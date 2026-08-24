@@ -1,3 +1,7 @@
+---
+title: "Context"
+---
+
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/01-context/) | English
 
 <!-- zlink-nav:start -->
@@ -28,7 +32,7 @@ The related contracts are owned by the following documents.
 | socket creation, options, and send/receive | [Sockets](socket/README.en.md) |
 | message lifecycle and ownership | [Message](02-message.en.md) |
 
-## 2. What a context owns
+## 2. What a Context owns
 
 A Context owns the following.
 
@@ -63,8 +67,10 @@ A Context's lifecycle proceeds in the order **create → use → shutdown signal
 
 If multiple threads are using sockets concurrently, call shutdown before
 term to avoid deadlock — calling term alone, without shutdown, can stall
-waiting for sockets to close. Blocking behavior during termination is
-controlled by the `ZLINK_CTX_OPT_BLOCKY` option.
+waiting for sockets to close. Setting `ZLINK_CTX_OPT_BLOCKY` to `0` makes the
+default `LINGER` value `0` for subsequently created sockets. Those sockets
+close without waiting for undelivered messages, so term returns sooner. Term
+itself still waits for internal cleanup to finish regardless of this option.
 
 ```mermaid
 sequenceDiagram
@@ -99,7 +105,7 @@ typedef enum zlink_ctx_option_t
     ZLINK_THREAD_AFFINITY_CPU_ADD      = 7,  // Add a CPU to the I/O thread affinity set
     ZLINK_THREAD_AFFINITY_CPU_REMOVE   = 8,  // Remove a CPU from the I/O thread affinity set
     ZLINK_THREAD_NAME_PREFIX      = 9,  // Prefix for I/O thread names
-    ZLINK_CTX_OPT_BLOCKY          = 10,  // Controls blocking behavior on termination (int, default 1)
+    ZLINK_CTX_OPT_BLOCKY          = 10,  // If 0, default LINGER=0 for subsequently created sockets (int, default 1; see section 3)
     ZLINK_CTX_OPT_AUTO_HWM_ENABLE = 12,  // Whether automatic HWM is enabled (0=disabled, 1=enabled)
     ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS = 14,  // Automatic HWM recalculation debounce (ms, >= 0)
     ZLINK_CTX_OPT_AUTO_HWM_PROFILE = 17,  // Automatic HWM profile. Unknown values fail with EINVAL
@@ -232,19 +238,24 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_set(void *context_, zlink_ctx_optio
 ```
 
 Configures the context before or after sockets have been created. Refer to the
-option list in §4 for valid option names and their semantics.
-`ZLINK_CTX_OPT_AUTO_HWM_ENABLE` takes effect on existing sockets
-immediately, but only for sockets that still use automatic `SNDHWM` /
-`RCVHWM` values rather than manual overrides. Setting it to `0` preserves the
-last HWM applied to each current pipe, excludes those pipes from subsequent
+option list in §4 for valid option names and their semantics. Setting
+`ZLINK_IO_THREADS` or `ZLINK_MAX_SOCKETS` succeeds at any time and is reflected
+by subsequent queries, but the actual I/O thread pool and socket-slot capacity
+are fixed once, using the values in effect when the first socket is created.
+Changing either value later does not change the runtime capacity.
+`ZLINK_CTX_OPT_AUTO_HWM_ENABLE` also applies to existing sockets: changing it
+schedules an automatic recalculation with a default debounce of 3000 ms. Call
+`zlink_ctx_auto_hwm_recalculate` if a new plan is needed before then. Only
+sockets without manually configured `SNDHWM` or `RCVHWM` values are
+recalculated under the automatic policy. Setting the option to `0` preserves
+the last HWM applied to each current pipe, excludes those pipes from subsequent
 automatic recalculation, and clears the snapshot planning-active flag.
-`ZLINK_CTX_OPT_AUTO_HWM_PROFILE` updates the profile used by the next
-automatic HWM calculation and is safe to change while the context is live.
-The profile selects the memory percentage and role byte bounds. `SNDBUF` /
-`RCVBUF` default to `-1`, and auto-HWM profiles do not change these values
-automatically. The three Auto HWM byte options are not accepted by
-`zlink_ctx_set`; using them there fails with `EINVAL`. (Contract owned by
-[Auto HWM](systems/06-auto-hwm.en.md).)
+`ZLINK_CTX_OPT_AUTO_HWM_PROFILE` changes the profile used by the next automatic
+HWM calculation and may be adjusted safely at runtime. The profile selects the
+memory percentage and per-role byte bounds. `SNDBUF` / `RCVBUF` default to
+`-1`, and Auto HWM profiles do not change these values automatically. The three
+Auto HWM byte options cannot be set with `zlink_ctx_set`; attempting to do so
+fails with `EINVAL`. See [Auto HWM](systems/06-auto-hwm.en.md) for the contract.
 
 **Returns:** `ZLINK_CONFIG_OK` on success; otherwise a `zlink_config_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
@@ -272,7 +283,12 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_set_data(void *context_,
 Each of the three Auto HWM byte options requires exactly `sizeof(uint64_t)`
 bytes. `0` means the input is unset, not unlimited. Every other size and the
 removed context option value `18` fail with `ZLINK_CONFIG_INVALID_ARGUMENT`.
-(Contract owned by [Auto HWM](systems/06-auto-hwm.en.md).)
+Setting a valid value stores it and then schedules an Auto HWM recalculation.
+The setter still succeeds if the new budget cannot accommodate both the
+current manual HWM and the automatic minima. In that case, the planner does
+not lower the automatic minima and sets
+`ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT` in the budget snapshot. See
+[Auto HWM](systems/06-auto-hwm.en.md) for the contract.
 
 `ZLINK_THREAD_NAME_PREFIX` takes a null-terminated string. Pass the string
 pointer as `optval_` and `strlen(prefix) + 1` as `optvallen_`. The prefix is
@@ -283,7 +299,6 @@ thread-name limit.
 
 **Errors:**
 - `EINVAL` -- unknown option or invalid value.
-- `ENOBUFS` -- a new explicit memory limit or manual Core budget cannot accommodate the current manual reservations and automatic minima together.
 - `EFAULT` -- invalid context handle (`ZLINK_CONFIG_INVALID_HANDLE`).
 
 **Thread safety:** Safe to call from any thread.
@@ -315,8 +330,8 @@ partially filling the value. The call writes the required `sizeof(uint64_t)` to
 errno for diagnostics.
 
 **Errors:**
-- `EINVAL` -- unknown option or invalid output size.
-- `EFAULT` -- invalid context handle or output pointer.
+- `EINVAL` -- unknown option, invalid output size, or NULL output pointer (`ZLINK_CONFIG_INVALID_ARGUMENT`).
+- `EFAULT` -- invalid context handle (`ZLINK_CONFIG_INVALID_HANDLE`).
 
 **Thread safety:** Safe to call from any thread.
 
@@ -335,8 +350,10 @@ ZLINK_EXPORT int zlink_ctx_get(void *context_, zlink_ctx_option_t option_, zlink
 Retrieves the current value of a context option. Can be used at any time to
 inspect the context configuration, including read-only options such as
 `ZLINK_SOCKET_LIMIT` and `ZLINK_MSG_T_SIZE`. Writes the configuration result
-into `*error_out_` on failure; returns the option value as the primary return
-on success.
+(`zlink_config_result_t`) into `*error_out_` on failure; returns the option
+value as the primary return on success. `error_out_` is optional: when it is
+`NULL`, a failure records no result code, and only the `-1` return value and
+errno are observable.
 
 **Returns:** The option value on success, or `-1` on failure with the
 `zlink_config_result_t` written through `*error_out_`. `zlink_errno()` retains
@@ -373,4 +390,4 @@ test.
 **Thread safety**
 - Every `zlink_ctx_*` function is safe to call concurrently from multiple threads. Only `zlink_ctx_term` is restricted to exactly once per context.
 
-Verification of Auto HWM budget and admission is owned by [Auto HWM](systems/06-auto-hwm.en.md#5-implementation-and-contract-test-verification).
+Verification of Auto HWM budget and admission is owned by [Auto HWM](systems/06-auto-hwm.en.md#5-implementation-and-contract-test-verification-requirements).

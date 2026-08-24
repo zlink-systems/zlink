@@ -1,3 +1,7 @@
+---
+title: "Utilities"
+---
+
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/07-utilities/) | English
 
 <!-- zlink-nav:start -->
@@ -6,31 +10,55 @@
 
 # Utilities
 
-Helper functions for atomic counters, timers, high-resolution timing, thread
-management, and miscellaneous operations. These utilities complement the core
-messaging API and are useful for building event loops, benchmarking, and
-managing background threads.
+> **What this chapter defines** — The public contracts of utility APIs that do
+> not belong to an individual category, including atomic counters, timers,
+> stopwatches, capability detection, proxies, and thread helpers.
 
-## Atomic Counter
+## 1. Utilities Overview
 
-Atomic counters provide atomic increment, decrement, and read operations on a
-shared integer. The counter is created with `zlink_atomic_counter_new` and
-must be destroyed with `zlink_atomic_counter_destroy`.
+zlink Core provides common runtime features that are not part of the messaging
+contract as utility APIs. These include atomic counters for atomically handling
+a shared integer, nanosecond-resolution timers, stopwatches as high-resolution
+clocks, capability detection for checking which features a library build
+includes, proxies for forwarding messages between two raw
+[sockets](glossary.en.md#socket), and sleep and thread helpers.
+
+This document defines the public contracts of these utilities. Its intended
+readers are developers who map each utility's lifecycle, thread safety, and
+callback ownership to the C API and each language binding. It answers the
+question, "When using common runtime features, how should the lifetime of each
+handle and callback, the scope of concurrent calls, and return values be
+interpreted?"
+
+The following documents own the related contracts.
+
+| Related contract | Defining document |
+|---|---|
+| `zlink_poller_add_timer`, which registers a timer with a poller | [Poll and Poller](05-polling.en.md) |
+| Raw socket creation and send/receive contracts (the targets forwarded by a proxy) | [Socket Common](socket/README.en.md) |
+| Context lifetime and termination | [Context](01-context.en.md) |
+
+## 2. Atomic Counter
+
+An atomic counter provides atomic increment, decrement, and read operations on
+a single integer shared by multiple threads. Create a counter with
+`zlink_atomic_counter_new` and destroy it with `zlink_atomic_counter_destroy`.
 
 ### zlink_atomic_counter_new
 
-Create a new atomic counter initialized to zero.
+Creates a new atomic counter initialized to zero.
 
 ```c
 ZLINK_EXPORT void *zlink_atomic_counter_new (void);
 ```
 
-Allocates and returns an opaque handle to an atomic counter with an initial
-value of zero.
+Allocates and returns an opaque handle to an atomic counter whose initial value
+is zero.
 
-**Returns:** Counter handle on success, or `NULL` on failure (out of memory).
+**Returns:** A counter handle on success. If memory allocation fails, the
+process aborts instead of returning `NULL`.
 
-**Thread safety:** Safe to call from any thread.
+**Thread safety:** May be called from any thread.
 
 **See also:** `zlink_atomic_counter_set`, `zlink_atomic_counter_destroy`
 
@@ -38,7 +66,7 @@ value of zero.
 
 ### zlink_atomic_counter_set
 
-Set the counter to an explicit value.
+Sets the counter to an explicit value.
 
 ```c
 ZLINK_EXPORT void zlink_atomic_counter_set (void *counter_, int value_);
@@ -46,8 +74,9 @@ ZLINK_EXPORT void zlink_atomic_counter_set (void *counter_, int value_);
 
 Replaces the current counter value with `value_`.
 
-**Thread safety:** Not thread-safe. Do not call concurrently with other
-operations on the same counter; typically used only during setup.
+**Thread safety:** Not thread-safe. It must not be called concurrently with
+another operation on the same counter. It is typically used only during
+initial setup.
 
 **See also:** `zlink_atomic_counter_value`
 
@@ -55,18 +84,18 @@ operations on the same counter; typically used only during setup.
 
 ### zlink_atomic_counter_inc
 
-Increment the counter by one.
+Increments the counter by one.
 
 ```c
 ZLINK_EXPORT int zlink_atomic_counter_inc (void *counter_);
 ```
 
-Atomically increments the counter and returns the previous value (the value
+Atomically increments the counter and returns its previous value (the value
 immediately before the increment).
 
-**Returns:** The value of the counter before the increment.
+**Returns:** The counter value before the increment.
 
-**Thread safety:** Safe to call from any thread.
+**Thread safety:** May be called from any thread.
 
 **See also:** `zlink_atomic_counter_dec`
 
@@ -74,20 +103,19 @@ immediately before the increment).
 
 ### zlink_atomic_counter_dec
 
-Decrement the counter by one.
+Decrements the counter by one.
 
 ```c
 ZLINK_EXPORT int zlink_atomic_counter_dec (void *counter_);
 ```
 
-Atomically decrements the counter and reports whether it is still nonzero:
-returns `1` when the counter remains greater than zero after the decrement, and
-`0` when it reaches zero.
+Atomically decrements the counter and returns `1` if it remains greater than
+zero after the decrement, or `0` if it reaches zero.
 
-**Returns:** `1` if the counter is still nonzero after the decrement, `0` if it
-reached zero.
+**Returns:** `1` if the counter is still nonzero after the decrement, or `0`
+if it has reached zero.
 
-**Thread safety:** Safe to call from any thread.
+**Thread safety:** May be called from any thread.
 
 **See also:** `zlink_atomic_counter_inc`
 
@@ -95,17 +123,17 @@ reached zero.
 
 ### zlink_atomic_counter_value
 
-Return the current counter value.
+Returns the current counter value.
 
 ```c
 ZLINK_EXPORT int zlink_atomic_counter_value (void *counter_);
 ```
 
-Reads the current value of the counter atomically.
+Atomically reads the current value of the counter.
 
 **Returns:** The current counter value.
 
-**Thread safety:** Safe to call from any thread.
+**Thread safety:** May be called from any thread.
 
 **See also:** `zlink_atomic_counter_set`
 
@@ -113,61 +141,72 @@ Reads the current value of the counter atomically.
 
 ### zlink_atomic_counter_destroy
 
-Destroy the counter and release its memory.
+Destroys the counter and releases its memory.
 
 ```c
 ZLINK_EXPORT void zlink_atomic_counter_destroy (void **counter_p_);
 ```
 
-Releases the counter handle. The pointer at `*counter_p_` is set to `NULL`
-after destruction.
+Releases the counter handle. After destruction, the pointer at `*counter_p_`
+is set to `NULL`.
 
-**Thread safety:** Must not be called while other threads are operating on the
-same counter.
+**Thread safety:** It must not be called while another thread is operating on
+the same counter.
 
 **See also:** `zlink_atomic_counter_new`
 
----
+## 3. Timer
 
-## Callback Types
+A timer provides a nanosecond-resolution periodic or one-shot generic timer.
+Create a standalone timer with `zlink_timer_new`. A timer fire event can be
+received synchronously with `zlink_timer_recv`, driven by a
+`zlink_timer_handler` callback, or integrated into a poller with
+`zlink_poller_add_timer`—[Poll and Poller](05-polling.en.md) owns the poller
+integration contract.
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant T as Timer
+    App->>T: zlink_timer_new()
+    App->>T: zlink_timer_start(interval_ns, repeat_count)
+    Note over T: First fire after interval_ns nanoseconds,<br/>then repeats at the same interval
+    T-->>App: fire (increments from 1 within this start)
+    App->>T: zlink_timer_recv() or invoke the registered handler
+    Note over T: If repeat_count is positive, automatically stops after that many fires
+    App->>T: zlink_timer_stop() / zlink_timer_destroy()
+```
+
+### zlink_timer_handler_fn
 
 ```c
 typedef void (*zlink_timer_handler_fn) (void *timer_,
                                         uint64_t fire_count_,
                                         void *userdata_);
-
-typedef void (zlink_thread_fn) (void *);
 ```
 
-`zlink_timer_handler_fn` is the callback signature for timer fire
-notifications. `timer_` is the timer handle, `fire_count_` is the cumulative
-number of times the timer has fired, and `userdata_` is the pointer supplied
-when the handler was attached.
+This is the signature of a timer expiration callback. `timer_` is the handle
+of the timer that fired, `fire_count_` is the fire count starting from 1
+within the most recent successful `zlink_timer_start` execution, and
+`userdata_` is the user pointer supplied when the handler was registered.
 
-`zlink_thread_fn` is the entry-point signature for threads started with
-`zlink_thread_start`.
-
-## Timers
-
-Timers provide nanosecond-resolution periodic or one-shot scheduling. Create
-a standalone generic timer with `zlink_timer_new`. Timers can be consumed synchronously with
-`zlink_timer_recv` or driven by a callback with `zlink_timer_handler`. They
-can also be integrated into a poller with `zlink_poller_add_timer`.
+---
 
 ### zlink_timer_new
 
-Create a new standalone timer.
+Creates a standalone timer.
 
 ```c
 ZLINK_EXPORT void *zlink_timer_new (void);
 ```
 
-Allocates and returns an opaque timer handle. Destroy with
-`zlink_timer_destroy` when no longer needed.
+Allocates and returns an opaque timer handle. Destroy it with
+`zlink_timer_destroy` when it is no longer needed.
 
-**Returns:** Timer handle on success, or `NULL` on failure (errno is set).
+**Returns:** A timer handle on success, or `NULL` on failure. On failure, errno
+is set.
 
-**Thread safety:** Safe to call from any thread.
+**Thread safety:** May be called from any thread.
 
 **See also:** `zlink_timer_destroy`
 
@@ -175,20 +214,20 @@ Allocates and returns an opaque timer handle. Destroy with
 
 ### zlink_timer_destroy
 
-Destroy a timer and release its resources.
+Destroys a timer and releases its resources.
 
 ```c
 ZLINK_EXPORT zlink_close_result_t zlink_timer_destroy (void **timer_p_);
 ```
 
-Stops the timer if running and frees the handle. The pointer at `*timer_p_`
-is set to `NULL` after destruction.
+Stops a running timer and releases its handle. After destruction,
+`*timer_p_` is set to `NULL`.
 
-**Returns:** `ZLINK_CLOSE_OK` on success; otherwise a `zlink_close_result_t`
-value. `zlink_errno()` retains the detailed internal errno for diagnostics.
+**Returns:** `ZLINK_CLOSE_OK` on success, or a `zlink_close_result_t` value
+on failure. `zlink_errno()` preserves the internal errno for diagnostics.
 
-**Thread safety:** Must not be called while another thread is using the same
-timer.
+**Thread safety:** It must not be called while another thread is using the
+same timer.
 
 **See also:** `zlink_timer_new`
 
@@ -196,7 +235,7 @@ timer.
 
 ### zlink_timer_start
 
-Start the timer with a nanosecond interval and repeat count.
+Starts a timer.
 
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_timer_start (void *timer_,
@@ -204,24 +243,21 @@ ZLINK_EXPORT zlink_config_result_t zlink_timer_start (void *timer_,
                                          uint64_t repeat_count_);
 ```
 
-Arms the timer to fire after `interval_ns_` nanoseconds. If `repeat_count_`
-is greater than zero, the timer fires that many times then stops automatically.
-If `repeat_count_` is zero, the timer repeats indefinitely until explicitly
-stopped.
+Starts the timer so that its first event occurs after `interval_ns_`
+nanoseconds. `interval_ns_` is the interval between events in nanoseconds and
+must not be `0`. If `repeat_count_` is `0`, the timer repeats until
+explicitly stopped. If it is positive, the timer generates that many events
+and then stops automatically. Each successful start resets the fire count, so
+the first fire is `1`, followed by `2`, `3`, and so on.
 
-**Parameters:**
+**Returns:** `ZLINK_CONFIG_OK` on success, or a `zlink_config_result_t` value
+on failure. `zlink_errno()` preserves the internal errno for diagnostics.
 
-| Name | Description |
-|------|-------------|
-| `timer_` | Timer handle |
-| `interval_ns_` | Interval between fires in nanoseconds |
-| `repeat_count_` | Number of times to fire (`0` = indefinite) |
+**Errors:** If `interval_ns_ == 0`, the result is
+`ZLINK_CONFIG_INVALID_ARGUMENT` and the internal errno is `EINVAL`.
 
-**Returns:** `ZLINK_CONFIG_OK` on success; otherwise a `zlink_config_result_t`
-value. `zlink_errno()` retains the detailed internal errno for diagnostics.
-
-**Thread safety:** Must not be called concurrently with other operations on
-the same timer.
+**Thread safety:** It must not be called concurrently with another operation
+on the same timer.
 
 **See also:** `zlink_timer_stop`
 
@@ -229,20 +265,19 @@ the same timer.
 
 ### zlink_timer_stop
 
-Stop a running timer.
+Stops a running timer.
 
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_timer_stop (void *timer_);
 ```
 
-Disarms the timer. No further fire events will be generated until the timer
-is started again.
+Stops the timer. It generates no new fire events until it is started again.
 
-**Returns:** `ZLINK_CONFIG_OK` on success; otherwise a `zlink_config_result_t`
-value. `zlink_errno()` retains the detailed internal errno for diagnostics.
+**Returns:** `ZLINK_CONFIG_OK` on success, or a `zlink_config_result_t` value
+on failure. `zlink_errno()` preserves the internal errno for diagnostics.
 
-**Thread safety:** Must not be called concurrently with other operations on
-the same timer.
+**Thread safety:** It must not be called concurrently with another operation
+on the same timer.
 
 **See also:** `zlink_timer_start`
 
@@ -250,30 +285,24 @@ the same timer.
 
 ### zlink_timer_recv
 
-Synchronously receive a timer fire event.
+Synchronously receives a timer fire.
 
 ```c
 ZLINK_EXPORT zlink_recv_result_t zlink_timer_recv (void *timer_, uint64_t *fire_count_out_);
 ```
 
-Waits for the timer to fire and writes the cumulative fire count into
-`fire_count_out_`. This provides a synchronous, poll-style interface to the
-timer.
+In receive mode, waits for the next timer fire. On success,
+`*fire_count_out_` is set to the fire count that starts from 1 within the most
+recent start execution.
 
-**Parameters:**
+**Returns:** `ZLINK_RECV_OK` on success, or a `zlink_recv_result_t` value on
+failure. `zlink_errno()` preserves the internal errno for diagnostics.
 
-| Name | Description |
-|------|-------------|
-| `timer_` | Timer handle |
-| `fire_count_out_` | Pointer to receive the cumulative fire count |
+**Errors:** If the timer has already stopped and there is no fire left to read,
+the result is `ZLINK_RECV_NO_DATA` (internal `EAGAIN`).
 
-**Returns:** `ZLINK_RECV_OK` on success; otherwise a `zlink_recv_result_t`
-value. `ZLINK_RECV_NO_DATA` (internal `EAGAIN`) when the timer has stopped
-and no fire event remains to receive. `zlink_errno()` retains the detailed
-internal errno for diagnostics.
-
-**Thread safety:** Must not be called concurrently with other operations on
-the same timer.
+**Thread safety:** It must not be called concurrently with another operation
+on the same timer.
 
 **See also:** `zlink_timer_handler`, `zlink_timer_start`
 
@@ -281,7 +310,7 @@ the same timer.
 
 ### zlink_timer_handler
 
-Attach a callback handler to the timer.
+Registers a timer expiration callback handler.
 
 ```c
 ZLINK_EXPORT zlink_handler_result_t zlink_timer_handler (void *timer_,
@@ -289,51 +318,47 @@ ZLINK_EXPORT zlink_handler_result_t zlink_timer_handler (void *timer_,
                                             void *userdata_);
 ```
 
-Registers `handler_` to be called each time the timer fires. The callback
-receives the timer handle, cumulative fire count, and `userdata_`. A NULL
-`handler_` is invalid and fails with `ZLINK_HANDLER_INVALID_ARGUMENT` (`EINVAL`).
-After a handler is attached, `zlink_timer_recv()` on the same timer returns
-`ZLINK_RECV_BUSY`.
+After `handler_` is registered, it is called each time the timer fires. A
+`NULL` `handler_` is invalid and fails with
+`ZLINK_HANDLER_INVALID_ARGUMENT` (`EINVAL`). After a handler is registered,
+`zlink_timer_recv` on the same timer returns `ZLINK_RECV_BUSY`.
 
-**Parameters:**
+The callback receives the timer handle, the fire count starting from 1 within
+the most recent start execution, and `userdata_`
+([`zlink_timer_handler_fn`](#zlink_timer_handler_fn)). `userdata_` is an
+opaque pointer passed through to the callback unchanged.
 
-| Name | Description |
-|------|-------------|
-| `timer_` | Timer handle |
-| `handler_` | Callback function (must not be NULL) |
-| `userdata_` | Opaque pointer passed to the callback |
+**Returns:** `ZLINK_HANDLER_OK` on success, or a `zlink_handler_result_t`
+value on failure. `zlink_errno()` preserves the internal errno for
+diagnostics.
 
-**Returns:** `ZLINK_HANDLER_OK` on success; otherwise a `zlink_handler_result_t`
-value. `zlink_errno()` retains the detailed internal errno for diagnostics.
-
-**Thread safety:** Must not be called concurrently with other operations on
-the same timer.
+**Thread safety:** It must not be called concurrently with another operation
+on the same timer.
 
 **See also:** `zlink_timer_recv`, `zlink_timer_start`
 
----
+## 4. Stopwatch
 
-## Stopwatch
-
-High-resolution timing functions for benchmarking and profiling. Start a
-stopwatch, take intermediate readings, and stop it to get the total elapsed
-time in microseconds.
+A stopwatch provides high-resolution timing functions for benchmarking and
+profiling. Start the stopwatch, read intermediate measurements, and stop it to
+obtain the total elapsed time in microseconds.
 
 ### zlink_stopwatch_start
 
-Start a high-resolution stopwatch.
+Starts a high-resolution stopwatch.
 
 ```c
 ZLINK_EXPORT void *zlink_stopwatch_start (void);
 ```
 
 Captures the current time and returns an opaque handle used to measure elapsed
-time. The handle must eventually be released by `zlink_stopwatch_stop`.
+time. The handle must eventually be released with `zlink_stopwatch_stop`.
 
-**Returns:** An opaque stopwatch handle on success, or `NULL` on failure.
+**Returns:** An opaque stopwatch handle on success. If memory allocation fails,
+the process aborts instead of returning `NULL`.
 
-**Thread safety:** Safe to call from any thread. The returned handle should be
-used by one thread at a time.
+**Thread safety:** May be called from any thread. The returned handle must be
+used by only one thread at a time.
 
 **See also:** `zlink_stopwatch_intermediate`, `zlink_stopwatch_stop`
 
@@ -341,20 +366,20 @@ used by one thread at a time.
 
 ### zlink_stopwatch_intermediate
 
-Return elapsed microseconds without stopping the stopwatch.
+Returns elapsed microseconds without stopping the stopwatch.
 
 ```c
 ZLINK_EXPORT unsigned long zlink_stopwatch_intermediate (void *watch_);
 ```
 
-Reads the elapsed time since `zlink_stopwatch_start` was called, without
-releasing the handle. May be called multiple times to take successive
+Reads the elapsed time since `zlink_stopwatch_start` was called without
+releasing the handle. It may be called multiple times for successive
 measurements.
 
 **Returns:** Elapsed time in microseconds.
 
-**Thread safety:** Must not be called concurrently with `zlink_stopwatch_stop`
-on the same handle.
+**Thread safety:** It must not be called concurrently with
+`zlink_stopwatch_stop` on the same handle.
 
 **See also:** `zlink_stopwatch_start`, `zlink_stopwatch_stop`
 
@@ -362,7 +387,7 @@ on the same handle.
 
 ### zlink_stopwatch_stop
 
-Stop the stopwatch and return total elapsed microseconds.
+Stops the stopwatch and returns the total elapsed microseconds.
 
 ```c
 ZLINK_EXPORT unsigned long zlink_stopwatch_stop (void *watch_);
@@ -373,67 +398,87 @@ releases the stopwatch handle. The handle must not be used after this call.
 
 **Returns:** Elapsed time in microseconds.
 
-**Thread safety:** Must not be called concurrently with other operations on
-the same handle.
+**Thread safety:** It must not be called concurrently with another operation
+on the same handle.
 
 **See also:** `zlink_stopwatch_start`, `zlink_stopwatch_intermediate`
 
----
+## 5. Capability Detection
 
-## Miscellaneous
+Use `zlink_has` at runtime to determine which features were included when the
+library was built.
 
 ### zlink_has
 
-Check whether the current library build provides a capability.
+Checks whether the current library build provides a capability.
 
 ```c
 ZLINK_EXPORT bool zlink_has (const char *capability_);
 ```
 
-`capability_` is a non-NULL, NUL-terminated string that the function does not
-retain. `"tcp"` always returns `true`. `"ipc"`, `"tls"`, `"ws"`, and `"wss"`
-return `true` only when that capability is present in the build. Any other
-string returns `false`.
+`capability_` is a non-NULL, NUL-terminated string, and the function does not
+retain it. `"tcp"` is always `true`. `"ipc"`, `"tls"`, `"ws"`, and
+`"wss"` are `true` only when the library was built with the corresponding
+feature. Any other string is `false`.
 
 **Thread safety:** Does not mutate global state and may be called from any
 thread.
 
----
+## 6. Proxy
+
+A proxy is a blocking helper that forwards multipart messages bidirectionally
+between two raw sockets. [Socket Common](socket/README.en.md) owns the creation
+and send/receive contracts of raw sockets.
 
 ### zlink_proxy
 
-Forward multipart messages bidirectionally between two raw sockets.
+Forwards multipart messages bidirectionally between two raw sockets.
 
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_proxy (void *frontend_, void *backend_, void *capture_);
 ```
 
-`frontend_` and `backend_` are required raw socket handles. `capture_` may be
-NULL; when non-NULL, it is a raw socket that receives a copy of every forwarded
-message. The call blocks its calling thread until the proxy loop ends.
+`frontend_` and `backend_` are required raw socket handles. `capture_` may
+be `NULL`; when non-NULL, it is a raw socket handle that receives a copy of
+every forwarded message. The function blocks the calling thread until the
+running proxy loop ends.
 
-All three handles are borrowed. The function neither closes nor takes ownership
-of them. The proxy receives message frames and forwards them to the opposite
-socket without returning frame pointers to the application.
+All three handles are borrowed. The function neither closes nor owns them. The
+proxy receives message frames and forwards them to the opposite socket without
+returning frame pointers to the application.
 
-**Returns:** `ZLINK_CONFIG_OK` when the proxy ends normally; otherwise a
-`zlink_config_result_t` error. A NULL required handle or a handle that is not a
-raw socket returns `ZLINK_CONFIG_INVALID_HANDLE`.
+**Returns:** `ZLINK_CONFIG_OK` when the proxy ends normally, or a
+`zlink_config_result_t` error otherwise. If a required handle is `NULL` or
+is not a raw socket, the result is `ZLINK_CONFIG_INVALID_HANDLE`.
+
+## 7. Sleep and Thread
+
+These are a portable sleep function that wraps platform-specific APIs and an
+OS thread helper.
+
+### zlink_thread_fn
+
+```c
+typedef void (zlink_thread_fn) (void *);
+```
+
+This is the entry-point signature of a thread started with
+`zlink_thread_start`.
 
 ---
 
 ### zlink_sleep
 
-Sleep for the given number of seconds.
+Sleeps for the specified number of seconds.
 
 ```c
 ZLINK_EXPORT void zlink_sleep (int seconds_);
 ```
 
-Suspends the calling thread for at least `seconds_` seconds. This is a
-portable convenience wrapper around platform-specific sleep functions.
+Suspends the calling thread for at least `seconds_` seconds. It is a portable
+convenience wrapper around platform-specific sleep functions.
 
-**Thread safety:** Safe to call from any thread.
+**Thread safety:** May be called from any thread.
 
 **See also:** `zlink_stopwatch_start`
 
@@ -441,7 +486,7 @@ portable convenience wrapper around platform-specific sleep functions.
 
 ### zlink_thread_start
 
-Start a new thread running the given function.
+Starts a new thread that runs the specified function.
 
 ```c
 ZLINK_EXPORT void *zlink_thread_start (zlink_thread_fn *func_, void *arg_);
@@ -451,9 +496,11 @@ Creates and starts a new operating-system thread that executes `func_` with
 `arg_` as its sole argument. The returned handle must be passed to
 `zlink_thread_join` to wait for completion and release resources.
 
-**Returns:** An opaque thread handle on success, or `NULL` on failure.
+**Returns:** An opaque thread handle on success. If allocation of the handle or
+creation of the operating-system thread fails, the process aborts instead of
+returning `NULL`.
 
-**Thread safety:** Safe to call from any thread.
+**Thread safety:** May be called from any thread.
 
 **See also:** `zlink_thread_join`
 
@@ -461,17 +508,110 @@ Creates and starts a new operating-system thread that executes `func_` with
 
 ### zlink_thread_join
 
-Wait for a thread to finish and release its handle.
+Waits for a thread to finish and releases its handle.
 
 ```c
 ZLINK_EXPORT void zlink_thread_join (void *thread_);
 ```
 
-Blocks the calling thread until the thread identified by `thread_` has
-terminated, then releases the handle. The handle must not be used after this
-call.
+Blocks the calling thread until the thread identified by `thread_` terminates,
+then releases the handle. The handle must not be used after this call.
 
-**Thread safety:** Must be called exactly once per handle. Do not call from
-the thread being joined.
+**Thread safety:** Must be called exactly once per handle. It must not be
+called from the thread being joined.
 
 **See also:** `zlink_thread_start`
+
+## 8. Implementation and Contract Test Verification Requirements
+
+Verify the following using only the public surface (utility functions, return
+values and errno, and callback invocations). Each item maps to one unit test.
+
+**Atomic counter**
+
+- A counter created with `zlink_atomic_counter_new` has an initial value of
+  zero—`zlink_atomic_counter_value` returns `0` immediately after creation.
+  If a memory allocation failure is injected, the function aborts the process
+  instead of returning `NULL`.
+- After `zlink_atomic_counter_set`, `zlink_atomic_counter_value` returns the
+  set value.
+- `zlink_atomic_counter_inc` returns the value immediately before the
+  increment.
+- `zlink_atomic_counter_dec` returns `1` if the counter remains greater than
+  zero after the decrement, or `0` if it reaches zero.
+- It is safe for multiple threads to call inc, dec, and value concurrently on
+  the same counter—updates are not lost because increments and decrements are
+  atomic.
+- After `zlink_atomic_counter_destroy`, `*counter_p_` is `NULL`.
+
+**Timer**
+
+- `zlink_timer_new` returns a non-NULL handle on success, or `NULL` with errno
+  set on failure.
+- `zlink_timer_start(timer, 0, repeat_count)` fails with
+  `ZLINK_CONFIG_INVALID_ARGUMENT` and internal `EINVAL`.
+- When `zlink_timer_start` receives a positive `repeat_count_`, the timer
+  fires that many times and then stops automatically. When it receives `0`,
+  the timer repeats until explicitly stopped.
+- `zlink_timer_recv` waits for the next fire and, on success, writes to
+  `*fire_count_out_` the fire count that starts from 1 within the current start
+  execution. After a stop followed by another start, the first value is `1`
+  again. If the timer has already stopped and no fire remains to be read, the
+  result is `ZLINK_RECV_NO_DATA` (internal `EAGAIN`).
+- Passing a `NULL` handler to `zlink_timer_handler` returns
+  `ZLINK_HANDLER_INVALID_ARGUMENT` (`EINVAL`).
+- After a handler is registered, `zlink_timer_recv` on the same timer returns
+  `ZLINK_RECV_BUSY`.
+- The registered handler is called on every fire with the timer handle, the
+  fire count that starts from 1 within the current start execution, and the
+  `userdata_` supplied during registration. After a stop followed by another
+  start, the first callback count is `1` again.
+- After `zlink_timer_stop`, no new fire event occurs until the timer is started
+  again.
+- After `zlink_timer_destroy`, `*timer_p_` is `NULL`.
+
+**Stopwatch**
+
+- If a memory allocation failure is injected into `zlink_stopwatch_start`,
+  the function aborts the process instead of returning `NULL`.
+- `zlink_stopwatch_intermediate` returns the elapsed microseconds since start
+  without releasing the handle and may be called multiple times with the same
+  handle.
+- `zlink_stopwatch_stop` returns the total elapsed microseconds since start
+  and releases the handle.
+
+**Capability detection**
+
+- `zlink_has("tcp")` is always `true`.
+- `"ipc"`, `"tls"`, `"ws"`, and `"wss"` are `true` only when the
+  library was built with the corresponding feature, and any other string is
+  `false`.
+
+**Proxy**
+
+- If a required handle passed to `zlink_proxy` is `NULL` or is not a raw
+  socket, the result is `ZLINK_CONFIG_INVALID_HANDLE`.
+- When a non-NULL `capture_` is supplied, a copy of every forwarded message
+  arrives at the capture socket.
+- The proxy blocks the calling thread until the loop ends and returns
+  `ZLINK_CONFIG_OK` when it ends normally.
+- The supplied handles are borrowed—the caller still owns them after the proxy
+  ends, and the function does not close them.
+
+**Sleep and thread**
+
+- `zlink_sleep(n)` suspends the calling thread for at least `n` seconds.
+- `zlink_thread_start` starts a thread that executes `func_` with `arg_` as
+  its sole argument and returns a handle on success. If a handle allocation or
+  operating-system thread creation failure is injected, the function aborts
+  the process instead of returning `NULL`.
+- `zlink_thread_join` waits until the target thread terminates and then
+  releases the handle, and it is called exactly once per handle.
+
+**Common return convention**
+
+- Each function that returns a result type (`zlink_close_result_t`,
+  `zlink_config_result_t`, `zlink_recv_result_t`, or
+  `zlink_handler_result_t`) returns the corresponding OK value on success and
+  a result value on failure, while `zlink_errno()` preserves the internal
+  errno for diagnostics.

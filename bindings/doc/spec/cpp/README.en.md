@@ -519,9 +519,10 @@ pending and total-messaging values, monitor/instance aggregates, application/
 completion queue counts, `outstanding_application_lease_count`,
 `retired_queue_count`, `deferred_origin_credit_bytes`, oversize/blocked/aggregate
 flags, `budget_generation`, and `measurement_epoch`. Metrics reset preserves
-current, pending, queue-count, and those three owner-lifecycle gauges, rebases
-budgeted and completion peaks to their current values, clears epoch counters,
-and increments `measurement_epoch`.
+current, pending, and queue-count gauges, rebases budgeted and completion peaks
+to their current values, clears epoch counters, and increments
+`measurement_epoch`. `application_accounted_bytes` and the three
+owner-lifecycle fields are ABI-reserved and always zero.
 
 The C++ binding does not decide send or receive admission. Core returns
 backpressure when the accounted bytes retained by a pipe reach the applied HWM,
@@ -534,25 +535,13 @@ builder contract. `0 bytes` means unlimited; it does not mean one message.
 forwarded unchanged as the exact monitor queue byte HWM. There is no
 message-count overload or alias.
 
-The `recv_retained(received_t&)` and
-`subscribe_retained(topic_message_t&)` entrypoints used by a Framework backend
-preserve the existing
-framing and attach the Core HWM budget lease returned with each physical payload
-part to the output object. No public lease is created for a ROUTER's synthetic
-routing-id frame or a SUB's internal topic frame. Multipart receive collects all
-non-null per-part leases under one private output owner and releases every lease
-already received if the receive fails partway through.
-
-Copies of `received_t` or `topic_message_t` share that private owner. Closing one
-copy clears that copy's parts and ownership, but does not return Core credit while
-another copy remains. The final copy returns every lease exactly once when it is
-closed or destroyed. Copying only a `message_t` part does not extend the lease;
-after preserving only a payload copy, the caller closes the output object to
-return credit. Ordinary `recv(received_t&)`, `subscribe(topic_message_t&)`,
-`recv(message_t&)`, and `subscribe_part(...)` retain no hidden lease and keep
-their existing immediate dequeue-credit behavior. Passing the same output
-object to the next retained receive clears that
-copy's prior parts and lease ownership before the binding starts native receive.
+Core byte HWM counts only payload retained by a Core queue, and its charge ends
+at receive dequeue. Ordinary `recv(received_t&)`,
+`subscribe(topic_message_t&)`, `recv(message_t&)`, and `subscribe_part(...)`
+transfer normal C++ ownership of parts and routing/topic/request metadata into
+the output object. Copying, closing, or destroying that object manages payload
+lifetime, not Core HWM credit or application byte capacity. No separate
+retained receive or lease handle exists in a public or internal API.
 
 The legacy `auto_hwm_msg_unit_bytes` and slot, size-cap, and connection-bucket
 planner properties are removed without aliases. The monitor snapshot projects
@@ -608,11 +597,9 @@ A C++ caller never has to reason about cleaning up a C handle.
 - A move-only resource class is preferred over shared ownership of a mutable handle.
 - A message value supports an efficient move, and an explicit copy when a copy is requested.
 - The data-plane receive and subscribe paths use caller-provided storage.
-- A `received_t` or `topic_message_t` filled by `recv_retained` or
-  `subscribe_retained` owns the shared lifetime of the received parts and their
-  Core HWM budget leases. Ordinary receive returns credit immediately. A copied
-  part alone does not own a lease; closing or dropping the final retained output
-  object returns the credit.
+- A `received_t` or `topic_message_t` owns only the C++ lifetime of received
+  parts and metadata. Core HWM byte charge ends at dequeue and is not tied to
+  copying, closing, or dropping the output object.
 - A service control/admission receive path, such as Actor join request receive, may use an optional or a typed result return when that's clearer for a C++ caller — but it must still distinguish no-data from a hard receive failure.
 - A callback keeps the native callback lifetime and the user callable's lifetime internally consistent.
 

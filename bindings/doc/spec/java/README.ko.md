@@ -50,7 +50,7 @@ deprecated wrapper, 중복 생성 경로, public runtime alias, direct construct
 | [Socket Contract Shape](#socket-contract-shape) | 공통/타입별 socket 동작 |
 | [Operation Builder Shape](#operation-builder-shape) | builder 시작 메서드와 terminal 메서드 |
 | [Messaging Values](#messaging-values) | `Message`/`Received`/`TopicMessage`/`SubscriptionEvent` 계약 |
-| [Receive And Subscribe Shape](#receive-and-subscribe-shape) | 호출자 제공 저장소, no-data, Framework retained credit 경계 |
+| [Receive And Subscribe Shape](#receive-and-subscribe-shape) | 호출자 제공 저장소, no-data, Core HWM ownership 경계 |
 | [Handler Registration Naming](#handler-registration-naming) | `set...Handler` 명명 규칙 |
 | [Byte HWM 및 monitoring ABI v4](#byte-hwm-및-monitoring-abi-v4) | 양수 `long` HWM과 monitor snapshot field |
 | [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
@@ -442,7 +442,6 @@ factory가 생성해야 한다.
 또는 functional interface가 될 수 있다:
 
 - socket receive handler
-- send-ready handler
 - stream packet handler
 - monitor handler
 - timer handler
@@ -764,32 +763,12 @@ boolean ok = router.recv(received, RecvFlags.DONT_WAIT);
 호출자가 제공하는 no-wait receive에서 no-data는 정상적인 `false` 결과다. 하드
 수신 실패는 문서화된 exception 타입을 던진다.
 
-일반 `recv(...)`와 `subscribe(...)`는 dequeue 시점에 Core queue credit을 즉시
-반환한다. 따라서 일반 수신 결과가 살아 있는 기간은 HWM accounting에 포함되지
-않으며, 이 기존 동작을 변경하지 않는다.
-
-Framework backend는 다음의 명시적 retained aggregate 진입점만 사용한다.
-
-```java
-boolean received = router.recvRetained(result, flags);
-boolean subscribed = sub.subscribeRetained(topicMessage, flags);
-```
-
-- `recvRetained(...)`는 `PairSocket`, `DealerSocket`, `RouterSocket`,
-  `StreamSocket`에 제공하고 `subscribeRetained(...)`는 `SubSocket`,
-  `XSubSocket`에 제공한다. 이 표면은 Framework backend용이며 일반 application
-  receive의 기본 경로가 아니다.
-- 반환된 `Received` 또는 `TopicMessage`는 caller에게 보이는 physical payload
-  part마다 Core의 opaque retained credit 하나를 내부에서 소유한다. Routing ID,
-  request sequence, topic과 multipart framing은 일반 aggregate 수신과 동일하게
-  보존한다.
-- 결과를 `close()`하거나 다음 수신 저장소로 재사용하면 모든 retained credit을
-  정확히 한 번 반환한다. 부분 multipart 실패, cancellation과 error도 이미 얻은
-  credit을 반환한다. `Cleaner`는 누락된 명시적 정리를 보완하는 fallback일 뿐
-  정상 lifecycle은 `close()`를 사용한다.
-- 개별 `Message` part나 bare part receive primitive에는 lease를 숨기지 않는다.
-  Raw lease handle, 별도 capacity, allowance 또는 중복 accounting 상태를 public
-  API로 노출하지 않는다.
+Core byte HWM charge는 일반 `recv(...)`와 `subscribe(...)`가 payload를 dequeue할
+때 끝난다. `Received`와 `TopicMessage`는 part, Routing ID, request sequence,
+topic과 multipart framing의 Java 수명만 소유한다. `close()`와 다음 수신 저장소
+재사용은 payload와 metadata를 정리하지만 Core HWM accounting에는 관여하지 않는다.
+별도 retained receive, raw lease handle, application byte capacity 또는 중복
+accounting 상태는 public이나 internal API에 두지 않는다.
 
 SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 대응하는 receive
 API를 no-data가 될 때까지 drain한다.
@@ -808,6 +787,8 @@ Core의 destination kind와 target node RID, target Spot RID, target Actor ref,
 channel name을 그대로 보존한다. 해당 destination kind에 사용하지 않는 필드는
 Core가 전달한 empty value로 유지한다. `ReceiveRecord.sendReady()`는 kind data가
 이 타입일 때만 값을 반환하며 다른 record kind에는 `null`을 반환한다.
+이 record kind는 service-wire dispatch protocol이며 Core HWM send-ready callback이나
+async send completion을 뜻하지 않는다.
 
 ## Handler Registration Naming
 
@@ -890,9 +871,10 @@ peak/provisional accounted byte, completion current/peak/pending과 total messag
 monitor/instance aggregate, application/completion queue count,
 `outstandingApplicationLeaseCount()`, `retiredQueueCount()`, `deferredOriginCreditBytes()`,
 oversize·blocked·aggregate flag, `budgetGeneration()`과 `measurementEpoch()`을 단위 변환 없이
-제공한다. Reset은 current·pending·queue count와 위 세 owner-lifecycle gauge를 유지하고 두
-peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `measurementEpoch`을 증가시킨다.
-Budget snapshot ABI version/size가 맞지 않으면 `UnsupportedOperationException`이다.
+제공한다. `applicationAccountedBytes()`와 위 세 owner-lifecycle 필드는 ABI 예약 필드이며
+항상 `0`이다. Reset은 current·pending·queue count를 유지하고 두 peak를 current로
+재기준화하며 epoch counter를 0으로 만든 뒤 `measurementEpoch`을 증가시킨다. Budget
+snapshot ABI version/size가 맞지 않으면 `UnsupportedOperationException`이다.
 
 Java와 Kotlin은 같은 Java method를 호출한다. 별도 Kotlin adapter나 다른 단위의 option을
 추가하지 않는다. Request/reply API는 HWM 값을 인자로 받지 않으며 기존 lifetime과 ownership

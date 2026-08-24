@@ -259,9 +259,8 @@ behavior are defined only by the immutable byte value.
   (`Result == Backpressured`), and the retry policy belongs to the application.
   `TryPublish(topic)` is the separate surface that observes the same
   back-pressure as `false` instead of an exception.
-- A back-pressure-cleared callback (`OnSendReady`) is not part of the public
-  contract: the `send_ready` readiness-hint semantics were withdrawn in Core
-  0.13.0.
+- There is no public `OnSendReady`. An HWM-managed asynchronous send completes
+  the Task returned by `Async(...)` from Core send completion.
 - A builder's start method takes only a target identity, topic, channel, routing id, or request sequence. Payload, flag, timeout, callback, and async submit choices are handled at the builder stage.
 - A reply builder has no send-flag stage. Since the core reply function takes no send-flag argument, the .NET binding does not expose a no-op `Flags(...)` as part of the public contract.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
@@ -324,7 +323,7 @@ behavior are defined only by the immutable byte value.
   runtime installs `zlink_send_complete_handler` once, on the first `Async(...)`,
   and every operation then hands one complete record to `zlink_send_async`. The
   binding owns no park queue, no readiness retry pump, no deadline timer and no
-  dispatcher thread — the `send_ready` readiness-hint semantics are withdrawn.
+  dispatcher thread. There is no public send-ready callback.
 - The completion callback only delivers completion. It never calls send,
   publish, or request on any socket; Core refuses such a call with `EDEADLK`.
 - The completion delegate instance handed to Core must outlive the socket. The
@@ -455,21 +454,15 @@ allocation-free draining.
   internal topic receive buffers for a later `Subscribe` call. It is valid only while the
   `TopicMessage` is open; after terminal `Dispose()` it throws `ObjectDisposedException` and
   does not reopen the object.
-- Ordinary `Recv(Received, ...)` and `Subscribe(TopicMessage, ...)` keep their existing behavior
-  of returning Core queue credit at dequeue.
-- A Framework backend explicitly selects `RecvRetained(Received, ...)` or
-  `SubscribeRetained(TopicMessage, ...)`. These entry points preserve existing framing and
-  metadata while internally adopting one Core retained-credit lease for each caller-visible
-  physical part. `Received` releases its current parts and all leases exactly once on
-  `Dispose()` or when the same storage starts another receive. `TopicMessage` does the same on
-  `Dispose()`, `ReleaseForReuse()`, or when the same storage starts another subscribe. An
-  internal finalizer is only a leak-prevention fallback; normal paths perform deterministic
-  cleanup first. A retained payload copy does not own the lease.
-- Retained receive is an internal lifetime behavior of the aggregate `Received` and
-  `TopicMessage` paths. Part-level primitives and ordinary aggregate receive keep their existing
-  behavior; the binding adds neither a public lease handle nor separate application capacity.
-  Dealer message type and request sequence, Router source RID and request sequence, and SUB topic
-  and source RID remain the existing typed receive results.
+- Core byte-HWM charge ends when ordinary `Recv(Received, ...)` or
+  `Subscribe(TopicMessage, ...)` dequeues the payload. `Received` and
+  `TopicMessage` own only the managed lifetime of parts and metadata;
+  `Dispose()`, `ReleaseForReuse()`, and storage reuse do not participate in Core
+  HWM accounting.
+- No separate retained receive, lease handle, or application byte capacity
+  exists in a public or internal API. Ordinary receive preserves the Dealer
+  message type and request sequence, Router source RID and request sequence,
+  and SUB topic and source RID.
 - `false` means no data only for a non-blocking receive using `RecvFlags.DontWait`.
 - A real receive failure (one that is not simply no-data) throws `ZlinkRecvException`.
 - A control-plane API such as monitor recv or timer recv may keep a nullable return form when no-data is a natural value shape.
@@ -556,10 +549,11 @@ aggregates, application/completion queue counts,
 `OutstandingApplicationLeaseCount`, `RetiredQueueCount`,
 `DeferredOriginCreditBytes`, oversize/blocked/aggregate flags,
 `BudgetGeneration`, and `MeasurementEpoch` without unit conversion. Reset
-preserves current, pending, queue-count, and those three owner-lifecycle gauges,
-rebases both peaks to current, clears epoch counters, and increments
-`MeasurementEpoch`. A budget snapshot ABI version/size mismatch throws
-`NotSupportedException`.
+preserves current, pending, and queue-count gauges, rebases both peaks to
+current, clears epoch counters, and increments `MeasurementEpoch`.
+`ApplicationAccountedBytes` and the three owner-lifecycle fields are
+ABI-reserved and always zero. A budget snapshot ABI version/size mismatch
+throws `NotSupportedException`.
 
 Request/reply APIs take no HWM value as an argument. While `Async(...)` waits
 for HWM credit on the selected exact target, it preserves the request's

@@ -1,68 +1,138 @@
+---
+title: "Events"
+---
+
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/04-events/) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Errors](03-errors.en.md) | [Next: Polling](05-polling.en.md)
 <!-- zlink-nav:end -->
 
-# Events and readiness catalog
+# Events
 
-This document defines the boundaries among ZLink Core raw event families
-and readiness meanings.
+> **What this chapter defines** — the catalog of socket events and readiness
+> values. [Polling](05-polling.en.md) and [Monitoring](06-monitoring.en.md)
+> define the consumption paths.
 
-## 1. Event families
+## 1. Events overview
+
+Events observed by applications in zlink Core fall into three families:
+monitor events, which subscribe to and record changes in a
+[socket](glossary.en.md#socket)'s connection state over a separate channel;
+readiness, which indicates that attempting a receive or submit retry now may be
+worthwhile; and generic timer fires. This document defines the boundary between
+ZLink Core raw event families and readiness meanings—when each event occurs and
+what values it carries.
+
+The following documents own the contracts for the paths that actually consume
+events.
+
+| Related contract | Defining document |
+|---|---|
+| readiness consumption—`zlink_poll` and poller wait APIs | [Polling](05-polling.en.md) |
+| opening a monitor, handler and recv consumption, event masks and the `zlink_monitor_event_t` declaration, queue overflow, and status counters | [Monitoring](06-monitoring.en.md) |
+
+## 2. Event families
 
 | Family | Source | Delivery API | Meaning |
 |---|---|---|---|
-| socket monitor | raw-socket monitor handle | handler or receive | bind, connect, handshake, disconnect, protocol, and close |
-| poller readiness | raw socket, FD, or generic timer | `zlink_poll` or poller wait | receiving or retrying a submit is worthwhile |
-| timer fire | generic timer handle | handler or timer receive | an accumulated fire count is available |
+| socket monitor | raw socket monitor handle | handler or recv | bind, connect, handshake, disconnect, protocol, and close |
+| poller readiness | raw socket, FD, or generic timer | `zlink_poll`, poller wait | attempting a receive or submit retry is worthwhile |
+| timer fire | generic timer handle | handler or timer recv | an accumulated fire count is available |
 
-A monitor event is an observation record. Readiness is a level-triggered
-indication that work may be available. One readiness signal does not correspond
-to one message and does not guarantee that the next operation succeeds.
+A monitor event is an observation record of something that has already
+happened. Readiness, by contrast, is a level-triggered state that indicates the
+possible presence of work: it is not a record that occurs once and ends, but a
+state value that remains observable as true while the condition persists. Do
+not assume that one readiness value corresponds one-to-one with one message or
+guarantees the success of the next operation.
 
-## 2. Raw-socket lifecycle
+## 3. Raw socket lifecycle
 
-A raw-socket monitor records endpoint bind/listen, outgoing connect, accept,
+A raw socket monitor records endpoint bind/listen, outgoing connect, accept,
 handshake success or failure, disconnect, protocol error, and close. Disconnect
-reasons distinguish transport error, handshake failure, Context termination,
-and unknown. Events contain no service topology or application payload.
+reasons distinguish transport error, handshake failure,
+[Context](glossary.en.md#context) termination, and unknown. Events contain no
+service topology or application payload.
 
-## 3. Receive-flow events
+## 4. Receive-flow event
 
-A paired DEALER/ROUTER socket reports the receive-flow state of its peers with
-three monitor events. `ZLINK_EVENT_SEND_FLOW_PAUSED` and
-`ZLINK_EVENT_SEND_FLOW_RESUMED` are emitted only when a peer's state actually
-flips between PAUSED and RUNNING on one application pipe of this socket, after
-that flip has been applied to the pipe. `ZLINK_EVENT_FLOW_STATE_STALE` is
-emitted when Core rejects a flow-state frame as stale or duplicate. Core emits
-no event for an ordinary data frame, for a repeated request of the state a peer
-already holds, and for a flow-state frame that changes nothing.
+A paired DEALER/ROUTER socket reports its peer's receive-flow state with three
+monitor events. The peer communicates its PAUSED or RUNNING state in a
+flow-state frame, and Core applies that state to the application pipe from this
+socket to that peer—a directional message channel connecting one socket and one
+peer.
+
+`ZLINK_EVENT_SEND_FLOW_PAUSED` and `ZLINK_EVENT_SEND_FLOW_RESUMED` occur only
+when the peer state on one application pipe of this socket actually transitions
+between PAUSED and RUNNING, and only after Core applies that transition to the
+pipe. `ZLINK_EVENT_FLOW_STATE_STALE` occurs when Core rejects a flow-state frame
+as stale or duplicate. No event occurs for an ordinary data frame, a repeated
+request for the state that the peer already maintains, or a flow-state frame
+that changes nothing.
+
+The version number of the applied flow state is called the flow epoch. Each
+event carries the following values.
 
 | Event | `value` | `flags` | Other fields |
 |---|---|---|---|
-| `ZLINK_EVENT_SEND_FLOW_PAUSED` | flow epoch of the applied state | none | `routing_id` of the paused peer, `transport_pair_id`, `transport_pair_generation` |
-| `ZLINK_EVENT_SEND_FLOW_RESUMED` | flow epoch of the applied state | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` when clearing the remote pause left the pipe writable | same as PAUSED |
-| `ZLINK_EVENT_FLOW_STATE_STALE` | received generation or received epoch, selected by the reason flag | exactly one of `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION` or `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | `transport_pair_id`, `transport_pair_generation` holding the current generation |
+| `ZLINK_EVENT_SEND_FLOW_PAUSED` | flow epoch of the applied state | none | `routing_id`, `transport_pair_id`, and `transport_pair_generation` of the paused peer |
+| `ZLINK_EVENT_SEND_FLOW_RESUMED` | flow epoch of the applied state | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` if clearing the remote pause makes the pipe actually writable | same as PAUSED |
+| `ZLINK_EVENT_FLOW_STATE_STALE` | received generation or received epoch, selected by the reason flag | exactly one of `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION` and `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | `transport_pair_id` and `transport_pair_generation`, which contains the current generation |
 
-`ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` is absent when another cause —
-byte HWM, a transport wait, or termination — still blocks the pipe, so a
-RESUMED event alone does not promise that the next send is admitted.
+`ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` is absent if another cause, such
+as byte [HWM](glossary.en.md#hwm), transport wait, or termination, still blocks
+the pipe. A RESUMED event alone therefore does not guarantee that the next send
+is accepted.
 
-The two stale reasons select what `value` carries, so it is never ambiguous.
-With `FLOW_STATE_STALE_GENERATION`, the frame named a different connection
-generation; `value` is the received generation and `transport_pair_generation`
-is the current one. With `FLOW_STATE_STALE_EPOCH`, the frame belongs to the
-current generation but its epoch did not advance; `value` is the received
-epoch, and the current epoch is the one reported by the preceding PAUSED or
-RESUMED event for the same pair.
+The two stale reasons select the meaning of `value`, so it is unambiguous.
+`FLOW_STATE_STALE_GENERATION` means that the frame refers to a different
+connection generation; `value` is the received generation, and
+`transport_pair_generation` is the current generation.
+`FLOW_STATE_STALE_EPOCH` means that the frame belongs to the current generation
+but its epoch did not advance; `value` is the received epoch, and the current
+epoch is the value reported by the preceding PAUSED or RESUMED event for the
+same pair.
 
-The three events occupy bits 16, 17, and 18 of the monitor event mask, so
-`ZLINK_EVENT_ALL` is `0x7FFFF`. A monitor that selects an explicit mask
-receives them only when it sets those bits.
+These three events use bits 16, 17, and 18 of the monitor event mask, so
+`ZLINK_EVENT_ALL` is `0x7FFFF`. A monitor that specifies a mask directly must
+set the corresponding bits to receive these events.
 
-## 4. Ordering and overflow
+## 5. Ordering and overflow
 
-One monitor queue preserves the order in which Core commits events. No global
-wall-clock order is provided across connection I/O threads. [Monitoring](06-monitoring.en.md)
-owns the exact queue-overflow and status-counter contract.
+Within the same monitor queue, Core preserves the order in which it commits
+events. It provides no global wall-clock order across different connection
+[I/O threads](glossary.en.md#io-thread). [Monitoring](06-monitoring.en.md) owns
+the exact contract for queue overflow and status counters.
+
+## 6. Implementation and contract-test verification requirements
+
+Verify the following using only the public surface: the `event`, `value`,
+`flags`, and fields of events received through monitor handlers or recv, and the
+event mask specified when opening a monitor. Each item maps to one unit test.
+
+**Receive-flow event occurrence**
+
+- When a peer state on a paired DEALER/ROUTER socket actually transitions between PAUSED and RUNNING, `ZLINK_EVENT_SEND_FLOW_PAUSED` or `ZLINK_EVENT_SEND_FLOW_RESUMED` is observed after Core applies that transition to the application pipe.
+- No receive-flow event is observed for an ordinary data frame, a repeated request for the state the peer already maintains, or a flow-state frame that changes nothing.
+- `ZLINK_EVENT_FLOW_STATE_STALE` is observed when Core rejects a flow-state frame as stale or duplicate.
+
+**Event fields and flags**
+
+- The `value` of a PAUSED or RESUMED event is the flow epoch of the applied state, and the event contains the paused peer's `routing_id`, `transport_pair_id`, and `transport_pair_generation`.
+- A RESUMED event contains `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` only when clearing the remote pause makes the pipe actually writable. The flag is absent if another cause, such as byte HWM, transport wait, or termination, continues to block the pipe, and a RESUMED event alone does not guarantee acceptance of the next send.
+- The `flags` of a STALE event contain exactly one of `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION` and `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`.
+- For a GENERATION reason, `value` is the received generation and `transport_pair_generation` is the current generation. For an EPOCH reason, `value` is the received epoch, and the current epoch equals the value reported by the preceding PAUSED or RESUMED event for the same pair.
+
+**Event mask**
+
+- The three receive-flow events use bits 16, 17, and 18 of the monitor event mask, and `ZLINK_EVENT_ALL` is `0x7FFFF`.
+- A monitor with an explicitly specified mask receives these events only when the corresponding bits are set.
+
+**Ordering**
+
+- Events received from the same monitor queue preserve the order in which Core commits them.
+- No global wall-clock order is guaranteed between events from different connection I/O threads.
+
+[Monitoring](06-monitoring.en.md) owns verification of queue overflow and status
+counters.

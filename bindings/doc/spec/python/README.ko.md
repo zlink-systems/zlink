@@ -6,14 +6,14 @@ title: "Python 바인딩 공개 계약"
 [스펙 목록](../README.ko.md) | [이전: Node.js](../node/README.ko.md) | [다음: Go](../go/README.ko.md)
 <!-- bindings-nav:end -->
 
-# Python binding Core 0.13.0 공개 계약
+# Python binding Core 0.13.1 공개 계약
 
-> **이 장이 정의하는 것** — `zlink` Python package가 Core 0.13.0 raw messaging 위에 제공하는
+> **이 장이 정의하는 것** — `zlink` Python package가 Core 0.13.1 raw messaging 위에 제공하는
 > 공개 타입·소유권·오류 계약.
 
-- 이 문서는 `zlink` Python package가 제공하는 Core 0.13.0 raw messaging 계약을 정의한다.
+- 이 문서는 `zlink` Python package가 제공하는 Core 0.13.1 raw messaging 계약을 정의한다.
 - 현재 구현과 공개 header에 없는 기능은 이 문서의 계약이 아니다.
-- Python 3.9 이상을 지원하며, 현재 candidate package version은 `0.13.0`이다.
+- Python 3.9 이상을 지원하며 package version은 `0.13.1`이다.
 - 현재 native package target은 Linux x86_64이며, 다른 target은 별도 candidate payload와 clean consumer 검증 전까지 이 계약의 지원 범위가 아니다.
 
 | 절 | 다루는 내용 |
@@ -90,8 +90,9 @@ peak/provisional accounted byte, completion current/peak/pending과 total messag
 monitor/instance aggregate, application/completion queue count,
 `outstanding_application_lease_count`, `retired_queue_count`, `deferred_origin_credit_bytes`,
 oversize·blocked·aggregate flag, `budget_generation`과 `measurement_epoch`을 Python
-`int`/boolean으로 제공한다. Reset은 current·pending·queue count와 위 세 owner-lifecycle
-gauge를 유지하고 두 peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤
+`int`/boolean으로 제공한다. `application_accounted_bytes`와 위 세 owner-lifecycle
+필드는 ABI 예약 필드이며 항상 `0`이다. Reset은 current·pending·queue count를 유지하고
+두 peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤
 `measurement_epoch`을 증가시킨다. ABI version/size 불일치는 unsupported error다.
 
 ## 소유권과 수명
@@ -108,18 +109,12 @@ gauge를 유지하고 두 peak를 current로 재기준화하며 epoch counter를
 - callback을 등록하면 callback과 필요한 Python 참조는 native callback 등록보다 먼저 해제되지 않는다.
   callback 예외는 binding의 callback error policy에 따라 전달된다.
 
-일반 `recv_into`와 `subscribe_into`는 Core에서 part를 dequeue할 때 queue credit을 즉시
-반환한다. Framework backend만 `recv_retained_into`와 `subscribe_retained_into`를
-명시적으로 선택한다. 두 retained 경로는 일반 경로와 같은 `Received`/`TopicMessage`,
-routing id, request sequence, topic과 multipart framing을 보존하면서 caller-visible
-physical part마다 Core credit 하나를 aggregate owner가 private하게 보유한다.
-
-Retained 결과의 `close()`, context manager 종료 또는 같은 저장소의 다음 retained
-수신 시작은 native part와 모든 credit을 정확히 한 번 반환한다. 따라서 재사용 수신이
-no-data로 끝나도 이전 결과는 남지 않는다. Framework의 drop·cancel·error 정상 경로도
-소유한 aggregate를 명시적으로 닫아야 하며, Python reference count/GC cleanup은 누락 방지
-fallback이다. 개별 `ReceivedMessage`와 public API에는 raw lease handle, 별도 application
-capacity, allowance나 중복 accounting 상태를 노출하지 않는다.
+Core byte HWM charge는 일반 `recv_into`와 `subscribe_into`가 payload를 dequeue할 때
+끝난다. `Received`와 `TopicMessage`는 native part, routing id, request sequence, topic과
+multipart framing의 Python 수명만 소유한다. `close()`, context manager 종료 또는 저장소
+재사용을 Core HWM accounting에 연결하지 않는다. 별도 retained receive, raw lease handle,
+application byte capacity, allowance 또는 중복 accounting 상태는 public이나 internal
+API에 두지 않는다.
 
 ## Callback 표면
 
@@ -127,16 +122,13 @@ Core FFI의 `zlink_recv_handler()`는 Python package가 직접 노출하지 않�
 primitive다. Python의 공개 callback 표면은 STREAM packet의 `on_packet`,
 monitor event의 `on_event`로 고정한다. Raw receive나
 routed request completion callback을 등록하는 별도 public method는 제공하지 않는다.
-`send_ready` readiness-hint semantics는 폐지되었다
-(`bindings/doc/spec/async-coroutine-policy.ko.md`, 2차 개정) — `on_send_ready`는
-없다. HWM-managed send 완료는 `submit()`이 이미 반환하는 awaitable로만 전달된다
+공개 `on_send_ready`는 없다. HWM-managed send 완료는 `submit()`이 이미 반환하는 awaitable로 전달된다
 (Core `zlink_send_complete_handler` 통지), 별도 readiness callback으로 전달되지 않는다.
 
 ## 송수신과 no-data
 
 바인딩은 이 표면 전체에서 스레드, 대기열, 재시도를 하나도 소유하지 않는다
-(`bindings/doc/spec/async-coroutine-policy.ko.md`, 3차 개정;
-`doc/plan/core-send-completion-design.ko.md`).
+(`bindings/doc/spec/async-coroutine-policy.ko.md`).
 
 - PUB·STREAM 송신과 ROUTER reply 같은 unrelated 동기 builder는 message part를 추가한 뒤
   `submit()`한다. Raw ROUTER/`Received` reply의 `submit()`은 `None`을 반환하는 동기

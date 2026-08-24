@@ -63,6 +63,9 @@ object, and a Rust request builder's `submit()` returns a runtime-independent
   DEALER/ROUTER routed send, and request pass through a point where an HWM wait
   *can* occur, so they are classified ASYNC. The classification criterion is
   not "does an HWM wait happen often" — it is "can an HWM wait happen at all."
+  This operation classification does not force the same terminal return shape
+  in every language. Go's `Submit(ctx) error` is a synchronous terminal that
+  waits inside Core.
 - **Raw reply is HWM-free and genuinely synchronous.** A raw
   ROUTER/`Received` reply never passes through the HWM path, so it is a
   genuinely synchronous completion lane.

@@ -363,8 +363,8 @@ public crate items and re-exports.
   context Core delivered the completion on. `timeout(...)` maps to
   `zlink_send_async_options_t::timeout_ms`, a per-operation deadline. The
   binding keeps no park queue, no WRITABLE retry, no deadline timer and no
-  dispatcher thread: the `send_ready` readiness-hint surface is retired, and
-  the per-socket-type `on_send_ready` was removed with it.
+  dispatcher thread. There is no public `on_send_ready`; send completion is
+  delivered only through the Future.
 - Routed send/request builders do not also expose callback, blocking-wait, or
   progress-polling terminals. PUB/XPUB `publish` and ROUTER reply remain
   separate synchronous operation contracts. The raw
@@ -437,9 +437,11 @@ aggregates, application/completion queue counts,
 `outstanding_application_lease_count`, `retired_queue_count`,
 `deferred_origin_credit_bytes`, oversize/blocked/aggregate flags,
 `budget_generation`, and `measurement_epoch` as `u64`/boolean values. Reset
-preserves current, pending, queue-count, and those three owner-lifecycle gauges,
-rebases both peaks to current, clears epoch counters, and increments
-`measurement_epoch`. An ABI version/size mismatch is an unsupported error.
+preserves current, pending, and queue-count gauges, rebases both peaks to
+current, clears epoch counters, and increments `measurement_epoch`.
+`application_accounted_bytes` and the three owner-lifecycle fields are
+ABI-reserved and always zero. An ABI version/size mismatch is an unsupported
+error.
 
 ## Receive flow state
 
@@ -496,15 +498,13 @@ logical spot.
 ## Receive and Subscribe shape
 
 - Data-plane receive and subscribe APIs use a reusable, caller-owned result storage.
-- Ordinary `recv` and `subscribe` return Core queue credit immediately on
-  dequeue. Only the explicit `recv_retained` and `subscribe_retained` entry
-  points selected by a Framework backend privately attach each physical
-  part's opaque Core lease to the `Received` or `TopicMessage` aggregate. No
-  raw lease or capacity value is public.
-- A retained aggregate releases every lease exactly once when it is reused by
-  the next receive, closed or consumed, with `Drop` as the fallback. DEALER
-  request sequence, ROUTER routing id/request sequence, and SUB topic/routing
-  id metadata remain identical to the existing typed receive paths.
+- Core byte-HWM charge ends when ordinary `recv` or `subscribe` dequeues the
+  payload. `Received` and `TopicMessage` own only the Rust lifetime of parts
+  and metadata; reuse, consuming accessors, and `Drop` do not participate in
+  Core HWM accounting. No separate retained receive, raw lease handle, or
+  application byte capacity exists in a public or internal API. Ordinary typed
+  receive preserves DEALER request sequence, ROUTER routing id/request
+  sequence, and SUB topic/routing id metadata.
 - Non-blocking no-data is distinguished from a hard receive failure.
 - A SPOT readable dispatch event is a readiness notification. The caller drains the matching receive API until it returns no-data.
 - Returned message data has clear ownership and lifetime. Borrowed data never outlives its native owner.

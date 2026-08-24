@@ -1,159 +1,199 @@
+---
+title: "I/O thread"
+---
+
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/03-io-thread/) | English
 
 <!-- zlink-nav:start -->
 [Systems Index](README.en.md) | [Previous: Threading Model](02-threading-model.en.md) | [Next: Thread Safety](04-thread-safety.en.md)
 <!-- zlink-nav:end -->
 
-# I/O Thread Internals
+# I/O thread
 
-This document describes what I/O threads do inside a zlink context,
-how they are created, and how work is distributed across them.
+> **What this chapter defines** — What an I/O thread does, how it is created, how work is
+> distributed, and its internal implementation.
 
-For the high-level threading model (application threads, reaper thread,
-inter-thread communication), see [Threading Model](02-threading-model.en.md).
+## 1. I/O thread overview
 
-## 1. Overview
+An [I/O thread](../glossary.en.md#io-thread) is a background thread created and managed by a
+[Context](../glossary.en.md#context) that performs the actual network send and receive operations.
+I/O threads are central to zlink networking: all actual network send and receive operations,
+protocol encoding and decoding, and connection management occur on I/O threads.
 
-Each I/O thread runs a dedicated **async event loop** that:
+Each I/O thread runs a dedicated **asynchronous event loop** that performs the following tasks:
 
-1. Polls registered sockets for read/write readiness
-2. Processes commands received through its mailbox
+1. Polls the read/write readiness of registered [sockets](../glossary.en.md#socket)
+2. Processes commands received through a mailbox (an inter-thread command delivery channel)
 3. Executes timers
 
-I/O threads are the workhorses of zlink networking: all actual network
-send/receive, protocol encoding/decoding, and connection management
-happens on I/O threads.
+This document describes the observable behavior of I/O thread creation and lifetime, as well as
+the internal implementation of the event loop, command processing, and thread assignment. The
+high-level threading model (application threads, the reaper thread, and inter-thread
+communication) is covered by the [Core threading model](02-threading-model.en.md).
 
-## 2. Creation and Lifecycle
+The following documents own the related contracts:
 
-I/O threads are created lazily — `zlink_ctx_new()` allocates the
-context but threads are not spawned until the first socket is created.
+| Related contract | Defining document |
+|---|---|
+| The `ZLINK_IO_THREADS` option and its default value | [Context](../01-context.en.md#4-options) |
+| High-level thread kinds and inter-thread communication | [Core threading model](02-threading-model.en.md) |
+| Short definitions of each term | [Core glossary](../glossary.en.md) |
+
+## 2. Creation and lifetime
+
+I/O threads are created lazily: `zlink_ctx_new()` allocates the context, but does not start the
+threads until the first socket is created.
 
 ```c
 void *ctx = zlink_ctx_new();
-zlink_ctx_set(ctx, ZLINK_IO_THREADS, 4);  /* must be set before first socket */
+zlink_ctx_set(ctx, ZLINK_IO_THREADS, 4);  /* Must be set before the first socket is created */
 
-void *socket = zlink_socket(ctx, ZLINK_SOCKET_DEALER);  /* triggers thread launch */
+void *socket = zlink_socket(ctx, ZLINK_SOCKET_DEALER);  /* This call starts the threads */
 ```
 
-Internally, `ctx_runtime_resources.cpp:start_io_threads_locked()` creates
-`io_thread_count` instances of `io_thread_t`. Each thread receives a
-unique slot ID and its mailbox is registered in the context's slot
-registry for command routing.
+Thread names follow the pattern `IO/0`, `IO/1`, ... `IO/N-1`. The [Context](../01-context.en.md#4-options)
+document owns the contract for the `ZLINK_IO_THREADS` option that determines the thread count and
+its default value.
 
-Thread names follow the pattern `IO/0`, `IO/1`, ... `IO/N-1`.
+Internally, `ctx_runtime_resources.cpp:start_io_threads_locked()` creates `io_thread_count`
+instances of `io_thread_t`. Each thread receives a unique slot ID, and its mailbox is registered in
+the context's slot registry for command routing.
 
-## 3. Event Loop
+## 3. Internal structure
 
-Each I/O thread owns a Boost ASIO-based poller (`asio_poller.cpp`).
-The main loop in `poller_t::loop()` repeats the following cycle:
+> **Contract ownership for this section** — This section describes the implementation. If the
+> implementation changes, update this document to match the code. [Context](../01-context.en.md#4-options)
+> owns the thread-count option contract, and the [Core threading model](02-threading-model.en.md)
+> owns the high-level description of thread kinds and inter-thread communication.
 
-```
-┌─────────────────────────────────────────────┐
-│                Event Loop                   │
-│                                             │
-│  1. Execute due timers                      │
-│  2. io_context.poll()  — non-blocking       │
-│     Process all ready I/O events            │
-│  3. If no events ready:                     │
-│     io_context.run_for(≤100ms) — blocking   │
-│  4. Clean up retired poll entries            │
-│                                             │
-│  ← repeat ─────────────────────────────────→│
-└─────────────────────────────────────────────┘
-```
+### 3.1 Event loop
 
-- **Step 2** uses non-blocking `poll()` to batch-process all ready
-  events in one pass for throughput.
-- **Step 3** blocks up to 100 ms when no events are pending, avoiding
-  busy-wait CPU burn.
+Each I/O thread owns a Boost ASIO-based poller (`asio_poller.cpp`). The main loop in
+`poller_t::loop()` repeats the following cycle:
 
-## 4. Socket I/O Handling
+1. Execute expired timers.
+2. Batch-process ready I/O events with a non-blocking `io_context.poll()` to improve throughput.
+3. If no events are ready, block for up to 100 ms with `io_context.run_for(≤100ms)` to prevent
+   busy-wait CPU consumption.
+4. Clean up retired poll entries and return to step 1.
 
-Network I/O uses the Proactor model. The engine (`asio_engine_t`) issues
-`async_read_some()` / `async_write_some()` to the transport; the I/O thread's
-`io_context` waits for the OS async I/O to complete and then invokes the
-completion handler. The engine does not poll readiness — it only processes
+### 3.2 Socket I/O handling
+
+Network I/O uses the Proactor model: instead of directly polling read/write readiness, it submits
+asynchronous I/O requests to the OS and processes only their completion results. When the engine
+(`asio_engine_t`) calls `async_read_some()` / `async_write_some()` on the transport, the I/O
+thread's `io_context` waits for the OS asynchronous I/O operation to complete and then invokes the
+completion callback. The engine does not directly poll read/write readiness; it processes only
 completion results.
 
-- **Read complete** → the received bytes are handed to the protocol decoder to
-  decode frames, messages are pushed into the receive pipe, and the next
-  `async_read_some()` is issued.
-- **Write complete** → a message pulled from the send pipe is encoded and sent;
-  if data remains, the next `async_write_some()` is issued.
+```mermaid
+sequenceDiagram
+    participant E as engine (asio_engine_t)
+    participant IO as io_context (I/O thread)
+    participant OS as OS
+    E->>IO: Request async_read_some()
+    IO->>OS: Register asynchronous read
+    OS-->>IO: Read completes
+    IO-->>E: Invoke completion callback
+    Note over E: Decode the read bytes and deliver them to the receive pipe
+    E->>IO: Request async_read_some() again
+```
 
-`asio_poller`'s `async_wait` readiness path is used only for mailbox command
-wakeup, not for network data.
+- **Read completion** → Pass the read bytes to the protocol decoder to decode frames, deliver the
+  message to the receive pipe, and issue `async_read_some()` again.
+- **Write completion** → Encode and send the message pulled from the send pipe, then issue the next
+  `async_write_some()` if data remains.
 
-## 5. Command Processing
+The `asio_poller` `async_wait` readiness path is used only to wake up mailbox command processing,
+not for network data.
 
-Each I/O thread has a **mailbox** — a command pipe
-(`ypipe_t<command_t>`, send side protected by a mutex) paired with a signaler for wake-up.
+### 3.3 Command processing
+
+Each I/O thread has a **mailbox**: a command pipe (`ypipe_t<command_t>`, with the sender side
+protected by a mutex) paired with a signaler for wake-up notifications.
 
 ```cpp
 // io_thread.cpp — process_mailbox()
 do {
     command_t cmd;
     int rc = _mailbox.recv(&cmd, 0);
-    while (rc == 0 || errno == EINTR) {      // EINTR retry
+    while (rc == 0 || errno == EINTR) {      // Retry on EINTR
         if (rc == 0)
             cmd.destination->process_command(cmd);
         rc = _mailbox.recv(&cmd, 0);
     }
-} while (_mailbox.reschedule_if_needed());    // reschedule if more remain
+} while (_mailbox.reschedule_if_needed());    // Reschedule if commands remain
 ```
 
-Commands arrive from application threads (via `ctx_t::send_command()`)
-and include operations such as:
+Commands arrive from application threads through `ctx_t::send_command()` and include the
+following kinds:
 
 | Command | Purpose |
 |---------|---------|
 | `plug` | Attach a new session/engine to this I/O thread |
 | `attach` | Attach an engine to a session |
-| `bind` | Establish pipe(s) between session and socket |
+| `bind` | Establish a pipe between a session and socket |
 | `activate_read` | Resume reading from a pipe |
 | `activate_write` | Resume writing to a pipe |
 | `stop` | Shut down the I/O thread |
 
-The mailbox is connected to the I/O thread's `io_context` (`set_io_context()`);
-sending a command posts an ASIO handler that wakes the blocking event loop to
-process the command.
+The mailbox is connected to the I/O thread's `io_context` through `set_io_context()`. Sending a
+command posts an ASIO handler, which wakes the blocking event loop and processes the command.
 
-## 6. Thread Assignment
+### 3.4 Thread assignment
 
-When a socket creates a new connection, it picks an I/O thread based
-on:
+When a socket creates a new connection, it selects an I/O thread according to the following
+criteria:
 
-1. **Affinity mask** — if set, restricts the candidate set
-2. **Load distribution** — general connections pick the thread with the fewest
-   registered handles (least-load); STREAM connections default to round-robin
-   (`ZLINK_ASIO_STREAM_SESSION_SCHED=minload` switches to least-load)
+1. **Affinity mask** — Restricts the candidate set when configured.
+2. **Load distribution** — General connections select the thread with the fewest registered
+   handles (least load) among the candidates, while STREAM connections select candidates in
+   round-robin order by default. If the `ZLINK_ASIO_STREAM_SESSION_SCHED=minload` environment
+   variable is set, STREAM connections also select the least-loaded thread.
 
-This distributes network connections across I/O threads for load
-balancing. The assignment is per-connection, not per-socket — a single
-socket with multiple connections may span several I/O threads.
+This distributes network connections across I/O threads. The assignment unit is a **connection**,
+not a socket: when one socket has multiple connections, those connections may span multiple I/O
+threads.
 
-## 7. Tuning Guidelines
+## 4. Tuning guidelines
 
 | Scenario | Recommended `ZLINK_IO_THREADS` |
-|----------|-------------------------------|
-| Single socket, few connections | 1 |
-| Many sockets or connections | 2–4 (default 4) |
-| High-throughput server (100+ connections) | Match to available CPU cores |
+|----------|--------------------------------|
+| One socket, few connections | 1 |
+| Many sockets or many connections | 2–4 (default: 4) |
+| High-performance server (100+ connections) | Match the number of available CPU cores |
 
-Setting more I/O threads than CPU cores provides no benefit and adds
-context-switch overhead. Profile with the
-[perf benchmarks](../../../../../bindings/c/perf) before increasing beyond 4.
+Setting more I/O threads than the number of CPU cores provides no benefit and only increases
+context-switch overhead. Profile with the [performance benchmarks](../../../../../bindings/c/perf)
+before increasing the value beyond 4.
 
-## Key Source Files
+## 5. Key source files
 
 | File | Role |
 |------|------|
-| `core/src/runtime/core/io_thread.hpp/.cpp` | I/O thread class, mailbox processing |
+| `core/src/runtime/core/io_thread.hpp/.cpp` | I/O thread class and mailbox processing |
 | `core/src/runtime/core/ctx_runtime_resources.cpp` | Thread creation in `start_io_threads_locked()` |
 | `core/src/runtime/engine/asio/asio_poller.hpp/.cpp` | Boost ASIO event loop and socket monitoring |
 | `core/src/runtime/core/poller_base.hpp` | Worker thread base class |
-| `core/src/runtime/core/mailbox.hpp` | Lock-free command queue with signaler |
+| `core/src/runtime/core/mailbox.hpp` | Lock-free command queue and signaler |
 
----
-[← Threading Model](02-threading-model.en.md)
+## 6. Implementation and contract-test verification requirements
+
+This section lists the items that an implementer must verify. These behaviors are observable only
+through the public surface (`zlink_ctx_new`, `zlink_ctx_set`, and `zlink_socket`) and the process
+thread list and names exposed by the OS. Each item maps to one test.
+
+**Creation and lifetime**
+
+- No I/O thread runs when only `zlink_ctx_new()` has been called. The first socket must be created
+  before the threads run.
+- If `ZLINK_IO_THREADS` is set to N before the first socket is created and then a socket is created,
+  the thread names follow the pattern `IO/0`, `IO/1`, ... `IO/N-1`.
+
+**Thread assignment**
+
+- When one socket has multiple connections, those connections may span multiple I/O threads. The
+  assignment unit is a connection, not a socket.
+
+[Context](../01-context.en.md#6-implementation-and-contract-test-verification) owns verification of
+the set/get and error contracts for the `ZLINK_IO_THREADS` option itself.

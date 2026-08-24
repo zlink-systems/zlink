@@ -1,3 +1,7 @@
+---
+title: "Auto HWM"
+---
+
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/06-auto-hwm/) | English
 
 <!-- zlink-nav:start -->
@@ -6,131 +10,93 @@
 
 # Auto HWM
 
-> **What this chapter defines** — the Auto HWM budget calculation and
-> admission contract, the related context functions, and their internal
-> implementation.
+> **What this chapter defines** — Auto HWM budget calculation and admission contracts, the related context functions, and their internal implementation.
 
-## 1. Overview
+## 1. Auto HWM Overview
 
-zlink Core automatically computes the byte ceiling each socket queue keeps
-([HWM](../glossary.en.md#hwm)) from the context memory budget and divides it
-among the queues, so the application does not have to set each one
-individually. This automatic policy is called
-[Auto HWM](../glossary.en.md#auto-hwm-budget).
+zlink Core automatically calculates the byte limit ([HWM](../glossary.en.md#hwm)) retained by each socket queue from the context memory budget and distributes it among the queues, so the application does not have to set every limit individually. This automatic policy is called the [Auto HWM budget](../glossary.en.md#auto-hwm-budget).
 
-This document defines the public contract for which inputs compute that
-budget and how it applies to message admission, the related context
-functions, and their internal implementation. The functions belong to the
-context object (`zlink_ctx_*`), but this document treats Auto HWM as a
-single topic and covers them together here.
+This document defines the public contract for the inputs used to calculate that budget and how it applies to message admission, the related context functions, and their internal implementation. The functions belong to the context object (`zlink_ctx_*`), but this document covers them together under the single topic of Auto HWM.
 
-The documents that own related contracts are as follows.
+The following documents own related contracts.
 
-| Related contract | Owning document |
+| Related contract | Defining document |
 |---|---|
-| Auto HWM option enum and defaults | [Context](../01-context.en.md) |
+| Auto HWM option enums and defaults | [Context](../01-context.en.md#4-options) |
 | Socket HWM options and observable behavior | [Socket Common](../socket/README.en.md) |
-| Short definition of each term | [Core Glossary](../glossary.en.md) |
+| Short definitions of terms | [Core Glossary](../glossary.en.md) |
 
-## 2. Auto HWM budget calculation
+## 2. Auto HWM Budget Calculation
 
-This section defines the public calculation and admission contract. The
-[Internals](#4-internals) section of this document owns queue-local state,
-decoder reservations, and data-path cost boundaries.
+This section defines the public calculation and admission contracts. The [Internals](#4-internals) section of this document owns queue-local state, decoder reservations, and data-path cost boundaries.
 
-Core checks the following inputs in priority order and picks the first usable
-value. The `ZLINK_CTX_OPT_AUTO_HWM_*` below are
-[Context options](../01-context.en.md#4-options) the application
-sets with `zlink_ctx_set_data`.
+Core checks the following inputs in priority order and selects the first usable value. The `ZLINK_CTX_OPT_AUTO_HWM_*` values below are [Context options](../01-context.en.md#4-options) that the application sets with `zlink_ctx_set_data`.
 
 1. A positive `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
 2. A positive `ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`
-3. A positive runtime memory hint, reduced to the smaller value when Core also
-   detects a finite hard limit
+3. A positive runtime memory hint. If Core also detected a finite hard limit, the smaller of the two values
 4. A finite hard limit detected by Core
 5. Physical memory detected by Core
 
-A manual Core budget is used unchanged. For every other memory input, Core
-applies the selected profile percentage exactly once and then clamps the result
-to the effective cap defined below.
+A manual Core budget is used as-is without applying the profile percentage or effective cap. For every other memory input, Core applies the selected profile percentage once and then clamps the result to the effective cap below.
 
-This budget is the normal-state distribution basis for application directional
-pipe HWMs, not a hard cap enforced against context-wide actual usage. Each pipe
-checks only its own HWM together with retained-credit leases originating from
-that pipe. A pipe that reaches its HWM or uses its empty-pipe oversize exception
-does not reduce another pipe's HWM or stop that pipe's admission.
+This budget has the following properties.
 
-| Profile | Percentage | Fixed cap | General-data minimum | General-data maximum | STREAM minimum | STREAM maximum |
+- It is the basis for distributing the steady-state HWM of each application directional pipe. It is not a hard cap compared against context-wide usage.
+- Each pipe checks only its own queue bytes and HWM.
+- A pipe that reaches its HWM or uses the empty-pipe oversize exception does not reduce another pipe's HWM or stop that pipe's admission.
+
+| Profile | Percentage | Fixed cap | General data role minimum | General data role maximum | STREAM minimum | STREAM maximum |
 |---|---:|---:|---:|---:|---:|---:|
 | Compact | 2% | 64 MiB | 32 KiB | 512 KiB | 8 KiB | 32 KiB |
 | LowLatency | 3% | 256 MiB | 32 KiB | 2 MiB | 16 KiB | 64 KiB |
 | Balanced | 5% | 512 MiB | 64 KiB | 1 MiB | 64 KiB | 128 KiB |
 | Throughput | 8% | 1024 MiB | 128 KiB | 8 MiB | 256 KiB | 512 KiB |
 
-Only the STREAM role uses the STREAM bounds. The `none` role is excluded from
-planning; every other current role uses the general-data bounds, with one
-exception: under the Balanced profile the `recv_ingress` role (SUB/XSUB) uses
-2 MiB instead of the general-data maximum.
+The role-specific bounds are as follows.
 
-The percentage alone does not determine the budget. The budget is the
-percentage share clamped to an **effective cap**, which is the larger of the
-profile's fixed cap and the floor every active application directional queue
-needs in order to reach its own role minimum. A fixed cap alone would push a
-queue-heavy deployment below its own minima; a queue floor alone would let a
-large host reserve gigabytes for a handful of queues.
+- STREAM role: STREAM bounds.
+- `none` role: excluded from planning.
+- Every other current role: general data bounds.
+- Exception — the `recv_ingress` role (SUB/XSUB) under the Balanced profile: 2 MiB instead of the general data maximum.
 
-These three expressions produce the final Core budget
-(`effectiveCoreBudgetBytes`), the basis for dividing each queue's steady-state
-HWM described above.
+The profile percentage alone does not determine the budget. The budget is the percentage-based value clamped to the **[effective cap](../glossary.en.md#effective-cap)**. The effective cap is the larger of the profile's fixed cap and the floor required for all active application directional queues to reach their role minimums. A fixed cap alone pushes queue-heavy deployments below their queue minimums, while a queue floor alone allows a large host with only a few queues to reserve several GiB.
+
+The following expressions produce the final Core budget (`effectiveCoreBudgetBytes`). This budget is the basis for distributing the steady-state HWM of each queue described above.
 
 ```text
-percentShareBytes =                                            // memory limit × profile ratio
+percentShareBytes =                                            // memory limit × profile percentage
     (resolvedMemoryLimitBytes / 100) * profilePercent
-  + ((resolvedMemoryLimitBytes % 100) * profilePercent) / 100  // integer division avoids overflow
+  + ((resolvedMemoryLimitBytes % 100) * profilePercent) / 100  // avoid overflow with integer division
 
-effectiveCapBytes =                                            // larger of the two below
+effectiveCapBytes =                                            // larger of the two values below
     max (profileFixedCapBytes,                                 //   profile fixed cap
-         activeDirectionalQueueCount * perQueueMinimumBytes)   //   total for every queue to reach its minimum
+         activeDirectionalQueueCount * perQueueMinimumBytes)   //   total needed for all queues to receive their minimum
 
-effectiveCoreBudgetBytes = min (percentShareBytes, effectiveCapBytes)  // final budget = ratio value clamped by the cap
+effectiveCoreBudgetBytes = min (percentShareBytes, effectiveCapBytes)  // final budget obtained by clamping the percentage value to the cap above
 ```
 
-`perQueueMinimumBytes` is that profile's general-data role minimum.
-`activeDirectionalQueueCount` is known only once the physical queue registry has
-resolved every plannable application direction, so the budget is settled at that
-point (context finalize). Setting a manual Core budget skips this calculation
-entirely.
+`perQueueMinimumBytes` is the general data role minimum for that profile. `activeDirectionalQueueCount` is known only after the physical queue registry has resolved every plannable application direction, so the budget is finalized at that point (context finalize). Setting a manual Core budget skips this entire calculation.
 
-When Core detects a finite hard limit, an explicit memory limit or manual Core
-budget above that limit fails with `EINVAL`. A runtime memory hint may be set
-above it; calculation then uses the smaller of the hint and the finite hard
-limit.
+When Core detects a finite hard limit, setting an explicit memory limit or manual Core budget above that limit fails with `EINVAL`. A runtime memory hint may still be set, and calculation uses the smaller of the hint and the finite hard limit. Physical memory and the finite hard limit are detected only once when the context starts and are not detected again while it runs.
 
-A successful Auto HWM option setter stores the configured value and schedules
-a calculation through the normal debounce path. `zlink_ctx_get_data` returns
-the stored value immediately, but the budget snapshot reports the last recorded
-plan and may therefore retain the previous result until recalculation.
-`zlink_ctx_auto_hwm_recalculate` records a new plan immediately.
+When an Auto HWM option setter succeeds, it stores the configured value and schedules a new calculation through the normal debounce path. `zlink_ctx_get_data` returns the stored configured value immediately, but the budget snapshot returns the last recorded plan and may therefore contain the previous result until recalculation. Calling `zlink_ctx_auto_hwm_recalculate` records a new plan immediately.
 
-The ABI-v1 planner uses the context physical directional queue registry. The
-registry records every application ypipe direction exactly once with a stable
-queue ID and generation independent of endpoint ownership. It owns the send or
-receive role, profile bounds, manual HWM, current applied HWM, and accounted
-bytes. Observing the same inproc ypipe from two endpoints does not count the
-direction twice.
+The ABI v1 planner uses the context's physical directional queue registry. The registry registers each application ypipe direction once and owns the following state.
 
-Core atomically reserves the role minima for both application directions of a
-new pipe pair. If both reservations cannot be made, Core rejects the pair
-before publishing the attach and does not leave a partially registered
-direction. A manual direction reserves its finite manual HWM. Manual HWM `0`
-remains unlimited for admission, while planning reserves the role maximum and
-clears the aggregate-HWM-valid flag.
+- An endpoint-independent stable queue ID and generation
+- Send and receive roles and profile bounds
+- Manual HWM, current applied HWM, and accounted bytes
 
-An inproc physical ypipe does not add the values held by its two endpoints.
-Core resolves one final cap with the following rules, then reserves and applies
-that cap once in the registry.
+Even when two endpoints observe the same inproc ypipe, Core counts it only once per direction. A new pipe pair uses the following reservation rules for each direction.
 
-| Send endpoint | Receive endpoint | Final physical-ypipe cap |
+- Application direction: atomically reserves the role-specific minimum. If both directions cannot be reserved, Core rejects the entire reservation before publishing the attach and does not register only a subset of the directions.
+- Manual direction: also reserves the role-specific minimum before attach. A finite manual HWM applies to admission immediately and is included in the next plan's manual reservation sum and aggregate HWM statistics.
+- Direction with manual HWM `0`: admission remains unlimited, while the next plan uses the role-specific maximum as its calculation reservation and sets the flag that indicates the aggregate HWM is not finite.
+
+Among automatic directions, Core distributes the remaining budget by repeatedly and evenly raising queues that have not yet reached their maximum. This distribution method is called [water-filling](../glossary.en.md#water-filling). An inproc physical ypipe does not add the values from both endpoints. It calculates one final cap using the following rules, then reserves and applies that cap once in the registry.
+
+| Send endpoint | Receive endpoint | Final physical ypipe cap |
 |---|---|---|
 | Auto | Auto | Water-filling result |
 | Finite manual | Auto | Finite manual cap |
@@ -138,38 +104,31 @@ that cap once in the registry.
 | Finite manual A | Finite manual B | `min(A, B)` |
 | Unlimited manual | Finite manual | Finite manual cap |
 | Finite manual | Unlimited manual | Finite manual cap |
-| Unlimited manual | Auto | Automatic plan |
-| Auto | Unlimited manual | Automatic plan |
-| Unlimited manual | Unlimited manual | Unlimited admission; reserve the role maximum for planning |
+| Unlimited manual | Auto | Auto plan |
+| Auto | Unlimited manual | Auto plan |
+| Unlimited manual | Unlimited manual | Admission is unlimited; use the role-specific maximum as the calculation reservation |
 
-If the budget left after manual reservations is below the sum of all automatic
-minimums, Core keeps those minimums and sets the insufficient-budget flag. With
-sufficient budget, it divides the remainder by the number of unique unsaturated
-physical queues and repeatedly raises each queue up to its role maximum.
-Division remainders are granted one byte at a time in stable queue-ID order, so
-the same registry snapshot and inputs always produce the same result.
+If the budget remaining after subtracting manual reservations is less than the sum of the minimums for all automatic directions, Core does not reduce the minimums and sets the insufficient-budget flag. When the budget is sufficient, Core divides the remainder by the number of unique physical queues that have not reached their maximum and repeatedly increases each queue up to its maximum. It assigns division remainders one byte at a time in stable queue ID order. The same registry snapshot and inputs therefore always produce the same result.
 
-If a new explicit memory limit or manual Core budget cannot accommodate the
-current manual reservations and automatic minima together, the setter fails
-with `ENOBUFS` and preserves the previous configuration and plan. A new
-synchronous inproc attach also fails with `ENOBUFS` when it cannot reserve its
-required minima. If a runtime memory hint or detected hard limit shrinks while
-the context is running, Core does not remove existing pipes or messages; it
-records the new input and sets the insufficient-budget flag. A new asynchronous
-network attach is not published before its reservation succeeds, and Core
-terminates the failed connection attempt.
+When a new input cannot secure the required reservation, Core handles each situation as follows.
 
-When a connection increase lowers a queue target, Core records the new target
-immediately and blocks further admission while existing bytes drain below it.
-When a connection decrease raises a target, Core applies the increase only
-after the cooldown and only to a live queue with the same generation. A
-detached queue is removed after its outstanding retained leases reach zero; it
-remains a retired queue while leases are outstanding.
+| Situation | Core behavior |
+|---|---|
+| A new explicit memory limit or manual Core budget cannot accommodate the current manual HWMs and automatic minimums together | Stores the value and schedules recalculation. The planner preserves the automatic minimums and sets the insufficient-budget flag. |
+| A new synchronous inproc attach cannot reserve the required minimum | Fails with `ENOBUFS` |
+| The runtime memory hint decreases while running | Records the new value without removing existing pipes or messages. If the recalculated result is insufficient, sets the insufficient-budget flag. |
+| Physical memory or the hard limit decreases while running | Does not change the current context's inputs or plan because they are not detected again after context startup. |
+| A new asynchronous network attach has not obtained the required reservation | Does not publish the attach and terminates the failed connection attempt. |
 
-The **observable behavior** of multipart reservation, the empty-queue oversize
-exception, and the retained-credit lease is owned by
-[§5 Verification](#5-implementation-and-contract-test-verification); its
-**implementation mechanism** is owned by [§4 Internals](#4-internals).
+When the number of connections changes a per-queue target, Core applies the change as follows.
+
+| Change | Core behavior |
+|---|---|
+| A connection increase lowers the per-queue target | Records the new target immediately and blocks further admission until current retained bytes drain below the new target |
+| A connection decrease raises the target | Applies it after the cooldown only to a live queue with the same generation |
+| Detached queue | Removes it when no outstanding retained lease remains, or preserves it as a retired queue while a lease remains |
+
+The **observable behavior** of multipart reservation, the empty-queue oversize exception, and retained-credit leases is owned by [§5 Verification Requirements](#5-implementation-and-contract-test-verification-requirements), while their **implementation mechanisms** are owned by [§4 Internals](#4-internals).
 
 ```text
 originQueueUsedBytes(queue) =
@@ -177,45 +136,25 @@ originQueueUsedBytes(queue) =
   + applicationLeaseBytesFrom(queue)
 ```
 
-Ordinary admission checks only this origin-local sum and the applied HWM of
-that queue. Core does not block other queues merely because context
-`current_accounted_bytes` exceeds `effective_core_budget_bytes`.
+Ordinary admission checks only this origin-local sum and that queue's applied HWM. It does not block other queues merely because the context's `current_accounted_bytes` exceeds `effective_core_budget_bytes`.
 
-`total_planned_hwm_bytes` is the current target sum for application directions,
-and `total_applied_hwm_bytes` is the HWM sum actually applied to live
-application directions. A retired entry retains only outstanding leases and
-deferred origin credit; it contributes neither applied capacity nor the new
-water-filling denominator. `core_queue_accounted_bytes` and
-`application_accounted_bytes` distinguish owners; their
-`current_accounted_bytes` sum does not change during an owner transfer.
+`total_planned_hwm_bytes` is the sum of the current targets for application directions, and `total_applied_hwm_bytes` is the sum of the HWMs actually applied to live application directions. A retired entry retains only outstanding leases and deferred origin credit; it is excluded from the applied capacity sum and the new water-filling denominator. `core_queue_accounted_bytes` and `application_accounted_bytes` distinguish only the owner, and their sum, `current_accounted_bytes`, does not change before and after an ownership transfer.
 
-The DEALER/ROUTER completion progress lane does not apply a byte HWM, LWM,
-inproc HWM boost, or the legacy 256 KiB floor, and it is excluded from the
-water-filling denominator above. This lane carries only terminal replies and
-error replies. It is excluded from HWM admission and Core budget reservation,
-but Core observes its current and peak accounted bytes and pending-message
-count separately. Those values are included in
-`total_messaging_accounted_bytes` and excluded from application water-filling.
+The DEALER and ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) does not apply a byte HWM, LWM, inproc HWM boost, or the legacy 256 KiB floor, and it is excluded from the water-filling denominator above. This lane owns the progress of terminal replies and error replies and also synchronizes receive-flow-state frames between peers. The completion lane is excluded from HWM admission and Core budget reservation, but its current and peak accounted bytes and pending message count are observed separately. These values are included in `total_messaging_accounted_bytes` and excluded from application water-filling.
 
 ## 3. Functions
 
 ### zlink_ctx_auto_hwm_recalculate
 
-Run the automatic HWM planner for the whole context immediately.
+Immediately reapplies the automatic HWM plan to the entire current context.
 
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_ctx_auto_hwm_recalculate(void *context_);
 ```
 
-This function forces an immediate automatic HWM refresh for every socket in
-the context that still follows the automatic queue and buffer policy. Manual
-overrides remain manual, and disabled automatic HWM remains disabled. Use it
-after changing the Auto HWM profile or a memory-budget input to record a new
-plan without waiting for the normal refresh path.
+This function immediately recalculates automatic HWM for sockets that still follow the automatic queue and buffer policy. Values the user changed manually remain unchanged, and sockets with Auto HWM disabled remain disabled. Use it after changing the Auto HWM profile or a memory budget input to record a new plan without waiting for the normal refresh path.
 
-**Returns:** `ZLINK_CONFIG_OK` on success; otherwise a
-`zlink_config_result_t` value. `zlink_errno()` retains the detailed internal
-errno for diagnostics.
+**Returns:** `ZLINK_CONFIG_OK` on success; otherwise, a `zlink_config_result_t` value. `zlink_errno()` preserves the internal errno for diagnostics.
 
 **Errors:**
 - `EFAULT` -- invalid context handle.
@@ -228,55 +167,55 @@ errno for diagnostics.
 
 ### zlink_ctx_get_auto_hwm_budget_snapshot
 
-Read the last recorded context-wide Auto HWM plan into a versioned structure.
+Retrieves the last recorded context-wide Auto HWM plan in a versioned structure.
 
 ```c
 #define ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1 1u
 
-#define ZLINK_AUTO_HWM_BUDGET_FLAG_PLANNING_ACTIVE       (1u << 0)
-#define ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT          (1u << 1)
-#define ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_HWM_VALID   (1u << 2)
-#define ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW    (1u << 3)
+#define ZLINK_AUTO_HWM_BUDGET_FLAG_PLANNING_ACTIVE       (1u << 0)  // Auto HWM was active in the last plan
+#define ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT          (1u << 1)  // budget cannot fit manual reservations and required automatic minimums together
+#define ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_HWM_VALID   (1u << 2)  // no unlimited manual direction, so the HWM sum can be interpreted as finite
+#define ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW    (1u << 3)  // planner/queue aggregation exceeded uint64_t and saturated
 
 typedef struct zlink_auto_hwm_budget_snapshot_t {
-  uint32_t abi_version;
-  uint32_t struct_size;
-  uint64_t budget_generation;
-  uint64_t measurement_epoch;
-  uint64_t configured_memory_limit_bytes;
-  uint64_t runtime_memory_limit_bytes;
-  uint64_t resolved_memory_limit_bytes;
-  uint64_t configured_core_budget_bytes;
-  uint64_t effective_core_budget_bytes;
-  uint64_t total_planned_hwm_bytes;
-  uint64_t total_applied_hwm_bytes;
-  uint64_t manual_reserved_hwm_bytes;
-  uint64_t core_queue_accounted_bytes;
-  uint64_t application_accounted_bytes;
-  uint64_t current_accounted_bytes;
-  uint64_t provisional_accounted_bytes;
-  uint64_t peak_accounted_bytes;
-  uint64_t completion_current_accounted_bytes;
-  uint64_t completion_peak_accounted_bytes;
-  uint64_t completion_pending_message_count;
-  uint64_t total_messaging_accounted_bytes;
-  uint64_t monitor_queue_applied_hwm_bytes;
-  uint64_t monitor_queue_accounted_bytes;
-  uint64_t total_instance_applied_hwm_bytes;
-  uint64_t total_instance_accounted_bytes;
-  uint64_t oversize_admission_count;
-  uint64_t largest_oversize_message_bytes;
-  uint64_t active_directional_queue_count;
-  uint64_t active_completion_directional_queue_count;
-  uint64_t active_send_queue_count;
-  uint64_t active_receive_queue_count;
-  uint64_t outstanding_application_lease_count;
-  uint64_t retired_queue_count;
-  uint64_t deferred_origin_credit_bytes;
-  uint64_t unlimited_manual_queue_count;
-  uint32_t blocked_ratio_ppm;
-  uint32_t flags;
-  uint64_t reserved_u64[8];
+  uint32_t abi_version;                         // caller sets to ABI_V1
+  uint32_t struct_size;                         // caller sets allocated size → Core returns the full v1 size
+  uint64_t budget_generation;                   // increments for each new recorded plan (new context=0)
+  uint64_t measurement_epoch;                   // increments for each metrics reset (new context=1)
+  uint64_t configured_memory_limit_bytes;       // configured explicit memory limit
+  uint64_t runtime_memory_limit_bytes;          // runtime memory hint
+  uint64_t resolved_memory_limit_bytes;         // limit actually used for calculation
+  uint64_t configured_core_budget_bytes;        // configured manual Core budget
+  uint64_t effective_core_budget_bytes;         // final budget after applying the effective cap
+  uint64_t total_planned_hwm_bytes;             // sum of current target HWMs for application directions
+  uint64_t total_applied_hwm_bytes;             // sum of HWMs actually applied to live directions
+  uint64_t manual_reserved_hwm_bytes;           // sum of reservations for manual directions
+  uint64_t core_queue_accounted_bytes;          // accounted bytes owned by Core
+  uint64_t application_accounted_bytes;         // reserved (always 0)
+  uint64_t current_accounted_bytes;             // equal to core_queue_accounted_bytes
+  uint64_t provisional_accounted_bytes;         // reservation for incomplete multipart messages
+  uint64_t peak_accounted_bytes;                // maximum observed in the current epoch
+  uint64_t completion_current_accounted_bytes;  // current bytes in completion lanes
+  uint64_t completion_peak_accounted_bytes;     // maximum bytes in completion lanes
+  uint64_t completion_pending_message_count;    // messages pending in completion lanes
+  uint64_t total_messaging_accounted_bytes;     // application+completion accounted-byte sum
+  uint64_t monitor_queue_applied_hwm_bytes;     // sum of HWMs for open monitor directions
+  uint64_t monitor_queue_accounted_bytes;       // sum of bytes held by monitor directions
+  uint64_t total_instance_applied_hwm_bytes;    // total_applied + monitor HWM
+  uint64_t total_instance_accounted_bytes;      // total_messaging + monitor accounted bytes
+  uint64_t oversize_admission_count;            // empty-queue oversize exceptions admitted
+  uint64_t largest_oversize_message_bytes;      // largest such message
+  uint64_t active_directional_queue_count;      // active application directions (counted once per direction)
+  uint64_t active_completion_directional_queue_count;// active completion directions
+  uint64_t active_send_queue_count;             // send-perspective count in the last plan
+  uint64_t active_receive_queue_count;          // receive-perspective count in the last plan
+  uint64_t outstanding_application_lease_count; // reserved (always 0)
+  uint64_t retired_queue_count;                 // reserved (always 0)
+  uint64_t deferred_origin_credit_bytes;        // reserved (always 0)
+  uint64_t unlimited_manual_queue_count;        // unlimited manual directions
+  uint32_t blocked_ratio_ppm;                   // ratio of first attempts blocked by HWM (ppm)
+  uint32_t flags;                               // ZLINK_AUTO_HWM_BUDGET_FLAG_* bits
+  uint64_t reserved_u64[8];                     // reserved (all 0)
 } zlink_auto_hwm_budget_snapshot_t;
 
 ZLINK_EXPORT zlink_config_result_t
@@ -285,73 +224,18 @@ zlink_ctx_get_auto_hwm_budget_snapshot(
   zlink_auto_hwm_budget_snapshot_t *snapshot_);
 ```
 
-The caller zero-initializes the structure, sets `abi_version` to
-`ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1`, and sets `struct_size` to the allocated
-byte size. A null snapshot or a size shorter than the two header fields fails
-with `EINVAL`; an unsupported version fails with `ENOTSUP`; an invalid context
-fails with `EFAULT`; and a terminating context fails with `ETERM`. On success,
-Core writes only the smaller of the caller-size and Core-v1 prefixes. The returned
-`struct_size` is the full Core-v1 structure size.
+The caller zero-initializes the structure, sets `abi_version` to `ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1`, and sets `struct_size` to the allocated byte size. A null snapshot or a size shorter than the two header fields fails with `EINVAL`; an unsupported version fails with `ENOTSUP`; an invalid context fails with `EFAULT`; and a terminating context fails with `ETERM`. On success, Core writes only the smaller prefix of the caller size and the Core v1 size. The returned `struct_size` is the full size of the Core v1 structure.
 
-V1 populates only these fields:
+`active_directional_queue_count` and `active_completion_directional_queue_count` count each unique physical ypipe direction shared by reader and writer endpoints only once. Completion directions are excluded from the application-direction planning denominator and HWM admission. `active_send_queue_count` and `active_receive_queue_count` are the perspective-specific counts from the last socket plan. A new context starts with `budget_generation` 0 and `measurement_epoch` 1. `budget_generation` increments whenever a new plan is recorded, and `measurement_epoch` increments when metrics are reset.
 
-- `abi_version` and `struct_size`
-- `budget_generation` and `measurement_epoch`
-- configured, runtime, and resolved memory limits, plus configured and
-  effective Core budgets
-- `total_planned_hwm_bytes`, `total_applied_hwm_bytes`, and
-  `manual_reserved_hwm_bytes`
-- `core_queue_accounted_bytes`, `application_accounted_bytes`,
-  `current_accounted_bytes`, `provisional_accounted_bytes`, and
-  `peak_accounted_bytes`
-- `completion_current_accounted_bytes`, `completion_peak_accounted_bytes`,
-  `completion_pending_message_count`, and `total_messaging_accounted_bytes`
-- `monitor_queue_applied_hwm_bytes`, `monitor_queue_accounted_bytes`,
-  `total_instance_applied_hwm_bytes`, and `total_instance_accounted_bytes`
-- `oversize_admission_count` and `largest_oversize_message_bytes`
-- `active_directional_queue_count`,
-  `active_completion_directional_queue_count`, `active_send_queue_count`,
-  `active_receive_queue_count`, `outstanding_application_lease_count`,
-  `retired_queue_count`, `deferred_origin_credit_bytes`, and
-  `unlimited_manual_queue_count`
-- `blocked_ratio_ppm`
-- The four `ZLINK_AUTO_HWM_BUDGET_FLAG_*` bits
+Physical queue accounting follows these rules.
 
-Every element of `reserved_u64` is zero.
+- Adds the payload and `sizeof(zlink_msg_t)` for each frame.
+- Includes incomplete multipart frames in `provisional_accounted_bytes`; at the final frame, converts the same bytes to committed state without incrementing them again.
+- Read, rollback, hiccup, termination, and conflate replacement return the charge for the frames they actually remove.
+- Completion directions report separate current and peak values and a complete-message pending count.
 
-| Flag | Set when |
-|---|---|
-| `ZLINK_AUTO_HWM_BUDGET_FLAG_PLANNING_ACTIVE` | Auto HWM was enabled in the last recorded plan. |
-| `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT` | Manual reservations and required automatic minimums cannot fit together within the budget. |
-| `ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_HWM_VALID` | No manual-unlimited direction makes the aggregate HWM non-finite. |
-| `ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW` | A planner or queue aggregate saturated past the `uint64_t` range. |
-
-`active_directional_queue_count` and
-`active_completion_directional_queue_count` count each unique physical ypipe
-direction once; its reader and writer endpoints share that identity. Completion
-directions are excluded from the application planning denominator and HWM
-admission. `active_send_queue_count` and `active_receive_queue_count` remain
-the perspective counts in the last socket plan. A new context starts with
-`budget_generation == 0` and `measurement_epoch == 1`. `budget_generation`
-increments whenever a new plan is recorded; `measurement_epoch` increments on
-metrics reset.
-
-Physical queue accounting adds payload bytes and `sizeof(zlink_msg_t)` for
-each frame. Incomplete multipart frames appear in
-`provisional_accounted_bytes`; the final frame converts the same bytes to
-committed accounting without adding them twice. Reads, rollback, hiccup,
-termination, and conflate replacement return the charge for the frames they
-actually remove. Completion directions report separate current, peak, and
-complete-message pending values.
-
-`monitor_queue_applied_hwm_bytes` sums the currently applied HWM once for each
-active physical ypipe direction owned by an open monitor. It does not add the
-option copies held by both the reader and writer endpoints.
-`monitor_queue_accounted_bytes` sums the accounted bytes currently held by
-those same monitor directions. Neither value contributes to application
-planning, `total_applied_hwm_bytes`, `current_accounted_bytes`, or
-`total_messaging_accounted_bytes`; they contribute only to these instance
-totals:
+`monitor_queue_applied_hwm_bytes` sums the currently applied HWM once for every unique physical ypipe direction of an open monitor. It does not separately add the options copied to the reader and writer endpoints. `monitor_queue_accounted_bytes` sums the accounted bytes of frames currently retained by those same monitor directions. Neither value is included in application planning, `total_applied_hwm_bytes`, `current_accounted_bytes`, or `total_messaging_accounted_bytes`; they are added only to the following instance totals.
 
 ```text
 total_instance_applied_hwm_bytes =
@@ -361,85 +245,46 @@ total_instance_accounted_bytes =
     total_messaging_accounted_bytes + monitor_queue_accounted_bytes
 ```
 
-Completion queues have no HWM and therefore do not contribute to
-`total_instance_applied_hwm_bytes`. A sum that exceeds the `uint64_t` range
-saturates at `UINT64_MAX` and sets
-`ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW`.
+Completion queues have no HWM, so they are not added to `total_instance_applied_hwm_bytes`. If either sum exceeds the `uint64_t` range, it saturates at `UINT64_MAX` and sets `ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW`.
 
-When retained-credit receive returns a physical frame, its charge moves
-atomically from `core_queue_accounted_bytes` to
-`application_accounted_bytes`. `current_accounted_bytes` is the saturating sum
-of those fields and does not change for an ownership transfer alone.
-`peak_accounted_bytes` is the largest such sum observed when a budget snapshot
-or an automatic HWM recalculation samples the queues during the current
-measurement epoch. It does not promise to capture a shorter-lived value between
-two sampling boundaries. `outstanding_application_lease_count` is the number of public leases
-not yet released. `deferred_origin_credit_bytes` is exact-origin byte credit
-held by either an internal framing token or a public lease and not yet
-published to the writer. `retired_queue_count` counts directional queue
-generations kept after detach or generation replacement because they still
-have a retained origin. Releasing an old generation changes neither accounting,
-credit, nor wake state for a new generation; the final origin release removes
-the retired entry.
+`peak_accounted_bytes` is the largest total observed in the current measurement epoch when a budget snapshot query or Auto HWM recalculation inspects the queues. It does not guarantee that it records values retained only briefly between two inspections.
 
-The snapshot is a coherent registry view belonging to one
-`budget_generation`. Queue counts, capacity, and accounted counters from
-different generations are not mixed. Current counters may change while Core
-constructs the snapshot, but the returned aggregate and component fields are
-mutually consistent at the same snapshot boundary.
+A snapshot is a consistent registry view that belongs to one `budget_generation`. It does not mix queue counts, capacity, and accounted counters from different generations. Current counters may change while the snapshot is constructed, but the returned aggregate and component fields must remain mutually consistent at the same snapshot boundary.
 
-Registry-owned fields and sampled fields become visible at different times. The
-registry updates `application_accounted_bytes`,
-`outstanding_application_lease_count`, and `deferred_origin_credit_bytes`
-synchronously with the call that changes them. `current_accounted_bytes`,
-`provisional_accounted_bytes`, and `peak_accounted_bytes` are sampled from
-per-pipe accounting when the snapshot is taken. Poll the snapshot when a test
-or an operator needs to observe a later settled value.
+Registry-owned fields and sampled fields become visible at different times.
 
-`blocked_ratio_ppm` is calculated as follows:
+- Sampling fields — `current_accounted_bytes`, `provisional_accounted_bytes`, and `peak_accounted_bytes`. These values are sampled from per-pipe accounting when the snapshot is constructed.
+
+`blocked_ratio_ppm` is calculated with the following expression.
 
 ```text
 floor(first_blocked_admission_attempts * 1,000,000 / total_admission_attempts)
 ```
 
-The ratio is zero when `total_admission_attempts` is zero.
-A retry after the same submission wakes is not counted again. The numerator
-contains only first attempts blocked by the target application pipe HWM; it
-excludes transport-I/O waits and context-aggregate usage.
+The ratio is 0 when `total_admission_attempts` is 0. A retry after the same submission wakes is not counted again. Only the first attempt blocked by the target application pipe's HWM is included in the numerator; transport I/O waits and context aggregate usage are excluded.
 
 ---
 
 ### zlink_ctx_reset_auto_hwm_budget_metrics
 
-Advance the current Auto HWM measurement epoch.
+Changes the current Auto HWM measurement epoch.
 
 ```c
 ZLINK_EXPORT zlink_config_result_t
 zlink_ctx_reset_auto_hwm_budget_metrics(void *context_);
 ```
 
-On success, `measurement_epoch` increments by one, application and completion
-peaks are rebased to their current accounted bytes, and the blocked and total
-admission-attempt counters, `blocked_ratio_ppm`, cumulative oversize count, and
-maximum are reset to zero. Current bytes, monitor queue HWM and
-accounted bytes, budget, plan, queue counts, and `budget_generation` remain
-unchanged. An invalid context fails with
-`EFAULT`; a terminating context fails with `ETERM`.
+On success, this function increments `measurement_epoch` by 1, rebases the application and completion peaks to their current accounted bytes, and resets the blocked and total admission-attempt counters, `blocked_ratio_ppm`, the cumulative oversize count, and the largest oversize value to 0. It does not change current bytes, monitor queue HWM or accounted bytes, the budget, plan, queue counts, or `budget_generation`. An invalid context fails with `EFAULT`, and a terminating context fails with `ETERM`.
 
 ## 4. Internals
 
-This document defines, for Core maintainers implementing Auto HWM memory
-limits, what state to read and update on the message-processing path. The
-application-visible budget calculation, HWM scope, and errors are owned by
-[§2 Auto HWM budget calculation](#2-auto-hwm-budget-calculation) of this
-document and by the
-[Socket specification](../socket/README.en.md#transportbuffer).
+This document defines the state that Core maintainers must read and update in the message processing path when implementing Auto HWM memory limits. The [Auto HWM Budget Calculation](#2-auto-hwm-budget-calculation) section of this document and the [Socket specification](../socket/README.en.md#transportbuffer) own the application-visible budget calculation, HWM scope, and errors.
 
-### Value limited by HWM
+### Value Limited by HWM
 
-Auto HWM divides a context memory budget among application directional queues.
-A message is admitted by comparing the target physical queue's unreturned
-charge with its applied HWM, not by comparing context-wide usage.
+Auto HWM distributes a context memory budget among application directional queues to determine each queue's HWM. Message admission is based on the unreturned bytes and applied HWM of the physical queue that will receive the message, not on context-wide usage.
+
+The unreturned bytes of one physical queue are the sum of the following values.
 
 ```text
 frameCharge = payloadBytes + sizeof(msg_t)
@@ -450,154 +295,126 @@ outstandingCharge =
   + retainedLeaseCharge
 ```
 
-The fixed `sizeof(msg_t)` component is not an allocator measurement. It keeps
-empty frames from consuming zero HWM while they still occupy a queue slot and
-a message object. Payload-only accounting cannot bound a stream of empty
-single-part messages or empty multipart frames.
+`sizeof(msg_t)` is not a measurement of allocator usage. Even a frame with no payload consumes a queue slot and message object, so this fixed value prevents its byte HWM cost from becoming 0. Payload-only accounting cannot impose a memory limit because it allows empty single-part messages or empty multipart frames to remain in a queue indefinitely regardless of HWM.
 
-`provisionalCharge` is reserved before a decoder allocates a payload buffer.
-`committedQueueCharge` belongs to frames stored by the queue. A frame retained
-by the application moves to `retainedLeaseCharge`. Moving ownership does not
-change the amount for which the writer has not received credit.
+`provisionalCharge` is the value reserved before the decoder allocates a payload buffer. `committedQueueCharge` is the value of frames retained by the queue. When the application continues to hold a message dequeued from the queue, that value moves to `retainedLeaseCharge`. The unreturned total does not change when ownership moves.
 
-For example, when the HWM is 1,024 bytes and the unreturned charge is 900
-bytes, ordinary admission accepts only a frame whose charge is at most 124
-bytes. The state of another queue and the context-wide total do not change this
-decision.
+For example, if the HWM is 1,024 bytes and the unreturned charge is 900 bytes, ordinary admission accepts only a frame whose charge is at most 124 bytes. Another queue being empty or the context-wide sum being below the budget does not change this decision.
 
-### Separation of responsibilities
+### Separation of Responsibilities
 
 | Processing location | Input | Result |
 |---|---|---|
-| Budget planner | Memory inputs, profile, application queue set | Target HWM per queue |
-| Queue configuration | Target HWM, applied value, queue generation | HWM applied to that generation |
-| Message processing | Target queue charge and frame charge | Admission or backpressure |
-| Snapshot | Per-queue HWM and charge | Context query result |
+| Budget planner | Memory inputs, profile, application queue list | Target HWM for each queue |
+| Queue configuration path | Target HWM, current applied value, queue generation | HWM to apply to the same generation |
+| Message processing path | Target queue's unreturned charge, frame charge | Admission or backpressure |
+| Snapshot path | Per-queue HWM and charge | Context query result |
 
-The planner runs for option and queue-lifecycle changes. Context aggregates
-and snapshot metrics are not message-admission inputs.
+The budget planner runs only when an option changes or a queue attaches or detaches. Context-wide sums and snapshot statistics produced by the planner are not used as message admission conditions.
 
-### Message-processing sequence
+### Message Processing Sequence
 
-1. The writer or decoder adds the fixed frame cost to the payload size.
-2. An overflowing sum is rejected.
-3. Before allocating a payload buffer, a decoder reserves the candidate charge
-   in target queue-local state. An application writer skips this step for an
-   already-created message.
-4. A nonzero applied HWM rejects a candidate that would make the unreturned
-   charge exceed the HWM, except for the public empty-queue oversize rule.
-5. Enqueue converts a provisional charge to committed state without adding it
-   again.
-6. Dequeue removes committed charge. A retained receive transfers the same
-   charge to its lease; an ordinary receive returns byte credit to the writer.
-7. Drop, allocation failure, protocol failure, and shutdown return only the
-   charge that the operation owns, exactly once.
+Ordinary frames are processed in the following order.
 
-Normal frame processing reads and updates only state created with its queue.
+```mermaid
+sequenceDiagram
+    participant D as Writer/Decoder
+    participant Q as Target Queue
+    D->>D: candidate charge = payload + fixed frame cost
+    Note over D: Reject on uint64_t overflow
+    D->>D: Record candidate charge in reservation token before buffer allocation<br/>(skip when submitting a message created by the writer)
+    Note over Q: Reject if HWM is nonzero and unreturned+candidate exceeds HWM<br/>(empty-queue oversize exception is separate)
+    D->>Q: After enqueue, provisional → committed
+    Q-->>D: On dequeue, decrease committed and return credit to writer<br/>(move to retained lease if the application keeps ownership)
+```
 
-### Multipart and oversize messages
+1. The writer or decoder adds the fixed frame cost to the payload size to calculate the candidate charge.
+2. If the addition exceeds the `uint64_t` range, it does not admit the frame.
+3. Before allocating the payload buffer, the decoder records the target queue reference, generation, and candidate charge in a reservation token. Accounting for the charge begins at frame write. This step is skipped when the application writer submits a message it has already created.
+4. If the applied HWM is nonzero and adding the candidate charge to the unreturned charge exceeds the HWM, it does not admit the frame. The public empty-queue oversize exception applies separately.
+5. After enqueue completes, it converts the value from provisional state to committed state without adding the reserved value again.
+6. When the queue removes a frame, it decreases the committed value. If the application continues to hold the frame, the same value moves to a retained lease; otherwise, byte credit is returned to the writer.
+7. Drop, allocation failure, protocol error, and termination each return only the value they actually own, exactly once.
 
-Multipart messages accumulate each frame's charge. After reading a wire frame
-length, a decoder reserves that frame before allocating its buffer. The final
-frame publishes the multipart without charging preceding frames again.
+In this sequence, normal frame processing reads and updates only local state created with the queue.
 
-An incremental multipart that reaches HWM stops before allocating its next
-frame. Discarding a multipart returns every charge it reserved or committed.
+### Multipart and Large Messages
 
-An empty queue may admit one complete message whose total charge is known at
-admission even when it exceeds HWM. The exception does not admit two messages
-at once and does not bypass `ZLINK_OPT_MAXMSGSIZE`. The
-[Socket specification](../socket/README.en.md#transportbuffer) owns
-the public rule.
+A multipart message accumulates the charge of each frame. After reading a frame's payload size from the wire header, the decoder records the frame's charge in a reservation token before buffer allocation. The final frame makes the entire multipart available to read without incrementing the values reserved for earlier frames again.
 
-### Retained receive and queue generations
+When a multipart message whose final size is not yet known reaches HWM, Core stops before allocating the buffer for the next `MORE` frame. However, if the multipart started on an empty queue, it may admit the final frame to complete one record even when that frame exceeds HWM. Eligibility is fixed by whether the queue was empty immediately before the first frame and does not apply to an intermediate `MORE` frame. If allocation failure or a protocol error discards the multipart, Core returns every charge that the multipart reserved or recorded in the queue.
 
-A retained receive lets the application keep a dequeued frame's memory. It
-does not return charge at dequeue. Lease release returns credit to the writer
-of the originating queue generation.
+An empty queue may admit one complete message whose total charge is known at admission, and the final frame of a multipart that started while the queue was empty, even when either exceeds HWM. This exception does not apply to two messages simultaneously and does not bypass the `ZLINK_OPT_MAXMSGSIZE` check. See the [HWM description in the Socket specification](../socket/README.en.md#transportbuffer) for detailed public behavior.
 
-Detach and reconnect create a new generation. Releasing an old lease neither
-decreases the new generation's charge nor wakes its writer. A retired
-generation keeps only the return target until its final lease and reservation
-finish.
+### Retained Receive and Queue Generation
 
-### HWM changes
+A receive that retains a frame's memory until the application returns it is called a retained receive. A retained receive does not return the charge when removing the frame from the queue; it returns the charge to the writer of the original queue generation when the lease ends.
 
-An increase applies to the current queue generation. A decrease below the
-unreturned charge preserves admitted frames and blocks new admission. Core
-applies the lower HWM after the charge reaches the target.
+Detaching or reconnecting a queue creates a new generation. Ending a lease from an earlier generation does not reduce the charge of the new generation or wake its writer. The earlier generation retains only the return target until its last lease and reservation end, then is removed.
 
-DEALER and ROUTER completion queues do not use application HWM so terminal and
-error replies can progress. Monitor queues are excluded from application
-budget distribution.
+### HWM Changes
 
-### Message-path cost limits
+Increasing the HWM applies the new value to the current queue generation. When the HWM is decreased and the unreturned charge is greater than the new target, Core does not remove frames already admitted. It stops accepting new frames, waits until the charge reaches or falls below the target, and then applies the new HWM.
 
-Send, receive, and decoder admission do not perform:
+Application HWM does not apply to the completion queue through which DEALER and ROUTER advance terminal replies and error replies and synchronize receive-flow-state frames. Monitor queues are also excluded from the queue list used to distribute the application budget.
 
-- context-wide mutex acquisition;
-- global map lookup by queue or reservation ID;
-- per-frame heap allocation for reservations;
-- per-frame updates of context-wide current, provisional, or peak totals;
-- global atomic updates for metrics not used by HWM admission;
-- usage lookup for another physical queue.
+### Message-Path Cost Limits
 
-A decoder or pipe stores its reservation inline: target queue reference,
-generation, reserved charge, and active state. A lifecycle registry may manage
-attach, detach, and retired generations, but normal frame admission does not
-look it up.
+The send, receive, and decoder admission paths do not perform the following operations.
 
-### Snapshots and metrics
+- Acquire a context-wide mutex
+- Search a global map for a queue ID or reservation ID
+- Allocate heap memory for each frame reservation
+- Update context-wide current, provisional, or peak sums for each frame
+- Update global atomics for statistics not used in HWM decisions
+- Query the usage of another physical queue
 
-A snapshot composes context totals from queue-local state when requested. It
-may take registry locks needed for the query, but it does not serialize every
-queue through a lock shared with message processing.
+A decoder reservation is represented by inline state owned by the decoder or pipe. The required values are the target queue reference, generation, reserved charge, and whether a reservation exists. The queue lifecycle registry may be used for queue attach, detach, and cleanup of earlier generations, but it is not queried for every ordinary frame admission.
 
-Peak metrics retain the largest aggregate observed when a snapshot or an
-automatic HWM recalculation collects the queue-local values. Because the hot
-path does not update a context-wide total for every frame, a value that exists
-only between two observation boundaries may not appear in the peak. Metrics
-reset and repeated snapshot reads do not alter admission or writer credit.
+### Snapshots and Metrics
 
-### Implementation locations
+A snapshot builds context totals from queue-local state when queried. It may use the required registry lock while constructing the snapshot, but it does not serialize every queue with the same lock used by the message processing path.
+
+Peak statistics record the largest total observed when a snapshot query or Auto HWM recalculation collects values from each queue. Because Core does not update the context-wide sum for every frame, a value retained only between two observation points may not be included in the peak. Resetting statistics or repeatedly querying the snapshot does not change HWM admission results or writer credit.
+
+### Implementation Locations
 
 | Responsibility | Implementation location |
 |---|---|
 | Profile bounds and per-queue HWM calculation | `auto_hwm_policy.*` |
-| Context inputs, recalculation, snapshot API | `ctx_auto_hwm_*` |
+| Context inputs, recalculation, and snapshot API | `ctx_auto_hwm_*` |
 | Physical queue identity and generation | `ctx_physical_queue_registry.*` |
-| Queue-local charge, admission, and byte credit | `pipe.*` |
-| Pre-allocation reservation | `zmp_decoder.*`, `session_base_pipe_io.cpp`, `pipe.*` |
+| Queue-local charge, HWM decision, and byte credit | `pipe.*` |
+| Reservation before allocation | `zmp_decoder.*`, `session_base_pipe_io.cpp`, `pipe.*` |
 | Retained lease release | Retained receive API and queue lifecycle code |
 
-## 5. Implementation and contract-test verification
+## 5. Implementation and Contract-Test Verification Requirements
 
-This section collects the items a worker verifies. They are behaviors observable
-only through the **public surface** — the context options
-`zlink_ctx_set_data`/`zlink_ctx_get_data`, `zlink_ctx_get_auto_hwm_budget_snapshot`,
-send/recv admission results, and errno — not internal implementation, and each
-maps to a single unit test.
+This section collects the items that workers must verify. These behaviors are observable only through the **public surface**—the context options `zlink_ctx_set_data`/`zlink_ctx_get_data`, `zlink_ctx_get_auto_hwm_budget_snapshot`, send and recv admission results, and errno—not through internal implementation. Each item maps to one unit test.
 
 **Options and budget**
-- Setting a memory limit or manual Core budget larger than a finite hard limit that Core detected fails with `EINVAL`.
+- Setting a memory limit or manual Core budget larger than a finite hard limit detected by Core fails with `EINVAL`.
+- A valid memory limit or manual Core budget is stored and recalculation is scheduled even when the value is less than the sum of current manual HWMs and automatic minimums. The recalculated snapshot preserves the automatic minimums and sets `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`.
+- Physical memory and the hard limit are detected only once when the context starts. Changing them while the context runs does not trigger detection again. Only a decreased runtime memory hint is stored as a new input, and `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT` is set when it causes a shortage.
 - Calling `zlink_ctx_set_data`/`zlink_ctx_get_data` for an Auto HWM byte option with a size other than exactly `sizeof(uint64_t)` fails with `EINVAL` and leaves the value unchanged.
-- For the same connection layout and inputs, the snapshot's `effective_core_budget_bytes` is always identical (deterministic).
+- With the same connection configuration and inputs, the snapshot's `effective_core_budget_bytes` is always the same (deterministic).
+- A new pipe pair first reserves the role-specific minimum for each direction regardless of the manual HWM size. A finite manual HWM applies to admission immediately and is included in the next snapshot's `manual_reserved_hwm_bytes` and aggregate HWM statistics.
 
 **Admission (byte accounting)**
-- Frames with no payload still consume HWM — repeatedly sending empty frames still blocks admission at the HWM.
-- An empty queue admits one total-known complete message even above the HWM, and rejects the second oversize message.
-- An incremental multipart of unknown total size blocks from the point it exceeds the HWM, and after it is discarded the snapshot's `provisional_accounted_bytes` returns to 0.
+- A frame with no payload still consumes HWM—repeatedly sending empty frames eventually blocks admission at the HWM.
+- An empty queue admits one complete message of known total size even above HWM and rejects a second oversize message.
+- An unknown-size multipart blocks further `MORE` frames from the point HWM is exceeded. However, it admits the final frame of a multipart that started on an empty queue even when the frame exceeds HWM, and this exception does not apply to an intermediate `MORE` frame. After the multipart is discarded, the snapshot's `provisional_accounted_bytes` returns to 0.
 
 **Credit, lease, and generation**
-- After an ordinary recv the sender can send again; a retained receive keeps the snapshot's `application_accounted_bytes` until the lease is released.
-- Detaching a socket while holding a lease adds no credit to a new generation (snapshot).
+- After an ordinary recv, the sender can send again; a retained receive keeps the snapshot's `application_accounted_bytes` until the lease is released.
+- Detaching a socket while holding a lease does not increase credit for a new generation (snapshot).
 
 **HWM changes**
-- Lowering the HWM keeps already-admitted frames and applies the new HWM to admission only after the backlog drains below the new target.
+- Lowering the HWM preserves frames already admitted, and the new HWM applies to admission after the retained amount drains below the new target.
 
-**Excluded queues**
-- DEALER/ROUTER completion replies and monitor traffic do not change application send admission or the snapshot's `total_planned_hwm_bytes` denominator.
+**Excluded targets**
+- DEALER and ROUTER completion replies, receive-flow-state frames, and monitor traffic do not change application send admission results or the denominator of the snapshot's `total_planned_hwm_bytes`.
 
 **Snapshot invariance**
-- Calling `zlink_ctx_get_auto_hwm_budget_snapshot` or `zlink_ctx_reset_auto_hwm_budget_metrics` does not change the accept/reject outcome of the same send sequence.
-- An unsupported `abi_version` fails with `ENOTSUP`; a terminating context fails with `ETERM`.
+- Calling `zlink_ctx_get_auto_hwm_budget_snapshot` or `zlink_ctx_reset_auto_hwm_budget_metrics` does not change the admission or rejection result for the same send sequence.
+- An unsupported `abi_version` fails with `ENOTSUP`, and a terminating context fails with `ETERM`.

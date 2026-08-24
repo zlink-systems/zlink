@@ -1,3 +1,7 @@
+---
+title: "Socket — ROUTER"
+---
+
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/07-router/) | English
 
 <!-- zlink-nav:start -->
@@ -6,26 +10,87 @@
 
 # Socket — ROUTER
 
-ROUTER is an asynchronous raw socket that manages multiple peer pipes on one
-socket and selects a send target by routing ID. It processes ordinary directed
-messages and request/reply records.
+> **What this chapter defines** — The public contract for routing replies by routing ID on a
+> ROUTER socket and for [result/errno](../03-errors.en.md#result-and-errno-mapping).
 
-## 1. Public types
+## 1. ROUTER overview
+
+ROUTER is an asynchronous raw socket that manages connections (pipes) to multiple peers on one
+[socket](../glossary.en.md#socket) and selects a send target by routing ID, the byte sequence that
+identifies a peer. It processes ordinary directed messages and received request records. The
+[Message](../02-message.en.md#zlink_routing_id_t) specification owns the contract for
+`zlink_routing_id_t`, the type that carries a routing ID.
+
+The following documents own the related contracts.
+
+| Related contract | Defining document |
+|---|---|
+| Socket creation, common options, and the `zlink_socket_set_receive_flow_state` declaration | [Socket Common](README.en.md) |
+| Routing ID type (`zlink_routing_id_t`) | [Message](../02-message.en.md#zlink_routing_id_t) |
+| Mapping of each result to errno and the receive flow state result table | [Errors](../03-errors.en.md) |
+| Peer socket paired with ROUTER | [DEALER](06-dealer.en.md) |
+| Socket status snapshot | [Monitoring](../06-monitoring.en.md) |
+
+## 2. Raw receive record classification
+
+The ROUTER receive API does not return the `zlink_dealer_message_type_t` from
+[DEALER](06-dealer.en.md). The following output combinations distinguish an ordinary raw record
+from a request record that requires a reply.
+
+| Record | `source_node_rid_out_` | `request_seq_out_` |
+|---|---|---:|
+| Ordinary raw multipart | Sending peer's routing ID | `0` |
+| Received request | Sending peer's routing ID | Nonzero reply sequence |
+
+Replies and terminal failures for a request started with `zlink_router_request_part()` are not
+returned as receive records. They are delivered only through the `zlink_reply_handler_fn`
+completion.
+
+`source_node_rid_out_` is a thread-local view owned by Core. The caller does not release it and
+copies the value if it must be retained after the next raw receive call. Starting the next receive
+call on the same thread invalidates the previously returned view. Every part of one multipart
+record returns the same routing ID and request sequence.
+
+## 3. Part sequences and ownership
+
+`*_part` send calls form one multipart sequence from `ZLINK_PART_MORE` through
+`ZLINK_PART_FINAL`. While a sequence is open, another send helper family or a different routing ID
+cannot be interleaved on the same handle.
+
+When a valid initialized `part_` is passed to a send API, the function consumes its message content
+on both success and failure. The caller therefore cannot read the pre-submit payload or send the
+same content again after the call, regardless of the result. Payload needed for another send must
+be retained in a separate message before the call.
+
+Each send helper family stages successful intermediate parts as one record until
+`ZLINK_PART_FINAL` succeeds. If an intermediate or final submit in an open sequence fails, Core
+atomically discards the previously staged parts and the failed part and closes the sequence. No
+part of that record becomes visible to the peer. The failed call also consumes `part_`, and the next
+submit starts the first part of a new record. A failed request submit creates no request sequence
+and invokes no handler. If a reply sequence fails, the reply-token and peer-RID pair remains valid
+until a successful `ZLINK_PART_FINAL` or the end of the request lifecycle, so the caller can
+resubmit a retained complete reply from its first part.
+
+The `part_out_` passed to a receive API must be an initialized `zlink_msg_t` before the call. On
+success, ownership of the received part moves to the caller, which releases it exactly once with
+`zlink_msg_close()`. On failure, ownership of the received part does not move.
+
+## 4. Public types
 
 The following numbers are public ABI values.
 
 ```c
 typedef enum zlink_router_option_t {
-  ZLINK_ROUTER_OPT_MANDATORY          = 0x3101,
-  ZLINK_ROUTER_OPT_PROBE              = 0x3103,
-  ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID = 0x3104,
-  ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS = 0x3105,
-  ZLINK_ROUTER_OPT_WEIGHT             = 0x3106
+  ZLINK_ROUTER_OPT_MANDATORY          = 0x3101,  // int, 0=off, positive=on, getter returns 0/1, default 1. Whether directed submit to an unconnected routing ID fails
+  ZLINK_ROUTER_OPT_PROBE              = 0x3103,  // int, 0=off, positive=on, getter returns 0/1, default 0. An empty raw message lets the peer observe the connection and routing ID when the connection is established
+  ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID = 0x3104,  // Variable-length byte string, set only. Local alias for the next zlink_connect() pipe
+  ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS = 0x3105,  // Nonnegative int (milliseconds), default 5000. Default timeout when a request uses timeout_ms_ == 0
+  ZLINK_ROUTER_OPT_WEIGHT             = 0x3106   // int, 0..10000, default 100. This ROUTER's weight advertised to connected peers
 } zlink_router_option_t;
 
 typedef enum zlink_part_flag_t {
-  ZLINK_PART_FINAL = 0,
-  ZLINK_PART_MORE  = 1
+  ZLINK_PART_FINAL = 0,  // The current part is the last part of the record
+  ZLINK_PART_MORE  = 1   // Another part follows in the same multipart record
 } zlink_part_flag_t;
 
 typedef void (*zlink_reply_handler_fn)(
@@ -35,11 +100,11 @@ typedef void (*zlink_reply_handler_fn)(
   void *userdata_);
 ```
 
-`ZLINK_PART_MORE` means that another part follows in the same multipart
-record. `ZLINK_PART_FINAL` means that the current part is the last part.
-Receive APIs use the same values for `has_more_out_`.
+`ZLINK_PART_MORE` means that another part follows in the same multipart record.
+`ZLINK_PART_FINAL` means that the current part is the last part. Receive APIs use the same values
+for `has_more_out_`.
 
-## 2. ROUTER options
+## 5. ROUTER options
 
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_set_router_option(
@@ -55,70 +120,20 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_router_option(
   size_t *optvallen_);
 ```
 
-| Constant | Value format | Meaning |
-|---|---|---|
-| `ZLINK_ROUTER_OPT_MANDATORY` | `int`, `0` or `1` | When set to `1`, a directed submit to a routing ID without a connected pipe fails with `ZLINK_SUBMIT_NOT_CONNECTED`; the default is `1` |
-| `ZLINK_ROUTER_OPT_PROBE` | `int`, `0` or `1` | Sends an empty raw message when a connection is established so the peer can observe the connection and routing ID; the default is `0` |
-| `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID` | Variable-length byte string, set only | Sets the local alias that identifies the pipe created by the next `zlink_connect()`; set it before each connect |
-| `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` | Nonnegative `int`, milliseconds | Selects the default timeout used by a request API when `timeout_ms_ == 0`; the default is `5000` |
-| `ZLINK_ROUTER_OPT_WEIGHT` | `int`, `0..10000` | Advertises this ROUTER's weight to connected peers; the default is `100` |
+The inline comments in [section 4](#4-public-types) define the value format, range, and default for
+each option. The following contracts are not included in those comments.
 
-For `zlink_get_router_option()`, `*optvallen_` is the input capacity of
-`optval_`. On success it is updated to the number of bytes written. HWM,
-reconnect and timeout options that are not ROUTER-specific use
+- When `ZLINK_ROUTER_OPT_MANDATORY` is positive, a directed submit to a routing ID without a
+  connected pipe fails with `ZLINK_SUBMIT_NOT_CONNECTED`.
+- `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID` sets the local alias that identifies the pipe created by
+  the next `zlink_connect()` and is set before each connect.
+
+When `zlink_get_router_option()` is called, `*optvallen_` is the input capacity of `optval_`. On
+success, it is updated to the number of bytes written. [HWM](../glossary.en.md#hwm), the byte limit
+for queue storage, and reconnect and timeout options that are not ROUTER-specific use
 `zlink_set_option()` and `zlink_get_option()`.
 
-## 3. Raw receive record classification
-
-The ROUTER receive API does not return `zlink_dealer_message_type_t`. The
-following output combinations distinguish an ordinary raw record from a
-request record that requires a reply.
-
-| Record | `source_node_rid_out_` | `request_seq_out_` |
-|---|---|---:|
-| Ordinary raw multipart | Sending peer's routing ID | `0` |
-| Received request | Sending peer's routing ID | A nonzero reply sequence |
-
-Replies and terminal failures for work started by
-`zlink_router_request_part()` are delivered through the
-`zlink_reply_handler_fn` completion and are not returned as ordinary receive
-records.
-
-`source_node_rid_out_` is a thread-local view owned by Core. The caller does
-not release it and copies its value if it must be retained beyond the next raw
-receive call. Starting the next receive call on the same thread invalidates
-the preceding view. Every part of one multipart record returns the same
-routing ID and request sequence.
-
-## 4. Part sequences and ownership
-
-`*_part` send calls form one multipart sequence from `ZLINK_PART_MORE` through
-`ZLINK_PART_FINAL`. While a sequence is open, another send-helper family or a
-different routing ID cannot be interleaved on the same handle.
-
-When `part_` points to a valid initialized message, a send API consumes its
-message content on both success and failure. The caller therefore cannot read
-the pre-submit payload or submit the same content again after the call,
-regardless of its result. Payload needed for a retry must be retained in a
-separate message before the call.
-
-Each send-helper family stages successful intermediate parts as one record
-until `ZLINK_PART_FINAL` succeeds. If an intermediate or final submit in an
-open sequence fails, Core atomically discards the previously staged parts and
-the failed part and closes the sequence. No part of that record becomes visible
-to the peer. The failed call still consumes `part_`, and the next submit starts
-the first part of a new record. A failed request submit creates no request
-sequence and invokes no handler. After a reply-sequence failure, the reply-token
-and peer-RID pair remains valid until a successful `ZLINK_PART_FINAL` or request-lifecycle
-termination, so the caller can resubmit a retained complete reply from its
-first part.
-
-`part_out_` passed to a receive API must be an initialized `zlink_msg_t`. On
-success, ownership of the received part moves to the caller, which closes it
-exactly once with `zlink_msg_close()`. No received-part ownership moves on
-failure.
-
-## 5. Directed raw send
+## 6. Directed raw send
 
 ```c
 ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
@@ -129,13 +144,12 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
   zlink_part_flag_t part_flag_);
 ```
 
-This sends one ordinary raw multipart part to the peer identified by
-`target_rid_`. Every part uses the same target. `flags_` is
-`ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT`. This API creates no
-request sequence or completion handler.
+This sends one ordinary raw multipart part to the peer identified by `target_rid_`. Every part must
+use the same target. `flags_` is `ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT`. This API
+creates no request sequence or completion handler.
 
-A binding preparing routed asynchronous admission obtains the exact
-application-pipe identity of the current RID route through these APIs:
+When a binding prepares routed asynchronous admission, it obtains the exact application-pipe
+identity of the current RID route through the following APIs.
 
 ```c
 ZLINK_EXPORT zlink_submit_result_t zlink_select_routed_submit_target(
@@ -153,20 +167,15 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_transport_pair(
   zlink_part_flag_t part_flag_);
 ```
 
-A ROUTER requires the target RID in `router_rid_or_null_`. Selection is a
-value snapshot that reserves neither the pipe nor credit. Exact submit uses
-only the current application pipe matching RID, pair ID, and generation. HWM
-returns `ZLINK_SUBMIT_BACKPRESSURED`; detach or a stale generation returns
-`ZLINK_SUBMIT_NOT_CONNECTED`. It never reselects another pipe for the same RID.
-Once the first multipart part is admitted, the exact-pipe fence remains
-through FINAL, and a failure rolls back the complete record.
-Each part call has its own public API scope, so a binding holds a socket-local
-attempt gate only while making one first-part-through-FINAL `DONTWAIT`
-attempt. After Core rolls back a failed sequence, the binding releases the
-gate immediately and never holds it while waiting for readiness. This gate is
-neither a new Core multipart API nor a public FIFO contract.
+A ROUTER requires the target RID in `router_rid_or_null_`. Selection is a value snapshot that
+reserves neither the pipe nor credit. Exact submit uses only the current application pipe whose
+RID, pair ID, and generation match. HWM returns `ZLINK_SUBMIT_BACKPRESSURED`; detach or a stale
+generation returns `ZLINK_SUBMIT_NOT_CONNECTED`. It does not reselect another pipe for the same
+RID. Once the first multipart part is accepted, a fence that sends the remaining parts only to that
+exact pipe remains through FINAL, and failure rolls back the complete record. [Internal
+structure](#12-internal-structure) explains how the binding serializes this multipart attempt.
 
-## 6. Raw request submit
+## 7. Raw request submit
 
 ```c
 ZLINK_EXPORT zlink_submit_result_t zlink_router_request_part(
@@ -192,26 +201,40 @@ ZLINK_EXPORT zlink_submit_result_t zlink_router_request_transport_pair_part(
   void *userdata_);
 ```
 
-This submits an asynchronous request payload to `peer_rid_` one part at a
-time. For an intermediate part, pass `ZLINK_PART_MORE`, `timeout_ms_ == 0`,
-`handler_ == NULL`, and `userdata_ == NULL`. The last part uses
-`ZLINK_PART_FINAL` and a non-null `handler_`. A final call with `timeout_ms_ ==
-0` uses the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` default.
+This submits an asynchronous request payload to `peer_rid_` one part at a time. An intermediate
+part uses `ZLINK_PART_MORE`, `timeout_ms_ == 0`, `handler_ == NULL`, and `userdata_ == NULL`. The
+last part uses `ZLINK_PART_FINAL` and a non-null `handler_`. If the last call uses
+`timeout_ms_ == 0`, it uses the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` default.
 
-If the final submit returns `ZLINK_SUBMIT_OK`, exactly one completion is
-delivered to `handler_`. A failed submit does not invoke the handler. Ownership
-of callback `parts_` and every message moves to the callback, which releases
-them exactly once.
+If the final submit returns `ZLINK_SUBMIT_OK`, exactly one completion is delivered to `handler_`.
+A failed submit does not invoke the handler. Ownership of the callback's `parts_` and each message
+moves to the callback, which releases them exactly once.
 
-An exact-target request uses
-`zlink_router_request_transport_pair_part()`. RID and pair-identity validation,
-no rerouting, the multipart fence, and rollback match exact raw submit. Core
-registers pending correlation before the request envelope can become visible
-on the wire; a failed submit removes that pending entry and its completion
-reservation without invoking the handler. A binding makes the complete request
-attempt under the same short socket-local gate as raw send.
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant R as ROUTER (Core)
+    participant P as Peer
+    App->>R: Submit intermediate part (ZLINK_PART_MORE, no handler)
+    App->>R: Submit final part (ZLINK_PART_FINAL, handler_)
+    Note over R: Register pending correlation before<br/>the request envelope is visible on the wire
+    R->>P: Deliver request record
+    P-->>R: Reply or terminal failure
+    R-->>App: Invoke handler_ (exactly once)
+    Note over App: Ownership of parts_ moves to the callback;<br/>the callback releases them exactly once
+```
 
-## 7. Raw request and message receive
+The diagram shows the normal path after a successful final submit. A failed submit does not invoke
+the handler and follows the discard rules in [section 3](#3-part-sequences-and-ownership).
+
+An exact-target request uses `zlink_router_request_transport_pair_part()`. RID and pair-identity
+validation, no rerouting, the multipart fence, and rollback match exact raw submit. Core registers
+pending correlation before the request envelope becomes visible on the wire. On submit failure, it
+removes that pending entry and the completion reservation and does not invoke the handler. The
+binding serializes the attempt in the same way as raw send, as described in [Internal
+structure](#12-internal-structure).
+
+## 8. Raw request and message receive
 
 ```c
 ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part(
@@ -233,22 +256,19 @@ ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part_v2(
   zlink_recv_flags_t flags_);
 ```
 
-This returns one part from a complete raw record. Every output pointer is
-required. `flags_` is `ZLINK_RECV_FLAGS_NONE` or
-`ZLINK_RECV_FLAGS_DONTWAIT`. A non-blocking call with no available record
-returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
+This returns one part from a complete raw record. Every output pointer is required. `flags_` is
+`ZLINK_RECV_FLAGS_NONE` or `ZLINK_RECV_FLAGS_DONTWAIT`. A non-blocking call with no record available
+returns `ZLINK_RECV_NO_DATA` and `EAGAIN`.
 
-When `has_more_out_ == ZLINK_PART_MORE`, the next call receives the next part
-of the same record. `ZLINK_PART_FINAL` completes that record's receive
-sequence. Use the output combinations in section 3 to determine whether a
-reply is required.
+When `has_more_out_ == ZLINK_PART_MORE`, the next call must receive the next part of the same
+record. `zlink_router_recv_part_v2()` has the same receive and ownership contract and additionally
+returns the source transport pair ID and generation. Every part of the same record returns the same
+RID, pair ID, and generation. The caller uses this snapshot for a reply or an exact-target follow-up
+operation without reselecting another pair. `ZLINK_PART_FINAL` completes the record's receive
+sequence. Use the output combinations in [section 2](#2-raw-receive-record-classification) to
+determine whether a reply is required.
 
-`zlink_router_recv_part_v2()` has the same receive and ownership contract and additionally
-returns the source transport pair ID and generation. Every part of one record returns the same
-RID, pair ID, and generation; a caller uses that snapshot for a reply or an exact-target
-follow-up operation without selecting another pair.
-
-## 8. Raw reply submit
+## 9. Raw reply submit
 
 ```c
 ZLINK_EXPORT zlink_submit_result_t zlink_router_reply_part(
@@ -259,70 +279,139 @@ ZLINK_EXPORT zlink_submit_result_t zlink_router_reply_part(
   zlink_part_flag_t part_flag_);
 ```
 
-This sends a reply part for a request returned by
-`zlink_router_recv_part()`. `peer_rid_` and the nonzero `request_seq_` are the
-values returned by that receive record. A multipart reply uses the same two
-values for every part. A successful `ZLINK_PART_FINAL` completes the reply.
+This sends a reply part for a request returned by `zlink_router_recv_part()`. `peer_rid_` and the
+nonzero `request_seq_` use the values returned by that receive record without modification. A
+multipart reply uses the same two values for every call. A successful `ZLINK_PART_FINAL` completes
+the reply.
 
-A raw reply or error reply is submitted exactly once on the completion progress lane. That
-lane is not subject to application byte HWM, manual HWM, LWM, or Core budget reservation, so
-this function does not return `ZLINK_SUBMIT_BACKPRESSURED` because of that capacity and does
-not wait for `ZLINK_POLLOUT` or a send-ready callback to retry. Connection, lifecycle,
-argument, state, and allocation failures terminate immediately with their corresponding
-`zlink_submit_result_t` at the call.
+Raw replies and error replies are submitted exactly once on the [completion progress
+lane](../glossary.en.md#completion-progress-lane), a separate path that handles only terminal-reply
+progress and bypasses HWM admission. This lane is not subject to application byte HWM, manual HWM,
+LWM, or Core budget reservation. This function therefore does not return
+`ZLINK_SUBMIT_BACKPRESSURED` because of that capacity and does not wait for `ZLINK_POLLOUT` or a
+send-ready callback to retry. Connection, lifecycle, argument, state, and allocation failures
+terminate immediately with the corresponding `zlink_submit_result_t` at the call.
 
 ## 10. Results and readiness
 
-Submit APIs return `zlink_submit_result_t`, receive APIs return
-`zlink_recv_result_t`, and option APIs return `zlink_config_result_t`. The
-[errno map](../03-errors.en.md#result-and-errno-mapping) defines the mapping between each result and
-`zlink_errno()`.
+Submit APIs return `zlink_submit_result_t`, receive APIs return `zlink_recv_result_t`, and option
+APIs return `zlink_config_result_t`. The [errno map](../03-errors.en.md#result-and-errno-mapping)
+defines the mapping between each result and `zlink_errno()`.
 
-ROUTER `ZLINK_POLLIN` means that a complete raw record can be received. For ordinary sends
-and requests, `ZLINK_POLLOUT` indicates that retrying a backpressured submit is
-worthwhile; it does not guarantee that the next submit will succeed. An
-application that wants a definitive per-operation answer uses `zlink_send_async`
-and its completion instead. This readiness contract does not apply to raw
+ROUTER `ZLINK_POLLIN` means that a complete raw record can be received. For ordinary sends and
+requests, `ZLINK_POLLOUT` indicates that retrying a submit after
+[backpressure](../glossary.en.md#backpressure), the state in which additional submissions are
+limited because the receiver cannot keep up, is worthwhile. It does not guarantee that the next
+submit succeeds. An application that needs a definitive answer for each operation uses
+`zlink_send_async` and its completion notification. This readiness contract does not apply to raw
 replies.
 
 ## 11. Receive flow state
 
-A ROUTER paired with DEALER peers over a completion lane can ask those peers to
-stop and resume sending to it. `zlink_socket_set_receive_flow_state()` stores
-one socket-wide state; [Socket overview](README.en.md) owns the declaration and
-[Errors](../03-errors.en.md) owns the result table.
+A ROUTER paired with [DEALER](06-dealer.en.md) peers over a completion lane can ask those peers to
+stop and resume sending to it. `zlink_socket_set_receive_flow_state()` stores one socket-wide state.
+[Socket Common](README.en.md) owns the function declaration, and [Errors](../03-errors.en.md) owns
+the result table.
 
-The state belongs to the socket, not to a routing ID. There is no per-peer
-flow-state call. One call fans the state out to the completion lane of every
-ready transport pair of this ROUTER, so every peer receives the same state, and
-a peer that becomes ready later receives the socket's current state on its new
-completion lane. A routing ID selects the destination of a send; it does not
-select a receive-flow state.
+The state belongs to the socket, not to a routing ID. There is no per-peer flow-state call. One call
+sends the state over the completion lane of every ready transport pair of this ROUTER, so every peer
+receives the same state. A peer that becomes ready later also receives the socket's current state
+over its new completion lane. A routing ID selects the destination of a send; it does not select a
+receive-flow state.
 
-The state is absolute, not a counter: repeating the current state succeeds and
-sends nothing.
+The state is an absolute value, not a counter. Setting the current state again succeeds and sends
+nothing.
 
-Each state change carries a flow epoch that increases within one connection
-generation, and each frame names the pair id and generation it was written on.
-A frame is applied only when it names the receiving pipe's current pair and
-generation and its epoch is greater than the last epoch accepted for that
-generation. Every other frame is ignored as stale and reported as
-`ZLINK_EVENT_FLOW_STATE_STALE`. A routing ID is stable across a reconnect
-while the pair generation is not, so state that a peer published before a
-reconnect is never applied to the connection that replaced it; the new
-generation starts from the state the socket sends when the pair becomes ready.
+Each state change includes a flow epoch that increases within one connection generation, and each
+frame contains the pair ID and generation on which it was written. A frame is applied only when it
+names the receiving pipe's current pair and generation and its epoch is greater than the last epoch
+accepted for that generation. A frame from a different pair ID, a frame with a zero pair ID or
+generation, a frame for a pair absent from the transport-pair table, or a frame from a pipe other
+than the registered completion pipe is consumed without an event. A frame is not applied and is
+reported as `ZLINK_EVENT_FLOW_STATE_STALE` only when it names the current pair ID but has a
+mismatched generation, or when its epoch is duplicate or regressive within the same generation. A
+routing ID remains stable across a reconnect, but a pair generation does not. State published by a
+peer before a reconnect is therefore never applied to the replacement connection. A new generation
+starts from the state that the socket sends when the pair becomes ready.
 
-A remote PAUSE blocks sending to the paused peer only. Routes to other peers
-are unaffected. It is an independent blocker composed with byte HWM, transport
-waits, and termination, so clearing it does not by itself admit the next send.
-Send results and readiness are unchanged: a blocked non-blocking send still
-reports `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`, and mandatory
-routing keeps the behavior defined in section 5.
+A remote PAUSE blocks only sends to the paused peer and does not affect routes to other peers. It is
+an independent blocker composed with byte HWM, transport waits, and termination, so clearing it
+does not by itself admit the next send. Send results and readiness remain unchanged. A blocked
+non-blocking send continues to report `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`, and
+mandatory routing retains the behavior defined in [section 6](#6-directed-raw-send).
 
-A remote PAUSE applies from the next message boundary and never splits a
-multipart record. A record whose routing-ID part this ROUTER has already
-accepted completes its remaining parts before the pause takes effect.
+A remote PAUSE applies from the next message boundary and does not split a multipart record. If
+this ROUTER has already accepted a record's routing-ID part, it sends the remaining parts before
+the pause takes effect.
 
-The [Monitoring](../06-monitoring.en.md) status snapshot reports the current
-number of paused peers together with the applied transition, stale, and
-pause-duration values for the whole socket.
+The [Monitoring](../06-monitoring.en.md) status snapshot reports the current number of paused peers
+together with the applied-transition count, stale count, and pause duration for the whole socket.
+
+## 12. Internal structure
+
+> **Contract ownership for this section** — [Section 6](#6-directed-raw-send) and [section
+> 7](#7-raw-request-submit) own the public contracts for directed and exact submit and request
+> submit. This section explains how a binding serializes multipart attempts on top of those
+> contracts.
+
+Because each part call has a separate public API scope, a binding holds a socket-local attempt gate
+only for one `DONTWAIT` attempt from the first part through FINAL. On failure, it releases the gate
+immediately after Core rolls back the sequence and does not hold it while waiting for
+`BACKPRESSURED` readiness. Request submit also makes one attempt from the first request part through
+FINAL under the same short socket-local attempt gate as raw send. This gate is neither a new Core
+multipart API nor a public FIFO contract.
+
+## 13. Implementation and contract test verification requirements
+
+The following behaviors are verified using only the public surface: ROUTER send, request, receive,
+and reply functions; ROUTER option set and get; return values and errno; the
+`zlink_reply_handler_fn` completion; and event and status snapshots. Each item maps to one test.
+
+**Options**
+- When `zlink_get_router_option()` is called, `*optvallen_` is the input capacity, and on success it is updated to the number of bytes written.
+- Each option's default value is returned: `MANDATORY` `1`, `PROBE` `0`, `REQUEST_TIMEOUT_MS` `5000`, and `WEIGHT` `100`.
+- When `ZLINK_ROUTER_OPT_MANDATORY` is positive, a directed submit to a routing ID without a connected pipe fails with `ZLINK_SUBMIT_NOT_CONNECTED`, and the getter returns `0` or `1`.
+- When `ZLINK_ROUTER_OPT_PROBE` is positive, an empty raw message is sent when a connection is established so that the peer can observe the connection and routing ID, and the getter returns `0` or `1`.
+- Setting `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID` before connect identifies the pipe created by the next `zlink_connect()` by that local alias.
+
+**Record classification and receive**
+- An ordinary raw record returns `request_seq_out_ == 0`; a received request returns a nonzero reply sequence.
+- Every part of one multipart record returns the same routing ID and request sequence, and `zlink_router_recv_part_v2()` additionally returns the same pair ID and generation for every part of that record.
+- Replies and terminal failures for a request started with `zlink_router_request_part()` are not returned as receive records and are delivered through `zlink_reply_handler_fn`.
+- A non-blocking receive with no record available returns `ZLINK_RECV_NO_DATA` and `EAGAIN`.
+- On successful receive, ownership of the part moves to the caller, which releases it with exactly one `zlink_msg_close()`; on failure, ownership does not move.
+- When `has_more_out_ == ZLINK_PART_MORE`, the next call returns the next part of the same record; `ZLINK_PART_FINAL` completes the record's receive sequence.
+
+**Part sequences**
+- A send API consumes the content of `part_` on both success and failure; the same `part_` cannot be resubmitted after failure.
+- If an intermediate or final submit in an open sequence fails, no part of that record becomes visible to the peer, and the next submit starts the first part of a new record.
+- A failed request submit creates no request sequence and invokes no handler.
+- After a reply-sequence failure, the reply-token and peer-RID pair remains valid until a successful `ZLINK_PART_FINAL` or the end of the request lifecycle, and a retained complete reply can be resubmitted from its first part.
+
+**Directed and exact submit**
+- `zlink_send_part_rid()` creates no request sequence or completion handler.
+- Exact submit uses only the current application pipe whose RID, pair ID, and generation match: HWM returns `ZLINK_SUBMIT_BACKPRESSURED`, detach or a stale generation returns `ZLINK_SUBMIT_NOT_CONNECTED`, and another pipe for the same RID is not reselected.
+- A failure after the first multipart part is accepted rolls back the complete record, so no partial record becomes visible to the peer.
+
+**Request completion**
+- If the final submit returns `ZLINK_SUBMIT_OK`, exactly one completion is delivered to `handler_`; a failed submit does not invoke the handler.
+- If the last call uses `timeout_ms_ == 0`, it uses the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` default.
+- Ownership of the callback's `parts_` and each message moves to the callback, which releases them exactly once.
+- If an exact request submit fails, the handler is not invoked, and no subsequent completion for that request is delivered.
+
+**Replies and the completion lane**
+- `zlink_router_reply_part()` uses the `peer_rid_` and `request_seq_` returned by the receive record without modification, and a successful `ZLINK_PART_FINAL` completes the reply.
+- Raw replies and error replies do not return `ZLINK_SUBMIT_BACKPRESSURED` because of completion-lane capacity; connection, lifecycle, argument, state, and allocation failures terminate immediately with the corresponding `zlink_submit_result_t` at the call.
+
+**Readiness**
+- `ZLINK_POLLIN` is set when a complete raw record can be received; `ZLINK_POLLOUT` indicates only that a retry after backpressure is worthwhile and does not guarantee that the next submit succeeds.
+- The readiness contract does not apply to raw replies.
+
+**Receive flow state**
+- Setting the current state again succeeds and sends nothing.
+- One call gives every ready transport pair the same state, and a peer that becomes ready later also receives the socket's current state.
+- A frame from a different pair ID, a frame with a zero pair ID or generation, a frame for an unregistered transport pair, or a frame from a pipe other than the registered completion pipe is consumed without an event. `ZLINK_EVENT_FLOW_STATE_STALE` occurs only when a frame names the current pair ID but has a mismatched generation, or when its epoch is duplicate or regressive within the same generation.
+- State published by a peer before a reconnect is not applied to the replacement connection.
+- A remote PAUSE blocks only sends to the paused peer: routes to other peers are unaffected, a blocked non-blocking send reports `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`, and clearing PAUSE alone does not admit the next send.
+- A remote PAUSE applies from the next message boundary: a record whose routing-ID part has already been accepted sends its remaining parts before the pause takes effect.
+- The [Monitoring](../06-monitoring.en.md) status snapshot provides the current number of paused peers, the socket-wide applied-transition count, stale count, and pause duration.

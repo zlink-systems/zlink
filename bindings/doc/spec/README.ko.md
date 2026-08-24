@@ -1334,9 +1334,10 @@ correlation을 유지하며 reply, timeout, disconnect, termination, cancellatio
 연장하지 않는다. 바인딩은 request 완료 표면 제공을 위해서도 자체 스레드나 재시도 큐를
 두지 않는다.
 
-Routed **send**의 언어별 canonical async terminal은 C++ `async()`, .NET `Async(...)`,
-Java·Node·Python·Rust `submit()`과 Go `Submit(ctx)`다. C++는 plain-thread용 blocking
-`submit()`도 제공한다. **Request**의 canonical terminal은 언어 native
+Routed **send**의 언어별 비동기 terminal은 C++ `async()`, .NET `Async(...)`,
+Java·Node·Python·Rust `submit()`이다. C++는 plain-thread용 blocking `submit()`도
+제공하고, Go의 canonical `Submit(ctx) error`는 Core 안에서 대기하는 동기 terminal이다.
+**Request**의 canonical terminal은 언어 native
 suspension 표면을 유지한다: C++ `async()`, .NET `Async(...)`, Java·Node·Python·Rust
 `submit()`(async 반환 타입), Kotlin `submit().await()`, Go `Submit(ctx)`가 반환하는 completion
 channel. C++만 기존 `submit()`·`submit(callback)`·`async()` 세 terminal을 유지한다.
@@ -3186,7 +3187,7 @@ zlink_config_result_t zlink_unset_subscription(
 - channel-aware send/request 와 topic publish 의 실패는 `SubmitError` 로 승격된다.
   - `NOT_FOUND`: channel-aware send/request 는 해당 `channel_name` 또는 attach 대상이 없음.
     topic publish 는 발행 가능한 topic plane 대상이 없음.
-  - `NOT_CONNECTED`: attachment 는 있으나 active/send-ready 경로가 없음
+  - `NOT_CONNECTED`: attachment 는 있으나 active send 경로가 없음
   - `BACKPRESSURED`: 경로는 있으나 HWM 도달
   - `NOT_ADMITTED`: 대상 peer 가 drain 상태라 신규 submit 거부
 
@@ -3338,7 +3339,7 @@ typed option/property로 이 두 값을 노출하고, raw option bag을 canonica
 
 core 는 callback 기반 event dispatcher 모델을 제공한다.
 하나의 I/O thread context 안에서 여러 이벤트 소스
-(sub recv, routed recv, timer, send-ready) 를 동기화 없이 처리할 수 있다.
+(sub recv, routed recv, timer)를 동기화 없이 처리할 수 있다.
 
 핵심 원리:
 - handler callback 을 등록하면 core I/O thread 가 이벤트 발생 시 callback 을 호출한다.
@@ -3357,16 +3358,20 @@ zlink_handler_result_t zlink_recv_handler(void *s,
 zlink_handler_result_t zlink_stream_packet_handler(void *stream,
     zlink_stream_packet_handler_fn handler, void *userdata);
 
-/* register writable notification callback */
-zlink_handler_result_t zlink_send_ready_handler(void *s,
-    zlink_send_ready_handler_fn handler, void *userdata);
+/* install or replace the async-send completion callback */
+zlink_handler_result_t zlink_send_complete_handler(void *s,
+    zlink_send_complete_handler_fn handler, void *userdata);
 ```
 
 규칙:
-- core C attach 함수는 한 subject 당 활성 handler 하나만 허용한다.
+- receive 계열 core C attach 함수는 한 subject 당 활성 handler 하나만 허용한다.
   이미 native handler가 attach된 상태에서 다시 attach하면 `EBUSY`가 날 수 있다.
   public binding의 `set...Handler` 표면은 이 raw attach 함수를 직접 반복 노출하지
   않고, 현재 public handler를 저장하거나 교체하는 의미로 제공한다.
+- `zlink_send_complete_handler()`는 replace-only다. `NULL`은 허용하지 않으며
+  같은 socket의 completion callback 안에서 교체하면 `EDEADLK`다. Callback은
+  application completion state로 handoff만 해야 한다. 그 안에서 send, publish,
+  request를 제출하면 `EDEADLK`다.
 - `zlink_recv_handler()` 는 raw `STREAM` 에만 허용한다.
 - `zlink_stream_packet_handler()` 도 raw `STREAM` 에만 허용하며,
   `recv` / raw callback / packet callback 세 모드는 서로 배타적이다.
@@ -4042,7 +4047,7 @@ ROUTER/`Received` reply는 HWM 없는 completion lane에 한 번 제출하므로
 | 301 | `INVALID_ARGUMENT` | `EINVAL` | NULL handler |
 | 302 | `BUSY` | `EBUSY` | handler 이미 attach 됨 |
 | 303 | `NOT_SUPPORTED` | `ENOTSUP` | 미지원 subject |
-| 304 | `DEADLOCK` | `EDEADLK` | reentrant 호출 (send-ready handler 전용) |
+| 304 | `DEADLOCK` | `EDEADLK` | callback 범위의 reentrant handler 교체 |
 | 305 | `INVALID_HANDLE` | `EFAULT` | NULL / invalid handle |
 | 306 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 handler 등록 실패 (상세는 `zlink_errno()`) |
 
@@ -4319,7 +4324,7 @@ Binding은 terminal reply와 error reply를 HWM 없는 completion lane에 native
   - `subscribe`
   - `receiveSubscriptionEvent`
   - `setSubscription`, `unsetSubscription`
-  - `setPacketHandler`, `setDispatchHandler`, `setSendReadyHandler`
+  - `setPacketHandler`, `setDispatchHandler`
 
 ### 메서드 이름 간결성
 - 이 규칙은 public API에 엄격히 적용한다.
@@ -4457,7 +4462,7 @@ guide, spec signature에 노출하지 않는다.
 | `setPacketHandler` callback registration | STREAM packet fn ptr | Required | Required | Required | Required | Required | Required | Required |
 | `setDispatchHandler` callback registration | SPOT raw fn ptr | 구현 시 Required | 구현 시 Required | 구현 시 Required | 구현 시 Required | 구현 시 Required | 구현 시 Required | 구현 시 Required |
 | `recvActorLifecycle` | SPOT lifecycle queue | Required | Required | Required | Required | Required | Required | Required |
-| `setSendReadyHandler` callback registration | Raw fn ptr | Required | Required | Required | Required | Required | Required | Required |
+| HWM-managed async send completion | `zlink_send_async` + completion callback | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `connect` 차단 | N/A | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `disconnectRid` 차단 | N/A | Required | Required | Required | Required | Required | Required | Required |
 | Public `detachStream` 비노출 | N/A | Required | Required | Required | Required | Required | Required | Required |
@@ -4865,7 +4870,7 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
   - StreamSocket에 `connect()` 노출 → 제거
   - StreamSocket에 `disconnectRid()` 노출 → 제거
   - StreamSocket에 `detachStream()` 노출 → 제거
-  - Node에 `setSendReadyHandler` 없음 → 추가
+  - async send가 Core completion 대신 binding retry queue를 사용함 → Core completion으로 연결
   - 잘못된 소켓에 publish/subscribe 노출 → 제거
 
 #### 2단계: 이름 정규화
@@ -4972,7 +4977,7 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
    - 모든 public API가 Naming Policy의 canonical 이름을 사용한다.
    - deprecated alias가 남아 있지 않다.
    - Callback API Policy의 canonical 이름(`setPacketHandler`,
-     `setDispatchHandler`, `setSendReadyHandler`)이
+     `setDispatchHandler`)이
      해당 역할에 맞게 존재한다.
 
 3. **얕은 래퍼 제거**

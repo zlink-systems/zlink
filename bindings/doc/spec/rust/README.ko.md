@@ -410,8 +410,7 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   완료를 전달한 컨텍스트에서 일어난다. `timeout(...)`은
   `zlink_send_async_options_t::timeout_ms`(per-operation deadline)로 전달한다.
   바인딩은 park queue, WRITABLE 재시도, deadline timer, dispatcher thread를
-  두지 않는다 — `send_ready` readiness-hint 표면은 폐지되었고 소켓 타입의
-  `on_send_ready`도 함께 제거되었다.
+  두지 않는다. 공개 `on_send_ready`는 없고 send completion은 Future로만 전달한다.
 - Routed send/request builder에는 callback, blocking wait, progress polling terminal을
   함께 제공하지 않는다. PUB/XPUB `publish`와 ROUTER reply는 별도의 동기
   operation 계약을 유지한다. Raw ROUTER/`Received` reply의 terminal은
@@ -477,9 +476,10 @@ peak/provisional accounted byte, completion current/peak/pending과 total messag
 monitor/instance aggregate, application/completion queue count,
 `outstanding_application_lease_count`, `retired_queue_count`, `deferred_origin_credit_bytes`,
 oversize·blocked·aggregate flag, `budget_generation`과 `measurement_epoch`을 `u64`/boolean으로
-제공한다. Reset은 current·pending·queue count와 위 세 owner-lifecycle gauge를 유지하고 두
-peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `measurement_epoch`을
-증가시킨다. ABI version/size 불일치는 unsupported error다.
+제공한다. `application_accounted_bytes`와 위 세 owner-lifecycle 필드는 ABI 예약 필드이며
+항상 `0`이다. Reset은 current·pending·queue count를 유지하고 두 peak를 current로
+재기준화하며 epoch counter를 0으로 만든 뒤 `measurement_epoch`을 증가시킨다. ABI
+version/size 불일치는 unsupported error다.
 
 ## Receive flow state
 
@@ -535,15 +535,12 @@ boolean은 논리적 spot을 생성한 호출에서만 `true`이다.
 
 - 데이터 플레인 receive와 subscribe API는 재사용 가능한 호출자 소유 결과
   저장소를 사용한다.
-- 일반 `recv`와 `subscribe`는 dequeue 시 Core queue credit을 즉시 반환한다.
-  Framework backend가 명시적으로 선택하는 `recv_retained`와
-  `subscribe_retained`만 physical part마다 받은 opaque Core lease를
-  `Received` 또는 `TopicMessage` aggregate가 private으로 소유한다. Raw lease와
-  capacity 값은 공개하지 않는다.
-- Retained aggregate는 다음 receive로 재사용될 때, `close` 또는 consuming
-  accessor로 소유권이 끝날 때, 그리고 `Drop` fallback에서 각 lease를 정확히 한
-  번 반환한다. DEALER request sequence, ROUTER routing id/request sequence와 SUB
-  topic/routing id metadata는 기존 typed receive와 동일하게 보존한다.
+- Core byte HWM charge는 일반 `recv`와 `subscribe`가 payload를 dequeue할 때 끝난다.
+  `Received`와 `TopicMessage`는 part와 metadata의 Rust 수명만 소유하며 재사용,
+  consuming accessor 또는 `Drop`을 Core HWM accounting에 연결하지 않는다.
+  별도 retained receive, raw lease handle 또는 application byte capacity는 public이나
+  internal API에 두지 않는다. DEALER request sequence, ROUTER routing id/request
+  sequence와 SUB topic/routing id metadata는 일반 typed receive가 보존한다.
 - non-blocking no-data는 hard receive 실패와 구별된다.
 - SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 매칭되는 receive
   API를 no-data가 될 때까지 비운다.

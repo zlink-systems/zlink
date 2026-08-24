@@ -61,6 +61,8 @@ executor가 아니다.
   DEALER/ROUTER의 routed send, request는 HWM 대기가 발생할 *수* 있는 지점을
   지나므로 ASYNC로 분류한다. 분류 기준은 "HWM 대기가 실제로 자주 발생하는가"가
   아니라 "HWM 대기가 발생할 가능성이 있는가"다.
+  이 operation 분류가 모든 언어의 terminal 반환형을 강제하지는 않는다. Go는
+  `Submit(ctx) error`가 Core 안에서 대기하는 동기 terminal이다.
 - **raw reply는 HWM-free이며 진짜 synchronous다.** raw ROUTER/`Received`
   reply는 HWM 경로를 전혀 거치지 않으므로 순수 동기인 completion lane이다.
 - **PUB/XPUB `publish`는 이 ASYNC 분류에 포함하지 않는다.** 기본 PUB

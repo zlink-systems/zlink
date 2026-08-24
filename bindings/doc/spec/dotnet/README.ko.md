@@ -300,8 +300,8 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   `ZlinkSubmitException`(`Result == Backpressured`)으로 표면화되고, 재시도
   정책은 어플리케이션이 소유한다. `TryPublish(topic)`는 같은 backpressure를
   예외 없이 `false`로 관찰하는 별도 표면이다.
-- back-pressure 해소 콜백(`OnSendReady`)은 공개 계약이 아니다. `send_ready`
-  readiness-hint 시맨틱이 Core 0.13.0에서 폐지되었기 때문이다.
+- 공개 `OnSendReady`는 없다. HWM-managed 비동기 send는 `Async(...)`가 반환한
+  Task를 Core send completion으로 완료한다.
 - builder의 시작 메서드는 target identity, topic, channel, routing id,
   request 시퀀스만 받는다. payload, flag, timeout, callback, 비동기 submit
   선택은 builder 단계에서 처리한다.
@@ -379,7 +379,7 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   `Async(...)` 시점에 `zlink_send_complete_handler`를 한 번 등록하고, 이후 모든
   operation은 complete record 하나를 `zlink_send_async`로 넘긴다. 바인딩은 park
   queue, readiness 재시도 pump, deadline timer, dispatcher thread를 두지
-  않는다 — `send_ready` readiness-hint 시맨틱은 폐지되었다.
+  않는다. 공개 send-ready callback은 없다.
 - 완료 콜백은 completion 전달만 한다. 콜백 안에서 어떤 socket의 send/publish/
   request도 호출하지 않는다(Core는 그런 호출을 `EDEADLK`로 거부한다).
 - Core에 넘긴 완료 delegate 인스턴스는 socket 수명 동안 살아 있어야 한다.
@@ -531,21 +531,13 @@ object identity 기반 dictionary 조회를 포함해 다시 사용하면 안 �
   버퍼를 유지해 다음 `Subscribe`에서 재사용하게 한다. `TopicMessage`가 열린 상태에서만
   사용할 수 있으며 terminal `Dispose()` 뒤에는 `ObjectDisposedException`을 던지고 객체를
   다시 열지 않는다.
-- 일반 `Recv(Received, ...)`와 `Subscribe(TopicMessage, ...)`는 기존처럼 dequeue 시
-  Core queue credit을 즉시 반환한다.
-- Framework backend는 `RecvRetained(Received, ...)`와
-  `SubscribeRetained(TopicMessage, ...)`를 명시적으로 선택한다. 이 경로는 기존 framing과
-  metadata를 유지한 채 caller-visible physical part마다 Core retained-credit lease를
-  내부에서 함께 인수한다. `Received`는 `Dispose()` 또는 같은 저장소로 다음 receive를
-  시작할 때, `TopicMessage`는 `Dispose()`, `ReleaseForReuse()` 또는 같은 저장소로 다음
-  subscribe를 시작할 때 현재 part와 모든 lease를 정확히 한 번 해제한다. 내부 finalizer는
-  누락 방지용 fallback일 뿐이며 정상 경로는 deterministic cleanup을 먼저 수행한다.
-  Payload를 복사해 보관한 값은 lease를 소유하지 않는다.
-- Retained receive는 `Received`와 `TopicMessage` aggregate 경로의 내부 수명 동작이다.
-  Part 단위 primitive와 일반 aggregate receive는 기존 동작을 유지하고, public lease handle이나
-  별도 application capacity를 추가하지 않는다. Dealer message type과 request sequence,
-  Router source RID와 request sequence, SUB topic과 source RID는 기존 typed receive 결과를
-  그대로 보존한다.
+- Core byte HWM charge는 일반 `Recv(Received, ...)`와
+  `Subscribe(TopicMessage, ...)`가 payload를 dequeue할 때 끝난다. `Received`와
+  `TopicMessage`는 part와 metadata의 관리 객체 수명만 소유하며, `Dispose()`,
+  `ReleaseForReuse()` 또는 같은 저장소 재사용을 Core HWM accounting에 연결하지 않는다.
+- 별도 retained receive, lease handle 또는 application byte capacity는 public이나
+  internal API에 두지 않는다. 일반 receive가 Dealer message type과 request sequence,
+  Router source RID와 request sequence, SUB topic과 source RID를 그대로 보존한다.
 - `false`는 `RecvFlags.DontWait`를 사용한 nonblocking receive에서만 데이터
   없음을 의미한다.
 - 실제 receive 실패(데이터 없음이 아닌 실패)는 `ZlinkRecvException`을 던진다.
@@ -642,9 +634,10 @@ peak/provisional accounted byte, completion current/peak/pending과 total messag
 monitor/instance aggregate, application/completion queue count,
 `OutstandingApplicationLeaseCount`, `RetiredQueueCount`, `DeferredOriginCreditBytes`,
 oversize·blocked·aggregate flag, `BudgetGeneration`과 `MeasurementEpoch`을 단위 변환 없이
-제공한다. Reset은 current·pending·queue count와 위 세 owner-lifecycle gauge를 유지하고 두
-peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `MeasurementEpoch`을
-증가시킨다. ABI version/size가 맞지 않으면 `NotSupportedException`이다.
+제공한다. `ApplicationAccountedBytes`와 위 세 owner-lifecycle 필드는 ABI 예약 필드이며
+항상 `0`이다. Reset은 current·pending·queue count를 유지하고 두 peak를 current로
+재기준화하며 epoch counter를 0으로 만든 뒤 `MeasurementEpoch`을 증가시킨다. ABI
+version/size가 맞지 않으면 `NotSupportedException`이다.
 
 Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`는 선택한 exact
 target의 HWM credit을 기다리는 동안 request의 원래 deadline을 유지한다.
