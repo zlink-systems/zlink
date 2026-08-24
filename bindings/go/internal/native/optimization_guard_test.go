@@ -29,12 +29,11 @@ var requiredPartSymbols = []string{
 	"zlink_subscribe_part_with_hwm_budget_lease",
 	"zlink_router_recv_part",
 	"zlink_router_recv_part_v2_with_hwm_budget_lease",
-	"zlink_dealer_send_transport_pair_part",
 	"zlink_dealer_request_transport_pair_part",
 	"zlink_dealer_recv_part",
 	"zlink_dealer_recv_part_with_hwm_budget_lease",
 	"zlink_dealer_reply_part",
-	"zlink_send_part_transport_pair",
+	"zlink_send_part_rid",
 	"zlink_router_request_transport_pair_part",
 	"zlink_router_reply_part",
 }

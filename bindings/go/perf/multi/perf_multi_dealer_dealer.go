@@ -260,7 +260,7 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 			if !now.Before(window.StopAt) {
 				break
 			}
-			sent, sendErr := perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) <-chan error {
+			sent, sendErr := perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
 				if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
 					return client.socket.Send().Message(message).Submit(context.Background())
 				}
@@ -344,7 +344,7 @@ func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {
 // the cpp / java / dotnet implementations.
 func sendMultiDealerStopToken(socket *zlink.DealerSocket) {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
-		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) <-chan error {
+		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) error {
 			return socket.Send().MoveMessage(message).Submit(context.Background())
 		})
 		if err == nil && sent {

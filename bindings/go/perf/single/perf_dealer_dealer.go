@@ -34,11 +34,11 @@ func runDealerDealer(cfg benchmarkConfig) perfcommon.Result {
 	perfcommon.WaitConnectedWithTimeout(perfcommon.SingleReadyTimeout(), serverMon, clientMon)
 
 	result := runSingleOneWay(cfg, server, func(message *zlink.Message) (bool, error) {
-		return perfcommon.SubmitRoutedMessage(message, func(message *zlink.Message) <-chan error {
+		return perfcommon.SubmitRoutedMessage(message, func(message *zlink.Message) error {
 			return client.Send().MoveMessage(message).Submit(context.Background())
 		})
 	}, func(message *zlink.Message) error {
-		return perfcommon.AwaitRoutedSend(client.Send().MoveMessage(message).Submit(context.Background()))
+		return client.Send().MoveMessage(message).Submit(context.Background())
 	})
 	perfcommon.PrintSingleAutoHWMDetail(serverMon, cfg.pattern, cfg.transport, "receiver", zlink.SocketTypeDealer, cfg.msgSize)
 	perfcommon.PrintSingleAutoHWMDetail(clientMon, cfg.pattern, cfg.transport, "sender", zlink.SocketTypeDealer, cfg.msgSize)

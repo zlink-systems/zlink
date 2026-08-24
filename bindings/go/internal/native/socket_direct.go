@@ -22,10 +22,6 @@ type directSocket struct {
 	*connectionSocket
 }
 
-func (s *directSocket) OnSendReady(handler func()) error {
-	return s.setSendReady(handler)
-}
-
 func (s *directSocket) submit(flags SendFlags, parts ...*Message) (bool, error) {
 	err := submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 		return submitErrorFromResult(C.zlink_send_part(s.raw(), part, C.zlink_send_flags_t(flags), partFlag))

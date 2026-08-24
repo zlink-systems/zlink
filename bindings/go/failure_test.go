@@ -365,7 +365,7 @@ func TestRoutedSendFailureSurfacesError(t *testing.T) {
 	}
 
 	rid := zlink.NewRoutingID([]byte("missing-peer"))
-	if err := awaitRoutedSend(t, router.SendTo(rid).Message(newMessage(t, "data")).Submit(context.Background())); err == nil {
+	if err := router.SendTo(rid).Message(newMessage(t, "data")).Submit(context.Background()); err == nil {
 		t.Fatalf("SendTo() should surface an error when no peer exists")
 	}
 }
@@ -389,7 +389,7 @@ func TestRoutedSendFailurePreservesMessagePayload(t *testing.T) {
 	msg := newMessage(t, "preserve-me")
 	defer msg.Close()
 
-	if err := awaitRoutedSend(t, router.SendTo(rid).Message(msg).Submit(context.Background())); err == nil {
+	if err := router.SendTo(rid).Message(msg).Submit(context.Background()); err == nil {
 		t.Fatalf("SendTo() should surface an error when no peer exists")
 	}
 	if got := string(msg.Data()); got != "preserve-me" {
@@ -414,7 +414,7 @@ func TestRoutedSendFailurePreservesBytesPayload(t *testing.T) {
 	rid := zlink.NewRoutingID([]byte("missing-peer"))
 	payload := []byte("preserve-bytes")
 
-	if err := awaitRoutedSend(t, router.SendTo(rid).Bytes(payload).Submit(context.Background())); err == nil {
+	if err := router.SendTo(rid).Bytes(payload).Submit(context.Background()); err == nil {
 		t.Fatalf("SendTo().Bytes() should surface an error when no peer exists")
 	}
 	if got := string(payload); got != "preserve-bytes" {
@@ -441,7 +441,7 @@ func TestMoveMessageFailureConsumesMessagePayload(t *testing.T) {
 	msg := newMessage(t, "consume-me")
 	defer msg.Close()
 
-	if err := awaitRoutedSend(t, router.SendTo(rid).MoveMessage(msg).Submit(context.Background())); err == nil {
+	if err := router.SendTo(rid).MoveMessage(msg).Submit(context.Background()); err == nil {
 		t.Fatalf("MoveMessage SendTo() should surface an error when no peer exists")
 	}
 	if got := msg.Data(); got != nil {

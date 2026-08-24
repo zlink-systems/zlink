@@ -64,11 +64,11 @@ func runRouterRouter(cfg benchmarkConfig) perfcommon.Result {
 	targetID := waitRouterRouterRouteReady(server, client, serverID)
 
 	result := runSingleRoutedOneWayWithTransient(cfg, server, func(message *zlink.Message) (bool, error) {
-		return perfcommon.SubmitRoutedMessage(message, func(message *zlink.Message) <-chan error {
+		return perfcommon.SubmitRoutedMessage(message, func(message *zlink.Message) error {
 			return client.SendTo(targetID).MoveMessage(message).Submit(context.Background())
 		})
 	}, func(message *zlink.Message) error {
-		return perfcommon.AwaitRoutedSend(client.SendTo(targetID).MoveMessage(message).Submit(context.Background()))
+		return client.SendTo(targetID).MoveMessage(message).Submit(context.Background())
 	}, isRouterRouterSendTransient)
 	perfcommon.PrintSingleAutoHWMDetail(serverMon, cfg.pattern, cfg.transport, "receiver", zlink.SocketTypeRouter, cfg.msgSize)
 	perfcommon.PrintSingleAutoHWMDetail(clientMon, cfg.pattern, cfg.transport, "sender", zlink.SocketTypeRouter, cfg.msgSize)
@@ -108,7 +108,7 @@ func waitRouterRouterRouteReady(
 	clientEvents := make([]zlink.PollEvent, 1)
 
 	for time.Now().Before(stopAt) {
-		_, sendErr := perfcommon.SubmitRoutedMessage(perfcommon.NewMessage(ping), func(message *zlink.Message) <-chan error {
+		_, sendErr := perfcommon.SubmitRoutedMessage(perfcommon.NewMessage(ping), func(message *zlink.Message) error {
 			return client.SendTo(serverID).MoveMessage(message).Submit(context.Background())
 		})
 		if sendErr != nil && !perfcommon.IsTransient(sendErr) {
@@ -150,7 +150,7 @@ func waitRouterRouterRouteReady(
 		if clientID.Size() == 0 {
 			continue
 		}
-		_, err := perfcommon.SubmitRoutedMessage(perfcommon.NewMessage(pong), func(message *zlink.Message) <-chan error {
+		_, err := perfcommon.SubmitRoutedMessage(perfcommon.NewMessage(pong), func(message *zlink.Message) error {
 			return server.SendTo(clientID).MoveMessage(message).Submit(context.Background())
 		})
 		perfcommon.Must(err)

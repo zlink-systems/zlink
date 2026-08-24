@@ -131,9 +131,6 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 		{(*zlink.StreamSocket)(nil), "RoutingID"},
 		{(*zlink.SubSocket)(nil), "SubscriptionAt"},
 		{(*zlink.XSubSocket)(nil), "SubscriptionAt"},
-		{(*zlink.PairSocket)(nil), "OnSendReady"},
-		{(*zlink.XPubSocket)(nil), "OnSendReady"},
-		{(*zlink.StreamSocket)(nil), "OnSendReady"},
 	}
 	for _, check := range checks {
 		if !hasMethod(check.target, check.name) {
@@ -143,8 +140,19 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 	if hasMethod((*zlink.PairSocket)(nil), "SetMandatory") {
 		t.Fatalf("PairSocket should not expose router-specific options")
 	}
-	if hasMethod((*zlink.DealerSocket)(nil), "OnSendReady") || hasMethod((*zlink.RouterSocket)(nil), "OnSendReady") {
-		t.Fatalf("managed routed sockets should not expose the native readiness callback")
+	// Core 0.13.0 retired the send_ready readiness hint: send completion is
+	// Core-owned, so no socket may expose a readiness callback.
+	for _, target := range []any{
+		(*zlink.PairSocket)(nil),
+		(*zlink.PubSocket)(nil),
+		(*zlink.XPubSocket)(nil),
+		(*zlink.StreamSocket)(nil),
+		(*zlink.DealerSocket)(nil),
+		(*zlink.RouterSocket)(nil),
+	} {
+		if hasMethod(target, "OnSendReady") {
+			t.Fatalf("%T should not expose the retired send_ready readiness callback", target)
+		}
 	}
 	if hasMethod((*zlink.PubSocket)(nil), "TopicsCount") || hasMethod((*zlink.XPubSocket)(nil), "TopicsCount") {
 		t.Fatalf("publish sockets should not expose subscriber-only topic count")
@@ -157,7 +165,9 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 
 func TestSurfaceManagedRoutedTerminalIsSubmitOnly(t *testing.T) {
 	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
-	sendCompletionType := reflect.TypeOf((<-chan error)(nil))
+	// Routed send is synchronous: Submit(ctx) error. Request keeps its
+	// Core-driven completion channel.
+	sendCompletionType := reflect.TypeOf((*error)(nil)).Elem()
 	requestCompletionType := reflect.TypeOf((<-chan zlink.RequestReplyCompletion)(nil))
 
 	assertTerminal := func(target reflect.Type, completion reflect.Type) {

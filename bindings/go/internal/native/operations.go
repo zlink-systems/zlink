@@ -21,22 +21,24 @@ type SendSubmitOp interface {
 	Submit(ctx context.Context) (bool, error)
 }
 
-// RoutedSendOp builds a DEALER/ROUTER send whose completion waits for exact-
-// target admission without occupying the caller goroutine.
+// RoutedSendOp builds a DEALER/ROUTER send. The HWM wait belongs to Core, so
+// the terminal is the synchronous Submit(ctx) below.
 type RoutedSendOp interface {
 	Message(message *Message) RoutedSendSubmitOp
 	MoveMessage(message *Message) RoutedSendSubmitOp
 	Bytes(data []byte) RoutedSendSubmitOp
 }
 
-// RoutedSendSubmitOp exposes the single completion-channel terminal for a
-// managed routed send. The channel yields nil after Core accepts the complete
-// record, or one terminal error, and then closes.
+// RoutedSendSubmitOp exposes the single terminal for a managed routed send.
+// Submit is synchronous — blocking the calling goroutine is Go's idiomatic
+// await, and the wait itself happens inside Core (bounded by the socket's
+// SNDTIMEO). ctx owns cancellation and deadlines at the submit boundary:
+// an already-cancelled ctx fails before anything reaches the wire.
 type RoutedSendSubmitOp interface {
 	Message(message *Message) RoutedSendSubmitOp
 	MoveMessage(message *Message) RoutedSendSubmitOp
 	Bytes(data []byte) RoutedSendSubmitOp
-	Submit(ctx context.Context) <-chan error
+	Submit(ctx context.Context) error
 }
 
 type RequestOp interface {
@@ -143,10 +145,10 @@ func (b *sendBuilder) singlePart() []sendBuilderPart {
 type routedSendBuilder struct {
 	parts []sendBuilderPart
 	submitOnce
-	submit func(context.Context, []sendBuilderPart) <-chan error
+	submit func(context.Context, []sendBuilderPart) error
 }
 
-func newRoutedSendBuilder(submit func(context.Context, []sendBuilderPart) <-chan error) RoutedSendOp {
+func newRoutedSendBuilder(submit func(context.Context, []sendBuilderPart) error) RoutedSendOp {
 	return &routedSendBuilder{submit: submit}
 }
 
@@ -165,12 +167,12 @@ func (b *routedSendBuilder) Bytes(data []byte) RoutedSendSubmitOp {
 	return b
 }
 
-func (b *routedSendBuilder) Submit(ctx context.Context) <-chan error {
+func (b *routedSendBuilder) Submit(ctx context.Context) error {
 	if len(b.parts) == 0 {
-		return completedSend(configInvalidArgumentError())
+		return configInvalidArgumentError()
 	}
 	if err := b.markSubmitted(); err != nil {
-		return completedSend(err)
+		return err
 	}
 	return b.submit(ctx, b.parts)
 }
@@ -265,13 +267,6 @@ func contextError(ctx context.Context) error {
 	default:
 		return nil
 	}
-}
-
-func completedSend(err error) <-chan error {
-	result := make(chan error, 1)
-	result <- err
-	close(result)
-	return result
 }
 
 func completedRequest(err error) <-chan RequestReplyCompletion {

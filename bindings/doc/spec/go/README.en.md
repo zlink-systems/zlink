@@ -157,11 +157,13 @@ type SendSubmitOp interface {
 }
 
 // This is the HWM-managed routed submit used by DEALER Send and ROUTER SendTo.
+// Submit is synchronous: blocking inside a goroutine is Go's idiomatic await,
+// and the HWM wait itself is owned by Core.
 type RoutedSendSubmitOp interface {
     Message(*Message) RoutedSendSubmitOp
     MoveMessage(*Message) RoutedSendSubmitOp
     Bytes([]byte) RoutedSendSubmitOp
-    Submit(context.Context) <-chan error
+    Submit(context.Context) error
 }
 
 // The single DEALER/ROUTER request terminal returns a completion channel.
@@ -198,33 +200,42 @@ type ReplySubmitOp interface {
   `error`.
 - Managed DEALER `Send`, ROUTER `SendTo`, and DEALER/ROUTER `Request` builders
   expose no flags, callback, or `SubmitAsync` compatibility terminal.
-  After validation, payload snapshot, and target selection, `Submit(ctx)`
-  returns a completion channel without blocking the caller for HWM credit.
-  The selected `(RID, transport pair, generation)` does not change during the
-  operation. If that connection detaches, the operation ends with an error
-  instead of selecting another connection. Other targets on the same socket
-  can continue to make progress during the wait.
-- Before accepting asynchronous operations, the socket runtime registers
-  Core's long-lived routed-target readiness handler. Before its first attempt,
-  an operation places its exact `(socket, RID, transport pair ID, generation)`
-  key, completion channel, and complete record in pending state, then attempts
-  `DONTWAIT` on that same target. The callback marks only that key ready; a pump
-  outside the callback performs native retry. An event for another pair
-  generation is a stale wake and is ignored.
-- Outbound paths on one native handle share a short attempt gate that protects
-  one complete multipart attempt from its first part through `FINAL`, and
-  release it before readiness waiting.
-- A routed send channel yields `nil` when Core accepts the complete record, or
-  one error, and then closes. A request channel likewise yields exactly one
-  reply or submit-failure, timeout, disconnect, socket-close, or context-
-  cancellation result and then closes. On request success the caller closes
-  `Parts`; failures are carried by `Err` and the corresponding `Result`.
-  Context cancellation places `context.Canceled` or
-  `context.DeadlineExceeded` in `Err`.
-- A routed send's absolute deadline is the earlier of the socket `SNDTIMEO` at
-  `Submit` and the context deadline. A request uses the builder `Timeout`, or
-  the socket request timeout when absent, and the earlier context deadline.
-  HWM waiting does not extend that deadline.
+- **The binding owns no thread, no queue, and no retry.** A routed send's
+  `Submit(ctx)` is a synchronous terminal that hands the complete record to a
+  blocking Core call (`zlink_send_part` for DEALER, `zlink_send_part_rid` for
+  ROUTER). The HWM wait happens entirely inside Core and resumes on a Core
+  signal. There is no park queue, no readiness-callback retry, no deadline
+  timer, and no dispatcher goroutine in the binding.
+- The upper bound on that wait is the socket `SNDTIMEO`. `SNDTIMEO=0` is the
+  `DONTWAIT` contract and fails immediately with
+  `SubmitBackpressured`/`EAGAIN`. With an unbounded `SNDTIMEO` (`-1`) the
+  calling goroutine waits inside Core until credit returns, so applications
+  are advised to set a finite `SNDTIMEO`.
+- For a routed send, `ctx` owns the **submit boundary**. An already-cancelled
+  or already-expired `ctx` fails with `context.Canceled` /
+  `context.DeadlineExceeded` and nothing reaches the wire. Once Core has taken
+  the record, Core owns the wait and cancelling `ctx` does not interrupt it.
+- A request's `Submit(ctx)` is a **synchronous submit with an asynchronous
+  completion**. It snapshots one exact `(RID, transport pair, generation)`
+  target (a policy-free value snapshot, not a credit reservation), submits
+  through a blocking Core call, and returns the completion channel. The
+  selected target does not change during the operation and detaching does not
+  re-select another connection. The completion is driven by Core's reply
+  handler callback — the binding adds no retry queue and no dedicated thread.
+- The request timeout is Core-owned: the builder `Timeout`, or the socket's
+  request-timeout option when absent, is handed to Core, and expiry is reported
+  as `RequestTimedOut`. `ctx` cancellation and deadline separately complete the
+  caller's channel first; a Core reply arriving afterwards is dropped and its
+  parts released.
+- Outbound paths on one native handle share a short record-attempt gate (a
+  plain mutex) that protects one complete multipart attempt from its first part
+  through `FINAL`. It is not a queue or a worker: it only prevents part-sequence
+  interleaving and close races. While a blocking submit holds it inside Core,
+  submits to other targets on the same socket serialize behind it.
+- A request channel yields exactly one reply, submit failure, timeout,
+  disconnect, or context-cancellation result and then closes. On success the
+  caller closes `Parts`; failures are carried by `Err` and the corresponding
+  `Result`.
 - Payload parts from complete records submitted concurrently on the same
   socket do not interleave.
 - On an existing one-shot send that returns a boolean, the normal result for
@@ -241,8 +252,8 @@ type ReplySubmitOp interface {
 |---|---|
 | PAIR | One-shot `Send` |
 | PUB, XPUB | `Publish` |
-| DEALER | Managed routed `Send` returning a completion channel |
-| ROUTER | Managed routed `SendTo` taking a routing id and returning a completion channel |
+| DEALER | Managed routed `Send` ending in a synchronous `Submit(ctx) error` |
+| ROUTER | Managed routed `SendTo` taking a routing id and ending in a synchronous `Submit(ctx) error` |
 | STREAM | A one-shot send operation that takes a target routing id |
 | DEALER, ROUTER | A request operation — if ROUTER has received request metadata, it builds the reply operation from that metadata |
 | STREAM | A raw TCP packet callback and caller-provided receive |

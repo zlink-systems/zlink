@@ -337,7 +337,7 @@ func TestExistingHWMBehaviorUnchangedAfterReceiveFlowStateCalls(t *testing.T) {
 	_ = dealer.Connect(endpoint)
 	_ = dealer.SetReceiveTimeout(5 * time.Second)
 
-	if err := awaitRoutedSend(t, dealer.Send().Message(newMessage(t, "request")).Submit(context.Background())); err != nil {
+	if err := dealer.Send().Message(newMessage(t, "request")).Submit(context.Background()); err != nil {
 		t.Fatalf("dealer Send() error = %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestExistingHWMBehaviorUnchangedAfterReceiveFlowStateCalls(t *testing.T) {
 	}
 	defer request.Close()
 
-	if err := awaitRoutedSend(t, router.SendTo(request.RoutingID()).Message(newMessage(t, "response")).Submit(context.Background())); err != nil {
+	if err := router.SendTo(request.RoutingID()).Message(newMessage(t, "response")).Submit(context.Background()); err != nil {
 		t.Fatalf("router SendTo() error = %v", err)
 	}
 

@@ -22,7 +22,7 @@ type routedSocket struct {
 
 func (s *routedSocket) submitTo(target RoutingID, flags SendFlags, parts ...*Message) (bool, error) {
 	rid := target.toC()
-	err := s.routedAdmission.withAttemptGate(func() error {
+	err := s.withSendGate(func() error {
 		return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 			return submitErrorFromResult(C.zlink_send_part_rid(s.raw(), &rid, part, C.zlink_send_flags_t(flags), partFlag))
 		})
@@ -32,7 +32,7 @@ func (s *routedSocket) submitTo(target RoutingID, flags SendFlags, parts ...*Mes
 
 func (s *routedSocket) submitToBuilder(target RoutingID, flags SendFlags, parts []sendBuilderPart) (bool, error) {
 	rid := target.toC()
-	err := s.routedAdmission.withAttemptGate(func() error {
+	err := s.withSendGate(func() error {
 		return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 			return submitErrorFromResult(C.zlink_send_part_rid(s.raw(), &rid, part, C.zlink_send_flags_t(flags), partFlag))
 		})
@@ -45,7 +45,7 @@ func (s *routedSocket) reply(rid RoutingID, requestSeq uint64, flags SendFlags, 
 		return err
 	}
 	target := rid.toC()
-	return s.routedAdmission.withAttemptGate(func() error {
+	return s.withSendGate(func() error {
 		return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 			return submitErrorFromResult(C.zlink_router_reply_part(s.raw(), &target, C.uint64_t(requestSeq), part, partFlag))
 		})
@@ -155,14 +155,14 @@ func (s *routedSocket) RecvRetained(out *Received, flags RecvFlags) (bool, error
 	return true, nil
 }
 func (s *RouterSocket) SendTo(target RoutingID) RoutedSendOp {
-	return newRoutedSendBuilder(func(ctx context.Context, parts []sendBuilderPart) <-chan error {
-		return submitRoutedSend(ctx, s.routedAdmission, &target, parts)
+	return newRoutedSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+		return submitRoutedSend(ctx, s.socketCore, routedRouter, &target, parts)
 	})
 }
 
 func (s *RouterSocket) Request(peerRID RoutingID) RequestOp {
 	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) <-chan RequestReplyCompletion {
-		return submitRoutedRequest(ctx, s.routedAdmission, &peerRID, timeout, parts)
+		return submitRoutedRequest(ctx, s.socketCore, routedRouter, &peerRID, timeout, parts)
 	})
 }
 

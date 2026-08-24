@@ -63,7 +63,6 @@ const (
 )
 
 type recvCallback func(*Received)
-type sendReadyCallback func()
 
 const recvTopicBufferCap = 64 * 1024
 
@@ -144,12 +143,7 @@ func newDealerSocket(ctx *Context) (*DealerSocket, error) {
 	if err != nil {
 		return nil, err
 	}
-	connection := &connectionSocket{socketCore: core}
-	if _, err := newRoutedAdmission(core, routedDealer); err != nil {
-		_ = core.Close()
-		return nil, err
-	}
-	return &DealerSocket{connectionSocket: connection}, nil
+	return &DealerSocket{connectionSocket: &connectionSocket{socketCore: core}}, nil
 }
 
 func (s *DealerSocket) SetRoutingID(id RoutingID) error {
@@ -193,14 +187,14 @@ func (s *DealerSocket) SetRequestTimeout(value time.Duration) error {
 }
 
 func (s *DealerSocket) Send() RoutedSendOp {
-	return newRoutedSendBuilder(func(ctx context.Context, parts []sendBuilderPart) <-chan error {
-		return submitRoutedSend(ctx, s.routedAdmission, nil, parts)
+	return newRoutedSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+		return submitRoutedSend(ctx, s.socketCore, routedDealer, nil, parts)
 	})
 }
 
 func (s *DealerSocket) Request() RequestOp {
 	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) <-chan RequestReplyCompletion {
-		return submitRoutedRequest(ctx, s.routedAdmission, nil, timeout, parts)
+		return submitRoutedRequest(ctx, s.socketCore, routedDealer, nil, timeout, parts)
 	})
 }
 
@@ -213,13 +207,8 @@ func newRouterSocket(ctx *Context) (*RouterSocket, error) {
 	if err != nil {
 		return nil, err
 	}
-	connection := &connectionSocket{socketCore: core}
-	if _, err := newRoutedAdmission(core, routedRouter); err != nil {
-		_ = core.Close()
-		return nil, err
-	}
 	return &RouterSocket{
-		routedSocket: &routedSocket{connectionSocket: connection},
+		routedSocket: &routedSocket{connectionSocket: &connectionSocket{socketCore: core}},
 	}, nil
 }
 
@@ -514,8 +503,4 @@ func (s *StreamSocket) Notify() (bool, error) {
 		return false, err
 	}
 	return raw != 0, nil
-}
-
-func (s *StreamSocket) OnSendReady(handler func()) error {
-	return s.core.connectionSocket.setSendReady(handler)
 }

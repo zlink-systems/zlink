@@ -160,7 +160,7 @@ func sendMultiDealerRouterRequest(
 	window perfcommon.BenchmarkWindow,
 ) bool {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
-	sent, err := perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) <-chan error {
+	sent, err := perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) error {
 		return socket.Send().MoveMessage(message).Submit(context.Background())
 	})
 	if err != nil {

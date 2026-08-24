@@ -203,7 +203,7 @@ func TestRetainedRoutedReceivePreservesMultipartAndRequestMetadata(t *testing.T)
 		t.Fatalf("dealer Connect() error = %v", err)
 	}
 
-	if err := awaitRoutedSend(t, dealer.Send().Bytes([]byte("raw-a")).Bytes([]byte("raw-b")).Submit(context.Background())); err != nil {
+	if err := dealer.Send().Bytes([]byte("raw-a")).Bytes([]byte("raw-b")).Submit(context.Background()); err != nil {
 		t.Fatalf("dealer Send() error = %v", err)
 	}
 	var routed zlink.Received

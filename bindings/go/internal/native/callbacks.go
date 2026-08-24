@@ -164,25 +164,6 @@ func (s *recvCallbackState) close() {
 	s.dispatcher.close()
 }
 
-type sendReadyCallbackState struct {
-	dispatcher *callbackDispatcher
-	handler    sendReadyCallback
-}
-
-func newSendReadyCallbackState(handler sendReadyCallback) *sendReadyCallbackState {
-	return &sendReadyCallbackState{
-		dispatcher: newCallbackDispatcher(),
-		handler:    handler,
-	}
-}
-
-func (s *sendReadyCallbackState) close() {
-	if s == nil {
-		return
-	}
-	s.dispatcher.close()
-}
-
 type monitorCallbackState struct {
 	dispatcher *callbackDispatcher
 	handler    func(*MonitorEvent)
@@ -288,20 +269,6 @@ func goZlinkRecvTrampoline(sourceRID *C.zlink_routing_id_t, parts *C.zlink_msg_t
 		return
 	}
 	_ = received.Close()
-}
-
-//export goZlinkSendReadyTrampoline
-func goZlinkSendReadyTrampoline(_ unsafe.Pointer, userdata C.uintptr_t) {
-	state, ok := safeHandleAs[*sendReadyCallbackState](userdata)
-	if !ok {
-		return
-	}
-	state.dispatcher.enqueue(&callbackTask{
-		label: "send-ready",
-		invoke: func() {
-			state.handler()
-		},
-	})
 }
 
 //export goZlinkStreamPacketTrampoline

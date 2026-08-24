@@ -4,11 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	zlink "zlink.systems/zlink"
 )
+
+// This file covers the routed send/request contract after the 0.13.0
+// realignment: routed send is a SYNCHRONOUS Submit(ctx) error, the HWM wait
+// lives inside Core (bounded by SNDTIMEO), and the binding owns no thread,
+// queue or retry. Request keeps its completion channel, but the submit itself
+// is synchronous and Core's reply callback drives the completion.
 
 const routedAsyncTestHWM = 4096
 
@@ -76,6 +83,12 @@ func newRoutedAsyncFixture(t testing.TB, withB bool) *routedAsyncFixture {
 		f.close()
 		t.Fatalf("router SetSendHighWaterMark() error = %v", err)
 	}
+	// The realigned contract puts the HWM wait inside Core, so every test
+	// bounds it with the socket's own SNDTIMEO instead of a binding deadline.
+	if err := f.router.SetSendTimeout(2 * time.Second); err != nil {
+		f.close()
+		t.Fatalf("router SetSendTimeout() error = %v", err)
+	}
 	for name, dealer := range map[string]*zlink.DealerSocket{"A": f.dealerA, "B": f.dealerB} {
 		if dealer == nil {
 			continue
@@ -142,9 +155,7 @@ func waitForRoutedAsyncPeer(t testing.TB, router *zlink.RouterSocket, dealer *zl
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		err := awaitRoutedSend(t, router.SendTo(rid).Bytes([]byte("route-ready")).Submit(ctx))
-		cancel()
+		err := router.SendTo(rid).Bytes([]byte("route-ready")).Submit(context.Background())
 		if err == nil {
 			var received zlink.Received
 			if ok, recvErr := dealer.Recv(&received, zlink.RecvFlagsNone); recvErr != nil || !ok {
@@ -162,63 +173,28 @@ func waitForRoutedAsyncPeer(t testing.TB, router *zlink.RouterSocket, dealer *zl
 	t.Fatal("timed out waiting for routed peer")
 }
 
-func fillRoutedTargetUntilWaiting(t testing.TB, router *zlink.RouterSocket, rid zlink.RoutingID, ctx context.Context) <-chan error {
+// fillRoutedTargetUntilBackpressured drives one exact target to its Core HWM
+// using SNDTIMEO=0 (the DONTWAIT contract). It returns how many records were
+// admitted so the caller can drain exactly that many.
+func fillRoutedTargetUntilBackpressured(t testing.TB, router *zlink.RouterSocket, rid zlink.RoutingID) int {
 	t.Helper()
+	if err := router.SetSendTimeout(0); err != nil {
+		t.Fatalf("router SetSendTimeout(0) error = %v", err)
+	}
 	payload := make([]byte, routedAsyncTestHWM)
-	for attempt := 0; attempt < 16; attempt++ {
-		completion := router.SendTo(rid).Bytes(payload).Submit(ctx)
-		timer := time.NewTimer(100 * time.Millisecond)
-		select {
-		case err, ok := <-completion:
-			timer.Stop()
-			if !ok {
-				t.Fatal("routed send completion closed without a result")
-			}
-			if err != nil {
-				t.Fatalf("fill send error = %v", err)
-			}
-		case <-timer.C:
-			select {
-			case err, ok := <-completion:
-				if !ok {
-					t.Fatal("routed send completion closed without a result")
-				}
-				if err != nil {
-					t.Fatalf("fill send error = %v", err)
-				}
-			default:
-				return completion
-			}
+	for admitted := 0; admitted < 512; admitted++ {
+		err := router.SendTo(rid).Bytes(payload).Submit(context.Background())
+		if err == nil {
+			continue
 		}
+		var submitError *zlink.SubmitError
+		if !errors.As(err, &submitError) || submitError.Result != zlink.SubmitBackpressured {
+			t.Fatalf("fill send error = %v, want SubmitBackpressured", err)
+		}
+		return admitted
 	}
 	t.Fatal("target did not reach HWM")
-	return nil
-}
-
-func awaitRoutedSendWithin(t testing.TB, completion <-chan error, timeout time.Duration) error {
-	t.Helper()
-	select {
-	case err, ok := <-completion:
-		if !ok {
-			t.Fatal("routed send completion closed without a result")
-		}
-		return err
-	case <-time.After(timeout):
-		t.Fatal("timed out waiting for routed send completion")
-		return nil
-	}
-}
-
-func requireCompletionClosed(t testing.TB, completion <-chan error) {
-	t.Helper()
-	select {
-	case _, ok := <-completion:
-		if ok {
-			t.Fatal("routed send completion produced more than one terminal result")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("routed send completion did not close after its terminal result")
-	}
+	return 0
 }
 
 func requireRequestCompletionClosed(t testing.TB, completion <-chan zlink.RequestReplyCompletion) {
@@ -242,44 +218,31 @@ func recvRoutedAsync(t testing.TB, dealer *zlink.DealerSocket) *zlink.Received {
 	return received
 }
 
-func drainUntilRoutedSendCompletes(t testing.TB, dealer *zlink.DealerSocket, completion <-chan error) {
+func drainRoutedAsync(t testing.TB, dealer *zlink.DealerSocket, count int) {
 	t.Helper()
-	for drained := 0; drained < 16; drained++ {
-		select {
-		case err, ok := <-completion:
-			if !ok {
-				t.Fatal("routed send completion closed without a result")
-			}
-			if err != nil {
-				t.Fatalf("routed send after exact wake error = %v", err)
-			}
-			return
-		default:
-		}
+	for i := 0; i < count; i++ {
 		received := recvRoutedAsync(t, dealer)
 		_ = received.Close()
-		select {
-		case err, ok := <-completion:
-			if !ok {
-				t.Fatal("routed send completion closed without a result")
-			}
-			if err != nil {
-				t.Fatalf("routed send after exact wake error = %v", err)
-			}
-			return
-		case <-time.After(250 * time.Millisecond):
-		}
 	}
-	t.Fatal("exact target did not wake after its credit was returned")
 }
 
-func TestRoutedAsyncBlockedTargetDoesNotBlockOtherAndExactWake(t *testing.T) {
+// A backpressured exact target must not poison another target: the routed send
+// terminal is synchronous, so B's submit returns while A is still full.
+func TestRoutedSendBlockedTargetDoesNotPoisonOtherTarget(t *testing.T) {
 	f := newRoutedAsyncFixture(t, true)
 	defer f.close()
 
-	blockedA := fillRoutedTargetUntilWaiting(t, f.router, f.ridA, context.Background())
-	if err := awaitRoutedSendWithin(t, f.router.SendTo(f.ridB).Bytes([]byte("b-progress")).Submit(context.Background()), 2*time.Second); err != nil {
+	admitted := fillRoutedTargetUntilBackpressured(t, f.router, f.ridA)
+	if err := f.router.SetSendTimeout(2 * time.Second); err != nil {
+		t.Fatalf("router SetSendTimeout() error = %v", err)
+	}
+
+	started := time.Now()
+	if err := f.router.SendTo(f.ridB).Bytes([]byte("b-progress")).Submit(context.Background()); err != nil {
 		t.Fatalf("target B send error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("target B send waited %s behind target A", elapsed)
 	}
 	receivedB := recvRoutedAsync(t, f.dealerB)
 	if len(receivedB.Parts()) != 1 || string(receivedB.Parts()[0].Data()) != "b-progress" {
@@ -287,32 +250,23 @@ func TestRoutedAsyncBlockedTargetDoesNotBlockOtherAndExactWake(t *testing.T) {
 	}
 	_ = receivedB.Close()
 
-	select {
-	case err := <-blockedA:
-		t.Fatalf("target A completed before A returned credit: %v", err)
-	default:
+	drainRoutedAsync(t, f.dealerA, admitted)
+	if err := f.router.SendTo(f.ridA).Bytes([]byte("a-after-drain")).Submit(context.Background()); err != nil {
+		t.Fatalf("target A send after drain error = %v", err)
 	}
-	drainUntilRoutedSendCompletes(t, f.dealerA, blockedA)
-	if err := f.router.Close(); err != nil {
-		t.Fatalf("router Close() after exact wake error = %v", err)
-	}
-	f.router = nil
+	received := recvRoutedAsync(t, f.dealerA)
+	_ = received.Close()
 }
 
-func TestRoutedAsyncZeroSendTimeoutDoesNotWaitBehindTargetQueue(t *testing.T) {
+// SNDTIMEO=0 is the DONTWAIT contract: Core returns BACKPRESSURED at once and
+// the binding does not retry.
+func TestRoutedSendZeroSendTimeoutReturnsBackpressureImmediately(t *testing.T) {
 	f := newRoutedAsyncFixture(t, false)
 	defer f.close()
 
-	_ = fillRoutedTargetUntilWaiting(t, f.router, f.ridA, context.Background())
-	if err := f.router.SetSendTimeout(0); err != nil {
-		t.Fatalf("router SetSendTimeout(0) error = %v", err)
-	}
+	_ = fillRoutedTargetUntilBackpressured(t, f.router, f.ridA)
 	started := time.Now()
-	err := awaitRoutedSendWithin(
-		t,
-		f.router.SendTo(f.ridA).Bytes([]byte("zero-timeout")).Submit(context.Background()),
-		time.Second,
-	)
+	err := f.router.SendTo(f.ridA).Bytes([]byte("zero-timeout")).Submit(context.Background())
 	if err == nil {
 		t.Fatal("zero-timeout routed send completed without backpressure")
 	}
@@ -325,103 +279,145 @@ func TestRoutedAsyncZeroSendTimeoutDoesNotWaitBehindTargetQueue(t *testing.T) {
 	}
 }
 
-func TestRoutedAsyncDetachCompletesExactlyOnce(t *testing.T) {
+// The blocking submit parks inside Core and resumes on a Core credit signal.
+// Nothing in the binding retries or reschedules it.
+func TestRoutedSendBlockingSubmitParksInCoreAndResumesOnCredit(t *testing.T) {
 	f := newRoutedAsyncFixture(t, false)
 	defer f.close()
 
-	blocked := fillRoutedTargetUntilWaiting(t, f.router, f.ridA, context.Background())
+	admitted := fillRoutedTargetUntilBackpressured(t, f.router, f.ridA)
+	if err := f.router.SetSendTimeout(5 * time.Second); err != nil {
+		t.Fatalf("router SetSendTimeout() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- f.router.SendTo(f.ridA).Bytes([]byte("parked-in-core")).Submit(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("blocked send returned before credit came back: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	drainRoutedAsync(t, f.dealerA, admitted)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("send after Core credit signal error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked send did not resume after its credit returned")
+	}
+}
+
+// SNDTIMEO bounds the Core-owned wait; expiry surfaces as BACKPRESSURED.
+func TestRoutedSendSendTimeoutBoundsTheCoreOwnedWait(t *testing.T) {
+	f := newRoutedAsyncFixture(t, false)
+	defer f.close()
+
+	_ = fillRoutedTargetUntilBackpressured(t, f.router, f.ridA)
+	if err := f.router.SetSendTimeout(200 * time.Millisecond); err != nil {
+		t.Fatalf("router SetSendTimeout() error = %v", err)
+	}
+	started := time.Now()
+	err := f.router.SendTo(f.ridA).Bytes([]byte("bounded-wait")).Submit(context.Background())
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("bounded routed send completed without backpressure")
+	}
+	var submitError *zlink.SubmitError
+	if !errors.As(err, &submitError) || submitError.Result != zlink.SubmitBackpressured {
+		t.Fatalf("bounded routed send error = %v, want SubmitBackpressured", err)
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Fatalf("bounded routed send returned after %s, want at least the SNDTIMEO", elapsed)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("bounded routed send waited %s past its SNDTIMEO", elapsed)
+	}
+}
+
+// A route that goes away surfaces a terminal submit error, not a retry.
+func TestRoutedSendDetachedTargetSurfacesTerminalError(t *testing.T) {
+	f := newRoutedAsyncFixture(t, false)
+	defer f.close()
+
 	if err := f.dealerA.Close(); err != nil {
 		t.Fatalf("dealer A Close() error = %v", err)
 	}
 	f.dealerA = nil
-	if err := awaitRoutedSendWithin(t, blocked, 2*time.Second); err == nil {
-		t.Fatal("detached target completed without an error")
+
+	var lastErr error
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		lastErr = f.router.SendTo(f.ridA).Bytes([]byte("detached")).Submit(context.Background())
+		if lastErr != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	requireCompletionClosed(t, blocked)
+	if lastErr == nil {
+		t.Fatal("send to a detached target never surfaced an error")
+	}
+	var submitError *zlink.SubmitError
+	if !errors.As(lastErr, &submitError) {
+		t.Fatalf("detached target error = %v, want *SubmitError", lastErr)
+	}
 }
 
-func TestRoutedAsyncContextAndCloseCompleteExactlyOnce(t *testing.T) {
-	t.Run("cancel", func(t *testing.T) {
-		f := newRoutedAsyncFixture(t, false)
-		defer f.close()
-		ctx, cancel := context.WithCancel(context.Background())
-		blocked := fillRoutedTargetUntilWaiting(t, f.router, f.ridA, ctx)
-		cancel()
-		if err := awaitRoutedSendWithin(t, blocked, 2*time.Second); !errors.Is(err, context.Canceled) {
-			t.Fatalf("cancel completion error = %v, want context.Canceled", err)
-		}
-		requireCompletionClosed(t, blocked)
-	})
-
-	t.Run("deadline", func(t *testing.T) {
-		f := newRoutedAsyncFixture(t, false)
-		defer f.close()
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		defer cancel()
-		blocked := fillRoutedTargetUntilWaiting(t, f.router, f.ridA, ctx)
-		if err := awaitRoutedSendWithin(t, blocked, 2*time.Second); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("deadline completion error = %v, want context.DeadlineExceeded", err)
-		}
-		requireCompletionClosed(t, blocked)
-	})
-
-	t.Run("socket close", func(t *testing.T) {
-		f := newRoutedAsyncFixture(t, false)
-		defer f.close()
-		blocked := fillRoutedTargetUntilWaiting(t, f.router, f.ridA, context.Background())
-		if err := f.router.Close(); err != nil {
-			t.Fatalf("router Close() error = %v", err)
-		}
-		f.router = nil
-		if err := awaitRoutedSendWithin(t, blocked, 2*time.Second); err == nil {
-			t.Fatal("socket-close completion did not contain an error")
-		}
-		requireCompletionClosed(t, blocked)
-	})
-}
-
-func TestRoutedAsyncCancelBeforeQueuedAttemptPreventsWireSubmit(t *testing.T) {
+// ctx owns cancellation at the submit boundary: an already-cancelled ctx fails
+// before anything reaches the wire.
+func TestRoutedSendCancelledContextNeverReachesTheWire(t *testing.T) {
 	f := newRoutedAsyncFixture(t, false)
 	defer f.close()
 
-	_ = fillRoutedTargetUntilWaiting(t, f.router, f.ridA, context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
-	canceled := f.router.SendTo(f.ridA).Bytes([]byte("must-not-reach-wire")).Submit(ctx)
 	cancel()
-	completionErr := awaitRoutedSendWithin(t, canceled, 2*time.Second)
-	if !errors.Is(completionErr, context.Canceled) {
-		t.Fatalf("queued cancel completion error = %v, want context.Canceled", completionErr)
+	err := f.router.SendTo(f.ridA).Bytes([]byte("must-not-reach-wire")).Submit(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled submit error = %v, want context.Canceled", err)
 	}
-	requireCompletionClosed(t, canceled)
 
-	for drained := 0; drained < 16; drained++ {
-		var received zlink.Received
-		ok, err := f.dealerA.Recv(&received, zlink.RecvFlagsDontWait)
-		if err != nil {
-			t.Fatalf("drain Recv() error = %v", err)
-		}
-		if !ok {
-			return
-		}
-		parts := received.Parts()
-		if len(parts) == 1 && string(parts[0].Data()) == "must-not-reach-wire" {
-			_ = received.Close()
-			t.Fatal("context-canceled queued send reached the wire")
-		}
-		_ = received.Close()
-	}
 	var received zlink.Received
-	if ok, err := f.dealerA.Recv(&received, zlink.RecvFlagsDontWait); err != nil {
-		t.Fatalf("final drain Recv() error = %v", err)
+	if ok, recvErr := f.dealerA.Recv(&received, zlink.RecvFlagsDontWait); recvErr != nil {
+		t.Fatalf("drain Recv() error = %v", recvErr)
 	} else if ok {
+		payload := string(received.Parts()[0].Data())
 		_ = received.Close()
-		t.Fatal("test did not finish draining the pre-cancel queue")
+		t.Fatalf("cancelled send reached the wire: %q", payload)
 	}
 }
 
-func TestRoutedAsyncMultipartRecordsDoNotInterleave(t *testing.T) {
+func TestRoutedSendExpiredContextDeadlineNeverReachesTheWire(t *testing.T) {
 	f := newRoutedAsyncFixture(t, false)
 	defer f.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond)
+	err := f.router.SendTo(f.ridA).Bytes([]byte("expired")).Submit(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired submit error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// Concurrent senders must not interleave the parts of one multipart record.
+// The binding keeps a plain record-attempt mutex for exactly this, not a queue.
+// A receiver drains in parallel because the send is now synchronous: with the
+// HWM wait owned by Core, nobody else would return credit.
+func TestRoutedSendConcurrentMultipartRecordsDoNotInterleave(t *testing.T) {
+	f := newRoutedAsyncFixture(t, false)
+	defer f.close()
+	if err := f.router.SetSendTimeout(5 * time.Second); err != nil {
+		t.Fatalf("router SetSendTimeout() error = %v", err)
+	}
+	// Record contiguity is the subject here, not backpressure: give both
+	// queues enough headroom that no record has to park on the Core HWM wait.
+	// (A record that does park can be dropped by Core 0.13.0 — see the Go
+	// realignment log, 2026-08-24-go-realignment.md, "Core 결함" section — and
+	// that loss is not a binding behaviour.)
 	if err := f.router.SetSendHighWaterMark(1 << 20); err != nil {
 		t.Fatalf("router SetSendHighWaterMark() error = %v", err)
 	}
@@ -429,67 +425,127 @@ func TestRoutedAsyncMultipartRecordsDoNotInterleave(t *testing.T) {
 		t.Fatalf("dealer A SetReceiveHighWaterMark() error = %v", err)
 	}
 
-	const records = 24
-	completions := make([]<-chan error, records)
-	for i := 0; i < records; i++ {
-		prefix := fmt.Sprintf("record-%02d", i)
-		completions[i] = f.router.SendTo(f.ridA).
-			Bytes([]byte(prefix + "-a")).
-			Bytes([]byte(prefix + "-b")).
-			Bytes([]byte(prefix + "-c")).
-			Submit(context.Background())
+	const senders = 4
+	const perSender = 6
+	const records = senders * perSender
+
+	type recordParts struct {
+		prefix string
+		parts  []string
 	}
-	for i, completion := range completions {
-		if err := awaitRoutedSendWithin(t, completion, 2*time.Second); err != nil {
-			t.Fatalf("multipart send %d error = %v", i, err)
+	receivedRecords := make(chan recordParts, records)
+	receiverErr := make(chan error, 1)
+	go func() {
+		defer close(receivedRecords)
+		for i := 0; i < records; i++ {
+			received := &zlink.Received{}
+			ok, err := f.dealerA.Recv(received, zlink.RecvFlagsNone)
+			if err != nil || !ok {
+				receiverErr <- fmt.Errorf("Recv() = (%v, %v)", ok, err)
+				return
+			}
+			record := recordParts{}
+			for _, part := range received.Parts() {
+				record.parts = append(record.parts, string(part.Data()))
+			}
+			if len(record.parts) > 0 {
+				record.prefix = record.parts[0]
+			}
+			_ = received.Close()
+			receivedRecords <- record
 		}
+		receiverErr <- nil
+	}()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, records)
+	for sender := 0; sender < senders; sender++ {
+		wg.Add(1)
+		go func(sender int) {
+			defer wg.Done()
+			for i := 0; i < perSender; i++ {
+				prefix := fmt.Sprintf("record-%d-%02d", sender, i)
+				err := f.router.SendTo(f.ridA).
+					Bytes([]byte(prefix + "-a")).
+					Bytes([]byte(prefix + "-b")).
+					Bytes([]byte(prefix + "-c")).
+					Submit(context.Background())
+				if err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(sender)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent multipart send error = %v", err)
+	}
+
+	select {
+	case err := <-receiverErr:
+		if err != nil {
+			t.Fatalf("receiver error = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("receiver did not collect every record")
 	}
 
 	seen := make(map[string]bool, records)
-	for i := 0; i < records; i++ {
-		received := recvRoutedAsync(t, f.dealerA)
-		parts := received.Parts()
-		if len(parts) != 3 {
-			_ = received.Close()
-			t.Fatalf("multipart record has %d parts, want 3", len(parts))
+	for record := range receivedRecords {
+		if len(record.parts) != 3 {
+			t.Fatalf("multipart record has %d parts, want 3", len(record.parts))
 		}
-		first := string(parts[0].Data())
+		first := record.parts[0]
 		if len(first) < 2 || first[len(first)-2:] != "-a" {
-			_ = received.Close()
 			t.Fatalf("first multipart part = %q", first)
 		}
 		prefix := first[:len(first)-2]
-		if string(parts[1].Data()) != prefix+"-b" || string(parts[2].Data()) != prefix+"-c" {
-			_ = received.Close()
+		if record.parts[1] != prefix+"-b" || record.parts[2] != prefix+"-c" {
 			t.Fatalf("multipart record %q was interleaved", prefix)
 		}
 		if seen[prefix] {
-			_ = received.Close()
 			t.Fatalf("multipart record %q was duplicated", prefix)
 		}
 		seen[prefix] = true
-		_ = received.Close()
+	}
+	if len(seen) != records {
+		t.Fatalf("received %d records, want %d", len(seen), records)
 	}
 }
 
-func TestRoutedAsyncRequestWaitsForCreditAndReplies(t *testing.T) {
-	f := newRoutedAsyncFixture(t, true)
+// The request submit is synchronous but keeps its completion channel: Core's
+// reply callback completes it. The submit itself waits inside Core for the
+// exact target's credit.
+func TestRoutedRequestWaitsForCreditAndReplies(t *testing.T) {
+	f := newRoutedAsyncFixture(t, false)
 	defer f.close()
 
-	blockedSend := fillRoutedTargetUntilWaiting(t, f.router, f.ridA, context.Background())
-	request := f.router.Request(f.ridA).
-		Bytes([]byte("request-after-credit")).
-		Timeout(4 * time.Second).
-		Submit(context.Background())
-	if err := awaitRoutedSendWithin(t, f.router.SendTo(f.ridB).Bytes([]byte("b-during-request-wait")).Submit(context.Background()), 2*time.Second); err != nil {
-		t.Fatalf("target B send error = %v", err)
+	admitted := fillRoutedTargetUntilBackpressured(t, f.router, f.ridA)
+	if err := f.router.SetSendTimeout(5 * time.Second); err != nil {
+		t.Fatalf("router SetSendTimeout() error = %v", err)
 	}
-	receivedB := recvRoutedAsync(t, f.dealerB)
-	_ = receivedB.Close()
 
-	blockedDone := false
+	submitted := make(chan (<-chan zlink.RequestReplyCompletion), 1)
+	go func() {
+		submitted <- f.router.Request(f.ridA).
+			Bytes([]byte("request-after-credit")).
+			Timeout(5 * time.Second).
+			Submit(context.Background())
+	}()
+
+	drainRoutedAsync(t, f.dealerA, admitted)
+
+	var request <-chan zlink.RequestReplyCompletion
+	select {
+	case request = <-submitted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request submit did not return after its credit came back")
+	}
+
 	replied := false
-	for receivedCount := 0; receivedCount < 20 && !replied; receivedCount++ {
+	for i := 0; i < 32 && !replied; i++ {
 		received := recvRoutedAsync(t, f.dealerA)
 		if received.HasRequestSeq() {
 			parts := received.Parts()
@@ -504,20 +560,11 @@ func TestRoutedAsyncRequestWaitsForCreditAndReplies(t *testing.T) {
 			replied = true
 		}
 		_ = received.Close()
-		if !blockedDone {
-			select {
-			case err, ok := <-blockedSend:
-				if !ok || err != nil {
-					t.Fatalf("blocked send completion = (%v, %v)", err, ok)
-				}
-				blockedDone = true
-			default:
-			}
-		}
 	}
 	if !replied {
-		t.Fatal("request was not admitted after exact-target credit returned")
+		t.Fatal("request never reached the exact target")
 	}
+
 	completion := awaitRequest(t, request)
 	defer zlink.MultipartClose(completion.Parts)
 	if completion.Err != nil {
@@ -528,15 +575,14 @@ func TestRoutedAsyncRequestWaitsForCreditAndReplies(t *testing.T) {
 	}
 }
 
-func TestRoutedAsyncRequestContextAndCloseCompleteExactlyOnce(t *testing.T) {
+func TestRoutedRequestContextCompletesExactlyOnce(t *testing.T) {
 	t.Run("cancel", func(t *testing.T) {
 		f := newRoutedAsyncFixture(t, false)
 		defer f.close()
-		_ = fillRoutedTargetUntilWaiting(t, f.router, f.ridA, context.Background())
 		ctx, cancel := context.WithCancel(context.Background())
 		request := f.router.Request(f.ridA).
-			Bytes([]byte("cancel-while-waiting")).
-			Timeout(4 * time.Second).
+			Bytes([]byte("cancel-after-submit")).
+			Timeout(10 * time.Second).
 			Submit(ctx)
 		cancel()
 		completion := awaitRequest(t, request)
@@ -549,12 +595,11 @@ func TestRoutedAsyncRequestContextAndCloseCompleteExactlyOnce(t *testing.T) {
 	t.Run("deadline", func(t *testing.T) {
 		f := newRoutedAsyncFixture(t, false)
 		defer f.close()
-		_ = fillRoutedTargetUntilWaiting(t, f.router, f.ridA, context.Background())
-		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
 		request := f.router.Request(f.ridA).
-			Bytes([]byte("deadline-while-waiting")).
-			Timeout(4 * time.Second).
+			Bytes([]byte("deadline-after-submit")).
+			Timeout(10 * time.Second).
 			Submit(ctx)
 		completion := awaitRequest(t, request)
 		if !errors.Is(completion.Err, context.DeadlineExceeded) {
@@ -563,35 +608,30 @@ func TestRoutedAsyncRequestContextAndCloseCompleteExactlyOnce(t *testing.T) {
 		requireRequestCompletionClosed(t, request)
 	})
 
-	t.Run("socket close", func(t *testing.T) {
+	t.Run("core owned timeout", func(t *testing.T) {
 		f := newRoutedAsyncFixture(t, false)
 		defer f.close()
-		_ = fillRoutedTargetUntilWaiting(t, f.router, f.ridA, context.Background())
 		request := f.router.Request(f.ridA).
-			Bytes([]byte("close-while-waiting")).
-			Timeout(4 * time.Second).
+			Bytes([]byte("core-timeout")).
+			Timeout(250 * time.Millisecond).
 			Submit(context.Background())
-		if err := f.router.Close(); err != nil {
-			t.Fatalf("router Close() error = %v", err)
-		}
-		f.router = nil
 		completion := awaitRequest(t, request)
-		if completion.Err == nil {
-			t.Fatal("socket-close request completion did not contain an error")
+		if completion.Result != zlink.RequestTimedOut {
+			t.Fatalf("request completion result = %v, want RequestTimedOut", completion.Result)
 		}
 		requireRequestCompletionClosed(t, request)
 	})
 }
 
-func TestRoutedAsyncBuilderCannotSubmitTwice(t *testing.T) {
+func TestRoutedBuilderCannotSubmitTwice(t *testing.T) {
 	f := newRoutedAsyncFixture(t, false)
 	defer f.close()
 
 	sendBuilder := f.router.SendTo(f.ridA).Bytes([]byte("submit-once"))
-	if err := awaitRoutedSendWithin(t, sendBuilder.Submit(context.Background()), 2*time.Second); err != nil {
+	if err := sendBuilder.Submit(context.Background()); err != nil {
 		t.Fatalf("first send Submit() error = %v", err)
 	}
-	if err := awaitRoutedSendWithin(t, sendBuilder.Submit(context.Background()), 2*time.Second); err == nil {
+	if err := sendBuilder.Submit(context.Background()); err == nil {
 		t.Fatal("second send Submit() completed without a state error")
 	}
 	received := recvRoutedAsync(t, f.dealerA)

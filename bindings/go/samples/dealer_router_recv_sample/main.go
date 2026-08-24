@@ -33,7 +33,7 @@ func main() {
 	samplecommon.Must(dealer.Connect(endpoint))
 	samplecommon.WaitConnected(routerMon, dealerMon)
 
-	samplecommon.Must(<-dealer.Send().Message(
+	samplecommon.Must(dealer.Send().Message(
 		samplecommon.Message("ping")).Submit(context.Background()))
 
 	var request zlink.Received

@@ -10,7 +10,9 @@ package native
 import "C"
 
 import (
+	"errors"
 	"math"
+	"runtime"
 	"runtime/cgo"
 	"strings"
 	"sync"
@@ -19,17 +21,25 @@ import (
 	"unsafe"
 )
 
+// closeBusyRetryLimit bounds the EBUSY handoff window Core reports while one
+// of its own callbacks is still inside its lifecycle scope. It is a close-path
+// lifecycle retry, not a submit retry: nothing on the send path retries.
+const closeBusyRetryLimit = 1024
+
 type socketCore struct {
-	handle                  atomic.Pointer[byte]
-	closed                  atomic.Bool
-	callbackMu              sync.Mutex
-	recvHandle              cgo.Handle
-	recvActive              atomic.Uintptr
-	subscribeHandle         cgo.Handle
-	sendReadyHandle         cgo.Handle
-	routedReadyHandle       cgo.Handle
-	streamPacketHandle      cgo.Handle
-	routedAdmission         *routedAdmission
+	handle  atomic.Pointer[byte]
+	closed  atomic.Bool
+	closing atomic.Bool
+	// sendGate is the handle-level record-attempt gate. It is a plain mutex,
+	// not a queue or a worker: it only keeps one multipart part sequence from
+	// interleaving with another on the same handle and keeps close from
+	// racing an in-flight native submit. The binding owns no send thread.
+	sendGate           sync.Mutex
+	callbackMu         sync.Mutex
+	recvHandle         cgo.Handle
+	recvActive         atomic.Uintptr
+	subscribeHandle    cgo.Handle
+	streamPacketHandle cgo.Handle
 }
 
 func newSocketCore(ctx *Context, socketType C.zlink_socket_type_t) (*socketCore, error) {
@@ -99,13 +109,27 @@ func (s *socketCore) Close() error {
 		return nil
 	}
 	handle := s.raw()
+	// Publish the closing intent before contending for the record-attempt
+	// gate. New submits are then rejected immediately and only the submit
+	// already inside Core has to drain, so close cannot starve behind a hot
+	// send loop (the C++ realignment hit exactly that starvation).
+	s.closing.Store(true)
+	s.sendGate.Lock()
 	var closeErr error
-	if s.routedAdmission != nil {
-		closeErr = s.routedAdmission.closeNative()
-	} else {
+	for attempt := 0; ; attempt++ {
 		closeErr = closeErrorFromResult(C.zlink_close(handle))
+		if !isCloseBusy(closeErr) || attempt >= closeBusyRetryLimit {
+			break
+		}
+		// A Core callback (reply completion, monitor, receive) can still be
+		// inside its own lifecycle scope when close arrives, and Core reports
+		// that window as EBUSY. Give only that short handoff a bounded chance
+		// to finish — a persistent concurrent API still returns CloseBusy.
+		runtime.Gosched()
 	}
+	s.sendGate.Unlock()
 	if closeErr != nil {
+		s.closing.Store(false)
 		s.callbackMu.Unlock()
 		return closeErr
 	}
@@ -118,17 +142,31 @@ func (s *socketCore) Close() error {
 
 func (s *socketCore) releaseCallbacks() {
 	s.callbackMu.Lock()
-	handles := []cgo.Handle{s.recvHandle, s.subscribeHandle, s.sendReadyHandle, s.routedReadyHandle, s.streamPacketHandle}
+	handles := []cgo.Handle{s.recvHandle, s.subscribeHandle, s.streamPacketHandle}
 	s.recvHandle = 0
 	s.recvActive.Store(0)
 	s.subscribeHandle = 0
-	s.sendReadyHandle = 0
-	s.routedReadyHandle = 0
 	s.streamPacketHandle = 0
 	s.callbackMu.Unlock()
 	for _, handle := range handles {
 		releaseCallbackHandle(handle)
 	}
+}
+
+// withSendGate runs one native record attempt under the handle-level
+// record-attempt gate. The gate is held for the whole attempt so a multipart
+// part sequence stays contiguous; the HWM wait inside that attempt belongs to
+// Core, bounded by the socket's SNDTIMEO.
+func (s *socketCore) withSendGate(attempt func() error) error {
+	if s == nil {
+		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	s.sendGate.Lock()
+	defer s.sendGate.Unlock()
+	if s.isClosed() || s.closing.Load() {
+		return routedTerminalError(int(C.ETERM))
+	}
+	return attempt()
 }
 
 func (s *socketCore) hasReceiveHandler() bool {
@@ -259,6 +297,11 @@ func (s *socketCore) setDurationOption(option C.zlink_option_t, value time.Durat
 func (s *socketCore) getDurationOption(option C.zlink_option_t) (time.Duration, error) {
 	value, err := s.getIntOption(option)
 	return time.Duration(value) * time.Millisecond, err
+}
+
+func isCloseBusy(err error) bool {
+	var closeError *CloseError
+	return errors.As(err, &closeError) && closeError.Result == CloseBusy
 }
 
 func (s *socketCore) withCString(value string, fn func(*C.char) error) error {

@@ -7,42 +7,54 @@
     {
       "id": "message-native-allocation",
       "classification": "required",
-      "sources": ["internal/native/message.go:173-181"],
+      "sources": [
+        "internal/native/message.go:173-181"
+      ],
       "reason": "Core owns the message buffer, so caller bytes are copied into native storage before the handle is returned.",
       "guardTest": "TestMessageCanonicalCopyHelpers"
     },
     {
       "id": "message-snapshot-copy",
       "classification": "required",
-      "sources": ["internal/native/message.go:251-258"],
+      "sources": [
+        "internal/native/message.go:251-258"
+      ],
       "reason": "Bytes is the explicit lifetime-independent snapshot API; the copy is required after the native message may close.",
       "guardTest": "TestMessageBytesSnapshotSurvivesClose"
     },
     {
       "id": "submit-copy-for-preservation",
       "classification": "required",
-      "sources": ["internal/native/socket_multipart.go:164-191"],
+      "sources": [
+        "internal/native/socket_multipart.go:164-191"
+      ],
       "reason": "Message submit preserves the caller handle when Core rejects a send, so the native submit frame is copied before submission.",
       "guardTest": "TestBlockingSendFailurePreservesMessagePayload"
     },
     {
       "id": "received-adopt-wrapper",
       "classification": "required",
-      "sources": ["internal/native/socket_multipart_receive.go:13-47"],
+      "sources": [
+        "internal/native/socket_multipart_receive.go:13-47"
+      ],
       "reason": "Each received native part needs a Go owner while zlink_msg_adopt transfers the Core buffer without a payload copy.",
       "guardTest": "TestRecvOwnershipCanBeExplicitlyReleased"
     },
     {
       "id": "topic-buffer-reuse",
       "classification": "required",
-      "sources": ["internal/native/socket_receive.go:14-18"],
+      "sources": [
+        "internal/native/socket_receive.go:14-18"
+      ],
       "reason": "Core writes topic metadata into caller-provided storage; the result objects retain one reusable buffer instead of allocating 64 KiB on every receive.",
       "guardTest": "TestTopicOutputStorageReusesBuffer"
     },
     {
       "id": "bytes-builder-native-copy",
       "classification": "required",
-      "sources": ["internal/native/socket_multipart_request.go:53-95"],
+      "sources": [
+        "internal/native/socket_multipart_request.go:53-95"
+      ],
       "reason": "A builder supplied with []byte must materialize Core-owned messages before Submit returns.",
       "guardTest": "TestBlockingSendFailurePreservesBytesPayload"
     },
@@ -60,28 +72,27 @@
     {
       "id": "callback-dispatcher-worker",
       "classification": "required",
-      "sources": ["internal/native/callbacks.go:24-128"],
+      "sources": [
+        "internal/native/callbacks.go:24-128"
+      ],
       "reason": "One dispatcher worker per callback registration preserves callback ordering and gives socket close an explicit completion owner.",
       "guardTest": "TestReceiveCallbackPanicDoesNotCloseSocketOrStopFutureCallbacks"
     },
     {
-      "id": "routed-payload-snapshot-copy",
+      "id": "routed-record-attempt-gate",
       "classification": "required",
-      "sources": ["internal/native/dealer_router_request.go:48-111"],
-      "reason": "A managed routed Submit snapshots caller payload before returning its completion channel so HWM waiting never retains caller byte storage and retries preserve one complete record.",
-      "guardTest": "TestRoutedSendFailurePreservesMessagePayload"
-    },
-    {
-      "id": "routed-admission-worker",
-      "classification": "required",
-      "sources": ["internal/native/routed_admission.go:83-113"],
-      "reason": "One event-driven admission worker per routed socket resumes exact targets without occupying a goroutine per HWM-waiting operation or polling at a fixed interval.",
-      "guardTest": "TestRoutedAsyncBlockedTargetDoesNotBlockOtherAndExactWake"
+      "sources": [
+        "internal/native/socket_core.go:134-148"
+      ],
+      "reason": "One plain mutex per handle keeps a multipart record contiguous and keeps close from racing an in-flight native submit. It is not a queue or a worker: the HWM wait itself belongs to Core.",
+      "guardTest": "TestRoutedSendConcurrentMultipartRecordsDoNotInterleave"
     },
     {
       "id": "cgo-package-runtime-rpath",
       "classification": "required",
-      "sources": ["internal/native/ffi.go:5-10"],
+      "sources": [
+        "internal/native/ffi.go:5-10"
+      ],
       "reason": "The package must link and load the runtime shipped beside the module, including in a clean consumer without repository paths.",
       "guardTest": "build-wsl.sh clean consumer ldd check"
     }

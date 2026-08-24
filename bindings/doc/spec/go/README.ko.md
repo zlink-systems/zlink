@@ -145,11 +145,13 @@ type SendSubmitOp interface {
 }
 
 // DEALER Send와 ROUTER SendTo의 HWM-managed routed submit이다.
+// Submit은 동기다 — goroutine 안에서의 blocking 호출이 Go의 관용적 대기
+// 방식이고, HWM 대기 자체는 Core가 소유한다.
 type RoutedSendSubmitOp interface {
     Message(*Message) RoutedSendSubmitOp
     MoveMessage(*Message) RoutedSendSubmitOp
     Bytes([]byte) RoutedSendSubmitOp
-    Submit(context.Context) <-chan error
+    Submit(context.Context) error
 }
 
 // DEALER/ROUTER request의 단일 terminal은 completion channel을 반환한다.
@@ -185,28 +187,43 @@ type ReplySubmitOp interface {
   반환한다.
 - DEALER `Send`, ROUTER `SendTo`와 DEALER/ROUTER `Request`의 managed routed
   builder는 flags, callback, `SubmitAsync` 호환 terminal을 제공하지 않는다.
-  `Submit(ctx)`는 validation·payload snapshot·target 선택을 마친 뒤 completion
-  channel을 반환하며 HWM credit을 기다리느라 caller를 막지 않는다. 선택한
-  `(RID, transport pair, generation)`은 operation 동안 바꾸지 않는다. 해당 연결이
-  detach되면 다른 연결로 재선택하지 않고 operation을 error로 끝낸다. 대기 중 같은
-  socket의 다른 target은 계속 진행할 수 있다.
-- Socket runtime은 비동기 operation을 받기 전에 Core routed-target readiness handler를
-  장기 등록한다. Operation은 최초 시도 전에 정확한 `(socket, RID, transport pair ID,
-  generation)` key, completion channel과 complete record를 pending에 넣고 같은 target에
-  `DONTWAIT`로 시도한다. Callback은 해당 key만 ready로 표시하며 native retry는 callback
-  밖의 pump가 수행한다. Pair generation이 다른 event는 stale wake로 무시한다.
-- 같은 native handle의 outbound 경로는 complete multipart의 첫 part부터 `FINAL`까지 한
-  시도만 보호하는 짧은 attempt gate를 공유하고 readiness 대기 전에 반환한다.
-- Routed send channel은 complete record가 Core에 수용되면 `nil`, 실패하면 error
-  하나를 전달한 뒤 닫힌다. Request channel도 reply 또는 submit 실패·timeout·
-  disconnect·socket close·context cancellation 중 하나를 정확히 한 번 전달한 뒤
-  닫힌다. Request 성공 시 `Parts`는 caller가 닫으며, 실패는 `Err`와 대응하는
-  `Result`에 담긴다. Context cancellation은 `Err`에 `context.Canceled` 또는
-  `context.DeadlineExceeded`를 담는다.
-- Routed send의 absolute deadline은 `Submit` 시점의 socket `SNDTIMEO`와 context
-  deadline 중 이른 값이다. Request는 builder `Timeout`, 값이 없으면 socket request
-  timeout, 그리고 context deadline 중 이른 값으로 정한다. HWM 대기는 이 deadline을
-  연장하지 않는다.
+- **바인딩은 스레드·대기열·재시도를 하나도 소유하지 않는다.** routed send의
+  `Submit(ctx)`는 동기 종결자이며 complete record를 blocking Core 호출
+  (DEALER는 `zlink_send_part`, ROUTER는 `zlink_send_part_rid`)로 그대로
+  넘긴다. HWM 대기는 전적으로 Core 안에서 일어나고 Core 신호로 재개한다.
+  binding에는 park queue도, readiness callback 재시도도, deadline timer도,
+  dispatcher goroutine도 없다.
+- routed send 대기의 상한은 socket `SNDTIMEO`다. `SNDTIMEO=0`은 `DONTWAIT`
+  계약이며 즉시 `SubmitBackpressured`/`EAGAIN`으로 끝난다. `SNDTIMEO`가
+  무한(`-1`)이면 credit이 돌아올 때까지 호출 goroutine이 Core 안에서 대기한다 —
+  어플리케이션에는 유한한 `SNDTIMEO` 사용을 권한다.
+- routed send에서 `ctx`가 담당하는 것은 **submit 경계**다. 이미 취소되었거나
+  deadline이 지난 `ctx`는 wire에 아무것도 내보내지 않고 `context.Canceled` /
+  `context.DeadlineExceeded`로 실패한다. Core가 record를 받아 대기에 들어간
+  뒤에는 그 대기의 소유자가 Core이므로 `ctx` 취소가 그것을 중단시키지 않는다.
+- request의 `Submit(ctx)`는 **제출은 동기, 완료는 비동기**다. 정확한
+  `(RID, transport pair, generation)` target을 한 번 스냅샷하고(정책 없는
+  값 스냅샷이며 credit 예약이 아니다) blocking Core 호출로 제출한 뒤 completion
+  channel을 반환한다. 선택한 target은 operation 동안 바꾸지 않으며 해당 연결이
+  detach되면 다른 연결로 재선택하지 않는다. 완료는 Core의 reply handler
+  callback이 구동한다 — 바인딩은 재시도 큐도 전용 스레드도 두지 않는다.
+- request timeout은 Core 소유다: builder `Timeout`, 값이 없으면 socket의
+  request timeout option이 Core에 전달되고 만료는 `RequestTimedOut`으로
+  통지된다. `ctx` 취소·deadline은 그와 별개로 caller의 completion channel을
+  먼저 끝낸다. 그 뒤 도착하는 Core reply는 버려지고 parts는 해제된다.
+- 같은 native handle의 outbound 경로는 complete multipart의 첫 part부터
+  `FINAL`까지 한 record attempt만 보호하는 짧은 record-attempt gate(단순
+  mutex)를 공유한다. 이는 대기열이나 worker가 아니라 part sequence 교차와 close
+  경합만 막는 장치다. blocking submit이 이 gate를 쥐고 Core 안에서 기다리는
+  동안 같은 socket의 다른 target 제출은 그만큼 직렬화된다.
+- Request channel은 reply 또는 submit 실패·timeout·disconnect·context
+  cancellation 중 하나를 정확히 한 번 전달한 뒤 닫힌다. 성공 시 `Parts`는
+  caller가 닫으며, 실패는 `Err`와 대응하는 `Result`에 담긴다.
+- **재개 컨텍스트 제약.** request completion은 Core가 reply를 전달한 컨텍스트
+  에서 channel에 실린다. completion을 소비하는 goroutine이 socket이나 context를
+  파괴해도 되지만, 그 파괴가 Core callback 안에서 일어나면 안 된다 — Go 바인딩은
+  completion을 buffered channel로 건네므로 소비자 goroutine이 분리되어 있고,
+  이 제약은 recv callback 등록을 쓸 때만 관련이 있다.
 - 같은 socket에서 동시에 submit한 complete record들의 payload part는 서로 섞이지
   않는다.
 - `bool`을 반환하는 기존 one-shot send에서 temporary backpressure의 정상 결과는
@@ -222,8 +239,8 @@ type ReplySubmitOp interface {
 |---|---|
 | PAIR | one-shot `Send` |
 | PUB, XPUB | `Publish` |
-| DEALER | completion channel을 반환하는 managed routed `Send` |
-| ROUTER | 대상 routing id를 받고 completion channel을 반환하는 managed routed `SendTo` |
+| DEALER | 동기 `Submit(ctx) error`로 끝나는 managed routed `Send` |
+| ROUTER | 대상 routing id를 받고 동기 `Submit(ctx) error`로 끝나는 managed routed `SendTo` |
 | STREAM | 대상 routing id를 받는 one-shot send operation |
 | DEALER, ROUTER | request operation — ROUTER는 수신한 request metadata가 있으면 그 metadata로 reply operation을 만든다 |
 | STREAM | raw TCP packet callback과 caller-provided receive |

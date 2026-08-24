@@ -195,7 +195,7 @@ func TestRouterRequestSupportPreservesDataReceiveSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMessage() error = %v", err)
 	}
-	if err := awaitRoutedSend(t, dealerSocket.Send().Message(payload).Submit(context.Background())); err != nil {
+	if err := dealerSocket.Send().Message(payload).Submit(context.Background()); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	var received zlink.Received

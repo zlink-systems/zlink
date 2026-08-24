@@ -2,14 +2,38 @@
   "schema": 1,
   "coreVersion": "0.13.0",
   "headers": [
-    {"path": "include/zlink.h", "sha256": "a9426f34c1a4a79110a562a6a0a43b0d8b20acdc89a3da7da06d244b984c4315"},
-    {"path": "include/zlink/common.h", "sha256": "648e8150f2af07a70455b296518b75adf4647d1ff3f06d32165029fbea9ff199"},
-    {"path": "include/zlink/core/api.h", "sha256": "ecdd8ad8d287002865f0f76f6b2df33f25a2f8ad15d62bed2622758b07e86030"},
-    {"path": "include/zlink/eventing/api.h", "sha256": "7e773c5e0f6b2589dcc791eb5bf3326c8e89b04f22a5190982c47bb9222b7f60"},
-    {"path": "include/zlink/message/api.h", "sha256": "4b7c7aef0877c96bcd81f98a807d0e7933b3aee0e806c4f80e1ddade296e4d72"},
-    {"path": "include/zlink/socket/api.h", "sha256": "d23b3a134b72be1d7bc06056ad6923063ed75386f0627011b5ffd1b0ccf87a00"},
-    {"path": "include/zlink_enum.h", "sha256": "28c110dbe7116a523586b80cea3765d109e352cf40c60dbdcd40e12222fb8f73"},
-    {"path": "include/zlink_errno.h", "sha256": "1672abe3532871e8ce722a3bf7e1bff822d508aff66a24bde29784b3a52f33fd"}
+    {
+      "path": "include/zlink.h",
+      "sha256": "3bc5011242e4e24117b1b53e65946a6aee33fad88adcf7917144534d37ec22d3"
+    },
+    {
+      "path": "include/zlink/common.h",
+      "sha256": "361b1f4f39bdc6bbf184cfa0810efdc55a2ef7ac9a61e24f8a013bcfc77d28d9"
+    },
+    {
+      "path": "include/zlink/core/api.h",
+      "sha256": "ecdd8ad8d287002865f0f76f6b2df33f25a2f8ad15d62bed2622758b07e86030"
+    },
+    {
+      "path": "include/zlink/eventing/api.h",
+      "sha256": "7e773c5e0f6b2589dcc791eb5bf3326c8e89b04f22a5190982c47bb9222b7f60"
+    },
+    {
+      "path": "include/zlink/message/api.h",
+      "sha256": "4b7c7aef0877c96bcd81f98a807d0e7933b3aee0e806c4f80e1ddade296e4d72"
+    },
+    {
+      "path": "include/zlink/socket/api.h",
+      "sha256": "bfbef8e1344c150d0a075b44bb68df9d09ce39f5d6d5d180e96839fba58fafbc"
+    },
+    {
+      "path": "include/zlink_enum.h",
+      "sha256": "05ff519b956ce6767b23f3a0f5ec41f3fcef517f6adca5d0b267d81c06414449"
+    },
+    {
+      "path": "include/zlink_errno.h",
+      "sha256": "c41c9b2e6a74e6244d8194916b47677232c36d32955c68b7d22ac13cff30fb62"
+    }
   ],
   "publicSymbols": [
     "zlink_atomic_counter_dec",
@@ -37,7 +61,6 @@
     "zlink_dealer_recv_part",
     "zlink_dealer_recv_part_with_hwm_budget_lease",
     "zlink_dealer_reply_part",
-    "zlink_dealer_send_transport_pair_part",
     "zlink_disconnect",
     "zlink_disconnect_rid",
     "zlink_errno",
@@ -94,7 +117,6 @@
     "zlink_recv_part_with_hwm_budget_lease",
     "zlink_recv_result_t",
     "zlink_request_result_t",
-    "zlink_routed_send_ready_event_t",
     "zlink_routed_submit_target_t",
     "zlink_router_recv_part",
     "zlink_router_recv_part_v2_with_hwm_budget_lease",
@@ -104,7 +126,6 @@
     "zlink_send_flags_t",
     "zlink_send_part",
     "zlink_send_part_rid",
-    "zlink_send_part_transport_pair",
     "zlink_set_dealer_option",
     "zlink_set_option",
     "zlink_set_pub_option",
@@ -146,16 +167,18 @@
     "zlink_dealer_request_transport_pair_part_go_local",
     "zlink_recv_handler_go_local",
     "zlink_router_request_transport_pair_part_go_local",
-    "zlink_routed_send_ready_handler_go_local",
-    "zlink_send_ready_handler_go_local",
     "zlink_socket_monitor_handler_go_local",
     "zlink_stream_packet_handler_go_local",
     "zlink_thread_start_go",
     "zlink_timer_handler_go_local",
     "zlink_userdata_from_handle"
   ],
-  "forbiddenPaths": ["include/zlink/service"],
+  "forbiddenPaths": [
+    "include/zlink/service"
+  ],
   "forbiddenTokens": [
+    "zlink_send_ready",
+    "zlink_routed_send_ready_event_t",
     "zlink_service_",
     "zlink_mesh_node_t",
     "zlink_spot_",

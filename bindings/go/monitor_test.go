@@ -226,7 +226,7 @@ func sendWithConnectRetry(t testing.TB, dealer *zlink.DealerSocket, msg *zlink.M
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		err := awaitRoutedSend(t, dealer.Send().Message(msg).Submit(ctx))
+		err := dealer.Send().Message(msg).Submit(ctx)
 		cancel()
 		if err == nil {
 			return

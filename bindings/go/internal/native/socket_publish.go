@@ -13,10 +13,6 @@ type publishSocket struct {
 	*connectionSocket
 }
 
-func (s *publishSocket) OnSendReady(handler func()) error {
-	return s.setSendReady(handler)
-}
-
 func (s *publishSocket) SetNoDrop(value bool) error {
 	return s.setPubBoolOption(C.ZLINK_PUB_OPT_NODROP, value)
 }

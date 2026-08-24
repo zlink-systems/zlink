@@ -521,25 +521,14 @@ func SubmitMessage(
 	return sent, err
 }
 
-func AwaitRoutedSend(completion <-chan error) error {
-	if completion == nil {
-		return fmt.Errorf("nil routed send completion")
-	}
-	err, ok := <-completion
-	if !ok {
-		return fmt.Errorf("routed send completion closed without a result")
-	}
-	return err
-}
-
 func SubmitRoutedMessage(
 	message *zlink.Message,
-	submit func(*zlink.Message) <-chan error,
+	submit func(*zlink.Message) error,
 ) (bool, error) {
 	if message == nil {
 		return false, fmt.Errorf("nil perf message")
 	}
-	err := AwaitRoutedSend(submit(message))
+	err := submit(message)
 	if err != nil {
 		_ = message.Close()
 		return false, err
@@ -549,7 +538,7 @@ func SubmitRoutedMessage(
 
 func SubmitRoutedPayload(
 	payload []byte,
-	submit func(*zlink.Message) <-chan error,
+	submit func(*zlink.Message) error,
 ) (bool, error) {
 	return SubmitRoutedMessage(NewMessage(payload), submit)
 }
@@ -557,7 +546,7 @@ func SubmitRoutedPayload(
 func SubmitRoutedWindowPayload(
 	size int,
 	activeAt time.Time,
-	submit func(*zlink.Message) <-chan error,
+	submit func(*zlink.Message) error,
 ) (bool, error) {
 	return SubmitRoutedMessage(NewWindowMessage(size, activeAt), submit)
 }

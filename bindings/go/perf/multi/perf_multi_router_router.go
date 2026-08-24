@@ -196,7 +196,7 @@ func validateMultiRouterRoutes(serverID zlink.RoutingID, clients []multiRouterCl
 	for index, client := range clients {
 		payload := perfcommon.PreparePayload(msgSize)
 		perfcommon.StampProbePayload(payload)
-		_, sendErr := perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) <-chan error {
+		_, sendErr := perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) error {
 			return client.socket.SendTo(serverID).MoveMessage(message).Submit(context.Background())
 		})
 		perfcommon.Must(sendErr)
@@ -348,7 +348,7 @@ func startMultiRouterRouterEchoServer(
 // transient backpressure.
 func sendMultiRouterStopToken(socket *zlink.RouterSocket, serverID zlink.RoutingID) {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
-		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) <-chan error {
+		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) error {
 			return socket.SendTo(serverID).MoveMessage(message).Submit(context.Background())
 		})
 		if err == nil && sent {
@@ -391,7 +391,7 @@ func drainRouterReplies(
 }
 
 func tryRouterSend(socket *zlink.RouterSocket, target zlink.RoutingID, payload []byte) (bool, error) {
-	return perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) <-chan error {
+	return perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) error {
 		return socket.SendTo(target).MoveMessage(message).Submit(context.Background())
 	})
 }
