@@ -387,7 +387,7 @@ async function runB8(
     await waitForPathState(faultArmFile, false, 60_000,
       'ZW-B8 precondition unmet: runner did not prove command-44 interception and target relocation commit.');
     await player.connect();
-    const rebound = await joinAndWaitForOwnedState(player, playerId);
+    const rebound = await joinAndWaitForOwnedState(player, playerId, pair.targetZoneId);
     zlinkStreamAssert.ensure(rebound.playerId === playerId, 'ZW-B8 reconnect did not preserve PlayerId.');
     zlinkStreamAssert.ensure(
       rebound.zoneId === pair.targetZoneId,
