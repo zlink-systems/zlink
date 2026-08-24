@@ -1302,8 +1302,9 @@ deferred HWM과 pending/accounted 값은 byte 단위이고, binding은 Core ABI 
 Terminal reply와 error reply는 HWM이 없는 completion lane으로 전송한다. Binding은 이
 completion submit에 SNDHWM·RCVHWM, HWM readiness 대기나 backpressure retry를 적용하지 않는다.
 
-Core byte HWM은 Core queue가 실제로 보관하는 payload byte만 계산한다. Receive가 payload를
-dequeue해 binding에 넘기면 그 byte charge는 끝난다. Binding의 일반 `recv`와 `subscribe`는
+Core byte HWM은 Core queue가 실제로 보관하는 physical frame charge, 즉 payload byte와
+`sizeof(zlink_msg_t)` metadata charge를 계산한다. Receive가 complete message를 dequeue해
+binding에 넘기면 그 charge는 끝난다. Binding의 일반 `recv`와 `subscribe`는
 message part, routing ID, request sequence와 topic metadata의 정상 ownership을
 `Received`·`TopicMessage` 계열 결과로 옮긴다. 결과는 언어별 close/dispose/drop 또는 다음
 receive까지 payload를 소유하지만, 그 application lifetime을 Core HWM accounting에 다시
