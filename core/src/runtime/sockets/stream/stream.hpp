@@ -4,6 +4,7 @@
 #define __ZLINK_STREAM_HPP_INCLUDED__
 
 #include <atomic>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <string>
@@ -55,8 +56,6 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
     int xterm_peer_rid (const zlink_routing_id_t *peer_rid_) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
-    int xrecv_retained (zlink::msg_t *msg_,
-                        retained_credit_token_t *token_out_) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
@@ -68,6 +67,7 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
                                               void *userdata_) ZLINK_OVERRIDE;
     int stream_set_packet_msg_handler_with_userdata (zlink_stream_packet_handler_fn handler_,
                                                      void *userdata_) ZLINK_OVERRIDE;
+    int stream_mark_raw_part_receive () ZLINK_OVERRIDE;
     int stream_dispatch_stop () ZLINK_OVERRIDE;
     bool stream_dispatch_active () const ZLINK_OVERRIDE;
     bool stream_dispatch_in_callback () const ZLINK_OVERRIDE;
@@ -106,6 +106,7 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     void identify_peer (pipe_t *pipe_, bool locally_initiated_);
     uint32_t ensure_dispatch_routing_id (pipe_t *pipe_);
     void maybe_emit_connect_event (pipe_t *pipe_, uint32_t routing_id_value_ = 0);
+    void queue_stream_notify (uint32_t routing_id_);
     void notify_session_observer (uint32_t routing_id_, bool connected_);
     int xstream_dispatch_msg (zlink::msg_t *msg_, zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     int stream_dispatch_packet_msg_from_io (const zlink_routing_id_t *rid_,
@@ -116,15 +117,13 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     void stop_dispatch_from_callback ();
     void clear_packet_dispatch_state ();
     bool stream_dispatch_owns_tls () const;
-    int xrecv_with_credit (zlink::msg_t *msg_,
-                           retained_credit_token_t *token_out_);
     fq_t _fq;
 
     bool _prefetched;
     bool _routing_id_sent;
     zlink::msg_t _prefetched_id;
     zlink::msg_t _prefetched_msg;
-    retained_credit_token_t _prefetched_credit;
+    std::deque<uint32_t> _stream_notify_routing_ids;
     zlink::pipe_t *_current_in;
     bool _more_in;
 
@@ -135,6 +134,7 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     route_shard_t _route_shards[route_shard_count];
 
     std::atomic<bool> _dispatch_active;
+    std::atomic<bool> _raw_part_receive_active;
     std::atomic<dispatch_mode_t> _dispatch_mode;
     std::atomic<uint32_t> _dispatch_inflight;
     std::atomic<zlink_stream_on_raw_fn> _dispatch_raw_callback;

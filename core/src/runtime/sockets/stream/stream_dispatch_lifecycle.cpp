@@ -14,7 +14,8 @@ int zlink::stream_t::stream_dispatch_start_raw (zlink_stream_on_raw_fn callback_
     }
 
     std::lock_guard<std::recursive_mutex> lock (_api_mutex);
-    if (_dispatch_active.load (std::memory_order_acquire)) {
+    if (_dispatch_active.load (std::memory_order_acquire)
+        || _raw_part_receive_active.load (std::memory_order_acquire)) {
         errno = EBUSY;
         return -1;
     }
@@ -39,7 +40,8 @@ int zlink::stream_t::stream_set_msg_handler_with_userdata (zlink_socket_msg_hand
         errno = EINVAL;
         return -1;
     }
-    if (_dispatch_active.load (std::memory_order_acquire)) {
+    if (_dispatch_active.load (std::memory_order_acquire)
+        || _raw_part_receive_active.load (std::memory_order_acquire)) {
         errno = EBUSY;
         return -1;
     }
@@ -64,7 +66,8 @@ int zlink::stream_t::stream_set_packet_msg_handler_with_userdata (
         errno = EINVAL;
         return -1;
     }
-    if (_dispatch_active.load (std::memory_order_acquire)) {
+    if (_dispatch_active.load (std::memory_order_acquire)
+        || _raw_part_receive_active.load (std::memory_order_acquire)) {
         errno = EBUSY;
         return -1;
     }
@@ -77,6 +80,17 @@ int zlink::stream_t::stream_set_packet_msg_handler_with_userdata (
     _dispatch_packet_handler.store (handler_, std::memory_order_release);
     _dispatch_packet_handler_userdata.store (userdata_, std::memory_order_release);
     _dispatch_active.store (true, std::memory_order_release);
+    return 0;
+}
+
+int zlink::stream_t::stream_mark_raw_part_receive ()
+{
+    std::lock_guard<std::recursive_mutex> lock (_api_mutex);
+    if (_dispatch_active.load (std::memory_order_acquire)) {
+        errno = EBUSY;
+        return -1;
+    }
+    _raw_part_receive_active.store (true, std::memory_order_release);
     return 0;
 }
 
