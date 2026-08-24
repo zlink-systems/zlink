@@ -112,11 +112,6 @@ const bool asio_stream_enable_handler_alloc =
 
 const bool asio_stream_enable_read_drain = zlink::asio_stream_fastpath_policy::enable_read_drain ();
 
-// STREAM/TCP is dominated by small-frame send overhead in high-connection
-// tests. Keep speculative write always enabled in the STREAM fast-path.
-const bool asio_stream_enable_speculative_write =
-  zlink::asio_stream_fastpath_policy::enable_speculative_write ();
-
 const bool asio_stream_enable_rx_slab = zlink::asio_stream_fastpath_policy::enable_rx_slab ();
 
 const bool asio_stream_enable_non_tcp_spec_read =
@@ -824,10 +819,11 @@ bool zlink::asio_engine_t::use_stream_speculative_write () const
     if (!_transport_adapter.transport)
         return false;
 
-    if (_options.type == ZLINK_CORE_SOCKET_STREAM && is_tcp_transport ())
-        return asio_stream_enable_speculative_write;
-
-    return _transport_adapter.transport->supports_speculative_write ();
+    //  asio_stream_fastpath_policy::use_speculative_write_for owns this
+    //  decision, including why non-STREAM sockets stay on the Proactor path.
+    return zlink::asio_stream_fastpath_policy::use_speculative_write_for (
+      _options.type, is_tcp_transport (),
+      _transport_adapter.transport->supports_speculative_write ());
 }
 
 bool zlink::asio_engine_t::use_non_tcp_speculative_read () const
@@ -1316,9 +1312,9 @@ void zlink::asio_engine_t::speculative_write ()
         return;
     }
 
-    const bool stream_tcp_speculative = _options.type == ZLINK_CORE_SOCKET_STREAM
-                                        && is_tcp_transport ()
-                                        && asio_stream_enable_speculative_write;
+    //  The byte budget bounds every admitted turn. It used to be gated on a
+    //  socket-type test re-derived here, which is how it came to disagree with
+    //  the admission above and leave the general-socket turn unbounded.
     const size_t stream_spec_budget = asio_stream_spec_write_budget_bytes;
     size_t stream_spec_bytes = 0;
 
@@ -1347,8 +1343,7 @@ void zlink::asio_engine_t::speculative_write ()
     //  Partial or complete write succeeded
     _outpos += bytes;
     _outsize -= bytes;
-    if (stream_tcp_speculative)
-        stream_spec_bytes += bytes;
+    stream_spec_bytes += bytes;
 
     ENGINE_DBG ("speculative_write: wrote %zu bytes, remaining=%zu", bytes, _outsize);
 
@@ -1371,8 +1366,7 @@ void zlink::asio_engine_t::speculative_write ()
             return;
         }
 
-        if (stream_tcp_speculative && stream_spec_budget > 0
-            && stream_spec_bytes >= stream_spec_budget) {
+        if (stream_spec_budget > 0 && stream_spec_bytes >= stream_spec_budget) {
             start_async_write ();
             return;
         }
@@ -1398,16 +1392,14 @@ void zlink::asio_engine_t::speculative_write ()
 
             _outpos += more_bytes;
             _outsize -= more_bytes;
-            if (stream_tcp_speculative)
-                stream_spec_bytes += more_bytes;
+            stream_spec_bytes += more_bytes;
 
             if (_outsize > 0) {
                 //  Partial write - async for remaining
                 start_async_write ();
                 return;
             }
-            if (stream_tcp_speculative && stream_spec_budget > 0
-                && stream_spec_bytes >= stream_spec_budget) {
+            if (stream_spec_budget > 0 && stream_spec_bytes >= stream_spec_budget) {
                 start_async_write ();
                 return;
             }
