@@ -34,7 +34,7 @@ socket.close();
 확장하고 자신의 `disconnectRid`를 독립적으로 선언한다(아래 참고).
 `BaseSocket` union 타입(`PairSocket | PubSocket | SubSocket |
 DealerSocket | RouterSocket | XPubSocket | XSubSocket | StreamSocket`)은
-`proxy`/`proxySteerable`(Core category)처럼 임의 구체 socket type을
+`proxy`(Core category)처럼 임의 구체 socket type을
 받는 API를 위해 export된다.
 
 | Member | 의미 |

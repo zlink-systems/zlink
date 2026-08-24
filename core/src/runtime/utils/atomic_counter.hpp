@@ -164,7 +164,19 @@ class atomic_counter_t
 #endif
     }
 
-    integer_t get () const ZLINK_NOEXCEPT { return _value; }
+    integer_t get () const ZLINK_NOEXCEPT
+    {
+#if defined ZLINK_ATOMIC_COUNTER_MUTEX
+        sync.lock ();
+        const integer_t value = _value;
+        sync.unlock ();
+        return value;
+#elif defined ZLINK_ATOMIC_COUNTER_CXX11
+        return _value.load (std::memory_order_acquire);
+#else
+        return _value;
+#endif
+    }
 
   private:
 #if defined ZLINK_ATOMIC_COUNTER_CXX11
@@ -174,7 +186,7 @@ class atomic_counter_t
 #endif
 
 #if defined ZLINK_ATOMIC_COUNTER_MUTEX
-    mutex_t sync;
+    mutable mutex_t sync;
 #endif
 
 #if !defined ZLINK_ATOMIC_COUNTER_CXX11

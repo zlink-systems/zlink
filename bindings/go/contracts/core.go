@@ -61,8 +61,6 @@ var (
 	Has = impl.Has
 	// Proxy forwards messages between two sockets, blocking until the context is terminated.
 	Proxy = impl.Proxy
-	// ProxySteerable forwards messages between two sockets under runtime control, blocking until terminated.
-	ProxySteerable = impl.ProxySteerable
 	// Sleep blocks the calling goroutine for the given duration.
 	Sleep = impl.Sleep
 	// MultipartClose closes every message in a multipart payload.

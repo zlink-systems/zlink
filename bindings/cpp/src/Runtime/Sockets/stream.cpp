@@ -32,11 +32,6 @@ int stream_socket_t::recv (received_t &out_, recv_flags_t flags_)
     return socket_t::receive (out_, flags_);
 }
 
-int stream_socket_t::recv_retained (received_t &out_, recv_flags_t flags_)
-{
-    return socket_t::receive_retained (out_, flags_);
-}
-
 void stream_socket_t::set_packet_handler (
   std::function<void (const routing_id_t &, message_t &&, message_t &&)> handler_)
 {

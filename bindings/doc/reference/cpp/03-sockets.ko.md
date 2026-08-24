@@ -6,7 +6,6 @@
 
 이 category는 `socket_t`(모든 구체 socket type이 파생하는, public 생성이 불가능한
 공유 기반), `common_socket_options_t`와 타입별 서브클래스, 8개 구체 socket type,
-자유 함수 `proxy`/`proxy_steerable`를 다룬다. 모든 socket의
 `send`/`publish`/`request`/`reply`는 Messaging category에 문서화된
 operation-builder family를 반환한다 — 이 category는 각 builder가 어디서 시작하고
 각 구체 타입이 고유하게 무엇을 더하는지만 다룬다. dotnet의 `ISocket`/
@@ -298,7 +297,6 @@ stream.set_packet_handler ([] (auto &rid, auto &&header, auto &&body) { /* heade
 
 ---
 
-## `proxy` / `proxy_steerable`
 
 두 socket 사이의 양방향 message-forwarding loop을 실행한다(선택적으로 control
 socket을 통해 조종 가능). socket method가 아니라 자유 함수다 — static facade가
@@ -308,7 +306,6 @@ socket을 통해 조종 가능). socket method가 아니라 자유 함수다 —
 ```cpp
 zlink::proxy (frontend, backend);
 zlink::proxy (frontend, backend, capture);
-zlink::proxy_steerable (frontend, backend, capture, control);
 ```
 
 **옵션.**
@@ -317,15 +314,12 @@ zlink::proxy_steerable (frontend, backend, capture, control);
 | --- | --- |
 | `proxy(socket_t& frontend_, socket_t& backend_)` | context가 종료될 때까지 두 socket 사이에 메시지를 전달 |
 | `proxy(socket_t&, socket_t&, socket_t& capture_)` | 같지만, 전달되는 모든 메시지의 복사본을 `capture_`로도 보냄 |
-| `proxy_steerable(socket_t&, socket_t&, socket_t& capture_, socket_t& control_)` | 같지만, `control_`의 명령으로 일시정지/재개/종료 가능 |
 
-**완료 결과.** 둘 다 context가 종료될 때까지(또는 `proxy_steerable`의 경우
 control 명령이나 에러가 loop을 끝낼 때까지) 호출 스레드를 block한다 — 둘 중
 하나를 전용 스레드에서 실행한다.
 
 **선택 기준.** 단순한 fire-and-forget forwarding loop엔 `proxy`를,
 application이 다른 스레드에서 control socket을 통해 loop을 일시정지·재개·종료해야
-할 땐 `proxy_steerable`을 쓴다.
 
 ---
 

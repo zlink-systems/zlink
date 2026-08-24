@@ -20,10 +20,6 @@ class router_socket_t : public routed_message_socket_t
     // reused without reallocation.
     int recv (received_t &out_, recv_flags_t flags_ = recv_flags_t::none);
 
-    /// Retains the origin Core HWM credit in @p out_ until its last copy closes.
-    int recv_retained (received_t &out_,
-                       recv_flags_t flags_ = recv_flags_t::none);
-
     int recv (routing_id_t &source_rid_out_,
               message_t &part_out_,
               recv_flags_t flags_ = recv_flags_t::none);

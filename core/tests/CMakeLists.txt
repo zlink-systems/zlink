@@ -86,7 +86,6 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_capabilities
   ${INTEGRATION_TEST_ROOT}/test_ctx_destroy
   ${INTEGRATION_TEST_ROOT}/test_ctx_options
-  ${INTEGRATION_TEST_ROOT}/test_retained_hwm_credit
   ${INTEGRATION_TEST_ROOT}/test_socket_null
   ${INTEGRATION_TEST_ROOT}/test_multi_socket_contract_regressions
   ${INTEGRATION_TEST_ROOT}/test_backpressure_matrix
@@ -105,6 +104,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_pubsub_filter_xpub
   ${INTEGRATION_TEST_ROOT}/test_xpub_nodrop
   ${INTEGRATION_TEST_ROOT}/test_timer_poller
+  ${INTEGRATION_TEST_ROOT}/test_polling_contract
   ${INTEGRATION_TEST_ROOT}/test_router_handover
   ${INTEGRATION_TEST_ROOT}/test_router_mandatory
   ${INTEGRATION_TEST_ROOT}/test_router_multiple_dealers

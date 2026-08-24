@@ -42,7 +42,6 @@ namespace zlink
 class ctx_t;
 class msg_t;
 class pipe_t;
-class retained_credit_token_t;
 class io_thread_t;
 class socket_base_t;
 
@@ -306,25 +305,12 @@ class socket_base_t : public own_t,
     int rollback ();
     int rollback_scoped (socket_public_send_scope_t &scope_);
     int recv (zlink::msg_t *msg_, int flags_);
-    int recv_retained (zlink::msg_t *msg_,
-                       retained_credit_token_t *token_out_,
-                       int flags_);
     int recv_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_, int flags_);
-    int recv_pipe_retained (zlink::msg_t *msg_,
-                            zlink::pipe_t **pipe_out_,
-                            retained_credit_token_t *token_out_,
-                            int flags_);
     int recv_routed (zlink::msg_t *msg_,
                      zlink_routing_id_t *source_rid_out_,
                      int flags_,
                      uint64_t *connection_id_out_ = NULL,
                      zlink::pipe_t **source_pipe_out_ = NULL);
-    int recv_routed_retained (zlink::msg_t *msg_,
-                              zlink_routing_id_t *source_rid_out_,
-                              retained_credit_token_t *token_out_,
-                              int flags_,
-                              uint64_t *connection_id_out_ = NULL,
-                              zlink::pipe_t **source_pipe_out_ = NULL);
     //  These three return a pipe whose lifetime is PINNED: they take a
     //  lifetime ref while the transport-pair table is locked, because the
     //  table slot is the only thing that proves the pipe is still alive and
@@ -417,6 +403,7 @@ class socket_base_t : public own_t,
     virtual int
     stream_set_packet_msg_handler_with_userdata (zlink_stream_packet_handler_fn handler_,
                                                  void *userdata_);
+    virtual int stream_mark_raw_part_receive ();
     virtual int stream_dispatch_stop ();
     virtual bool stream_dispatch_active () const;
     virtual bool stream_dispatch_in_callback () const;
@@ -547,6 +534,7 @@ class socket_base_t : public own_t,
     bool monitor_has_attached_pipes () const;
     void socket_peer_remote_endpoints (std::vector<std::string> *out_);
     void socket_bound_endpoints (std::set<std::string> *out_) const;
+    bool socket_has_endpoint_history () const;
     bool socket_has_attached_pipes () const;
     bool socket_has_manual_connect_endpoints () const;
     int set_peer_weight (uint32_t weight_);
@@ -626,22 +614,11 @@ class socket_base_t : public own_t,
     //  The default implementation assumes that recv in not supported.
     virtual bool xhas_in ();
     virtual int xrecv (zlink::msg_t *msg_);
-    virtual int xrecv_retained (zlink::msg_t *msg_,
-                                retained_credit_token_t *token_out_);
     virtual int xrecv_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_);
-    virtual int xrecv_pipe_retained (zlink::msg_t *msg_,
-                                     zlink::pipe_t **pipe_out_,
-                                     retained_credit_token_t *token_out_);
     virtual int xrecv_routed (zlink::msg_t *msg_,
                               zlink_routing_id_t *source_rid_out_,
                               uint64_t *connection_id_out_,
                               zlink::pipe_t **source_pipe_out_ = NULL);
-    virtual int xrecv_routed_retained (
-      zlink::msg_t *msg_,
-      zlink_routing_id_t *source_rid_out_,
-      uint64_t *connection_id_out_,
-      zlink::pipe_t **source_pipe_out_,
-      retained_credit_token_t *token_out_);
     virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_);
     int xterm_transport_pair (uint64_t transport_pair_id_,
                               uint64_t transport_pair_generation_);
@@ -714,10 +691,7 @@ class socket_base_t : public own_t,
     // Transfer a monitor-started command executor lease to a longer-lived
     // async socket consumer before registering that consumer.
     void retain_async_command_processing ();
-    int recv_common (zlink::msg_t *msg_,
-                     retained_credit_token_t *token_out_,
-                     bool retained_,
-                     int flags_,
+    int recv_common (zlink::msg_t *msg_, int flags_,
                      zlink::socket_receive_runtime_t::mode_t mode_,
                      zlink::pipe_t **pipe_out_,
                      zlink_routing_id_t *source_rid_out_,

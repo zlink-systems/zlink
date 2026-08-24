@@ -588,6 +588,13 @@ uint64_t zlink::pipe_t::get_oversize_message_admission_max_bytes () const
     return _oversize_message_admission_max_bytes;
 }
 
+void zlink::pipe_t::reset_oversize_message_admission_metrics ()
+{
+    scoped_fast_lock_t lock (_out_sync);
+    _oversize_message_admission_count = 0;
+    _oversize_message_admission_max_bytes = 0;
+}
+
 uint64_t zlink::pipe_t::get_connected_time () const
 {
     return _connected_time;
@@ -696,23 +703,10 @@ bool zlink::pipe_t::check_read ()
 
 bool zlink::pipe_t::read (msg_t *msg_)
 {
-    return read_internal (msg_, NULL, false);
+    return read_internal (msg_);
 }
 
-bool zlink::pipe_t::read_retained (msg_t *msg_,
-                                   retained_credit_token_t *token_out_)
-{
-    if (!token_out_) {
-        errno = EFAULT;
-        return false;
-    }
-    token_out_->reset ();
-    return read_internal (msg_, token_out_, false);
-}
-
-bool zlink::pipe_t::read_internal (msg_t *msg_,
-                                   retained_credit_token_t *token_out_,
-                                   bool defer_credit_)
+bool zlink::pipe_t::read_internal (msg_t *msg_)
 {
     if (unlikely (_state != active && _state != waiting_for_delimiter))
         return false;
@@ -748,61 +742,15 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
         return false;
     }
 
-    if (token_out_) {
+    if (_registry_accounting) {
         const uint64_t frame_bytes = frame_accounted_bytes (msg_);
         const uint64_t counted_messages = counted_pending_message_ref (*msg_);
-        if (get_ctx ()->_physical_queue_registry.retain_dequeued_frame (
-              _in_physical_queue, this, frame_bytes, counted_messages,
-              token_out_)
-            != 0) {
-            const int saved_errno = errno;
-            if (_registry_accounting)
-                get_ctx ()->_physical_queue_registry.release_committed_frame (
-                  _in_physical_queue, frame_bytes, counted_messages);
-            account_inbound_frame (msg_);
-            const int close_rc = msg_->close ();
-            zlink_assert (close_rc == 0);
-            const int init_rc = msg_->init ();
-            zlink_assert (init_rc == 0);
-            errno = saved_errno;
-            return false;
-        }
-    } else if (!defer_credit_) {
-        if (_registry_accounting) {
-            const uint64_t frame_bytes = frame_accounted_bytes (msg_);
-            const uint64_t counted_messages = counted_pending_message_ref (*msg_);
-            get_ctx ()->_physical_queue_registry.release_committed_frame (
-              _in_physical_queue, frame_bytes, counted_messages);
-        }
-        account_inbound_frame (msg_);
-    }
-
-    return true;
-}
-
-bool zlink::pipe_t::read_deferred (msg_t *msg_)
-{
-    // Deferred credit is used only by socket-local prefetch. Completion and
-    // monitor queues require immediate registry accounting on dequeue.
-    zlink_assert (!_registry_accounting);
-    return read_internal (msg_, NULL, true);
-}
-
-int zlink::pipe_t::finish_deferred_read (
-  const msg_t *msg_, retained_credit_token_t *token_out_)
-{
-    if (!msg_) {
-        errno = EFAULT;
-        return -1;
-    }
-    if (token_out_) {
-        token_out_->reset ();
-        return get_ctx ()->_physical_queue_registry.retain_dequeued_frame (
-          _in_physical_queue, this, frame_accounted_bytes (msg_),
-          counted_pending_message_ref (*msg_), token_out_);
+        get_ctx ()->_physical_queue_registry.release_committed_frame (
+          _in_physical_queue, frame_bytes, counted_messages);
     }
     account_inbound_frame (msg_);
-    return 0;
+
+    return true;
 }
 
 int zlink::pipe_t::reserve_inbound_decoder_frame (
@@ -1080,13 +1028,6 @@ void zlink::pipe_t::finish_direct_decoder_frame (
         return;
     scoped_optional_fast_lock_t lock (_session_pipe ? NULL : &_out_sync);
     _decoder_multipart_started_empty = false;
-}
-
-void zlink::pipe_t::schedule_retained_credit (uint64_t generation_,
-                                              uint64_t msgs_read_,
-                                              uint64_t bytes_read_)
-{
-    send_retained_credit (this, generation_, msgs_read_, bytes_read_);
 }
 
 bool zlink::pipe_t::check_write ()
@@ -1673,41 +1614,6 @@ void zlink::pipe_t::process_activate_write (uint64_t generation_,
 
     if (notify)
         _sink->write_activated (this);
-}
-
-void zlink::pipe_t::process_retained_credit (uint64_t generation_,
-                                             uint64_t msgs_read_,
-                                             uint64_t bytes_read_)
-{
-    pipe_t *peer = NULL;
-    uint64_t published_msgs = 0;
-    uint64_t published_bytes = 0;
-    {
-        scoped_fast_lock_t lock (_out_sync);
-        if (generation_ != _in_generation
-            || (_state != active && _state != waiting_for_delimiter))
-            return;
-
-        _msgs_read = UINT64_MAX - _msgs_read < msgs_read_
-                       ? UINT64_MAX
-                       : _msgs_read + msgs_read_;
-        _bytes_read = UINT64_MAX - _bytes_read < bytes_read_
-                        ? UINT64_MAX
-                        : _bytes_read + bytes_read_;
-        _published_msgs_read.store (_msgs_read, std::memory_order_release);
-        _published_bytes_read.store (_bytes_read, std::memory_order_release);
-        _last_credit_bytes_read = _bytes_read;
-        published_msgs = _msgs_read;
-        published_bytes = _bytes_read;
-        peer = _peer;
-    }
-
-    if (peer)
-        send_activate_write (peer, generation_, published_msgs,
-                             published_bytes);
-    if (!_registry_accounting)
-        get_ctx ()->_physical_queue_registry.refresh_application_hwm_if_drained (
-          _in_physical_queue);
 }
 
 void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)

@@ -70,25 +70,6 @@ int zlink::recv_msg_socket (socket_base_t *socket_, int type_, zlink_msg_t *msg_
     return static_cast<int> (size < static_cast<size_t> (INT_MAX) ? size : INT_MAX);
 }
 
-int zlink::recv_msg_socket_retained (
-  socket_base_t *socket_, int type_, zlink_msg_t *msg_,
-  retained_credit_token_t *token_out_, int flags_)
-{
-    if (!socket_ || !msg_ || !token_out_) {
-        errno = EFAULT;
-        return -1;
-    }
-    if (validate_direct_recv_mode (socket_, type_) != 0)
-        return -1;
-    const int rc = socket_->recv_retained (
-      reinterpret_cast<msg_t *> (msg_), token_out_, flags_);
-    if (rc < 0)
-        return -1;
-    const size_t size = zlink_msg_size (msg_);
-    return static_cast<int> (size < static_cast<size_t> (INT_MAX) ? size
-                                                                  : INT_MAX);
-}
-
 int zlink::recv_msg_internal (void *socket_, zlink_msg_t *msg_, int flags_)
 {
     socket_base_t *socket = static_cast<socket_base_t *> (socket_);
@@ -161,25 +142,6 @@ int zlink::recv_followup_msg_socket (socket_base_t *socket_, zlink_msg_t *msg_)
         return static_cast<int> (size < static_cast<size_t> (INT_MAX) ? size : INT_MAX);
     }
 
-    if (errno == EAGAIN || errno == EINTR)
-        errno = EPROTO;
-    return -1;
-}
-
-int zlink::recv_followup_msg_socket_retained (
-  socket_base_t *socket_, zlink_msg_t *msg_, retained_credit_token_t *token_out_)
-{
-    if (!socket_ || !msg_ || !token_out_) {
-        errno = EFAULT;
-        return -1;
-    }
-    const int rc = socket_->recv_retained (
-      reinterpret_cast<msg_t *> (msg_), token_out_, ZLINK_DONTWAIT);
-    if (rc >= 0) {
-        const size_t size = zlink_msg_size (msg_);
-        return static_cast<int> (size < static_cast<size_t> (INT_MAX) ? size
-                                                                      : INT_MAX);
-    }
     if (errno == EAGAIN || errno == EINTR)
         errno = EPROTO;
     return -1;

@@ -141,7 +141,6 @@ zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     routing_socket_base_t (parent_, tid_, sid_),
     _prefetched (false),
     _routing_id_sent (false),
-    _prefetched_credit_deferred (false),
     _current_in (NULL),
     _terminate_current_in (false),
     _more_in (false),
@@ -168,10 +167,6 @@ zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
 zlink::router_t::~router_t ()
 {
     zlink_assert (_anonymous_pipes.empty ());
-    if (_prefetched_credit_deferred) {
-        const int rc = finish_prefetched_credit (NULL);
-        LIBZLINK_UNUSED (rc);
-    }
     close_socket_msg_parts (&_dispatch_parts);
     for (std::map<pipe_t *, std::vector<zlink_msg_t>>::iterator it =
            _dispatch_parts_by_pipe.begin ();

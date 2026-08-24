@@ -89,11 +89,6 @@ pub struct zlink_send_async_options_t {
     pub target: *const zlink_routed_submit_target_t,
 }
 
-#[repr(C)]
-pub struct zlink_hwm_budget_lease_t {
-    _private: [u8; 0],
-}
-
 pub const ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1: u32 = 1;
 
 #[repr(C)]
@@ -295,7 +290,6 @@ pub enum zlink_option_t {
     ZLINK_OPT_TYPE = 0x3009,
     ZLINK_OPT_LAST_ENDPOINT = 0x3014,
     ZLINK_OPT_ZMP_METADATA = 0x3030,
-    ZLINK_OPT_ROUTE_VALUE_MAX_SIZE = 0x3032,
     ZLINK_OPT_RID_DUPLICATE_POLICY = 0x3033,
 }
 
@@ -800,26 +794,6 @@ unsafe extern "C" {
         has_more_out: *mut zlink_part_flag_t,
         flags: zlink_recv_flags_t,
     ) -> c_int;
-    pub fn zlink_router_recv_part_v2_with_hwm_budget_lease(
-        router: *mut c_void,
-        source_rid_out: *mut *const zlink_routing_id_t,
-        request_seq_out: *mut u64,
-        transport_pair_id_out: *mut u64,
-        transport_pair_generation_out: *mut u64,
-        part_out: *mut zlink_msg_t,
-        lease_out: *mut *mut zlink_hwm_budget_lease_t,
-        has_more_out: *mut zlink_part_flag_t,
-        flags: zlink_recv_flags_t,
-    ) -> c_int;
-    pub fn zlink_dealer_recv_part_with_hwm_budget_lease(
-        dealer: *mut c_void,
-        message_type_out: *mut u8,
-        request_seq_out: *mut u64,
-        part_out: *mut zlink_msg_t,
-        lease_out: *mut *mut zlink_hwm_budget_lease_t,
-        has_more_out: *mut zlink_part_flag_t,
-        flags: zlink_recv_flags_t,
-    ) -> c_int;
     pub fn zlink_recv_part(
         socket: *mut c_void,
         source_rid_out: *mut *const zlink_routing_id_t,
@@ -827,16 +801,6 @@ unsafe extern "C" {
         has_more_out: *mut zlink_part_flag_t,
         flags: zlink_recv_flags_t,
     ) -> c_int;
-    pub fn zlink_recv_part_with_hwm_budget_lease(
-        socket: *mut c_void,
-        source_rid_out: *mut *const zlink_routing_id_t,
-        part_out: *mut zlink_msg_t,
-        lease_out: *mut *mut zlink_hwm_budget_lease_t,
-        has_more_out: *mut zlink_part_flag_t,
-        flags: zlink_recv_flags_t,
-    ) -> c_int;
-    pub fn zlink_hwm_budget_lease_release(lease: *mut *mut zlink_hwm_budget_lease_t);
-
     pub fn zlink_publish_part(
         subject: *mut c_void,
         topic_id: *const c_char,
@@ -860,17 +824,6 @@ unsafe extern "C" {
         topic_id_capacity: usize,
         topic_id_len_out: *mut usize,
         part_out: *mut zlink_msg_t,
-        has_more_out: *mut zlink_part_flag_t,
-        flags: zlink_recv_flags_t,
-    ) -> c_int;
-    pub fn zlink_subscribe_part_with_hwm_budget_lease(
-        subject: *mut c_void,
-        source_rid_out: *mut *const zlink_routing_id_t,
-        topic_id_out: *mut c_char,
-        topic_id_capacity: usize,
-        topic_id_len_out: *mut usize,
-        part_out: *mut zlink_msg_t,
-        lease_out: *mut *mut zlink_hwm_budget_lease_t,
         has_more_out: *mut zlink_part_flag_t,
         flags: zlink_recv_flags_t,
     ) -> c_int;
@@ -967,12 +920,6 @@ unsafe extern "C" {
     pub fn zlink_thread_join(thread: *mut c_void);
 
     pub fn zlink_proxy(frontend: *mut c_void, backend: *mut c_void, capture: *mut c_void) -> c_int;
-    pub fn zlink_proxy_steerable(
-        frontend: *mut c_void,
-        backend: *mut c_void,
-        capture: *mut c_void,
-        control: *mut c_void,
-    ) -> c_int;
     pub fn zlink_has(capability: *const c_char) -> c_int;
     pub fn zlink_sleep(seconds: c_int);
 }

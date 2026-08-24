@@ -26,6 +26,50 @@ bool poller_index_from_user_data (void *user_data_, size_t item_count_, size_t *
     return true;
 }
 
+namespace
+{
+const unsigned short public_readiness_bits =
+  ZLINK_POLLIN | ZLINK_POLLOUT | ZLINK_POLLERR | ZLINK_POLLPRI
+  | ZLINK_POLLCOMPLETION;
+
+int validate_defined_event_bits (short events_)
+{
+    const unsigned short events = static_cast<unsigned short> (events_);
+    if ((events & static_cast<unsigned short> (~public_readiness_bits)) != 0
+        || (events & ZLINK_POLLITEMS_DFLT) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+}
+
+int validate_socket_poller_event_mask (short events_, bool allow_completion_)
+{
+    if (validate_defined_event_bits (events_) != 0)
+        return -1;
+    if ((events_ & ZLINK_POLLCOMPLETION) != 0 && !allow_completion_) {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((events_ & ZLINK_POLLPRI) != 0) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return 0;
+}
+
+int validate_fd_poller_event_mask (short events_)
+{
+    if (validate_defined_event_bits (events_) != 0)
+        return -1;
+    if ((events_ & ZLINK_POLLCOMPLETION) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
 int poller_add_registration (poller_handle_t *poller_,
                              zlink::socket_base_t *socket_,
                              void *user_data_,
@@ -227,7 +271,7 @@ int poller_remove_all_registrations_for_subject (poller_handle_t *poller_, void 
     }
 
     if (!removed) {
-        errno = EINVAL;
+        errno = ENOENT;
         return -1;
     }
     return 0;

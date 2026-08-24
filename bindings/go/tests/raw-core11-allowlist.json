@@ -12,7 +12,7 @@
     },
     {
       "path": "include/zlink/core/api.h",
-      "sha256": "ecdd8ad8d287002865f0f76f6b2df33f25a2f8ad15d62bed2622758b07e86030"
+      "sha256": "2cab19ac76112bd5abc95dbd6ce4e13f17db391142f637642317d6fa6c891112"
     },
     {
       "path": "include/zlink/eventing/api.h",
@@ -24,11 +24,11 @@
     },
     {
       "path": "include/zlink/socket/api.h",
-      "sha256": "bfbef8e1344c150d0a075b44bb68df9d09ce39f5d6d5d180e96839fba58fafbc"
+      "sha256": "30d64aea1b77bf22066625a63844caf7685a57bb15a123d005bbf88b04d011a6"
     },
     {
       "path": "include/zlink_enum.h",
-      "sha256": "05ff519b956ce6767b23f3a0f5ec41f3fcef517f6adca5d0b267d81c06414449"
+      "sha256": "b3a47932595c859adb0a44f858e99f778ff97ebd86543b2890cddd012ff831a5"
     },
     {
       "path": "include/zlink_errno.h",
@@ -59,7 +59,6 @@
     "zlink_ctx_shutdown",
     "zlink_ctx_term",
     "zlink_dealer_recv_part",
-    "zlink_dealer_recv_part_with_hwm_budget_lease",
     "zlink_dealer_reply_part",
     "zlink_disconnect",
     "zlink_disconnect_rid",
@@ -73,8 +72,6 @@
     "zlink_get_stream_option",
     "zlink_get_sub_option",
     "zlink_has",
-    "zlink_hwm_budget_lease_release",
-    "zlink_hwm_budget_lease_t",
     "zlink_monitor_close",
     "zlink_monitor_event_t",
     "zlink_monitor_status",
@@ -108,18 +105,15 @@
     "zlink_poller_wait",
     "zlink_pollitem_t",
     "zlink_proxy",
-    "zlink_proxy_steerable",
     "zlink_pub_option_t",
     "zlink_publish_part",
     "zlink_receive_flow_state_t",
     "zlink_recv_flags_t",
     "zlink_recv_part",
-    "zlink_recv_part_with_hwm_budget_lease",
     "zlink_recv_result_t",
     "zlink_request_result_t",
     "zlink_routed_submit_target_t",
     "zlink_router_recv_part",
-    "zlink_router_recv_part_v2_with_hwm_budget_lease",
     "zlink_router_reply_part",
     "zlink_routing_id_t",
     "zlink_select_routed_submit_target",
@@ -150,7 +144,6 @@
     "zlink_strerror",
     "zlink_sub_option_t",
     "zlink_subscribe_part",
-    "zlink_subscribe_part_with_hwm_budget_lease",
     "zlink_subscription_at",
     "zlink_thread_join",
     "zlink_timer_destroy",

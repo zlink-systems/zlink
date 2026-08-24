@@ -234,7 +234,7 @@ context-manager 프로토콜을 둘 다 지원한다. `Thread`는 그렇지 않�
 
 ---
 
-## `proxy(...)` / `proxy_steerable(...)` / `sleep(seconds)` / `multipart_close(parts)`
+## `proxy(...)` / `sleep(seconds)` / `multipart_close(parts)`
 
 두 socket 사이의 양방향 message-forwarding loop을
 실행하거나(선택적으로 control socket을 통해 조종 가능), 호출 스레드를
@@ -242,7 +242,6 @@ sleep하거나, multipart sequence의 모든 메시지를 닫는다.
 
 ```python
 proxy(frontend, backend, capture)  # capture는 None 가능; context 종료까지 block
-proxy_steerable(frontend, backend, capture, control)
 sleep(1)  # 초 단위, 밀리초 아님
 multipart_close(parts)
 ```
@@ -252,18 +251,13 @@ multipart_close(parts)
 | Member | 의미 |
 | --- | --- |
 | `proxy(frontend, backend, capture=None)` | `capture`는 선택 사항 |
-| `proxy_steerable(frontend, backend, capture, control)` | 필수 `control` socket을 더함 |
 | `sleep(seconds)` | 호출 스레드를 block; 초 단위를 직접 받는다 |
 | `multipart_close(parts)` | 모든 메시지를 한 번에 닫음 |
 
-**Completion result.** 모두 반환값 없이 동기다. `proxy`/
-`proxy_steerable`은 context가 종료될 때까지(또는 `proxy_steerable`의
-경우 control 명령이나 에러가 loop을 끝낼 때까지) 호출 스레드를
-block한다 — 둘 중 하나를 전용 스레드에서 실행한다.
+**Completion result.** 모두 반환값 없이 동기다. `proxy`는 context가 종료될 때까지
+호출 스레드를 block한다 — 전용 스레드에서 실행한다.
 
-**선택 기준.** 단순한 fire-and-forget forwarding loop엔 `proxy`를,
-application이 다른 스레드에서 control socket을 통해 loop을
-일시정지·재개·종료해야 할 땐 `proxy_steerable`을 쓴다. 수신되거나
+**선택 기준.** 단순한 fire-and-forget forwarding loop엔 `proxy`를 쓴다. 수신되거나
 구성된 multipart sequence의 모든 메시지를 손으로 짠 loop 대신 한
 호출로 해제하려면 `multipart_close`를 쓴다.
 

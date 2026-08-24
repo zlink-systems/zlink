@@ -44,9 +44,6 @@ public final class ContractAccess {
 
         void proxy(Socket frontend, Socket backend, Socket capture);
 
-        void proxySteerable(Socket frontend, Socket backend, Socket capture,
-                            Socket control);
-
         void sleep(int seconds);
 
         void sleep(Duration duration);
@@ -100,12 +97,6 @@ public final class ContractAccess {
 
     public static void proxy(Socket frontend, Socket backend, Socket capture) {
         runtimeFactoryAccess().proxy(frontend, backend, capture);
-    }
-
-    public static void proxySteerable(Socket frontend, Socket backend,
-                                      Socket capture, Socket control) {
-        runtimeFactoryAccess().proxySteerable(frontend, backend, capture,
-            control);
     }
 
     public static void sleep(int seconds) {

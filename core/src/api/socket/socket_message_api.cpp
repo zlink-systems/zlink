@@ -41,10 +41,24 @@ zlink_recv_result_t zlink_recv_part (void *s_,
 
     const int type = socket_type (handle);
     const bool expose_source_rid = type == ZLINK_CORE_SOCKET_STREAM;
+    const auto finish_success = [&] () -> zlink_recv_result_t {
+        if (type == ZLINK_CORE_SOCKET_STREAM
+            && handle.socket->stream_mark_raw_part_receive () != 0)
+            return zlink::recv_result_internal::from_errno (errno);
+        return ZLINK_RECV_OK;
+    };
     std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t> request_state;
     const bool dealer_request_surface = type == ZLINK_CORE_SOCKET_DEALER;
-    if (handle.socket->has_request_reply_state ())
+    // A blocking generic DEALER receive participates in the same transport
+    // ownership transition as the typed receive API. Establish the internal
+    // request/reply state before it waits, so a concurrent request remains on
+    // the paired transport rather than creating a separate payload queue.
+    if (dealer_request_surface)
+        request_state = zlink::socket_reqrep_internal::find_or_create_request_reply_state (handle);
+    else if (handle.socket->has_request_reply_state ())
         request_state = handle.socket->request_reply_state ();
+    if (dealer_request_surface && !request_state)
+        return zlink::recv_result_internal::from_errno (errno);
     zlink::socket_base_t *recv_source_socket = handle.socket;
     auto recv_parts_once = [&] (zlink_routing_id_t *source_rid_,
                                 zlink_msg_t **parts_,
@@ -59,7 +73,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
                 source_rid_->size = 0;
             return zlink::socket_reqrep_internal::recv_dealer_message_direct (
               handle, request_state, &message_type, &request_seq, parts_, part_count_,
-              static_cast<int> (recv_flags_), NULL, terminal_part_out_,
+              static_cast<int> (recv_flags_), terminal_part_out_,
               terminal_part_returned_out_);
         }
         if (terminal_part_returned_out_)
@@ -97,7 +111,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
             if (source_rid_out_)
                 *source_rid_out_ = NULL;
             *has_more_out_ = ZLINK_PART_FINAL;
-            return ZLINK_RECV_OK;
+            return finish_success ();
         }
 
         if (!parts || part_count == 0) {
@@ -124,7 +138,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
                 }
             }
             *has_more_out_ = ZLINK_PART_FINAL;
-            return ZLINK_RECV_OK;
+            return finish_success ();
         }
 
         std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
@@ -157,7 +171,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
             zlink::part_helper_internal::export_recv_metadata (helper_state, source_rid_out_, NULL);
         }
         zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);
-        return ZLINK_RECV_OK;
+        return finish_success ();
     }
 
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
@@ -214,7 +228,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
             }
             *has_more_out_ = ZLINK_PART_FINAL;
             zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);
-            return ZLINK_RECV_OK;
+            return finish_success ();
         }
 
         const int stage_rc = zlink::part_helper_internal::stage_recv_sequence (
@@ -247,7 +261,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
         zlink::part_helper_internal::export_recv_metadata (helper_state, source_rid_out_, NULL);
     }
     zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);
-    return ZLINK_RECV_OK;
+    return finish_success ();
 }
 
 zlink_recv_result_t zlink_subscribe_part (void *subject_,

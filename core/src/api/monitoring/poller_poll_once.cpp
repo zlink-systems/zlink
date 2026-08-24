@@ -20,6 +20,7 @@ int zlink_poll (zlink_pollitem_t *items_,
         return -1;
     }
     if (nitems_ == 0) {
+        errno = 0;
         if (error_out_)
             *error_out_ = ZLINK_CONFIG_OK;
         return 0;
@@ -45,6 +46,11 @@ int zlink_poll (zlink_pollitem_t *items_,
                     *error_out_ = ZLINK_CONFIG_INVALID_HANDLE;
                 return -1;
             }
+            if (validate_socket_poller_event_mask (items_[i].events, false) != 0) {
+                if (error_out_)
+                    *error_out_ = zlink::config_result_internal::from_errno (errno);
+                return -1;
+            }
             if (validate_socket_callback_poller_events (handle, items_[i].events) != 0) {
                 if (error_out_)
                     *error_out_ = ZLINK_CONFIG_INVALID_ARGUMENT;
@@ -55,10 +61,15 @@ int zlink_poll (zlink_pollitem_t *items_,
                     *error_out_ = zlink::config_result_internal::from_errno (errno);
                 return -1;
             }
-        } else if (poller.add_fd (items_[i].fd, index_user_data, items_[i].events) != 0) {
-            if (error_out_)
-                *error_out_ = zlink::config_result_internal::from_errno (errno);
-            return -1;
+        } else {
+            if (validate_fd_poller_event_mask (items_[i].events) != 0
+                || poller.add_fd (items_[i].fd, index_user_data,
+                                  items_[i].events)
+                     != 0) {
+                if (error_out_)
+                    *error_out_ = zlink::config_result_internal::from_errno (errno);
+                return -1;
+            }
         }
     }
 
@@ -66,11 +77,18 @@ int zlink_poll (zlink_pollitem_t *items_,
       static_cast<size_t> (nitems_));
     const int rc = poller.wait (events.data (), nitems_, timeout_);
     if (rc < 0) {
+        if (errno == EAGAIN) {
+            errno = 0;
+            if (error_out_)
+                *error_out_ = ZLINK_CONFIG_OK;
+            return 0;
+        }
         if (error_out_)
             *error_out_ = zlink::config_result_internal::from_errno (errno);
         return rc;
     }
     if (rc == 0) {
+        errno = 0;
         if (error_out_)
             *error_out_ = ZLINK_CONFIG_OK;
         return 0;

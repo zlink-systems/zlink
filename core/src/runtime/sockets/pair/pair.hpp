@@ -26,8 +26,6 @@ class pair_t ZLINK_FINAL : public socket_base_t
     int xsend (zlink::msg_t *msg_,
                pipe_message_admission_t *admission_out_ = NULL);
     int xrecv (zlink::msg_t *msg_);
-    int xrecv_retained (zlink::msg_t *msg_,
-                        retained_credit_token_t *token_out_) ZLINK_OVERRIDE;
     bool xhas_in ();
     bool xhas_out ();
     void xread_activated (zlink::pipe_t *pipe_);

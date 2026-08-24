@@ -520,27 +520,11 @@ int zlink::socket_base_t::xrecv (msg_t *)
     return -1;
 }
 
-int zlink::socket_base_t::xrecv_retained (
-  msg_t *msg_, retained_credit_token_t *token_out_)
-{
-    if (token_out_)
-        token_out_->reset ();
-    return xrecv (msg_);
-}
-
 int zlink::socket_base_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
 {
     if (pipe_out_)
         *pipe_out_ = NULL;
     return xrecv (msg_);
-}
-
-int zlink::socket_base_t::xrecv_pipe_retained (
-  msg_t *msg_, pipe_t **pipe_out_, retained_credit_token_t *token_out_)
-{
-    if (pipe_out_)
-        *pipe_out_ = NULL;
-    return xrecv_retained (msg_, token_out_);
 }
 
 int zlink::socket_base_t::xrecv_routed (msg_t *msg_,
@@ -561,23 +545,6 @@ int zlink::socket_base_t::xrecv_routed (msg_t *msg_,
     return rc;
 }
 
-int zlink::socket_base_t::xrecv_routed_retained (
-  msg_t *msg_, zlink_routing_id_t *source_rid_out_,
-  uint64_t *connection_id_out_, pipe_t **source_pipe_out_,
-  retained_credit_token_t *token_out_)
-{
-    if (source_rid_out_)
-        source_rid_out_->size = 0;
-    if (connection_id_out_)
-        *connection_id_out_ = 0;
-    if (source_pipe_out_)
-        *source_pipe_out_ = NULL;
-
-    const int rc = xrecv_retained (msg_, token_out_);
-    if (rc == 0 && source_rid_out_)
-        copy_last_recv_source_rid (source_rid_out_);
-    return rc;
-}
 
 void zlink::socket_base_t::xarm_socket_msg_dispatch ()
 {

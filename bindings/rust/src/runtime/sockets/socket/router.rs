@@ -119,7 +119,7 @@ pub(crate) fn recv_router_retained_once(
         let mut received_any = false;
         let mut routing_id = RoutingId::from_raw(ffi::zlink_routing_id_t::empty());
         let mut request_seq = 0u64;
-        let mut leases = crate::internal::HwmBudgetLeaseOwner::default();
+        let owner = crate::internal::ReceiveOwner::default();
 
         loop {
             let mut part = std::mem::MaybeUninit::<ffi::zlink_msg_t>::uninit();
@@ -131,21 +131,16 @@ pub(crate) fn recv_router_retained_once(
             let mut current_request_seq = 0u64;
             let mut transport_pair_id = 0u64;
             let mut transport_pair_generation = 0u64;
-            let mut lease = ptr::null_mut();
             let rc = unsafe {
-                ffi::zlink_router_recv_part_v2_with_hwm_budget_lease(
+                ffi::zlink_router_recv_part(
                     handle,
                     &mut source_rid,
                     &mut current_request_seq,
-                    &mut transport_pair_id,
-                    &mut transport_pair_generation,
                     part.as_mut_ptr(),
-                    &mut lease,
                     &mut has_more,
                     recv_flags,
                 )
             };
-            leases.adopt(lease);
 
             if !received_any {
                 if rc == crate::error::RecvResult::NoData as i32 {
@@ -174,20 +169,20 @@ pub(crate) fn recv_router_retained_once(
 
             parts.push(unsafe { Message::from_raw(part.assume_init()) });
             if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
-                break Some((routing_id, request_seq, leases));
+                break Some((routing_id, request_seq, owner));
             }
             recv_flags = ffi::ZLINK_DONTWAIT;
         }
     };
 
-    if let Some((routing_id, request_seq, leases)) = received {
+    if let Some((routing_id, request_seq, owner)) = received {
         out.replace_router_retained_parts(
             handle,
             routed,
             completions,
             routing_id,
             request_seq,
-            leases,
+            owner,
         );
         Ok(true)
     } else {

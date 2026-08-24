@@ -312,6 +312,26 @@ void test_typed_raw_socket_options ()
     TEST_ASSERT_EQUAL_MEMORY ("topic", filter, 5);
     TEST_ASSERT_EQUAL_INT (0, is_pattern);
 
+    char small_filter[4] = {'k', 'e', 'e', 'p'};
+    filter_len = sizeof (small_filter);
+    is_pattern = -1;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_BUFFER_TOO_SMALL,
+      zlink_subscription_at (xsub, 0, small_filter, &filter_len,
+                             &is_pattern));
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, errno);
+    TEST_ASSERT_EQUAL_UINT (5, (unsigned int) filter_len);
+    TEST_ASSERT_EQUAL_MEMORY ("keep", small_filter, sizeof (small_filter));
+    TEST_ASSERT_EQUAL_INT (-1, is_pattern);
+
+    filter_len = sizeof (filter);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_NOT_SUPPORTED,
+      zlink_subscription_at (router, 0, filter, &filter_len, &is_pattern));
+    TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+
     TEST_ASSERT_SUCCESS_ERRNO (zlink_close (router));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_close (dealer));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_close (stream));

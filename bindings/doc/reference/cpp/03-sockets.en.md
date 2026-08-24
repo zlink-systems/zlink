@@ -6,7 +6,6 @@
 
 This category covers `socket_t` (the shared, non-publicly-constructible base every concrete socket
 type derives from), `common_socket_options_t` and its per-type subclasses, the eight concrete
-socket types, and the free `proxy`/`proxy_steerable` functions. Every socket's
 `send`/`publish`/`request`/`reply` returns the operation-builder family documented in the Messaging
 category — this category only covers where each builder starts and what each concrete type
 uniquely adds. Unlike dotnet's `ISocket`/`IStreamSocket` interfaces, C++ does not expose role
@@ -292,7 +291,6 @@ message ownership to the callback via rvalue references.
 
 ---
 
-## `proxy` / `proxy_steerable`
 
 Runs a bidirectional message-forwarding loop between two sockets (optionally steerable via a
 control socket). Free functions, not socket methods — declared alongside `socket_t` in this
@@ -301,7 +299,6 @@ category rather than on a static facade (unlike dotnet's `Zlink.Proxy(...)`).
 ```cpp
 zlink::proxy (frontend, backend);
 zlink::proxy (frontend, backend, capture);
-zlink::proxy_steerable (frontend, backend, capture, control);
 ```
 
 **Options.**
@@ -310,13 +307,10 @@ zlink::proxy_steerable (frontend, backend, capture, control);
 | --- | --- |
 | `proxy(socket_t& frontend_, socket_t& backend_)` | forwards messages between the two sockets until the context terminates |
 | `proxy(socket_t&, socket_t&, socket_t& capture_)` | same, plus a copy of every forwarded message sent to `capture_` |
-| `proxy_steerable(socket_t&, socket_t&, socket_t& capture_, socket_t& control_)` | same, pausable/resumable/terminable via commands on `control_` |
 
 **Completion result.** Both block the calling thread until the context is terminated (or, for
-`proxy_steerable`, until a control command or error ends the loop) — run either on a dedicated
 thread.
 
-**When to use.** `proxy` for a simple fire-and-forget forwarding loop; `proxy_steerable` when the
 application needs to pause/resume/terminate the loop from another thread via the control socket.
 
 ---

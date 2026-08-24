@@ -6,6 +6,8 @@ set -euo pipefail
 # Node package directly. Build the Node binding first: (cd ../../node && npm run build).
 SAMPLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_DIR="$(cd "$SAMPLES_DIR/../../node" && pwd)"
+source "$NODE_DIR/../tools/local_core_runtime.sh"
+zlink_export_local_core_runtime
 source "$NODE_DIR/scripts/run_node_job.sh"
 
 if [[ ! -f "$NODE_DIR/dist/index.js" || ! -f "$NODE_DIR/build/Release/zlink.node" ]]; then

@@ -75,10 +75,6 @@ class object_t
                               uint64_t generation_,
                               uint64_t msgs_read_,
                               uint64_t bytes_read_);
-    void send_retained_credit (zlink::pipe_t *destination_,
-                               uint64_t generation_,
-                               uint64_t msgs_read_,
-                               uint64_t bytes_read_);
     //  Applies the peer's absolute receive-flow state to one application pipe
     //  on the pipe's own thread.
     void send_flow_state (zlink::pipe_t *destination_,
@@ -109,9 +105,6 @@ class object_t
     virtual void process_activate_write (uint64_t generation_,
                                          uint64_t msgs_read_,
                                          uint64_t bytes_read_);
-    virtual void process_retained_credit (uint64_t generation_,
-                                          uint64_t msgs_read_,
-                                          uint64_t bytes_read_);
     virtual void process_flow_state (unsigned char state_, uint64_t epoch_);
     virtual void process_hiccup (void *pipe_, uint64_t generation_);
     virtual void process_pipe_term ();

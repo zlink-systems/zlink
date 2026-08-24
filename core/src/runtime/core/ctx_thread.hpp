@@ -21,7 +21,7 @@ class thread_ctx_t
     start_thread (thread_t &thread_, thread_fn *tfn_, void *arg_, const char *name_ = NULL) const;
 
     int set (int option_, const void *optval_, size_t optvallen_);
-    int get (int option_, void *optval_, const size_t *optvallen_);
+    int get (int option_, void *optval_, size_t *optvallen_);
 
   private:
     //  Synchronisation of access to thread options.

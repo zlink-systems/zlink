@@ -32,7 +32,6 @@ struct command_t
         bind,
         activate_read,
         activate_write,
-        retained_credit,
         flow_state,
         send_pending,
         request_completion,
@@ -100,13 +99,6 @@ struct command_t
 
         //  Returns one retained receive frame's exact origin credit on the
         //  reader pipe's owning thread.
-        struct
-        {
-            uint64_t generation;
-            uint64_t msgs_read;
-            uint64_t bytes_read;
-        } retained_credit;
-
         //  Applies the peer's absolute receive-flow state to one application
         //  pipe on the socket thread. The state is not a counter, so a repeated
         //  value is simply idempotent.

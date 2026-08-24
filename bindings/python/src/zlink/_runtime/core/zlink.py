@@ -61,16 +61,6 @@ def proxy(frontend, backend, capture=None):
         _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
 
 
-def proxy_steerable(frontend, backend, capture, control):
-    rc = lib().zlink_proxy_steerable(
-        _as_handle(frontend),
-        _as_handle(backend),
-        _as_handle(capture),
-        _as_handle(control),
-    )
-    if rc != 0:
-        _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-
 
 def sleep(seconds):
     lib().zlink_sleep(_validated_int32(seconds, field="seconds"))

@@ -115,7 +115,6 @@ typedef enum zlink_option_t
     ZLINK_OPT_TYPE = 0x3009,
     ZLINK_OPT_LAST_ENDPOINT = 0x3014,
     ZLINK_OPT_ZMP_METADATA = 0x3030,
-    ZLINK_OPT_ROUTE_VALUE_MAX_SIZE = 0x3032,
     ZLINK_OPT_RID_DUPLICATE_POLICY = 0x3033
 } zlink_option_t;
 
@@ -150,9 +149,7 @@ typedef enum zlink_dealer_option_t
 typedef enum zlink_dealer_message_type_t
 {
     ZLINK_DEALER_MESSAGE_RAW = 0,
-    ZLINK_DEALER_MESSAGE_REQUEST = 1,
-    ZLINK_DEALER_MESSAGE_REPLY = 2,
-    ZLINK_DEALER_MESSAGE_ERROR_REPLY = 3
+    ZLINK_DEALER_MESSAGE_REQUEST = 1
 } zlink_dealer_message_type_t;
 
 typedef enum zlink_pub_option_t

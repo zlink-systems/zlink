@@ -244,16 +244,15 @@ thread.join();
 
 ---
 
-## `proxy(...)` / `proxy_steerable(...)` / `sleep(seconds)` / `multipart_close(parts)` / `poll(items, timeout_ms)`
+## `proxy(...)` / `sleep(seconds)` / `multipart_close(parts)` / `poll(items, timeout_ms)`
 
 두 pollable source 사이의 양방향 message-forwarding loop을
-실행하거나(선택적으로 control source를 통해 조종 가능), 호출 스레드를
+실행하거나, 호출 스레드를
 sleep하거나, multipart slice의 모든 메시지를 닫거나, raw poll item의
 고정 배열을 wait한다.
 
 ```rust
 proxy(&frontend, &backend, Some(&capture))?;
-proxy_steerable(&frontend, &backend, Some(&capture), &control)?;
 sleep(1); // 초 단위, 밀리초 아님
 multipart_close(&mut parts);
 let ready = poll(&mut items, 1000)?;
@@ -264,12 +263,10 @@ let ready = poll(&mut items, 1000)?;
 | Member | 의미 |
 | --- | --- |
 | `proxy(frontend: &dyn Pollable, backend: &dyn Pollable, capture: Option<&dyn Pollable>)` | `capture`는 선택 사항; 셋 다 구체 socket 타입이 아니라 `&dyn Pollable` trait object를 받는다 — 모든 내장 socket type이 sealed `Pollable` trait(Eventing category)을 구현한다 |
-| `proxy_steerable(..., control: &dyn Pollable)` | 필수 `control` source를 더함, 같은 `Pollable` 형태 |
 | `sleep(seconds: i32)` | 호출 스레드를 block; 초 단위를 직접 받는다 |
 | `multipart_close(parts: &mut [Message])` | 모든 part를 한 번에 닫음 |
 | `poll(items: &mut [PollItem], timeout_ms: i64)` | `Poller`(Eventing category)와 구별되는 standalone one-shot poll helper; 각 `PollItem`의 `revents`를 그 자리에서 채운다 |
 
-**Completion result.** `proxy`/`proxy_steerable`은 `Result<(),
 ConfigError>`를 반환한다 — **여기선 실패할 수 있다**, 다른 언어에서
 대응하는 호출엔 error 경로가 없고 그냥 종료까지 block하는 것과 다르다.
 `sleep`/`multipart_close`는 반환값이 없다. `poll`은 `Result<i32,
@@ -277,7 +274,6 @@ RecvError>`(준비된 개수)를 반환한다.
 
 **선택 기준.** 단순한 fire-and-forget forwarding loop엔 자신의 스레드에서
 `proxy`를 쓴다. application이 다른 스레드에서 control source를 통해
-loop을 일시정지·재개·종료해야 할 땐 `proxy_steerable`을 쓴다. 수신되거나
 구성된 multipart slice의 모든 `Message`를 한 호출로 해제하려면
 `multipart_close`를 쓴다. 작고 고정된 raw file descriptor 집합에 대한
 임시 wait엔 standalone `poll(...)`을, 감시 대상 집합이 시간에 따라

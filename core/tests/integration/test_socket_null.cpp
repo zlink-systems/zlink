@@ -164,6 +164,20 @@ void test_zlink_msg_closed_handle_read_is_invalid ()
     TEST_ASSERT_EQUAL_INT (EFAULT, errno);
 }
 
+void test_zlink_msg_type_byte_match_without_signature_is_invalid ()
+{
+    zlink_msg_t msg;
+    memset (&msg, 101, sizeof (msg));
+
+    errno = 0;
+    TEST_ASSERT_NULL (zlink_msg_data (&msg));
+    TEST_ASSERT_EQUAL_INT (EFAULT, errno);
+
+    errno = 0;
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&msg));
+    TEST_ASSERT_EQUAL_INT (EFAULT, errno);
+}
+
 int main (void)
 {
     UNITY_BEGIN ();
@@ -178,6 +192,7 @@ int main (void)
     RUN_TEST (test_zlink_disconnect_null_socket);
     RUN_TEST (test_zlink_msg_null_handle);
     RUN_TEST (test_zlink_msg_closed_handle_read_is_invalid);
+    RUN_TEST (test_zlink_msg_type_byte_match_without_signature_is_invalid);
 
 
     return UNITY_END ();

@@ -52,8 +52,8 @@ own lifecycle methods.
 
 The typed options facade shared by every socket type, reached via `socket.options()`. **Only the
 members below are `public`** — `CommonSocketOptions` also declares `affinity`, `rate`,
-`recoveryInterval`, `handshakeInterval`, `routeValueMaxSize`, `tos`, `multicastHops`,
-`multicastMaxTpdu`, `bindToDevice`, `tcpKeepaliveCount`, `tcpKeepaliveIdle`,
+`recoveryInterval`, `handshakeInterval`, `tos`, `multicastHops`, `multicastMaxTpdu`,
+`bindToDevice`, `tcpKeepaliveCount`, `tcpKeepaliveIdle`,
 `tcpKeepaliveInterval`, `tcpMaxRt`, `conflate`, `blocky`, `invertMatching`, `fd`, `events`,
 `socketType`, and `zmpMetadata`, but every one of those is package-private and unreachable from
 application code — a materially narrower public surface than dotnet/cpp's equivalent facade.

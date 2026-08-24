@@ -30,8 +30,6 @@ import {
   replaceTopicMessage,
   replaceTopicMessageOwnedSinglePart
 } from './topic_message_state';
-import { replaceMessagePartsEnvelopeRetainedCredit } from '../../contracts/messaging/message_parts_envelope';
-import { requireNative } from '../native/native';
 
 export interface NativeReceivedEnvelope {
   parts?: MessageSnapshot[];
@@ -41,8 +39,6 @@ export interface NativeReceivedEnvelope {
   requestSeq?: bigint | null;
   transportPairId?: bigint;
   transportPairGeneration?: bigint;
-  /** @internal Opaque native owner for all retained Core credits in this envelope. */
-  hwmBudgetLeaseOwner?: unknown;
 }
 
 /** Internal receive transfer: either an envelope or an unrouted native frame. */
@@ -54,8 +50,6 @@ export interface NativeTopicMessageRaw {
   data?: Buffer;
   nativeMessage?: unknown;
   routingId?: Buffer | null;
-  /** @internal Opaque native owner for all retained Core credits in this envelope. */
-  hwmBudgetLeaseOwner?: unknown;
 }
 
 type NativeTopicMessageSinglePart = readonly [Buffer, string];
@@ -178,26 +172,6 @@ function hasReplyableRequestSeq(requestSeq: bigint | null): requestSeq is bigint
   return requestSeq !== null && requestSeq !== 0n;
 }
 
-function retainedCreditOwner(raw: NativeReceivedRaw | NativeTopicMessageEnvelope): unknown {
-  return (raw as { hwmBudgetLeaseOwner?: unknown }).hwmBudgetLeaseOwner;
-}
-
-function adoptRetainedCredit(target: Received | TopicMessage, owner: unknown): void {
-  if (owner === undefined) {
-    return;
-  }
-  replaceMessagePartsEnvelopeRetainedCredit(
-    target,
-    () => requireNative().hwmBudgetLeaseRelease(owner)
-  );
-}
-
-function releaseRetainedCredit(owner: unknown): void {
-  if (owner !== undefined) {
-    requireNative().hwmBudgetLeaseRelease(owner);
-  }
-}
-
 export function materializeReceived(
   raw: NativeReceivedRaw,
   reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
@@ -239,11 +213,9 @@ export function materializeReceivedInto(
   reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
   send?: (parts: readonly Message[], flags: SendFlags) => boolean
 ): void {
-  const retainedOwner = retainedCreditOwner(raw);
   const envelope = envelopeOf(raw);
   const requestSeq = envelope?.requestSeq ?? null;
-  try {
-    replaceReceived(
+  replaceReceived(
       target,
       materializeReceivedParts(raw),
       wrapNativeRoutingId(envelope?.routingId ?? null),
@@ -270,11 +242,6 @@ export function materializeReceivedInto(
           }
         : null
     );
-    adoptRetainedCredit(target, retainedOwner);
-  } catch (error) {
-    releaseRetainedCredit(retainedOwner);
-    throw error;
-  }
   const targetInternal = target as Received & {
     transportPairId?: bigint;
     transportPairGeneration?: bigint;
@@ -288,7 +255,6 @@ export function materializeRoutedReceivedInto(
   raw: NativeReceivedRaw,
   operations: RoutedReceiveOperations
 ): void {
-  const retainedOwner = retainedCreditOwner(raw);
   const envelope = envelopeOf(raw);
   if (envelope === null) {
     throw new Error('routed receive requires a receive envelope');
@@ -337,8 +303,7 @@ export function materializeRoutedReceivedInto(
     context.cachedRoutingBytes = context.routingId;
     context.cachedRoutingId = wrapNativeRoutingId(context.routingId);
   }
-  try {
-    replaceReceived(
+  replaceReceived(
       target,
       materializeReceivedParts(raw),
       context.cachedRoutingId,
@@ -346,11 +311,6 @@ export function materializeRoutedReceivedInto(
       hasReplyableRequestSeq(context.requestSeq) ? context.replyContext : null,
       context.routingId == null ? null : context.sendContext
     );
-    adoptRetainedCredit(target, retainedOwner);
-  } catch (error) {
-    releaseRetainedCredit(retainedOwner);
-    throw error;
-  }
   const targetInternal = target as Received & {
     transportPairId?: bigint;
     transportPairGeneration?: bigint;
@@ -372,13 +332,11 @@ export function materializeTopicMessage(raw: NativeTopicMessageEnvelope): TopicM
 }
 
 export function adoptTopicMessage(result: TopicMessage, raw: NativeTopicMessageEnvelope): void {
-  const retainedOwner = retainedCreditOwner(raw);
   const topic = isNativeTopicMessageSinglePart(raw) ? raw[1] : raw.topic;
   const routingId = isNativeTopicMessageSinglePart(raw)
     ? null
     : wrapNativeRoutingId(raw.routingId ?? null);
-  try {
-    const data = isNativeTopicMessageSinglePart(raw)
+  const data = isNativeTopicMessageSinglePart(raw)
       ? raw[0]
       : raw.data;
     if (data !== undefined) {
@@ -391,9 +349,4 @@ export function adoptTopicMessage(result: TopicMessage, raw: NativeTopicMessageE
         routingId
       );
     }
-    adoptRetainedCredit(result, retainedOwner);
-  } catch (error) {
-    releaseRetainedCredit(retainedOwner);
-    throw error;
-  }
 }

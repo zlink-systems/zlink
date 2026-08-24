@@ -142,15 +142,6 @@ pub fn proxy(
     runtime::proxy(frontend, backend, capture)
 }
 
-pub fn proxy_steerable(
-    frontend: &dyn Pollable,
-    backend: &dyn Pollable,
-    capture: Option<&dyn Pollable>,
-    control: &dyn Pollable,
-) -> Result<(), ConfigError> {
-    runtime::proxy_steerable(frontend, backend, capture, control)
-}
-
 pub fn sleep(seconds: i32) {
     runtime::sleep(seconds);
 }

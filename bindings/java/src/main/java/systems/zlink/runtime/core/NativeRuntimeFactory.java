@@ -74,13 +74,6 @@ final class NativeRuntimeFactory {
             }
 
             @Override
-            public void proxySteerable(Socket frontend, Socket backend,
-                                       Socket capture, Socket control) {
-                NativeCoreRuntime.proxySteerable(frontend, backend, capture,
-                    control);
-            }
-
-            @Override
             public void sleep(int seconds) {
                 NativeCoreRuntime.sleep(seconds);
             }

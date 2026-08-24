@@ -103,7 +103,7 @@ type RecvRetainedParts = Result<
     Option<(
         Option<RoutingId>,
         Option<u64>,
-        crate::internal::HwmBudgetLeaseOwner,
+        crate::internal::ReceiveOwner,
     )>,
     RecvError,
 >;
@@ -111,7 +111,7 @@ type RecvRetainedSubscribedParts = Result<
     Option<(
         Option<RoutingId>,
         smol_str::SmolStr,
-        crate::internal::HwmBudgetLeaseOwner,
+        crate::internal::ReceiveOwner,
     )>,
     RecvError,
 >;
@@ -181,7 +181,7 @@ pub(crate) fn recv_retained_parts(
     let mut request_seq = None;
     let mut recv_flags = flags;
     let mut received_any = false;
-    let mut leases = crate::internal::HwmBudgetLeaseOwner::default();
+    let owner = crate::internal::ReceiveOwner::default();
 
     loop {
         let mut source_rid_ptr = ptr::null();
@@ -191,31 +191,27 @@ pub(crate) fn recv_retained_parts(
         unsafe {
             ffi::zlink_msg_init(part.as_mut_ptr());
         }
-        let mut lease = ptr::null_mut();
         let mut has_more = ffi::zlink_part_flag_t::ZLINK_PART_FINAL;
         let rc = unsafe {
             if dealer {
-                ffi::zlink_dealer_recv_part_with_hwm_budget_lease(
+                ffi::zlink_dealer_recv_part(
                     handle,
                     &mut message_type,
                     &mut current_request_seq,
                     part.as_mut_ptr(),
-                    &mut lease,
                     &mut has_more,
                     recv_flags,
                 )
             } else {
-                ffi::zlink_recv_part_with_hwm_budget_lease(
+                ffi::zlink_recv_part(
                     handle,
                     &mut source_rid_ptr,
                     part.as_mut_ptr(),
-                    &mut lease,
                     &mut has_more,
                     recv_flags,
                 )
             }
         };
-        leases.adopt(lease);
 
         if !received_any {
             if rc == RecvResult::NoData as i32 {
@@ -242,7 +238,7 @@ pub(crate) fn recv_retained_parts(
 
         parts.push(unsafe { Message::from_raw(part.assume_init()) });
         if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
-            return Ok(Some((routing_id, request_seq, leases)));
+            return Ok(Some((routing_id, request_seq, owner)));
         }
         recv_flags = ffi::ZLINK_DONTWAIT;
     }
@@ -320,7 +316,7 @@ pub(crate) fn recv_retained_subscribed_parts(
     let mut topic = smol_str::SmolStr::default();
     let mut recv_flags = flags;
     let mut received_any = false;
-    let mut leases = crate::internal::HwmBudgetLeaseOwner::default();
+    let owner = crate::internal::ReceiveOwner::default();
 
     loop {
         let mut source_rid_ptr = ptr::null();
@@ -329,22 +325,19 @@ pub(crate) fn recv_retained_subscribed_parts(
         unsafe {
             ffi::zlink_msg_init(part.as_mut_ptr());
         }
-        let mut lease = ptr::null_mut();
         let mut has_more = ffi::zlink_part_flag_t::ZLINK_PART_FINAL;
         let rc = unsafe {
-            ffi::zlink_subscribe_part_with_hwm_budget_lease(
+            ffi::zlink_subscribe_part(
                 handle,
                 &mut source_rid_ptr,
                 topic_buf.as_mut_ptr(),
                 topic_buf.len(),
                 &mut topic_len,
                 part.as_mut_ptr(),
-                &mut lease,
                 &mut has_more,
                 recv_flags,
             )
         };
-        leases.adopt(lease);
 
         if !received_any {
             if rc == RecvResult::NoData as i32 {
@@ -371,7 +364,7 @@ pub(crate) fn recv_retained_subscribed_parts(
 
         parts.push(unsafe { Message::from_raw(part.assume_init()) });
         if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
-            return Ok(Some((routing_id, topic, leases)));
+            return Ok(Some((routing_id, topic, owner)));
         }
         recv_flags = ffi::ZLINK_DONTWAIT;
     }

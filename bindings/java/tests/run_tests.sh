@@ -3,10 +3,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-[[ "${ZLINK_CORE_PACKAGE_PREFIX:-}" = /* ]] || {
+source "${ROOT_DIR}/../tools/local_core_runtime.sh"
+if [[ "${ZLINK_CORE_SOURCE}" == "release" && "${ZLINK_CORE_PACKAGE_PREFIX:-}" != /* ]]; then
   echo "ZLINK_CORE_PACKAGE_PREFIX must name the approved Core 0.13.0 install prefix" >&2
   exit 2
-}
+fi
 TASKS=(
   ":test"
   ":integrationTest"

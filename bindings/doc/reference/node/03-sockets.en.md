@@ -29,7 +29,7 @@ socket.close();
 **Options.** Every concrete socket type below extends `ConnectableSocket` **except `StreamSocket`**,
 which extends `Socket` directly and adds its own `disconnectRid` independently (see below). A
 `BaseSocket` union type (`PairSocket | PubSocket | SubSocket | DealerSocket | RouterSocket |
-XPubSocket | XSubSocket | StreamSocket`) is exported for APIs — such as `proxy`/`proxySteerable`,
+XPubSocket | XSubSocket | StreamSocket`) is exported for APIs — such as `proxy` in the
 Core category — that accept any concrete socket type.
 
 | Member | Meaning |

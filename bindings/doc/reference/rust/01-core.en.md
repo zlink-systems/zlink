@@ -232,7 +232,7 @@ to own its lifecycle and re-propagate a task panic through `join()`.
 
 ---
 
-## `proxy(...)` / `proxy_steerable(...)` / `sleep(seconds)` / `multipart_close(parts)` / `poll(items, timeout_ms)`
+## `proxy(...)` / `sleep(seconds)` / `multipart_close(parts)` / `poll(items, timeout_ms)`
 
 Runs a bidirectional message-forwarding loop between two pollable sources (optionally steerable via
 a control source), sleeps the calling thread, closes every message in a multipart slice, or waits
@@ -240,7 +240,6 @@ on a fixed array of raw poll items.
 
 ```rust
 proxy(&frontend, &backend, Some(&capture))?;
-proxy_steerable(&frontend, &backend, Some(&capture), &control)?;
 sleep(1); // seconds, not milliseconds
 multipart_close(&mut parts);
 let ready = poll(&mut items, 1000)?;
@@ -251,18 +250,15 @@ let ready = poll(&mut items, 1000)?;
 | Member | Meaning |
 | --- | --- |
 | `proxy(frontend: &dyn Pollable, backend: &dyn Pollable, capture: Option<&dyn Pollable>)` | `capture` is optional; all three take `&dyn Pollable` trait objects rather than concrete socket types — any built-in socket type implements the sealed `Pollable` trait (Eventing category) |
-| `proxy_steerable(..., control: &dyn Pollable)` | adds a required `control` source, same `Pollable` shape |
 | `sleep(seconds: i32)` | blocks the calling thread; takes whole seconds directly |
 | `multipart_close(parts: &mut [Message])` | closes every part in one call |
 | `poll(items: &mut [PollItem], timeout_ms: i64)` | a standalone one-shot poll helper distinct from `Poller` (Eventing category); fills `revents` on each `PollItem` in place |
 
-**Completion result.** `proxy`/`proxy_steerable` return `Result<(), ConfigError>` — **fallible here**,
 unlike other languages where the equivalent call has no error path and simply blocks until
 termination. `sleep`/`multipart_close` have no return value. `poll` returns `Result<i32, RecvError>`
 (the ready count).
 
 **When to use.** Use `proxy` for a simple fire-and-forget forwarding loop on its own thread. Use
-`proxy_steerable` when the application needs to pause/resume/terminate the loop from another thread
 via the control source. Use `multipart_close` to release every `Message` in a received or
 constructed multipart slice in one call. Use the standalone `poll(...)` for an ad hoc wait across a
 small fixed set of raw file descriptors, and `Poller` instead when the watched set changes over

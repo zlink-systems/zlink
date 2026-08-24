@@ -21,7 +21,6 @@
     zlink_ctx_shutdown;
     zlink_ctx_term;
     zlink_dealer_recv_part;
-    zlink_dealer_recv_part_with_hwm_budget_lease;
     zlink_dealer_reply_part;
     zlink_dealer_request_part;
     zlink_dealer_request_transport_pair_part;
@@ -66,16 +65,11 @@
     zlink_poller_size;
     zlink_poller_wait;
     zlink_proxy;
-    zlink_proxy_steerable;
     zlink_publish_part;
     zlink_recv_handler;
     zlink_recv_part;
-    zlink_recv_part_with_hwm_budget_lease;
-    zlink_recv_with_hwm_budget_lease;
-    zlink_hwm_budget_lease_release;
     zlink_router_recv_part;
     zlink_router_recv_part_v2;
-    zlink_router_recv_part_v2_with_hwm_budget_lease;
     zlink_router_reply_part;
     zlink_router_request_part;
     zlink_router_request_transport_pair_part;
@@ -108,7 +102,6 @@
     zlink_stream_packet_handler;
     zlink_strerror;
     zlink_subscribe_part;
-    zlink_subscribe_part_with_hwm_budget_lease;
     zlink_subscription_at;
     zlink_thread_join;
     zlink_thread_start;

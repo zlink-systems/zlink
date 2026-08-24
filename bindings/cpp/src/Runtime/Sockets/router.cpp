@@ -44,17 +44,6 @@ int router_socket_t::recv (received_t &out_, recv_flags_t flags_)
     return 0;
 }
 
-int router_socket_t::recv_retained (received_t &out_, recv_flags_t flags_)
-{
-    const int rc = socket_t::receive_retained (out_, flags_, false);
-    if (rc != 0)
-        return rc;
-    if (out_.routing_id ().has_value ())
-        detail::received_access_t::set_socket_rid_send_context (
-          out_, detail::native_handle (*this), callback_state ().shared_from_this ());
-    return 0;
-}
-
 int router_socket_t::recv (routing_id_t &source_rid_out_, message_t &part_out_, recv_flags_t flags_)
 {
     return detail::recv_single_part_routed_message (detail::native_handle (*this), source_rid_out_,

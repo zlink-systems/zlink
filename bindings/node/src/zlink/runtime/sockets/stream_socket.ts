@@ -149,26 +149,6 @@ export class StreamSocket extends SocketBase {
     materializeReceivedInto(result, receivedRaw, undefined, send);
     return true;
   }
-  recvRetained(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
-    let raw;
-    try {
-      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageRetainedNoWait(getNativeHandle(this))
-        : native.socketRecvMessageRetained(getNativeHandle(this), flags | 0);
-    } catch (error) {
-      throw recvNativeError(error, flags, 'retained recv failed');
-    }
-    if (raw == null) return false;
-    const receivedRoutingId = nativeReceivedRoutingId(raw);
-    const send = (parts: readonly Message[], sendFlags: SendFlags) => {
-      if (!receivedRoutingId) {
-        throw submitErrorFromResult(SubmitResult.InvalidState, 'missing routed send target');
-      }
-      return this.sendDirectRaw(receivedRoutingId, parts, sendFlags);
-    };
-    materializeReceivedInto(result, raw, undefined, send);
-    return true;
-  }
   setPacketHandler(handler: StreamPacketHandler): void {
     handlerCall('stream packet handler registration failed', () => {
       const bodyMaterialization = this.options.packetBodyMaterialization;

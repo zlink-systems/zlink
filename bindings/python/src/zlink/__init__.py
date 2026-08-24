@@ -88,7 +88,6 @@ version = _core_runtime.version
 strerror = _core_runtime.strerror
 has = _core_runtime.has
 proxy = _core_runtime.proxy
-proxy_steerable = _core_runtime.proxy_steerable
 sleep = _core_runtime.sleep
 multipart_close = _core_runtime.multipart_close
 
@@ -124,7 +123,6 @@ __all__ = [
     "strerror",
     "has",
     "proxy",
-    "proxy_steerable",
     "sleep",
     "multipart_close",
     "create_context",

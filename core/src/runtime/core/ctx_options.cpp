@@ -134,7 +134,7 @@ int zlink::ctx_t::set (int option_, const void *optval_, size_t optvallen_)
     return -1;
 }
 
-int zlink::ctx_t::get (int option_, void *optval_, const size_t *optvallen_)
+int zlink::ctx_t::get (int option_, void *optval_, size_t *optvallen_)
 {
     const bool is_int = (*optvallen_ == sizeof (int));
     int *value = static_cast<int *> (optval_);

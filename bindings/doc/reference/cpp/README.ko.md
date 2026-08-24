@@ -22,7 +22,7 @@ SPOT/Actor는 framework 계층에만 존재한다. dotnet과 마찬가지로 `Co
   `extern "C"` 선언이다 — bindings 구현자를 위한 저수준 part-substrate 계층이지 public C++
   contract가 아니다. public contract는 `include/zlink/Contracts/<Category>/*.hpp`이며, 단일
   진입 헤더 `<zlink.hpp>`가 이를 집계한다.
-- **`proxy`/`proxy_steerable`는 Core가 아니라 Sockets category에 있다** — `socket_t&`를
+- **`proxy`는 Core가 아니라 Sockets category에 있다** — `socket_t&`를
   받는 자유 함수다(`Contracts/Sockets/socket_contracts.hpp`), dotnet의 `Zlink` static facade
   배치와 다르다. dotnet의 `Zlink.Sleep(...)`/`Zlink.MultipartClose(...)` 같은 자유 함수 편의
   helper에 대응하는 C++ 대응물은 오늘 시점엔 없다.

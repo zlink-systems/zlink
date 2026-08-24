@@ -90,7 +90,6 @@ zlink::ctx_t::~ctx_t ()
 {
     //  Check that there are no remaining _sockets.
     zlink_assert (_socket_registry.empty ());
-    _physical_queue_registry.force_release_retained_credit ();
     stop_auto_hwm_recalc_task ();
     teardown_runtime ();
 
@@ -152,6 +151,10 @@ void zlink::ctx_t::debug_dump_sockets_locked (const char *phase_) const
 
 int zlink::ctx_t::terminate ()
 {
+    //  remove_task() waits for an in-flight auto-HWM task.  That task takes
+    //  _slot_sync, so quiesce it before taking the context slot lock for the
+    //  monitor and socket shutdown sequence.
+    stop_auto_hwm_recalc_task ();
     _slot_sync.lock ();
     flush_pending_inproc_locked ();
 
@@ -178,6 +181,9 @@ int zlink::ctx_t::terminate ()
 
 int zlink::ctx_t::shutdown ()
 {
+    //  See terminate(): monitor teardown removes control-runtime tasks while
+    //  holding _slot_sync.  An auto-HWM task must therefore be quiesced first.
+    stop_auto_hwm_recalc_task ();
     scoped_lock_t locker (_slot_sync);
     (void) begin_shutdown_locked (false);
     return 0;

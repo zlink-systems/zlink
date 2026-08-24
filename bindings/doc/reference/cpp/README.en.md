@@ -23,7 +23,7 @@ Two C++-specific placement notes carried into every category below:
   declarations — the low-level part-substrate layer for bindings implementers, not the public C++
   contract. The public contract is `include/zlink/Contracts/<Category>/*.hpp`, aggregated by the
   single entry header `<zlink.hpp>`.
-- **`proxy`/`proxy_steerable` live in the Sockets category**, not Core — they are free functions
+- **`proxy` lives in the Sockets category**, not Core — it is a free function
   taking `socket_t&` (`Contracts/Sockets/socket_contracts.hpp`), unlike dotnet's `Zlink` static
   facade placement. There is no C++ equivalent of dotnet's `Zlink.Sleep(...)`/
   `Zlink.MultipartClose(...)` free-function convenience helpers today.

@@ -10,14 +10,8 @@
 namespace zlink
 {
 class socket_base_t;
-class retained_credit_token_t;
 
 int recv_msg_socket (socket_base_t *socket_, int socket_type_, zlink_msg_t *msg_, int flags_);
-int recv_msg_socket_retained (socket_base_t *socket_,
-                              int socket_type_,
-                              zlink_msg_t *msg_,
-                              retained_credit_token_t *token_out_,
-                              int flags_);
 int recv_msg_internal (void *socket_, zlink_msg_t *msg_, int flags_);
 int recv_msg_routed_socket (socket_base_t *socket_,
                             zlink_msg_t *msg_,
@@ -30,9 +24,6 @@ int recv_msg_routed_internal (void *socket_,
                               int flags_,
                               uint64_t *connection_id_out_ = NULL);
 int recv_followup_msg_socket (socket_base_t *socket_, zlink_msg_t *msg_);
-int recv_followup_msg_socket_retained (socket_base_t *socket_,
-                                       zlink_msg_t *msg_,
-                                       retained_credit_token_t *token_out_);
 int recv_followup_msg_internal (void *socket_, zlink_msg_t *msg_);
 int recv_followup_msg_socket_wait (socket_base_t *socket_, zlink_msg_t *msg_, int flags_);
 bool msg_frame_has_more (const zlink_msg_t &msg_);

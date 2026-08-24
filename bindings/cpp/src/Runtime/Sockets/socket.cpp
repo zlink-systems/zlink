@@ -280,29 +280,16 @@ int socket_t::send (const routing_id_t &target_rid_,
 
 int socket_t::receive (received_t &received_, recv_flags_t flags_)
 {
-    return receive_impl (received_, flags_, true, false);
+    return receive_impl (received_, flags_, true);
 }
 
 int socket_t::receive (received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_)
 {
-    return receive_impl (received_, flags_, attach_routed_send_context_, false);
-}
-
-int socket_t::receive_retained (received_t &received_, recv_flags_t flags_)
-{
-    return receive_impl (received_, flags_, true, true);
-}
-
-int socket_t::receive_retained (
-  received_t &received_, recv_flags_t flags_,
-  bool attach_routed_send_context_)
-{
-    return receive_impl (received_, flags_, attach_routed_send_context_, true);
+    return receive_impl (received_, flags_, attach_routed_send_context_);
 }
 
 int socket_t::receive_impl (
-  received_t &received_, recv_flags_t flags_,
-  bool attach_routed_send_context_, bool retain_credit_)
+  received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_)
 {
     // Caller-provided storage is reusable. Release this copy's previous
     // envelope credit before waiting for the next message.
@@ -316,7 +303,7 @@ int socket_t::receive_impl (
     try {
         rc = detail::recv_envelope (
           detail::native_handle (*this), flags_, envelope, use_router_recv,
-          use_dealer_recv, retain_credit_);
+          use_dealer_recv);
     }
     catch (...) {
         // A failed binding-side allocation must not leave earlier multipart
@@ -341,15 +328,13 @@ int socket_t::receive_impl (
 
     if (envelope.single_part.has_value ()) {
         detail::received_access_t::assign (received_, source_rid, request_seq,
-                                           std::move (*envelope.single_part),
-                                           std::move (envelope.leases));
+                                           std::move (*envelope.single_part));
     } else if (envelope.parts.size () == 1u) {
         detail::received_access_t::assign (received_, source_rid, request_seq,
-                                           std::move (envelope.parts[0]),
-                                           std::move (envelope.leases));
+                                           std::move (envelope.parts[0]));
     } else {
         detail::received_access_t::assign (received_, source_rid, request_seq,
-                                           envelope.parts, std::move (envelope.leases));
+                                           envelope.parts);
     }
     if (attach_routed_send_context_ && source_rid.has_value ())
         detail::received_access_t::set_socket_rid_send_context (received_,
@@ -410,33 +395,12 @@ int socket_t::subscribe (topic_message_t &message_, recv_flags_t flags_)
     return detail::read_subscription_message (
       message_,
       [&] (const zlink_routing_id_t **source_rid_out_, char *topic_out_, size_t topic_capacity_,
-           size_t *topic_size_out_, zlink_msg_t *part_out_,
-           zlink_hwm_budget_lease_t **lease_out_, zlink_part_flag_t *has_more_out_) {
-           *lease_out_ = nullptr;
+           size_t *topic_size_out_, zlink_msg_t *part_out_, zlink_part_flag_t *has_more_out_) {
            return static_cast<int> (zlink_subscribe_part (
              detail::native_handle (*this), source_rid_out_, topic_out_,
              topic_capacity_, topic_size_out_, part_out_, has_more_out_,
              static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
        });
-}
-
-int socket_t::subscribe_retained (
-  topic_message_t &message_, recv_flags_t flags_)
-{
-    message_.close ();
-    return detail::read_subscription_message (
-      message_,
-      [&] (const zlink_routing_id_t **source_rid_out_, char *topic_out_,
-           size_t topic_capacity_, size_t *topic_size_out_,
-           zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
-           zlink_part_flag_t *has_more_out_) {
-          return static_cast<int> (
-            zlink_subscribe_part_with_hwm_budget_lease (
-              detail::native_handle (*this), source_rid_out_, topic_out_,
-              topic_capacity_, topic_size_out_, part_out_, lease_out_,
-              has_more_out_, static_cast<zlink_recv_flags_t> (
-                               static_cast<int> (flags_))));
-      });
 }
 
 int socket_t::subscribe_part (std::optional<routing_id_t> &source_rid_out_,

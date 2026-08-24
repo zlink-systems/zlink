@@ -70,34 +70,7 @@ func (s *routedSocket) recvInto(out *Received, flags RecvFlags) error {
 		return err
 	}
 
-	s.replaceRoutedReceived(out, routingIDFromCPtr(sourceRID), parts, uint64(requestSeq), nil)
-	return nil
-}
-
-func (s *routedSocket) recvRetainedInto(out *Received, flags RecvFlags) error {
-	reuse := out.beginReceive()
-	var sourceRID *C.zlink_routing_id_t
-	var requestSeq C.uint64_t
-	var transportPairID C.uint64_t
-	var transportPairGeneration C.uint64_t
-	parts, retainedCredit, err := recvMultipartRetained(reuse, flags, func(part *C.zlink_msg_t, lease **C.zlink_hwm_budget_lease_t, hasMore *C.zlink_part_flag_t, recvFlags C.zlink_recv_flags_t) error {
-		return recvErrorFromResult(C.zlink_router_recv_part_v2_with_hwm_budget_lease(
-			s.raw(),
-			&sourceRID,
-			&requestSeq,
-			&transportPairID,
-			&transportPairGeneration,
-			part,
-			lease,
-			hasMore,
-			recvFlags,
-		))
-	})
-	if err != nil {
-		return err
-	}
-
-	s.replaceRoutedReceived(out, routingIDFromCPtr(sourceRID), parts, uint64(requestSeq), retainedCredit)
+	s.replaceRoutedReceived(out, routingIDFromCPtr(sourceRID), parts, uint64(requestSeq))
 	return nil
 }
 
@@ -106,7 +79,6 @@ func (s *routedSocket) replaceRoutedReceived(
 	routingID RoutingID,
 	parts []*Message,
 	seq uint64,
-	retainedCredit *hwmBudgetLeaseOwner,
 ) {
 	hasSeq := seq != 0
 	var reply func(SendFlags, []*Message) error
@@ -119,7 +91,7 @@ func (s *routedSocket) replaceRoutedReceived(
 			return s.submitToBuilder(routingID, sendFlags, builderParts)
 		}
 	}
-	out.replace(routingID, parts, seq, hasSeq, reply, send, retainedCredit)
+	out.replace(routingID, parts, seq, hasSeq, reply, send)
 }
 
 func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
@@ -138,22 +110,6 @@ func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	return true, nil
 }
 
-// RecvRetained is the explicit Framework-backend routed receive boundary.
-func (s *routedSocket) RecvRetained(out *Received, flags RecvFlags) (bool, error) {
-	if out == nil {
-		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
-	}
-	if s.connectionSocket.hasReceiveHandler() {
-		return false, &RecvError{Result: RecvBusy, nativeErrno: int(C.EBUSY)}
-	}
-	if err := s.recvRetainedInto(out, flags); err != nil {
-		if isNoData(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
 func (s *RouterSocket) SendTo(target RoutingID) RoutedSendOp {
 	return newRoutedSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
 		return submitRoutedSend(ctx, s.socketCore, routedRouter, &target, parts)

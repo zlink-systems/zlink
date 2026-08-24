@@ -72,7 +72,7 @@ int copy_subscription_entry (const subscription_snapshot_entry_t &entry_,
     }
     if (*filter_len_inout_ < entry_.filter.size ()) {
         *filter_len_inout_ = entry_.filter.size ();
-        errno = EINVAL;
+        errno = ENOBUFS;
         return -1;
     }
     if (filter_out_ && !entry_.filter.empty ())
@@ -160,8 +160,8 @@ zlink_config_result_t zlink_subscription_at (
     if (zlink::socket_base_t *socket = as_socket (handle_)) {
         const int type = socket_type_of (socket);
         if (type != ZLINK_CORE_SOCKET_SUB && type != ZLINK_CORE_SOCKET_XSUB) {
-            errno = EINVAL;
-            return ZLINK_CONFIG_INVALID_ARGUMENT;
+            errno = ENOTSUP;
+            return ZLINK_CONFIG_NOT_SUPPORTED;
         }
         return zlink::config_result_internal::from_rc (raw_socket_subscription_at (
           socket, index_, filter_out_, filter_len_inout_, is_pattern_out_));

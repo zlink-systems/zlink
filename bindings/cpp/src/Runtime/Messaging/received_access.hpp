@@ -19,13 +19,11 @@ struct received_access_t
     static void assign (received_t &received_,
                         std::optional<routing_id_t> routing_id_,
                         std::optional<uint64_t> request_seq_,
-                        std::vector<message_t> &parts_,
-                        std::shared_ptr<hwm_budget_lease_set_t> leases_)
+                        std::vector<message_t> &parts_)
     {
         received_._routing_id = std::move (routing_id_);
         received_._request_seq = std::move (request_seq_);
         received_._parts.replace (parts_);
-        received_._hwm_budget_leases = std::move (leases_);
         received_._send_context_handle = 0;
         received_._send_context_kind = received_t::send_context_kind_t::none;
         received_._send_context_callbacks.reset ();
@@ -34,13 +32,11 @@ struct received_access_t
     static void assign (received_t &received_,
                         std::optional<routing_id_t> routing_id_,
                         std::optional<uint64_t> request_seq_,
-                        message_t part_,
-                        std::shared_ptr<hwm_budget_lease_set_t> leases_)
+                        message_t part_)
     {
         received_._routing_id = std::move (routing_id_);
         received_._request_seq = std::move (request_seq_);
         received_._parts.replace (std::move (part_));
-        received_._hwm_budget_leases = std::move (leases_);
         received_._send_context_handle = 0;
         received_._send_context_kind = received_t::send_context_kind_t::none;
         received_._send_context_callbacks.reset ();

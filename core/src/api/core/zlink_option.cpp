@@ -95,8 +95,10 @@ zlink_config_result_t
 zlink_set_option (void *handle_, zlink_option_t option_, const void *optval_, size_t optvallen_)
 {
     const option_descriptor_t *descriptor = lookup_common_option (option_);
-    if (!descriptor)
+    if (!descriptor) {
+        errno = EINVAL;
         return ZLINK_CONFIG_INVALID_ARGUMENT;
+    }
     const int socket_option = descriptor->internal_option;
     if (option_ == ZLINK_OPT_LAST_ENDPOINT || option_ == ZLINK_OPT_FD || option_ == ZLINK_OPT_EVENTS
         || option_ == ZLINK_OPT_TYPE) {
@@ -121,8 +123,10 @@ zlink_config_result_t
 zlink_get_option (void *handle_, zlink_option_t option_, void *optval_, size_t *optvallen_)
 {
     const option_descriptor_t *descriptor = lookup_common_option (option_);
-    if (!descriptor)
+    if (!descriptor) {
+        errno = EINVAL;
         return ZLINK_CONFIG_INVALID_ARGUMENT;
+    }
     const int socket_option = descriptor->internal_option;
 
     const zlink::option_target_t target = zlink::resolve_option_target (handle_);

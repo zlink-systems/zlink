@@ -51,8 +51,6 @@ class xsub_t : public socket_base_t
                pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_FINAL;
-    int xrecv_retained (zlink::msg_t *msg_,
-                        retained_credit_token_t *token_out_) ZLINK_FINAL;
     bool xhas_in () ZLINK_FINAL;
     void xdispatch_io () ZLINK_OVERRIDE;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
@@ -79,8 +77,6 @@ class xsub_t : public socket_base_t
     void refresh_delivery_ready_state (const endpoint_uri_pair_t &endpoint_uri_pair_);
     uint32_t compute_delivery_ready_count () const;
     bool compute_delivery_ready_state () const;
-    int xrecv_with_credit (zlink::msg_t *msg_,
-                           retained_credit_token_t *token_out_);
 
     //  Fair queueing object for inbound pipes.
     fq_t _fq;
@@ -104,7 +100,6 @@ class xsub_t : public socket_base_t
     //  next recv call.
     bool _has_message;
     msg_t _message;
-    retained_credit_token_t _message_credit;
 
     //  If true, part of a multipart message was already sent, but
     //  there are following parts still waiting.

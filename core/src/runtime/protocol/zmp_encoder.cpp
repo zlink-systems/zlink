@@ -5,6 +5,8 @@
 #include "core/msg.hpp"
 #include "protocol/wire.hpp"
 
+#include <limits>
+
 zlink::zmp_encoder_t::zmp_encoder_t (size_t bufsize_) : encoder_base_t<zmp_encoder_t> (bufsize_)
 {
     next_step (NULL, 0, &zmp_encoder_t::header_ready, true);
@@ -18,6 +20,13 @@ void zlink::zmp_encoder_t::header_ready ()
 {
     const msg_t *msg = in_progress ();
     const size_t size = msg->size ();
+    if (size > static_cast<size_t> (std::numeric_limits<uint32_t>::max ())) {
+        // ZMP v1 has one fixed 32-bit payload length. Consume the rejected
+        // frame without emitting a truncated header/body pair.
+        errno = EMSGSIZE;
+        next_step (NULL, 0, &zmp_encoder_t::header_ready, true);
+        return;
+    }
     const unsigned char msg_flags = msg->flags ();
 
     unsigned char flags = 0;

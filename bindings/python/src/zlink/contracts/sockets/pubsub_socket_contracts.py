@@ -65,11 +65,6 @@ class SubSocket(_socket_contract._SocketContract, Protocol):
         storage; ``False`` when ``DONT_WAIT`` is set and none is available."""
         ...
 
-    def subscribe_retained_into(self, topic_message, *, flags=0):
-        """Framework-backend aggregate topic receive that retains Core HWM
-        credit until ``topic_message`` is closed or reused."""
-        ...
-
 
 @runtime_checkable
 class XPubSocket(_socket_contract._SocketContract, Protocol):
@@ -133,11 +128,6 @@ class XSubSocket(_socket_contract._SocketContract, Protocol):
     def subscribe_into(self, topic_message, *, flags=0):
         """Receive the next matching topic message into ``topic_message``
         storage; ``False`` when ``DONT_WAIT`` is set and none is available."""
-        ...
-
-    def subscribe_retained_into(self, topic_message, *, flags=0):
-        """Framework-backend aggregate topic receive that retains Core HWM
-        credit until ``topic_message`` is closed or reused."""
         ...
 
 

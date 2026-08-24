@@ -220,7 +220,6 @@ class _Lib:
         p_routed_target = ctypes.POINTER(ZlinkRoutedSubmitTarget)
         p_int = ctypes.POINTER(ctypes.c_int)
         p_size = ctypes.POINTER(ctypes.c_size_t)
-        p_hwm_budget_lease = ctypes.POINTER(ctypes.c_void_p)
         p_send_async_options = ctypes.POINTER(ZlinkSendAsyncOptions)
         p_send_op_id = ctypes.POINTER(ctypes.c_uint64)
 
@@ -239,7 +238,6 @@ class _Lib:
             ("zlink_ctx_get_auto_hwm_budget_snapshot", [ctypes.c_void_p, ctypes.POINTER(ZlinkAutoHwmBudgetSnapshot)], ctypes.c_int),
             ("zlink_ctx_reset_auto_hwm_budget_metrics", [ctypes.c_void_p], ctypes.c_int),
             ("zlink_proxy", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_proxy_steerable", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_has", [ctypes.c_char_p], ctypes.c_bool),
             ("zlink_atomic_counter_new", [], ctypes.c_void_p),
             ("zlink_atomic_counter_set", [ctypes.c_void_p, ctypes.c_int], None),
@@ -301,22 +299,17 @@ class _Lib:
             ("zlink_dealer_request_transport_pair_part", [ctypes.c_void_p, p_routed_target, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_dealer_send_transport_pair_part", [ctypes.c_void_p, p_routed_target, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
             ("zlink_dealer_recv_part", [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_uint64), p_msg, p_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_dealer_recv_part_with_hwm_budget_lease", [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_uint64), p_msg, p_hwm_budget_lease, p_int, ctypes.c_int], ctypes.c_int),
             ("zlink_dealer_reply_part", [ctypes.c_void_p, ctypes.c_uint64, p_msg, ctypes.c_int], ctypes.c_int),
             ("zlink_router_request_part", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_router_request_transport_pair_part", [ctypes.c_void_p, p_rid, ctypes.c_uint64, ctypes.c_uint64, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_router_reply_part", [ctypes.c_void_p, p_rid, ctypes.c_uint64, p_msg, ctypes.c_int], ctypes.c_int),
             ("zlink_router_recv_part", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_uint64), p_msg, p_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_router_recv_part_v2_with_hwm_budget_lease", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), p_msg, p_hwm_budget_lease, p_int, ctypes.c_int], ctypes.c_int),
             ("zlink_recv_part", [ctypes.c_void_p, p_rid_ptr, p_msg, p_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_recv_part_with_hwm_budget_lease", [ctypes.c_void_p, p_rid_ptr, p_msg, p_hwm_budget_lease, p_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_hwm_budget_lease_release", [p_hwm_budget_lease], None),
             ("zlink_publish_part", [ctypes.c_void_p, ctypes.c_char_p, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
             ("zlink_set_subscription", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_unset_subscription", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_subscription_at", [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, p_size, p_int], ctypes.c_int),
             ("zlink_subscribe_part", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, p_msg, p_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_subscribe_part_with_hwm_budget_lease", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, p_msg, p_hwm_budget_lease, p_int, ctypes.c_int], ctypes.c_int),
             ("zlink_xpub_recv_part", [ctypes.c_void_p, p_rid_ptr, p_int, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
             ("zlink_monitor_ignore_handler", [ctypes.POINTER(ZlinkMonitorEvent), ctypes.c_void_p], None),
             ("zlink_socket_monitor_open", [ctypes.c_void_p, ctypes.POINTER(ZlinkSocketMonitorOpenOptions)], ctypes.c_void_p),

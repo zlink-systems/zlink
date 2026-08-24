@@ -14,7 +14,6 @@ from ..handles.native_support import (
     _copy_routing_id,
     _decode_topic_text,
     _ReceivedPartsOwner,
-    _recv_retained_native_parts,
     _raise_result_error,
     _report_unhandled_callback_exception,
     _routing_id_bytes,
@@ -84,16 +83,6 @@ _native_publisher_send_op_func = (
 )
 _native_router_recv_owner_func = (
     getattr(_native_extension, "router_recv_owner", None)
-    if _native_extension is not None
-    else None
-)
-_native_dealer_recv_retained_owner_func = (
-    getattr(_native_extension, "dealer_recv_retained_owner", None)
-    if _native_extension is not None
-    else None
-)
-_native_router_recv_retained_owner_func = (
-    getattr(_native_extension, "router_recv_retained_owner", None)
     if _native_extension is not None
     else None
 )
@@ -640,59 +629,6 @@ class DealerSocket(
             )
         )
 
-    def recv_retained_into(self, received, *, flags=0):
-        """Framework-backend typed DEALER receive with retained Core credit."""
-        if received is None:
-            raise TypeError("received must be a Received")
-        received.close()
-        try:
-            if (
-                _native_dealer_recv_retained_owner_func is not None
-                and not _in_callback()
-            ):
-                result = _native_dealer_recv_retained_owner_func(
-                    int(self._socket_handle.handle), int(flags)
-                )
-                if result is False:
-                    return False
-                rc, err, _message_type, request_seq, owner, retained_credit = result
-                if int(rc) != 0:
-                    _raise_result_error(RecvError, RecvResult, rc, err)
-                seq = int(request_seq)
-            else:
-                seq = 0
-
-                def recv_part(part, lease, has_more, recv_flags, first):
-                    nonlocal seq
-                    message_type = ctypes.c_uint8()
-                    request_seq = ctypes.c_uint64()
-                    rc = lib().zlink_dealer_recv_part_with_hwm_budget_lease(
-                        self._handle,
-                        ctypes.byref(message_type),
-                        ctypes.byref(request_seq),
-                        part,
-                        lease,
-                        has_more,
-                        recv_flags,
-                    )
-                    if rc == 0 and first:
-                        seq = int(request_seq.value)
-                    return rc
-
-                owner, retained_credit = _recv_retained_native_parts(
-                    recv_part, flags
-                )
-        except RecvError as ex:
-            if int(flags) & 1 and ex.result == RecvResult.NO_DATA:
-                return False
-            raise
-        received._replace(
-            owner,
-            request_seq=seq if seq != 0 else None,
-            retained_credit=retained_credit,
-        )
-        return True
-
 class RouterSocket(
     _RoutedAsyncSocket,
     _EndpointSocket,
@@ -835,74 +771,6 @@ class RouterSocket(
         )
         return True
 
-    def recv_retained_into(self, received, *, flags=0):
-        """Framework-backend typed ROUTER receive with retained Core credit."""
-        if received is None:
-            raise TypeError("received must be a Received")
-        received.close()
-        try:
-            if (
-                _native_router_recv_retained_owner_func is not None
-                and not _in_callback()
-            ):
-                result = _native_router_recv_retained_owner_func(
-                    int(self._socket_handle.handle), int(flags)
-                )
-                if result is False:
-                    return False
-                rc, err, routing, request_seq, owner, retained_credit = result
-                if int(rc) != 0:
-                    _raise_result_error(RecvError, RecvResult, rc, err)
-                routing_id = (
-                    RoutingId.from_(routing) if routing is not None else None
-                )
-                seq = int(request_seq)
-            else:
-                routing_id = None
-                seq = 0
-
-                def recv_part(part, lease, has_more, recv_flags, first):
-                    nonlocal routing_id, seq
-                    source_rid = ctypes.POINTER(ZlinkRoutingId)()
-                    request_seq = ctypes.c_uint64()
-                    transport_pair_id = ctypes.c_uint64()
-                    transport_pair_generation = ctypes.c_uint64()
-                    rc = lib().zlink_router_recv_part_v2_with_hwm_budget_lease(
-                        self._handle,
-                        ctypes.byref(source_rid),
-                        ctypes.byref(request_seq),
-                        ctypes.byref(transport_pair_id),
-                        ctypes.byref(transport_pair_generation),
-                        part,
-                        lease,
-                        has_more,
-                        recv_flags,
-                    )
-                    if rc == 0 and first:
-                        routing_id = (
-                            _routing_id_bytes(source_rid.contents)
-                            if source_rid
-                            else None
-                        )
-                        seq = int(request_seq.value)
-                    return rc
-
-                owner, retained_credit = _recv_retained_native_parts(
-                    recv_part, flags
-                )
-        except RecvError as ex:
-            if int(flags) & 1 and ex.result == RecvResult.NO_DATA:
-                return False
-            raise
-        received._replace(
-            owner,
-            routing_id=routing_id,
-            request_seq=seq if seq != 0 else None,
-            router_socket=self,
-            retained_credit=retained_credit,
-        )
-        return True
-
 class StreamSocket(
     _BindSocket,
     _StreamOptionSocket,
@@ -913,16 +781,6 @@ class StreamSocket(
 
     def __init__(self, context):
         super().__init__(context)
-
-    def _replace_retained_received(
-        self, received, owner, routing, retained_credit
-    ):
-        received._replace(
-            owner,
-            routing,
-            router_socket=self,
-            retained_credit=retained_credit,
-        )
 
     def send(self, routing_id):
         return _native_routed_send_op(self, routing_id) or _RoutedSocketSendOp(

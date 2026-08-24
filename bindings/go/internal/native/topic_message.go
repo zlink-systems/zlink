@@ -9,11 +9,10 @@ package native
 import "C"
 
 type TopicMessage struct {
-	routingID      RoutingID
-	topic          string
-	parts          []*Message
-	topicBuf       []byte
-	retainedCredit *hwmBudgetLeaseOwner
+	routingID RoutingID
+	topic     string
+	parts     []*Message
+	topicBuf  []byte
 }
 
 func (t *TopicMessage) RoutingID() RoutingID {
@@ -81,8 +80,5 @@ func (t *TopicMessage) Close() error {
 	t.routingID = RoutingID{}
 	t.topic = ""
 	t.parts = nil
-	retainedCredit := t.retainedCredit
-	t.retainedCredit = nil
-	retainedCredit.release()
 	return first
 }

@@ -98,7 +98,7 @@ void zlink::socket_poller_t::reserve (size_t items_)
 int zlink::socket_poller_t::add (socket_base_t *socket_, void *user_data_, short events_)
 {
     if (find_socket_item (socket_) != _items.end ()) {
-        errno = EINVAL;
+        errno = EEXIST;
         return -1;
     }
     return add_item (socket_, 0, user_data_, events_);
@@ -107,7 +107,7 @@ int zlink::socket_poller_t::add (socket_base_t *socket_, void *user_data_, short
 int zlink::socket_poller_t::add_fd (fd_t fd_, void *user_data_, short events_)
 {
     if (find_fd_item (fd_) != _items.end ()) {
-        errno = EINVAL;
+        errno = EEXIST;
         return -1;
     }
     return add_item (NULL, fd_, user_data_, events_);
@@ -182,7 +182,7 @@ zlink::socket_poller_t::items_t::iterator zlink::socket_poller_t::find_fd_item (
 int zlink::socket_poller_t::modify_item_events (items_t::iterator it_, short events_)
 {
     if (it_ == _items.end ()) {
-        errno = EINVAL;
+        errno = ENOENT;
         return -1;
     }
 
@@ -198,7 +198,7 @@ int zlink::socket_poller_t::modify_item_events (items_t::iterator it_, short eve
 int zlink::socket_poller_t::modify_item_user_data (items_t::iterator it_, void *user_data_)
 {
     if (it_ == _items.end ()) {
-        errno = EINVAL;
+        errno = ENOENT;
         return -1;
     }
 
@@ -209,7 +209,7 @@ int zlink::socket_poller_t::modify_item_user_data (items_t::iterator it_, void *
 int zlink::socket_poller_t::remove_item (items_t::iterator it_)
 {
     if (it_ == _items.end ()) {
-        errno = EINVAL;
+        errno = ENOENT;
         return -1;
     }
 
@@ -640,32 +640,28 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
             errno = EFAULT;
             return -1;
         }
-        // We'll report an error (timed out) as if the list was non-empty and
-        // no event occurred within the specified timeout. Otherwise the caller
-        // needs to check the return value AND the event to avoid using the
-        // nullified event data.
-        errno = EAGAIN;
+        // A finite wait with no pollable descriptor is still a successful
+        // timeout. Public poll APIs reserve -1 for actual failures.
         if (timeout_ == 0)
-            return -1;
+            return 0;
 #if defined ZLINK_HAVE_WINDOWS
         Sleep (timeout_ > 0 ? timeout_ : INFINITE);
-        return -1;
+        return 0;
 #elif defined ZLINK_HAVE_ANDROID
         usleep (timeout_ * 1000);
-        return -1;
+        return 0;
 #elif defined ZLINK_HAVE_OSX
         usleep (timeout_ * 1000);
-        errno = EAGAIN;
-        return -1;
+        return 0;
 #elif defined ZLINK_HAVE_VXWORKS
         struct timespec ns_;
         ns_.tv_sec = timeout_ / 1000;
         ns_.tv_nsec = timeout_ % 1000 * 1000000;
         nanosleep (&ns_, 0);
-        return -1;
+        return 0;
 #else
         usleep (timeout_ * 1000);
-        return -1;
+        return 0;
 #endif
     }
 
@@ -716,8 +712,7 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
                     break;
             }
         }
-        errno = EAGAIN;
-        return -1;
+        return 0;
     }
 #endif
 
@@ -777,8 +772,7 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
                 break;
         }
     }
-    errno = EAGAIN;
-    return -1;
+    return 0;
 
 #elif defined ZLINK_POLL_BASED_ON_SELECT
 
@@ -860,8 +854,7 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
         }
     }
 
-    errno = EAGAIN;
-    return -1;
+    return 0;
 
 #else
 

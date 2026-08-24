@@ -144,13 +144,11 @@ message_t received_t::single_part_or_throw ()
 void received_t::close ()
 {
     _parts.close ();
-    _hwm_budget_leases.reset ();
 }
 
 void topic_message_t::close ()
 {
     _parts.close ();
-    _hwm_budget_leases.reset ();
 }
 
 const std::vector<message_t> &received_t::parts () const

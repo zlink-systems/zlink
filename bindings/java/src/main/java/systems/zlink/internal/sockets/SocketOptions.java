@@ -96,9 +96,6 @@ public final class SocketOptions {
     public static final SocketOptionKey<Integer> RID_DUPLICATE_POLICY =
       SocketOptionKey.int32("RID_DUPLICATE_POLICY",
         SocketOption.RID_DUPLICATE_POLICY, true, true);
-    public static final SocketOptionKey<Integer> ROUTE_VALUE_MAX_SIZE =
-      SocketOptionKey.int32("ROUTE_VALUE_MAX_SIZE",
-        SocketOption.ROUTE_VALUE_MAX_SIZE, true, true);
     public static final SocketOptionKey<Integer> SUBMIT_RETRY_MODE =
       SocketOptionKey.int32("SUBMIT_RETRY_MODE",
         SocketOption.SUBMIT_RETRY_MODE, true, true);
@@ -229,7 +226,7 @@ public final class SocketOptions {
         LAST_ENDPOINT, ROUTER_MANDATORY, TCP_KEEPALIVE,
         TCP_KEEPALIVE_CNT, TCP_KEEPALIVE_IDLE, TCP_KEEPALIVE_INTVL,
         TCP_NODELAY, IMMEDIATE, XPUB_VERBOSE, IPV6, PROBE_ROUTER,
-        CONFLATE, RID_DUPLICATE_POLICY, ROUTE_VALUE_MAX_SIZE,
+        CONFLATE, RID_DUPLICATE_POLICY,
         SUBMIT_RETRY_MODE, SUBMIT_RETRY_TIMEOUT, SUBMIT_RETRY_ATTEMPTS, TOS,
         CONNECT_ROUTING_ID, CONNECT_ROUTING_ID_BYTES,
         HANDSHAKE_IVL, XPUB_NODROP, BLOCKY, XPUB_MANUAL,

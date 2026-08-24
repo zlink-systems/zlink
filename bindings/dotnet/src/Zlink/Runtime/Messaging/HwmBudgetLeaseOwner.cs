@@ -40,8 +40,7 @@ internal sealed class HwmBudgetLeaseOwner : IDisposable
 
     internal static void ReleaseUnowned(ref IntPtr lease)
     {
-        if (lease != IntPtr.Zero)
-            NativeMethods.zlink_hwm_budget_lease_release(ref lease);
+        lease = IntPtr.Zero;
     }
 
     public void Dispose()

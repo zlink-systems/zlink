@@ -290,6 +290,11 @@ void test_socket_lifecycle_coordinator_handoff_waits_pending_async_quiesce ()
     TEST_ASSERT_TRUE (coordinator.is_async_quiesce_pending ());
     coordinator.mark_async_processing_stopped (&mailbox);
     TEST_ASSERT_FALSE (coordinator.is_async_quiesce_pending ());
+
+    // A later monitor detach must not reopen a handoff that has already
+    // published its quiesce acknowledgement.
+    coordinator.stop_async_mailbox_processing (&mailbox);
+    TEST_ASSERT_FALSE (coordinator.is_async_quiesce_pending ());
 }
 
 void test_socket_lifecycle_coordinator_claims_deferred_close_once ()

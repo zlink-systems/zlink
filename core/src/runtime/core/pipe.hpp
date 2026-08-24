@@ -24,7 +24,6 @@
 namespace zlink
 {
 class pipe_t;
-class retained_credit_token_t;
 
 enum pipe_write_status_t
 {
@@ -173,6 +172,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void apply_physical_queue_hwm_plan ();
     uint64_t get_oversize_message_admission_count () const;
     uint64_t get_oversize_message_admission_max_bytes () const;
+    void reset_oversize_message_admission_metrics ();
     uint64_t get_connected_time () const;
     void refresh_write_credit (uint64_t peer_msgs_read_, uint64_t peer_bytes_read_);
     bool mark_stream_connect_event_emitted ();
@@ -189,10 +189,6 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Reads a message to the underlying pipe.
     bool read (msg_t *msg_);
-    bool read_retained (msg_t *msg_, retained_credit_token_t *token_out_);
-    bool read_deferred (msg_t *msg_);
-    int finish_deferred_read (const msg_t *msg_,
-                              retained_credit_token_t *token_out_ = NULL);
     int reserve_inbound_decoder_frame (
       uint64_t payload_bytes_, unsigned char msg_flags_, bool track_multipart_,
       decoder_frame_reservation_t *reservation_storage_,
@@ -202,9 +198,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     void release_decoder_frame_reservation (
       decoder_frame_reservation_t **reservation_);
     void finish_direct_decoder_frame (unsigned char msg_flags_);
-    void schedule_retained_credit (uint64_t generation_,
-                                   uint64_t msgs_read_,
-                                   uint64_t bytes_read_);
 
     //  Checks whether messages can be written to the pipe. If the pipe is
     //  closed or if writing the message would cause high watermark the
@@ -396,9 +389,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     void process_activate_write (uint64_t generation_,
                                  uint64_t msgs_read_,
                                  uint64_t bytes_read_) ZLINK_OVERRIDE;
-    void process_retained_credit (uint64_t generation_,
-                                  uint64_t msgs_read_,
-                                  uint64_t bytes_read_) ZLINK_OVERRIDE;
     void process_hiccup (void *pipe_, uint64_t generation_) ZLINK_OVERRIDE;
     void process_pipe_term () ZLINK_OVERRIDE;
     void process_pipe_term_ack () ZLINK_OVERRIDE;
@@ -449,8 +439,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void snapshot_outbound_queue_accounting (const pipe_t *reader_,
                                              uint64_t *provisional_out_,
                                              uint64_t *committed_out_) const;
-    bool read_internal (msg_t *msg_, retained_credit_token_t *token_out_,
-                        bool defer_credit_ = false);
+    bool read_internal (msg_t *msg_);
     void refresh_inbound_lwm_from_physical_queue ();
 
     //  Constructor is private. Pipe can only be created using

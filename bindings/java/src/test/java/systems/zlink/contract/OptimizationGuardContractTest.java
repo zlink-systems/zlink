@@ -55,17 +55,12 @@ final class OptimizationGuardContractTest {
     private static final String[] REQUIRED_PART_SYMBOLS = {
         "zlink_send_part",
         "zlink_recv_part",
-        "zlink_recv_part_with_hwm_budget_lease",
         "zlink_publish_part",
         "zlink_subscribe_part",
-        "zlink_subscribe_part_with_hwm_budget_lease",
         "zlink_router_recv_part",
-        "zlink_router_recv_part_v2_with_hwm_budget_lease",
-        "zlink_dealer_recv_part_with_hwm_budget_lease",
         "zlink_dealer_request_part",
         "zlink_router_request_part",
         "zlink_router_reply_part",
-        "zlink_hwm_budget_lease_release"
     };
 
     @Test

@@ -32,6 +32,7 @@
 #include <cerrno>
 #include <sstream>
 #include <cstring>
+#include <limits>
 #include <limits.h>
 
 namespace
@@ -1050,6 +1051,10 @@ bool zlink::asio_ws_engine_t::build_gather_header (const msg_t &msg_,
         return false;
 
     const size_t size = msg_.size ();
+    if (size > static_cast<size_t> (std::numeric_limits<uint32_t>::max ())) {
+        errno = EMSGSIZE;
+        return false;
+    }
     const unsigned char msg_flags = msg_.flags ();
 
     unsigned char flags = 0;

@@ -20,8 +20,6 @@ class ctx_physical_queue_registry_t;
 struct physical_queue_record_t;
 typedef std::shared_ptr<physical_queue_record_t> physical_queue_handle_t;
 
-struct retained_credit_control_t;
-struct retained_credit_origin_t;
 
 struct decoder_frame_reservation_t
 {
@@ -46,37 +44,6 @@ struct decoder_frame_reservation_request_t
     bool multipart_started_empty;
     bool qualify_multipart_from_queue_state;
 };
-
-//  Move-only ownership for one physical frame removed from a queue without
-//  publishing writer credit. Socket framing code may hold this token while it
-//  prefetches or parses an envelope; only the public retained receive entry
-//  converts it to application ownership.
-class retained_credit_token_t
-{
-  public:
-    retained_credit_token_t ();
-    ~retained_credit_token_t ();
-    retained_credit_token_t (retained_credit_token_t &&other_);
-    retained_credit_token_t &operator= (retained_credit_token_t &&other_);
-
-    bool empty () const;
-    void reset ();
-    int transfer_to_application (
-      std::shared_ptr<retained_credit_origin_t> *origin_out_);
-
-  private:
-    friend class ctx_physical_queue_registry_t;
-    explicit retained_credit_token_t (
-      const std::shared_ptr<retained_credit_origin_t> &origin_);
-
-    std::shared_ptr<retained_credit_origin_t> _origin;
-
-    retained_credit_token_t (const retained_credit_token_t &);
-    retained_credit_token_t &operator= (const retained_credit_token_t &);
-};
-
-void release_retained_credit_origin (
-  std::shared_ptr<retained_credit_origin_t> *origin_);
 
 struct physical_queue_registry_snapshot_t
 {
@@ -157,11 +124,6 @@ class ctx_physical_queue_registry_t
     void release_committed_frame (const physical_queue_handle_t &direction_,
                                   uint64_t frame_bytes_,
                                   uint64_t counted_message_count_);
-    int retain_dequeued_frame (const physical_queue_handle_t &direction_,
-                               pipe_t *reader_pipe_,
-                               uint64_t frame_bytes_,
-                               uint64_t counted_message_count_,
-                               retained_credit_token_t *token_out_);
     int reserve_decoder_frame (
       const physical_queue_handle_t &direction_,
       const decoder_frame_reservation_request_t &request_,
@@ -194,13 +156,8 @@ class ctx_physical_queue_registry_t
     void release_endpoint (physical_queue_handle_t *direction_);
     void snapshot (physical_queue_registry_snapshot_t *out_) const;
     void reset_metrics ();
-    void stop_retained_transfers ();
-    void force_release_retained_credit ();
 
   private:
-    friend class retained_credit_token_t;
-    friend void release_retained_credit_origin (
-      std::shared_ptr<retained_credit_origin_t> *origin_);
     uint64_t allocate_queue_id_unlocked ();
 
     mutable mutex_t _sync;
@@ -209,22 +166,13 @@ class ctx_physical_queue_registry_t
     uint64_t _application_reserved_minimum_bytes;
     mutable std::atomic<uint64_t> _application_peak_accounted_bytes;
     mutable std::atomic<uint64_t> _completion_peak_accounted_bytes;
-    std::atomic<uint64_t> _application_lease_accounted_bytes;
-    std::atomic<uint64_t> _outstanding_application_lease_count;
     std::atomic<uint64_t> _oversize_admission_count;
     std::atomic<uint64_t> _largest_oversize_message_bytes;
     std::atomic<uint64_t> _total_admission_attempts;
     std::atomic<uint64_t> _first_blocked_admission_attempts;
     std::atomic<bool> _aggregate_overflow;
-    std::shared_ptr<retained_credit_control_t> _retained_control;
-    std::map<uint64_t, retained_credit_origin_t *> _retained_origins;
-    uint64_t _next_retained_origin_id;
     std::atomic<bool> _decoder_accepting;
 
-    bool transfer_retained_origin_to_application (
-      retained_credit_origin_t *origin_);
-    void release_retained_origin (retained_credit_origin_t *origin_,
-                                  bool force_);
     void erase_direction_if_retired_and_drained_unlocked (
       const physical_queue_handle_t &direction_);
     void force_cancel_decoder_reservations ();

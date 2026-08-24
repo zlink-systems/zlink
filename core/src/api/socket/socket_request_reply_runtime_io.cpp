@@ -264,7 +264,6 @@ int recv_router_message_direct (socket_handle_t handle_,
                                 zlink_msg_t **parts_out_,
                                 size_t *part_count_out_,
                                 int flags_,
-                                std::vector<retained_credit_token_t> *credits_out_,
                                 zlink_msg_t *terminal_part_out_,
                                 bool *terminal_part_returned_out_,
                                 zlink_routing_id_t *terminal_source_storage_)
@@ -297,8 +296,13 @@ int recv_router_message_direct (socket_handle_t handle_,
         }
     }
 
+    // Part receive APIs accept an uninitialised output slot. Only use the
+    // zero-copy terminal path when that slot is already a valid msg_t;
+    // otherwise receive into local storage and export through the normal
+    // move path, which initializes the caller's slot.
     const bool receive_terminal_direct =
-      terminal_part_out_ && terminal_part_returned_out_ && !credits_out_;
+      terminal_part_out_ && terminal_part_returned_out_
+      && reinterpret_cast<zlink::msg_t *> (terminal_part_out_)->check ();
     zlink::msg_t current_storage;
     if (!receive_terminal_direct) {
         const int current_init_rc = current_storage.init ();
@@ -314,16 +318,8 @@ int recv_router_message_direct (socket_handle_t handle_,
                                : &source_rid_storage;
     memset (source_rid, 0, sizeof (*source_rid));
     zlink::pipe_t *source_pipe = NULL;
-    if (credits_out_)
-        credits_out_->clear ();
-    retained_credit_token_t current_credit;
-    const int first_recv_rc = credits_out_
-                                ? handle_.socket->recv_routed_retained (
-                                    &current, source_rid, &current_credit,
-                                    flags_, NULL, &source_pipe)
-                                : handle_.socket->recv_routed (
-                                    &current, source_rid, flags_, NULL,
-                                    &source_pipe);
+    const int first_recv_rc = handle_.socket->recv_routed (
+      &current, source_rid, flags_, NULL, &source_pipe);
     if (first_recv_rc != 0) {
         return -1;
     }
@@ -365,8 +361,6 @@ int recv_router_message_direct (socket_handle_t handle_,
 
         const int export_rc = zlink::recv_tls_view::commit_reserved_single (
           parts_out_, part_count_out_);
-        if (export_rc == 0 && credits_out_)
-            credits_out_->push_back (std::move (current_credit));
         return export_rc;
     }
 
@@ -382,7 +376,6 @@ int recv_router_message_direct (socket_handle_t handle_,
     }
 
     std::vector<zlink_msg_t> raw_parts;
-    std::vector<retained_credit_token_t> raw_credits;
     raw_parts.reserve (stack_request_reply_part_capacity);
     while (true) {
         raw_parts.push_back (zlink_msg_t ());
@@ -394,20 +387,13 @@ int recv_router_message_direct (socket_handle_t handle_,
             errno = EFAULT;
             return -1;
         }
-        if (credits_out_)
-            raw_credits.push_back (std::move (current_credit));
-
         if (!router_raw_part_has_more (&raw_parts.back ()))
             break;
 
         zlink_msg_t next;
         zlink_msg_init (&next);
-        const int followup_rc = credits_out_
-                                  ? handle_.socket->recv_retained (
-                                      reinterpret_cast<zlink::msg_t *> (&next),
-                                      &current_credit, 0)
-                                  : recv_router_followup_frame (
-                                      handle_.socket, &next);
+        const int followup_rc = recv_router_followup_frame (
+          handle_.socket, &next);
         if (followup_rc != 0) {
             zlink_msg_close (&next);
             zlink::close_msg_frames (&raw_parts);
@@ -476,11 +462,6 @@ int recv_router_message_direct (socket_handle_t handle_,
     const int export_rc = export_router_payload_parts (
       raw_parts.data (), raw_parts.size (), start_index, parts_out_,
       part_count_out_);
-    if (export_rc == 0 && credits_out_) {
-        credits_out_->reserve (raw_credits.size () - start_index);
-        for (size_t i = start_index; i < raw_credits.size (); ++i)
-            credits_out_->push_back (std::move (raw_credits[i]));
-    }
     return export_rc;
 }
 
@@ -492,7 +473,6 @@ int recv_dealer_message_direct (
   zlink_msg_t **parts_out_,
   size_t *part_count_out_,
   int flags_,
-  std::vector<retained_credit_token_t> *credits_out_,
   zlink_msg_t *terminal_part_out_,
   bool *terminal_part_returned_out_)
 {
@@ -505,7 +485,8 @@ int recv_dealer_message_direct (
         *terminal_part_returned_out_ = false;
 
     const bool receive_terminal_direct =
-      terminal_part_out_ && terminal_part_returned_out_ && !credits_out_;
+      terminal_part_out_ && terminal_part_returned_out_
+      && reinterpret_cast<zlink::msg_t *> (terminal_part_out_)->check ();
     zlink::msg_t current_storage;
     if (!receive_terminal_direct) {
         const int current_init_rc = current_storage.init ();
@@ -516,15 +497,8 @@ int recv_dealer_message_direct (
         ? *reinterpret_cast<zlink::msg_t *> (terminal_part_out_)
         : current_storage;
     zlink::pipe_t *source_pipe = NULL;
-    if (credits_out_)
-        credits_out_->clear ();
-    retained_credit_token_t current_credit;
-    const int first_recv_rc = credits_out_
-                                ? handle_.socket->recv_pipe_retained (
-                                    &current, &source_pipe, &current_credit,
-                                    flags_)
-                                : handle_.socket->recv_pipe (
-                                    &current, &source_pipe, flags_);
+    const int first_recv_rc = handle_.socket->recv_pipe (
+      &current, &source_pipe, flags_);
     if (first_recv_rc != 0)
         return -1;
 
@@ -542,15 +516,12 @@ int recv_dealer_message_direct (
         }
         if (export_rc != 0)
             return -1;
-        if (credits_out_)
-            credits_out_->push_back (std::move (current_credit));
         *message_type_out_ = ZLINK_DEALER_MESSAGE_RAW;
         *request_seq_out_ = 0;
         return 0;
     }
 
     std::vector<zlink_msg_t> raw_parts;
-    std::vector<retained_credit_token_t> raw_credits;
     raw_parts.reserve (stack_request_reply_part_capacity);
     while (true) {
         const bool more = (current.flags () & zlink::msg_t::more) != 0;
@@ -561,18 +532,13 @@ int recv_dealer_message_direct (
             errno = EFAULT;
             return -1;
         }
-        if (credits_out_)
-            raw_credits.push_back (std::move (current_credit));
         if (!more)
             break;
         zlink::msg_t next;
         const int init_rc = next.init ();
         errno_assert (init_rc == 0);
-        const int followup_rc = credits_out_
-                                  ? handle_.socket->recv_retained (
-                                      &next, &current_credit, ZLINK_DONTWAIT)
-                                  : handle_.socket->recv (
-                                      &next, ZLINK_DONTWAIT);
+        const int followup_rc = handle_.socket->recv (
+          &next, ZLINK_DONTWAIT);
         if (followup_rc != 0) {
             const int saved_errno = errno;
             const int close_rc = next.close ();
@@ -645,11 +611,6 @@ int recv_dealer_message_direct (
                                      parts_out_, part_count_out_)
         != 0)
         return -1;
-    if (credits_out_) {
-        credits_out_->reserve (raw_credits.size () - start_index);
-        for (size_t i = start_index; i < raw_credits.size (); ++i)
-            credits_out_->push_back (std::move (raw_credits[i]));
-    }
     *message_type_out_ = exported_type;
     *request_seq_out_ = exported_seq;
     return 0;
@@ -788,10 +749,9 @@ int send_completion_frames (zlink::socket_base_t *socket_,
         ? socket_->completion_pipe_for_application (application_pipe_)
         : socket_->completion_pipe_for_peer (peer_rid_);
     if (!completion) {
-        socket_->arm_send_recovery_after_backpressure ();
         zlink::request_reply::consume_send_frames_from (
           parts_, 0, part_count_);
-        errno = EAGAIN;
+        errno = ENOTCONN;
         return -1;
     }
     int rc = 0;
@@ -806,12 +766,13 @@ int send_completion_frames (zlink::socket_base_t *socket_,
         const bool written =
           i + 1 < part_count_ ? completion->write (msg) : completion->write_and_flush (msg);
         if (!written) {
-            const int saved_errno = errno ? errno : EAGAIN;
             completion->rollback ();
-            socket_->arm_send_recovery_after_backpressure ();
             zlink::request_reply::consume_send_frames_from (
               parts_, i, part_count_);
-            errno = saved_errno;
+            // Completion pipes do not expose application backpressure. A
+            // failed write means the selected reply target disappeared while
+            // the reply was being committed.
+            errno = ENOTCONN;
             rc = -1;
             break;
         }
@@ -845,9 +806,8 @@ int send_completion_frames_for_transport_pair (
     zlink::pipe_t *completion = socket_->completion_pipe_for_transport_pair (
       transport_pair_id_, transport_pair_generation_);
     if (!completion) {
-        socket_->arm_send_recovery_after_backpressure ();
         zlink::request_reply::consume_send_frames_from (parts_, 0, part_count_);
-        errno = EAGAIN;
+        errno = ENOTCONN;
         return -1;
     }
     for (size_t i = 0; i < part_count_; ++i) {
@@ -860,11 +820,9 @@ int send_completion_frames_for_transport_pair (
         const bool written = i + 1 < part_count_ ? completion->write (msg)
                                                  : completion->write_and_flush (msg);
         if (!written) {
-            const int saved_errno = errno ? errno : EAGAIN;
             completion->rollback ();
-            socket_->arm_send_recovery_after_backpressure ();
             zlink::request_reply::consume_send_frames_from (parts_, i, part_count_);
-            errno = saved_errno;
+            errno = ENOTCONN;
             return -1;
         }
         const int init_rc = zlink_msg_init (&parts_[i]);
