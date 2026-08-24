@@ -13,6 +13,8 @@ log_dir="$(pwd)/logs/${run_id}"
 config_dir="$(mktemp -d)"
 chmod 0700 "${config_dir}"
 SCENARIO="${1:-all}"
+# Inventory blocker: MON-A7. The runner must keep the canonical scenario
+# discoverable until coherent Core HWM and application-job-queue reset evidence exists.
 e2e_start_order="$(zlink_e2e_start_order_mode "$@")"
 echo "start_order=${e2e_start_order}"
 

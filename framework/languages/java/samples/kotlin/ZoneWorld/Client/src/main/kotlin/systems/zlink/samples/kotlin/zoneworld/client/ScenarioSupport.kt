@@ -81,13 +81,13 @@ internal class Game private constructor(
     var x = 0
     var y = 0
 
-    suspend fun join(): Messages.JoinWorldRes = coroutineScope {
+    suspend fun join(): Messages.JoinWorldNotify = coroutineScope {
         val response = async(start = CoroutineStart.UNDISPATCHED) {
-            connector.waitFor<Messages.JoinWorldRes>()
+            connector.waitFor<Messages.JoinWorldNotify>()
                 .where { it.payload().playerId == playerId }
                 .timeout(Duration.ofSeconds(20)).await().payload()
         }
-        connector.send(Messages.JoinWorldReq(playerId)).await()
+        connector.send(Messages.JoinWorldMsg(playerId)).await()
         response.await().also { x = it.x; y = it.y }
     }
 

@@ -653,22 +653,22 @@ final class SampleReleaseGateContractTest {
             String script = Files.readString(sampleRoot.resolve("run_sample.sh"));
 
             for (String requiredText : List.of(
-                    "zoneworld=completed",
-                    "zoneworld server evidence=completed",
-                    "scenario ZW-E5 armed",
-                    "scenario ZW-C3 armed",
-                    "scenario ZW-C2 passed",
-                    "scenario ZW-C3 passed",
-                    "scenario ZW-E5 passed",
-                    "scenario ZW-G3 ready",
-                    "scenario ZW-G3 announced id=",
-                    "scenario ZW-G3 identity passed old=$zone_b_routing_id new=$replacement_routing_id",
-                    "scenario ZW-G3 serves",
-                    "scenario ZW-G3 passed",
-                    "fanout announcement delivered node=zone-node-2 id=${announcement_id}",
-                    "maintenance restored node=zone-node-2 enabled=true",
-                    "topology=ready node=zone-node-2",
-                    "node status observed\\. node=zone-node-2, rid=.*, registered=true")) {
+                    "run_with_stop ZW-C2 TERM",
+                    "run_with_stop ZW-C3 KILL",
+                    "run_client ZW-E5-arm",
+                    "kill_node zone-node-2 KILL",
+                    "run_client ZW-E5",
+                    "checks_all ZW-D1-subscribers 'fanout subscriber received announcement'",
+                    "checks_all ZW-D1-spots 'zone spot: announcement delivered'",
+                    "old=\"$rid2\"; kill_node zone-node-2 TERM",
+                    "wait_log_while_running zone-node-replacement topology=ready",
+                    "[[ \"$new\" != \"$old\" ]] && run_client ZW-G3-fresh",
+                    "scenario ZW-G3-fresh owner=$new ",
+                    "pass ZW-G3",
+                    "phase zoneworld-ops-observe=completed ZW-C1 ZW-C2 ZW-C3 ZW-C4",
+                    "phase zoneworld-ops-announce=completed ZW-D1 ZW-D1-subscribers ZW-D1-spots ZW-D2",
+                    "phase zoneworld-ops-maintenance=completed ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E5 ZW-E6",
+                    "phase zoneworld=completed")) {
                 assertTrue(script.contains(requiredText),
                     language + "/ZoneWorld runner must prove continuity marker '" + requiredText + "'");
             }

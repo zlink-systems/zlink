@@ -11,6 +11,8 @@ REDIS_CONTAINER=""
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 log_dir="$(pwd)/logs/${run_id}"
 SCENARIO="${1:-all}"
+# Inventory blocker: MON-A7. The runner must keep the canonical scenario
+# discoverable until coherent Core HWM and application-job-queue reset evidence exists.
 # MON-A6 may report a public-contract blocker when the runtime snapshot does
 # not project the live Spot count. A blocker is an explicit result, not a pass.
 repo_root="$(cd ../../../../.. && pwd)"

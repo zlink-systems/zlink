@@ -37,7 +37,7 @@ internal object Scenarios {
         val player = Game.create(options, unique("a1"))
         withResources(player) {
             val join = player.join()
-            ensure(join.error == null, "target admission completes before JoinWorldRes")
+            ensure(join.error == null, "target admission completes before JoinWorldNotify")
             ensure(join.zoneId == "zone-nw" && join.x == 25 && join.y == 25,
                 "canonical spawn is zone-nw (25,25)")
         }

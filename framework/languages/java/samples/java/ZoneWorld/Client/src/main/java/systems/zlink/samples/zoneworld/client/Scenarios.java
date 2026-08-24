@@ -54,8 +54,8 @@ final class Scenarios {
 
     private static void a1(ClientOptions options) {
         try (Game player = new Game(options, unique("a1"))) {
-            Messages.JoinWorldRes join = player.join();
-            ensure(join.error() == null, "target admission completes before JoinWorldRes");
+            Messages.JoinWorldNotify join = player.join();
+            ensure(join.error() == null, "target admission completes before JoinWorldNotify");
             ensure("zone-nw".equals(join.zoneId()) && join.x() == 25 && join.y() == 25,
                 "canonical spawn is zone-nw (25,25)");
         }
@@ -563,7 +563,7 @@ final class Scenarios {
                     delay(Duration.ofMillis(100));
                 }
                 player.connector.connect().submit().toCompletableFuture().join();
-                Messages.JoinWorldRes rebound = player.join();
+                Messages.JoinWorldNotify rebound = player.join();
                 ensure(id.equals(rebound.playerId()), "reconnect preserves the PlayerId");
                 ensure(pair.targetZoneId().equals(rebound.zoneId()),
                     "reconnect rebinds the existing relocated actor at the target zone");

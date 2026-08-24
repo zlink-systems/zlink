@@ -13,13 +13,13 @@ public final class EntryZoneJoinHandler
     implements ZLinkEntrySpotActorSendHandler<
         ZoneEntrySpot,
         PlayerActor,
-        Messages.JoinWorldReq> {
+        Messages.JoinWorldMsg> {
     @Override
     public CompletionStage<Void> handle(
         ZoneEntrySpot spot,
         PlayerActor actor,
         ZLinkMessageContext context,
-        Messages.JoinWorldReq request) {
+        Messages.JoinWorldMsg request) {
         if (!actor.actorId().equals(request.playerId())) {
             return CompletableFuture.failedFuture(
                 new IllegalArgumentException("Join player does not match the actor"));

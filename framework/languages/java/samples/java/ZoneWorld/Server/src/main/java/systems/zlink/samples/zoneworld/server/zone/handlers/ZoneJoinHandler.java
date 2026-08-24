@@ -16,12 +16,12 @@ public final class ZoneJoinHandler {
         ZoneSpot spot,
         PlayerActor actor,
         ZLinkMessageContext context,
-        Messages.JoinWorldReq request) {
+        Messages.JoinWorldMsg request) {
         if (actor.pendingJoin()) {
             return CompletableFuture.failedFuture(
                 new IllegalStateException("Zone actor is not ready"));
         }
-        return actor.send(new Messages.JoinWorldRes(
+        return actor.send(new Messages.JoinWorldNotify(
             actor.actorId(), actor.zoneId(), actor.x(), actor.y(), null));
     }
 }

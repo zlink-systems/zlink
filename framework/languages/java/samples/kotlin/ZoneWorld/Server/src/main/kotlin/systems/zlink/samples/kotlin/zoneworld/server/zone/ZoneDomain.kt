@@ -141,7 +141,7 @@ class PlayerActor(
                 applyAtZone(pendingX, pendingY, joinedZone, isBot)
                 pendingZone = ""
                 when (pendingPurpose) {
-                    JoinPurpose.INITIAL_HUMAN -> send(Messages.JoinWorldRes(actorId, joinedZone, x, y))
+                    JoinPurpose.INITIAL_HUMAN -> send(Messages.JoinWorldNotify(actorId, joinedZone, x, y))
                     JoinPurpose.CRASH_PROBE -> send(Messages.CrashRelocationProbeRes())
                     else -> CompletableFuture.completedFuture<Void>(null)
                 }.also { pendingPurpose = JoinPurpose.NONE }
@@ -155,7 +155,7 @@ class PlayerActor(
                 }
                 pendingZone = ""
                 when (pendingPurpose) {
-                    JoinPurpose.INITIAL_HUMAN -> send(Messages.JoinWorldRes(
+                    JoinPurpose.INITIAL_HUMAN -> send(Messages.JoinWorldNotify(
                         actorId, ZoneWorldSpec.zoneOf(pendingX, pendingY), pendingX, pendingY, reason))
                     JoinPurpose.CRASH_PROBE -> send(Messages.CrashRelocationProbeRes(reason))
                     else -> if (!isBot) send(Messages.MoveRejectedNotify(reason, x, y)) else {
@@ -235,7 +235,7 @@ class ZoneEntrySpot(private val context: ZLinkEntrySpotContext) : ZLinkEntrySpot
                 true, true, "", false)).timeout(Duration.ofSeconds(10)).defer()
         }
         return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept(
-            Messages.JoinWorldRes(actor.actorId, zone, request.x, request.y)))
+            Messages.JoinWorldNotify(actor.actorId, zone, request.x, request.y)))
     }
     override fun onJoinedActor(actor: PlayerActor): CompletionStage<Void> = CompletableFuture.completedFuture<Void>(null)
     override fun onLeaveActor(actor: PlayerActor): CompletionStage<Void> = CompletableFuture.completedFuture<Void>(null)
@@ -423,24 +423,24 @@ class ZoneBotMoveHandler {
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
 class ZoneJoinHandler {
     @ZLinkSpotActorSend
-    fun handle(spot: ZoneSpot, actor: PlayerActor, context: ZLinkMessageContext, message: Messages.JoinWorldReq): CompletionStage<Void> {
+    fun handle(spot: ZoneSpot, actor: PlayerActor, context: ZLinkMessageContext, message: Messages.JoinWorldMsg): CompletionStage<Void> {
         if (actor.pending) {
             return CompletableFuture.failedFuture(IllegalStateException("Zone actor is not ready"))
         }
-        return actor.send(Messages.JoinWorldRes(actor.actorId, actor.zoneId, actor.x, actor.y))
+        return actor.send(Messages.JoinWorldNotify(actor.actorId, actor.zoneId, actor.x, actor.y))
     }
 }
 
 class EntryZoneJoinHandler : ZLinkEntrySpotActorSendHandler<
     ZoneEntrySpot,
     PlayerActor,
-    Messages.JoinWorldReq,
+    Messages.JoinWorldMsg,
 > {
     override fun handle(
         entrySpot: ZoneEntrySpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
-        request: Messages.JoinWorldReq,
+        request: Messages.JoinWorldMsg,
     ): CompletionStage<Void> {
         require(actor.actorId == request.playerId) { "Join player does not match the actor" }
         actor.prepareEntry(ZoneWorldSpec.SPAWN_X, ZoneWorldSpec.SPAWN_Y, false, 0, 0)

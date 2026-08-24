@@ -11,8 +11,8 @@ object Messages {
         val playerCount: Int,
     )
 
-    data class JoinWorldReq(val playerId: String)
-    data class JoinWorldRes(val playerId: String, val zoneId: String, val x: Int, val y: Int, val error: String? = null)
+    data class JoinWorldMsg(val playerId: String)
+    data class JoinWorldNotify(val playerId: String, val zoneId: String, val x: Int, val y: Int, val error: String? = null)
     data class MoveMsg(val x: Int, val y: Int)
     data class ZoneStateNotify(val zoneId: String, val tick: Long, val players: List<PlayerView>)
     data class ZoneChangedNotify(val playerId: String, val zoneId: String)

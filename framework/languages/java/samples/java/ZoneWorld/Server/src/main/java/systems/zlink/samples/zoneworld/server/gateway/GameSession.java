@@ -78,11 +78,11 @@ public final class GameSession implements ZLinkSession {
             Messages.MessageFollowProbeMsg message = payload.decode(Messages.MessageFollowProbeMsg.class);
             return actorClient.sendToActor(message.actorId(), message).submit();
         }
-        if ("JoinWorldReq".equals(dispatch.packetName())) {
+        if ("JoinWorldMsg".equals(dispatch.packetName())) {
             return join(dispatch, payload);
         }
         if (context.actors().bound().size() != 1) {
-            throw new IllegalStateException("JoinWorldReq must bind an actor before game traffic");
+            throw new IllegalStateException("JoinWorldMsg must bind an actor before game traffic");
         }
         return context.actors().bound().get(0).relay(dispatch, payload);
     }
@@ -90,7 +90,7 @@ public final class GameSession implements ZLinkSession {
     private CompletionStage<Void> join(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
-        Messages.JoinWorldReq request = payload.decode(Messages.JoinWorldReq.class);
+        Messages.JoinWorldMsg request = payload.decode(Messages.JoinWorldMsg.class);
         return actors.getOrCreate(request.playerId(), ZoneWorldNames.PLAYER_ACTOR_TYPE)
             .inMesh(ZoneWorldNames.MESH)
             .request(ZLinkMessage.empty())

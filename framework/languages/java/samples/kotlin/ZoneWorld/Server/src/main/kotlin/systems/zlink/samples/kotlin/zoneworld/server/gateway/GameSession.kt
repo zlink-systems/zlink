@@ -45,13 +45,13 @@ class GameSession(
             val message = payload.decode(Messages.MessageFollowProbeMsg::class.java)
             return actorClient.sendToActor(message.actorId, message).submit()
         }
-        if (dispatch.packetName() == "JoinWorldReq") return join(dispatch, payload)
-        require(sessionContext.actors().bound().size == 1) { "JoinWorldReq must bind an actor first" }
+        if (dispatch.packetName() == "JoinWorldMsg") return join(dispatch, payload)
+        require(sessionContext.actors().bound().size == 1) { "JoinWorldMsg must bind an actor first" }
         return sessionContext.actors().bound().single().relay(dispatch, payload)
     }
 
     private fun join(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): CompletionStage<Void> {
-        val request = payload.decode(Messages.JoinWorldReq::class.java)
+        val request = payload.decode(Messages.JoinWorldMsg::class.java)
         return actors.getOrCreate(request.playerId, ZoneWorldNames.PLAYER_ACTOR_TYPE)
             .inMesh(ZoneWorldNames.MESH)
             .request(ZLinkMessage.empty())

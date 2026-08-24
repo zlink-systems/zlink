@@ -31,6 +31,8 @@ final class ZLinkTraceFormat {
         append(builder, "outcome", flow.outcome().traceName());
         append(builder, "reason", flow.errorReason() == null
             ? null : flow.errorReason().traceName());
+        append(builder, "action", flow.errorAction() == null
+            ? null : flow.errorAction().traceName());
         if (size != null) {
             append(builder, "size", String.valueOf(size.longValue()));
         }
