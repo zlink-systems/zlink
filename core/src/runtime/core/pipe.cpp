@@ -2384,9 +2384,11 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
 
     const bool more = (msg_->flags () & msg_t::more) != 0;
     const bool commits_bytes = !more && !msg_->is_delimiter ();
-    if (more && incomplete_before == 0)
+    if (more && incomplete_before == 0) {
+        refresh_peer_credit_snapshot_unlocked ();
         _out_multipart_started_empty =
           _bytes_written <= _peers_bytes_read;
+    }
     if ((commits_bytes || enforce_incremental_hwm_) && enforce_hwm_
         && !can_commit_bytes_with_peer_snapshot_unlocked (
           _out_incomplete_bytes, _out_incomplete_payload_bytes,

@@ -1,5 +1,5 @@
-zlink (0.13.1-0.1) UNRELEASED; urgency=low
+zlink (0.13.2-0.1) UNRELEASED; urgency=low
 
-  * Package the zlink 0.13.1 public ABI.
+  * Package the zlink 0.13.2 public ABI.
 
  -- zlink Developers <ulalax@kairoscode.dev>  Sun, 19 Jul 2026 00:00:00 +0900
