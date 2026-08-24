@@ -1565,13 +1565,15 @@ it calls the existing exact-target part API from the first part through
 blocking wait Core performs inside it. It adds no multipart ABI or public
 transaction abstraction.
 
-**Request** is different: Core drives reply completion. A reply handler
-callback completes the suspension, and resumption happens in the context where
-that completion occurred. A request keeps the existing reply correlation after
+**Request** is different: Core drives reply completion. A reply-handler callback
+takes the terminal exactly once. If a language future or promise can run user
+continuations inline on the completing thread, the binding hands completion to
+an existing socket completion dispatcher so resumption happens outside the
+native callback thread. A request keeps the existing reply correlation after
 its initial submit until reply, timeout, disconnect, termination, or
 cancellation — timeout is already Core-owned (`ZLINK_REQUEST_TIMED_OUT`).
-Waiting never extends the original deadline. A binding owns no thread or retry
-queue for the request completion surface either.
+Waiting never extends the original deadline. A binding adds no request-specific
+thread, admission/retry queue, or timer.
 
 Routed **send**'s asynchronous terminal is C++ `async()`, .NET `Async(...)`,
 and Java/Node/Python/Rust `submit()`. C++ also provides blocking `submit()` for

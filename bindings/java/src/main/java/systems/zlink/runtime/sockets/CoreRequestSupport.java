@@ -24,7 +24,7 @@ import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.RoutedRequestSupport;
 import systems.zlink.runtime.nativeapi.RequestReplySupport;
 
-/** Direct Core reply-callback request completion; no binding scheduler. */
+/** Core reply completion handed to the socket's existing completion dispatcher. */
 final class CoreRequestSupport implements AutoCloseable {
     private static final int DONT_WAIT = 1;
 
@@ -73,6 +73,11 @@ final class CoreRequestSupport implements AutoCloseable {
                 @Override
                 public void exit() {
                     SocketCore.leaveCallback();
+                }
+
+                @Override
+                public void dispatch(Runnable completion) {
+                    socket.dispatchCompletion(completion);
                 }
             });
         future.whenComplete((ignored, failure) -> requestIds.remove(requestId));

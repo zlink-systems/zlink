@@ -361,6 +361,14 @@ final class SocketCore {
         callbackSupport.ensureNoFailure();
     }
 
+    void dispatchCompletion(Runnable completion) {
+        if (sendCompletions == null) {
+            throw new IllegalStateException(
+                "socket does not support completion dispatch");
+        }
+        sendCompletions.dispatchCompletion(completion);
+    }
+
     void closeCommonState() {
         receiveHandler = null;
         streamFramedPacketHandler = null;

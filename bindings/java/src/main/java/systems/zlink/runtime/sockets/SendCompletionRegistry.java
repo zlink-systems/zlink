@@ -209,6 +209,11 @@ final class SendCompletionRegistry implements AutoCloseable {
         }
     }
 
+    void dispatchCompletion(Runnable completion) {
+        Objects.requireNonNull(completion, "completion");
+        completionExecutor.execute(completion);
+    }
+
     @Override
     public void close() {
         List<Pending> abandoned = new ArrayList<>();

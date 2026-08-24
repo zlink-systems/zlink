@@ -665,14 +665,23 @@ another pair using the same peer routing id. This operation is used for
 runtime connection control such as Framework connection replacement; callers
 must not invent a pair identity.
 
-The canonical terminal on DEALER/ROUTER routed send and request builders is the
-single no-argument `submit()` method. Routed send returns
-`CompletionStage<Void>` and request returns
-`CompletionStage<List<Message>>`.
+The canonical terminal on PAIR send, DEALER/ROUTER routed send, and request
+builders is the single no-argument `submit()` method. PAIR and routed send
+return `CompletionStage<Void>`, and request returns
+`CompletionStage<List<Message>>`. PUB/XPUB publish uses the same staged message
+builder shape, but its `submit()` is synchronous `void` and immediately throws
+`ZlinkSubmitException` on failure.
 
 ```java
+public interface AsyncSendSubmitOperation {
+    AsyncSendSubmitOperation message(Message part);
+    AsyncSendSubmitOperation timeout(Duration timeout);
+    CompletionStage<Void> submit();
+}
+
 public interface RoutedSendSubmitOperation {
     RoutedSendSubmitOperation message(Message part);
+    RoutedSendSubmitOperation timeout(Duration timeout);
     CompletionStage<Void> submit();
 }
 
@@ -683,13 +692,17 @@ public interface RequestSubmitOperation {
 }
 ```
 
-These two builders do not expose blocking `await()`, `submit(callback)`,
+These asynchronous builders do not expose blocking `await()`, `submit(callback)`,
 `flags(...)`, or a boolean one-shot terminal. `submit()` does not block the
 calling thread; Framework and Kotlin connect the returned `CompletionStage`
-directly to their completion/await boundaries. Existing synchronous data-plane
-terminals outside this routed HWM-managed range, including PAIR and STREAM, are
-not removed by this rule. The shared language policy is defined in
+directly to their completion/await boundaries. Kotlin's canonical use is
+`submit().await()`. The shared language policy is defined in
 [bindings async execution surface policy](../async-coroutine-policy.en.md).
+
+The PUB/XPUB publish builder's `submit()` creates no `CompletionStage`. Default
+lossy publish drops a copy for a full subscriber queue and reports success;
+`NODROP` reports an immediate error. Core returns `ENOTSUP` if
+`zlink_send_async` is called for PUB/XPUB.
 
 The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
 `ReplySubmitOperation.submit() -> void`. It returns no `CompletionStage` and
@@ -698,40 +711,35 @@ one native call. HWM backpressure is not a reply result; `NOT_CONNECTED`,
 `TERMINATED`, `INVALID_ARGUMENT`, and other non-HWM submit failures are
 delivered immediately as `ZlinkSubmitException`.
 
-### Routed Asynchronous First Admission
+### Completing Asynchronous Operations From Core Completion
 
-- The socket runtime registers Core's long-lived routed-target readiness
-  handler before accepting an asynchronous operation. An ordinary operation
-  uses the Core target selector to snapshot the exact RID, transport-pair ID,
-  and generation. An explicit Router transport-pair request uses the exact
-  identity obtained from a monitor event.
-- `submit()` creates the completion state, a binding-owned snapshot of the
-  complete record, and the pending operation before scheduling native work.
-  The payload therefore remains valid for the first attempt and retries even
-  if the caller closes its input `Message` immediately after return. It never
-  performs a native blocking submit and then creates or returns the stage.
-- The pending operation enters the `(target RID, transport-pair ID,
-  generation)` queue before its first attempt. The queue and deduplicated ready
-  ring are socket-runtime implementation details; they do not add a separate
-  public same-RID ordering guarantee.
-- Outside the callback thread, the pump invokes the exact target's existing
-  per-part APIs with `DONT_WAIT`. It holds a per-socket short attempt gate only
-  for one complete multipart part loop and releases it immediately on success,
-  backpressure, or failure. It never holds that gate, a worker thread, or a
-  submit lock while waiting for HWM readiness. No public multipart transaction,
-  helper, or retry capacity is added.
-- On `BACKPRESSURED`, the exact target readiness event places only that target
-  in the ready ring. Waiting target A does not block selection or attempts for
-  targets B, C, or D. An event with another generation and a duplicate writable
-  event are stale/duplicate wakes.
-- A send uses the original absolute socket send-timeout deadline. A request
-  timeout covers both HWM admission waiting and the Core reply lifecycle from
-  the first `submit()` and is never extended by a retry.
-- The request reply registry is installed before the first native request part.
-  A fast reply, cancellation, exact-target terminal/disconnect, socket close,
-  context termination, and timeout race to exactly one terminal completion.
-  The binding owns the complete record until admission; after Core accepts it,
-  caller payload ownership ends.
+- Each PAIR/DEALER/ROUTER/STREAM socket installs exactly one
+  `zlink_send_complete_handler`. Core's selector or an explicit exact
+  transport-pair identity selects a routed target; the binding owns no
+  per-target admission queue or readiness ring.
+- Before calling Core, `submit()` registers the `CompletionStage` and a
+  binding-owned opaque userdata token in a strong pending table. This remains
+  safe if Core invokes a completion inline from `zlink_send_async`; the native
+  callback removes the entry exactly once and snapshots its terminal.
+- A native completion callback snapshots only the event and payload ownership
+  on the JVM thread used by Core. The socket's existing completion dispatcher
+  completes the stage outside the native callback thread. This prevents an
+  inline `CompletionStage` continuation from re-entering a native submit while
+  Core is still dispatching the callback. The binding adds no admission thread
+  or queue, readiness scheduler, or retry; the deadline remains a per-operation
+  Core option.
+- `TIMED_OUT` and `TERMINAL` preserve `terminal_errno` in the exceptional
+  `ZlinkSubmitException`. Cancellation requests `zlink_send_async_cancel`, and
+  Core still delivers exactly one completion. Re-entering submit from inside a
+  Core callback is rejected with `EDEADLK` by the Core contract.
+- A request installs its callback table before the final request part. The Core
+  reply callback takes the reply exactly once and hands stage completion to the
+  same existing socket completion dispatcher. The binding adds no
+  request-specific executor, timeout scheduler, or retry queue.
+- Because of current Core ROUTER multipart-abort and DEALER
+  generic-target-failure defects, Java multipart-async contract verification is
+  limited to a one-part record. Restore the multipart assertion after those
+  Core defects are fixed.
 
 Do not add separate operation-start families such as `sendNoWait`,
 `sendWithFlags`, `requestAsync`, `publishWithFlags`, or direct

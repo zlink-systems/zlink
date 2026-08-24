@@ -82,6 +82,10 @@ final class NativeSocketRuntime implements AutoCloseable {
         SocketCore.leaveCallback();
     }
 
+    void dispatchCompletion(Runnable completion) {
+        socketCore.dispatchCompletion(completion);
+    }
+
     SocketType socketTypeHint() {
         return socketTypeHint;
     }
