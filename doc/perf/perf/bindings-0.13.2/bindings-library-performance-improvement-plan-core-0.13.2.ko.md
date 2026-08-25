@@ -132,7 +132,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | wss | ROUTER_ROUTER | 통과(85.73%) | 통과(97.40%) | 통과(95.26%) | 통과(97.82%) | 통과(99.70%) | 통과(92.21%) | **통과(94.69%)** — secure 5-run median, latency median 1.05x. `log/cpp-single-router-router-wss-20260825.ko.md` |
 | wss | ROUTER_ROUTER_REQREP | 미달(41.85%) | 미달(38.80%) | 미달(38.61%) | 통과(89.44%) | 통과(90.03%) | 통과(87.36%) | **미달(64.35%)** — secure 5-run median, latency median 1.86x. 후보 A는 exact-target contract no-go, 기존 async-only completion 후보 B는 contract 5/5 통과 상태로 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-router-router-reqrep-wss-20260825.ko.md` |
 | tls | PAIR | 미달(90.41%) | 통과(101.12%) | 통과(99.16%) | 미달(92.09%) | 미달(88.67%) | 미달(81.07%) | **미달(92.09%)** — secure 5-run median, latency median 0.99x. bounded pool 후보 A는 이미 baseline에 반영됐고 64KiB pool 후보 B는 기존 timeout no-go. `log/cpp-single-pair-tls-20260825.ko.md` |
-| tls | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| tls | PUBSUB | 통과(88.23%) | 통과(102.62%) | 통과(94.91%) | 통과(87.35%) | 미달(81.85%) | 통과(97.83%) | **미달(92.13%)** — secure 5-run median, latency median 1.11x. single-part direct publish와 bounded pool은 이미 baseline에 반영됐고, mutex/lifetime guard 제거·pool 확대는 no-go. `log/cpp-single-pubsub-tls-20260825.ko.md` |
 | tls | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | tls | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | tls | DEALER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -207,6 +207,10 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     strict throughput aggregate가 92.09%로 미달이다. bounded pool 후보 A는 현재 baseline에 이미
     적용돼 있고, 64KiB pool 후보 B는 timeout no-go이므로 재도입하지 않는다. 다음은 `PUBSUB / tls`를
     같은 secure 규칙으로 측정한다.
+19. `PUBSUB / tls`는 C→C++ 64B smoke와 6-size secure 5-run median을 완료했다. latency는 통과했지만
+    throughput aggregate가 92.13%로 95% 목표에 미달한다. single-part direct publish, operation-state
+    reuse 및 bounded pool은 baseline에 이미 적용되어 있으며 mutex/lifetime guard 제거·pool 확대는
+    contract/resource boundary no-go다. 다음은 `DEALER_DEALER / tls`를 같은 secure 규칙으로 측정한다.
 
 ## 7. 완료 기준
 
