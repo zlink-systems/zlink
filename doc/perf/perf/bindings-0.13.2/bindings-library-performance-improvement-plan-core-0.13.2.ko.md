@@ -139,7 +139,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | tls | ROUTER_ROUTER | 통과(86.63%) | 통과(106.61%) | 통과(101.16%) | 통과(90.14%) | 통과(93.38%) | 통과(98.72%) | **통과(96.11%)** — secure 5-run median, latency median 1.07x. `log/cpp-single-router-router-tls-20260825.ko.md` |
 | tls | ROUTER_ROUTER_REQREP | 미달(54.09%) | 미달(52.63%) | 미달(42.22%) | 통과(84.00%) | 통과(94.73%) | 통과(100.92%) | **미달(71.43%)** — secure 5-run median, latency median 1.65x. 후보 A는 exact-target contract no-go, 기존 async-only completion 후보 B는 contract 5/5 통과 상태로 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-router-router-reqrep-tls-20260825.ko.md` |
 | inproc | PAIR | 통과(84.71%) | 통과(100.01%) | 통과(91.40%) | 미달(22.71%) | 미달(73.70%) | 통과(84.04%) | **미달(76.09%)** — 5-run median, latency median 1.08x. 128KiB 이상 bounded pool은 이미 baseline이고 64KiB 하향은 TCP 25/30 partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-pair-inproc-20260825.ko.md` |
-| inproc | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| inproc | PUBSUB | 통과(99.46%) | 통과(91.11%) | 통과(92.14%) | 미달(24.09%) | 미달(79.24%) | 통과(86.24%) | **미달(78.71%)** — 5-run median, latency median 1.23x. direct single-part publish와 bounded pool은 baseline이며 64KiB pool 하향은 TCP partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-pubsub-inproc-20260825.ko.md` |
 | inproc | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | inproc | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | inproc | DEALER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -232,6 +232,10 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     128KiB–1MiB bounded pool 후보 A는 baseline에 이미 반영되어 있고, pool 하한을 64KiB로 낮추는
     후보 B는 전역 정책이라 TCP의 25/30 partial timeout을 재도입할 수 있어 no-go다. cap 확대도
     resource boundary를 깨므로 하지 않는다. 다음은 `PUBSUB / inproc`를 같은 C→C++ 순서로 측정한다.
+26. `PUBSUB / inproc`는 C→C++ 64B smoke와 6-size 5-run median을 완료했다. latency는 통과했지만
+    aggregate throughput 78.71%가 strict 95% 목표에 미달한다. direct single-part publish와
+    128KiB–1MiB bounded pool은 이미 baseline이고, 64KiB 24.09% 하락을 겨냥한 전역 pool 하향은
+    TCP partial timeout, cap 확대는 resource boundary no-go다. 다음은 `DEALER_DEALER / inproc`다.
 
 ## 7. 완료 기준
 
