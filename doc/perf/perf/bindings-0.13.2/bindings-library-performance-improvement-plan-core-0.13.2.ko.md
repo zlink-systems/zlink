@@ -120,7 +120,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | ws | PAIR | 미달(79.11%) | 통과(98.36%) | 통과(95.70%) | 통과(91.40%) | 통과(93.31%) | 통과(102.85%) | **미달(93.46%)** — strict 95% 목표 미달. 기존 direct single-part send·bounded pool·state reuse가 이미 적용됐고, 64KiB pool 하향은 이전 timeout 후보라 재시도하지 않음. mutex/weak 제거·pool 확대는 금지 no-go. `log/cpp-single-pair-ws-20260825.ko.md` |
 | ws | PUBSUB | 통과(94.01%) | 통과(101.06%) | 통과(102.39%) | 통과(94.28%) | 통과(99.38%) | 통과(97.77%) | **통과(98.15%)** — latency median 1.06x. `log/cpp-single-pubsub-ws-20260825.ko.md` |
 | ws | DEALER_DEALER | 통과(82.05%) | 통과(96.80%) | 통과(96.07%) | 통과(94.93%) | 통과(98.34%) | 통과(100.51%) | **통과(94.78%)** — latency median 1.03x. `log/cpp-single-dealer-dealer-ws-20260825.ko.md` |
-| ws | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| ws | DEALER_ROUTER | outlier(78.82%) | 통과(95.83%) | 통과(100.71%) | 통과(98.13%) | 통과(102.16%) | 통과(100.01%) | **통과(95.94%)** — latency median 1.07x; 64B outlier는 aggregate 판정을 바꾸지 않는다. `log/cpp-single-dealer-router-ws-20260825.ko.md` |
 | ws | DEALER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ws | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ws | ROUTER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -172,6 +172,8 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
    동일한 C→C++ 순서로 측정한다.
 6. `DEALER_DEALER / ws`도 smoke와 6-size paired 기준선을 통과했다. 다음은
    `DEALER_ROUTER / ws`를 동일한 C→C++ 순서로 측정한다.
+7. `DEALER_ROUTER / ws`도 smoke와 6-size paired 기준선을 통과했다. 다음은
+   `DEALER_ROUTER_REQREP / ws`를 동일한 C→C++ 순서로 측정하고, 미달이면 개선 pass를 끝낸다.
 
 ## 7. 완료 기준
 
