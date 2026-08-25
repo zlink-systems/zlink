@@ -1552,12 +1552,13 @@ the socket's `RUNNING`/`PAUSED` receive-flow-state setter.
 
 The asynchronous terminal for HWM-managed PAIR **send** and DEALER/ROUTER
 **routed send** wraps Core `zlink_send_async` and send completion. Core owns HWM
-wait/retry, the operation deadline, route termination, and cancellation, and
-delivers exactly one completion for every accepted operation. A binding only
-correlates the Core operation id with a language awaitable; it owns no park
-queue, readiness-callback retry, deadline timer, or dispatcher thread. The
-application owns policy only when Core rejects the initial submit because its
-pending-operation bound is full.
+wait/retry, the operation deadline, route termination, and cancellation.
+Immediate admission returns operation id zero and the binding completes the
+awaitable locally. Core delivers exactly one completion for every pending
+operation with a non-zero id. A binding owns no park queue,
+readiness-callback retry, or deadline timer. Pending bounds default to
+unlimited; the application owns immediate overload policy only when it
+explicitly configures a non-zero bound.
 
 A binding that uses part-level Core APIs has a short complete-record attempt
 gate shared by every outbound path on the same native handle. Inside the gate
@@ -1661,8 +1662,9 @@ Each binding maps HWM values as follows.
   premise and does not layer lazy bootstrap logic on top.
 #### Send Completion, Peer Weight, And STREAM Receive Modes
 
-- `zlink_send_complete_handler()` delivers the final result of an operation
-  accepted by `zlink_send_async()`. `ZLINK_POLLCOMPLETION` transfers dispatch
+- `zlink_send_complete_handler()` delivers the final result of a pending
+  operation accepted by `zlink_send_async()` with a non-zero id. Operation id
+  zero means immediate admission and no callback. `ZLINK_POLLCOMPLETION` transfers dispatch
   of that same callback and `zlink_send_complete_event_t` to the thread calling
   `zlink_poller_wait()`. `ZLINK_POLLOUT` is readiness to retry a synchronous
   nonblocking send; it is not async-send completion. No public send-ready

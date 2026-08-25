@@ -318,7 +318,7 @@ typedef enum zlink_send_complete_result_t {
 typedef uint64_t zlink_send_op_id_t;
 
 typedef struct zlink_send_complete_event_t {
-  zlink_send_op_id_t op_id;                // Core가 부여한 socket local 단조 증가 값; 0은 유효한 id 아님
+  zlink_send_op_id_t op_id;                // pending operation id; completion event에서는 항상 nonzero
   void *userdata;                          // submit option에 넘긴 값을 그대로 돌려줌
   zlink_routing_id_t peer_rid;             // target identity — 항상 채워짐
   uint64_t transport_pair_id;              // routed target이 없는 socket에서는 0
@@ -348,12 +348,13 @@ typedef struct zlink_send_async_options_t {
 
 `struct_size`는 `sizeof(zlink_send_async_options_t)`와 같아야 하며, 다르면 submit이
 `EINVAL`로 실패한다. `timeout_ms == 0`은 deadline 없음을 뜻한다. `op_id_out_`은 선택
-사항이며, 전달한 경우 실패한 submit은 `0`으로 초기화한다.
+사항이며, 전달한 경우 즉시 admission과 실패한 submit은 `0`, Core가 보관한 pending
+operation은 nonzero id를 기록한다.
 
-`op_id`는 Core가 부여하는 socket local 단조 증가 값이고 `0`은 유효한 id가 아니며
-submit 실패 시 out 파라미터에 남는 값이다. `userdata`는 submit option에 넘긴
-값을 그대로 돌려준다. target identity field는 항상 채워지며 routed target이
-없는 socket에서는 0이다.
+nonzero `op_id`는 Core가 부여하는 socket local 단조 증가 값이다. `0`은 즉시
+admission되어 callback이 필요 없다는 뜻이며 cancel 대상이 아니다. `userdata`는
+submit option에 넘긴 값을 그대로 돌려준다. target identity field는 항상 채워지며
+routed target이 없는 socket에서는 0이다.
 
 #### zlink_reply_handler_fn
 
@@ -444,8 +445,8 @@ typedef enum zlink_option_t {
   ZLINK_OPT_SUBMIT_RETRY_MODE          = 0x3037,  // local submit 실패 재시도 모드 (int; ZLINK_SUBMIT_RETRY_OFF 또는 ZLINK_SUBMIT_RETRY_LOCAL_FAILURE, raw socket 기본값 off)
   ZLINK_OPT_SUBMIT_RETRY_TIMEOUT       = 0x3038,  // local submit 실패 재시도 예산 (ms, int; raw socket 기본값 0, 0이면 재시도 없음)
   ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS      = 0x3039,  // 최초 submit 이후 추가 재시도 횟수 (int; raw socket 기본값 0, 현재 상한 16)
-  ZLINK_OPT_SEND_PENDING_MAX_MSGS      = 0x303A,  // async send pending 건수 상한 (uint64_t, 0 거절, 기본 1024)
-  ZLINK_OPT_SEND_PENDING_MAX_BYTES     = 0x303B   // async send pending byte 상한 (uint64_t, 0 거절, 기본 4,096,000)
+  ZLINK_OPT_SEND_PENDING_MAX_MSGS      = 0x303A,  // async send pending 건수 상한 (uint64_t, 0 unlimited, 기본 0)
+  ZLINK_OPT_SEND_PENDING_MAX_BYTES     = 0x303B   // async send pending byte 상한 (uint64_t, 0 unlimited, 기본 0)
 } zlink_option_t;
 ```
 
@@ -928,8 +929,8 @@ identity를 지정하면 `ZLINK_CONNECT_NOT_FOUND`를 반환한다.
 
 ### 비동기 송신 admission
 
-완전한 multipart record 하나를 Core에 인계하고 그에 대한 완료 통지를 정확히
-한 번 받는다.
+완전한 multipart record 하나를 Core에 인계한다. 즉시 admission은 반환값으로
+완료하고, HWM 때문에 Core가 보관한 operation만 완료 통지를 정확히 한 번 받는다.
 
 ```c
 ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
@@ -953,10 +954,11 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
 결과에서는 소유권이 호출자에게 남는다.
 
 이 호출은 blocking하지 않는다. target에 여유가 있으면 호출 thread에서 그대로
-admit되며 완료 callback이 이 함수가 반환하기 전에 인라인으로 실행될 수 있다.
-target이 backpressure 상태면 record는 pending operation으로 예약되고 완료는
-나중에 도착한다. byte HWM 회계는 동기 multipart send와 동일하게 record
-하나를 message 하나로 계산한다.
+admit하고 `op_id_out_`에 `0`을 기록하며 callback은 실행하지 않는다. target이
+backpressure 상태면 record를 pending operation으로 보관하고 nonzero id를
+기록한다. 이 operation은 admission, timeout, cancel 또는 종료 시 callback으로
+완료된다. byte HWM 회계는 동기 multipart send와 동일하게 record 하나를 message
+하나로 계산한다.
 
 ```mermaid
 sequenceDiagram
@@ -966,20 +968,21 @@ sequenceDiagram
     App->>Core: zlink_send_async(parts, options)
     alt target에 여유가 있음
         Note over Core: 호출 thread에서 그대로 admit
-        Core-->>App: 완료 callback (반환 전 인라인 실행 가능)
-        Core-->>App: ZLINK_SUBMIT_OK 반환
+        Core-->>App: ZLINK_SUBMIT_OK, op_id=0 반환
+        Note over App: binding이 awaitable을 즉시 완료
     else target이 backpressure 상태
         Note over Core: record를 pending operation으로 예약
-        Core-->>App: ZLINK_SUBMIT_OK 반환
+        Core-->>App: ZLINK_SUBMIT_OK, op_id=nonzero 반환
         Core-->>App: 이후 완료 callback (ADMITTED·TIMED_OUT·TERMINAL 중 하나, 정확히 한 번)
     end
 ```
 
-pending operation은 socket 단위로 `ZLINK_OPT_SEND_PENDING_MAX_MSGS`와
-`ZLINK_OPT_SEND_PENDING_MAX_BYTES`에 의해 유한하다. 둘 중 하나를 넘기면
-`ZLINK_SUBMIT_BACKPRESSURED`를 반환하고 part 소유권은 호출자에게 남는다 —
-여기가 앱이 정책을 소유하는 지점이다. 두 옵션 모두 `0`을 무제한으로 받지
-않는다. 무제한 예약 queue는 HWM 우회이기 때문이다.
+pending operation은 기본적으로 개수와 byte를 제한하지 않는다. 따라서 정상적인
+HWM 진입은 submit 실패가 아니라 비동기 대기다. 앱이 명시적인 overload 정책을
+원하면 `ZLINK_OPT_SEND_PENDING_MAX_MSGS`와
+`ZLINK_OPT_SEND_PENDING_MAX_BYTES`를 nonzero로 설정할 수 있다. 설정한 상한을
+넘기면 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하고 part 소유권은 호출자에게 남는다.
+두 옵션의 기본값 `0`은 unlimited다.
 
 같은 target의 pending operation은 제출 순서대로 admit되고 그 순서대로
 완료된다. target 내부의 head-of-line 차단은 의도된 동작이다. 그 target
@@ -1000,23 +1003,24 @@ target별 순서를 정의할 수 없기 때문이다. PAIR는 이 field를 무�
 
 callback 계약은 다음과 같다.
 
-- `ZLINK_SUBMIT_OK`을 반환한 operation마다 완료가 정확히 한 번 실행된다.
+- `ZLINK_SUBMIT_OK`과 nonzero `op_id`를 반환한 pending operation마다 완료가
+  정확히 한 번 실행된다. `op_id == 0`인 즉시 admission에는 callback이 없다.
 - 같은 target의 완료는 제출 순서대로 실행된다.
 - 한 socket의 완료끼리는 절대 동시에 실행되지 않는다.
-- 고정된 thread를 약속하지 않는다. callback은 `zlink_send_async` 안에서
-  인라인으로, backpressure가 풀린 뒤에는 Core async mailbox thread에서,
-  timeout에서는 Core deadline thread에서, close나 context 종료에서는 그것을
-  호출한 thread에서, 그리고 이 socket에 `ZLINK_POLLCOMPLETION` 등록이 있으면
-  `zlink_poller_wait`를 호출한 thread에서 실행될 수 있다.
+- 고정된 thread를 약속하지 않는다. callback은 backpressure가 풀린 뒤에는 Core
+  async mailbox thread에서, timeout에서는 Core deadline thread에서, close나
+  context 종료에서는 그것을 호출한 thread에서, 그리고 이 socket에
+  `ZLINK_POLLCOMPLETION` 등록이 있으면 `zlink_poller_wait`를 호출한 thread에서
+  실행될 수 있다.
 - callback은 완료를 앱 상태에 전달하는 일만 해야 한다. callback 안에서 send,
   publish, request 계열 진입점을 호출하면 `errno=EDEADLK`로 실패한다.
 
 `ZLINK_POLLCOMPLETION`으로 socket을 poller에 등록하면 이 callback의 dispatch
 소유권이 Core async mailbox thread에서 `zlink_poller_wait` 호출 thread로
 넘어간다. dispatch 위치만 달라질 뿐 등록 API도, callback도, 이벤트도, 보장도
-같다. 두 dispatch 소유자는 socket 단위로 상호 배타적이다. pending
-상한이 callback을 기다릴 수 있는 operation 수를 제한하므로 완료가 유실되는 일은
-없다.
+같다. 두 dispatch 소유자는 socket 단위로 상호 배타적이다. Core는 자신이 접수한
+pending operation을 모두 보관하고 각각 정확히 한 번 완료하므로 통지가 유실되지
+않는다.
 
 `zlink_send_async_cancel`은 요청이다. `ZLINK_SUBMIT_OK`은 취소가 접수됐고
 완료가 `ZLINK_SEND_TERMINAL` + `ECANCELED`로 온다는 뜻이다.
@@ -1208,7 +1212,7 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 **비동기 송신**
 - 완료 handler를 설치하지 않은 채 `zlink_send_async`를 호출하면 `errno=EINVAL`로 실패하고, 자신의 완료 callback 안에서 handler를 교체하면 `EDEADLK`다.
 - `ZLINK_SUBMIT_OK`을 반환한 operation마다 완료 callback이 정확히 한 번 실행되고, 같은 target의 완료는 제출 순서대로 실행되며, 한 socket의 완료끼리는 동시에 실행되지 않는다.
-- pending 상한(`ZLINK_OPT_SEND_PENDING_MAX_MSGS`/`MAX_BYTES`) 초과 시 `ZLINK_SUBMIT_BACKPRESSURED`이며 part 소유권은 호출자에게 남는다. 두 옵션은 `0`을 무제한으로 받지 않는다.
+- pending 상한 옵션의 기본값 `0`은 unlimited다. 앱이 nonzero 상한을 명시했고 이를 초과하면 `ZLINK_SUBMIT_BACKPRESSURED`이며 part 소유권은 호출자에게 남는다.
 - `zlink_send_async_cancel`이 `ZLINK_SUBMIT_OK`이면 완료가 `ZLINK_SEND_TERMINAL`+`ECANCELED`로, `ZLINK_SUBMIT_INVALID_STATE`이면 `ZLINK_SEND_ADMITTED`로 오고, 없는 id는 `ZLINK_SUBMIT_NOT_FOUND`다.
 - `zlink_close`와 `zlink_ctx_term`은 반환 전에 모든 pending operation을 각각 `ECANCELED`·`ETERM`으로 완료시키며 `ZLINK_OPT_LINGER`는 적용하지 않는다.
 - 완료 callback 안에서 send·publish·request 계열 진입점을 호출하면 `EDEADLK`다.

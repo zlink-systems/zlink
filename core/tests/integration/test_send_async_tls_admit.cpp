@@ -47,7 +47,8 @@ void configure_tls (void *server_, void *client_, const tls_test_files_t &files_
       client_, ZLINK_OPT_TLS_HOSTNAME, hostname, strlen (hostname)));
 }
 
-//  Submits one 1024B record on a DEALER and waits for its single completion.
+//  Submits one 1024B record on a DEALER. Immediate admission returns op_id zero
+//  without a callback; a handshaking/HWM-pending record completes by callback.
 //  `settle_ms_` selects the two variants: 0 submits as early as the socket will
 //  accept a target (handshake still in flight), a positive value submits after
 //  the connection has settled.
@@ -100,22 +101,25 @@ void run_case (const char *transport_, int settle_ms_)
         msleep (5);
     }
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit);
-    TEST_ASSERT_NOT_EQUAL (0, op_id);
-
-    //  The socket owns the record now. Nothing below touches the socket, so a
-    //  completion that only arrives because the test kept polling the API
-    //  cannot pass this assertion.
-    int waited = 0;
-    while (probe.count.load (std::memory_order_acquire) == 0
-           && waited < completion_wait_ms) {
-        msleep (10);
-        waited += 10;
+    if (op_id == 0) {
+        TEST_ASSERT_EQUAL_INT (
+          0, probe.count.load (std::memory_order_acquire));
+    } else {
+        //  The socket owns the pending record now. Nothing below touches the
+        //  socket, so admission must be driven by the transport wake itself.
+        int waited = 0;
+        while (probe.count.load (std::memory_order_acquire) == 0
+               && waited < completion_wait_ms) {
+            msleep (10);
+            waited += 10;
+        }
+        TEST_ASSERT_EQUAL_INT_MESSAGE (
+          1, probe.count.load (std::memory_order_acquire),
+          "send_async completion never fired: pending record was never admitted");
+        TEST_ASSERT_EQUAL_INT (
+          1, probe.admitted.load (std::memory_order_acquire));
+        TEST_ASSERT_EQUAL_UINT64 (op_id, probe.events[0].op_id);
     }
-    TEST_ASSERT_EQUAL_INT_MESSAGE (
-      1, probe.count.load (std::memory_order_acquire),
-      "send_async completion never fired: pending record was never admitted");
-    TEST_ASSERT_EQUAL_INT (1, probe.admitted.load (std::memory_order_acquire));
-    TEST_ASSERT_EQUAL_UINT64 (op_id, probe.events[0].op_id);
 
     //  The bytes really reached the peer, so this is admission and not a
     //  completion invented by the wake path.

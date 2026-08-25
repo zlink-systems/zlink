@@ -64,8 +64,9 @@ internal sealed class SendCompletionRegistry
     }
 
     /// <summary>
-    ///     Submits one complete record for asynchronous admission. The returned
-    ///     task is completed exactly once by the Core completion callback.
+    ///     Submits one complete record for asynchronous admission. Immediate
+    ///     admission completes locally; only a Core-pending operation is
+    ///     completed by the Core completion callback.
     /// </summary>
     internal unsafe Task SendAsync(RoutingId? routerRoutingId,
         IReadOnlyList<Message> parts, CancellationToken cancellationToken)
@@ -143,14 +144,22 @@ internal sealed class SendCompletionRegistry
             throw ZlinkException.CreateSubmitException((SubmitResult)rc);
         }
 
-        // Ownership of every part has moved to Core.
+        // Ownership of every part has moved to Core. opId == 0 is the
+        // immediate-admission disposition and deliberately has no callback.
         pending.OpId = opId;
+        if (opId == 0)
+        {
+            pending.Complete(ZlinkSendCompleteResult.Admitted, 0);
+            self.Free();
+            return Task.CompletedTask;
+        }
+
         if (cancellationToken.CanBeCanceled && !pending.IsCompleted)
             pending.AttachCancellation(this);
 
         var task = pending.Task;
-        // Inline admission: the completion already ran before the submit
-        // returned, so the caller never suspends.
+        // A pending operation can still complete while zlink_send_async is
+        // returning; preserve the already-completed Task fast path.
         return task.IsCompletedSuccessfully ? Task.CompletedTask : task;
     }
 

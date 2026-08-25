@@ -646,6 +646,21 @@ class socket_t
         });
     }
 
+    // Public asynchronous routed-send terminal used by the coroutine
+    // ROUTER_ROUTER benchmark.
+    async_result_t<void> send_routed_async (const routing_id_t &routing_id_,
+                                            message_t &part_)
+    {
+        return visit ([&] (auto &socket_) -> async_result_t<void> {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
+                return std::move (socket_.send (routing_id_)).message (part_).async ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
     int publish (const std::string &topic_id_, message_t &part_, int flags_ = 0)
     {
         return visit ([&] (auto &socket_) -> int {

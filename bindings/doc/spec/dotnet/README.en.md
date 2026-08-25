@@ -319,7 +319,7 @@ behavior are defined only by the immutable byte value.
 - Unrelated common synchronous data-plane builders for roles such as PAIR and
   STREAM remain separate contracts; they are not canonical terminals for the
   DEALER/ROUTER HWM-managed routed path.
-- Core's send-completion notification drives routed send completion. The socket
+- Core's send-completion notification drives pending routed send completion. The socket
   runtime installs `zlink_send_complete_handler` once, on the first `Async(...)`,
   and every operation then hands one complete record to `zlink_send_async`. The
   binding owns no park queue, no readiness retry pump, no deadline timer and no
@@ -331,11 +331,12 @@ behavior are defined only by the immutable byte value.
   it only after the native socket is closed. Collecting it early would leave
   Core calling a freed reverse-P/Invoke stub.
 - Operation state is kept alive by the `GCHandle` that travels through Core as
-  the operation `userdata`; the exactly-once completion frees that handle. A
+  the operation `userdata`; a pending operation's exactly-once completion frees that handle. A
   submit that is not `SUBMIT_OK` runs no completion, so payload ownership
   returns to the caller immediately.
-- A record admitted immediately runs its completion inline inside
-  `zlink_send_async`, so the caller never suspends on that path.
+- Immediate admission returns `SUBMIT_OK` with operation id zero and no
+  callback. The binding releases the `GCHandle` and returns a completed Task,
+  so the caller never suspends on that path.
 - `CancellationToken` maps to `zlink_send_async_cancel`. A cancelled operation
   still completes exactly once (`TERMINAL` / `ECANCELED`), and an operation
   whose admission is already committed is not cancelled and completes as

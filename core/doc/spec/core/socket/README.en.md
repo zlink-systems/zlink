@@ -329,7 +329,7 @@ typedef enum zlink_send_complete_result_t {
 typedef uint64_t zlink_send_op_id_t;
 
 typedef struct zlink_send_complete_event_t {
-  zlink_send_op_id_t op_id;                // Core-assigned, socket-local monotonic value; 0 is not a valid id
+  zlink_send_op_id_t op_id;                // Pending operation id; always non-zero in a completion event
   void *userdata;                          // Returned unchanged from the submit options
   zlink_routing_id_t peer_rid;             // Target identity; always populated
   uint64_t transport_pair_id;              // 0 for a socket without a routed target
@@ -360,12 +360,14 @@ termination uses `ETERM`, and other cases carry a route-failure errno.
 
 `struct_size` must equal `sizeof(zlink_send_async_options_t)`; otherwise the
 submit fails with `EINVAL`. `timeout_ms == 0` means no deadline. `op_id_out_`
-is optional, and a failed submit initializes it to `0` when it is supplied.
+is optional. Immediate admission and failed submission set it to `0`; a record
+retained by Core receives a non-zero id.
 
-`op_id` is a Core-assigned, socket-local monotonic value. `0` is not a valid
-ID and is the value left in the out parameter after submit failure. `userdata`
-is returned unchanged from the submit options. Target identity fields are
-always populated and are zero for a socket without a routed target.
+A non-zero `op_id` is a Core-assigned, socket-local monotonic value. Zero means
+the record was admitted immediately, no callback will run, and there is no
+operation to cancel. `userdata` is returned unchanged from the submit options.
+Target identity fields are always populated and are zero for a socket without
+a routed target.
 
 #### zlink_reply_handler_fn
 
@@ -460,8 +462,8 @@ typedef enum zlink_option_t {
   ZLINK_OPT_SUBMIT_RETRY_MODE          = 0x3037,  // Local submit-failure retry mode (int; OFF or LOCAL_FAILURE; raw socket default off)
   ZLINK_OPT_SUBMIT_RETRY_TIMEOUT       = 0x3038,  // Local submit-failure retry budget (ms, int; raw socket default 0, 0 disables retry)
   ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS      = 0x3039,  // Additional retry attempts after the first submit (int; raw socket default 0, current maximum 16)
-  ZLINK_OPT_SEND_PENDING_MAX_MSGS      = 0x303A,  // Maximum async-send pending operations (uint64_t, 0 rejects, default 1024)
-  ZLINK_OPT_SEND_PENDING_MAX_BYTES     = 0x303B   // Maximum async-send pending bytes (uint64_t, 0 rejects, default 4,096,000)
+  ZLINK_OPT_SEND_PENDING_MAX_MSGS      = 0x303A,  // Maximum async-send pending operations (uint64_t, 0 unlimited, default 0)
+  ZLINK_OPT_SEND_PENDING_MAX_BYTES     = 0x303B   // Maximum async-send pending bytes (uint64_t, 0 unlimited, default 0)
 } zlink_option_t;
 ```
 
@@ -964,8 +966,9 @@ the detailed internal errno for diagnostics.
 
 ### Asynchronous send admission
 
-Hand one complete multipart record to Core and receive exactly one completion
-for it.
+Hand one complete multipart record to Core. Immediate admission completes in
+the return path; only an operation retained after HWM pressure receives exactly
+one completion callback.
 
 ```c
 ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
@@ -990,10 +993,11 @@ transfers to Core and the caller must not touch those messages again, close
 included. On any other result ownership stays with the caller.
 
 The call never blocks. When the target has room the record is admitted on the
-calling thread and the completion callback may run inline before the call
-returns. When the target is backpressured the record is reserved as a pending
-operation and its completion arrives later. The byte high-water mark accounts
-the record as one message, exactly as a synchronous multipart send does.
+calling thread, `*op_id_out_` is set to zero, and no completion callback runs.
+When the target is backpressured Core retains the record as a pending operation
+and sets a non-zero operation id. Exactly one callback later reports admission,
+timeout, cancellation, or termination. The byte high-water mark accounts the
+record as one message, exactly as a synchronous multipart send does.
 
 ```mermaid
 sequenceDiagram
@@ -1003,20 +1007,21 @@ sequenceDiagram
     App->>Core: zlink_send_async(parts, options)
     alt target has capacity
         Note over Core: Admit immediately on the calling thread
-        Core-->>App: Completion callback (may run inline before return)
-        Core-->>App: Return ZLINK_SUBMIT_OK
+        Core-->>App: Return ZLINK_SUBMIT_OK, op_id=0
+        Note over App: Binding completes the awaitable locally
     else target is backpressured
         Note over Core: Reserve the record as a pending operation
-        Core-->>App: Return ZLINK_SUBMIT_OK
+        Core-->>App: Return ZLINK_SUBMIT_OK, op_id=nonzero
         Core-->>App: Later completion callback (exactly one of ADMITTED, TIMED_OUT, or TERMINAL)
     end
 ```
 
-Pending operations are bounded per socket by `ZLINK_OPT_SEND_PENDING_MAX_MSGS`
-and `ZLINK_OPT_SEND_PENDING_MAX_BYTES`. Exceeding either bound returns
-`ZLINK_SUBMIT_BACKPRESSURED` and leaves part ownership with the caller: that is
-where the application owns policy. Neither bound accepts `0` as unlimited - an
-unbounded reservation queue would be a high-water mark bypass.
+Pending operations are unlimited by default, so normal HWM pressure becomes an
+asynchronous wait rather than a submit failure. An application can opt into an
+overload policy by setting `ZLINK_OPT_SEND_PENDING_MAX_MSGS` or
+`ZLINK_OPT_SEND_PENDING_MAX_BYTES` to a non-zero value. Exceeding an explicitly
+configured bound returns `ZLINK_SUBMIT_BACKPRESSURED` and leaves part ownership
+with the caller. Zero, the default, means unlimited.
 
 Pending operations for one target are admitted, and completed, in submit
 order. Head-of-line blocking within a target is intentional, because the target
@@ -1037,12 +1042,13 @@ with `errno=EDEADLK`.
 
 The callback contract is:
 
-- Exactly one completion runs per operation that returned `ZLINK_SUBMIT_OK`.
+- Exactly one completion runs per operation that returned `ZLINK_SUBMIT_OK`
+  with a non-zero operation id. Immediate admission returns an operation id of
+  zero and has no callback.
 - Completions for the same target run in submit order.
 - Completions for one socket never run concurrently with each other.
-- No fixed thread is promised. The callback can run inline inside
-  `zlink_send_async`, on the Core async mailbox thread after backpressure
-  clears, on the Core deadline thread on timeout, on the closing thread during
+- No fixed thread is promised. The callback can run on the Core async mailbox
+  thread after backpressure clears, on the Core deadline thread on timeout, on the closing thread during
   close or context termination, or on the thread that called
   `zlink_poller_wait` while a `ZLINK_POLLCOMPLETION` registration owns
   completion dispatch for this socket.
@@ -1054,9 +1060,9 @@ Registering the socket on a poller with `ZLINK_POLLCOMPLETION` transfers
 dispatch ownership of this callback from the Core async mailbox thread to the
 thread that calls `zlink_poller_wait`. That is a change of dispatch location
 only: the same registration, the same callback, the same event, the same
-guarantees. The two dispatch owners are mutually exclusive per socket. No
-completion is ever lost, because the pending bound caps the number of
-operations that can be awaiting a callback.
+guarantees. The two dispatch owners are mutually exclusive per socket. Core
+retains every accepted pending operation and completes each exactly once, so no
+completion is lost.
 
 `zlink_send_async_cancel` is a request. `ZLINK_SUBMIT_OK` means the cancel was
 accepted and the completion reports `ZLINK_SEND_TERMINAL` with `ECANCELED`.
@@ -1310,12 +1316,14 @@ callback invocation. Each item maps to one unit test.
 - Calling `zlink_send_async` without first installing a completion handler
   fails with `errno=EINVAL`; replacing the handler inside its own completion
   callback produces `EDEADLK`.
-- Each operation that returns `ZLINK_SUBMIT_OK` invokes its completion callback
-  exactly once. Completions for the same target run in submit order, and
-  completions for one socket never run concurrently.
-- Exceeding a pending limit (`ZLINK_OPT_SEND_PENDING_MAX_MSGS` /
+- Each operation that returns `ZLINK_SUBMIT_OK` with a non-zero operation id
+  invokes its completion callback exactly once. An operation id of zero means
+  immediate admission and no callback. Completions for the same target run in
+  submit order, and completions for one socket never run concurrently.
+- Pending-limit options default to zero, meaning unlimited. Exceeding an
+  explicitly configured non-zero limit (`ZLINK_OPT_SEND_PENDING_MAX_MSGS` /
   `MAX_BYTES`) produces `ZLINK_SUBMIT_BACKPRESSURED` and leaves part ownership
-  with the caller. Neither option accepts `0` as unlimited.
+  with the caller.
 - If `zlink_send_async_cancel` returns `ZLINK_SUBMIT_OK`, completion is
   `ZLINK_SEND_TERMINAL` + `ECANCELED`; if it returns
   `ZLINK_SUBMIT_INVALID_STATE`, completion is `ZLINK_SEND_ADMITTED`; an absent

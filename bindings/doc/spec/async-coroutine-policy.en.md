@@ -136,8 +136,9 @@ same operation entrypoint. It adds no separate name such as `send_async` or
   the wait.
 - **Completion driver.** C++ `async()` and the .NET, Java, Node, Python, and
   Rust asynchronous send terminals use Core `zlink_send_async`. They first
-  install `zlink_send_complete_handler`, then correlate the accepted
-  operation's socket-local id with an awaitable. A
+  install `zlink_send_complete_handler`. Immediate admission returns operation
+  id zero and the binding completes the awaitable locally. HWM wait returns a
+  non-zero socket-local id that the binding correlates with an awaitable. A
   `zlink_send_complete_event_t` reports admission, deadline expiry, or terminal
   failure exactly once. Completions preserve submit order for the same target,
   and completion callbacks for one socket do not run concurrently.
@@ -148,9 +149,9 @@ same operation entrypoint. It adds no separate name such as `send_async` or
 - No public send-ready handler exists. `ZLINK_POLLOUT` is a readiness value for
   retrying a synchronous nonblocking send, not completion of an accepted async
   operation.
-- A binding keeps no park queue, WRITABLE-callback retry, deadline timer, or
-  dispatcher thread for this completion surface — completion is driven by
-  the Core send-completion notification.
+- A binding keeps no park queue, WRITABLE-callback retry, or deadline timer.
+  A C++ default coroutine that could submit again from inside a callback uses
+  a continuation dispatcher only on the pending slow path.
 - Submit flags may be accepted as a language-idiomatic option argument or
   builder stage.
 - Core retries an accepted async operation. The binding never retries; the

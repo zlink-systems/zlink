@@ -9,6 +9,7 @@
 #include "operation_state.hpp"
 #include "async_operation_state.hpp"
 
+#include <atomic>
 #include <cerrno>
 #include <memory>
 
@@ -20,8 +21,32 @@ namespace
 
 struct send_completion_anchor_t
 {
+    explicit send_completion_anchor_t (
+      std::shared_ptr<detail::async_operation_state_t<void>> completion_) :
+        completion (std::move (completion_))
+    {
+    }
+
+    void release () noexcept
+    {
+        if (references.fetch_sub (1, std::memory_order_acq_rel) == 1)
+            delete this;
+    }
+
+    // One reference belongs to submit_send_async until it has interpreted
+    // op_id. The other belongs to Core only if the operation becomes pending;
+    // on immediate admission or submit failure the submitter releases both.
+    std::atomic<unsigned int> references{2};
     std::shared_ptr<detail::async_operation_state_t<void>> completion;
 };
+
+void release_anchor_without_callback (send_completion_anchor_t *anchor_) noexcept
+{
+    if (!anchor_)
+        return;
+    anchor_->release ();
+    anchor_->release ();
+}
 
 std::exception_ptr send_completion_failure (const zlink_send_complete_event_t &event_)
 {
@@ -38,35 +63,25 @@ std::exception_ptr send_completion_failure (const zlink_send_complete_event_t &e
 
 void send_complete_trampoline (void * /*subject_*/,
                                const zlink_send_complete_event_t *event_,
-                               void *userdata_) noexcept
+                               void * /*userdata_*/) noexcept
 {
-    auto *const callbacks = static_cast<detail::socket_callback_state_t *> (userdata_);
-    if (!callbacks || !event_)
+    if (!event_)
         return;
-
-    std::shared_ptr<void> opaque_anchor;
-    {
-        std::lock_guard<std::mutex> lock (callbacks->send_completion_mutex);
-        const auto it = callbacks->send_completion_anchors.find (event_->userdata);
-        if (it == callbacks->send_completion_anchors.end ())
-            return;
-        opaque_anchor = std::move (it->second);
-        callbacks->send_completion_anchors.erase (it);
-    }
-
-    const auto anchor = std::static_pointer_cast<send_completion_anchor_t> (
-      std::move (opaque_anchor));
+    send_completion_anchor_t *const anchor =
+      static_cast<send_completion_anchor_t *> (event_->userdata);
     if (!anchor || !anchor->completion)
         return;
     if (event_->result == ZLINK_SEND_ADMITTED)
         (void) anchor->completion->complete ();
     else
         (void) anchor->completion->fail (send_completion_failure (*event_));
+    anchor->release ();
 }
 
 void ensure_send_completion_handler (detail::socket_callback_state_t &callbacks_,
                                      void *socket_)
 {
+    detail::ensure_async_continuation_dispatcher ();
     std::lock_guard<std::mutex> lock (callbacks_.send_completion_mutex);
     if (callbacks_.send_completion_handler_registered)
         return;
@@ -78,13 +93,6 @@ void ensure_send_completion_handler (detail::socket_callback_state_t &callbacks_
         throw handler_error_t (detail::handler_result_from_errno (error), error);
     }
     callbacks_.send_completion_handler_registered = true;
-}
-
-void discard_send_completion_anchor (detail::socket_callback_state_t &callbacks_,
-                                     void *key_) noexcept
-{
-    std::lock_guard<std::mutex> lock (callbacks_.send_completion_mutex);
-    callbacks_.send_completion_anchors.erase (key_);
 }
 
 async_result_t<void> submit_send_async (detail::operation_state_t &state_)
@@ -120,16 +128,28 @@ async_result_t<void> submit_send_async (detail::operation_state_t &state_)
                                   ? detail::native_timeout_ms (state_.timeout)
                                   : 0u;
     auto completion = std::make_shared<detail::async_operation_state_t<void>> ();
-    auto anchor = std::make_shared<send_completion_anchor_t> ();
-    anchor->completion = completion;
-    std::vector<message_t> parts = detail::take_send_parts (state_);
-    if (parts.empty ())
-        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+    const bool direct_single_part =
+      state_.message.single_part.has_value ()
+      || state_.message.single_part_source != nullptr;
+    message_t *single_part = direct_single_part
+                               ? &detail::send_single_part (state_)
+                               : nullptr;
+    std::vector<message_t> parts;
+    if (single_part) {
+        if (!single_part->valid ()) {
+            detail::restore_single_send_part_to_source (state_);
+            throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+        }
+    } else {
+        parts = detail::take_send_parts (state_);
+        if (parts.empty ())
+            throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+    }
 
+    send_completion_anchor_t *anchor = nullptr;
     try {
         ensure_send_completion_handler (*callbacks, state_.raw.socket);
-        std::lock_guard<std::mutex> lock (callbacks->send_completion_mutex);
-        callbacks->send_completion_anchors.emplace (anchor.get (), anchor);
+        anchor = new send_completion_anchor_t (completion);
     }
     catch (...) {
         detail::restore_send_parts_to_sources (state_, parts);
@@ -139,48 +159,68 @@ async_result_t<void> submit_send_async (detail::operation_state_t &state_)
     zlink_send_async_options_t options{};
     options.struct_size = sizeof (options);
     options.timeout_ms = timeout_ms;
-    options.userdata = anchor.get ();
+    options.userdata = anchor;
     options.target = target_ptr;
 
     zlink_send_op_id_t op_id = 0;
     int result_errno = EINVAL;
     int raw_result = -1;
     try {
-        raw_result = detail::with_moved_native_parts (
-          parts, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
+        const auto submit_native =
+          [&] (zlink_msg_t *native_parts_, size_t part_count_) {
               const zlink_submit_result_t result = zlink_send_async (
                 state_.raw.socket, native_parts_, part_count_, &options, &op_id);
-              if (result != ZLINK_SUBMIT_OK)
+              if (result != ZLINK_SUBMIT_OK && !single_part)
                   detail::restore_parts_from_native (parts, native_parts_, part_count_);
               return static_cast<int> (result);
-          });
+          };
+        if (single_part) {
+            raw_result = detail::submit_one_message_part (
+              *single_part,
+              [&] (zlink_msg_t *native_part_, zlink_part_flag_t) {
+                  return submit_native (native_part_, 1);
+              });
+        } else {
+            raw_result = detail::with_moved_native_parts (parts, submit_native);
+        }
         result_errno = zlink_errno ();
     }
     catch (...) {
-        discard_send_completion_anchor (*callbacks, anchor.get ());
-        detail::restore_send_parts_to_sources (state_, parts);
+        release_anchor_without_callback (anchor);
+        if (single_part)
+            detail::restore_single_send_part_to_source (state_);
+        else
+            detail::restore_send_parts_to_sources (state_, parts);
         throw;
     }
 
     if (raw_result != ZLINK_SUBMIT_OK) {
-        discard_send_completion_anchor (*callbacks, anchor.get ());
-        detail::restore_send_parts_to_sources (state_, parts);
+        release_anchor_without_callback (anchor);
+        if (single_part)
+            detail::restore_single_send_part_to_source (state_);
+        else
+            detail::restore_send_parts_to_sources (state_, parts);
         const submit_result_t result = raw_result == -1
                                          ? detail::submit_result_from_errno (result_errno)
                                          : static_cast<submit_result_t> (raw_result);
         throw submit_error_t (result, result_errno);
     }
     if (op_id == 0) {
-        // Core promises a non-zero id for every accepted operation. Surface an
-        // impossible contract as a binding failure instead of installing an
-        // un-cancellable awaitable.
-        discard_send_completion_anchor (*callbacks, anchor.get ());
-        throw submit_error_t (submit_result_t::internal_error, EPROTO);
+        // Immediate admission has no Core completion record or callback. Drop
+        // the callback anchor and complete locally so co_await observes the
+        // ready fast path without suspension or callback re-entry.
+        (void) completion->complete ();
+        release_anchor_without_callback (anchor);
+        return detail::async_result_access_t::make<void> (
+          std::move (completion));
     }
 
     completion->set_cancel ([callbacks, socket = state_.raw.socket, op_id] () {
         return zlink_send_async_cancel (socket, op_id) == ZLINK_SUBMIT_OK;
     });
+    // Drop the submitter reference. The Core callback may already have
+    // released its reference if completion raced the return path.
+    anchor->release ();
     return detail::async_result_access_t::make<void> (std::move (completion));
 }
 

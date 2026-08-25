@@ -234,8 +234,7 @@ void managed_request_trampoline (zlink_request_result_t result_,
     (*bridge_ref)->finish (result_, parts_, part_count_);
 }
 
-using async_request_completion_t =
-  detail::async_operation_state_t<std::vector<message_t>>;
+using async_request_completion_t = detail::async_request_operation_state_t;
 
 void release_async_request_completion (void *userdata_) noexcept
 {

@@ -14,6 +14,9 @@
 namespace zlink::detail
 {
 
+void ensure_async_continuation_dispatcher ();
+void dispatch_async_continuation (std::function<void ()> work_) noexcept;
+
 class async_resume_slot_t
 {
   public:
@@ -229,6 +232,154 @@ class async_operation_state_t final : public async_result_state_t<T>
     bool _consumer_registered = false;
 };
 
+// Accepted requests are owned by Core until the reply handler reaches its
+// terminal event. Unlike send admission, they have no binding-side cancellation
+// function: async_result_t::cancel() has always returned false after admission.
+// Keep their result state separate so the hot reply path does not carry the
+// generic std::function cancellation storage and its state transitions.
+class async_request_operation_state_t final
+  : public async_result_state_t<std::vector<message_t>>
+{
+  public:
+    using value_t = std::vector<message_t>;
+
+    bool ready () const noexcept override
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        return _terminal;
+    }
+
+    bool suspend (std::coroutine_handle<> continuation_,
+                  async_continuation_scheduler_t scheduler_) override
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_terminal)
+            return false;
+        if (_consumer_registered)
+            throw std::logic_error ("async result already has a consumer");
+        _consumer_registered = true;
+        _continuation = std::make_shared<async_resume_slot_t> (continuation_);
+        _scheduler = std::move (scheduler_);
+        return true;
+    }
+
+    value_t take () override
+    {
+        std::exception_ptr failure;
+        std::optional<value_t> value;
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            if (!_terminal)
+                throw std::logic_error ("async result is not complete");
+            if (_consumed)
+                throw std::logic_error ("async result was already consumed");
+            _consumed = true;
+            failure = _failure;
+            value = std::move (_value);
+            _continuation.reset ();
+        }
+        if (failure)
+            std::rethrow_exception (failure);
+        if (!value)
+            throw std::logic_error ("async result completed without a value");
+        return std::move (*value);
+    }
+
+    // Once accepted, Core owns the terminal callback and no C cancellation
+    // primitive exists for this request path.
+    bool cancel () noexcept override { return false; }
+
+    void abandon (std::coroutine_handle<> continuation_) noexcept override
+    {
+        std::shared_ptr<async_resume_slot_t> continuation;
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            continuation = _continuation;
+            _scheduler = {};
+        }
+        if (continuation)
+            continuation->abandon (continuation_);
+    }
+
+    void retain_for_core (std::shared_ptr<async_request_operation_state_t> self_)
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (!_terminal)
+            _core_lifetime = std::move (self_);
+    }
+
+    void release_from_core () noexcept
+    {
+        // Retain through the unlock: this can drop the final reference after a
+        // caller discarded its async_result_t while Core was still in flight.
+        std::shared_ptr<async_request_operation_state_t> keep_alive;
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            keep_alive = std::move (_core_lifetime);
+        }
+    }
+
+    bool complete (value_t value_) noexcept
+    {
+        return finish ([&] { _value.emplace (std::move (value_)); });
+    }
+
+    bool fail (std::exception_ptr failure_) noexcept
+    {
+        return finish ([&] { _failure = std::move (failure_); });
+    }
+
+  private:
+    template <typename TStore> bool finish (TStore &&store_) noexcept
+    {
+        std::shared_ptr<async_resume_slot_t> continuation;
+        async_continuation_scheduler_t scheduler;
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            if (_terminal)
+                return false;
+            try {
+                store_ ();
+            }
+            catch (...) {
+                _failure = std::current_exception ();
+            }
+            _terminal = true;
+            continuation = _continuation;
+            scheduler = std::move (_scheduler);
+        }
+        resume (continuation, std::move (scheduler));
+        return true;
+    }
+
+    static void resume (std::shared_ptr<async_resume_slot_t> continuation_,
+                        async_continuation_scheduler_t scheduler_) noexcept
+    {
+        if (!continuation_)
+            return;
+        if (!scheduler_) {
+            continuation_->resume ();
+            return;
+        }
+        try {
+            scheduler_ ([continuation_] { continuation_->resume (); });
+        }
+        catch (...) {
+            continuation_->resume ();
+        }
+    }
+
+    mutable std::mutex _mutex;
+    std::optional<value_t> _value;
+    std::exception_ptr _failure;
+    std::shared_ptr<async_resume_slot_t> _continuation;
+    std::shared_ptr<async_request_operation_state_t> _core_lifetime;
+    async_continuation_scheduler_t _scheduler;
+    bool _terminal = false;
+    bool _consumed = false;
+    bool _consumer_registered = false;
+};
+
 template <>
 class async_operation_state_t<void> final : public async_result_state_t<void>
 {
@@ -341,22 +492,29 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
         return true;
     }
 
-    // See the primary template: resume runs in the completing context.
+    // Immediate admission completes before a consumer is registered and never
+    // reaches this function. A suspended void operation was Core-pending, so
+    // its callback must hand the continuation outside Core's completion scope
+    // before the coroutine can submit its next operation.
     static void resume (std::shared_ptr<async_resume_slot_t> continuation_,
                         async_continuation_scheduler_t scheduler_) noexcept
     {
         if (!continuation_)
             return;
-        if (!scheduler_) {
-            continuation_->resume ();
-            return;
-        }
-        try {
-            scheduler_ ([continuation_] { continuation_->resume (); });
-        }
-        catch (...) {
-            continuation_->resume ();
-        }
+        auto work = [continuation_] { continuation_->resume (); };
+        dispatch_async_continuation (
+          [work = std::move (work), scheduler = std::move (scheduler_)] () mutable {
+              if (!scheduler) {
+                  work ();
+                  return;
+              }
+              try {
+                  scheduler (work);
+              }
+              catch (...) {
+                  work ();
+              }
+          });
     }
 
     mutable std::mutex _mutex;

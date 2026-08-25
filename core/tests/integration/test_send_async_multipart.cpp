@@ -205,7 +205,8 @@ void init_part (zlink_msg_t *part_, const std::string &payload_)
 
 zlink_submit_result_t submit_record (void *socket_,
                                       const std::vector<std::string> &payloads_,
-                                      const zlink_send_async_options_t *options_)
+                                      const zlink_send_async_options_t *options_,
+                                      zlink_send_op_id_t *op_id_out_ = NULL)
 {
     std::vector<zlink_msg_t> parts (payloads_.size ());
     for (size_t i = 0; i != payloads_.size (); ++i)
@@ -216,8 +217,8 @@ zlink_submit_result_t submit_record (void *socket_,
       zlink_send_async (socket_, parts.data (), parts.size (), options_, &op_id);
     if (result != ZLINK_SUBMIT_OK)
         zlink_multipart_close (parts.data (), parts.size ());
-    else
-        TEST_ASSERT_TRUE (op_id != 0);
+    if (op_id_out_)
+        *op_id_out_ = op_id;
     return result;
 }
 
@@ -421,6 +422,32 @@ void run_sync_multipart_sequence (void *router_,
 }
 }
 
+void test_send_pending_limits_default_to_unlimited_and_accept_zero ()
+{
+    void *socket = test_context_socket (ZLINK_SOCKET_PAIR);
+    const zlink_option_t options[2] = {
+      ZLINK_OPT_SEND_PENDING_MAX_MSGS, ZLINK_OPT_SEND_PENDING_MAX_BYTES};
+    for (size_t i = 0; i != 2; ++i) {
+        uint64_t value = 1;
+        size_t value_size = sizeof (value);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_get_option (socket, options[i], &value, &value_size));
+        TEST_ASSERT_EQUAL_UINT64 (0, value);
+
+        value = 7;
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (socket, options[i], &value, sizeof (value)));
+        value = 0;
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (socket, options[i], &value, sizeof (value)));
+        value = 1;
+        value_size = sizeof (value);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_get_option (socket, options[i], &value, &value_size));
+        TEST_ASSERT_EQUAL_UINT64 (0, value);
+    }
+}
+
 void test_completion_callback_rejects_all_reentrant_submit_entry_points ()
 {
     void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -428,9 +455,29 @@ void test_completion_callback_rejects_all_reentrant_submit_entry_points ()
     void *different = test_context_socket (ZLINK_SOCKET_PAIR);
     void *request_socket = test_context_socket (ZLINK_SOCKET_DEALER);
     void *publish_socket = test_context_socket (ZLINK_SOCKET_PUB);
+    const uint64_t hwm = 65536u + sizeof (zlink_msg_t);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (sender, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (receiver, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (receiver, "inproc://completion-reentry-send"));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sender, "inproc://completion-reentry-send"));
     msleep (SETTLE_TIME);
+
+    bool backpressured = false;
+    for (int i = 0; i != 32 && !backpressured; ++i) {
+        zlink_msg_t filler;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&filler, 65536));
+        const zlink_submit_result_t fill = zlink_send_part (
+          sender, &filler, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
+        if (fill == ZLINK_SUBMIT_BACKPRESSURED) {
+            backpressured = true;
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&filler));
+        } else {
+            TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, fill);
+        }
+    }
+    TEST_ASSERT_TRUE (backpressured);
 
     completion_reentry_probe_t probe;
     probe.different_socket = different;
@@ -443,8 +490,19 @@ void test_completion_callback_rejects_all_reentrant_submit_entry_points ()
     zlink_send_async_options_t options;
     memset (&options, 0, sizeof (options));
     options.struct_size = sizeof (options);
+    zlink_send_op_id_t op_id = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK, submit_record (sender, {"completion-reentry-root"}, &options));
+      ZLINK_SUBMIT_OK,
+      submit_record (sender, {std::string (65536, 'r')}, &options, &op_id));
+    TEST_ASSERT_TRUE (op_id != 0);
+
+    zlink_msg_t drained;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&drained));
+    zlink_part_flag_t more = ZLINK_PART_FINAL;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_recv_part (receiver, NULL, &drained, &more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&drained));
 
     {
         std::unique_lock<std::mutex> lock (probe.mutex);
@@ -497,12 +555,12 @@ void test_router_send_async_admits_and_delivers_two_and_three_part_records ()
       {"router-three-head", "router-three-middle", "router-three-tail"}};
     for (size_t i = 0; i != records.size (); ++i) {
         const size_t before = completion_count (&probe);
+        zlink_send_op_id_t op_id = 1;
         TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK, submit_record (router, records[i], &options));
-        TEST_ASSERT_TRUE (wait_for_completion_count (&probe, before + 1));
-        const completion_snapshot_t completion = completion_at (&probe, before);
-        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.result);
-        TEST_ASSERT_EQUAL_INT (0, completion.terminal_errno);
+          ZLINK_SUBMIT_OK,
+          submit_record (router, records[i], &options, &op_id));
+        TEST_ASSERT_EQUAL_UINT64 (0, op_id);
+        TEST_ASSERT_EQUAL_UINT64 (before, completion_count (&probe));
         TEST_ASSERT_TRUE (recv_dealer_record_eventually (dealer, records[i]));
     }
 }
@@ -529,12 +587,11 @@ void test_dealer_generic_target_admits_multipart_after_connect ()
 
     const std::vector<std::string> record = {
       "dealer-generic-head", "dealer-generic-middle", "dealer-generic-tail"};
+    zlink_send_op_id_t op_id = 1;
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
-                           submit_record (sender, record, &options));
-    TEST_ASSERT_TRUE (wait_for_completion_count (&probe, 1));
-    const completion_snapshot_t completion = completion_at (&probe, 0);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.result);
-    TEST_ASSERT_EQUAL_INT (0, completion.terminal_errno);
+                           submit_record (sender, record, &options, &op_id));
+    TEST_ASSERT_EQUAL_UINT64 (0, op_id);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_count (&probe));
     TEST_ASSERT_TRUE (recv_dealer_record_eventually (receiver, record));
 }
 
@@ -627,8 +684,11 @@ void test_pending_multipart_admission_waits_for_sync_sequence_gate ()
     options.struct_size = sizeof (options);
     options.target = &target_a;
     const std::vector<std::string> pending_record = {"async-gate-head", "async-gate-tail"};
+    zlink_send_op_id_t pending_op_id = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK, submit_record (router, pending_record, &options));
+      ZLINK_SUBMIT_OK,
+      submit_record (router, pending_record, &options, &pending_op_id));
+    TEST_ASSERT_TRUE (pending_op_id != 0);
     //  It must still be pending on the full A pipe. The sync sequence below
     //  is deliberately started after this reservation.
     TEST_ASSERT_EQUAL_UINT64 (0, completion_count (&completion));
@@ -680,6 +740,7 @@ int main ()
     setup_test_environment (60);
 
     UNITY_BEGIN ();
+    RUN_TEST (test_send_pending_limits_default_to_unlimited_and_accept_zero);
     RUN_TEST (test_completion_callback_rejects_all_reentrant_submit_entry_points);
     RUN_TEST (test_router_send_async_admits_and_delivers_two_and_three_part_records);
     RUN_TEST (test_dealer_generic_target_admits_multipart_after_connect);

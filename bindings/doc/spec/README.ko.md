@@ -1317,11 +1317,12 @@ receive를 늦춰야 할 때 사용하는 동적 제어 경계는 socket의 `RUN
 state setter 하나다.
 
 HWM-managed PAIR **send**와 DEALER/ROUTER **routed send**의 비동기 terminal은 Core
-`zlink_send_async`와 send-completion을 감싼다. Core가 HWM 대기와 재시도, operation deadline,
-route 종료와 cancel을 소유하고 accepted operation마다 정확히 한 번 completion을 전달한다.
-Binding은 Core operation id를 언어별 awaitable에 연결할 뿐 park queue, readiness callback
-재시도, deadline timer 또는 dispatcher thread를 두지 않는다. Core가 pending-operation
-상한 때문에 submit 자체를 거부한 경우에만 application이 그 즉시 실패의 정책을 정한다.
+`zlink_send_async`와 send-completion을 감싼다. 즉시 admission은 operation id `0`을 반환하며
+binding이 awaitable을 즉시 완료한다. Core가 HWM 대기와 재시도, operation deadline,
+route 종료와 cancel을 소유하고, nonzero id를 받은 pending operation마다 정확히 한 번
+completion을 전달한다. Binding은 park queue, readiness callback 재시도 또는 deadline timer를
+두지 않는다. pending 상한은 기본 unlimited이며, application이 nonzero 상한을 명시한 경우에만
+초과 submit의 즉시 실패 정책을 소유한다.
 
 Part 단위 Core API를 사용하는 binding은 같은 native handle의 모든 outbound 경로가 공유하는 짧은
 complete-record attempt gate를 둔다. Gate 안에서 기존 exact-target part API를 첫 part부터 `FINAL`까지
@@ -1412,8 +1413,9 @@ channel. C++만 기존 `submit()`·`submit(callback)`·`async()` 세 terminal을
   수행하면 안 된다. 바인딩도 같은 전제를 두고 lazy bootstrap 로직을 올리지 않는다.
 #### Send completion, Peer 가중치, STREAM 수신 모드
 
-- `zlink_send_complete_handler()`는 `zlink_send_async()`가 수용한 operation의
-  최종 결과를 전달한다. `ZLINK_POLLCOMPLETION`은 같은 callback과
+- `zlink_send_complete_handler()`는 `zlink_send_async()`가 nonzero id로 수용한
+  pending operation의 최종 결과를 전달한다. operation id `0`은 즉시 admission이며
+  callback이 없다. `ZLINK_POLLCOMPLETION`은 같은 callback과
   `zlink_send_complete_event_t`의 dispatch를 `zlink_poller_wait()` 호출 thread로
   옮긴다. `ZLINK_POLLOUT`은 동기 nonblocking send를 다시 시도할 수 있다는
   readiness 값이며 async send completion과 같은 축이 아니다. 공개 send-ready

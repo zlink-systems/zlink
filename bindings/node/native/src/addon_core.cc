@@ -2335,7 +2335,15 @@ napi_value socket_send_async (napi_env env, napi_callback_info info)
     bool inline_completed = false;
     zlink_send_complete_event_t inline_event;
     memset (&inline_event, 0, sizeof (inline_event));
-    {
+    if (op_id == 0) {
+        // Core admitted the record directly and intentionally emits no
+        // completion callback. Return the completion in the submit result so
+        // JavaScript resolves the Promise without a TSFN hop.
+        operation->submit_returned = true;
+        inline_completed = true;
+        inline_event.userdata = operation;
+        inline_event.result = ZLINK_SEND_ADMITTED;
+    } else {
         std::lock_guard<std::mutex> lock (operation->mutex);
         operation->submit_returned = true;
         inline_completed = operation->completed;

@@ -111,14 +111,14 @@ typedef struct zlink_send_complete_event_t
  * @brief Send completion callback.
  *
  * Contract:
- * - Exactly one completion runs for every operation that returned
- *   `ZLINK_SUBMIT_OK`, including operations admitted immediately.
+ * - An operation that returned `ZLINK_SUBMIT_OK` with a non-zero operation id
+ *   receives exactly one completion. An operation id of zero means the record
+ *   was admitted immediately and no completion callback runs.
  * - Completions for the same target run in submit order.
  * - Completions for one socket never run concurrently with each other.
- * - No fixed thread is promised. The callback can run inline inside
- *   `zlink_send_async` when the record is admitted immediately, on the Core
- *   async mailbox thread after backpressure clears, on the Core deadline
- *   thread on timeout, on the closing thread during close, or on the thread
+ * - No fixed thread is promised. The callback can run on the Core async
+ *   mailbox thread after backpressure clears, on the Core deadline thread on
+ *   timeout, on the closing thread during close, or on the thread
  *   that called `zlink_poller_wait` while a `ZLINK_POLLCOMPLETION`
  *   registration owns completion dispatch for this socket.
  * - The callback must only hand the completion to application state. Calling
@@ -189,23 +189,27 @@ ZLINK_EXPORT zlink_handler_result_t zlink_stream_packet_handler (
  * included. On any other result ownership stays with the caller.
  *
  * The call never blocks. When the target has room the record is admitted on
- * the calling thread and the completion callback may run inline before this
- * function returns. When the target is backpressured the record is reserved as
- * a pending operation and the completion arrives later. The byte high-water
- * mark accounts the record as one message, exactly as a synchronous multipart
- * send does.
+ * the calling thread, `*op_id_out_` is set to zero, and no completion callback
+ * runs. When the target is backpressured the record is reserved as a pending
+ * operation, `*op_id_out_` is set to a non-zero id, and exactly one completion
+ * reports admission, timeout, cancellation, or termination. The byte
+ * high-water mark accounts the record as one message, exactly as a synchronous
+ * multipart send does.
  *
- * Pending operations are bounded per socket by
- * `ZLINK_OPT_SEND_PENDING_MAX_MSGS` and `ZLINK_OPT_SEND_PENDING_MAX_BYTES`.
- * Exceeding either bound fails with `ZLINK_SUBMIT_BACKPRESSURED` and leaves
- * part ownership with the caller: that is where the application owns policy.
+ * Pending operations wait without a limit by default, preserving asynchronous
+ * admission semantics under normal HWM pressure. An application may opt into
+ * bounds with `ZLINK_OPT_SEND_PENDING_MAX_MSGS` and
+ * `ZLINK_OPT_SEND_PENDING_MAX_BYTES`; zero means unlimited. Exceeding a
+ * configured non-zero bound fails with `ZLINK_SUBMIT_BACKPRESSURED` and leaves
+ * part ownership with the caller.
  *
  * Pending operations for one target are admitted, and completed, in submit
  * order. There is no ordering guarantee between different targets, and a
  * synchronous send competes for the same high-water mark on equal terms.
- *
  * A completion callback must be installed with `zlink_send_complete_handler`
- * first; without one the call fails with errno=EINVAL.
+ * first because the call can become pending; without one the call fails with
+ * errno=EINVAL. `op_id_out_` may be NULL when the caller does not need to
+ * distinguish immediate admission from pending completion.
  *
  * `ZLINK_SEND_ADMITTED` means admission into the Core send queue, not peer
  * delivery.

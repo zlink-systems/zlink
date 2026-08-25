@@ -491,16 +491,14 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
 
     const zlink_routed_submit_target_t target =
       select_stream_target_eventually (server, &rid);
-    //  A handler registered before the transport attached still completes the
-    //  first record submitted to that exact target.
+    //  A handler registered before the transport attached does not prevent
+    //  immediate admission of the first record submitted to that exact
+    //  target. Immediate admission uses op id zero and no callback.
     zlink_send_op_id_t admitted_op = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       park_stream_record (server, &target, "attach", &admitted_op));
-    TEST_ASSERT_TRUE_MESSAGE (
-      wait_stream_routed_ready (&before_attach_probe, &rid,
-                                ZLINK_SEND_ADMITTED),
-      "STREAM handler registered before attach did not complete its record");
+    TEST_ASSERT_EQUAL_UINT64 (0, admitted_op);
     {
         unsigned char attach_received[6];
         TEST_ASSERT_TRUE (
@@ -544,7 +542,10 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
     //  route: the reserved record is what reports the terminal failure.
     fill_stream_send_queue_until_backpressured_once (server, &rid);
     zlink_send_op_id_t parked_op = 0;
-    (void) park_stream_record (server, &target, "parked", &parked_op);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      park_stream_record (server, &target, "parked", &parked_op));
+    TEST_ASSERT_NOT_EQUAL (0, parked_op);
 
     close_raw_fd (raw_fd);
     TEST_ASSERT_TRUE_MESSAGE (
@@ -575,10 +576,11 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       park_stream_record (late_server, &late_target, "late", &late_op));
-    TEST_ASSERT_TRUE_MESSAGE (
-      wait_stream_routed_ready (&after_attach_probe, &late_rid,
-                                ZLINK_SEND_ADMITTED),
-      "STREAM handler registered after attach did not complete its record");
+    TEST_ASSERT_EQUAL_UINT64 (0, late_op);
+
+    unsigned char late_received[4];
+    TEST_ASSERT_TRUE (
+      recv_raw_exact (late_raw_fd, late_received, sizeof (late_received)));
 
     close_raw_fd (late_raw_fd);
     test_context_socket_close (late_server);

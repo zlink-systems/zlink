@@ -241,9 +241,8 @@ int zlink::socket_base_t::try_admit_send_pending (
     //  array form exists: the per-handle send sequence is taken and released
     //  inside a single call, so a multipart record can never hold it across
     //  application code.
-    std::unique_ptr<socket_public_send_scope_t> scope =
-      begin_public_send_scope (true);
-    if (!scope) {
+    socket_public_send_scope_t scope (lifecycle_coordinator (), true);
+    if (!scope.acquired ()) {
         //  A lifecycle refusal (close admitted, context terminated) is not a
         //  route failure. Keep the record pending so the close / term path
         //  owns the terminal cause instead of reporting ESHUTDOWN here.
@@ -273,11 +272,11 @@ int zlink::socket_base_t::try_admit_send_pending (
         const bool routed_start = record_->has_target && i == 0;
         const int rc =
           routed_start
-            ? send_direct_with_retry (&rid, msg, flags, *scope, NULL, 0, false,
+            ? send_direct_with_retry (&rid, msg, flags, scope, NULL, 0, false,
                                       NULL, record_->target.transport_pair_id,
                                       record_->target
                                         .transport_pair_generation)
-            : send_direct_with_retry (NULL, msg, flags, *scope);
+            : send_direct_with_retry (NULL, msg, flags, scope);
         if (rc == 0)
             continue;
 
@@ -303,7 +302,7 @@ int zlink::socket_base_t::try_admit_send_pending (
         //  HWM is only tested at the message start, so this is a route
         //  failure rather than backpressure. Drop the half-written message so
         //  the peer never sees a truncated record.
-        (void) rollback_scoped (*scope);
+        (void) rollback_scoped (scope);
         errno = failure_errno == EAGAIN ? ECONNABORTED : failure_errno;
         return -1;
     }
@@ -328,6 +327,8 @@ void zlink::socket_base_t::drive_send_pending ()
                    pending.queues.begin ();
                  it != pending.queues.end (); ++it) {
                 if (it->second.empty () || blocked.count (it->first) != 0)
+                    continue;
+                if (pending.inline_attempts.count (it->first) != 0)
                     continue;
                 send_pending_record_t *head = it->second.front ();
                 if (head->claimed)
@@ -625,47 +626,167 @@ int zlink::socket_base_t::send_async_submit (
         has_target = true;
     }
 
-    const uint64_t charge = record_charge_bytes (parts_, part_count_);
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    send_pending_record_t *record = NULL;
-    zlink_send_op_id_t op_id = 0;
+    bool attempt_inline = false;
     {
         scoped_lock_t lock (pending.sync);
         if (pending.failing) {
             errno = ESHUTDOWN;
             return -1;
         }
-        //  Bounded pending is the whole point: an unbounded reservation queue
-        //  is a high-water mark bypass wearing a different name. Overflow is
-        //  reported to the caller, which is where the application owns the
-        //  policy decision.
-        const uint64_t max_msgs = options.send_pending_max_msgs;
-        const uint64_t max_bytes = options.send_pending_max_bytes;
-        if (pending.pending_msgs + 1 > max_msgs
-            || (max_bytes > 0 && pending.pending_bytes + charge > max_bytes)) {
-            errno = EAGAIN;
-            return -1;
+        const std::map<routed_send_target_key_t,
+                       std::deque<send_pending_record_t *> >::const_iterator queue =
+          pending.queues.find (target);
+        const bool queue_empty =
+          queue == pending.queues.end () || queue->second.empty ();
+        if (queue_empty && pending.inline_attempts.count (target) == 0) {
+            pending.inline_attempts.insert (target);
+            attempt_inline = true;
         }
+    }
 
-        record = new (std::nothrow) send_pending_record_t ();
-        if (!record) {
+    //  Preserve the old binding-owned admission fast path: when no operation
+    //  is already ahead of this target, attempt admission before allocating a
+    //  pending record. Success is reported by op_id == 0 and never generates
+    //  a completion callback. The caller can therefore complete an awaitable
+    //  locally without entering Core's callback dispatch scope.
+    send_pending_record_t inline_record;
+    int inline_terminal_errno = 0;
+    if (attempt_inline) {
+        inline_record.target = target;
+        inline_record.has_target = has_target;
+        try {
+            inline_record.parts.assign (parts_, parts_ + part_count_);
+        } catch (...) {
+            {
+                scoped_lock_t lock (pending.sync);
+                pending.inline_attempts.erase (target);
+            }
+            drive_send_pending ();
+            dispatch_send_completions_if_local ();
             errno = ENOMEM;
             return -1;
         }
-        record->op_id = pending.next_op_id++;
+        const int inline_rc = try_admit_send_pending (&inline_record);
+        const int inline_errno = errno;
+
+        if (inline_rc == 0) {
+            {
+                scoped_lock_t lock (pending.sync);
+                pending.inline_attempts.erase (target);
+            }
+            //  The pipe now owns its frame references. Close Core's moved
+            //  handles and blank the caller's handles exactly as the pending
+            //  ownership-transfer path does.
+            for (size_t i = 0; i != inline_record.parts.size (); ++i) {
+                msg_t *msg = reinterpret_cast<msg_t *> (&inline_record.parts[i]);
+                if (msg->check ()) {
+                    const int rc = msg->close ();
+                    errno_assert (rc == 0);
+                }
+            }
+            inline_record.parts.clear ();
+            for (size_t i = 0; i != part_count_; ++i) {
+                const int rc = reinterpret_cast<msg_t *> (&parts_[i])->init ();
+                errno_assert (rc == 0);
+            }
+
+            //  Operations queued behind the direct attempt may also fit now.
+            drive_send_pending ();
+            dispatch_send_completions_if_local ();
+            return 0;
+        }
+
+        if (inline_errno != EAGAIN) {
+            //  A multipart attempt can fail after its first part reached the
+            //  pipe and was rolled back. Preserve the accepted-operation
+            //  ownership rule for every post-validation attempt: publish a
+            //  non-zero operation id and report this terminal through the
+            //  completion channel instead of returning borrowed handles whose
+            //  internal state may already have participated in a send.
+            inline_terminal_errno = inline_errno;
+        }
+    }
+
+    const uint64_t charge = record_charge_bytes (parts_, part_count_);
+    send_pending_record_t *record =
+      new (std::nothrow) send_pending_record_t ();
+    zlink_send_op_id_t op_id = 0;
+    int pending_reject_errno = record ? 0 : ENOMEM;
+    if (record) {
         record->userdata = options_->userdata;
         record->target = target;
         record->has_target = has_target;
         record->charge_bytes = charge;
         record->timeout_ms = options_->timeout_ms;
-        record->parts.assign (parts_, parts_ + part_count_);
-        //  Ownership transfer happens here and is irreversible: from this
-        //  point Core closes the parts, never the caller.
-        pending.queues[target].push_back (record);
-        pending.by_op[record->op_id] = record;
-        pending.pending_msgs += 1;
-        pending.pending_bytes += charge;
-        op_id = record->op_id;
+        record->claimed = inline_terminal_errno != 0;
+        try {
+            if (attempt_inline)
+                record->parts.swap (inline_record.parts);
+            else
+                record->parts.assign (parts_, parts_ + part_count_);
+        } catch (...) {
+            pending_reject_errno = ENOMEM;
+        }
+    }
+
+    //  Reserve queue capacity only after the pending record is completely
+    //  prepared. This keeps allocation failure outside the synchronized
+    //  runtime state and makes rejection leave caller ownership intact.
+    if (pending_reject_errno == 0) {
+        scoped_lock_t lock (pending.sync);
+        if (inline_terminal_errno == 0 && pending.failing) {
+            pending_reject_errno = ESHUTDOWN;
+        } else {
+            //  Async admission waits by default, matching the former
+            //  binding-owned queues. A non-zero option is an explicit
+            //  application overload policy; zero means unlimited and normal
+            //  HWM pressure never becomes an immediate submit failure.
+            const uint64_t max_msgs = options.send_pending_max_msgs;
+            const uint64_t max_bytes = options.send_pending_max_bytes;
+            if (inline_terminal_errno == 0
+                && ((max_msgs > 0 && pending.pending_msgs + 1 > max_msgs)
+                    || (max_bytes > 0
+                        && pending.pending_bytes + charge > max_bytes))) {
+                pending_reject_errno = EAGAIN;
+            } else {
+                record->op_id = pending.next_op_id++;
+                //  Ownership transfer happens here and is irreversible: from
+                //  this point Core closes the parts, never the caller. Keep
+                //  the inline reservation until the original operation is at
+                //  the front, so a later submit cannot overtake it between
+                //  EAGAIN and queue insertion.
+                if (attempt_inline)
+                    pending.queues[target].push_front (record);
+                else
+                    pending.queues[target].push_back (record);
+                pending.by_op[record->op_id] = record;
+                pending.pending_msgs += 1;
+                pending.pending_bytes += charge;
+                op_id = record->op_id;
+                if (attempt_inline)
+                    pending.inline_attempts.erase (target);
+            }
+        }
+    }
+
+    if (pending_reject_errno != 0) {
+        //  No ownership transfer occurred on rejection. Release the target
+        //  reservation and let already-queued followers make progress.
+        inline_record.parts.clear ();
+        if (record) {
+            record->parts.clear ();
+            delete record;
+            record = NULL;
+        }
+        if (attempt_inline) {
+            scoped_lock_t lock (pending.sync);
+            pending.inline_attempts.erase (target);
+        }
+        drive_send_pending ();
+        dispatch_send_completions_if_local ();
+        errno = pending_reject_errno;
+        return -1;
     }
     //  `record` is no longer safe to dereference: the moment the pending
     //  mutex was released, the admit loop or the deadline thread could have
@@ -680,6 +801,13 @@ int zlink::socket_base_t::send_async_submit (
     }
     if (op_id_out_)
         *op_id_out_ = op_id;
+
+    if (inline_terminal_errno != 0) {
+        finish_send_pending (record, ZLINK_SEND_TERMINAL,
+                             inline_terminal_errno);
+        dispatch_send_completions_if_local ();
+        return 0;
+    }
 
     if (options_->timeout_ms > 0) {
         std::pair<socket_base_t *, zlink_send_op_id_t> *entry =
@@ -701,9 +829,15 @@ int zlink::socket_base_t::send_async_submit (
         }
     }
 
-    //  Fast path: try the physical submit on the calling thread. When the
-    //  target has room this costs zero thread hops, and the completion runs
-    //  inline before this call returns.
+    //  A non-zero operation id is the pending disposition. Core now owns the
+    //  record and completes it exactly once after admission, timeout, cancel
+    //  or termination. The immediate-admission path returned op_id == 0 and
+    //  intentionally produced no callback.
+    //
+    //  Retry once after publishing the record so a writable edge racing the
+    //  initial EAGAIN cannot be lost between the direct attempt and queue
+    //  insertion. If it admits here, it is still a pending operation and its
+    //  callback may run before this function returns.
     drive_send_pending ();
     dispatch_send_completions_if_local ();
     return 0;

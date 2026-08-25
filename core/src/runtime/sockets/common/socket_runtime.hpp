@@ -421,6 +421,10 @@ struct socket_send_pending_runtime_t
     //  peer rid + transport pair identity + generation.
     std::map<routed_send_target_key_t, std::deque<send_pending_record_t *> >
       queues;
+    //  A target in this set is being attempted directly by the submitting
+    //  thread. Later operations queue behind it until that attempt either
+    //  admits or becomes the head pending record.
+    std::set<routed_send_target_key_t> inline_attempts;
     std::map<zlink_send_op_id_t, send_pending_record_t *> by_op;
     uint64_t pending_msgs;
     uint64_t pending_bytes;

@@ -5,9 +5,11 @@ namespace Systems.Zlink.Tests;
 
 /// <summary>
 ///     The routed asynchronous send terminal is a thin wrapper over the Core
-///     0.13.1 send-completion contract: one complete record goes to
-///     <c>zlink_send_async</c>, and exactly one Core completion resolves the
-///     Task. The binding parks nothing, retries nothing and times nothing.
+///     0.13.2 send-admission contract: one complete record goes to
+///     <c>zlink_send_async</c>. Immediate admission returns operation id zero
+///     and resolves locally; a non-zero pending operation receives exactly one
+///     Core completion. The binding parks nothing, retries nothing and times
+///     nothing.
 /// </summary>
 public sealed class test_routed_async_admission
 {
@@ -35,9 +37,8 @@ public sealed class test_routed_async_admission
         Task admitted = dealer.Send().Message(payload).Async();
         started.Stop();
 
-        // The submit hands the record to Core and returns; whether Core runs
-        // the completion inline or on its own dispatch context, the caller is
-        // never occupied waiting for credit.
+        // Immediate admission returns operation id zero and the binding
+        // resolves locally without entering Core's callback dispatch scope.
         Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
         await admitted.WaitAsync(TimeSpan.FromSeconds(3));
 

@@ -722,6 +722,55 @@ void test_request_direct_await_suspends_until_reply ()
     router_done.get ();
 }
 
+void test_request_async_accepted_cancel_is_false_and_drop_is_safe ()
+{
+    zlink::context_t ctx;
+    zlink::dealer_socket_t dealer (ctx);
+    zlink::router_socket_t router (ctx);
+    const std::string endpoint =
+      zlink_cpp_contract::unique_inproc ("cpp-request-accepted-cancel-drop");
+    router.bind (endpoint);
+    dealer.connect (endpoint);
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+
+    std::future<void> server = std::async (std::launch::async, [&router] {
+        for (int index = 0; index != 2; ++index) {
+            zlink::received_t request;
+            assert (router.recv (request) == 0);
+            zlink::message_t reply = make_request_message (
+              index == 0 ? "reply:accepted-cancel" : "reply:dropped");
+            request.reply ().message (reply).submit ();
+        }
+    });
+
+    zlink::message_t accepted = make_request_message ("request:accepted-cancel");
+    auto pending = dealer.request ()
+                     .message (accepted)
+                     .timeout (std::chrono::seconds (2))
+                     .async ();
+    // A request was already admitted to Core. Its reply callback owns the
+    // terminal lifecycle, therefore cancellation cannot retract it.
+    assert (!pending.cancel ());
+    auto accepted_completion = await_result (std::move (pending));
+    assert (accepted_completion.wait_for (std::chrono::seconds (2)));
+    const auto accepted_reply = accepted_completion.take ();
+    assert (accepted_reply.size () == 1);
+    assert (accepted_reply.front ().to_string () == "reply:accepted-cancel");
+
+    {
+        zlink::message_t dropped = make_request_message ("request:dropped");
+        auto result = dealer.request ()
+                        .message (dropped)
+                        .timeout (std::chrono::seconds (2))
+                        .async ();
+        assert (!result.cancel ());
+    }
+    server.get ();
+    // The dropped result has no consumer, but its Core-owned reply callback
+    // must finish and release its self-anchor without touching a dead result.
+    std::this_thread::sleep_for (std::chrono::milliseconds (25));
+}
+
 void test_dealer_request_without_initial_routed_target_is_terminal ()
 {
     zlink::context_t ctx;
@@ -1560,6 +1609,7 @@ int main ()
     test_request_callback_fires_exactly_once ();
     test_request_dealer_router_roundtrip ();
     test_request_direct_await_suspends_until_reply ();
+    test_request_async_accepted_cancel_is_false_and_drop_is_safe ();
     test_dealer_request_without_initial_routed_target_is_terminal ();
     test_dealer_send_without_initial_routed_target_is_terminal ();
     test_routed_send_submit_is_synchronous_and_consumes_parts ();

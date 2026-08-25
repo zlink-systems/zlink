@@ -141,7 +141,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | tls | DEALER_ROUTER | 통과(84.51%) | 통과(102.94%) | 통과(97.76%) | 통과(85.58%) | 통과(81.93%) | 통과(87.04%) | **통과(89.96%)** — secure 5-run median, latency median 1.10x. `log/cpp-single-dealer-router-tls-20260825.ko.md` |
 | tls | DEALER_ROUTER_REQREP | 미달(49.80%) | 미달(52.63%) | 미달(45.64%) | 통과(90.57%) | 통과(93.02%) | 통과(94.80%) | **보류(미달 71.08%)** — clean-source secure 5-run final pair, latency median 1.63x. Sol review가 C0 self-anchor, C1 completion-release 결합, C2 reply native-adopt, C3 scheduler-less inline resume의 비재현/회귀를 확인해 안전 후보 소진을 승인했다. `log/cpp-single-dealer-router-reqrep-tls-20260825.ko.md` |
 | tls | ROUTER_ROUTER | 통과(86.63%) | 통과(106.61%) | 통과(101.16%) | 통과(90.14%) | 통과(93.38%) | 통과(98.72%) | **통과(96.11%)** — secure 5-run median, latency median 1.07x. `log/cpp-single-router-router-tls-20260825.ko.md` |
-| tls | ROUTER_ROUTER_REQREP | 미달(54.09%) | 미달(52.63%) | 미달(42.22%) | 통과(84.00%) | 통과(94.73%) | 통과(100.92%) | **미달(71.43%)** — secure 5-run median, latency median 1.65x. 후보 A는 exact-target contract no-go, 기존 async-only completion 후보 B는 contract 5/5 통과 상태로 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-router-router-reqrep-tls-20260825.ko.md` |
+| tls | ROUTER_ROUTER_REQREP | 재검증 | 재검증 | 재검증 | 재검증 | 재검증 | 재검증 | **재검증 필요** — C 기준 callback completion과 C++ 요청당 coroutine observer의 workload 동등성 검증이 선행되지 않아 기존 paired 비율을 binding 성능 판정으로 사용하지 않는다. `log/cpp-single-router-router-reqrep-tls-20260825.ko.md` |
 | inproc | PAIR | 통과(84.71%) | 통과(100.01%) | 통과(91.40%) | 미달(22.71%) | 미달(73.70%) | 통과(84.04%) | **미달(76.09%)** — 5-run median, latency median 1.08x. 128KiB 이상 bounded pool은 이미 baseline이고 64KiB 하향은 TCP 25/30 partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-pair-inproc-20260825.ko.md` |
 | inproc | PUBSUB | 통과(99.46%) | 통과(91.11%) | 통과(92.14%) | 미달(24.09%) | 미달(79.24%) | 통과(86.24%) | **미달(78.71%)** — 5-run median, latency median 1.23x. direct single-part publish와 bounded pool은 baseline이며 64KiB pool 하향은 TCP partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-pubsub-inproc-20260825.ko.md` |
 | inproc | DEALER_DEALER | 미달(76.21%) | 통과(84.11%) | 통과(81.64%) | 미달(25.90%) | 미달(72.17%) | 통과(82.94%) | **미달(70.49%)** — 5-run median, latency median 1.22x. bounded pool은 baseline이며 64KiB 하향은 TCP partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-dealer-dealer-inproc-20260825.ko.md` |
@@ -239,10 +239,11 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 23. `ROUTER_ROUTER / tls`는 C→C++ 64B smoke와 6-size secure 5-run median을 통과했다. 다음은
     마지막 TLS Single 패턴 `ROUTER_ROUTER_REQREP / tls`를 같은 secure 규칙으로 측정하고, 미달이면
     이 문서 4절의 개선 pass를 끝낸다.
-24. `ROUTER_ROUTER_REQREP / tls`는 secure 5-run baseline과 개선 gate를 마쳤다. 후보 A는 initial
-    exact target을 생략해 terminal/no-reroute contract를 바꾸므로 no-go다. 후보 B인 async-only
-    completion bridge는 contract 5/5를 통과하지만 throughput 71.43%로 request/reply 목표에는
-    미달이다. TLS Single 전체를 확정했으며, 다음은 `PAIR / inproc`를 C→C++ 순서로 측정한다.
+24. `ROUTER_ROUTER_REQREP / tls`의 기존 paired 결과는 C의 callback completion과 C++ 요청당
+    detached coroutine observer가 completion-path 동등성 검증 없이 비교된 값이다. 따라서 후보
+    C0~C3·clean final 수치를 binding 성능 판정이나 보류 근거로 사용하지 않는다. 먼저 completion
+    consumer, 요청당 allocation/task 생성, notification과 latency sampling의 동등성을 검증하고
+    C와 동등한 workload를 확정한 뒤 처음부터 재측정·개선한다.
 25. `PAIR / inproc`는 C→C++ 64B smoke와 6-size 5-run median을 완료했다. latency는 통과했지만
     aggregate throughput 76.09%가 strict 95% 목표에 미달한다. 64KiB 22.71%가 주된 하락점이다.
     128KiB–1MiB bounded pool 후보 A는 baseline에 이미 반영되어 있고, pool 하한을 64KiB로 낮추는
@@ -267,6 +268,32 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     재선택은 terminal/no-reroute contract no-go며, async-only completion bridge와 safe borrowed
     single-part view는 유지한다. 모든 inproc Single 패턴의 C→C++ 5-run paired 측정을 확정했고,
     다음은 `PAIR / ipc`를 같은 개선 gate와 순서로 측정한다.
+31. Core async send의 즉시 admission까지 operation별 callback을 만들던 계약을 수정했다.
+    `SUBMIT_OK + op_id=0`은 callback 없이 binding이 즉시 완료하고, 실제 HWM pending만
+    nonzero id와 callback을 사용한다. pending 상한의 기본값도 기존 async 대기 계약과
+    동일하게 unlimited로 바꿨다. C++ `ROUTER_ROUTER / tcp / 64B` coroutine send는 먼저
+    기존 `EDEADLK` 실패에서 5/5 완료, 중앙값 891.29 Kmsg/s로 바뀌었다. perf helper가
+    메시지마다 자식 coroutine을 만들던 구조를 전송 loop coroutine 하나에서 public
+    `send_routed_async()`를 직접 await하도록 고쳐 983.88 Kmsg/s를 확인했다. 이어서 pending
+    callback anchor를 socket별 mutex+unordered map에 매번 등록·삭제하던 경로를 exact-once
+    callback 소유권과 intrusive refcount로 바꿔 1,046.39 Kmsg/s를 얻었다. 단일-part async도
+    동기 send와 같은 native move helper를 사용해 불필요한 message vector 승격을 제거했고,
+    Core admission의 heap send scope를 동기 경로와 같은 stack RAII로 바꿨다. 최종 중앙값은
+    1,076.69 Kmsg/s다
+    (`perf_cpp_single_linux_20260826_071337_core0132-stack-send-scope-single-native-intrusive-single-coro-tcp64-paired5-20260826.txt`).
+    최초 정상 동작 891.29 Kmsg/s 대비 20.80% 개선됐지만 동기 C 2,092.20 Kmsg/s 대비
+    51.46%이므로 여전히 미달이다. Core 즉시 경로의 소형 part stack 후보는 +0.16%로
+    측정 잡음이라 폐기했고, completion state/anchor co-allocation은 973.09 Kmsg/s로
+    회귀해 폐기했다. exact target cache는 reconnect generation과 terminal/no-reroute 계약을
+    바꿀 수 있어 적용하지 않았다. RID-only target 선택과 admission을 합친 후보는 첫 측정
+    1,100.84 Kmsg/s 뒤 최종 재측정이 1,078.46 Kmsg/s(+0.16%)로 재현되지 않아 public
+    target 계약 확장과 구현을 모두 폐기했다. 이 후보의 두 번째 `process_commands()` 생략도
+    1,069.66 Kmsg/s로 회귀했다.
+    .NET 동일 조건의 최종 중앙값은 679.85 Kmsg/s로, 변경 전 620.27 Kmsg/s보다 9.60%
+    높다
+    (`perf_dotnet_single_linux_20260826_054616_core0132-send-admission-fastpath-tcp64-paired5-v2-20260826.txt`).
+    이 수치는 async send 경로 진단이며 위 표의 동기 C 대비 공식 paired 판정을 대체하지
+    않는다.
 
 ## 7. 완료 기준
 

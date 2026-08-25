@@ -253,6 +253,7 @@ add_library(zlink_cpp STATIC
   src/Runtime/Eventing/monitor.cpp
   src/Runtime/Eventing/timers.cpp
   src/Runtime/Messaging/message.cpp
+  src/Runtime/Messaging/async_continuation_dispatcher.cpp
   src/Runtime/Messaging/received.cpp
   src/Runtime/Messaging/reply_operations.cpp
   src/Runtime/Messaging/request_reply.cpp
