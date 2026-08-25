@@ -6,7 +6,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
-BROWSER_SMOKE=1
+# 샘플 검증은 client connector 경로만 돌린다. node·cpp ZoneWorld runner에는 브라우저
+# 단계가 없으므로 기본 실행 범위를 맞춘다. 브라우저 smoke는 --browser-smoke로 따로 켠다.
+BROWSER_SMOKE=0
 SCENARIO="all"
 SCENARIO_SET=0
 G4_CHILD=0
@@ -171,21 +173,22 @@ for index in (1, 2, 3):
 
 # The replacement reuses the application NodeId but has a different socket endpoint.
 # Framework gives every process lifecycle a new prefix-based RID.
-write("zone-node-replacement", "zoneNode", {
-    "nodeId": "zone-node-2",
-    "meshEndpoint": f"tcp://127.0.0.1:{ports[3]}",
-    "faultTickZone": None,
-    "disableBots": False,
-    "subscriberOnly": False,
-})
-
 write("zone-node-crash-replacement", "zoneNode", {
     "nodeId": "zone-node-2",
     "meshEndpoint": f"tcp://127.0.0.1:{ports[3]}",
     "faultTickZone": None,
     "disableBots": True,
     "subscriberOnly": False,
+    # 7.5 — crash 교체는 이전 owner의 object를 복원하지 않는다. zone 0개로 ready가 된다.
     "allowEmptyZoneSet": True,
+})
+
+write("zone-node-replacement", "zoneNode", {
+    "nodeId": "zone-node-2",
+    "meshEndpoint": f"tcp://127.0.0.1:{ports[3]}",
+    "faultTickZone": None,
+    "disableBots": False,
+    "subscriberOnly": False,
 })
 
 write("ops", "ops", {
@@ -652,6 +655,9 @@ if [[ "$G4_CHILD" == "1" ]]; then
     g_fail ZW-G4 "the interrupted operation did not terminate as Unavailable"
   fi
   first_replacement_ops_line="$(next_log_line "$LOG_DIR/ops.log")"
+  # crash 교체는 이전 owner의 zone을 되찾지 않는다 — ZoneWorld 스펙 7.5는 "새 object를
+  # 수용할 수 있게 되는 것"이지 "이전 Ready owner가 소유하던 object의 자동 복원·재생성이
+  # 아니다"라고 정한다. 그래서 zone 0개로 ready가 되는 전용 config를 쓴다.
   start_zone_node zone-node-2 zone-node-crash-replacement
   crash_rid="$(routing_id_of zone-node-2 "$first_replacement_ops_line")"
   if ! is_zone_node_rid "$crash_rid" || [[ "$crash_rid" == "$old_rid" ]]; then

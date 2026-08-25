@@ -1,0 +1,59 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameQuest.Client", "Client\GameQuest.Client.csproj", "{B9CE2C28-FD72-4D78-9EEB-B2DC82B59662}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameQuest", "GameQuest.csproj", "{58A26298-4C66-4530-A7E9-83ACEB89027A}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Server", "Server", "{C901D396-738C-4CAA-A8CC-102D265D9EC4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameQuest.Server.Configuration", "Server\Configuration\GameQuest.Server.Configuration.csproj", "{C5EBDF74-22EC-4AB7-AFB5-1A4387ED2FA1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameQuest.GameApi", "Server\GameApi\GameQuest.GameApi.csproj", "{BD88360A-B7C8-4515-B80E-F8FCAC6C3FDD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameQuest.QuestMission", "Server\QuestMission\GameQuest.QuestMission.csproj", "{B0DA33B4-D534-46CE-9992-93C741B854B3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameQuest.Shared", "Shared\GameQuest.Shared.csproj", "{B1B5CBFC-23B8-4F08-AD33-28F749C9FBAC}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B9CE2C28-FD72-4D78-9EEB-B2DC82B59662}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B9CE2C28-FD72-4D78-9EEB-B2DC82B59662}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B9CE2C28-FD72-4D78-9EEB-B2DC82B59662}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B9CE2C28-FD72-4D78-9EEB-B2DC82B59662}.Release|Any CPU.Build.0 = Release|Any CPU
+		{58A26298-4C66-4530-A7E9-83ACEB89027A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{58A26298-4C66-4530-A7E9-83ACEB89027A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{58A26298-4C66-4530-A7E9-83ACEB89027A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{58A26298-4C66-4530-A7E9-83ACEB89027A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C5EBDF74-22EC-4AB7-AFB5-1A4387ED2FA1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C5EBDF74-22EC-4AB7-AFB5-1A4387ED2FA1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C5EBDF74-22EC-4AB7-AFB5-1A4387ED2FA1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C5EBDF74-22EC-4AB7-AFB5-1A4387ED2FA1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BD88360A-B7C8-4515-B80E-F8FCAC6C3FDD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BD88360A-B7C8-4515-B80E-F8FCAC6C3FDD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BD88360A-B7C8-4515-B80E-F8FCAC6C3FDD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BD88360A-B7C8-4515-B80E-F8FCAC6C3FDD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B0DA33B4-D534-46CE-9992-93C741B854B3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B0DA33B4-D534-46CE-9992-93C741B854B3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B0DA33B4-D534-46CE-9992-93C741B854B3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B0DA33B4-D534-46CE-9992-93C741B854B3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B1B5CBFC-23B8-4F08-AD33-28F749C9FBAC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B1B5CBFC-23B8-4F08-AD33-28F749C9FBAC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B1B5CBFC-23B8-4F08-AD33-28F749C9FBAC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B1B5CBFC-23B8-4F08-AD33-28F749C9FBAC}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{C5EBDF74-22EC-4AB7-AFB5-1A4387ED2FA1} = {C901D396-738C-4CAA-A8CC-102D265D9EC4}
+		{BD88360A-B7C8-4515-B80E-F8FCAC6C3FDD} = {C901D396-738C-4CAA-A8CC-102D265D9EC4}
+		{B0DA33B4-D534-46CE-9992-93C741B854B3} = {C901D396-738C-4CAA-A8CC-102D265D9EC4}
+	EndGlobalSection
+EndGlobal

@@ -571,6 +571,63 @@ for d in framework/languages/<tree>/samples/*/; do
 done
 ```
 
+### dotnet ZoneWorld — 남은 조사
+
+7샘플 중 유일하게 통과하지 못한다. **이 캠페인의 회귀가 아니다** — dotnet 소스를 HEAD로
+되돌려 돌리면 9개 시나리오가 실패하고(ZW-D1·E1·E2·E3·E4·E6·F1·F3·F4), 현재 상태에서는
+1곳만 실패한다. node ZoneWorld(167초)와 cpp ZoneWorld(206초)는 같은 시나리오 정본으로
+통과한다.
+
+지금까지 좁힌 것.
+
+| 사실 | 근거 |
+|---|---|
+| 실패 지점은 노드 교체 | `!! zone-node-replacement never logged 'topology=ready'` |
+| 교체 노드는 zone 2개를 반드시 확보해야 한다 | `run_sample.sh`의 `zone-node-replacement` config는 `allowEmptyZoneSet`을 켜지 않는다. 켜는 것은 `zone-node-crash-replacement`뿐이다 |
+| 확보 재시도 예산은 30초 | `BotSpawner.cs`의 `StartupRetryAttempts=120` × `StartupRetryDelay=250ms`. 넘으면 예외를 던져 프로세스가 죽는다 |
+| 죽은 owner의 zone은 lease가 만료돼야 가져온다 | ZoneNode는 lease 설정을 하지 않아 framework 기본값(TTL 15초, 갱신 5초)을 쓴다. Ops만 TTL 3초로 줄인다 |
+| 실패 시 관찰되는 것 | `live_row_filter rejected=owner_not_live`가 8개 owner에 반복되고 `actor_join_retry attempt=58`까지 간다 |
+
+#### 원인 — dotnet만 브라우저 단계를 돌렸다
+
+`run_sample.sh`의 playwright·browser 참조 수를 세면 **dotnet 31곳, node 0곳, cpp 0곳**이다.
+dotnet ZoneWorld만 `shared_sample/zoneworld/client`의 Playwright UI 테스트를 추가로 돌린다.
+같은 시나리오 정본을 검증하는 것이 아니라 **dotnet만 검증 범위가 넓었다.**
+
+3회 실행에서 실패 지점이 Playwright → 노드 교체 → Playwright로 갈린 것도 이걸로 설명된다.
+
+`--no-browser-smoke` 옵션은 원래 있었지만 **기본값이 켜짐(`BROWSER_SMOKE=1`)**이었다.
+사용자 판단(2026-08-25)으로 **기본값을 끔으로 바꿨다** — 샘플 검증은 client connector
+경로만 돌리고, 브라우저 smoke가 필요하면 `--browser-smoke`로 따로 켠다.
+
+#### 언어별 설정 차이
+
+같은 시나리오 정본인데 node는 통과하고 dotnet은 못 하므로 설정을 대조했다.
+
+| 언어 | ZoneNode의 owner lease |
+|---|---|
+| node | `ownerLeaseTtlMs(3_000)`, 갱신 1초, fencing margin 500 ms — **Ops·Gateway·ZoneNode가 `Server/Configuration/location-store.ts` 하나를 공유** |
+| dotnet | **설정하지 않는다** → framework 기본값 TTL 15초, 갱신 5초. Ops만 `Server/Ops/Program.cs`에서 TTL 3초로 줄인다 |
+| cpp | ZoneWorld 샘플에 lease 설정이 없다 |
+
+**dotnet이 ZoneNode에 lease를 설정하지 않는 것은 실수가 아니라 의도다.** Ops 코드의 주석이
+밝힌다 — "Zone nodes keep the documented 30-second defaults, so crash scenarios still exercise
+real lease expiry (§4.2 and §8.1)". crash 시나리오가 실제 lease 만료를 겪게 하려는 것이다.
+
+다만 두 가지가 어긋난다.
+
+- 주석은 "30-second defaults"라 하지만 framework 기본값은 **`OwnerLeaseTtl` 15초**다.
+- `BotSpawner`의 재시도 예산 30초가 그 주석의 30초를 전제로 맞춰졌다면, 실제 15초 TTL +
+  fencing margin과의 관계를 다시 봐야 한다.
+
+즉 **lease 만료 대기와 재시도 예산이 빠듯한 구조**이고, WSL처럼 느린 환경에서 30초를 넘긴다.
+다음 단계는 교체 노드가 던진 예외 원문을 확보해 "예산 부족"인지 "영영 claim 불가"인지
+가르는 것이다. 증거는 `ZLINK_SAMPLE_EVIDENCE_DIR`를 주고 실행해야 남는다.
+
+```bash
+ZLINK_SAMPLE_EVIDENCE_DIR=<디렉터리> bash framework/languages/dotnet/samples/ZoneWorld/run_sample.sh
+```
+
 ### 샘플 실행에서 배운 것
 
 - **일괄 실행의 실패를 그대로 믿지 않는다.** cpp DeliveryDispatch(81초 connector timeout)와

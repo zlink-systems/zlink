@@ -98,6 +98,34 @@ D1~D10과 별개로, 전체 게이트를 돌리다 드러난 발산에 대해 �
 적용: `packages/framework/src/runtime/foundation/service-stateful-wire-codec.ts`의
 `serviceSessionRelocationIdentityKey`. 나머지 3언어도 같은 기준으로 대조해야 한다.
 
+## 게이트 실행 중 발견 — R2
+
+| R# | 무엇이 갈렸는가 | 판정 | 근거 |
+|---|---|---|---|
+| R2 | `zlink flow:` structured log 본문의 첫 key가 언어마다 다르다. dotnet은 `event_id=`, node는 `event=`로 시작한다 | **`event`가 맞다.** dotnet을 고친다 | [Message flow tracing](../../../framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md)의 "Structured log 대체 표기"가 key를 `event`, `phase`, `surface`, `kind`, `mesh`, … 로 고정한다. 기록 attribute의 이름(`event_id`, `message_kind` …)과는 별개 집합이다(R1 표 참조) |
+
+관찰 근거 — ZoneWorld 샘플의 dotnet `zone-node-2.log`가 `zlink flow: event_id=zlink.message_flow`로
+시작한다. node 구현은 `event`를 쓴다.
+
+## ZoneWorld 샘플 — 언어별 구현 불일치
+
+시나리오 ID 집합은 세 언어가 **34개 완전히 일치**하고, 각 ID의 전제·행동·단언은
+[ZoneWorld 샘플 스펙](../../../framework/doc/framework/common/sample/zoneworld/README.ko.md)이
+소유한다. 그 문서가 "언어별 runner가 일부 ID를 runner-driven으로 구현할 수는 있으나 ID의
+전제·행동·단언 의미는 바꾸지 않는다"고 정한다. 그런데 실행 범위와 설정이 갈려 있다.
+
+| 항목 | dotnet | node | cpp | 판정 |
+|---|---|---|---|---|
+| 브라우저(Playwright) 단계 | 있었음 — `run_sample.sh`에 playwright 참조 31곳 | 없음 | 없음 | **정리함** — 기본값을 끔으로 바꾸고 `--browser-smoke` 옵트인으로 남겼다. 샘플 검증은 client connector 경로만 돈다 |
+| 오케스트레이션 | bash 1,060줄 | bash 10줄 + `Runner/sample-runner.mjs` 790줄 | bash 601줄 | 미정리 — 같은 34개를 검증하는데 구조와 분량이 제각각이다 |
+| owner lease | Ops만 TTL 3초로 재정의 | Ops·Gateway·ZoneNode 전부 TTL 3초 | 재정의 없음 | **정리함 — 재정의를 전부 걷어냈다.** ZoneWorld 스펙은 report TTL 15초(§2.2, ZW-C3)만 정하고 owner lease 재정의를 요구하지 않는다. 스펙대로면 [Location runtime §5](../../../framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md)의 기본값(TTL 15초·갱신 5초·timeout 3초·fencing margin 5초)을 그대로 쓴다. cpp가 원래 맞았다 |
+| ZW-G4 재시작 config | `zone-node-crash-replacement`(`allowEmptyZoneSet=true`) — zone 0개로 ready | `topology=ready node=… zones=`(빈 zone)을 기다린다 | 평소 config로 재기동 | **cpp가 이탈** — [ZoneWorld 스펙 §7.5](../../../framework/doc/framework/common/sample/zoneworld/README.ko.md)는 crash replacement를 "같은 NodeId로 새 process를 시작해 **새 object를 수용할 수 있게 되는 것**"으로 정의하고 "**이전 Ready owner가 소유하던 object의 자동 복원·재생성이 아니다**"라고 못박는다. dotnet·node가 맞고, 평소 config로 띄우면 죽은 owner의 zone을 다시 claim하려 한다 |
+| `.sln` | 7개 샘플 중 3개만 있었음 | — | — | **정리함** — GameQuest·ShoppingMall·SupportChat·ZoneWorld에 추가 |
+
+또한 dotnet Ops 코드 주석이 "the documented 30-second defaults"라고 하지만 스펙이 정한
+기본값은 **`OwnerLeaseTtl` 15초**다([Location runtime §5](../../../framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md)).
+framework 구현 기본값은 4언어 모두 스펙과 일치하므로, 어긋난 것은 주석뿐이다.
+
 ## 구현 부채 — 이 캠페인이 만들고 넘기는 목록
 
 문서를 확정한 결과 "지금 구현이 계약과 다르다"가 확정된 항목이다. **이 캠페인에서는 코드를
@@ -115,6 +143,8 @@ D1~D10과 별개로, 전체 게이트를 돌리다 드러난 발산에 대해 �
 | D1 | cpp | eager coroutine 첫 turn이 session thread에서 시작하는 동작 정정 |
 | G15 | dotnet, jvm, node | lane 정책 타입이 의미 없는 조합을 표현할 수 없게 변경 |
 | G22 | jvm | `close_reason`을 `server_drain`에서 `server_shutdown`으로, `idle_timeout`·`heartbeat_timeout` 종료를 `zlink.stream.connections.closed`에 계상 |
+| ZW-G4 | cpp | crash 교체 노드를 평소 config로 띄우지 않는다. ZoneWorld 스펙 7.5대로 이전 owner의 zone을 되찾지 않는 재기동으로 바꾼다(dotnet의 `allowEmptyZoneSet`, node의 빈 zone 대기가 기준) |
+| R2 | dotnet | `zlink flow:` 본문 첫 key를 `event_id`에서 `event`로 바꾼다 |
 | G16 | 언어별 | 단일 언어 이탈 묶음 — 판정표 J8~J12 참조 |
 
 D9(bind 시 Message Follow relay)는 4언어 어디에도 구현이 없어 계약 의도 자체를 재확인해야

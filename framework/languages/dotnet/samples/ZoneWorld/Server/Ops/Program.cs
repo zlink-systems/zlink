@@ -51,13 +51,9 @@ builder.Services.AddZLinkFramework(options =>
         redis.ConnectionString = shared.RedisEndpoint;
         redis.KeyPrefix = shared.RedisKeyPrefix;
     }));
-    // These values govern registrations owned by Ops. Zone nodes keep the documented 30-second
-    // defaults, so crash scenarios still exercise real lease expiry (§4.2 and §8.1).
-    var locations = options.ConfigureLocations();
-    locations.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(1);
-    locations.OwnerLeaseTtl = TimeSpan.FromSeconds(3);
-    locations.OwnerLeaseFencingMargin = TimeSpan.FromSeconds(1);
-    locations.OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(500);
+    // owner lease는 Location runtime 5절이 정한 기본값을 그대로 쓴다 — TTL 15초, 갱신
+    // 5초, renew timeout 3초, fencing margin 5초. ZoneWorld 스펙은 report TTL 15초(2.2)만
+    // 정하고 owner lease 재정의를 요구하지 않으므로 어떤 역할도 덮어쓰지 않는다.
 
     options.ConfigureDispatch()
         .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
