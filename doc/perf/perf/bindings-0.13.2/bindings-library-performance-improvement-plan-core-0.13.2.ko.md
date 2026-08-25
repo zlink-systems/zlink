@@ -66,16 +66,18 @@ C++/Rust의 latency 상한은 2.0x, .NET/Java/Go는 3.0x, Node/Python은 5.0x다
 secure transport(`tls`, `wss`)와 목표 경계 ±5%p는 C→binding 모두 5회 중앙값으로 최종
 판정한다.
 
-상태는 다음 세 가지뿐이다.
+상태는 다음 네 가지뿐이다.
 
 - `미측정`: 유효한 paired C/binding report가 없다.
 - `통과(비율%)`: aggregate throughput·latency, 회귀, options, auto-HWM, client 수 조건을
   충족한다.
 - `미달(비율%)`: aggregate throughput 또는 latency가 목표에 미치지 못했다. log에 개선 pass
-  상태와 후보 결과를 반드시 기록한다.
+  상태와 후보 결과를 반드시 기록하며, 개선 pass가 진행 중인 동안에는 다음 셀로 이동하지 않는다.
+- `보류(미달 비율%)`: 유효한 paired 재측정, 계약 회귀, 구현·측정된 후보와 **Sol reviewer의 후보
+  소진 결론**까지 모두 log·시트에 남겼지만 목표에는 미달한 최종 상태다. 이때만 다음 셀로 이동한다.
 
-`보류`는 성능 상태로 사용하지 않는다. 개선 pass를 모두 끝냈더라도 목표를 충족하지 못하면
-상태는 계속 `미달`이다.
+`보류`는 단순한 주관적 판단이나 no-go 하나만으로 지정하지 않는다. Sol review 전에는 상태를
+`미달`로 유지한다.
 
 ## 4. 강제 작업 순서
 
@@ -88,8 +90,10 @@ secure transport(`tls`, `wss`)와 목표 경계 ±5%p는 C→binding 모두 5회
    한정하고, before/after와 기능 회귀를 기록한다.
 5. 후보 A가 목표를 못 맞추거나 no-go이면 read-only Sol review를 받고, 공개 contract를
    유지하는 후보 B를 구현·측정하거나 no-go 근거를 남긴다.
-6. 두 pass 후에도 목표를 못 맞추면 `미달`로 확정하고 C report, binding report, 후보 A/B,
-   Sol 의견, contract 회귀 결과를 log와 시트에 남긴 뒤에만 다음 항목으로 이동한다.
+6. 구현·측정 가능한 후보를 끝낸 뒤 Sol reviewer가 안전한 후보 소진을 결론 내리면, clean source의
+   동일 manifest C→binding final pair를 다시 측정한다. 목표를 못 맞추면 `보류(미달)`로 확정하고
+   C report, binding report, 후보 결과, Sol 의견, contract 회귀 결과를 log와 시트에 남긴 뒤에만
+   다음 항목으로 이동한다.
 7. 개선을 채택한 경우에만 source·검증·paired report·문서를 한 커밋으로 만들고 push한다.
 
 허용되는 변경은 public interface, message/routing-id ownership, 정확히 한 번 완료, close와
@@ -128,7 +132,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | wss | PUBSUB | 통과(95.05%) | 통과(96.73%) | 통과(96.39%) | 통과(100.53%) | 통과(101.93%) | 통과(98.90%) | **통과(98.25%)** — secure 5-run median, latency median 1.04x. `log/cpp-single-pubsub-wss-20260825.ko.md` |
 | wss | DEALER_DEALER | 통과(91.20%) | 통과(97.34%) | 통과(90.86%) | 통과(103.93%) | 통과(96.12%) | 통과(83.83%) | **통과(93.89%)** — secure 5-run median, latency median 1.07x. `log/cpp-single-dealer-dealer-wss-20260825.ko.md` |
 | wss | DEALER_ROUTER | 통과(95.65%) | 통과(104.07%) | 통과(98.99%) | 통과(99.39%) | 통과(107.71%) | 통과(91.14%) | **통과(99.49%)** — secure 5-run median, latency median 0.99x. `log/cpp-single-dealer-router-wss-20260825.ko.md` |
-| wss | DEALER_ROUTER_REQREP | 미달(43.96%) | 미달(39.93%) | 미달(40.89%) | 통과(89.44%) | 통과(95.47%) | 통과(96.42%) | **미달(67.69%)** — secure 5-run median, latency median 1.82x. 후보 A는 exact-target contract no-go, 기존 async-only 완료 경로(B)는 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-dealer-router-reqrep-wss-20260825.ko.md` |
+| wss | DEALER_ROUTER_REQREP | 미달(43.78%) | 미달(38.22%) | 미달(38.62%) | 통과(89.15%) | 통과(92.75%) | 통과(96.56%) | **보류(미달 66.51%)** — clean-source secure 5-run final pair, latency median 1.87x. Sol review가 세 구현 후보의 실질 개선 없음을 확인해 안전 후보 소진으로 결론. `log/cpp-single-dealer-router-reqrep-wss-20260825.ko.md` |
 | wss | ROUTER_ROUTER | 통과(85.73%) | 통과(97.40%) | 통과(95.26%) | 통과(97.82%) | 통과(99.70%) | 통과(92.21%) | **통과(94.69%)** — secure 5-run median, latency median 1.05x. `log/cpp-single-router-router-wss-20260825.ko.md` |
 | wss | ROUTER_ROUTER_REQREP | 미달(41.85%) | 미달(38.80%) | 미달(38.61%) | 통과(89.44%) | 통과(90.03%) | 통과(87.36%) | **미달(64.35%)** — secure 5-run median, latency median 1.86x. 후보 A는 exact-target contract no-go, 기존 async-only completion 후보 B는 contract 5/5 통과 상태로 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-router-router-reqrep-wss-20260825.ko.md` |
 | tls | PAIR | 미달(90.41%) | 통과(101.12%) | 통과(99.16%) | 미달(92.09%) | 미달(88.67%) | 미달(81.07%) | **미달(92.09%)** — secure 5-run median, latency median 0.99x. bounded pool 후보 A는 이미 baseline에 반영됐고 64KiB pool 후보 B는 기존 timeout no-go. `log/cpp-single-pair-tls-20260825.ko.md` |
@@ -192,9 +196,12 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     `DEALER_ROUTER / wss`를 같은 secure 규칙으로 측정한다.
 14. `DEALER_ROUTER / wss`도 C→C++ 64B smoke와 6-size secure 5-run median을 통과했다. 다음은
     `DEALER_ROUTER_REQREP / wss`를 같은 secure 규칙으로 측정하고, 미달이면 개선 pass를 끝낸다.
-15. `DEALER_ROUTER_REQREP / wss`는 secure 5-run baseline과 contract gate를 마쳤다. exact target을
-    생략하는 후보 A는 public terminal/failover contract no-go이며, 기존 async-only completion 후보 B는
-    이미 source에 반영되어 있다. throughput 67.69%로 미달을 확정하고 다음은 `ROUTER_ROUTER / wss`다.
+15. `DEALER_ROUTER_REQREP / wss`는 secure 5-run baseline 뒤 후보 1(bridge+completion co-allocation),
+    후보 2(scheduler 없는 inline resume slot), 후보 3(native reply-part adopt)를 구현·계약 검증·동일 manifest
+    측정했다. Sol reviewer는 각각 67.72%/67.07%/68.37%가 control drift 범위의 혼재 결과라 채택할
+    실질 개선이 아니며, 남은 변경은 exact target·async consumer·reply ownership·close/liveness 계약을
+    바꾸므로 no-go라고 결론 냈다. clean source final pair는 66.51%, latency 1.87x이며 throughput 85%
+    미달이므로 `보류(미달 66.51%)`로 닫고 다음은 `ROUTER_ROUTER / wss`다.
 16. `ROUTER_ROUTER / wss`는 C→C++ 64B smoke와 6-size secure 5-run median을 통과했다. 다음은
     마지막 WSS Single 패턴 `ROUTER_ROUTER_REQREP / wss`를 같은 secure 규칙으로 측정하고, 미달이면
     이 문서 4절의 개선 pass를 끝낸다.
