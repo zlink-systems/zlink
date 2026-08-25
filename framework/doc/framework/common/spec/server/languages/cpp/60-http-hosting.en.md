@@ -1,12 +1,11 @@
-<!-- framework-adapter-nav:start -->
-[Spec table of contents](README.en.md) | [Previous: C++ exact interface](interfaces/README.en.md) | [Next: C++ Embedded HTTP Server](61-embedded-http-server.en.md)
-<!-- framework-adapter-nav:end -->
-
 [Framework common document](../../../../README.en.md)
 
 
 # C++ HTTP Hosting Public Contract
 
+<!-- framework-adapter-nav:start -->
+[C++ contract table of contents](README.en.md) | [Language interface table of contents](../README.en.md) | [Previous: C++ Per-Language Interface](interfaces/README.en.md) | [Next: C++ Embedded HTTP Server](61-embedded-http-server.en.md)
+<!-- framework-adapter-nav:end -->
 > This document is the formal contract C++ HTTP hosting must provide.
 
 ## 1. Request Processing Contract
@@ -268,7 +267,7 @@ Handler signatures that must fail:
 The support scope is typed JSON route and raw HTTP route. `GET`,
 `POST`, `PUT`, `DELETE` must be registrable with the same convention.
 The [C++ configuration and host interface](interfaces/02-configuration-host.en.md#41-http-hosting)
-solely owns the exact `http_options_builder_t` declaration. This
+solely owns the `http_options_builder_t` declaration. This
 section defines the route builder's usage semantics and the HTTP
 request/response contract.
 
@@ -519,7 +518,7 @@ A framework error kind maps to HTTP status.
 | `protocol_error` | `400 Bad Request` | The client body didn't convert to a DTO, or the request meaning doesn't match the framework contract |
 | `not_found` | `404 Not Found` | The target route, channel, or service wasn't found |
 | `framework_exception_t::code() == std::errc::timed_out` | `504 Gateway Timeout` | A zlink request behind HTTP hosting didn't finish in time |
-| `framework_exception_t::code()` indicates a [shutdown](../../01-glossary.en.md#shutdown) boundary and the host is shutting down | `503 Service Unavailable` | The host is shutting down |
+| `framework_exception_t::code()` indicates a [shutdown](../../00-foundation/02-glossary.en.md#shutdown) boundary and the host is shutting down | `503 Service Unavailable` | The host is shutting down |
 | `internal_failure` | `500 Internal Server Error` | An internal handler or runtime failure |
 
 If the HTTP server runtime detects a request that exceeded the body
@@ -545,7 +544,7 @@ The HTTP server runs as a `hosted_service_t`.
   shutdown timeout.
 - It doesn't indefinitely build a new zlink submit during shutdown.
 
-An HTTP endpoint switches to [ready](../../01-glossary.en.md#ready)
+An HTTP endpoint switches to [ready](../../00-foundation/02-glossary.en.md#ready)
 only after the framework client the handler is injected becomes ready.
 On shutdown, it first rejects a new HTTP request and gives an
 in-progress handler a chance to complete within the messaging drain
@@ -614,7 +613,7 @@ use the framework's `http_request_t`, `http_response_t`, and
 | Package location | HTTP hosting is provided by the framework server package. |
 | Implementation dependency exposure | Beast, Asio, and SSL implementation types aren't exposed in the public header and signature. |
 | HTTPS/TLS | Certificate and private key configuration are provided as a public option. |
-| Route matching | Supports exact path and `{name}` path parameter. |
+| Route matching | Supports literal path and `{name}` path parameter. |
 | Method | Supports `GET`, `POST`, `PUT`, `DELETE` with the same builder convention. |
 | Cancellation | Doesn't add a separate cancellation token to the handler signature — applies the request timeout and host drain contract. |
 | Response customization | A typed DTO defaults to `200 OK` status. Direct status and header control is provided by a handler that returns `http_response_t`. |
@@ -689,5 +688,5 @@ Handler signature regression matrix:
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Spec table of contents](README.en.md) | [Previous: C++ exact interface](interfaces/README.en.md) | [Next: C++ Embedded HTTP Server](61-embedded-http-server.en.md)
+[C++ contract table of contents](README.en.md) | [Language interface table of contents](../README.en.md) | [Previous: C++ Per-Language Interface](interfaces/README.en.md) | [Next: C++ Embedded HTTP Server](61-embedded-http-server.en.md)
 <!-- framework-adapter-nav:bottom:end -->

@@ -1,6 +1,6 @@
 # HTTP Client — 공통 스펙
 
-[스펙 목차](../server/README.ko.md) | [이전: Channel 메시징](../server/08-channel-messaging.ko.md) | [다음: SPOT 메시징](../server/12-spot-messaging.ko.md)
+[스펙 목차](../server/README.ko.md) | [이전: Channel 메시징](../server/02-channel-transport/02-channel-messaging.ko.md) | [다음: SPOT 메시징](../server/03-spot-actor/02-spot-messaging.ko.md)
 
 > 이 문서는 HTTP client를 Framework에서 등록하고 호출하는 경계를 정의한다. 정체성,
 > fluent builder 형식, 실행 terminator, Spot 실행 문맥과의 결합, codec과 공통 오류
@@ -18,7 +18,7 @@
 **HTTP client는 STREAM connector와 같은 자리에 있다.** 별도 패키지로 배포하지만 **framework
 전용 동반 client**이며, 계약은 framework가 소유한다.
 
-| | [STREAM connector](../server/01-glossary.ko.md#stream-connector) | HTTP client |
+| | [STREAM connector](../server/00-foundation/02-glossary.ko.md#stream-connector) | HTTP client |
 |---|---|---|
 | 패키지 | 별도 | 별도 |
 | 계약 소유 | framework 공통 스펙([32](../stream-connector/32-stream-connector.ko.md)) | framework 공통 스펙(이 문서) |
@@ -32,7 +32,7 @@
 **framework는 HTTP client에 의존하지 않는다** — HTTP client 없이도 동작한다.
 
 **소비하는 것은 framework의 계약이지 런타임이 아니다.** 그래야 CLI와 client 시나리오가 framework
-host·runtime을 끌고 오지 않는다. [Spot](../server/01-glossary.ko.md#spot) 실행 문맥과의 결합은 §3.2의 **주입점 하나**로만 이뤄진다 —
+host·runtime을 끌고 오지 않는다. [Spot](../server/00-foundation/02-glossary.ko.md#spot) 실행 문맥과의 결합은 §3.2의 **주입점 하나**로만 이뤄진다 —
 scheduler가 주입되지 않으면 HTTP client는 turn을 모르는 평범한 client다.
 
 산출물 경계와 언어별 패키지 분할은
@@ -66,7 +66,7 @@ HTTP client의 완료 표면은 one-way submission, response completion과 callb
 typed response와 callback에 `async`, one-way에 `submit`을 사용한다. TypeScript 상속 signature
 제약은 언어별 exact interface가 소유한다. Shared Spot gate를 반납하는
 `Yield`는 서버 request와 Worker call에만 제공하며 HTTP request builder에는 포함하지 않는다
-([04 §1.1](../server/05-async-execution-policy.ko.md)).
+([04 §1.1](../server/01-execution/README.ko.md)).
 
 | 실행 방식 | 무엇을 기다리나 | Spot 실행 줄 |
 |---|---|---|
@@ -113,7 +113,7 @@ C++ HTTP client는 같은 scheduler seam을 `coroutines(resume_scheduler)`와
 
 ### 3.3 blocking terminator를 두지 않는다
 
-**완료 값을 동기로 언래핑하는 public terminator를 만들지 않는다**([04 §2](../server/05-async-execution-policy.ko.md)).
+**완료 값을 동기로 언래핑하는 public terminator를 만들지 않는다**([04 §2](../server/01-execution/README.ko.md)).
 같은 의미의 blocking 대안 terminator는 계약 위반이다. 테스트나 CLI에서 동기로 기다려야 하면
 호출자가 언어 관용(`GetAwaiter().GetResult()`, `runBlocking`, `.join()`)으로 직접 감싼다.
 
@@ -136,7 +136,7 @@ handler 안에서 client를 만들지 않는다 — 연결 pool과 turn seam을 
 ## 5. Codec
 
 **HTTP client는 framework와 codec extension을 공유하지만 registry 인스턴스는 따로 가진다**
-([Stream Session §5](../server/19-stream-session.ko.md#5-codec-계층-분리)). 같은 codec extension 객체를 양쪽에 각각 등록할 수 있으나,
+([Stream Session §5](../server/04-session/01-stream-session.ko.md#6-payload-변환과-codec-경계)). 같은 codec extension 객체를 양쪽에 각각 등록할 수 있으나,
 **등록은 host마다 따로 해야 한다.**
 
 typed body의 encode/decode는 그 registry가 담당한다. raw body API는 registry를 거치지 않는다.
@@ -144,7 +144,7 @@ typed body의 encode/decode는 그 registry가 담당한다. raw body API는 reg
 ## 6. 오류 모델
 
 **HTTP client는 자체 예외 계층을 만들지 않는다.** framework 공용 오류 모델
-([Framework 오류 모델](../server/32-framework-error-model.ko.md))의 error kind를 그대로 쓴다. **HTTP client
+([Framework 오류 모델](../server/00-foundation/07-framework-error-model.ko.md))의 error kind를 그대로 쓴다. **HTTP client
 전용 error kind를 새로 만들지 않는다.**
 
 | 상황 | kind |

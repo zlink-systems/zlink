@@ -160,14 +160,14 @@ test('MFLOW-003/005 standard logger provider receives the structured record', ()
   assert.equal(telemetryRecords.length, 1);
   const record = telemetryRecords[0];
   assert.equal(record.eventName, 'zlink.message_flow');
-  assert.match(record.body, /^zlink flow: event_id=zlink\.message_flow /);
+  assert.match(record.body, /^zlink flow: event=zlink\.message_flow /);
   assert.equal(record.attributes.event_id, 'zlink.message_flow');
   assert.equal(record.attributes.phase, 'received');
   assert.equal(record.attributes.surface, 'channel');
-  assert.equal(record.attributes.packet, 'EchoRequest');
-  assert.equal(record.attributes.channel, 'api');
-  assert.equal(record.attributes.channel_route, 'client_server');
-  assert.equal(record.attributes.corr, 'corr-1');
+  assert.equal(record.attributes.packet_name, 'EchoRequest');
+  assert.equal(record.attributes.channel_name, 'api');
+  assert.equal(record.attributes.channel_route_kind, 'client_server');
+  assert.equal(record.attributes.correlation_id, 'corr-1');
 });
 
 test('MFLOW-004 provider failures do not change the message operation', () => {
@@ -290,7 +290,7 @@ test('spec 26 maps every added surface and control without admitting publish as 
     });
   }
   assert.deepEqual(
-    telemetryRecords.map((record) => [record.attributes.surface, record.attributes.kind]),
+    telemetryRecords.map((record) => [record.attributes.surface, record.attributes.message_kind]),
     [['node', 'send'], ['actor_relocation', 'control'], ['classic_fanout', 'send']]
   );
   assert.throws(
@@ -310,10 +310,14 @@ test('spec 26 structured log projection uses only the exact keys', () => {
     durationSeconds: 0.125
   });
   const keys = Object.keys(telemetryRecords[0].attributes).sort();
+  //  기록의 attribute 이름은 Message flow tracing 3.2가 고정한다. `zlink flow:` 본문의
+  //  축약 key(`kind`, `mesh` …)는 별도 집합이며 본문 문자열에만 쓴다.
   const allowed = [
-    'activation_state', 'actor', 'channel', 'channel_route', 'corr', 'event_id', 'flow',
-    'instance_type', 'kind', 'mesh', 'origin', 'outcome', 'packet', 'phase', 'reason',
-    'server_rid', 'size', 'source_rid', 'spot', 'surface', 'target_rid', 'topic'
+    'action', 'activation_state', 'actor_id', 'channel_name', 'channel_route_kind',
+    'correlation_id', 'duration_seconds', 'event_id', 'flow_id', 'flow_origin',
+    'instance_spot_type', 'mesh_name', 'message_kind', 'message_size_bytes', 'outcome',
+    'packet_name', 'phase', 'reason', 'server_rid', 'source_rid', 'spot_id', 'surface',
+    'target_rid', 'timestamp', 'topic'
   ];
   assert.deepEqual(keys, allowed.filter((key) => keys.includes(key)).sort());
   assert.equal(telemetryRecords[0].attributes.server_rid, 'server-1');
@@ -332,7 +336,7 @@ test('spec 26 flow-less sampling does not create a flow context and backpressure
     sourceMeshGeneration: 17n
   });
   assert.equal(telemetryRecords.length, 1);
-  assert.equal(telemetryRecords[0].attributes.flow, undefined);
+  assert.equal(telemetryRecords[0].attributes.flow_id, undefined);
 });
 
 test('dispatch reporter Off gate skips trace formatting and trace-only counters', () => {
@@ -670,11 +674,11 @@ test('MFLOW-EXT channel wire and outbound trace use the same created flow', asyn
           const { tracer } = makeTracer(diagnostics('normal'));
           tracer.trace(receivedEvent());
         });
-        assert.equal(telemetryRecords[0].attributes.flow, header.flowId);
+        assert.equal(telemetryRecords[0].attributes.flow_id, header.flowId);
         assert.equal(header.flowOrigin, 3);
         // Spec 27 §3 value set: telemetry emits lowercase origins in every
         // language even though the wire enum stays numeric.
-        assert.equal(telemetryRecords[0].attributes.origin, 'application');
+        assert.equal(telemetryRecords[0].attributes.flow_origin, 'application');
         // The scope did not leak into the caller's ambient context.
         assert.equal(flowContext.currentFlowContext(), undefined);
         resolve();

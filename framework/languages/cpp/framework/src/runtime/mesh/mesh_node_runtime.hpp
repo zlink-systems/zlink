@@ -238,6 +238,8 @@ class mesh_node_runtime_t
     void
     configure_stateful_dispatch (runtime::stateful::accepted_record_authority_resolver_t resolver);
     void configure_bound_session_operations (host::bound_session_operations_t operations);
+    void configure_late_session_route_update (
+      std::function<void (const runtime::protocol::session_relocation_route_t &)> reporter);
     message_follow_subscription_id_t subscribe_message_follow_invalidation (
       std::function<void (const runtime::protocol::message_follow_notice_t &)> handler);
     void unsubscribe_message_follow_invalidation (
@@ -641,6 +643,8 @@ class mesh_node_runtime_t
       _bound_session_relocation_resolver;
     runtime::stateful::accepted_record_authority_resolver_t _stateful_dispatch_resolver;
     std::optional<host::bound_session_operations_t> _bound_session_operations;
+    std::function<void (const runtime::protocol::session_relocation_route_t &)>
+      _late_session_route_update_reporter;
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)>
       _descriptor_publisher;
     std::shared_ptr<host::public_host_runtime_t> _node;

@@ -117,7 +117,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             () => GetActorSpotNode() ?? GetRouterSpotNodeOrNull(),
             meshName => GetMeshNodeRuntime(meshName).Node,
             registration,
-            () => ShutdownToken)
+            () => ShutdownToken,
+            loggerFactory: services.GetService<ILoggerFactory>())
         {
             RemotePushRelay = RelayRemoteSessionPush,
             RemotePushRelayAsync = RelayRemoteSessionPushAsync,

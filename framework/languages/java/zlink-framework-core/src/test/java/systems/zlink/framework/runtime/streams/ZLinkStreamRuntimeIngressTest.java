@@ -16,8 +16,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +56,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAd
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.actors.ActorRef;
@@ -251,6 +254,30 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(1, TestSession.createdCount.get());
         assertEquals(List.of("good"), session.packetNames);
         assertEquals(0, stream.sessionClosingSends.get());
+    }
+
+    @Test
+    void livenessTimeoutsAreIncludedInClosedConnectionMetrics()
+        throws Exception {
+        assertLivenessCloseReason("lastHeartbeatPongNanos", "heartbeat_timeout");
+        assertLivenessCloseReason("lastApplicationNanos", "idle_timeout");
+    }
+
+    @Test
+    void drainedCloseUsesServerShutdownMetricReason() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        List<String> closeReasons = Collections.synchronizedList(new ArrayList<>());
+        try (AutoCloseable ignored = installClosedMetricSink(closeReasons)) {
+            ZLinkStreamRuntime runtime = start(stream, 0);
+            runtimes.add(runtime);
+
+            awaitSession();
+            runtime.beginDrain();
+            runtime.closeAsync().toCompletableFuture().join();
+
+            assertEquals(List.of("server_shutdown"), closeReasons);
+        }
     }
 
     @Test
@@ -522,19 +549,20 @@ final class ZLinkStreamRuntimeIngressTest {
             actorRef.nodeRid(), replacement(actorRef));
 
         assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
-        assertTrue(stream.sessionClosingSendsLatch.await(8, TimeUnit.SECONDS));
+        assertTrue(stream.sessionClosingSendsLatch.await(2, TimeUnit.SECONDS));
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(
             System.nanoTime() - started);
         assertEquals(1, session.replacementCallbacks.get());
-        assertTrue(elapsedMillis >= 4_800,
+        assertTrue(elapsedMillis >= 80,
             "a stalled callback must be bounded by the callback deadline");
-        assertTrue(elapsedMillis < 8_000,
+        assertTrue(elapsedMillis < 2_000,
             "callback deadline did not return to the scheduler promptly");
     }
 
     private static ReplacementFixture startReplacement(FakeStream stream) {
         stream.enqueue(PEER_A, frame("initial", "{}"));
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setSessionReplacementCallbackTimeout(Duration.ofMillis(100));
         options.addStreamNode("stream")
             .bind("tcp://127.0.0.1:18081")
             .registerSession(TestSession.class);
@@ -720,6 +748,76 @@ final class ZLinkStreamRuntimeIngressTest {
             (ignoredBackend, ignoredKey) ->
                 (ignoredReady, ignoredShutdown) ->
                     CompletableFuture.completedFuture(null));
+    }
+
+    private void assertLivenessCloseReason(
+        String expiredTimestampField,
+        String expectedReason) throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        List<String> closeReasons = Collections.synchronizedList(new ArrayList<>());
+        try (AutoCloseable ignored = installClosedMetricSink(closeReasons)) {
+            ZLinkStreamRuntime runtime = start(stream, 0);
+            runtimes.add(runtime);
+
+            expireSessionForLiveness(runtime, expiredTimestampField);
+            runtime.closeAsync().toCompletableFuture().join();
+
+            assertEquals(List.of(expectedReason), closeReasons);
+        }
+    }
+
+    private static AutoCloseable installClosedMetricSink(List<String> closeReasons) {
+        return ZLinkRuntimeMetrics.install(new ZLinkRuntimeMetrics.Sink() {
+            @Override
+            public void increment(String name, Map<String, String> tags) {
+                if ("zlink.stream.connections.closed".equals(name)) {
+                    closeReasons.add(tags.get("close_reason"));
+                }
+            }
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void expireSessionForLiveness(
+        ZLinkStreamRuntime runtime,
+        String expiredTimestampField) throws Exception {
+        Field sessionsField = ZLinkStreamRuntime.class.getDeclaredField("sessions");
+        sessionsField.setAccessible(true);
+        Map<String, Object> sessions = (Map<String, Object>) sessionsField.get(runtime);
+        Object state = null;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            synchronized (sessions) {
+                if (!sessions.isEmpty()) {
+                    state = sessions.values().iterator().next();
+                    break;
+                }
+            }
+            Thread.sleep(1);
+        }
+        if (state == null) {
+            throw new AssertionError("STREAM session was not created");
+        }
+
+        long now = System.nanoTime();
+        setSessionTimestamp(state, "lastHeartbeatPongNanos", now);
+        setSessionTimestamp(state, "lastApplicationNanos", now);
+        setSessionTimestamp(
+            state,
+            expiredTimestampField,
+            now - TimeUnit.SECONDS.toNanos(31));
+        Method checkSessionLiveness = ZLinkStreamRuntime.class
+            .getDeclaredMethod("checkSessionLiveness");
+        checkSessionLiveness.setAccessible(true);
+        checkSessionLiveness.invoke(runtime);
+    }
+
+    private static void setSessionTimestamp(Object state, String name, long value)
+        throws ReflectiveOperationException {
+        Field field = state.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.setLong(state, value);
     }
 
     private static TestSession awaitSession() throws Exception {

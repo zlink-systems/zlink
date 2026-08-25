@@ -159,13 +159,13 @@ activation과 explicit close 뒤 새 generation만 다루며 state handoff나 pl
 
 | 필요한 동작 | 선택한 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| player별 current owner를 찾는다. | global Spot message | SpotId로 current Ready authority를 resolve한다. [상호작용 모델 §2](../../spec/server/03-interaction-model.ko.md#2-공통-모델) |
-| 없는 player owner를 첫 event에서 준비한다. | Instance intent | Missing Instance Spot에 명시한 첫 message만 cold activation을 시작한다. [상호작용 모델 §7](../../spec/server/03-interaction-model.ko.md#7-spot과-actor) |
-| 한 player event를 순서대로 처리한다. | Spot execution gate | owner turn을 Application 상태 변경 경계로 사용한다. [Async execution policy](../../spec/server/05-async-execution-policy.ko.md) |
-| 연결과 push를 유지한다. | STREAM session과 bound session | binding route가 현재 연결을 가리킨다. [STREAM session](../../spec/server/19-stream-session.ko.md) |
-| session actor와 Spot을 준비한다. | public Actor/Spot manager | global ID와 stable type을 사용하고 owner NodeRid를 caller가 선택하지 않는다. [Framework API](../../spec/server/06-framework-api.ko.md) |
+| player별 current owner를 찾는다. | global Spot message | SpotId로 current Ready authority를 resolve한다. [상호작용 모델 §2](../../spec/server/00-foundation/04-interaction-model.ko.md) |
+| 없는 player owner를 첫 event에서 준비한다. | Instance intent | Missing Instance Spot에 명시한 첫 message만 cold activation을 시작한다. [상호작용 모델 §7](../../spec/server/00-foundation/04-interaction-model.ko.md#7-spot과-actor) |
+| 한 player event를 순서대로 처리한다. | Spot execution gate | owner turn을 Application 상태 변경 경계로 사용한다. [Async execution policy](../../spec/server/01-execution/README.ko.md) |
+| 연결과 push를 유지한다. | STREAM session과 bound session | binding route가 현재 연결을 가리킨다. [STREAM session](../../spec/server/04-session/01-stream-session.ko.md) |
+| session actor와 Spot을 준비한다. | public Actor/Spot manager | global ID와 stable type을 사용하고 owner NodeRid를 caller가 선택하지 않는다. [Framework API](../../spec/server/00-foundation/06-framework-api.ko.md) |
 | progress를 보정한다. | Application store와 explicit request | Framework는 event sourcing과 reconcile 정책을 제공하지 않는다. |
-| owner 장애 범위를 정한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy §4.4](../../spec/server/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
+| owner 장애 범위를 정한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
 
 Instance intent는 SpotId가 Missing일 때 첫 owner를 준비하기 위한 선택이다. Ready owner 장애
 뒤 다른 node에 실패한 message를 자동 재제출하는 기능이 아니다. 명시적 close와 authority release

@@ -172,15 +172,15 @@ auto-issued by the Framework as a prefix plus a UUID; no fixed RID is configured
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Find the current zone owner by ZoneId. | Global Spot message | The Framework resolves the global SpotId authority. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
-| Find an actor by PlayerId. | Global Actor message | Doesn't expose the Actor location or current owner as an application route. [Actor model](../../spec/server/14-actor-model.en.md) |
-| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. The single authority for the full relocation order (owner transition, relay, target queue, CAS) is [Relocation flow](../../spec/server/28-relocation-flow.en.md); target admission, membership, and lifecycle are owned by [Spot and Actor membership §4.2](../../spec/server/15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) |
-| Deliver a message to the previous owner during a move. | Message Follow | Uses the committed target route and doesn't automatically resubmit a failed operation to a different owner. [Object routing §2.4](../../spec/server/18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route) |
-| Deliver a snapshot to an adjacent zone. | Logical Multicast | Expresses the boundary via topic and target subscription. [Interaction Model §5](../../spec/server/03-interaction-model.en.md#5-spot-logical-multicast) |
-| Send all-node announcements/maintenance. | Classic fanout | The publisher doesn't manage the node list. [Interaction Model §6](../../spec/server/03-interaction-model.en.md#6-classic-fanout) |
-| Observe node status. | Runtime monitoring event | Ops collects status changes and local reports. [Runtime monitoring](../../spec/server/24-runtime-monitoring.en.md) |
-| Keep the actor connection alive. | Bound STREAM session | Keeps the same connection during relocation, only updating the binding location. [Failure policy §6](../../spec/server/31-failure-failover-policy.en.md#6-session-and-binding) |
-| Avoid RID collisions. | `SetRoutingIdPrefix` zn | Separates the application NodeId/ZoneId from transport identity. [MeshNode spec](../../spec/server/13-mesh-node.en.md) |
+| Find the current zone owner by ZoneId. | Global Spot message | The Framework resolves the global SpotId authority. [Interaction Model §2](../../spec/server/00-foundation/04-interaction-model.en.md) |
+| Find an actor by PlayerId. | Global Actor message | Doesn't expose the Actor location or current owner as an application route. [Actor model](../../spec/server/03-spot-actor/04-actor-model.en.md) |
+| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. The single authority for the full relocation order (owner transition, relay, target queue, CAS) is [Relocation flow](../../spec/server/05-location-relocation/04-relocation-flow.en.md); target admission, membership, and lifecycle are owned by [Spot and Actor membership §4.2](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) |
+| Deliver a message to the previous owner during a move. | Message Follow | Uses the committed target route and doesn't automatically resubmit a failed operation to a different owner. [Object routing §2.4](../../spec/server/03-spot-actor/08-routing.en.md#25-a-message-arriving-at-a-previous-owner-route) |
+| Deliver a snapshot to an adjacent zone. | Logical Multicast | Expresses the boundary via topic and target subscription. [Interaction Model §5](../../spec/server/00-foundation/04-interaction-model.en.md#5-spot-logical-multicast) |
+| Send all-node announcements/maintenance. | Classic fanout | The publisher doesn't manage the node list. [Interaction Model §6](../../spec/server/00-foundation/04-interaction-model.en.md#6-classic-fanout) |
+| Observe node status. | Runtime monitoring event | Ops collects status changes and local reports. [Runtime monitoring](../../spec/server/06-observability/01-runtime-monitoring.en.md) |
+| Keep the actor connection alive. | Bound STREAM session | Keeps the same connection during relocation, only updating the binding location. [Failure policy §6](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#6-session-and-binding) |
+| Avoid RID collisions. | `SetRoutingIdPrefix` zn | Separates the application NodeId/ZoneId from transport identity. [MeshNode spec](../../spec/server/03-spot-actor/03-mesh-node.en.md) |
 
 The Player Actor factory registers a `PreserveStateWith` relocation adapter. Its Capture/Restore
 payload preserves only Application-owned state such as coordinates, ZoneId, bot direction, and the
@@ -206,7 +206,7 @@ that would expose per-language exception text):
 |---|---|
 | Move rejection (OutOfRange/TooFar/DiagonalCrossing/ZoneMaintenance) | the matching code in `MoveRejectedNotify.reason` |
 | JoinWorld zone-admission rejection (maintenance etc.) | a typed code in `JoinWorldRes.error` (e.g. `ZoneMaintenance`) |
-| Any other Framework Join/request failure | the public failure kind name from [Spot and Actor membership §4](../../spec/server/15-spot-actor.en.md#4-joining-an-actor-to-a-spot) **verbatim** in the `error` field (e.g. `NotFound`, `CapacityExceeded`, `InternalFailure`, `DataLost`, `InvalidOperation`, `ShuttingDown`) — no strings outside this closed set |
+| Any other Framework Join/request failure | the public failure kind name from [Spot and Actor membership §4](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md) **verbatim** in the `error` field (e.g. `NotFound`, `CapacityExceeded`, `InternalFailure`, `DataLost`, `InvalidOperation`, `ShuttingDown`) — no strings outside this closed set |
 | Operation ended by target owner crash | `JoinWorldRes.error` / the request's `error` = `Unavailable` |
 | Request deadline exceeded | the request's `error` = `DeadlineExceeded` |
 | Session route-update timeout | WebSocket close (no message; §7.5) |
@@ -440,7 +440,7 @@ Zone Spot to update the copy.
 
 A zone join is a Framework Actor Join, so it does not complete synchronously inside a handler.
 The Actor registers the join with `Defer()`, ends the current handler normally, and the join
-result arrives in a completion callback ([Spot and Actor membership §3](../../spec/server/15-spot-actor.en.md#3-membership)).
+result arrives in a completion callback ([Spot and Actor membership §3](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md)).
 `JoinWorldRes` is therefore sent from the join completion callback — **a successful JoinWorldRes
 means target zone admission has completed** is the normative meaning in this scenario, and an
 implementation that produces the JoinWorldRes terminal from pre-admission state (such as a
@@ -529,7 +529,7 @@ rejected, the direction reverses. The initial coordinates and directions are fix
 
 Ops converts runtime events and explicit reports from ZoneNode into `NodeStatusNotify` and
 `NodeAlertNotify`. Here, a runtime event means the current-status query and change-observation
-surface of [Runtime monitoring](../../spec/server/24-runtime-monitoring.en.md), where each item is
+surface of [Runtime monitoring](../../spec/server/06-observability/01-runtime-monitoring.en.md), where each item is
 a complete status, not a partial event. `WatchNodesRes`'s Registered and Connected are different
 observations: Connected comes from the peer state of the runtime status observation, and
 Registered comes from ZoneNode's explicit report, since the Framework topology status doesn't
@@ -564,7 +564,7 @@ a terminal. Ops records desired state to the maintenance store, so the maintenan
 same NodeId is restored after a ZoneNode restart.
 
 This maintenance is application admission desired state and does not invoke
-[Host relocation flow](../../spec/server/30-host-relocation-flow.en.md)'s
+[Host relocation flow](../../spec/server/05-location-relocation/05-host-relocation-flow.en.md)'s
 `Relocate(PlannedMaintenance)` — ZW-E is not a verification target for Spec 30 host relocation
 (that coverage is owned by a separate harness).
 

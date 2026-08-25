@@ -34,6 +34,8 @@ export interface ZLinkActorClaimActivation<TActor> {
   readonly activated?: TActor;
   readonly existingLocation?: ZLinkActorLocation;
   readonly generation?: bigint;
+  /** Owner lease captured by the successful Actor Location claim. */
+  readonly ownerLeaseGeneration?: bigint;
 }
 
 export class ZLinkActorLocationClaims {
@@ -61,7 +63,11 @@ export class ZLinkActorLocationClaims {
       return { existingLocation: claim.existing };
     }
     try {
-      return { activated: await activate(), generation: claim.generation };
+      return {
+        activated: await activate(),
+        generation: claim.generation,
+        ownerLeaseGeneration: claim.claimed?.leaseGeneration
+      };
     } catch (error) {
       await this.release(actorType, actorId);
       throw error;

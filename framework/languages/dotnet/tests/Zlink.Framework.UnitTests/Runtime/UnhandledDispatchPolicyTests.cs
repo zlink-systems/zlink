@@ -1049,10 +1049,6 @@ public sealed partial class UnhandledDispatchPolicyTests
         {
         }
 
-        public void OnSendReady(Action handler)
-        {
-        }
-
         public bool RequestToChannel(
             string channelName,
             Message message,

@@ -64,8 +64,8 @@ request processed exactly once and does it get a reply?
 - Procedure: Caller A sends one request with an Instance intent.
 - Verification: The factory and request handler each run exactly once, and the reply's Spot ID and
   operation ID match the input. A subsequent public lookup returns a Ready Spot ref.
-- Contract basis: [Spot Address Messaging](../spec/server/16-spot-address-messaging.en.md),
-  [Location Runtime](../spec/server/21-location-runtime.en.md)
+- Contract basis: [Spot Address Messaging](../spec/server/03-spot-actor/06-spot-address-messaging.en.md),
+  [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md)
 
 #### IS-E2E-02 Cold Send
 
@@ -84,8 +84,8 @@ accepted message get processed exactly once at the final owner?
 - Verification: The send can succeed before the handler finishes, and one piece of handler evidence
   appears after the gate is released. A separate input that injects activation failure does not
   change the already-returned send result.
-- Contract basis: [Async Execution Policy](../spec/server/05-async-execution-policy.en.md),
-  [Spot Messaging](../spec/server/12-spot-messaging.en.md)
+- Contract basis: [Async Execution Policy](../spec/server/01-execution/README.en.md),
+  [Spot Messaging](../spec/server/03-spot-actor/02-spot-messaging.en.md)
 
 #### IS-E2E-03 Concurrent First Call
 
@@ -103,7 +103,7 @@ handler?
 - Verification: Every successful reply points to the same Spot identity, and the factory runs
   exactly once. Every operation ID is processed exactly once with no duplicates, and the handler
   active count never exceeds 1.
-- Contract basis: [Spot Address Messaging](../spec/server/16-spot-address-messaging.en.md)
+- Contract basis: [Spot Address Messaging](../spec/server/03-spot-actor/06-spot-address-messaging.en.md)
 
 #### IS-E2E-04 Different Spot ID
 
@@ -118,7 +118,7 @@ another Spot's processing.
 - Procedure: A's handler is made to wait on an application gate, and a request is sent to B.
 - Verification: B's reply arrives before the gate opens, and the Spot IDs in A's and B's evidence
   are not mixed.
-- Contract basis: [Spot Messaging](../spec/server/12-spot-messaging.en.md)
+- Contract basis: [Spot Messaging](../spec/server/03-spot-actor/02-spot-messaging.en.md)
 
 ### Track B — Losing And Re-Activating An Owner
 
@@ -143,7 +143,7 @@ requests each end in bounded `Unavailable` without running on another owner?
   `Unavailable`. Neither A nor B has handler/factory evidence for any operation ID, and the Framework
   does not automatically create a new generation. Explicit recreate and rebind are confirmed
   separately in `IS-E2E-08` and application recovery scenarios.
-- Contract basis: [Failure And Failover](../spec/server/31-failure-failover-policy.en.md)
+- Contract basis: [Failure And Failover](../spec/server/05-location-relocation/06-failure-failover-policy.en.md)
 
 #### IS-E2E-06 A Creating-Owner Crash Respects The Same Generation's Recovery Boundary
 
@@ -163,8 +163,8 @@ with follow-up requests not mixing with a different generation or a stale owner?
   the same generation's recovery continues, the follow-up request joins that activation; if the
   creation is canceled and becomes `Missing`, a new activation starts then. There must be no stale
   owner's handler evidence or generation mixing.
-- Contract basis: [Location Runtime](../spec/server/21-location-runtime.en.md) and
-  [Failure And Failover](../spec/server/31-failure-failover-policy.en.md)
+- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md) and
+  [Failure And Failover](../spec/server/05-location-relocation/06-failure-failover-policy.en.md)
 
 #### IS-E2E-07 Normal Relocate
 
@@ -183,8 +183,8 @@ restored at the target?
 - Verification: The follow-up handler runs only on B, and the Spot identity and state version are
   preserved. An operation ID accepted before the relocation is also processed exactly once across
   all evidence.
-- Contract basis: [Location Runtime](../spec/server/21-location-runtime.en.md) and
-  [Graceful Drain And Handoff](../spec/server/30-host-relocation-flow.en.md)
+- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md) and
+  [Graceful Drain And Handoff](../spec/server/05-location-relocation/05-host-relocation-flow.en.md)
 
 #### IS-E2E-08 Close And Reactivate
 
@@ -201,7 +201,7 @@ instance?
   the same ID.
 - Verification: The new factory instance ID differs from the previous value, and the handler runs
   exactly once on the new instance.
-- Contract basis: [Location Runtime](../spec/server/21-location-runtime.en.md)
+- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md)
 
 #### IS-E2E-10 No Automatic Owner Even After A Stale Owner Resumes
 
@@ -219,7 +219,7 @@ without the stale owner processing it?
   are sent.
 - Verification: The request ends in `Unavailable`, with no new handler/timer evidence on either A or
   B.
-- Contract basis: [Failure And Failover](../spec/server/31-failure-failover-policy.en.md)
+- Contract basis: [Failure And Failover](../spec/server/05-location-relocation/06-failure-failover-policy.en.md)
 
 ### Track C — Failure Results And Resubmission Boundaries
 
@@ -238,7 +238,7 @@ run on another owner?
 - Procedure: A request with a unique operation ID is sent once.
 - Verification: The request ends in exactly one contracted failure, and no owner's handler evidence
   has that operation ID.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### IS-E2E-12 Ambiguous Result
 
@@ -255,7 +255,7 @@ the operation ID at most one?
   connection.
 - Verification: The caller receives either a reply or exactly one terminal failure, and the combined
   handler execution count across every owner is at most one.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### IS-E2E-13 Accepted Send Then Failure
 
@@ -271,7 +271,7 @@ target failure?
 - Procedure: Right after the send succeeds, the target is terminated, and a replacement owner is
   prepared.
 - Verification: The operation ID's processed count across all owners is 0 or 1, never 2.
-- Contract basis: [Async Execution Policy](../spec/server/05-async-execution-policy.en.md)
+- Contract basis: [Async Execution Policy](../spec/server/01-execution/README.en.md)
 
 #### IS-E2E-14 Store Outage
 
@@ -287,8 +287,8 @@ no handler run?
 - Procedure: After the cached location's validity period ends, a request is sent.
 - Verification: The request ends in a contracted Store/route failure, and the handler execution
   count across every owner is 0.
-- Contract basis: [Location Runtime](../spec/server/21-location-runtime.en.md),
-  [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md),
+  [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### IS-E2E-15 Kind/Type Atomic Conflict
 
@@ -304,7 +304,7 @@ does only one kind succeed?
   concurrently.
 - Verification: Only one operation succeeds, and the public lookup's kind/type matches the
   successful operation. The failed side's factory and handler do not run.
-- Contract basis: [Spot Address Messaging](../spec/server/16-spot-address-messaging.en.md)
+- Contract basis: [Spot Address Messaging](../spec/server/03-spot-actor/06-spot-address-messaging.en.md)
 
 #### IS-E2E-16 No Eligible Node
 
@@ -321,7 +321,7 @@ terminal?
 - Procedure: The same shape of cold request and send are called in each topology.
 - Verification: The request and send each return the terminal matching their condition, with no
   factory/handler evidence.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### IS-E2E-17 Activation Backpressure
 
@@ -341,8 +341,8 @@ execution count never exceed 1, with each request having a bounded terminal?
 - Verification: The concurrently running factory/initialize count in application evidence is always
   at most 1, and each request ends in either a reply or a formal failure. The requests' admission
   order or internal waiter count is not judged.
-- Contract basis: [Framework API RouteMesh Activation Admission](../spec/server/06-framework-api.en.md#3-routemesh-registration) and
-  [Object Placement And Activation](../spec/server/05-async-execution-policy.en.md#object-placement-and-activation)
+- Contract basis: [Framework API RouteMesh Activation Admission](../spec/server/00-foundation/06-framework-api.en.md#4-routemesh-registration) and
+  [Object Placement And Activation](../spec/server/01-execution/README.en.md)
 
 #### IS-E2E-18 Cross-Language
 
@@ -359,7 +359,7 @@ failure case with the same result?
 - Procedure: A successful request and a no-type request are run in each direction combination.
 - Verification: The successful payload and reply match, and the failure category also matches. No
   separate raw frame or test adapter is used.
-- Contract basis: [Public Contract Governance](../spec/server/00-public-contract-governance.en.md)
+- Contract basis: [Public Contract Governance](../spec/server/00-foundation/01-public-contract-governance.en.md)
 
 ### Track D — Ordering And Concurrency
 
@@ -377,7 +377,7 @@ arrives while the Spot is being prepared must not overtake it.
   and the gate is opened.
 - Verification: The first operation ID in handler evidence is the first request, and the rest keep
   their acceptance order.
-- Contract basis: [Spot Messaging](../spec/server/12-spot-messaging.en.md)
+- Contract basis: [Spot Messaging](../spec/server/03-spot-actor/02-spot-messaging.en.md)
 
 #### IS-E2E-20 Closing-Owner Crash
 
@@ -397,7 +397,7 @@ without a new factory running?
 - Verification: The new request ends exactly once in `Unavailable`, with no new factory/handler
   evidence on any owner. The flow that starts a new activation after an explicit Close completion is
   confirmed in `IS-E2E-08`.
-- Contract basis: [Failure And Failover](../spec/server/31-failure-failover-policy.en.md)
+- Contract basis: [Failure And Failover](../spec/server/05-location-relocation/06-failure-failover-policy.en.md)
 
 #### IS-E2E-21 Multi-Mesh Initial Placement
 
@@ -413,7 +413,7 @@ a different Mesh after Ready go to the current owner?
 - Procedure: A cold request specifying Mesh A is sent, then a follow-up request specifying Mesh B is
   sent.
 - Verification: Both handlers run on the initial owner, and the factory runs exactly once.
-- Contract basis: [Spot Address Messaging](../spec/server/16-spot-address-messaging.en.md)
+- Contract basis: [Spot Address Messaging](../spec/server/03-spot-actor/06-spot-address-messaging.en.md)
 
 #### IS-E2E-22 Monotonic Owner Deadline
 
@@ -431,7 +431,7 @@ handlers, and does the request end in `Unavailable`?
   is resumed. A message and a timer-observation request are then sent.
 - Verification: After resuming, there is zero new message/timer evidence on A and other nodes, and
   the caller's operation ends in `Unavailable`.
-- Contract basis: [Failure And Failover](../spec/server/31-failure-failover-policy.en.md)
+- Contract basis: [Failure And Failover](../spec/server/05-location-relocation/06-failure-failover-policy.en.md)
 
 #### IS-E2E-23 Handler Capability
 
@@ -448,7 +448,7 @@ capability fail without running the application handler?
 - Procedure: An Instance request of that type is sent.
 - Verification: The request ends in a configuration failure, and the packet handler and Actor
   lifecycle callback do not run.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### IS-E2E-24 Late Store Response
 
@@ -465,7 +465,7 @@ timeout without the handler running?
 - Procedure: A short-deadline request is sent, and after the timeout, the proxy is restored.
 - Verification: The caller receives exactly one timeout, with no factory/handler evidence for that
   operation ID.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### IS-E2E-25 Activation Completion Failure
 
@@ -483,7 +483,7 @@ Ready, and does the next call converge normally?
   ID is requested again.
 - Verification: The first handler does not run, and the first request fails exactly once. The next
   request succeeds with exactly one factory and handler run.
-- Contract basis: [Location Runtime](../spec/server/21-location-runtime.en.md)
+- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md)
 
 #### IS-E2E-26 Concurrent Claim
 
@@ -499,7 +499,7 @@ owner?
 - Procedure: Two callers concurrently send first requests for the same ID.
 - Verification: There is exactly one piece of factory evidence, on one owner, and every successful
   handler evidence is also only on that owner.
-- Contract basis: [Location Runtime](../spec/server/21-location-runtime.en.md)
+- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md)
 
 #### IS-E2E-27 Deadline Isolation
 
@@ -516,7 +516,7 @@ keep being processed?
   the gate is opened.
 - Verification: The short request times out, and the long request receives a reply. The send's and
   the long request's operation IDs are each processed exactly once.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### IS-E2E-28 Close/Admission Contention
 
@@ -531,7 +531,7 @@ handler?
 - Procedure: Right after Close entry, a request with a unique operation ID is sent.
 - Verification: The previous instance's handler has no such operation ID, and the request ends in
   either one failure or exactly one processing on a new instance after Close.
-- Contract basis: [Location Runtime](../spec/server/21-location-runtime.en.md)
+- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md)
 
 ### Track E — Relocation Contention And Recovery
 
@@ -550,8 +550,8 @@ no duplication?
   concurrently.
 - Verification: Relocate and the request each end in exactly one terminal, and the request handler
   runs exactly once, on either A or B alone.
-- Contract basis: [Location Runtime](../spec/server/21-location-runtime.en.md) and
-  [Graceful Drain And Handoff](../spec/server/30-host-relocation-flow.en.md)
+- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md) and
+  [Graceful Drain And Handoff](../spec/server/05-location-relocation/05-host-relocation-flow.en.md)
 
 #### IS-E2E-30 Multi-Mesh Concurrent Relocate
 
@@ -569,7 +569,7 @@ Concurrent host Relocate calls for the same Spot must not produce two owners.
 - Verification: Variant A callers join the shared operation and receive the same terminal. Variant B
   ends the incompatible call once in `Blocked/OperationInProgress` without changing the first option.
   Both variants finish with one Ready owner, and the follow-up request runs only there.
-- Contract basis: [Graceful Drain — Concurrent Calls And Cancellation](../spec/server/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)
+- Contract basis: [Graceful Drain — Concurrent Calls And Cancellation](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)
 
 #### IS-E2E-31 Remote Selection Loser
 
@@ -587,7 +587,7 @@ final owner?
   the same Spot ID.
 - Verification: The public lookup's owner matches the factory/handler evidence, and the
   non-selected target's factory count is 0.
-- Contract basis: [Spot Address Messaging](../spec/server/16-spot-address-messaging.en.md)
+- Contract basis: [Spot Address Messaging](../spec/server/03-spot-actor/06-spot-address-messaging.en.md)
 
 #### IS-E2E-32 Activation Crash Boundary
 
@@ -608,7 +608,7 @@ boundary?
   recovery continues, the follow-up request joins that activation; if the creation is canceled and
   becomes `Missing`, the next call starts a new activation. A Ready-owner crash is not interpreted as
   automatic handling by another owner, and every operation ID's processed count is at most one.
-- Contract basis: [Failure And Failover](../spec/server/31-failure-failover-policy.en.md)
+- Contract basis: [Failure And Failover](../spec/server/05-location-relocation/06-failure-failover-policy.en.md)
 
 #### IS-E2E-33 Cold Activation Failure Release
 
@@ -625,7 +625,7 @@ factory?
   is requested again.
 - Verification: The failed operation's handler execution count is 0, and it has exactly one
   terminal. The follow-up request succeeds with exactly one factory and handler run.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### IS-E2E-34 Unpublished Activation Cleanup
 
@@ -647,7 +647,7 @@ payload, respecting the recovery boundary?
   recovery root, followed by B; if the first activation is canceled and public resolve does not
   return a Ready object, only B is processed in a new activation. A and B payloads must not merge,
   and stale A must not be used in the new operation's reply instead of B.
-- Contract basis: [Location Runtime](../spec/server/21-location-runtime.en.md)
+- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md)
 
 #### IS-E2E-35 The Queue Is Not Automatically Recovered After A Ready-Owner Crash
 
@@ -666,7 +666,7 @@ another owner's handler running?
 - Verification: Each caller receives exactly one terminal, with no other owner's handler/factory
   evidence after the crash. Subsequent messaging ends in `Unavailable` until an explicit Close and
   recreate.
-- Contract basis: [Failure And Failover](../spec/server/31-failure-failover-policy.en.md)
+- Contract basis: [Failure And Failover](../spec/server/05-location-relocation/06-failure-failover-policy.en.md)
 
 #### IS-E2E-36 First-Handler Terminal Recovery
 
@@ -686,7 +686,7 @@ exactly one terminal with no automatic replay on another owner?
 - Verification: Each caller ends in exactly one reply or failure. Each operation ID's domain commit
   happens at most once, and no other owner's handler has that ID. Follow-up requests end in
   `Unavailable` until an explicit recreate/rebind.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 ## 4. Reference Sample Verification
 

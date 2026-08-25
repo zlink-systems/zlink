@@ -192,7 +192,7 @@ submit 시도가 source에서 success 또는 failure terminal에 도달한 시�
 ACK는 이 구간의 종점이 아니다. Actor 하나, Instance Spot 하나와 SpotWide User Spot
 aggregate 하나는 각각 기본 1초 이내를 목표로 한다. 1초를 넘겨도 relocation을 취소하거나
 rollback하지 않는다. 자세한 기준은
-[graceful drain과 handoff](../spec/server/30-host-relocation-flow.ko.md#71-relocation-unit별-서비스-중단-시간-목표)를
+[graceful drain과 handoff](../spec/server/05-location-relocation/05-host-relocation-flow.ko.md)를
 따른다.
 
 SpotWide User Spot은 Spot state와 member Actor state를 하나의 relocation unit으로 옮긴다.
@@ -210,7 +210,7 @@ SpotWide factory가 application-signaled boundary를 선택한 sample은 안전�
 any-turn boundary에서 준비 지연 operation을 호출하는 예제는 만들지 않는다. 정확한 API 이름은
 언어별 exact interface가 소유한다.
 
-[Message Follow](../spec/server/21-location-runtime.ko.md#63-이전-owner로-도착한-message를-새-owner에게-전달한다)는
+[Message Follow](../spec/server/05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)는
 owner 변경 직후 이전 node에 도착한 Actor·Spot message를 current owner에게 전달하는 기능이다.
 샘플 검증은 다음 경우를 각각 확인한다.
 
@@ -275,7 +275,7 @@ operation의 reply는 Framework가 정의한 생성 결과이므로 sample 전�
 
 ## Spot 실행 turn과 terminator 샘플 기준
 
-**모든 샘플은 세 terminator를 같은 기준으로 고른다**([04 §1.1](../spec/server/05-async-execution-policy.ko.md)).
+**모든 샘플은 세 terminator를 같은 기준으로 고른다**([04 §1.1](../spec/server/01-execution/README.ko.md)).
 
 | terminator | 실행 줄 | 언제 |
 |---|---|---|
@@ -299,7 +299,7 @@ operation의 reply는 Framework가 정의한 생성 결과이므로 sample 전�
 | [DeliveryDispatch](deliverydispatch/README.ko.md) §6.1 | Entry Spot이 전달받은 새 Actor의 application 상태를 초기화한다 | `async` |
 | TicTacToe | game join이 게임 상태 흐름으로 바로 이어진다 | `async` |
 
-**worker와 HTTP client도 같은 축이다**([04 §1.2](../spec/server/05-async-execution-policy.ko.md),
+**worker와 HTTP client도 같은 축이다**([04 §1.2](../spec/server/01-execution/README.ko.md),
 [12 §3](../spec/http-client/12-http-client.ko.md)). 외부 HTTP·레거시 API는 HTTP client의 terminator를 직접 쓰고,
 DB 드라이버·외부 SDK처럼 자체 terminator가 없는 비동기 대기는 `RunIoWorker(...)`로 감싼다. CPU
 작업은 `RunCpuWorker(...)`로 넘긴다.
@@ -344,7 +344,7 @@ scale-out 흐름을 보여 준다.
   위반이 하나라도 있으면 해당 샘플 변경은 완료된 것으로 판단하지 않는다.
 - **Managed language는 TicTacToe를 제외한 sample에서 handler 자동 등록을 사용한다.** Framework가
   annotation·attribute·decorator metadata를 scan해 handler를 등록하므로 sample 구성 코드가 같은
-  목록을 반복하지 않는다([Handler 등록과 dispatch §8](../spec/server/06-framework-api.ko.md#8-handler-등록과-dispatch)).
+  목록을 반복하지 않는다([Handler 등록과 dispatch §8](../spec/server/00-foundation/06-framework-api.ko.md#9-handler-등록과-dispatch)).
 - **TicTacToe만 모든 언어에서 연결과 handler 등록을 모두 수동으로 구성한다.** 각 public
   builder·handler registry가 handler를 직접 등록한다. 이 sample은 자동 연결과 자동 handler 등록을
   사용하는 Bingo와 구성 방법을 비교할 수 있어야 한다. 이 규칙을 다른 sample의 수동 연결이나 수동
@@ -368,7 +368,7 @@ TicTacToe, SupportChat 같은 서로 다른 샘플이 logging 설정 helper를 �
 로그 출력은 새 logging 체계를 만들지 않고 각 샘플이 이미 쓰는 logger를 따른다.
 파일 로그를 이미 직접 쓰는 샘플은 그 파일 logger에 기록하고, 실행 스크립트가
 stdout/stderr를 `logs/*.log`로 저장하는 샘플은 그 샘플의 console logger에 기록하면 된다.
-Trace attribute는 [Message flow tracing](../spec/server/26-message-flow-tracing.ko.md)의 정확한 snake_case 이름과
+Trace attribute는 [Message flow tracing](../spec/server/06-observability/03-message-flow-tracing.ko.md)의 정확한 snake_case 이름과
 포함 조건을 따른다. `surface`, `message_kind`, `outcome`은 message-flow 기록에 포함하고, 원인이 있을 때
 `reason`, dispatch error에는 `action`을 포함한다. Typed packet name이 있을 때만 `packet_name`,
 request와 terminal reply를 연결할 때만 `correlation_id`를 기록한다. Channel 경로는 `channel_name`, Spot

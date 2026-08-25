@@ -68,8 +68,8 @@
 ### 4.1 간헐 실패 디버깅 (message tracking·file log)
 
 [`framework/doc/framework/common/spec/server/README.ko.md`](./framework/doc/framework/common/spec/server/README.ko.md)의
-"디버깅 원칙"과 [`26-message-flow-tracing`](./framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md)·
-[`27-flow-correlation`](./framework/doc/framework/common/spec/server/27-flow-correlation.ko.md)을 따른다.
+"디버깅 원칙"과 [`26-message-flow-tracing`](./framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md)·
+[`27-flow-correlation`](./framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md)을 따른다.
 
 - **먼저 이미 있는 message tracking과 file log를 켜서 읽는다.** 임시 로깅부터 추가하고 재현을
   다시 돌리지 않는다 — 재현 사이클 하나를 예외 한 줄 보는 데 낭비하고, 이미 flow에 찍힌 원인을 놓친다.

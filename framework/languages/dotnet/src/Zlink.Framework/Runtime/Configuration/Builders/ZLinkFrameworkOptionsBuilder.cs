@@ -21,6 +21,18 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         }
     }
 
+    public TimeSpan SessionReplacementCallbackTimeout
+    {
+        get => _registration.SessionReplacementCallbackTimeout;
+        set
+        {
+            ZLinkRequestTimeoutValidation.Validate(
+                value,
+                nameof(SessionReplacementCallbackTimeout));
+            _registration.SessionReplacementCallbackTimeout = value;
+        }
+    }
+
     public TimeSpan DefaultSocketSendTimeout
     {
         get => _registration.DefaultSocketSendTimeout;

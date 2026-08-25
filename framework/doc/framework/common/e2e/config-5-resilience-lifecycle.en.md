@@ -68,7 +68,7 @@ the new server is ready succeeds?
 - Verification: The down-window request ends exactly once, in `NotFound` or a formal route terminal,
   with no automatic resubmission. The follow-up request is processed exactly once by the replacement
   handler, and the consumer process is kept.
-- Detailed behavior: verifies [Transport Liveness §6](../spec/server/29-transport-liveness.en.md).
+- Detailed behavior: verifies [Transport Liveness §6](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 #### RL-A2 Switch To A Replacement At A Different Endpoint
 
@@ -86,7 +86,7 @@ process follow-up requests?
 - Verification: The pending request ends exactly once, in either `Unavailable` or
   `DeadlineExceeded`. All 20 follow-ups are processed by the replacement, with no automatic
   resubmission to the old endpoint.
-- Detailed behavior: verifies [Failover Policy §3](../spec/server/31-failure-failover-policy.en.md).
+- Detailed behavior: verifies [Failover Policy §3](../spec/server/05-location-relocation/06-failure-failover-policy.en.md).
 
 #### RL-A3 Many Clients Reconnect After A Server Restart
 
@@ -103,7 +103,7 @@ is ready, with no separate reconnect loop?
   ready state is confirmed with bounded polling, then a unique request is sent from each.
 - Verification: Every connector is ready within the common reconnect timeout, and 100 replies arrive,
   one per operation ID. The Application does not repeatedly call reconnect.
-- Detailed behavior: verifies [Transport Liveness §6](../spec/server/29-transport-liveness.en.md).
+- Detailed behavior: verifies [Transport Liveness §6](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 #### RL-A4 Keep A Serving Target During A Rolling Or Blue-Green Update
 
@@ -122,7 +122,7 @@ does completion happen with no lost terminal, with only the new version processi
 - Verification: Each request receives exactly one terminal, and the serving-target count never
   reaches 0. After completion, new requests are recorded only in N+1's handler evidence.
   Descriptor discovery alone is not treated as ready.
-- Detailed behavior: verifies [Host Maintenance §5](../spec/server/30-host-relocation-flow.en.md).
+- Detailed behavior: verifies [Host Maintenance §5](../spec/server/05-location-relocation/05-host-relocation-flow.en.md).
 
 #### RL-A5 Converge On The Current Target Even With Repeated Provider Lifecycle
 
@@ -140,7 +140,7 @@ process requests?
   request, then restored.
 - Verification: Down-window requests are processed by A, and each replacement verification is
   processed by the current B. Public status never keeps a previous B RID as ready.
-- Detailed behavior: verifies [Runtime Monitoring §3](../spec/server/24-runtime-monitoring.en.md).
+- Detailed behavior: verifies [Runtime Monitoring §3](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 ### Track B — Distinguish In-Flight Operations From New Admission
 
@@ -161,7 +161,7 @@ its own reply?
   with a new operation ID is sent and its reply received, then the first gate is released.
 - Verification: The first awaitable has its variant's terminal, and the second request receives its own
   payload reply exactly once. The late first reply does not change the second's completion.
-- Detailed behavior: verifies [Error Model §5](../spec/server/32-framework-error-model.en.md).
+- Detailed behavior: verifies [Error Model §5](../spec/server/00-foundation/07-framework-error-model.en.md).
 
 #### RL-B2 Handle A Provider Crash During An In-Flight Handler
 
@@ -178,7 +178,7 @@ follow-up processed by a different provider?
   follow-up request with a new operation ID.
 - Verification: The old request ends exactly once, in either `Unavailable` or `DeadlineExceeded`. The
   same ID is not processed by A, and only the follow-up is processed by A exactly once.
-- Detailed behavior: verifies [Failover Policy §2](../spec/server/31-failure-failover-policy.en.md).
+- Detailed behavior: verifies [Failover Policy §2](../spec/server/05-location-relocation/06-failure-failover-policy.en.md).
 
 #### RL-B3 Remove From Topology After A Graceful Shutdown
 
@@ -195,7 +195,7 @@ accepted reply is preserved?
   released.
 - Verification: The accepted request completes exactly once with B's reply. New requests after the
   seal go to A, and after B's terminal, public status no longer keeps B as a ready target.
-- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/server/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
+- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
 
 #### RL-B4 Exclude From New Selection With Runtime Weight 0, Then Restore
 
@@ -213,7 +213,7 @@ does it process them again after restoring to 100?
   also restored.
 - Verification: The first window is processed only by A, and the directed verification is processed
   by B. B's process and connection are kept throughout.
-- Detailed behavior: verifies [Channel Topology §4.3](../spec/server/07-channel-topology.en.md).
+- Detailed behavior: verifies [Channel Topology §4.3](../spec/server/02-channel-transport/01-channel-topology.en.md).
 
 #### RL-B5 Finish A Request Accepted Before A Weight Change
 
@@ -230,7 +230,7 @@ with B's reply?
   released.
 - Verification: The slow request receives B's reply exactly once, and new requests are processed by
   A.
-- Detailed behavior: verifies connection retention and weight update in [A Weight Change Doesn't Rebuild The Connection](../spec/server/07-channel-topology.en.md#52-a-weight-change-doesnt-rebuild-the-connection).
+- Detailed behavior: verifies connection retention and weight update in [A Weight Change Doesn't Rebuild The Connection](../spec/server/02-channel-transport/01-channel-topology.en.md).
 
 #### RL-B6 Isolate One Provider's Gray Failure From Other Replies
 
@@ -249,7 +249,7 @@ exactly to their own requests?
   exactly one configured error or timeout. There is no automatic resubmission to a target with no
   handler evidence.
 - Detailed behavior: verifies request correlation and provider-failure isolation in
-  [Channel Messaging](../spec/server/08-channel-messaging.en.md) and [Error Model](../spec/server/32-framework-error-model.en.md).
+  [Channel Messaging](../spec/server/02-channel-transport/02-channel-messaging.en.md) and [Error Model](../spec/server/00-foundation/07-framework-error-model.en.md).
 
 ### Track C — Clean Up Public Resources After Shutdown And Store Lifecycle
 
@@ -269,7 +269,7 @@ the same listeners?
   a replacement is started on the same ports.
 - Verification: There are no pending public operations, the old process exits, and the replacement's
   listeners become ready.
-- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/server/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
+- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
 
 #### RL-C3 Converge On The New Lifecycle After A Normal Restart
 
@@ -285,7 +285,7 @@ replacement processing requests?
   endpoint.
 - Verification: Public status shows only the replacement RID as ready, and follow-up requests are all
   recorded in the replacement's evidence.
-- Detailed behavior: verifies [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md).
+- Detailed behavior: verifies [Runtime Monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 #### RL-C4 Keep Existing Messaging During A Location Store Restart
 
@@ -301,7 +301,7 @@ with status returning to Ready after recovery?
   public status converges through degraded and ready.
 - Verification: Existing-route requests each receive a terminal, and the follow-up succeeds after
   recovery. A Store failure is not turned into target-missing.
-- Detailed behavior: verifies [Transport Liveness §7](../spec/server/29-transport-liveness.en.md).
+- Detailed behavior: verifies [Transport Liveness §7](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 ### Track D — Isolate Load And Observability Failures
 
@@ -323,7 +323,7 @@ failure reporting remains limited and uses the fallback boundary?
   within the implementation-defined limit, use only the fallback logger or stderr, and do not call
   the failed provider again. Records contain no payload, exception object, secret, or stack trace.
   Failure of the fallback record does not change message results.
-- Detailed behavior: verifies [Message Flow Tracing §5](../spec/server/26-message-flow-tracing.en.md).
+- Detailed behavior: verifies [Message Flow Tracing §5](../spec/server/06-observability/03-message-flow-tracing.en.md).
 
 #### RL-D3 Confirm A Dispatch Error In An Application Logger Provider
 
@@ -339,8 +339,8 @@ logger provider?
 - Procedure: A missing-handler request and a normal request are each sent once.
 - Verification: The logger provider supplies `zlink.dispatch_error`, `no_handler`, and `reply_error` fields for the
   negative operation, and the normal request succeeds.
-- Detailed behavior: verifies [Message-Flow Attribute Inclusion Conditions](../spec/server/26-message-flow-tracing.en.md#32-attribute-inclusion-conditions)
-  and [Completion, Failure, And Lifetime](../spec/server/26-message-flow-tracing.en.md#5-completion-failure-and-lifetime).
+- Detailed behavior: verifies [Message-Flow Attribute Inclusion Conditions](../spec/server/06-observability/03-message-flow-tracing.en.md#32-attribute-inclusion-conditions)
+  and [Completion, Failure, And Lifetime](../spec/server/06-observability/03-message-flow-tracing.en.md#6-completion-failure-and-lifetime).
 
 #### RL-D4 Same-Version Peers Preserve The Public Error Kind
 
@@ -357,7 +357,7 @@ application-safe message at the caller?
 - Procedure: The caller sends each variant's request once.
 - Verification: The caller's public error kind and message match the expected variant, and the
   success request receives a normal reply. The raw envelope is verified by the contract test.
-- Detailed behavior: verifies [Error Model §2](../spec/server/32-framework-error-model.en.md).
+- Detailed behavior: verifies [Error Model §2](../spec/server/00-foundation/07-framework-error-model.en.md).
 
 #### RL-D5 Pass Lifecycle Checkpoints During A Fixed Soak
 
@@ -375,7 +375,7 @@ do requests keep having a terminal?
 - Verification: Each checkpoint's public status and directed request confirm the expected target set.
   Requests have exactly one terminal, with no functional errors or pending accumulation. Throughput
   and latency are recorded only, not used as a common PASS threshold.
-- Detailed behavior: verifies repeated-lifecycle convergence in [Transport Liveness](../spec/server/29-transport-liveness.en.md).
+- Detailed behavior: verifies repeated-lifecycle convergence in [Transport Liveness](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 ### Track E — Verify Service Connection Liveness
 
@@ -394,7 +394,7 @@ not-ready within the common observation budget?
   observed.
 - Verification: The affected connection drops out of ready targets before the fixed peer deadline,
   and the other target keeps processing requests.
-- Detailed behavior: verifies [Transport Liveness §5](../spec/server/29-transport-liveness.en.md).
+- Detailed behavior: verifies [Transport Liveness §5](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 #### RL-E2 Judge A Half-Open Connection Independently Of Application Traffic
 
@@ -411,7 +411,7 @@ not-ready at the 15-second deadline?
   deadline plus tolerance is waited for public status to change.
 - Verification: Only the blocked connection is not-ready, and reverse application traffic does not
   extend the deadline. The other target's requests succeed.
-- Detailed behavior: verifies [Transport Liveness §3](../spec/server/29-transport-liveness.en.md).
+- Detailed behavior: verifies [Transport Liveness §3](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 #### RL-E3 An Old Reply Before Reconnect Does Not Complete A New Request
 
@@ -428,7 +428,7 @@ request receive only its own reply?
   request completes, then the old reply gate is released.
 - Verification: The old request keeps exactly one failure or timeout terminal. The new request
   receives the replacement's reply exactly once, unaffected by the old payload.
-- Detailed behavior: verifies [Transport Liveness §6](../spec/server/29-transport-liveness.en.md).
+- Detailed behavior: verifies [Transport Liveness §6](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 #### RL-E4 Produce Exactly One Terminal Even In A Connection-Loss Race
 
@@ -446,7 +446,7 @@ handler running at most once?
   the reply; supporting languages also run a cancellation variant.
 - Verification: Each request ends exactly once, in reply, supported cancellation, `Unavailable`, or timeout. The
   same operation ID is not processed by a different provider.
-- Detailed behavior: verifies [Error Model §5](../spec/server/32-framework-error-model.en.md).
+- Detailed behavior: verifies [Error Model §5](../spec/server/00-foundation/07-framework-error-model.en.md).
 
 #### RL-E5 Handle A Store Failure Independently Of Transport Liveness
 
@@ -463,7 +463,7 @@ the connection become not-ready without reconnecting after Shutdown?
 - Verification: The connection is not-ready at the peer deadline, unblocked by the Store error. After
   the Host terminal, public status does not switch back to Connecting, and no new handler evidence
   appears.
-- Detailed behavior: verifies [Transport Liveness §7](../spec/server/29-transport-liveness.en.md).
+- Detailed behavior: verifies [Transport Liveness §7](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 ### Track F — Confirm Relocation Lifecycle And Fencing Through Public Results
 
@@ -486,8 +486,8 @@ target-capacity/availability race before RelayReady acceptance?
 - Verification: When Relocate succeeds, state exists exactly once at the target. The blocked variant
   keeps the source location and state, its follow-up request succeeds, and there is no automatic
   switch to a different target.
-- Detailed behavior: verifies [Selecting A Target Matching The Mode](../spec/server/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode)
-  and [Relocation Units And Concurrency Limits](../spec/server/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits).
+- Detailed behavior: verifies [Selecting A Target Matching The Mode](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode)
+  and [Relocation Units And Concurrency Limits](../spec/server/05-location-relocation/05-host-relocation-flow.en.md).
 
 #### RL-F3 Interpret Cross-Language Terminal Failures The Same Way
 
@@ -505,7 +505,7 @@ directional language combinations?
   supported language direction.
 - Verification: The caller's received terminal kind and application payload match the scenario. Raw
   unknown-code injection is the protocol contract test's responsibility.
-- Detailed behavior: verifies [Error Model §8](../spec/server/32-framework-error-model.en.md).
+- Detailed behavior: verifies [Error Model §8](../spec/server/00-foundation/07-framework-error-model.en.md).
 
 #### RL-F5 Process Messages Received During Relocation In Order At The Target
 
@@ -524,8 +524,8 @@ target after relocation completes?
   logical IDs. The gate is released.
 - Verification: The target handler evidence is in the order `Q1, Q2, H1, H2`, and each marker appears
   exactly once. There is no application handler evidence during the restore-held window.
-- Detailed behavior: verifies [When The Target Starts Accepting New Messages](../spec/server/21-location-runtime.en.md#74-when-the-target-starts-accepting-new-messages)
-  and [The Order For Relocating One Unit](../spec/server/30-host-relocation-flow.en.md#8-the-order-for-relocating-one-unit).
+- Detailed behavior: verifies [When The Target Starts Accepting New Messages](../spec/server/05-location-relocation/01-location-runtime.en.md#92-when-the-target-starts-accepting-new-messages)
+  and [The Order For Relocating One Unit](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#9-the-order-for-relocating-one-unit--owned-by-04).
 
 #### RL-F6 Distinguish A Runtime Mutable Update From An Invalid Mutation
 
@@ -543,7 +543,7 @@ mutation is a local validation error?
 - Verification: The weight update produces the RL-B4 result and keeps the connection. The unsupported
   mutation is a public validation error before starting the operation, and current target selection
   does not change.
-- Detailed behavior: verifies [Channel Topology §4.3](../spec/server/07-channel-topology.en.md).
+- Detailed behavior: verifies [Channel Topology §4.3](../spec/server/02-channel-transport/01-channel-topology.en.md).
 
 #### RL-F7 A Relocated Accepted Request Returns Exactly One Terminal
 
@@ -561,8 +561,8 @@ request, does the request have exactly one terminal?
 - Verification: The caller ends exactly once, in reply, timeout, or an unavailable result. The same
   operation ID does not duplicate-run in the application handler, and the follow-up request succeeds
   at the current target.
-- Detailed behavior: verifies [Actor Join And Commit Order](../spec/server/15-spot-actor.en.md#4-actor-join-and-commit-order)
-  and [Relocation Policy Shared By Every Move Path](../spec/server/15-spot-actor.en.md#5-relocation-policy-shared-by-every-move-path).
+- Detailed behavior: verifies [Actor Join And Commit Order](../spec/server/03-spot-actor/05-spot-actor-membership.en.md#4-actor-join-and-commit-order)
+  and [Relocation Policy Shared By Every Move Path](../spec/server/03-spot-actor/05-spot-actor-membership.en.md#6-relocation-policy-shared-by-every-move-path).
 
 #### RL-F8 Host Relocate Does Not Start On A Manual Topology
 
@@ -584,8 +584,8 @@ while keeping the source?
   accepted request and follow-up request are each processed once at the source, with no target
   restore/factory evidence. Shutdown does not use manual topology as a blocker and ends in a
   bounded terminal.
-- Detailed behavior: verifies [Host Maintenance §4](../spec/server/30-host-relocation-flow.en.md) and
-  [§10](../spec/server/30-host-relocation-flow.en.md).
+- Detailed behavior: verifies [Host Maintenance §4](../spec/server/05-location-relocation/05-host-relocation-flow.en.md) and
+  [§10](../spec/server/05-location-relocation/05-host-relocation-flow.en.md).
 
 #### RL-F9 Distinguish A Preflight Timeout From A Post-Seal Deadline
 
@@ -604,8 +604,8 @@ outcomes/Host states?
 - Verification: The first is `Blocked/DeadlineExceeded`, and the Host is Serving. The second is
   `ForceStopped/DeadlineExceeded` or the spec's post-seal forced outcome, and the source is not
   mistaken as Serving again.
-- Detailed behavior: verifies [Relocate Completion And Failure](../spec/server/30-host-relocation-flow.en.md#10-relocate-completion-and-failure)
-  and [The Race Between Shutdown And Relocate](../spec/server/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
+- Detailed behavior: verifies [Relocate Completion And Failure](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#13-relocate-completion-and-failure)
+  and [The Race Between Shutdown And Relocate](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
 
 #### RL-F10 Host-Relocate An Entry Actor And SpotWide Aggregate
 
@@ -622,7 +622,7 @@ Join/Leave callbacks?
 - Procedure: Host Relocate completes, and current refs, state, and callbacks are queried.
 - Verification: The objects preserve generation and state, processing requests at the target. The
   Join/Leave callback counters are 0, and the source Spot's closing reason is RelocationOut.
-- Detailed behavior: verifies [Host Maintenance §8](../spec/server/30-host-relocation-flow.en.md).
+- Detailed behavior: verifies [Host Maintenance §8](../spec/server/05-location-relocation/05-host-relocation-flow.en.md).
 
 #### RL-F11 Ready Relocation Units Finish Before Slow Units
 
@@ -640,7 +640,7 @@ handler-held?
 - Verification: At least one ready object has a target location and a normal handler result before
   the slow gates are released. The slow objects also reach a terminal after release, and aggregate
   members move together.
-- Detailed behavior: verifies [Host Maintenance §7](../spec/server/30-host-relocation-flow.en.md).
+- Detailed behavior: verifies [Host Maintenance §7](../spec/server/05-location-relocation/05-host-relocation-flow.en.md).
 
 #### RL-F12 Restore A User Spot's Queue And Timer After Relocation
 
@@ -659,7 +659,7 @@ original order, at the target?
 - Verification: After R0, Q1/Q2 and A1/A2 keep their target-queue and Actor-lane order and are each processed once. The
   timer callback also runs exactly once at the target, and the Application does not repeat timer
   registration.
-- Detailed behavior: verifies [Graceful Drain — Moving Pending Messages, Timers, And Sessions](../spec/server/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions).
+- Detailed behavior: verifies [Graceful Drain — Moving Pending Messages, Timers, And Sessions](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions).
 
 #### RL-F13 Finish Relocation Of Many Large-State Units With A Bounded Terminal
 
@@ -682,8 +682,8 @@ successful terminal?
   adapter-specific size cap. Every unit and Host operation has a bounded successful terminal. The
   in-flight payload budget may only delay a unit's start before the seal — it does not fail a unit
   that already started.
-- Detailed behavior: verifies [Host Maintenance §7](../spec/server/30-host-relocation-flow.en.md) and
-  the chunk/budget boundary in [The Complete Actor And Spot Relocation Flow](../spec/server/28-relocation-flow.en.md).
+- Detailed behavior: verifies [Host Maintenance §7](../spec/server/05-location-relocation/05-host-relocation-flow.en.md) and
+  the chunk/budget boundary in [The Complete Actor And Spot Relocation Flow](../spec/server/05-location-relocation/04-relocation-flow.en.md).
 
 #### RL-F14 Restore The Source Queue Order After An Explicit Abort Before RelayReady Acceptance
 
@@ -704,7 +704,7 @@ process Q1, Q2, H1, H2 once each, in order?
 - Verification: Relocate has a blocked or failed terminal, and the public current location is the
   source. Source handler evidence is in the order `Q1, Q2, H1, H2` with no duplicates. A follow-up
   timer also runs normally at the source.
-- Detailed behavior: verifies [Host Maintenance §9](../spec/server/30-host-relocation-flow.en.md).
+- Detailed behavior: verifies [Host Maintenance §9](../spec/server/05-location-relocation/05-host-relocation-flow.en.md).
 
 ## 5. Completion Criteria
 

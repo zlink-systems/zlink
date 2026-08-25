@@ -76,7 +76,7 @@ public sealed class BoundSessionReplacementLifecycleTests
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
             ReplacementCallbackBehavior.WaitForDeadline,
-            callbackDeadline: TimeSpan.FromMilliseconds(40));
+            sessionReplacementCallbackTimeout: TimeSpan.FromMilliseconds(40));
         fixture.BindRetiredSessionActor("actor-a");
 
         Assert.True(fixture.NotifyReplacement("actor-a"));
@@ -557,11 +557,13 @@ public sealed class BoundSessionReplacementLifecycleTests
 
         internal static async Task<ReplacementFixture> CreateAsync(
             ReplacementCallbackBehavior behavior,
-            TimeSpan? callbackDeadline = null)
+            TimeSpan? sessionReplacementCallbackTimeout = null)
         {
             var registration = new ZLinkFrameworkRegistration
             {
-                DefaultRequestTimeout = callbackDeadline ?? TimeSpan.FromSeconds(5)
+                DefaultRequestTimeout = TimeSpan.FromSeconds(5),
+                SessionReplacementCallbackTimeout =
+                    sessionReplacementCallbackTimeout ?? TimeSpan.FromSeconds(5)
             };
             var lifetime = new ReplacementLifetime(behavior);
             ZLinkFrameworkRuntime runtime = null!;
@@ -816,8 +818,6 @@ public sealed class BoundSessionReplacementLifecycleTests
 
         public void Bind(string endpoint) { }
         public void SetTlsServer(string certPath, string keyPath, bool requireClientCert) { }
-        public void OnSendReady(Action handler) { }
-
         public IZLinkBackendSocketPoller CreateReceivePoller() =>
             throw new NotSupportedException();
 

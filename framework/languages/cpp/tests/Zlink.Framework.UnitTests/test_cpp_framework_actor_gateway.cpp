@@ -1903,6 +1903,34 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
     return 0;
 }
 
+int session_relay_does_not_start_actor_dispatch_on_session_thread ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    gateway.offload_session_relay ();
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
+    const auto actor = test_actor_ref ("actor-owner", "game.actor", "relay-execution", 1);
+    auto binding = manager.bind (actor).submit ().result ().value ();
+    const auto session_thread = std::this_thread::get_id ();
+    std::thread::id actor_dispatch_thread;
+    gateway.on_relay ([&] (const actor_ref_t &, actor_context_t, const stream_header_t &,
+                           const zlink::message_t &,
+                           std::optional<bound_session_relay_source_t>) {
+        actor_dispatch_thread = std::this_thread::get_id ();
+        return task_t<std::optional<zlink::message_t>> (
+          result_t<std::optional<zlink::message_t>>::success (std::nullopt));
+    });
+
+    const auto delivered = binding.relay ("execution", zlink::message_t{}).result ();
+    return !delivered || actor_dispatch_thread == std::thread::id{}
+           || actor_dispatch_thread == session_thread
+             ? 1
+             : 0;
+}
+
 zlink::framework::task_t<std::optional<zlink::message_t>> inspect_pending_relay_arguments (
   const zlink::framework::actor_ref_t &actor,
   const zlink::framework::detail::stream_header_t &header,
@@ -4436,6 +4464,10 @@ int main ()
     if (const auto queue = session_relay_queue_is_ordered_without_blocking_other_actors ();
         queue != 0) {
         return 150 + queue;
+    }
+    if (const auto execution = session_relay_does_not_start_actor_dispatch_on_session_thread ();
+        execution != 0) {
+        return 155 + execution;
     }
     if (const auto admission = bound_session_relay_admission_is_exact_and_monotonic ();
         admission != 0) {

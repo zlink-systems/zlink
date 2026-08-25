@@ -35,7 +35,7 @@ C++, which doesn't offer runtime reflection, uses compile-time types
 and explicit builder registration. A reflection helper isn't added to
 imitate RC-A1's scan in C++. This is a per-language expression
 difference the formal spec fixes
-([Framework API §8](../spec/server/06-framework-api.en.md#8-handler-registration-and-dispatch)),
+([Framework API §8](../spec/server/00-foundation/06-framework-api.en.md#9-handler-registration-and-dispatch)),
 not a missing feature.
 
 ## 2. Deployment Configuration
@@ -103,9 +103,9 @@ registration?
   `not-applicable` and runs RC-A3 as mandatory instead.
 - Detailed behavior: verifies the boundary between runtime reflection
   and C++ explicit registration from
-  [Framework API §8](../spec/server/06-framework-api.en.md#8-handler-registration-and-dispatch)
+  [Framework API §8](../spec/server/00-foundation/06-framework-api.en.md#9-handler-registration-and-dispatch)
   and the per-language expression from
-  [Public Contract Governance](../spec/server/00-public-contract-governance.en.md).
+  [Public Contract Governance](../spec/server/00-foundation/01-public-contract-governance.en.md).
 
 #### RC-A3 Register A Handler Explicitly
 
@@ -126,7 +126,7 @@ public builder produce the same result in every language?
   marker, and the send handler runs once. The result comes with no
   scan and no private registry mutation.
 - Detailed behavior: verifies explicit registration from
-  [Framework API §8](../spec/server/06-framework-api.en.md#8-handler-registration-and-dispatch).
+  [Framework API §8](../spec/server/00-foundation/06-framework-api.en.md#9-handler-registration-and-dispatch).
 
 #### RC-A4 Split The Dependency Scope Per Dispatch
 
@@ -150,7 +150,7 @@ dispatch scopes while sharing the application singleton?
   with no public disposal observation only verifies instance
   separation.
 - Detailed behavior: verifies Channel dispatch scope from
-  [Framework API §8.2](../spec/server/06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
+  [Framework API §8.2](../spec/server/00-foundation/06-framework-api.en.md#11-handler-execution-object-and-dependency-lifetime).
 
 #### RC-A5 Filter Order And Short-Circuit Result
 
@@ -175,7 +175,7 @@ and does a short-circuit request end in `Rejected`?
   and the handler don't run.
 - Detailed behavior: verifies filter order and the request short-
   circuit contract from
-  [Framework API §8.1](../spec/server/06-framework-api.en.md#81-handler-filter).
+  [Framework API §8.1](../spec/server/00-foundation/06-framework-api.en.md#10-handler-filter).
 
 #### RC-A6 Reject A Duplicate Dispatch Key At Startup
 
@@ -200,9 +200,9 @@ ready?
   status, and exits with a configuration error. The normal control
   host becomes ready and processes both packets once each.
 - Detailed behavior: confirms duplicate-registration verification from
-  [Framework API §8](../spec/server/06-framework-api.en.md#8-handler-registration-and-dispatch)
+  [Framework API §8](../spec/server/00-foundation/06-framework-api.en.md#9-handler-registration-and-dispatch)
   and
-  [§14](../spec/server/06-framework-api.en.md#14-startup-validation).
+  [§14](../spec/server/00-foundation/06-framework-api.en.md#22-startup-validation).
 
 ### Track B — Typed Payload Codec Selection
 
@@ -225,8 +225,8 @@ correctly with no codec extension registered at all?
   request reply and send evidence match the input. Per-message-type
   codec registration count is `0`.
 - Detailed behavior: verifies the default typed JSON contract from
-  [Framework API §9](../spec/server/06-framework-api.en.md#9-codec) and
-  [Message Model §1](../spec/server/04-message-model.en.md#1-typed-messages).
+  [Framework API §9](../spec/server/00-foundation/06-framework-api.en.md#12-codec) and
+  [Message Model §1](../spec/server/00-foundation/05-message-model.en.md#1-typed-messages).
 
 #### RC-B2 Use Typed Codec Extensions Registered At The Root
 
@@ -250,7 +250,7 @@ send processed through the selected extension?
   name nor Channel configuration is used as the codec selector.
 - Detailed behavior: verifies root codec extension and type-based
   extension selection from
-  [Framework API §9](../spec/server/06-framework-api.en.md#9-codec).
+  [Framework API §9](../spec/server/00-foundation/06-framework-api.en.md#12-codec).
 
 #### RC-B4 Use Multiple Codecs Together At One Root
 
@@ -273,7 +273,7 @@ matching extension?
   type's message count, and neither extension runs on a JSON message.
 - Detailed behavior: verifies type-based codec selection and JSON
   fallback from
-  [Framework API §9](../spec/server/06-framework-api.en.md#9-codec).
+  [Framework API §9](../spec/server/00-foundation/06-framework-api.en.md#12-codec).
 
 #### RC-B5 Ends In `ProtocolError` When There's No Receive Codec
 
@@ -297,8 +297,8 @@ the receiver handler running?
   request receives a normal reply. It's a failure if the receiver
   falls back to JSON for a non-JSON payload.
 - Detailed behavior: verifies
-  [Framework API §9](../spec/server/06-framework-api.en.md#9-codec) and
-  [Error Model §5](../spec/server/32-framework-error-model.en.md#5-request-completion-and-failure).
+  [Framework API §9](../spec/server/00-foundation/06-framework-api.en.md#12-codec) and
+  [Error Model §5](../spec/server/00-foundation/07-framework-error-model.en.md#5-request-completion-and-failure).
 
 #### RC-B6 Five Languages Restore The Same JSON Application Value
 
@@ -327,7 +327,7 @@ same typed value?
   JSON bytes, whitespace, or member order isn't required.
 - Detailed behavior: verifies `framework-json-v1`'s cross-language
   semantics from
-  [Message Model §2](../spec/server/04-message-model.en.md).
+  [Message Model §2](../spec/server/00-foundation/05-message-model.en.md).
 
 ## 5. Completion Conditions
 

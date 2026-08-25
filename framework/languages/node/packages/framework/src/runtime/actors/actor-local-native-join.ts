@@ -346,43 +346,64 @@ export class ZLinkLocalNativeActorJoin {
       throw new Error('Actor Join OperationId must be distinct from RelocationId.');
     }
     const actorAuthorityFence = remoteJoinAuthorityFence(node, state);
-    if (actorAuthorityFence === undefined) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-        `Actor '${actor.context.actorId}' canonical remote Join authority fence is not configured.`
-      );
-    }
-    const canonicalAdmission = {
-      request: actorJoinApplicationPayload(request),
-      actorFence: {
-        targetNodeGeneration: actorAuthorityFence.nodeGeneration,
-        authorityOwnerGeneration: actorAuthorityFence.authorityOwnerGeneration,
-        ownerLeaseGeneration: actorAuthorityFence.ownerLeaseGeneration
-      },
-      local: { phase: 'admission', transferId: relocationId } as const
-    };
+    // Command 28 is usable only when both the source Actor authority fence
+    // and the backend's canonical entry point are present.  Until then keep
+    // the existing internal admission route (wire protocol §10); fabricating
+    // an Actor fence from the destination Spot would let a stale source pass
+    // receiver-side Authority-row equality.
+    const canonicalAdmission = actorAuthorityFence === undefined
+      || !supportsCanonicalActorJoin(node, entrySpot)
+      ? undefined
+      : {
+          request: actorJoinApplicationPayload(request),
+          actorFence: {
+            targetNodeGeneration: actorAuthorityFence.nodeGeneration,
+            authorityOwnerGeneration: actorAuthorityFence.authorityOwnerGeneration,
+            ownerLeaseGeneration: actorAuthorityFence.ownerLeaseGeneration
+          },
+          local: { phase: 'admission', transferId: relocationId } as const
+        };
     let admissionOperationId: ZLinkActorJoinOperationId | undefined;
     const admission = await this.waitForJoinCompletion(
       () => {
-        const operationId = entrySpot
-          ? node.joinActorEntrySpotCanonical(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              canonicalAdmission.request,
-              canonicalAdmission.actorFence,
-              canonicalAdmission.local,
-              timeoutMs
-            )
-          : node.joinActorSpotCanonical(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              toBackendRoutingId(target.spotId),
-              target.targetSpotGeneration!,
-              canonicalAdmission.request,
-              canonicalAdmission.actorFence,
-              canonicalAdmission.local,
-              timeoutMs
-            );
+        const legacyAdmission = canonicalAdmission === undefined
+          ? legacyRemoteActorJoinPayload(actor, state, actorRef, target, request, relocationId)
+          : undefined;
+        const operationId = canonicalAdmission === undefined
+          ? entrySpot
+            ? node.joinActorEntrySpot(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                legacyAdmission!,
+                timeoutMs
+              )
+            : node.joinActorSpot(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                toBackendRoutingId(target.spotId),
+                target.targetSpotGeneration!,
+                legacyAdmission!,
+                timeoutMs
+              )
+          : entrySpot
+            ? node.joinActorEntrySpotCanonical!(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                canonicalAdmission.request,
+                canonicalAdmission.actorFence,
+                canonicalAdmission.local,
+                timeoutMs
+              )
+            : node.joinActorSpotCanonical!(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                toBackendRoutingId(target.spotId),
+                target.targetSpotGeneration!,
+                canonicalAdmission.request,
+                canonicalAdmission.actorFence,
+                canonicalAdmission.local,
+                timeoutMs
+              );
         admissionOperationId = operationId;
         return operationId;
       },
@@ -466,7 +487,7 @@ export class ZLinkLocalNativeActorJoin {
                 admissionOperationId: {
                   // Command 28 authenticates its operation as
                   // (source node generation, Core request sequence).
-                  high: actorAuthorityFence.nodeGeneration,
+                  high: actorAuthorityFence!.nodeGeneration,
                   low: admissionOperationId!.low
                 },
                 requestContentType: canonicalAdmission.request.contentType,
@@ -479,12 +500,12 @@ export class ZLinkLocalNativeActorJoin {
                 reply: completionOperationId === undefined
                   ? Buffer.alloc(0)
                   : Buffer.from(admission.parts[0]?.data() ?? []),
-                actorNodeGeneration: actorAuthorityFence.nodeGeneration,
-                expectedOwnerLeaseGeneration: actorAuthorityFence.ownerLeaseGeneration,
+                actorNodeGeneration: actorAuthorityFence!.nodeGeneration,
+                expectedOwnerLeaseGeneration: actorAuthorityFence!.ownerLeaseGeneration,
                 targetNodeGeneration: target.targetNodeGeneration!,
                 targetSpotGeneration: control.location.spotGeneration,
                 targetAuthorityOwnerGeneration:
-                  actorAuthorityFence.authorityOwnerGeneration + 1n,
+                  actorAuthorityFence!.authorityOwnerGeneration + 1n,
                 targetSpotAuthorityOwnerGeneration:
                   target.authorityOwnerGeneration ?? 1n
               }
@@ -552,11 +573,57 @@ function remoteJoinAuthorityFence(
   };
 }
 
+function supportsCanonicalActorJoin(
+  node: ZLinkBackendMeshNode,
+  entrySpot: boolean
+): boolean {
+  return entrySpot
+    ? typeof node.joinActorEntrySpotCanonical === 'function'
+    : typeof node.joinActorSpotCanonical === 'function';
+}
+
 function actorJoinApplicationPayload(request: Message) {
   return {
     packetName: ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME,
     contentType: frameworkPayloadContentType(request),
     payload: Buffer.from(request.data())
+  };
+}
+
+function legacyRemoteActorJoinPayload(
+  actor: ZLinkActor,
+  state: ZLinkActorRuntimeState,
+  actorRef: ZLinkBackendActorRef,
+  target: ZLinkSpotRouteTarget,
+  request: Message,
+  transferId: string
+) {
+  // The pre-command-28 route keeps its own JSON envelope.  It is selected
+  // only when this backend cannot prove the source Actor fence needed for
+  // canonical admission; it never substitutes target-Spot values as an Actor
+  // authority fence.
+  const payload = Buffer.from(JSON.stringify({
+    packetName: '__zlink.actor.join_spot.request',
+    phase: 'admission',
+    transferId,
+    spotId: String(target.spotId),
+    actorId: actor.context.actorId,
+    actorType: state.actorType,
+    actorNodeRid: String(actorRef.nodeRid),
+    actorGeneration: actorRef.generation.toString(),
+    ...(state.spotId === undefined ? {} : { sourceSpotId: String(state.spotId) }),
+    ...(target.routerChannelId.length === 0 ? {} : { routerChannelId: target.routerChannelId }),
+    request: Buffer.from(request.data()).toString('base64'),
+    requestContentType: frameworkPayloadContentType(request)
+  }));
+  return {
+    packetName: ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME,
+    contentType: 'application/json',
+    payload,
+    // Older in-process MeshNode adapters consume the fallback as a Message.
+    // Keep that structural view without changing the typed service payload.
+    data: () => payload,
+    getString: (encoding?: BufferEncoding) => payload.toString(encoding)
   };
 }
 

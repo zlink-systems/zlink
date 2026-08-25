@@ -1,6 +1,6 @@
 # .NET Bound STREAM Session Public Interface
 
-[.NET exact interface table of contents](README.en.md)
+[.NET per-language interface table of contents](README.en.md)
 
 ## 1. Bound STREAM Session
 

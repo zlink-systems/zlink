@@ -20,6 +20,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -40,7 +41,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         router.inbound.add(received("one"));
         router.inbound.add(received("two"));
         var handlerExecutor = Executors.newSingleThreadExecutor();
-        ZLinkAsyncSerialQueue serial = new ZLinkAsyncSerialQueue(handlerExecutor, false);
+        ZLinkAsyncSerialQueue serial = new ZLinkAsyncSerialQueue(
+            handlerExecutor, ZLinkExecutionLanePolicy.generic());
         CountDownLatch allowFirstInstruction = new CountDownLatch(1);
         CountDownLatch bothDispatched = new CountDownLatch(2);
         AtomicInteger job = new AtomicInteger();

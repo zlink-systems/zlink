@@ -2714,7 +2714,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         Class<? extends ZLinkActorFactory> factory = factories.get(actorType);
         if (factory == null) {
-            throw new ZLinkConfigurationException("actor type is not registered: " + actorType);
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NOT_FOUND,
+                "actor type is not registered: " + actorType);
         }
         return factory;
     }

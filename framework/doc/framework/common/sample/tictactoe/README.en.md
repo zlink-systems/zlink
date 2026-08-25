@@ -180,14 +180,14 @@ observer Spot type is added.
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Build the object route with a manual peer. | RouteMesh manual endpoint | Shows a topology distinct from automatic discovery. [Channel Topology](../../spec/server/07-channel-topology.en.md) |
-| Create a new room. | The User Spot manager's Create | The Framework issues the global RoomId and chooses the owner. [Interaction Model §2.1](../../spec/server/03-interaction-model.en.md#21-the-public-interface-that-starts-an-interaction) |
-| Join a remote room. | A global Spot/Actor message | The caller specifies the RoomId/ActorId, and the Framework resolves the current owner. [Spot Address Messaging](../../spec/server/16-spot-address-messaging.en.md) |
-| Join a Player Actor to a room on another node. | `PreserveStateWith`, an Actor relocation adapter, and the Relocation Store | The Framework preserves Actor state while moving it to the room owner. [Relocation Policy §5](../../spec/server/15-spot-actor.en.md#5-relocation-policy-shared-by-every-move-path), [Store Registration §10](../../spec/server/06-framework-api.en.md#10-location-store-and-relocation-store) |
-| Connect the client connection to an actor. | STREAM session binding | Sends a server push to the current session. [STREAM Session](../../spec/server/19-stream-session.en.md) |
-| Notify multiple Play ingresses of a milestone. | Logical Multicast | The publisher doesn't manage a subscriber node list. [Interaction Model §5](../../spec/server/03-interaction-model.en.md#5-spot-logical-multicast) |
-| Clean up the actor after the game ends. | Public leave and Entry Spot destroy | Separates disconnect cleanup from explicit destroy. [Spot/Actor Membership §3](../../spec/server/15-spot-actor.en.md#3-actor-membership-for-entry-spot-and-user-spot) |
-| Express an owner failure. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failover Policy](../../spec/server/31-failure-failover-policy.en.md#42-an-existing-actor-and-spot) |
+| Build the object route with a manual peer. | RouteMesh manual endpoint | Shows a topology distinct from automatic discovery. [Channel Topology](../../spec/server/02-channel-transport/01-channel-topology.en.md) |
+| Create a new room. | The User Spot manager's Create | The Framework issues the global RoomId and chooses the owner. [Interaction Model §2.1](../../spec/server/00-foundation/04-interaction-model.en.md#2-the-public-interface-that-starts-an-interaction) |
+| Join a remote room. | A global Spot/Actor message | The caller specifies the RoomId/ActorId, and the Framework resolves the current owner. [Spot Address Messaging](../../spec/server/03-spot-actor/06-spot-address-messaging.en.md) |
+| Join a Player Actor to a room on another node. | `PreserveStateWith`, an Actor relocation adapter, and the Relocation Store | The Framework preserves Actor state while moving it to the room owner. [Relocation Policy §5](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md#6-relocation-policy-shared-by-every-move-path), [Store Registration §10](../../spec/server/00-foundation/06-framework-api.en.md#13-location-store-and-relocation-store-registration) |
+| Connect the client connection to an actor. | STREAM session binding | Sends a server push to the current session. [STREAM Session](../../spec/server/04-session/01-stream-session.en.md) |
+| Notify multiple Play ingresses of a milestone. | Logical Multicast | The publisher doesn't manage a subscriber node list. [Interaction Model §5](../../spec/server/00-foundation/04-interaction-model.en.md#5-spot-logical-multicast) |
+| Clean up the actor after the game ends. | Public leave and Entry Spot destroy | Separates disconnect cleanup from explicit destroy. [Spot/Actor Membership §3](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md#3-actor-membership-for-entry-spot-and-user-spot) |
+| Express an owner failure. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failover Policy](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#42-an-existing-actor-and-spot) |
 
 Room creation's Create call can pass initial room settings and, if needed, the first placement Mesh,
 but doesn't pass a Play endpoint or NodeRid as a business value. A direct message to an already

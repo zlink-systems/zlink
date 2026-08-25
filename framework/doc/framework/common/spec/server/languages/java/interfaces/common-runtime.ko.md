@@ -1,12 +1,12 @@
 # Java 공통 runtime 공개 인터페이스
 
-[인터페이스 목차](README.ko.md) · [Host relocation과 종료 계약](../../../30-host-relocation-flow.ko.md)
+[인터페이스 목차](README.ko.md) · [Host relocation과 종료 계약](../../../05-location-relocation/05-host-relocation-flow.ko.md)
 
 이 문서는 Java에서 host의 실행 상태, object relocation, 종료 요청과 공통 비동기 operation을 표현하는 공개 타입을
 고정한다. 공통 문서가 동작을 정의하며, 아래 선언은 Java에서 사용하는 타입과 member의 정확한 형태를
 보여 준다.
 
-공개 계약은 `systems.zlink.framework` Java module이 소유한다. 이 module은 이 exact interface에 기록한
+공개 계약은 `systems.zlink.framework` Java module이 소유한다. 이 module은 이 언어별 interface에 기록한
 application package와 `runtime.host`만 일반 consumer에게 export한다. Raw binding 구현은 별도 internal
 artifact에 있으며 application compile classpath에는 포함되지 않는다. Named module에서도 Framework
 companion module에 필요한 package만 export한다. 따라서 raw binding type은 public API inventory에
@@ -14,106 +14,106 @@ companion module에 필요한 package만 export한다. 따라서 raw binding typ
 
 ```java
 public enum ZLinkFrameworkRuntimeState {
-    PREPARING(0), SERVING(1), RELOCATING(2), RELOCATED(3),
-    DRAINING(4), STOPPED(5), ERROR(6);
-    private final int wireValue;
-    ZLinkFrameworkRuntimeState(int wireValue) { this.wireValue = wireValue; }
-    public int wireValue() { return wireValue; }
+ PREPARING(0), SERVING(1), RELOCATING(2), RELOCATED(3),
+ DRAINING(4), STOPPED(5), ERROR(6);
+ private final int wireValue;
+ ZLinkFrameworkRuntimeState(int wireValue) { this.wireValue = wireValue; }
+ public int wireValue() { return wireValue; }
 }
 
 public enum ZLinkFrameworkRelocationOutcome {
-    RELOCATED(0), BLOCKED(1);
-    private final int wireValue;
-    ZLinkFrameworkRelocationOutcome(int wireValue) { this.wireValue = wireValue; }
-    public int wireValue() { return wireValue; }
+ RELOCATED(0), BLOCKED(1);
+ private final int wireValue;
+ ZLinkFrameworkRelocationOutcome(int wireValue) { this.wireValue = wireValue; }
+ public int wireValue() { return wireValue; }
 }
 
 public enum ZLinkFrameworkRelocationMode {
-    PLANNED_MAINTENANCE(0), ROLLING_UPDATE(1);
-    private final int wireValue;
-    ZLinkFrameworkRelocationMode(int wireValue) { this.wireValue = wireValue; }
-    public int wireValue() { return wireValue; }
+ PLANNED_MAINTENANCE(0), ROLLING_UPDATE(1);
+ private final int wireValue;
+ ZLinkFrameworkRelocationMode(int wireValue) { this.wireValue = wireValue; }
+ public int wireValue() { return wireValue; }
 }
 
 public enum ZLinkFrameworkRelocationReason {
-    NONE(0), TARGET_UNAVAILABLE(1), STORE_UNAVAILABLE(2),
-    RELOCATION_DISABLED(3), STATE_INCOMPATIBLE(4),
-    DEADLINE_EXCEEDED(5), RELOCATION_FAILED(6),
-    RUNTIME_NOT_READY(7), MANUAL_TOPOLOGY_UNSUPPORTED(8),
-    SHUTDOWN_REQUESTED(9), OPERATION_IN_PROGRESS(10);
-    private final int wireValue;
-    ZLinkFrameworkRelocationReason(int wireValue) { this.wireValue = wireValue; }
-    public int wireValue() { return wireValue; }
+ NONE(0), TARGET_UNAVAILABLE(1), STORE_UNAVAILABLE(2),
+ RELOCATION_DISABLED(3), STATE_INCOMPATIBLE(4),
+ DEADLINE_EXCEEDED(5), RELOCATION_FAILED(6),
+ RUNTIME_NOT_READY(7), MANUAL_TOPOLOGY_UNSUPPORTED(8),
+ SHUTDOWN_REQUESTED(9), OPERATION_IN_PROGRESS(10);
+ private final int wireValue;
+ ZLinkFrameworkRelocationReason(int wireValue) { this.wireValue = wireValue; }
+ public int wireValue() { return wireValue; }
 }
 
 public record ZLinkFrameworkRelocationOptions(
-    ZLinkFrameworkRelocationMode mode,
-    Long targetApplicationVersion,
-    Duration deadline) {}
+ ZLinkFrameworkRelocationMode mode,
+ Long targetApplicationVersion,
+ Duration deadline) {}
 
 public record ZLinkFrameworkRelocationResult(
-    ZLinkFrameworkRelocationMode mode,
-    long effectiveTargetApplicationVersion,
-    ZLinkFrameworkRelocationOutcome outcome,
-    ZLinkFrameworkRelocationReason reason) {}
+ ZLinkFrameworkRelocationMode mode,
+ long effectiveTargetApplicationVersion,
+ ZLinkFrameworkRelocationOutcome outcome,
+ ZLinkFrameworkRelocationReason reason) {}
 
 public enum ZLinkFrameworkTerminationOutcome {
-    STOPPED(0), FORCE_STOPPED(1);
-    private final int wireValue;
-    ZLinkFrameworkTerminationOutcome(int wireValue) { this.wireValue = wireValue; }
-    public int wireValue() { return wireValue; }
+ STOPPED(0), FORCE_STOPPED(1);
+ private final int wireValue;
+ ZLinkFrameworkTerminationOutcome(int wireValue) { this.wireValue = wireValue; }
+ public int wireValue() { return wireValue; }
 }
 
 public enum ZLinkFrameworkTerminationReason {
-    NONE(0), DEADLINE_EXCEEDED(1), TEARDOWN_FAILED(2);
-    private final int wireValue;
-    ZLinkFrameworkTerminationReason(int wireValue) { this.wireValue = wireValue; }
-    public int wireValue() { return wireValue; }
+ NONE(0), DEADLINE_EXCEEDED(1), TEARDOWN_FAILED(2);
+ private final int wireValue;
+ ZLinkFrameworkTerminationReason(int wireValue) { this.wireValue = wireValue; }
+ public int wireValue() { return wireValue; }
 }
 
 public record ZLinkFrameworkTerminationResult(
-    ZLinkFrameworkTerminationOutcome outcome,
-    ZLinkFrameworkTerminationReason reason) {}
+ ZLinkFrameworkTerminationOutcome outcome,
+ ZLinkFrameworkTerminationReason reason) {}
 
 public enum ZLinkListenerKind {
-    ROUTE_MESH, CLIENT_SERVER, FANOUT, STREAM
+ ROUTE_MESH, CLIENT_SERVER, FANOUT, STREAM
 }
 
 public record ZLinkListenerStatus(
-    ZLinkListenerKind kind,
-    String name,
-    String endpoint,
-    Instant observedAt) {}
+ ZLinkListenerKind kind,
+ String name,
+ String endpoint,
+ Instant observedAt) {}
 
 public final class ZLinkFrameworkRuntime
-    implements AutoCloseable, ZLinkMessageFlowControl {
-    public ZLinkClient client();
-    public void setMessageFlowMode(ZLinkMessageFlowLogMode mode);
-    public ZLinkMessageFlowLogMode messageFlowMode();
-    public ZLinkFanoutClient fanout();
-    public ZLinkRouteClient route();
-    public ZLinkRouteMeshRuntime routeMeshRuntime();
-    public ZLinkClientServerRuntime clientServerRuntime();
-    public ZLinkFanoutRuntime fanoutRuntime();
-    public ZLinkListenerStatus listenerStatus(
-        ZLinkListenerKind kind, String name);
-    public ZLinkSpotManager spotManager();
-    public ZLinkSpotOutbound spotOutbound();
-    public ZLinkSpotPublisherClient spotPublisherClient();
-    public ZLinkLocationRuntimeQuery monitoringLocationRuntimeQuery();
-    public ZLinkLocationReadiness locationReadiness();
-    public boolean stopSpotRuntime();
-    public ZLinkActorManager actorManager();
-    public ZLinkActorClient actorClient();
-    public ZLinkSessionActorsRuntime sessionActors(String streamNodeName, RoutingId sessionRid);
+ implements AutoCloseable, ZLinkMessageFlowControl {
+ public ZLinkClient client();
+ public void setMessageFlowMode(ZLinkMessageFlowLogMode mode);
+ public ZLinkMessageFlowLogMode messageFlowMode();
+ public ZLinkFanoutClient fanout();
+ public ZLinkRouteClient route();
+ public ZLinkRouteMeshRuntime routeMeshRuntime();
+ public ZLinkClientServerRuntime clientServerRuntime();
+ public ZLinkFanoutRuntime fanoutRuntime();
+ public ZLinkListenerStatus listenerStatus(
+ ZLinkListenerKind kind, String name);
+ public ZLinkSpotManager spotManager();
+ public ZLinkSpotOutbound spotOutbound();
+ public ZLinkSpotPublisherClient spotPublisherClient();
+ public ZLinkLocationRuntimeQuery monitoringLocationRuntimeQuery();
+ public ZLinkLocationReadiness locationReadiness();
+ public boolean stopSpotRuntime();
+ public ZLinkActorManager actorManager();
+ public ZLinkActorClient actorClient();
+ public ZLinkSessionActorsRuntime sessionActors(String streamNodeName, RoutingId sessionRid);
 
-    public ZLinkFrameworkRuntimeStatus status();
-    public Flow.Publisher<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> observe();
-    public CompletionStage<ZLinkFrameworkRelocationResult> relocate(
-        ZLinkFrameworkRelocationOptions options);
-    public CompletionStage<ZLinkFrameworkTerminationResult> shutdown();
-    public CompletionStage<ZLinkFrameworkTerminationResult> shutdown(Duration deadline);
-    public void close();
+ public ZLinkFrameworkRuntimeStatus status();
+ public Flow.Publisher<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> observe();
+ public CompletionStage<ZLinkFrameworkRelocationResult> relocate(
+ ZLinkFrameworkRelocationOptions options);
+ public CompletionStage<ZLinkFrameworkTerminationResult> shutdown();
+ public CompletionStage<ZLinkFrameworkTerminationResult> shutdown(Duration deadline);
+ public void close();
 }
 ```
 
@@ -122,13 +122,13 @@ public final class ZLinkFrameworkRuntime
 사용한다는 사실만 고정한다.
 
 `relocate(options)`는 신규 application admission과 placement를 닫고 현재 object를 compatible target으로
-이전한다. 성공하면 `RELOCATED` 상태가 되며 host process와 infrastructure connection은 유지한다. User Spot은 [Spot](../../../01-glossary.ko.md#spot)과 current
+이전한다. 성공하면 `RELOCATED` 상태가 되며 host process와 infrastructure connection은 유지한다. User Spot은 [Spot](../../../00-foundation/02-glossary.ko.md#spot)과 current
 member Actor 전체를 하나의 aggregate로 옮긴다. Participant 총수에 고정 상한을 두지 않는다.
 Aggregate participant 하나라도 `disableRelocation()`을 선택했으면
 `Blocked/RelocationDisabled`다. 요청한 application version과 등록 factory/type·relocation adapter eligibility를
 만족하는 target·capacity·reservation을 확보할 수 없으면 `Blocked/TargetUnavailable`로 끝난다. Target 선택 뒤
 전달한 state schema/type adapter가 호환되지 않으면 `Blocked/StateIncompatible`다. 이
-preflight failure는 admission을 변경하지 않는다. [User Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)이 존재한다는 사실만으로 relocation을 차단하지 않는다.
+preflight failure는 admission을 변경하지 않는다. [User Spot](../../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot)이 존재한다는 사실만으로 relocation을 차단하지 않는다.
 Local manual RouteMesh peer, ClientServer client endpoint, fanout subscriber endpoint 또는 manual fanout publisher가
 하나라도 있으면 `Blocked/ManualTopologyUnsupported`로 끝난다. Automatic RouteMesh는 source의 Core peer table에서
 descriptor와 같은 RID·lifecycle generation이 admitted·ready가 된 뒤에만 `RELOCATING`으로 전환한다.
@@ -147,27 +147,27 @@ bounded cleanup을 계속한다.
 `deadline == null`이면 Framework의 host relocation 기본 deadline을 사용한다.
 
 - `PLANNED_MAINTENANCE`는 같은 application version을 유지하는 node 점검이나 재부팅에 사용한다.
-  `targetApplicationVersion`은 반드시 `null`이어야 하며, 결과의
-  `effectiveTargetApplicationVersion`은 source host의 application version이다.
+ `targetApplicationVersion`은 반드시 `null`이어야 하며, 결과의
+ `effectiveTargetApplicationVersion`은 source host의 application version이다.
 - `ROLLING_UPDATE`는 새 application version으로 교체할 때 사용한다.
-  `targetApplicationVersion`은 반드시 지정해야 하고 source version보다 커야 한다. Framework는 이 값과
-  application version이 정확히 같은 node만 target 후보로 사용하며, 중간 version이나 그보다 높은 다른
-  version으로 대체하지 않는다.
+ `targetApplicationVersion`은 반드시 지정해야 하고 source version보다 커야 한다. Framework는 이 값과
+ application version이 정확히 같은 node만 target 후보로 사용하며, 중간 version이나 그보다 높은 다른
+ version으로 대체하지 않는다.
 
 Mode와 target version 조합이 위 조건에 맞지 않으면 Framework는 admission이나 placement 상태를 변경하지
 않고 `IllegalArgumentException`으로 호출을 거부한다. 유효한 호출의 후보 선택 순서는 다음과 같다.
 
 1. `PLANNED_MAINTENANCE`는 source version과 같은 node만, `ROLLING_UPDATE`는 지정한 target version과
-   정확히 같은 node만 남긴다.
+ 정확히 같은 node만 남긴다.
 2. 같은 Mesh에서 source가 아니며 `SERVING` 상태인 Object Server만 남긴다.
 3. stable type, factory에서 선택한 relocation 동작과 adapter capability가 맞는지 확인한다.
 4. population capacity와 reservation 가능 여부를 확인하고 source와 같은 maintenance wave를 제외한다.
 5. 같은 descriptor snapshot에서 RID와 lifecycle generation이 일치하는 Core peer가 `ADMITTED`인
-   node만 남긴다.
+ node만 남긴다.
 6. 남은 후보에 node-wide placement weight를 적용한다.
 
 Version 조건을 먼저 적용하므로 capability나 capacity가 충분하더라도 다른 version node로 fallback하지
-않는다. Version·wave·capacity 또는 등록 factory/type·relocation adapter eligibility를 만족하는 exact-ready
+않는다. Version·wave·capacity 또는 등록 factory/type·relocation adapter eligibility를 만족하는 -ready
 target이 없으면 deadline까지 다시 확인한 뒤 `Blocked/TargetUnavailable`이다. Target 선택 뒤 전달한 state
 schema/type adapter가 호환되지 않으면 `Blocked/StateIncompatible`이다. Store 조회 실패는
 `Blocked/StoreUnavailable`이다.
@@ -206,147 +206,147 @@ advertise host를 조합한 endpoint를 반환한다. Endpoint 문자열은 wild
 않으면 `ZLinkFrameworkErrorKind.NOT_CONFIGURED`로 실패한다. 반환된 status의 `observedAt`은 query 결과를
 만든 시각이다.
 
-## Exact public member `javap` inventory
+## public member `javap` inventory
 
 아래 선언은 `javap`가 출력하는 binary signature 형식으로 Java public type과 member를 고정한다.
 
 ```java
 public final class systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState extends java.lang.Enum<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState> {
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState PREPARING;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState SERVING;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState RELOCATING;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState RELOCATED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState DRAINING;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState STOPPED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState ERROR;
-  public int wireValue();
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState PREPARING;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState SERVING;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState RELOCATING;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState RELOCATED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState DRAINING;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState STOPPED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState ERROR;
+ public int wireValue();
 }
 public final class systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome extends java.lang.Enum<systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome> {
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome RELOCATED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome BLOCKED;
-  public int wireValue();
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome RELOCATED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome BLOCKED;
+ public int wireValue();
 }
 public final class systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode extends java.lang.Enum<systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode> {
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode PLANNED_MAINTENANCE;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode ROLLING_UPDATE;
-  public int wireValue();
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode PLANNED_MAINTENANCE;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode ROLLING_UPDATE;
+ public int wireValue();
 }
 public final class systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason extends java.lang.Enum<systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason> {
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason NONE;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason TARGET_UNAVAILABLE;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason STORE_UNAVAILABLE;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason RELOCATION_DISABLED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason STATE_INCOMPATIBLE;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason DEADLINE_EXCEEDED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason RELOCATION_FAILED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason RUNTIME_NOT_READY;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason MANUAL_TOPOLOGY_UNSUPPORTED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason SHUTDOWN_REQUESTED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason OPERATION_IN_PROGRESS;
-  public int wireValue();
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason NONE;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason TARGET_UNAVAILABLE;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason STORE_UNAVAILABLE;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason RELOCATION_DISABLED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason STATE_INCOMPATIBLE;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason DEADLINE_EXCEEDED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason RELOCATION_FAILED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason RUNTIME_NOT_READY;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason MANUAL_TOPOLOGY_UNSUPPORTED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason SHUTDOWN_REQUESTED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason OPERATION_IN_PROGRESS;
+ public int wireValue();
 }
 public final class systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions extends java.lang.Record {
-  public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions(systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode, java.lang.Long, java.time.Duration);
-  public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode mode();
-  public java.lang.Long targetApplicationVersion();
-  public java.time.Duration deadline();
+ public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions(systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode, java.lang.Long, java.time.Duration);
+ public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode mode();
+ public java.lang.Long targetApplicationVersion();
+ public java.time.Duration deadline();
 }
 public final class systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult extends java.lang.Record {
-  public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult(systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode, long, systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome, systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason);
-  public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode mode();
-  public long effectiveTargetApplicationVersion();
-  public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome outcome();
-  public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason reason();
+ public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult(systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode, long, systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome, systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason);
+ public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode mode();
+ public long effectiveTargetApplicationVersion();
+ public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome outcome();
+ public systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason reason();
 }
 public final class systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome extends java.lang.Enum<systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome> {
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome STOPPED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome FORCE_STOPPED;
-  public int wireValue();
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome STOPPED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome FORCE_STOPPED;
+ public int wireValue();
 }
 public final class systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason extends java.lang.Enum<systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason> {
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason NONE;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason DEADLINE_EXCEEDED;
-  public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason TEARDOWN_FAILED;
-  public int wireValue();
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason NONE;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason DEADLINE_EXCEEDED;
+ public static final systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason TEARDOWN_FAILED;
+ public int wireValue();
 }
 public final class systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult extends java.lang.Record {
-  public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult(systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome, systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason);
-  public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome outcome();
-  public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason reason();
+ public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult(systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome, systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason);
+ public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome outcome();
+ public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason reason();
 }
 public final class systems.zlink.framework.monitoring.ZLinkListenerKind extends java.lang.Enum<systems.zlink.framework.monitoring.ZLinkListenerKind> {
-  public static final systems.zlink.framework.monitoring.ZLinkListenerKind ROUTE_MESH;
-  public static final systems.zlink.framework.monitoring.ZLinkListenerKind CLIENT_SERVER;
-  public static final systems.zlink.framework.monitoring.ZLinkListenerKind FANOUT;
-  public static final systems.zlink.framework.monitoring.ZLinkListenerKind STREAM;
-  public static systems.zlink.framework.monitoring.ZLinkListenerKind[] values();
-  public static systems.zlink.framework.monitoring.ZLinkListenerKind valueOf(java.lang.String);
+ public static final systems.zlink.framework.monitoring.ZLinkListenerKind ROUTE_MESH;
+ public static final systems.zlink.framework.monitoring.ZLinkListenerKind CLIENT_SERVER;
+ public static final systems.zlink.framework.monitoring.ZLinkListenerKind FANOUT;
+ public static final systems.zlink.framework.monitoring.ZLinkListenerKind STREAM;
+ public static systems.zlink.framework.monitoring.ZLinkListenerKind[] values();
+ public static systems.zlink.framework.monitoring.ZLinkListenerKind valueOf(java.lang.String);
 }
 public final class systems.zlink.framework.monitoring.ZLinkListenerStatus extends java.lang.Record {
-  public systems.zlink.framework.monitoring.ZLinkListenerStatus(systems.zlink.framework.monitoring.ZLinkListenerKind, java.lang.String, java.lang.String, java.time.Instant);
-  public systems.zlink.framework.monitoring.ZLinkListenerKind kind();
-  public java.lang.String name();
-  public java.lang.String endpoint();
-  public java.time.Instant observedAt();
+ public systems.zlink.framework.monitoring.ZLinkListenerStatus(systems.zlink.framework.monitoring.ZLinkListenerKind, java.lang.String, java.lang.String, java.time.Instant);
+ public systems.zlink.framework.monitoring.ZLinkListenerKind kind();
+ public java.lang.String name();
+ public java.lang.String endpoint();
+ public java.time.Instant observedAt();
 }
 public interface systems.zlink.framework.ZLinkMessageContext {
-  public abstract java.util.Optional<java.lang.String> meshName();
-  public abstract java.util.Optional<java.lang.String> channelName();
-  public abstract java.lang.String packetName();
-  public abstract java.util.Optional<java.lang.String> contentType();
-  public abstract java.util.Map<java.lang.String, java.lang.String> metadata();
-  public abstract java.util.Optional<java.lang.String> correlationId();
+ public abstract java.util.Optional<java.lang.String> meshName();
+ public abstract java.util.Optional<java.lang.String> channelName();
+ public abstract java.lang.String packetName();
+ public abstract java.util.Optional<java.lang.String> contentType();
+ public abstract java.util.Map<java.lang.String, java.lang.String> metadata();
+ public abstract java.util.Optional<java.lang.String> correlationId();
 }
 public final class systems.zlink.framework.ZLinkHandlerDispatchKind extends java.lang.Enum<systems.zlink.framework.ZLinkHandlerDispatchKind> {
-  public static final systems.zlink.framework.ZLinkHandlerDispatchKind NODE_DIRECT_SEND;
-  public static final systems.zlink.framework.ZLinkHandlerDispatchKind NODE_DIRECT_REQUEST;
-  public static final systems.zlink.framework.ZLinkHandlerDispatchKind CHANNEL_SEND;
-  public static final systems.zlink.framework.ZLinkHandlerDispatchKind CHANNEL_REQUEST;
-  public static final systems.zlink.framework.ZLinkHandlerDispatchKind CLASSIC_FANOUT;
+ public static final systems.zlink.framework.ZLinkHandlerDispatchKind NODE_DIRECT_SEND;
+ public static final systems.zlink.framework.ZLinkHandlerDispatchKind NODE_DIRECT_REQUEST;
+ public static final systems.zlink.framework.ZLinkHandlerDispatchKind CHANNEL_SEND;
+ public static final systems.zlink.framework.ZLinkHandlerDispatchKind CHANNEL_REQUEST;
+ public static final systems.zlink.framework.ZLinkHandlerDispatchKind CLASSIC_FANOUT;
 }
 public interface systems.zlink.framework.ZLinkHandlerFilterContext extends systems.zlink.framework.ZLinkMessageContext {
-  public abstract systems.zlink.framework.ZLinkHandlerDispatchKind dispatchKind();
+ public abstract systems.zlink.framework.ZLinkHandlerDispatchKind dispatchKind();
 }
 public interface systems.zlink.framework.ZLinkHandlerFilter {
-  public abstract <T> java.util.concurrent.CompletionStage<T> invoke(systems.zlink.framework.ZLinkHandlerFilterContext, systems.zlink.framework.ZLinkHandlerFilterNext<T>);
+ public abstract <T> java.util.concurrent.CompletionStage<T> invoke(systems.zlink.framework.ZLinkHandlerFilterContext, systems.zlink.framework.ZLinkHandlerFilterNext<T>);
 }
 public interface systems.zlink.framework.ZLinkMessageSerializer {
-  public abstract <T> systems.zlink.framework.ZLinkEncodedPayload serialize(T);
-  public default <T> systems.zlink.framework.ZLinkEncodedPayload serialize(T, java.lang.Class<?>);
-  public abstract <T> T deserialize(systems.zlink.framework.ZLinkEncodedPayload, java.lang.Class<T>);
-  public default void prepare(java.lang.Class<?>);
+ public abstract <T> systems.zlink.framework.ZLinkEncodedPayload serialize(T);
+ public default <T> systems.zlink.framework.ZLinkEncodedPayload serialize(T, java.lang.Class<?>);
+ public abstract <T> T deserialize(systems.zlink.framework.ZLinkEncodedPayload, java.lang.Class<T>);
+ public default void prepare(java.lang.Class<?>);
 }
 public interface systems.zlink.framework.ZLinkHandlerFilterNext<T> {
-  public abstract java.util.concurrent.CompletionStage<T> invoke();
+ public abstract java.util.concurrent.CompletionStage<T> invoke();
 }
 public final class systems.zlink.framework.errors.ZLinkFrameworkErrorKind extends java.lang.Enum<systems.zlink.framework.errors.ZLinkFrameworkErrorKind> {
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind NOT_FOUND;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind ALREADY_EXISTS;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind TYPE_MISMATCH;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind NOT_CONFIGURED;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind REJECTED;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind UNAVAILABLE;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind CAPACITY_EXCEEDED;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind DEADLINE_EXCEEDED;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind SHUTTING_DOWN;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind PROTOCOL_ERROR;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind INVALID_OPERATION;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind DATA_LOST;
-  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind INTERNAL_FAILURE;
-  public static systems.zlink.framework.errors.ZLinkFrameworkErrorKind[] values();
-  public static systems.zlink.framework.errors.ZLinkFrameworkErrorKind valueOf(java.lang.String);
-  public int value();
-  public static systems.zlink.framework.errors.ZLinkFrameworkErrorKind fromValue(int);
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind NOT_FOUND;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind ALREADY_EXISTS;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind TYPE_MISMATCH;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind NOT_CONFIGURED;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind REJECTED;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind UNAVAILABLE;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind CAPACITY_EXCEEDED;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind DEADLINE_EXCEEDED;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind SHUTTING_DOWN;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind PROTOCOL_ERROR;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind INVALID_OPERATION;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind DATA_LOST;
+ public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind INTERNAL_FAILURE;
+ public static systems.zlink.framework.errors.ZLinkFrameworkErrorKind[] values();
+ public static systems.zlink.framework.errors.ZLinkFrameworkErrorKind valueOf(java.lang.String);
+ public int value();
+ public static systems.zlink.framework.errors.ZLinkFrameworkErrorKind fromValue(int);
 }
 public class systems.zlink.framework.errors.ZLinkFrameworkException extends java.lang.RuntimeException {
-  public systems.zlink.framework.errors.ZLinkFrameworkException(systems.zlink.framework.errors.ZLinkFrameworkErrorKind, java.lang.String);
-  public systems.zlink.framework.errors.ZLinkFrameworkException(systems.zlink.framework.errors.ZLinkFrameworkErrorKind, java.lang.String, java.lang.Throwable);
-  public systems.zlink.framework.errors.ZLinkFrameworkErrorKind kind();
+ public systems.zlink.framework.errors.ZLinkFrameworkException(systems.zlink.framework.errors.ZLinkFrameworkErrorKind, java.lang.String);
+ public systems.zlink.framework.errors.ZLinkFrameworkException(systems.zlink.framework.errors.ZLinkFrameworkErrorKind, java.lang.String, java.lang.Throwable);
+ public systems.zlink.framework.errors.ZLinkFrameworkErrorKind kind();
 }
 ```
 
 `ZLinkFrameworkErrorKind.value()`는 선언 순서와 무관하게 공통 숫자 `0..12`를 반환한다.
-`fromValue(int)`도 [공통 오류 모델](../../../32-framework-error-model.ko.md)의 같은 mapping을 사용한다.
+`fromValue(int)`도 [공통 오류 모델](../../../00-foundation/07-framework-error-model.ko.md)의 같은 mapping을 사용한다.
 Public exception은 재시도 여부를 제공하지 않는다.
 
 ## Serializer와 오류 public signature
@@ -358,34 +358,34 @@ Public exception은 재시도 여부를 제공하지 않는다.
 
 ```java
 public final class systems.zlink.framework.ZLinkEncodedPayload {
-  public static systems.zlink.framework.ZLinkEncodedPayload from(byte[]);
-  public byte[] bytes();
+ public static systems.zlink.framework.ZLinkEncodedPayload from(byte[]);
+ public byte[] bytes();
 }
 public final class systems.zlink.framework.errors.ZLinkConfigurationException extends systems.zlink.framework.errors.ZLinkFrameworkException {
-  public systems.zlink.framework.errors.ZLinkConfigurationException(java.lang.String);
-  public systems.zlink.framework.errors.ZLinkConfigurationException(java.lang.String, java.lang.Throwable);
+ public systems.zlink.framework.errors.ZLinkConfigurationException(java.lang.String);
+ public systems.zlink.framework.errors.ZLinkConfigurationException(java.lang.String, java.lang.Throwable);
 }
 public final class systems.zlink.framework.messaging.ZLinkMessage {
-  public static systems.zlink.framework.messaging.ZLinkMessage empty();
-  public static systems.zlink.framework.messaging.ZLinkMessage of(java.lang.Object);
-  public static systems.zlink.framework.messaging.ZLinkMessage of(java.lang.Object, java.lang.Class<?>);
-  public static systems.zlink.framework.messaging.ZLinkMessage fromEncoded(systems.zlink.framework.ZLinkEncodedPayload, systems.zlink.framework.ZLinkMessageSerializer);
-  public boolean isEmpty();
-  public java.lang.Class<?> declaredType();
-  public <T> T decode(java.lang.Class<T>);
-  public systems.zlink.framework.ZLinkEncodedPayload toEncodedPayload(systems.zlink.framework.ZLinkMessageSerializer);
+ public static systems.zlink.framework.messaging.ZLinkMessage empty();
+ public static systems.zlink.framework.messaging.ZLinkMessage of(java.lang.Object);
+ public static systems.zlink.framework.messaging.ZLinkMessage of(java.lang.Object, java.lang.Class<?>);
+ public static systems.zlink.framework.messaging.ZLinkMessage fromEncoded(systems.zlink.framework.ZLinkEncodedPayload, systems.zlink.framework.ZLinkMessageSerializer);
+ public boolean isEmpty();
+ public java.lang.Class<?> declaredType();
+ public <T> T decode(java.lang.Class<T>);
+ public systems.zlink.framework.ZLinkEncodedPayload toEncodedPayload(systems.zlink.framework.ZLinkMessageSerializer);
 }
 public final class systems.zlink.framework.codecs.msgpack.ZLinkMessagePackCodec implements systems.zlink.framework.configuration.ZLinkCodecExtension,systems.zlink.stream.connector.ZLinkStreamTypedCodec {
-  public static systems.zlink.framework.codecs.msgpack.ZLinkMessagePackCodec defaultCodec();
-  public static systems.zlink.framework.codecs.msgpack.ZLinkMessagePackCodec forPayloadTypes(java.util.function.Predicate<java.lang.Class<?>>);
-  public <T> systems.zlink.stream.connector.ZLinkStreamEncodedPayload encode(java.lang.String, T);
-  public <T> T decode(systems.zlink.stream.connector.ZLinkStreamEncodedPayload, java.lang.Class<T>);
-  public void register(systems.zlink.framework.configuration.ZLinkCodecRegistrar);
+ public static systems.zlink.framework.codecs.msgpack.ZLinkMessagePackCodec defaultCodec();
+ public static systems.zlink.framework.codecs.msgpack.ZLinkMessagePackCodec forPayloadTypes(java.util.function.Predicate<java.lang.Class<?>>);
+ public <T> systems.zlink.stream.connector.ZLinkStreamEncodedPayload encode(java.lang.String, T);
+ public <T> T decode(systems.zlink.stream.connector.ZLinkStreamEncodedPayload, java.lang.Class<T>);
+ public void register(systems.zlink.framework.configuration.ZLinkCodecRegistrar);
 }
 public final class systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec implements systems.zlink.framework.configuration.ZLinkCodecExtension,systems.zlink.stream.connector.ZLinkStreamTypedCodec {
-  public static systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec defaultCodec();
-  public <T> systems.zlink.stream.connector.ZLinkStreamEncodedPayload encode(java.lang.String, T);
-  public <T> T decode(systems.zlink.stream.connector.ZLinkStreamEncodedPayload, java.lang.Class<T>);
-  public void register(systems.zlink.framework.configuration.ZLinkCodecRegistrar);
+ public static systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec defaultCodec();
+ public <T> systems.zlink.stream.connector.ZLinkStreamEncodedPayload encode(java.lang.String, T);
+ public <T> T decode(systems.zlink.stream.connector.ZLinkStreamEncodedPayload, java.lang.Class<T>);
+ public void register(systems.zlink.framework.configuration.ZLinkCodecRegistrar);
 }
 ```

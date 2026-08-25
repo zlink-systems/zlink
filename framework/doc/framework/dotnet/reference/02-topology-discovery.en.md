@@ -345,7 +345,7 @@ during host startup validation.
 Core owns its byte-budget calculation. The Framework does not divide that budget by connection
 count. The Application Job Queue is a separate job-count limit; `MaxQueuedApplicationJobs` accepts
 `1..2,147,483,647`, while `null` selects the Auto profile. See the
-[Core/Framework API contract](../../common/spec/server/06-framework-api.en.md).
+[Core/Framework API contract](../../common/spec/server/00-foundation/06-framework-api.en.md).
 
 **When to use it.** Use it to adjust host-wide settings that end in a single simple value and
 do not belong to one of the dedicated entries above (host lifecycle·topology registration·

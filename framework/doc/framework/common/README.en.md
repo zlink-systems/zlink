@@ -1,10 +1,10 @@
 <!-- framework-adapter-nav:start -->
-[Guide Home](../index.en.md) | [Previous: ZLink Framework](../index.en.md) | [Next: ZLink Framework Overview](spec/server/02-overview.en.md)
+[Guide Home](../index.en.md) | [Previous: ZLink Framework](../index.en.md) | [Next: ZLink Framework Overview](spec/server/00-foundation/03-overview.en.md)
 <!-- framework-adapter-nav:end -->
 
 [Guide Home](../index.en.md)
 
-[Spec Table Of Contents](spec/server/README.en.md) | [Public Contract Governance](spec/server/00-public-contract-governance.en.md) | [Common Internals](spec/server/README.en.md) | [Overview](spec/server/02-overview.en.md) | [Interaction Model](spec/server/03-interaction-model.en.md) | [Message Model](spec/server/04-message-model.en.md) | [Channel Topology](spec/server/07-channel-topology.en.md) | [Framework API](spec/server/06-framework-api.en.md) | [Async Execution](spec/server/05-async-execution-policy.en.md) | [Actor Model](spec/server/14-actor-model.en.md) | [Spot Actor Join / Relocation](spec/server/15-spot-actor.en.md) | [Session Actor Dispatch Usability](spec/server/20-session-actor-dispatch.en.md) | [Message Flow Tracing](spec/server/26-message-flow-tracing.en.md) | [Location Runtime](spec/server/21-location-runtime.en.md) | [Redis Store](spec/server/22-location-store-redis.en.md) | [Spot Address Messaging](spec/server/16-spot-address-messaging.en.md) | [Per-Language Public Contract](spec/server/languages/README.en.md) | [Sample/E2E Configuration Policy](sample-e2e-configuration-policy.en.md) | [Common Sample](sample/README.en.md) | [Scenario E2E](e2e/README.en.md) | [Performance Testing](perf/README.en.md)
+[Spec Table Of Contents](spec/server/README.en.md) | [Public Contract Governance](spec/server/00-foundation/01-public-contract-governance.en.md) | [Common Internals](spec/server/README.en.md) | [Overview](spec/server/00-foundation/03-overview.en.md) | [Interaction Model](spec/server/00-foundation/04-interaction-model.en.md) | [Message Model](spec/server/00-foundation/05-message-model.en.md) | [Channel Topology](spec/server/02-channel-transport/01-channel-topology.en.md) | [Framework API](spec/server/00-foundation/06-framework-api.en.md) | [Async Execution](spec/server/01-execution/README.en.md) | [Actor Model](spec/server/03-spot-actor/04-actor-model.en.md) | [Spot Actor Join / Relocation](spec/server/03-spot-actor/05-spot-actor-membership.en.md) | [Session Actor Dispatch Usability](spec/server/04-session/02-session-actor-binding.en.md) | [Message Flow Tracing](spec/server/06-observability/03-message-flow-tracing.en.md) | [Location Runtime](spec/server/05-location-relocation/01-location-runtime.en.md) | [Redis Store](spec/server/05-location-relocation/02-location-store-redis.en.md) | [Spot Address Messaging](spec/server/03-spot-actor/06-spot-address-messaging.en.md) | [Per-Language Public Contract](spec/server/languages/README.en.md) | [Sample/E2E Configuration Policy](sample-e2e-configuration-policy.en.md) | [Common Sample](sample/README.en.md) | [Scenario E2E](e2e/README.en.md) | [Performance Testing](perf/README.en.md)
 
 # ZLink Framework Common Spec
 
@@ -17,7 +17,7 @@
 This set organizes the direction of `ZLink Framework` for developers using `ASP.NET
 Core`, `Spring Boot`, `NestJS`, or the C++ zlink framework host on top of zlink's
 `.NET`, `Java`, `Kotlin`, `Node.js`, and `C++` bindings. See
-[01-overview.ko.md](spec/server/02-overview.en.md) for the product overview and core value.
+[01-overview.ko.md](spec/server/00-foundation/03-overview.en.md) for the product overview and core value.
 
 ## 2. Version Baseline
 
@@ -41,19 +41,19 @@ Reading them in numeric order naturally builds the full picture.
 
 | Order | Document | Scope |
 |:----:|------|------------|
-| 1 | [01-overview.ko.md](spec/server/02-overview.en.md) | Product overview, core differentiators, current priority scope. Answers "what is ZLink Framework, and why is it needed." |
-| 2 | [02-interaction-model.ko.md](spec/server/03-interaction-model.en.md) | Defines the meaning of the request-response, command, publish-subscribe, and stream models visible to the user. |
-| 3 | [03-message-model.ko.md](spec/server/04-message-model.en.md) | Covers the server-to-server multipart `header + payload` message structure, the STREAM single-packet boundary, header fields, payload codec direction, and codec extension policy. |
-| 4 | [10-channel-topology.ko.md](spec/server/07-channel-topology.en.md) | Covers channel grouping, discovery, manual connection, the interaction model, and internal transport mapping. |
-| 5 | [05-framework-api.ko.md](spec/server/06-framework-api.en.md) | Covers the API surface direction based on `ASP.NET Core`, `Spring Boot`, `NestJS`, and the `C++` standalone host. |
-| 6 | [Async Execution And Coroutine Policy](spec/server/05-async-execution-policy.en.md) | Defines the common meaning of async submit, the ban on blocking alternatives, and coroutines/adapters. |
-| 7 | [22-actor-model.ko.md](spec/server/14-actor-model.en.md) | Defines the actor lifecycle, session bind, user Spot join, outbound actor calls, and registration surface. |
-| 8 | [Spot Actor Join / Relocation](spec/server/15-spot-actor.en.md) | Defines the admission, commit, callback order, and failure handling when an actor moves between the Entry Spot and a user Spot. |
-| 9 | [Session Actor Dispatch](spec/server/20-session-actor-dispatch.en.md) | Defines the typed handler, route resolver, helper, `SessionProxy`, and error meaning of session actor dispatch. |
-| 10 | [Message Flow Tracing And Dispatch Observation](spec/server/26-message-flow-tracing.en.md) | Defines the modes, events, observer, performance, runtime toggle, and correlation contract of message flow tracing. |
-| 11 | [40-location-runtime.ko.md](spec/server/21-location-runtime.en.md) | Defines peer/spot/actor/route location, owner lease, store/resolver, auto-connect, and the operational query contract. |
-| 12 | [41-location-store-redis.ko.md](spec/server/22-location-store-redis.en.md) | Defines the official Redis location store extension's keys, lease, atomic write, error, and test contract. |
-| 13 | [24-spot-address-messaging.ko.md](spec/server/16-spot-address-messaging.en.md) | Defines spot/actor target addressing, lookup and re-lookup, failure classification, and the relocation boundary. |
+| 1 | [01-overview.ko.md](spec/server/00-foundation/03-overview.en.md) | Product overview, core differentiators, current priority scope. Answers "what is ZLink Framework, and why is it needed." |
+| 2 | [02-interaction-model.ko.md](spec/server/00-foundation/04-interaction-model.en.md) | Defines the meaning of the request-response, command, publish-subscribe, and stream models visible to the user. |
+| 3 | [03-message-model.ko.md](spec/server/00-foundation/05-message-model.en.md) | Covers the server-to-server multipart `header + payload` message structure, the STREAM single-packet boundary, header fields, payload codec direction, and codec extension policy. |
+| 4 | [10-channel-topology.ko.md](spec/server/02-channel-transport/01-channel-topology.en.md) | Covers channel grouping, discovery, manual connection, the interaction model, and internal transport mapping. |
+| 5 | [05-framework-api.ko.md](spec/server/00-foundation/06-framework-api.en.md) | Covers the API surface direction based on `ASP.NET Core`, `Spring Boot`, `NestJS`, and the `C++` standalone host. |
+| 6 | [Async Execution And Coroutine Policy](spec/server/01-execution/README.en.md) | Defines the common meaning of async submit, the ban on blocking alternatives, and coroutines/adapters. |
+| 7 | [22-actor-model.ko.md](spec/server/03-spot-actor/04-actor-model.en.md) | Defines the actor lifecycle, session bind, user Spot join, outbound actor calls, and registration surface. |
+| 8 | [Spot Actor Join / Relocation](spec/server/03-spot-actor/05-spot-actor-membership.en.md) | Defines the admission, commit, callback order, and failure handling when an actor moves between the Entry Spot and a user Spot. |
+| 9 | [Session Actor Dispatch](spec/server/04-session/02-session-actor-binding.en.md) | Defines the typed handler, route resolver, helper, `SessionProxy`, and error meaning of session actor dispatch. |
+| 10 | [Message Flow Tracing And Dispatch Observation](spec/server/06-observability/03-message-flow-tracing.en.md) | Defines the modes, events, observer, performance, runtime toggle, and correlation contract of message flow tracing. |
+| 11 | [40-location-runtime.ko.md](spec/server/05-location-relocation/01-location-runtime.en.md) | Defines peer/spot/actor/route location, owner lease, store/resolver, auto-connect, and the operational query contract. |
+| 12 | [41-location-store-redis.ko.md](spec/server/05-location-relocation/02-location-store-redis.en.md) | Defines the official Redis location store extension's keys, lease, atomic write, error, and test contract. |
+| 13 | [24-spot-address-messaging.ko.md](spec/server/03-spot-actor/06-spot-address-messaging.en.md) | Defines spot/actor target addressing, lookup and re-lookup, failure classification, and the relocation boundary. |
 | 14 | [Sample/E2E Configuration Policy](sample-e2e-configuration-policy.en.md) | Defines config files, the ban on environment variables, per-language typed binding, and runner responsibility. |
 | 15 | [Common Sample Scenarios](sample/README.en.md) | Defines the language-neutral business flow, server roles, messages, and verification criteria for the 6 canonical samples. |
 | 16 | [Scenario E2E Tests](e2e/README.en.md) | Verifies scale-out, failure, lifecycle, and observability combinations against a real multi-process structure. |
@@ -153,7 +153,7 @@ rules.
 - Don't lengthen a name just because the parameter combination differs.
 - The common meaning of async submit, the ban on blocking alternatives, and coroutine
   adapters follows the
-  [Async Execution And Coroutine Policy](spec/server/05-async-execution-policy.en.md).
+  [Async Execution And Coroutine Policy](spec/server/01-execution/README.en.md).
 - A builder terminator's name keeps its common meaning but is projected to match each
   language's fluent-API convention. For example, the `.NET` awaitable terminator is
   `Async(...)`, Java's is `submit(...)` / `await(...)`, the C++ coroutine terminator is
@@ -191,7 +191,7 @@ following document set.
 | Document kind | Role |
 |----------|------|
 | `README.ko.md` | The entry point for that language's set. Organizes document structure, division of roles, and core direction. |
-| Interface reference document | Gathers the common interface / context / configuration surface / attribute or decorator in one place. The boundary between the common contract and internal runtime implementation follows [05-framework-api.ko.md §1.1](spec/server/06-framework-api.en.md#11-the-boundary-between-public-contract-and-runtime-implementation). |
+| Interface reference document | Gathers the common interface / context / configuration surface / attribute or decorator in one place. The boundary between the common contract and internal runtime implementation follows [05-framework-api.ko.md §1.1](spec/server/00-foundation/06-framework-api.en.md#1-the-boundary-between-public-contract-and-runtime-implementation). |
 | Channel messaging topic document | Explains channel registration, the handler model, the outbound client, and the dispatch flow. |
 | Channel messaging sample document | Provides a sample showing everything at once, from registration to handler to client call. |
 | `SPOT` topic document | If that language supports `SPOT`, explains lifecycle, publish/subscribe, and RouteMesh registration. |
@@ -310,9 +310,9 @@ client by the [per-language HTTP client contract](spec/http-client/README.en.md)
 The per-language specs aren't documents that copy each other's signatures. They fix the
 same common behavior as a public contract that user of that language can use naturally.
 The procedure for changing a contract follows
-[Public Contract Governance](spec/server/00-public-contract-governance.en.md).
+[Public Contract Governance](spec/server/00-foundation/01-public-contract-governance.en.md).
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Guide Home](../index.en.md) | [Previous: ZLink Framework](../index.en.md) | [Next: ZLink Framework Overview](spec/server/02-overview.en.md)
+[Guide Home](../index.en.md) | [Previous: ZLink Framework](../index.en.md) | [Next: ZLink Framework Overview](spec/server/00-foundation/03-overview.en.md)
 <!-- framework-adapter-nav:bottom:end -->

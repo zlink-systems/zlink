@@ -173,6 +173,61 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
     }
 
     [Fact]
+    public void AddZLinkFramework_Throws_WhenStreamSessionTypeIsRegisteredAcrossNodes()
+    {
+        var services = new ServiceCollection();
+
+        var exception = Assert.Throws<ZLinkConfigurationException>(() =>
+            services.AddZLinkFramework(options =>
+            {
+                options.AddStreamNode("stream-a")
+                    .Bind("tcp://127.0.0.1:9100")
+                    .AddSession<TestHeaderSession>();
+                options.AddStreamNode("stream-b")
+                    .Bind("tcp://127.0.0.1:9101")
+                    .AddSession<TestHeaderSession>();
+            }));
+
+        Assert.Contains("STREAM session type", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("stream-a", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("stream-b", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SessionReplacementCallbackTimeout_DefaultsToThirtySeconds_AndCanBeConfigured()
+    {
+        TimeSpan defaultValue = TimeSpan.Zero;
+        TimeSpan configuredValue = TimeSpan.Zero;
+
+        new ServiceCollection().AddZLinkFramework(options =>
+        {
+            defaultValue = options.SessionReplacementCallbackTimeout;
+            options.SessionReplacementCallbackTimeout = TimeSpan.FromMilliseconds(47);
+            configuredValue = options.SessionReplacementCallbackTimeout;
+        });
+
+        Assert.Equal(TimeSpan.FromMilliseconds(30_000), defaultValue);
+        Assert.Equal(TimeSpan.FromMilliseconds(47), configuredValue);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void SessionReplacementCallbackTimeout_RejectsNonPositiveValues(
+        int milliseconds)
+    {
+        var error = Assert.Throws<ZLinkConfigurationException>(() =>
+            new ServiceCollection().AddZLinkFramework(options =>
+                options.SessionReplacementCallbackTimeout =
+                    TimeSpan.FromMilliseconds(milliseconds)));
+
+        Assert.Contains(
+            "SessionReplacementCallbackTimeout",
+            error.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AddZLinkFramework_AllowsStandaloneLocalSpotNode()
     {
         var services = new ServiceCollection();

@@ -1,8 +1,8 @@
 # .NET Location·Relocation provider 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md) · [Location runtime](../../../21-location-runtime.ko.md) ·
-[Location Store provider](../../../22-location-store-redis.ko.md) ·
-[Relocation Store provider](../../../23-relocation-store-redis.ko.md)
+[.NET 언어별 interface 목차](README.ko.md) · [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md) ·
+[Location Store provider](../../../05-location-relocation/02-location-store-redis.ko.md) ·
+[Relocation Store provider](../../../05-location-relocation/03-relocation-store-redis.ko.md)
 
 ## 1. 범위
 
@@ -239,7 +239,7 @@ reference가 없어도 성공한 no-op이다.
 호출 전에 cancellation이 요청되면 provider는 I/O나 commit을 시작하지 않는다. 호출이 시작된 뒤
 cancellation, timeout 또는 transport failure가 발생하면 commit 여부가 불확실할 수 있다.
 
-Framework는 Location Store의 exact read와 version 또는 Relocation Store의 caller-issued reference로 결과를
+Framework는 Location Store의 직접 read와 version 또는 Relocation Store의 caller-issued reference로 결과를
 재조정한다. `Conflict`, `Missing`, `Expired`와 `AlreadyStored`는 닫힌 정상 결과다.
 `ArgumentException`과 `OperationCanceledException`이 아닌 Store 호출 예외는 Framework가 provider failure로
 분류한다.

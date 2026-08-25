@@ -379,6 +379,7 @@ export class ZLinkRemoteBoundSessionRelay {
         // The Session owner already closed this binding at the seal deadline.
         // A late command 44 is terminal and cannot reactivate the route.
         this.terminalServiceWireRelocations.touch(key);
+        this.warnLateSessionRouteUpdate(value);
         return;
       }
       if (terminal.routeFingerprint !== fingerprint) {
@@ -387,6 +388,7 @@ export class ZLinkRemoteBoundSessionRelay {
         );
       }
       this.terminalServiceWireRelocations.touch(key);
+      this.warnLateSessionRouteUpdate(value);
       return;
     }
     const state = this.activeServiceWireRelocations.get(key);
@@ -398,6 +400,7 @@ export class ZLinkRemoteBoundSessionRelay {
           `Actor '${value.actor.actorId}' command 44 did not match an active command 42.`
         )
       );
+      this.warnLateSessionRouteUpdate(value);
       return;
     }
     if (
@@ -414,6 +417,7 @@ export class ZLinkRemoteBoundSessionRelay {
           `Session relocation '${key}' repeated command 44 with different bytes.`
         );
       }
+      this.warnLateSessionRouteUpdate(value);
       await state.routePromise;
       return;
     }
@@ -476,6 +480,10 @@ export class ZLinkRemoteBoundSessionRelay {
     }
     this.activeServiceWireRelocations.clear();
     this.terminalServiceWireRelocations.clear();
+  }
+
+  private warnLateSessionRouteUpdate(value: ServiceSessionRelocationRoute): void {
+    console.warn(`late_session_route_update session=${value.session.sessionRid}`);
   }
 
   private async applyServiceWireSessionRelocationRoute(

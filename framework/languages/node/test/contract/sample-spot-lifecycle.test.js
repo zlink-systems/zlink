@@ -44,9 +44,13 @@ test('SupportChat closes a conversation Spot after the close grace deadline', as
 
       const idleAt = Date.now() + 3001;
       await spot.onTimer(idleAt);
-      await spot.onTimer(idleAt + 1001);
+      const closedAgentActorId = await spot.onTimer(idleAt + 1001);
 
-      assert.equal(closeCalls, 1);
+      //  member Actor가 남아 있으면 public close는 false로 끝나므로 Spot은 논리적
+      //  Closed 상태만 갖는다 — Spot 모델 §5 "Current Actor membership이 하나라도
+      //  남아 있으면 public close는 false로 끝나며".
+      assert.equal(closeCalls, 0);
+      assert.equal(closedAgentActorId, 'agent-1');
     }
   );
 });

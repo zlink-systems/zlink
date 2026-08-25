@@ -1396,10 +1396,15 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
     }
 
+    //  Session owner가 seal을 대조할 때 쓰는 값만 본다 — Session과 Actor binding 8.1
+    //  "Session owner는 다음 값만 검증한다": 현재 Session identity와 SessionRid, 현재
+    //  binding generation과 ActorId/ObjectGeneration, 같은 relocation인지 구분하는
+    //  relocation identity. coordinator identity는 transport가 검증하는 wire fence이므로
+    //  여기서 다시 대조하지 않는다.
     private static boolean sealMatchesRoute(
         ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
         ZLinkServiceM6BWireCodec.SessionRelocationRoute route) {
-        return seal.coordinator().equals(route.coordinator())
+        return seal.relocation().equals(route.relocation())
             && seal.session().equals(route.session())
             && seal.actor().actor().actorId().equals(route.actor().actorId())
             && seal.actor().actor().generation() == route.actor().generation();

@@ -1672,6 +1672,18 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RejectsInvalidRoutingAndRelocationLi
     {
         options_fixture_t fixture;
         auto options = fixture.make_options ();
+        EXPECT_EQ (std::chrono::milliseconds (30000),
+                   options.session_replacement_callback_timeout ());
+        options.set_session_replacement_callback_timeout (std::chrono::milliseconds (17));
+        EXPECT_EQ (std::chrono::milliseconds (17),
+                   options.session_replacement_callback_timeout ());
+        EXPECT_THROW (
+          options.set_session_replacement_callback_timeout (std::chrono::milliseconds::zero ()),
+          zlink::framework::framework_exception_t);
+    }
+    {
+        options_fixture_t fixture;
+        auto options = fixture.make_options ();
         options.configure_locations ().route_cache_max_age = std::chrono::seconds (26);
         options.configure_locations ().message_follow_duration = std::chrono::seconds (30);
         EXPECT_THROW (options.apply (), zlink::framework::framework_exception_t);

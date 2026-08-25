@@ -1,6 +1,6 @@
 # .NET Official Redis Store Public Interface
 
-[.NET exact interface table of contents](README.en.md) · [Provider SPI](08-authority-relocation.en.md) ·
+[.NET per-language interface table of contents](README.en.md) · [Provider SPI](08-authority-relocation.en.md) ·
 [Location Configuration And Operations](08-location-maintenance.en.md)
 
 ## 1. Scope

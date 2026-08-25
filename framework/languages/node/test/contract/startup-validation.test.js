@@ -337,6 +337,42 @@ test('STREAM Actor dispatch is opt-in and requires global authority prerequisite
   assert.equal(registration.spotNodes.size, 2);
 });
 
+test('STREAM Session types must be unique across a host', () => {
+  const FirstSession = class SharedSession {};
+  const SecondSession = class SharedSession {};
+
+  assert.throws(
+    () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {
+      builder.addStreamNode('gateway-a').registerSession(FirstSession);
+      builder.addStreamNode('gateway-b').registerSession(SecondSession);
+    })),
+    /STREAM session type 'SharedSession' is registered on both 'gateway-a' and 'gateway-b'/
+  );
+});
+
+test('SessionReplacementCallbackTimeout defaults to 30000 ms and rejects non-positive values', () => {
+  assert.equal(framework.createFrameworkRegistration().sessionReplacementCallbackTimeoutMs, 30_000);
+  assert.equal(
+    framework.createFrameworkRegistration({ requestTimeoutMs: 1 }).sessionReplacementCallbackTimeoutMs,
+    30_000
+  );
+
+  const configured = framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {
+    builder.setSessionReplacementCallbackTimeout(12_345);
+  }));
+  assert.equal(configured.sessionReplacementCallbackTimeoutMs, 12_345);
+  assert.throws(
+    () => framework.createFrameworkRegistration({ sessionReplacementCallbackTimeoutMs: 0 }),
+    /sessionReplacementCallbackTimeoutMs must be a positive safe integer/
+  );
+  assert.throws(
+    () => framework.createFrameworkOptions((builder) => {
+      builder.setSessionReplacementCallbackTimeout(-1);
+    }),
+    /SessionReplacementCallbackTimeout must be a positive safe integer/
+  );
+});
+
 test('Object Client RouteMesh rejects application Node-direct handlers', () => {
   class NodeNotice {}
   assert.throws(

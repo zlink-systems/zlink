@@ -143,14 +143,14 @@ send's `submit()` returns `CompletionStage<Void>`.** This stage only
 delivers completion and failure, and doesn't include transport result
 or admission status. A request/wait/lifecycle's `submit()` returns a
 `CompletionStage` carrying each operation's result
-([04 §1](../../../server/05-async-execution-policy.en.md)).
+([04 §1](../../../server/01-execution/README.en.md)).
 The Java connector doesn't provide a separate blocking terminator that
 waits for the same operation on the current thread. Lifecycle also
 follows the same call builder convention, like `connect().submit()`,
 `dispatch().submit()`.
 The Kotlin wrapper waits for the `CompletionStage` obtained from
 `submit()` as a coroutine suspension. This execution meaning follows
-the [framework common policy](../../../server/05-async-execution-policy.en.md).
+the [framework common policy](../../../server/01-execution/README.en.md).
 
 ## 4. Options
 
@@ -212,7 +212,7 @@ request correlation is kept regardless of the level.
 
 **Runtime change.** Per the rule required by
 [Common spec §13](../../32-stream-connector.en.md#13-diagnostics-level), which follows
-[server spec 26 §4.1](../../../server/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime),
+[server spec 26 §4.1](../../../server/06-observability/03-message-flow-tracing.en.md#5-changing-the-record-level-at-runtime-and-the-cost-rule),
 `ZLinkStreamConnectorOptions.diagnosticsLevel()` is only the construction-time initial
 value; the connector itself owns a runtime read/write API.
 
@@ -296,7 +296,7 @@ Metadata only carries a small key-value. Large work data is sent as
 payload. The STREAM wire header is a runtime-internal type. The
 connector user and server session don't build or pass a header object
 — they only handle the
-[packet name](../../../server/01-glossary.en.md#packet-name) and a metadata
+[packet name](../../../server/00-foundation/02-glossary.en.md#packet-name) and a metadata
 snapshot in the public model.
 
 ## 7. Send And Request
@@ -370,7 +370,7 @@ The current flow isn't guessed from a connector instance's mutable
 field or thread ID. The wire format and async context boundary is
 owned by
 [Stream Connector §4.2](../../32-stream-connector.en.md#42-header) and
-[Flow Correlation §6](../../../server/27-flow-correlation.en.md#6-async-work-and-execution-context).
+[Flow Correlation §6](../../../server/06-observability/04-flow-correlation.en.md#6-async-work-and-execution-context).
 
 ### 7.2 Test Wait Surface
 
@@ -636,7 +636,7 @@ buffering policy from the Java connector. The extension copying options
 **must preserve every option value, including the receive message
 bound.** `messages(...)` and `errors()` wrap the Java connector's
 `on(...)`, `onErrorReceived(...)` handler with `callbackFlow`. So in
-manual [dispatch mode](../../../server/01-glossary.en.md#dispatch-mode), just
+manual [dispatch mode](../../../server/00-foundation/02-glossary.en.md#dispatch-mode), just
 like Java, the Kotlin wrapper's `dispatch().await()` must be called for
 the collector to receive a message or error event.
 

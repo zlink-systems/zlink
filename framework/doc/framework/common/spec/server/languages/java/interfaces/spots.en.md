@@ -1,5 +1,7 @@
 # Java Spot Public Interface
 
+[Interface table of contents](README.en.md) · [Common Spot Contract](../../../03-spot-actor/02-spot-messaging.en.md)
+
 A Spot relocation, including an Actor bound to a session, restores
 Spot/Actor state and queue on the target, commits owner and membership,
 and then starts message processing. The target runtime sends
@@ -11,173 +13,171 @@ doesn't run the Actor disconnect callback. The route and physical
 connection of a different Actor not included in the relocation target
 aren't changed.
 
-[Interface table of contents](README.en.md) · [Common Spot Contract](../../../12-spot-messaging.en.md)
-
 This document fixes the public interface expressing Spot identity,
 lifecycle, messaging, manager, and relocation adapter in Java. A regular
 message targets with the global SpotId, and only the operation that
 closes a specific incarnation uses `SpotRef`.
 
 Entry/User/Instance SpotId is a global logical ID that's a `String` of
-UTF-8 encoded size 1..255 bytes, compared as a case-sensitive exact
+UTF-8 encoded size 1..255 bytes, compared as a case-sensitive
 value. Unicode normalization and case folding aren't applied.
 
 The information the Location Store holds, fixing the current owner and
-lifecycle state of a [Spot](../../../01-glossary.en.md#spot), is
+lifecycle state of a [Spot](../../../00-foundation/02-glossary.en.md#spot), is
 called authority. The process of preparing a new Instance Spot when
 authority is Missing and the caller specified Instance intent is called
 cold activation.
 
 ```java
 public record SpotRef(
-    String spotId,
-    long objectGeneration,
-    String meshName,
-    RoutingId nodeRid) {}
+ String spotId,
+ long objectGeneration,
+ String meshName,
+ RoutingId nodeRid) {}
 
 public enum ZLinkSpotCloseReason {
-    EXPLICIT_CLOSE(0), HOST_SHUTDOWN(1), RELOCATION_OUT(2), IDLE_EVICTED(3);
-    private final int value;
-    ZLinkSpotCloseReason(int value) { this.value = value; }
-    public int value() { return value; }
+ EXPLICIT_CLOSE(0), HOST_SHUTDOWN(1), RELOCATION_OUT(2), IDLE_EVICTED(3);
+ private final int value;
+ ZLinkSpotCloseReason(int value) { this.value = value; }
+ public int value() { return value; }
 }
 
 public record ZLinkSpotClosingContext(
-    ZLinkSpotCloseReason reason,
-    Instant deadline) {}
+ ZLinkSpotCloseReason reason,
+ Instant deadline) {}
 
 public enum ZLinkSpotRelocationReadyOutcome {
-    CONTINUED(0), RELOCATED(1);
-    private final int value;
-    ZLinkSpotRelocationReadyOutcome(int value) { this.value = value; }
-    public int value() { return value; }
+ CONTINUED(0), RELOCATED(1);
+ private final int value;
+ ZLinkSpotRelocationReadyOutcome(int value) { this.value = value; }
+ public int value() { return value; }
 }
 
 public record ZLinkSpotRelocationReadyCompletion(
-    ZLinkSpotRelocationReadyOutcome outcome) {}
+ ZLinkSpotRelocationReadyOutcome outcome) {}
 
 public interface ZLinkSpotRelocationReadyCall {
-    void defer();
+ void defer();
 }
 
 public interface ZLinkSpot<TActor extends ZLinkActor>
-    extends ZLinkUserSpotActorLifecycle<TActor> {
-    ZLinkSpotContext context();
-    default void configure() {}
-    default CompletionStage<ZLinkSpotCreateResponse> onCreate(
-        ZLinkMessage request) {
-        return CompletableFuture.completedFuture(
-            ZLinkSpotCreateResponse.accept());
-    }
-    default CompletionStage<Void> onInitialize() {
-        return CompletableFuture.completedFuture(null);
-    }
-    default CompletionStage<Void> onClosing(
-        ZLinkSpotClosingContext context) {
-        return CompletableFuture.completedFuture(null);
-    }
-    default CompletionStage<Void> onRelocationReadyCompleted(
-        ZLinkSpotRelocationReadyCompletion completion) {
-        return CompletableFuture.completedFuture(null);
-    }
+ extends ZLinkUserSpotActorLifecycle<TActor> {
+ ZLinkSpotContext context();
+ default void configure() {}
+ default CompletionStage<ZLinkSpotCreateResponse> onCreate(
+ ZLinkMessage request) {
+ return CompletableFuture.completedFuture(
+ ZLinkSpotCreateResponse.accept());
+ }
+ default CompletionStage<Void> onInitialize() {
+ return CompletableFuture.completedFuture(null);
+ }
+ default CompletionStage<Void> onClosing(
+ ZLinkSpotClosingContext context) {
+ return CompletableFuture.completedFuture(null);
+ }
+ default CompletionStage<Void> onRelocationReadyCompleted(
+ ZLinkSpotRelocationReadyCompletion completion) {
+ return CompletableFuture.completedFuture(null);
+ }
 }
 
 public interface ZLinkInstanceSpot {
-    ZLinkInstanceSpotContext context();
-    default void configure() {}
-    default CompletionStage<Void> onInitialize() {
-        return CompletableFuture.completedFuture(null);
-    }
-    default CompletionStage<Void> onClosing(
-        ZLinkSpotClosingContext context) {
-        return CompletableFuture.completedFuture(null);
-    }
+ ZLinkInstanceSpotContext context();
+ default void configure() {}
+ default CompletionStage<Void> onInitialize() {
+ return CompletableFuture.completedFuture(null);
+ }
+ default CompletionStage<Void> onClosing(
+ ZLinkSpotClosingContext context) {
+ return CompletableFuture.completedFuture(null);
+ }
 }
 
 public interface ZLinkInstanceSpotHandlerRegistry {
-    void addPacket(Class<?> handlerType);
+ void addPacket(Class<?> handlerType);
 }
 
 public interface ZLinkInstanceSpotContext {
-    String meshName();
-    String spotId();
-    long objectGeneration();
-    RoutingId nodeRid();
-    ZLinkInstanceSpotHandlerRegistry handlers();
-    ZLinkSpotOutbound outbound();
-    <T> ZLinkWorkerCall<T> runCpuWorker(ZLinkWorkerTask<T> work);
-    <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
-    CompletionStage<Boolean> close();
-    CompletionStage<ZLinkTimer> addTimer(
-        String name,
-        Duration period,
-        Class<?> handlerType,
-        ZLinkTimerOptions options);
+ String meshName();
+ String spotId();
+ long objectGeneration();
+ RoutingId nodeRid();
+ ZLinkInstanceSpotHandlerRegistry handlers();
+ ZLinkSpotOutbound outbound();
+ <T> ZLinkWorkerCall<T> runCpuWorker(ZLinkWorkerTask<T> work);
+ <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
+ CompletionStage<Boolean> close();
+ CompletionStage<ZLinkTimer> addTimer(
+ String name,
+ Duration period,
+ Class<?> handlerType,
+ ZLinkTimerOptions options);
 }
 
 public interface ZLinkSpotRelocationAdapter<TSpot> {
-    CompletionStage<byte[]> capture(
-        TSpot spot, ZLinkRelocationCancellation cancellation);
-    CompletionStage<Void> restore(
-        TSpot spot, byte[] state, ZLinkRelocationCancellation cancellation);
+ CompletionStage<byte[]> capture(
+ TSpot spot, ZLinkRelocationCancellation cancellation);
+ CompletionStage<Void> restore(
+ TSpot spot, byte[] state, ZLinkRelocationCancellation cancellation);
 }
 
 public interface ZLinkSpotContext {
-    String meshName();
-    String spotId();
-    long objectGeneration();
-    RoutingId nodeRid();
-    ZLinkSpotHandlerRegistry handlers();
-    ZLinkSpotOutbound outbound();
-    <T> ZLinkWorkerCall<T> runCpuWorker(ZLinkWorkerTask<T> work);
-    <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
-    ZLinkSpotRelocationReadyCall relocationReady();
-    CompletionStage<Void> leaveActor(ZLinkActor actor);
-    CompletionStage<Boolean> close();
-    CompletionStage<ZLinkTimer> addTimer(
-        String name,
-        Duration period,
-        Class<?> handlerType,
-        ZLinkTimerOptions options);
+ String meshName();
+ String spotId();
+ long objectGeneration();
+ RoutingId nodeRid();
+ ZLinkSpotHandlerRegistry handlers();
+ ZLinkSpotOutbound outbound();
+ <T> ZLinkWorkerCall<T> runCpuWorker(ZLinkWorkerTask<T> work);
+ <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
+ ZLinkSpotRelocationReadyCall relocationReady();
+ CompletionStage<Void> leaveActor(ZLinkActor actor);
+ CompletionStage<Boolean> close();
+ CompletionStage<ZLinkTimer> addTimer(
+ String name,
+ Duration period,
+ Class<?> handlerType,
+ ZLinkTimerOptions options);
 }
 
 public interface ZLinkEntrySpot<TActor extends ZLinkActor>
-    extends ZLinkSpotActorMembershipLifecycle<TActor> {
-    ZLinkEntrySpotContext context();
-    default CompletionStage<ZLinkActorCreateResponse> onCreateActor(
-        TActor actor,
-        ZLinkMessage createRequest) {
-        return CompletableFuture.completedFuture(
-            ZLinkActorCreateResponse.accept());
-    }
-    default CompletionStage<Void> onClosing(
-        ZLinkSpotClosingContext context) {
-        return CompletableFuture.completedFuture(null);
-    }
+ extends ZLinkSpotActorMembershipLifecycle<TActor> {
+ ZLinkEntrySpotContext context();
+ default CompletionStage<ZLinkActorCreateResponse> onCreateActor(
+ TActor actor,
+ ZLinkMessage createRequest) {
+ return CompletableFuture.completedFuture(
+ ZLinkActorCreateResponse.accept());
+ }
+ default CompletionStage<Void> onClosing(
+ ZLinkSpotClosingContext context) {
+ return CompletableFuture.completedFuture(null);
+ }
 }
 
 public interface ZLinkSpotSendCall extends ZLinkSendCall {
-    ZLinkSpotSendCall instanceSpot();
-    ZLinkSpotSendCall instanceSpot(String stableType);
-    ZLinkSpotSendCall inMesh(String meshName);
-    @Override ZLinkSpotSendCall metadata(String key, String value);
-    @Override ZLinkSpotSendCall metadata(Map<String, String> metadata);
+ ZLinkSpotSendCall instanceSpot();
+ ZLinkSpotSendCall instanceSpot(String stableType);
+ ZLinkSpotSendCall inMesh(String meshName);
+ @Override ZLinkSpotSendCall metadata(String key, String value);
+ @Override ZLinkSpotSendCall metadata(Map<String, String> metadata);
 }
 
 public interface ZLinkSpotRequestCall extends ZLinkRequestCall {
-    ZLinkSpotRequestCall instanceSpot();
-    ZLinkSpotRequestCall instanceSpot(String stableType);
-    ZLinkSpotRequestCall inMesh(String meshName);
-    @Override ZLinkSpotRequestCall metadata(String key, String value);
-    @Override ZLinkSpotRequestCall metadata(Map<String, String> metadata);
-    @Override ZLinkSpotRequestCall timeout(Duration timeout);
+ ZLinkSpotRequestCall instanceSpot();
+ ZLinkSpotRequestCall instanceSpot(String stableType);
+ ZLinkSpotRequestCall inMesh(String meshName);
+ @Override ZLinkSpotRequestCall metadata(String key, String value);
+ @Override ZLinkSpotRequestCall metadata(Map<String, String> metadata);
+ @Override ZLinkSpotRequestCall timeout(Duration timeout);
 }
 
 public interface ZLinkSpotManager {
-    ZLinkSpotCreateCall create(String spotType);
-    ZLinkSpotGetOrCreateCall getOrCreate(String spotId, String spotType);
-    CompletionStage<Optional<SpotRef>> find(String spotId);
-    CompletionStage<Boolean> close(SpotRef spot);
+ ZLinkSpotCreateCall create(String spotType);
+ ZLinkSpotGetOrCreateCall getOrCreate(String spotId, String spotType);
+ CompletionStage<Optional<SpotRef>> find(String spotId);
+ CompletionStage<Boolean> close(SpotRef spot);
 }
 
 ```
@@ -194,10 +194,10 @@ relocation clean up the source handler and re-create it in the target
 activation. The handler instance isn't relocation payload — the
 application state that must be recovered is owned by the Spot or Actor.
 
-The exact builder member of factory registration is owned by
+The builder member of factory registration is owned by
 [Configuration And Host](configuration-host.en.md). The Actor/User Spot/
-[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
-[factory](../../../01-glossary.en.md#factory) selects exactly one
+[Instance Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
+[factory](../../../00-foundation/02-glossary.en.md#factory) selects exactly one
 relocation behavior in the configure callback, and an overload that
 omits the callback isn't provided. The Spot manager is User-Spot-only.
 Only `create(spotType)` and `getOrCreate(spotId, spotType)` create a
@@ -209,7 +209,7 @@ The two operations return `ZLinkSpotSendCall` and `ZLinkSpotRequestCall`
 respectively. Only an operation that called `instanceSpot()` or
 `instanceSpot(stableType)` can start cold activation of a Missing
 Instance Spot. An operation without the marker ends Missing
-[authority](../../../01-glossary.en.md#authority) with `NOT_FOUND`
+[authority](../../../00-foundation/02-glossary.en.md#authority) with `NOT_FOUND`
 and doesn't create a creation intent.
 
 If existing authority exists, `instanceSpot()` uses the stable type
@@ -225,7 +225,7 @@ User, it's a type-mismatch error.
 
 `inMesh` selects the Mesh for Missing Instance cold activation. It
 doesn't relocate existing authority to a different
-[owner](../../../01-glossary.en.md#owner), and doesn't apply to
+[owner](../../../00-foundation/02-glossary.en.md#owner), and doesn't apply to
 regular User Spot messaging either. This option and the Instance marker
 can each only be set once, and terminal `submit` can also only be called
 once.
@@ -261,7 +261,7 @@ empty payload or success. A null stage and null `byte[]` from capture,
 and a null stage from restore, are contract violations. A precommit
 adapter exception and contract violation where a deadline hasn't been
 fixed yet in host relocation are `Blocked/StateIncompatible`; once a
-[deadline](../../../01-glossary.en.md#deadline) is fixed,
+[deadline](../../../00-foundation/02-glossary.en.md#deadline) is fixed,
 `Blocked/DeadlineExceeded`. Stale attempt cancellation can't commit a
 terminal result. Capture and restore are at-least-once and can overlap
 with a stale target attempt, so they must be retry-safe.
@@ -311,74 +311,74 @@ An Instance Spot doesn't create a reservation on the source — it's
 processed in the following order.
 
 1. The source looks up authority. If Ready, it sends a regular message
-   to the current owner.
+ to the current owner.
 2. If authority is Missing and there's
-   [Instance intent](../../../01-glossary.en.md#instance-intent), the
-   source selects an eligible target. It then puts SpotId, stable type,
-   creation intent, and the first message into an activation envelope
-   and sends it to the target. This envelope is a Framework
-   infrastructure message that can be delivered even before
-   [Ready](../../../01-glossary.en.md#ready), and isn't delivered to
-   the application handler.
+ [Instance intent](../../../00-foundation/02-glossary.en.md#instance-intent), the
+ source selects an eligible target. It then puts SpotId, stable type,
+ creation intent, and the first message into an activation envelope
+ and sends it to the target. This envelope is a Framework
+ infrastructure message that can be delivered even before
+ [Ready](../../../00-foundation/02-glossary.en.md#ready), and isn't delivered to
+ the application handler.
 3. The target runtime first stores the complete envelope, including
-   metadata presence and frame, as an immutable recovery root in the
-   Relocation Store, then confirms whether a local instance matching the
-   requested SpotId and
-   [stable type](../../../01-glossary.en.md#stable-type) exists.
+ metadata presence and frame, as an immutable recovery root in the
+ Relocation Store, then confirms whether a local instance matching the
+ requested SpotId and
+ [stable type](../../../00-foundation/02-glossary.en.md#stable-type) exists.
 4. Only when there's no instance does the target reserve `CREATING`
-   authority and reserved capacity with itself as owner. The reserved
-   [snapshot](../../../01-glossary.en.md#snapshot) is returned with a
-   reservation fence identifying which reservation it is, and a receipt
-   proving the recovery root's storage is complete, both received from
-   the provider.
+ authority and reserved capacity with itself as owner. The reserved
+ [snapshot](../../../00-foundation/02-glossary.en.md#snapshot) is returned with a
+ reservation fence identifying which reservation it is, and a receipt
+ proving the recovery root's storage is complete, both received from
+ the provider.
 5. Only the target that wins the authority reservation race (CAS winner)
-   runs factory and initialize and confirms the first record of the
-   durable activation inbox. A target that loses the race (CAS loser)
-   doesn't start a factory — it re-reads current authority and either
-   sends a message to the owner or joins the in-progress attempt.
+ runs factory and initialize and confirms the first record of the
+ durable activation inbox. A target that loses the race (CAS loser)
+ doesn't start a factory — it re-reads current authority and either
+ sends a message to the owner or joins the in-progress attempt.
 6. The winner publishes the recovery root/cursor, Ready state, and active
-   capacity while keeping the barrier that blocks handler execution
-   closed.
+ capacity while keeping the barrier that blocks handler execution
+ closed.
 7. The runtime restores the first record as the first item of the local
-   queue and then opens the handler barrier. The source doesn't resend
-   the same message after Ready. A local instance not matching authority
-   is fenced from processing the message.
+ queue and then opens the handler barrier. The source doesn't resend
+ the same message after Ready. A local instance not matching authority
+ is fenced from processing the message.
 8. If target activation fails, that reservation is aborted.
 9. The recovery pointer tracking recovery data is removed with a
-   Preserve CAS only after durably recording the first handler's
-   terminal completion and updating the replay cursor to the inbox
-   sequence. It isn't removed merely because it was submitted to the
-   queue.
+ Preserve CAS only after durably recording the first handler's
+ terminal completion and updating the replay cursor to the inbox
+ sequence. It isn't removed merely because it was submitted to the
+ queue.
 
 ```mermaid
 sequenceDiagram
-    participant S as Source runtime
-    participant L as Location Store
-    participant T as Target runtime
-    participant R as Relocation Store
-    participant I as Instance Spot
+ participant S as Source runtime
+ participant L as Location Store
+ participant T as Target runtime
+ participant R as Relocation Store
+ participant I as Instance Spot
 
-    S->>L: query authority
-    alt Ready
-        L-->>S: return current owner
-        S->>I: deliver regular message to existing owner
-    else Missing and has Instance intent
-        S->>T: deliver activation envelope including first message
-        T->>R: store complete envelope as immutable recovery root
-        T->>L: reserve CREATING authority and reserved capacity
-        alt CAS winner
-            T->>I: run factory and initialize
-            T->>L: publish recovery info and Ready state
-            T->>I: submit first record as the queue's first item
-        else CAS loser
-            T->>L: re-query current authority
-            L-->>T: return owner or in-progress attempt
-        end
-    end
+ S->>L: query authority
+ alt Ready
+ L-->>S: return current owner
+ S->>I: deliver regular message to existing owner
+ else Missing and has Instance intent
+ S->>T: deliver activation envelope including first message
+ T->>R: store complete envelope as immutable recovery root
+ T->>L: reserve CREATING authority and reserved capacity
+ alt CAS winner
+ T->>I: run factory and initialize
+ T->>L: publish recovery info and Ready state
+ T->>I: submit first record as the queue's first item
+ else CAS loser
+ T->>L: re-query current authority
+ L-->>T: return owner or in-progress attempt
+ end
+ end
 ```
 
 This diagram only shows the first message that starts
-[cold activation](../../../01-glossary.en.md#cold-activation) and the
+[cold activation](../../../00-foundation/02-glossary.en.md#cold-activation) and the
 authority race. The handler's terminal completion or reply, activation
 failure cleanup, and recovery pointer removal are defined in the later
 steps of the numbered list.
@@ -411,11 +411,11 @@ are only used if the Spot doesn't exist.
 
 ```java
 CompletionStage<CartReply> reply = spotClient
-    .requestToSpot(cartId, request)
-    .instanceSpot("shopping-cart") // if Missing, requests creation of an Instance Spot of this stable type.
-    .inMesh("commerce")            // only restricts the Mesh selection scope for Missing cold activation.
-    .timeout(Duration.ofSeconds(5))
-    .submit(CartReply.class);       // waits for the reply the creation or the existing owner's handler returned.
+ .requestToSpot(cartId, request)
+ .instanceSpot("shopping-cart") // if Missing, requests creation of an Instance Spot of this stable type.
+ .inMesh("commerce") // only restricts the Mesh selection scope for Missing cold activation.
+ .timeout(Duration.ofSeconds(5))
+ .submit(CartReply.class); // waits for the reply the creation or the existing owner's handler returned.
 ```
 
 `ZLinkSpotCloseReason`'s values are `EXPLICIT_CLOSE=0`,
@@ -423,20 +423,20 @@ CompletionStage<CartReply> reply = spotClient
 `IDLE_EVICTED` is an Instance-Spot-only reason and isn't delivered to
 Entry Spot or User Spot. The idle judgment condition and the
 reactivation rule after cleanup are owned by
-[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../03-spot-actor/01-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 The context's `deadline` is an absolute `Instant`. A separate Framework
 cancellation argument isn't added to the Java Spot closing callback. The
 framework ends the stage-completion wait at the deadline and proceeds
 with bounded teardown. Only Entry/User/Instance Spot receive this
 callback — a per-Actor closing callback isn't provided. Host
-[Shutdown](../../../01-glossary.en.md#shutdown) runs the callback
+[Shutdown](../../../00-foundation/02-glossary.en.md#shutdown) runs the callback
 while Actor membership and the local instance are valid, and cleans up
 scope and authority after completion. A standalone Actor relocation
 doesn't close the Entry Spot, so it doesn't call this callback.
 
 A regular message resolves the Ready owner. On a Missing RID, only a
 call with the Instance marker above creates a target-owned
-[activation envelope](../../../01-glossary.en.md#activation-envelope).
+[activation envelope](../../../00-foundation/02-glossary.en.md#activation-envelope).
 The stored envelope, stable type, and initial Mesh are used only to
 resume the first cold activation on the same target node and lifecycle
 before its terminal completion is recorded. Termination or lease expiry
@@ -445,7 +445,7 @@ another node; it ends as `UNAVAILABLE`.
 
 If a cold Instance factory/initialize fails, a durable public `FAILED`
 state isn't published. The runtime keeps a local failed barrier, deletes
-it with the exact authority fence, and reads to reconcile. A call to the
+it with the matching authority fence, and reads to reconcile. A call to the
 same address before the delete is confirmed returns the same typed
 failure — hidden retry is 0. Only the next caller after `MISSING` is
 confirmed starts a new `COLD_ACTIVATING` claim. There's no public API
@@ -464,308 +464,308 @@ An unknown property, duplicate property, missing required property, a
 non-numeric generation token, and an out-of-range value in Ref JSON are
 rejected.
 
-## Exact Public Member Inventory
+## Public Member Inventory
 
 The declarations below fix this category's Java public types and
 members.
 
 ```java
 public final class systems.zlink.framework.spots.SpotRef extends java.lang.Record {
-  public systems.zlink.framework.spots.SpotRef(java.lang.String, long, java.lang.String, systems.zlink.contracts.core.RoutingId);
-  public final java.lang.String toString();
-  public final int hashCode();
-  public final boolean equals(java.lang.Object);
-  public java.lang.String spotId();
-  public long objectGeneration();
-  public java.lang.String meshName();
-  public systems.zlink.contracts.core.RoutingId nodeRid();
+ public systems.zlink.framework.spots.SpotRef(java.lang.String, long, java.lang.String, systems.zlink.contracts.core.RoutingId);
+ public final java.lang.String toString();
+ public final int hashCode();
+ public final boolean equals(java.lang.Object);
+ public java.lang.String spotId();
+ public long objectGeneration();
+ public java.lang.String meshName();
+ public systems.zlink.contracts.core.RoutingId nodeRid();
 }
 public final class systems.zlink.framework.spots.ZLinkSpotCloseReason extends java.lang.Enum<systems.zlink.framework.spots.ZLinkSpotCloseReason> {
-  public static final systems.zlink.framework.spots.ZLinkSpotCloseReason EXPLICIT_CLOSE;
-  public static final systems.zlink.framework.spots.ZLinkSpotCloseReason HOST_SHUTDOWN;
-  public static final systems.zlink.framework.spots.ZLinkSpotCloseReason RELOCATION_OUT;
-  public static final systems.zlink.framework.spots.ZLinkSpotCloseReason IDLE_EVICTED;
-  public static systems.zlink.framework.spots.ZLinkSpotCloseReason[] values();
-  public static systems.zlink.framework.spots.ZLinkSpotCloseReason valueOf(java.lang.String);
-  public int value();
+ public static final systems.zlink.framework.spots.ZLinkSpotCloseReason EXPLICIT_CLOSE;
+ public static final systems.zlink.framework.spots.ZLinkSpotCloseReason HOST_SHUTDOWN;
+ public static final systems.zlink.framework.spots.ZLinkSpotCloseReason RELOCATION_OUT;
+ public static final systems.zlink.framework.spots.ZLinkSpotCloseReason IDLE_EVICTED;
+ public static systems.zlink.framework.spots.ZLinkSpotCloseReason[] values();
+ public static systems.zlink.framework.spots.ZLinkSpotCloseReason valueOf(java.lang.String);
+ public int value();
 }
 public final class systems.zlink.framework.spots.ZLinkSpotClosingContext extends java.lang.Record {
-  public systems.zlink.framework.spots.ZLinkSpotClosingContext(systems.zlink.framework.spots.ZLinkSpotCloseReason, java.time.Instant);
-  public final java.lang.String toString();
-  public final int hashCode();
-  public final boolean equals(java.lang.Object);
-  public systems.zlink.framework.spots.ZLinkSpotCloseReason reason();
-  public java.time.Instant deadline();
+ public systems.zlink.framework.spots.ZLinkSpotClosingContext(systems.zlink.framework.spots.ZLinkSpotCloseReason, java.time.Instant);
+ public final java.lang.String toString();
+ public final int hashCode();
+ public final boolean equals(java.lang.Object);
+ public systems.zlink.framework.spots.ZLinkSpotCloseReason reason();
+ public java.time.Instant deadline();
 }
 public final class systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome extends java.lang.Enum<systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome> {
-  public static final systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome CONTINUED;
-  public static final systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome RELOCATED;
-  public static systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome[] values();
-  public static systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome valueOf(java.lang.String);
-  public int value();
+ public static final systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome CONTINUED;
+ public static final systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome RELOCATED;
+ public static systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome[] values();
+ public static systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome valueOf(java.lang.String);
+ public int value();
 }
 public final class systems.zlink.framework.spots.ZLinkSpotRelocationReadyCompletion extends java.lang.Record {
-  public systems.zlink.framework.spots.ZLinkSpotRelocationReadyCompletion(systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome);
-  public systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome outcome();
+ public systems.zlink.framework.spots.ZLinkSpotRelocationReadyCompletion(systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome);
+ public systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome outcome();
 }
 public interface systems.zlink.framework.spots.ZLinkSpotRelocationReadyCall {
-  public abstract void defer();
+ public abstract void defer();
 }
 public interface systems.zlink.framework.spots.ZLinkInstanceSpot {
-  public abstract systems.zlink.framework.spots.ZLinkInstanceSpotContext context();
-  public default void configure();
-  public default java.util.concurrent.CompletionStage<java.lang.Void> onInitialize();
-  public default java.util.concurrent.CompletionStage<java.lang.Void> onClosing(systems.zlink.framework.spots.ZLinkSpotClosingContext);
+ public abstract systems.zlink.framework.spots.ZLinkInstanceSpotContext context();
+ public default void configure();
+ public default java.util.concurrent.CompletionStage<java.lang.Void> onInitialize();
+ public default java.util.concurrent.CompletionStage<java.lang.Void> onClosing(systems.zlink.framework.spots.ZLinkSpotClosingContext);
 }
 public interface systems.zlink.framework.spots.ZLinkInstanceSpotContext {
-  public abstract java.lang.String meshName();
-  public abstract java.lang.String spotId();
-  public abstract long objectGeneration();
-  public abstract systems.zlink.contracts.core.RoutingId nodeRid();
-  public abstract systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry handlers();
-  public abstract systems.zlink.framework.spots.ZLinkSpotOutbound outbound();
-  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
-  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
-  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
+ public abstract java.lang.String meshName();
+ public abstract java.lang.String spotId();
+ public abstract long objectGeneration();
+ public abstract systems.zlink.contracts.core.RoutingId nodeRid();
+ public abstract systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry handlers();
+ public abstract systems.zlink.framework.spots.ZLinkSpotOutbound outbound();
+ public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
+ public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
+ public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
 public interface systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry {
-  public abstract void addPacket(java.lang.Class<?>);
+ public abstract void addPacket(java.lang.Class<?>);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotRelocationAdapter<TSpot> {
-  public abstract java.util.concurrent.CompletionStage<byte[]> capture(TSpot, systems.zlink.framework.actors.ZLinkRelocationCancellation);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> restore(TSpot, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
+ public abstract java.util.concurrent.CompletionStage<byte[]> capture(TSpot, systems.zlink.framework.actors.ZLinkRelocationCancellation);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> restore(TSpot, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
 }
 public interface systems.zlink.framework.spots.ZLinkEntrySpot<TActor extends systems.zlink.framework.actors.ZLinkActor> extends systems.zlink.framework.spots.ZLinkSpotActorMembershipLifecycle<TActor> {
-  public abstract systems.zlink.framework.spots.ZLinkEntrySpotContext context();
-  public default void configure();
-  public default java.util.concurrent.CompletionStage<java.lang.Void> onInitialize();
-  public default java.util.concurrent.CompletionStage<java.lang.Void> onClosing(systems.zlink.framework.spots.ZLinkSpotClosingContext);
-  public default java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkActorCreateResponse> onCreateActor(TActor, systems.zlink.framework.messaging.ZLinkMessage);
+ public abstract systems.zlink.framework.spots.ZLinkEntrySpotContext context();
+ public default void configure();
+ public default java.util.concurrent.CompletionStage<java.lang.Void> onInitialize();
+ public default java.util.concurrent.CompletionStage<java.lang.Void> onClosing(systems.zlink.framework.spots.ZLinkSpotClosingContext);
+ public default java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkActorCreateResponse> onCreateActor(TActor, systems.zlink.framework.messaging.ZLinkMessage);
 }
 public interface systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler<TEntrySpot extends systems.zlink.framework.spots.ZLinkEntrySpot<?>, TActor extends systems.zlink.framework.actors.ZLinkActor, TRequest, TReply> {
-  public abstract java.util.concurrent.CompletionStage<TReply> handle(TEntrySpot, TActor, systems.zlink.framework.ZLinkMessageContext, TRequest);
+ public abstract java.util.concurrent.CompletionStage<TReply> handle(TEntrySpot, TActor, systems.zlink.framework.ZLinkMessageContext, TRequest);
 }
 public interface systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler<TEntrySpot extends systems.zlink.framework.spots.ZLinkEntrySpot<?>, TActor extends systems.zlink.framework.actors.ZLinkActor, TMessage> {
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TEntrySpot, TActor, systems.zlink.framework.ZLinkMessageContext, TMessage);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TEntrySpot, TActor, systems.zlink.framework.ZLinkMessageContext, TMessage);
 }
 public interface systems.zlink.framework.spots.ZLinkEntrySpotContext {
-  public abstract java.lang.String meshName();
-  public abstract java.lang.String spotId();
-  public abstract long objectGeneration();
-  public abstract systems.zlink.contracts.core.RoutingId nodeRid();
-  public default systems.zlink.framework.spots.ZLinkSpotHandlerRegistry handlers();
-  public abstract systems.zlink.framework.spots.ZLinkSpotOutbound outbound();
-  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
-  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> destroyActor(systems.zlink.framework.actors.ZLinkActor);
-  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
+ public abstract java.lang.String meshName();
+ public abstract java.lang.String spotId();
+ public abstract long objectGeneration();
+ public abstract systems.zlink.contracts.core.RoutingId nodeRid();
+ public default systems.zlink.framework.spots.ZLinkSpotHandlerRegistry handlers();
+ public abstract systems.zlink.framework.spots.ZLinkSpotOutbound outbound();
+ public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
+ public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> destroyActor(systems.zlink.framework.actors.ZLinkActor);
+ public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
 public interface systems.zlink.framework.spots.ZLinkIoWorkerTask<T> {
-  public abstract java.util.concurrent.CompletionStage<T> run(systems.zlink.framework.spots.ZLinkWorkerCancellation) throws java.lang.Exception;
+ public abstract java.util.concurrent.CompletionStage<T> run(systems.zlink.framework.spots.ZLinkWorkerCancellation) throws java.lang.Exception;
 }
 public interface systems.zlink.framework.spots.ZLinkSpot<TActor extends systems.zlink.framework.actors.ZLinkActor> extends systems.zlink.framework.spots.ZLinkUserSpotActorLifecycle<TActor> {
-  public abstract systems.zlink.framework.spots.ZLinkSpotContext context();
-  public default void configure();
-  public default java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResponse> onCreate(systems.zlink.framework.messaging.ZLinkMessage);
-  public default java.util.concurrent.CompletionStage<java.lang.Void> onInitialize();
-  public default java.util.concurrent.CompletionStage<java.lang.Void> onClosing(systems.zlink.framework.spots.ZLinkSpotClosingContext);
-  public default java.util.concurrent.CompletionStage<java.lang.Void> onRelocationReadyCompleted(systems.zlink.framework.spots.ZLinkSpotRelocationReadyCompletion);
+ public abstract systems.zlink.framework.spots.ZLinkSpotContext context();
+ public default void configure();
+ public default java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResponse> onCreate(systems.zlink.framework.messaging.ZLinkMessage);
+ public default java.util.concurrent.CompletionStage<java.lang.Void> onInitialize();
+ public default java.util.concurrent.CompletionStage<java.lang.Void> onClosing(systems.zlink.framework.spots.ZLinkSpotClosingContext);
+ public default java.util.concurrent.CompletionStage<java.lang.Void> onRelocationReadyCompleted(systems.zlink.framework.spots.ZLinkSpotRelocationReadyCompletion);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotActorJoinResult extends java.lang.Record {
-  public systems.zlink.framework.spots.ZLinkSpotActorJoinResult(boolean, systems.zlink.framework.messaging.ZLinkMessage);
-  public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult accept();
-  public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult accept(systems.zlink.framework.messaging.ZLinkMessage);
-  public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult accept(java.lang.Object);
-  public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult reject();
-  public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult reject(systems.zlink.framework.messaging.ZLinkMessage);
-  public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult reject(java.lang.Object);
-  public final java.lang.String toString();
-  public final int hashCode();
-  public final boolean equals(java.lang.Object);
-  public boolean accepted();
-  public systems.zlink.framework.messaging.ZLinkMessage reply();
+ public systems.zlink.framework.spots.ZLinkSpotActorJoinResult(boolean, systems.zlink.framework.messaging.ZLinkMessage);
+ public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult accept();
+ public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult accept(systems.zlink.framework.messaging.ZLinkMessage);
+ public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult accept(java.lang.Object);
+ public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult reject();
+ public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult reject(systems.zlink.framework.messaging.ZLinkMessage);
+ public static systems.zlink.framework.spots.ZLinkSpotActorJoinResult reject(java.lang.Object);
+ public final java.lang.String toString();
+ public final int hashCode();
+ public final boolean equals(java.lang.Object);
+ public boolean accepted();
+ public systems.zlink.framework.messaging.ZLinkMessage reply();
 }
 public interface systems.zlink.framework.spots.ZLinkSpotActorMembershipLifecycle<TActor extends systems.zlink.framework.actors.ZLinkActor> {
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> onJoinedActor(TActor);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> onLeaveActor(TActor);
-  public default java.util.concurrent.CompletionStage<java.lang.Void> onDisconnectActor(TActor);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> onJoinedActor(TActor);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> onLeaveActor(TActor);
+ public default java.util.concurrent.CompletionStage<java.lang.Void> onDisconnectActor(TActor);
 }
 public interface systems.zlink.framework.spots.ZLinkUserSpotActorLifecycle<TActor extends systems.zlink.framework.actors.ZLinkActor> extends systems.zlink.framework.spots.ZLinkSpotActorMembershipLifecycle<TActor> {
-  public default java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotActorJoinResult> onActorJoin(java.lang.String, systems.zlink.framework.messaging.ZLinkMessage);
+ public default java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotActorJoinResult> onActorJoin(java.lang.String, systems.zlink.framework.messaging.ZLinkMessage);
 }
 public final class systems.zlink.framework.spots.ZLinkActorCreateResponse extends java.lang.Record {
-  public systems.zlink.framework.spots.ZLinkActorCreateResponse(boolean, systems.zlink.framework.messaging.ZLinkMessage);
-  public static systems.zlink.framework.spots.ZLinkActorCreateResponse accept();
-  public static systems.zlink.framework.spots.ZLinkActorCreateResponse accept(systems.zlink.framework.messaging.ZLinkMessage);
-  public static systems.zlink.framework.spots.ZLinkActorCreateResponse accept(java.lang.Object);
-  public static systems.zlink.framework.spots.ZLinkActorCreateResponse reject();
-  public static systems.zlink.framework.spots.ZLinkActorCreateResponse reject(systems.zlink.framework.messaging.ZLinkMessage);
-  public static systems.zlink.framework.spots.ZLinkActorCreateResponse reject(java.lang.Object);
-  public boolean accepted();
-  public systems.zlink.framework.messaging.ZLinkMessage reply();
+ public systems.zlink.framework.spots.ZLinkActorCreateResponse(boolean, systems.zlink.framework.messaging.ZLinkMessage);
+ public static systems.zlink.framework.spots.ZLinkActorCreateResponse accept();
+ public static systems.zlink.framework.spots.ZLinkActorCreateResponse accept(systems.zlink.framework.messaging.ZLinkMessage);
+ public static systems.zlink.framework.spots.ZLinkActorCreateResponse accept(java.lang.Object);
+ public static systems.zlink.framework.spots.ZLinkActorCreateResponse reject();
+ public static systems.zlink.framework.spots.ZLinkActorCreateResponse reject(systems.zlink.framework.messaging.ZLinkMessage);
+ public static systems.zlink.framework.spots.ZLinkActorCreateResponse reject(java.lang.Object);
+ public boolean accepted();
+ public systems.zlink.framework.messaging.ZLinkMessage reply();
 }
 public interface systems.zlink.framework.spots.ZLinkSpotActorRequestHandler<TSpot extends systems.zlink.framework.spots.ZLinkSpot<?>, TActor extends systems.zlink.framework.actors.ZLinkActor, TRequest, TReply> {
-  public abstract java.util.concurrent.CompletionStage<TReply> handle(TSpot, TActor, systems.zlink.framework.ZLinkMessageContext, TRequest);
+ public abstract java.util.concurrent.CompletionStage<TReply> handle(TSpot, TActor, systems.zlink.framework.ZLinkMessageContext, TRequest);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotActorSendHandler<TSpot extends systems.zlink.framework.spots.ZLinkSpot<?>, TActor extends systems.zlink.framework.actors.ZLinkActor, TMessage> {
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TActor, systems.zlink.framework.ZLinkMessageContext, TMessage);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TActor, systems.zlink.framework.ZLinkMessageContext, TMessage);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotContext {
-  public abstract java.lang.String meshName();
-  public abstract java.lang.String spotId();
-  public abstract long objectGeneration();
-  public abstract systems.zlink.contracts.core.RoutingId nodeRid();
-  public default systems.zlink.framework.spots.ZLinkSpotHandlerRegistry handlers();
-  public abstract systems.zlink.framework.spots.ZLinkSpotOutbound outbound();
-  public abstract systems.zlink.framework.spots.ZLinkSpotRelocationReadyCall relocationReady();
-  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
-  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> leaveActor(systems.zlink.framework.actors.ZLinkActor);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
-  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
+ public abstract java.lang.String meshName();
+ public abstract java.lang.String spotId();
+ public abstract long objectGeneration();
+ public abstract systems.zlink.contracts.core.RoutingId nodeRid();
+ public default systems.zlink.framework.spots.ZLinkSpotHandlerRegistry handlers();
+ public abstract systems.zlink.framework.spots.ZLinkSpotOutbound outbound();
+ public abstract systems.zlink.framework.spots.ZLinkSpotRelocationReadyCall relocationReady();
+ public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
+ public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> leaveActor(systems.zlink.framework.actors.ZLinkActor);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
+ public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotCreateResult extends java.lang.Record {
-  public systems.zlink.framework.spots.ZLinkSpotCreateResult(systems.zlink.framework.spots.SpotRef, systems.zlink.framework.spots.ZLinkSpotCreateState, systems.zlink.framework.messaging.ZLinkMessage);
-  public final java.lang.String toString();
-  public final int hashCode();
-  public final boolean equals(java.lang.Object);
-  public systems.zlink.framework.spots.SpotRef spot();
-  public systems.zlink.framework.spots.ZLinkSpotCreateState state();
-  public systems.zlink.framework.messaging.ZLinkMessage reply();
+ public systems.zlink.framework.spots.ZLinkSpotCreateResult(systems.zlink.framework.spots.SpotRef, systems.zlink.framework.spots.ZLinkSpotCreateState, systems.zlink.framework.messaging.ZLinkMessage);
+ public final java.lang.String toString();
+ public final int hashCode();
+ public final boolean equals(java.lang.Object);
+ public systems.zlink.framework.spots.SpotRef spot();
+ public systems.zlink.framework.spots.ZLinkSpotCreateState state();
+ public systems.zlink.framework.messaging.ZLinkMessage reply();
 }
 public final class systems.zlink.framework.spots.ZLinkSpotCreateState extends java.lang.Enum<systems.zlink.framework.spots.ZLinkSpotCreateState> {
-  public static final systems.zlink.framework.spots.ZLinkSpotCreateState EXISTING;
-  public static final systems.zlink.framework.spots.ZLinkSpotCreateState CREATED;
-  public static final systems.zlink.framework.spots.ZLinkSpotCreateState REJECTED;
-  public static systems.zlink.framework.spots.ZLinkSpotCreateState[] values();
-  public static systems.zlink.framework.spots.ZLinkSpotCreateState valueOf(java.lang.String);
-  public int value();
+ public static final systems.zlink.framework.spots.ZLinkSpotCreateState EXISTING;
+ public static final systems.zlink.framework.spots.ZLinkSpotCreateState CREATED;
+ public static final systems.zlink.framework.spots.ZLinkSpotCreateState REJECTED;
+ public static systems.zlink.framework.spots.ZLinkSpotCreateState[] values();
+ public static systems.zlink.framework.spots.ZLinkSpotCreateState valueOf(java.lang.String);
+ public int value();
 }
 public interface systems.zlink.framework.spots.ZLinkSpotHandlerRegistry {
-  public abstract void addHandler(java.lang.Class<?>);
+ public abstract void addHandler(java.lang.Class<?>);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotKind extends java.lang.Enum<systems.zlink.framework.spots.ZLinkSpotKind> {
-  public static final systems.zlink.framework.spots.ZLinkSpotKind INVALID;
-  public static final systems.zlink.framework.spots.ZLinkSpotKind ENTRY;
-  public static final systems.zlink.framework.spots.ZLinkSpotKind USER;
-  public static final systems.zlink.framework.spots.ZLinkSpotKind INSTANCE;
-  public static systems.zlink.framework.spots.ZLinkSpotKind[] values();
-  public static systems.zlink.framework.spots.ZLinkSpotKind valueOf(java.lang.String);
-  public int value();
-  public static systems.zlink.framework.spots.ZLinkSpotKind fromValue(int);
+ public static final systems.zlink.framework.spots.ZLinkSpotKind INVALID;
+ public static final systems.zlink.framework.spots.ZLinkSpotKind ENTRY;
+ public static final systems.zlink.framework.spots.ZLinkSpotKind USER;
+ public static final systems.zlink.framework.spots.ZLinkSpotKind INSTANCE;
+ public static systems.zlink.framework.spots.ZLinkSpotKind[] values();
+ public static systems.zlink.framework.spots.ZLinkSpotKind valueOf(java.lang.String);
+ public int value();
+ public static systems.zlink.framework.spots.ZLinkSpotKind fromValue(int);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotManager {
-  public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall create(java.lang.String);
-  public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall getOrCreate(java.lang.String, java.lang.String);
-  public abstract java.util.concurrent.CompletionStage<java.util.Optional<systems.zlink.framework.spots.SpotRef>> find(java.lang.String);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close(systems.zlink.framework.spots.SpotRef);
+ public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall create(java.lang.String);
+ public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall getOrCreate(java.lang.String, java.lang.String);
+ public abstract java.util.concurrent.CompletionStage<java.util.Optional<systems.zlink.framework.spots.SpotRef>> find(java.lang.String);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close(systems.zlink.framework.spots.SpotRef);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotCreateCall {
-  public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall inMesh(java.lang.String);
-  public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall request(java.lang.Object);
-  public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall request(systems.zlink.framework.messaging.ZLinkMessage);
-  public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall timeout(java.time.Duration);
-  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResult> submit();
-  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResult> yield();
+ public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall inMesh(java.lang.String);
+ public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall request(java.lang.Object);
+ public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall request(systems.zlink.framework.messaging.ZLinkMessage);
+ public abstract systems.zlink.framework.spots.ZLinkSpotCreateCall timeout(java.time.Duration);
+ public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResult> submit();
+ public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResult> yield();
 }
 public interface systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall {
-  public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall inMesh(java.lang.String);
-  public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall request(java.lang.Object);
-  public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall request(systems.zlink.framework.messaging.ZLinkMessage);
-  public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall timeout(java.time.Duration);
-  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResult> submit();
-  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResult> yield();
+ public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall inMesh(java.lang.String);
+ public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall request(java.lang.Object);
+ public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall request(systems.zlink.framework.messaging.ZLinkMessage);
+ public abstract systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall timeout(java.time.Duration);
+ public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResult> submit();
+ public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResult> yield();
 }
 public interface systems.zlink.framework.spots.ZLinkSpotRequestCall extends systems.zlink.framework.channels.ZLinkRequestCall {
-  public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall instanceSpot();
-  public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall instanceSpot(java.lang.String);
-  public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall inMesh(java.lang.String);
-  public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall metadata(java.lang.String, java.lang.String);
-  public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall metadata(java.util.Map<java.lang.String, java.lang.String>);
-  public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall timeout(java.time.Duration);
+ public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall instanceSpot();
+ public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall instanceSpot(java.lang.String);
+ public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall inMesh(java.lang.String);
+ public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall metadata(java.lang.String, java.lang.String);
+ public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall metadata(java.util.Map<java.lang.String, java.lang.String>);
+ public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall timeout(java.time.Duration);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotSendCall extends systems.zlink.framework.channels.ZLinkSendCall {
-  public abstract systems.zlink.framework.spots.ZLinkSpotSendCall instanceSpot();
-  public abstract systems.zlink.framework.spots.ZLinkSpotSendCall instanceSpot(java.lang.String);
-  public abstract systems.zlink.framework.spots.ZLinkSpotSendCall inMesh(java.lang.String);
-  public abstract systems.zlink.framework.spots.ZLinkSpotSendCall metadata(java.lang.String, java.lang.String);
-  public abstract systems.zlink.framework.spots.ZLinkSpotSendCall metadata(java.util.Map<java.lang.String, java.lang.String>);
+ public abstract systems.zlink.framework.spots.ZLinkSpotSendCall instanceSpot();
+ public abstract systems.zlink.framework.spots.ZLinkSpotSendCall instanceSpot(java.lang.String);
+ public abstract systems.zlink.framework.spots.ZLinkSpotSendCall inMesh(java.lang.String);
+ public abstract systems.zlink.framework.spots.ZLinkSpotSendCall metadata(java.lang.String, java.lang.String);
+ public abstract systems.zlink.framework.spots.ZLinkSpotSendCall metadata(java.util.Map<java.lang.String, java.lang.String>);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotOutbound {
-  public abstract systems.zlink.framework.spots.ZLinkSpotSendCall sendToSpot(java.lang.String, java.lang.Object);
-  public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall requestToSpot(java.lang.String, java.lang.Object);
-  public abstract systems.zlink.framework.channels.ZLinkPublishCall publish(java.lang.String, java.lang.String, java.lang.Object);
-  public abstract systems.zlink.framework.channels.ZLinkSendCall sendToChannel(java.lang.String, java.lang.Object);
-  public abstract systems.zlink.framework.channels.ZLinkRequestCall requestToChannel(java.lang.String, java.lang.Object);
+ public abstract systems.zlink.framework.spots.ZLinkSpotSendCall sendToSpot(java.lang.String, java.lang.Object);
+ public abstract systems.zlink.framework.spots.ZLinkSpotRequestCall requestToSpot(java.lang.String, java.lang.Object);
+ public abstract systems.zlink.framework.channels.ZLinkPublishCall publish(java.lang.String, java.lang.String, java.lang.Object);
+ public abstract systems.zlink.framework.channels.ZLinkSendCall sendToChannel(java.lang.String, java.lang.Object);
+ public abstract systems.zlink.framework.channels.ZLinkRequestCall requestToChannel(java.lang.String, java.lang.Object);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotPacketHandler<TSpot, TMessage> {
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TMessage);
-  public default java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TMessage, systems.zlink.framework.ZLinkMessageContext);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TMessage);
+ public default java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TMessage, systems.zlink.framework.ZLinkMessageContext);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotPublisherClient {
-  public abstract systems.zlink.framework.channels.ZLinkPublishCall publish(java.lang.String, java.lang.String, java.lang.Object);
+ public abstract systems.zlink.framework.channels.ZLinkPublishCall publish(java.lang.String, java.lang.String, java.lang.Object);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotRequestHandler<TSpot, TRequest, TReply> {
-  public abstract java.util.concurrent.CompletionStage<TReply> handle(TSpot, TRequest);
-  public default java.util.concurrent.CompletionStage<TReply> handle(TSpot, TRequest, systems.zlink.framework.ZLinkMessageContext);
+ public abstract java.util.concurrent.CompletionStage<TReply> handle(TSpot, TRequest);
+ public default java.util.concurrent.CompletionStage<TReply> handle(TSpot, TRequest, systems.zlink.framework.ZLinkMessageContext);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler<TSpot, TEvent> {
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TEvent);
-  public default java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TEvent, systems.zlink.framework.channels.ZLinkPublishMessageContext);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TEvent);
+ public default java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, TEvent, systems.zlink.framework.channels.ZLinkPublishMessageContext);
 }
 public interface systems.zlink.framework.spots.ZLinkSpotTimerHandler<TSpot> {
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, systems.zlink.framework.spots.ZLinkTimerTick);
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TSpot, systems.zlink.framework.spots.ZLinkTimerTick);
 }
 public interface systems.zlink.framework.spots.ZLinkTimer extends java.lang.AutoCloseable {
-  public abstract boolean isDisposed();
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> cancel();
-  public abstract void close();
+ public abstract boolean isDisposed();
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> cancel();
+ public abstract void close();
 }
 public final class systems.zlink.framework.spots.ZLinkTimerOptions extends java.lang.Record {
-  public systems.zlink.framework.spots.ZLinkTimerOptions(systems.zlink.framework.spots.ZLinkTimerOverrunPolicy, int, boolean);
-  public final java.lang.String toString();
-  public final int hashCode();
-  public final boolean equals(java.lang.Object);
-  public systems.zlink.framework.spots.ZLinkTimerOverrunPolicy overrunPolicy();
-  public int maxCatchUpTicks();
-  public boolean stopOnUnhandledException();
+ public systems.zlink.framework.spots.ZLinkTimerOptions(systems.zlink.framework.spots.ZLinkTimerOverrunPolicy, int, boolean);
+ public final java.lang.String toString();
+ public final int hashCode();
+ public final boolean equals(java.lang.Object);
+ public systems.zlink.framework.spots.ZLinkTimerOverrunPolicy overrunPolicy();
+ public int maxCatchUpTicks();
+ public boolean stopOnUnhandledException();
 }
 public final class systems.zlink.framework.spots.ZLinkTimerOverrunPolicy extends java.lang.Enum<systems.zlink.framework.spots.ZLinkTimerOverrunPolicy> {
-  public static final systems.zlink.framework.spots.ZLinkTimerOverrunPolicy SKIP_LATE_TICKS;
-  public static final systems.zlink.framework.spots.ZLinkTimerOverrunPolicy CATCH_UP_BOUNDED;
-  public static final systems.zlink.framework.spots.ZLinkTimerOverrunPolicy DELAY_NEXT_TICK;
-  public static systems.zlink.framework.spots.ZLinkTimerOverrunPolicy[] values();
-  public static systems.zlink.framework.spots.ZLinkTimerOverrunPolicy valueOf(java.lang.String);
-  public int value();
+ public static final systems.zlink.framework.spots.ZLinkTimerOverrunPolicy SKIP_LATE_TICKS;
+ public static final systems.zlink.framework.spots.ZLinkTimerOverrunPolicy CATCH_UP_BOUNDED;
+ public static final systems.zlink.framework.spots.ZLinkTimerOverrunPolicy DELAY_NEXT_TICK;
+ public static systems.zlink.framework.spots.ZLinkTimerOverrunPolicy[] values();
+ public static systems.zlink.framework.spots.ZLinkTimerOverrunPolicy valueOf(java.lang.String);
+ public int value();
 }
 public final class systems.zlink.framework.spots.ZLinkTimerTick extends java.lang.Record {
-  public systems.zlink.framework.spots.ZLinkTimerTick(java.lang.String, long, long, java.time.Duration, java.time.Instant, java.time.Instant, java.time.Duration, java.time.Duration, java.time.Duration, long);
-  public final java.lang.String toString();
-  public final int hashCode();
-  public final boolean equals(java.lang.Object);
-  public java.lang.String name();
-  public long deliveryIndex();
-  public long scheduledIndex();
-  public java.time.Duration period();
-  public java.time.Instant scheduledAt();
-  public java.time.Instant startedAt();
-  public java.time.Duration scheduledElapsed();
-  public java.time.Duration startedElapsed();
-  public java.time.Duration delay();
-  public long skippedTicks();
+ public systems.zlink.framework.spots.ZLinkTimerTick(java.lang.String, long, long, java.time.Duration, java.time.Instant, java.time.Instant, java.time.Duration, java.time.Duration, java.time.Duration, long);
+ public final java.lang.String toString();
+ public final int hashCode();
+ public final boolean equals(java.lang.Object);
+ public java.lang.String name();
+ public long deliveryIndex();
+ public long scheduledIndex();
+ public java.time.Duration period();
+ public java.time.Instant scheduledAt();
+ public java.time.Instant startedAt();
+ public java.time.Duration scheduledElapsed();
+ public java.time.Duration startedElapsed();
+ public java.time.Duration delay();
+ public long skippedTicks();
 }
 public interface systems.zlink.framework.spots.ZLinkWorkerCall<T> {
-  public abstract systems.zlink.framework.spots.ZLinkWorkerCall<T> timeout(java.time.Duration);
-  public abstract java.util.concurrent.CompletionStage<T> submit();
-  public default java.util.concurrent.CompletionStage<T> yield();
+ public abstract systems.zlink.framework.spots.ZLinkWorkerCall<T> timeout(java.time.Duration);
+ public abstract java.util.concurrent.CompletionStage<T> submit();
+ public default java.util.concurrent.CompletionStage<T> yield();
 }
 public interface systems.zlink.framework.spots.ZLinkWorkerCancellation {
-  public abstract boolean isCancellationRequested();
-  public abstract void throwIfCancellationRequested();
+ public abstract boolean isCancellationRequested();
+ public abstract void throwIfCancellationRequested();
 }
 public interface systems.zlink.framework.spots.ZLinkWorkerTask<T> {
-  public abstract T run(systems.zlink.framework.spots.ZLinkWorkerCancellation) throws java.lang.Exception;
+ public abstract T run(systems.zlink.framework.spots.ZLinkWorkerCancellation) throws java.lang.Exception;
 }
 ```
 
@@ -780,18 +780,18 @@ this value against that range. This prose does not change the existing
 
 ```java
 public final class systems.zlink.framework.spots.ZLinkSpotCreateResponse extends java.lang.Record {
-  public systems.zlink.framework.spots.ZLinkSpotCreateResponse(boolean, systems.zlink.framework.messaging.ZLinkMessage);
-  public static systems.zlink.framework.spots.ZLinkSpotCreateResponse accept();
-  public static systems.zlink.framework.spots.ZLinkSpotCreateResponse accept(systems.zlink.framework.messaging.ZLinkMessage);
-  public static systems.zlink.framework.spots.ZLinkSpotCreateResponse accept(java.lang.Object);
-  public static systems.zlink.framework.spots.ZLinkSpotCreateResponse reject();
-  public static systems.zlink.framework.spots.ZLinkSpotCreateResponse reject(systems.zlink.framework.messaging.ZLinkMessage);
-  public static systems.zlink.framework.spots.ZLinkSpotCreateResponse reject(java.lang.Object);
-  public final java.lang.String toString();
-  public final int hashCode();
-  public final boolean equals(java.lang.Object);
-  public boolean accepted();
-  public systems.zlink.framework.messaging.ZLinkMessage reply();
+ public systems.zlink.framework.spots.ZLinkSpotCreateResponse(boolean, systems.zlink.framework.messaging.ZLinkMessage);
+ public static systems.zlink.framework.spots.ZLinkSpotCreateResponse accept();
+ public static systems.zlink.framework.spots.ZLinkSpotCreateResponse accept(systems.zlink.framework.messaging.ZLinkMessage);
+ public static systems.zlink.framework.spots.ZLinkSpotCreateResponse accept(java.lang.Object);
+ public static systems.zlink.framework.spots.ZLinkSpotCreateResponse reject();
+ public static systems.zlink.framework.spots.ZLinkSpotCreateResponse reject(systems.zlink.framework.messaging.ZLinkMessage);
+ public static systems.zlink.framework.spots.ZLinkSpotCreateResponse reject(java.lang.Object);
+ public final java.lang.String toString();
+ public final int hashCode();
+ public final boolean equals(java.lang.Object);
+ public boolean accepted();
+ public systems.zlink.framework.messaging.ZLinkMessage reply();
 }
 ```
 

@@ -1,6 +1,6 @@
-# C++ STREAM Session Exact Interface
+# C++ STREAM Session Per-Language Interface
 
-[C++ exact interface table of contents](README.en.md) · [Session Actor Dispatch](../../../20-session-actor-dispatch.en.md)
+[C++ per-language interface table of contents](README.en.md) · [Session Actor Dispatch](../../../04-session/02-session-actor-binding.en.md)
 
 ## 1. Public Session Surface
 
@@ -186,7 +186,7 @@ After bind, relay/request relay and `notify_disconnected()` use a
 per-Actor stored route and don't look up Location Store for every
 message. On physical disconnect, the Framework performs an automatic
 all-settled notification across every current binding and runs the
-Spot callback at most once per exact binding identity.
+Spot callback at most once per binding identity.
 `notify_disconnected()` is a logical notification while the connection
 is kept, and waits until the callback terminal. Relocation route update
 is only allowed within the same ObjectGeneration. After the target
@@ -202,7 +202,7 @@ the same Session, the route and physical STREAM connection of a
 different Actor not included in the relocation target is kept. The
 application doesn't call `bind()` again to learn about relocation.
 
-The exact Actor-interworking member of `bound_session_t`,
+The Actor-interworking member of `bound_session_t`,
 `session_actor_t`, and `session_actor_manager_t` is owned by the
 [Actor interface](05-actors.en.md). The metadata/compression/
 `submit()` member of `stream_send_call_t` and `stream_write_call_t`
@@ -223,7 +223,7 @@ address are a session identity snapshot the handshake confirmed, kept
 through packet dispatch.
 The Session callback accesses that session's Actor binding manager
 through the received `stream_t`'s `actors()`. Since Actor dispatch uses
-global ActorId lookup and an exact `actor_ref_t` bind, a target
+global ActorId lookup and an `actor_ref_t` bind, a target
 MeshName or local Actor overload isn't registered. Without Object role
 `client`/`server` and Location Store, startup fails with
 `not_configured`.

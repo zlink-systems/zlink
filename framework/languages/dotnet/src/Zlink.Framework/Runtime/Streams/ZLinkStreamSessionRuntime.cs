@@ -731,7 +731,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         var deadline = false;
         using var callbackDeadline = CancellationTokenSource
             .CreateLinkedTokenSource(_terminalCallbackStop.Token);
-        callbackDeadline.CancelAfter(_runtime.Registration.DefaultRequestTimeout);
+        callbackDeadline.CancelAfter(
+            _runtime.Registration.SessionReplacementCallbackTimeout);
         try
         {
             await ZLinkApplicationJobQueueInvocation

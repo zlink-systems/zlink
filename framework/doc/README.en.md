@@ -31,14 +31,14 @@ Official languages: `.NET` · `Java/Kotlin` · `Node.js` · `C++`.
 
 | Document | Scope |
 |------|-------------|
-| [Overview](framework/common/spec/server/02-overview.en.md) | The Framework's purpose and priority scope |
-| [Interaction model](framework/common/spec/server/03-interaction-model.en.md) | The request-response, command, publish-subscribe user model |
-| [Message model](framework/common/spec/server/04-message-model.en.md) | The header/payload structure and metadata policy |
-| [Channel topology](framework/common/spec/server/07-channel-topology.en.md) | Channel grouping, discovery, manual connection, internal transport mapping |
-| [Framework API](framework/common/spec/server/06-framework-api.en.md) | The common direction of the per-language framework API |
-| [Async execution policy](framework/common/spec/server/05-async-execution-policy.en.md) | Async submit, the ban on blocking, coroutine/adapter common meaning |
-| [Actor model](framework/common/spec/server/14-actor-model.en.md) | Actor location, session binding, Entry Spot, user Spot, dispatch criteria |
-| [Session Actor Dispatch](framework/common/spec/server/20-session-actor-dispatch.en.md) | The helper and routing policy that connects a session to an actor |
+| [Overview](framework/common/spec/server/00-foundation/03-overview.en.md) | The Framework's purpose and priority scope |
+| [Interaction model](framework/common/spec/server/00-foundation/04-interaction-model.en.md) | The request-response, command, publish-subscribe user model |
+| [Message model](framework/common/spec/server/00-foundation/05-message-model.en.md) | The header/payload structure and metadata policy |
+| [Channel topology](framework/common/spec/server/02-channel-transport/01-channel-topology.en.md) | Channel grouping, discovery, manual connection, internal transport mapping |
+| [Framework API](framework/common/spec/server/00-foundation/06-framework-api.en.md) | The common direction of the per-language framework API |
+| [Async execution policy](framework/common/spec/server/01-execution/README.en.md) | Async submit, the ban on blocking, coroutine/adapter common meaning |
+| [Actor model](framework/common/spec/server/03-spot-actor/04-actor-model.en.md) | Actor location, session binding, Entry Spot, user Spot, dispatch criteria |
+| [Session Actor Dispatch](framework/common/spec/server/04-session/02-session-actor-binding.en.md) | The helper and routing policy that connects a session to an actor |
 
 **Common sample scenarios** ([index](framework/common/sample/README.en.md)) — every language
 implements the 6 canonical samples with the same role separation, message names, and smoke order.
@@ -137,7 +137,7 @@ usage, and the Kotlin guide explains coroutine and `Flow` usage.
 
 ## Reading Order
 
-1. [Common overview](framework/common/spec/server/02-overview.en.md) → [Interaction model](framework/common/spec/server/03-interaction-model.en.md) → [Actor model](framework/common/spec/server/14-actor-model.en.md)
+1. [Common overview](framework/common/spec/server/00-foundation/03-overview.en.md) → [Interaction model](framework/common/spec/server/00-foundation/04-interaction-model.en.md) → [Actor model](framework/common/spec/server/03-spot-actor/04-actor-model.en.md)
 2. The [framework/&lt;lang&gt;](framework/dotnet/README.en.md) guide for the language you'll use
 3. If you need HTTP, [framework/&lt;lang&gt;/guide/http-client](framework/dotnet/guide/http-client/README.en.md); for external client connections, [framework/&lt;lang&gt;/guide/stream-connector](framework/cpp/guide/stream-connector/INDEX.en.md)
 

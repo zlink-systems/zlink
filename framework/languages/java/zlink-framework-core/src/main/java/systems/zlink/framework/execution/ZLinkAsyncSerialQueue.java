@@ -42,7 +42,7 @@ public final class ZLinkAsyncSerialQueue {
 
     private final Executor executor;
     private final ExecutorService ownedExecutor;
-    private final boolean releaseOnIncompleteStage;
+    private final ZLinkExecutionLanePolicy lanePolicy;
     private final int applicationMessageCapacity;
     private final long applicationByteCapacity;
     private final int lifecycleMessageCapacity;
@@ -76,13 +76,13 @@ public final class ZLinkAsyncSerialQueue {
         new ArrayList<>();
 
     public ZLinkAsyncSerialQueue() {
-        this(false);
+        this(ZLinkExecutionLanePolicy.generic());
     }
 
-    public ZLinkAsyncSerialQueue(boolean releaseOnIncompleteStage) {
+    public ZLinkAsyncSerialQueue(ZLinkExecutionLanePolicy lanePolicy) {
         this(
             null,
-            releaseOnIncompleteStage,
+            lanePolicy,
             DEFAULT_APPLICATION_MESSAGE_CAPACITY,
             DEFAULT_APPLICATION_BYTE_CAPACITY,
             DEFAULT_LIFECYCLE_MESSAGE_CAPACITY,
@@ -94,10 +94,10 @@ public final class ZLinkAsyncSerialQueue {
 
     public ZLinkAsyncSerialQueue(
         Executor executor,
-        boolean releaseOnIncompleteStage) {
+        ZLinkExecutionLanePolicy lanePolicy) {
         this(
             executor,
-            releaseOnIncompleteStage,
+            lanePolicy,
             DEFAULT_APPLICATION_MESSAGE_CAPACITY,
             DEFAULT_APPLICATION_BYTE_CAPACITY,
             DEFAULT_LIFECYCLE_MESSAGE_CAPACITY,
@@ -107,10 +107,12 @@ public final class ZLinkAsyncSerialQueue {
             DEFAULT_OWNER_TIME_BUDGET);
     }
 
-    public ZLinkAsyncSerialQueue(boolean releaseOnIncompleteStage, int pendingCapacity) {
+    public ZLinkAsyncSerialQueue(
+        ZLinkExecutionLanePolicy lanePolicy,
+        int pendingCapacity) {
         this(
             null,
-            releaseOnIncompleteStage,
+            lanePolicy,
             pendingCapacity,
             DEFAULT_APPLICATION_BYTE_CAPACITY,
             pendingCapacity,
@@ -122,11 +124,11 @@ public final class ZLinkAsyncSerialQueue {
 
     public ZLinkAsyncSerialQueue(
         Executor executor,
-        boolean releaseOnIncompleteStage,
+        ZLinkExecutionLanePolicy lanePolicy,
         int pendingCapacity) {
         this(
             executor,
-            releaseOnIncompleteStage,
+            lanePolicy,
             pendingCapacity,
             DEFAULT_APPLICATION_BYTE_CAPACITY,
             pendingCapacity,
@@ -138,7 +140,7 @@ public final class ZLinkAsyncSerialQueue {
 
     public ZLinkAsyncSerialQueue(
         Executor executor,
-        boolean releaseOnIncompleteStage,
+        ZLinkExecutionLanePolicy lanePolicy,
         int applicationMessageCapacity,
         long applicationByteCapacity,
         int lifecycleMessageCapacity,
@@ -164,7 +166,7 @@ public final class ZLinkAsyncSerialQueue {
             this.ownedExecutor = null;
             this.executor = executor;
         }
-        this.releaseOnIncompleteStage = releaseOnIncompleteStage;
+        this.lanePolicy = Objects.requireNonNull(lanePolicy, "lanePolicy");
         this.applicationMessageCapacity = applicationMessageCapacity;
         this.applicationByteCapacity = applicationByteCapacity;
         this.lifecycleMessageCapacity = lifecycleMessageCapacity;
@@ -989,11 +991,11 @@ public final class ZLinkAsyncSerialQueue {
                         } else {
                             result.complete(null);
                         }
-                        if (!releaseOnIncompleteStage) {
+                        if (!lanePolicy.releasesGateOnIncompleteStage()) {
                             gate.complete(null);
                         }
                     });
-                    if (releaseOnIncompleteStage
+                    if (lanePolicy.releasesGateOnIncompleteStage()
                         && !Boolean.TRUE.equals(CURRENT_RELEASE_DEFERRED.get())) {
                         gate.complete(null);
                     }
@@ -1045,7 +1047,7 @@ public final class ZLinkAsyncSerialQueue {
                 stage.toCompletableFuture().cancel(false);
             }
         });
-        if (!queue.releaseOnIncompleteStage) {
+        if (!queue.lanePolicy.releasesGateOnIncompleteStage()) {
             CompletableFuture<Void> gate = turn.gate;
             stage.whenComplete((value, error) -> {
                 try {

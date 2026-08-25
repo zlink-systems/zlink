@@ -1,6 +1,6 @@
 # Stream Connector — 공통 스펙
 
-[스펙 목차](../server/README.ko.md) | [이전: Session Actor Dispatch](../server/20-session-actor-dispatch.ko.md) | [다음: Location Runtime](../server/21-location-runtime.ko.md)
+[스펙 목차](../server/README.ko.md) | [이전: Session Actor Dispatch](../server/04-session/02-session-actor-binding.ko.md) | [다음: Location Runtime](../server/05-location-relocation/01-location-runtime.ko.md)
 
 > 이 문서는 **client stream connector의 언어 중립 정본**이다. 대상 실행 환경, transport,
 > wire 계약, packet(header 정보와 payload를 결합한 전송 단위) 모델, 연결 생명주기,
@@ -12,16 +12,16 @@
 > [java](languages/java/03-stream-connector.ko.md) ·
 > [typescript](languages/typescript/README.ko.md). 이 문서는
 > **무엇을 보장하는가**를 정의하고, 언어별 스펙은 **그 의미가 그 언어에서 어떤 모양인가**를
-> 정의한다([공개 계약 관리](../server/00-public-contract-governance.ko.md)).
+> 정의한다([공개 계약 관리](../server/00-foundation/01-public-contract-governance.ko.md)).
 
 ## 1. 목적과 범위
 
 Stream Connector는 서버 framework의 **STREAM 모델에 접속하는 client 쪽 라이브러리**다.
 서버 session callback이 받는 것과 같은
-[packet](../server/01-glossary.ko.md#stream-packet)(header + payload)을 client에서도 동일하게
+[packet](../server/00-foundation/02-glossary.ko.md#stream-packet)(header + payload)을 client에서도 동일하게
 주고받게 한다.
 
-[Connector](../server/01-glossary.ko.md#stream-connector)는 도메인을 포함하지 않는다. 사용자가 그 위에 채팅·게임·장비 제어·알림 같은 자기
+[Connector](../server/00-foundation/02-glossary.ko.md#stream-connector)는 도메인을 포함하지 않는다. 사용자가 그 위에 채팅·게임·장비 제어·알림 같은 자기
 protocol을 구성한다.
 
 **의존성 경계:**
@@ -112,12 +112,12 @@ STREAM frame의 앞쪽 2바이트는 `header_size`다.
 - **header의 첫 바이트는 `format_marker = 0xF2`다.** 값이 다르면 decode error다.
 - `kind`·`codec`은 문자열이 아니라 **1바이트 enum**으로 인코딩한다.
 - packet name은 `u8 name_len + UTF-8 bytes`이며 **최대 255바이트**다. **`Response`와 `Error`는
-  [packet name](../server/01-glossary.ko.md#packet-name)을 담지 않는다** — `name_len = 0`으로 인코딩한다. 응답은 handler를 고르지 않고
+  [packet name](../server/00-foundation/02-glossary.ko.md#packet-name)을 담지 않는다** — `name_len = 0`으로 인코딩한다. 응답은 handler를 고르지 않고
   상관관계는 `request_seq`가 이미 정하므로 이 필드가 쓰이지 않는다
-  ([03 message model](../server/04-message-model.ko.md)의 "reply 상관관계").
+  ([03 message model](../server/00-foundation/05-message-model.ko.md)의 "reply 상관관계").
 - metadata는 `u16 meta_len + metadata bytes`, correlation id는 `u8 len + bytes`로 이어진다.
 - flow 필드는 **36바이트 `flow_id`와 1바이트 `flow_origin`이 항상 함께** 존재하거나 함께 없다.
-  의미는 [메시지 흐름 상관관계 §3](../server/27-flow-correlation.ko.md#3-형식과-소유권)이 소유한다.
+  의미는 [메시지 흐름 상관관계 §3](../server/06-observability/04-flow-correlation.ko.md#3-형식과-소유권)이 소유한다.
 - **모든 multi-byte 정수는 network byte order**다.
 
 application code는 이 header를 직접 만들거나 수정하지 않는다. connector runtime이 소유한다.
@@ -133,7 +133,7 @@ application code는 이 header를 직접 만들거나 수정하지 않는다. co
 | has flow id | `0x10` | `flow_id`·`flow_origin` 필드가 있다 |
 
 `Control` packet에는 `has flow id`를 세우지 않는다
-([flow-correlation §3](../server/27-flow-correlation.ko.md#3-형식과-소유권)).
+([flow-correlation §3](../server/06-observability/04-flow-correlation.ko.md#3-형식과-소유권)).
 
 ### 4.4 metadata
 
@@ -192,7 +192,7 @@ control frame은 `Raw` codec, request sequence 없음, metadata 없음, flow fla
 
 `session-closing`은 서버가 세션을 닫기 직전에 보내는 control packet이며, client는 이를 읽어
 `closeReason`을 확정한다
-([Host relocation 전체 흐름 §9](../server/30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
+([Host relocation 전체 흐름 §9](../server/05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)).
 
 ```text
 +------------+-------------------+----------------+--------------------+
@@ -270,7 +270,7 @@ response에만** 들어간다.
 - **pending request 매칭은 `request_seq`가 정본이다.** `Response`와 `Error`에는 **packet name
   필드가 아예 없으므로**(`name_len = 0`) 이름으로 대조할 수도 없다. 어떤 응답인지는 sequence가
   이미 정한다. STREAM session에서 Actor request를 relay할 때도 같은 terminal reply 원칙을 사용한다
-  ([Session Actor Dispatch §3](../server/20-session-actor-dispatch.ko.md#3-inbound-dispatch와-reply)).
+  ([Session Actor Dispatch §3](../server/04-session/02-session-actor-binding.ko.md#5-bind와-relay)).
 - **request timeout·close·disconnect가 발생하면 pending request는 모두 실패로 완료하고 map에서
   제거한다.** 재연결 후 자동 재전송하지 않는다(§6).
 
@@ -393,7 +393,7 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 | wait timeout(특정 packet 대기) | 5초 |
 | heartbeat | 켜짐 — interval 1초, timeout 5초 |
 | reconnect | 켜짐 — 초기 지연 250ms, 최대 지연 5초, backoff 계수 2.0, 최대 시도 3회 |
-| [dispatch mode](../server/01-glossary.ko.md#dispatch-mode) | `Manual`(§7) |
+| [dispatch mode](../server/00-foundation/02-glossary.ko.md#dispatch-mode) | `Manual`(§7) |
 | codec | JSON(§5.4) |
 | 압축 | Lz4(§8) |
 | 송신·수신 payload 한도 | 각 64KB(§4.7) |
@@ -422,7 +422,7 @@ public metric provider 또는 sink에 게시한다. E2E와 application은 그 pr
 ### 6.3 종료 사유
 
 연결이 끊기면 connector는 **종료 사유**를 노출한다. 값 집합은 서버 측 `close_reason`
-([runtime-metrics §4](../server/25-runtime-metrics.ko.md#4-object와-stream))과 정합하는 **닫힌 집합**이며, wire 인코딩은
+([runtime-metrics §4](../server/06-observability/02-runtime-metrics.ko.md#6-object-수capacity와-relocation-계기))과 정합하는 **닫힌 집합**이며, wire 인코딩은
 §4.6의 `session-closing` control packet이 소유한다.
 
 | 사유 | 의미 |
@@ -435,7 +435,7 @@ public metric provider 또는 sink에 게시한다. E2E와 application은 그 pr
 | `TransportError` | transport 수준 실패로 끊겼다 |
 
 `ServerDrain`을 받은 client는 이 값을 보고 **재접속과 백오프를 결정한다**
-([Host relocation 전체 흐름 §9](../server/30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)). **서버가 대체 endpoint를
+([Host relocation 전체 흐름 §9](../server/05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)). **서버가 대체 endpoint를
 지정하는 기능은 이 계약에 포함하지 않는다.**
 
 언어별 문서는 이 사유를 표현하는 **타입 이름과 노출 방식**(속성인지 이벤트 인자인지)만
@@ -624,11 +624,11 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 ## 13. Diagnostics level
 
 Connector는 생성 시점 option으로 diagnostics level을 받는다. 값과 의미는
-[Message flow tracing §4](../server/26-message-flow-tracing.ko.md#4-application은-기록-범위를-어떻게-정하는가)의
+[Message flow tracing §4](../server/06-observability/03-message-flow-tracing.ko.md#4-기록-범위-설정--level과-sampling)의
 네 값 `Off`·`Errors`·`Normal`·`Detailed`를 그대로 사용하며 **기본값은 `Errors`다.**
-Connector는 [Flow correlation §4](../server/27-flow-correlation.ko.md#4-flow를-만드는-시점)가
+Connector는 [Flow correlation §4](../server/06-observability/04-flow-correlation.ko.md#4-flow를-만드는-시점)가
 말하는 client connector 규칙의 적용 대상이므로, 실행 중 level 변경도
-[Message flow tracing §4.1](../server/26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경)을
+[Message flow tracing §4.1](../server/06-observability/03-message-flow-tracing.ko.md#5-실행-중-기록-수준-변경과-비용-규칙)을
 그대로 따른다. Application은 connector를 다시 만들지 않고 level을 읽고 바꿀 수 있으며,
 변경은 그 뒤의 처리 지점부터 적용한다. 이미 만들어진 frame에는 소급 적용하지 않는다.
 각 처리 지점은 현재 level을 한 번 읽어 그 값으로 판단한다.
@@ -637,7 +637,7 @@ Connector는 [Flow correlation §4](../server/27-flow-correlation.ko.md#4-flow�
 생성·부착하고(§4.2, flag `0x10`), inbound frame의 flow 필드를 검증해 수신 message에
 전달한다.
 
-`Off`이면 [Flow correlation §4](../server/27-flow-correlation.ko.md#4-flow를-만드는-시점)의
+`Off`이면 [Flow correlation §4](../server/06-observability/04-flow-correlation.ko.md#4-flow를-만드는-시점)의
 client connector 규칙을 그대로 적용한다.
 
 - Outbound frame에 `flow_id`·`flow_origin`을 만들지 않고 부착하지 않는다(flag `0x10`을
@@ -648,6 +648,6 @@ client connector 규칙을 그대로 적용한다.
 
 Diagnostics level은 protocol 정보에 영향을 주지 않는다. Request의 correlation id는
 `Off`에서도 만들고 보존한다. 반대로 **one-way `Send`는 어느 level에서도 correlation id를
-만들지 않는다** — [Flow correlation §2](../server/27-flow-correlation.ko.md#2-두-식별자의-역할)의
+만들지 않는다** — [Flow correlation §2](../server/06-observability/04-flow-correlation.ko.md#2-두-식별자의-역할)의
 "reply가 없는 one-way message에는 `correlation_id`를 만들지 않는다"가 connector에도 그대로
 적용된다(flag `0x08` 미설정).

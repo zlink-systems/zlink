@@ -1206,14 +1206,13 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 assertArrayEquals(
                     new byte[] {1, 2, 3},
                     record.parts().get(1).toByteArray());
-                // The service envelope has one protocol header and one payload
-                // frame. Both native receive claims remain owned by this record
-                // until its terminal close.
-                awaitOutstandingApplicationLease(context, 2L);
+                assertEquals(0L, context.coreHwmBudgetSnapshot()
+                    .outstandingApplicationLeaseCount());
             } finally {
                 record.close();
             }
-            awaitOutstandingApplicationLease(context, 0L);
+            assertEquals(0L, context.coreHwmBudgetSnapshot()
+                .outstandingApplicationLeaseCount());
             CompletableFuture<ZLinkMeshDispatchRecord> progressed =
                 new CompletableFuture<>();
             nextDispatch.set(progressed);
@@ -1474,16 +1473,4 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         assertTrue(node.hasLivePeerIntent(endpoint));
     }
 
-    private static void awaitOutstandingApplicationLease(
-        systems.zlink.contracts.core.Context context,
-        long expected) throws InterruptedException {
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (context.coreHwmBudgetSnapshot()
-            .outstandingApplicationLeaseCount() != expected
-            && System.nanoTime() < deadline) {
-            Thread.sleep(1);
-        }
-        assertEquals(expected, context.coreHwmBudgetSnapshot()
-            .outstandingApplicationLeaseCount());
-    }
 }

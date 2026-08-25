@@ -129,13 +129,13 @@ Support가 등록하는 identity·roster·conversation Actor factory와 Conversa
 
 | 필요한 동작 | 선택한 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| client connection을 actor에 연결한다. | STREAM session binding | 현재 binding route로 server push를 전달한다. [STREAM session](../../spec/server/19-stream-session.ko.md) |
-| identity actor를 준비한다. | Actor GetOrCreate | stable ActorId와 type으로 기존 actor를 재사용한다. [상호작용 모델 §2.1](../../spec/server/03-interaction-model.ko.md#21-상호작용을-시작하는-public-interface) |
-| 새 conversation의 logical address를 만든다. | User Spot manager Create | Framework가 global SpotId를 발급하고 owner를 선택한다. [Framework API](../../spec/server/06-framework-api.ko.md) |
-| actor를 ConversationSpot에 참여시킨다. | public actor join | ActorRef나 owner NodeRid를 application payload로 보내지 않는다. [Spot·Actor membership](../../spec/server/15-spot-actor.ko.md) |
-| 대화 상태를 순서대로 변경한다. | Spot turn | domain aggregate의 mutable state를 한 execution gate에서 변경한다. [Async execution policy](../../spec/server/05-async-execution-policy.ko.md) |
-| current ConversationId actor로 relay한다. | session metadata routing | Session이 payload를 domain decode하지 않고 metadata로 bound actor를 고른다. [Session–Actor dispatch](../../spec/server/20-session-actor-dispatch.ko.md) |
-| owner 장애를 표현한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy](../../spec/server/31-failure-failover-policy.ko.md#42-기존-actor와-spot) |
+| client connection을 actor에 연결한다. | STREAM session binding | 현재 binding route로 server push를 전달한다. [STREAM session](../../spec/server/04-session/01-stream-session.ko.md) |
+| identity actor를 준비한다. | Actor GetOrCreate | stable ActorId와 type으로 기존 actor를 재사용한다. [상호작용 모델 §2.1](../../spec/server/00-foundation/04-interaction-model.ko.md#2-상호작용을-시작하는-public-interface) |
+| 새 conversation의 logical address를 만든다. | User Spot manager Create | Framework가 global SpotId를 발급하고 owner를 선택한다. [Framework API](../../spec/server/00-foundation/06-framework-api.ko.md) |
+| actor를 ConversationSpot에 참여시킨다. | public actor join | ActorRef나 owner NodeRid를 application payload로 보내지 않는다. [Spot·Actor membership](../../spec/server/03-spot-actor/05-spot-actor-membership.ko.md) |
+| 대화 상태를 순서대로 변경한다. | Spot turn | domain aggregate의 mutable state를 한 execution gate에서 변경한다. [Async execution policy](../../spec/server/01-execution/README.ko.md) |
+| current ConversationId actor로 relay한다. | session metadata routing | Session이 payload를 domain decode하지 않고 metadata로 bound actor를 고른다. [Session–Actor dispatch](../../spec/server/04-session/02-session-actor-binding.ko.md) |
+| owner 장애를 표현한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#42-기존-actor와-spot) |
 
 Session은 binding token과 current ActorRef를 직접 cache하지 않는다. GetOrCreate 결과의 exact
 ActorRef는 같은 binding operation에만 사용한다. Actor destroy 뒤 같은 ActorId를 새로 만들면

@@ -1,4 +1,4 @@
-// SF-F2: 장기 relocation은 Store lease를 유지하고 실패 뒤 새 call을 허용한다 시나리오를 검증한다.
+// SF-F2: 장기 relocation은 operation deadline 안에서 완료하고 실패 뒤 새 call을 허용한다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';
 import {

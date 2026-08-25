@@ -35,6 +35,7 @@ export { validateFrameworkRegistration };
 export { normalizeEndpoint, buildAdvertisedEndpoint, parseEndpointHostPort } from './EndpointNotation';
 
 const DEFAULT_MESSAGE_FOLLOW_DURATION_MS = 30_000;
+const DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS = 30_000;
 
 export function createFrameworkRegistration(
   options: ZLinkFrameworkRegistrationOptions = {}
@@ -59,6 +60,11 @@ export function createFrameworkRegistration(
       options.messageFollowDurationMs,
       'messageFollowDurationMs',
       DEFAULT_MESSAGE_FOLLOW_DURATION_MS
+    ),
+    sessionReplacementCallbackTimeoutMs: normalizePositiveInteger(
+      options.sessionReplacementCallbackTimeoutMs,
+      'sessionReplacementCallbackTimeoutMs',
+      DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS
     ),
     spotFactories: toSpotFactorySet(options.spotFactories, spotNodes),
     channels: toChannelMap(options.channels, network),
@@ -166,6 +172,14 @@ function normalizeNonNegativeInteger(value: number | undefined, name: string, fa
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new TypeError(`${name} must be a non-negative safe integer.`);
+  }
+  return value;
+}
+
+function normalizePositiveInteger(value: number | undefined, name: string, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${name} must be a positive safe integer.`);
   }
   return value;
 }

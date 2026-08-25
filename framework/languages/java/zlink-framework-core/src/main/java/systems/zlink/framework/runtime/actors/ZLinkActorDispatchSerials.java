@@ -14,6 +14,7 @@ import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 import java.util.function.Function;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRetainedSerialQueueCommit;
 
@@ -56,8 +57,9 @@ final class ZLinkActorDispatchSerials {
 
     private ZLinkAsyncSerialQueue newQueue() {
         return executor == null
-            ? new ZLinkAsyncSerialQueue(false)
-            : new ZLinkAsyncSerialQueue(executor, false);
+            ? new ZLinkAsyncSerialQueue(ZLinkExecutionLanePolicy.actorDelivery())
+            : new ZLinkAsyncSerialQueue(
+                executor, ZLinkExecutionLanePolicy.actorDelivery());
     }
 
     private synchronized Object admissionGate(String actorId) {

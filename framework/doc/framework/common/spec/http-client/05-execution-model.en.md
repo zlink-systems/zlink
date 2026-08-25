@@ -4,7 +4,7 @@
 >
 > The terminator and Spot execution context combination is owned by
 > [12 HTTP Client §3](12-http-client.en.md) and
-> [04 Async Execution Policy §1.1](../server/05-async-execution-policy.en.md).
+> [04 Async Execution Policy §1.1](../server/01-execution/README.en.md).
 > §5.1 below is a summary to understand the call form. From §5.2, this
 > document defines the non-blocking basis of HTTP transport and the
 > cancellation and timeout boundary.
@@ -21,7 +21,7 @@ execution context where returning the gate is allowed — namely,
 `SpotWide` User Spot and Instance Spot. A standalone client has no gate
 to return, so it isn't provided.
 
-| Execution Mode | What It Waits For | [Spot](../server/01-glossary.en.md#spot) Execution Queue |
+| Execution Mode | What It Waits For | [Spot](../server/00-foundation/02-glossary.en.md#spot) Execution Queue |
 | --- | --- | --- |
 | **one-way submission** | Waits until the HTTP request is submitted at the transport boundary | Keeps the current turn. No normal completion value |
 | **response completion** | Waits until the HTTP response arrives | Keeps the current turn |
@@ -46,7 +46,7 @@ occupy the caller's thread/event loop while waiting on the network.
 `Async(...)`, Kotlin wrapper uses `await(...)`, Java/C++ use
 `submit(...)`. Node's HTTP typed response and callback keep `async(...)`
 to avoid a TypeScript inheritance signature conflict, and raw response
-uses `submitRaw()` ([04 §2](../server/05-async-execution-policy.en.md)).
+uses `submitRaw()` ([04 §2](../server/01-execution/README.en.md)).
 
 ## 5.2 External HTTP Wait And The Spot Execution Queue
 

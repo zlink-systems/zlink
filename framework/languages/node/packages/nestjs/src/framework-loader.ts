@@ -90,6 +90,7 @@ interface FrameworkIntegrationModule {
   createIntegrationHttpExecutionScheduler(runtime: ZLinkNestIntegrationRuntimeHost): ZLinkHttpExecutionScheduler;
   validateActorTransferTimeout(timeoutMs: number): number;
   validateMessageFollowDuration(timeoutMs: number): number;
+  validateSessionReplacementCallbackTimeout(timeoutMs: number): number;
   validateRoutingIdPrefix(prefix: string): string;
   registerEntrySpot(
     options: { entrySpotType?: Type<ZLinkEntrySpot> },

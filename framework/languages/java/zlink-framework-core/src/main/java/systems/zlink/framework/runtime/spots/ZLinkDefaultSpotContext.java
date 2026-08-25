@@ -23,6 +23,7 @@ import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -71,9 +72,9 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         this.nodeRid = nodeRid;
         this.backendSpot = backendSpot;
         this.dispatchQueue = new ZLinkAsyncSerialQueue(
-            host.serialExecutor(), false);
+            host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
         this.infrastructureQueue = new ZLinkAsyncSerialQueue(
-            host.infrastructureExecutor(), false);
+            host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);
         this.handlerInstances = host.createHandlerInstances();
     }
@@ -375,7 +376,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             handlerLoader,
             nodeRid,
             backendSpot,
-            new ZLinkAsyncSerialQueue(host.serialExecutor(), false),
+            new ZLinkAsyncSerialQueue(
+                host.serialExecutor(), ZLinkExecutionLanePolicy.spot()),
             ZLinkUserSpotExecutionMode.SPOT_WIDE,
             false);
     }
@@ -461,7 +463,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         this.backendSpot = backendSpot;
         this.dispatchQueue = dispatchQueue;
         this.infrastructureQueue = new ZLinkAsyncSerialQueue(
-            host.infrastructureExecutor(), false);
+            host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
         this.executionMode = Objects.requireNonNull(executionMode, "executionMode");
         this.relocationCoordinationMode = Objects.requireNonNull(
             relocationCoordinationMode, "relocationCoordinationMode");
@@ -919,7 +921,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         }
         ZLinkAsyncSerialQueue queue = timerQueues.computeIfAbsent(
             Objects.requireNonNull(timerName, "timerName"),
-            ignored -> new ZLinkAsyncSerialQueue(host.serialExecutor(), false));
+            ignored -> new ZLinkAsyncSerialQueue(
+                host.serialExecutor(), ZLinkExecutionLanePolicy.spot()));
         return queue.enqueue(() -> runApplicationExecution(
             null,
             false,

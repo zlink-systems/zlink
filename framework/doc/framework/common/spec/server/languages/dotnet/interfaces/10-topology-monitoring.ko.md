@@ -1,8 +1,8 @@
 # .NET topology와 host monitoring 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md) ·
-[Runtime monitoring](../../../24-runtime-monitoring.ko.md) ·
-[Host Relocate, Shutdown & Handoff](../../../30-host-relocation-flow.ko.md)
+[.NET 언어별 interface 목차](README.ko.md) ·
+[Runtime monitoring](../../../06-observability/01-runtime-monitoring.ko.md) ·
+[Host Relocate, Shutdown & Handoff](../../../05-location-relocation/05-host-relocation-flow.ko.md)
 
 ## 1. 범위
 
@@ -421,7 +421,7 @@ Manual subscriber의 연결 목록은 manual connection API가 소유한다. Man
 `ObserveAsync(...)` 호출마다 0에서 시작하고 같은 enumeration 안에서 단조 증가하며, `ulong` 표현 범위를
 `9223372036854775807`(`2^63 - 1`)을 넘으면 그 값으로 고정한다. 이 상한은 네 언어가 같다. Framework는 소비자 queue가 가득 찼다는 이유로 enumeration을
 종료하지 않는다. 전달 단위의 정의는
-[Runtime monitoring §3](../../../24-runtime-monitoring.ko.md#3-현재-상태-조회와-변화-관찰)이 소유한다.
+[Runtime monitoring §3](../../../06-observability/01-runtime-monitoring.ko.md#6-상태-변화를-관찰한다--sequence와-완전한-status)이 소유한다.
 
 Identifier에
 따라 nullable field의 의미가 달라지는 범용 event DTO는 사용하지 않는다. 소비자는 event 종류별 field

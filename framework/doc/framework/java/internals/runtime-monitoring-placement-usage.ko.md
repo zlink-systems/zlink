@@ -5,7 +5,7 @@ Store 조회 경계와 bounded fallback은
 
 이 문서는 Java Framework의 public RouteMesh monitoring snapshot이 placement limit과 현재
 사용량을 결합하는 경계를 설명한다. Placement의 공개 의미는
-[공통 runtime monitoring spec](../../common/spec/server/24-runtime-monitoring.ko.md)과 Java monitoring
+[공통 runtime monitoring spec](../../common/spec/server/06-observability/01-runtime-monitoring.ko.md)과 Java monitoring
 interface spec이 소유한다.
 
 ## 상태 source

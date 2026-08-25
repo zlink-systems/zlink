@@ -117,7 +117,7 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
 
         var messageSize = checked((long)headerSize + payloadSize);
         if (_maxMessageSize > 0 && messageSize > _maxMessageSize)
-            throw new InvalidDataException("STREAM frame exceeds MaxMessageSize.");
+            throw new InvalidDataException("EMSGSIZE: STREAM frame exceeds MaxMessageSize.");
         var totalBytes = checked((long)ZLinkStreamFrameCodec.PrefixSize + messageSize);
         if (totalBytes > int.MaxValue)
             throw new InvalidDataException("STREAM frame exceeds the supported size.");
@@ -166,7 +166,7 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
 
         var messageSize = checked((long)headerSize + payloadSize);
         if (_maxMessageSize > 0 && messageSize > _maxMessageSize)
-            throw new InvalidDataException("STREAM frame exceeds MaxMessageSize.");
+            throw new InvalidDataException("EMSGSIZE: STREAM frame exceeds MaxMessageSize.");
         var totalBytes = checked((long)ZLinkStreamFrameCodec.PrefixSize + messageSize);
         if (totalBytes > int.MaxValue)
             throw new InvalidDataException("STREAM frame exceeds the supported size.");

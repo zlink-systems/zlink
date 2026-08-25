@@ -103,6 +103,12 @@ public interface IZLinkFrameworkOptions
     TimeSpan DefaultRequestTimeout { get; set; }
 
     /// <summary>
+    ///     Gets or sets the maximum time an actor-binding replacement callback
+    ///     may run before Framework force-closes the retired session.
+    /// </summary>
+    TimeSpan SessionReplacementCallbackTimeout { get; set; }
+
+    /// <summary>
     ///     Gets or sets the default timeout used while submitting a socket send.
     /// </summary>
     TimeSpan DefaultSocketSendTimeout { get; set; }

@@ -418,8 +418,8 @@ Application listener의 `maxMessageSize` 기본값은 `16_777_216` bytes다.
 NestJS builder도 Entry Spot 구현 type만 등록한다. Entry Spot의 `SpotId`는 Framework가
 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 발급하며 caller 지정 identity option은 없다.
 
-`RecreateOnRelocation` 또는 `PreserveStateWith` factory가 하나라도 있거나 Instance Spot [factory](../../../01-glossary.ko.md#factory)가 하나라도 등록된 Object Server는
-`addRelocationStore(...)`를 정확히 한 번 호출해야 한다. [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고 모든 factory가
+`RecreateOnRelocation` 또는 `PreserveStateWith` factory가 하나라도 있거나 Instance Spot [factory](../../../00-foundation/02-glossary.ko.md#factory)가 하나라도 등록된 Object Server는
+`addRelocationStore(...)`를 정확히 한 번 호출해야 한다. [Instance Spot](../../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고 모든 factory가
 `DisableRelocation`인 same-node 구성만 Relocation Store를 생략할 수 있다. 누락과 중복은 socket bind 전에 configuration
 error다. Relocation Store는 Actor·Spot relocation의 state·queue·timer handoff payload를 보관하지
 않는다 — handoff payload는 source memory에서 target으로 직접 전송한다. Store는 Instance Spot cold

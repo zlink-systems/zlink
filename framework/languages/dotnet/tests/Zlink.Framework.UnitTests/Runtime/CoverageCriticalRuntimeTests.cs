@@ -101,9 +101,13 @@ public sealed class CoverageCriticalRuntimeTests
             options.AddStreamNode("stream-a")
                 .Bind(firstEndpoint)
                 .AddSession<StartupFailureTestSession>();
+            //  같은 host 안에서 같은 session type을 두 node에 등록하면 등록 검증이 먼저
+            //  거부하므로(STREAM 서버 session §3.2), 두 번째 node는 다른 type을 쓴다.
+            //  이 테스트가 확인하려는 것은 endpoint 실패로 startup이 깨질 때 이미 만든
+            //  stream runtime을 dispose하는가이다.
             options.AddStreamNode("stream-b")
                 .Bind("invalid://startup-failure")
-                .AddSession<StartupFailureTestSession>();
+                .AddSession<SecondStartupFailureTestSession>();
         });
 
         using var host = builder.Build();
@@ -129,6 +133,17 @@ public sealed class CoverageCriticalRuntimeTests
     }
 
     private sealed record CompressionProbe(string Text);
+
+    private sealed class SecondStartupFailureTestSession(IZLinkSessionContext context) : IZLinkSession
+    {
+        public IZLinkSessionContext Context { get; } = context;
+
+        public ValueTask OnConnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+        public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    }
 
     private sealed class StartupFailureTestSession(IZLinkSessionContext context) : IZLinkSession
     {

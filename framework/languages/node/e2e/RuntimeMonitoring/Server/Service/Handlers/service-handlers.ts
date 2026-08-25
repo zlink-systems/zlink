@@ -52,6 +52,22 @@ export class MonitoringPublishGate {
   }
 }
 
+/** Holds exactly one framework ingress permit at handler start for MON-A7. */
+@Injectable()
+export class MonitoringCapacityGate {
+  private armed = false;
+
+  arm(): void {
+    this.armed = true;
+  }
+
+  shouldHoldPermitBeforeHandler(): boolean {
+    if (!this.armed) return false;
+    this.armed = false;
+    return true;
+  }
+}
+
 @Injectable()
 export class ProfileRequestHandler implements ZLinkRequestHandler<ProfileReq, ProfileRes> {
   constructor(private readonly evidence: EvidenceStore) {}
@@ -113,6 +129,11 @@ export class MonitoringUserSpot implements ZLinkSpot<MonitoringActor> {
       MonitoringUserSpotPublishHandler,
       RuntimeMonitoringNames.spotChannel,
       RuntimeMonitoringNames.publishTopic
+    );
+    this.context.handlers.addSubscribe(
+      MonitoringUserSpotPublishHandler,
+      RuntimeMonitoringNames.spotChannel,
+      RuntimeMonitoringNames.capacityTopic
     );
     this.requireEvidence().add(
       `subscription-configured|rid=${this.requireEvidence().rid}|spot=${this.context.spotId}`

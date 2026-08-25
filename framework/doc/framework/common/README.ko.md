@@ -1,10 +1,10 @@
 <!-- framework-adapter-nav:start -->
-[가이드 홈](../index.ko.md) | [이전: ZLink Framework](../index.ko.md) | [다음: ZLink Framework Overview](spec/server/02-overview.ko.md)
+[가이드 홈](../index.ko.md) | [이전: ZLink Framework](../index.ko.md) | [다음: ZLink Framework Overview](spec/server/00-foundation/03-overview.ko.md)
 <!-- framework-adapter-nav:end -->
 
 [가이드 홈](../index.ko.md)
 
-[스펙 목차](spec/server/README.ko.md) | [공개 계약 관리](spec/server/00-public-contract-governance.ko.md) | [공통 내부 구조](spec/server/README.ko.md) | [개요](spec/server/02-overview.ko.md) | [상호작용 모델](spec/server/03-interaction-model.ko.md) | [메시지 모델](spec/server/04-message-model.ko.md) | [channel topology](spec/server/07-channel-topology.ko.md) | [framework API](spec/server/06-framework-api.ko.md) | [비동기 실행](spec/server/05-async-execution-policy.ko.md) | [Actor 모델](spec/server/14-actor-model.ko.md) | [Spot Actor Join / Relocation](spec/server/15-spot-actor.ko.md) | [Session Actor Dispatch 사용성](spec/server/20-session-actor-dispatch.ko.md) | [메시지 흐름 추적](spec/server/26-message-flow-tracing.ko.md) | [location runtime](spec/server/21-location-runtime.ko.md) | [Redis store](spec/server/22-location-store-redis.ko.md) | [spot 주소 메시징](spec/server/16-spot-address-messaging.ko.md) | [언어별 공개 계약](spec/server/languages/README.ko.md) | [Sample/E2E 설정 정책](sample-e2e-configuration-policy.ko.md) | [공통 샘플](sample/README.ko.md) | [Scenario E2E](e2e/README.ko.md) | [Performance 테스트](perf/README.ko.md)
+[스펙 목차](spec/server/README.ko.md) | [공개 계약 관리](spec/server/00-foundation/01-public-contract-governance.ko.md) | [공통 내부 구조](spec/server/README.ko.md) | [개요](spec/server/00-foundation/03-overview.ko.md) | [상호작용 모델](spec/server/00-foundation/04-interaction-model.ko.md) | [메시지 모델](spec/server/00-foundation/05-message-model.ko.md) | [channel topology](spec/server/02-channel-transport/01-channel-topology.ko.md) | [framework API](spec/server/00-foundation/06-framework-api.ko.md) | [비동기 실행](spec/server/01-execution/README.ko.md) | [Actor 모델](spec/server/03-spot-actor/04-actor-model.ko.md) | [Spot Actor Join / Relocation](spec/server/03-spot-actor/05-spot-actor-membership.ko.md) | [Session Actor Dispatch 사용성](spec/server/04-session/02-session-actor-binding.ko.md) | [메시지 흐름 추적](spec/server/06-observability/03-message-flow-tracing.ko.md) | [location runtime](spec/server/05-location-relocation/01-location-runtime.ko.md) | [Redis store](spec/server/05-location-relocation/02-location-store-redis.ko.md) | [spot 주소 메시징](spec/server/03-spot-actor/06-spot-address-messaging.ko.md) | [언어별 공개 계약](spec/server/languages/README.ko.md) | [Sample/E2E 설정 정책](sample-e2e-configuration-policy.ko.md) | [공통 샘플](sample/README.ko.md) | [Scenario E2E](e2e/README.ko.md) | [Performance 테스트](perf/README.ko.md)
 
 # ZLink Framework 공통 스펙
 
@@ -16,7 +16,7 @@
 이 묶음은 zlink의 `.NET`, `Java`, `Kotlin`, `Node.js`, `C++` 바인딩 위에
 `ASP.NET Core`, `Spring Boot`, `NestJS`, C++ zlink framework host를 사용하는 개발자를 위한
 `ZLink Framework` 방향을 정리한다.
-제품 개요와 핵심 가치는 [01-overview.ko.md](spec/server/02-overview.ko.md)를 참고한다.
+제품 개요와 핵심 가치는 [01-overview.ko.md](spec/server/00-foundation/03-overview.ko.md)를 참고한다.
 
 ## 2. 버전 기준
 
@@ -39,19 +39,19 @@
 
 | 순서 | 문서 | 다루는 범위 |
 |:----:|------|------------|
-| 1 | [01-overview.ko.md](spec/server/02-overview.ko.md) | 제품 개요, 핵심 차별점, 현재 우선 범위. "ZLink Framework가 무엇이고, 왜 필요한가"에 답한다. |
-| 2 | [02-interaction-model.ko.md](spec/server/03-interaction-model.ko.md) | 사용자에게 보이는 request-response, command, publish-subscribe, stream 모델의 의미를 정의한다. |
-| 3 | [03-message-model.ko.md](spec/server/04-message-model.ko.md) | 서버 간 multipart `header + payload` 메시지 구조, STREAM 단일 packet 경계, header 필드, payload codec 방향과 codec extension 정책을 다룬다. |
-| 4 | [10-channel-topology.ko.md](spec/server/07-channel-topology.ko.md) | channel grouping, Discovery, 수동 연결, 상호작용 모델과 내부 transport 매핑을 다룬다. |
-| 5 | [05-framework-api.ko.md](spec/server/06-framework-api.ko.md) | `ASP.NET Core`, `Spring Boot`, `NestJS`, `C++` standalone host 기준의 API 표면 방향을 다룬다. |
-| 6 | [비동기 실행과 coroutine 정책](spec/server/05-async-execution-policy.ko.md) | async submit, blocking 대안 금지, coroutine/adapter의 공통 의미를 정의한다. |
-| 7 | [22-actor-model.ko.md](spec/server/14-actor-model.ko.md) | actor 라이프사이클, session bind, user Spot join, outbound actor 호출과 등록 표면을 정의한다. |
-| 8 | [Spot Actor Join / Relocation](spec/server/15-spot-actor.ko.md) | actor가 Entry Spot과 user Spot 사이를 이동할 때의 admission, commit, callback 순서와 장애 처리를 정의한다. |
-| 9 | [Session Actor Dispatch](spec/server/20-session-actor-dispatch.ko.md) | session actor dispatch의 typed handler, route resolver, helper, `SessionProxy`, error 의미를 정의한다. |
-| 10 | [메시지 흐름 추적과 dispatch 관측](spec/server/26-message-flow-tracing.ko.md) | 메시지 흐름 추적의 mode, event, observer, 성능, 런타임 토글과 correlation 계약을 정의한다. |
-| 11 | [40-location-runtime.ko.md](spec/server/21-location-runtime.ko.md) | peer/spot/actor/route 위치, owner lease, store/resolver, 자동 연결과 운영 조회 계약을 정의한다. |
-| 12 | [41-location-store-redis.ko.md](spec/server/22-location-store-redis.ko.md) | 공식 Redis location store extension의 key, lease, 원자 write, 오류와 테스트 계약을 정의한다. |
-| 13 | [24-spot-address-messaging.ko.md](spec/server/16-spot-address-messaging.ko.md) | spot/actor 대상 주소, 조회와 재조회, 실패 분류와 이동 경계를 정의한다. |
+| 1 | [01-overview.ko.md](spec/server/00-foundation/03-overview.ko.md) | 제품 개요, 핵심 차별점, 현재 우선 범위. "ZLink Framework가 무엇이고, 왜 필요한가"에 답한다. |
+| 2 | [02-interaction-model.ko.md](spec/server/00-foundation/04-interaction-model.ko.md) | 사용자에게 보이는 request-response, command, publish-subscribe, stream 모델의 의미를 정의한다. |
+| 3 | [03-message-model.ko.md](spec/server/00-foundation/05-message-model.ko.md) | 서버 간 multipart `header + payload` 메시지 구조, STREAM 단일 packet 경계, header 필드, payload codec 방향과 codec extension 정책을 다룬다. |
+| 4 | [10-channel-topology.ko.md](spec/server/02-channel-transport/01-channel-topology.ko.md) | channel grouping, Discovery, 수동 연결, 상호작용 모델과 내부 transport 매핑을 다룬다. |
+| 5 | [05-framework-api.ko.md](spec/server/00-foundation/06-framework-api.ko.md) | `ASP.NET Core`, `Spring Boot`, `NestJS`, `C++` standalone host 기준의 API 표면 방향을 다룬다. |
+| 6 | [비동기 실행과 coroutine 정책](spec/server/01-execution/README.ko.md) | async submit, blocking 대안 금지, coroutine/adapter의 공통 의미를 정의한다. |
+| 7 | [22-actor-model.ko.md](spec/server/03-spot-actor/04-actor-model.ko.md) | actor 라이프사이클, session bind, user Spot join, outbound actor 호출과 등록 표면을 정의한다. |
+| 8 | [Spot Actor Join / Relocation](spec/server/03-spot-actor/05-spot-actor-membership.ko.md) | actor가 Entry Spot과 user Spot 사이를 이동할 때의 admission, commit, callback 순서와 장애 처리를 정의한다. |
+| 9 | [Session Actor Dispatch](spec/server/04-session/02-session-actor-binding.ko.md) | session actor dispatch의 typed handler, route resolver, helper, `SessionProxy`, error 의미를 정의한다. |
+| 10 | [메시지 흐름 추적과 dispatch 관측](spec/server/06-observability/03-message-flow-tracing.ko.md) | 메시지 흐름 추적의 mode, event, observer, 성능, 런타임 토글과 correlation 계약을 정의한다. |
+| 11 | [40-location-runtime.ko.md](spec/server/05-location-relocation/01-location-runtime.ko.md) | peer/spot/actor/route 위치, owner lease, store/resolver, 자동 연결과 운영 조회 계약을 정의한다. |
+| 12 | [41-location-store-redis.ko.md](spec/server/05-location-relocation/02-location-store-redis.ko.md) | 공식 Redis location store extension의 key, lease, 원자 write, 오류와 테스트 계약을 정의한다. |
+| 13 | [24-spot-address-messaging.ko.md](spec/server/03-spot-actor/06-spot-address-messaging.ko.md) | spot/actor 대상 주소, 조회와 재조회, 실패 분류와 이동 경계를 정의한다. |
 | 14 | [Sample/E2E 설정 정책](sample-e2e-configuration-policy.ko.md) | 설정 파일, 환경 변수 금지, 언어별 typed binding과 runner 책임을 정의한다. |
 | 15 | [공통 샘플 시나리오](sample/README.ko.md) | 정본 6종의 언어 중립 업무 흐름, 서버 역할, 메시지와 검증 기준을 정의한다. |
 | 16 | [Scenario E2E 테스트](e2e/README.ko.md) | scale-out, 실패, lifecycle, 관측성 조합을 실제 multi-process 구조로 검증한다. |
@@ -142,7 +142,7 @@ framework 문서의 public 이름 규칙은
 - 단어 교체, 단어 생략, 의미가 같은 별도 이름 추가는 허용하지 않는다.
 - 파라미터 조합이 다르다는 이유만으로 이름을 늘리지 않는다.
 - async submit, blocking 대안 금지, coroutine adapter의 공통 의미는
-  [비동기 실행과 coroutine 정책](spec/server/05-async-execution-policy.ko.md)을 따른다.
+  [비동기 실행과 coroutine 정책](spec/server/01-execution/README.ko.md)을 따른다.
 - builder terminator 이름은 공통 의미를 유지하되, 각 언어의 fluent API 관례에 맞춰
   투영한다. 예를 들어 `.NET` awaitable terminator는 `Async(...)`, Java는
   `submit(...)` / `await(...)`, C++ coroutine terminator는 `async()`, Node.js
@@ -179,7 +179,7 @@ action 이름을 유지해야 한다. 예를 들면 아래처럼 맞춘다.
 | 문서 종류 | 역할 |
 |----------|------|
 | `README.ko.md` | 그 언어 묶음의 진입점. 문서 구조, 역할 분담, 핵심 방향을 정리한다. |
-| 인터페이스 기준 문서 | 공용 interface / context / configuration surface / attribute 또는 decorator를 한 곳에 모은다. 공용 계약과 내부 runtime 구현의 분리 기준은 [05-framework-api.ko.md §1.1](spec/server/06-framework-api.ko.md#11-public-contract와-runtime-implementation의-경계)을 따른다. |
+| 인터페이스 기준 문서 | 공용 interface / context / configuration surface / attribute 또는 decorator를 한 곳에 모은다. 공용 계약과 내부 runtime 구현의 분리 기준은 [05-framework-api.ko.md §1.1](spec/server/00-foundation/06-framework-api.ko.md#1-public-contract와-runtime-implementation의-경계)을 따른다. |
 | channel messaging 주제 문서 | channel 등록, handler 모델, outbound client, dispatch 흐름을 설명한다. |
 | channel messaging 샘플 문서 | 등록부터 handler, client 호출까지 한 번에 보이는 샘플을 둔다. |
 | `SPOT` 주제 문서 | 해당 언어에서 `SPOT`을 지원하면 lifecycle, publish/subscribe, RouteMesh 등록을 설명한다. |
@@ -289,10 +289,10 @@ client는 [언어별 HTTP client 계약](spec/http-client/README.ko.md)이 각�
 
 언어별 스펙은 서로의 시그니처를 복사하는 문서가 아니다. 같은 공통 동작을 해당
 언어 사용자가 자연스럽게 사용할 수 있는 public contract로 고정한다. 계약을
-변경하는 절차는 [공개 계약 관리](spec/server/00-public-contract-governance.ko.md)를
+변경하는 절차는 [공개 계약 관리](spec/server/00-foundation/01-public-contract-governance.ko.md)를
 따른다.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[가이드 홈](../index.ko.md) | [이전: ZLink Framework](../index.ko.md) | [다음: ZLink Framework Overview](spec/server/02-overview.ko.md)
+[가이드 홈](../index.ko.md) | [이전: ZLink Framework](../index.ko.md) | [다음: ZLink Framework Overview](spec/server/00-foundation/03-overview.ko.md)
 <!-- framework-adapter-nav:bottom:end -->

@@ -18,9 +18,9 @@ title: "12. 운영 — 런타임 메트릭 · graceful drain · readiness · C#/
 # 12. 운영 — 런타임 메트릭 · graceful drain · readiness
 
 > **이 장의 계약 소유 문서** — 공통 스펙
-> [Runtime 상태 조회와 운영 진단](../../../common/spec/server/24-runtime-monitoring.ko.md),
-> [런타임 메트릭](../../../common/spec/server/25-runtime-metrics.ko.md)과
-> [Graceful Drain & Handoff](../../../common/spec/server/30-host-relocation-flow.ko.md)가 소유한다.
+> [Runtime 상태 조회와 운영 진단](../../../common/spec/server/06-observability/01-runtime-monitoring.ko.md),
+> [런타임 메트릭](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)과
+> [Graceful Drain & Handoff](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md)가 소유한다.
 > 언어별 표면의 정식 정의는
 > [언어별 topology·monitoring 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 소유한다.
@@ -67,8 +67,8 @@ builder.Services.AddOpenTelemetry().WithMetrics(m => m
 - 대시보드와 exporter 선택은 앱 몫이다. framework는 내장 scrape 서버를 두지 않는다.
 
 계기 카탈로그는 다음과 같다. MeshNode, object·STREAM, location·fanout 계기의 라벨·단위·종류는
-[Runtime Metrics §§3~5](../../../common/spec/server/25-runtime-metrics.ko.md)가 정하고, drain 계기는
-[Host relocation 전체 흐름 §13](../../../common/spec/server/30-host-relocation-flow.ko.md#13-관측-정보)이 정한다.
+[Runtime Metrics §§3~5](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)가 정하고, drain 계기는
+[Host relocation 전체 흐름 §13](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md#16-관측-정보)이 정한다.
 
 | 계기 | 무엇을 재나 |
 |---|---|
@@ -135,9 +135,9 @@ pressure transition, cumulative pause duration과 flow-state config failure 누�
 동시에 발생한 event는 정확히 한 epoch에만 속한다. Always-on metric은 의도적으로 모든 job에
 timestamp를 찍거나 job별 queue-wait histogram을 만들지 않는다. 그런 분포는 bounded perf
 fixture 안에서만 기록한다. 정확한 snapshot·reset 규칙은
-[Runtime 상태 조회와 운영 진단](../../../common/spec/server/24-runtime-monitoring.ko.md),
+[Runtime 상태 조회와 운영 진단](../../../common/spec/server/06-observability/01-runtime-monitoring.ko.md),
 metric 이름·단위·label은
-[런타임 메트릭](../../../common/spec/server/25-runtime-metrics.ko.md)이 소유한다.
+[런타임 메트릭](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)이 소유한다.
 
 ## 2. Relocate — 상태를 유지한 채 다른 host로 옮기기
 
@@ -239,7 +239,7 @@ message를 밀어내지 않도록 네 가지 server 설정으로 조정한다. �
 예산이 차 있으면 새 relocation unit은 seal 전에 대기하고, 대기하는 동안 그
 Actor·Spot은 message를 정상적으로 처리한다 — 예산 때문에 시작하지 못하는 payload
 크기는 없다. Chunk 형식·검증 규약 같은 내부 protocol은
-[Relocation Flow](../../../common/spec/server/28-relocation-flow.ko.md)가 다룬다.
+[Relocation Flow](../../../common/spec/server/05-location-relocation/04-relocation-flow.ko.md)가 다룬다.
 
 ### 2.3 SafeToShutdown — 종료해도 안전한 시점
 
@@ -250,13 +250,13 @@ Actor·Spot은 message를 정상적으로 처리한다 — 예산 때문에 시�
 `Shutdown`을 호출하는 것을 권장한다 — 게시 전에 종료해도 되지만, 남아 있던 follow
 route가 사라져 이전 route를 cache한 호출자의 request가 `Unavailable`로 끝날 수 있다.
 상태 조회·변화 관찰 방법은
-[Runtime 상태 조회와 운영 진단](../../../common/spec/server/24-runtime-monitoring.ko.md)을 따른다.
+[Runtime 상태 조회와 운영 진단](../../../common/spec/server/06-observability/01-runtime-monitoring.ko.md)을 따른다.
 
 Relocation 구간은 세 지표로 나눠 관찰한다 — source 정지(seal부터 cutover 전송까지),
 target 재개(target의 owner 확정부터 dispatch 개방까지), route 수렴(cutover 전송부터
 Message Follow route를 제거할 수 있을 때까지). Cutover를 기다리다 검증 없이 진행한
 fallback 횟수는 `cutover_timeout` counter로 게시된다. 지표 이름·단위·label은
-[런타임 메트릭](../../../common/spec/server/25-runtime-metrics.ko.md)이 소유한다.
+[런타임 메트릭](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)이 소유한다.
 
 ## 3. Shutdown — 옮기지 않고 종료하기
 
@@ -453,6 +453,6 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
 ## 7. 관련 문서
 
 - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §7 — 검증 클래스 `FrameworkRuntimeContracts`
-- 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/30-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/25-runtime-metrics.ko.md)
+- 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
 - 상태 관측과 진단: [11. Monitoring](11-monitoring.ko.md)
 - relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)

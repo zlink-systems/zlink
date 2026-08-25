@@ -94,6 +94,10 @@ import {
   type ZLinkInternalActorTransportDeliveryGate
 } from '../actors/actor-transport-delivery-gate';
 import {
+  ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE,
+  type ZLinkInternalApplicationJobQueueHandlerStartGate
+} from '../application-jobs/application-job-queue-handler-start-gate';
+import {
   ZLinkFrameworkExecutionState,
   ZLinkRuntimeTaskErrorSink
 } from '../execution';
@@ -317,7 +321,18 @@ export class ZLinkFrameworkRuntimeHost implements
       resolveApplicationJobQueueConfiguration(
         options.registration.applicationJobQueue,
         () => nodeEffectiveProcessorCount(options.registration.worker?.maxThreads)
-      )
+      ),
+      undefined,
+      () => {
+        try {
+          return this.options.providerResolver?.get?.(
+            ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE as unknown as
+              Type<ZLinkInternalApplicationJobQueueHandlerStartGate>
+          )?.shouldHoldPermitBeforeHandler() === true;
+        } catch {
+          return false;
+        }
+      }
     );
     this.capacityStatus = new HostCapacityStatusProjection(
       options.registration.coreHwm,

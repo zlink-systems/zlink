@@ -237,6 +237,14 @@ abstract class ZLinkNestOptionsBuilder implements ZLinkNestFrameworkOptionsBuild
     return this;
   }
 
+  setSessionReplacementCallbackTimeout(timeoutMs: number): this {
+    this.state.additionalOptions = {
+      ...this.state.additionalOptions,
+      sessionReplacementCallbackTimeoutMs: framework.validateSessionReplacementCallbackTimeout(timeoutMs)
+    };
+    return this;
+  }
+
   configureStreamCompression(): ZLinkStreamCompressionBuilder {
     const compression = { ...(this.state.additionalOptions.streamCompression ?? {}) };
     this.state.additionalOptions = { ...this.state.additionalOptions, streamCompression: compression };

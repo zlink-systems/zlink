@@ -66,6 +66,17 @@ public final class DefaultZLinkFrameworkOptions
     }
 
     @Override
+    public Duration sessionReplacementCallbackTimeout() {
+        return registration.sessionReplacementCallbackTimeout();
+    }
+
+    @Override
+    public void setSessionReplacementCallbackTimeout(Duration timeout) {
+        registration.setSessionReplacementCallbackTimeout(
+            requirePositive(timeout, "session replacement callback timeout"));
+    }
+
+    @Override
     public void setApplicationVersion(long version) {
         if (version < 0) {
             throw new ZLinkConfigurationException(

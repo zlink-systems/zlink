@@ -14,34 +14,34 @@ delivered when the dispatch is cancelled.
 
 ```ts
 export interface ZLinkMessageContext {
-  readonly meshName?: string;
-  readonly channelName?: string;
-  readonly packetName: string;
-  readonly contentType?: string;
-  readonly metadata: ZLinkMessageMetadata;
-  readonly correlationId?: string;
+ readonly meshName?: string;
+ readonly channelName?: string;
+ readonly packetName: string;
+ readonly contentType?: string;
+ readonly metadata: ZLinkMessageMetadata;
+ readonly correlationId?: string;
 }
 
 export enum ZLinkHandlerDispatchKind {
-  NodeDirectSend = 'nodeDirectSend',
-  NodeDirectRequest = 'nodeDirectRequest',
-  ChannelSend = 'channelSend',
-  ChannelRequest = 'channelRequest',
-  ClassicFanout = 'classicFanout'
+ NodeDirectSend = 'nodeDirectSend',
+ NodeDirectRequest = 'nodeDirectRequest',
+ ChannelSend = 'channelSend',
+ ChannelRequest = 'channelRequest',
+ ClassicFanout = 'classicFanout'
 }
 
 export interface ZLinkHandlerFilterContext extends ZLinkMessageContext {
-  readonly dispatchKind: ZLinkHandlerDispatchKind;
+ readonly dispatchKind: ZLinkHandlerDispatchKind;
 }
 
 export type ZLinkHandlerFilterNext = () => Promise<void>;
 
 export interface ZLinkHandlerFilter {
-  invoke(
-    context: ZLinkHandlerFilterContext,
-    next: ZLinkHandlerFilterNext,
-    signal?: AbortSignal
-  ): Promise<void>;
+ invoke(
+ context: ZLinkHandlerFilterContext,
+ next: ZLinkHandlerFilterNext,
+ signal?: AbortSignal
+ ): Promise<void>;
 }
 ```
 
@@ -64,91 +64,91 @@ Multicast/STREAM handlers.
 
 ```ts
 export interface ZLinkLocationRuntimeQuery {
-  getStatus(signal?: AbortSignal): Promise<ZLinkLocationRuntimeStatus>;
-  listTopology(
-    filter: ZLinkLocationTopologyFilter,
-    page?: ZLinkPageRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkLocationPage<ZLinkLocationTopologyEntry>>;
-  listServiceSummaries(
-    filter: ZLinkLocationServiceSummaryFilter,
-    page?: ZLinkPageRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>>;
-  findActorLocation(
-    actorId: ActorId,
-    signal?: AbortSignal
-  ): Promise<ZLinkLocationObjectEntry | undefined>;
-  findSpotLocation(
-    spotId: SpotId,
-    signal?: AbortSignal
-  ): Promise<ZLinkLocationObjectEntry | undefined>;
-  listObjectLocations(
-    filter: ZLinkLocationObjectFilter,
-    page?: ZLinkPageRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>>;
+ getStatus(signal?: AbortSignal): Promise<ZLinkLocationRuntimeStatus>;
+ listTopology(
+ filter: ZLinkLocationTopologyFilter,
+ page?: ZLinkPageRequest,
+ signal?: AbortSignal
+ ): Promise<ZLinkLocationPage<ZLinkLocationTopologyEntry>>;
+ listServiceSummaries(
+ filter: ZLinkLocationServiceSummaryFilter,
+ page?: ZLinkPageRequest,
+ signal?: AbortSignal
+ ): Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>>;
+ findActorLocation(
+ actorId: ActorId,
+ signal?: AbortSignal
+ ): Promise<ZLinkLocationObjectEntry | undefined>;
+ findSpotLocation(
+ spotId: SpotId,
+ signal?: AbortSignal
+ ): Promise<ZLinkLocationObjectEntry | undefined>;
+ listObjectLocations(
+ filter: ZLinkLocationObjectFilter,
+ page?: ZLinkPageRequest,
+ signal?: AbortSignal
+ ): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>>;
 }
 
 export type ZLinkLocationObjectState = 'creating' | 'ready' | 'unavailable';
 
 export interface ZLinkLocationObjectEntry {
-  readonly globalId: string;
-  readonly objectGeneration: bigint;
-  readonly meshName: string;
-  readonly nodeRid: RoutingId;
-  readonly state: ZLinkLocationObjectState;
-  readonly stableType: string;
+ readonly globalId: string;
+ readonly objectGeneration: bigint;
+ readonly meshName: string;
+ readonly nodeRid: RoutingId;
+ readonly state: ZLinkLocationObjectState;
+ readonly stableType: string;
 }
 
 export interface ZLinkLocationObjectFilter {
-  readonly objectKind: 'actor' | 'user_spot' | 'instance_spot';
-  readonly stableType?: string;
-  readonly meshName?: string;
+ readonly objectKind: 'actor' | 'user_spot' | 'instance_spot';
+ readonly stableType?: string;
+ readonly meshName?: string;
 }
 
 export interface ZLinkLocationTopologyFilter {
-  readonly meshName?: string;
-  readonly nodeRid?: RoutingId;
-  readonly state?: ZLinkLocationTopologyState;
+ readonly meshName?: string;
+ readonly nodeRid?: RoutingId;
+ readonly state?: ZLinkLocationTopologyState;
 }
 
 export interface ZLinkLocationTopologyEntry {
-  readonly meshName: string;
-  readonly nodeRid: RoutingId;
-  readonly endpoint: string;
-  readonly draining: boolean;
-  readonly state: ZLinkLocationTopologyState;
-  readonly updatedAt: Date;
+ readonly meshName: string;
+ readonly nodeRid: RoutingId;
+ readonly endpoint: string;
+ readonly draining: boolean;
+ readonly state: ZLinkLocationTopologyState;
+ readonly updatedAt: Date;
 }
 
 export interface ZLinkLocationServiceSummaryFilter {
-  readonly meshName?: string;
+ readonly meshName?: string;
 }
 
 export interface ZLinkLocationServiceSummary {
-  readonly meshName: string;
-  readonly totalCount: number;
-  readonly readyCount: number;
-  readonly errorCount: number;
-  readonly stoppedCount: number;
-  readonly lastUpdatedAt: Date;
+ readonly meshName: string;
+ readonly totalCount: number;
+ readonly readyCount: number;
+ readonly errorCount: number;
+ readonly stoppedCount: number;
+ readonly lastUpdatedAt: Date;
 }
 
 export interface ZLinkLocationReadiness {
-  isPeerReady(
-    meshName: string,
-    role: ZLinkLocationRole,
-    nodeRid?: RoutingId,
-    signal?: AbortSignal
-  ): Promise<boolean>;
+ isPeerReady(
+ meshName: string,
+ role: ZLinkLocationRole,
+ nodeRid?: RoutingId,
+ signal?: AbortSignal
+ ): Promise<boolean>;
 }
 ```
 
 Spot and Actor location queries are public operations for operational tools.
-An exact lookup returns `undefined` for Missing, a `creating` entry for Creating,
+A direct lookup returns `undefined` for Missing, a `creating` entry for Creating,
 a `ready` entry for Ready, and an `unavailable` entry when the current owner is
-unavailable after commit. Spot exact lookup treats User Spot and Instance Spot
+unavailable after commit. Spot direct lookup treats User Spot and Instance Spot
 under the same Spot-ID lookup contract. A list requires `objectKind`, and takes
 `stableType` and `meshName` as optional filters. A page contains `1..1000` items,
 its encoded size is at most 4 MiB, and its continuation token is an opaque value
@@ -178,158 +178,158 @@ change host lifecycle.
 
 ```ts
 export enum ZLinkFrameworkRuntimeState {
-  Preparing = 0,
-  Serving = 1,
-  Relocating = 2,
-  Relocated = 3,
-  Draining = 4,
-  Stopped = 5,
-  Error = 6
+ Preparing = 0,
+ Serving = 1,
+ Relocating = 2,
+ Relocated = 3,
+ Draining = 4,
+ Stopped = 5,
+ Error = 6
 }
 
 export enum ZLinkFrameworkRelocationOutcome {
-  Relocated = 0,
-  Blocked = 1
+ Relocated = 0,
+ Blocked = 1
 }
 
 export enum ZLinkFrameworkRelocationMode {
-  PlannedMaintenance = 0,
-  RollingUpdate = 1
+ PlannedMaintenance = 0,
+ RollingUpdate = 1
 }
 
 export enum ZLinkFrameworkRelocationReason {
-  None = 0,
-  TargetUnavailable = 1,
-  StoreUnavailable = 2,
-  RelocationDisabled = 3,
-  StateIncompatible = 4,
-  DeadlineExceeded = 5,
-  RelocationFailed = 6,
-  RuntimeNotReady = 7,
-  ManualTopologyUnsupported = 8,
-  ShutdownRequested = 9,
-  OperationInProgress = 10
+ None = 0,
+ TargetUnavailable = 1,
+ StoreUnavailable = 2,
+ RelocationDisabled = 3,
+ StateIncompatible = 4,
+ DeadlineExceeded = 5,
+ RelocationFailed = 6,
+ RuntimeNotReady = 7,
+ ManualTopologyUnsupported = 8,
+ ShutdownRequested = 9,
+ OperationInProgress = 10
 }
 
 export interface ZLinkFrameworkRelocationOptions {
-  readonly mode: ZLinkFrameworkRelocationMode;
-  readonly targetApplicationVersion?: bigint;
-  readonly deadlineMs?: number;
-  readonly signal?: AbortSignal;
+ readonly mode: ZLinkFrameworkRelocationMode;
+ readonly targetApplicationVersion?: bigint;
+ readonly deadlineMs?: number;
+ readonly signal?: AbortSignal;
 }
 
 export interface ZLinkFrameworkRelocationResult {
-  readonly mode: ZLinkFrameworkRelocationMode;
-  readonly effectiveTargetApplicationVersion: bigint;
-  readonly outcome: ZLinkFrameworkRelocationOutcome;
-  readonly reason: ZLinkFrameworkRelocationReason;
+ readonly mode: ZLinkFrameworkRelocationMode;
+ readonly effectiveTargetApplicationVersion: bigint;
+ readonly outcome: ZLinkFrameworkRelocationOutcome;
+ readonly reason: ZLinkFrameworkRelocationReason;
 }
 
 export enum ZLinkFrameworkTerminationOutcome {
-  Stopped = 0,
-  ForceStopped = 1
+ Stopped = 0,
+ ForceStopped = 1
 }
 
 export enum ZLinkFrameworkTerminationReason {
-  None = 0,
-  DeadlineExceeded = 1,
-  TeardownFailed = 2
+ None = 0,
+ DeadlineExceeded = 1,
+ TeardownFailed = 2
 }
 
 export interface ZLinkFrameworkTerminationResult {
-  readonly outcome: ZLinkFrameworkTerminationOutcome;
-  readonly reason: ZLinkFrameworkTerminationReason;
+ readonly outcome: ZLinkFrameworkTerminationOutcome;
+ readonly reason: ZLinkFrameworkTerminationReason;
 }
 
 export interface ZLinkFrameworkLifecycleOptions {
-  readonly deadlineMs?: number;
-  readonly signal?: AbortSignal;
+ readonly deadlineMs?: number;
+ readonly signal?: AbortSignal;
 }
 
 export interface ZLinkFrameworkRuntimeStatus {
-  readonly state: ZLinkFrameworkRuntimeState;
-  readonly isReady: boolean;
-  readonly acceptingWork: boolean;
-  readonly deadline?: Date;
-  readonly relocationResult?: ZLinkFrameworkRelocationResult;
-  readonly terminationResult?: ZLinkFrameworkTerminationResult;
-  readonly capacity: ZLinkHostCapacityStatus;
-  readonly sequence: bigint;
-  readonly observedAt: Date;
+ readonly state: ZLinkFrameworkRuntimeState;
+ readonly isReady: boolean;
+ readonly acceptingWork: boolean;
+ readonly deadline?: Date;
+ readonly relocationResult?: ZLinkFrameworkRelocationResult;
+ readonly terminationResult?: ZLinkFrameworkTerminationResult;
+ readonly capacity: ZLinkHostCapacityStatus;
+ readonly sequence: bigint;
+ readonly observedAt: Date;
 }
 
 export interface ZLinkObservationLoss {
-  readonly coalescedCount: bigint;
-  readonly discardedTerminalCount: bigint;
+ readonly coalescedCount: bigint;
+ readonly discardedTerminalCount: bigint;
 }
 
 export interface ZLinkObservedStatus<TStatus> {
-  readonly status: TStatus;
-  readonly loss: ZLinkObservationLoss;
+ readonly status: TStatus;
+ readonly loss: ZLinkObservationLoss;
 }
 
 export interface ZLinkCoreHwmStatus {
-  readonly configuredMemoryLimitBytes?: bigint;
-  readonly configuredBudgetBytes?: bigint;
-  readonly configuredProfile: ZLinkCoreHwmProfile;
-  readonly effectiveBudgetBytes: bigint;
-  readonly totalAppliedHwmBytes: bigint;
-  readonly coreQueueAccountedBytes: bigint;
-  readonly applicationAccountedBytes: bigint;
-  readonly currentAccountedBytes: bigint;
-  readonly provisionalAccountedBytes: bigint;
-  readonly peakAccountedBytes: bigint;
-  readonly completionCurrentAccountedBytes: bigint;
-  readonly completionPeakAccountedBytes: bigint;
-  readonly completionPendingMessageCount: bigint;
-  readonly totalMessagingAccountedBytes: bigint;
-  readonly monitorQueueAppliedHwmBytes: bigint;
-  readonly monitorQueueAccountedBytes: bigint;
-  readonly totalInstanceAppliedHwmBytes: bigint;
-  readonly totalInstanceAccountedBytes: bigint;
-  readonly blockedRatioPpm: bigint;
-  readonly activeDirectionalQueueCount: bigint;
-  readonly activeCompletionDirectionalQueueCount: bigint;
-  readonly activeSendQueueCount: bigint;
-  readonly activeReceiveQueueCount: bigint;
-  readonly outstandingApplicationLeaseCount: bigint;
-  readonly retiredQueueCount: bigint;
-  readonly deferredOriginCreditBytes: bigint;
+ readonly configuredMemoryLimitBytes?: bigint;
+ readonly configuredBudgetBytes?: bigint;
+ readonly configuredProfile: ZLinkCoreHwmProfile;
+ readonly effectiveBudgetBytes: bigint;
+ readonly totalAppliedHwmBytes: bigint;
+ readonly coreQueueAccountedBytes: bigint;
+ readonly applicationAccountedBytes: bigint;
+ readonly currentAccountedBytes: bigint;
+ readonly provisionalAccountedBytes: bigint;
+ readonly peakAccountedBytes: bigint;
+ readonly completionCurrentAccountedBytes: bigint;
+ readonly completionPeakAccountedBytes: bigint;
+ readonly completionPendingMessageCount: bigint;
+ readonly totalMessagingAccountedBytes: bigint;
+ readonly monitorQueueAppliedHwmBytes: bigint;
+ readonly monitorQueueAccountedBytes: bigint;
+ readonly totalInstanceAppliedHwmBytes: bigint;
+ readonly totalInstanceAccountedBytes: bigint;
+ readonly blockedRatioPpm: bigint;
+ readonly activeDirectionalQueueCount: bigint;
+ readonly activeCompletionDirectionalQueueCount: bigint;
+ readonly activeSendQueueCount: bigint;
+ readonly activeReceiveQueueCount: bigint;
+ readonly outstandingApplicationLeaseCount: bigint;
+ readonly retiredQueueCount: bigint;
+ readonly deferredOriginCreditBytes: bigint;
 }
 
 export interface ZLinkApplicationJobQueueStatus {
-  readonly configuredProfile: ZLinkApplicationJobQueueProfile;
-  readonly configuredManualMax?: bigint;
-  readonly configuredPauseThresholdPercent: number;
-  readonly configuredResumeThresholdPercent: number;
-  readonly effectiveProcessorCount: bigint;
-  readonly effectiveMaxQueuedApplicationJobs: bigint;
-  readonly pausePermitCount: bigint;
-  readonly resumePermitCount: bigint;
-  readonly reservedSupplyPermits: bigint;
-  readonly queuedApplicationJobs: bigint;
-  readonly permitsInUse: bigint;
-  readonly peakPermitsInUse: bigint;
-  readonly pressureState: "running" | "paused";
-  readonly currentPauseDurationSeconds: number;
-  readonly capacityWaiters: bigint;
-  readonly capacityWaitCount: bigint;
-  readonly capacityWaitDurationSeconds: number;
+ readonly configuredProfile: ZLinkApplicationJobQueueProfile;
+ readonly configuredManualMax?: bigint;
+ readonly configuredPauseThresholdPercent: number;
+ readonly configuredResumeThresholdPercent: number;
+ readonly effectiveProcessorCount: bigint;
+ readonly effectiveMaxQueuedApplicationJobs: bigint;
+ readonly pausePermitCount: bigint;
+ readonly resumePermitCount: bigint;
+ readonly reservedSupplyPermits: bigint;
+ readonly queuedApplicationJobs: bigint;
+ readonly permitsInUse: bigint;
+ readonly peakPermitsInUse: bigint;
+ readonly pressureState: "running" | "paused";
+ readonly currentPauseDurationSeconds: number;
+ readonly capacityWaiters: bigint;
+ readonly capacityWaitCount: bigint;
+ readonly capacityWaitDurationSeconds: number;
 }
 
 export interface ZLinkHostCapacityStatus {
-  readonly measurementEpoch: bigint;
-  readonly coreHwm: ZLinkCoreHwmStatus;
-  readonly applicationJobQueue: ZLinkApplicationJobQueueStatus;
+ readonly measurementEpoch: bigint;
+ readonly coreHwm: ZLinkCoreHwmStatus;
+ readonly applicationJobQueue: ZLinkApplicationJobQueueStatus;
 }
 
 export interface ZLinkFrameworkRuntime {
-  readonly status: ZLinkFrameworkRuntimeStatus;
-  resetCapacityMetrics(): void;
-  diagnosticsLevel: ZLinkMessageFlowLogMode;
-  observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>;
-  relocate(options: ZLinkFrameworkRelocationOptions): Promise<ZLinkFrameworkRelocationResult>;
-  shutdown(options?: ZLinkFrameworkLifecycleOptions): Promise<ZLinkFrameworkTerminationResult>;
+ readonly status: ZLinkFrameworkRuntimeStatus;
+ resetCapacityMetrics(): void;
+ diagnosticsLevel: ZLinkMessageFlowLogMode;
+ observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>;
+ relocate(options: ZLinkFrameworkRelocationOptions): Promise<ZLinkFrameworkRelocationResult>;
+ shutdown(options?: ZLinkFrameworkLifecycleOptions): Promise<ZLinkFrameworkTerminationResult>;
 }
 ```
 
@@ -371,16 +371,16 @@ version.
 Target candidates are narrowed in the following order.
 
 1. Keeps only a node exactly matching the source version for planned
-   maintenance, or the specified target version for rolling update.
+ maintenance, or the specified target version for rolling update.
 2. Keeps only a `Serving` Object Server on the same Mesh that isn't the
-   source.
+ source.
 3. Confirms stable type, factory, relocation policy, and state adapter
-   compatibility.
+ compatibility.
 4. Confirms population capacity and reservation availability, and
-   excludes the same maintenance wave as source.
+ excludes the same maintenance wave as source.
 5. Keeps only a node whose RID and lifecycle generation match in the
-   same descriptor snapshot and Core peer table, and whose peer is
-   `Admitted` and `Ready`.
+ same descriptor snapshot and Core peer table, and whose peer is
+ `Admitted` and `Ready`.
 6. Applies node-wide placement weight to the remaining candidates.
 
 Since the version filter is applied before capability/capacity/weight,
@@ -405,71 +405,71 @@ is `Ready`.
 
 ```ts
 export enum ZLinkTopologyState {
-  Starting = 0,
-  Ready = 1,
-  Degraded = 2,
-  Stopping = 3,
-  Stopped = 4,
-  Failed = 5
+ Starting = 0,
+ Ready = 1,
+ Degraded = 2,
+ Stopping = 3,
+ Stopped = 4,
+ Failed = 5
 }
 
 export enum ZLinkPeerState {
-  Connecting = 0,
-  Ready = 1,
-  Draining = 2,
-  NotConnected = 3,
-  NotRequired = 4
+ Connecting = 0,
+ Ready = 1,
+ Draining = 2,
+ NotConnected = 3,
+ NotRequired = 4
 }
 
 export enum ZLinkTopologyReason {
-  RuntimeNotReady = 0,
-  NoReadyPeer = 1,
-  NoReadyTarget = 2,
-  LocationUnavailable = 3,
-  CapacityExceeded = 4,
-  Draining = 5,
-  InternalFailure = 6
+ RuntimeNotReady = 0,
+ NoReadyPeer = 1,
+ NoReadyTarget = 2,
+ LocationUnavailable = 3,
+ CapacityExceeded = 4,
+ Draining = 5,
+ InternalFailure = 6
 }
 
 export interface ZLinkPeerStatus {
-  readonly nodeRid: RoutingId;
-  readonly state: ZLinkPeerState;
-  readonly unavailableReason?: ZLinkTopologyReason;
+ readonly nodeRid: RoutingId;
+ readonly state: ZLinkPeerState;
+ readonly unavailableReason?: ZLinkTopologyReason;
 }
 
 export interface ZLinkChannelStatus {
-  readonly channelName: string;
-  readonly isReady: boolean;
-  readonly readyTargetCount: number;
+ readonly channelName: string;
+ readonly isReady: boolean;
+ readonly readyTargetCount: number;
 }
 
 export interface ZLinkPlacementStatus {
-  readonly isAvailable: boolean;
-  readonly activeActorCount: number;
-  readonly activeSpotCount: number;
-  readonly unavailableReason?: ZLinkTopologyReason;
+ readonly isAvailable: boolean;
+ readonly activeActorCount: number;
+ readonly activeSpotCount: number;
+ readonly unavailableReason?: ZLinkTopologyReason;
 }
 
 export interface ZLinkRouteMeshStatus {
-  readonly meshName: string;
-  readonly state: ZLinkTopologyState;
-  readonly isReady: boolean;
-  readonly readyPeerCount: number;
-  readonly channels: readonly ZLinkChannelStatus[];
-  readonly peers: readonly ZLinkPeerStatus[];
-  readonly placement: ZLinkPlacementStatus;
-  readonly sequence: bigint;
-  readonly observedAt: Date;
+ readonly meshName: string;
+ readonly state: ZLinkTopologyState;
+ readonly isReady: boolean;
+ readonly readyPeerCount: number;
+ readonly channels: readonly ZLinkChannelStatus[];
+ readonly peers: readonly ZLinkPeerStatus[];
+ readonly placement: ZLinkPlacementStatus;
+ readonly sequence: bigint;
+ readonly observedAt: Date;
 }
 
 export interface ZLinkRouteMeshRuntime {
-  snapshot(meshName: string): ZLinkRouteMeshStatus;
-  observe(
-    meshName: string,
-    capacity?: number,
-    signal?: AbortSignal
-  ): AsyncIterable<ZLinkObservedStatus<ZLinkRouteMeshStatus>>;
-  isReady(meshName: string): boolean;
+ snapshot(meshName: string): ZLinkRouteMeshStatus;
+ observe(
+ meshName: string,
+ capacity?: number,
+ signal?: AbortSignal
+ ): AsyncIterable<ZLinkObservedStatus<ZLinkRouteMeshStatus>>;
+ isReady(meshName: string): boolean;
 }
 ```
 
@@ -496,50 +496,50 @@ event holding only some fields.
 ```ts
 export type ZLinkClientServerRole = 'client' | 'server' | 'clientAndServer';
 export interface ZLinkClientServerTargetStatus {
-  readonly nodeRid: RoutingId;
-  readonly weight: number;
-  readonly state: ZLinkPeerState;
-  readonly unavailableReason?: ZLinkTopologyReason;
+ readonly nodeRid: RoutingId;
+ readonly weight: number;
+ readonly state: ZLinkPeerState;
+ readonly unavailableReason?: ZLinkTopologyReason;
 }
 
 export interface ZLinkClientServerStatus {
-  readonly channelName: string;
-  readonly localRole: ZLinkClientServerRole;
-  readonly state: ZLinkTopologyState;
-  readonly isReady: boolean;
-  readonly readyTargetCount: number;
-  readonly targets: readonly ZLinkClientServerTargetStatus[];
-  readonly sequence: bigint;
-  readonly observedAt: Date;
+ readonly channelName: string;
+ readonly localRole: ZLinkClientServerRole;
+ readonly state: ZLinkTopologyState;
+ readonly isReady: boolean;
+ readonly readyTargetCount: number;
+ readonly targets: readonly ZLinkClientServerTargetStatus[];
+ readonly sequence: bigint;
+ readonly observedAt: Date;
 }
 
 export interface ZLinkClientServerRuntime {
-  snapshot(channelName: string): ZLinkClientServerStatus;
-  observe(
-    channelName: string,
-    capacity?: number,
-    signal?: AbortSignal
-  ): AsyncIterable<ZLinkObservedStatus<ZLinkClientServerStatus>>;
-  isReady(channelName: string): boolean;
+ snapshot(channelName: string): ZLinkClientServerStatus;
+ observe(
+ channelName: string,
+ capacity?: number,
+ signal?: AbortSignal
+ ): AsyncIterable<ZLinkObservedStatus<ZLinkClientServerStatus>>;
+ isReady(channelName: string): boolean;
 }
 
 export interface ZLinkFanoutStatus {
-  readonly channelName: string;
-  readonly state: ZLinkTopologyState;
-  readonly isReady: boolean;
-  readonly readyPublisherCount: number;
-  readonly publishers: readonly ZLinkPeerStatus[];
-  readonly sequence: bigint;
-  readonly observedAt: Date;
+ readonly channelName: string;
+ readonly state: ZLinkTopologyState;
+ readonly isReady: boolean;
+ readonly readyPublisherCount: number;
+ readonly publishers: readonly ZLinkPeerStatus[];
+ readonly sequence: bigint;
+ readonly observedAt: Date;
 }
 
 export interface ZLinkFanoutRuntime {
-  snapshot(channelName: string): ZLinkFanoutStatus;
-  observe(
-    channelName: string,
-    capacity?: number,
-    signal?: AbortSignal
-  ): AsyncIterable<ZLinkObservedStatus<ZLinkFanoutStatus>>;
+ snapshot(channelName: string): ZLinkFanoutStatus;
+ observe(
+ channelName: string,
+ capacity?: number,
+ signal?: AbortSignal
+ ): AsyncIterable<ZLinkObservedStatus<ZLinkFanoutStatus>>;
 }
 ```
 
@@ -566,18 +566,18 @@ can represent, and it's matched here so all four languages use the
 same cap. The framework doesn't end the iteration just because the
 observer's queue is full — only a `signal` abort ends that iteration.
 The definition of the delivery unit is owned by
-[Runtime Monitoring §3](../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+[Runtime Monitoring §3](../../../06-observability/01-runtime-monitoring.en.md#6-observing-state-changes--sequence-and-the-complete-status).
 
 ## 7. Message Wrapper
 
 ```ts
 export declare class ZLinkMessage<TValue = unknown> {
-  private constructor();
-  static from<T>(value: T, declaredType?: Type<T>): ZLinkMessage<T>;
-  static fromEncoded(payload: ZLinkEncodedPayload): ZLinkMessage;
-  decode<T>(type?: Type<T>): T;
-  toEncodedPayload(): ZLinkEncodedPayload;
-  isEncoded(): boolean;
+ private constructor();
+ static from<T>(value: T, declaredType?: Type<T>): ZLinkMessage<T>;
+ static fromEncoded(payload: ZLinkEncodedPayload): ZLinkMessage;
+ decode<T>(type?: Type<T>): T;
+ toEncodedPayload(): ZLinkEncodedPayload;
+ isEncoded(): boolean;
 }
 
 ```

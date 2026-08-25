@@ -11,7 +11,7 @@
 [기술문서 작성 원칙](documentation-principles.ko.md) ·
 [사용자 가이드 문서 작성 가이드](guide-writing-guide.ko.md) ·
 [E2E 시나리오 문서 작성 가이드](e2e-scenario-writing-guide.ko.md) ·
-[Framework 공개 계약 관리](../../../framework/doc/framework/common/spec/server/00-public-contract-governance.ko.md) ·
+[Framework 공개 계약 관리](../../../framework/doc/framework/common/spec/server/00-foundation/01-public-contract-governance.ko.md) ·
 [Framework 공통 sample](../../../framework/doc/framework/common/sample/README.ko.md)
 
 ## 1. 샘플 문서의 역할

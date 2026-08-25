@@ -9,6 +9,7 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
+#include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/application_job_queue_capacity.hpp"
 #include "runtime/dispatch/host_capacity_runtime.hpp"
@@ -2283,6 +2284,7 @@ void app_t::_apply_zlink_framework ()
               }
               co_return relayed;
           });
+        actor_gateway_runtime.offload_session_relay ();
         actor_gateway_runtime.on_disconnect (
           [mesh_nodes, request_timeout] (const actor_ref_t &actor) -> task_t<void> {
               bool notified = false;
@@ -2502,6 +2504,23 @@ void app_t::_apply_zlink_framework ()
                     }
                 };
             }});
+        application_mesh->configure_late_session_route_update (
+          [dispatch = options.dispatch_options ()] (
+              const runtime::protocol::session_relocation_route_t &route) mutable {
+                const framework_exception_t warning (
+                  framework_error_kind_t::invalid_operation,
+                  "late_session_route_update");
+                detail::dispatch_error_reporter_t (dispatch).report_lazy ([&] {
+                    return message_dispatch_error_event_t{
+                      .surface = dispatch_error_surface_t::stream_session,
+                      .message_kind = dispatch_message_kind_t::actor_send,
+                      .reason = dispatch_error_reason_t::invalid_frame,
+                      .action = dispatch_error_action_t::drop,
+                      .packet_name = "sessionRelocationRoute",
+                      .actor_id = route.actor.actor_id,
+                      .exception = std::make_exception_ptr (warning)};
+                });
+            });
     }
     if (!_state->services.contains (std::type_index (typeid (actor_client_t)))) {
         _state->services.add_factory<actor_client_t> (
@@ -2602,6 +2621,7 @@ void app_t::_apply_zlink_framework ()
         auto stream_runtime = detail::stream_runtime_t::from (_state->zlink);
         auto stream_service = std::make_unique<runtime::stream_host_service_t> (
           stream_runtime, stream_snapshot, options.stream_session_factories (),
+          options.session_replacement_callback_timeout (),
           mesh_nodes.empty () ? nullptr : mesh_nodes.front (), stream_runtime.advertise_hosts (),
           _state->listener_statuses, _state->application_job_queue);
         stream_service->bind_drain_flag (_state->draining);

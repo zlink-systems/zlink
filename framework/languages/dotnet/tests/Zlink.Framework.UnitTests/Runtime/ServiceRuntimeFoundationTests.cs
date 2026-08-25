@@ -1696,7 +1696,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public async Task MessageFollowAsyncAdmission_ReleasesCoreApplicationLeases()
+    public async Task MessageFollowAsyncAdmission_UsesOrdinaryEnvelopeOwnership()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = new ZLinkManagedMeshNode(context, "message-follow");
@@ -1722,7 +1722,6 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(
             () => source.Status().AdmittedPeerCount == 1
                   && target.Status().AdmittedPeerCount == 1);
-        context.ResetCoreHwmBudgetMetrics();
 
         using var first = Message.From("first");
         using var second = Message.From("second");
@@ -1772,19 +1771,11 @@ public sealed class ServiceRuntimeFoundationTests
                 ZLinkMessageParts.DisposeAll(retained);
             }
             var held = context.GetCoreHwmBudgetSnapshot();
-            Assert.True(held.OutstandingApplicationLeaseCount > 0);
-            Assert.True(held.ApplicationAccountedBytes > 0);
+            Assert.Equal(0UL, held.OutstandingApplicationLeaseCount);
         }
 
-        await WaitUntilAsync(() =>
-        {
-            var snapshot = context.GetCoreHwmBudgetSnapshot();
-            return snapshot.OutstandingApplicationLeaseCount == 0
-                   && snapshot.ApplicationAccountedBytes == 0;
-        });
         var released = context.GetCoreHwmBudgetSnapshot();
         Assert.Equal(0UL, released.OutstandingApplicationLeaseCount);
-        Assert.Equal(0UL, released.ApplicationAccountedBytes);
     }
 
     [Fact]
@@ -2091,7 +2082,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public async Task Managed_mesh_node_waits_for_shared_application_permit_before_core_receive()
+    public async Task Managed_mesh_node_pauses_core_receive_while_shared_application_capacity_is_saturated()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var applicationJobQueue = new ZLinkApplicationJobQueue(
@@ -2129,12 +2120,36 @@ public sealed class ServiceRuntimeFoundationTests
 
         using var occupied = await applicationJobQueue
             .AcquireAsync(CancellationToken.None);
+        Assert.Equal(
+            ZLinkApplicationJobQueuePressureState.Paused,
+            applicationJobQueue.GetStatus().PressureState);
         using var payload = Message.From(new byte[] { 1, 2, 3 });
         Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
 
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().CapacityWaiters == 1);
+        await Task.Delay(100);
+        // Receive-flow state converges over Core's completion lane. One
+        // already-signalled ordinary record may therefore have reserved the
+        // source's single waiter before the peer observes PAUSED, but no
+        // application job may be published without the permit.
+        Assert.InRange(
+            applicationJobQueue.GetStatus().CapacityWaiters,
+            0UL,
+            1UL);
         Assert.Equal(0UL, target.Status().PendingApplicationMessages);
+
+        occupied.ReleaseForHandlerStart();
+        await WaitUntilAsync(() =>
+        {
+            var status = applicationJobQueue.GetStatus();
+            return target.Status().PendingApplicationMessages == 1
+                || (status.PressureState
+                        == ZLinkApplicationJobQueuePressureState.Running
+                    && status.CapacityWaiters == 0);
+        });
+        Assert.Equal(
+            0UL,
+            applicationJobQueue.GetPressureMetrics()
+                .FlowStateConfigFailures);
     }
 
     [Fact]
@@ -2177,15 +2192,24 @@ public sealed class ServiceRuntimeFoundationTests
             && replier.Status().AdmittedPeerCount == 1);
 
         //  Saturate the requester's ordinary job flow: the single permit is
-        //  held externally, so an inbound ordinary record parks pre-receive.
+        //  held externally, so Core pauses the inbound ordinary data line
+        //  before Framework needs another permit.
         using var occupied = await applicationJobQueue
             .AcquireAsync(CancellationToken.None);
         using var ordinary = Message.From(new byte[] { 1, 2, 3 });
         Assert.Equal(
             SubmitResult.Ok,
             replier.SendToNode(requesterRid, [ordinary]));
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().CapacityWaiters == 1);
+        await Task.Delay(100);
+        // PAUSED applies from the next message boundary. A record already in
+        // flight may leave the single receive loop waiting for this permit;
+        // native request completion must still make progress independently.
+        Assert.InRange(
+            applicationJobQueue.GetStatus().CapacityWaiters,
+            0UL,
+            1UL);
+        var ordinaryCapacityWaiters =
+            applicationJobQueue.GetStatus().CapacityWaiters;
         Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
 
         //  The saturated requester issues a request; the replier answers.
@@ -2230,7 +2254,9 @@ public sealed class ServiceRuntimeFoundationTests
                 RecvFlags.DontWait);
             return completionReady.Count == 1;
         });
-        Assert.Equal(1UL, applicationJobQueue.GetStatus().CapacityWaiters);
+        Assert.Equal(
+            ordinaryCapacityWaiters,
+            applicationJobQueue.GetStatus().CapacityWaiters);
         Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
         using var completionClaim = completionReady.TakeClaim(0);
         using var completionBatch = new MeshReceiveBatch();
@@ -2419,7 +2445,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public async Task Managed_mesh_shutdown_keeps_shared_core_credit_until_the_admitted_multicast_child_finishes()
+    public async Task Managed_mesh_shutdown_keeps_application_permit_until_the_admitted_multicast_child_finishes()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var applicationJobQueue = new ZLinkApplicationJobQueue(
@@ -2478,7 +2504,6 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(() =>
             source.Status().AdmittedPeerCount == 1
             && target.Status().AdmittedPeerCount == 1);
-        context.ResetCoreHwmBudgetMetrics();
 
         var sourceSpot = source.EntrySpot();
         using var payload = Message.From(new byte[] { 7, 8, 9 });
@@ -2488,17 +2513,15 @@ public sealed class ServiceRuntimeFoundationTests
             .WaitAsync(TimeSpan.FromSeconds(3));
         await WaitUntilAsync(() =>
             applicationJobQueue.GetStatus().CapacityWaiters == 1);
-        Assert.True(
-            context.GetCoreHwmBudgetSnapshot().OutstandingApplicationLeaseCount > 0);
+        Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
 
         await target.DisposeAsync();
 
-        Assert.True(
-            context.GetCoreHwmBudgetSnapshot().OutstandingApplicationLeaseCount > 0);
+        Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
         first.ApplicationJobAdmission?.ReleaseForHandlerStart();
         first.Dispose();
         await WaitUntilAsync(() =>
-            context.GetCoreHwmBudgetSnapshot().OutstandingApplicationLeaseCount == 0);
+            applicationJobQueue.GetStatus().PermitsInUse == 0);
     }
 
     [Fact]

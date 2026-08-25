@@ -2,7 +2,7 @@
 
 [Interface table of contents](README.en.md) · [Node.js contract table of contents](../README.en.md)
 
-This document fixes the exact TypeScript declarations related to the
+This document fixes the TypeScript declarations related to the
 NestJS host adapter that `@zlink-systems/framework` and
 `@zlink-systems/nestjs` export in ZLink Framework. Behavioral meaning is
 owned by the [common spec](../../../README.en.md) — this document
@@ -57,12 +57,12 @@ export declare const ZLINK_SPOT_PUBLISHER_CLIENT: unique symbol;
 export declare function zlinkDiscoverProviders(rootDir: string, options?: ZLinkNestProviderDiscoveryOptions): Provider[];
 
 export declare class ZLinkDrainHealthIndicator {
-    private readonly runtime;
-    private readonly meshName;
-    constructor(runtime: ZLinkRouteMeshRuntime, meshName: string);
-    isHealthy(key?: string): Promise<Record<string, {
-        readonly status: 'up';
-    }>>;
+ private readonly runtime;
+ private readonly meshName;
+ constructor(runtime: ZLinkRouteMeshRuntime, meshName: string);
+ isHealthy(key?: string): Promise<Record<string, {
+ readonly status: 'up';
+ }>>;
 }
 
 export declare function zlinkEntrySpotActorRequestHandler<TEntrySpot extends ZLinkEntrySpot, TActor extends ZLinkActor>(options: ZLinkNestEntrySpotActorRequestHandlerOptions<TEntrySpot, TActor>): ClassDecorator;
@@ -85,29 +85,29 @@ export declare function zlinkModule(metadata: ZLinkNestModuleMetadata): ClassDec
 export declare function zlinkModule(roleRoot: ZLinkNestModuleRoleRoot, metadata: ModuleMetadata): ClassDecorator;
 
 export declare class ZLinkModule {
-    static forRoot(options?: ZLinkModuleOptions): DynamicModule;
-    static forRootFactory(options: ZLinkModuleFactoryOptions): DynamicModule;
+ static forRoot(options?: ZLinkModuleOptions): DynamicModule;
+ static forRootFactory(options: ZLinkModuleFactoryOptions): DynamicModule;
 }
 
 export interface ZLinkModuleFactoryOptions<TArgs extends unknown[] = unknown[]> {
-    readonly useFactory: (...args: TArgs) => ZLinkModuleOptions | Promise<ZLinkModuleOptions>;
-    readonly inject?: { readonly [TIndex in keyof TArgs]: InjectionToken };
-    readonly imports?: ModuleMetadata['imports'];
+ readonly useFactory: (...args: TArgs) => ZLinkModuleOptions | Promise<ZLinkModuleOptions>;
+ readonly inject?: { readonly [TIndex in keyof TArgs]: InjectionToken };
+ readonly imports?: ModuleMetadata['imports'];
 }
 
 export interface ZLinkModuleOptions {
-    readonly [ZLINK_MODULE_OPTIONS_BRAND]: true;
+ readonly [ZLINK_MODULE_OPTIONS_BRAND]: true;
 }
 
 export interface ZLinkNestCodecRegistryBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    use(extension: ZLinkCodecExtension): this;
+ use(extension: ZLinkCodecExtension): this;
 }
 
 export interface ZLinkNestEntrySpotActorRequestHandlerOptions<TEntrySpot extends ZLinkEntrySpot, TActor extends ZLinkActor> {
-    readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
-    readonly actor: ZLinkNestTypeResolver<TActor>;
-    readonly packetName: string;
-    readonly methodName?: string;
+ readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
+ readonly actor: ZLinkNestTypeResolver<TActor>;
+ readonly packetName: string;
+ readonly methodName?: string;
 }
 ```
 
@@ -115,101 +115,101 @@ export interface ZLinkNestEntrySpotActorRequestHandlerOptions<TEntrySpot extends
 
 ```ts
 export interface ZLinkNestEntrySpotActorSendHandlerOptions<TEntrySpot extends ZLinkEntrySpot, TActor extends ZLinkActor> {
-    readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
-    readonly actor: ZLinkNestTypeResolver<TActor>;
-    readonly packetName: string;
-    readonly methodName?: string;
+ readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
+ readonly actor: ZLinkNestTypeResolver<TActor>;
+ readonly packetName: string;
+ readonly methodName?: string;
 }
 
 export interface ZLinkNestEntrySpotPacketHandlerOptions<TEntrySpot extends ZLinkEntrySpot> {
-    readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
-    readonly packetName?: string;
+ readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
+ readonly packetName?: string;
 }
 
 export interface ZLinkNestEntrySpotSubscriptionHandlerOptions<TEntrySpot extends ZLinkEntrySpot> {
-    readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
-    readonly channelName: string;
-    readonly topic: string;
+ readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
+ readonly channelName: string;
+ readonly topic: string;
 }
 
 export interface ZLinkNestFanoutChannelBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    enablePublisher(bind: string | undefined): this;
-    enablePublisher(port?: number): this;
-    setBindHost(bindHost: string): this;
-    setAdvertiseHost(advertiseHost: string): this;
-    routingId(routingId: string | undefined): this;
-    setRoutingIdPrefix(prefix: string): this;
-    enableSubscriber(endpoint?: string | readonly string[]): this;
-    addPublishHandler(packetName: string, handlerType: Type): this;
-    addHandlerGroup(groupName: string): this;
+ enablePublisher(bind: string | undefined): this;
+ enablePublisher(port?: number): this;
+ setBindHost(bindHost: string): this;
+ setAdvertiseHost(advertiseHost: string): this;
+ routingId(routingId: string | undefined): this;
+ setRoutingIdPrefix(prefix: string): this;
+ enableSubscriber(endpoint?: string | readonly string[]): this;
+ addPublishHandler(packetName: string, handlerType: Type): this;
+ addHandlerGroup(groupName: string): this;
 }
 
 export interface ZLinkNestFrameworkAdditionalOptions {
-    readonly requestTimeoutMs?: number;
-    readonly filters?: readonly Type<ZLinkHandlerFilter>[];
-    readonly worker?: ZLinkWorkerOptions;
-    readonly dispatch?: ZLinkDispatchOptions;
-    readonly metrics?: ZLinkMetricsOptions;
+ readonly requestTimeoutMs?: number;
+ readonly filters?: readonly Type<ZLinkHandlerFilter>[];
+ readonly worker?: ZLinkWorkerOptions;
+ readonly dispatch?: ZLinkDispatchOptions;
+ readonly metrics?: ZLinkMetricsOptions;
 }
 
 export interface ZLinkLocationOptions {
-    ownerLeaseRenewIntervalMs(value: number): this;
-    ownerLeaseTtlMs(value: number): this;
-    pollingIntervalMs(value: number): this;
-    storeFailureGraceMs(value: number): this;
-    ownerLeaseFencingMarginMs(value: number): this;
-    ownerLeaseRenewTimeoutMs(value: number): this;
-    routeCacheMaxAgeMs(value: number): this;
-    messageFollowDurationMs(value: number): this;
-    sessionRelocationSealTimeoutMs(value: number): this;
-    relocationCutoverWaitTimeoutMs(value: number): this;
-    relocationPayloadChunkLimitBytes(value: number): this;
-    relocationInFlightPayloadBudgetBytes(value: number): this;
-    relocationNodeInFlightPayloadBudgetBytes(value: number): this;
+ ownerLeaseRenewIntervalMs(value: number): this;
+ ownerLeaseTtlMs(value: number): this;
+ pollingIntervalMs(value: number): this;
+ storeFailureGraceMs(value: number): this;
+ ownerLeaseFencingMarginMs(value: number): this;
+ ownerLeaseRenewTimeoutMs(value: number): this;
+ routeCacheMaxAgeMs(value: number): this;
+ messageFollowDurationMs(value: number): this;
+ sessionRelocationSealTimeoutMs(value: number): this;
+ relocationCutoverWaitTimeoutMs(value: number): this;
+ relocationPayloadChunkLimitBytes(value: number): this;
+ relocationInFlightPayloadBudgetBytes(value: number): this;
+ relocationNodeInFlightPayloadBudgetBytes(value: number): this;
 }
 
 export interface ZLinkNestFrameworkOptionsBuilder {
-    options(options: ZLinkNestFrameworkAdditionalOptions): this;
-    disableImplicitHandlerAutoRegistration(): this;
-    codecs(): ZLinkNestCodecRegistryBuilder;
-    configureDispatch(): ZLinkDispatchOptionsBuilder;
-    addLocationStore(store: ZLinkLocationStore): this;
-    addRelocationStore(store: ZLinkRelocationStore): this;
-    setApplicationVersion(version: bigint): this;
-    setMaintenanceWave(waveId: string): this;
-    setActorTransferTimeout(timeoutMs: number): this;
-    setMessageFollowDuration(timeoutMs: number): this;
-    configureStreamCompression(): ZLinkStreamCompressionBuilder;
-    configureLocations(): ZLinkLocationOptions;
-    configureNetwork(): ZLinkNetworkOptions;
-    addRouteMesh(name: string): ZLinkNestMeshNodeBuilder;
-    addClientServerChannel(name: string): ZLinkNestClientServerChannelRoleBuilder;
-    addFanoutChannel(name: string): ZLinkNestFanoutChannelBuilder;
-    addStreamNode(name: string): ZLinkNestStreamNodeBuilder;
-    build(): ZLinkModuleOptions;
+ options(options: ZLinkNestFrameworkAdditionalOptions): this;
+ disableImplicitHandlerAutoRegistration(): this;
+ codecs(): ZLinkNestCodecRegistryBuilder;
+ configureDispatch(): ZLinkDispatchOptionsBuilder;
+ addLocationStore(store: ZLinkLocationStore): this;
+ addRelocationStore(store: ZLinkRelocationStore): this;
+ setApplicationVersion(version: bigint): this;
+ setMaintenanceWave(waveId: string): this;
+ setActorTransferTimeout(timeoutMs: number): this;
+ setMessageFollowDuration(timeoutMs: number): this;
+ configureStreamCompression(): ZLinkStreamCompressionBuilder;
+ configureLocations(): ZLinkLocationOptions;
+ configureNetwork(): ZLinkNetworkOptions;
+ addRouteMesh(name: string): ZLinkNestMeshNodeBuilder;
+ addClientServerChannel(name: string): ZLinkNestClientServerChannelRoleBuilder;
+ addFanoutChannel(name: string): ZLinkNestFanoutChannelBuilder;
+ addStreamNode(name: string): ZLinkNestStreamNodeBuilder;
+ build(): ZLinkModuleOptions;
 }
 
 export type ZLinkNestHandlerKind = 'request' | 'send' | 'publish';
 
 export interface ZLinkNestHandlerOptions {
-    readonly methodName?: string;
-    readonly decodePayload?: (payload: Buffer, context: ZLinkMessageContext | ZLinkRouteMessageContext | ZLinkPublishMessageContext) => unknown;
-    readonly encodeResult?: (result: unknown, context: ZLinkMessageContext | ZLinkRouteMessageContext) => unknown;
+ readonly methodName?: string;
+ readonly decodePayload?: (payload: Buffer, context: ZLinkMessageContext | ZLinkRouteMessageContext | ZLinkPublishMessageContext) => unknown;
+ readonly encodeResult?: (result: unknown, context: ZLinkMessageContext | ZLinkRouteMessageContext) => unknown;
 }
 
 export interface ZLinkNestModuleMetadata extends ModuleMetadata {
-    readonly providerDiscovery?: readonly ZLinkNestProviderDiscoveryRoot[];
+ readonly providerDiscovery?: readonly ZLinkNestProviderDiscoveryRoot[];
 }
 
 export type ZLinkNestModuleRoleRoot = string;
 
 export interface ZLinkNestProviderDiscoveryOptions {
-    readonly recursive?: boolean;
+ readonly recursive?: boolean;
 }
 
 export type ZLinkNestProviderDiscoveryRoot = string | {
-    readonly rootDir: string;
-    readonly options?: ZLinkNestProviderDiscoveryOptions;
+ readonly rootDir: string;
+ readonly options?: ZLinkNestProviderDiscoveryOptions;
 };
 ```
 
@@ -225,125 +225,125 @@ automatic registration.
 
 ```ts
 export interface ZLinkNestMeshNodeBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    channel(name: string): ZLinkNestMeshChannelBuilder;
-    listen(endpoint: string): this;
-    listen(port?: number): this;
-    setBindHost(bindHost: string): this;
-    setAdvertiseHost(advertiseHost: string): this;
-    routingId(routingId: string | undefined): this;
-    setRoutingIdPrefix(prefix: string): this;
-    setPlacementWeight(weight: number): this;
-    setActorLimit(limit: number): this;
-    setSpotLimit(limit: number): this;
-    setActivationConcurrency(limit: number): this;
-    setInstanceSpotIdleTimeout(timeoutMs: number): this;
-    objects(): ZLinkNestMeshObjectRoleBuilder;
-    configureRouterSocket(): ZLinkMeshNodeSocketConfig;
-    configureSpotPublisher(): ZLinkSpotPublisherConfig;
-    peerConnections(): ZLinkMeshPeerConnections;
-    addSendHandler(packetName: string, handlerType: Type): this;
-    addRequestHandler(packetName: string, handlerType: Type): this;
+ channel(name: string): ZLinkNestMeshChannelBuilder;
+ listen(endpoint: string): this;
+ listen(port?: number): this;
+ setBindHost(bindHost: string): this;
+ setAdvertiseHost(advertiseHost: string): this;
+ routingId(routingId: string | undefined): this;
+ setRoutingIdPrefix(prefix: string): this;
+ setPlacementWeight(weight: number): this;
+ setActorLimit(limit: number): this;
+ setSpotLimit(limit: number): this;
+ setActivationConcurrency(limit: number): this;
+ setInstanceSpotIdleTimeout(timeoutMs: number): this;
+ objects(): ZLinkNestMeshObjectRoleBuilder;
+ configureRouterSocket(): ZLinkMeshNodeSocketConfig;
+ configureSpotPublisher(): ZLinkSpotPublisherConfig;
+ peerConnections(): ZLinkMeshPeerConnections;
+ addSendHandler(packetName: string, handlerType: Type): this;
+ addRequestHandler(packetName: string, handlerType: Type): this;
 }
 
 export interface ZLinkNestMeshObjectRoleBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    client(): ZLinkNestMeshObjectClientBuilder;
-    server(): ZLinkNestMeshObjectServerBuilder;
+ client(): ZLinkNestMeshObjectClientBuilder;
+ server(): ZLinkNestMeshObjectServerBuilder;
 }
 
 export interface ZLinkNestMeshObjectClientBuilder extends ZLinkNestFrameworkOptionsBuilder {
 }
 
 export interface ZLinkNestMeshObjectServerBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this;
-    addSpotFactory<TSpot extends ZLinkSpot>(
-        spotType: string,
-        implementation: Type<TSpot>,
-        configure: (builder: ZLinkUserSpotFactoryBuilder<TSpot>) => void): this;
-    addInstanceSpotFactory<TSpot extends ZLinkInstanceSpot>(
-        instanceSpotType: string,
-        implementation: Type<TSpot>,
-        configure: (builder: ZLinkInstanceSpotFactoryBuilder<TSpot>) => void): this;
-    addActorFactory<TActor extends ZLinkActor>(
-        actorType: string,
-        factoryType: Type<ZLinkActorFactory<TActor>>,
-        configure: (builder: ZLinkActorFactoryBuilder<TActor>) => void): this;
+ addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this;
+ addSpotFactory<TSpot extends ZLinkSpot>(
+ spotType: string,
+ implementation: Type<TSpot>,
+ configure: (builder: ZLinkUserSpotFactoryBuilder<TSpot>) => void): this;
+ addInstanceSpotFactory<TSpot extends ZLinkInstanceSpot>(
+ instanceSpotType: string,
+ implementation: Type<TSpot>,
+ configure: (builder: ZLinkInstanceSpotFactoryBuilder<TSpot>) => void): this;
+ addActorFactory<TActor extends ZLinkActor>(
+ actorType: string,
+ factoryType: Type<ZLinkActorFactory<TActor>>,
+ configure: (builder: ZLinkActorFactoryBuilder<TActor>) => void): this;
 }
 
 export interface ZLinkNestMeshChannelBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    client(): ZLinkNestMeshChannelClientBuilder;
-    server(): ZLinkNestMeshChannelServerBuilder;
+ client(): ZLinkNestMeshChannelClientBuilder;
+ server(): ZLinkNestMeshChannelServerBuilder;
 }
 
 export interface ZLinkNestMeshChannelClientBuilder extends ZLinkNestFrameworkOptionsBuilder {
 }
 
 export interface ZLinkNestMeshChannelServerBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    setWeight(weight: number): this;
-    addSendHandler(packetName: string, handlerType: Type): this;
-    addRequestHandler(packetName: string, handlerType: Type): this;
-    addHandlerGroup(groupName: string): this;
+ setWeight(weight: number): this;
+ addSendHandler(packetName: string, handlerType: Type): this;
+ addRequestHandler(packetName: string, handlerType: Type): this;
+ addHandlerGroup(groupName: string): this;
 }
 
 export interface ZLinkNestClientServerChannelRoleBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    client(): ZLinkNestClientServerChannelClientBuilder;
-    server(): ZLinkNestClientServerChannelServerBuilder;
+ client(): ZLinkNestClientServerChannelClientBuilder;
+ server(): ZLinkNestClientServerChannelServerBuilder;
 }
 
 export interface ZLinkNestClientServerChannelClientBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    connect(endpoint: string): this;
+ connect(endpoint: string): this;
 }
 
 export interface ZLinkNestClientServerChannelServerBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    listen(port?: number): this;
-    setBindHost(bindHost: string): this;
-    setAdvertiseHost(advertiseHost: string): this;
-    setWeight(weight: number): this;
-    addSendHandler(packetName: string, handlerType: Type): this;
-    addRequestHandler(packetName: string, handlerType: Type): this;
-    addHandlerGroup(groupName: string): this;
+ listen(port?: number): this;
+ setBindHost(bindHost: string): this;
+ setAdvertiseHost(advertiseHost: string): this;
+ setWeight(weight: number): this;
+ addSendHandler(packetName: string, handlerType: Type): this;
+ addRequestHandler(packetName: string, handlerType: Type): this;
+ addHandlerGroup(groupName: string): this;
 }
 
 export interface ZLinkNestSpotActorRequestHandlerOptions<TSpot extends ZLinkSpot, TActor extends ZLinkActor> {
-    readonly spot: ZLinkNestTypeResolver<TSpot>;
-    readonly actor: ZLinkNestTypeResolver<TActor>;
-    readonly packetName: string;
-    readonly methodName?: string;
+ readonly spot: ZLinkNestTypeResolver<TSpot>;
+ readonly actor: ZLinkNestTypeResolver<TActor>;
+ readonly packetName: string;
+ readonly methodName?: string;
 }
 
 export interface ZLinkNestSpotActorSendHandlerOptions<TSpot extends ZLinkSpot, TActor extends ZLinkActor> {
-    readonly spot: ZLinkNestTypeResolver<TSpot>;
-    readonly actor: ZLinkNestTypeResolver<TActor>;
-    readonly packetName: string;
-    readonly methodName?: string;
+ readonly spot: ZLinkNestTypeResolver<TSpot>;
+ readonly actor: ZLinkNestTypeResolver<TActor>;
+ readonly packetName: string;
+ readonly methodName?: string;
 }
 
 export interface ZLinkNestSpotPacketHandlerOptions<TSpot extends ZLinkSpot> {
-    readonly spot: ZLinkNestTypeResolver<TSpot>;
-    readonly packetName?: string;
+ readonly spot: ZLinkNestTypeResolver<TSpot>;
+ readonly packetName?: string;
 }
 
 export interface ZLinkNestSpotSubscriptionHandlerOptions<TSpot extends ZLinkSpot> {
-    readonly spot: ZLinkNestTypeResolver<TSpot>;
-    readonly channelName: string;
-    readonly topic: string;
+ readonly spot: ZLinkNestTypeResolver<TSpot>;
+ readonly channelName: string;
+ readonly topic: string;
 }
 
 export interface ZLinkNestSpotTimerHandlerOptions<TSpot extends ZLinkSpot = ZLinkSpot> {
-    readonly spot?: ZLinkNestTypeResolver<TSpot>;
-    readonly entrySpot?: ZLinkNestTypeResolver<ZLinkEntrySpot>;
-    readonly name?: string;
-    readonly periodMs?: number;
-    readonly options?: ZLinkTimerOptions;
+ readonly spot?: ZLinkNestTypeResolver<TSpot>;
+ readonly entrySpot?: ZLinkNestTypeResolver<ZLinkEntrySpot>;
+ readonly name?: string;
+ readonly periodMs?: number;
+ readonly options?: ZLinkTimerOptions;
 }
 
 export interface ZLinkNestStreamNodeBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    bind(endpoint: string | undefined): this;
-    bind(port?: number): this;
-    setBindHost(bindHost: string): this;
-    setAdvertiseHost(advertiseHost: string): this;
-    enableActorDispatch(): this;
-    setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
-    registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
+ bind(endpoint: string | undefined): this;
+ bind(port?: number): this;
+ setBindHost(bindHost: string): this;
+ setAdvertiseHost(advertiseHost: string): this;
+ enableActorDispatch(): this;
+ setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
+ registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }
 
 export type ZLinkNestTypeResolver<T> = Type<T> | (() => Type<T>);
@@ -382,35 +382,35 @@ returning the turn.
 
 ```ts
 export interface ZLinkNamedHttpClientOptions {
-    readonly name: string;
-    readonly baseUrl: string;
-    readonly configure?: (builder: ZLinkHttpClientBuilder) => void;
+ readonly name: string;
+ readonly baseUrl: string;
+ readonly configure?: (builder: ZLinkHttpClientBuilder) => void;
 }
 
 export interface ZLinkHttpClientModuleOptions {
-    readonly imports: ModuleMetadata['imports'];
-    readonly clients: readonly ZLinkNamedHttpClientOptions[];
+ readonly imports: ModuleMetadata['imports'];
+ readonly clients: readonly ZLinkNamedHttpClientOptions[];
 }
 
 export interface ZLinkServerHttpRequestBuilder extends ZLinkHttpRequestBuilder {
-    submit(): void;
-    yield<T>(): Promise<HttpResponse<T>>;
+ submit(): void;
+ yield<T>(): Promise<HttpResponse<T>>;
 }
 
 export interface ZLinkServerHttpClient extends Omit<ZLinkHttpClient, 'get' | 'post' | 'put' | 'delete' | 'patch' | 'head' | 'options'> {
-    get(path: string): ZLinkServerHttpRequestBuilder;
-    post(path: string): ZLinkServerHttpRequestBuilder;
-    put(path: string): ZLinkServerHttpRequestBuilder;
-    delete(path: string): ZLinkServerHttpRequestBuilder;
-    patch(path: string): ZLinkServerHttpRequestBuilder;
-    head(path: string): ZLinkServerHttpRequestBuilder;
-    options(path: string): ZLinkServerHttpRequestBuilder;
+ get(path: string): ZLinkServerHttpRequestBuilder;
+ post(path: string): ZLinkServerHttpRequestBuilder;
+ put(path: string): ZLinkServerHttpRequestBuilder;
+ delete(path: string): ZLinkServerHttpRequestBuilder;
+ patch(path: string): ZLinkServerHttpRequestBuilder;
+ head(path: string): ZLinkServerHttpRequestBuilder;
+ options(path: string): ZLinkServerHttpRequestBuilder;
 }
 
 export declare function zlinkHttpClientToken(name: string): InjectionToken;
 
 export declare class ZLinkHttpClientModule {
-    static forRoot(options: ZLinkHttpClientModuleOptions): DynamicModule;
+ static forRoot(options: ZLinkHttpClientModuleOptions): DynamicModule;
 }
 ```
 
@@ -431,10 +431,10 @@ caller-specified identity option.
 
 An Object Server with even one `RecreateOnRelocation` or
 `PreserveStateWith` factory, or even one registered Instance Spot
-[factory](../../../01-glossary.en.md#factory), must call
+[factory](../../../00-foundation/02-glossary.en.md#factory), must call
 `addRelocationStore(...)` exactly once. Only a same-node configuration
 with no
-[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
+[Instance Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
 factory where every factory is `DisableRelocation` can omit the
 Relocation Store. A missing or duplicate registration is a
 configuration error before socket bind. The Relocation Store doesn't

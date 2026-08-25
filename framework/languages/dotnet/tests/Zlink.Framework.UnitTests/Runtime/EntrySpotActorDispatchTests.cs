@@ -29,6 +29,19 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Fact]
+    public void Missing_actor_factory_is_not_found_and_is_not_retryable()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        registration.ActorCatalog.Build([]);
+
+        var error = Assert.Throws<ZLinkFrameworkException>(
+            () => registration.ActorCatalog.ResolveFactory("unregistered"));
+
+        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+        Assert.Equal(ZLinkRetryAdvice.DoNotRetry, error.RetryAdvice);
+    }
+
+    [Fact]
     public async Task BoundSessionAsyncSend_UsesCommittedRelocationRouteBeforeAck()
     {
         var localNode = new CapturingSpotNode();
@@ -5168,7 +5181,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionOwnerNodeGeneration: 1);
 
             node.BoundSessionSendAccepted = true;
-            node.SignalSendReady();
+            node.CompleteBoundSessionAdmission();
 
             await pending;
 
@@ -9157,8 +9170,6 @@ public sealed partial class EntrySpotActorDispatchTests
             (_dispatchHandler ?? throw new InvalidOperationException("Dispatch handler was not attached.")).Invoke(info);
         }
 
-        public void OnSendReady(Action handler) { }
-
         public bool RequestToChannel(
             string channelName,
             Message message,
@@ -9377,8 +9388,6 @@ public sealed partial class EntrySpotActorDispatchTests
             string keyPath,
             bool requireClientCert) { }
 
-        public void OnSendReady(Action handler) { }
-
         public bool RecvPart(
             out RoutingId? sourceRoutingId,
             out Message? part,
@@ -9444,8 +9453,6 @@ public sealed partial class EntrySpotActorDispatchTests
             string certPath,
             string keyPath,
             bool requireClientCert) { }
-
-        public void OnSendReady(Action handler) { }
 
         public bool RecvPart(
             out RoutingId? sourceRoutingId,
@@ -9602,11 +9609,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
         private TaskCompletionSource? BoundSessionAdmission { get; set; }
 
-        private Action? SendReadyHandler { get; set; }
-
-        public void SignalSendReady()
+        public void CompleteBoundSessionAdmission()
         {
-            SendReadyHandler?.Invoke();
             if (BoundSessionSendAccepted)
                 BoundSessionAdmission?.TrySetResult();
         }
@@ -9819,8 +9823,6 @@ public sealed partial class EntrySpotActorDispatchTests
             PublisherConfig = publisher;
             SubscriberConfig = subscriber;
         }
-
-        public void OnSendReady(Action handler) => SendReadyHandler = handler;
 
         public void ConnectPeer(string endpoint) { }
 

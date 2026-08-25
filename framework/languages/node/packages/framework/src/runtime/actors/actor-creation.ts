@@ -1,4 +1,4 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException } from '../framework-errors-internal';
 import type {
   RoutingId,
   Type,
@@ -60,7 +60,12 @@ export class ZLinkActorCreationCoordinator {
           await lifecycle.releaseActor(actorType, actorId);
           return activation.activated;
         }
-        if (activation.generation !== undefined) state.setLocationGeneration(activation.generation);
+        if (activation.generation !== undefined) {
+          state.setLocationGeneration(activation.generation);
+        }
+        if (activation.ownerLeaseGeneration !== undefined) {
+          state.setOwnerLeaseGeneration(activation.ownerLeaseGeneration);
+        }
         state.markLocationOwned();
         return activation.activated;
       }
@@ -207,7 +212,10 @@ export class ZLinkActorCreationCoordinator {
   private async createFactory(actorType: string): Promise<ZLinkActorFactory> {
     const factoryOrType = this.options.actorFactories.get(actorType);
     if (factoryOrType === undefined) {
-      throw new ZLinkConfigurationException(`Actor factory '${actorType}' is not registered.`);
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
+        `Actor factory '${actorType}' is not registered.`
+      );
     }
     if (typeof factoryOrType === 'function') {
       const type = factoryOrType as Type<ZLinkActorFactory>;

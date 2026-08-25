@@ -18,14 +18,14 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/01-overview.
 # 1. Overview
 
 > **The documents that own this chapter's contract** — owned by the
-> [Framework Overview](../../../common/spec/server/02-overview.en.md) and the
+> [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md) and the
 > [per-language public contract index](../../../common/spec/server/languages/README.en.md).
 
 > This document is the entry point of the `Node.js` guide. The guide explains the
 > concepts and usage of ZLink Framework directly so a Node.js developer can **read it
 > and start writing code right away.** The **language-neutral formal definition** of a
 > concept is owned by the [common spec
-> overview](../../../common/spec/server/02-overview.en.md), and the **formal contract** of the
+> overview](../../../common/spec/server/00-foundation/03-overview.en.md), and the **formal contract** of the
 > `Node.js` public API is owned by the
 > [Node.js exact interface index](../../../common/spec/server/languages/node/interfaces/README.en.md)
 > document. If the two disagree, the spec wins.

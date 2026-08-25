@@ -18,7 +18,7 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/09-stream.en
 # 9. STREAM
 
 > **The documents that own this chapter's contract** —
-> [STREAM server session](../../../common/spec/server/19-stream-session.en.md) owns the behavior,
+> [STREAM server session](../../../common/spec/server/04-session/01-stream-session.en.md) owns the behavior,
 > and the
 > [per-language STREAM session public contract](../../../common/spec/server/languages/README.en.md)
 > owns the server's exact signatures. The client package follows the Stream Connector guide

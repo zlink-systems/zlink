@@ -2,7 +2,7 @@
 
 [Interface table of contents](README.en.md) · [Node.js contract table of contents](../README.en.md)
 
-This document fixes the exact TypeScript declarations related to
+This document fixes the TypeScript declarations related to
 Channel, request, and routing that `@zlink-systems/framework` and
 `@zlink-systems/nestjs` export in ZLink Framework. Behavioral meaning is
 owned by the [common spec](../../../README.en.md) — this document
@@ -22,98 +22,98 @@ instances it created and the child context.
 
 ```ts
 export declare class ZLinkEncodedPayload {
-    private readonly payload;
-    private constructor();
-    static from(bytes: Uint8Array): ZLinkEncodedPayload;
-    data(): Uint8Array;
-    toBytes(): Uint8Array;
-    copy(): ZLinkEncodedPayload;
-    size(): number;
-    isEmpty(): boolean;
-    getString(encoding?: BufferEncoding): string;
-    close(): void;
+ private readonly payload;
+ private constructor();
+ static from(bytes: Uint8Array): ZLinkEncodedPayload;
+ data(): Uint8Array;
+ toBytes(): Uint8Array;
+ copy(): ZLinkEncodedPayload;
+ size(): number;
+ isEmpty(): boolean;
+ getString(encoding?: BufferEncoding): string;
+ close(): void;
 }
 
 export interface ZLinkEndpointConnections {
-    connect(endpoint: string): void;
-    disconnect(endpoint: string): void;
-    listConnections(): readonly string[];
+ connect(endpoint: string): void;
+ disconnect(endpoint: string): void;
+ listConnections(): readonly string[];
 }
 
 export interface ZLinkEntrySpot<TActor extends ZLinkActor = ZLinkActor>
-    extends ZLinkSpotActorMembershipLifecycle<TActor> {
-    readonly context: ZLinkEntrySpotContext<TActor>;
-    configure?(): void;
-    onInitialize?(): Promise<void>;
-    onClosing?(
-        context: ZLinkSpotClosingContext,
-        cleanupSignal: AbortSignal): Promise<void>;
-    onCreateActor?(
-        actor: TActor,
-        createRequest: ZLinkMessage): Promise<ZLinkActorCreateResponse>;
+ extends ZLinkSpotActorMembershipLifecycle<TActor> {
+ readonly context: ZLinkEntrySpotContext<TActor>;
+ configure?(): void;
+ onInitialize?(): Promise<void>;
+ onClosing?(
+ context: ZLinkSpotClosingContext,
+ cleanupSignal: AbortSignal): Promise<void>;
+ onCreateActor?(
+ actor: TActor,
+ createRequest: ZLinkMessage): Promise<ZLinkActorCreateResponse>;
 }
 
 export interface ZLinkEntrySpotActorRequestHandler<
-    TEntrySpot extends ZLinkEntrySpot<TActor>,
-    TActor extends ZLinkActor,
-    TRequest,
-    TReply> {
-    handle(
-        spot: TEntrySpot,
-        actor: TActor,
-        context: ZLinkMessageContext,
-        request: TRequest): Promise<TReply>;
+ TEntrySpot extends ZLinkEntrySpot<TActor>,
+ TActor extends ZLinkActor,
+ TRequest,
+ TReply> {
+ handle(
+ spot: TEntrySpot,
+ actor: TActor,
+ context: ZLinkMessageContext,
+ request: TRequest): Promise<TReply>;
 }
 
 export interface ZLinkEntrySpotActorSendHandler<
-    TEntrySpot extends ZLinkEntrySpot<TActor>,
-    TActor extends ZLinkActor,
-    TMessage> {
-    handle(
-        spot: TEntrySpot,
-        actor: TActor,
-        context: ZLinkMessageContext,
-        message: TMessage): Promise<void>;
+ TEntrySpot extends ZLinkEntrySpot<TActor>,
+ TActor extends ZLinkActor,
+ TMessage> {
+ handle(
+ spot: TEntrySpot,
+ actor: TActor,
+ context: ZLinkMessageContext,
+ message: TMessage): Promise<void>;
 }
 
 export interface ZLinkEntrySpotContext<TActor extends ZLinkActor = ZLinkActor, TEntrySpot extends ZLinkEntrySpot<TActor> = ZLinkEntrySpot<TActor>> extends ZLinkSpotCommonContext<TEntrySpot> {
-    readonly handlers: ZLinkSpotHandlerRegistry;
-    destroyActor(actor: TActor, signal?: AbortSignal): Promise<void>;
+ readonly handlers: ZLinkSpotHandlerRegistry;
+ destroyActor(actor: TActor, signal?: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkFanoutChannelBuilder {
-    enablePublisher(endpoint: string): this;
-    enablePublisher(port?: number): this;
-    setBindHost(bindHost: string): this;
-    setAdvertiseHost(advertiseHost: string): this;
-    routingId(publisherRoutingId: RoutingId): this;
-    setRoutingIdPrefix(prefix: string): this;
-    enableSubscriber(): this;
-    connect(endpoint: string): this;
-    subscriberConnections(): ZLinkEndpointConnections;
+ enablePublisher(endpoint: string): this;
+ enablePublisher(port?: number): this;
+ setBindHost(bindHost: string): this;
+ setAdvertiseHost(advertiseHost: string): this;
+ routingId(publisherRoutingId: RoutingId): this;
+ setRoutingIdPrefix(prefix: string): this;
+ enableSubscriber(): this;
+ connect(endpoint: string): this;
+ subscriberConnections(): ZLinkEndpointConnections;
 }
 
 export interface ZLinkFanoutClient {
-    publish(channelName: string, event: unknown): ZLinkFanoutPublishCall;
-    publish(channelName: string, topic: string, event: unknown): ZLinkFanoutPublishCall;
-    getListenerStatus(channelName: string): ZLinkFanoutListenerStatus;
+ publish(channelName: string, event: unknown): ZLinkFanoutPublishCall;
+ publish(channelName: string, topic: string, event: unknown): ZLinkFanoutPublishCall;
+ getListenerStatus(channelName: string): ZLinkFanoutListenerStatus;
 }
 
 export interface ZLinkFanoutListenerStatus {
-    readonly channelName: string;
-    readonly endpoint: string;
-    readonly observedAt: Date;
+ readonly channelName: string;
+ readonly endpoint: string;
+ readonly observedAt: Date;
 }
 
 export interface ZLinkFanoutPublishCall {
-    submit(signal?: AbortSignal): Promise<void>;
+ submit(signal?: AbortSignal): Promise<void>;
 }
 ```
 
 The Entry Spot ID is issued by the framework at MeshNode startup. The
 application doesn't provide the Entry Spot ID as a configuration value.
 Actor create finishes the selected owner
-[MeshNode](../../../01-glossary.en.md#meshnode)'s Entry Spot
+[MeshNode](../../../00-foundation/02-glossary.en.md#meshnode)'s Entry Spot
 membership and Actor Ready barrier in the same lifecycle. Afterward, a
 one-way business message is delivered directly to the Actor queue,
 without going through the Entry Spot callback.
@@ -122,7 +122,7 @@ When maintenance materializes an Actor into a target Entry Spot,
 Snapshot first finishes the Actor adapter's `restore(...)`, and Recreate
 finishes factory materialization without payload restore. It restores
 the queue/Actor timer, commits Location authority/Entry
-[membership](../../../01-glossary.en.md#membership), and then starts
+[membership](../../../00-foundation/02-glossary.en.md#membership), and then starts
 Actor message processing. The Bound Session location update is then
 performed with `sessionActorLocationUpdateReqMsg` and
 `sessionActorLocationUpdateResMsg` send messages, and Actor processing
@@ -137,7 +137,7 @@ either.
 
 `ZLinkFanoutClient.publish(...)` provides both a call that uses the
 typed event's packet name as topic, and a call that specifies
-[topic](../../../01-glossary.en.md#topic) explicitly.
+[topic](../../../00-foundation/02-glossary.en.md#topic) explicitly.
 `ZLinkFanoutPublishCall.submit(...)` completes normally once the local
 publisher transport accepts the event. It doesn't return subscriber
 count or receipt completion. `ZLinkPublishCall` is Logical-Multicast-only
@@ -150,19 +150,19 @@ the returned endpoint contains the actual port the operating system
 chose. It fails with `ZLinkConfigurationException` if the host hasn't
 started or that channel isn't registered as a publisher.
 
-Passing the internal liveness-dedicated exact byte `01 5A 4C 46 31` to
+Passing the internal liveness-dedicated byte `01 5A 4C 46 31` to
 the overload that specifies topic raises `ZLinkConfigurationException`
 without starting transport. The overload that omits topic uses the
-typed event's [packet name](../../../01-glossary.en.md#packet-name),
+typed event's [packet name](../../../00-foundation/02-glossary.en.md#packet-name),
 so it doesn't create this internal topic.
 
 A fanout publisher that registered a location store selects one of a
 fixed Publisher RID or automatic allocation before startup, and
-publishes a dedicated [descriptor](../../../01-glossary.en.md#descriptor).
+publishes a dedicated [descriptor](../../../00-foundation/02-glossary.en.md#descriptor).
 A publisher with no Store can be used as a target with a manually
 delivered listener endpoint, but doesn't perform RID allocation or
 automatic discovery registration. `enableSubscriber()` with no argument
-queries the [location store](../../../01-glossary.en.md#location-store)
+queries the [location store](../../../00-foundation/02-glossary.en.md#location-store)
 for every valid publisher descriptor of the same ChannelName and
 connects them all. The overload taking an endpoint configures a manual
 subscriber that only uses the specified endpoint. Configuring both
@@ -178,24 +178,24 @@ and lifecycle generation.
 
 ```ts
 export interface ZLinkMetricAttributes {
-    readonly [name: string]: string | number | boolean;
+ readonly [name: string]: string | number | boolean;
 }
 
 export interface ZLinkMetricHistogram {
-    record(value: number, attributes?: ZLinkMetricAttributes): void;
+ record(value: number, attributes?: ZLinkMetricAttributes): void;
 }
 
 export interface ZLinkMetricInstrument {
-    add(value: number, attributes?: ZLinkMetricAttributes): void;
+ add(value: number, attributes?: ZLinkMetricAttributes): void;
 }
 
 export interface ZLinkMetricsOptions {
-    readonly meterProvider?: ZLinkMeterProvider;
+ readonly meterProvider?: ZLinkMeterProvider;
 }
 
 export interface ZLinkOutboundRouteConfig {
-    targetNodeRid: RoutingId;
-    endpoint: string;
+ targetNodeRid: RoutingId;
+ endpoint: string;
 }
 
 export declare function ZLinkPacket(packetName: string): ClassDecorator;
@@ -203,10 +203,10 @@ export declare function ZLinkPacket(packetName: string): ClassDecorator;
 
 The Node runtime also records Instance Spot observations with
 `ZLinkMeter`. The
-[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
+[Instance Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
 instrument name catalog used in this language is the following six
 values, and the name/kind/unit and attribute restrictions are owned by
-[runtime-metrics](../../../25-runtime-metrics.en.md).
+[runtime-metrics](../../../06-observability/02-runtime-metrics.en.md).
 
 - `zlink.instance_spot.activations`
 - `zlink.instance_spot.activation.duration`
@@ -221,8 +221,8 @@ attached. The standard structured logger records
 `eventId=zlink.message_flow`, the same surface, and `outcome=dropped`.
 Only the bounded type registered at startup is
 recorded in `instanceSpotType`, and
-[Spot ID](../../../01-glossary.en.md#spot-id),
-[owner](../../../01-glossary.en.md#owner) ID, and internal authority
+[Spot ID](../../../00-foundation/02-glossary.en.md#spot-id),
+[owner](../../../00-foundation/02-glossary.en.md#owner) ID, and internal authority
 fields aren't used as metric attributes. Reason and action use the closed
 values from the message-flow tracing contract, but aren't exposed as a public
 DTO or callback type.
@@ -233,19 +233,19 @@ DTO or callback type.
 export declare function ZLinkPublish(packetName?: string): MethodDecorator;
 
 export interface ZLinkPublishCall {
-    metadata(key: string, value: string): this;
-    metadata(metadata: ZLinkMessageMetadata): this;
-    submit(signal?: AbortSignal): Promise<void>;
+ metadata(key: string, value: string): this;
+ metadata(metadata: ZLinkMessageMetadata): this;
+ submit(signal?: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkPublishMessageContext extends ZLinkMessageContext {
-    readonly channelName: string;
-    readonly topic: string;
-    readonly source?: string;
+ readonly channelName: string;
+ readonly topic: string;
+ readonly source?: string;
 }
 
 export interface ZLinkFanoutHandler<TMessage> {
-    handle(message: TMessage, context: ZLinkPublishMessageContext): Promise<void>;
+ handle(message: TMessage, context: ZLinkPublishMessageContext): Promise<void>;
 }
 ```
 
@@ -259,62 +259,62 @@ provider interprets.
 export declare function ZLinkRequest(packetName?: string): MethodDecorator;
 
 export interface ZLinkRequestCall {
-    metadata(key: string, value: string): this;
-    metadata(metadata: ZLinkMessageMetadata): this;
-    timeout(timeoutMs: number): this;
-    submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ metadata(key: string, value: string): this;
+ metadata(metadata: ZLinkMessageMetadata): this;
+ timeout(timeoutMs: number): this;
+ submit<TReply>(signal?: AbortSignal): Promise<TReply>;
 }
 
 export interface ZLinkChannelRequestCall {
-    metadata(key: string, value: string): this;
-    metadata(metadata: ZLinkMessageMetadata): this;
-    timeout(timeoutMs: number): this;
-    submit<TReply>(signal?: AbortSignal): Promise<TReply>;
-    yield<TReply>(signal?: AbortSignal): Promise<TReply>;
+ metadata(key: string, value: string): this;
+ metadata(metadata: ZLinkMessageMetadata): this;
+ timeout(timeoutMs: number): this;
+ submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ yield<TReply>(signal?: AbortSignal): Promise<TReply>;
 }
 
 export interface ZLinkRequestHandler<TRequest, TResponse> {
-    handle(request: TRequest, context: ZLinkMessageContext): Promise<TResponse>;
+ handle(request: TRequest, context: ZLinkMessageContext): Promise<TResponse>;
 }
 
 export interface ZLinkRouteClient {
-    sendToNode(meshName: string, targetNodeRid: RoutingId, message: unknown): ZLinkSendCall;
-    requestToNode(meshName: string, targetNodeRid: RoutingId, request: unknown): ZLinkRequestCall;
-    sendToChannel(channelName: string, message: unknown): ZLinkSendCall;
-    requestToChannel(channelName: string, request: unknown): ZLinkChannelRequestCall;
-    sendToSpot(spotId: SpotId, message: unknown): ZLinkSpotSendCall;
-    requestToSpot(spotId: SpotId, request: unknown): ZLinkSpotRequestCall;
+ sendToNode(meshName: string, targetNodeRid: RoutingId, message: unknown): ZLinkSendCall;
+ requestToNode(meshName: string, targetNodeRid: RoutingId, request: unknown): ZLinkRequestCall;
+ sendToChannel(channelName: string, message: unknown): ZLinkSendCall;
+ requestToChannel(channelName: string, request: unknown): ZLinkChannelRequestCall;
+ sendToSpot(spotId: SpotId, message: unknown): ZLinkSpotSendCall;
+ requestToSpot(spotId: SpotId, request: unknown): ZLinkSpotRequestCall;
 }
 
 export interface ZLinkRouteConfig {
-    channelName: string;
-    endpoint: string;
+ channelName: string;
+ endpoint: string;
 }
 
 export interface ZLinkRouteMeshRuntimeOptions {
-    mesh(meshName: string): ZLinkMeshPlacementRuntimeOptions;
-    channel(channelName: string): ZLinkMeshChannelRuntimeOptions;
+ mesh(meshName: string): ZLinkMeshPlacementRuntimeOptions;
+ channel(channelName: string): ZLinkMeshChannelRuntimeOptions;
 }
 
 export interface ZLinkMeshPlacementRuntimeOptions {
-    placementWeight: number;
+ placementWeight: number;
 }
 
 export interface ZLinkMeshChannelRuntimeOptions {
-    weight: number;
+ weight: number;
 }
 ```
 
 In the following example, `client` is a `ZLinkRouteClient` obtained
 through configuration or dependency injection. It starts a request with
-[ChannelName](../../../01-glossary.en.md#channelname), and the
+[ChannelName](../../../00-foundation/02-glossary.en.md#channelname), and the
 Promise `submit(...)` returns waits until the terminal reply.
 
 ```ts
 const reply = await client
-    .requestToChannel("checkout", request) // the framework selects one of the Server candidates.
-    .timeout(5_000)                        // specifies this request operation's timeout in ms.
-    .submit<CheckoutReply>();              // receives the terminal reply as CheckoutReply.
+ .requestToChannel("checkout", request) // the framework selects one of the Server candidates.
+ .timeout(5_000) // specifies this request operation's timeout in ms.
+ .submit<CheckoutReply>(); // receives the terminal reply as CheckoutReply.
 ```
 
 `ZLinkMeshNodeSocketConfig` doesn't provide a Framework-level message-size
@@ -327,28 +327,28 @@ wire guards.
 
 ```ts
 export interface ZLinkRouteRequestHandler<TRequest, TReply> {
-    handle(request: TRequest, context: ZLinkRouteMessageContext): Promise<TReply>;
+ handle(request: TRequest, context: ZLinkRouteMessageContext): Promise<TReply>;
 }
 
 export interface ZLinkRouteMessageContext extends ZLinkMessageContext {
-    readonly meshName: string;
-    readonly sourceNodeRid: RoutingId;
+ readonly meshName: string;
+ readonly sourceNodeRid: RoutingId;
 }
 
 export interface ZLinkRouteSendHandler<TMessage> {
-    handle(message: TMessage, context: ZLinkRouteMessageContext): Promise<void>;
+ handle(message: TMessage, context: ZLinkRouteMessageContext): Promise<void>;
 }
 
 export declare function ZLinkSend(packetName?: string): MethodDecorator;
 
 export interface ZLinkSendCall {
-    metadata(key: string, value: string): this;
-    metadata(metadata: ZLinkMessageMetadata): this;
-    submit(signal?: AbortSignal): Promise<void>;
+ metadata(key: string, value: string): this;
+ metadata(metadata: ZLinkMessageMetadata): this;
+ submit(signal?: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkSendHandler<TMessage> {
-    handle(message: TMessage, context: ZLinkMessageContext): Promise<void>;
+ handle(message: TMessage, context: ZLinkMessageContext): Promise<void>;
 }
 ```
 
@@ -382,7 +382,7 @@ request timeout — it only uses that STREAM socket's send timeout.
 
 RouteMesh node/Channel/Spot/Actor use the send timeout of the selected
 MeshNode ROUTER, ClientServer uses the client DEALER,
-[classic fanout](../../../01-glossary.en.md#classic-fanout) uses the
+[classic fanout](../../../00-foundation/02-glossary.en.md#classic-fanout) uses the
 publisher socket, and STREAM send/reply use that STREAM socket. A
 bound session uses one framework socket send timeout even if the
 local/remote Actor route changes. If there's no public setting, 1 second
@@ -391,15 +391,15 @@ a finite integer in range `1..2147483647`. `undefined` selects the
 default, and `0`, a negative value, a non-integer value, and exceeding
 the cap are rejected with `ZLinkConfigurationError`.
 
-[Logical Multicast](../../../01-glossary.en.md#logical-multicast)'s
+[Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast)'s
 `ZLinkPublishCall.submit(...)` does a direct handoff to a bounded I/O
 executor. If a worker slot isn't obtained immediately, it waits for
 capacity up to the send timeout. After obtaining the slot but before the
 publish attempt starts, abort and
-[shutdown](../../../01-glossary.en.md#shutdown) can block the
+[shutdown](../../../00-foundation/02-glossary.en.md#shutdown) can block the
 operation from starting. The moment the publish attempt starts is the
 operation commit barrier — an abort after that doesn't interrupt the
-already-confirmed [snapshot](../../../01-glossary.en.md#snapshot)
+already-confirmed [snapshot](../../../00-foundation/02-glossary.en.md#snapshot)
 operation. Once the transaction has started, an individual target
 failure doesn't roll back an already-accepted target or automatically
 retry the whole publish. Per-target admission/failure results of remote
@@ -410,76 +410,76 @@ monitoring. It completes normally even with 0 targets in the snapshot.
 
 ```ts
 export interface ZLinkSession {
-    readonly context: ZLinkSessionContext;
-    onConnected?(context: ZLinkSessionContext): Promise<void>;
-    onDisconnected?(context: ZLinkSessionContext): Promise<void>;
-    onActorBindingReplaced?(context: ZLinkSessionContext, actorId: ActorId): Promise<void>;
-    onError?(context: ZLinkSessionContext, error: ZLinkStreamError): Promise<void>;
-    onDispatch?(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
+ readonly context: ZLinkSessionContext;
+ onConnected?(context: ZLinkSessionContext): Promise<void>;
+ onDisconnected?(context: ZLinkSessionContext): Promise<void>;
+ onActorBindingReplaced?(context: ZLinkSessionContext, actorId: ActorId): Promise<void>;
+ onError?(context: ZLinkSessionContext, error: ZLinkStreamError): Promise<void>;
+ onDispatch?(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
 }
 
 export interface ZLinkSessionActor {
-    readonly actorId: ActorId;
-    readonly ref: ActorRef;
-    relay(payload: ZLinkMessage, signal?: AbortSignal): Promise<void>;
-    relay(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage,
-        signal?: AbortSignal): Promise<void>;
-    notifyDisconnected(signal?: AbortSignal): Promise<void>;
+ readonly actorId: ActorId;
+ readonly ref: ActorRef;
+ relay(payload: ZLinkMessage, signal?: AbortSignal): Promise<void>;
+ relay(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage,
+ signal?: AbortSignal): Promise<void>;
+ notifyDisconnected(signal?: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkSessionActors {
-    readonly bound: readonly ZLinkSessionActor[];
-    bind(actor: ActorRef, signal?: AbortSignal): Promise<ZLinkSessionActor>;
-    bindOrGet(actor: ActorRef, signal?: AbortSignal): Promise<ZLinkSessionActor>;
-    find(actorId: ActorId): ZLinkSessionActor | undefined;
+ readonly bound: readonly ZLinkSessionActor[];
+ bind(actor: ActorRef, signal?: AbortSignal): Promise<ZLinkSessionActor>;
+ bindOrGet(actor: ActorRef, signal?: AbortSignal): Promise<ZLinkSessionActor>;
+ find(actorId: ActorId): ZLinkSessionActor | undefined;
 }
 
 export interface ZLinkSessionClient {
-    send(message: unknown): ZLinkSessionSendCall;
-    reply(message: unknown): ZLinkSessionReplyCall;
+ send(message: unknown): ZLinkSessionSendCall;
+ reply(message: unknown): ZLinkSessionReplyCall;
 }
 
 export interface ZLinkSessionContext {
-    readonly sessionId: string;
-    readonly routingId?: RoutingId;
-    readonly localAddr?: string;
-    readonly remoteAddr?: string;
-    readonly client: ZLinkSessionClient;
-    readonly actors: ZLinkSessionActors;
-    readonly handlers: ZLinkSessionHandlerRegistry;
-    close(signal?: AbortSignal): Promise<void>;
+ readonly sessionId: string;
+ readonly routingId?: RoutingId;
+ readonly localAddr?: string;
+ readonly remoteAddr?: string;
+ readonly client: ZLinkSessionClient;
+ readonly actors: ZLinkSessionActors;
+ readonly handlers: ZLinkSessionHandlerRegistry;
+ close(signal?: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkSessionDispatchContext {
-    readonly packetName: string;
-    readonly metadata: ZLinkMessageMetadata;
-    readonly canReply: boolean;
+ readonly packetName: string;
+ readonly metadata: ZLinkMessageMetadata;
+ readonly canReply: boolean;
 }
 
 export interface ZLinkSessionFactory<TSession extends ZLinkSession = ZLinkSession> {
-    create(context: ZLinkSessionContext): Promise<TSession>;
+ create(context: ZLinkSessionContext): Promise<TSession>;
 }
 
 export interface ZLinkSessionHandlerRegistry {
-    addHandler<THandler>(handlerType: Type<THandler>): this;
-    tryHandle(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<boolean>;
+ addHandler<THandler>(handlerType: Type<THandler>): this;
+ tryHandle(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<boolean>;
 }
 
 export interface ZLinkSessionPacketHandler<TSessionContext, TMessage = ZLinkMessage> {
-    handle(context: TSessionContext, dispatch: ZLinkSessionDispatchContext, message: TMessage): Promise<void>;
+ handle(context: TSessionContext, dispatch: ZLinkSessionDispatchContext, message: TMessage): Promise<void>;
 }
 
 export interface ZLinkSessionReplyCall {
-    compress(enabled?: boolean): this;
-    submit(signal?: AbortSignal): Promise<void>;
+ compress(enabled?: boolean): this;
+ submit(signal?: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkSessionSendCall {
-    metadata(key: string, value: string): this;
-    metadata(metadata: ZLinkMessageMetadata): this;
-    compress(enabled?: boolean): this;
-    timeout(timeoutMs: number): this;
-    submit(signal?: AbortSignal): Promise<void>;
+ metadata(key: string, value: string): this;
+ metadata(metadata: ZLinkMessageMetadata): this;
+ compress(enabled?: boolean): this;
+ timeout(timeoutMs: number): this;
+ submit(signal?: AbortSignal): Promise<void>;
 }
 ```
 
@@ -488,7 +488,7 @@ Actor is bound to a new session. Before the callback, the framework moves the se
 rejects new inbound application dispatch. The application may notify the client through
 `context.client.send(...)`, but does not call `context.close()`. After a successful or failed callback
 terminal, the framework schedules a non-blocking timer and releases the turn immediately. The timer
-revalidates the exact retired session identity and closes the connection at 100 ms; it never sleeps
+revalidates the retired session identity and closes the connection at 100 ms; it never sleeps
 or occupies a session serial lane or worker. The new bind does not wait for the callback or close.
 
 `ZLinkSessionSendCall.timeout(...)` only shortens this send's admission wait.
@@ -503,12 +503,12 @@ After bind, relay/request relay and `notifyDisconnected(...)` use the
 per-Actor stored route and don't query the Location Store per message. A
 physical disconnect has the framework perform an automatic all-settled
 notification to every current binding, running the Spot callback at
-most once per exact binding identity. `notifyDisconnected(...)` is a
+most once per specified binding identity. `notifyDisconnected(...)` is a
 logical notification while the connection is kept, and waits for the
-callback terminal. The exact binding callback runs at most once, then the
+callback terminal. The binding callback runs at most once, then the
 binding is committed as a tombstone and removed after terminal. The physical
 STREAM connection and Actor/Spot membership are kept, and no new public Unbind
-API is provided. Rebind doesn't reuse an old exact binding identity for another
+API is provided. Rebind doesn't reuse an old specified binding identity for another
 Actor or generation. It registers the new identity first, then runs the old
 callback at most once and tombstones the old binding. Callback failure is
 recorded as diagnostics but doesn't remove the new binding or restore the old

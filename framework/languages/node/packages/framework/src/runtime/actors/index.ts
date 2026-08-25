@@ -414,7 +414,10 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
 
   requireRelocationActorFactory(actorType: string): void {
     if (!this.options.actorFactories.has(actorType)) {
-      throw new ZLinkConfigurationException(`Actor factory '${actorType}' is not registered.`);
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
+        `Actor factory '${actorType}' is not registered.`
+      );
     }
   }
 

@@ -1,6 +1,6 @@
 # .NET Common Runtime Public Interface
 
-[.NET exact interface table of contents](README.en.md)
+[.NET per-language interface table of contents](README.en.md)
 
 ## 1. Common Metadata And Call
 
@@ -16,64 +16,64 @@ outcome.
 ```csharp
 public sealed class ZLinkMessage
 {
-    public static ZLinkMessage Empty { get; }
-    public string? ContentType { get; }
-    public bool IsEmpty { get; }
-    public ZlinkStreamCodec? StreamCodec { get; }
-    public static ZLinkMessage From<T>(T value);
-    public T Decode<T>();
+ public static ZLinkMessage Empty { get; }
+ public string? ContentType { get; }
+ public bool IsEmpty { get; }
+ public ZlinkStreamCodec? StreamCodec { get; }
+ public static ZLinkMessage From<T>(T value);
+ public T Decode<T>();
 }
 
 public sealed class ZLinkMessageMetadata
 {
-    public ZLinkMessageMetadata(
-        IReadOnlyDictionary<string, string> values);
-    public static ZLinkMessageMetadata Empty { get; }
-    public IReadOnlyDictionary<string, string> Values { get; }
-    public string? Find(string key);
+ public ZLinkMessageMetadata(
+ IReadOnlyDictionary<string, string> values);
+ public static ZLinkMessageMetadata Empty { get; }
+ public IReadOnlyDictionary<string, string> Values { get; }
+ public string? Find(string key);
 }
 
 public interface IZLinkSendCall : IZLinkMetadataCall<IZLinkSendCall>
 {
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+ ValueTask Async(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkRequestCall : IZLinkMetadataCall<IZLinkRequestCall>
 {
-    IZLinkRequestCall Timeout(TimeSpan timeout);
-    ValueTask<TReply> Async<TReply>(
-        CancellationToken cancellationToken = default);
-    ValueTask<TReply> Yield<TReply>(
-        CancellationToken cancellationToken = default);
+ IZLinkRequestCall Timeout(TimeSpan timeout);
+ ValueTask<TReply> Async<TReply>(
+ CancellationToken cancellationToken = default);
+ ValueTask<TReply> Yield<TReply>(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkPublishCall : IZLinkMetadataCall<IZLinkPublishCall>
 {
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+ ValueTask Async(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkFanoutPublishCall
 {
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+ ValueTask Async(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkWorkerCall<TResult>
 {
-    IZLinkWorkerCall<TResult> Timeout(TimeSpan timeout);
-    void Submit(CancellationToken cancellationToken = default);
-    ValueTask<TResult> Async(CancellationToken cancellationToken = default);
-    ValueTask<TResult> Yield(CancellationToken cancellationToken = default);
+ IZLinkWorkerCall<TResult> Timeout(TimeSpan timeout);
+ void Submit(CancellationToken cancellationToken = default);
+ ValueTask<TResult> Async(CancellationToken cancellationToken = default);
+ ValueTask<TResult> Yield(CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkWorkerOptions
 {
-    int MinThreads { get; set; }
-    int MaxThreads { get; set; }
-    TimeSpan IdleTimeout { get; set; }
-    int MaxQueueLength { get; set; }
+ int MinThreads { get; set; }
+ int MaxThreads { get; set; }
+ TimeSpan IdleTimeout { get; set; }
+ int MaxQueueLength { get; set; }
 }
 ```
 
@@ -102,10 +102,10 @@ targets.
 
 If `CancellationToken` is triggered before admission, it completes
 exactly once with a cancelled `ValueTask`. Pre-cancellation doesn't start
-runtime admission. If admission/timeout/[shutdown](../../../01-glossary.en.md#shutdown)
+runtime admission. If admission/timeout/[shutdown](../../../00-foundation/02-glossary.en.md#shutdown)
 and cancellation race, only one atomic terminal winner completes, and
 late admission isn't created after a timeout or cancellation. For
-[Logical Multicast](../../../01-glossary.en.md#logical-multicast), only
+[Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast), only
 cancellation before publish starts blocks the operation from starting.
 Once publish has started, submission to the selected target set proceeds
 to completion.
@@ -113,7 +113,7 @@ to completion.
 An invalid argument/handle/state, a duplicate terminal, and an
 already-used reply token are handled as .NET exceptional completion. An
 operation isn't automatically resubmitted after a timeout or
-cancellation. The exact signature of `IZLinkMetadataCall<TSelf>` and the
+cancellation. The signature of `IZLinkMetadataCall<TSelf>` and the
 1024-byte upper bound are owned by
 [Topology Configuration §6](03-configuration-topology.en.md#6-messaging-metadata).
 Setting the same key multiple times sends the last value. A reply doesn't
@@ -121,7 +121,7 @@ automatically copy request metadata.
 
 The worker call's `Submit`, `Async`, and `Yield` follow the completion
 semantics of
-[Async Execution Policy §1.2](../../../05-async-execution-policy.en.md#12-worker-offload).
+[Async Execution Policy §1.2](../../../01-execution/02-handler-turn-and-execution-gate.en.md).
 Worker options can only be set before the host starts.
 
 The `Yield` terminal only exists on `RequestToChannel`,
@@ -146,31 +146,31 @@ The minimal attribute surface used for assembly scanning is as follows.
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = true)]
 public sealed class ZLinkHandlerGroupAttribute(string groupName) : Attribute
 {
-    public string GroupName { get; } = groupName;
+ public string GroupName { get; } = groupName;
 }
 
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class ZLinkRequestAttribute : Attribute
 {
-    public string? PacketName { get; init; }
+ public string? PacketName { get; init; }
 }
 
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class ZLinkSendAttribute : Attribute
 {
-    public string? PacketName { get; init; }
+ public string? PacketName { get; init; }
 }
 
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class ZLinkPublishAttribute : Attribute
 {
-    public string? PacketName { get; init; }
+ public string? PacketName { get; init; }
 }
 
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct)]
 public sealed class ZLinkPacketAttribute(string packetName) : Attribute
 {
-    public string PacketName { get; } = packetName;
+ public string PacketName { get; } = packetName;
 }
 ```
 
@@ -186,74 +186,74 @@ doesn't change with codec selection.
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class ZLinkSpotRequestAttribute : Attribute
 {
-    public string? PacketName { get; init; }
+ public string? PacketName { get; init; }
 }
 
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class ZLinkSpotPacketHandlerAttribute(string packetName) : Attribute
 {
-    public string PacketName { get; } = packetName;
+ public string PacketName { get; } = packetName;
 }
 
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class ZLinkSpotRequestHandlerAttribute(string packetName) : Attribute
 {
-    public string PacketName { get; } = packetName;
+ public string PacketName { get; } = packetName;
 }
 
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class ZLinkSpotSubscriptionAttribute : Attribute
 {
-    public ZLinkSpotSubscriptionAttribute(
-        string spotNodeName,
-        string channelName,
-        string topic);
-    public string SpotNodeName { get; }
-    public string ChannelName { get; }
-    public string Topic { get; }
+ public ZLinkSpotSubscriptionAttribute(
+ string spotNodeName,
+ string channelName,
+ string topic);
+ public string SpotNodeName { get; }
+ public string ChannelName { get; }
+ public string Topic { get; }
 }
 
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class ZLinkSpotSubscriptionHandlerAttribute : Attribute
 {
-    public ZLinkSpotSubscriptionHandlerAttribute(
-        string channelName,
-        string topic);
-    public string ChannelName { get; }
-    public string Topic { get; }
+ public ZLinkSpotSubscriptionHandlerAttribute(
+ string channelName,
+ string topic);
+ public string ChannelName { get; }
+ public string Topic { get; }
 }
 
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class ZLinkSpotActorSendAttribute : Attribute
 {
-    public string? PacketName { get; init; }
+ public string? PacketName { get; init; }
 }
 
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class ZLinkSpotActorSendHandlerAttribute(string packetName) : Attribute
 {
-    public string PacketName { get; } = packetName;
+ public string PacketName { get; } = packetName;
 }
 
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class ZLinkSpotActorRequestAttribute : Attribute
 {
-    public string? PacketName { get; init; }
+ public string? PacketName { get; init; }
 }
 
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class ZLinkSpotActorRequestHandlerAttribute(string packetName) : Attribute
 {
-    public string PacketName { get; } = packetName;
+ public string PacketName { get; } = packetName;
 }
 
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class ZLinkSpotTimerHandlerAttribute(
-    string name,
-    double periodMilliseconds) : Attribute
+ string name,
+ double periodMilliseconds) : Attribute
 {
-    public string Name { get; } = name;
-    public double PeriodMilliseconds { get; } = periodMilliseconds;
+ public string Name { get; } = name;
+ public double PeriodMilliseconds { get; } = periodMilliseconds;
 }
 
 [AttributeUsage(AttributeTargets.Method)]

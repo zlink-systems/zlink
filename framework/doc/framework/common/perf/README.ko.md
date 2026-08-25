@@ -48,14 +48,14 @@ framework public API와 stream connector public API를 사용해서, 같은 서�
 | actor client(no-bind) → actor echo | session 없는 server 측 caller가 `ActorRef`로 직접 send/request하는 비용 측정 | 4 KiB | 1 KiB |
 | publish → subscriber fanout | publisher 하나가 여러 subscriber에게 이벤트를 뿌릴 때 fanout 처리량과 delivery latency 측정 | 1 KiB | 4 KiB |
 
-`publish → subscriber fanout` 축은 `framework/doc/framework/common/spec/server/03-interaction-model.ko.md` §3.3과
-`framework/doc/framework/common/spec/server/07-channel-topology.ko.md`가 정의하는 `publish-subscribe` 공용
+`publish → subscriber fanout` 축은 `framework/doc/framework/common/spec/server/00-foundation/04-interaction-model.ko.md` §3.3과
+`framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md`가 정의하는 `publish-subscribe` 공용
 상호작용 모델, 그리고 `framework/doc/framework/common/e2e/config-3-pubsub.ko.md`의 fanout 시나리오를
 기준으로 한다. `publish-subscribe`는 이미 5개 언어 모두 구현된 공개 계약이므로, 이 축은 언어별
 스킵 없이 다른 다섯 축과 동일하게 필수로 구현한다.
 
 `actor client(no-bind) → actor echo` 축은
-`framework/doc/framework/common/spec/server/14-actor-model.ko.md` 6.1절의 actor client 계약과
+`framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md` 6.1절의 actor client 계약과
 `framework/doc/framework/common/e2e/config-9-to-actor-messaging.ko.md` 시나리오를 기준으로 한다.
 공개 actor client를 제공하는 모든 framework 언어는 이 축을 같은 필수 perf 범위로 유지한다.
 
@@ -1325,9 +1325,9 @@ runner를 다른 host 또는 여러 host에 분산한다.
 
 이 절은 Core의 ordinary queue byte budget과 Framework host instance의 queued application job
 상한을 production workload에서 측정하는 방법을 정의한다. 설정값·예외와 status reset 계약은
-[Framework API §2.1](../spec/server/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다),
-[runtime monitoring](../spec/server/24-runtime-monitoring.ko.md)과
-[runtime metrics](../spec/server/25-runtime-metrics.ko.md)을 기준으로 한다. Perf fixture는 계약을 다시
+[Framework API §2.1](../spec/server/00-foundation/06-framework-api.ko.md#3-core-memory-budget과-application-job-queue-설정),
+[runtime monitoring](../spec/server/06-observability/01-runtime-monitoring.ko.md)과
+[runtime metrics](../spec/server/06-observability/02-runtime-metrics.ko.md)을 기준으로 한다. Perf fixture는 계약을 다시
 정의하지 않고 그 값과 경계를 검증한다.
 
 ### 23.1 고정할 workload와 CPU matrix

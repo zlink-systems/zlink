@@ -17,13 +17,13 @@ title: "1. 개요 · Node/TypeScript"
 
 # 1. 개요
 
-> **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/02-overview.ko.md)와
+> **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)와
 > [언어별 공개 계약 목차](../../../common/spec/server/languages/README.ko.md)가 소유한다.
 
 > 이 문서는 `Node.js` 가이드의 진입점이다. 가이드는 Node.js 개발자가
 > ZLink Framework의 기능을 **읽고 바로 따라 쓸 수 있도록** 개념과 사용법을
 > 직접 설명한다. 개념의 **언어 중립 정식 정의**는 [공통 스펙
-> 개요](../../../common/spec/server/02-overview.ko.md)가, `Node.js` public API의 **정식 계약**은
+> 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)가, `Node.js` public API의 **정식 계약**은
 > [Node.js exact interface 목차](../../../common/spec/server/languages/node/interfaces/README.ko.md) 문서가 다룬다. 두 표기가 어긋나면
 > spec이 우선이다.
 

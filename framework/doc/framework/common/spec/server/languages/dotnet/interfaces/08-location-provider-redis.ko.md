@@ -1,6 +1,6 @@
 # .NET 공식 Redis Store 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md) · [Provider SPI](08-authority-relocation.ko.md) ·
+[.NET 언어별 interface 목차](README.ko.md) · [Provider SPI](08-authority-relocation.ko.md) ·
 [Location 설정과 운영](08-location-maintenance.ko.md)
 
 ## 1. 범위

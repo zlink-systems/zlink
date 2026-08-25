@@ -153,7 +153,10 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
     });
     client.connectPeer(server.topology.localDescriptor().advertisedEndpoint, server.topology.localDescriptor());
     server.connectPeer(client.topology.localDescriptor().advertisedEndpoint, client.topology.localDescriptor());
-    for (let turn = 0; turn < 300
+    //  turn 예산은 CPU 부하에 민감하다 — 한 turn이 하는 일이 줄어들면 같은 예산으로
+    //  admission이 끝나지 않는다. 검증 대상은 준비가 되느냐이지 몇 turn에 되느냐가
+    //  아니므로 예산을 넉넉히 둔다.
+    for (let turn = 0; turn < 3000
       && (!client.isPeerRouteReady('channel-server') || !server.isPeerRouteReady('channel-client')); turn += 1) {
       await client.drainMonitorEvents(); await server.drainMonitorEvents();
       await client.announceExpectedPeers(); await server.announceExpectedPeers();
@@ -2627,11 +2630,12 @@ test('REG-003 ZLinkFrameworkRuntimeHost dispatches manual channel handlers and r
       { value: 'missing-event' },
       () => hasDispatchEvent(
         dispatchEvents,
-        'publish',
+        'send',
         'no_handler',
         'drop',
         'ManualMissingEvent',
-        'manual-events'
+        'manual-events',
+        'classic_fanout'
       )
     );
 
@@ -2654,11 +2658,12 @@ test('REG-003 ZLinkFrameworkRuntimeHost dispatches manual channel handlers and r
       ) &&
       hasDispatchEvent(
         dispatchEvents,
-        'publish',
+        'send',
         'no_handler',
         'drop',
         'ManualMissingEvent',
-        'manual-events'
+        'manual-events',
+        'classic_fanout'
       ),
     1000);
   } finally {
@@ -4391,14 +4396,14 @@ test('channel dispatch failures emit one logger-provider record per failure', ()
     });
     reporter.report({
       surface: 'channel',
-      messageKind: 'publish',
+      messageKind: 'send',
       reason: 'decode_error',
       action: 'drop',
       packetName: 'BrokenPublish'
     });
     reporter.report({
       surface: 'channel',
-      messageKind: 'publish',
+      messageKind: 'send',
       reason: 'handler_exception',
       action: 'drop',
       packetName: 'ThrowingPublish',
@@ -4830,9 +4835,14 @@ function commonFanoutSequence(first, second, third) {
     .find((sequence) => secondSequences.has(sequence) && thirdSequences.has(sequence));
 }
 
-function hasDispatchEvent(events, messageKind, reason, action, packetName, channelName) {
+//  surface 기본값은 channel이다. Classic fanout subscriber의 handler 부재는
+//  surface=classic_fanout, message_kind=send로 기록한다 — Message flow tracing 3.1과
+//  그 뒤의 Classic fanout 규정. message_kind 허용 값에 publish는 없다.
+function hasDispatchEvent(
+  events, messageKind, reason, action, packetName, channelName, surface = 'channel'
+) {
   return events.some((event) =>
-    event.surface === 'channel' &&
+    event.surface === surface &&
     event.messageKind === messageKind &&
     event.outcome === 'failed' &&
     event.reason === reason &&

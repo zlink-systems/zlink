@@ -5,6 +5,7 @@
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
 #include "runtime/timers/async_delay.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -13,12 +14,14 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 
 namespace
 {
 
 thread_local int native_await_ambient_value = 0;
+thread_local bool inside_native_completion = false;
 
 struct ambient_guard_t
 {
@@ -132,13 +135,26 @@ zlink::framework::task_t<int> await_native_binding_result (
   const std::shared_ptr<native_async_state_t> &state,
   const std::shared_ptr<test_serial_turn_t> &turn,
   std::atomic<int> &observed_ambient,
-  std::atomic<bool> &observed_serial_turn)
+  std::atomic<bool> &observed_serial_turn,
+  std::atomic<bool> &resumed_inside_completion)
 {
     const int value = co_await zlink::detail::async_result_access_t::make<int> (state);
+    resumed_inside_completion.store (
+      inside_native_completion, std::memory_order_release);
     observed_ambient.store (native_await_ambient_value, std::memory_order_release);
     observed_serial_turn.store (
       zlink::framework::detail::capture_current_serial_turn () == turn,
       std::memory_order_release);
+    co_return value;
+}
+
+zlink::framework::task_t<int> await_native_binding_outside_completion (
+  const std::shared_ptr<native_async_state_t> &state,
+  std::atomic<bool> &resumed_inside_completion)
+{
+    const int value = co_await zlink::detail::async_result_access_t::make<int> (state);
+    resumed_inside_completion.store (
+      inside_native_completion, std::memory_order_release);
     co_return value;
 }
 
@@ -372,6 +388,7 @@ int main ()
 
     const zlink::framework::detail::ambient_context_hooks_t test_ambient_hooks{
       &capture_test_ambient, &enter_test_ambient};
+    zlink::framework::runtime::configure_handler_coroutine_executor (1);
     zlink::framework::detail::ambient_context_hooks.store (
       &test_ambient_hooks, std::memory_order_release);
     native_await_ambient_value = 42;
@@ -379,25 +396,44 @@ int main ()
     auto serial_turn = std::make_shared<test_serial_turn_t> ();
     std::atomic<int> observed_ambient{0};
     std::atomic<bool> observed_serial_turn{false};
+    std::atomic<bool> serial_resumed_inside_completion{true};
     auto native_task = [&] {
         zlink::framework::detail::serial_turn_scope_t scope (serial_turn);
         return await_native_binding_result (
           native_state, serial_turn, observed_ambient,
-          observed_serial_turn);
+          observed_serial_turn, serial_resumed_inside_completion);
     } ();
     std::thread completion_thread ([native_state] {
         native_await_ambient_value = 999;
+        inside_native_completion = true;
         native_state->complete (700);
+        inside_native_completion = false;
     });
     completion_thread.join ();
     if (native_task.result ().value () != 700
         || observed_ambient.load (std::memory_order_acquire) != 42
         || !observed_serial_turn.load (std::memory_order_acquire)
+        || serial_resumed_inside_completion.load (std::memory_order_acquire)
         || serial_turn->released ()) {
         return 17;
     }
     zlink::framework::detail::ambient_context_hooks.store (
       nullptr, std::memory_order_release);
+
+    auto unowned_native_state = std::make_shared<native_async_state_t> ();
+    std::atomic<bool> resumed_inside_completion{true};
+    auto unowned_native_task = await_native_binding_outside_completion (
+      unowned_native_state, resumed_inside_completion);
+    std::thread unowned_completion_thread ([unowned_native_state] {
+        inside_native_completion = true;
+        unowned_native_state->complete (701);
+        inside_native_completion = false;
+    });
+    unowned_completion_thread.join ();
+    if (unowned_native_task.result ().value () != 701
+        || resumed_inside_completion.load (std::memory_order_acquire)) {
+        return 18;
+    }
 
     /* Regression pin for the request_erased retry loop
      * (actor_client.cpp): the admission-retry delay used to
@@ -411,14 +447,87 @@ int main ()
     auto delayed_retry = await_async_delay (std::chrono::milliseconds (150), 77);
     const auto delay_call_returned = std::chrono::steady_clock::now ();
     if (delay_call_returned - delay_call_start >= std::chrono::milliseconds (100)) {
-        return 18;
+        return 19;
     }
     if (delayed_retry.result ().value () != 77) {
-        return 19;
+        return 20;
     }
     if (std::chrono::steady_clock::now () - delay_call_start
         < std::chrono::milliseconds (140)) {
-        return 20;
+        return 21;
+    }
+
+    auto abandoned_scheduler =
+      zlink::framework::detail::capture_runtime_native_continuation_scheduler ();
+    std::atomic<bool> abandoned_shutdown_done{false};
+    std::thread abandoned_shutdown ([&] {
+        zlink::framework::runtime::shutdown_handler_coroutine_executor ();
+        abandoned_shutdown_done.store (true, std::memory_order_release);
+    });
+    abandoned_shutdown.join ();
+    if (!abandoned_shutdown_done.load (std::memory_order_acquire)) {
+        return 22;
+    }
+    bool rejected_after_shutdown = false;
+    bool rejected_work_ran = false;
+    try {
+        abandoned_scheduler ([&] { rejected_work_ran = true; });
+    }
+    catch (const std::runtime_error &) {
+        rejected_after_shutdown = true;
+    }
+    abandoned_scheduler = {};
+    if (!rejected_after_shutdown || rejected_work_ran) {
+        return 23;
+    }
+
+    zlink::framework::runtime::configure_handler_coroutine_executor (1);
+    auto queued_scheduler =
+      zlink::framework::detail::capture_runtime_native_continuation_scheduler ();
+    std::mutex queued_mutex;
+    std::condition_variable queued_changed;
+    bool queued_started = false;
+    bool release_queued = false;
+    queued_scheduler ([&] {
+        std::unique_lock lock (queued_mutex);
+        queued_started = true;
+        queued_changed.notify_all ();
+        queued_changed.wait (lock, [&] { return release_queued; });
+    });
+    queued_scheduler = {};
+    {
+        std::unique_lock lock (queued_mutex);
+        if (!queued_changed.wait_for (
+              lock, std::chrono::seconds (1), [&] { return queued_started; })) {
+            release_queued = true;
+            queued_changed.notify_all ();
+            zlink::framework::runtime::shutdown_handler_coroutine_executor ();
+            return 24;
+        }
+    }
+    std::atomic<bool> queued_shutdown_done{false};
+    std::thread queued_shutdown ([&] {
+        zlink::framework::runtime::shutdown_handler_coroutine_executor ();
+        queued_shutdown_done.store (true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for (std::chrono::milliseconds (25));
+    if (queued_shutdown_done.load (std::memory_order_acquire)) {
+        {
+            std::lock_guard lock (queued_mutex);
+            release_queued = true;
+        }
+        queued_changed.notify_all ();
+        queued_shutdown.join ();
+        return 25;
+    }
+    {
+        std::lock_guard lock (queued_mutex);
+        release_queued = true;
+    }
+    queued_changed.notify_all ();
+    queued_shutdown.join ();
+    if (!queued_shutdown_done.load (std::memory_order_acquire)) {
+        return 26;
     }
 
     return 0;

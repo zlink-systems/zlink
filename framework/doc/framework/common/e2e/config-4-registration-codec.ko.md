@@ -25,7 +25,7 @@ Framework registry, encoded payload나 private dispatch table을 직접 읽지 �
 
 Runtime reflection을 제공하지 않는 C++는 compile-time type과 explicit builder registration을 사용한다.
 RC-A1의 scan을 C++에서 흉내 내기 위해 reflection helper를 추가하지 않는다. 이는 기능 누락이 아니라
-[Framework API §8](../spec/server/06-framework-api.ko.md)이 정한 언어 표현 차이다.
+[Framework API §8](../spec/server/00-foundation/06-framework-api.ko.md)이 정한 언어 표현 차이다.
 
 ## 2. 배포 구성
 
@@ -75,8 +75,8 @@ handler가 explicit registration 없이 지정한 packet을 처리하는가.
   범위 밖의 대조 handler는 실행되지 않는다. 해당 metadata 표면이 없는 언어는 그 variant만
   `not-applicable`로 기록하며 대체 helper를 추가하지 않는다. C++ runner는 scan scenario 전체를
   `not-applicable`로 기록하고 RC-A3을 필수로 실행한다.
-- 세부 동작: [Framework API §8](../spec/server/06-framework-api.ko.md)의 runtime
-  reflection과 C++ explicit registration 경계, [Public contract governance](../spec/server/00-public-contract-governance.ko.md)의
+- 세부 동작: [Framework API §8](../spec/server/00-foundation/06-framework-api.ko.md)의 runtime
+  reflection과 C++ explicit registration 경계, [Public contract governance](../spec/server/00-foundation/01-public-contract-governance.ko.md)의
   언어별 표현을 검증한다.
 
 #### RC-A3 Handler를 명시적으로 등록한다
@@ -92,7 +92,7 @@ Explicit registration은 reflection 유무와 관계없이 handler type과 dispa
 - 절차: Client가 explicit variant의 request와 send를 각각 한 번 보낸다.
 - 검증: Request는 입력 marker와 일치하는 reply를 받고 send handler는 한 번 실행된다. Scan이나 private
   registry mutation 없이 결과가 나온다.
-- 세부 동작: [Framework API §8](../spec/server/06-framework-api.ko.md)의 explicit
+- 세부 동작: [Framework API §8](../spec/server/00-foundation/06-framework-api.ko.md)의 explicit
   registration을 검증한다.
 
 #### RC-A4 Dispatch마다 dependency scope를 분리한다
@@ -109,7 +109,7 @@ request 사이에 공유되면 한 request의 mutable state가 다른 request에
 - 검증: Scoped dependency ID는 20개가 모두 다르고 singleton ID는 모두 같다. 해당 언어의 public DI가
   scope disposal 관측을 제공하면 정상·handler 실패·cancellation 반복에서 scope가 각각 한 번 정리된다.
   Public disposal 관측이 없는 언어는 instance 분리까지만 검증한다.
-- 세부 동작: [Framework API §8.2](../spec/server/06-framework-api.ko.md)의
+- 세부 동작: [Framework API §8.2](../spec/server/00-foundation/06-framework-api.ko.md)의
   Channel dispatch scope를 검증한다.
 
 #### RC-A5 Filter 순서와 short-circuit 결과
@@ -127,7 +127,7 @@ request 사이에 공유되면 한 request의 mutable state가 다른 request에
 - 검증: 정상 evidence 순서는 `F1-before, F2-before, F3-before, handler, F3-after, F2-after,
   F1-after`이며 handler는 한 번 실행된다. Short-circuit request는 `Rejected`로 끝나고 `F3`와 handler는
   실행되지 않는다.
-- 세부 동작: [Framework API §8.1](../spec/server/06-framework-api.ko.md)의 filter 순서와
+- 세부 동작: [Framework API §8.1](../spec/server/00-foundation/06-framework-api.ko.md)의 filter 순서와
   request short-circuit 계약을 검증한다.
 
 #### RC-A6 중복 dispatch key를 startup에서 거부한다
@@ -146,8 +146,8 @@ Framework는 첫 message가 올 때까지 미루지 않고 startup에서 구성�
   packet name만 다른 정상 대조 host를 시작한다.
 - 검증: Negative host는 listener와 ready status를 공개하지 않고 configuration error로 종료된다. 정상
   대조 host는 ready가 되고 두 packet을 각각 한 번 처리한다.
-- 세부 동작: [Framework API §8](../spec/server/06-framework-api.ko.md)과
-  [§14](../spec/server/06-framework-api.ko.md)의 중복 registration 검증을 확인한다.
+- 세부 동작: [Framework API §8](../spec/server/00-foundation/06-framework-api.ko.md)과
+  [§14](../spec/server/00-foundation/06-framework-api.ko.md)의 중복 registration 검증을 확인한다.
 
 ### Track B — Typed payload codec 선택
 
@@ -164,8 +164,8 @@ serializer 책임이 호출자에게 노출된다.
 - 절차: Nullable field, string enum, signed 64-bit 값과 bytes를 포함한 request와 send를 각각 보낸다.
 - 검증: Handler가 모든 application 값을 복원하고 request reply와 send evidence가 입력과 일치한다.
   Message type별 codec registration은 `0`건이다.
-- 세부 동작: [Framework API §9](../spec/server/06-framework-api.ko.md)과
-  [message model §1](../spec/server/04-message-model.ko.md)의 기본 typed JSON 계약을 검증한다.
+- 세부 동작: [Framework API §9](../spec/server/00-foundation/06-framework-api.ko.md)과
+  [message model §1](../spec/server/00-foundation/05-message-model.ko.md)의 기본 typed JSON 계약을 검증한다.
 
 #### RC-B2 Root에 등록한 typed codec extension을 사용한다
 
@@ -183,7 +183,7 @@ root에 한 번 등록한다. Payload type과 extension이 일치하면 Framewor
 - 검증: 각 reply와 send evidence의 application 값이 입력과 일치한다. Extension의 encode·decode callback이
   message마다 한 번 실행된다. Handler 호출부에 codec option을 전달하지 않고 packet name이나 Channel
   설정을 codec 선택 값으로 사용하지 않는다.
-- 세부 동작: [Framework API §9](../spec/server/06-framework-api.ko.md)의 root codec extension과 type 기반
+- 세부 동작: [Framework API §9](../spec/server/00-foundation/06-framework-api.ko.md)의 root codec extension과 type 기반
   extension 선택을 검증한다.
 
 #### RC-B4 한 root에서 여러 codec을 함께 사용한다
@@ -201,7 +201,7 @@ root에 한 번 등록한다. Payload type과 extension이 일치하면 Framewor
   보낸다.
 - 검증: 60개 request와 3개 send의 application 값이 모두 보존된다. Extension callback count는 해당
   payload type의 message 수와 일치하며 JSON message에서는 두 extension이 실행되지 않는다.
-- 세부 동작: [Framework API §9](../spec/server/06-framework-api.ko.md)의 type 기반 codec 선택과 JSON
+- 세부 동작: [Framework API §9](../spec/server/00-foundation/06-framework-api.ko.md)의 type 기반 codec 선택과 JSON
   fallback을 검증한다.
 
 #### RC-B5 수신 codec이 없으면 `ProtocolError`로 끝난다
@@ -219,8 +219,8 @@ Envelope가 non-JSON content type을 명시했는데 receiver에 일치하는 ex
 - 절차: Protobuf request를 한 번 보낸 뒤 JSON request를 한 번 보낸다.
 - 검증: Protobuf request는 `ProtocolError`로 한 번만 끝나고 Protobuf handler는 실행되지 않는다. JSON
   request는 정상 reply를 받는다. Receiver가 non-JSON payload를 JSON으로 fallback하면 실패다.
-- 세부 동작: [Framework API §9](../spec/server/06-framework-api.ko.md)과
-  [오류 모델 §5](../spec/server/32-framework-error-model.ko.md)를 검증한다.
+- 세부 동작: [Framework API §9](../spec/server/00-foundation/06-framework-api.ko.md)과
+  [오류 모델 §5](../spec/server/00-foundation/07-framework-error-model.ko.md)를 검증한다.
 
 #### RC-B6 다섯 언어가 JSON application 값을 같게 복원한다
 
@@ -240,7 +240,7 @@ Envelope가 non-JSON content type을 명시했는데 receiver에 일치하는 ex
 - 검증: Golden request는 같은 typed application 값으로 복원되고 reply도 같은 의미를 가진다. Unknown
   field는 무시한다. Duplicate field와 required field 누락은 handler 전에 `ProtocolError`로 끝난다.
   Re-encode한 JSON bytes, whitespace와 member order의 일치는 요구하지 않는다.
-- 세부 동작: [Message model §2](../spec/server/04-message-model.ko.md)의
+- 세부 동작: [Message model §2](../spec/server/00-foundation/05-message-model.ko.md)의
   `framework-json-v1` 언어 간 의미를 검증한다.
 
 ## 5. 완료 조건

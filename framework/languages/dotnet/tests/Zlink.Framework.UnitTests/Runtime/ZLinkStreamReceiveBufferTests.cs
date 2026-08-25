@@ -46,42 +46,42 @@ public sealed class ZLinkStreamReceiveBufferTests
     }
 
     [Fact]
-    public void Buffer_retains_one_raw_credit_until_every_derived_frame_finishes()
+    public void Buffer_retains_one_payload_owner_until_every_derived_frame_finishes()
     {
         var first = ZLinkStreamFrameCodec.Encode("h1"u8, "p1"u8);
         var second = ZLinkStreamFrameCodec.Encode("h2"u8, "p2"u8);
         var combined = first.Concat(second).ToArray();
-        var credit = new CountingCreditOwner();
+        var payloadOwner = new CountingPayloadOwner();
         using var buffer = new ZLinkStreamReceiveBuffer(1024);
 
-        buffer.Append(combined, credit);
+        buffer.Append(combined, payloadOwner);
         Assert.True(buffer.TryTakeFrame(out var firstFrame));
         Assert.True(buffer.TryTakeFrame(out var secondFrame));
-        Assert.Equal(0, credit.DisposeCount);
+        Assert.Equal(0, payloadOwner.DisposeCount);
 
         firstFrame!.Dispose();
-        Assert.Equal(0, credit.DisposeCount);
+        Assert.Equal(0, payloadOwner.DisposeCount);
         secondFrame!.Dispose();
-        Assert.Equal(1, credit.DisposeCount);
+        Assert.Equal(1, payloadOwner.DisposeCount);
     }
 
     [Fact]
-    public void Buffer_retains_every_contributing_raw_credit_until_the_frame_finishes()
+    public void Buffer_retains_every_contributing_payload_owner_until_the_frame_finishes()
     {
         var encoded = ZLinkStreamFrameCodec.Encode("header"u8, "payload"u8);
-        var firstCredit = new CountingCreditOwner();
-        var secondCredit = new CountingCreditOwner();
+        var firstOwner = new CountingPayloadOwner();
+        var secondOwner = new CountingPayloadOwner();
         using var buffer = new ZLinkStreamReceiveBuffer(1024);
 
-        buffer.Append(encoded.AsSpan(0, 3), firstCredit);
-        buffer.Append(encoded.AsSpan(3), secondCredit);
+        buffer.Append(encoded.AsSpan(0, 3), firstOwner);
+        buffer.Append(encoded.AsSpan(3), secondOwner);
         Assert.True(buffer.TryTakeFrame(out var frame));
-        Assert.Equal(0, firstCredit.DisposeCount);
-        Assert.Equal(0, secondCredit.DisposeCount);
+        Assert.Equal(0, firstOwner.DisposeCount);
+        Assert.Equal(0, secondOwner.DisposeCount);
 
         frame!.Dispose();
-        Assert.Equal(1, firstCredit.DisposeCount);
-        Assert.Equal(1, secondCredit.DisposeCount);
+        Assert.Equal(1, firstOwner.DisposeCount);
+        Assert.Equal(1, secondOwner.DisposeCount);
     }
 
     [Fact]
@@ -91,10 +91,11 @@ public sealed class ZLinkStreamReceiveBufferTests
         using var buffer = new ZLinkStreamReceiveBuffer(9);
         buffer.Append(encoded);
 
-        Assert.Throws<InvalidDataException>(() => buffer.TryTakeFrame(out _));
+        var error = Assert.Throws<InvalidDataException>(() => buffer.TryTakeFrame(out _));
+        Assert.Contains("EMSGSIZE", error.Message, StringComparison.Ordinal);
     }
 
-    private sealed class CountingCreditOwner : IDisposable
+    private sealed class CountingPayloadOwner : IDisposable
     {
         private int _disposeCount;
 

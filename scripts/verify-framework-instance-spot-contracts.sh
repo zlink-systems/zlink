@@ -37,7 +37,7 @@ const normalized = source => source.replace(/\s+/gu, ' ').trim();
 
 const formalFixtures = [
   {
-    path: 'framework/doc/framework/common/spec/server/06-framework-api.ko.md',
+    path: 'framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md',
     required: [
       'actor-free Instance Spot factory',
       'Instance Spot은 actor-free lifecycle을 사용하며 Actor handler, Actor membership과 Logical Multicast subscription을 등록할 수 없다.',
@@ -48,37 +48,37 @@ const formalFixtures = [
       'Source는 owner claim이나 reservation을 먼저 만들지 않는다.',
       '확보한 runtime만 factory와 initialize를 실행하고, activation envelope의 message를 durable activation inbox의 첫 record로 확정한다.',
       'Public object handle, directory, resolver와 unbounded list는 제공하지 않는다.',
-      '| exact SpotRef close |',
+      '| SpotRef로 직접 지정한 close |',
     ],
   },
   {
-    path: 'framework/doc/framework/common/spec/server/12-spot-messaging.ko.md',
+    path: 'framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md',
     required: [
       '### 3.2 Instance Spot이 없을 때 새로 준비하기',
-      'Spot direct call에 `Instance intent`',
-      'target Spot이 존재하지 않으면 `NotFound`로 끝난다.',
+      'Spot direct call에 [Instance intent]',
+      '| Instance intent 없음 | Target-not-found로 끝나며 Spot 생성 정보를 만들지 않는다.',
       '서로 다른 type이 하나뿐이면 그 type을 자동으로 선택한다.',
-      '최초 application message와 Spot 생성·reply에 필요한 정보를 하나의 전달 단위에 함께 넣는다.',
+      'call은 최초 application message를 activation envelope에 포함한다.',
       '| Instance [Spot application queue]',
       'Instance intent가 없는 Missing Spot message가 Spot 생성 정보를 만들지 않는다.',
     ],
   },
   {
-    path: 'framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md',
+    path: 'framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md',
     required: [
       '`SpotHandle`, 별도 resolver handle과 `InstanceSpotAddress`는 제공하지 않는다.',
-      '## 3. User Spot Create와 GetOrCreate',
-      '## 4. Direct message로 Instance Spot 생성을 허용하는 방법',
+      '## 3. User Spot 명시적 생성 — Create와 GetOrCreate',
+      '## 4. Cold activation — message로 Instance Spot을 처음 만드는 방법',
       'Spot manager가 Instance Spot create·get-or-create를 제공하지 않는다.',
       'Instance intent가 없는 Missing Spot message가 creation intent를 만들지 않는다.',
       '선택한 Mesh의 distinct Instance type이 하나면 type을 자동 선택하고 여러 개면 type 명시를 요구한다.',
       'Cold activation source가 owner claim을 만들지 않고 최초 message를 포함한 activation envelope를 target에',
-      '생성 권한을 얻은 target만 자신을 owner로 기록하고 factory를 실행한다.',
-      'Spot manager의 public `Close`는 User Spot의 exact `SpotRef`를 받는다.',
+      '생성 권한을 얻은 target만 자신을 owner로 기록하고 factory를 실행하며',
+      'Spot manager의 public `Close`는 User Spot의 `SpotRef`를 받는다.',
     ],
   },
   {
-    path: 'framework/doc/framework/common/spec/server/15-spot-actor.ko.md',
+    path: 'framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md',
     required: [
       'Spot의 terminal lifecycle callback은 `OnClosing(ClosingContext)`이다.',
       '| 0 | `ExplicitClose` |',
@@ -90,12 +90,12 @@ const formalFixtures = [
     ],
   },
   {
-    path: 'framework/doc/framework/common/spec/server/21-location-runtime.ko.md',
+    path: 'framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md',
     required: [
       'Actor와 User Spot은 Manager의 `Create` 또는 `GetOrCreate`로 만든다.',
       'Framework가 소문자 표준 UUID v4 문자열을 SpotId로 발급한다.',
       'Instance Spot은 별도 생성 API를 사용하지 않는다.',
-      'Instance Spot 요청임을 표시했고 Spot이 없을 때만, message를 받은 target node가 Spot을 만든다.',
+      '요청임을 표시했고 Spot이 없을 때만, message를 받은 target node가 cold activation으로 Spot을',
       '사용 가능한 Instance Spot type이 하나면 선택한다. 0개면 `NotFound`, 둘 이상이면 `InvalidOperation`이다.',
       'Source는 owner나 generation을 미리 만들지 않는다.',
       '동시에 여러 target이 시도해도 성공한 하나만 factory를 실행한다.',

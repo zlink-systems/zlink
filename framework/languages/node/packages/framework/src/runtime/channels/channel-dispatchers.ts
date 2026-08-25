@@ -496,7 +496,7 @@ export class ZLinkRoutePacketDispatcher {
 
   /** Spec 27 §4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
   flowEnabled(): boolean {
-    return this.dispatchErrors.flow.flowCreationEnabled();
+    return this.dispatchErrors.flow?.flowCreationEnabled() ?? true;
   }
 
   dispatchInfrastructure(received: {

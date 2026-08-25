@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""공통 정본 산문에 특정 언어 고유 이름이 남았는지 검사한다(런북 §11 게이트 3).
+"""공통 guide 산문에 특정 언어 고유 이름이 남았는지 검사한다(런북 §11 게이트 3).
 
 공통 12장은 다섯 언어가 한 파일을 공유한다. 산문이 한 언어의 타입·메서드 이름을
 부르면 나머지 넷의 독자에게는 없는 이름이 된다. 런북 §5.2가 정한 역할 분담은 이렇다.
@@ -101,7 +101,7 @@ def main() -> int:
     docs = sorted(p for p in COMMON_GUIDE.rglob("*.md")
                   if p.name not in SKIP_FILES)
     if not docs:
-        print(f"검사할 공통 정본이 없다: {COMMON_GUIDE}", file=sys.stderr)
+        print(f"검사할 공통 guide가 없다: {COMMON_GUIDE}", file=sys.stderr)
         return 2
 
     errors: list[str] = []

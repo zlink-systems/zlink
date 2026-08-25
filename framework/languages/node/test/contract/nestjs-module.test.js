@@ -1771,7 +1771,9 @@ test('Nest configureInboundDispatch forwards Core HWM and job queue options', as
     .coreHwmMemoryLimitBytes(536870912n)
     .coreHwmBudgetBytes(134217728n)
     .applicationJobQueueProfile(framework.ZLinkApplicationJobQueueProfile.LowLatency)
-    .maxQueuedApplicationJobs(17n);
+    .maxQueuedApplicationJobs(17n)
+    .applicationJobQueuePauseThresholdPercent(75)
+    .applicationJobQueueResumeThresholdPercent(55);
   const registration = await resolveFrameworkRegistration(
     nestjs.ZLinkModule.forRoot(builder.build())
   );
@@ -1783,7 +1785,9 @@ test('Nest configureInboundDispatch forwards Core HWM and job queue options', as
   });
   assert.deepEqual(registration.applicationJobQueue, {
     profile: framework.ZLinkApplicationJobQueueProfile.LowLatency,
-    maxQueuedApplicationJobs: 17n
+    maxQueuedApplicationJobs: 17n,
+    pauseThresholdPercent: 75,
+    resumeThresholdPercent: 55
   });
 });
 
@@ -2521,7 +2525,6 @@ test('framework runtime host attaches stream SessionRelay to registered SpotNode
     createPublisher() { return { close() {} }; },
     createSpot() {
       return {
-        onSendReady() {},
         async dispose() {
           calls.push('publisher:dispose');
         }
@@ -2720,7 +2723,6 @@ test('framework runtime host applies formal MeshNode router and peer options', a
         subscribe() { return true; },
         recvRoute() { return true; },
         onDispatchEvent() {},
-        onSendReady() {},
         requestToChannel() { return true; },
         sendToChannel() { return true; },
         publish(topic, parts) {
@@ -2807,7 +2809,6 @@ test('framework runtime host applies formal MeshNode router and peer options', a
               connect(endpoint) { calls.push(`dealer:connect:${endpoint}`); },
               disconnect() {},
               attachDiscovery() {},
-              onSendReady() {},
               send() { return true; },
               request() { return true; },
               recv() {},
@@ -2866,7 +2867,6 @@ test('framework runtime host lets the formal MeshNode own its accepted route cha
     createPublisher() { return { close() {} }; },
     createSpot() {
       return {
-        onSendReady() {},
         async dispose() {
           calls.push('publisher:dispose');
         }
@@ -3435,7 +3435,6 @@ test('framework route transport sends Spot request through accepted Spot route c
                 callback(0, [reply]);
                 return true;
               },
-              onSendReady() {},
               async dispose() {
                 calls.push('route:dispose');
               }
@@ -3506,7 +3505,6 @@ test('framework runtime host starts router-only SessionRelay SpotNode without Di
     joinActorEntrySpot() { return true; },
     createSpot() {
       return {
-        onSendReady() {},
         async dispose() {
           calls.push('publisher:dispose');
         }
@@ -3612,7 +3610,6 @@ test('framework runtime host starts a formal MeshNode without Discovery after bi
     createPublisher() { return { close() {} }; },
     createSpot() {
       return {
-        onSendReady() {},
         async dispose() {
           calls.push('publisher:dispose');
         }
@@ -3759,7 +3756,6 @@ test('framework runtime host defers Entry Spot lifecycle until Core materializes
     subscribe() { return true; },
     recvRoute() { return true; },
     onDispatchEvent() {},
-    onSendReady() {},
     requestToChannel() { return true; },
     sendToChannel() { return true; },
     publish() { return true; },

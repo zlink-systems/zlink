@@ -1,5 +1,8 @@
 # Kotlin Public Interface Formal Contract
 
+<!-- framework-adapter-nav:start -->
+[Kotlin contract table of contents](../README.en.md) | [Language interface table of contents](../../README.en.md)
+<!-- framework-adapter-nav:end -->
 [Kotlin contract table of contents](../README.en.md) · [Java Interface](../../java/interfaces/README.en.md)
 
 The Kotlin package shares the JVM service runtime with Java. The
@@ -41,7 +44,7 @@ application-signaled boundary's completion is provided as an
 
 A Channel extension only takes a process-local ChannelName, and an
 optional overload that takes MeshName and
-[ChannelName](../../../01-glossary.en.md#channelname) together isn't
+[ChannelName](../../../00-foundation/02-glossary.en.md#channelname) together isn't
 added. Host `Relocate`/`Shutdown` uses Java's relocation mode/options/
 result type unchanged, and doesn't provide a separate drain facade. The
 Location Store's opaque key/value atomic batch and the Relocation
@@ -53,7 +56,7 @@ generated JVM signature the application actually links against. Default
 argument, suspend continuation, extension receiver, and generic bound
 must correspond without loss between the two representations. The first
 `String` argument of an extension that directly specifies a node is
-[MeshName](../../../01-glossary.en.md#meshname), same as the Java
+[MeshName](../../../00-foundation/02-glossary.en.md#meshname), same as the Java
 contract.
 
 Public generation, revision, epoch, and sequence ordinal use the Java
@@ -65,18 +68,18 @@ value.
 
 ## RouteMesh Object Runtime Baseline
 
-The Kotlin exact interface uses the same global ActorId/SpotId,
+The Kotlin per-language interface uses the same global ActorId/SpotId,
 immutable `ActorRef`/`SpotRef`, ID-only regular messaging, and
-exact-ref mutation/session bind as Java. Actor and User Spot's
+-ref mutation/session bind as Java. Actor and User Spot's
 create/get-or-create are single-use fluent operations. The
-[Spot](../../../01-glossary.en.md#spot) manager is User-Spot-only and
+[Spot](../../../00-foundation/02-glossary.en.md#spot) manager is User-Spot-only and
 doesn't provide an Instance Spot creation member. Cold activation of a
-Missing [Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
+Missing [Instance Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
 only starts when `instanceSpot()` or `instanceSpot(stableType)` is
 specified on the Spot-dedicated send/request call. Without the marker,
 it's not-found, and cold activation using only the marker auto-selects
 the type only when the selected Mesh has one distinct serving Instance
-type. Existing [authority](../../../01-glossary.en.md#authority) uses
+type. Existing [authority](../../../00-foundation/02-glossary.en.md#authority) uses
 the stored type regardless of the number of registered types. Mesh
 object role is distinguished as None, Client, Server. Every server
 factory configure callback selects exactly one relocation behavior. A
@@ -87,7 +90,7 @@ The global ref's JSON fields are `actorId` or `spotId`,
 `objectGeneration`, `meshName`, `nodeRid`. `objectGeneration` is a
 decimal string, and an unknown field, duplicate field, missing required
 field, or a value that's 0 or exceeds `Long.MAX_VALUE` is rejected.
-String identity keeps the exact value and isn't normalized. The
+String identity keeps the value and isn't normalized. The
 following two shapes are allowed. `objectGeneration` is `"1"`..
 `"9223372036854775807"` with no leading zero, and a JSON number token is
 rejected.
@@ -99,3 +102,8 @@ rejected.
 ```json
 {"spotId":"room-7","objectGeneration":"42","meshName":"game","nodeRid":"game-0123456789abcdef0123456789abcdef"}
 ```
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[Kotlin contract table of contents](../README.en.md) | [Language interface table of contents](../../README.en.md)
+<!-- framework-adapter-nav:bottom:end -->

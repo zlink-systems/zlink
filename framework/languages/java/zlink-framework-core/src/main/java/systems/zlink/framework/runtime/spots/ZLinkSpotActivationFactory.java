@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 import java.util.Map;
 import java.util.function.Function;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 
@@ -70,7 +71,7 @@ final class ZLinkSpotActivationFactory {
             host.primaryNode().routingId(),
             backendSpot,
             new ZLinkAsyncSerialQueue(
-                host.serialExecutor(), false),
+                host.serialExecutor(), ZLinkExecutionLanePolicy.spot()),
             executionModes.getOrDefault(
                 spotType,
                 ZLinkUserSpotExecutionMode.SPOT_WIDE),

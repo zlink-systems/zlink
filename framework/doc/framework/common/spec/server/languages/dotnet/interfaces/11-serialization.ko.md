@@ -1,7 +1,7 @@
 # .NET codec extension 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md) · [공통 메시지 계약](../../../04-message-model.ko.md) ·
-[공통 Framework API](../../../06-framework-api.ko.md#9-codec)
+[.NET 언어별 interface 목차](README.ko.md) · [공통 메시지 계약](../../../00-foundation/05-message-model.ko.md) ·
+[공통 Framework API](../../../00-foundation/06-framework-api.ko.md#12-codec)
 
 ## 1. 범위
 

@@ -172,13 +172,13 @@ Dispatch는 고객과 배송원의 session을 직접 보관하지 않는다. Cou
 
 | 필요한 동작 | 선택한 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| 배송원·고객 ID로 현재 object를 찾는다. | Actor direct message | Global Actor ID를 사용하면 Framework가 current Ready owner를 resolve한다. [상호작용 모델 §2](../../spec/server/03-interaction-model.ko.md#2-공통-모델) |
-| Actor를 처음 준비하고 같은 session에 bind한다. | Actor GetOrCreate와 bound session | 생성 결과의 exact ActorRef를 해당 bind operation에만 사용한다. [Actor model](../../spec/server/14-actor-model.ko.md) · [Session–Actor dispatch](../../spec/server/20-session-actor-dispatch.ko.md) |
-| 최초 Actor membership을 승인한다. | Entry Spot | 생성 callback은 local initial state만 설정하고 짧게 끝낸다. [Spot model §4](../../spec/server/11-spot-model.ko.md#4-entry-spot) |
-| worker와 Tracking 사이의 독립 요청 | ClientServer Channel | object RouteMesh와 channel Server membership을 섞지 않는다. [Channel topology](../../spec/server/07-channel-topology.ko.md) |
-| 고객·배송원에게 server push | STREAM bound session | current binding FIFO를 통해 연결을 교체해도 같은 logical Actor로 push한다. [STREAM session §8](../../spec/server/03-interaction-model.ko.md#8-stream-session) |
-| one-way 제안·결정 전송 | Actor send | send admission은 handler 실행 완료나 상대 수신을 보장하지 않는다. [Send와 request §4](../../spec/server/03-interaction-model.ko.md#4-send와-request) |
-| owner 장애 경계 | failure/failover policy | Ready owner 장애는 자동 cold activation이나 다른 owner 선택으로 바뀌지 않는다. [Failure policy §4.4](../../spec/server/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
+| 배송원·고객 ID로 현재 object를 찾는다. | Actor direct message | Global Actor ID를 사용하면 Framework가 current Ready owner를 resolve한다. [상호작용 모델 §2](../../spec/server/00-foundation/04-interaction-model.ko.md) |
+| Actor를 처음 준비하고 같은 session에 bind한다. | Actor GetOrCreate와 bound session | 생성 결과의 exact ActorRef를 해당 bind operation에만 사용한다. [Actor model](../../spec/server/03-spot-actor/04-actor-model.ko.md) · [Session–Actor dispatch](../../spec/server/04-session/02-session-actor-binding.ko.md) |
+| 최초 Actor membership을 승인한다. | Entry Spot | 생성 callback은 local initial state만 설정하고 짧게 끝낸다. [Spot model §4](../../spec/server/03-spot-actor/01-spot-model.ko.md#4-entry-spot) |
+| worker와 Tracking 사이의 독립 요청 | ClientServer Channel | object RouteMesh와 channel Server membership을 섞지 않는다. [Channel topology](../../spec/server/02-channel-transport/01-channel-topology.ko.md) |
+| 고객·배송원에게 server push | STREAM bound session | current binding FIFO를 통해 연결을 교체해도 같은 logical Actor로 push한다. [STREAM session §8](../../spec/server/00-foundation/04-interaction-model.ko.md#8-stream-session) |
+| one-way 제안·결정 전송 | Actor send | send admission은 handler 실행 완료나 상대 수신을 보장하지 않는다. [Send와 request §4](../../spec/server/00-foundation/04-interaction-model.ko.md#4-send와-request) |
+| owner 장애 경계 | failure/failover policy | Ready owner 장애는 자동 cold activation이나 다른 owner 선택으로 바뀌지 않는다. [Failure policy §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
 
 Courier와 Customer Actor factory는 sample 범위에서 `DisableRelocation`을 사용한다. planned
 relocation을 추가하더라도 같은 Actor identity와 binding 갱신을 검증해야 하며, Ready owner

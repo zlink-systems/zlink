@@ -1,5 +1,8 @@
 # ZLink Framework Kotlin Public Contract
 
+<!-- framework-adapter-nav:start -->
+[Language interface table of contents](../README.en.md) | [Spec table of contents](../../README.en.md)
+<!-- framework-adapter-nav:end -->
 This directory owns the Kotlin-only public contract `zlink-framework-kotlin`
 adds on top of the Java runtime. Java types and methods used as-is follow
 the [Java Public Contract](../java/README.en.md) and aren't copied and
@@ -24,15 +27,15 @@ network identity, handler context, and dedicated descriptor/runtime all
 reuse the Java formal types, with only the Kotlin DSL projected
 idiomatically.
 
-Global ActorId/SpotId, exact ActorRef/SpotRef, the
-[User Spot](../../01-glossary.en.md#entry-user-instance-spot) manager's
+Global ActorId/SpotId, ActorRef/SpotRef, the
+[User Spot](../../00-foundation/02-glossary.en.md#entry-user-instance-spot) manager's
 explicit create/get-or-create, and the actor-free Instance Spot
 lifecycle also reuse the Java formal types. The Location provider
 implements Java's opaque key/value atomic batch, and the Relocation
 provider implements the immutable blob contract based on a
 Framework-issued reference, unchanged. Kotlin only adds `send` and
 `request` extensions to the ID-only direct call, and doesn't declare a
-suspend `requestToSpot` that conflicts with the Java member. The exact
+suspend `requestToSpot` that conflicts with the Java member. The
 extension and Store type reuse are fixed by the
 [Per-Feature Interfaces](interfaces/README.en.md).
 
@@ -40,7 +43,7 @@ The shared JVM runtime implements placement and the activation barrier
 using the Java binding's public raw socket API. It doesn't use the Core
 service driver, a private binding entrypoint, or a separate Kotlin
 runtime. A Ready-owner call resolves current
-[authority](../../01-glossary.en.md#authority) using the global ID,
+[authority](../../00-foundation/02-glossary.en.md#authority) using the global ID,
 and doesn't use a process-local handle or separate address.
 
 The official Redis location extension's Kotlin call boundary and Java
@@ -60,3 +63,8 @@ feature's contract.
 the Java provider/adapter ABI, aren't Kotlin lifecycle tokens — they're
 a fence for that SPI operation. This type isn't projected onto a Kotlin
 suspending lifecycle callback.
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[Language interface table of contents](../README.en.md) | [Spec table of contents](../../README.en.md)
+<!-- framework-adapter-nav:bottom:end -->

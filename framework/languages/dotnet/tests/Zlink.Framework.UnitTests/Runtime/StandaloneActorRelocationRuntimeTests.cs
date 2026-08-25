@@ -674,7 +674,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
                     "captured",
                     ZlinkStreamMetadata.Empty)).Span);
         var body = Message.From("retained");
-        var creditOwner = new DisposeProbe();
+        var payloadOwner = new DisposeProbe();
         var parts = new[]
         {
             new ZLinkBackendActorPart(
@@ -701,18 +701,18 @@ public sealed class StandaloneActorRelocationRuntimeTests
         var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(
             runtime,
             parts,
-            creditOwner);
+            payloadOwner);
 
         Assert.Equal(0, batch.Count);
         Assert.True(IsDisposed(header));
         Assert.True(IsDisposed(body));
-        Assert.Equal(0, creditOwner.DisposeCount);
+        Assert.Equal(0, payloadOwner.DisposeCount);
         Assert.Equal("retained", System.Text.Encoding.UTF8.GetString(
             Assert.Single(state.Handoff.SnapshotFrames()).Body));
 
         batch.Dispose();
         batch.Dispose();
-        Assert.Equal(1, creditOwner.DisposeCount);
+        Assert.Equal(1, payloadOwner.DisposeCount);
 
         var rejectedHeader = Message.From(
             ZLinkStreamProtocolDefaults.EncodeHeader(
@@ -724,7 +724,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
                     "rejected",
                     ZlinkStreamMetadata.Empty)).Span);
         var rejectedBody = Message.From("rejected-retained");
-        var rejectedCreditOwner = new DisposeProbe();
+        var rejectedPayloadOwner = new DisposeProbe();
         var rejectedParts = new[]
         {
             new ZLinkBackendActorPart(
@@ -751,10 +751,10 @@ public sealed class StandaloneActorRelocationRuntimeTests
             ZLinkActorHandoffIngress.CaptureMovingFrames(
                 runtime,
                 rejectedParts,
-                rejectedCreditOwner));
+                rejectedPayloadOwner));
         Assert.True(IsDisposed(rejectedHeader));
         Assert.True(IsDisposed(rejectedBody));
-        Assert.Equal(1, rejectedCreditOwner.DisposeCount);
+        Assert.Equal(1, rejectedPayloadOwner.DisposeCount);
         state.Handoff.Reset();
     }
 

@@ -17,8 +17,8 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/03-concepts.
 
 # 3. Core Concepts
 
-> **The documents that own this chapter's contract** — [Framework Overview](../../../common/spec/server/02-overview.en.md)
-> and the [Interaction Model](../../../common/spec/server/03-interaction-model.en.md) own the
+> **The documents that own this chapter's contract** — [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md)
+> and the [Interaction Model](../../../common/spec/server/00-foundation/04-interaction-model.en.md) own the
 > formal meaning of the concepts, and the
 > [per-language handler interface contracts](../../../common/spec/server/languages/README.en.md)
 > own the formal definition of the interfaces. This document lays out what that meaning
@@ -312,7 +312,7 @@ side looks up the target in the store by logical name and connects. When the ser
 changes, connections update accordingly.
 
 Usage is covered by [10-location](10-location.en.md); the contract is defined by the
-[common spec](../../../common/spec/server/21-location-runtime.en.md).
+[common spec](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md).
 
 Manual connections — specifying an endpoint directly at registration without a store — are
 also supported, for development/testing and small fixed deployments

@@ -83,8 +83,8 @@ DOC_SETS = {
         CANONICAL,
         [SITE_DIR, REPO_ROOT],
     ),
-    # framework 사이트는 정본 트리를 그대로 docs root로 쓴다. 사본이 없으므로
-    # 검사 대상도 정본 트리 하나다.
+    # framework 사이트는 원본 트리를 그대로 docs root로 쓴다. 사본이 없으므로
+    # 검사 대상도 원본 트리 하나다.
     "framework": DocSet(
         "framework",
         FRAMEWORK_DOC_DIR,

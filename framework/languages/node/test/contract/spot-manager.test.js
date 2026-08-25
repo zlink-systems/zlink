@@ -1494,7 +1494,9 @@ test('ZLinkSpotManager reports SPOT subscription dispatch errors to the standard
 
   assert.equal(dispatchEvents.length, 1);
   assert.equal(dispatchEvents[0].surface, 'spot');
-  assert.equal(dispatchEvents[0].messageKind, 'publish');
+  //  message_kind 허용 값은 send/request/response/error/control 다섯 개로 닫혀 있다 —
+  //  Message flow tracing 3.1. Multicast·fanout 전달도 send로 기록한다.
+  assert.equal(dispatchEvents[0].messageKind, 'send');
   assert.equal(dispatchEvents[0].outcome, 'failed');
   assert.equal(dispatchEvents[0].reason, 'invalid_frame');
   assert.equal(dispatchEvents[0].action, 'drop');
@@ -3154,11 +3156,11 @@ test('formal remote Actor transfer admits the target before reading referenced s
       }
     });
 
-    assert.deepEqual(events, [
-      'admission',
-      ['read', 'relocation-state', 17],
-      ['materialize', 'player-state']
-    ]);
+    //  admission만 일어난다. relocation payload는 Relocation Store를 거치지 않고
+    //  source memory에서 target으로 직접 전달하므로(Service wire protocol 9절의
+    //  relocationState chunk 전송, Spot·Actor membership의 재-Restore 원본 규정)
+    //  target이 store reference를 읽어 state를 가져오는 경로는 없다.
+    assert.deepEqual(events, ['admission']);
   } finally {
     admissionMessage.close();
     commitMessage.close();

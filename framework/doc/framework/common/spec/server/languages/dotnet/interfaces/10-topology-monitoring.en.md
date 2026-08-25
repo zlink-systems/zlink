@@ -1,8 +1,8 @@
 # .NET Topology And Host Monitoring Public Interface
 
-[.NET exact interface table of contents](README.en.md) ·
-[Runtime Monitoring](../../../24-runtime-monitoring.en.md) ·
-[Host Relocate, Shutdown & Handoff](../../../30-host-relocation-flow.en.md)
+[.NET per-language interface table of contents](README.en.md) ·
+[Runtime Monitoring](../../../06-observability/01-runtime-monitoring.en.md) ·
+[Host Relocate, Shutdown & Handoff](../../../05-location-relocation/05-host-relocation-flow.en.md)
 
 ## 1. Scope
 
@@ -473,7 +473,7 @@ enumeration, and are pinned at
 representable range. This cap is the same across all four languages. The
 framework doesn't end the enumeration just because the consumer's queue
 is full. The definition of the delivery unit is owned by
-[Runtime Monitoring §3](../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+[Runtime Monitoring §3](../../../06-observability/01-runtime-monitoring.en.md#6-observing-state-changes--sequence-and-the-complete-status).
 
 A general-purpose event DTO whose nullable field meaning changes based on
 an identifier isn't used. A consumer can use the entire received status

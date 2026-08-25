@@ -439,7 +439,7 @@ endpoints a client calls are also decided from this viewpoint.
   capability with `AddRelocationStore(instance)`, each separately.
   Don't use a Redis-only registration function or one that bundles both
   capabilities
-  ([Framework API — Location Store And Relocation Store](../spec/server/06-framework-api.en.md#10-location-store-and-relocation-store)).
+  ([Framework API — Location Store And Relocation Store](../spec/server/00-foundation/06-framework-api.en.md#13-location-store-and-relocation-store-registration)).
   Don't hide framework configuration behind a thin wrapper/extension
   method.
 - Don't create separate runnable projects like `Server/Driver`,
@@ -931,7 +931,7 @@ substitute ad-hoc `printf` or console scrolling. Since tracing records
 go out" as a standard feature, use it as the test's primary debugging
 tool. A scenario verifying tracing's `off` behavior and a runtime
 level change turns off tracing only for that span.
-(Feature spec: [Message Flow Tracing And Dispatch Observation](../spec/server/26-message-flow-tracing.en.md))
+(Feature spec: [Message Flow Tracing And Dispatch Observation](../spec/server/06-observability/03-message-flow-tracing.en.md))
 
 ### 6.1 All Logs To File (`log/` Folder)
 

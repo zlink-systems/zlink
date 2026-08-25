@@ -25,6 +25,7 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -641,7 +642,8 @@ final class ZLinkDefaultSpotContextTest {
                 null,
                 RoutingId.from("node-a"),
                 backendSpot,
-                new ZLinkAsyncSerialQueue(executor, false),
+                new ZLinkAsyncSerialQueue(
+                    executor, ZLinkExecutionLanePolicy.spot()),
                 executionMode,
                 false,
                 null,
@@ -809,7 +811,8 @@ final class ZLinkDefaultSpotContextTest {
         private ZLinkAsyncSerialQueue actorQueue(String actorId) {
             return actorQueues.computeIfAbsent(
                 actorId,
-                ignored -> new ZLinkAsyncSerialQueue(executor, false));
+                ignored -> new ZLinkAsyncSerialQueue(
+                    executor, ZLinkExecutionLanePolicy.spot()));
         }
 
         private static ZLinkBackendSpot backendSpot() {

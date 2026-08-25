@@ -561,12 +561,16 @@ test('runtime host reports joined Spot route before stale remote actor packet ta
     }
   };
 
-  assert.deepEqual(runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'), {
-    routerChannelId: 'bingo.room.route',
-    targetNodeRid: 'play-node-1',
-    spotId: 'bingo-room-1',
-    spotKind: 'user'
-  });
+  //  캐시된 packet target이 가리키는 Spot과 Actor의 현재 membership이 다르면 hint를
+  //  내지 않는다. stale target의 node에 새 Spot ID를 붙이면 authority fence가 없는
+  //  route가 만들어지고 다음 direct request가 fence 검증에서 실패한다 — Spot·Actor
+  //  routing의 "stale route 결과 … entry를 제거한다"와 "찾은 object·owner generation과
+  //  lease fence를 검증하며 새 incarnation으로 다시 지정하지 않는다". caller는 hint 없이
+  //  owner를 다시 조회한다.
+  assert.equal(
+    runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'),
+    undefined
+  );
 });
 
 test('runtime host normalizes remote actor join bound-session route ids', async () => {

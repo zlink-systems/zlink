@@ -1,7 +1,7 @@
 # Kotlin Configuration And Host Public Interface
 
 [Interface table of contents](README.en.md) · [Java Configuration](../../java/interfaces/configuration-host.en.md) ·
-[MeshNode Common Contract](../../../13-mesh-node.en.md)
+[MeshNode Common Contract](../../../03-spot-actor/03-mesh-node.en.md)
 
 A Kotlin application directly uses the Java builder. The Kotlin DSL is
 only provided when a receiver and reified type genuinely reduce
@@ -25,7 +25,7 @@ manual topology can connect from one or both sides depending on
 application endpoint configuration. If bidirectional connection or
 automatic discovery contention/a stale snapshot creates a duplicate
 candidate, handshake and admission check the same RID and
-[lifecycle generation](../../../01-glossary.en.md#lifecycle-generation)
+[lifecycle generation](../../../00-foundation/02-glossary.en.md#lifecycle-generation)
 and keep only one in ready state.
 
 A peer connection isn't needed only when both MeshNodes are Object
@@ -35,10 +35,10 @@ side has Channel Server membership, including weight `0`, a connection
 is needed. ClientServer and classic fanout are separate physical
 topologies, so they aren't included in this judgment.
 
-A [MeshNode](../../../01-glossary.en.md#meshnode)'s object role is
+A [MeshNode](../../../00-foundation/02-glossary.en.md#meshnode)'s object role is
 one of `None`, `Client`, `Server`. Not calling `objects()` means
 `None`; `client()` provides an outbound manager and resolve; `server()`
-provides Client capability plus [factory](../../../01-glossary.en.md#factory)/
+provides Client capability plus [factory](../../../00-foundation/02-glossary.en.md#factory)/
 Entry registration together. Client and Server need a Location Store.
 None has no object manager or factory. Selecting a duplicate role on
 one node is a startup configuration error. A RouteMesh Channel Server
@@ -54,11 +54,11 @@ or even one Instance Spot factory exists, exactly one Relocation Store
 must be registered. A missing or duplicate registration is a
 configuration error before socket bind. A Relocation Store isn't
 required for a same-node configuration with no
-[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
+[Instance Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
 factory that only selected `disableRelocation()`. A Kotlin DSL or
 Redis-specific registration helper bundling both capabilities isn't
 provided. The application state/queue/timer handoff payload of a
-cross-node Actor/[Spot](../../../01-glossary.en.md#spot) move isn't
+cross-node Actor/[Spot](../../../00-foundation/02-glossary.en.md#spot) move isn't
 stored in the Relocation Store. The source keeps the payload in memory
 and transfers it as chunks directly over the source–target ordered mesh
 connection, and source memory is the restore origin. The Relocation
@@ -74,87 +74,87 @@ the same JVM signature, without a property conversion.
 
 ```java
 public enum systems.zlink.framework.configuration.ZLinkCoreHwmProfile {
-  COMPACT,
-  LOW_LATENCY,
-  BALANCED,
-  THROUGHPUT
+ COMPACT,
+ LOW_LATENCY,
+ BALANCED,
+ THROUGHPUT
 }
 public enum systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile {
-  COMPACT,
-  LOW_LATENCY,
-  BALANCED,
-  THROUGHPUT
+ COMPACT,
+ LOW_LATENCY,
+ BALANCED,
+ THROUGHPUT
 }
 public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
-  public abstract systems.zlink.framework.configuration.ZLinkUnhandledDispatchOptions unhandled();
-  public abstract systems.zlink.framework.configuration.ZLinkDiagnosticsOptions diagnostics();
-  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode);
-  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceSampleRate(double);
-  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions includeMessageSizes(boolean);
+ public abstract systems.zlink.framework.configuration.ZLinkUnhandledDispatchOptions unhandled();
+ public abstract systems.zlink.framework.configuration.ZLinkDiagnosticsOptions diagnostics();
+ public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode);
+ public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceSampleRate(double);
+ public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions includeMessageSizes(boolean);
 }
 public interface systems.zlink.framework.configuration.ZLinkInboundDispatchOptions {
-  public abstract java.util.OptionalLong coreHwmMemoryLimitBytes();
-  public abstract void setCoreHwmMemoryLimitBytes(long);
-  public abstract java.util.OptionalLong coreHwmBudgetBytes();
-  public abstract void setCoreHwmBudgetBytes(long);
-  public abstract systems.zlink.framework.configuration.ZLinkCoreHwmProfile coreHwmProfile();
-  public abstract void setCoreHwmProfile(systems.zlink.framework.configuration.ZLinkCoreHwmProfile);
-  public abstract systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile applicationJobQueueProfile();
-  public abstract void setApplicationJobQueueProfile(systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile);
-  public abstract java.util.OptionalLong maxQueuedApplicationJobs();
-  public abstract void setMaxQueuedApplicationJobs(long);
-  public abstract int applicationJobQueuePauseThresholdPercent();
-  public abstract void setApplicationJobQueuePauseThresholdPercent(int);
-  public abstract int applicationJobQueueResumeThresholdPercent();
-  public abstract void setApplicationJobQueueResumeThresholdPercent(int);
+ public abstract java.util.OptionalLong coreHwmMemoryLimitBytes();
+ public abstract void setCoreHwmMemoryLimitBytes(long);
+ public abstract java.util.OptionalLong coreHwmBudgetBytes();
+ public abstract void setCoreHwmBudgetBytes(long);
+ public abstract systems.zlink.framework.configuration.ZLinkCoreHwmProfile coreHwmProfile();
+ public abstract void setCoreHwmProfile(systems.zlink.framework.configuration.ZLinkCoreHwmProfile);
+ public abstract systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile applicationJobQueueProfile();
+ public abstract void setApplicationJobQueueProfile(systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile);
+ public abstract java.util.OptionalLong maxQueuedApplicationJobs();
+ public abstract void setMaxQueuedApplicationJobs(long);
+ public abstract int applicationJobQueuePauseThresholdPercent();
+ public abstract void setApplicationJobQueuePauseThresholdPercent(int);
+ public abstract int applicationJobQueueResumeThresholdPercent();
+ public abstract void setApplicationJobQueueResumeThresholdPercent(int);
 }
 public interface systems.zlink.framework.locations.ZLinkLocationOptions {
-  public abstract java.time.Duration ownerLeaseRenewInterval();
-  public abstract void setOwnerLeaseRenewInterval(java.time.Duration);
-  public abstract java.time.Duration ownerLeaseTtl();
-  public abstract void setOwnerLeaseTtl(java.time.Duration);
-  public abstract java.time.Duration pollingInterval();
-  public abstract void setPollingInterval(java.time.Duration);
-  public abstract java.time.Duration storeFailureGrace();
-  public abstract void setStoreFailureGrace(java.time.Duration);
-  public abstract java.time.Duration ownerLeaseFencingMargin();
-  public abstract void setOwnerLeaseFencingMargin(java.time.Duration);
-  public abstract java.time.Duration ownerLeaseRenewTimeout();
-  public abstract void setOwnerLeaseRenewTimeout(java.time.Duration);
-  public abstract java.time.Duration routeCacheMaxAge();
-  public abstract void setRouteCacheMaxAge(java.time.Duration);
-  public abstract java.time.Duration messageFollowDuration();
-  public abstract void setMessageFollowDuration(java.time.Duration);
-  public abstract java.time.Duration sessionRelocationSealTimeout();
-  public abstract void setSessionRelocationSealTimeout(java.time.Duration);
-  public abstract long relocationPayloadChunkLimitBytes();
-  public abstract void setRelocationPayloadChunkLimitBytes(long);
-  public abstract long relocationInFlightPayloadBudgetBytes();
-  public abstract void setRelocationInFlightPayloadBudgetBytes(long);
-  public abstract long relocationNodeInFlightPayloadBudgetBytes();
-  public abstract void setRelocationNodeInFlightPayloadBudgetBytes(long);
-  public abstract java.time.Duration relocationCutoverWaitTimeout();
-  public abstract void setRelocationCutoverWaitTimeout(java.time.Duration);
+ public abstract java.time.Duration ownerLeaseRenewInterval();
+ public abstract void setOwnerLeaseRenewInterval(java.time.Duration);
+ public abstract java.time.Duration ownerLeaseTtl();
+ public abstract void setOwnerLeaseTtl(java.time.Duration);
+ public abstract java.time.Duration pollingInterval();
+ public abstract void setPollingInterval(java.time.Duration);
+ public abstract java.time.Duration storeFailureGrace();
+ public abstract void setStoreFailureGrace(java.time.Duration);
+ public abstract java.time.Duration ownerLeaseFencingMargin();
+ public abstract void setOwnerLeaseFencingMargin(java.time.Duration);
+ public abstract java.time.Duration ownerLeaseRenewTimeout();
+ public abstract void setOwnerLeaseRenewTimeout(java.time.Duration);
+ public abstract java.time.Duration routeCacheMaxAge();
+ public abstract void setRouteCacheMaxAge(java.time.Duration);
+ public abstract java.time.Duration messageFollowDuration();
+ public abstract void setMessageFollowDuration(java.time.Duration);
+ public abstract java.time.Duration sessionRelocationSealTimeout();
+ public abstract void setSessionRelocationSealTimeout(java.time.Duration);
+ public abstract long relocationPayloadChunkLimitBytes();
+ public abstract void setRelocationPayloadChunkLimitBytes(long);
+ public abstract long relocationInFlightPayloadBudgetBytes();
+ public abstract void setRelocationInFlightPayloadBudgetBytes(long);
+ public abstract long relocationNodeInFlightPayloadBudgetBytes();
+ public abstract void setRelocationNodeInFlightPayloadBudgetBytes(long);
+ public abstract java.time.Duration relocationCutoverWaitTimeout();
+ public abstract void setRelocationCutoverWaitTimeout(java.time.Duration);
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeBuilder {
-  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setRoutingIdPrefix(java.lang.String);
-  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setPlacementWeight(int);
-  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setActorCapacity(int);
-  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setSpotCapacity(int);
-  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setActivationConcurrency(int);
-  public abstract systems.zlink.framework.configuration.ZLinkMeshObjectRoleBuilder objects();
+ public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setRoutingIdPrefix(java.lang.String);
+ public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setPlacementWeight(int);
+ public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setActorCapacity(int);
+ public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setSpotCapacity(int);
+ public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setActivationConcurrency(int);
+ public abstract systems.zlink.framework.configuration.ZLinkMeshObjectRoleBuilder objects();
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshObjectRoleBuilder {
-  public abstract systems.zlink.framework.configuration.ZLinkMeshObjectClientBuilder client();
-  public abstract systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder server();
+ public abstract systems.zlink.framework.configuration.ZLinkMeshObjectClientBuilder client();
+ public abstract systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder server();
 }
 public interface systems.zlink.framework.configuration.ZLinkStreamNodeBuilder {
-  public abstract systems.zlink.framework.configuration.ZLinkStreamSocketConfig configureSocket();
-  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder enableActorDispatch();
+ public abstract systems.zlink.framework.configuration.ZLinkStreamSocketConfig configureSocket();
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder enableActorDispatch();
 }
 public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
-  public abstract long maxMessageSize();
-  public abstract void setMaxMessageSize(long);
+ public abstract long maxMessageSize();
+ public abstract void setMaxMessageSize(long);
 }
 ```
 
@@ -204,34 +204,34 @@ bounds, ordering, and overflow validation also match the Java public contract.
 ```kotlin
 fun ZLinkFrameworkOptions.useCoroutineHandlers(dispatcher: CoroutineDispatcher)
 fun ZLinkFrameworkOptions.useCoroutineHandlers(
-    scope: CoroutineScope,
-    dispatcher: CoroutineDispatcher,
+ scope: CoroutineScope,
+ dispatcher: CoroutineDispatcher,
 )
 
 inline fun ZLinkFrameworkOptions.configureDispatch(
-    block: ZLinkDispatchOptions.() -> Unit,
+ block: ZLinkDispatchOptions.() -> Unit,
 ): ZLinkDispatchOptions
 
 fun ZLinkFrameworkOptions.configureStreamCompression(
-    configure: ZLinkStreamCompressionBuilder.() -> Unit,
+ configure: ZLinkStreamCompressionBuilder.() -> Unit,
 ): ZLinkFrameworkOptions
 
 inline fun <reified TActor, reified TFactory>
-    ZLinkMeshObjectServerBuilder.actorFactory(
-        actorType: String,
-        noinline configure: ZLinkActorFactoryBuilder<TActor>.() -> Unit,
-    ): ZLinkMeshObjectServerBuilder
-    where TActor : ZLinkActor,
-          TFactory : ZLinkActorFactory
+ ZLinkMeshObjectServerBuilder.actorFactory(
+ actorType: String,
+ noinline configure: ZLinkActorFactoryBuilder<TActor>.() -> Unit,
+ ): ZLinkMeshObjectServerBuilder
+ where TActor : ZLinkActor,
+ TFactory : ZLinkActorFactory
 ```
 
 The factory configure callback has no default. The Actor factory
 builder has no setting other than relocation behavior selection. Node
-placement [weight](../../../01-glossary.en.md#weight) is 0..10000,
+placement [weight](../../../00-foundation/02-glossary.en.md#weight) is 0..10000,
 defaulting to 100. An out-of-range value is a configuration error in
 both startup config and runtime change. It's independent of Channel
 weight, and the same value is used for runtime update and the
-descriptor [snapshot](../../../01-glossary.en.md#snapshot).
+descriptor [snapshot](../../../00-foundation/02-glossary.en.md#snapshot).
 RouteMesh Channel Server and ClientServer Server weight also use the
 same range and default. Weighted selection computes the sum of
 candidate weight using at least a 64-bit integer.
@@ -244,13 +244,13 @@ RID is at most 255 UTF-8 bytes. On conflict with an active owner, it
 fails immediately with `RoutingIdConflict` instead of retrying with a
 new UUID. Fixed RID can only be used in a manual topology with no
 object role or automatic Store
-[descriptor](../../../01-glossary.en.md#descriptor). There's no slot
+[descriptor](../../../00-foundation/02-glossary.en.md#descriptor). There's no slot
 count, allocation group, or public allocation provider.
 
 The Object Server's Entry Spot ID has the same-prefix format
 `<prefix>-entry-<lowercase-canonical-uuid-v4>`, using a UUID v4
 generated separately from the MeshNode. Java's
-`ZLinkMeshNodeDescriptor.entrySpotId()` provides the exact mapping for
+`ZLinkMeshNodeDescriptor.entrySpotId()` provides the mapping for
 the same lifecycle. If the global Spot ID conflicts with an active
 owner, startup fails immediately with `SpotIdConflict` instead of
 retrying with a new UUID. If a caller-specified User/Instance Spot ID
@@ -279,18 +279,18 @@ with the Java root's `addRelocationStore(...)`. Only a same-node
 configuration with no Instance Spot factory where every factory
 selected `disableRelocation()` can omit this.
 
-## Exact Generated JVM Signature
+## Generated JVM Signature
 
 ```java
 public final class systems.zlink.framework.kotlin.ZLinkCoroutineHandlerOptionsKt {
-  public static final void useCoroutineHandlers(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlinx.coroutines.CoroutineDispatcher);
-  public static final void useCoroutineHandlers(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlinx.coroutines.CoroutineScope, kotlinx.coroutines.CoroutineDispatcher);
+ public static final void useCoroutineHandlers(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlinx.coroutines.CoroutineDispatcher);
+ public static final void useCoroutineHandlers(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlinx.coroutines.CoroutineScope, kotlinx.coroutines.CoroutineDispatcher);
 }
 public final class systems.zlink.framework.kotlin.ZLinkDispatchOptionsExtensionsKt {
-  public static final systems.zlink.framework.configuration.ZLinkDispatchOptions configureDispatch(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkDispatchOptions, kotlin.Unit>);
+ public static final systems.zlink.framework.configuration.ZLinkDispatchOptions configureDispatch(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkDispatchOptions, kotlin.Unit>);
 }
 public final class systems.zlink.framework.kotlin.ZLinkFrameworkExtensionsKt {
-  public static final <TActor extends systems.zlink.framework.actors.ZLinkActor, TFactory extends systems.zlink.framework.actors.ZLinkActorFactory> systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder actorFactory(systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkActorFactoryBuilder<TActor>, kotlin.Unit>);
-  public static final systems.zlink.framework.configuration.ZLinkFrameworkOptions configureStreamCompression(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkStreamCompressionBuilder, kotlin.Unit>);
+ public static final <TActor extends systems.zlink.framework.actors.ZLinkActor, TFactory extends systems.zlink.framework.actors.ZLinkActorFactory> systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder actorFactory(systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkActorFactoryBuilder<TActor>, kotlin.Unit>);
+ public static final systems.zlink.framework.configuration.ZLinkFrameworkOptions configureStreamCompression(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkStreamCompressionBuilder, kotlin.Unit>);
 }
 ```

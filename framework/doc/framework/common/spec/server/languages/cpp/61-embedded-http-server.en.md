@@ -1,12 +1,11 @@
-<!-- framework-adapter-nav:start -->
-[Spec table of contents](README.en.md) | [Previous: C++ HTTP Hosting](60-http-hosting.en.md)
-<!-- framework-adapter-nav:end -->
-
 [Framework common document](../../../../README.en.md)
 
 
 # C++ Embedded HTTP Server Public Contract
 
+<!-- framework-adapter-nav:start -->
+[C++ contract table of contents](README.en.md) | [Language interface table of contents](../README.en.md) | [Previous: C++ HTTP Hosting](60-http-hosting.en.md)
+<!-- framework-adapter-nav:end -->
 > This document organizes the public contract of the embedded HTTP
 > server the `C++` framework provides.
 >
@@ -145,7 +144,7 @@ The connection lifecycle guarantees the following public behavior.
 - A new connection exceeding `max_connections` ends with the overload
   result set in the server option.
 - No new connection is accepted after
-  [shutdown](../../01-glossary.en.md#shutdown) starts.
+  [shutdown](../../00-foundation/02-glossary.en.md#shutdown) starts.
 - During shutdown drain, an active request waits to complete within
   the timeout.
 - A connection is closed once the drain timeout passes.
@@ -192,7 +191,7 @@ Important rules:
 
 The HTTP server does not build a new handler model. The
 [C++ HTTP Hosting handler signature forms](60-http-hosting.en.md#3-handler-signature-forms)
-solely own the exact handler declarations and invocation priority. The
+solely own the handler declarations and invocation priority. The
 embedded server applies the same four-stage execution flow to typed and
 raw routes.
 
@@ -257,7 +256,7 @@ The public option and default value are below.
 
 The public TLS/server option builder names are fixed below. The
 [C++ configuration and host interface](interfaces/02-configuration-host.en.md#41-http-hosting)
-solely owns the exact `http_options_builder_t` declaration.
+solely owns the `http_options_builder_t` declaration.
 
 ```cpp
 namespace zlink::framework {
@@ -406,3 +405,8 @@ default server, it must satisfy every condition below.
   `zlink::http_client`.
 - The public header doesn't expose a Boost.Beast, Boost.Asio, or
   OpenSSL implementation type.
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[C++ contract table of contents](README.en.md) | [Language interface table of contents](../README.en.md) | [Previous: C++ HTTP Hosting](60-http-hosting.en.md)
+<!-- framework-adapter-nav:bottom:end -->

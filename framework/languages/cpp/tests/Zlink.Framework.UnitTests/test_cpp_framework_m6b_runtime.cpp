@@ -3632,6 +3632,11 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
             zlink::framework::location_owner_token_t{
               "configured-session-owner", 19});
       });
+    std::atomic_int late_session_route_update_count{0};
+    local->configure_late_session_route_update (
+      [&late_session_route_update_count] (const protocol::session_relocation_route_t &) {
+          late_session_route_update_count.fetch_add (1, std::memory_order_acq_rel);
+      });
     local->start ();
 
     const auto status = local->status ();
@@ -3792,6 +3797,13 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
     (void) local->dispatch_ready (dispatch);
     assert (!local->sessions ().current_binding (
       actor_object->key));
+    assert (late_session_route_update_count.load (std::memory_order_acquire) == 1);
+    assert (local->route_session_remote (
+      status.routing_id (), late_route)
+              .result ()
+              .value ());
+    (void) local->dispatch_ready (dispatch);
+    assert (late_session_route_update_count.load (std::memory_order_acquire) == 2);
     assert (held_settlement_count.load (
               std::memory_order_acquire)
             == 1);

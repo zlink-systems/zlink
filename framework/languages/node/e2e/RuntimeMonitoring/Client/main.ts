@@ -3,6 +3,7 @@ import { runMonA2 } from './Scenarios/mon-a2-location-runtime-events-scenario';
 import { runMonA3 } from './Scenarios/mon-a3-spot-events-scenario';
 import { runMonA5 } from './Scenarios/mon-a5-fixed-kinds-scenario';
 import { runMonA6 } from './Scenarios/mon-a6-placement-scenario';
+import { runMonA7 } from './Scenarios/mon-a7-capacity-reset-scenario';
 import { runMonA4A } from './Scenarios/mon-a4a-normal-replacement-scenario';
 import { runMonA4B } from './Scenarios/mon-a4b-crash-recovery-scenario';
 import { runMonB1 } from './Scenarios/mon-b1-kind-filter-scenario';
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
     'MON-A3': () => runMonA3(options),
     'MON-A5': () => runMonA5(options),
     'MON-A6': () => runMonA6(options),
+    'MON-A7': () => runMonA7(options),
     'MON-B1': () => runMonB1(options),
     'MON-B2': () => runMonB2(options),
     'MON-C1': async () => { serviceBProcess = await runMonC1(options); },
@@ -37,7 +39,7 @@ async function main(): Promise<void> {
     'MON-D1B': async () => { serviceBProcess = await runMonD1B(options); }
   };
   const gaps: Record<string, string> = {};
-  const defaultScenarioIds = ['MON-A1', 'MON-A2', 'MON-A3', 'MON-A5', 'MON-A6', 'MON-B1', 'MON-B2', 'MON-C1', 'MON-D1A', 'MON-D1B', 'MON-A4A', 'MON-A4B'];
+  const defaultScenarioIds = ['MON-A1', 'MON-A2', 'MON-A3', 'MON-A5', 'MON-A6', 'MON-A7', 'MON-B1', 'MON-B2', 'MON-C1', 'MON-D1A', 'MON-D1B', 'MON-A4A', 'MON-A4B'];
 
   try {
     if (options.scenario.toLowerCase() === 'all') {

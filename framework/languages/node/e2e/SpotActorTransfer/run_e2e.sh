@@ -323,7 +323,7 @@ wait_topology
 ST_H2_FIXTURE_ID="${RUN_ID//[^a-zA-Z0-9]/}"
 
 if [[ "$SCENARIO" == "all-core" ]]; then
-  run_client "ST-A1,ST-A2,ST-A3,ST-B1,ST-B3,ST-B4,ST-C3,ST-D1,ST-D2,ST-E1,ST-E1A,ST-E2,ST-F1,ST-F2,ST-F4,ST-F6"
+  run_client "ST-A1,ST-A2,ST-A3,ST-B1,ST-B3,ST-B4,ST-C3,ST-C4,ST-D1,ST-D2,ST-E1,ST-E1A,ST-E2,ST-F1,ST-F2,ST-F4,ST-F6"
   run_client "ST-C2"
   restart_node_a
   run_client "ST-B2"

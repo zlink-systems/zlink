@@ -1,5 +1,5 @@
 {
-  "notice": "All official Redis extensions must match this fixture. Canonical contract: framework/doc/framework/common/spec/server/22-location-store-redis.ko.md.",
+  "notice": "All official Redis extensions must match this fixture. Canonical contract: framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md.",
   "format": "actor-location-v2",
   "keyContract": {
     "objectKind": "actor",

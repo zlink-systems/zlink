@@ -45,6 +45,7 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
@@ -83,8 +84,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
     private static final long HEARTBEAT_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(5);
     private static final long IDLE_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(30);
-    private static final Duration BOUND_SESSION_REPLACEMENT_DEADLINE =
-        Duration.ofSeconds(5);
     private static final Duration BOUND_SESSION_REPLACEMENT_CLOSE_DELAY =
         Duration.ofMillis(100);
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
@@ -109,6 +108,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher;
     private final ZLinkMetadataPolicyRegistration metadataPolicy;
     private final Duration sessionRelocationSealTimeout;
+    private final Duration sessionReplacementCallbackTimeout;
     private final List<ZLinkBackendStreamSocket> streams = new ArrayList<>();
     private final Map<String, ZLinkBackendStreamSocket> streamsByName = new HashMap<>();
     private final Map<String, Boolean> streamSessionRelayAttached = new HashMap<>();
@@ -234,6 +234,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         this.sessionRelocationSealTimeout = registration.locations()
             .options()
             .sessionRelocationSealTimeout();
+        this.sessionReplacementCallbackTimeout =
+            registration.sessionReplacementCallbackTimeout();
         this.applicationJobQueue = registration.applicationJobQueue();
         this.serializer = serializer;
         this.actors = actors;
@@ -561,7 +563,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 ScheduledFuture<?> deadline = scheduleReplacementClose(
                     state,
                     identity,
-                    BOUND_SESSION_REPLACEMENT_DEADLINE);
+                    sessionReplacementCallbackTimeout);
                 CompletionStage<Void> callback;
                 try {
                     callback = executeHandler(() ->
@@ -1027,7 +1029,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 }
             }
             if (session != null) {
-                recordSessionClosed("protocol_error");
+                recordSessionClosed(session, "protocol_error");
                 try {
                     session.queue().enqueue(() -> executeHandler(() ->
                         transportErrorDisconnectSessionStage(
@@ -1302,7 +1304,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             getOrCreateSessionState(streamNode, stream, routingId);
             return;
         }
-        recordSessionClosed("client_close");
+        recordSessionClosed(state, "client_close");
         state.queue().enqueue(() -> executeHandler(() -> disconnectSessionStage(state)));
     }
 
@@ -1327,7 +1329,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         if (state == null) {
             return;
         }
-        recordSessionClosed(nativeCode == 0 ? "transport_error" : "protocol_error");
+        recordSessionClosed(
+            state,
+            nativeCode == 0 ? "transport_error" : "protocol_error");
         if (nativeCode == 0 && "DISCONNECTED".equals(message)) {
             state.queue().enqueue(() -> executeHandler(() -> disconnectSessionStage(state)));
             return;
@@ -1359,7 +1363,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return state;
     }
 
-    private static void recordSessionClosed(String reason) {
+    private static void recordSessionClosed(SessionState state, String reason) {
+        if (!state.closeMetricRecorded().compareAndSet(false, true)) {
+            return;
+        }
         ZLinkRuntimeMetrics.add("zlink.stream.connections.active", -1, Map.of());
         ZLinkRuntimeMetrics.increment("zlink.stream.connections.closed",
             Map.of("close_reason", reason));
@@ -1443,7 +1450,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     + streamNode.sessionType().getName());
         }
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
-            serialExecutor, false);
+            serialExecutor, ZLinkExecutionLanePolicy.session());
         return new SessionState(
             session,
             queue,
@@ -1493,9 +1500,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             sessions.clear();
         }
         sessionContexts.forEach(ZLinkStreamSessionContextState::closeReplyRetries);
-        String closeReason = draining ? "server_drain" : "transport_error";
+        String closeReason = draining ? "server_shutdown" : "transport_error";
         for (int index = 0; index < activeSessions.size(); index++) {
-            recordSessionClosed(closeReason);
+            recordSessionClosed(activeSessions.get(index), closeReason);
         }
         replyRetryExecutor.shutdownNow();
         boolean replyRetriesStopped = awaitExecutorTermination(
@@ -1639,6 +1646,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 reason == ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT
                     ? "heartbeat timeout"
                     : "idle timeout");
+            recordSessionClosed(
+                state,
+                reason == ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT
+                    ? "heartbeat_timeout"
+                    : "idle_timeout");
             state.queue().enqueue(() -> executeHandler(() -> disconnectSessionStage(state)));
         }
     }
@@ -1736,6 +1748,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ConcurrentHashMap.newKeySet();
         private final AtomicBoolean replacementClosing = new AtomicBoolean();
         private final AtomicBoolean closeScheduled = new AtomicBoolean();
+        private final AtomicBoolean closeMetricRecorded = new AtomicBoolean();
         private volatile long lastApplicationNanos = System.nanoTime();
         private volatile long lastHeartbeatPongNanos = System.nanoTime();
 
@@ -1803,6 +1816,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         long lastApplicationNanos() { return lastApplicationNanos; }
         long lastHeartbeatPongNanos() { return lastHeartbeatPongNanos; }
+        AtomicBoolean closeMetricRecorded() { return closeMetricRecorded; }
         void markApplicationReceived() { lastApplicationNanos = System.nanoTime(); }
         void markHeartbeatPong() { lastHeartbeatPongNanos = System.nanoTime(); }
     }

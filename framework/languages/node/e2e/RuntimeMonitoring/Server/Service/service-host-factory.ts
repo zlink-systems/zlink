@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
@@ -30,6 +31,7 @@ import {
   FailingTimerHandler,
   MonitoringActor,
   MonitoringActorFactory,
+  MonitoringCapacityGate,
   MonitoringEntryPublishHandler,
   MonitoringEntrySpot,
   MonitoringPublishGate,
@@ -42,6 +44,14 @@ import { closeHttpServer, startHttpServer } from './Support/http-server';
 import { PublicObserverProbe, startPublicStatusObservers } from './Support/public-status-observer';
 import { createRedisLocationStore, monitoringLocationOptions } from '../../Shared/location-store';
 
+const { ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE: CAPACITY_HANDLER_START_GATE } =
+  require(path.resolve(
+    __dirname,
+    '../../../../../../../packages/framework/dist/runtime/application-jobs/application-job-queue-handler-start-gate.js'
+  )) as typeof import(
+    '../../../../packages/framework/dist/runtime/application-jobs/application-job-queue-handler-start-gate.js'
+  );
+
 export async function startServiceHost(role: ServiceRoleOptions = {}): Promise<void> {
   let stopping = false;
 
@@ -53,6 +63,7 @@ export async function startServiceHost(role: ServiceRoleOptions = {}): Promise<v
   const spots = app.get(ZLINK_SPOT_MANAGER, { strict: false }) as ZLinkSpotManager;
   const actors = app.get(ZLINK_ACTOR_MANAGER, { strict: false }) as ZLinkActorManager;
   const publishGate = app.get(MonitoringPublishGate, { strict: false }) as MonitoringPublishGate;
+  const capacityGate = app.get(MonitoringCapacityGate, { strict: false }) as MonitoringCapacityGate;
   const runtimeOptions = app.get(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false }) as ZLinkRouteMeshRuntimeOptions;
   const routeRuntime = app.get(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }) as ZLinkRouteMeshRuntime;
   const frameworkRuntime = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false }) as ZLinkFrameworkRuntime;
@@ -76,6 +87,7 @@ export async function startServiceHost(role: ServiceRoleOptions = {}): Promise<v
       spots,
       actors,
       publishGate,
+      capacityGate,
       observerProbe,
       () => { stopping = true; }
     )
@@ -109,6 +121,8 @@ function createServiceModule(role: ServiceRoleOptions): Function {
           builder
             .configureDispatch()
               .messageFlow('normal');
+          builder.configureInboundDispatch()
+            .maxQueuedApplicationJobs(1n);
 
           builder.addLocationStore(createRedisLocationStore({
             redisEndpoint: options.redisEndpoint,
@@ -153,6 +167,11 @@ function createServiceModule(role: ServiceRoleOptions): Function {
         return evidence;
       } },
       MonitoringPublishGate,
+      MonitoringCapacityGate,
+      {
+        provide: CAPACITY_HANDLER_START_GATE,
+        useExisting: MonitoringCapacityGate
+      },
       FailingTimerHandler,
       MonitoringActorFactory,
       MonitoringEntryPublishHandler,

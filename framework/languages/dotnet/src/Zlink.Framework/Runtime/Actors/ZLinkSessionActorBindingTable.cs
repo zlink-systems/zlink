@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -296,6 +297,11 @@ internal readonly record struct ZLinkSessionBindingTombstone(
 internal sealed class ZLinkSessionActorBindingTable
 {
     private const int DefaultMaxRetainedOutbound = 4_096;
+    private static readonly Action<ILogger, string, string, Exception?>
+        LateSessionRouteUpdate = LoggerMessage.Define<string, string>(
+            LogLevel.Warning,
+            new EventId(28002, "late_session_route_update"),
+            "late_session_route_update actor={ActorId} relocation={RelocationId}");
     private readonly Dictionary<ZLinkSessionBindingKey, ZLinkSessionBindingEntry> _entries = new();
     private readonly Dictionary<ZLinkSessionBindingKey, ZLinkSessionBindingTombstone>
         _tombstones = new();
@@ -312,6 +318,7 @@ internal sealed class ZLinkSessionActorBindingTable
     private readonly TimeProvider _timeProvider;
     private readonly int _maxTombstones;
     private readonly int _maxRetainedOutbound;
+    private readonly ILogger? _logger;
 
     private sealed class CanonicalSealTimeoutState(
         ZLinkServiceWireCodec.SessionRelocationSealRecord seal)
@@ -350,7 +357,8 @@ internal sealed class ZLinkSessionActorBindingTable
         TimeSpan canonicalRelocationSealTimeout,
         TimeProvider? timeProvider = null,
         int maxTombstones = 4_096,
-        int maxRetainedOutbound = DefaultMaxRetainedOutbound)
+        int maxRetainedOutbound = DefaultMaxRetainedOutbound,
+        ILogger? logger = null)
     {
         _tombstoneRetention = tombstoneRetention > TimeSpan.Zero
             ? tombstoneRetention
@@ -362,6 +370,7 @@ internal sealed class ZLinkSessionActorBindingTable
         _maxRetainedOutbound = maxRetainedOutbound > 0
             ? maxRetainedOutbound
             : DefaultMaxRetainedOutbound;
+        _logger = logger;
         _canonicalRelocationSealTimeout = canonicalRelocationSealTimeout;
         if (_canonicalRelocationSealTimeout <= TimeSpan.Zero
             || _canonicalRelocationSealTimeout == Timeout.InfiniteTimeSpan
@@ -398,6 +407,56 @@ internal sealed class ZLinkSessionActorBindingTable
         while (_timedOutCanonicalSeals.Count > _maxTombstones)
             _timedOutCanonicalSeals.Remove(
                 _timedOutCanonicalSealOrder.Dequeue());
+    }
+
+    private void LogLateSessionRouteUpdate(
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord request)
+    {
+        var logger = _logger;
+        if (logger is null) return;
+        try
+        {
+            if (logger.IsEnabled(LogLevel.Warning))
+                LateSessionRouteUpdate(
+                    logger,
+                    request.Actor.ActorId,
+                    request.RelocationId.ToString(),
+                    null);
+        }
+        catch
+        {
+            // Diagnostics must not change command 44's one-way semantics.
+        }
+    }
+
+    internal bool IsLateCanonicalRoute(
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord request)
+    {
+        lock (_entries)
+        {
+            if (_timedOutCanonicalSeals.Contains(
+                    CanonicalRelocationKey.From(request)))
+            {
+                LogLateSessionRouteUpdate(request);
+                return true;
+            }
+            if (!TryFindCanonicalBinding(
+                    request.Actor,
+                    request.Session,
+                    out _,
+                    out var entry)
+                || entry.AppliedCanonicalRelocationRoute is not null
+                || entry.CanonicalRelocationSeal is not { } seal
+                || seal.RelocationId != request.RelocationId
+                || seal.Coordinator != request.Coordinator
+                || seal.Actor.Actor != request.Actor
+                || seal.Session != request.Session)
+            {
+                LogLateSessionRouteUpdate(request);
+                return true;
+            }
+            return false;
+        }
     }
 
     private async Task RunCanonicalSealTimeoutAsync(
@@ -1060,10 +1119,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (_timedOutCanonicalSeals.Contains(
                     CanonicalRelocationKey.From(request)))
             {
-                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"late_session_route_update "
-                    + $"actor={request.Actor.ActorId} "
-                    + $"relocation={request.RelocationId}");
+                LogLateSessionRouteUpdate(request);
                 return false;
             }
             if (!TryFindCanonicalBinding(
@@ -1071,24 +1127,30 @@ internal sealed class ZLinkSessionActorBindingTable
                     request.Session,
                     out var key,
                     out var entry))
+            {
+                LogLateSessionRouteUpdate(request);
                 return false;
+            }
 
             if (entry.AppliedCanonicalRelocationRoute is { } applied)
             {
-                if (applied != request)
-                    throw new InvalidDataException(
-                        "A late command 44 changed the completed route fingerprint.");
-                return true;
+                LogLateSessionRouteUpdate(request);
+                return applied == request;
             }
 
             if (entry.CanonicalRelocationSeal is not { } seal)
+            {
+                LogLateSessionRouteUpdate(request);
                 return false;
+            }
             if (seal.RelocationId != request.RelocationId
                 || seal.Coordinator != request.Coordinator
                 || seal.Actor.Actor != request.Actor
                 || seal.Session != request.Session)
-                throw new InvalidDataException(
-                    "Command 44 does not identify the active command 42 seal.");
+            {
+                LogLateSessionRouteUpdate(request);
+                return false;
+            }
             if (entry.CanonicalRelocationSealResult is null)
                 throw new InvalidDataException(
                     "Command 44 arrived before the exact command 43 terminal.");

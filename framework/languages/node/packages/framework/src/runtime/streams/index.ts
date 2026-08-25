@@ -276,7 +276,7 @@ export class ZLinkStreamRuntimeManager {
         metrics: this.options.metrics,
         providerResolver: this.options.providerResolver,
         messageSerializers: this.options.registration.messageSerializers,
-        replacementCallbackTimeoutMs: this.options.registration.requestTimeoutMs ?? 30_000,
+        replacementCallbackTimeoutMs: this.options.registration.sessionReplacementCallbackTimeoutMs,
         sessionFactory: (context) => createStreamSessionInstance(
           sessionType as Type<ZLinkSession> | Type<ZLinkSessionFactory>,
           this.options.providerResolver,

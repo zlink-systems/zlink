@@ -1,8 +1,11 @@
-# .NET Exact Public Interface
+# .NET Per-Language Public Interface
 
+<!-- framework-adapter-nav:start -->
+[.NET contract table of contents](../README.en.md) | [Language interface table of contents](../../README.en.md)
+<!-- framework-adapter-nav:end -->
 [.NET contract table of contents](../README.en.md)
 
-This directory owns only the exact C# public contract of ZLink Framework
+This directory owns only the C# public contract of ZLink Framework
 server, organized per feature. The common Framework spec decides
 behavior, and the following documents fix the type, member, generic
 constraint, nullable annotation, and default. It includes the API the
@@ -21,7 +24,7 @@ the provider-neutral payload the handler receives.
 | [Configuration and host](02-configuration-host.en.md) | Defines the package, ASP.NET Core host, DI, and startup interface. |
 | [Topology configuration](03-configuration-topology.en.md) | Defines RouteMesh, ClientServer, and fanout builder and runtime options. |
 | [Channel messaging](04-channel-messaging.en.md) | Defines the call and handler for Node direct, ChannelName, and Logical Multicast. |
-| [Spots](05-spots.en.md) | Defines Entry/User/Instance Spot lifecycle, relocation adapter, the [Spot](../../../01-glossary.en.md#spot)-dedicated fluent call, [User Spot](../../../01-glossary.en.md#entry-user-instance-spot) manager, and timer. |
+| [Spots](05-spots.en.md) | Defines Entry/User/Instance Spot lifecycle, relocation adapter, the [Spot](../../../00-foundation/02-glossary.en.md#spot)-dedicated fluent call, [User Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot) manager, and timer. |
 | [Actors](06-actors.en.md) | Defines Actor factory, context, client, manager, relocation adapter, and policy. |
 | [Bound STREAM session](07-bound-stream-session.en.md) | Defines the bound session call an Actor owns. |
 | [STREAM session](07-stream-session.en.md) | Defines the STREAM server session and handler interface. |
@@ -43,3 +46,8 @@ ordinal is `1..9223372036854775807`. Even though the .NET type is
 framework treats it as terminal exhaustion, without wrap or value reuse.
 `0` is only used when the relevant contract explicitly specifies it to
 represent a not-yet-determined value.
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[.NET contract table of contents](../README.en.md) | [Language interface table of contents](../../README.en.md)
+<!-- framework-adapter-nav:bottom:end -->

@@ -103,7 +103,7 @@ separate diagnostics and does not change the original message operation's termin
 
 `flow_id` and `flow_origin` are the identifiers that tie together the pieces of one
 request as it crosses multiple nodes. The correlation rules are owned by
-[Flow Correlation](../../../common/spec/server/27-flow-correlation.en.md).
+[Flow Correlation](../../../common/spec/server/06-observability/04-flow-correlation.en.md).
 
 ## 4. Health Check
 
@@ -142,7 +142,7 @@ directly.
 - Exporter lifecycle, registry, and provider internal state
 
 Metric names, kinds, units, and labels are owned by
-[Runtime Metrics And Aggregation Rules](../../../common/spec/server/25-runtime-metrics.en.md).
+[Runtime Metrics And Aggregation Rules](../../../common/spec/server/06-observability/02-runtime-metrics.en.md).
 
 ## 6. Common Problems
 

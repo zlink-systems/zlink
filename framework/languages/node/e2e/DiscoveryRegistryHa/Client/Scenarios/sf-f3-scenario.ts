@@ -1,4 +1,4 @@
-// SF-F3: Relocation Store 장애는 새 relocation만 막는다 시나리오를 검증한다.
+// SF-F3: Relocation Store 장애가 막는 것과 막지 않는 것을 구분한다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';
 import {

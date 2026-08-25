@@ -1,5 +1,8 @@
 # Node.js Actor And Session Binding Public Interface
 
+[Interface table of contents](README.en.md) · [Actor Model](../../../03-spot-actor/04-actor-model.en.md) ·
+[Spot/Actor Membership](../../../03-spot-actor/05-spot-actor-membership.en.md)
+
 A Spot relocation, including an Actor bound to a session, restores the
 Actor and queue on the target, commits owner and membership, and then
 starts message processing. The target runtime sends
@@ -11,10 +14,7 @@ relocation itself isn't a physical/logical disconnect, it doesn't run
 the Actor disconnect callback. The route and physical connection of a
 different Actor not included in the relocation target aren't changed.
 
-[Interface table of contents](README.en.md) · [Actor Model](../../../14-actor-model.en.md) ·
-[Spot/Actor Membership](../../../15-spot-actor.en.md)
-
-This document fixes the exact TypeScript declarations related to Actor
+This document fixes the TypeScript declarations related to Actor
 that `@zlink-systems/framework` and `@zlink-systems/nestjs` export in
 ZLink Framework.
 
@@ -22,119 +22,119 @@ ZLink Framework.
 
 `ActorId` is a logical ID unique across the whole Location Store
 transaction domain. Its UTF-8 encoded size is 1..255 bytes, it's
-compared as a case-sensitive exact value, and it isn't normalized. A
+compared as a case-sensitive value comparison, and it isn't normalized. A
 regular message only takes `ActorId` and resolves current authority.
-`ActorRef` is the immutable location snapshot used to change an exact
+`ActorRef` is the immutable location snapshot used to change an
 incarnation or bind to a session.
 
 ```ts
 export interface ZLinkActor {
-    readonly context: ZLinkActorContext;
-    configure?(): void;
-    onJoinCompleted?(completion: ZLinkActorJoinCompletion): Promise<void>;
+ readonly context: ZLinkActorContext;
+ configure?(): void;
+ onJoinCompleted?(completion: ZLinkActorJoinCompletion): Promise<void>;
 }
 
 export interface ZLinkActorContext {
-    readonly actorId: ActorId;
-    readonly objectGeneration: bigint;
-    readonly meshName: string;
-    readonly spotId?: SpotId;
-    readonly boundSession: ZLinkBoundSession;
-    joinSpot(spotId: SpotId): ZLinkActorJoinSpotCall;
-    joinSpot(spotId: SpotId, request: unknown): ZLinkActorJoinSpotCall;
-    joinEntrySpot(): ZLinkActorJoinEntrySpotCall;
-    joinEntrySpot(request: unknown): ZLinkActorJoinEntrySpotCall;
+ readonly actorId: ActorId;
+ readonly objectGeneration: bigint;
+ readonly meshName: string;
+ readonly spotId?: SpotId;
+ readonly boundSession: ZLinkBoundSession;
+ joinSpot(spotId: SpotId): ZLinkActorJoinSpotCall;
+ joinSpot(spotId: SpotId, request: unknown): ZLinkActorJoinSpotCall;
+ joinEntrySpot(): ZLinkActorJoinEntrySpotCall;
+ joinEntrySpot(request: unknown): ZLinkActorJoinEntrySpotCall;
 }
 
 export interface ZLinkActorFactory<TActor extends ZLinkActor = ZLinkActor> {
-    create(context: ZLinkActorContext, signal?: AbortSignal): Promise<TActor>;
+ create(context: ZLinkActorContext, signal?: AbortSignal): Promise<TActor>;
 }
 
 export interface ZLinkActorHandlerRegistry {
-    addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this;
+ addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this;
 }
 
 export interface ZLinkActorJoinCall<TSelf> {
-    timeout(timeoutMs: number): TSelf;
-    defer(): void;
+ timeout(timeoutMs: number): TSelf;
+ defer(): void;
 }
 
 export interface ZLinkActorJoinEntrySpotCall
-    extends ZLinkActorJoinCall<ZLinkActorJoinEntrySpotCall> {}
+ extends ZLinkActorJoinCall<ZLinkActorJoinEntrySpotCall> {}
 
 export interface ZLinkActorJoinSpotCall
-    extends ZLinkActorJoinCall<ZLinkActorJoinSpotCall> {}
+ extends ZLinkActorJoinCall<ZLinkActorJoinSpotCall> {}
 
 export interface ZLinkActorJoinOperationId {
-    readonly high: bigint;
-    readonly low: bigint;
+ readonly high: bigint;
+ readonly low: bigint;
 }
 
 export type ZLinkActorJoinCompletion =
-    | { readonly status: 'accepted'; readonly operationId: ZLinkActorJoinOperationId;
-        readonly actor: ActorRef; readonly reply?: ZLinkMessage }
-    | { readonly status: 'rejected'; readonly operationId: ZLinkActorJoinOperationId;
-        readonly reply?: ZLinkMessage }
-    | { readonly status: 'failed'; readonly operationId: ZLinkActorJoinOperationId;
-        readonly kind: ZLinkFrameworkErrorKind };
+ | { readonly status: 'accepted'; readonly operationId: ZLinkActorJoinOperationId;
+ readonly actor: ActorRef; readonly reply?: ZLinkMessage }
+ | { readonly status: 'rejected'; readonly operationId: ZLinkActorJoinOperationId;
+ readonly reply?: ZLinkMessage }
+ | { readonly status: 'failed'; readonly operationId: ZLinkActorJoinOperationId;
+ readonly kind: ZLinkFrameworkErrorKind };
 ```
 
 The canonical declaration of `ActorId` and `ActorRef` is owned by
 [Foundation Types And Configuration](01-foundation-configuration.en.md).
-This document only fixes the exact location where the Actor lifecycle
+This document only fixes the location where the Actor lifecycle
 and manager use that type.
 
 ## 2. Global Client And Manager
 
 ```ts
 export interface ZLinkActorClient {
-    sendToActor(actorId: ActorId, message: unknown): ZLinkActorSendCall;
-    requestToActor(actorId: ActorId, request: unknown): ZLinkActorRequestCall;
+ sendToActor(actorId: ActorId, message: unknown): ZLinkActorSendCall;
+ requestToActor(actorId: ActorId, request: unknown): ZLinkActorRequestCall;
 }
 
 export interface ZLinkActorManager {
-    create(actorId: ActorId, actorType: string): ZLinkActorCreateCall;
-    getOrCreate(actorId: ActorId, actorType: string): ZLinkActorGetOrCreateCall;
-    find(actorId: ActorId, signal?: AbortSignal): Promise<ActorRef | undefined>;
-    findSpot(actorId: ActorId, signal?: AbortSignal): Promise<SpotRef | undefined>;
-    destroy(actor: ActorRef, signal?: AbortSignal): Promise<boolean>;
+ create(actorId: ActorId, actorType: string): ZLinkActorCreateCall;
+ getOrCreate(actorId: ActorId, actorType: string): ZLinkActorGetOrCreateCall;
+ find(actorId: ActorId, signal?: AbortSignal): Promise<ActorRef | undefined>;
+ findSpot(actorId: ActorId, signal?: AbortSignal): Promise<SpotRef | undefined>;
+ destroy(actor: ActorRef, signal?: AbortSignal): Promise<boolean>;
 }
 
 export interface ZLinkActorCreateCall {
-    inMesh(meshName: string): this;
-    request(request: unknown): this;
-    timeout(timeoutMs: number): this;
-    submit(signal?: AbortSignal): Promise<ZLinkActorCreateResult>;
-    yield(signal?: AbortSignal): Promise<ZLinkActorCreateResult>;
+ inMesh(meshName: string): this;
+ request(request: unknown): this;
+ timeout(timeoutMs: number): this;
+ submit(signal?: AbortSignal): Promise<ZLinkActorCreateResult>;
+ yield(signal?: AbortSignal): Promise<ZLinkActorCreateResult>;
 }
 
 export interface ZLinkActorGetOrCreateCall {
-    inMesh(meshName: string): this;
-    request(request: unknown): this;
-    timeout(timeoutMs: number): this;
-    submit(signal?: AbortSignal): Promise<ZLinkActorCreateResult>;
-    yield(signal?: AbortSignal): Promise<ZLinkActorCreateResult>;
+ inMesh(meshName: string): this;
+ request(request: unknown): this;
+ timeout(timeoutMs: number): this;
+ submit(signal?: AbortSignal): Promise<ZLinkActorCreateResult>;
+ yield(signal?: AbortSignal): Promise<ZLinkActorCreateResult>;
 }
 
 export type ZLinkActorCreateResult =
-    | { readonly status: 'existing'; readonly actor: ActorRef }
-    | {
-        readonly status: 'created';
-        readonly actor: ActorRef;
-        readonly reply?: unknown;
-      }
-    | { readonly status: 'rejected'; readonly reply?: unknown };
+ | { readonly status: 'existing'; readonly actor: ActorRef }
+ | {
+ readonly status: 'created';
+ readonly actor: ActorRef;
+ readonly reply?: unknown;
+ }
+ | { readonly status: 'rejected'; readonly reply?: unknown };
 
 export interface ZLinkActorRequestCall {
-    metadata(key: string, value: string): this;
-    timeout(timeoutMs: number): this;
-    submit<TReply>(signal?: AbortSignal): Promise<TReply>;
-    yield<TReply>(signal?: AbortSignal): Promise<TReply>;
+ metadata(key: string, value: string): this;
+ timeout(timeoutMs: number): this;
+ submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ yield<TReply>(signal?: AbortSignal): Promise<TReply>;
 }
 
 export interface ZLinkActorSendCall {
-    metadata(key: string, value: string): this;
-    submit(signal?: AbortSignal): Promise<void>;
+ metadata(key: string, value: string): this;
+ submit(signal?: AbortSignal): Promise<void>;
 }
 ```
 
@@ -148,7 +148,7 @@ The caller doesn't specify a target RID or predicate.
 `create` returns `AlreadyExists` if a ready incarnation of the same
 ActorId exists, and `TypeMismatch` if stable type differs. A new attempt
 returns `created` or `rejected`. `getOrCreate` returns a
-[ready](../../../01-glossary.en.md#ready) Actor of the same type as
+[ready](../../../00-foundation/02-glossary.en.md#ready) Actor of the same type as
 `existing`, without a callback. If Creating, it waits for the authority
 change, and a CAS loser doesn't start a separate factory or callback. A
 different operation receives `existing` after ready, competes for a new
@@ -159,7 +159,7 @@ generation/`OperationId` reads the correlation-free
 the current correlation/reply route. The terminal is kept for 5 minutes
 after the original deadline. A callback exception isn't `rejected` —
 it's a typed creation failure. If the whole deadline ends,
-`DeadlineExceeded`; if there's no capacity, `CapacityExceeded`. An exact
+`DeadlineExceeded`; if there's no capacity, `CapacityExceeded`. An
 lifecycle operation whose ActorRef's object generation differs from
 current is `InvalidOperation`, and `Unavailable` while moving.
 
@@ -167,7 +167,7 @@ Actor create finishes the selected owner MeshNode's Entry Spot
 membership and the Ready barrier in the same lifecycle. After Ready, a
 one-way message is submitted directly to the Actor queue. Even if a
 stale route is confirmed after resolve or queue admission, the
-framework doesn't find a new [owner](../../../01-glossary.en.md#owner)
+framework doesn't find a new [owner](../../../00-foundation/02-glossary.en.md#owner)
 and hidden-retry the same operation.
 
 The Actor Join call only provides a synchronous `defer()`, and doesn't
@@ -191,22 +191,22 @@ timeout is 5 seconds, and an explicit value is a finite
 absolute deadline is fixed at the moment `defer()` is called.
 
 If `ZLinkActorContext.spotId` is absent, the Actor is a current
-[Entry Spot](../../../01-glossary.en.md#entry-user-instance-spot)
+[Entry Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
 member; if it has a value, it's a member of that User Spot. A separate
 boolean or mutable Spot instance representing the same state isn't
 provided. `findSpot(actorId)` also only returns the current User
-[Spot](../../../01-glossary.en.md#spot)
-[membership](../../../01-glossary.en.md#membership) as `SpotRef`,
+[Spot](../../../00-foundation/02-glossary.en.md#spot)
+[membership](../../../00-foundation/02-glossary.en.md#membership) as `SpotRef`,
 and `undefined` on Entry Spot. The factory creates a new Actor and
 context per target attempt, and doesn't reuse an instance whose
 cross-node restore failed in the next attempt.
 
 ## 3. Session Binding
 
-Session binding fixes the exact incarnation of `ActorRef.actorId +
+Session binding fixes the specified incarnation of `ActorRef.actorId +
 objectGeneration` once. A bind overload taking a local Actor instance,
 a global Actor directory, a handle resolver, and a separate ActorRef
-[snapshot](../../../01-glossary.en.md#snapshot) conversion API aren't
+[snapshot](../../../00-foundation/02-glossary.en.md#snapshot) conversion API aren't
 provided. `find(actorId)` only queries an Actor already bound to that
 session, not a global directory.
 
@@ -218,9 +218,9 @@ only releases the binding — Actor and Spot membership are kept.
 
 The public trace category is `actor-relocation`. The meaning and
 verification criteria are owned by
-[Actor Model](../../../14-actor-model.en.md),
-[Spot/Actor Membership](../../../15-spot-actor.en.md), and
-[Session Actor Dispatch](../../../20-session-actor-dispatch.en.md).
+[Actor Model](../../../03-spot-actor/04-actor-model.en.md),
+[Spot/Actor Membership](../../../03-spot-actor/05-spot-actor-membership.en.md), and
+[Session Actor Dispatch](../../../04-session/02-session-actor-binding.en.md).
 
 `yield(...)` declared on an Actor request is only valid while the
 current Actor handler is running on a `SpotWide` User Spot's shared

@@ -248,7 +248,7 @@ started from an inbound callback reuses the current inbound flow, and
 once the callback ends, the connector runtime cleans up the current
 flow context. The wire format and async context boundary is owned by
 [Common Stream Connector §4.2](../../32-stream-connector.en.md) and
-[Flow Correlation §6](../../../server/27-flow-correlation.en.md#6-async-work-and-execution-context).
+[Flow Correlation §6](../../../server/06-observability/04-flow-correlation.en.md#6-async-work-and-execution-context).
 
 ## 6. Options
 
@@ -314,16 +314,16 @@ its boundary, and a metric processing failure doesn't change send,
 request, or connection state.
 
 `options()` returns a copy of the configuration the
-[factory](../../../server/01-glossary.en.md#factory) applied. The value the
+[factory](../../../server/00-foundation/02-glossary.en.md#factory) applied. The value the
 getter shows must be the value the actual connect, request, wait,
 queue, TLS, and compression paths use — a configuration value not
 reflected in behavior isn't exposed.
 
 `connector_options_t::diagnostics_level` is only the level `create()`
 starts with. Common spec §13 makes the connector a client connector
-under [flow correlation §4](../../../server/27-flow-correlation.en.md#4-when-a-flow-is-created),
+under [flow correlation §4](../../../server/06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created),
 so runtime level changes follow
-[message-flow-tracing §4.1](../../../server/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime)
+[message-flow-tracing §4.1](../../../server/06-observability/03-message-flow-tracing.en.md#5-changing-the-record-level-at-runtime-and-the-cost-rule)
 as-is: the application reads and changes the level without recreating
 the connector, using two methods on `connector_t`:
 

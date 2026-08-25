@@ -5,6 +5,7 @@
 
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
@@ -1137,13 +1138,41 @@ task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
     auto actor_context = std::make_shared<actor_context_t> (context ());
     return enqueue_session_relay (
       _state, actor_id, packet_name,
-      [dispatcher = std::move (dispatcher), actor = _ref, actor_context = std::move (actor_context),
-       relay_header = std::move (relay_header), payload,
+      [state = _state, dispatcher = std::move (dispatcher), actor = _ref,
+       actor_context = std::move (actor_context), relay_header = std::move (relay_header), payload,
        relay_source = std::move (relay_source)] () mutable -> task_t<void> {
-          const auto dispatched = co_await dispatcher (
-            actor, std::move (*actor_context), relay_header, payload, std::move (relay_source));
-          (void) dispatched;
-          co_return;
+          bool offload_session_relay = false;
+          {
+              const std::lock_guard lock (state->mutex);
+              offload_session_relay = state->offload_session_relay;
+          }
+          if (!offload_session_relay) {
+              const auto dispatched = co_await dispatcher (
+                actor, std::move (*actor_context), relay_header, payload, std::move (relay_source));
+              (void) dispatched;
+              co_return;
+          }
+          /* task_t coroutines start eagerly. Submit the relay before
+           * constructing that coroutine so a STREAM callback cannot enter an
+           * Actor delivery turn inline; the Actor runtime then selects its
+           * PerActor or SpotWide execution gate as usual. */
+          auto offloaded = runtime::handler_coroutine_executor ().submit<void> (
+            [dispatcher = std::move (dispatcher), actor = std::move (actor),
+             actor_context = std::move (actor_context), relay_header = std::move (relay_header),
+             payload, relay_source = std::move (relay_source)] () mutable
+            -> boost::asio::awaitable<result_t<void>> {
+                const auto dispatched = co_await runtime::await_task_result (
+                  dispatcher (actor, std::move (*actor_context), relay_header, payload,
+                              std::move (relay_source)));
+                if (!dispatched) {
+                    co_return result_t<void>::failure (
+                      dispatched.error_kind (), dispatched.error () != nullptr
+                                                  ? dispatched.error ()->what ()
+                                                  : "actor session relay failed");
+                }
+                co_return result_t<void>::success ();
+            });
+          co_return co_await offloaded;
       });
 }
 
@@ -1190,6 +1219,7 @@ relay_request_call_t session_actor_t::relay_request (const zlink::message_t &pay
     detail::actor_gateway_state_t::relay_dispatcher_t dispatcher;
     detail::stream_header_t relay_header;
     std::optional<detail::bound_session_relay_source_t> relay_source;
+    bool offload_session_relay = false;
     {
         const std::lock_guard lock (_state->mutex);
         if (::zlink::framework::detail::actor_ref_access_t::empty (_ref)) {
@@ -1243,6 +1273,7 @@ relay_request_call_t session_actor_t::relay_request (const zlink::message_t &pay
               framework_error_kind_t::not_found, "actor relay dispatcher is not configured"));
         }
         dispatcher = _state->relay_dispatcher;
+        offload_session_relay = _state->offload_session_relay;
         if (found->second.source_session_rid && found->second.source_binding_generation != 0) {
             relay_source = detail::bound_session_relay_source_t{
               *found->second.source_session_rid, found->second.source_binding_generation,
@@ -1265,9 +1296,22 @@ relay_request_call_t session_actor_t::relay_request (const zlink::message_t &pay
                 relay_header.with_flow (std::string (*flow_id), *header->flow_origin ());
         }
     }
-    return relay_request_call_t (complete_session_actor_relay_request (
-      _state, std::move (dispatcher), _ref, context (), std::move (relay_header), payload,
-      std::move (relay_source)));
+    if (!offload_session_relay) {
+        return relay_request_call_t (complete_session_actor_relay_request (
+          _state, std::move (dispatcher), _ref, context (), std::move (relay_header), payload,
+          std::move (relay_source)));
+    }
+    auto actor_context = std::make_shared<actor_context_t> (context ());
+    return relay_request_call_t (runtime::handler_coroutine_executor ().submit<zlink::message_t> (
+      [state = _state, dispatcher = std::move (dispatcher), actor = _ref,
+       actor_context = std::move (actor_context), relay_header = std::move (relay_header), payload,
+       relay_source = std::move (relay_source)] () mutable
+      -> boost::asio::awaitable<result_t<zlink::message_t>> {
+          co_return co_await runtime::await_task_result (complete_session_actor_relay_request (
+            std::move (state), std::move (dispatcher), std::move (actor),
+            std::move (*actor_context), std::move (relay_header), payload,
+            std::move (relay_source)));
+      }));
 }
 
 relay_request_call_t session_actor_t::relay_request (std::string packet_name,
@@ -3111,6 +3155,12 @@ void actor_gateway_runtime_t::on_relay (actor_gateway_state_t::relay_dispatcher_
 {
     const std::lock_guard lock (_state->mutex);
     _state->relay_dispatcher = std::move (dispatcher);
+}
+
+void actor_gateway_runtime_t::offload_session_relay (bool enabled)
+{
+    const std::lock_guard lock (_state->mutex);
+    _state->offload_session_relay = enabled;
 }
 
 void actor_gateway_runtime_t::on_disconnect (

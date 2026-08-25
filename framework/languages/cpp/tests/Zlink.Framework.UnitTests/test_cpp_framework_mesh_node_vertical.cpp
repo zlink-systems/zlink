@@ -265,10 +265,10 @@ bool wait_until_admitted (zlink::framework::detail::mesh_node_runtime_t &node)
     while (std::chrono::steady_clock::now () < deadline) {
         if (node.admitted_peer_count () > 0)
             return true;
-        (void) node.dispatch_ready (
+        (void) std::move (node.dispatch_ready (
           [] (const zlink::framework::runtime::host::ready_record_t &,
               const zlink::framework::runtime::host::receive_record_t &,
-              std::vector<zlink::message_t>) {});
+              std::vector<zlink::message_t>) {})).result ().value ();
         std::this_thread::sleep_for (10ms);
     }
     std::fprintf (stderr, "[vertical] admission timeout rid=%s peers=%zu state=%d\n",
@@ -324,10 +324,10 @@ bool wait_until_admitted_count (zlink::framework::detail::mesh_node_runtime_t &n
     while (std::chrono::steady_clock::now () < deadline) {
         if (node.admitted_peer_count () >= expected)
             return true;
-        (void) node.dispatch_ready (
+        (void) std::move (node.dispatch_ready (
           [] (const zlink::framework::runtime::host::ready_record_t &,
               const zlink::framework::runtime::host::receive_record_t &,
-              std::vector<zlink::message_t>) {});
+              std::vector<zlink::message_t>) {})).result ().value ();
         std::this_thread::sleep_for (10ms);
     }
     return false;
@@ -394,14 +394,14 @@ bool receive_one (zlink::framework::detail::mesh_node_runtime_t &node,
     const auto deadline = std::chrono::steady_clock::now () + 5s;
     while (std::chrono::steady_clock::now () < deadline) {
         bool matched = false;
-        (void) node.dispatch_ready (
+        (void) std::move (node.dispatch_ready (
           [&] (const zlink::framework::runtime::host::ready_record_t &,
                const zlink::framework::runtime::host::receive_record_t &record,
                std::vector<zlink::message_t> parts) {
               matched = matched
                         || (record.kind == expected_kind && !parts.empty ()
                             && parts.front ().to_string () == expected_text);
-          });
+          })).result ().value ();
         if (matched)
             return true;
         std::this_thread::sleep_for (5ms);
@@ -417,7 +417,7 @@ bool reply_to_one_request (zlink::framework::detail::mesh_node_runtime_t &node,
     const auto deadline = std::chrono::steady_clock::now () + 5s;
     while (std::chrono::steady_clock::now () < deadline) {
         bool replied = false;
-        (void) node.dispatch_ready (
+        (void) std::move (node.dispatch_ready (
           [&] (const zlink::framework::runtime::host::ready_record_t &,
                const zlink::framework::runtime::host::receive_record_t &record,
                std::vector<zlink::message_t> parts) {
@@ -428,7 +428,7 @@ bool reply_to_one_request (zlink::framework::detail::mesh_node_runtime_t &node,
                   replied = zlink::framework::runtime::host::reply (record.reply_token, reply_parts)
                             == zlink::submit_result_t::ok;
               }
-          });
+          })).result ().value ();
         if (replied)
             return true;
         std::this_thread::sleep_for (5ms);
@@ -446,7 +446,7 @@ bool receive_completion (zlink::framework::detail::mesh_node_runtime_t &node,
     const auto deadline = std::chrono::steady_clock::now () + 5s;
     while (std::chrono::steady_clock::now () < deadline) {
         bool matched = false;
-        (void) node.dispatch_ready (
+        (void) std::move (node.dispatch_ready (
           [&] (const zlink::framework::runtime::host::ready_record_t &,
                const zlink::framework::runtime::host::receive_record_t &record,
                std::vector<zlink::message_t> parts) {
@@ -456,7 +456,7 @@ bool receive_completion (zlink::framework::detail::mesh_node_runtime_t &node,
                       == zlink::framework::runtime::host::record_kind_t::completion
                     && record.operation_id == operation_id && record.terminal_result == 0
                     && !parts.empty () && parts.front ().to_string () == expected_text);
-          });
+          })).result ().value ();
         if (matched)
             return true;
         std::this_thread::sleep_for (5ms);

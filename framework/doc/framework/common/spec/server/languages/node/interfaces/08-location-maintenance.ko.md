@@ -1,8 +1,8 @@
-# Node.js Location·Relocation provider exact interface
+# Node.js Location·Relocation provider 언어별 interface
 
 [Node.js 공개 interface 목차](README.ko.md) ·
-[Location Runtime](../../../21-location-runtime.ko.md) ·
-[Redis Location Store](../../../22-location-store-redis.ko.md)
+[Location Runtime](../../../05-location-relocation/01-location-runtime.ko.md) ·
+[Redis Location Store](../../../05-location-relocation/02-location-store-redis.ko.md)
 
 이 문서는 외부 provider가 구현하는 최소 public SPI와 공식 Redis extension의 public declaration을
 고정한다. Authority, owner lease, reservation, capacity, aggregate와 relocation state machine은
@@ -20,109 +20,109 @@ declare const zlinkStoreVersionBrand: unique symbol;
 declare const zlinkStoreScanCursorBrand: unique symbol;
 
 export interface ZLinkStoreKey {
-  readonly value: string;
-  readonly [zlinkStoreKeyBrand]: true;
+ readonly value: string;
+ readonly [zlinkStoreKeyBrand]: true;
 }
 
 export interface ZLinkStoreVersion {
-  readonly value: string;
-  readonly [zlinkStoreVersionBrand]: true;
+ readonly value: string;
+ readonly [zlinkStoreVersionBrand]: true;
 }
 
 export interface ZLinkStoreScanCursor {
-  readonly value: string;
-  readonly [zlinkStoreScanCursorBrand]: true;
+ readonly value: string;
+ readonly [zlinkStoreScanCursorBrand]: true;
 }
 
 export interface ZLinkStoreValue {
-  readonly bytes: Uint8Array;
-  readonly version: ZLinkStoreVersion;
-  readonly expiresAt?: Date;
-  readonly storeNow: Date;
+ readonly bytes: Uint8Array;
+ readonly version: ZLinkStoreVersion;
+ readonly expiresAt?: Date;
+ readonly storeNow: Date;
 }
 
 export type ZLinkStoreReadResult =
-  | { readonly kind: 'missing'; readonly storeNow: Date }
-  | { readonly kind: 'found'; readonly value: ZLinkStoreValue };
+ | { readonly kind: 'missing'; readonly storeNow: Date }
+ | { readonly kind: 'found'; readonly value: ZLinkStoreValue };
 
 export type ZLinkStoreCondition =
-  | { readonly kind: 'missing'; readonly key: ZLinkStoreKey }
-  | {
-      readonly kind: 'version';
-      readonly key: ZLinkStoreKey;
-      readonly expected: ZLinkStoreVersion;
-    };
+ | { readonly kind: 'missing'; readonly key: ZLinkStoreKey }
+ | {
+ readonly kind: 'version';
+ readonly key: ZLinkStoreKey;
+ readonly expected: ZLinkStoreVersion;
+ };
 
 export type ZLinkStoreMutation =
-  | {
-      readonly kind: 'put';
-      readonly key: ZLinkStoreKey;
-      readonly bytes: Uint8Array;
-      readonly retentionMs?: number;
-    }
-  | { readonly kind: 'delete'; readonly key: ZLinkStoreKey };
+ | {
+ readonly kind: 'put';
+ readonly key: ZLinkStoreKey;
+ readonly bytes: Uint8Array;
+ readonly retentionMs?: number;
+ }
+ | { readonly kind: 'delete'; readonly key: ZLinkStoreKey };
 
 export interface ZLinkStoreWriteRequest {
-  readonly conditions: readonly ZLinkStoreCondition[];
-  readonly mutations: readonly ZLinkStoreMutation[];
+ readonly conditions: readonly ZLinkStoreCondition[];
+ readonly mutations: readonly ZLinkStoreMutation[];
 }
 
 export interface ZLinkStorePutVersion {
-  readonly key: ZLinkStoreKey;
-  readonly version: ZLinkStoreVersion;
+ readonly key: ZLinkStoreKey;
+ readonly version: ZLinkStoreVersion;
 }
 
 export type ZLinkStoreWriteResult =
-  | {
-      readonly kind: 'applied';
-      readonly putVersions: readonly ZLinkStorePutVersion[];
-      readonly storeNow: Date;
-    }
-  | { readonly kind: 'conflict'; readonly storeNow: Date };
+ | {
+ readonly kind: 'applied';
+ readonly putVersions: readonly ZLinkStorePutVersion[];
+ readonly storeNow: Date;
+ }
+ | { readonly kind: 'conflict'; readonly storeNow: Date };
 
 export interface ZLinkStoreScanRequest {
-  readonly prefix: string;
-  readonly cursor?: ZLinkStoreScanCursor;
-  readonly limit: number;
+ readonly prefix: string;
+ readonly cursor?: ZLinkStoreScanCursor;
+ readonly limit: number;
 }
 
 export interface ZLinkStoreScanItem {
-  readonly key: ZLinkStoreKey;
-  readonly value: ZLinkStoreValue;
+ readonly key: ZLinkStoreKey;
+ readonly value: ZLinkStoreValue;
 }
 
 export interface ZLinkStoreScanPage {
-  readonly items: readonly ZLinkStoreScanItem[];
-  readonly nextCursor?: ZLinkStoreScanCursor;
-  readonly storeNow: Date;
+ readonly items: readonly ZLinkStoreScanItem[];
+ readonly nextCursor?: ZLinkStoreScanCursor;
+ readonly storeNow: Date;
 }
 
 export type ZLinkStoreScanResult =
-  | { readonly kind: 'page'; readonly value: ZLinkStoreScanPage }
-  | { readonly kind: 'expired' };
+ | { readonly kind: 'page'; readonly value: ZLinkStoreScanPage }
+ | { readonly kind: 'expired' };
 
 export interface ZLinkLocationStore {
-  read(
-    key: ZLinkStoreKey,
-    signal?: AbortSignal
-  ): Promise<ZLinkStoreReadResult>;
+ read(
+ key: ZLinkStoreKey,
+ signal?: AbortSignal
+ ): Promise<ZLinkStoreReadResult>;
 
-  write(
-    request: ZLinkStoreWriteRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkStoreWriteResult>;
+ write(
+ request: ZLinkStoreWriteRequest,
+ signal?: AbortSignal
+ ): Promise<ZLinkStoreWriteResult>;
 
-  scan(
-    request: ZLinkStoreScanRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkStoreScanResult>;
+ scan(
+ request: ZLinkStoreScanRequest,
+ signal?: AbortSignal
+ ): Promise<ZLinkStoreScanResult>;
 
-  // Framework가 Store 수명을 인수한 경우 dependent runtime을 먼저 종료한 뒤 한 번 호출한다.
-  dispose?(): void | Promise<void>;
+ // Framework가 Store 수명을 인수한 경우 dependent runtime을 먼저 종료한 뒤 한 번 호출한다.
+ dispose?(): void | Promise<void>;
 }
 ```
 
-Key는 Framework가 발급하는 opaque UTF-8 `1..1024` bytes 문자열이며 case-sensitive exact match를
+Key는 Framework가 발급하는 opaque UTF-8 `1..1024` bytes 문자열이며 case-sensitive 비교를
 사용한다. Version과 cursor는 provider가 발급하는 opaque UTF-8 `1..4096` bytes 문자열이다.
 Value는 최대 1 MiB다. `retentionMs`가 없으면 만료되지 않으며, 만료 판단에는 provider clock을
 사용한다. `storeNow`는 같은 provider 관측에서 얻은 시각이므로 Framework는 local clock을 TTL
@@ -134,8 +134,8 @@ buffer로 재사용하지 않는다. Provider는 반환한 `Uint8Array`를 Promi
 
 `write(...)`는 모든 condition을 먼저 검사하고 모두 참일 때만 모든 mutation을 하나의 atomic
 commit으로 적용한다. 조건 하나라도 거짓이면 mutation과 version 증가는 모두 0이고 `conflict`를
-반환한다. Condition은 Missing 또는 exact Version 비교만 제공한다. Conflict 결과에 domain state나
-current value를 싣지 않으며 Framework가 필요한 key를 exact read한다.
+반환한다. Condition은 Missing 또는 Version 비교만 제공한다. Conflict 결과에 domain state나
+current value를 싣지 않으며 Framework가 필요한 key를 직접 read한다.
 
 한 write request는 condition과 mutation을 합쳐 최대 2,048개의 unique key와 최대 4 MiB의 encoded
 크기를 허용한다. 같은 key의 condition 또는 mutation을 중복할 수 없다.
@@ -152,68 +152,68 @@ UTF-8 `0..1024` bytes이고 limit은 `1..1000`이다. 첫 page가 만든 snapsho
 declare const zlinkBlobReferenceBrand: unique symbol;
 
 export interface ZLinkBlobReference {
-  readonly value: string;
-  readonly [zlinkBlobReferenceBrand]: true;
+ readonly value: string;
+ readonly [zlinkBlobReferenceBrand]: true;
 }
 
 export type ZLinkBlobPutResult =
-  | {
-      readonly kind: 'stored' | 'alreadyStored';
-      readonly expiresAt: Date;
-      readonly storeNow: Date;
-    }
-  | { readonly kind: 'conflict'; readonly storeNow: Date };
+ | {
+ readonly kind: 'stored' | 'alreadyStored';
+ readonly expiresAt: Date;
+ readonly storeNow: Date;
+ }
+ | { readonly kind: 'conflict'; readonly storeNow: Date };
 
 export type ZLinkBlobReadResult =
-  | { readonly kind: 'missing'; readonly storeNow: Date }
-  | {
-      readonly kind: 'found';
-      readonly bytes: Uint8Array;
-      readonly expiresAt: Date;
-      readonly storeNow: Date;
-    };
+ | { readonly kind: 'missing'; readonly storeNow: Date }
+ | {
+ readonly kind: 'found';
+ readonly bytes: Uint8Array;
+ readonly expiresAt: Date;
+ readonly storeNow: Date;
+ };
 
 export type ZLinkBlobRenewResult =
-  | { readonly kind: 'missing'; readonly storeNow: Date }
-  | {
-      readonly kind: 'renewed';
-      readonly expiresAt: Date;
-      readonly storeNow: Date;
-    };
+ | { readonly kind: 'missing'; readonly storeNow: Date }
+ | {
+ readonly kind: 'renewed';
+ readonly expiresAt: Date;
+ readonly storeNow: Date;
+ };
 
 export interface ZLinkRelocationStore {
-  put(
-    reference: ZLinkBlobReference,
-    payload: Uint8Array,
-    retentionMs: number,
-    signal?: AbortSignal
-  ): Promise<ZLinkBlobPutResult>;
+ put(
+ reference: ZLinkBlobReference,
+ payload: Uint8Array,
+ retentionMs: number,
+ signal?: AbortSignal
+ ): Promise<ZLinkBlobPutResult>;
 
-  read(
-    reference: ZLinkBlobReference,
-    signal?: AbortSignal
-  ): Promise<ZLinkBlobReadResult>;
+ read(
+ reference: ZLinkBlobReference,
+ signal?: AbortSignal
+ ): Promise<ZLinkBlobReadResult>;
 
-  renew(
-    reference: ZLinkBlobReference,
-    retentionMs: number,
-    signal?: AbortSignal
-  ): Promise<ZLinkBlobRenewResult>;
+ renew(
+ reference: ZLinkBlobReference,
+ retentionMs: number,
+ signal?: AbortSignal
+ ): Promise<ZLinkBlobRenewResult>;
 
-  // Reference가 없어도 성공하는 idempotent operation이다.
-  delete(
-    reference: ZLinkBlobReference,
-    signal?: AbortSignal
-  ): Promise<void>;
+ // Reference가 없어도 성공하는 idempotent operation이다.
+ delete(
+ reference: ZLinkBlobReference,
+ signal?: AbortSignal
+ ): Promise<void>;
 
-  dispose?(): void | Promise<void>;
+ dispose?(): void | Promise<void>;
 }
 ```
 
-Reference는 Framework가 put 전에 발급하는 opaque UTF-8 `1..4096` bytes 문자열이며 exact match를
+Reference는 Framework가 put 전에 발급하는 opaque UTF-8 `1..4096` bytes 문자열이며 match를
 사용한다. 삭제되거나 만료된 reference도 다른 content에 다시 사용하지 않는다. 같은 reference와 같은
 bytes를 다시 put하면 `alreadyStored`, 다른 bytes를 put하면 `conflict`다. 이 규칙으로 Framework는
-timeout이나 연결 오류 뒤에 같은 reference를 exact read하여 저장 결과를 재조정할 수 있다.
+timeout이나 연결 오류 뒤에 같은 reference를 직접 read하여 저장 결과를 재조정할 수 있다.
 `retentionMs`는 양의 safe integer여야 한다.
 
 Blob 하나는 최대 64 MiB다. Actor·Spot relocation의 state·queue·timer handoff payload는 이 Store를
@@ -232,35 +232,35 @@ Store instance의 수명은 Framework가 인수한다. Framework는 dependent ru
 
 호출 전에 `AbortSignal`이 중단되면 provider는 I/O와 commit을 시작하지 않는다. 호출을 시작한 뒤
 중단되거나 transport 오류가 발생하면 commit 여부가 불확실할 수 있다. Framework는 Location Store의
-exact read와 version 또는 Relocation Store의 Framework-issued reference로 결과를 재조정한다.
+직접 read와 version 또는 Relocation Store의 Framework-issued reference로 결과를 재조정한다.
 
 ## 4. Redis extension
 
 ```ts
 export interface ZLinkRedisLocationOptions {
-  readonly url?: string;
-  readonly client?: RedisClientType;
-  readonly clientOptions?: RedisClientOptions;
-  readonly keyPrefix: string;
-  readonly operationTimeoutMs?: number;
+ readonly url?: string;
+ readonly client?: RedisClientType;
+ readonly clientOptions?: RedisClientOptions;
+ readonly keyPrefix: string;
+ readonly operationTimeoutMs?: number;
 }
 
 export interface ZLinkRedisRelocationOptions {
-  readonly url?: string;
-  readonly client?: RedisClientType;
-  readonly clientOptions?: RedisClientOptions;
-  readonly keyPrefix: string;
-  readonly operationTimeoutMs?: number;
+ readonly url?: string;
+ readonly client?: RedisClientType;
+ readonly clientOptions?: RedisClientOptions;
+ readonly keyPrefix: string;
+ readonly operationTimeoutMs?: number;
 }
 
 export class ZLinkRedisLocationStore implements ZLinkLocationStore {
-  constructor(options: ZLinkRedisLocationOptions);
-  dispose(): Promise<void>;
+ constructor(options: ZLinkRedisLocationOptions);
+ dispose(): Promise<void>;
 }
 
 export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
-  constructor(options: ZLinkRedisRelocationOptions);
-  dispose(): Promise<void>;
+ constructor(options: ZLinkRedisRelocationOptions);
+ dispose(): Promise<void>;
 }
 ```
 

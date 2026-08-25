@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Diagnostics.Metrics;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Messaging;
@@ -1313,7 +1314,8 @@ public sealed class SessionActorCoordinatorTests
     [Fact]
     public async Task Canonical_Seal_Retries_Target_Push_Until_Command_44_Commits()
     {
-        var runtime = CreateRuntime();
+        var loggerFactory = new SessionRouteLoggerFactory();
+        var runtime = CreateRuntime(loggerFactory: loggerFactory);
         runtime.Registration.Locations.UseInMemoryStores = true;
         var store = runtime.Registration.Locations.ResolveStore()!;
         var targetNode = RoutingId.From("actor-node-canonical-target");
@@ -1457,6 +1459,36 @@ public sealed class SessionActorCoordinatorTests
         await pending.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Single(stream.Writes);
         Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[0].Payload);
+
+        await runtime.RouteCanonicalSessionActorAsync(
+            command44,
+            new ZLinkSessionRelocationAuthenticatedRoute(
+                targetNode,
+                targetNodeGeneration,
+                identity.MeshName,
+                targetAuthority,
+                OwnerLeaseGeneration: 0),
+            CancellationToken.None);
+        await runtime.RouteCanonicalSessionActorAsync(
+            command44 with
+            {
+                RelocationId = new ZLinkServiceWireCodec.RelocationWireId(107, 109)
+            },
+            new ZLinkSessionRelocationAuthenticatedRoute(
+                targetNode,
+                targetNodeGeneration,
+                identity.MeshName,
+                targetAuthority,
+                targetOwnerLease),
+            CancellationToken.None);
+
+        Assert.Equal(
+            2,
+            loggerFactory.Entries.Count(entry =>
+                entry.Level == LogLevel.Warning
+                && entry.Message.StartsWith(
+                    "late_session_route_update ",
+                    StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -2313,7 +2345,8 @@ public sealed class SessionActorCoordinatorTests
 
     private static ZLinkFrameworkRuntime CreateRuntime(
         IZLinkActorResolver? actorDirectory = null,
-        TimeSpan? defaultRequestTimeout = null)
+        TimeSpan? defaultRequestTimeout = null,
+        ILoggerFactory? loggerFactory = null)
     {
         var registration = new ZLinkFrameworkRegistration();
         if (defaultRequestTimeout is { } timeout)
@@ -2321,6 +2354,7 @@ public sealed class SessionActorCoordinatorTests
         var services = new ServiceCollection();
         services.AddSingleton(registration);
         if (actorDirectory is not null) services.AddSingleton(actorDirectory);
+        if (loggerFactory is not null) services.AddSingleton(loggerFactory);
         var provider = services.BuildServiceProvider();
 
         return new ZLinkFrameworkRuntime(
@@ -2334,6 +2368,56 @@ public sealed class SessionActorCoordinatorTests
     }
 
     private sealed record SessionPush(string Value);
+
+    private sealed class SessionRouteLoggerFactory : ILoggerFactory
+    {
+        private readonly SessionRouteLogger _logger = new();
+
+        internal IReadOnlyList<(LogLevel Level, string Message)> Entries =>
+            _logger.Entries;
+
+        public void AddProvider(ILoggerProvider provider) => _ = provider;
+
+        public ILogger CreateLogger(string categoryName)
+        {
+            _ = categoryName;
+            return _logger;
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class SessionRouteLogger : ILogger
+    {
+        private readonly List<(LogLevel Level, string Message)> _entries = [];
+
+        internal IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get
+            {
+                lock (_entries)
+                    return _entries.ToArray();
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _ = eventId;
+            lock (_entries)
+                _entries.Add((logLevel, formatter(state, exception)));
+        }
+    }
 
     private sealed class MissingActorDirectory : IZLinkActorResolver
     {

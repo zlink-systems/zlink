@@ -7,6 +7,7 @@ export const RuntimeMonitoringNames = {
   spotChannel: 'monitor.spot',
   spotNode: 'monitor.spot',
   publishTopic: 'monitor.profile.events',
+  capacityTopic: 'monitor.capacity.events',
   actorType: 'monitor.actor'
 } as const;
 

@@ -1,13 +1,13 @@
 # .NET RouteMesh/MeshNode Public Interface
 
-[.NET exact interface table of contents](README.en.md) · [Common Topology](../../../07-channel-topology.en.md) ·
-[MeshNode](../../../13-mesh-node.en.md) · [Message Model](../../../04-message-model.en.md)
+[.NET per-language interface table of contents](README.en.md) · [Common Topology](../../../02-channel-transport/01-channel-topology.en.md) ·
+[MeshNode](../../../03-spot-actor/03-mesh-node.en.md) · [Message Model](../../../00-foundation/05-message-model.en.md)
 
 ## 1. Scope
 
 This document fixes ZLink Framework's .NET RouteMesh/MeshNode public
 interface. The target audience is .NET application developers and public
-provider implementers. This document owns the exact C# signature for
+provider implementers. This document owns the C# signature for
 physical mesh registration, logical channel membership, manual peer,
 handler, Spot/Actor registration, and runtime weight change.
 
@@ -16,92 +16,92 @@ handler, Spot/Actor registration, and runtime weight change.
 ```csharp
 public interface IZLinkFrameworkOptions
 {
-    TimeSpan DefaultRequestTimeout { get; set; }
-    TimeSpan DefaultSocketSendTimeout { get; set; }
-    long ApplicationVersion { get; set; }
-    string? MaintenanceWave { get; set; }
-    IZLinkCodecRegistryBuilder Codecs { get; }
-    IZLinkWorkerOptions Worker { get; }
+ TimeSpan DefaultRequestTimeout { get; set; }
+ TimeSpan DefaultSocketSendTimeout { get; set; }
+ long ApplicationVersion { get; set; }
+ string? MaintenanceWave { get; set; }
+ IZLinkCodecRegistryBuilder Codecs { get; }
+ IZLinkWorkerOptions Worker { get; }
 
-    void AddHandlersFromAssemblyOf<TMarker>();
-    void AddHandlersFromAssemblyOf(Type markerType);
-    void AddHandlersFromAssembly(System.Reflection.Assembly assembly);
-    void DisableImplicitHandlerAutoRegistration();
-    IZLinkMetadataPolicyBuilder ConfigureMetadata();
-    void AddLocationStore(IZLinkLocationStore store);
-    void AddRelocationStore(IZLinkRelocationStore store);
-    ZLinkLocationOptions ConfigureLocations();
-    IZLinkNetworkOptions ConfigureNetwork();
-    IZLinkDispatchOptions ConfigureDispatch();
-    IZLinkInboundDispatchOptions ConfigureInboundDispatch();
-    IZLinkStreamCompressionBuilder ConfigureStreamCompression();
-    void UseFilter<TFilter>() where TFilter : class, IZLinkHandlerFilter;
+ void AddHandlersFromAssemblyOf<TMarker>();
+ void AddHandlersFromAssemblyOf(Type markerType);
+ void AddHandlersFromAssembly(System.Reflection.Assembly assembly);
+ void DisableImplicitHandlerAutoRegistration();
+ IZLinkMetadataPolicyBuilder ConfigureMetadata();
+ void AddLocationStore(IZLinkLocationStore store);
+ void AddRelocationStore(IZLinkRelocationStore store);
+ ZLinkLocationOptions ConfigureLocations();
+ IZLinkNetworkOptions ConfigureNetwork();
+ IZLinkDispatchOptions ConfigureDispatch();
+ IZLinkInboundDispatchOptions ConfigureInboundDispatch();
+ IZLinkStreamCompressionBuilder ConfigureStreamCompression();
+ void UseFilter<TFilter>() where TFilter : class, IZLinkHandlerFilter;
 
-    IZLinkMeshNodeBuilder AddRouteMesh(string meshName);
-    IZLinkClientServerChannelRoleBuilder AddClientServerChannel(string channelName);
-    IZLinkFanoutChannelBuilder AddFanoutChannel(string channelName);
-    IZLinkStreamNodeBuilder AddStreamNode(string streamNodeName);
+ IZLinkMeshNodeBuilder AddRouteMesh(string meshName);
+ IZLinkClientServerChannelRoleBuilder AddClientServerChannel(string channelName);
+ IZLinkFanoutChannelBuilder AddFanoutChannel(string channelName);
+ IZLinkStreamNodeBuilder AddStreamNode(string streamNodeName);
 }
 
 public enum ZLinkCoreHwmProfile
 {
-    Compact = 0,
-    LowLatency = 1,
-    Balanced = 2,
-    Throughput = 3
+ Compact = 0,
+ LowLatency = 1,
+ Balanced = 2,
+ Throughput = 3
 }
 
 public enum ZLinkApplicationJobQueueProfile
 {
-    Compact = 0,
-    LowLatency = 1,
-    Balanced = 2,
-    Throughput = 3
+ Compact = 0,
+ LowLatency = 1,
+ Balanced = 2,
+ Throughput = 3
 }
 
 public enum ZLinkApplicationJobQueuePressureState
 {
-    Running = 0,
-    Paused = 1
+ Running = 0,
+ Paused = 1
 }
 
 public interface IZLinkMeshNodeBuilder
 {
-    IZLinkMeshChannelRoleBuilder Channel(string channelName);
-    IZLinkMeshNodeBuilder Listen(string endpoint);
-    IZLinkMeshNodeBuilder Listen(int port = 0);
-    IZLinkMeshNodeBuilder SetBindHost(string bindHost);
-    IZLinkMeshNodeBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkMeshNodeBuilder SetRoutingId(RoutingId routingId);
-    IZLinkMeshNodeBuilder SetRoutingIdPrefix(string prefix);
-    IZLinkMeshNodeBuilder SetPlacementWeight(int weight);
-    IZLinkMeshNodeBuilder SetActorLimit(int limit);
-    IZLinkMeshNodeBuilder SetSpotLimit(int limit);
-    IZLinkMeshNodeBuilder SetActivationConcurrency(int limit);
-    IZLinkMeshNodeBuilder SetInstanceSpotIdleTimeout(TimeSpan timeout);
-    IZLinkMeshObjectRoleBuilder Objects();
-    IZLinkMeshNodeSocketConfig ConfigureRouterSocket();
-    IZLinkSpotPublisherConfig ConfigureSpotPublisher();
-    IZLinkMeshPeerConnections PeerConnections { get; }
+ IZLinkMeshChannelRoleBuilder Channel(string channelName);
+ IZLinkMeshNodeBuilder Listen(string endpoint);
+ IZLinkMeshNodeBuilder Listen(int port = 0);
+ IZLinkMeshNodeBuilder SetBindHost(string bindHost);
+ IZLinkMeshNodeBuilder SetAdvertiseHost(string advertiseHost);
+ IZLinkMeshNodeBuilder SetRoutingId(RoutingId routingId);
+ IZLinkMeshNodeBuilder SetRoutingIdPrefix(string prefix);
+ IZLinkMeshNodeBuilder SetPlacementWeight(int weight);
+ IZLinkMeshNodeBuilder SetActorLimit(int limit);
+ IZLinkMeshNodeBuilder SetSpotLimit(int limit);
+ IZLinkMeshNodeBuilder SetActivationConcurrency(int limit);
+ IZLinkMeshNodeBuilder SetInstanceSpotIdleTimeout(TimeSpan timeout);
+ IZLinkMeshObjectRoleBuilder Objects();
+ IZLinkMeshNodeSocketConfig ConfigureRouterSocket();
+ IZLinkSpotPublisherConfig ConfigureSpotPublisher();
+ IZLinkMeshPeerConnections PeerConnections { get; }
 
-    IZLinkMeshNodeBuilder SetDefaultRequestTimeout(TimeSpan timeout);
-    IZLinkMeshNodeBuilder AddRouteSendHandler<THandler, TMessage>(
-        string? packetName = null)
-        where THandler : class, IZLinkRouteSendHandler<TMessage>;
-    IZLinkMeshNodeBuilder AddRouteSendHandler<THandler>(string? packetName = null)
-        where THandler : class;
-    IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler, TRequest, TReply>(
-        string? packetName = null)
-        where THandler : class, IZLinkRouteRequestHandler<TRequest, TReply>;
-    IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler>(string? packetName = null)
-        where THandler : class;
+ IZLinkMeshNodeBuilder SetDefaultRequestTimeout(TimeSpan timeout);
+ IZLinkMeshNodeBuilder AddRouteSendHandler<THandler, TMessage>(
+ string? packetName = null)
+ where THandler : class, IZLinkRouteSendHandler<TMessage>;
+ IZLinkMeshNodeBuilder AddRouteSendHandler<THandler>(string? packetName = null)
+ where THandler : class;
+ IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler, TRequest, TReply>(
+ string? packetName = null)
+ where THandler : class, IZLinkRouteRequestHandler<TRequest, TReply>;
+ IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler>(string? packetName = null)
+ where THandler : class;
 
 }
 
 public interface IZLinkMeshObjectRoleBuilder
 {
-    IZLinkMeshObjectClientBuilder Client();
-    IZLinkMeshObjectServerBuilder Server();
+ IZLinkMeshObjectClientBuilder Client();
+ IZLinkMeshObjectServerBuilder Server();
 }
 
 public interface IZLinkMeshObjectClientBuilder
@@ -110,78 +110,78 @@ public interface IZLinkMeshObjectClientBuilder
 
 public interface IZLinkMeshObjectServerBuilder
 {
-    IZLinkMeshObjectServerBuilder AddEntrySpot<TEntrySpot>()
-        where TEntrySpot : class, IZLinkEntrySpot;
-    IZLinkMeshObjectServerBuilder AddSpotFactory<TSpot>(
-        string spotType,
-        Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure)
-        where TSpot : class, IZLinkSpot;
-    IZLinkMeshObjectServerBuilder AddInstanceSpotFactory<TSpot>(
-        string instanceSpotType,
-        Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure)
-        where TSpot : class, IZLinkInstanceSpot;
-    IZLinkMeshObjectServerBuilder AddActorFactory<TActor, TFactory>(
-        string actorType,
-        Action<IZLinkActorFactoryBuilder<TActor>> configure)
-        where TActor : class, IZLinkActor
-        where TFactory : class, IZLinkActorFactory<TActor>;
+ IZLinkMeshObjectServerBuilder AddEntrySpot<TEntrySpot>()
+ where TEntrySpot : class, IZLinkEntrySpot;
+ IZLinkMeshObjectServerBuilder AddSpotFactory<TSpot>(
+ string spotType,
+ Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure)
+ where TSpot : class, IZLinkSpot;
+ IZLinkMeshObjectServerBuilder AddInstanceSpotFactory<TSpot>(
+ string instanceSpotType,
+ Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure)
+ where TSpot : class, IZLinkInstanceSpot;
+ IZLinkMeshObjectServerBuilder AddActorFactory<TActor, TFactory>(
+ string actorType,
+ Action<IZLinkActorFactoryBuilder<TActor>> configure)
+ where TActor : class, IZLinkActor
+ where TFactory : class, IZLinkActorFactory<TActor>;
 }
 
 public enum ZLinkUserSpotExecutionMode
 {
-    SpotWide = 0,
-    PerActor = 1
+ SpotWide = 0,
+ PerActor = 1
 }
 
 public enum ZLinkSpotRelocationCoordinationMode
 {
-    FrameworkManaged = 0,
-    ApplicationSignaled = 1
+ FrameworkManaged = 0,
+ ApplicationSignaled = 1
 }
 
 public interface IZLinkActorFactoryBuilder<TActor>
-    where TActor : class, IZLinkActor
+ where TActor : class, IZLinkActor
 {
-    IZLinkActorFactoryBuilder<TActor> DisableRelocation();
-    IZLinkActorFactoryBuilder<TActor> RecreateOnRelocation();
-    IZLinkActorFactoryBuilder<TActor> PreserveStateWith<TAdapter>()
-        where TAdapter : class, IZLinkActorRelocationAdapter<TActor>;
+ IZLinkActorFactoryBuilder<TActor> DisableRelocation();
+ IZLinkActorFactoryBuilder<TActor> RecreateOnRelocation();
+ IZLinkActorFactoryBuilder<TActor> PreserveStateWith<TAdapter>()
+ where TAdapter : class, IZLinkActorRelocationAdapter<TActor>;
 }
 
 public interface IZLinkUserSpotFactoryBuilder<TSpot>
-    where TSpot : class, IZLinkSpot
+ where TSpot : class, IZLinkSpot
 {
-    IZLinkUserSpotFactoryBuilder<TSpot> StableTypeLimit(int limit);
-    IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(
-        ZLinkUserSpotExecutionMode mode);
-    IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
-        ZLinkSpotRelocationCoordinationMode mode);
-    IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation();
-    IZLinkUserSpotFactoryBuilder<TSpot> RecreateOnRelocation();
-    IZLinkUserSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
-        where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>;
+ IZLinkUserSpotFactoryBuilder<TSpot> StableTypeLimit(int limit);
+ IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(
+ ZLinkUserSpotExecutionMode mode);
+ IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
+ ZLinkSpotRelocationCoordinationMode mode);
+ IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation();
+ IZLinkUserSpotFactoryBuilder<TSpot> RecreateOnRelocation();
+ IZLinkUserSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
+ where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>;
 }
 
 public interface IZLinkInstanceSpotFactoryBuilder<TSpot>
-    where TSpot : class, IZLinkInstanceSpot
+ where TSpot : class, IZLinkInstanceSpot
 {
-    IZLinkInstanceSpotFactoryBuilder<TSpot> StableTypeLimit(int limit);
-    IZLinkInstanceSpotFactoryBuilder<TSpot> DisableRelocation();
-    IZLinkInstanceSpotFactoryBuilder<TSpot> RecreateOnRelocation();
-    IZLinkInstanceSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
-        where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>;
+ IZLinkInstanceSpotFactoryBuilder<TSpot> StableTypeLimit(int limit);
+ IZLinkInstanceSpotFactoryBuilder<TSpot> DisableRelocation();
+ IZLinkInstanceSpotFactoryBuilder<TSpot> RecreateOnRelocation();
+ IZLinkInstanceSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
+ where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>;
 }
 
 public interface IZLinkNetworkOptions
 {
-    string BindHost { get; set; }
-    string? AdvertiseHost { get; set; }
+ string BindHost { get; set; }
+ string? AdvertiseHost { get; set; }
 }
 
 public interface IZLinkMeshChannelRoleBuilder
 {
-    IZLinkMeshChannelClientBuilder Client();
-    IZLinkMeshChannelServerBuilder Server();
+ IZLinkMeshChannelClientBuilder Client();
+ IZLinkMeshChannelServerBuilder Server();
 }
 
 public interface IZLinkMeshChannelClientBuilder
@@ -190,98 +190,98 @@ public interface IZLinkMeshChannelClientBuilder
 
 public interface IZLinkMeshChannelServerBuilder
 {
-    IZLinkMeshChannelServerBuilder SetWeight(int weight);
-    IZLinkMeshChannelServerBuilder AddHandlerGroup(string groupName);
-    IZLinkMeshChannelServerBuilder AddSendHandler<THandler, TMessage>(
-        string? packetName = null)
-        where THandler : class, IZLinkSendHandler<TMessage>;
-    IZLinkMeshChannelServerBuilder AddSendHandler<THandler>(string? packetName = null)
-        where THandler : class;
-    IZLinkMeshChannelServerBuilder AddRequestHandler<THandler, TRequest, TReply>(
-        string? packetName = null)
-        where THandler : class, IZLinkRequestHandler<TRequest, TReply>;
-    IZLinkMeshChannelServerBuilder AddRequestHandler<THandler>(string? packetName = null)
-        where THandler : class;
+ IZLinkMeshChannelServerBuilder SetWeight(int weight);
+ IZLinkMeshChannelServerBuilder AddHandlerGroup(string groupName);
+ IZLinkMeshChannelServerBuilder AddSendHandler<THandler, TMessage>(
+ string? packetName = null)
+ where THandler : class, IZLinkSendHandler<TMessage>;
+ IZLinkMeshChannelServerBuilder AddSendHandler<THandler>(string? packetName = null)
+ where THandler : class;
+ IZLinkMeshChannelServerBuilder AddRequestHandler<THandler, TRequest, TReply>(
+ string? packetName = null)
+ where THandler : class, IZLinkRequestHandler<TRequest, TReply>;
+ IZLinkMeshChannelServerBuilder AddRequestHandler<THandler>(string? packetName = null)
+ where THandler : class;
 }
 
 public interface IZLinkClientServerChannelRoleBuilder
 {
-    IZLinkClientServerChannelClientBuilder Client();
-    IZLinkClientServerChannelServerBuilder Server();
+ IZLinkClientServerChannelClientBuilder Client();
+ IZLinkClientServerChannelServerBuilder Server();
 }
 
 public interface IZLinkClientServerChannelClientBuilder
 {
-    IZLinkClientServerChannelClientBuilder Connect(string endpoint);
+ IZLinkClientServerChannelClientBuilder Connect(string endpoint);
 }
 
 public interface IZLinkClientServerChannelServerBuilder
 {
-    IZLinkClientServerChannelServerBuilder Listen(int port = 0);
-    IZLinkClientServerChannelServerBuilder SetBindHost(string bindHost);
-    IZLinkClientServerChannelServerBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkClientServerChannelServerBuilder SetWeight(int weight);
-    IZLinkClientServerChannelServerBuilder AddHandlerGroup(string groupName);
-    IZLinkClientServerChannelServerBuilder AddSendHandler<THandler, TMessage>(
-        string? packetName = null)
-        where THandler : class, IZLinkSendHandler<TMessage>;
-    IZLinkClientServerChannelServerBuilder AddRequestHandler<THandler, TRequest, TReply>(
-        string? packetName = null)
-        where THandler : class, IZLinkRequestHandler<TRequest, TReply>;
+ IZLinkClientServerChannelServerBuilder Listen(int port = 0);
+ IZLinkClientServerChannelServerBuilder SetBindHost(string bindHost);
+ IZLinkClientServerChannelServerBuilder SetAdvertiseHost(string advertiseHost);
+ IZLinkClientServerChannelServerBuilder SetWeight(int weight);
+ IZLinkClientServerChannelServerBuilder AddHandlerGroup(string groupName);
+ IZLinkClientServerChannelServerBuilder AddSendHandler<THandler, TMessage>(
+ string? packetName = null)
+ where THandler : class, IZLinkSendHandler<TMessage>;
+ IZLinkClientServerChannelServerBuilder AddRequestHandler<THandler, TRequest, TReply>(
+ string? packetName = null)
+ where THandler : class, IZLinkRequestHandler<TRequest, TReply>;
 }
 
 public interface IZLinkEndpointConnections
 {
-    void Connect(string endpoint);
-    void Disconnect(string endpoint);
-    IReadOnlyList<string> ListConnections();
+ void Connect(string endpoint);
+ void Disconnect(string endpoint);
+ IReadOnlyList<string> ListConnections();
 }
 
 public interface IZLinkFanoutChannelBuilder
 {
-    IZLinkFanoutChannelBuilder EnablePublisher(string endpoint);
-    IZLinkFanoutChannelBuilder EnablePublisher(int port = 0);
-    IZLinkFanoutChannelBuilder SetBindHost(string bindHost);
-    IZLinkFanoutChannelBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkFanoutChannelBuilder SetRoutingId(RoutingId publisherRoutingId);
-    IZLinkFanoutChannelBuilder SetRoutingIdPrefix(string prefix);
-    IZLinkFanoutChannelBuilder EnableSubscriber();
-    IZLinkFanoutChannelBuilder Connect(string endpoint);
-    IZLinkEndpointConnections SubscriberConnections { get; }
-    IZLinkFanoutChannelBuilder AddHandler<THandler, TEvent>(
-        string? packetName = null)
-        where THandler : class, IZLinkFanoutHandler<TEvent>;
+ IZLinkFanoutChannelBuilder EnablePublisher(string endpoint);
+ IZLinkFanoutChannelBuilder EnablePublisher(int port = 0);
+ IZLinkFanoutChannelBuilder SetBindHost(string bindHost);
+ IZLinkFanoutChannelBuilder SetAdvertiseHost(string advertiseHost);
+ IZLinkFanoutChannelBuilder SetRoutingId(RoutingId publisherRoutingId);
+ IZLinkFanoutChannelBuilder SetRoutingIdPrefix(string prefix);
+ IZLinkFanoutChannelBuilder EnableSubscriber();
+ IZLinkFanoutChannelBuilder Connect(string endpoint);
+ IZLinkEndpointConnections SubscriberConnections { get; }
+ IZLinkFanoutChannelBuilder AddHandler<THandler, TEvent>(
+ string? packetName = null)
+ where THandler : class, IZLinkFanoutHandler<TEvent>;
 }
 
 public interface IZLinkStreamNodeBuilder
 {
-    IZLinkStreamNodeBuilder Bind(string endpoint);
-    IZLinkStreamNodeBuilder Bind(int port = 0);
-    IZLinkStreamNodeBuilder SetBindHost(string bindHost);
-    IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
-    IZLinkStreamSocketConfig ConfigureSocket();
-    IZLinkStreamNodeBuilder EnableActorDispatch();
-    IZLinkStreamNodeBuilder SetTlsServer(
-        string certificatePath,
-        string keyPath,
-        bool requireClientCertificate = false);
-    IZLinkStreamNodeBuilder AddSession<TSession>()
-        where TSession : class, IZLinkSession;
+ IZLinkStreamNodeBuilder Bind(string endpoint);
+ IZLinkStreamNodeBuilder Bind(int port = 0);
+ IZLinkStreamNodeBuilder SetBindHost(string bindHost);
+ IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
+ IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+ IZLinkStreamSocketConfig ConfigureSocket();
+ IZLinkStreamNodeBuilder EnableActorDispatch();
+ IZLinkStreamNodeBuilder SetTlsServer(
+ string certificatePath,
+ string keyPath,
+ bool requireClientCertificate = false);
+ IZLinkStreamNodeBuilder AddSession<TSession>()
+ where TSession : class, IZLinkSession;
 }
 
 public interface IZLinkStreamCompressionBuilder
 {
-    IZLinkStreamCompressionBuilder UseDefault();
-    IZLinkStreamCompressionBuilder UseLz4();
-    IZLinkStreamCompressionBuilder Use(IZlinkStreamCompressionCodec codec);
-    IZLinkStreamCompressionBuilder Disable();
+ IZLinkStreamCompressionBuilder UseDefault();
+ IZLinkStreamCompressionBuilder UseLz4();
+ IZLinkStreamCompressionBuilder Use(IZlinkStreamCompressionCodec codec);
+ IZLinkStreamCompressionBuilder Disable();
 }
 
 public interface IZLinkMetadataPolicyBuilder
 {
-    IZLinkMetadataPolicyBuilder AllowSessionToActor(string key);
-    IZLinkMetadataPolicyBuilder AllowActorToSession(string key);
+ IZLinkMetadataPolicyBuilder AllowSessionToActor(string key);
+ IZLinkMetadataPolicyBuilder AllowActorToSession(string key);
 }
 
 ```
@@ -297,20 +297,20 @@ observes the close rather than a separate wire error code. The Framework
 limit doesn't apply to server-to-client outbound messages. ClientServer and
 RouteMesh SS don't gain this setting.
 
-The exact declaration of `IZLinkCodecRegistryBuilder` and the codec
+The declaration of `IZLinkCodecRegistryBuilder` and the codec
 extension is owned by [Serialization](11-serialization.en.md).
 
 `AddRouteMesh(meshName)` registers one process-local
-[MeshNode](../../../01-glossary.en.md#meshnode). Registering the same
+[MeshNode](../../../00-foundation/02-glossary.en.md#meshnode). Registering the same
 `meshName` twice in the same process fails host startup with
 `ZLinkConfigurationException`. After `Channel(channelName)`, call exactly
 one of `Client()` or `Server()`. `Client()` only creates the send path,
 and only `Server()` provides
-[weight](../../../01-glossary.en.md#weight) and handler registration.
-A MeshNode with no Server [membership](../../../01-glossary.en.md#membership)
+[weight](../../../00-foundation/02-glossary.en.md#weight) and handler registration.
+A MeshNode with no Server [membership](../../../00-foundation/02-glossary.en.md#membership)
 can also start.
 
-An automatic [RouteMesh](../../../01-glossary.en.md#routemesh)
+An automatic [RouteMesh](../../../00-foundation/02-glossary.en.md#routemesh)
 compares RID in canonical byte order, and only the MeshNode with the
 smaller RID connects to the counterpart endpoint. Connection intent isn't
 created only when both local and remote object roles are `Client` and
@@ -343,10 +343,10 @@ Server share one ClientServer topology through separate registrations.
 Registering the same role twice fails startup. The RouteMesh ChannelName
 conflict rule stays the same. A Client can use both the registered manual
 endpoint and the server endpoint of the same
-[ChannelName](../../../01-glossary.en.md#channelname) automatically
+[ChannelName](../../../00-foundation/02-glossary.en.md#channelname) automatically
 discovered from the location store as connection targets. If the two
 sources point to the same Server RID and
-[lifecycle generation](../../../01-glossary.en.md#lifecycle-generation),
+[lifecycle generation](../../../00-foundation/02-glossary.en.md#lifecycle-generation),
 the connection intent and ready target are merged into one. In both
 automatic and manual, only Client connects to server — Server doesn't
 look for a client endpoint or start an outbound connect. Server only
@@ -356,7 +356,7 @@ doesn't start a new business call to a connected client.
 If a Server role is also registered on the same process, a local Server
 that finished listener and service admission is put in the same
 candidate set as a remote Server. The same
-[Ready](../../../01-glossary.en.md#ready), positive weight, and
+[Ready](../../../00-foundation/02-glossary.en.md#ready), positive weight, and
 non-draining conditions apply, with no local priority or remote
 exclusion rule. After selection, the actual transport message is
 delivered from the Client DEALER to the Server ROUTER, without calling
@@ -364,8 +364,8 @@ the handler directly.
 
 `ConfigureNetwork()`'s default BindHost is `127.0.0.1`, and if
 AdvertiseHost is omitted, a non-wildcard
-[BindHost](../../../01-glossary.en.md#bindhost) is used. An
-[automatic discovery](../../../01-glossary.en.md#automatic-discovery)
+[BindHost](../../../00-foundation/02-glossary.en.md#bindhost) is used. An
+[automatic discovery](../../../00-foundation/02-glossary.en.md#automatic-discovery)
 listener binds to port `0` if the port on `Listen()`/`Bind()`/
 `EnablePublisher()` is omitted, or if the listener call itself is
 omitted. In manual mode, if the endpoint can't be obtained from a
@@ -374,7 +374,7 @@ specified explicitly. A per-listener host setting takes priority over the
 root default.
 
 A fanout publisher that registered a
-[location store](../../../01-glossary.en.md#location-store) has the
+[location store](../../../00-foundation/02-glossary.en.md#location-store) has the
 framework generate a per-lifecycle RID and publish a dedicated
 descriptor. A publisher with no Store can still be used as a target with
 a fixed RID and manually delivered listener endpoint. `EnableSubscriber()`,
@@ -385,7 +385,7 @@ an automatic subscriber and a manual subscriber on one fanout channel
 fails startup. An automatic subscriber needs a location store, but it
 isn't needed for a host that only uses a manual publisher and manual
 subscriber. A publisher only publishes a
-[descriptor](../../../01-glossary.en.md#descriptor) and doesn't start
+[descriptor](../../../00-foundation/02-glossary.en.md#descriptor) and doesn't start
 an outbound connect to a subscriber endpoint. Only the subscriber
 connects to the publisher endpoint, and an automatic subscriber creates
 one connection intent per Publisher RID and lifecycle generation.
@@ -404,12 +404,12 @@ UUID v4 generated separately from the MeshNode RID attached. The format
 is `<prefix>-entry-<lowercase-canonical-uuid-v4>`, and the caller doesn't
 specify a fixed Entry Spot ID. This ID's global conflict and the reserved
 format validation for a caller-specified Spot ID are defined by the
-[Spot Model](../../../11-spot-model.en.md). The prefix and the
+[Spot Model](../../../03-spot-actor/01-spot-model.en.md). The prefix and the
 generated RID/Spot ID aren't interpreted as placement, shard, or stable
 application identity.
 
 A registered MeshNode descriptor must be at most 1 MiB. The
-[Spot](../../../01-glossary.en.md#spot) type and stateful object
+[Spot](../../../00-foundation/02-glossary.en.md#spot) type and stateful object
 capability collection are each at most 1024. Exceeding the bound fails
 startup — it doesn't apply only some of the registrations.
 
@@ -419,7 +419,7 @@ targeting the same set of endpoints registered on the builder. An
 automatic subscriber's discovery results aren't changed by this handle.
 
 `AddHandlersFromAssemblyOf(...)` and `AddHandlersFromAssembly(...)` only
-add the specified assembly to the handler scan scope. The exact
+add the specified assembly to the handler scan scope. The
 declaration of the method, group, and packet attributes used for the
 scan is owned by [Common Runtime](01-common-runtime.en.md).
 
@@ -468,10 +468,10 @@ so they aren't included in this judgment. A connection between an Object
 Client and Object Server, or between Object Servers, is kept.
 
 The Actor/User Spot/Instance Spot
-[factory](../../../01-glossary.en.md#factory) fixes stable type,
+[factory](../../../00-foundation/02-glossary.en.md#factory) fixes stable type,
 per-object-kind factory options, and explicit relocation policy in the
 same registration. There's no overload that omits the policy.
-[Stable type](../../../01-glossary.en.md#stable-type) is UTF-8 1..255
+[Stable type](../../../00-foundation/02-glossary.en.md#stable-type) is UTF-8 1..255
 bytes, and a duplicate type is a startup error. The Entry Spot ID is
 issued by the framework.
 
@@ -495,21 +495,21 @@ value. Only Instance Spot is a cleanup target — Entry Spot and User Spot
 aren't affected by this setting. The idle judgment condition, the
 delivery of `ZLinkSpotCloseReason.IdleEvicted`, and the cold-activation
 rule after cleanup are owned by
-[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../03-spot-actor/01-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 
 ## 3. Manual Peer
 
 ```csharp
 public readonly record struct ZLinkMeshPeerConnection(
-    string Endpoint,
-    RoutingId? ExpectedRoutingId);
+ string Endpoint,
+ RoutingId? ExpectedRoutingId);
 
 public interface IZLinkMeshPeerConnections
 {
-    void Connect(string endpoint);
-    void Connect(RoutingId expectedRoutingId, string endpoint);
-    void Disconnect(string endpoint);
-    IReadOnlyList<ZLinkMeshPeerConnection> ListConnections();
+ void Connect(string endpoint);
+ void Connect(RoutingId expectedRoutingId, string endpoint);
+ void Disconnect(string endpoint);
+ IReadOnlyList<ZLinkMeshPeerConnection> ListConnections();
 }
 ```
 
@@ -532,26 +532,26 @@ Framework API.
 ```csharp
 public enum ZLinkHandlerDispatchKind
 {
-    NodeDirectSend = 0,
-    NodeDirectRequest = 1,
-    ChannelSend = 2,
-    ChannelRequest = 3,
-    ClassicFanout = 4
+ NodeDirectSend = 0,
+ NodeDirectRequest = 1,
+ ChannelSend = 2,
+ ChannelRequest = 3,
+ ClassicFanout = 4
 }
 
 public interface IZLinkHandlerFilterContext : IZLinkMessageContext
 {
-    ZLinkHandlerDispatchKind DispatchKind { get; }
+ ZLinkHandlerDispatchKind DispatchKind { get; }
 }
 
 public delegate ValueTask ZLinkHandlerFilterNext();
 
 public interface IZLinkHandlerFilter
 {
-    ValueTask InvokeAsync(
-        IZLinkHandlerFilterContext context,
-        ZLinkHandlerFilterNext next,
-        CancellationToken cancellationToken);
+ ValueTask InvokeAsync(
+ IZLinkHandlerFilterContext context,
+ ZLinkHandlerFilterNext next,
+ CancellationToken cancellationToken);
 }
 ```
 
@@ -611,7 +611,7 @@ default no-op implementation, so an application override isn't required.
 If expected RID is omitted, the admission handshake determines the
 remote identity. If expected RID is specified, the connection isn't
 admitted if the handshake identity differs. A manual connection also uses
-the same [MeshName](../../../01-glossary.en.md#meshname)/RID/
+the same [MeshName](../../../00-foundation/02-glossary.en.md#meshname)/RID/
 ChannelName/security validation as an automatic discovery connection.
 
 ## 4. Dispatch Scope Of Handler And Filter
@@ -655,89 +655,89 @@ direct route, other membership, or an already-submitted operation.
 ```csharp
 public interface IZLinkSpotPublisherConfig
 {
-    ulong SendHighWaterMark { get; set; }
-    TimeSpan? SendTimeout { get; set; }
-    TimeSpan? Linger { get; set; }
+ ulong SendHighWaterMark { get; set; }
+ TimeSpan? SendTimeout { get; set; }
+ TimeSpan? Linger { get; set; }
 }
 
 public interface IZLinkSpotSubscriberConfig
 {
-    ulong ReceiveHighWaterMark { get; set; }
-    TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? Linger { get; set; }
+ ulong ReceiveHighWaterMark { get; set; }
+ TimeSpan? ReceiveTimeout { get; set; }
+ TimeSpan? Linger { get; set; }
 }
 
 public interface IZLinkSocketConfig
 {
-    long MaxMessageSize { get; set; }
-    ulong SendHighWaterMark { get; set; }
-    ulong ReceiveHighWaterMark { get; set; }
-    int SendBufferSize { get; set; }
-    int ReceiveBufferSize { get; set; }
-    TimeSpan? Linger { get; set; }
-    TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? SendTimeout { get; set; }
-    TimeSpan? ConnectTimeout { get; set; }
-    TimeSpan? HandshakeInterval { get; set; }
-    bool IPv6 { get; set; }
-    bool TcpNoDelay { get; set; }
-    bool Immediate { get; set; }
-    int Weight { get; set; }
+ long MaxMessageSize { get; set; }
+ ulong SendHighWaterMark { get; set; }
+ ulong ReceiveHighWaterMark { get; set; }
+ int SendBufferSize { get; set; }
+ int ReceiveBufferSize { get; set; }
+ TimeSpan? Linger { get; set; }
+ TimeSpan? ReceiveTimeout { get; set; }
+ TimeSpan? SendTimeout { get; set; }
+ TimeSpan? ConnectTimeout { get; set; }
+ TimeSpan? HandshakeInterval { get; set; }
+ bool IPv6 { get; set; }
+ bool TcpNoDelay { get; set; }
+ bool Immediate { get; set; }
+ int Weight { get; set; }
 }
 
 public interface IZLinkStreamSocketConfig
 {
-    ulong SendHighWaterMark { get; set; }
-    ulong ReceiveHighWaterMark { get; set; }
-    int SendBufferSize { get; set; }
-    int ReceiveBufferSize { get; set; }
-    TimeSpan? Linger { get; set; }
-    TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? SendTimeout { get; set; }
-    TimeSpan? ConnectTimeout { get; set; }
-    TimeSpan? HandshakeInterval { get; set; }
-    bool IPv6 { get; set; }
-    bool TcpNoDelay { get; set; }
-    bool Immediate { get; set; }
+ ulong SendHighWaterMark { get; set; }
+ ulong ReceiveHighWaterMark { get; set; }
+ int SendBufferSize { get; set; }
+ int ReceiveBufferSize { get; set; }
+ TimeSpan? Linger { get; set; }
+ TimeSpan? ReceiveTimeout { get; set; }
+ TimeSpan? SendTimeout { get; set; }
+ TimeSpan? ConnectTimeout { get; set; }
+ TimeSpan? HandshakeInterval { get; set; }
+ bool IPv6 { get; set; }
+ bool TcpNoDelay { get; set; }
+ bool Immediate { get; set; }
 }
 
 public interface IZLinkRouteConfig
 {
-    bool RequireKnownPeer { get; set; }
-    bool AllowPeerHandover { get; set; }
-    bool EnablePeerProbe { get; set; }
-    RoutingId ConnectRoutingId { get; set; }
+ bool RequireKnownPeer { get; set; }
+ bool AllowPeerHandover { get; set; }
+ bool EnablePeerProbe { get; set; }
+ RoutingId ConnectRoutingId { get; set; }
 }
 
 public interface IZLinkOutboundRouteConfig
 {
-    bool ProbeRouterOnConnect { get; set; }
+ bool ProbeRouterOnConnect { get; set; }
 }
 
 public interface IZLinkRouteMeshRuntimeOptions
 {
-    IZLinkMeshPlacementRuntimeOptions Mesh(string meshName);
-    IZLinkMeshChannelRuntimeOptions Channel(string channelName);
+ IZLinkMeshPlacementRuntimeOptions Mesh(string meshName);
+ IZLinkMeshChannelRuntimeOptions Channel(string channelName);
 }
 
 public interface IZLinkMeshPlacementRuntimeOptions
 {
-    int PlacementWeight { get; set; }
+ int PlacementWeight { get; set; }
 }
 
 public interface IZLinkMeshChannelRuntimeOptions
 {
-    int Weight { get; set; }
+ int Weight { get; set; }
 }
 
 public interface IZLinkMeshNodeSocketConfig
 {
-    ulong SendHighWaterMark { get; set; }
-    ulong ReceiveHighWaterMark { get; set; }
-    ulong MailboxMessageBudget { get; set; }
-    ulong MailboxByteBudget { get; set; }
-    TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? SendTimeout { get; set; }
+ ulong SendHighWaterMark { get; set; }
+ ulong ReceiveHighWaterMark { get; set; }
+ ulong MailboxMessageBudget { get; set; }
+ ulong MailboxByteBudget { get; set; }
+ TimeSpan? ReceiveTimeout { get; set; }
+ TimeSpan? SendTimeout { get; set; }
 }
 ```
 
@@ -747,7 +747,7 @@ with the Core HWM budget or application job queue setting. This setting does not
 RouteMesh ServerServer.
 
 `ConfigureSpotPublisher()` doesn't provide a publish-only delivery
-policy option. [Logical Multicast](../../../01-glossary.en.md#logical-multicast)
+policy option. [Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast)
 starts once it secures source-local execution capacity within the send
 timeout, and completes normally with no return value. It doesn't wait
 for or aggregate per-target admission/failure results into public
@@ -757,14 +757,14 @@ some target's failure. It completes normally even with no targets.
 `IZLinkRouteMeshRuntimeOptions` is a public DI singleton. Querying
 unregistered membership is `ZLinkConfigurationException`.
 `MailboxMessageBudget` and `MailboxByteBudget` are the caps on message
-count and byte sum for the per-[owner](../../../01-glossary.en.md#owner)
+count and byte sum for the per-[owner](../../../00-foundation/02-glossary.en.md#owner)
 application mailbox. Byte accounting doesn't count only payload size —
 it adds `payload size + metadata size + a fixed per-job cost`. Even if
 payload is empty, one job isn't 0 bytes, and even for a large payload,
 the fixed cost is still added. If the sum exceeds the `ulong`
 representable range, it's pinned to `ulong.MaxValue` and that submit is
 rejected. The accounting rule is owned by
-[Framework API §8.2](../../../06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
+[Framework API §8.2](../../../00-foundation/06-framework-api.en.md#11-handler-execution-object-and-dependency-lifetime).
 0 uses the Framework profile's finite default. Both values are set
 before startup in `ConfigureRouterSocket()`, and Logical Multicast's
 local target drop also follows this public capacity setting.
@@ -803,8 +803,8 @@ snapshot.
 ```csharp
 public interface IZLinkMetadataCall<TSelf>
 {
-    TSelf Metadata(string key, string value);
-    TSelf Metadata(ZLinkMessageMetadata metadata);
+ TSelf Metadata(string key, string value);
+ TSelf Metadata(ZLinkMessageMetadata metadata);
 }
 ```
 
@@ -821,6 +821,6 @@ Actor relocation must explicitly register a location store. The official
 Redis location store package is the production default implementation.
 Without registration, host startup fails. A process-local in-memory
 implementation can only be registered in a single-process contract test.
-The exact store capability and the Redis constructor/options are owned
+The store capability and the Redis constructor/options are owned
 by
 [.NET Location And Maintenance](08-location-maintenance.en.md).

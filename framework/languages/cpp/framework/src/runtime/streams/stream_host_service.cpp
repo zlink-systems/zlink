@@ -962,7 +962,8 @@ class stream_host_service_t::listener_t
                 std::shared_ptr<std::atomic_bool> drain_flag,
                 std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring,
                 std::shared_ptr<detail::mesh_node_runtime_t> mesh_node,
-                std::shared_ptr<application_job_queue_t> application_jobs) :
+                std::shared_ptr<application_job_queue_t> application_jobs,
+                std::chrono::milliseconds session_replacement_callback_timeout) :
         _runtime (std::move (runtime)),
         _stream (std::move (stream)),
         _advertise_host (std::move (advertise_host)),
@@ -973,6 +974,7 @@ class stream_host_service_t::listener_t
         _monitoring (std::move (monitoring)),
         _mesh_node (std::move (mesh_node)),
         _application_jobs (std::move (application_jobs)),
+        _session_replacement_callback_timeout (session_replacement_callback_timeout),
         _acceptor (_io),
         _accept_retry_timer (_io)
     {
@@ -1839,7 +1841,7 @@ class stream_host_service_t::listener_t
           std::weak_ptr<replacement_session_state_t> (state);
         auto deadline = std::make_shared<asio::steady_timer> (
           asio::system_executor {});
-        deadline->expires_after (std::chrono::seconds (5));
+        deadline->expires_after (_session_replacement_callback_timeout);
         deadline->async_wait (
           [weak, replacement_copy, deadline] (
             const boost::system::error_code &error) {
@@ -3963,6 +3965,7 @@ class stream_host_service_t::listener_t
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
     std::shared_ptr<application_job_queue_t> _application_jobs;
+    std::chrono::milliseconds _session_replacement_callback_timeout;
     std::mutex _active_streams_mutex;
     std::vector<active_session_t> _active_streams;
     asio::io_context _io;
@@ -4006,6 +4009,7 @@ stream_host_service_t::stream_host_service_t (
   detail::stream_runtime_t runtime,
   std::vector<stream_snapshot_t> streams,
   std::map<std::string, detail::stream_session_factory_t> session_factories,
+  std::chrono::milliseconds session_replacement_callback_timeout,
   std::shared_ptr<detail::mesh_node_runtime_t> mesh_node,
   std::map<std::string, std::optional<std::string>> advertise_hosts,
   std::shared_ptr<listener_status_registry_t> listener_statuses,
@@ -4013,6 +4017,7 @@ stream_host_service_t::stream_host_service_t (
     _runtime (std::move (runtime)),
     _streams (std::move (streams)),
     _session_factories (std::move (session_factories)),
+    _session_replacement_callback_timeout (session_replacement_callback_timeout),
     _advertise_hosts (std::move (advertise_hosts)),
     _listener_statuses (std::move (listener_statuses)),
     _mesh_node (std::move (mesh_node)),
@@ -4053,7 +4058,8 @@ void stream_host_service_t::start (service_provider_t &services)
         auto listener =
           std::make_unique<listener_t> (_runtime, stream, advertise_host, factory->second,
                                         services, _stop, _drain_flag, _monitoring, _mesh_node,
-                                        _application_jobs);
+                                        _application_jobs,
+                                        _session_replacement_callback_timeout);
         auto *raw = listener.get ();
         _listeners.push_back (std::move (listener));
         _threads.emplace_back ([raw] { raw->run_guarded (); });

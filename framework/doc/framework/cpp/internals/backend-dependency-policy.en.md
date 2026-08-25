@@ -38,7 +38,7 @@ the binding contract.
 ## 4. C++ Responsibility Graph
 
 The C++ implementation follows the [common layering
-principle](../../common/spec/server/40-internal-layering.en.md). Public headers and the
+principle](../../common/spec/server/00-foundation/08-layering.en.md). Public headers and the
 domain runtime do not expose binding types. Where binding and framework
 semantics are identical, the semantic runtime calls the binding public API
 directly. Where ownership, lifecycle, readiness, error, or concurrency rules

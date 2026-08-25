@@ -361,62 +361,62 @@ nav:
               - "08. Observability diagnostics": node/reference/08-observability-diagnostics.md
       - Spec:
           - "Common spec": common/README.md
-          - Conventions and glossary:
-              - "Public contract governance": common/spec/server/00-public-contract-governance.md
-              - "Messaging glossary": common/spec/server/01-glossary.md
-          - Foundation contracts:
-              - "Framework overview": common/spec/server/02-overview.md
-              - "Interaction model": common/spec/server/03-interaction-model.md
-              - "Message model": common/spec/server/04-message-model.md
-              - "Async execution policy": common/spec/server/05-async-execution-policy.md
-              - "Framework API": common/spec/server/06-framework-api.md
-              - "Core Byte HWM And Application Job Flow": common/spec/server/33-core-hwm-application-job-flow.md
-          - Channel and network:
-              - "RouteMesh topology": common/spec/server/07-channel-topology.md
-              - "Channel messaging": common/spec/server/08-channel-messaging.md
-              - "ClientServer Channel": common/spec/server/09-client-server-channel.md
-              - "Network listener identity": common/spec/server/10-network-listener-identity.md
-          - Object messaging:
-              - "Spot model": common/spec/server/11-spot-model.md
-              - "Spot messaging": common/spec/server/12-spot-messaging.md
-              - "MeshNode": common/spec/server/13-mesh-node.md
-              - "Actor model": common/spec/server/14-actor-model.md
-              - "Spot and Actor membership": common/spec/server/15-spot-actor.md
-              - "Spot address messaging": common/spec/server/16-spot-address-messaging.md
-              - "Stage wrapper on Spot": common/spec/server/17-stage-wrapper-on-spot.md
-              - "Spot·Actor routing": common/spec/server/18-object-routing.md
-          - STREAM and session:
-              - "STREAM server session": common/spec/server/19-stream-session.md
-              - "Session Actor dispatch": common/spec/server/20-session-actor-dispatch.md
-          - Location Store and relocation:
-              - "Location runtime": common/spec/server/21-location-runtime.md
-              - "Location Store (Redis)": common/spec/server/22-location-store-redis.md
-              - "Relocation Store (Redis)": common/spec/server/23-relocation-store-redis.md
-          - Observability and shutdown:
-              - "Runtime status and diagnostics": common/spec/server/24-runtime-monitoring.md
-              - "Runtime metric": common/spec/server/25-runtime-metrics.md
-              - "Message flow tracing": common/spec/server/26-message-flow-tracing.md
-              - "Request correlation": common/spec/server/27-flow-correlation.md
-              - "Complete Actor and Spot relocation flow": common/spec/server/28-relocation-flow.md
-              - "Transport liveness": common/spec/server/29-transport-liveness.md
-              - "Complete Host relocation flow": common/spec/server/30-host-relocation-flow.md
-              - "Failure handling and failover": common/spec/server/31-failure-failover-policy.md
-              - "Framework error model": common/spec/server/32-framework-error-model.md
-      - Internals:
-          - "Internal design overview (non-normative)": common/spec/server/README.md
-          - "40. Layer boundary and identifier": common/spec/server/40-internal-layering.md
-          - "41. Spot and Actor execution serialization": common/spec/server/41-internal-serialization.md
-          - "42. Application and infrastructure isolation": common/spec/server/42-internal-progress-isolation.md
-          - "43. Operation completion": common/spec/server/43-internal-completion.md
-          - "44. Message continuity during a move": common/spec/server/44-internal-relocation-continuity.md
-          - "45. Target selection and route cache": common/spec/server/45-internal-routing-and-cache.md
-          - "46. Receive and dispatch loop": common/spec/server/46-internal-dispatch-loop.md
-          - "47. Object kind and activation": common/spec/server/47-internal-object-lifecycle.md
-          - "48. Session and Actor connection": common/spec/server/48-internal-session-binding.md
-          - "49. Liveness and status publication": common/spec/server/49-internal-liveness-and-state.md
-          - "50. Payload ownership and copy": common/spec/server/50-internal-message-ownership.md
-          - "51. Service wire protocol": common/spec/server/51-internal-service-wire-protocol.md
-          - "52. Relocation handoff state transitions": common/spec/server/52-internal-relocation-handoff.md
+          - "Server spec": common/spec/server/README.md
+          - Foundation:
+              - "Foundation overview": common/spec/server/00-foundation/README.md
+              - "Public Contract Governance": common/spec/server/00-foundation/01-public-contract-governance.md
+              - "Framework Messaging Glossary": common/spec/server/00-foundation/02-glossary.md
+              - "Framework Overview": common/spec/server/00-foundation/03-overview.md
+              - "Interaction Model": common/spec/server/00-foundation/04-interaction-model.md
+              - "Message Model": common/spec/server/00-foundation/05-message-model.md
+              - "ZLink Framework API": common/spec/server/00-foundation/06-framework-api.md
+              - "Framework Error Model": common/spec/server/00-foundation/07-framework-error-model.md
+              - "Layering Boundaries And Identifiers": common/spec/server/00-foundation/08-layering.md
+          - Execution:
+              - "Execution overview": common/spec/server/01-execution/README.md
+              - "Submit And Completion": common/spec/server/01-execution/01-submit-and-completion.md
+              - "Handler Turn And Execution Gate": common/spec/server/01-execution/02-handler-turn-and-execution-gate.md
+              - "Cancellation And Shutdown": common/spec/server/01-execution/03-cancellation-and-shutdown.md
+              - "Application Job Queue And Backpressure": common/spec/server/01-execution/04-application-job-queue-and-backpressure.md
+              - "Payload Ownership And Codec": common/spec/server/01-execution/05-payload-ownership-and-codec.md
+          - Channel and transport:
+              - "Channel and transport overview": common/spec/server/02-channel-transport/README.md
+              - "RouteMesh Topology": common/spec/server/02-channel-transport/01-channel-topology.md
+              - "Channel Messaging": common/spec/server/02-channel-transport/02-channel-messaging.md
+              - "ClientServer Channel": common/spec/server/02-channel-transport/03-client-server-channel.md
+              - "Network Listener Identity": common/spec/server/02-channel-transport/04-network-listener-identity.md
+              - "Transport Liveness": common/spec/server/02-channel-transport/05-transport-liveness.md
+              - "Service Wire Protocol": common/spec/server/02-channel-transport/06-wire-protocol.md
+          - Spot and Actor:
+              - "Spot and Actor overview": common/spec/server/03-spot-actor/README.md
+              - "Spot Model — Entry, User, Instance": common/spec/server/03-spot-actor/01-spot-model.md
+              - "Spot Messaging": common/spec/server/03-spot-actor/02-spot-messaging.md
+              - "MeshNode": common/spec/server/03-spot-actor/03-mesh-node.md
+              - "Actor Model": common/spec/server/03-spot-actor/04-actor-model.md
+              - "Spot And Actor Membership": common/spec/server/03-spot-actor/05-spot-actor-membership.md
+              - "Spot Address Messaging": common/spec/server/03-spot-actor/06-spot-address-messaging.md
+              - "Stage Wrapper On Spot": common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.md
+              - "Spot/Actor Routing": common/spec/server/03-spot-actor/08-routing.md
+              - "09. Object Kind And Activation": common/spec/server/03-spot-actor/09-object-lifecycle.md
+              - "Spot Timer": common/spec/server/03-spot-actor/10-spot-timer.md
+          - Session:
+              - "Session overview": common/spec/server/04-session/README.md
+              - "STREAM Server Session": common/spec/server/04-session/01-stream-session.md
+              - "Session And Actor Binding": common/spec/server/04-session/02-session-actor-binding.md
+          - Location and relocation:
+              - "Location and relocation overview": common/spec/server/05-location-relocation/README.md
+              - "Location Runtime": common/spec/server/05-location-relocation/01-location-runtime.md
+              - "Location Store Provider SPI And The Official Redis Implementation": common/spec/server/05-location-relocation/02-location-store-redis.md
+              - "Relocation Store Provider SPI And The Official Redis Implementation": common/spec/server/05-location-relocation/03-relocation-store-redis.md
+              - "Complete Actor And Spot Relocation Flow": common/spec/server/05-location-relocation/04-relocation-flow.md
+              - "Complete Host Relocation Flow": common/spec/server/05-location-relocation/05-host-relocation-flow.md
+              - "Failure Handling And Failover Scope": common/spec/server/05-location-relocation/06-failure-failover-policy.md
+          - Observability:
+              - "Observability overview": common/spec/server/06-observability/README.md
+              - "Runtime Status Query And Operational Diagnostics": common/spec/server/06-observability/01-runtime-monitoring.md
+              - "Runtime Metrics And Aggregation Rules": common/spec/server/06-observability/02-runtime-metrics.md
+              - "Message Flow Tracing": common/spec/server/06-observability/03-message-flow-tracing.md
+              - "Request Correlation And Business Flow Identification": common/spec/server/06-observability/04-flow-correlation.md
   - Bindings:
       - Guide:
         - Overview: bindings/guide/README.md

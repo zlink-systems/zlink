@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
 
@@ -32,7 +33,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         Func<string, IZLinkBackendSpotNode?> getNodeForMesh,
         ZLinkFrameworkRegistration registration,
         Func<CancellationToken> getShutdownToken,
-        Func<IZLinkLocationRepository?>? resolveAuthorityStore = null)
+        Func<IZLinkLocationRepository?>? resolveAuthorityStore = null,
+        ILoggerFactory? loggerFactory = null)
     {
         _getState = getState;
         _getNode = getNode;
@@ -44,7 +46,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         _canonicalRouteApplicationCancellation = new CancellationTokenSource();
         _sessionBindings = new ZLinkSessionActorBindingTable(
             registration.DefaultRequestTimeout + registration.DefaultRequestTimeout,
-            registration.Locations.SessionRelocationSealTimeoutAtStartup);
+            registration.Locations.SessionRelocationSealTimeoutAtStartup,
+            logger: loggerFactory?.CreateLogger<ZLinkSessionActorBindingTable>());
         _boundSessions = new ZLinkActorBoundSessionRegistry(UnbindActorSession);
         _remoteFrames = new ZLinkRemoteRelayFrameAssembler(
             registration.DefaultRequestTimeout,
@@ -622,6 +625,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (_sessionBindings.IsLateCanonicalRoute(request))
+            return;
         var authenticated = authenticatedCandidate;
         if (request.Route.Action
                 == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
@@ -680,9 +685,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                     (ulong)found.Snapshot.OwnerLeaseGeneration)
             };
         }
-        if (!RouteCanonicalSession(request, authenticated))
-            throw new InvalidDataException(
-                "Remote command 44 did not match the active session relocation seal.");
+        _ = RouteCanonicalSession(request, authenticated);
     }
 
     private void RequireOpenApplicationEpoch()

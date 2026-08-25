@@ -115,20 +115,20 @@ message와 domain model을 바꾸지 않아도 된다.
 
 | 필요한 동작 | Framework 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| Client 연결 하나로 request와 push 처리 | STREAM session | Dispatch와 reply correlation을 Framework가 소유한다. [STREAM 서버 session §3](../../spec/server/19-stream-session.ko.md#3-dispatch-모델) |
-| Session request를 현재 player에게 전달 | Session Actor binding | Bind할 때 저장한 exact route로 relay한다. [Spot·Actor routing §3](../../spec/server/18-object-routing.ko.md#3-session에-bind된-actor로-relay하는-방법) |
-| Player별 identity와 lifecycle 유지 | Actor와 Entry Spot | Actor 생성과 최초 진입점을 Framework가 관리한다. [Spot 모델 §4](../../spec/server/11-spot-model.ko.md#4-entry-spot) |
-| Room별 shared state를 순서대로 변경 | `SpotWide` User Spot | Room의 join, card, timer와 winner 판단을 하나의 shared turn에서 처리한다. [Spot 모델 §5.1](../../spec/server/11-spot-model.ko.md#51-spotwide-relocation-경계) |
-| Level bucket별 matchmaker를 필요할 때 생성 | Instance Spot | `Missing` 상태의 첫 request가 cold activation을 시작한다. [SPOT 메시징 §3.2](../../spec/server/12-spot-messaging.ko.md#32-instance-spot이-없을-때-새로-준비하기) |
-| External record call 동안 room turn 반환 | `Yield` terminator | 결과가 정해지면 새 Spot turn에서 continuation을 실행한다. [SPOT 메시징 §3.6](../../spec/server/12-spot-messaging.ko.md#36-channel-request의-실행-재개) |
-| Reward를 여러 Play node의 local observer room에 전달 | Logical Multicast | Channel과 topic으로 local subscription 범위를 정한다. [SPOT 메시징 §4](../../spec/server/12-spot-messaging.ko.md#4-channel-범위-logical-multicast) |
-| Actor가 이동해도 현재 client로 push | Bound session send | Session owner가 보관한 binding identity와 route를 사용한다. [Spot과 Actor membership §9](../../spec/server/15-spot-actor.ko.md#9-bound-session) |
-| 계획된 node 종료 때 room과 Actor 이동 | Host Relocate | Spot과 member Actor를 같은 relocation unit으로 옮긴다. [Host Relocate §8.5](../../spec/server/30-host-relocation-flow.ko.md#85-spotwide-user-spot) |
+| Client 연결 하나로 request와 push 처리 | STREAM session | Dispatch와 reply correlation을 Framework가 소유한다. [STREAM 서버 session §3](../../spec/server/04-session/01-stream-session.ko.md) |
+| Session request를 현재 player에게 전달 | Session Actor binding | Bind할 때 저장한 exact route로 relay한다. [Spot·Actor routing §3](../../spec/server/03-spot-actor/08-routing.ko.md#3-session에-bind된-actor로-relay하는-방법) |
+| Player별 identity와 lifecycle 유지 | Actor와 Entry Spot | Actor 생성과 최초 진입점을 Framework가 관리한다. [Spot 모델 §4](../../spec/server/03-spot-actor/01-spot-model.ko.md#4-entry-spot) |
+| Room별 shared state를 순서대로 변경 | `SpotWide` User Spot | Room의 join, card, timer와 winner 판단을 하나의 shared turn에서 처리한다. [Spot 모델 §5.1](../../spec/server/03-spot-actor/01-spot-model.ko.md#51-spotwide-relocation-경계) |
+| Level bucket별 matchmaker를 필요할 때 생성 | Instance Spot | `Missing` 상태의 첫 request가 cold activation을 시작한다. [SPOT 메시징 §3.2](../../spec/server/03-spot-actor/02-spot-messaging.ko.md#32-instance-spot이-없을-때-새로-준비하기) |
+| External record call 동안 room turn 반환 | `Yield` terminator | 결과가 정해지면 새 Spot turn에서 continuation을 실행한다. [SPOT 메시징 §3.6](../../spec/server/03-spot-actor/02-spot-messaging.ko.md#36-channel-request의-실행-재개) |
+| Reward를 여러 Play node의 local observer room에 전달 | Logical Multicast | Channel과 topic으로 local subscription 범위를 정한다. [SPOT 메시징 §4](../../spec/server/03-spot-actor/02-spot-messaging.ko.md#4-channel-범위-logical-multicast) |
+| Actor가 이동해도 현재 client로 push | Bound session send | Session owner가 보관한 binding identity와 route를 사용한다. [Spot과 Actor membership §9](../../spec/server/03-spot-actor/05-spot-actor-membership.ko.md#10-bound-session) |
+| 계획된 node 종료 때 room과 Actor 이동 | Host Relocate | Spot과 member Actor를 같은 relocation unit으로 옮긴다. [Host Relocate §8.5](../../spec/server/05-location-relocation/05-host-relocation-flow.ko.md#103-spotwide-user-spot) |
 
 Handler는 typed handler contract와 선언형 metadata로 자동 등록한다. .NET의 attribute,
 Java·Kotlin의 annotation과 Node의 decorator가 같은 역할을 한다. C++은 runtime scan 대신
 compile-time type과 builder로 같은 handler 집합을 명시한다. 등록 방식만 다르며 message와 처리
-책임은 같다. 계약은 [Framework API §8](../../spec/server/06-framework-api.ko.md#8-handler-등록과-dispatch)을
+책임은 같다. 계약은 [Framework API §8](../../spec/server/00-foundation/06-framework-api.ko.md#9-handler-등록과-dispatch)을
 따른다.
 
 ### 5.1 Instance Spot의 수명과 failure 경계
@@ -145,7 +145,7 @@ cold activation을 시작할 수 있다.
 이 동작을 crash failover로 해석하면 안 된다. Ready owner process가 비정상 종료되었거나 lease가
 무효가 된 경우 Framework는 authority를 자동 release하거나 다른 node에 새 incarnation을 만들지
 않는다. 해당 operation은 `Unavailable`로 끝난다. 계획된 `Relocate`는 같은 generation을 target으로
-이동하는 별도 lifecycle이다. 자세한 구분은 [장애 대응 §4.4](../../spec/server/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)을 따른다.
+이동하는 별도 lifecycle이다. 자세한 구분은 [장애 대응 §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)을 따른다.
 
 ## 6. Message 계약
 
@@ -579,7 +579,7 @@ subscriber handler 실행이나 target별 수락을 보장하지 않는다. Clie
 STREAM connection이 끊기면 Framework가 current binding snapshot의 각 exact identity에 disconnect를
 자동 제출한다. Current Spot의 disconnect callback은 push가 불가능한 domain 상태만 반영한다.
 Session callback이 Actor를 순회하거나 binding을 직접 제거하지 않는다. Disconnect는 Actor를 destroy하거나
-room membership을 바꾸지 않는다. 이 경계는 [Session Actor dispatch §4.1](../../spec/server/20-session-actor-dispatch.ko.md#41-connection-disconnect를-actor에-알리는-방법)을 따른다.
+room membership을 바꾸지 않는다. 이 경계는 [Session Actor dispatch §4.1](../../spec/server/04-session/02-session-actor-binding.ko.md)을 따른다.
 
 Game 종료 뒤 player Actor cleanup은 별도 순서로 실행한다.
 
@@ -796,8 +796,8 @@ Docker를 사용할 수 없거나 Redis가 ready가 아니면 명확한 오류�
 - Domain에는 Framework와 Redis type이 없고, sample 전용 route·codec·polling helper가 없다.
 - .NET, Java, Kotlin, Node와 C++ 구현은 같은 message schema, 업무 순서와 최종 결과를 유지한다.
 
-관측 기능을 켜는 구현은 [flow correlation](../../spec/server/27-flow-correlation.ko.md),
-[runtime metrics](../../spec/server/25-runtime-metrics.ko.md)과
-[Graceful Drain](../../spec/server/30-host-relocation-flow.ko.md)의 언어별 exact interface를 사용한다.
+관측 기능을 켜는 구현은 [flow correlation](../../spec/server/06-observability/04-flow-correlation.ko.md),
+[runtime metrics](../../spec/server/06-observability/02-runtime-metrics.ko.md)과
+[Graceful Drain](../../spec/server/05-location-relocation/05-host-relocation-flow.ko.md)의 언어별 exact interface를 사용한다.
 관측 설정과 100 Actor relocation workload는 이 기본 sample의 성공 조건이 아니라
 [Config 11 관측·운영 E2E](../../e2e/config-11-observability-ops.ko.md)가 검증한다.

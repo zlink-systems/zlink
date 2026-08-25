@@ -14,8 +14,8 @@ contract.
 
 This directory doesn't define the server-side public interface. The
 server session a connector connects to is owned by
-[server/30 STREAM Server Session](../server/19-stream-session.en.md) and
-[server/31 Session Actor Dispatch](../server/20-session-actor-dispatch.en.md).
+[server/30 STREAM Server Session](../server/04-session/01-stream-session.en.md) and
+[server/31 Session Actor Dispatch](../server/04-session/02-session-actor-binding.en.md).
 
 ## Per-Language Public API
 
@@ -28,7 +28,7 @@ server session a connector connects to is owned by
 
 The browser connector and Node.js Framework are different packages.
 The browser connector isn't a public interface of the Node.js host
-([00 §4](../server/00-public-contract-governance.en.md)).
+([00 §4](../server/00-foundation/01-public-contract-governance.en.md)).
 
 ## Usage Guide
 

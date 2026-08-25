@@ -103,9 +103,6 @@ const SPOT_MOVING = 34;
 const USER_SPOT_OPERATION_CAPACITY = 65_536;
 const USER_SPOT_OPERATION_REPLAY_RETENTION_MS = 5 * 60_000;
 const ACTOR_ROUTE_NOT_FOUND = 1;
-const SESSION_BINDING_REPLACEMENT_RETRY_DEADLINE_MS = 30_000;
-const SESSION_BINDING_REPLACEMENT_RETRY_INITIAL_DELAY_MS = 25;
-const SESSION_BINDING_REPLACEMENT_RETRY_MAX_DELAY_MS = 1_000;
 
 export interface ServiceSpotMessageFollowSeal {
   readonly key: string;
@@ -3381,32 +3378,9 @@ export class ServiceStatefulRuntime {
     previous: ServiceSessionBinding,
     actorAuthority: ServiceBoundSessionActorAuthority
   ): void {
-    void this.trySendBoundSessionReplacement(
-      previous,
-      actorAuthority,
-      SESSION_BINDING_REPLACEMENT_RETRY_INITIAL_DELAY_MS,
-      Date.now() + SESSION_BINDING_REPLACEMENT_RETRY_DEADLINE_MS
-    );
-  }
-
-  private async trySendBoundSessionReplacement(
-    previous: ServiceSessionBinding,
-    actorAuthority: ServiceBoundSessionActorAuthority,
-    delayMs: number,
-    deadline: number
-  ): Promise<void> {
-    if (this.closed || Date.now() >= deadline) return;
     const ownerGeneration = previous.sessionOwnerNodeGeneration
       ?? this.tryPeerGeneration(previous.sessionOwnerNodeRid);
-    if (ownerGeneration === undefined) {
-      this.scheduleBoundSessionReplacementRetry(
-        previous,
-        actorAuthority,
-        delayMs,
-        deadline
-      );
-      return;
-    }
+    if (ownerGeneration === undefined) return;
     const header = encodeBoundSessionReplacedHeader(
       actorAuthority,
       {
@@ -3418,33 +3392,10 @@ export class ServiceStatefulRuntime {
         retiredBindingGeneration: previous.bindingGeneration
       }
     );
-    let result: number;
-    try {
-      result = await this.submitOneWay(previous.sessionOwnerNodeRid, [header]);
-    } catch {
-      result = SubmitResult.InvalidState;
-    }
-    // This is admission-only. A failed send is retried by the replacement
-    // admission path and never changes the already-current Actor binding.
-    if (result !== SubmitResult.Ok) {
-      this.scheduleBoundSessionReplacementRetry(
-        previous,
-        actorAuthority,
-        Math.min(delayMs * 2, SESSION_BINDING_REPLACEMENT_RETRY_MAX_DELAY_MS),
-        deadline
-      );
-    }
-  }
-
-  private scheduleBoundSessionReplacementRetry(
-    previous: ServiceSessionBinding,
-    actorAuthority: ServiceBoundSessionActorAuthority,
-    delayMs: number,
-    deadline: number
-  ): void {
-    setTimeout(() => {
-      void this.trySendBoundSessionReplacement(previous, actorAuthority, delayMs, deadline);
-    }, delayMs);
+    // submitOneWay owns the normal transport admission timeout. A replacement
+    // notice is one-way, so an unsuccessful admission has no caller terminal
+    // to complete and must not delay the already-completed bind.
+    void this.submitOneWay(previous.sessionOwnerNodeRid, [header]).catch(() => {});
   }
 
   private enqueueSessionBindingTombstone(

@@ -112,7 +112,7 @@ test sentence solely from source. The important differentiation is observability
 exercise the edge boundaries; Java/Kotlin/C++ largely demonstrate the surface but do not prove
 turn/lifecycle/relocation outcomes through the sample harness.
 
-Spec source: `framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md:13-178`.
+Spec source: `framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md:13-178`.
 
 ## 3. Relocation and maintenance scope (Specs 15/28/30 + common scenario)
 
@@ -255,7 +255,7 @@ expanded; do not use those old outcomes to select the reference.
 ## Read-only evidence index
 
 - Common sample contract: `framework/doc/framework/common/sample/zoneworld/README.ko.md:6-33,142-161,385-510,603-695`.
-- Stage wrapper contract: `framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md:13-178`.
+- Stage wrapper contract: `framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md:13-178`.
 - .NET scenario registry/runner: `framework/languages/dotnet/samples/ZoneWorld/Client/Scenarios.cs:15-49`; `run_sample.sh:628-879`.
 - Node implementation/runner/static gate: `framework/languages/node/samples/ZoneWorld/Client/main.ts:43-312`; `Runner/sample-runner.mjs:1-249`; `test/contract/sample-zoneworld-gate.test.js:12-212`.
 - Java/Kotlin clients/runners: `framework/languages/java/samples/{java,kotlin}/ZoneWorld/Client/src/main/*/.../Program.{java,kt}`; both `run_sample.sh:185-259`.

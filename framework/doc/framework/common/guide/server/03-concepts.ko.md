@@ -1,7 +1,7 @@
 # 3. 핵심 개념
 
-> **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/02-overview.ko.md)와
-> [상호작용 모델](../../../common/spec/server/03-interaction-model.ko.md)이 개념의 정식 의미를,
+> **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)와
+> [상호작용 모델](../../../common/spec/server/00-foundation/04-interaction-model.ko.md)이 개념의 정식 의미를,
 > [언어별 handler 인터페이스 계약](../../../common/spec/server/languages/README.ko.md)이
 > 인터페이스의 정식 정의를 소유한다. 이 문서는 그 의미가 코드에서 어떤 모양으로 보이는지
 > 정리한다.
@@ -324,7 +324,7 @@ descriptor로 store에 등록하고, 호출하는 쪽은 논리 이름으로 sto
 연결한다. 서버 구성이 바뀌면 연결도 갱신된다.
 
 사용법은 [10-location](10-location.ko.md), 계약은
-[공통 스펙](../../../common/spec/server/21-location-runtime.ko.md)이 정의한다.
+[공통 스펙](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md)이 정의한다.
 
 store 없이 endpoint를 등록에 직접 지정하는 수동 연결도 지원한다 — 개발·테스트와
 소규모 고정 배포에 사용한다([05-channel-messaging §6](05-channel-messaging.ko.md)).

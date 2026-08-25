@@ -1,5 +1,8 @@
 # ZLink Framework Kotlin 공개 계약
 
+<!-- framework-adapter-nav:start -->
+[언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)
+<!-- framework-adapter-nav:end -->
 이 디렉토리는 `zlink-framework-kotlin`이 Java runtime 위에 추가하는 Kotlin 전용
 public contract를 소유한다. 그대로 사용하는 Java 타입과 메서드는
 [Java 공개 계약](../java/README.ko.md)을 따르고 여기서 복사해 다시 정의하지 않는다.
@@ -15,10 +18,10 @@ Host relocation은 Java의 mode·options·result type을 그대로 사용한다.
 일치하는 target만 사용한다. Kotlin 전용 default mode나 target 선택 extension은 제공하지 않는다.
 
 ChannelName 단일 호출, RouteMesh·ClientServer role builder, listener network identity, handler context와
-전용 descriptor·runtime은 Java 정본 타입을 재사용하고 Kotlin DSL만 관용적으로 투영한다.
+전용 descriptor·runtime은 Java 타입을 단일 기준으로 재사용하고 Kotlin DSL만 관용적으로 투영한다.
 
-Global ActorId·SpotId, exact ActorRef·SpotRef, [User Spot](../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) manager의 명시적인 create/get-or-create,
-actor-free Instance Spot lifecycle도 Java 정본 타입을 재사용한다. Location provider는 Java의 opaque
+Global ActorId·SpotId, ActorRef·SpotRef, [User Spot](../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot) manager의 명시적인 create/get-or-create,
+actor-free Instance Spot lifecycle도 Java 타입을 단일 기준으로 재사용한다. Location provider는 Java의 opaque
 key·value atomic batch를, Relocation provider는 Framework-issued reference 기반 immutable blob 계약을
 그대로 구현한다. Kotlin은
 ID-only direct call에 `send`와 `request` extension만 추가하며 Java member와 충돌하는 suspend
@@ -27,7 +30,7 @@ ID-only direct call에 `send`와 `request` extension만 추가하며 Java member
 
 공유 JVM runtime은 Java binding의 public raw socket API로 placement와 activation barrier를 구현한다.
 Core service driver, private binding 진입점과 별도 Kotlin runtime은 사용하지 않는다. Ready owner 호출은
-global ID로 current [authority](../../01-glossary.ko.md#authority)를 resolve하며 process-local handle이나 별도 address를 사용하지 않는다.
+global ID로 current [authority](../../00-foundation/02-glossary.ko.md#authority)를 resolve하며 process-local handle이나 별도 address를 사용하지 않는다.
 
 공식 Redis location extension의 Kotlin 호출 경계와 Java type 재사용 규칙은
 [Location과 maintenance](interfaces/location-maintenance.ko.md)가 고정한다.
@@ -42,3 +45,8 @@ Kotlin application callback과 call interface에는 framework `CancellationToken
 Java provider·adapter ABI에서 재사용하는 `ZLinkStoreCancellation`과 `ZLinkRelocationCancellation`은 Kotlin
 lifecycle token이 아니라 해당 SPI operation의 fence다. Kotlin suspending lifecycle callback에는 이 타입을
 투영하지 않는다.
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)
+<!-- framework-adapter-nav:bottom:end -->

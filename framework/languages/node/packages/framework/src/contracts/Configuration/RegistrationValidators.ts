@@ -542,6 +542,7 @@ function requireFilePath(label: string, value: string | undefined): void {
 }
 
 function validateStreamNodes(registration: ZLinkFrameworkRegistration): void {
+  const sessionTypes = new Map<string, string>();
   for (const [streamNodeName, streamNode] of registration.streamNodes.entries()) {
     requireNonNegativeInteger(
       `STREAM node '${streamNodeName}' maxMessageSize`,
@@ -563,6 +564,14 @@ function validateStreamNodes(registration: ZLinkFrameworkRegistration): void {
         `STREAM node '${streamNodeName}' must register a header stream session.`
       );
     }
+    const sessionTypeName = streamNode.session.name;
+    const registeredNodeName = sessionTypes.get(sessionTypeName);
+    if (registeredNodeName !== undefined) {
+      throw new ZLinkConfigurationException(
+        `STREAM session type '${sessionTypeName}' is registered on both '${registeredNodeName}' and '${streamNodeName}'.`
+      );
+    }
+    sessionTypes.set(sessionTypeName, streamNodeName);
     if (streamNode.actorDispatchEnabled === true) {
       if (!hasLocationStores(registration)) {
         throw new ZLinkConfigurationException(

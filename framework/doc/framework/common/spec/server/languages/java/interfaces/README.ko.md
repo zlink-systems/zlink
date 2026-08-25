@@ -1,5 +1,8 @@
 # Java public interface 정식 계약
 
+<!-- framework-adapter-nav:start -->
+[Java 계약 목차](../README.ko.md) | [언어별 interface 목차](../../README.ko.md)
+<!-- framework-adapter-nav:end -->
 [Java 계약 목차](../README.ko.md)
 
 이 디렉토리는 Java server package의 정확한 public signature를 기능별로 고정한다. 공통 동작은
@@ -29,17 +32,22 @@ Relocation provider는 Framework가 미리 발급한 reference에 immutable blob
 
 `ZLinkTopologyState`는 등록한 topology의 가용성을, `ZLinkFrameworkRuntimeState`는 host 전체 상태를 나타낸다. Channel
 호출은 process-local ChannelName만 받는다. Node를 직접 지정하는
-`sendToNode(String, RoutingId, Object)`의 첫 번째 인자는 [MeshName](../../../01-glossary.ko.md#meshname)이다.
+`sendToNode(String, RoutingId, Object)`의 첫 번째 인자는 [MeshName](../../../00-foundation/02-glossary.ko.md#meshname)이다.
 
-ActorId와 User·Instance SpotId는 global logical ID다. 일반 message는 ID만 받고 current [authority](../../../01-glossary.ko.md#authority)를
-resolve하며 exact mutation과 session bind는 `ActorRef` 또는 `SpotRef`를 받는다. [MeshNode](../../../01-glossary.ko.md#meshnode) object role은
+ActorId와 User·Instance SpotId는 global logical ID다. 일반 message는 ID만 받고 current [authority](../../../00-foundation/02-glossary.ko.md#authority)를
+resolve하며 mutation과 session bind는 `ActorRef` 또는 `SpotRef`를 받는다. [MeshNode](../../../00-foundation/02-glossary.ko.md#meshnode) object role은
 `None`, `Client`, `Server`로 닫혀 있고 Client·Server는 Location Store가 필수다.
 
 정확한 type, constructor, method, record component, enum value와 generic bound는 위 기능별 문서가 소유한다.
 Core·bindings의 내부 type과 `runtime.internal` type은 application public signature에 노출하지 않는다.
 Spring starter는 public bean의 type, singleton 수명과 identity만 계약으로 제공한다. Auto-configuration class,
-bean factory method와 lifecycle adapter의 concrete type은 exact public interface에 포함하지 않는다.
+bean factory method와 lifecycle adapter의 concrete type은 공개 interface에 포함하지 않는다.
 
 Public generation, revision, epoch와 sequence ordinal의 유효 범위는 양수 `long`, 즉
 `1..Long.MAX_VALUE`다. 최대값에 도달하면 Framework는 wrap이나 값 재사용 없이 terminal exhaustion으로
 처리한다. `0`은 값이 확정되지 않은 상태를 표현하도록 해당 계약이 명시한 경우에만 사용한다.
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[Java 계약 목차](../README.ko.md) | [언어별 interface 목차](../../README.ko.md)
+<!-- framework-adapter-nav:bottom:end -->

@@ -357,19 +357,17 @@ export function serviceSessionRelocationIdentityKey(
   const actor = 'targetNodeGeneration' in value.actor
     ? value.actor.actor
     : value.actor;
-  return JSON.stringify([
+  //  Session owner가 seal을 대조할 때 쓰는 값만 넣는다 — Session과 Actor binding
+  //  §8.1 "Session owner는 다음 값만 검증한다". coordinator identity는 transport가
+  //  검증하는 wire fence이므로 여기서 다시 대조하지 않는다.
+  return [
     value.relocation.high.toString(),
     value.relocation.low.toString(),
-    value.coordinator.ownerId,
-    value.coordinator.leaseGeneration.toString(),
-    value.coordinator.nodeRid,
-    value.coordinator.nodeGeneration.toString(),
-    value.coordinator.expectedAuthorityStoreVersion,
     actor.actorId,
     actor.generation.toString(),
     value.session.sessionRid,
     value.session.bindingGeneration.toString()
-  ]);
+  ].join(':');
 }
 
 function toGeneratedRoutingId(value: string, field: string): Uint8Array {

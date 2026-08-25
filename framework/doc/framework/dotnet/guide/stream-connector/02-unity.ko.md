@@ -23,7 +23,7 @@ Unity에서는 `MonoBehaviour.Update()`에서 `Dispatch.Async()`를 호출한다
 쌓인 callback이 Unity main thread에서 실행된다.
 
 비동기 실행과 coroutine adapter의 공통 의미는
-[framework 공통 정책](../../../common/spec/server/05-async-execution-policy.ko.md)을 따른다.
+[framework 공통 정책](../../../common/spec/server/01-execution/README.ko.md)을 따른다.
 Unity에서도 connector의 public API는 일반 `.NET`과 같은 `Task` / `ValueTask` 기반
 비동기 API다. `Connect.Async()`, `Close.Async()`, `Dispatch.Async()`,
 `Request(...).Async<TReply>(...)`, `WaitFor(...).Async(...)` 같은 호출을 그대로 사용한다.

@@ -1,5 +1,8 @@
 # ZLink Framework C++ Public Contract
 
+<!-- framework-adapter-nav:start -->
+[Language interface table of contents](../README.en.md) | [Spec table of contents](../../README.en.md)
+<!-- framework-adapter-nav:end -->
 This directory owns the **formal public contract** the C++ framework
 must provide. Public headers and contract tests must follow this
 contract.
@@ -14,14 +17,14 @@ directory.
 | No. | Document | Scope |
 |---|------|------|
 | `01` | [System Structure](01-system-structure.en.md) | Package/build target, application host, **DI container**, **configuration**, **logging**, lifecycle, registration surface |
-| `02` | [Exact Interface Per Capability](interfaces/README.en.md) | Server package's per-capability C++ public type and member |
-| `03` | [Location · Relocation Store · Redis Relocation Notice](03-location-store.en.md) | Links to the per-capability exact interface's Store/Redis document |
+| `02` | [Per-Capability Interface](interfaces/README.en.md) | Server package's per-capability C++ public type and member |
+| `03` | [Location · Relocation Store · Redis Relocation Notice](interfaces/07-location-store.en.md) | Links to the per-capability per-language interface's Store/Redis document |
 | `60` | [HTTP Hosting](60-http-hosting.en.md) | HTTP hosting contract |
 | `61` | [Embedded HTTP Server](61-embedded-http-server.en.md) | Embedded server |
 
 **The meaning and behavior rule of a capability is owned by the
 [common spec](../../README.en.md).** This directory fixes the
-**exact public surface** that meaning has in C++.
+**public surface** that meaning has in C++.
 
 **The internal runtime structure isn't a public contract** — it's
 owned by [internals/runtime-architecture](../../README.en.md).
@@ -39,3 +42,8 @@ cancellable long-running operation needs explicit cancellation
 delivery, it uses **standard C++ lifetime and cancellation
 convention**. Timeout, host shutdown, RAII cleanup, and coroutine
 lifetime follow each capability contract.
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[Language interface table of contents](../README.en.md) | [Spec table of contents](../../README.en.md)
+<!-- framework-adapter-nav:bottom:end -->

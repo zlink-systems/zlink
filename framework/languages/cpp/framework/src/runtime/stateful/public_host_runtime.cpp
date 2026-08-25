@@ -1082,6 +1082,15 @@ void public_host_runtime_t::configure_bound_session_operations (
     _bound_session_operations = std::move (operations);
 }
 
+void public_host_runtime_t::configure_late_session_route_update (
+  std::function<void (const protocol::session_relocation_route_t &)> reporter)
+{
+    std::lock_guard lock (_mutex);
+    if (_started)
+        throw std::logic_error ("late Session route reporter must be configured before start");
+    _late_session_route_update_reporter = std::move (reporter);
+}
+
 void public_host_runtime_t::start ()
 {
     std::lock_guard lock (_mutex);
@@ -3292,57 +3301,6 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     return true;
 }
 
-void public_host_runtime_t::queue_bound_session_replacement_retry (
-  protocol::bound_session_replaced_t replacement)
-{
-    const auto next_attempt = std::chrono::steady_clock::now () + std::chrono::milliseconds (10);
-    std::lock_guard lock (_mutex);
-    if (_pending_bound_session_replacements.size () >= bound_session_replacement_retry_capacity) {
-        _pending_bound_session_replacements.pop_front ();
-    }
-    _pending_bound_session_replacements.push_back (
-      pending_bound_session_replacement_t{std::move (replacement), 1, next_attempt});
-}
-
-task_t<void> public_host_runtime_t::retry_bound_session_replacements ()
-{
-    std::deque<pending_bound_session_replacement_t> due;
-    const auto now = std::chrono::steady_clock::now ();
-    {
-        std::lock_guard lock (_mutex);
-        for (auto pending = _pending_bound_session_replacements.begin ();
-             pending != _pending_bound_session_replacements.end ();) {
-            if (pending->next_attempt > now) {
-                ++pending;
-                continue;
-            }
-            due.push_back (std::move (*pending));
-            pending = _pending_bound_session_replacements.erase (pending);
-        }
-    }
-
-    for (auto &pending : due) {
-        const auto admitted = co_await _transport->send_bound_session_replaced (
-          pending.replacement.retired_session.session_owner_node_routing_id, pending.replacement);
-        trace_mesh_host ("bound-session-replacement-retry",
-                         "actor=" + pending.replacement.actor_authority.actor_id
-                           + " attempt=" + std::to_string (pending.attempts + 1)
-                           + " admitted=" + (admitted ? "true" : "false"));
-        if (admitted || ++pending.attempts >= bound_session_replacement_max_attempts) {
-            continue;
-        }
-        const auto delay = std::chrono::milliseconds (10 * (1 << (pending.attempts - 1)));
-        pending.next_attempt = std::chrono::steady_clock::now () + delay;
-        std::lock_guard lock (_mutex);
-        if (_pending_bound_session_replacements.size ()
-            >= bound_session_replacement_retry_capacity) {
-            _pending_bound_session_replacements.pop_front ();
-        }
-        _pending_bound_session_replacements.push_back (std::move (pending));
-    }
-    co_return;
-}
-
 void public_host_runtime_t::reply_relocation_assembly_failure (
   const pending_relocation_assembly_t &pending, protocol::framework_error_code code)
 {
@@ -3890,7 +3848,6 @@ bool public_host_runtime_t::register_relocation_target_queue (
 
 task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
 {
-    co_await retry_bound_session_replacements ();
     std::shared_ptr<zlink::framework::location_repository_t> store;
     user_spot_materializer_t materializer;
     actor_create_operation_target_t actor_create_target;
@@ -3901,6 +3858,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     std::function<std::optional<location_owner_token_t> ()> session_route_owner_resolver;
     std::function<void (const protocol::message_follow_notice_t &)> message_follow_handler;
     bound_session_operations_t bound_session_operations;
+    std::function<void (const protocol::session_relocation_route_t &)>
+      late_session_route_update_reporter;
     {
         std::lock_guard lock (_mutex);
         store = _user_spot_store;
@@ -3913,6 +3872,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
         session_route_owner_resolver = _session_route_owner_resolver;
         message_follow_handler = _message_follow_handler;
         bound_session_operations = _bound_session_operations;
+        late_session_route_update_reporter = _late_session_route_update_reporter;
     }
     expire_relocation_target_attempts ();
     std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
@@ -4033,14 +3993,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         : static_cast<std::uint32_t> (
                             protocol::framework_error_code::actorSessionNotBound));
                     if (replied && operation_result.replacement) {
-                        const auto replacement_sent =
-                          co_await _transport->send_bound_session_replaced (
-                            operation_result.replacement->retired_session
-                              .session_owner_node_routing_id,
-                            *operation_result.replacement);
-                        if (!replacement_sent) {
-                            queue_bound_session_replacement_retry (*operation_result.replacement);
-                        }
+                        (void) co_await _transport->send_bound_session_replaced (
+                          operation_result.replacement->retired_session
+                            .session_owner_node_routing_id,
+                          *operation_result.replacement);
                     }
                     continue;
                 }
@@ -4343,11 +4299,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
 
                     const auto relocation_key = session_relocation_key (route);
                     std::uint64_t sealed_authority = 0;
+                    bool late_session_route_update = false;
                     {
                         std::lock_guard lock (_mutex);
                         const auto sealed = _session_seal_terminals.find (relocation_key);
-                        if (sealed == _session_seal_terminals.end () || sealed->second.consumed
-                            || !sealed->second.ready
+                        if (sealed == _session_seal_terminals.end () || sealed->second.consumed) {
+                            late_session_route_update = true;
+                        } else if (!sealed->second.ready
                             || sealed->second.seal.relocation != route.relocation
                             || sealed->second.seal.coordinator != route.coordinator
                             || sealed->second.seal.actor.actor_id != route.actor.actor_id
@@ -4363,17 +4321,29 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             || sealed->second.seal.session_routing_id != route.session_routing_id
                             || sealed->second.seal.binding_generation != route.binding_generation) {
                             continue;
+                        } else {
+                            sealed_authority = sealed->second.seal.actor.authority_owner_generation;
+                            if ((route.route.action
+                                   == protocol::session_relocation_route_action_t::commit
+                                 && route.route.previous_authority_owner_generation
+                                      != sealed_authority)
+                                || (route.route.action
+                                      == protocol::session_relocation_route_action_t::abort
+                                    && route.route.current_authority_owner_generation
+                                         != sealed_authority)) {
+                                continue;
+                            }
                         }
-                        sealed_authority = sealed->second.seal.actor.authority_owner_generation;
-                        if ((route.route.action
-                               == protocol::session_relocation_route_action_t::commit
-                             && route.route.previous_authority_owner_generation != sealed_authority)
-                            || (route.route.action
-                                  == protocol::session_relocation_route_action_t::abort
-                                && route.route.current_authority_owner_generation
-                                     != sealed_authority)) {
-                            continue;
+                    }
+                    if (late_session_route_update) {
+                        if (late_session_route_update_reporter) {
+                            try {
+                                late_session_route_update_reporter (route);
+                            }
+                            catch (...) {
+                            }
                         }
+                        continue;
                     }
 
                     const auto session_id =

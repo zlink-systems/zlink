@@ -28,6 +28,7 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
@@ -781,8 +782,10 @@ public final class ZLinkMeshApplicationDispatcher
         private final ZLinkAsyncSerialQueue requestQueue;
 
         Namespace(Executor executor) {
-            sendQueue = new ZLinkAsyncSerialQueue(executor, false);
-            requestQueue = new ZLinkAsyncSerialQueue(executor, false);
+            sendQueue = new ZLinkAsyncSerialQueue(
+                executor, ZLinkExecutionLanePolicy.generic());
+            requestQueue = new ZLinkAsyncSerialQueue(
+                executor, ZLinkExecutionLanePolicy.generic());
         }
     }
 }

@@ -161,4 +161,4 @@ bool canAcceptNewOperations = status.IsReady && status.AcceptingWork;
 전체 근거는
 [Host 등록 exact interface](../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md),
 [Topology monitoring exact interface](../../common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.ko.md),
-[Host Relocate·Shutdown·Handoff](../../common/spec/server/30-host-relocation-flow.ko.md)를 참고한다.
+[Host Relocate·Shutdown·Handoff](../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md)를 참고한다.

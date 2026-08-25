@@ -18,9 +18,9 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/12-operation
 # 12. Operations — Runtime Metrics · Graceful Drain · Readiness
 
 > **The documents that own this chapter's contract** — owned by the common spec
-> [Runtime state query and operational diagnostics](../../../common/spec/server/24-runtime-monitoring.en.md),
-> [Runtime metrics](../../../common/spec/server/25-runtime-metrics.en.md), and
-> [Graceful Drain & Handoff](../../../common/spec/server/30-host-relocation-flow.en.md). The
+> [Runtime state query and operational diagnostics](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md),
+> [Runtime metrics](../../../common/spec/server/06-observability/02-runtime-metrics.en.md), and
+> [Graceful Drain & Handoff](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.en.md). The
 > formal definition of each language's surface is owned by the
 > [per-language topology/monitoring public contract](../../../common/spec/server/languages/README.en.md).
 > This chapter focuses on usage — what you actually wire up and declare in an operational
@@ -74,9 +74,9 @@ auto status = runtime.status ();
 
 The instrument catalog is below. The labels, units, and kinds of the MeshNode,
 object/STREAM, and location/fanout instruments are set by
-[Runtime Metrics §§3-5](../../../common/spec/server/25-runtime-metrics.en.md), and the drain
+[Runtime Metrics §§3-5](../../../common/spec/server/06-observability/02-runtime-metrics.en.md), and the drain
 instruments by
-[Complete Host Relocation Flow §13](../../../common/spec/server/30-host-relocation-flow.en.md#13-observability-information).
+[Complete Host Relocation Flow §13](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.en.md#16-observability-information).
 
 | Instrument | What it measures |
 |---|---|
@@ -146,9 +146,9 @@ An event concurrent with reset belongs to exactly one epoch. Always-on metrics d
 not timestamp every job or create a per-job queue-wait histogram;
 record such distributions only inside a bounded performance fixture. The exact snapshot and
 reset rules are in
-[Runtime state query and operational diagnostics](../../../common/spec/server/24-runtime-monitoring.en.md)
+[Runtime state query and operational diagnostics](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md)
 and the metric names, units, and labels are in
-[Runtime metrics](../../../common/spec/server/25-runtime-metrics.en.md).
+[Runtime metrics](../../../common/spec/server/06-observability/02-runtime-metrics.en.md).
 
 ## 2. Relocate — Moving To Another Host While Keeping State
 
@@ -262,7 +262,7 @@ When the budget is full, a new relocation unit waits before its seal, and the Ac
 keeps processing messages normally while it waits — no payload size is ever too large to
 start because of the budget. Internal protocol details such as the chunk format and
 verification rules are covered by
-[Relocation Flow](../../../common/spec/server/28-relocation-flow.en.md).
+[Relocation Flow](../../../common/spec/server/05-location-relocation/04-relocation-flow.en.md).
 
 ### 2.3 SafeToShutdown — When It's Safe To Terminate
 
@@ -274,14 +274,14 @@ to confirm `Relocated`, then observe this state before calling `shutdown` — te
 before it's published is allowed, but the remaining follow routes disappear and requests
 from callers still caching the old route can end in `Unavailable`. State queries and change
 observation follow
-[Runtime Status Queries And Operational Diagnostics](../../../common/spec/server/24-runtime-monitoring.en.md).
+[Runtime Status Queries And Operational Diagnostics](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md).
 
 The relocation window is observed as three separate segments — source stop (from seal to
 cutover submission), target resume (from the target's owner confirmation to dispatch
 opening), and route convergence (from cutover submission until the Message Follow route can
 be removed). The number of fallbacks that proceeded unverified after waiting for a cutover
 is published as the `cutover_timeout` counter. Metric names, units, and labels are owned by
-[Runtime Metrics](../../../common/spec/server/25-runtime-metrics.en.md).
+[Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.en.md).
 
 ## 3. Shutdown — Terminating Without Moving
 
@@ -476,8 +476,8 @@ the `zlink.host.*` instruments from §1.
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §7 — the verification class `FrameworkRuntimeContracts`
 - The formal contract:
-  [Complete Host Relocation Flow](../../../common/spec/server/30-host-relocation-flow.en.md) ·
-  [Runtime Metrics](../../../common/spec/server/25-runtime-metrics.en.md)
+  [Complete Host Relocation Flow](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.en.md) ·
+  [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.en.md)
 - Status observation and diagnostics: the [11. Monitoring](11-monitoring.en.md)
 - The Spot where the application decides the relocation boundary:
   [06-spot §7](06-spot.en.md#7-signaling-when-relocation-may-begin)

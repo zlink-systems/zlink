@@ -467,6 +467,7 @@ struct framework_options_state_t
     std::optional<std::uint32_t> max_queued_application_jobs;
     std::uint32_t application_job_queue_pause_threshold_percent = 80;
     std::uint32_t application_job_queue_resume_threshold_percent = 60;
+    std::chrono::milliseconds session_replacement_callback_timeout{30'000};
     bool applied = false;
 
     void add_zlink_action (std::function<void (zlink_builder_t &)> action)

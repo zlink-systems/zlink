@@ -235,6 +235,7 @@ class actor_gateway_state_t
     join_spot_dispatcher_t join_spot_dispatcher;
     join_entry_spot_dispatcher_t join_entry_spot_dispatcher;
     relay_dispatcher_t relay_dispatcher;
+    bool offload_session_relay = false;
     disconnect_dispatcher_t disconnect_dispatcher;
     bound_session_registrar_t bound_session_registrar;
     bound_session_sender_t bound_session_sender;
@@ -374,6 +375,7 @@ class actor_gateway_runtime_t
     void on_create (actor_gateway_state_t::create_dispatcher_t dispatcher);
     void on_join_entry_spot (actor_gateway_state_t::join_entry_spot_dispatcher_t dispatcher);
     void on_relay (actor_gateway_state_t::relay_dispatcher_t dispatcher);
+    void offload_session_relay (bool enabled = true);
     void on_membership (actor_gateway_state_t::membership_query_t query);
     void on_join_barrier (actor_gateway_state_t::join_barrier_reserver_t reserver);
     void on_disconnect (actor_gateway_state_t::disconnect_dispatcher_t dispatcher);

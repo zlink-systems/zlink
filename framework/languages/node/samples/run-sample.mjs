@@ -79,6 +79,7 @@ function createContext(redisEndpoint) {
   }
   return {
     env,
+    lane: runnerOptions.lane,
     logDir,
     nodeRoot,
     redisEndpoint,
@@ -304,11 +305,17 @@ function removeRedisAttempt(containerId, name) {
 }
 
 function parseRunnerOptions(args) {
-  const options = { keepRunDir: false, redisImage: 'redis:7.2-alpine' };
+  const options = { keepRunDir: false, redisImage: 'redis:7.2-alpine', lane: undefined };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--keep-run-dir') {
       options.keepRunDir = true;
+      continue;
+    }
+    if (argument === '--lane') {
+      const value = args[++index];
+      if (!value || value.startsWith('--')) throw new Error('--lane <name> is required.');
+      options.lane = value;
       continue;
     }
     if (argument === '--redis-image') {

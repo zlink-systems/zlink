@@ -9,6 +9,7 @@ import { runStB4 } from './Scenarios/st-b4-target-failure-rollback-scenario';
 import { runStC1 } from './Scenarios/st-c1-duplicate-transfer-scenario';
 import { runStC2 } from './Scenarios/st-c2-stale-generation-scenario';
 import { runStC3 } from './Scenarios/st-c3-callback-failure-scenario';
+import { runStC4 } from './Scenarios/st-c4-integrity-failure-scenario';
 import { runStD1 } from './Scenarios/st-d1-stateless-transfer-scenario';
 import { runStD2 } from './Scenarios/st-d2-stateful-transfer-scenario';
 import { runStE1 } from './Scenarios/st-e1-source-restart-recovery-scenario';
@@ -51,7 +52,7 @@ import { runNodeSess001Process } from './Process/node-sess-001-process-scenario'
 const scenarios: Readonly<Record<string, () => Promise<void>>> = {
   'ST-A1': runStA1, 'ST-A2': runStA2, 'ST-A3': runStA3,
   'ST-B1': runStB1, 'ST-B2': runStB2, 'ST-B3': runStB3, 'ST-B4': runStB4,
-  'ST-C1': runStC1, 'ST-C2': runStC2, 'ST-C3': runStC3,
+  'ST-C1': runStC1, 'ST-C2': runStC2, 'ST-C3': runStC3, 'ST-C4': runStC4,
   'ST-D1': runStD1, 'ST-D2': runStD2,
   'ST-E1': runStE1, 'ST-E2': runStE2,
   'ST-E1A': runStE1A,

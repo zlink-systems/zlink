@@ -845,6 +845,8 @@ void mesh_node_runtime_t::start ()
         node->configure_stateful_dispatch (_stateful_dispatch_resolver);
     if (_bound_session_operations)
         node->configure_bound_session_operations (*_bound_session_operations);
+    if (_late_session_route_update_reporter)
+        node->configure_late_session_route_update (_late_session_route_update_reporter);
     node->configure_message_follow_handler (
       [this] (const auto &notice) { dispatch_message_follow (notice); });
     if (_relocation_authority && _relocation_store)
@@ -1662,6 +1664,17 @@ void mesh_node_runtime_t::configure_bound_session_operations (
         throw configuration_error (
           "Bound Session operations must be configured before MeshNode start");
     _bound_session_operations = std::move (operations);
+}
+
+void mesh_node_runtime_t::configure_late_session_route_update (
+  std::function<void (const runtime::protocol::session_relocation_route_t &)> reporter)
+{
+    if (!reporter)
+        throw configuration_error ("late Session route reporter is required");
+    if (_node)
+        throw configuration_error (
+          "late Session route reporter must be configured before MeshNode start");
+    _late_session_route_update_reporter = std::move (reporter);
 }
 
 mesh_node_runtime_t::message_follow_subscription_id_t

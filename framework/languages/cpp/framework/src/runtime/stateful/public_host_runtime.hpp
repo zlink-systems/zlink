@@ -728,6 +728,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_message_follow_handler (
       std::function<void (const protocol::message_follow_notice_t &)> handler);
     void configure_bound_session_operations (bound_session_operations_t operations);
+    void configure_late_session_route_update (
+      std::function<void (const protocol::session_relocation_route_t &)> reporter);
     task_t<bool> seal_session_remote (const zlink::routing_id_t &session_owner_node,
                                       protocol::session_relocation_seal_t seal,
                                       std::chrono::milliseconds timeout,
@@ -910,8 +912,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record,
                                       std::function<void ()> retain_mailbox_reservation = {},
                                       std::function<void ()> release_mailbox_reservation = {});
-    void queue_bound_session_replacement_retry (protocol::bound_session_replaced_t replacement);
-    task_t<void> retry_bound_session_replacements ();
 
     host_options_t _options;
     std::function<bool ()> _flow_capture;
@@ -947,6 +947,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::function<std::optional<location_owner_token_t> ()> _session_route_owner_resolver;
     std::function<void (const protocol::message_follow_notice_t &)> _message_follow_handler;
     bound_session_operations_t _bound_session_operations;
+    std::function<void (const protocol::session_relocation_route_t &)>
+      _late_session_route_update_reporter;
     std::shared_ptr<stateful::relocation_store_port_t> _session_relocations;
     using session_seal_local_completion_t = std::function<void (
       foundation::operation_terminal_t, std::optional<protocol::session_relocation_sealed_t>)>;
@@ -1122,15 +1124,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::map<std::string, user_spot_terminal_record_t> _user_spot_terminals;
     std::function<void ()> _maintenance_started;
     std::function<void ()> _maintenance_closing;
-    struct pending_bound_session_replacement_t
-    {
-        protocol::bound_session_replaced_t replacement;
-        std::size_t attempts = 1;
-        std::chrono::steady_clock::time_point next_attempt;
-    };
-    std::deque<pending_bound_session_replacement_t> _pending_bound_session_replacements;
-    static constexpr std::size_t bound_session_replacement_retry_capacity = 1024;
-    static constexpr std::size_t bound_session_replacement_max_attempts = 4;
     mutable std::mutex _mutex;
     static constexpr std::size_t completion_capacity = 65'536;
     using completion_value_t = std::pair<receive_record_t, std::vector<zlink::message_t>>;

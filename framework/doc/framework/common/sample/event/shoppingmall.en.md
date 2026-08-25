@@ -219,14 +219,14 @@ the same `OrderId` workflow. The API doesn't directly change the event stream or
 
 | Behavior Needed | Framework Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Find the current owner by `OrderId` even if the process changes. | A global Spot message | If the caller specifies the global Spot ID, the Framework resolves the current Ready authority. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
-| Be able to create a missing order workflow on the first command. | Instance intent | Cold activation starts only on a Missing Instance Spot. [Interaction Model §7](../../spec/server/03-interaction-model.en.md#7-spot-and-actor) |
-| Connect the API and Workflow via a logical mesh. | RouteMesh | The caller doesn't assemble a MeshName or owner endpoint as an application route. [RouteMesh Topology](../../spec/server/07-channel-topology.en.md) |
-| Confirm request completion. | Spot request/reply | A request completes with a typed reply, timeout, or terminal error. [Interaction Model §4](../../spec/server/03-interaction-model.en.md#4-send-and-request) |
-| Process one order's transitions in order. | The Spot handler turn | Puts Application state changes in a single owner flow, with no competing writer outside the handler. [Async Execution Policy](../../spec/server/05-async-execution-policy.en.md) |
-| Use JSON messages with the same wire meaning across languages. | The Framework typed JSON codec | The JSON default codec is chosen with no per-message registration. [Framework API §9](../../spec/server/06-framework-api.en.md#9-codec) |
-| Share the owner and generation. | The Location Store | The Framework manages object location and authority. [Location Runtime](../../spec/server/21-location-runtime.en.md) |
-| Define the scope of a Ready owner failure. | Failure/failover policy | A Ready owner failure doesn't turn into automatic cold activation on a different node. [Failure And Failover §4.4](../../spec/server/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
+| Find the current owner by `OrderId` even if the process changes. | A global Spot message | If the caller specifies the global Spot ID, the Framework resolves the current Ready authority. [Interaction Model §2](../../spec/server/00-foundation/04-interaction-model.en.md) |
+| Be able to create a missing order workflow on the first command. | Instance intent | Cold activation starts only on a Missing Instance Spot. [Interaction Model §7](../../spec/server/00-foundation/04-interaction-model.en.md#7-spot-and-actor) |
+| Connect the API and Workflow via a logical mesh. | RouteMesh | The caller doesn't assemble a MeshName or owner endpoint as an application route. [RouteMesh Topology](../../spec/server/02-channel-transport/01-channel-topology.en.md) |
+| Confirm request completion. | Spot request/reply | A request completes with a typed reply, timeout, or terminal error. [Interaction Model §4](../../spec/server/00-foundation/04-interaction-model.en.md#4-send-and-request) |
+| Process one order's transitions in order. | The Spot handler turn | Puts Application state changes in a single owner flow, with no competing writer outside the handler. [Async Execution Policy](../../spec/server/01-execution/README.en.md) |
+| Use JSON messages with the same wire meaning across languages. | The Framework typed JSON codec | The JSON default codec is chosen with no per-message registration. [Framework API §9](../../spec/server/00-foundation/06-framework-api.en.md#12-codec) |
+| Share the owner and generation. | The Location Store | The Framework manages object location and authority. [Location Runtime](../../spec/server/05-location-relocation/01-location-runtime.en.md) |
+| Define the scope of a Ready owner failure. | Failure/failover policy | A Ready owner failure doesn't turn into automatic cold activation on a different node. [Failure And Failover §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
 
 Instance intent is a feature that decides the creation moment when an object is Missing. It's not a
 feature that automatically recovers an already-Ready object's owner failure on a different node. A
@@ -447,7 +447,7 @@ message OrderFailedEvent {
 | `Order*Event` | Workflow → `OrderEventStore`, append | An event recorded in the stream after passing the expected version becomes the basis for a state transition. |
 
 A request/reply's timeout, cancellation, and route error are not turned into a success response. The
-common terminal result of `Send` and `Request` follows the [Framework Error Model](../../spec/server/32-framework-error-model.en.md),
+common terminal result of `Send` and `Request` follows the [Framework Error Model](../../spec/server/00-foundation/07-framework-error-model.en.md),
 and the sample doesn't automatically resubmit a failed operation to a different owner.
 
 ### 6.3 State And Event Order
@@ -683,7 +683,7 @@ sequenceDiagram
 | `Missing` after explicit `Close` completes | A new Instance intent command | Can create a new generation. |
 | Planned relocation | An owner change for the existing object | Uses the same object and relocation contract, not treated as crash failover. |
 
-This table applies the scope of the [Failure/Failover Policy](../../spec/server/31-failure-failover-policy.en.md)
+This table applies the scope of the [Failure/Failover Policy](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md)
 to the sample. `InstanceSpot` decides the creation moment of a missing object, but doesn't add a
 feature that automatically releases authority or restores the event stream on a different node after
 a Ready owner failure. A failed request isn't automatically resubmitted to a new owner. If a separate
