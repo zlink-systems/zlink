@@ -695,7 +695,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 통과(85.43%) | 통과(97.00%) | 통과(93.75%) | 통과(90.61%) | 통과(81.70%; 개별 최소 미달) | 통과(111.33%) | 완화 목표 90% 선택; aggregate throughput 93.30%, latency 1.089x; `cpp-pubsub-tcp-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pubsub-tcp.md) |
 | `tcp` | `DEALER_DEALER` | 보류(77.39%) | 보류(98.24%) | 보류(95.90%) | 보류(70.89%) | 보류(81.95%) | 보류(85.40%) | aggregate throughput 84.96%, latency 1.126x; 자체 public-path no-go; `cpp-dealer-dealer-tcp-core0130-before-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-dealer-tcp.md) |
 | `tcp` | `DEALER_ROUTER` | 통과(83.45%) | 통과(102.55%) | 통과(101.24%) | 통과(78.20%; 개별 최소 미달) | 통과(82.54%) | 통과(91.71%) | routed one-way 목표 85%; aggregate throughput 89.95%, latency 1.080x; `cpp-dealer-router-tcp-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-router-tcp.md) |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_ROUTER_REQREP` | 보류(57.70%) | 보류(55.65%) | 보류(34.61%) | 보류(69.12%) | 보류(83.44%) | 보류(83.99%) | request/reply 목표 85%; aggregate throughput 64.09%, latency 1.789x; public completion path no-go; `cpp-dealer-router-reqrep-tcp-core0130-before-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-router-reqrep-tcp.md) |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PAIR` | 통과(71.67%; 개별 최소 미달) | 통과(90.85%) | 통과(99.34%) | 통과(99.02%) | 통과(90.48%) | 통과(99.26%) | 완화 목표 90% 선택; aggregate throughput 91.77%, latency 1.157x; `cpp-pair-ws-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-ws.md) |
