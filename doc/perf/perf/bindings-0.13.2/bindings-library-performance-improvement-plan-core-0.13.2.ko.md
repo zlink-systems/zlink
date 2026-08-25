@@ -122,7 +122,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | ws | DEALER_DEALER | 통과(82.05%) | 통과(96.80%) | 통과(96.07%) | 통과(94.93%) | 통과(98.34%) | 통과(100.51%) | **통과(94.78%)** — latency median 1.03x. `log/cpp-single-dealer-dealer-ws-20260825.ko.md` |
 | ws | DEALER_ROUTER | outlier(78.82%) | 통과(95.83%) | 통과(100.71%) | 통과(98.13%) | 통과(102.16%) | 통과(100.01%) | **통과(95.94%)** — latency median 1.07x; 64B outlier는 aggregate 판정을 바꾸지 않는다. `log/cpp-single-dealer-router-ws-20260825.ko.md` |
 | ws | DEALER_ROUTER_REQREP | 미달(25.08%) | 미달(28.82%) | 미달(31.73%) | 통과(85.39%) | 통과(89.18%) | 통과(89.86%) | **미달(58.34%)** — latency median 2.19x. 후보 A는 initial target terminal contract 위반, 후보 B는 54.58% 회귀로 폐기. `log/cpp-single-dealer-router-reqrep-ws-20260825.ko.md` |
-| ws | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| ws | ROUTER_ROUTER | 통과(85.88%) | 통과(102.31%) | 통과(98.10%) | 통과(91.79%) | 통과(92.17%) | 통과(100.30%) | **통과(95.09%)** — latency median 1.08x. `log/cpp-single-router-router-ws-20260825.ko.md` |
 | ws | ROUTER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | wss | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | wss | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -177,6 +177,8 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 8. `DEALER_ROUTER_REQREP / ws`는 후보 A/B와 contract gate를 마쳤지만 목표에 미달했다.
    후보 A는 public terminal contract 위반, 후보 B는 성능 회귀로 모두 폐기했다. 다음은
    `ROUTER_ROUTER / ws`를 동일한 C→C++ 순서로 측정한다.
+9. `ROUTER_ROUTER / ws`는 smoke와 6-size paired 기준선을 통과했다. 다음은 마지막 WebSocket
+   Single 패턴 `ROUTER_ROUTER_REQREP / ws`를 동일한 C→C++ 순서로 측정한다.
 
 ## 7. 완료 기준
 
