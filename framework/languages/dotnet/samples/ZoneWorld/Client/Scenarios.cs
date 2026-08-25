@@ -61,6 +61,11 @@ public static class Scenarios
             ["ZW-G4-fresh"] = G4FreshReplacementAcceptsObject
         };
 
+    // Ops status observation waits for one NodeStatusNotify after a maintenance or lifecycle
+    // change. A busy full-sample run competes for CPU with several server processes, so the
+    // wait needs room. This is a harness budget, not a public latency guarantee.
+    private static readonly TimeSpan OpsStatusObservationTimeout = TimeSpan.FromSeconds(30);
+
     // Cross-node observation includes actor relocation and the first target-zone snapshot.
     // This is a harness budget, not a public latency guarantee.
     private static readonly TimeSpan CrossNodeObservationTimeout = TimeSpan.FromSeconds(30);
@@ -133,7 +138,7 @@ public static class Scenarios
             node.Zones.Contains(pair.TargetZoneId, StringComparer.Ordinal)).NodeId;
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == targetNodeId && message.Payload.Maintenance)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(OpsStatusObservationTimeout)
             .Async(ct);
         var enabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: true, ct);
         if (enabled.Error is null) await enabledObserved;
@@ -150,7 +155,7 @@ public static class Scenarios
         {
             var disabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == targetNodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: false, ct);
             if (disabled.Error is null) await disabledObserved;
@@ -890,7 +895,7 @@ public static class Scenarios
         {
             var resetObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == nodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var reset = await ops.SetMaintenanceAsync(nodeId, enabled: false, ct);
             if (reset.Error is null) await resetObserved;
@@ -907,7 +912,7 @@ public static class Scenarios
 
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == targetNodeId && message.Payload.Maintenance)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(OpsStatusObservationTimeout)
             .Async(ct);
         var applied = await ops.SetMaintenanceAsync(targetNodeId, enabled: true, ct);
         if (applied.Error is null) await enabledObserved;
@@ -929,7 +934,7 @@ public static class Scenarios
         {
             var disabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == targetNodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: false, ct);
             if (disabled.Error is null) await disabledObserved;
@@ -946,7 +951,7 @@ public static class Scenarios
         {
             var resetObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == nodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var reset = await ops.SetMaintenanceAsync(nodeId, enabled: false, ct);
             if (reset.Error is null) await resetObserved;
@@ -961,7 +966,7 @@ public static class Scenarios
 
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == targetNodeId && message.Payload.Maintenance)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(OpsStatusObservationTimeout)
             .Async(ct);
         var enabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: true, ct);
         if (enabled.Error is null) await enabledObserved;
@@ -981,7 +986,7 @@ public static class Scenarios
         {
             var disabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == targetNodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: false, ct);
             if (disabled.Error is null) await disabledObserved;
@@ -997,7 +1002,7 @@ public static class Scenarios
         {
             var resetObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == nodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var reset = await ops.SetMaintenanceAsync(nodeId, enabled: false, ct);
             if (reset.Error is null) await resetObserved;
@@ -1034,7 +1039,7 @@ public static class Scenarios
 
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == sourceNodeId && message.Payload.Maintenance)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(OpsStatusObservationTimeout)
             .Async(ct);
         var enabled = await ops.SetMaintenanceAsync(sourceNodeId, enabled: true, ct);
         ZlinkStreamAssert.Ensure(
@@ -1054,7 +1059,7 @@ public static class Scenarios
         {
             var disabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == sourceNodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(sourceNodeId, enabled: false, ct);
             ZlinkStreamAssert.Ensure(
@@ -1074,7 +1079,7 @@ public static class Scenarios
         {
             var resetObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == nodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var reset = await ops.SetMaintenanceAsync(nodeId, enabled: false, ct);
             if (reset.Error is null) await resetObserved;
@@ -1102,7 +1107,7 @@ public static class Scenarios
 
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == targetNodeId && message.Payload.Maintenance)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(OpsStatusObservationTimeout)
             .Async(ct);
         var enabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: true, ct);
         if (enabled.Error is null) await enabledObserved;
@@ -1119,7 +1124,7 @@ public static class Scenarios
         {
             var disabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == targetNodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: false, ct);
             if (disabled.Error is null) await disabledObserved;
@@ -1147,7 +1152,7 @@ public static class Scenarios
         {
             var resetObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == nodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var reset = await ops.SetMaintenanceAsync(nodeId, enabled: false, ct);
             if (reset.Error is null) await resetObserved;
@@ -1156,7 +1161,7 @@ public static class Scenarios
 
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == targetNodeId && message.Payload.Maintenance)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(OpsStatusObservationTimeout)
             .Async(ct);
         var applied = await ops.SetMaintenanceAsync(targetNodeId, enabled: true, ct);
         if (applied.Error is null) await enabledObserved;
@@ -1175,7 +1180,7 @@ public static class Scenarios
         {
             var disabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == targetNodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: false, ct);
             if (disabled.Error is null) await disabledObserved;
@@ -1302,7 +1307,7 @@ public static class Scenarios
         {
             var resetObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == nodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var reset = await ops.SetMaintenanceAsync(nodeId, enabled: false, ct);
             if (reset.Error is null) await resetObserved;
@@ -1310,7 +1315,7 @@ public static class Scenarios
         }
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == spawnOwnerNodeId && message.Payload.Maintenance)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(OpsStatusObservationTimeout)
             .Async(ct);
         var enabled = await ops.SetMaintenanceAsync(spawnOwnerNodeId, enabled: true, ct);
         if (enabled.Error is null) await enabledObserved;
@@ -1324,7 +1329,7 @@ public static class Scenarios
         {
             var disabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == spawnOwnerNodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(spawnOwnerNodeId, enabled: false, ct);
             if (disabled.Error is null) await disabledObserved;
@@ -1446,7 +1451,7 @@ public static class Scenarios
             .Last().NodeId;
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == targetNodeId && message.Payload.Maintenance)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(OpsStatusObservationTimeout)
             .Async(ct);
         var applied = await ops.SetMaintenanceAsync(targetNodeId, enabled: true, ct);
         if (applied.Error is null) await enabledObserved;
@@ -1500,7 +1505,7 @@ public static class Scenarios
         {
             var disabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == targetNodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: false, ct);
             if (disabled.Error is null) await disabledObserved;
@@ -1590,7 +1595,7 @@ public static class Scenarios
         {
             var resetObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == nodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var reset = await ops.SetMaintenanceAsync(nodeId, enabled: false, ct);
             if (reset.Error is null) await resetObserved;
@@ -1615,7 +1620,7 @@ public static class Scenarios
 
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == targetNodeId && message.Payload.Maintenance)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(OpsStatusObservationTimeout)
             .Async(ct);
         var enabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: true, ct);
         if (enabled.Error is null) await enabledObserved;
@@ -1654,7 +1659,7 @@ public static class Scenarios
         {
             var disabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == targetNodeId && !message.Payload.Maintenance)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(OpsStatusObservationTimeout)
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(targetNodeId, enabled: false, ct);
             if (disabled.Error is null) await disabledObserved;
