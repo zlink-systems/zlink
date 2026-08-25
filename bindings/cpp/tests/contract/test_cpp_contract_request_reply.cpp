@@ -1353,6 +1353,36 @@ struct multipart_request_fixture_t
     }
 };
 
+// The single-part fast path borrows a shallow native view so that Core can
+// consume its submit argument without consuming an lvalue owned by the
+// caller.  A real later submit failure must therefore leave that original
+// message intact, just like the multipart adapter does.
+void test_single_part_request_failure_returns_lvalue ()
+{
+    multipart_request_fixture_t fixture ("single-request-failure");
+
+    const std::string payload_text = "single:lvalue";
+    bool reported = false;
+    for (int attempt = 0; attempt < 64 && !reported; ++attempt) {
+        fixture.fill_until_backpressured ();
+        zlink::message_t payload = make_request_message (payload_text);
+        try {
+            (void) fixture.dealer.request ()
+              .message (payload)
+              .timeout (std::chrono::milliseconds (100))
+              .async ();
+            continue;
+        }
+        catch (const zlink::submit_error_t &error) {
+            reported = true;
+            assert (error.result () == zlink::submit_result_t::backpressured);
+            assert (error.internal_errno () == EAGAIN);
+        }
+        assert_part_intact (payload, payload_text);
+    }
+    assert (reported);
+}
+
 // Later-error path: Core rejects the part sequence after the state handed its
 // parts to the submit adapter. Every lvalue part must come back valid.
 void test_multipart_request_failure_returns_every_part ()
@@ -1541,6 +1571,7 @@ int main ()
     test_received_reply_rejects_non_none_flags ();
     test_reply_submit_is_one_shot_without_ghost_retry ();
     test_raw_router_reply_maps_submit_result ();
+    test_single_part_request_failure_returns_lvalue ();
     test_multipart_request_failure_returns_every_part ();
     test_multipart_request_invalid_part_returns_the_others ();
     test_multipart_request_failure_keeps_rvalue_parts_consumed ();

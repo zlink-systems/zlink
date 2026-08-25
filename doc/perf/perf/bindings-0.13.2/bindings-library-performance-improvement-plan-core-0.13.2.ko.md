@@ -141,10 +141,10 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | inproc | PAIR | 통과(84.71%) | 통과(100.01%) | 통과(91.40%) | 미달(22.71%) | 미달(73.70%) | 통과(84.04%) | **미달(76.09%)** — 5-run median, latency median 1.08x. 128KiB 이상 bounded pool은 이미 baseline이고 64KiB 하향은 TCP 25/30 partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-pair-inproc-20260825.ko.md` |
 | inproc | PUBSUB | 통과(99.46%) | 통과(91.11%) | 통과(92.14%) | 미달(24.09%) | 미달(79.24%) | 통과(86.24%) | **미달(78.71%)** — 5-run median, latency median 1.23x. direct single-part publish와 bounded pool은 baseline이며 64KiB pool 하향은 TCP partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-pubsub-inproc-20260825.ko.md` |
 | inproc | DEALER_DEALER | 미달(76.21%) | 통과(84.11%) | 통과(81.64%) | 미달(25.90%) | 미달(72.17%) | 통과(82.94%) | **미달(70.49%)** — 5-run median, latency median 1.22x. bounded pool은 baseline이며 64KiB 하향은 TCP partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-dealer-dealer-inproc-20260825.ko.md` |
-| inproc | DEALER_ROUTER | 미달(79.52%) | 미달(77.75%) | 통과(90.72%) | 미달(21.50%) | 미달(76.30%) | 통과(80.02%) | **미달(70.97%)** — 5-run median, latency median 1.36x. bounded pool baseline; 64KiB global threshold는 TCP partial timeout, cap 확대는 resource boundary no-go. |
-| inproc | DEALER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
-| inproc | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
-| inproc | ROUTER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| inproc | DEALER_ROUTER | 미달(79.52%) | 미달(77.73%) | 통과(92.77%) | 미달(21.50%) | 미달(76.30%) | 통과(80.02%) | **미달(70.97%)** — 5-run median, latency median 1.36x. bounded pool baseline; 64KiB global threshold는 TCP partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-dealer-router-inproc-20260825.ko.md` |
+| inproc | DEALER_ROUTER_REQREP | 미달(40.07%) | 미달(41.30%) | 미달(42.95%) | 미달(24.98%) | 미달(45.70%) | 미달(62.11%) | **미달(42.85%)** — 5-run median, latency median 1.14x. exact-target 우회는 terminal/no-reroute contract no-go, async-only completion bridge는 baseline에 반영됐으나 throughput 목표 85%에는 미달. `log/cpp-single-dealer-router-reqrep-inproc-20260825.ko.md` |
+| inproc | ROUTER_ROUTER | 통과(89.22%) | 통과(92.60%) | 통과(87.26%) | 미달(20.87%) | 통과(88.95%) | 통과(86.81%) | **미달(69.85%)** — 5-run median, latency median 1.09x. bounded pool baseline; 64KiB global threshold는 TCP partial timeout, cap 확대와 route/lifetime guard 제거는 no-go. `log/cpp-single-router-router-inproc-20260825.ko.md` |
+| inproc | ROUTER_ROUTER_REQREP | 미달(42.51%) | 미달(46.26%) | 미달(44.67%) | 미달(30.61%) | 미달(46.68%) | 미달(58.29%) | **미달(44.06%)** — 5-run median, latency median 1.10x. exact-target 우회는 terminal/no-reroute contract no-go, async-only completion bridge는 baseline에 반영됐으나 throughput 목표 85%에는 미달. `log/cpp-single-router-router-reqrep-inproc-20260825.ko.md` |
 | ipc | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ipc | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ipc | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -236,6 +236,21 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     aggregate throughput 78.71%가 strict 95% 목표에 미달한다. direct single-part publish와
     128KiB–1MiB bounded pool은 이미 baseline이고, 64KiB 24.09% 하락을 겨냥한 전역 pool 하향은
     TCP partial timeout, cap 확대는 resource boundary no-go다. 다음은 `DEALER_DEALER / inproc`다.
+27. `DEALER_DEALER / inproc`와 `DEALER_ROUTER / inproc`는 각각 70.49%, 70.97%로 strict 95%
+    목표에 미달했다. 64KiB 전역 pool 하향은 TCP 25/30 partial timeout, cap 확대는 resource
+    boundary no-go다. route cache·lifetime guard 제거도 close/concurrency contract를 약화시키므로
+    채택하지 않는다.
+28. `DEALER_ROUTER_REQREP / inproc`는 42.85%로 request/reply 85% 목표에 미달했다. exact target
+    생략/재선택은 terminal/no-reroute contract no-go다. async-only completion bridge와 borrowed
+    single-part native view는 baseline에 반영돼 있으며, 단일 lvalue failure를 포함한 5개 contract
+    suite가 통과했다.
+29. `ROUTER_ROUTER / inproc`는 69.85%로 strict 95% 목표에 미달했다. bounded pool·state reuse는
+    baseline이고, 64KiB pool 하향·cap 확대·route cache·lifetime guard 제거는 각각 timeout,
+    resource-boundary, exact route/close contract 위험으로 no-go다.
+30. `ROUTER_ROUTER_REQREP / inproc`는 44.06%로 request/reply 85% 목표에 미달했다. exact target
+    재선택은 terminal/no-reroute contract no-go며, async-only completion bridge와 safe borrowed
+    single-part view는 유지한다. 모든 inproc Single 패턴의 C→C++ 5-run paired 측정을 확정했고,
+    다음은 `PAIR / ipc`를 같은 개선 gate와 순서로 측정한다.
 
 ## 7. 완료 기준
 
