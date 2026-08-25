@@ -683,9 +683,9 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `진행 중` (`PAIR / tcp` 보류, `PUBSUB / tcp` 통과, 나머지 미측정)
+- Single 상태: `진행 중` (`PAIR / tcp` 보류, `PAIR / ws`와 `PUBSUB / tcp` 통과, 나머지 미측정)
 - Multi 상태: `미측정`
-- 다음 작업: transport 순서에 따라 `PAIR / ws` paired 측정과 개선 pass를 진행한다.
+- 다음 작업: transport 순서에 따라 `PAIR / wss` paired 측정과 개선 pass를 진행한다.
 
 #### 9.1.1 Single suite
 
@@ -698,7 +698,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `PAIR` | 통과(71.67%; 개별 최소 미달) | 통과(90.85%) | 통과(99.34%) | 통과(99.02%) | 통과(90.48%) | 통과(99.26%) | 완화 목표 90% 선택; aggregate throughput 91.77%, latency 1.157x; `cpp-pair-ws-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-ws.md) |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1241,16 +1241,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | C++ |  |
-| 현재 pattern | `PAIR / ws` | `PAIR/tcp` 보류, `PUBSUB/tcp` 통과(선측정) |
-| paired C | 준비 | 다음 `PAIR/ws` smoke부터 진행 |
-| 개선 반복 | 준비 | 다음 `PAIR/ws` 자체 pass와 Sol pass |
-| 커밋과 푸시 | 진행 중 | PUBSUB/tcp 측정 기록 검증 후 수행 |
+| 현재 pattern | `PAIR / wss` | `PAIR/tcp` 보류, `PAIR/ws` 통과, `PUBSUB/tcp` 통과(선측정) |
+| paired C | 준비 | 다음 `PAIR/wss` smoke부터 진행 |
+| 개선 반복 | 준비 | 다음 `PAIR/wss` 자체 pass와 Sol pass |
+| 커밋과 푸시 | 진행 중 | PAIR/ws 측정 기록 검증 후 수행 |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 진행 중 | 미측정 | transport 순서에 따라 `PAIR / ws` paired 측정과 개선 pass를 진행한다. |
+| 1 | C++ | 진행 중 | 미측정 | transport 순서에 따라 `PAIR / wss` paired 측정과 개선 pass를 진행한다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1268,6 +1268,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 | 2026-08-24 | 전체 | 계획 초기화 | - | Core 0.13.0 release, C 기준과 binding paired 비교, 단일 perf process 조건을 사용한다. | 계획 작성 | 이 문서 |
 | 2026-08-25 | C++ | Single `PAIR / tcp` | `cpp-pair-tcp-core0130-parity-ab-{c,cpp}-20260825` | 6 sizes, 5초, 3회 중앙값, Core 0.13.0 release, C/C++ Effective Options 일치 | 처리량 평균 89.09%로 보류, latency 평균 1.131x 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_084219_cpp-pair-tcp-core0130-parity-ab-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_084400_cpp-pair-tcp-core0130-parity-ab-cpp-20260825.txt` |
 | 2026-08-25 | C++ | Single `PUBSUB / tcp` | `cpp-pubsub-tcp-core0130-final5-{c,cpp}-20260825` | 6 sizes, 5초, 5회 중앙값, Core 0.13.0 release, 자체/Sol pass 완료 | 완화 목표 90% 선택; 처리량 평균 93.30%, latency 1.089x로 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_090156_cpp-pubsub-tcp-core0130-final5-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_090516_cpp-pubsub-tcp-core0130-final5-cpp-20260825.txt`; [log](log/2026-08-25-cpp-pubsub-tcp.md) |
+| 2026-08-25 | C++ | Single `PAIR / ws` | `cpp-pair-ws-core0130-final5-{c,cpp}-20260825` | 6 sizes, 5초, 5회 중앙값, Core 0.13.0 release, 자체/Sol pass 완료 | 완화 목표 90% 선택; 처리량 평균 91.77%, latency 1.157x로 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_092245_cpp-pair-ws-core0130-final5-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_092532_cpp-pair-ws-core0130-final5-cpp-20260825.txt`; [log](log/2026-08-25-cpp-pair-ws.md) |
 
 ## 12. 완료 기준
 
