@@ -240,7 +240,7 @@ This runs exactly backwards, since it gets costlier as load rises.
 wake-up.** The reason a bound is needed is the same as §3. Reading
 indefinitely while the peer keeps sending would let one connection
 monopolize the receive stage, delaying other connections and
-send-ready processing.
+binding-operation completion processing.
 
 **Decision — the bound sets count, bytes, and elapsed time together,
 and applies whichever is hit first.** Count alone makes large messages
@@ -406,7 +406,15 @@ close, and shutdown clean up waiters and handed-off permits exactly once. Same-h
 fanout, serial-owner, and relocation paths must not wait for a same-authority acquire while
 holding a gate, execution authority, or resource needed to return permits. A sustained
 wait/capacity cycle is a protocol/runtime bug, not grounds for bypass.
-[Payload Ownership](50-internal-message-ownership.en.md) owns retained-record lifetime.
+[Payload Ownership](50-internal-message-ownership.en.md) owns ordinary record-storage lifetime.
+
+## Permit Changes And Pressure Evaluation
+
+Reserved-permit acquisition, queued conversion, and release update permits in use and pressure
+state in the same queue-owner boundary. Moving reserved to queued does not repeat a transition
+when the sum is unchanged. `running` changes only at or above the pause permit count and `paused`
+only at or below the resume permit count. Shutdown does not wait indefinitely for a final state
+application; resetting observation counters preserves current state and current pause duration.
 
 ---
 

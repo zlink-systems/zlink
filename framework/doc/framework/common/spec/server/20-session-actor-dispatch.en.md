@@ -491,7 +491,7 @@ The session owner serializes the same session's handler turn, binding mutation, 
 and relocation barrier. Once submitted to the Actor, the Actor queue owns the order.
 Session turn and Actor turn aren't merged via a shared lock or callback stack.
 
-Request completion, send-ready, binding update, relocation barrier, and disconnect
+Request and binding-operation completion, binding update, relocation barrier, and disconnect
 cleanup proceed on an infrastructure task. This must proceed even while a session or
 Actor application callback is awaiting an async operation.
 

@@ -472,6 +472,11 @@ export interface ZLinkLocationOptionValues {
 
 export declare const zlinkDefaultLocationOptions: Readonly<ZLinkLocationOptionValues>;
 
+export interface ZLinkFrameworkOptions {
+    configureDispatch(): ZLinkDispatchOptionsBuilder;
+    configureInboundDispatch(): ZLinkInboundDispatchOptions;
+}
+
 export interface ZLinkDiagnosticsOptions {
     messageFlow: ZLinkMessageFlowLogMode;
     sampleRate: number;
@@ -487,11 +492,16 @@ export interface ZLinkDispatchOptionsBuilder {
     messageFlow(mode: ZLinkMessageFlowLogMode): this;
     traceSampleRate(rate: number): this;
     includeMessageSizes(include: boolean): this;
+}
+
+export interface ZLinkInboundDispatchOptions {
     coreHwmMemoryLimitBytes(value: bigint | undefined): this;
     coreHwmBudgetBytes(value: bigint | undefined): this;
     coreHwmProfile(value: ZLinkCoreHwmProfile): this;
     applicationJobQueueProfile(value: ZLinkApplicationJobQueueProfile): this;
     maxQueuedApplicationJobs(value: bigint | undefined): this;
+    applicationJobQueuePauseThresholdPercent(value: number): this;
+    applicationJobQueueResumeThresholdPercent(value: number): this;
 }
 
 ```
@@ -508,4 +518,6 @@ record를 기록한다. Message-flow observer callback, runtime error sink와 ra
 Node.js binding은 V8 `heap_size_limit`의 양수 유한값을 Core runtime memory hint로 전달한다. Core와
 Application job queue profile은 기본값 `Balanced`인 독립된 enum과 계산이다. Manual job cap은
 `1..2,147,483,647`이고 생략하면 common startup CPU snapshot과 32/64/128/256 계수를 사용한다. Range
-위반과 overflow는 socket bind 전에 configuration error이며 runtime 중 다시 계산하지 않는다.
+검증에서 pressure threshold 기본값은 pause `80`, resume `60`이고, pause는 `1..100`, resume은 `0..99`의
+정수이며 resume은 pause보다 작아야 한다. 이 범위·순서 위반과 capacity overflow는 socket bind 전에
+configuration error이며 runtime 중 다시 계산하지 않는다.

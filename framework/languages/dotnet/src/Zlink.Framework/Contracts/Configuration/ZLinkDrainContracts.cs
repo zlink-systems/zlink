@@ -118,15 +118,21 @@ public readonly record struct ZLinkCoreHwmStatus(
 public readonly record struct ZLinkApplicationJobQueueStatus(
     ZLinkApplicationJobQueueProfile ConfiguredProfile,
     ulong? ConfiguredManualMax,
+    uint ConfiguredPauseThresholdPercent,
+    uint ConfiguredResumeThresholdPercent,
     ulong EffectiveProcessorCount,
     ulong EffectiveMaxQueuedApplicationJobs,
+    ulong PausePermitCount,
+    ulong ResumePermitCount,
     ulong ReservedSupplyPermits,
     ulong QueuedApplicationJobs,
     ulong PermitsInUse,
     ulong PeakPermitsInUse,
     ulong CapacityWaiters,
     ulong CapacityWaitCount,
-    TimeSpan CapacityWaitDuration);
+    TimeSpan CapacityWaitDuration,
+    ZLinkApplicationJobQueuePressureState PressureState,
+    TimeSpan CurrentPauseDuration);
 
 public readonly record struct ZLinkHostCapacityStatus(
     ulong MeasurementEpoch,

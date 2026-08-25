@@ -110,6 +110,8 @@ public final class ZLinkFrameworkRuntime
         .ZLinkApplicationJobQueue applicationJobQueue;
     private final Object capacityLock = new Object();
     private AutoCloseable capacityMetricRegistration = () -> { };
+    private AutoCloseable applicationJobQueuePressureMetricRegistration =
+        () -> { };
     private long capacityMeasurementEpoch;
     private systems.zlink.framework.monitoring.ZLinkCoreHwmStatus
         lastCoreHwmStatus;
@@ -474,6 +476,9 @@ public final class ZLinkFrameworkRuntime
 
         this.capacityMetricRegistration =
             ZLinkRuntimeMetrics.registerHostCapacity(this::capacityStatus);
+        this.applicationJobQueuePressureMetricRegistration =
+            ZLinkRuntimeMetrics.registerApplicationJobQueuePressure(
+                applicationJobQueue::pressureMetrics);
         locationSubsystem.startup()
             .thenCompose(ignored ->
                 this.objectDescriptors == null
@@ -1704,12 +1709,18 @@ public final class ZLinkFrameworkRuntime
                     queue.configuredManualMax().isPresent()
                         ? Optional.of(queue.configuredManualMax().getAsLong())
                         : Optional.empty(),
+                    queue.configuredPauseThresholdPercent(),
+                    queue.configuredResumeThresholdPercent(),
                     queue.effectiveProcessorCount(),
                     queue.effectiveMaxQueuedApplicationJobs(),
+                    queue.pausePermitCount(),
+                    queue.resumePermitCount(),
                     queue.reservedSupplyPermits(),
                     queue.queuedApplicationJobs(),
                     queue.permitsInUse(),
                     queue.peakPermitsInUse(),
+                    queue.pressureState(),
+                    queue.currentPauseDuration(),
                     queue.capacityWaiters(),
                     queue.capacityWaitCount(),
                     queue.capacityWaitDuration());
@@ -1925,6 +1936,11 @@ public final class ZLinkFrameworkRuntime
         applicationJobQueue.close();
         try {
             capacityMetricRegistration.close();
+        } catch (Exception ignored) {
+            // Metrics are observational and cannot make runtime teardown fail.
+        }
+        try {
+            applicationJobQueuePressureMetricRegistration.close();
         } catch (Exception ignored) {
             // Metrics are observational and cannot make runtime teardown fail.
         }

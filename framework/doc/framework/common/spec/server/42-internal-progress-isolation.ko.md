@@ -25,7 +25,7 @@ runtime의 작업은 성격이 다른 두 무리로 나뉜다.
 | 영역 | 하는 일 | 진행 조건 |
 |---|---|---|
 | application | handler 실행, Spot·Actor message, timer callback, session callback | Spot 소유자별 순서를 지킨다 |
-| infrastructure | peer 수락, 송신 준비 알림, 호출 완료 확정, owner 정보 갱신, 이동 절차, 종료 절차 | **application의 대기와 무관하게 진행한다** |
+| infrastructure | peer 수락, binding operation completion, 호출 완료 확정, owner 정보 갱신, 이동 절차, 종료 절차 | **application의 대기와 무관하게 진행한다** |
 
 정식 spec의 요구는 "독립적으로 진행한다"보다 강하다 — infrastructure 작업은
 **application handler가 점유할 수 없는 실행 영역**에서 진행한다
@@ -55,8 +55,8 @@ ordinary control에 shared capacity 우회를 주는 규칙이 아니다. Pre-re
 식별되는 supply만 우회하고, application·control·malformed ordinary record는 모두
 [dispatch loop](46-internal-dispatch-loop.ko.md)의 shared permit을 먼저 얻는다.
 
-서로 다른 목적의 한도는 합치지 않는다. Core 방향별 byte HWM은 retained credit으로 transport
-backpressure를 소유하고, host Application job queue는 callback 시작 전 job 수를 제한한다. Owner별
+서로 다른 목적의 한도는 합치지 않는다. Core 방향별 byte HWM은 Core queue가 현재 소유한 byte로
+transport backpressure를 만들고, host Application job queue는 callback 시작 전 job 수를 제한한다. Owner별
 count/byte queue는 ordering과 structural isolation을 소유하며, outbound admission waiter는 send deadline을
 소유한다. 같은 profile label이나 단위가 있어도 type·계산·error 의미를 공유하지 않는다.
 
@@ -142,15 +142,16 @@ Node는 event loop가 하나이므로 물리적으로 전용 자원을 만들 �
 밀렸다는 사실 자체는 caller가 받는 값이 아니다. `Backpressured`는 public terminal result가
 아니다. 한도가 없으면 상대가 느릴 때 이쪽 메모리가 상대의 처리 속도에 따라 무한정 늘어난다.
 
-수신 쪽은 Core retained-credit lease와 host shared Application job queue permit을 함께 사용한다.
-Ordinary source는 permit readiness 뒤 receive/claim하고, application job은 actual callback start까지
-permit을 유지한다. Control·malformed ordinary record도 같은 permit을 얻되 내부 처리 직후 반환한다.
-Ordinary connection에서 receive한 뒤 terminal completion으로 분류해 우회를 얻을 수 없다.
+Ordinary source는 host-shared Application Job Queue permit readiness 뒤 receive·claim하고, application
+job은 actual callback start까지 permit을 유지한다. Receive 뒤의 payload owner는 native storage 수명을
+관리하지만 Core HWM budget을 계속 점유하지 않는다. Control·malformed ordinary record도 같은 permit을
+얻되 내부 처리 직후 반환한다. Ordinary connection에서 receive한 뒤 terminal completion으로 분류해
+우회를 얻을 수 없다.
 
 Terminal reply/error completion supply는 pre-receive에 별도 식별되는 completion 경로로 진행하므로 ordinary
 queue가 포화돼도 correlation과 terminal 결과를 확정할 수 있다. Core receive queue가 차면 방향별 byte HWM이
 sender까지 backpressure를 전달한다. Batch와 1:N은 확보한 permit보다 많은 job을 게시하지 않으며 자세한
-fairness는 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md), retained record 수명은
+fairness는 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md), ordinary record storage 수명은
 [Payload 소유권](50-internal-message-ownership.ko.md)이 소유한다.
 
 StreamNode의 client→server complete-message `MaxMessageSize`는 이 capacity와 독립된 wire guard다.
@@ -167,7 +168,7 @@ transport backpressure를 만든다. 어느 경로도 별도 unbounded backlog, 
 
 | 한도 | 무엇으로 재는가 | 포화 의미 |
 |---|---|---|
-| Core HWM | 방향별 retained/accounted byte | Core queue에서 sender까지 backpressure |
+| Core HWM | 방향별 queued/accounted byte | Core queue에서 sender까지 backpressure |
 | Application job queue | host instance의 reserved·queued·in-use permit | cancellable shared-cap wait |
 | Owner FIFO | owner별 count와 byte | structural owner isolation error |
 | Outbound admission waiter | operation family별 bounded waiter | 원래 send deadline/cancellation 결과 |
@@ -228,7 +229,19 @@ event loop나 thread pool 위에서 실행되는 .NET 경로를 표현할 수 �
 
 ## 포화 상태의 progress 분리
 
-Terminal reply/error completion supply만 shared permit을 우회한다. Ordinary progress와 completion 격리의 permit 순서는 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md), retained lease는 [Payload 소유권](50-internal-message-ownership.ko.md)이 소유한다.
+Terminal reply/error completion supply만 shared permit을 우회한다. Ordinary progress와 completion
+격리의 permit 순서는 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md)가 소유한다. Receive 뒤
+payload storage는 [Payload 소유권](50-internal-message-ownership.ko.md)을 따르지만 Core HWM credit이나
+별도 progress authority가 아니다.
+
+## Pressure 전이와 송신 완료
+
+Host queue owner는 permit count 변경과 같은 synchronization 경계에서 80% pause·60% resume
+hysteresis를 평가한다. 상태가 바뀌면 지원 socket snapshot에 새 절대 상태를 적용하고, 새 socket은
+현재 상태를 적용한 뒤 registry에 게시한다. Socket별 적용을 직렬화하고 stale sequence와 이미 적용한
+같은 상태를 건너뛴다. Binding 호출은 queue·registry·user lock 밖에서 수행하고, close는 먼저
+registry에서 제거한 뒤 진행한다. Core와 binding이 HWM 재시도와 operation별 completion을 소유하므로
+Framework infrastructure domain은 별도 `send_ready` waiter나 retry adapter를 두지 않는다.
 
 ---
 

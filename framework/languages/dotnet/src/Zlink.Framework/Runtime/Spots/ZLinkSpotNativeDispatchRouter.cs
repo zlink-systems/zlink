@@ -34,7 +34,7 @@ internal static class ZLinkSpotNativeDispatchRouter
                         break;
                     case ZLinkBackendSpotDispatchEvent.ActorReadable
                         when info.ActorParts is { Count: > 0 } actorParts:
-                        actorPartsReadable(actorParts, info.ActorCreditOwner);
+                        actorPartsReadable(actorParts, info.ActorPayloadOwner);
                         break;
                 }
             });

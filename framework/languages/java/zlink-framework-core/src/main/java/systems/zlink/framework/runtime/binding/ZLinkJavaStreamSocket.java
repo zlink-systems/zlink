@@ -120,7 +120,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         Received received = new Received();
         boolean transferred = false;
         try {
-            if (!socket.recvRetained(received, RecvFlags.DONT_WAIT)) {
+            if (!socket.recv(received, RecvFlags.DONT_WAIT)) {
                 return null;
             }
             ZLinkBackendStreamReceived result = new ZLinkBackendStreamReceived(

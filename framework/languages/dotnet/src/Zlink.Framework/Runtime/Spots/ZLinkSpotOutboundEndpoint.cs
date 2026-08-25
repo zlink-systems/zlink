@@ -170,8 +170,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         }
     }
 
-    /// <summary>Performs the first non-blocking spot-send admission attempt.
-    /// False lets the async submitter wait for send-ready.</summary>
+    /// <summary>Performs the non-blocking spot-send admission call.
+    /// False leaves accepted async completion to the binding.</summary>
     public bool TrySendToSpotOnce(
         string routerChannelId,
         RoutingId targetNodeRid,

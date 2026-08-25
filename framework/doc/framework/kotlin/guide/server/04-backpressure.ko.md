@@ -44,11 +44,11 @@ send·receive queue가 보유한 accounted byte를 origin별로 제한한다. Fr
 queue는 handler 실행을 기다리는 job 수를 host instance 전체에서 제한한다. Byte와 job을 같은
 상한으로 합치거나 서로 환산하지 않는다.
 
-Core에서 Framework로 꺼낸 application record는 origin의 retained-credit lease를 terminal까지
-유지한다. Application job queue permit은 receive·claim 직전에 얻고 실제 사용자 callback의 첫
-instruction 직전에 반환한다. 따라서 handler가 시작된 뒤 비동기 I/O를 기다리는 동안에는 job
-queue permit을 다시 점유하지 않지만, Core retained byte credit은 record와 필요한 reply submit이
-terminal에 도달할 때까지 유지될 수 있다.
+Core queue가 application record를 binding·Framework에 넘기면 그 record의 Core receive HWM
+계상은 끝난다. Application Job Queue permit은 receive·claim 직전에 얻고 실제 사용자 callback의
+첫 instruction 직전에 반환한다. Handler가 시작된 뒤 비동기 I/O를 기다리는 동안에는 job queue
+permit을 다시 점유하지 않는다. Record payload는 필요한 terminal까지 Framework 쪽 owner가
+유지하지만 Core HWM budget을 계속 점유하지 않는다.
 
 ```mermaid
 %%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
@@ -62,7 +62,7 @@ flowchart LR
     CC(["Completion 연결"]):::net
 
     H1 --> SQ --> AC --> RQ --> BUD --> H2
-    H2 -. "reply · runtime control" .-> CC
+    H2 -. "terminal reply · error" .-> CC
     CC -.-> H1
 
     classDef app fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
@@ -106,8 +106,10 @@ origin과 receive 전에 식별할 수 있는 terminal reply·error completion�
 포화와 분리된다.
 
 **3단계 — sender의 Core submit이 대기한다.** 받는 쪽으로 더 보낼 수 없는 동안 sender의
-ordinary send queue도 비워지지 않는다. 해당 origin의 HWM에 도달하면 비동기 send는 수용 가능한
-상태를 기다리고, 정해진 deadline까지 자리가 없으면 해당 언어의 timeout 결과로 끝난다.
+ordinary send queue도 비워지지 않는다. Binding은 선택한 exact target operation을 한 번 제출하고,
+Core가 HWM 대기와 재시도를 소유하여 operation별 completion을 완료한다. Framework는 별도 readiness
+callback, retry adapter를 설치하거나 대기 중인 operation의 route를 다시 선택하지 않는다. 정해진
+deadline까지 완료되지 않거나 target이 detach되면 해당 operation의 terminal 결과로 끝난다.
 
 ```text
 받는 handler가 처리 속도를 못 맞춤
@@ -136,18 +138,19 @@ terminal completion은 계속 진행한다.
 
 ### 2.4 Application 연결과 Completion 연결 분리
 
-한 상대와 연결하면 두 개의 경로를 만든다. **Application 연결**은 일반 message와 request를
-나르고, **Completion 연결**은 이미 보낸 request의 reply와 runtime이 진행에 필요한 control을
-나른다.
+한 상대와 연결하면 두 개의 경로를 만든다. **Application 연결**은 일반 message와 request뿐 아니라
+Framework heartbeat, topology, relocation과 service-wire `sendReady` kind `12`를 나른다. 이
+Framework control은 data line FIFO에 남는다. **Completion 연결**은 이미 보낸 request의 terminal
+reply와 error reply를 나르며 Framework의 범용 control channel이 아니다.
 
 경로를 나누는 이유는 backlog가 차서 수신을 멈출 때 reply까지 같은 경로에 있으면 이미 보낸
 request가 완료되지 못하고 그 handler도 끝나지 못해 backlog가 줄어들 방법이 없어지기
 때문이다. Completion 연결은 application 수신이 멈춘 동안에도 계속 읽으므로 진행 중이던
 request가 정상적으로 끝나고, 다음 job이 실행을 시작하면서 backlog가 내려간다.
 
-두 경로 사이에는 공통 도착 순서가 없다. 같은 상대가 보낸 것이라도 Completion 연결의 control이
-Application 연결의 message를 앞지를 수 있으므로, handler는 도착 순서로 선후 관계를 판단하지
-않는다.
+두 경로 사이에는 공통 도착 순서가 없다. 같은 상대가 보낸 것이라도 Completion 연결의 terminal
+reply가 Application 연결의 message를 앞지를 수 있으므로, handler는 도착 순서로 선후 관계를
+판단하지 않는다.
 
 ## 3. API에 드러나는 backpressure
 
@@ -161,9 +164,10 @@ client.sendToChannel("orders", CancelOrder("order-1042")).submit().await()
 // 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
 ```
 
-자리가 없으면 즉시 실패하지 않고 `DefaultSocketSendTimeout`(기본 1초)까지 기다린다. 그
-안에 자리가 생기면 정확히 한 번 제출하고 정상 완료하며, 끝까지 자리가 생기지 않으면
-`DeadlineExceeded` 예외로 끝난다. **자동으로 다시 보내지 않는다** — 재시도할지, 버릴지,
+Framework는 binding operation 하나만 시작한다. 자리가 없으면 Core가 그 같은 operation의 HWM
+대기와 내부 재시도를 소유하고 `DefaultSocketSendTimeout`(기본 1초) 안에 operation별 completion을
+완료한다. 자리가 끝까지 생기지 않으면 `DeadlineExceeded` 예외로 끝난다. **Framework는 두 번째
+operation을 만들거나 다시 보내지 않는다** — terminal 실패 뒤 새 operation으로 재시도할지, 버릴지,
 사용자에게 실패를 알릴지는 application이 정한다.
 
 ```kotlin
@@ -171,7 +175,7 @@ try {
     client.sendToChannel("orders", command).submit().await()
 } catch (ex: ZLinkFrameworkException) {
     if (ex.kind() != ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) throw ex
-    // 이 시점에 확실한 것은 "제출되지 않았다" 하나다. 상대 상태는 알 수 없다.
+    // 이 operation이 DeadlineExceeded로 끝났다는 것만 확실하다. 상대 상태는 알 수 없다.
     // canSafelyRetry는 command 중복을 허용하는지 확인하는 application 소유 predicate다.
     if (!canSafelyRetry(command)) throw ex
     pending += command
@@ -193,11 +197,11 @@ try {
 설정한 상한이 1초인데 send가 즉시 실패했다면 queue가 찬 것이 아니라 **대기하는 호출이
 너무 많다**는 뜻이므로, 보내는 쪽 동시성을 먼저 본다.
 
-**기다리는 동안 target이 바뀔 수 있는 호출과 아닌 호출이 갈린다.** node를 직접 지정했거나
-Spot · Actor ID로 보내는 호출은 기다리는 동안에도 그 대상을 그대로 유지한다. 반면 channel
-이름으로 보내는 호출은 **자리가 확보되기 전까지 그 채널의 현재 후보를 다시 고를 수 있고**,
-전송 queue가 수락한 시점에 대상이 확정된다. 한 node가 느릴 때 channel 호출이 다른 node로
-흘러가는 것은 이 때문이다 — 대상이 고정된 호출에는 그 완충이 없다.
+Target은 binding operation을 시작하기 전에 한 번 확정한다. Node를 직접 지정하거나 Spot · Actor
+ID로 보내는 호출은 지정한 exact target을 사용하고, channel 이름으로 보내는 호출은 operation을
+시작하기 직전에 그 channel의 현재 후보 하나를 고른다. **Operation을 시작한 뒤 Core가 HWM을
+기다리고 재시도하는 동안에는 어느 호출도 target을 다시 선택하지 않는다.** 이후 시작한 새 channel
+operation은 그때 바뀐 후보를 고를 수 있다.
 
 ### 3.2 request의 timeout 경계
 
@@ -232,8 +236,8 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 | `receiveHighWaterMark` | 상대별로 **받아서** 보관할 수 있는 byte. `0`은 무제한 | `configureRouterSocket()` |
 | `maxMessageSize` | 받아들일 message 하나의 최대 크기 | `configureRouterSocket()` |
 | `sendHighWaterMark` · `linger` | pub/sub 발행 소켓의 상한과 종료 시 잔여 발행 대기 | `configureSpotPublisher()` |
-| `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | Core context의 ordinary queue byte budget | `configureDispatch()` |
-| `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` | host instance의 queued application job 상한 | `configureDispatch()` |
+| `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | Core context의 ordinary queue byte budget | root inbound-dispatch 설정 |
+| `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` · pause/resume threshold | host instance의 queued application job 상한과 flow 전이 경계 | root inbound-dispatch 설정 |
 
 **"보낼 자리를 기다리는 상한"은 하나의 전역 값이 아니다.** 실제로 쓰이는 값은 그 호출이
 사용하는 socket이 소유한다.
@@ -274,7 +278,7 @@ Framework root는 Core memory 설정을 같은 Core context에 전달하고, Cor
 
 ### 4.1 Core HWM — Core가 소유하는 byte budget
 
-`configureDispatch()`에서 다음 값을 설정한다. 정확한 언어별 표기는 `16. Options`와
+Root inbound-dispatch 설정에서 다음 값을 지정한다. 정확한 언어별 표기는 `16. Options`와
 exact interface에서 확인한다.
 
 | 설정 | 용도 |
@@ -315,24 +319,34 @@ Application Job Queue HWM은 handler 시작을 기다리는 job 수를 Framework
 | owner | Core context의 origin별 ordinary queue | Framework host instance의 shared queue |
 | 단위 | accounted byte | reserved supply와 queued application job 수 |
 | 획득 | Core queue admission | ordinary receive·claim 직전 |
-| 반환 | Core queue·retained lease lifecycle | 사용자 callback의 실제 첫 instruction 직전 |
+| 반환 | Core queue가 frame 소유권을 내놓을 때 | 사용자 callback의 실제 첫 instruction 직전 |
 | 포화 결과 | 해당 origin의 sender가 기다린다 | ordinary ingress source가 permit을 기다린다 |
-| 설정 | `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` |
+| 설정 | `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` · `applicationJobQueuePauseThresholdPercent` · `applicationJobQueueResumeThresholdPercent` |
 
 Manual `maxQueuedApplicationJobs`는 `1..2,147,483,647` 범위의 정확한 상한이다. `0`은 unlimited가
 아니라 startup configuration error다. Manual 값이 없으면 effective processor 수와 profile을 사용해
 startup에서 한 번 계산한다.
 
+Framework는 기본적으로 permits in use가 상한의 80%에 도달하면 `paused`, 60% 이하로
+회복되면 `running`으로 바꾼다. Pause permit count는 올림, resume permit count는 내림으로
+계산한다. `applicationJobQueuePauseThresholdPercent`(`1..100`)와
+`applicationJobQueueResumeThresholdPercent`(`0..99`)로 조정할 수 있지만 resume 값은 pause
+값보다 작아야 한다. Pressure 상태 자체는 readiness나 liveness를 바꾸지 않는다.
+Receive-flow 연동 대상은 RouteMesh와 ClientServer의 paired DEALER/ROUTER뿐이며 PUB/SUB와
+STREAM에는 이 pressure 상태를 적용하지 않는다.
+
 | profile | effective processor 하나당 job |
 | --- | ---: |
-| `Compact` | 32 |
+| `compact` | 32 |
 | `LowLatency` | 64 |
 | `Balanced`(기본) | 128 |
 | `Throughput` | 256 |
 
 `CoreHwmProfile`과 `ApplicationJobQueueProfile`은 같은 label을 사용하지만 서로 다른 public type과
 계산이다. Profile은 benchmark를 시작하기 위한 bootstrap 값이다. 운영에서는 목표 CPU 사용률과
-허용 latency에서 `reserved + queued` permit 분포를 측정하고 manual job 상한을 정한다.
+허용 latency에서 `reserved + queued` permit 분포, payload 크기 분포와 process memory를 함께 측정해
+manual job 상한을 정한다. 큰 payload를 오래 유지하는 workload에서는 Core profile을 바꾸는 대신
+`maxQueuedApplicationJobs`를 낮춰 Framework가 동시에 소유할 record 수를 줄인다.
 
 상한에 도달하면 새 ordinary ingress는 가장 오래 기다린 source부터 permit 반환을 기다린다. Batch와
 1:N local dispatch도 확보한 permit보다 많은 handler job을 먼저 만들지 않는다. Receive 전에 식별할 수

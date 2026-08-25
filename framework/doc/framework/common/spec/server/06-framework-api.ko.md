@@ -62,8 +62,9 @@ Framework builder는 service liveness interval과 [deadline](01-glossary.ko.md#d
 
 ### 2.1 Core memory budget과 application job queue를 분리한다
 
-Framework는 message byte 상한을 따로 계산하지 않는다. Core context 하나가 Core-managed messaging
-budget 하나를 소유하고, Framework는 다음 설정을 binding의 같은 context option으로 전달한다.
+Framework는 message byte 상한을 따로 계산하지 않는다. Core context 하나가 Core queue용 messaging
+budget 하나를 소유하고, Framework는 다음 설정을 binding의 같은 context option으로 전달한다. 이
+전달은 startup configuration일 뿐 Framework가 Core HWM 계산을 소유한다는 뜻이 아니다.
 
 | 설정 | 의미 |
 |---|---|
@@ -77,19 +78,21 @@ configuration error로 실패한다. 명시 값이 없으면 managed binding은 
 memory hint를 Core에 전달하고, native binding은 Core의 container·process·OS 감지를 사용한다. Framework와
 binding은 profile 비율을 적용하거나 budget을 connection 수로 나누지 않는다.
 
-Core queue에서 Framework로 꺼낸 application record는 origin의 retained-credit lease를 함께 옮긴다.
-Queue와 executor 사이에서는 lease 소유권만 이동한다. 정상 완료, validation·routing 실패, cancellation,
-exception과 shutdown에서 정확히 한 번 반환하며, reply가 필요한 request는 reply 또는 error reply submit이
-terminal 상태가 된 뒤 반환한다. Reply와 error reply completion은 ordinary Core byte HWM과 Application
-job queue permit을 적용하지 않는다.
+Core queue가 application record를 binding에 넘기면 해당 Core byte charge는 끝난다. 이후 payload는
+[Payload 소유권과 복사](50-internal-message-ownership.ko.md)의 일반 message lifetime을 따르며 Core
+HWM credit이나 별도 capacity token이 아니다. Framework는 retained receive를 사용해 이 charge를
+handler 또는 reply terminal까지 연장하지 않는다. Reply와 error reply completion은 ordinary Core
+byte HWM 경로와 Application Job Queue permit을 사용하지 않는다.
 
 Framework host instance는 handler 시작을 기다리는 application job 수를 별도 permit으로 제한한다. Root의
-dispatch option은 다음 값을 제공한다.
+inbound-dispatch option은 다음 값을 제공한다.
 
 | 설정 | 의미 |
 |---|---|
 | `ApplicationJobQueueProfile` | 자동 job 상한 profile이다. 기본값은 `Balanced`다. |
 | `MaxQueuedApplicationJobs` | Profile 계산을 완전히 대체하는 `1..2,147,483,647` 범위의 정확한 상한이다. |
+| `ApplicationJobQueuePauseThresholdPercent` | `1..100` 범위의 정수다. 기본값은 `80`이다. |
+| `ApplicationJobQueueResumeThresholdPercent` | `0..99` 범위의 정수다. 기본값은 `60`이며 pause 값보다 작아야 한다. |
 | `EffectiveMaxQueuedApplicationJobs` | Startup에서 확정한 실제 host instance 상한이다. 읽기 전용 status 값이다. |
 
 Manual 범위 위반은 startup configuration error이며 unlimited mode는 없다. Manual 값이 없으면 effective
@@ -104,8 +107,14 @@ processor 수는 startup에서 알려진 양수 값인 runtime constrained logic
 | `Throughput` | 256 |
 
 곱셈 overflow는 socket bind 전 startup configuration error다. 값은 startup에서 확정하고 runtime CPU·TPS
-측정값에 따라 자동으로 바꾸지 않는다. `CoreHwmProfile`과 `ApplicationJobQueueProfile`은 같은 label을 사용하지만 type,
-owner, 단위와 계산을 공유하지 않는다.
+측정값에 따라 자동으로 바꾸지 않는다. `CoreHwmProfile`과 `ApplicationJobQueueProfile`은 같은 label을
+사용하지만 type, owner, 단위와 계산을 공유하지 않는다. 두 profile의 기본값은 각각 `Balanced`이며
+한쪽 선택이 다른 쪽 값을 바꾸지 않는다.
+
+Framework는 effective maximum에 pause percent를 곱한 값을 올림하여 pause permit count를 정하고,
+resume percent를 곱한 값을 내림하여 resume permit count를 정한다. Startup은 두 percent의 범위와
+`resume < pause`를 함께 검증하며, 위반하면 socket bind 전에 configuration error로 실패한다.
+Pressure count는 reserved supply permit과 queued application job의 합인 permits in use다.
 
 Pre-receive에 terminal reply 또는 error reply completion으로 식별되는 supply만 queue permit을 사용하지
 않는다. Ordinary connection에서 먼저 receive한 뒤 classify한 record는 우회하지 않는다. 그 밖의 ordinary ingress는
@@ -121,9 +130,12 @@ polling, busy spin과 unbounded 임시 queue로 바꾸지 않는다. 가장 오�
 많은 handler job을 먼저 만들 수 없다. Core receive queue가 채워지면 기존 origin별 byte HWM이 sender까지
 backpressure를 전달한다.
 
-Pre-handler 비동기 ownership flow, Core lease와 Framework permit의 서로 다른 반환 경계, relocation
-durable staging 경계는 [Core byte HWM과 Application job flow](33-core-hwm-application-job-flow.ko.md)가
-정의한다.
+Framework job pressure가 Core에 주는 runtime feedback은 지원 socket의 receive-flow 절대 상태
+`RUNNING`·`PAUSED`뿐이다. Framework는 이 전이로 Core HWM 설정이나 queued-byte counter를 바꾸지
+않는다. Core snapshot 투영은 읽기 전용 관측이며 pressure 계산의 입력이 아니다.
+
+두 capacity의 분리 의도, permit 반환 경계와 relocation durable staging의 예외는
+[Core byte HWM과 Application job flow](33-core-hwm-application-job-flow.ko.md)가 정의한다.
 
 Root Location option은 startup-only `SessionRelocationSealTimeout`을 소유한다. 기본값은 `3,000 ms`이며
 finite positive duration만 허용한다. 0, 음수, 무한대와 exact language interface가 유한 millisecond로
@@ -468,7 +480,7 @@ Scheduler는 작업 도착을 기다릴 때 도착 기반으로 깨어난다. �
 wakeup을 제공하지 못해 주기적 확인을 사용하는 경우에는 그 주기를 언어별 문서에 공표한다. 그 주기가
 message 하나의 최선 지연 하한이 되기 때문이다. Transport readiness는 application callback 인자가 아니다. Request
 completion과 liveness·admission·relocation·reply recovery service control은 기존 Completion connection에서
-받는다. Send-ready는 Core callback으로 전달한다. 이 infrastructure 작업은 application handler가 점유할 수
+받는다. Core HWM 재시도 결과는 binding의 operation별 completion으로 받는다. 이 infrastructure 작업은 application handler가 점유할 수
 없는 실행 영역에서 진행한다. Actor·Spot lifecycle처럼 application callback을 호출하는 job은 application
 실행 영역에서 처리한다.
 
@@ -750,13 +762,15 @@ Actor egress는 bound session FIFO를 사용한다. Actor dispatch capability를
 Framework는 target selection과 transport admission 결과를 다음 공통 결과로 변환한다. Node direct call은
 Node RID를, Spot·Actor message는 global ID를, session binding은 exact object generation과 binding token을
 유지한다. 물리 peer lifecycle generation은 public commitment가 아니다.
-RouteMesh·ClientServer select-one ChannelName은 성공한 admission 전까지 현재 eligible member를 다시 선택할
-수 있지만 수락 또는 terminal completion 뒤에는 같은 operation을 다시 제출하지 않는다.
+RouteMesh·ClientServer select-one ChannelName은 첫 binding operation을 시작하기 직전에 현재 eligible
+member 하나를 선택한다. Binding operation이 시작되기 전 route eligibility·source-local admission 확인
+단계에서만 다른 eligible member를 선택할 수 있다. 시작 뒤에는 Core가 HWM 재시도와 완료를 소유하며
+Framework는 용량을 이유로 target을 다시 선택하거나 같은 binding operation을 다시 제출하지 않는다.
 
 | 관찰한 조건 | Framework 결과 |
 |---|---|
 | 해당 operation family의 source outbound admission이 operation을 수락함 | one-way send·publish는 결과값 없이 정상 완료하고 request는 pending completion으로 전환 |
-| 일반 one-way의 첫 submit이 backpressured임 | send timeout까지 send-ready를 기다린다. Timeout 전 capacity가 생기면 한 번 제출하고, deadline이 먼저 끝나면 `DeadlineExceeded` exception으로 완료 |
+| 일반 one-way의 첫 submit | Binding operation별 completion awaitable이 Core의 HWM 재시도 결과로 완료된다. Framework는 별도 readiness callback을 기다리거나 재시도하지 않으며, deadline이 먼저 끝나면 `DeadlineExceeded` exception으로 완료 |
 | Logical Multicast를 시작한 뒤 일부 target에 제출하지 못함 | 이미 수락한 target은 유지한다. Target별 실패를 public 결과나 publish 전용 monitoring으로 만들지 않으며 전체 operation을 rollback하거나 자동 retry하지 않음 |
 | 알려진 direct target의 route가 준비되지 않음 | `Unavailable` |
 | Actor·Spot authority 또는 Node·Channel 송신 경로가 없음 | `NotFound` |
@@ -771,10 +785,12 @@ STREAM reply의 유효한 첫 terminator는 transport 시도 전에 one-shot tok
 Backpressure, timeout 또는 cancellation으로 완료되어도 해당 token을 다시 사용할 수 없다. 같은
 token의 두 call이 경쟁하면 하나만 transport admission을 시작한다.
 Direct pending one-way operation은 Node RID, global Spot·Actor ID 또는 session [binding token](01-glossary.ko.md#binding-token)을 유지한다.
-Send-ready 또는 lifecycle signal 뒤의 재시도는 그 identity의 현재 route만 사용한다. 재시도 시점에
-해당 route가 없으면 `Unavailable`로 완료하고 다른 논리 target으로 이전하지 않는다.
-[Select-one](01-glossary.ko.md#select-one) ChannelName은 성공한 admission 전까지 eligible member를 다시 선택할 수 있지만, 이미
-수락된 뒤에는 다른 target으로 replay하지 않는다.
+첫 binding operation을 시작하면 exact target selection이 확정되고 Core가 그 operation의 HWM
+재시도를 소유한다. 이후 detach나 timeout은 terminal이며 Framework는 현재 route를 다시 조회하거나
+다른 logical target으로 replay하지 않는다.
+[Select-one](01-glossary.ko.md#select-one) ChannelName의 target 선택은 위의 binding operation 시작 경계를
+따른다. 이후 새 operation은 그때의 eligible member를 새로 선택할 수 있지만 시작된 operation을 다른
+target으로 replay하지 않는다.
 
 Global object message의 missing·route·exact-incarnation 결과는 다음처럼 구분한다.
 

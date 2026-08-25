@@ -18,6 +18,8 @@ public final class ZLinkInboundDispatchRegistration
     private ZLinkApplicationJobQueueProfile applicationJobQueueProfile =
         ZLinkApplicationJobQueueProfile.BALANCED;
     private Long maxQueuedApplicationJobs;
+    private int applicationJobQueuePauseThresholdPercent = 80;
+    private int applicationJobQueueResumeThresholdPercent = 60;
     private ZLinkApplicationJobQueue applicationJobQueue;
 
     @Override
@@ -82,14 +84,53 @@ public final class ZLinkInboundDispatchRegistration
         maxQueuedApplicationJobs = value;
     }
 
+    @Override
+    public synchronized int applicationJobQueuePauseThresholdPercent() {
+        return applicationJobQueuePauseThresholdPercent;
+    }
+
+    @Override
+    public synchronized void setApplicationJobQueuePauseThresholdPercent(
+        int value) {
+        requireMutable();
+        if (value < 1 || value > 100) {
+            throw new ZLinkConfigurationException(
+                "ApplicationJobQueuePauseThresholdPercent must be in 1..100");
+        }
+        applicationJobQueuePauseThresholdPercent = value;
+    }
+
+    @Override
+    public synchronized int applicationJobQueueResumeThresholdPercent() {
+        return applicationJobQueueResumeThresholdPercent;
+    }
+
+    @Override
+    public synchronized void setApplicationJobQueueResumeThresholdPercent(
+        int value) {
+        requireMutable();
+        if (value < 0 || value > 99) {
+            throw new ZLinkConfigurationException(
+                "ApplicationJobQueueResumeThresholdPercent must be in 0..99");
+        }
+        applicationJobQueueResumeThresholdPercent = value;
+    }
+
     public synchronized ZLinkApplicationJobQueue applicationJobQueue(
         Executor handlerExecutor) {
         if (applicationJobQueue == null) {
+            if (applicationJobQueueResumeThresholdPercent
+                >= applicationJobQueuePauseThresholdPercent) {
+                throw new ZLinkConfigurationException(
+                    "ApplicationJobQueueResumeThresholdPercent must be less than ApplicationJobQueuePauseThresholdPercent");
+            }
             applicationJobQueue = new ZLinkApplicationJobQueue(
                 applicationJobQueueProfile,
                 optional(maxQueuedApplicationJobs),
                 ZLinkApplicationJobQueue.productionProcessorCandidates(
-                    handlerExecutor));
+                    handlerExecutor),
+                applicationJobQueuePauseThresholdPercent,
+                applicationJobQueueResumeThresholdPercent);
         }
         return applicationJobQueue;
     }

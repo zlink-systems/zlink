@@ -85,14 +85,14 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         RecvFlags flags = RecvFlags.None) =>
         _socket.RecvPart(out sourceRoutingId, out part, out hasMore, flags);
 
-    public bool RecvRetained(
+    public bool Recv(
         out ZLinkBackendStreamReceive? received,
         RecvFlags flags = RecvFlags.None)
     {
         var envelope = Received.Create();
         try
         {
-            if (!_socket.RecvRetained(envelope, flags))
+            if (!_socket.Recv(envelope, flags))
             {
                 envelope.Dispose();
                 received = null;
@@ -111,11 +111,6 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
             envelope.Dispose();
             throw;
         }
-    }
-
-    public void OnSendReady(Action handler)
-    {
-        _socket.OnSendReady(handler);
     }
 
     public bool Send(RoutingId routingId, Message payload, SendFlags flags)

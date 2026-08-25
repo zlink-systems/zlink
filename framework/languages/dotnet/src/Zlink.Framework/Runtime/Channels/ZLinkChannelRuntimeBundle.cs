@@ -10,6 +10,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     private int _disposed;
     private Task? _disposeTask;
     private IDisposable? _manualConnectionAttachment;
+    private IDisposable? _receiveFlowRegistration;
 
     public ZLinkChannelRuntimeBundle(
         IAsyncDisposable socket,
@@ -18,7 +19,8 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         RoutingId localRid = default,
         string? socketRole = null,
         ZLinkClientServerServerIdentity? clientServerServer = null,
-        ZLinkFanoutPublisherIdentity? fanoutPublisher = null)
+        ZLinkFanoutPublisherIdentity? fanoutPublisher = null,
+        IDisposable? receiveFlowRegistration = null)
     {
         Socket = socket;
         _connect = connect;
@@ -27,6 +29,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         SocketRole = socketRole;
         ClientServerServer = clientServerServer;
         FanoutPublisher = fanoutPublisher;
+        _receiveFlowRegistration = receiveFlowRegistration;
     }
 
     public IAsyncDisposable Socket { get; }
@@ -64,6 +67,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         await started.ConfigureAwait(false);
         var failures = new ZLinkFailureCollector();
         failures.Capture(DetachManualConnections);
+        failures.Capture(DetachReceiveFlow);
         await _connectionGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -109,6 +113,9 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         }
         attachment?.Dispose();
     }
+
+    private void DetachReceiveFlow() =>
+        Interlocked.Exchange(ref _receiveFlowRegistration, null)?.Dispose();
 
     public void ConnectManual(string endpoint)
     {

@@ -218,7 +218,7 @@ Crossing this boundary duplicates three things together.
 
 | If framework does it instead | What gets taken on together |
 |---|---|
-| Target selection | Connection lifetime, reconnect backoff, HWM and send-ready determination |
+| Target selection | Connection lifetime, reconnect backoff, HWM and operation completion |
 | One socket per candidate | socket/fd/monitor resources grow proportional to candidate count |
 | Inducing selection via connection order | Core promises nothing about connection order |
 

@@ -132,6 +132,7 @@ struct mesh_node_builder_state_t
     std::optional<std::string> advertise_host_override;
     std::weak_ptr<framework_options_state_t> framework_options;
     std::shared_ptr<zlink::context_t> core_context;
+    std::shared_ptr<runtime::application_job_queue_t> application_jobs;
     service_collection_t *services = nullptr;
     std::vector<std::function<void (service_collection_t &)>> pending_handler_service_registrars;
     std::shared_ptr<handler_group_options_state_t> handler_groups;

@@ -2177,27 +2177,27 @@ export class ServiceStatefulRuntime {
     metadataFrame?: Buffer
   ): RawServicePumpResult {
     if (record.activation === 'missing' && this.asyncInstanceAuthority !== undefined) {
-      const retainedIngress = retainIngress(ingress);
+      const ownedIngress = shareIngressOwnership(ingress);
       void this.continueMissingInstanceActivation(
-        retainedIngress,
+        ownedIngress,
         record,
         payloadFrame,
         undefined,
         metadataFrame
-      ).finally(() => retainedIngress.applicationJobOwner?.close());
+      ).finally(() => ownedIngress.applicationJobOwner?.close());
       return 'infrastructure';
     }
     if (
       record.activation === 'ready'
       && this.needsInstanceApplicationMaterialization(ingress, record)
     ) {
-      const retainedIngress = retainIngress(ingress);
+      const ownedIngress = shareIngressOwnership(ingress);
       void this.continueReadyInstanceMaterialization(
-        retainedIngress,
+        ownedIngress,
         record,
         payloadFrame,
         metadataFrame
-      ).finally(() => retainedIngress.applicationJobOwner?.close());
+      ).finally(() => ownedIngress.applicationJobOwner?.close());
       return 'infrastructure';
     }
     const spot = this.requireInstanceActivation(ingress, record);
@@ -4698,7 +4698,7 @@ export class ServiceStatefulRuntime {
     }
     const bytes = ingress.parts.reduce((sum, part) => sum + part.byteLength, 0);
     state.queued.push({
-      ingress: retainIngress(ingress),
+      ingress: shareIngressOwnership(ingress),
       wire,
       bytes
     });
@@ -5323,7 +5323,7 @@ function freezeDirectSpotRoute(
   });
 }
 
-function retainIngress(record: RawServiceIngressRecord): RawServiceIngressRecord {
+function shareIngressOwnership(record: RawServiceIngressRecord): RawServiceIngressRecord {
   // Raw binding ingress already owns stable Buffer values. Relocation follow
   // queues retain the same record until the route decision completes.
   const applicationJobOwner = requireApplicationJobOwner(record).retain();

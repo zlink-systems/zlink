@@ -91,10 +91,7 @@ class ZLinkNodeChannelBackendAdapter implements ZLinkChannelBackendAdapter {
 
 class ZLinkNodeStreamBackendAdapter implements ZLinkStreamBackendAdapter {
   createStreamSocket(context: ZLinkBackendContext): ZLinkBackendStreamSocket {
-    return wrapSocket(
-      zlink.createStreamSocket(asNodeContext(context)),
-      { retainReceived: true }
-    ) as unknown as ZLinkBackendStreamSocket;
+    return wrapSocket(zlink.createStreamSocket(asNodeContext(context))) as unknown as ZLinkBackendStreamSocket;
   }
 
   createReadablePoller(socket: ZLinkBackendStreamSocket): ZLinkBackendReadablePoller {

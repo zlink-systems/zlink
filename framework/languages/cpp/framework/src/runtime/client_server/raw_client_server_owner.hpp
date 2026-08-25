@@ -64,6 +64,7 @@ struct raw_client_server_server_options_t
     std::optional<std::string> advertise_host;
     zlink::poller_t *transport_poller = nullptr;
     std::uintptr_t transport_poller_slot = 0;
+    std::shared_ptr<application_job_queue_t> application_jobs;
 };
 
 class raw_client_server_server_t
@@ -120,6 +121,8 @@ class raw_client_server_server_t
     std::mutex _socket_mutex;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
+    application_job_queue_t::receive_flow_registration_t
+      _receive_flow_registration;
     std::unique_ptr<zlink::poller_t> _monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
@@ -143,6 +146,7 @@ struct raw_client_server_client_options_t
     protocol::client_server_server_admission_t expected_server;
     zlink::poller_t *transport_poller = nullptr;
     std::uintptr_t transport_poller_slot = 0;
+    std::shared_ptr<application_job_queue_t> application_jobs;
 };
 
 class raw_client_server_client_t
@@ -194,6 +198,8 @@ class raw_client_server_client_t
     std::mutex _socket_mutex;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::dealer_socket_t> _dealer;
+    application_job_queue_t::receive_flow_registration_t
+      _receive_flow_registration;
     std::unique_ptr<zlink::poller_t> _monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_dealer_port_t> _port;

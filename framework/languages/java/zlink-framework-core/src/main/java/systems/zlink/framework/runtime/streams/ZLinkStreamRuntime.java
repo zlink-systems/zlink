@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
@@ -1601,6 +1602,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     "STREAM session-closing control was not admitted by the transport: "
                         + routingId);
             }
+        } catch (ZlinkSubmitException transportFailure) {
+            LOGGER.log(Level.FINE,
+                "STREAM session-closing control failed during transport teardown: "
+                    + routingId,
+                transportFailure);
         } finally {
             payload.close();
         }

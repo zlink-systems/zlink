@@ -66,6 +66,15 @@ export interface ZLinkRuntimeMetricRegistration {
   dispose(): void;
 }
 
+export interface ZLinkApplicationJobQueuePressureMetricSnapshot {
+  readonly pressureState: 'running' | 'paused';
+  readonly runningTransitionCount: bigint;
+  readonly pausedTransitionCount: bigint;
+  readonly currentPauseDurationSeconds: number;
+  readonly cumulativePauseDurationSeconds: number;
+  readonly flowStateConfigFailureCount: bigint;
+}
+
 export interface ZLinkRuntimeMetricOperation {
   complete(outcome: string): void;
 }
@@ -82,7 +91,7 @@ const COUNTERS = Object.freeze({
   'zlink.mesh_node.messages.dropped': '{message}',
   'zlink.relocation.started': '{relocation}',
   'zlink.relocation.completed': '{relocation}',
-  'zlink.relocation.cutover_timeout': '{relocation}',
+  'zlink.relocation.cutover_timeout': '{fallback}',
   'zlink.instance_spot.activations': '{activation}',
   'zlink.instance_spot.claim.conflicts': '{claim}',
   'zlink.instance_spot.takeovers': '{takeover}',
@@ -136,12 +145,16 @@ const OBSERVABLE_GAUGES = Object.freeze({
   'zlink.host.core_hwm.blocked_ratio': '{ppm}',
   'zlink.host.application_job_queue.limit': '{job}',
   'zlink.host.application_job_queue.jobs': '{job}',
-  'zlink.host.application_job_queue.capacity_waiters': '{waiter}'
+  'zlink.host.application_job_queue.capacity_waiters': '{waiter}',
+  'zlink.host.application_job_queue.pressure_state': '{state}',
+  'zlink.host.application_job_queue.pause_duration': 's'
 } as const);
 
 const OBSERVABLE_COUNTERS = Object.freeze({
   'zlink.host.application_job_queue.capacity_waits': '{wait}',
-  'zlink.host.application_job_queue.capacity_wait_duration': 's'
+  'zlink.host.application_job_queue.capacity_wait_duration': 's',
+  'zlink.host.application_job_queue.pressure_transitions': '{transition}',
+  'zlink.host.application_job_queue.flow_state_config_failures': '{failure}'
 } as const);
 
 type CounterName = keyof typeof COUNTERS;
@@ -155,6 +168,9 @@ class MetricRegistry {
   readonly meshSnapshots = new Set<() => ReadonlyArray<ZLinkRuntimeMetricMeshSnapshot>>();
   readonly hostStates = new Set<() => string>();
   readonly hostCapacities = new Set<() => ZLinkHostCapacityStatus>();
+  readonly applicationJobQueuePressures = new Set<
+    () => ZLinkApplicationJobQueuePressureMetricSnapshot
+  >();
 
   constructor(meter: ZLinkObservableMeter) {
     for (const [name, unit] of Object.entries(COUNTERS)) {
@@ -177,6 +193,19 @@ class MetricRegistry {
   }
 
   private observe(name: string, result: ZLinkObservableResult): void {
+    if (name === 'zlink.host.application_job_queue.pressure_state'
+        || name === 'zlink.host.application_job_queue.pressure_transitions'
+        || name === 'zlink.host.application_job_queue.pause_duration'
+        || name === 'zlink.host.application_job_queue.flow_state_config_failures') {
+      for (const provider of this.applicationJobQueuePressures) {
+        try {
+          this.observeApplicationJobQueuePressure(name, provider(), result);
+        } catch {
+          // Diagnostics must not affect runtime behavior.
+        }
+      }
+      return;
+    }
     if (name.startsWith('zlink.host.core_hwm.')
         || name.startsWith('zlink.host.application_job_queue.')) {
       for (const provider of this.hostCapacities) {
@@ -207,6 +236,24 @@ class MetricRegistry {
         continue;
       }
       for (const snapshot of snapshots) this.observeMesh(name, snapshot, result);
+    }
+  }
+
+  private observeApplicationJobQueuePressure(
+    name: string,
+    snapshot: ZLinkApplicationJobQueuePressureMetricSnapshot,
+    result: ZLinkObservableResult
+  ): void {
+    if (name === 'zlink.host.application_job_queue.pressure_state') {
+      result.observe(1, { state: snapshot.pressureState });
+    } else if (name === 'zlink.host.application_job_queue.pressure_transitions') {
+      result.observe(metricNumber(snapshot.runningTransitionCount), { state: 'running' });
+      result.observe(metricNumber(snapshot.pausedTransitionCount), { state: 'paused' });
+    } else if (name === 'zlink.host.application_job_queue.pause_duration') {
+      result.observe(nonNegative(snapshot.currentPauseDurationSeconds), { state: 'current' });
+      result.observe(nonNegative(snapshot.cumulativePauseDurationSeconds), { state: 'cumulative' });
+    } else if (name === 'zlink.host.application_job_queue.flow_state_config_failures') {
+      result.observe(metricNumber(snapshot.flowStateConfigFailureCount));
     }
   }
 
@@ -348,6 +395,13 @@ export class ZLinkRuntimeMetrics {
   ): ZLinkRuntimeMetricRegistration {
     this.registry.hostCapacities.add(provider);
     return registration(() => this.registry.hostCapacities.delete(provider));
+  }
+
+  registerApplicationJobQueuePressure(
+    provider: () => ZLinkApplicationJobQueuePressureMetricSnapshot
+  ): ZLinkRuntimeMetricRegistration {
+    this.registry.applicationJobQueuePressures.add(provider);
+    return registration(() => this.registry.applicationJobQueuePressures.delete(provider));
   }
 
   startRequest(meshName: string, surface: 'node' | 'channel' | 'spot' | 'instance_spot' | 'actor'):

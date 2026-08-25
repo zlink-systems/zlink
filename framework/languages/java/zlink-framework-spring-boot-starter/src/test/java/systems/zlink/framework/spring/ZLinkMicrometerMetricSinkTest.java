@@ -13,9 +13,11 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.configuration.ZLinkCoreHwmProfile;
+import systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState;
 import systems.zlink.framework.monitoring.ZLinkApplicationJobQueueStatus;
 import systems.zlink.framework.monitoring.ZLinkCoreHwmStatus;
 import systems.zlink.framework.monitoring.ZLinkHostCapacityStatus;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkApplicationJobQueuePressureMetrics;
 
 final class ZLinkMicrometerMetricSinkTest {
     @Test
@@ -102,6 +104,86 @@ final class ZLinkMicrometerMetricSinkTest {
                 .allMatch(tag -> tag.getKey().equals("state"))));
     }
 
+    @Test
+    void exportsMetricOnlyApplicationJobQueuePressureAccounting() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ZLinkMicrometerMetricSink sink = new ZLinkMicrometerMetricSink(registry);
+        AtomicReference<ZLinkApplicationJobQueuePressureMetrics> source =
+            new AtomicReference<>(new ZLinkApplicationJobQueuePressureMetrics(
+                ZLinkApplicationJobQueuePressureState.RUNNING,
+                2,
+                3,
+                Duration.ofSeconds(4),
+                Duration.ofSeconds(5),
+                6));
+
+        sink.registerApplicationJobQueuePressure(source::get);
+
+        assertEquals(Set.of(
+            "zlink.host.application_job_queue.pressure_state",
+            "zlink.host.application_job_queue.pressure_transitions",
+            "zlink.host.application_job_queue.pause_duration",
+            "zlink.host.application_job_queue.flow_state_config_failures"),
+            registry.getMeters().stream()
+                .map(meter -> meter.getId().getName())
+                .collect(java.util.stream.Collectors.toSet()));
+        assertEquals(1.0,
+            registry.get("zlink.host.application_job_queue.pressure_state")
+                .tag("state", "running").gauge().value());
+        assertEquals(Set.of("running"), pressureStateSeries(registry));
+        assertEquals(2.0,
+            registry.get("zlink.host.application_job_queue.pressure_transitions")
+                .tag("state", "running").functionCounter().count());
+        assertEquals(3.0,
+            registry.get("zlink.host.application_job_queue.pressure_transitions")
+                .tag("state", "paused").functionCounter().count());
+        assertEquals(5.0,
+            registry.get("zlink.host.application_job_queue.pause_duration")
+                .tag("state", "cumulative").gauge().value());
+        assertEquals(6.0,
+            registry.get("zlink.host.application_job_queue.flow_state_config_failures")
+                .functionCounter().count());
+
+        ZLinkApplicationJobQueuePressureMetrics paused =
+            new ZLinkApplicationJobQueuePressureMetrics(
+                ZLinkApplicationJobQueuePressureState.PAUSED,
+                0,
+                0,
+                Duration.ofSeconds(7),
+                Duration.ZERO,
+                0);
+        source.set(paused);
+        sink.observeApplicationJobQueuePressure(paused);
+        assertEquals(1.0,
+            registry.get("zlink.host.application_job_queue.pressure_state")
+                .tag("state", "paused").gauge().value());
+        assertEquals(Set.of("paused"), pressureStateSeries(registry));
+        assertEquals(0.0,
+            registry.get("zlink.host.application_job_queue.pressure_transitions")
+                .tag("state", "running").functionCounter().count());
+        assertEquals(0.0,
+            registry.get("zlink.host.application_job_queue.flow_state_config_failures")
+                .functionCounter().count());
+
+        source.set(new ZLinkApplicationJobQueuePressureMetrics(
+            ZLinkApplicationJobQueuePressureState.RUNNING,
+            1,
+            1,
+            Duration.ZERO,
+            Duration.ofSeconds(1),
+            0));
+        sink.observeApplicationJobQueuePressure(source.get());
+        assertEquals(Set.of("running"), pressureStateSeries(registry));
+    }
+
+    private static Set<String> pressureStateSeries(SimpleMeterRegistry registry) {
+        return registry.getMeters().stream()
+            .filter(meter -> meter.getId().getName().equals(
+                "zlink.host.application_job_queue.pressure_state"))
+            .map(meter -> meter.getId().getTag("state"))
+            .collect(java.util.stream.Collectors.toSet());
+    }
+
     private static ZLinkHostCapacityStatus capacity(
         long epoch,
         long waits,
@@ -115,7 +197,9 @@ final class ZLinkMicrometerMetricSinkTest {
                 1, 1, 1, 1, 0, 0, 0),
             new ZLinkApplicationJobQueueStatus(
                 ZLinkApplicationJobQueueProfile.BALANCED,
-                Optional.empty(), 1, 128, 1, 2, 3, 4, 1,
-                waits, waitDuration));
+                Optional.empty(), 80, 60, 1, 128, 103, 76,
+                1, 2, 3, 4,
+                ZLinkApplicationJobQueuePressureState.RUNNING,
+                Duration.ZERO, 1, waits, waitDuration));
     }
 }

@@ -1369,8 +1369,10 @@ p50·p95·p99를 별도로 측정할 수 있지만 public metric으로 오인해
 
 Auto profile에서 시작해 `CoreHwmBudgetBytes` 후보를 단계적으로 낮추며 같은 steady·burst test를
 반복한다. 각 후보에서 effective budget, applied HWM, current·peak accounted byte, completion
-accounted byte, blocked ratio, outstanding application lease, RSS·managed heap, throughput과 latency를
-기록한다. Core budget은 RSS hard cap이 아니므로 snapshot과 process memory를 별도로 판정한다.
+accounted byte, blocked ratio, active directional queue 수, RSS·managed heap, throughput과 latency를
+기록한다. `application accounted bytes`, `outstanding application lease`, `retired queue`,
+`deferred origin credit`은 0.13.1 이후 ABI 호환용 reserved field로 항상 `0`이므로 운영값으로 사용하지
+않는다. Core budget은 RSS hard cap이 아니므로 snapshot과 process memory를 별도로 판정한다.
 
 Production 값은 workload의 throughput·latency·memory pass condition을 만족하는 가장 작은 후보에
 운영자가 정한 safety margin을 반영해 선택한다. Completion 진행은 ordinary Core HWM 포화와

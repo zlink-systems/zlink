@@ -6,13 +6,14 @@ export interface ZLinkRawReceivedRecord {
   readonly transportPairGeneration?: bigint;
   readonly reply?: (parts: readonly Uint8Array[]) => void;
   readonly parts: readonly Buffer[];
-  /** Releases the retained Core receive credit exactly once. */
+  /** Releases the ordinary Framework-owned receive record exactly once. */
   close(): void;
 }
 
 export interface ZLinkRawMonitorRecord {
   readonly event: number;
-  readonly value: number;
+  /** Lossless native monitor value (Core exposes the full unsigned 64-bit field). */
+  readonly value: bigint;
   readonly routingId?: string;
   readonly localAddress: string;
   readonly remoteAddress: string;
@@ -28,6 +29,7 @@ export interface ZLinkRawSocketPort {
   unbind(endpoint: string): void;
   connect(endpoint: string): void;
   disconnect(endpoint: string): void;
+  setReceiveFlowState(state: 'running' | 'paused'): void;
   monitor(handler: (event: ZLinkRawMonitorRecord) => void): ZLinkRawMonitorPort;
   close(): void;
 }

@@ -18,15 +18,13 @@ internal interface IZLinkBackendStreamSocket : IAsyncDisposable
 
     void SetTlsServer(string certPath, string keyPath, bool requireClientCert);
 
-    void OnSendReady(Action handler);
-
     bool RecvPart(
         out RoutingId? sourceRoutingId,
         out Message? part,
         out bool hasMore,
         RecvFlags flags = RecvFlags.None);
 
-    bool RecvRetained(
+    bool Recv(
         out ZLinkBackendStreamReceive? received,
         RecvFlags flags = RecvFlags.None)
     {

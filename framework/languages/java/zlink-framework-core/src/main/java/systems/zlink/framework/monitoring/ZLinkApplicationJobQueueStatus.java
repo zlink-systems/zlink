@@ -9,12 +9,18 @@ import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 public record ZLinkApplicationJobQueueStatus(
     ZLinkApplicationJobQueueProfile configuredProfile,
     Optional<Long> configuredManualMax,
+    int configuredPauseThresholdPercent,
+    int configuredResumeThresholdPercent,
     long effectiveProcessorCount,
     long effectiveMaxQueuedApplicationJobs,
+    long pausePermitCount,
+    long resumePermitCount,
     long reservedSupplyPermits,
     long queuedApplicationJobs,
     long permitsInUse,
     long peakPermitsInUse,
+    ZLinkApplicationJobQueuePressureState pressureState,
+    Duration currentPauseDuration,
     long capacityWaiters,
     long capacityWaitCount,
     Duration capacityWaitDuration) {
@@ -22,6 +28,8 @@ public record ZLinkApplicationJobQueueStatus(
         Objects.requireNonNull(configuredProfile, "configuredProfile");
         configuredManualMax = configuredManualMax == null
             ? Optional.empty() : configuredManualMax;
+        Objects.requireNonNull(pressureState, "pressureState");
+        Objects.requireNonNull(currentPauseDuration, "currentPauseDuration");
         Objects.requireNonNull(capacityWaitDuration, "capacityWaitDuration");
     }
 }

@@ -5,14 +5,14 @@ import type {
 
 export type ApplicationJobRecordDomain = 'application' | 'infrastructure';
 
-export interface RetainedIngressRecordPort {
+export interface IngressRecordPort {
   close(): void;
 }
 
 /**
  * Owns one raw ingress record from pre-receive reservation through every
  * derived mailbox job. Child jobs have independent queue permits while the
- * retained Core credit is shared and returned after the last child terminal.
+ * ordinary Framework-owned ingress record closes after the last child terminal.
  */
 export class ApplicationIngressRecordOwner {
   private readonly stop = new AbortController();
@@ -23,10 +23,10 @@ export class ApplicationIngressRecordOwner {
   static create(
     queue: ApplicationJobQueuePort,
     initialPermit: ApplicationJobPermitPort,
-    retainedRecord: RetainedIngressRecordPort
+    record: IngressRecordPort
   ): ApplicationIngressRecordOwner {
     return new ApplicationIngressRecordOwner(
-      new SharedIngressRecordState(queue, initialPermit, retainedRecord)
+      new SharedIngressRecordState(queue, initialPermit, record)
     );
   }
 
@@ -76,7 +76,7 @@ export class ApplicationIngressRecordOwner {
   }
 }
 
-/** Queue-permit child of one retained raw ingress record. */
+/** Queue-permit child of one shared raw ingress record. */
 export class ApplicationJobRecordLease implements ApplicationJobPermitPort {
   private ingressClosed = false;
   private permitReleased = false;
@@ -139,25 +139,25 @@ class SharedIngressRecordState {
   private ownerCount = 1;
   private jobCount = 0;
   private initialPermit?: ApplicationJobPermitPort;
-  private retainedClosed = false;
+  private recordClosed = false;
 
   constructor(
     private readonly queue: ApplicationJobQueuePort,
     initialPermit: ApplicationJobPermitPort,
-    private readonly retainedRecord: RetainedIngressRecordPort
+    private readonly record: IngressRecordPort
   ) {
     this.initialPermit = initialPermit;
   }
 
   retainOwner(): void {
-    if (this.retainedClosed) throw ownerClosedError();
+    if (this.recordClosed) throw ownerClosedError();
     this.ownerCount += 1;
   }
 
   releaseOwner(): void {
     if (this.ownerCount === 0) return;
     this.ownerCount -= 1;
-    this.tryCloseRetainedRecord();
+    this.tryCloseIngressRecord();
   }
 
   takeInitialPermit(
@@ -184,7 +184,7 @@ class SharedIngressRecordState {
     } catch (error) {
       this.jobCount -= 1;
       permit.releaseAfterInternalProcessing();
-      this.tryCloseRetainedRecord();
+      this.tryCloseIngressRecord();
       throw error;
     }
   }
@@ -194,17 +194,17 @@ class SharedIngressRecordState {
       throw new Error('Application ingress record job accounting underflow.');
     }
     this.jobCount -= 1;
-    this.tryCloseRetainedRecord();
+    this.tryCloseIngressRecord();
   }
 
-  private tryCloseRetainedRecord(): void {
-    if (this.ownerCount !== 0 || this.jobCount !== 0 || this.retainedClosed) return;
-    this.retainedClosed = true;
+  private tryCloseIngressRecord(): void {
+    if (this.ownerCount !== 0 || this.jobCount !== 0 || this.recordClosed) return;
+    this.recordClosed = true;
     try {
       this.initialPermit?.releaseAfterInternalProcessing();
     } finally {
       this.initialPermit = undefined;
-      this.retainedRecord.close();
+      this.record.close();
     }
   }
 }

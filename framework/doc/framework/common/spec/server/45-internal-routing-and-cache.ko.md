@@ -192,7 +192,7 @@ Framework는 후보 endpoint와 각 후보의 weight만 Core에 전달한다. Co
 
 | framework가 대신 하면 | 함께 떠안게 되는 것 |
 |---|---|
-| 대상 선택 | 연결 수명, 재연결 backoff, HWM과 송신 준비 판정 |
+| 대상 선택 | 연결 수명, 재연결 backoff, HWM과 operation completion |
 | 후보마다 socket 하나씩 | socket·fd·monitor 자원이 후보 수에 비례해 늘어난다 |
 | 연결 순서로 선택 유도 | Core는 연결 순서에 대해 아무것도 약속하지 않는다 |
 

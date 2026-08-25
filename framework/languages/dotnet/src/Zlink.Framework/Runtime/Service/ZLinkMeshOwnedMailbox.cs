@@ -3,15 +3,15 @@ using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Service;
 
-// A single retained binding envelope can fan out to more than one framework
-// mailbox. Each mailbox receives a terminal lease; the underlying envelope (and
-// therefore Core's receive credit) is released only after the final consumer.
-internal sealed class ZLinkSharedCreditOwner : IDisposable
+// A single binding envelope can fan out to more than one framework mailbox.
+// Each mailbox receives a terminal owner; the underlying envelope is released
+// only after the final consumer.
+internal sealed class ZLinkSharedEnvelopeOwner : IDisposable
 {
     private IDisposable? _owner;
     private int _references = 1;
 
-    internal ZLinkSharedCreditOwner(IDisposable owner)
+    internal ZLinkSharedEnvelopeOwner(IDisposable owner)
     {
         _owner = owner ?? throw new ArgumentNullException(nameof(owner));
     }
@@ -22,7 +22,7 @@ internal sealed class ZLinkSharedCreditOwner : IDisposable
         {
             var current = Volatile.Read(ref _references);
             if (current == 0)
-                throw new ObjectDisposedException(nameof(ZLinkSharedCreditOwner));
+                throw new ObjectDisposedException(nameof(ZLinkSharedEnvelopeOwner));
             if (Interlocked.CompareExchange(
                     ref _references,
                     checked(current + 1),
@@ -38,9 +38,9 @@ internal sealed class ZLinkSharedCreditOwner : IDisposable
         Interlocked.Exchange(ref _owner, null)?.Dispose();
     }
 
-    private sealed class Lease(ZLinkSharedCreditOwner owner) : IDisposable
+    private sealed class Lease(ZLinkSharedEnvelopeOwner owner) : IDisposable
     {
-        private ZLinkSharedCreditOwner? _owner = owner;
+        private ZLinkSharedEnvelopeOwner? _owner = owner;
 
         public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Dispose();
     }
@@ -178,7 +178,7 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
     // payload bytes only.
     internal const ulong FixedRecordBytes = 256;
     private IReadOnlyList<Message>? _parts;
-    private IDisposable? _creditOwner;
+    private IDisposable? _payloadOwner;
     private readonly ulong _payloadBytes;
     private readonly ulong _pendingBytes;
     internal MeshReceiveRecord Record { get; private set; }
@@ -187,7 +187,7 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
         MeshReceiveRecord record,
         IReadOnlyList<Message> parts,
         ulong? applicationPayloadBytes = null,
-        IDisposable? creditOwner = null)
+        IDisposable? payloadOwner = null)
     {
         _parts = parts;
         _payloadBytes = applicationPayloadBytes
@@ -198,7 +198,7 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
                                 "Queued mesh records must carry application payload bytes."));
         record.ApplicationPayloadBytes = _payloadBytes;
         Record = record;
-        _creditOwner = creditOwner;
+        _payloadOwner = payloadOwner;
         _pendingBytes = ComputePendingBytes(
             _payloadBytes,
             (ulong)(record.ApplicationMetadata?.Length ?? 0));
@@ -210,8 +210,8 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
     internal IReadOnlyList<Message> TakeParts() =>
         Interlocked.Exchange(ref _parts, null) ?? Array.Empty<Message>();
 
-    internal IDisposable? TakeCreditOwner() =>
-        Interlocked.Exchange(ref _creditOwner, null);
+    internal IDisposable? TakePayloadOwner() =>
+        Interlocked.Exchange(ref _payloadOwner, null);
 
     private static ulong ComputePendingBytes(ulong payload, ulong metadata)
     {
@@ -229,6 +229,6 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
         if (owned is not null)
             foreach (var part in owned)
                 part.Dispose();
-        Interlocked.Exchange(ref _creditOwner, null)?.Dispose();
+            Interlocked.Exchange(ref _payloadOwner, null)?.Dispose();
     }
 }

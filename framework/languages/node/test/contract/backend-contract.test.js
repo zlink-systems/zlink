@@ -13,6 +13,7 @@ const {
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const { isPollerInterruptedError } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
 const {
   ZLinkMeshCompletionTable,
   closeMeshCompletion
@@ -1736,6 +1737,29 @@ test('backend adapter creates context and core socket wrappers through public bi
   }
 });
 
+test('PUB backend uses only the synchronous 0.13 publish operation', () => {
+  const calls = [];
+  const native = {
+    close() {},
+    publish(topic) {
+      calls.push(`publish:${topic}`);
+      return {
+        message(part) {
+          calls.push(`part:${Buffer.from(part).toString()}`);
+          return this;
+        },
+        submit() { calls.push('submit'); }
+      };
+    }
+  };
+  const publisher = wrapSocket(native);
+  assert.equal(publisher.publish('raw', [Buffer.from('one'), Buffer.from('two')]), undefined);
+  assert.equal(publisher.publishAsync, undefined);
+  assert.deepEqual(calls, [
+    'publish:raw', 'part:one', 'part:two', 'submit'
+  ]);
+});
+
 test('backend adapter unwraps SpotNode when attaching stream SessionRelay', async () => {
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const channel = factory.createChannelAdapter();
@@ -1824,7 +1848,6 @@ test('channel runtime connects route mesh peers before bind and spot route bridg
     connect(endpoint) { calls.push(`route:connect:${endpoint}`); },
     bind(endpoint) { calls.push(`route:bind:${endpoint}`); },
     disconnect() {},
-    onSendReady() {},
     recv() { return undefined; },
     async dispose() {}
   };

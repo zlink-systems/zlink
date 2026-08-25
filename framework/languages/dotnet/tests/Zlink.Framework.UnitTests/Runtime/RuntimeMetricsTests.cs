@@ -1,5 +1,6 @@
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
+using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -76,6 +77,10 @@ public sealed class RuntimeMetricsTests
             ["zlink.host.application_job_queue.capacity_waiters"] = (typeof(ObservableGauge<>), "{waiter}"),
             ["zlink.host.application_job_queue.capacity_waits"] = (typeof(ObservableCounter<>), "{wait}"),
             ["zlink.host.application_job_queue.capacity_wait_duration"] = (typeof(ObservableCounter<>), "s"),
+            ["zlink.host.application_job_queue.pressure_state"] = (typeof(ObservableGauge<>), "{state}"),
+            ["zlink.host.application_job_queue.pressure_transitions"] = (typeof(ObservableCounter<>), "{transition}"),
+            ["zlink.host.application_job_queue.pause_duration"] = (typeof(ObservableGauge<>), "s"),
+            ["zlink.host.application_job_queue.flow_state_config_failures"] = (typeof(ObservableCounter<>), "{failure}"),
             ["zlink.host.relocation.duration"] = (typeof(Histogram<>), "s"),
             ["zlink.host.relocation.blocked"] = (typeof(Counter<>), "{operation}"),
             ["zlink.host.shutdown.duration"] = (typeof(Histogram<>), "s"),
@@ -152,15 +157,21 @@ public sealed class RuntimeMetricsTests
         var queue = new ZLinkApplicationJobQueueStatus(
             ZLinkApplicationJobQueueProfile.Balanced,
             ConfiguredManualMax: 16,
+            ConfiguredPauseThresholdPercent: 80,
+            ConfiguredResumeThresholdPercent: 60,
             EffectiveProcessorCount: 4,
             EffectiveMaxQueuedApplicationJobs: 16,
+            PausePermitCount: 13,
+            ResumePermitCount: 9,
             ReservedSupplyPermits: 2,
             QueuedApplicationJobs: 3,
             PermitsInUse: 5,
             PeakPermitsInUse: 8,
             CapacityWaiters: 1,
             CapacityWaitCount: 11,
-            CapacityWaitDuration: TimeSpan.FromSeconds(1.25));
+            CapacityWaitDuration: TimeSpan.FromSeconds(1.25),
+            PressureState: ZLinkApplicationJobQueuePressureState.Running,
+            CurrentPauseDuration: TimeSpan.Zero);
         using var registration = ZLinkRuntimeMetrics.RegisterHostCapacity(
             () => new ZLinkHostCapacityStatus(4, core, queue));
         var longSamples = new List<(
@@ -215,6 +226,65 @@ public sealed class RuntimeMetricsTests
                 sample.Tags.Keys,
                 static key => Assert.Equal("state", key)));
         Assert.Equal(1.25, Assert.Single(durationSamples), precision: 3);
+    }
+
+    [Fact]
+    public void Application_job_pressure_metrics_project_exact_states_and_durations()
+    {
+        using var registration =
+            ZLinkRuntimeMetrics.RegisterApplicationJobQueuePressure(
+                () => new ZLinkApplicationJobQueuePressureMetrics(
+                    ZLinkApplicationJobQueuePressureState.Paused,
+                    PausedTransitionCount: 4,
+                    RunningTransitionCount: 3,
+                    CurrentPauseDuration: TimeSpan.FromSeconds(5),
+                    CumulativePauseDuration: TimeSpan.FromSeconds(9),
+                    FlowStateConfigFailures: 2));
+        var longSamples = new List<(
+            string Name,
+            long Value,
+            IReadOnlyDictionary<string, string> Tags)>();
+        var durationSamples = new List<(
+            double Value,
+            IReadOnlyDictionary<string, string> Tags)>();
+        using var longListener = Listen<long>(
+            [
+                "zlink.host.application_job_queue.pressure_state",
+                "zlink.host.application_job_queue.pressure_transitions",
+                "zlink.host.application_job_queue.flow_state_config_failures"
+            ],
+            (instrument, value, tags) => longSamples.Add(
+                (instrument.Name, value, Tags(tags))));
+        using var durationListener = Listen<double>(
+            "zlink.host.application_job_queue.pause_duration",
+            (_, value, tags) => durationSamples.Add((value, Tags(tags))));
+
+        longListener.RecordObservableInstruments();
+        durationListener.RecordObservableInstruments();
+
+        Assert.Contains(longSamples, sample =>
+            sample.Name == "zlink.host.application_job_queue.pressure_state"
+            && sample.Value == 1
+            && sample.Tags["state"] == "paused");
+        Assert.DoesNotContain(longSamples, sample =>
+            sample.Name == "zlink.host.application_job_queue.pressure_state"
+            && sample.Tags["state"] == "running");
+        Assert.Contains(longSamples, sample =>
+            sample.Name == "zlink.host.application_job_queue.pressure_transitions"
+            && sample.Value == 4
+            && sample.Tags["state"] == "paused");
+        Assert.Contains(longSamples, sample =>
+            sample.Name == "zlink.host.application_job_queue.pressure_transitions"
+            && sample.Value == 3
+            && sample.Tags["state"] == "running");
+        Assert.Contains(longSamples, sample =>
+            sample.Name == "zlink.host.application_job_queue.flow_state_config_failures"
+            && sample.Value == 2
+            && sample.Tags.Count == 0);
+        Assert.Contains(durationSamples, sample =>
+            sample.Value == 5 && sample.Tags["state"] == "current");
+        Assert.Contains(durationSamples, sample =>
+            sample.Value == 9 && sample.Tags["state"] == "cumulative");
     }
 
     [Fact]

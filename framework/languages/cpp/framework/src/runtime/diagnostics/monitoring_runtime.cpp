@@ -268,6 +268,15 @@ void monitoring_runtime_t::publish_actor (actor_event_payload_t event) const
           {"message", std::move (event.message)}});
 }
 
+void monitoring_runtime_t::publish_application_job_queue_failure () const
+{
+    log (log_level_t::error,
+         "zlink.runtime.host.application_job_queue.receive_flow_config_failed",
+         {{"category", "receive_flow_state_configuration"},
+          {"message",
+           "Failed to apply the absolute Application Job Queue receive-flow state"}});
+}
+
 void monitoring_runtime_t::publish_timer_failure (
   std::string source_name,
   spot_id_t spot_id,

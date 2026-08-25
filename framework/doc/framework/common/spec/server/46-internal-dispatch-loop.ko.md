@@ -199,7 +199,7 @@ Framework-level `MaxMessageSize` 설정이나 complete-message 상한을 추가�
 
 **결정 — 한 번 깨어났을 때 한도 안에서 여러 건을 이어서 읽는다.** 한도가 필요한 이유는
 §3과 같다. 상대가 계속 보내는 동안 무한정 읽으면 그 연결 하나가 수신 단계를 독점하고,
-다른 연결과 송신 준비 처리가 밀린다.
+다른 연결과 binding operation completion 처리가 밀린다.
 
 **결정 — 한도는 건수·byte·경과 시간 셋을 함께 두고 먼저 닿는 것을 적용한다.** 건수만
 두면 큰 message에서 시간이 길어지고, 시간만 두면 작은 message에서 시계를 너무 자주 읽는다.
@@ -322,8 +322,15 @@ Application permit은 실제 exact-target callback 첫 instruction에서 반환�
 내부 처리 직후 반환한다. Cancellation, source close와 shutdown은 waiter와 handoff permit을 정확히 한 번
 정리한다. Same-host relay, fanout, serial owner와 relocation 경로는 permit 반환에 필요한 gate·execution
 authority·resource를 쥔 채 같은 authority의 새 permit acquire를 기다려서는 안 된다. 지속 wait/capacity
-cycle은 우회 근거가 아니라 protocol/runtime bug다. Retained record 수명은
+cycle은 우회 근거가 아니라 protocol/runtime bug다. Ordinary record storage 수명은
 [Payload 소유권](50-internal-message-ownership.ko.md)이 소유한다.
+
+## Permit 변경과 pressure 평가
+
+Reserved permit 획득·queued 전환·release는 permits in use와 pressure 상태를 같은 queue owner 경계에서
+갱신한다. Reserved에서 queued로 이동할 때 합계가 같으면 전이를 다시 만들지 않는다. `running`은
+pause permit count 이상, `paused`는 resume permit count 이하에서만 바뀐다. Shutdown은 마지막 상태 적용을
+기다리느라 무기한 지연되지 않으며 관측 counter를 정리해도 현재 상태와 current pause duration은 유지한다.
 
 ---
 

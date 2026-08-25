@@ -1068,6 +1068,16 @@ static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::inbound_dispatch_options_t &> ()
                              .set_max_queued_application_jobs (std::optional<std::uint32_t>{1})),
                  zlink::framework::inbound_dispatch_options_t &>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::inbound_dispatch_options_t &> ()
+                             .set_application_job_queue_pause_threshold_percent (
+                               std::uint32_t{80})),
+                 zlink::framework::inbound_dispatch_options_t &>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::inbound_dispatch_options_t &> ()
+                             .set_application_job_queue_resume_threshold_percent (
+                               std::uint32_t{60})),
+                 zlink::framework::inbound_dispatch_options_t &>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::core_hwm_options_t &> ()
                                           .set_core_hwm_memory_limit_bytes (std::uint64_t{1})),
                               zlink::framework::core_hwm_options_t &>);
@@ -1085,6 +1095,22 @@ static_assert (std::is_same_v<decltype (std::declval<zlink::framework::framework
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::framework_runtime_status_t> ().capacity),
                  zlink::framework::host_capacity_status_t>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::application_job_queue_status_t> ()
+                             .pause_permit_count),
+                 std::uint32_t>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::application_job_queue_status_t> ()
+                             .resume_permit_count),
+                 std::uint32_t>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::application_job_queue_status_t> ()
+                             .pressure_state),
+                 zlink::framework::application_job_queue_pressure_state_t>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::application_job_queue_status_t> ()
+                             .current_pause_duration),
+                 std::chrono::nanoseconds>);
 static_assert (
   std::is_same_v<
     decltype (std::declval<zlink::framework::framework_runtime_t &> ().observe (

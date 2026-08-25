@@ -139,6 +139,7 @@ class monitoring_runtime_t
       std::optional<std::vector<location_service_summary_t>> summary) const;
     void publish_stream (stream_event_payload_t event) const;
     void publish_actor (actor_event_payload_t event) const;
+    void publish_application_job_queue_failure () const;
     void publish_timer_failure (std::string source_name,
                                 spot_id_t spot_id,
                                 timer_failure_event_t failure) const;

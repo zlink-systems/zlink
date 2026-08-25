@@ -18,6 +18,7 @@ import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
 import systems.zlink.framework.monitoring.ZLinkHostCapacityStatus;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkApplicationJobQueuePressureMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 final class ZLinkApplicationJobQueueRuntimeMonitoringTest {
@@ -27,12 +28,18 @@ final class ZLinkApplicationJobQueueRuntimeMonitoringTest {
             ZLinkApplicationJobQueueStatus.class,
             "configuredProfile",
             "configuredManualMax",
+            "configuredPauseThresholdPercent",
+            "configuredResumeThresholdPercent",
             "effectiveProcessorCount",
             "effectiveMaxQueuedApplicationJobs",
+            "pausePermitCount",
+            "resumePermitCount",
             "reservedSupplyPermits",
             "queuedApplicationJobs",
             "permitsInUse",
             "peakPermitsInUse",
+            "pressureState",
+            "currentPauseDuration",
             "capacityWaiters",
             "capacityWaitCount",
             "capacityWaitDuration");
@@ -85,6 +92,12 @@ final class ZLinkApplicationJobQueueRuntimeMonitoringTest {
                 .configuredManualMax().orElseThrow());
             assertEquals(1, before.applicationJobQueue()
                 .effectiveMaxQueuedApplicationJobs());
+            assertEquals(80, before.applicationJobQueue()
+                .configuredPauseThresholdPercent());
+            assertEquals(60, before.applicationJobQueue()
+                .configuredResumeThresholdPercent());
+            assertEquals(1, before.applicationJobQueue().pausePermitCount());
+            assertEquals(0, before.applicationJobQueue().resumePermitCount());
             assertEquals(1, before.applicationJobQueue().reservedSupplyPermits());
             assertEquals(1, before.applicationJobQueue().capacityWaiters());
             assertEquals(1, before.applicationJobQueue().capacityWaitCount());
@@ -115,12 +128,20 @@ final class ZLinkApplicationJobQueueRuntimeMonitoringTest {
         throws Exception {
         AtomicReference<Supplier<ZLinkHostCapacityStatus>> source =
             new AtomicReference<>();
+        AtomicReference<Supplier<ZLinkApplicationJobQueuePressureMetrics>>
+            pressureSource = new AtomicReference<>();
         AutoCloseable metrics = ZLinkRuntimeMetrics.install(
             new ZLinkRuntimeMetrics.Sink() {
                 @Override
                 public void registerHostCapacity(
                     Supplier<ZLinkHostCapacityStatus> value) {
                     source.set(value);
+                }
+
+                @Override
+                public void registerApplicationJobQueuePressure(
+                    Supplier<ZLinkApplicationJobQueuePressureMetrics> value) {
+                    pressureSource.set(value);
                 }
             });
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
@@ -133,10 +154,14 @@ final class ZLinkApplicationJobQueueRuntimeMonitoringTest {
             assertEquals(
                 runtime.status().capacity(),
                 source.get().get());
+            assertEquals(
+                options.registration().applicationJobQueue().pressureMetrics(),
+                pressureSource.get().get());
         } finally {
             if (runtime != null) {
                 runtime.close();
                 assertEquals(null, source.get().get());
+                assertEquals(null, pressureSource.get().get());
             }
             metrics.close();
         }

@@ -161,6 +161,10 @@ internal static class ZLinkRuntimeMetrics
     private static readonly ConcurrentDictionary<
         object,
         Func<ZLinkHostCapacityStatus?>> HostCapacityProviders = new();
+    private static readonly ConcurrentDictionary<
+        object,
+        Func<ZLinkApplicationJobQueuePressureMetrics>>
+        ApplicationJobQueuePressureProviders = new();
     private static readonly ObservableGauge<long> HostState =
         Meter.CreateObservableGauge("zlink.host.state", ObserveHostStates, "{runtime}");
     private static readonly ObservableGauge<long> HostCoreHwmEffectiveBudget =
@@ -220,6 +224,30 @@ internal static class ZLinkRuntimeMetrics
                 "zlink.host.application_job_queue.capacity_wait_duration",
                 ObserveHostApplicationJobQueueWaitDuration,
                 "s");
+    private static readonly ObservableGauge<long>
+        HostApplicationJobQueuePressureState =
+            Meter.CreateObservableGauge(
+                "zlink.host.application_job_queue.pressure_state",
+                ObserveHostApplicationJobQueuePressureState,
+                "{state}");
+    private static readonly ObservableCounter<long>
+        HostApplicationJobQueuePressureTransitions =
+            Meter.CreateObservableCounter(
+                "zlink.host.application_job_queue.pressure_transitions",
+                ObserveHostApplicationJobQueuePressureTransitions,
+                "{transition}");
+    private static readonly ObservableGauge<double>
+        HostApplicationJobQueuePauseDuration =
+            Meter.CreateObservableGauge(
+                "zlink.host.application_job_queue.pause_duration",
+                ObserveHostApplicationJobQueuePauseDuration,
+                "s");
+    private static readonly ObservableCounter<long>
+        HostApplicationJobQueueFlowStateConfigFailures =
+            Meter.CreateObservableCounter(
+                "zlink.host.application_job_queue.flow_state_config_failures",
+                ObserveHostApplicationJobQueueFlowStateConfigFailures,
+                "{failure}");
     private static readonly Histogram<double> HostRelocationDuration =
         Meter.CreateHistogram<double>("zlink.host.relocation.duration", "s");
     private static readonly Counter<long> HostRelocationBlocked =
@@ -424,6 +452,18 @@ internal static class ZLinkRuntimeMetrics
         HostCapacityProviders[owner] = snapshot;
         return new ProviderRegistration(
             () => HostCapacityProviders.TryRemove(owner, out _));
+    }
+
+    internal static IDisposable RegisterApplicationJobQueuePressure(
+        Func<ZLinkApplicationJobQueuePressureMetrics> snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var owner = new object();
+        ApplicationJobQueuePressureProviders[owner] = snapshot;
+        return new ProviderRegistration(
+            () => ApplicationJobQueuePressureProviders.TryRemove(
+                owner,
+                out _));
     }
 
     public static void RecordLocationStoreError(string operation) =>
@@ -725,6 +765,73 @@ internal static class ZLinkRuntimeMetrics
             yield return new Measurement<double>(Math.Max(
                 0d,
                 capacity.ApplicationJobQueue.CapacityWaitDuration.TotalSeconds));
+    }
+
+    private static IEnumerable<Measurement<long>>
+        ObserveHostApplicationJobQueuePressureState()
+    {
+        foreach (var pressure in ApplicationJobQueuePressureSnapshots())
+            yield return new Measurement<long>(
+                1,
+                new KeyValuePair<string, object?>(
+                    "state",
+                    pressure.State == ZLinkApplicationJobQueuePressureState.Paused
+                        ? "paused"
+                        : "running"));
+    }
+
+    private static IEnumerable<Measurement<long>>
+        ObserveHostApplicationJobQueuePressureTransitions()
+    {
+        foreach (var pressure in ApplicationJobQueuePressureSnapshots())
+        {
+            yield return new Measurement<long>(
+                ToMetricValue(pressure.RunningTransitionCount),
+                new KeyValuePair<string, object?>("state", "running"));
+            yield return new Measurement<long>(
+                ToMetricValue(pressure.PausedTransitionCount),
+                new KeyValuePair<string, object?>("state", "paused"));
+        }
+    }
+
+    private static IEnumerable<Measurement<double>>
+        ObserveHostApplicationJobQueuePauseDuration()
+    {
+        foreach (var pressure in ApplicationJobQueuePressureSnapshots())
+        {
+            yield return new Measurement<double>(
+                Math.Max(0d, pressure.CurrentPauseDuration.TotalSeconds),
+                new KeyValuePair<string, object?>("state", "current"));
+            yield return new Measurement<double>(
+                Math.Max(0d, pressure.CumulativePauseDuration.TotalSeconds),
+                new KeyValuePair<string, object?>("state", "cumulative"));
+        }
+    }
+
+    private static IEnumerable<Measurement<long>>
+        ObserveHostApplicationJobQueueFlowStateConfigFailures()
+    {
+        foreach (var pressure in ApplicationJobQueuePressureSnapshots())
+            yield return new Measurement<long>(
+                ToMetricValue(pressure.FlowStateConfigFailures));
+    }
+
+    private static IEnumerable<ZLinkApplicationJobQueuePressureMetrics>
+        ApplicationJobQueuePressureSnapshots()
+    {
+        foreach (var provider in ApplicationJobQueuePressureProviders.Values)
+        {
+            ZLinkApplicationJobQueuePressureMetrics snapshot;
+            try
+            {
+                snapshot = provider();
+            }
+            catch
+            {
+                continue;
+            }
+            yield return snapshot;
+        }
     }
 
     private static IEnumerable<ZLinkHostCapacityStatus> HostCapacitySnapshots()

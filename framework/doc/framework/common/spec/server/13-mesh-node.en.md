@@ -396,7 +396,8 @@ restrict or move an existing owner's current Mesh.
 Application payload is processed serially on the owner's application
 turn. Request completion and service control such as liveness/admission/
 relocation/reply recovery are received on the existing Completion
-connection, and send-ready is delivered via a Core callback. Internal
+connection. Core HWM retry completes through each binding operation's completion;
+the Framework has no send-ready callback or waiter. Internal
 framework work such as location reconciliation and reservation proceeds
 even while an application handler is waiting. Actor/Spot lifecycle
 application callbacks run on the application turn. An application handler

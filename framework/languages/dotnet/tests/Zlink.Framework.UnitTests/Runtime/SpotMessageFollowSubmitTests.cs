@@ -37,7 +37,6 @@ public sealed class SpotMessageFollowSubmitTests
 
         Assert.False(pending.IsCompleted);
         Assert.Equal(1, proxy.InvocationCount);
-        Assert.False(proxy.ReadyHandlerRegistered);
         Assert.Equal(operationId, proxy.OperationId);
         Assert.Equal((ulong)11, proxy.TargetNodeGeneration);
         Assert.Equal((ulong)13, proxy.AuthorityOwnerGeneration);
@@ -160,8 +159,6 @@ public sealed class SpotMessageFollowSubmitTests
 
         internal int InvocationCount { get; private set; }
 
-        internal bool ReadyHandlerRegistered { get; private set; }
-
         internal MeshOperationId OperationId { get; private set; }
 
         internal ulong TargetNodeGeneration { get; private set; }
@@ -183,18 +180,11 @@ public sealed class SpotMessageFollowSubmitTests
             ArgumentNullException.ThrowIfNull(targetMethod);
             return targetMethod.Name switch
             {
-                nameof(IZLinkBackendSpot.OnSendReady) => RegisterSendReady(),
                 nameof(IZLinkBackendSpotMessageFollower.MessageFollowSendToSpotAsync) =>
                     SubmitMessageFollow(args),
                 nameof(IAsyncDisposable.DisposeAsync) => ValueTask.CompletedTask,
                 _ => throw new NotSupportedException(targetMethod.Name)
             };
-        }
-
-        private object? RegisterSendReady()
-        {
-            ReadyHandlerRegistered = true;
-            return null;
         }
 
         private ValueTask SubmitMessageFollow(object?[]? args)

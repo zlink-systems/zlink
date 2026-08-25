@@ -1083,7 +1083,9 @@ void app_t::_apply_zlink_framework ()
         options.handler_coroutine_workers () == 0
           ? std::nullopt
           : std::optional<std::uint32_t> (static_cast<std::uint32_t> (std::min<std::size_t> (
-              options.handler_coroutine_workers (), std::numeric_limits<std::uint32_t>::max ())))));
+              options.handler_coroutine_workers (), std::numeric_limits<std::uint32_t>::max ())))),
+      options.application_job_queue_pause_threshold_percent (),
+      options.application_job_queue_resume_threshold_percent ());
     auto core_context = std::make_shared<zlink::context_t> ();
     auto core_options = core_context->options ();
     core_options.auto_hwm_enabled (true);
@@ -1098,8 +1100,14 @@ void app_t::_apply_zlink_framework ()
     }
     detail::zlink_builder_access_t::bind_shared_core_context (_state->zlink,
                                                               std::move (core_context));
+    const auto monitoring = _state->monitoring;
     _state->application_job_queue =
-      std::make_shared<runtime::application_job_queue_t> (job_queue_configuration);
+      std::make_shared<runtime::application_job_queue_t> (
+        job_queue_configuration,
+        [monitoring] {
+            detail::monitoring_runtime_t (monitoring)
+              .publish_application_job_queue_failure ();
+        });
     _state->host_capacity = std::make_shared<runtime::host_capacity_runtime_t> (
       detail::zlink_builder_access_t::shared_core_context (_state->zlink),
       _state->application_job_queue,
@@ -1283,8 +1291,10 @@ void app_t::_apply_zlink_framework ()
                                                  has_public_relocation_store);
     const auto shared_core_context =
       detail::zlink_builder_access_t::shared_core_context (_state->zlink);
-    for (const auto &registration : mesh_node_registrations)
+    for (const auto &registration : mesh_node_registrations) {
         registration->core_context = shared_core_context;
+        registration->application_jobs = _state->application_job_queue;
+    }
     _state->has_manual_service_topology = [options, mesh_node_registrations,
                                            channel_runtime_manager] () mutable {
         if (!options.client_endpoint_connections ().empty ()

@@ -23,4 +23,12 @@ public interface ZLinkInboundDispatchOptions {
     OptionalLong maxQueuedApplicationJobs();
 
     void setMaxQueuedApplicationJobs(long value);
+
+    int applicationJobQueuePauseThresholdPercent();
+
+    void setApplicationJobQueuePauseThresholdPercent(int value);
+
+    int applicationJobQueueResumeThresholdPercent();
+
+    void setApplicationJobQueueResumeThresholdPercent(int value);
 }

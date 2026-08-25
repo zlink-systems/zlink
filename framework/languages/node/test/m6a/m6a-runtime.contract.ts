@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createContext } from '@zlink-systems/zlink';
-
 import {
   SERVICE_WIRE_MAGIC,
   SERVICE_WIRE_MAJOR,
@@ -248,6 +246,7 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
   const sent: Array<{ readonly target: string; readonly parts: readonly Uint8Array[] }> = [];
   const router = {
     setRoutingId() {},
+    setReceiveFlowState() {},
     bind(endpoint: string) {
       assert.equal(endpoint, 'tcp://127.0.0.2:0');
     },
@@ -299,45 +298,6 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
   }
 });
 
-test('raw binding receive retains Core credit until the Framework record closes', async () => {
-  const context = createContext();
-  const binding = new ZLinkNodeRawBindingPort(context);
-  const host = binding.createHost();
-  const router = host.createRouter();
-  const dealer = host.createDealer();
-  const endpoint = `ipc:///tmp/zlink-node-raw-retained-${process.pid}-${Date.now()}.sock`;
-  router.setRoutingId('raw-retained-router');
-  router.bind(endpoint);
-  dealer.setRoutingId('raw-retained-dealer');
-  dealer.connect(endpoint);
-  try {
-    await pollUntil(async () => {
-      try {
-        await dealer.send([Buffer.from('retained-payload')]);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-    let received;
-    await pollUntil(() => {
-      received = router.receive(true);
-      return received !== undefined;
-    });
-    assert.equal(
-      context.getCoreHwmBudgetSnapshot().outstandingApplicationLeaseCount,
-      1n
-    );
-    received!.close();
-    assert.equal(
-      context.getCoreHwmBudgetSnapshot().outstandingApplicationLeaseCount,
-      0n
-    );
-  } finally {
-    host.close();
-    context.close();
-  }
-});
 
 test('RouteMesh admission rejects malformed UTF-8 instead of replacing bytes', () => {
   const meshName = 'canonical-utf8-mesh';
@@ -1759,11 +1719,11 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     assert.equal(leftJobs.snapshot().permitsInUse, 1n);
 
     //  An ordinary inbound record cannot be received while saturated.
-    assert.equal(await right.sendToNode('m6a-r6-left', {
+    const pendingOrdinarySend = right.sendToNode('m6a-r6-left', {
       packetName: 'OrdinaryNotice',
       contentType: 'application/json',
       payload: Buffer.from('parked')
-    }), true);
+    });
 
     //  The terminal reply completion still progresses.
     const pending = left.requestToNode('m6a-r6-right', {
@@ -1793,6 +1753,7 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
 
     //  Releasing the permit drains the parked ordinary record normally.
     occupied.releaseAfterInternalProcessing();
+    assert.equal(await pendingOrdinarySend, true);
     const parkedResult = await parked;
     assert.ok(parkedResult === 'application' || parkedResult === 'noData');
     if (parkedResult !== 'application') {

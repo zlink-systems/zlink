@@ -38,8 +38,23 @@ function projectApplicationJobQueue(
 ): ZLinkApplicationJobQueueStatus {
   const snapshot = queue.snapshot();
   return Object.freeze({
-    ...snapshot,
-    configuredProfile: snapshot.configuredProfile as ZLinkApplicationJobQueueProfile
+    configuredProfile: snapshot.configuredProfile as ZLinkApplicationJobQueueProfile,
+    configuredManualMax: snapshot.configuredManualMax,
+    configuredPauseThresholdPercent: snapshot.configuredPauseThresholdPercent,
+    configuredResumeThresholdPercent: snapshot.configuredResumeThresholdPercent,
+    effectiveProcessorCount: snapshot.effectiveProcessorCount,
+    effectiveMaxQueuedApplicationJobs: snapshot.effectiveMaxQueuedApplicationJobs,
+    pausePermitCount: snapshot.pausePermitCount,
+    resumePermitCount: snapshot.resumePermitCount,
+    reservedSupplyPermits: snapshot.reservedSupplyPermits,
+    queuedApplicationJobs: snapshot.queuedApplicationJobs,
+    permitsInUse: snapshot.permitsInUse,
+    peakPermitsInUse: snapshot.peakPermitsInUse,
+    pressureState: snapshot.pressureState,
+    currentPauseDurationSeconds: snapshot.currentPauseDurationSeconds,
+    capacityWaiters: snapshot.capacityWaiters,
+    capacityWaitCount: snapshot.capacityWaitCount,
+    capacityWaitDurationSeconds: snapshot.capacityWaitDurationSeconds
   });
 }
 

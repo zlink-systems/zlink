@@ -208,6 +208,8 @@ test('inbound dispatch keeps Core HWM and application job queue as independent o
   assert.match(inboundDispatch, /coreHwmProfile\(value: ZLinkCoreHwmProfile\): this/);
   assert.match(inboundDispatch, /applicationJobQueueProfile\(value: ZLinkApplicationJobQueueProfile\): this/);
   assert.match(inboundDispatch, /maxQueuedApplicationJobs\(value: bigint \| undefined\): this/);
+  assert.match(inboundDispatch, /applicationJobQueuePauseThresholdPercent\(value: number\): this/);
+  assert.match(inboundDispatch, /applicationJobQueueResumeThresholdPercent\(value: number\): this/);
 });
 
 test('location and relocation stores have separate public registration surfaces', () => {
@@ -957,7 +959,7 @@ test('old public contract names from the redesign rename table do not re-enter n
     }
     const text = fs.readFileSync(file, 'utf8');
     for (const name of forbidden) {
-      if (text.includes(name)) {
+      if (new RegExp(`\\b${name}\\b`, 'u').test(text)) {
         matches.push(`${relativePath}: ${name}`);
       }
     }

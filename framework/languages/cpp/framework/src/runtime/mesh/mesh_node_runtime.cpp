@@ -774,7 +774,7 @@ void mesh_node_runtime_t::start ()
         runtime::dispatch_limits::application_mailbox_bytes,
         runtime::dispatch_limits::control_mailbox_messages,
         runtime::dispatch_limits::control_mailbox_bytes, _state->advertise_host,
-        _state->auto_hwm_profile},
+        _state->auto_hwm_profile, _state->application_jobs},
       _state->spot_state->snapshot.entry_spot_name.value_or ("entry"),
       std::move (object_stable_types), _route_cache_max_age, _owner_lease_fencing_margin,
       _state->core_context, _session_relocation_seal_timeout});

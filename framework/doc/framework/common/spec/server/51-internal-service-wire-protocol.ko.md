@@ -167,8 +167,9 @@ Part count는 1 이상이어야 한다. Decoder는 결과 list를 만들기 전�
 Framework는 part의 내용을 업무 의미로 해석하지 않고 원래 bytes를 각 Message로 복원한다.
 
 이 profile의 count·length, outer envelope, content-type frame과 Framework metadata를 Framework의 별도
-Application byte HWM으로 다시 계산하지 않는다. Core receive에서 retain한 complete message의 credit lease가
-payload 소유권이 끝날 때까지 byte backpressure를 유지한다.
+Application byte HWM으로 다시 계산하지 않는다. Core의 byte charge는 complete message가 binding/Framework로
+dequeue되는 시점에 끝나며, decode된 payload는 Framework의 일반 소유권 규칙을 따른다. Framework는 receive/claim
+전에 application job queue permit을 확보하여 handler admission을 job 개수로 제한한다.
 
 ## 3. Command space
 
@@ -233,7 +234,7 @@ Command별 body, metadata·payload 허용 여부와 direction은 schema의 close
 `messageFollow`는 응답을 기다리지 않는 infrastructure record다. flags와 application payload를 허용하지 않으며,
 service record 하나에 version `1`과 길이로 닫힌 body를 담는다. body에는 source route, target route, hop count,
 relay 시점의 queue count·byte, 원래 operation ID와 원래 reply route ID가 들어간다. 두 queue 값은
-포화 방식으로 기록하는 `u32` 진단 snapshot이다. `UINT32_MAX`는 실제 건수 또는 보관 byte가 이 값
+포화 방식으로 기록하는 `u32` 진단 snapshot이다. `UINT32_MAX`는 실제 건수 또는 queue byte가 이 값
 이상이라는 뜻이며, 이 snapshot을 payload admission 판단에 사용하지 않는다.
 
 #### Route 검증
@@ -715,6 +716,12 @@ lease가 유효한 동안 ACK를 확인하지 못하면 Retire는 relocation roo
 - Cleanup은 Location authority에서 reference를 release한 뒤 Relocation Store delete를 수행한다.
 - Published reference의 permanent missing, checksum mismatch 또는 inventory digest mismatch는 non-retriable `RelocationDataLost`이며 commit된 owner·membership을 source로 rollback하지 않는다.
 
+### `SendReady` record와 binding completion
+
+Schema의 Framework service-wire `SendReady` record kind `12`는 service control에 사용한다. Core 0.13의
+operation별 `send_completion`과 binding awaitable은 HWM 재시도 완료를 전달하는 별도 계약이다. Binding에서
+send-ready callback이 폐기되어도 service-wire record와 schema 값은 유지한다.
+
 ## 12. 구현 검증
 
 - 생성 결과와 checked-in codec table이 schema와 일치한다.
@@ -736,7 +743,7 @@ lease가 유효한 동안 ACK를 확인하지 못하면 Retire는 relocation roo
 
 ## Wire record와 shared capacity
 
-Wire command 자체는 우회 권한이 아니며 ordinary control·malformed record도 shared permit을 쓴다. 분류 전 permit은 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md), retained record 수명은 [Payload 소유권](50-internal-message-ownership.ko.md)이 소유한다.
+Wire command 자체는 우회 권한이 아니며 ordinary control·malformed record도 shared permit을 쓴다. 분류 전 permit은 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md), ordinary record storage 수명은 [Payload 소유권](50-internal-message-ownership.ko.md)이 소유한다.
 
 ---
 

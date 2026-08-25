@@ -3,6 +3,7 @@
 
 #include "runtime/backend/raw_route_port.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/mesh/service_liveness_registry.hpp"
 #include "runtime/mesh/service_mailbox.hpp"
@@ -62,6 +63,7 @@ struct raw_mesh_node_options_t
     std::optional<std::string> advertise_host;
     zlink::auto_hwm_profile auto_hwm_profile =
       zlink::auto_hwm_profile::balanced;
+    std::shared_ptr<application_job_queue_t> application_jobs;
 };
 
 struct raw_mesh_byte_vector_less_t
@@ -510,6 +512,8 @@ class raw_mesh_node_owner_t
     std::mutex _socket_mutex;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
+    application_job_queue_t::receive_flow_registration_t
+      _receive_flow_registration;
     std::unique_ptr<zlink::poller_t> _monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_route_port_t> _port;

@@ -24,7 +24,10 @@ public sealed class BackendMonitorWrapperTests
             7,
             RoutingId.From("peer-a"),
             "tcp://127.0.0.1:5001",
-            "tcp://127.0.0.1:5002");
+            "tcp://127.0.0.1:5002",
+            0,
+            0,
+            MonitorEventFlags.None);
         var monitor = new RecordingSocketMonitor(nativeEvent);
         var wrapper = new ZLinkBackendSocketMonitorWrapper(monitor);
 

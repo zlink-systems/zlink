@@ -1483,8 +1483,11 @@ int main ()
     provider.get_required<zlink::framework::logger_factory_t> ()
       .create ("app-default-logger")
       .info ("resolved");
-    if (app.logging ().captured_records ().empty ()
-        || app.logging ().captured_records ().back ().category != "app-default-logger") {
+    const auto captured_records = app.logging ().captured_records ();
+    if (std::none_of (
+          captured_records.begin (), captured_records.end (), [] (const auto &record) {
+              return record.category == "app-default-logger";
+          })) {
         return 42;
     }
 

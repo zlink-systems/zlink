@@ -8,24 +8,37 @@
 먼저 읽는다. 공통 문서는 전체 책임과 message 흐름을 설명하고, 이 문서는 Framework 후속
 구현과 언어 parity 절차를 소유한다.
 
+> **0.13.2 입력 계약** — Core queue가 complete message를 dequeue해 binding에 넘기면 Core byte
+> HWM charge는 끝난다. Framework는 retained-credit lease를 사용하지 않는다. Core와 binding은
+> 수용한 send의 HWM 대기·내부 재시도·operation별 `send_completion`을 소유하며 공개
+> `send_ready` callback·event는 없다. Framework service-wire `SendReady` kind `12`는 별도 service
+> control record라 유지한다.
+
 ## 1. 시작 조건과 범위
 
-이 작업은 [Core byte HWM과 흐름 제어 작업](./core-byte-hwm-flow-control-plan.ko.md)의 완료
-조건을 모두 통과한 뒤에만 시작한다. Core와 Framework를 같은 변경 묶음으로 구현하거나
-검증하지 않는다.
+이 작업은 [Core byte HWM과 흐름 제어 작업](./core-byte-hwm-flow-control-plan.ko.md)의 기능,
+binding parity와 승인된 spec 반영이 끝난 뒤에 시작한다. Core 계획에서 별도 성능 단계로 이관한
+과거 `0.10.1` 회귀 비교 항목은 `DEFERRED` 상태를 그대로 인계하며 완료했다고 간주하지 않는다.
+그 항목은 이 문서 §9.4의 Framework RUNNING·PAUSE/RESUME·liveness 3개 짧은 성능 case를
+생략하는 근거가 아니다. Core와 Framework를 같은 변경 묶음으로 구현하거나 검증하지 않는다.
 
 시작할 때 다음 Core 결과를 입력으로 받는다.
 
 - Paired DEALER/ROUTER에 한정된 receive-flow C API와 binding signature
 - `RUNNING`·`PAUSED`의 local acceptance, reconnect와 close 경쟁 계약
-- Remote PAUSE가 기존 byte HWM과 독립적으로 send-ready에 반영된 결과
+- Remote PAUSE와 byte HWM 재시도를 Core가 소유하고 binding operation completion으로 완료한 결과
 - Flow transition event와 metric
-- Flow state가 계속 `RUNNING`일 때 `0.10.1` 수준으로 회복된 Core 성능 결과
+- Flow state가 계속 `RUNNING`일 때의 Core 성능 상태와, 미완료 비교가 있으면 명시적인
+  `DEFERRED` 인계
 
 Framework는 host-shared application job capacity를 기준으로 pressure를 계산하고, 지원되는
 paired socket에 Core receive-flow state를 설정한다. 첫 범위는 RouteMesh와 ClientServer처럼
 paired DEALER/ROUTER를 사용하는 경로다. Classic fanout, PUB/SUB와 STREAM에는 Core remote
 PAUSE를 적용하지 않고 기존 bounded queue와 transport backpressure를 유지한다.
+
+Core HWM profile과 Framework Application Job Queue profile은 별도 public 설정이며 둘의 기본값은
+각각 `Balanced`다. 같은 label을 사용해도 값·단위·계산·status를 공유하지 않는다. Framework가
+Core에 주는 runtime feedback은 지원 socket의 `RUNNING`·`PAUSED` 절대 상태 하나뿐이다.
 
 Framework heartbeat, topology, relocation과 기타 Framework control message는 data line에
 남긴다. Core completion lane을 범용 Framework control channel로 사용하지 않는다.
@@ -39,9 +52,11 @@ Framework heartbeat, topology, relocation과 기타 Framework control message는
 1. `git branch --show-current`와 `git status --short`를 확인하고 dirty worktree의 기존 변경을
    보존한다.
 2. [Core 계획](./core-byte-hwm-flow-control-plan.ko.md)의 완료 보고에서 C API signature,
-   지원 socket, lifecycle test와 paired perf report가 모두 존재하는지 확인한다.
-3. `scripts/local-package/README.ko.md`에 따라 local Core와 binding package를 만든다. Framework가
-   release package나 stale native runtime을 사용하면 작업을 시작하지 않는다.
+   지원 socket, lifecycle test, binding parity와 승인된 spec을 확인한다. 별도 이관한 paired perf
+   항목은 `DEFERRED` 근거와 현재 측정 상태를 확인하고 Framework 결과와 섞지 않는다.
+3. `scripts/local-package/README.ko.md`에 따라 검증된 `0.13.2` Core release와 local binding
+   package를 준비한다. Framework가 stale package나 서로 다른 native runtime을 사용하면 작업을
+   시작하지 않는다.
 4. 공통 spec과 모든 언어 exact interface 변경 범위를 사용자에게 제시하고 protected path
    승인을 받은 뒤 문서를 수정한다.
 5. 공통 계약을 먼저 고정한 다음 한 언어의 focused 구현과 test를 완료하고 나머지 언어로
@@ -59,7 +74,7 @@ Core 완료 보고에 하나라도 빠졌으면 Framework helper나 raw frame으
 | Framework 규칙 | `framework/AGENTS.md` | 공통 계약, 언어 parity와 package 사용 |
 | Framework 문서 규칙 | `framework/doc/AGENTS.md`, `doc/AGENTS.md` | Spec·guide·internal 문서 위치와 승인 |
 | 문서 작성 원칙 | `doc/principal/documentation/documentation-principles.ko.md`, `spec-writing-guide.ko.md` | 현재 계약, exact interface와 test |
-| Local Core package | `scripts/local-package/README.ko.md` | Local Core·binding package 생성과 provenance |
+| Core·binding package | `scripts/local-package/README.ko.md` | Core release 검증, local binding package 생성과 provenance |
 | Public governance | `framework/doc/framework/common/spec/server/00-public-contract-governance.ko.md` | 공통 계약과 언어별 표현 |
 | 용어 | `01-glossary.ko.md` | Pressure, generation과 token 비교 규칙 |
 | Async 결과 | `05-async-execution-policy.ko.md`, `32-framework-error-model.ko.md` | Admission, timeout, cancellation과 오류 owner |
@@ -92,18 +107,20 @@ Core 완료 보고에 하나라도 빠졌으면 Framework helper나 raw frame으
 정식 build로 generated output을 갱신한다. 한 언어에서 control frame을 직접 encode하거나
 Core raw handle을 새로 노출하지 않는다.
 
-### 1.4 Local Core와 binding 준비
+### 1.4 Core release와 local binding 준비
 
-Core 완료 revision에서 repository root 기준으로 다음을 실행한다.
+배포된 Core `0.13.2` release와 같은 repository version에서 다음을 실행한다.
 
 ```bash
 scripts/local-package/build-wsl.sh --sync-versions
 scripts/local-package/build-wsl.sh --verify-versions
-scripts/local-package/build-wsl.sh --core-source local cpp dotnet java node
+scripts/local-package/build-wsl.sh cpp dotnet java node
 ```
 
-생성된 package와 native runtime의 version·provenance가 현재 Core revision을 가리키는지
-확인한다. Framework 언어별 중앙 version pin은 다음 위치가 소유한다.
+기본 release source mode로 checksum과 clean provenance를 검증한다. 아직 release되지 않은 Core
+변경을 함께 검증할 때만 `--core-source local`을 사용하며, 최종 Framework gate는 배포된
+`core/v0.13.2`의 revision·runtime hash를 가리키는 package로 다시 실행한다. Framework 언어별
+중앙 version pin은 다음 위치가 소유한다.
 
 - C++: `ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION`을 선언한 CMake 설정
 - .NET: `framework/languages/dotnet/Directory.Packages.props`
@@ -138,7 +155,7 @@ monitor event로 받는다 — `ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED`·`_
 | 주체 | 소유하는 결정 | 소유하지 않는 결정 |
 |---|---|---|
 | Application 개발자 | 성능 시험으로 job hard 상한과 필요하면 threshold override를 정한다. | Core flow frame, pair generation과 epoch를 만들거나 해석하지 않는다. |
-| Framework | Pressure count, 80%/60% 상태 전이, Core API 호출, topology별 liveness와 route 상태를 소유한다. | Core queued byte와 send-ready 원인을 직접 수정하지 않는다. |
+| Framework | Pressure count, 80%/60% 상태 전이, Core 절대 상태 적용과 기존 topology liveness·route-ready 판정을 소유한다. | Core queued byte와 HWM 재시도·operation completion을 수정하지 않으며, PAUSE를 이유로 topology liveness나 route-ready 판정을 바꾸지 않는다. |
 | Core | Local flow state를 paired connection에 동기화하고 remote PAUSE를 send admission에 적용한다. | Job 처리 능력이나 Framework queue 점유율을 판단하지 않는다. |
 
 ## 3. Pressure count와 threshold
@@ -214,7 +231,7 @@ Remote PAUSE를 새 public terminal result로 노출하지 않는다. Core send�
 
 | Operation 경계 | 유지할 결과 |
 |---|---|
-| One-way remote target, local transport queue가 아직 message를 수락하지 않음 | 기존 send timeout까지 send-ready를 기다린다. Deadline이 먼저 끝나면 `DeadlineExceeded`다. |
+| 첫 exact-target binding operation을 시작함 | Core가 HWM 재시도를 소유하고 operation별 completion을 완료한다. Framework는 별도 readiness waiter나 retry adapter를 만들지 않는다. Deadline·detach는 해당 operation의 terminal이며 다른 route로 replay하지 않는다. |
 | One-way가 source-local admission을 이미 완료함 | PAUSE 때문에 취소하거나 자동 재전송하지 않고 기존 정상 완료를 유지한다. |
 | Request가 source가 소유한 local bounded resource를 얻지 못함 | 기존 `CapacityExceeded` 규칙을 유지한다. |
 | Request가 remote route·target queue를 사용할 수 없음 | 기존 `Unavailable` 규칙을 유지한다. Remote queue 상태를 local `CapacityExceeded`로 바꾸지 않는다. |
@@ -233,7 +250,7 @@ Deadline, cancellation, route timeout이 경쟁하면 기존 operation state mac
 
 | 경로 | 실어 나르는 것 | remote PAUSE의 영향 |
 |---|---|---|
-| Data line | application payload와 Framework control(heartbeat·topology·relocation)을 하나의 FIFO로 | application send-ready를 막는 대상이다 |
+| Data line | application payload와 Framework control(heartbeat·topology·relocation)을 하나의 FIFO로 | Core의 operation completion을 지연시킬 수 있다 |
 | Transport liveness | 연결 progress 증거인 `livenessAck` (§6.2 · `29`·`49`가 소유) | **영향받지 않는다.** PAUSE와 독립된 경로라 PAUSE 중에도 계속 오간다 |
 | Core completion lane | Core가 내부 처리하는 flow state | Framework control 채널이 아니다 |
 
@@ -266,9 +283,9 @@ PAUSE 상태도 기존 heartbeat timeout에서 제외하지 않는다. RouteMesh
 ACK가 deadline 안에 도착하지 않으면 connection을 not-ready로 바꾸고 닫는다. TCP나 Core
 completion lane이 유지됐다는 사실만으로 route를 available 상태에 두지 않는다.
 
-Reconnect 뒤에는 기존 handshake와 matching liveness 증거를 다시 만족하고 host pressure
-state가 `RUNNING`이어야 route를 available 후보로 게시한다. 새 socket에는 게시 전에 현재
-`RUNNING`을 적용한다. Timeout으로 끝난 request와 이미 수락한 one-way를 자동 재전송하지
+Reconnect 뒤에는 기존 handshake와 matching liveness 증거를 다시 만족하면 route를 available
+후보로 게시할 수 있다. 새 socket에는 게시 전에 현재 host pressure 절대 상태를 적용한다.
+Pressure가 `PAUSED`라는 사실은 route ready나 liveness를 직접 바꾸지 않는다. Timeout으로 끝난 request와 이미 수락한 one-way를 자동 재전송하지
 않는다.
 
 별도 public max-pause timeout은 첫 계약에 추가하지 않는다. 기존 topology별 liveness deadline이
@@ -368,8 +385,8 @@ Reference 언어는 임의의 새 계약을 만들기 위한 기준이 아니다
 - RouteMesh·ClientServer 일반 application message는 matching ACK deadline을 연장하지 않는다.
 - Matching ACK가 없으면 기존 deadline에서 not-ready와 route unavailable로 전환한다.
 - Classic fanout은 기존 record·beacon progress 규칙을 유지한다.
-- Reconnect가 handshake, liveness와 local pressure 조건을 모두 만족하기 전에 route를
-  available로 게시하지 않는다.
+- Reconnect가 handshake와 liveness 조건을 만족하고 현재 local pressure 절대 상태를 socket에
+  적용하기 전에 route를 available로 게시하지 않는다. Pressure 값 자체는 ready 조건이 아니다.
 
 ### 9.4 성능
 
@@ -440,7 +457,7 @@ cd ../cpp
 | `06-framework-api.*.md` | Threshold 설정, 기본값, 범위, 반올림과 startup validation을 명시한다. |
 | `24-runtime-monitoring.*.md`, `25-runtime-metrics.*.md` | Permits in use, pressure state, transition·duration과 liveness 결과를 명시한다. |
 | `29-transport-liveness.*.md` | Topology별 progress 증거, PAUSE 중 timeout과 recovery 조건을 명시한다. |
-| `33-core-hwm-application-job-flow.*.md` | 기존 byte HWM과 job permit 경계, PAUSE 전파와 send 결과를 명시한다. Retained receive는 변경하지 않는다. |
+| `33-core-hwm-application-job-flow.*.md` | Core charge가 dequeue에서 끝나는 경계, job permit, PAUSE 전파와 Core-owned send completion을 명시한다. Retained-credit lease를 Framework 경계에 복구하지 않는다. |
 | `42-internal-progress-isolation.*.md` | 80%/60% 상태 전이, Core API 호출 owner와 data-line FIFO를 명시한다. |
 | `46-internal-dispatch-loop.*.md` | Permit 변경, 상태 평가, 중복 방지와 shutdown 순서를 명시한다. |
 | `51-internal-service-wire-protocol.*.md` | Framework control은 data line에 남고 Core flow frame은 Framework wire message가 아님을 명시한다. |
@@ -516,46 +533,46 @@ Core source changed during Framework phase: no
 
 | Done | 확인 항목 | Evidence |
 |---|---|---|
-| [ ] | 공통 설계 의도와 Core·Framework 계획을 읽었다. | |
-| [ ] | Core 계획의 모든 final checklist가 완료됐다. | |
-| [ ] | Core C API·binding signature, 지원 socket과 lifecycle 결과를 받았다. | |
-| [ ] | Core paired perf report와 완료 revision을 확인했다. | |
-| [ ] | Local Core·C++·.NET·Java·Node binding package provenance를 확인했다. | |
-| [ ] | Framework 보호 문서 변경 범위를 승인받았다. | |
+| [x] | 공통 설계 의도와 Core·Framework 계획을 읽었다. | `00-hwm-backpressure-design-intent.ko.md`, Core·Framework 계획 대조 |
+| [x] | Core 기능·binding·spec final checklist가 완료됐고 별도 paired perf 항목의 `DEFERRED` 이관 상태를 확인했다. | `core/v0.13.2`; Core 계획의 paired perf `DEFERRED` 유지 |
+| [x] | Core C API·binding signature, 지원 socket과 lifecycle 결과를 받았다. | §1.5의 0.13.2 binding API와 paired DEALER/ROUTER 범위 확인 |
+| [x] | Core paired perf 항목의 `DEFERRED` 근거와 완료 revision을 확인했다. | Core revision `9cff16f3a4a24624390bdc6e2d3623b70e364fc3` |
+| [x] | Local Core·C++·.NET·Java·Node binding package provenance를 확인했다. | `build-wsl.sh --verify-versions` 통과; runtime SHA-256 `48f4d928110614ef8edc6c421583828af1e31ee479bea0af50ee804634c90df7` |
+| [x] | Framework 보호 문서 변경 범위를 승인받았다. | 사용자 승인: spec·guide에 HWM 의도와 책임 경계 반영 |
 
 ### 13.2 공통 계약
 
 | Done | 확인 항목 | Evidence |
 |---|---|---|
-| [ ] | Pressure count를 reserved supply permits와 queued application jobs의 합으로 확정했다. | |
-| [ ] | 80% PAUSE, 60% RUNNING과 반올림·validation을 확정했다. | |
-| [ ] | 첫 topology를 paired RouteMesh·ClientServer로 제한했다. | |
-| [ ] | Operation family별 admission, timeout, cancellation과 terminal 표를 확정했다. | |
-| [ ] | RouteMesh·ClientServer, Classic fanout과 STREAM liveness 증거를 구분했다. | |
-| [ ] | 공통 한국어·영어 spec과 5개 언어 exact interface를 함께 갱신했다. | |
+| [x] | Pressure count를 reserved supply permits와 queued application jobs의 합으로 확정했다. | 공통 spec `33`, 언어별 queue test |
+| [x] | 80% PAUSE, 60% RUNNING과 반올림·validation을 확정했다. | 공통 spec `06`·`33`, 5개 언어 configuration/queue test |
+| [x] | 첫 topology를 paired RouteMesh·ClientServer로 제한했다. | 공통 spec `33`, unsupported topology test |
+| [x] | Operation family별 admission, timeout, cancellation과 terminal 표를 확정했다. | 공통 spec `05`·`33`, guide `04`·`12` |
+| [x] | RouteMesh·ClientServer, Classic fanout과 STREAM liveness 증거를 구분했다. | 공통 spec `29`·`33` |
+| [x] | 공통 한국어·영어 spec과 5개 언어 exact interface를 함께 갱신했다. | common spec/guide와 C++·.NET·Java·Kotlin·Node interface mirror |
 
 ### 13.3 구현과 언어 parity
 
 | Done | 확인 항목 | Evidence |
 |---|---|---|
-| [ ] | Reference 언어의 permit state machine과 hysteresis test가 통과했다. | |
-| [ ] | New socket sync, close race, reconnect와 shutdown test가 통과했다. | |
-| [ ] | Framework control과 heartbeat가 data-line FIFO에 남아 있다. | |
-| [ ] | Status, metric과 message-flow tracing의 off-cost test가 통과했다. | |
-| [ ] | C++ focused unit·contract test가 통과했다. | |
-| [ ] | .NET focused unit·contract test가 통과했다. | |
-| [ ] | Java와 Kotlin focused unit·contract test가 통과했다. | |
-| [ ] | Node.js build·typecheck·lint·runtime gate가 통과했다. | |
-| [ ] | Cross-language PAUSE/RESUME과 reconnect smoke가 통과했다. | |
+| [x] | Reference 언어의 permit state machine과 hysteresis test가 통과했다. | C++ 18/18 및 기존 focused 39/39; Java/Node queue test 통과 |
+| [x] | New socket sync, close race, reconnect와 shutdown test가 통과했다. | 언어별 receive-flow lifecycle focused test 통과 |
+| [x] | Framework control과 heartbeat가 data-line FIFO에 남아 있다. | service-wire `SendReady` kind 12 유지; Core completion과 분리된 test/spec |
+| [x] | Status, metric과 message-flow tracing의 off-cost test가 통과했다. | .NET 관련 96/96, Node queue·metrics 24/24, Java monitoring test 통과 |
+| [x] | C++ focused unit·contract test가 통과했다. | HWM/queue 18/18; 전체 focused 39/39 |
+| [ ] | .NET focused unit·contract test가 통과했다. | unit 1874/1874·HWM 필터 96/96 통과; contract 73/77, 기존 source-layout/API snapshot 4건 실패 |
+| [x] | Java와 Kotlin focused unit·contract test가 통과했다. | Java core 1132/1133 후 유일 실패 격리 재실행 통과; Kotlin test 통과 |
+| [ ] | Node.js build·typecheck·lint·runtime gate가 통과했다. | BLOCKED: build/typecheck와 HWM 47/47 통과, 기존 lint 오류 142건 및 diagnostics 계약 10건 실패 |
+| [x] | Cross-language PAUSE/RESUME과 reconnect smoke가 통과했다. | `run_cross_language_smoke.sh all` 통과, 0.13.2 package 사용 |
 
 ### 13.4 최종 Framework gate
 
 | Done | 확인 항목 | Evidence |
 |---|---|---|
-| [ ] | RUNNING, 단일 PAUSE/RESUME과 liveness timeout 성능 case를 짧게 비교했다. | |
-| [ ] | Application send, request, cancellation, shutdown과 multipart 결과가 기존과 같다. | |
-| [ ] | Unsupported PUB/SUB·Classic fanout·STREAM fallback이 유지된다. | |
-| [ ] | 공개 spec, exact interface, guide와 구현이 일치한다. | |
-| [ ] | `git diff --check`, link 검사와 관련 문서 생성 검사가 통과했다. | |
-| [ ] | 완료 보고에 Core provenance, 언어별 test, perf report와 남은 실패를 기록했다. | |
-| [ ] | Framework 단계에서 Core source와 byte-HWM 구조를 변경하지 않았다. | |
+| [ ] | RUNNING, 단일 PAUSE/RESUME과 liveness timeout 성능 case를 짧게 비교했다. | BLOCKED: 기능 test는 있으나 §9.4의 throughput·latency 3-case 측정 결과가 아직 없음 |
+| [x] | Application send, request, cancellation, shutdown과 multipart 결과가 기존과 같다. | 언어별 focused unit 및 cross-language smoke |
+| [x] | Unsupported PUB/SUB·Classic fanout·STREAM fallback이 유지된다. | unsupported topology focused test와 source audit |
+| [x] | 공개 spec, exact interface, guide와 구현이 일치한다. | 5개 언어 exact-interface parity audit |
+| [ ] | `git diff --check`, link 검사와 관련 문서 생성 검사가 통과했다. | `git diff --check` 통과; BLOCKED: 기존 unchanged broken link 8건(전체 70건) |
+| [ ] | 완료 보고에 Core provenance, 언어별 test, perf report와 남은 실패를 기록했다. | 최종 완료 보고 시 갱신 |
+| [x] | Framework 단계에서 Core source와 byte-HWM 구조를 변경하지 않았다. | Framework phase에서 Core source diff 없음 |

@@ -15,6 +15,7 @@ export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
       readonly routingId?: string;
       readonly trustProfile?: string;
       readonly applicationJobQueue: import('../../application-jobs/contracts').ApplicationJobQueuePort;
+      readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
     }
   ): ZLinkBackendMeshNode {
     if (options.trustProfile !== undefined) {
@@ -28,7 +29,8 @@ export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
       options.meshName,
       options.routingId,
       new ZLinkNodeRawBindingPort(bindingContext),
-      options.applicationJobQueue
+      options.applicationJobQueue,
+      options.applicationJobReceiveFlowFailureSink
     );
   }
 }

@@ -16,7 +16,6 @@ import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import type { ZLinkBackendSendFlags } from '../backend/contracts';
 import { awaitWithAbort, throwIfAborted } from '../abort';
 import {
   closeMessages,
@@ -34,7 +33,6 @@ import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contract
 import { ZLinkRouteDisconnectedError } from './route-disconnected-error';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
 
-const ZLINK_SEND_DONT_WAIT = 1 as ZLinkBackendSendFlags;
 const CHANNEL_REQUEST_LOOP_KEEPALIVE_MS = 0x7fff_ffff;
 
 //  Shared default for the dominant no-metadata call; avoids a Map allocation
@@ -290,11 +288,7 @@ export class ZLinkChannelOutboundOperations {
       this.dispatchServices.flowCreationEnabled(),
       metadata
     ) as readonly Message[];
-    const accepted = publisher.publish(topic, parts, ZLINK_SEND_DONT_WAIT);
-    if (!accepted) {
-      closeMessages(parts);
-      return publishResult(ZLinkSubmitStatus.Backpressured);
-    }
+    publisher.publish(topic, parts);
     return publishResult(ZLinkSubmitStatus.Submitted);
   }
 
@@ -337,15 +331,8 @@ export class ZLinkChannelOutboundOperations {
       this.dispatchServices.flowCreationEnabled(),
       metadata
     ) as readonly Message[];
-    try {
-      throwIfAborted(signal);
-      await publisher.publishAsync(topic, parts);
-    } catch (error) {
-      if (isSubmitDeadline(error)) {
-        return publishResult(ZLinkSubmitStatus.TimedOut);
-      }
-      throw error;
-    }
+    throwIfAborted(signal);
+    publisher.publish(topic, parts);
     return publishResult(ZLinkSubmitStatus.Submitted);
   }
 

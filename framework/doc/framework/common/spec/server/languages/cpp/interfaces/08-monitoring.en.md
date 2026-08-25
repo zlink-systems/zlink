@@ -65,6 +65,8 @@ struct core_hwm_status_t {
     std::uint64_t deferred_origin_credit_bytes;
 };
 
+enum class application_job_queue_pressure_state_t { running, paused };
+
 struct application_job_queue_status_t {
     application_job_queue_profile_t configured_profile;
     std::optional<std::uint32_t> configured_manual_max;
@@ -77,6 +79,12 @@ struct application_job_queue_status_t {
     std::uint32_t capacity_waiters;
     std::uint64_t capacity_wait_count;
     std::chrono::nanoseconds capacity_wait_duration;
+    std::uint32_t configured_pause_threshold_percent;
+    std::uint32_t configured_resume_threshold_percent;
+    std::uint32_t pause_permit_count;
+    std::uint32_t resume_permit_count;
+    application_job_queue_pressure_state_t pressure_state;
+    std::chrono::nanoseconds current_pause_duration;
 };
 
 struct host_capacity_status_t {
@@ -111,6 +119,11 @@ public:
         const observed_status_t<framework_runtime_status_t> &)> observer) = 0;
 };
 ```
+
+In `core_hwm_status_t`, `application_accounted_bytes`, `outstanding_application_lease_count`,
+`retired_queue_count`, and `deferred_origin_credit_bytes` are ABI-reserved compatibility fields
+and are always `0` since 0.13.1. The framework projects them unchanged and does not reinterpret
+them as Application Job Queue pressure.
 
 `is_ready` is `true` only when
 `state == framework_runtime_state_t::serving`. `accepting_work`
@@ -282,15 +295,23 @@ struct dispatch_options_t {
     dispatch_options_t &message_flow(message_flow_log_mode_t mode);
     dispatch_options_t &trace_sample_rate(double rate);
     dispatch_options_t &include_message_sizes(bool include);
-    dispatch_options_t &set_core_hwm_memory_limit_bytes(
+};
+
+class inbound_dispatch_options_t {
+public:
+    inbound_dispatch_options_t &set_core_hwm_memory_limit_bytes(
       std::optional<std::uint64_t> value);
-    dispatch_options_t &set_core_hwm_budget_bytes(
+    inbound_dispatch_options_t &set_core_hwm_budget_bytes(
       std::optional<std::uint64_t> value);
-    dispatch_options_t &set_core_hwm_profile(core_hwm_profile_t value);
-    dispatch_options_t &set_application_job_queue_profile(
+    inbound_dispatch_options_t &set_core_hwm_profile(core_hwm_profile_t value);
+    inbound_dispatch_options_t &set_application_job_queue_profile(
       application_job_queue_profile_t value);
-    dispatch_options_t &set_max_queued_application_jobs(
+    inbound_dispatch_options_t &set_max_queued_application_jobs(
       std::optional<std::uint32_t> value);
+    inbound_dispatch_options_t &set_application_job_queue_pause_threshold_percent(
+      std::uint32_t value);
+    inbound_dispatch_options_t &set_application_job_queue_resume_threshold_percent(
+      std::uint32_t value);
 };
 ```
 

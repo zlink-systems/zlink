@@ -137,11 +137,11 @@ ready member 가운데 weight가 0보다 큰 하나를 고르고, ClientServer �
 제외하며, RouteMesh에서는 Logical Multicast remote target에서도 제외한다. RID direct와 이미 제출한
 operation에는 영향을 주지 않는다.
 
-Select-one의 non-blocking submit이 capacity 부족으로 수락되지 않은 경우, 그 첫 선택은 public
-target commitment가 아니다. Framework service runtime은 send-ready 이후 성공한 admission 전까지 같은 [ChannelName](01-glossary.ko.md#channelname)의 현재
-eligible member 가운데 다른 target을 선택할 수 있다. Target은 transport queue가 operation을 수락한 시점에
-확정되며, 그 이후에는 같은 operation을 다른 member에게 replay하지 않는다. Direct call은 이 재선택
-규칙을 사용하지 않는다. Node direct는 RID, Spot·Actor는 global ID, session은 binding token을 유지하며 물리
+Select-one은 첫 binding operation을 시작하기 직전에 같은
+[ChannelName](01-glossary.ko.md#channelname)의 현재 eligible member 하나를 선택한다. Binding operation이
+시작되면 exact target이 확정되고 Core가 HWM 재시도와 completion을 소유한다. Framework는 capacity를
+이유로 target을 다시 선택하거나 operation을 replay하지 않는다. Direct call은 이 선택 규칙을 사용하지
+않는다. Node direct는 RID, Spot·Actor는 global ID, session은 binding token을 유지하며 물리
 peer lifecycle generation을 public target identity로 노출하지 않는다.
 
 같은 ChannelName을 여러 물리 송신 경로에 등록할 수 없으므로 호출자는 MeshName이나 ClientServer 종류를
@@ -262,7 +262,7 @@ payload는 Spot message queue를 경유하지 않는다. Entry Spot Actor와 `Pe
 gate를 사용하고, `SpotWide` User Spot의 member Actor는 User Spot 공통 gate를 사용한다. Spot 소유 상태를
 읽거나 바꿔야 하면 명시적인 Spot send/request를 제출하고 해당 Spot turn에서 처리한다.
 
-Node, Spot과 Actor의 completion과 send-ready는 application handler가 대기 중이어도 진행할 수 있는
+Node·Spot·Actor와 binding operation completion은 application handler가 대기 중이어도 진행할 수 있는
 infrastructure 실행 영역에서 처리한다.
 
 ## 8. STREAM session

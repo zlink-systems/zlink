@@ -70,13 +70,32 @@ coroutine_executor_t::~coroutine_executor_t ()
 
 void coroutine_executor_t::drain ()
 {
+    {
+        std::lock_guard lock (_mutex);
+        if (_drained) {
+            return;
+        }
+        _drained = true;
+    }
+    _pool.join ();
+}
+
+void coroutine_executor_t::post_native_continuation (
+  std::function<void ()> work)
+{
     std::lock_guard lock (_mutex);
     if (_drained) {
-        return;
+        throw std::runtime_error ("handler coroutine executor is drained");
     }
-    _drained = true;
-    _pool.stop ();
-    _pool.join ();
+    boost::asio::post (_pool, [work = std::move (work)] () mutable {
+        try {
+            if (work) {
+                work ();
+            }
+        }
+        catch (...) {
+        }
+    });
 }
 
 coroutine_executor_t &handler_coroutine_executor ()
@@ -141,3 +160,37 @@ void shutdown_handler_coroutine_executor () noexcept
 }
 
 } // namespace zlink::framework::runtime
+
+namespace zlink::framework::detail
+{
+
+task_scheduler_t capture_runtime_native_continuation_scheduler ()
+{
+    {
+        std::lock_guard lock (runtime::executor_mutex ());
+        if (runtime::executor_shutdown_requested ()
+            || runtime::executor_owner_count () == 0) {
+            return {};
+        }
+    }
+    return [] (std::function<void ()> work) {
+        std::lock_guard lock (runtime::executor_mutex ());
+        if (runtime::executor_shutdown_requested ()
+            || runtime::executor_owner_count () == 0) {
+            throw std::runtime_error (
+              "handler coroutine executor is not accepting continuations");
+        }
+        auto &configured = runtime::executor_instance ();
+        if (!configured) {
+            const auto workers = runtime::configured_worker_count () == 0
+                                   ? runtime::default_worker_count ()
+                                   : runtime::configured_worker_count ();
+            configured = std::make_unique<runtime::coroutine_executor_t> (workers);
+            runtime::executor_fast_path ().store (
+              configured.get (), std::memory_order_release);
+        }
+        configured->post_native_continuation (std::move (work));
+    };
+}
+
+} // namespace zlink::framework::detail

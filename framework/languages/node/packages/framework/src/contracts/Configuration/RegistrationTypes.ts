@@ -89,6 +89,8 @@ export interface ZLinkCoreHwmOptions {
 export interface ZLinkApplicationJobQueueOptions {
   readonly profile?: ZLinkApplicationJobQueueProfile;
   readonly maxQueuedApplicationJobs?: bigint;
+  readonly pauseThresholdPercent?: number;
+  readonly resumeThresholdPercent?: number;
 }
 
 export interface ZLinkLocationRegistration {

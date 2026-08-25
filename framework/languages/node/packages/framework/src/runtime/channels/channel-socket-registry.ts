@@ -52,6 +52,7 @@ import {
   inspectFanoutInbound
 } from './fanout-service-wire';
 import type { ZLinkChannelEnvelopeHeader } from './channel-envelope';
+import type { ApplicationJobQueue } from '../host/application-job-queue';
 
 const MAX_LIFECYCLE_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const CLIENT_SERVER_PROBE_INTERVAL_MS = 5_000;
@@ -109,6 +110,8 @@ interface FanoutPublisherConnection {
   deadlineAt?: number;
 }
 
+type ReceiveFlowSocket = ZLinkBackendDealerSocket | ZLinkBackendRouterSocket;
+
 export class ZLinkChannelSocketRegistry {
   private readonly clientDealers = new Map<string, ZLinkBackendDealerSocket>();
   private readonly channelRouters = new Map<string, ZLinkBackendRouterSocket>();
@@ -159,7 +162,8 @@ export class ZLinkChannelSocketRegistry {
     private readonly adapter: ZLinkChannelBackendAdapter,
     private readonly context: ZLinkBackendContext,
     private readonly monitoringAdapter?: ZLinkMonitoringBackendAdapter,
-    private readonly oneWayFailureSink?: (error: unknown) => void
+    private readonly oneWayFailureSink?: (error: unknown) => void,
+    private readonly applicationJobQueue?: ApplicationJobQueue
   ) {}
 
   async dispose(): Promise<void> {
@@ -175,6 +179,12 @@ export class ZLinkChannelSocketRegistry {
       ...this.publishers.values(),
       ...this.routeRouters.values()
     ];
+    for (const socket of new Set<ReceiveFlowSocket>([
+      ...this.clientDealers.values(),
+      ...clientServerConnections.map(value => value.dealer),
+      ...this.channelRouters.values(),
+      ...this.routeRouters.values()
+    ])) this.unregisterReceiveFlowSocket(socket);
     this.clientDealers.clear();
     this.clientServerConnections.clear();
     this.clientServerReadyIdentities.clear();
@@ -224,6 +234,7 @@ export class ZLinkChannelSocketRegistry {
     }
 
     const dealer = this.adapter.createDealerSocket(this.context);
+    this.registerReceiveFlowSocket(dealer);
     dealer.setChannelName(channelName);
     if (channel?.routingId !== undefined && channel.routingId.length > 0) {
       dealer.setRoutingId(deriveRoutingId(channel.routingId, 'dealer'));
@@ -248,6 +259,7 @@ export class ZLinkChannelSocketRegistry {
     }
 
     const router = this.adapter.createRouterSocket(this.context);
+    this.registerReceiveFlowSocket(router);
     router.setChannelName(channelName);
     const identity = this.clientServerIdentities.get(channelName) ?? {
       serverRid: channel.server.routingId
@@ -353,10 +365,12 @@ export class ZLinkChannelSocketRegistry {
       throw new ZLinkConfigurationException(`Channel client '${channelName}' is not registered.`);
     }
     const dealer = this.adapter.createDealerSocket(this.context);
+    this.registerReceiveFlowSocket(dealer);
     dealer.setChannelName(channelName);
     dealer.setRoutingId(`cs-client-${randomUUID()}`);
     applySocketConfig(dealer, client);
     const cleanupDealer = (): void => {
+      this.unregisterReceiveFlowSocket(dealer);
       void Promise.allSettled([dealer.dispose()]);
     };
     let readablePoller: ZLinkBackendReadablePoller;
@@ -494,6 +508,7 @@ export class ZLinkChannelSocketRegistry {
       }
     }
     this.ownedMonitors.delete(current.monitor);
+    this.unregisterReceiveFlowSocket(current.dealer);
     current.readablePoller.dispose();
     const results = await Promise.allSettled([
       current.monitor.dispose(),
@@ -1154,7 +1169,7 @@ export class ZLinkChannelSocketRegistry {
       );
       const payload = RuntimeMessage.from(FANOUT_LIVENESS_PAYLOAD);
       try {
-        publisher.publish(FANOUT_LIVENESS_TOPIC, payload, 0);
+        publisher.publish(FANOUT_LIVENESS_TOPIC, payload);
       } finally {
         payload.close();
       }
@@ -1554,6 +1569,7 @@ export class ZLinkChannelSocketRegistry {
       throw new ZLinkConfigurationException(`Route channel '${routerChannelId}' is not registered.`);
     }
     const router = this.adapter.createRouterSocket(this.context);
+    this.registerReceiveFlowSocket(router);
     router.setChannelName(routerChannelId);
     if (
       (routeChannel.manualConnections?.length ?? 0) > 0 &&
@@ -1597,6 +1613,18 @@ export class ZLinkChannelSocketRegistry {
     const router = this.routeRouter(routerChannelId);
     this.routeMeshPublicWeights.set(routerChannelId, weight);
     router.peerWeight = rawAvailabilityWeight(weight);
+  }
+
+  private registerReceiveFlowSocket(socket: ReceiveFlowSocket): void {
+    this.applicationJobQueue?.registerReceiveFlowTarget(
+      socket,
+      state => socket.setReceiveFlowState(state === 'paused' ? 1 : 0),
+      this.oneWayFailureSink
+    );
+  }
+
+  private unregisterReceiveFlowSocket(socket: ReceiveFlowSocket): void {
+    this.applicationJobQueue?.unregisterReceiveFlowTarget(socket);
   }
 
   routeMemberStatus(routerChannelId: string, targetNodeRid: string): 'unknown' | 'missing' | 'connected' | 'disconnected' {

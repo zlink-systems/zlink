@@ -128,6 +128,7 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
   readonly applicationJobQueue?: ApplicationJobQueue;
+  readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
   readonly meshRecordDispatcher?: (
     meshName: string,
     owner: ReadyRecord,
@@ -283,7 +284,9 @@ export class ZLinkSpotNodeRuntimeManager {
       const node = meshAdapter.createMeshNode(this.options.context, {
         meshName: spotNodeName,
         routingId,
-        applicationJobQueue: this.applicationJobQueue
+        applicationJobQueue: this.applicationJobQueue,
+        applicationJobReceiveFlowFailureSink:
+          this.options.applicationJobReceiveFlowFailureSink
       });
       node.setMailboxRecordDroppedHandler?.((record) =>
         this.options.dispatchErrors?.report({

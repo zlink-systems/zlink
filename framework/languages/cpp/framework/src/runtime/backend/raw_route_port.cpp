@@ -67,8 +67,10 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
         throw std::invalid_argument ("raw route send requires a target and message parts");
     }
     auto messages = materialize_binding_parts (parts);
-    // Routed send is the synchronous binding terminal: admission is decided by
-    // Core inside this call, so there is no separate wait stage to trace.
+    std::optional<zlink::async_result_t<void>> pending;
+    // Core owns HWM waiting and completion. Submit under the socket lock, then
+    // release it before awaiting so ingress/liveness can continue to make
+    // progress while Core parks the operation.
     try {
         if (trace)
             trace ("router_admission_submit", "begin");
@@ -85,8 +87,9 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
             for (std::size_t index = 1; index < messages.size (); ++index) {
                 operation = std::move (operation).message (messages[index]);
             }
-            std::move (operation).submit ();
+            pending.emplace (std::move (operation).async ());
         }
+        co_await std::move (*pending);
         if (trace) {
             trace ("router_admission_submit", "admitted");
             trace ("router_admission_complete", "ok");
@@ -230,7 +233,7 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (
              == 0) {
         return std::nullopt;
     }
-    const int result = _socket->recv_retained (
+    const int result = _socket->recv (
       _received, zlink::recv_flags_t::dontwait);
     if (result == static_cast<int> (zlink::recv_result_t::no_data)) {
         return std::nullopt;

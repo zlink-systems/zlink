@@ -23,7 +23,7 @@ namespace Zlink.Framework.Runtime.Backend.Contracts;
 internal sealed class ZLinkBackendRouteReceived : IDisposable
 {
     private readonly Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? _reply;
-    private readonly IDisposable? _creditOwner;
+    private readonly IDisposable? _payloadOwner;
     private int _disposed;
 
     public ZLinkBackendRouteReceived(
@@ -42,7 +42,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
         ulong deadlineUnixMs = 0,
-        IDisposable? creditOwner = null)
+        IDisposable? payloadOwner = null)
     {
         Parts = parts;
         SourceNodeRid = sourceNodeRid;
@@ -59,7 +59,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         SourceNodeGeneration = sourceNodeGeneration;
         RequestSource = requestSource;
         DeadlineUnixMs = deadlineUnixMs;
-        _creditOwner = creditOwner;
+        _payloadOwner = payloadOwner;
     }
 
     public IReadOnlyList<Message> Parts { get; }
@@ -96,7 +96,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
     public ulong DeadlineUnixMs { get; }
 
     internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission =>
-        (_creditOwner as ZLinkApplicationJobQueueCreditOwner)?.Admission;
+        (_payloadOwner as ZLinkApplicationJobQueueRecordOwner)?.Admission;
 
     public bool CanReply => _reply is not null;
 
@@ -117,7 +117,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         }
         finally
         {
-            _creditOwner?.Dispose();
+            _payloadOwner?.Dispose();
         }
     }
 }
@@ -129,7 +129,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
 /// </summary>
 internal sealed class ZLinkBackendSubscribeMessage : IDisposable
 {
-    private readonly IDisposable? _creditOwner;
+    private readonly IDisposable? _payloadOwner;
     private int _disposed;
 
     public ZLinkBackendSubscribeMessage(
@@ -137,13 +137,13 @@ internal sealed class ZLinkBackendSubscribeMessage : IDisposable
         string topic,
         IReadOnlyList<Message> parts,
         ZLinkMessageMetadata? metadata = null,
-        IDisposable? creditOwner = null)
+        IDisposable? payloadOwner = null)
     {
         ChannelName = channelName;
         Topic = topic;
         Parts = parts;
         Metadata = metadata ?? ZLinkMessageMetadata.Empty;
-        _creditOwner = creditOwner;
+        _payloadOwner = payloadOwner;
     }
 
     public string ChannelName { get; }
@@ -157,7 +157,7 @@ internal sealed class ZLinkBackendSubscribeMessage : IDisposable
     public ZLinkMessageMetadata Metadata { get; }
 
     internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission =>
-        (_creditOwner as ZLinkApplicationJobQueueCreditOwner)?.Admission;
+        (_payloadOwner as ZLinkApplicationJobQueueRecordOwner)?.Admission;
 
     public void Dispose()
     {
@@ -168,7 +168,7 @@ internal sealed class ZLinkBackendSubscribeMessage : IDisposable
         }
         finally
         {
-            _creditOwner?.Dispose();
+            _payloadOwner?.Dispose();
         }
     }
 }

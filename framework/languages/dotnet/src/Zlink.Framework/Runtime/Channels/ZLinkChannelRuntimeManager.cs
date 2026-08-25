@@ -135,6 +135,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                     channel.Client.SocketConfig.SendTimeout
                     ?? registration.DefaultSocketSendTimeout,
                     state.StopTokenSource.Token,
+                    state.ApplicationJobQueue,
                     outboundFlow?.Invoke());
                 state.ClientServerClientRuntimes.Add(entry.Key, runtime);
                 runtime.OwnManualConnectionAttachment(channel.Client.ManualConnections.Attach(

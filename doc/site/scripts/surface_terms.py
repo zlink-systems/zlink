@@ -48,6 +48,14 @@ OVERRIDES: dict[str, dict[str, str]] = {
     "AddPacket": {"Java": "addHandler", "Kotlin": "addHandler"},
     "AddSubscribe": {"Java": "addHandler", "Kotlin": "addHandler"},
     "AddActorPacket": {"Java": "addHandler", "Kotlin": "addHandler"},
+    "ApplicationJobQueuePauseThresholdPercent": {
+        "C++": "set_application_job_queue_pause_threshold_percent",
+        "Java": "setApplicationJobQueuePauseThresholdPercent",
+    },
+    "ApplicationJobQueueResumeThresholdPercent": {
+        "C++": "set_application_job_queue_resume_threshold_percent",
+        "Java": "setApplicationJobQueueResumeThresholdPercent",
+    },
 }
 
 #  spec이 소유하는 언어 중립 용어와 도메인 단어. 치환 대상이 아니다.

@@ -567,6 +567,11 @@ export interface ZLinkLocationOptionValues {
 
 export declare const zlinkDefaultLocationOptions: Readonly<ZLinkLocationOptionValues>;
 
+export interface ZLinkFrameworkOptions {
+    configureDispatch(): ZLinkDispatchOptionsBuilder;
+    configureInboundDispatch(): ZLinkInboundDispatchOptions;
+}
+
 export interface ZLinkDiagnosticsOptions {
     messageFlow: ZLinkMessageFlowLogMode;
     sampleRate: number;
@@ -582,11 +587,16 @@ export interface ZLinkDispatchOptionsBuilder {
     messageFlow(mode: ZLinkMessageFlowLogMode): this;
     traceSampleRate(rate: number): this;
     includeMessageSizes(include: boolean): this;
+}
+
+export interface ZLinkInboundDispatchOptions {
     coreHwmMemoryLimitBytes(value: bigint | undefined): this;
     coreHwmBudgetBytes(value: bigint | undefined): this;
     coreHwmProfile(value: ZLinkCoreHwmProfile): this;
     applicationJobQueueProfile(value: ZLinkApplicationJobQueueProfile): this;
     maxQueuedApplicationJobs(value: bigint | undefined): this;
+    applicationJobQueuePauseThresholdPercent(value: number): this;
+    applicationJobQueueResumeThresholdPercent(value: number): this;
 }
 
 ```
@@ -607,5 +617,7 @@ separate diagnostics.
 The Node.js binding forwards a positive finite V8 `heap_size_limit` as Core's runtime
 memory hint. Core and application-job-queue profiles are independent enums and calculations,
 both defaulting to `Balanced`. Manual job cap is `1..2,147,483,647`; omission uses the
-common startup CPU snapshot and 32/64/128/256 coefficients. Range violation and overflow are
-configuration errors before socket bind, and runtime does not recompute the result.
+common startup CPU snapshot and 32/64/128/256 coefficients. Pressure thresholds default to pause
+`80` and resume `60`; pause is an integer in `1..100`, resume is an integer in `0..99`, and resume
+must be less than pause. Violating these bounds or their ordering, or overflowing capacity, is a
+configuration error before socket bind, and runtime does not recompute the result.

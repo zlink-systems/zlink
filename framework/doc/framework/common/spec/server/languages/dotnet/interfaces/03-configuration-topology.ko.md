@@ -31,6 +31,7 @@ public interface IZLinkFrameworkOptions
     ZLinkLocationOptions ConfigureLocations();
     IZLinkNetworkOptions ConfigureNetwork();
     IZLinkDispatchOptions ConfigureDispatch();
+    IZLinkInboundDispatchOptions ConfigureInboundDispatch();
     IZLinkStreamCompressionBuilder ConfigureStreamCompression();
     void UseFilter<TFilter>() where TFilter : class, IZLinkHandlerFilter;
 
@@ -54,6 +55,12 @@ public enum ZLinkApplicationJobQueueProfile
     LowLatency = 1,
     Balanced = 2,
     Throughput = 3
+}
+
+public enum ZLinkApplicationJobQueuePressureState
+{
+    Running = 0,
+    Paused = 1
 }
 
 public interface IZLinkMeshNodeBuilder
@@ -654,11 +661,16 @@ ChannelName은 local RouteMesh 또는 ClientServer Server 등록을 유일하게
 receiver는 Framework-level complete-message 상한으로 message를 거절하지 않는다. HWM, mailbox byte budget과
 service-wire 표현 한계는 별도 자원·wire guard로 유지한다.
 
-`ConfigureDispatch()`는 host 전체 dispatch 설정 하나를 반환한다. Core memory limit·manual budget·profile은
-Core에 전달한다. .NET binding은 `GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`의 양수 유한값을 runtime
-memory hint로 전달한다. 두 profile은 기본값 `Balanced`인 독립된 enum과 계산이다. Manual job cap은
-`1..2,147,483,647`이고, 생략하면 common spec의 startup CPU snapshot과 32/64/128/256 계수를 사용한다.
-범위 위반과 overflow는 socket bind 전에 실패하고 runtime 중 다시 계산하지 않는다.
+`ConfigureDispatch()`는 host 전체 진단·unhandled dispatch 설정을 반환한다.
+`ConfigureInboundDispatch()`가 반환하는 `IZLinkInboundDispatchOptions`는 Core HWM profile과
+Application Job Queue profile·manual cap·pause/resume threshold를 서로 독립된 설정으로 소유한다.
+Core memory limit·manual budget·profile은 Core에 전달한다. .NET binding은
+`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`의 양수 유한값을 runtime memory hint로 전달한다.
+두 profile은 기본값 `Balanced`인 독립된 enum과 계산이고 pressure threshold 기본값은 `80`/`60`이다.
+Manual job cap은 `1..2,147,483,647`이며 생략하면 common spec의 startup CPU snapshot과
+32/64/128/256 계수를 사용한다. Pause threshold는 `1..100`, resume threshold는 `0..99`의 정수이고
+resume은 pause보다 작아야 한다. 이 범위·순서 위반과 capacity overflow는 socket bind 전에 실패하고
+runtime 중 다시 계산하지 않는다.
 
 ## 6. 메시징 metadata
 

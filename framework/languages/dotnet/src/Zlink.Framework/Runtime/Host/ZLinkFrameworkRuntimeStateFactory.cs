@@ -21,7 +21,11 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
             ZLinkApplicationJobQueueCapacityResolver.Resolve(
                 registration.InboundDispatchOptions.ApplicationJobQueueProfile,
                 registration.InboundDispatchOptions.MaxQueuedApplicationJobs,
-                effectiveProcessorCount);
+                effectiveProcessorCount,
+                registration.InboundDispatchOptions
+                    .ApplicationJobQueuePauseThresholdPercent,
+                registration.InboundDispatchOptions
+                    .ApplicationJobQueueResumeThresholdPercent);
         await ZLinkSpotStartupValidator.ValidateAsync(
                 frameworkRuntime.Services,
                 registration)

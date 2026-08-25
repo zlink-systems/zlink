@@ -8,7 +8,7 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
 {
     private const int DefaultCapacity = 4096;
     private readonly long _maxMessageSize;
-    private readonly Queue<RetainedCreditSegment> _retainedCreditSegments = new();
+    private readonly Queue<PayloadOwnerSegment> _payloadOwnerSegments = new();
     private byte[] _buffer = ArrayPool<byte>.Shared.Rent(DefaultCapacity);
     private int _offset;
     private int _length;
@@ -21,34 +21,34 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
 
     internal void Append(ReadOnlySpan<byte> bytes)
     {
-        AppendCore(bytes, creditOwner: null);
+        AppendCore(bytes, payloadOwner: null);
     }
 
-    internal void Append(ReadOnlySpan<byte> bytes, IDisposable creditOwner)
+    internal void Append(ReadOnlySpan<byte> bytes, IDisposable payloadOwner)
     {
-        ArgumentNullException.ThrowIfNull(creditOwner);
+        ArgumentNullException.ThrowIfNull(payloadOwner);
         if (bytes.IsEmpty)
         {
-            creditOwner.Dispose();
+            payloadOwner.Dispose();
             return;
         }
         try
         {
-            AppendCore(bytes, creditOwner);
+            AppendCore(bytes, payloadOwner);
         }
         catch
         {
-            creditOwner.Dispose();
+            payloadOwner.Dispose();
             throw;
         }
     }
 
     internal void Append(
         IReadOnlyList<Message> parts,
-        IDisposable creditOwner)
+        IDisposable payloadOwner)
     {
         ArgumentNullException.ThrowIfNull(parts);
-        ArgumentNullException.ThrowIfNull(creditOwner);
+        ArgumentNullException.ThrowIfNull(payloadOwner);
         var ownershipTransferred = false;
         try
         {
@@ -73,20 +73,20 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
             }
 
             _length = required;
-            _retainedCreditSegments.Enqueue(
-                new RetainedCreditSegment(
+            _payloadOwnerSegments.Enqueue(
+                new PayloadOwnerSegment(
                     appendedBytes,
-                    new SharedCreditOwner(creditOwner)));
+                    new SharedPayloadOwner(payloadOwner)));
             ownershipTransferred = true;
         }
         finally
         {
             if (!ownershipTransferred)
-                creditOwner.Dispose();
+                payloadOwner.Dispose();
         }
     }
 
-    private void AppendCore(ReadOnlySpan<byte> bytes, IDisposable? creditOwner)
+    private void AppendCore(ReadOnlySpan<byte> bytes, IDisposable? payloadOwner)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (bytes.IsEmpty) return;
@@ -97,10 +97,10 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
         EnsureCapacity(required);
         bytes.CopyTo(_buffer.AsSpan(_offset + _length));
         _length = required;
-        _retainedCreditSegments.Enqueue(
-            new RetainedCreditSegment(
+        _payloadOwnerSegments.Enqueue(
+            new PayloadOwnerSegment(
                 bytes.Length,
-                creditOwner is null ? null : new SharedCreditOwner(creditOwner)));
+                payloadOwner is null ? null : new SharedPayloadOwner(payloadOwner)));
     }
 
     internal bool TryTakeFrame(out ZLinkStreamInboundFrame? frame)
@@ -146,9 +146,9 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
             throw new InvalidDataException("STREAM frame contains an invalid length.", exception);
         }
 
-        var frameCreditOwner = TakeFrameCreditOwner((int)totalBytes);
+        var framePayloadOwner = TakeFramePayloadOwner((int)totalBytes);
         Consume((int)totalBytes);
-        frame = new ZLinkStreamInboundFrame(header, payload, frameCreditOwner);
+        frame = new ZLinkStreamInboundFrame(header, payload, framePayloadOwner);
         return true;
     }
 
@@ -184,8 +184,8 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
         _buffer = Array.Empty<byte>();
         _offset = 0;
         _length = 0;
-        while (_retainedCreditSegments.TryDequeue(out var segment))
-            segment.CreditOwner?.Dispose();
+        while (_payloadOwnerSegments.TryDequeue(out var segment))
+            segment.PayloadOwner?.Dispose();
     }
 
     private void EnsureCapacity(int required)
@@ -241,17 +241,17 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
         _buffer = ArrayPool<byte>.Shared.Rent(DefaultCapacity);
     }
 
-    private IDisposable? TakeFrameCreditOwner(int bytes)
+    private IDisposable? TakeFramePayloadOwner(int bytes)
     {
         List<IDisposable>? retained = null;
         var remaining = bytes;
-        while (remaining > 0 && _retainedCreditSegments.TryPeek(out var segment))
+        while (remaining > 0 && _payloadOwnerSegments.TryPeek(out var segment))
         {
             var consumed = Math.Min(remaining, segment.RemainingBytes);
-            if (segment.CreditOwner is { } creditOwner)
+            if (segment.PayloadOwner is { } payloadOwner)
             {
                 retained ??= new List<IDisposable>();
-                retained.Add(creditOwner.Retain());
+                retained.Add(payloadOwner.Retain());
             }
 
             segment.RemainingBytes -= consumed;
@@ -259,32 +259,32 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
             if (segment.RemainingBytes != 0)
                 continue;
 
-            _retainedCreditSegments.Dequeue();
-            segment.CreditOwner?.Dispose();
+            _payloadOwnerSegments.Dequeue();
+            segment.PayloadOwner?.Dispose();
         }
 
         return retained?.Count switch
         {
             null or 0 => null,
             1 => retained[0],
-            _ => new CompositeCreditOwner(retained)
+            _ => new CompositePayloadOwner(retained)
         };
     }
 
-    private sealed class RetainedCreditSegment(
+    private sealed class PayloadOwnerSegment(
         int remainingBytes,
-        SharedCreditOwner? creditOwner)
+        SharedPayloadOwner? payloadOwner)
     {
         internal int RemainingBytes = remainingBytes;
-        internal readonly SharedCreditOwner? CreditOwner = creditOwner;
+        internal readonly SharedPayloadOwner? PayloadOwner = payloadOwner;
     }
 
-    private sealed class SharedCreditOwner : IDisposable
+    private sealed class SharedPayloadOwner : IDisposable
     {
         private IDisposable? _owner;
         private int _references = 1;
 
-        internal SharedCreditOwner(IDisposable owner)
+        internal SharedPayloadOwner(IDisposable owner)
         {
             _owner = owner;
         }
@@ -295,12 +295,12 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
             {
                 var current = Volatile.Read(ref _references);
                 if (current == 0)
-                    throw new ObjectDisposedException(nameof(SharedCreditOwner));
+                    throw new ObjectDisposedException(nameof(SharedPayloadOwner));
                 if (Interlocked.CompareExchange(
                         ref _references,
                         checked(current + 1),
                         current) == current)
-                    return new CreditLease(this);
+                    return new PayloadOwnerLease(this);
             }
         }
 
@@ -311,16 +311,16 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
             Interlocked.Exchange(ref _owner, null)?.Dispose();
         }
 
-        private sealed class CreditLease(SharedCreditOwner owner) : IDisposable
+        private sealed class PayloadOwnerLease(SharedPayloadOwner owner) : IDisposable
         {
-            private SharedCreditOwner? _owner = owner;
+            private SharedPayloadOwner? _owner = owner;
 
             public void Dispose() =>
                 Interlocked.Exchange(ref _owner, null)?.Dispose();
         }
     }
 
-    private sealed class CompositeCreditOwner(List<IDisposable> owners) : IDisposable
+    private sealed class CompositePayloadOwner(List<IDisposable> owners) : IDisposable
     {
         private List<IDisposable>? _owners = owners;
 
@@ -338,14 +338,14 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
 internal sealed class ZLinkStreamInboundFrame(
     Message header,
     Message payload,
-    IDisposable? coreCreditOwner = null) : IDisposable
+    IDisposable? payloadOwner = null) : IDisposable
 {
     internal Message? Header { get; private set; } = header;
     internal Message? Payload { get; private set; } = payload;
 
     internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission { get; set; }
 
-    internal IDisposable? CoreCreditOwner { get; private set; } = coreCreditOwner;
+    internal IDisposable? PayloadOwner { get; private set; } = payloadOwner;
 
     internal long ByteLength => checked((long)(Header?.Size ?? 0) + (Payload?.Size ?? 0));
 
@@ -354,7 +354,7 @@ internal sealed class ZLinkStreamInboundFrame(
         Header = null;
         Payload = null;
         ApplicationJobAdmission = null;
-        CoreCreditOwner = null;
+        PayloadOwner = null;
     }
 
     public void Dispose()
@@ -365,8 +365,8 @@ internal sealed class ZLinkStreamInboundFrame(
         Payload = null;
         ApplicationJobAdmission?.Dispose();
         ApplicationJobAdmission = null;
-        CoreCreditOwner?.Dispose();
-        CoreCreditOwner = null;
+        PayloadOwner?.Dispose();
+        PayloadOwner = null;
     }
 }
 

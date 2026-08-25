@@ -294,11 +294,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         _ = subscriber;
     }
 
-    public void OnSendReady(Action handler)
-    {
-        _pump.SetNodeSendReadyHandler(handler);
-    }
-
     public void SetUserSpotOperationTarget(IUserSpotOperationTarget target)
     {
         _node.SetUserSpotOperationTarget(target);

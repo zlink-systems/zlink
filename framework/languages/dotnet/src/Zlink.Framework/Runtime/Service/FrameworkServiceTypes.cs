@@ -474,7 +474,7 @@ internal sealed class MeshReadyBatch : IDisposable
 
 internal sealed class MeshReceiveBatch : IDisposable
 {
-    private readonly List<(MeshReceiveRecord Record, IReadOnlyList<Message> Parts, IDisposable? CreditOwner)> _entries = new();
+    private readonly List<(MeshReceiveRecord Record, IReadOnlyList<Message> Parts, IDisposable? PayloadOwner)> _entries = new();
     internal int MaximumRecords { get; set; } = int.MaxValue;
     internal long MaximumBytes { get; set; } = long.MaxValue;
     internal long StartedAt { get; set; }
@@ -498,14 +498,14 @@ internal sealed class MeshReceiveBatch : IDisposable
     internal void Add(
         MeshReceiveRecord record,
         IReadOnlyList<Message> parts,
-        IDisposable? creditOwner = null)
+        IDisposable? payloadOwner = null)
     {
-        _entries.Add((record, parts, creditOwner));
+        _entries.Add((record, parts, payloadOwner));
         Bytes = checked(Bytes + parts.Sum(static part => Math.Max(part.Size, 0)));
     }
     public void Reset()
     {
-        foreach (var (record, parts, creditOwner) in _entries)
+        foreach (var (record, parts, payloadOwner) in _entries)
         {
             try
             {
@@ -514,24 +514,24 @@ internal sealed class MeshReceiveBatch : IDisposable
             }
             finally
             {
-                creditOwner?.Dispose();
+                payloadOwner?.Dispose();
             }
         }
         _entries.Clear();
         Bytes = 0;
     }
 
-    internal IDisposable? TakeCreditOwner(int index)
+    internal IDisposable? TakePayloadOwner(int index)
     {
         var entry = _entries[index];
         _entries[index] = (entry.Record, entry.Parts, null);
-        return entry.CreditOwner;
+        return entry.PayloadOwner;
     }
 
     internal ZLinkApplicationJobQueueLease? GetApplicationJobAdmission(
         int index) =>
-        _entries[index].CreditOwner
-            is ZLinkApplicationJobQueueCreditOwner owner
+        _entries[index].PayloadOwner
+            is ZLinkApplicationJobQueueRecordOwner owner
                 ? owner.Admission
                 : null;
 

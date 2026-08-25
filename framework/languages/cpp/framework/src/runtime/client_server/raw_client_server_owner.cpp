@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
+#include "runtime/dispatch/application_job_receive_flow.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/transport/listener_identity.hpp"
@@ -209,6 +210,17 @@ void raw_client_server_server_t::start ()
     router->set_routing_id (
       zlink::routing_id_t::from (
         _options.descriptor.server_routing_id));
+    application_job_queue_t::receive_flow_registration_t
+      receive_flow_registration;
+    if (_options.application_jobs) {
+        receive_flow_registration =
+          _options.application_jobs->register_receive_flow_socket (
+            [socket = router.get ()] (
+              application_job_queue_pressure_state_t state) {
+                return apply_application_job_receive_flow_state (
+                  *socket, state);
+            });
+    }
     auto monitor = std::make_unique<zlink::socket_monitor_t> (
       router->monitor_open (zlink::monitor_event::connection_ready
                             | zlink::monitor_event::disconnected));
@@ -234,6 +246,8 @@ void raw_client_server_server_t::start ()
     _monitor_poller = std::move (monitor_poller);
     _monitor = std::move (monitor);
     _router = std::move (router);
+    _receive_flow_registration =
+      std::move (receive_flow_registration);
 }
 
 void raw_client_server_server_t::close () noexcept
@@ -242,6 +256,8 @@ void raw_client_server_server_t::close () noexcept
     std::unique_ptr<zlink::router_socket_t> router;
     std::unique_ptr<zlink::poller_t> monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> monitor;
+    application_job_queue_t::receive_flow_registration_t
+      receive_flow_registration;
     {
         std::lock_guard lock (_mutex);
         if (_closed) {
@@ -252,7 +268,10 @@ void raw_client_server_server_t::close () noexcept
         router = std::move (_router);
         monitor_poller = std::move (_monitor_poller);
         monitor = std::move (_monitor);
+        receive_flow_registration =
+          std::move (_receive_flow_registration);
     }
+    receive_flow_registration.close ();
     _mailbox.close ();
     if (port) {
         port->close ();
@@ -835,6 +854,17 @@ void raw_client_server_client_t::start ()
       });
     dealer->set_routing_id (
       zlink::routing_id_t::from (_options.client_routing_id));
+    application_job_queue_t::receive_flow_registration_t
+      receive_flow_registration;
+    if (_options.application_jobs) {
+        receive_flow_registration =
+          _options.application_jobs->register_receive_flow_socket (
+            [socket = dealer.get ()] (
+              application_job_queue_pressure_state_t state) {
+                return apply_application_job_receive_flow_state (
+                  *socket, state);
+            });
+    }
     auto monitor = std::make_unique<zlink::socket_monitor_t> (
       dealer->monitor_open (zlink::monitor_event::connection_ready
                             | zlink::monitor_event::disconnected));
@@ -849,6 +879,8 @@ void raw_client_server_client_t::start ()
     _monitor_poller = std::move (monitor_poller);
     _monitor = std::move (monitor);
     _dealer = std::move (dealer);
+    _receive_flow_registration =
+      std::move (receive_flow_registration);
 }
 
 void raw_client_server_client_t::close () noexcept
@@ -857,6 +889,8 @@ void raw_client_server_client_t::close () noexcept
     std::unique_ptr<zlink::dealer_socket_t> dealer;
     std::unique_ptr<zlink::poller_t> monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> monitor;
+    application_job_queue_t::receive_flow_registration_t
+      receive_flow_registration;
     {
         std::lock_guard lock (_mutex);
         if (_closed) {
@@ -868,7 +902,10 @@ void raw_client_server_client_t::close () noexcept
         dealer = std::move (_dealer);
         monitor_poller = std::move (_monitor_poller);
         monitor = std::move (_monitor);
+        receive_flow_registration =
+          std::move (_receive_flow_registration);
     }
+    receive_flow_registration.close ();
     if (port) {
         port->close ();
     }

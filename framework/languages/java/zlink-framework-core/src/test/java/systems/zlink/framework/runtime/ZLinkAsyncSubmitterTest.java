@@ -100,21 +100,17 @@ final class ZLinkChannelSubmissionContractTest {
     }
 
     @Test
-    void cancellingFanoutPublishCancelsBindingAdmission() {
+    void fanoutPublishCompletesAtSynchronousSubmit() {
         RecordingPublishBackend backend = new RecordingPublishBackend();
-        backend.asyncAdmission = new CompletableFuture<>();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addFanoutChannel("events").enablePublisher("inproc://events");
 
         try (ZLinkFrameworkRuntime runtime =
                  ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
-            CompletableFuture<Void> submission = runtime.fanout()
+            assertEquals(0, OneWayTestStatus.status(runtime.fanout()
                 .publish("events", "payload")
-                .submit()
-                .toCompletableFuture();
-
-            assertTrue(submission.cancel(false));
-            assertTrue(backend.asyncAdmission.isCancelled());
+                .submit()));
+            assertEquals(1, backend.submissions);
         }
     }
 
@@ -254,8 +250,6 @@ final class ZLinkChannelSubmissionContractTest {
     private static final class RecordingPublishBackend extends NoReplyBackend {
         private SendFlags flags;
         private int submissions;
-        private CompletableFuture<Void> asyncAdmission =
-            CompletableFuture.completedFuture(null);
 
         @Override
         public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
@@ -315,6 +309,8 @@ final class ZLinkChannelSubmissionContractTest {
     }
 
     private static class NoReplyDealer implements ZLinkBackendDealerSocket {
+        @Override public void setReceiveFlowState(
+            systems.zlink.contracts.sockets.ReceiveFlowState state) { }
         @Override public String name() { return "dealer"; }
         @Override public void bind(String endpoint) { }
         @Override public void connect(String endpoint) { }
@@ -427,11 +423,6 @@ final class ZLinkChannelSubmissionContractTest {
         @Override public boolean publish(String topic, List<Message> parts, SendFlags flags) {
             record(topic, flags);
             return true;
-        }
-        @Override public CompletionStage<Void> publishAsync(
-            String topic, List<Message> parts, SendFlags flags) {
-            record(topic, flags);
-            return owner.asyncAdmission;
         }
         private void record(String topic, SendFlags flags) {
             owner.flags = flags;

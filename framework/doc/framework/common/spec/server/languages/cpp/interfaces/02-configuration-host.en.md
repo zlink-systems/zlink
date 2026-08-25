@@ -691,6 +691,10 @@ enum class application_job_queue_profile_t {
     balanced = 2,
     throughput = 3
 };
+enum class application_job_queue_pressure_state_t {
+    running = 0,
+    paused = 1
+};
 
 class zlink_framework_options_t {
 public:
@@ -701,6 +705,8 @@ public:
     worker_options_t &worker();
     dispatch_options_t &configure_dispatch();
     dispatch_options_t dispatch_options() const;
+    core_hwm_options_t &configure_core_hwm();
+    inbound_dispatch_options_t &configure_inbound_dispatch();
     location_options_t &configure_locations();
     location_options_t location_options() const;
     zlink_framework_options_t &set_max_pending(std::size_t count);
@@ -789,12 +795,19 @@ AdvertiseHost default, and a per-listener setting overrides this value.
 idle timeout, and queue bound. Both options can be changed only before
 host start.
 
-`configure_dispatch()` returns one host-wide dispatch setting. Core memory limit, manual
-budget, and profile are forwarded unchanged; C++ supplies no managed-runtime hint. The two
-profiles both default to `balanced` but are independent enums and calculations. Manual job
-cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and 32/64/128/256
-coefficients. Range violation and overflow fail before socket bind, and runtime does not
-recompute the result.
+`configure_dispatch()` returns host-wide diagnostics and unhandled-dispatch settings.
+`configure_inbound_dispatch()` returns the Core HWM and application-job-queue settings. The
+existing C++ `configure_core_hwm()` remains a Core-only surface, while the job profile, manual
+cap, and 80/60 pressure thresholds are owned only by the inbound-dispatch surface. Core memory
+limit, manual budget, and profile are forwarded unchanged; C++ supplies no managed-runtime
+hint. The Core HWM fields on the two surfaces are compatibility views of the same startup state;
+they do not create separate profiles or controllers. The Core and job-queue profiles both default
+to `balanced` but are independent enums and calculations. Manual job cap is `1..2,147,483,647`;
+omission uses the common startup CPU snapshot
+and 32/64/128/256 coefficients. Pressure thresholds default to pause `80` and resume `60`; pause
+is an integer in `1..100`, resume is an integer in `0..99`, and resume must be less than pause.
+Violating these bounds or their ordering, or overflowing capacity, fails before socket bind, and
+runtime does not recompute the result.
 
 Application version and maintenance wave are set once for the whole
 host. Version is a non-negative signed 64-bit deployment ordinal

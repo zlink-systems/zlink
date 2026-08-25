@@ -16,6 +16,12 @@ public enum ZLinkApplicationJobQueueProfile
     Throughput = 3
 }
 
+public enum ZLinkApplicationJobQueuePressureState
+{
+    Running = 0,
+    Paused = 1
+}
+
 /// <summary>
 /// Configures Core HWM and the host-wide Application Job Queue independently.
 /// </summary>
@@ -30,4 +36,8 @@ public interface IZLinkInboundDispatchOptions
     ZLinkApplicationJobQueueProfile ApplicationJobQueueProfile { get; set; }
 
     ulong? MaxQueuedApplicationJobs { get; set; }
+
+    uint ApplicationJobQueuePauseThresholdPercent { get; set; }
+
+    uint ApplicationJobQueueResumeThresholdPercent { get; set; }
 }

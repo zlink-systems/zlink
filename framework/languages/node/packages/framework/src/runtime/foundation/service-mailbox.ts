@@ -23,7 +23,7 @@ export interface ServiceMailboxRecord {
     }
   ) => void;
   readonly stateful?: unknown;
-  /** Host queue permit plus the retained raw-ingress Core credit. */
+  /** Host queue permit plus its ordinary Framework-owned ingress record. */
   readonly applicationJob?: ApplicationJobRecordLease;
 }
 
@@ -82,9 +82,10 @@ export class ServiceMailbox {
     _legacyLimits?: ServiceMailboxLimits,
     private readonly onReady?: (domain: ServiceMailboxDomain) => void
   ) {
-    // Host ApplicationJobQueue permits and retained Core HWM credit are the
-    // admission owners. A second mailbox cap would reject already-admitted
-    // work before the shared queue can apply cancellable FIFO backpressure.
+    // Host ApplicationJobQueue permits own ordinary-record admission. The
+    // Framework-owned payload lifetime does not retain Core HWM credit. A
+    // second mailbox cap would reject already-admitted work before the shared
+    // queue can apply cancellable FIFO backpressure.
     this.application = createDomain();
     this.infrastructure = createDomain();
   }

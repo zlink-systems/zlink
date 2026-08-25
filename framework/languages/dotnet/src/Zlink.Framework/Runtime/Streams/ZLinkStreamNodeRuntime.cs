@@ -356,7 +356,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             suppliedAdmission = await _applicationJobQueue
                                 .AcquireAsync(stop.Token)
                                 .ConfigureAwait(false);
-                        if (!Socket.RecvRetained(
+                        if (!Socket.Recv(
                                 out received,
                                 RecvFlags.DontWait))
                         {
@@ -615,8 +615,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     if (!state.Buffer.TryGetCompleteFrameSize(out var frameBytes))
                     {
                         // No application job materialized from this supply
-                        // record. Core HWM owns the retained raw bytes; the Job
-                        // Queue reservation ends after this finite parse turn.
+                        // record. The Framework receive buffer owns the already
+                        // dequeued bytes; this finite parse turn releases its Job
+                        // Queue reservation without extending Core HWM charge.
                         suppliedAdmission?.Dispose();
                         suppliedAdmission = null;
                         return ZLinkReceiveStateDrainResult.Empty;
@@ -733,7 +734,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     header,
                     payload,
                     frame.ApplicationJobAdmission,
-                    frame.CoreCreditOwner);
+                    frame.PayloadOwner);
             if (admitted) frame.Detach();
             return admitted;
         }
@@ -758,14 +759,14 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         ZLinkApplicationJobQueueLease? applicationJobAdmission)
     {
         applicationJobAdmission?.MarkQueued();
-        var coreCreditOwner = frame.CoreCreditOwner;
+        var payloadOwner = frame.PayloadOwner;
         if (_sessions.TryGet(routingId, out var existing))
             {
                 var admission = existing.TryEnqueuePacket(
                     header,
                     payload,
                     applicationJobAdmission,
-                    coreCreditOwner);
+                    payloadOwner);
                 if (admission == ZLinkSerialPostAdmission.Accepted)
                 {
                     return true;
@@ -787,7 +788,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                                     header,
                                     payload,
                                     applicationJobAdmission,
-                                    coreCreditOwner)
+                                    payloadOwner)
                                 == ZLinkSerialPostAdmission.Accepted;
                     }
                     finally
@@ -796,7 +797,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                         {
                             DisposeRejectedPacket(header, payload);
                             applicationJobAdmission?.Dispose();
-                            coreCreditOwner?.Dispose();
+                            payloadOwner?.Dispose();
                         }
                     }
                 });
@@ -814,7 +815,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         Message header,
         Message payload,
         ZLinkApplicationJobQueueLease? applicationJobAdmission,
-        IDisposable? coreCreditOwner)
+        IDisposable? payloadOwner)
     {
         if (_sessions.TryGet(routingId, out var existing))
         {
@@ -822,7 +823,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 header,
                 payload,
                 applicationJobAdmission,
-                coreCreditOwner);
+                payloadOwner);
             if (admission == ZLinkSerialPostAdmission.Accepted) return true;
             throw new ZLinkStreamPeerAdmissionException(
                 "STREAM peer control queue is closed.");
@@ -840,7 +841,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             header,
                             payload,
                             applicationJobAdmission,
-                            coreCreditOwner)
+                            payloadOwner)
                         == ZLinkSerialPostAdmission.Accepted;
             }
             finally
@@ -849,7 +850,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 {
                     DisposeRejectedPacket(header, payload);
                     applicationJobAdmission?.Dispose();
-                    coreCreditOwner?.Dispose();
+                    payloadOwner?.Dispose();
                 }
             }
         }) == ZLinkSerialPostAdmission.Accepted)

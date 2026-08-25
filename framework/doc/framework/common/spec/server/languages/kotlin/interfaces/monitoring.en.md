@@ -11,12 +11,19 @@ not an event holding only some fields.
 The host's capacity state also uses Java's
 `ZLinkHostCapacityStatus` unchanged. A Kotlin-only data class or
 `Flow` aggregation isn't added. Core HWM runtime snapshot, application job queue
-effective/reserved/queued/in-use/peak/wait values, and
-`resetCapacityMetrics()` therefore use the Java projection unchanged.
+configured pause/resume percentages, computed permit counts, `RUNNING|PAUSED` pressure
+state, `Duration` current pause duration, and `resetCapacityMetrics()` therefore use the
+Java projection unchanged.
+The inherited `applicationAccountedBytes`, `outstandingApplicationLeaseCount`,
+`retiredQueueCount`, and `deferredOriginCreditBytes` fields are ABI-reserved and always
+`0` since 0.13.1. Cumulative pause duration, transition counts, and
+configuration-failure counts are metric-only values, not fields of the public status
+projection. Reset preserves the current pressure state and current pause duration while
+clearing those metric-only cumulative/count values.
 
 Endpoint, lifecycle generation, and descriptor source are kept only for
-the framework to judge a stale descriptor and connection. Admission/
-Other than aggregate queue reservation, per-owner admission/claim,
+the framework to judge a stale descriptor and connection. Other than aggregate queue
+reservation, per-owner admission/claim,
 payload, and connection intent aren't added to the Kotlin projection.
 
 A RouteMesh peer uses Java's `ZLinkPeerState` unchanged.

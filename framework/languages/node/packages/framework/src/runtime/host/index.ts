@@ -789,6 +789,8 @@ export class ZLinkFrameworkRuntimeHost implements
       this.metrics.registerHostState(() => runtimeStateMetricName(this.runtimeState)),
       this.metrics.registerHostCapacity(() =>
         this.capacityStatus.snapshot(this.context?.getCoreHwmBudgetSnapshot())),
+      this.metrics.registerApplicationJobQueuePressure(() =>
+        this.applicationJobQueue.snapshot()),
       this.metrics.registerMeshSnapshots(() => this.runtimeMetricMeshSnapshots())
     );
     this.routeMeshRuntime = this.routeMeshCoordinator;
@@ -2603,7 +2605,12 @@ export class ZLinkFrameworkRuntimeHost implements
       actorHandoff: this.actorHandoff,
       detachedTaskRunner: this.detachedTaskRunner(),
       metrics: this.metrics,
-      applicationJobQueue: this.applicationJobQueue
+      applicationJobQueue: this.applicationJobQueue,
+      applicationJobReceiveFlowFailureSink: (error) =>
+        this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+          'RouteMesh receive-flow configuration',
+          error
+        )
     }).create();
     return {
       ...options,

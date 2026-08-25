@@ -50,12 +50,12 @@ held by ordinary send/receive queues per origin. The framework's application job
 the number of jobs waiting to start a handler across the whole host instance. Bytes and jobs
 aren't combined into one ceiling or converted into each other.
 
-An application record removed from Core keeps its origin retained-credit lease until terminal.
-It acquires an application job queue permit immediately before receive/claim and returns that
-permit immediately before the actual user callback's first instruction. A handler that has
-started and is awaiting asynchronous I/O therefore does not reacquire the queue permit, while
-its Core retained-byte credit can remain until the record and required reply submit reach a
-terminal state.
+When a Core queue hands an application record to the binding/framework, Core receive-HWM
+accounting for that record ends. The framework acquires an application job queue permit
+immediately before receive/claim and returns it immediately before the actual user callback's
+first instruction. A handler that has started and is awaiting asynchronous I/O therefore does
+not reacquire the queue permit. A framework-side owner keeps the record payload valid until its
+required terminal, but it does not continue to occupy Core HWM budget.
 
 ```mermaid
 %%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
@@ -69,7 +69,7 @@ flowchart LR
     CC(["Completion connection"]):::net
 
     H1 --> SQ --> AC --> RQ --> BUD --> H2
-    H2 -. "reply · runtime control" .-> CC
+    H2 -. "terminal reply · error" .-> CC
     CC -.-> H1
 
     classDef app fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
@@ -115,9 +115,10 @@ the sender's corresponding path. Other origins and terminal reply/error completi
 before receive remain separate from this saturated queue.
 
 **Stage 3 — the sender's Core submit waits.** While the receiver cannot take more records,
-the sender's ordinary send queue stops draining. Once that origin reaches its HWM, an async
-send waits until it can be accepted and ends with the language's timeout result if no slot
-opens by its deadline.
+the sender's ordinary send queue stops draining. The binding submits the selected exact-target
+operation once, and Core owns the HWM wait/retry and completes the per-operation completion.
+The framework installs no separate readiness callback or retry adapter and does not reselect
+the route of a waiting operation. Deadline expiry or target detach is terminal for that operation.
 
 ```text
 The receiving handler can't keep up
@@ -149,8 +150,10 @@ already-started request to progress while ordinary traffic is saturated.
 ### 2.4 Splitting The Application Connection And Completion Connection
 
 Connecting to one peer creates two paths. The **Application connection** carries ordinary
-messages and requests, and the **Completion connection** carries the reply to an
-already-sent request and the control the runtime needs to make progress.
+messages and requests as well as Framework heartbeat, topology, relocation, and service-wire
+`sendReady` kind `12`; this Framework control remains on the data-line FIFO. The **Completion
+connection** carries terminal replies and error replies for already-sent requests. It is not a
+general-purpose Framework control channel.
 
 The reason for splitting the path is that if the reply were on the same path when the
 backlog fills and receiving stops, an already-sent request could never complete, its handler
@@ -158,8 +161,8 @@ could never finish, and there'd be no way for the backlog to shrink. The Complet
 connection keeps reading even while application receiving is stopped, so an in-flight
 request finishes normally, and the backlog drops as the next job starts executing.
 
-There's no shared arrival order between the two paths. Even from the same peer, control on
-the Completion connection can overtake a message on the Application connection, so a handler
+There's no shared arrival order between the two paths. Even from the same peer, a terminal reply
+on the Completion connection can overtake a message on the Application connection, so a handler
 never judges before/after by arrival order.
 
 ## 3. Backpressure Visible In The API
@@ -175,11 +178,12 @@ client.sendToChannel("orders", new CancelOrder("order-1042")).submit().toComplet
 // It doesn't mean the peer received it or the handler finished.
 ```
 
-If there's no room, it doesn't fail immediately — it waits up to `DefaultSocketSendTimeout`
-(1 second by default). If room opens up within that time, it submits exactly once and
-completes normally; if room never opens up, it ends in a `DeadlineExceeded` exception.
-**It's never auto-resent** — whether to retry, drop it, or tell the user it failed is up to
-the application.
+The framework starts one binding operation. If there is no room, Core owns the HWM wait and
+internal retries for that same operation and completes its per-operation completion within
+`DefaultSocketSendTimeout` (1 second by default). If room never opens up, it ends in a
+`DeadlineExceeded` exception. **The framework does not create or resend a second operation** —
+after a terminal failure, whether to start a new operation, drop it, or tell the user it failed
+is up to the application.
 
 ```java
 try {
@@ -188,7 +192,7 @@ try {
     if (ex.kind() != ZLinkFrameworkErrorKind.DeadlineExceeded) {
         throw ex;
     }
-    // The one thing certain at this point is "it wasn't submitted." The peer's state is unknown.
+    // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
     // canSafelyRetry is an application-owned predicate that checks whether the command tolerates duplication.
     if (!canSafelyRetry(command)) {
         throw ex;
@@ -214,12 +218,11 @@ at all — it ends immediately in `DeadlineExceeded`. If the configured ceiling 
 `send` failed instantly, that means the queue isn't full — **too many calls are waiting** —
 so look at the sender's concurrency first.
 
-**Whether the target can change during the wait splits calls into two kinds.** A call that
-directly names a node, or sends by Spot/Actor ID, keeps that same target throughout the
-wait. A call sent by channel name, on the other hand, **can re-pick that channel's current
-candidate until the slot is secured**, and the target is fixed only once the send queue
-accepts it. This is why a channel call flows to a different node when one node is slow —
-a call with a fixed target has no such buffer.
+The target is fixed once, before the binding operation starts. A call that directly names a
+node or sends by Spot/Actor ID uses that exact target; a channel call selects one current channel
+candidate immediately before starting the operation. **After the operation starts, no call
+reselects its target while Core performs the HWM wait and retry.** A later, new channel operation
+can observe and select a candidate that has changed by then.
 
 ### 3.2 request's Timeout Boundary
 
@@ -253,8 +256,8 @@ is neither cancelled nor rolled back.
 | `receiveHighWaterMark` | Bytes that can be held **after receiving**, per peer. `0` means unlimited | `configureRouterSocket()` |
 | `maxMessageSize` | The max size of one message that will be accepted | `configureRouterSocket()` |
 | `sendHighWaterMark` · `linger` | The pub/sub publish socket's ceiling and how long a pending publish waits at shutdown | `configureSpotPublisher()` |
-| `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | The Core context's ordinary-queue byte budget | `configureDispatch()` |
-| `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` | The host instance's queued-application-job limit | `configureDispatch()` |
+| `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | The Core context's ordinary-queue byte budget | root inbound-dispatch configuration |
+| `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` · pause/resume thresholds | The host instance's queued-application-job limit and flow-transition boundaries | root inbound-dispatch configuration |
 
 **"The ceiling for waiting on a send slot" isn't a single global value.** The value actually
 used is owned by the socket that call uses.
@@ -301,7 +304,7 @@ limits job count independently of that byte calculation.
 
 ### 4.1 Core HWM — The Byte Budget Owned By Core
 
-Set the following values through `configureDispatch()`. See `16. Options` and the
+Set the following values through the root inbound-dispatch configuration. See `16. Options` and the
 exact interface for each language's precise spelling.
 
 | Setting | Purpose |
@@ -346,25 +349,36 @@ count bytes or a memory ratio.
 | Owner | A Core context's per-origin ordinary queues | The framework host instance's shared queue |
 | Unit | Accounted bytes | Reserved supply plus queued application jobs |
 | Acquisition | Core queue admission | Immediately before ordinary receive/claim |
-| Release | Core queue/retained-lease lifecycle | Immediately before the user callback's actual first instruction |
+| Release | When the Core queue gives up frame ownership | Immediately before the user callback's actual first instruction |
 | Saturation result | The sender for that origin waits | The ordinary ingress source waits for a permit |
-| Settings | `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` |
+| Settings | `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` · `setApplicationJobQueuePauseThresholdPercent` · `setApplicationJobQueueResumeThresholdPercent` |
 
 Manual `maxQueuedApplicationJobs` is an exact limit in `1..2,147,483,647`. `0` is not
 unlimited; it is a startup configuration error. Without a manual value, the framework
 calculates the value once at startup from the effective processor count and profile.
 
+By default, the framework changes to `paused` when permits in use reaches 80% of the limit and
+back to `running` at or below 60%. It rounds the pause permit count up and the resume permit
+count down. Tune these boundaries with `setApplicationJobQueuePauseThresholdPercent` (`1..100`)
+and `setApplicationJobQueueResumeThresholdPercent` (`0..99`); resume must be below pause.
+Pressure state itself does not change readiness or liveness.
+Receive-flow coupling applies only to paired DEALER/ROUTER sockets for RouteMesh and
+ClientServer; it does not apply this pressure state to PUB/SUB or STREAM.
+
 | Profile | Jobs per effective processor |
 | --- | ---: |
-| `Compact` | 32 |
+| `compact` | 32 |
 | `LowLatency` | 64 |
 | `Balanced` (default) | 128 |
 | `Throughput` | 256 |
 
 `CoreHwmProfile` and `ApplicationJobQueueProfile` use the same labels but are different
 public types and calculations. A profile is a bootstrap value for starting a benchmark. In
-production, measure the `reserved + queued` permit distribution at the target CPU usage and
-acceptable latency, then set the manual job limit.
+production, measure the `reserved + queued` permit distribution, payload-size distribution,
+and process memory at the target CPU usage and acceptable latency, then set the manual job
+limit. For a workload that retains large payloads for longer, lower `maxQueuedApplicationJobs`
+to reduce the number of records owned concurrently by the framework instead of changing the
+Core profile.
 
 At the limit, new ordinary ingress waits for a returned permit in oldest-waiter order. Batch
 and 1:N local dispatch do not create more handler jobs than the permits already secured.

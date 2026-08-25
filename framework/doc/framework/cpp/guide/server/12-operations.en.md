@@ -121,6 +121,10 @@ instruments by
 | `zlink.host.application_job_queue.capacity_waiters` | Current number of permit-capacity waiters |
 | `zlink.host.application_job_queue.capacity_waits` | Permit-capacity waits in the current measurement epoch |
 | `zlink.host.application_job_queue.capacity_wait_duration` | Cumulative permit-capacity wait duration in the current epoch |
+| `zlink.host.application_job_queue.pressure_state` | Current running · paused state (state) |
+| `zlink.host.application_job_queue.pressure_transitions` | Transitions by destination state (state=running · paused) |
+| `zlink.host.application_job_queue.pause_duration` | Current/cumulative pause seconds (state=current · cumulative) |
+| `zlink.host.application_job_queue.flow_state_config_failures` | Failures to apply an absolute Core flow state |
 | `zlink.host.relocation.duration` | Time from starting Host `relocate` to the terminal result |
 | `zlink.host.relocation.blocked` | Count of host `relocate` calls that ended in `Blocked` |
 | `zlink.host.shutdown.duration` | Time from starting Host `shutdown` to the terminal result |
@@ -135,9 +139,11 @@ exact type and member names from the relevant
 [per-language monitoring contract](../../../common/spec/server/languages/README.en.md).
 
 Resetting measurements starts a new epoch without changing capacity. Current gauges and
-configuration stay unchanged, each peak is rebased to its current value, and epoch wait
-counts and duration become zero. A concurrent event belongs to exactly one epoch. Always-on
-metrics deliberately do not timestamp every job or create a per-job queue-wait histogram;
+configuration stay unchanged, including pressure state and current pause duration. Each peak
+is rebased to its current value, and epoch waits, pressure transitions, cumulative pause
+duration, and flow-state configuration failures become zero.
+An event concurrent with reset belongs to exactly one epoch. Always-on metrics deliberately do
+not timestamp every job or create a per-job queue-wait histogram;
 record such distributions only inside a bounded performance fixture. The exact snapshot and
 reset rules are in
 [Runtime state query and operational diagnostics](../../../common/spec/server/24-runtime-monitoring.en.md)

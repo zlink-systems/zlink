@@ -8,7 +8,13 @@ Kotlin은 Java의 RouteMesh, ClientServer, automatic fanout과 host runtime stat
 
 Host capacity 상태도 Java `ZLinkHostCapacityStatus`를 그대로 사용한다. Kotlin 전용
 data class나 `Flow` 집계를 추가하지 않는다. 따라서 Core HWM runtime snapshot, Application job queue의
-effective/reserved/queued/in-use/peak/wait 값과 `resetCapacityMetrics()`도 Java projection 그대로다.
+configured pause·resume percent, 계산된 permit count, `RUNNING|PAUSED` pressure state,
+`Duration` current pause duration과 `resetCapacityMetrics()`도 Java projection 그대로다.
+Java에서 상속한 `applicationAccountedBytes`, `outstandingApplicationLeaseCount`, `retiredQueueCount`,
+`deferredOriginCreditBytes`는 ABI 호환용 reserved field이며 0.13.1 이후 항상 `0`이다.
+Cumulative pause duration, transition count와 config failure count는 public status projection field가
+아닌 metric-only 값이다. Reset은 현재 pressure state와 current pause duration을 유지하고 이
+metric-only cumulative/count 값을 0으로 만든다.
 
 Endpoint, lifecycle generation과 descriptor source는 Framework가 stale descriptor와 connection을
 판정할 때만 유지한다. Aggregate queue reservation 외의 owner별 admission·claim, payload와 connection

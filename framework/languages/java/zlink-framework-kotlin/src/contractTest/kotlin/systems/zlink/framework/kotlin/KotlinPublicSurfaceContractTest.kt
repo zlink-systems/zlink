@@ -83,6 +83,21 @@ class KotlinPublicSurfaceContractTest {
                 .returnType,
         )
         assertEquals(
+            Int::class.javaPrimitiveType,
+            ZLinkInboundDispatchOptions::class.java
+                .getMethod("applicationJobQueuePauseThresholdPercent")
+                .returnType,
+        )
+        assertEquals(
+            Void.TYPE,
+            ZLinkInboundDispatchOptions::class.java
+                .getMethod(
+                    "setApplicationJobQueueResumeThresholdPercent",
+                    Int::class.javaPrimitiveType,
+                )
+                .returnType,
+        )
+        assertEquals(
             listOf("COMPACT", "LOW_LATENCY", "BALANCED", "THROUGHPUT"),
             ZLinkCoreHwmProfile.entries.map { it.name },
         )

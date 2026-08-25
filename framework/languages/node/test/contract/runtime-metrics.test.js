@@ -96,7 +96,7 @@ test('RMETRIC-001 global OpenTelemetry no-op provider remains callable', () => {
   metrics.duration('zlink.mesh_node.request.duration', 0.01);
 });
 
-test('RMETRIC-006 server runtime exposes the exact 52-instrument spec25 catalog', () => {
+test('RMETRIC-006 server runtime exposes the exact 59-instrument spec25 catalog', () => {
   const { provider, instruments } = collector();
   new framework.ZLinkRuntimeMetrics(provider);
   const expected = new Map([
@@ -124,9 +124,12 @@ test('RMETRIC-006 server runtime exposes the exact 52-instrument spec25 catalog'
     ['zlink.actor.count', ['updown', '{actor}']],
     ['zlink.relocation.started', ['counter', '{relocation}']],
     ['zlink.relocation.completed', ['counter', '{relocation}']],
+    ['zlink.relocation.cutover_timeout', ['counter', '{fallback}']],
     ['zlink.relocation.duration', ['histogram', 's']],
     ['zlink.relocation.bytes', ['histogram', 'By']],
     ['zlink.relocation.interruption', ['histogram', 's']],
+    ['zlink.relocation.target_resume', ['histogram', 's']],
+    ['zlink.relocation.route_convergence', ['histogram', 's']],
     ['zlink.instance_spot.activations', ['counter', '{activation}']],
     ['zlink.instance_spot.activation.duration', ['histogram', 's']],
     ['zlink.instance_spot.pending.messages', ['gauge', '{message}']],
@@ -151,14 +154,72 @@ test('RMETRIC-006 server runtime exposes the exact 52-instrument spec25 catalog'
     ['zlink.host.application_job_queue.jobs', ['gauge', '{job}']],
     ['zlink.host.application_job_queue.capacity_waiters', ['gauge', '{waiter}']],
     ['zlink.host.application_job_queue.capacity_waits', ['observable_counter', '{wait}']],
-    ['zlink.host.application_job_queue.capacity_wait_duration', ['observable_counter', 's']]
+    ['zlink.host.application_job_queue.capacity_wait_duration', ['observable_counter', 's']],
+    ['zlink.host.application_job_queue.pressure_state', ['gauge', '{state}']],
+    ['zlink.host.application_job_queue.pressure_transitions', ['observable_counter', '{transition}']],
+    ['zlink.host.application_job_queue.pause_duration', ['gauge', 's']],
+    ['zlink.host.application_job_queue.flow_state_config_failures', ['observable_counter', '{failure}']]
   ]);
-  assert.equal(instruments.length, 52);
+  assert.equal(instruments.length, 59);
   assert.deepEqual(
     new Map(instruments.map(({ name, kind, unit }) => [name, [kind, unit]])),
     expected
   );
   assert(instruments.every(({ name }) => !name.startsWith('zlink.fanout.')));
+});
+
+test('application job queue pressure metrics expose bounded current and epoch series', () => {
+  const { provider, observables } = collector();
+  const metrics = new framework.ZLinkRuntimeMetrics(provider);
+  metrics.registerApplicationJobQueuePressure(() => ({
+    pressureState: 'paused',
+    runningTransitionCount: 2n,
+    pausedTransitionCount: 3n,
+    currentPauseDurationSeconds: 1.5,
+    cumulativePauseDurationSeconds: 4.25,
+    flowStateConfigFailureCount: 1n
+  }));
+  const samples = [];
+  for (const observable of observables) {
+    if (!observable.name.includes('application_job_queue.pressure')
+        && !observable.name.includes('application_job_queue.pause_duration')
+        && !observable.name.includes('application_job_queue.flow_state')) continue;
+    observable.callback({
+      observe(value, attributes) { samples.push({ name: observable.name, value, attributes }); }
+    });
+  }
+  assert.deepEqual(samples, [
+    {
+      name: 'zlink.host.application_job_queue.pressure_state',
+      value: 1,
+      attributes: { state: 'paused' }
+    },
+    {
+      name: 'zlink.host.application_job_queue.pause_duration',
+      value: 1.5,
+      attributes: { state: 'current' }
+    },
+    {
+      name: 'zlink.host.application_job_queue.pause_duration',
+      value: 4.25,
+      attributes: { state: 'cumulative' }
+    },
+    {
+      name: 'zlink.host.application_job_queue.pressure_transitions',
+      value: 2,
+      attributes: { state: 'running' }
+    },
+    {
+      name: 'zlink.host.application_job_queue.pressure_transitions',
+      value: 3,
+      attributes: { state: 'paused' }
+    },
+    {
+      name: 'zlink.host.application_job_queue.flow_state_config_failures',
+      value: 1,
+      attributes: undefined
+    }
+  ]);
 });
 
 test('RMETRIC-017 capacity instruments observe only the host capacity projection', () => {
@@ -334,7 +395,7 @@ test('RMETRIC Entry Spot activation records entry count and lifecycle counters',
   ]);
 });
 
-test('RMETRIC-009 channel drops use normalized closed labels when tracing is off', async () => {
+test('RMETRIC-009 classic fanout drops are excluded from mesh-node drop metrics', async () => {
   const { provider, records } = collector();
   const metrics = new framework.ZLinkRuntimeMetrics(provider);
   const reporter = new framework.ZLinkDispatchErrorReporter(
@@ -362,12 +423,10 @@ test('RMETRIC-009 channel drops use normalized closed labels when tracing is off
 
   await dispatcher.dispatch({ topic: 'known', parts });
 
-  assert.deepEqual(records.find((record) => record.name === 'zlink.mesh_node.messages.dropped'), {
-    name: 'zlink.mesh_node.messages.dropped',
-    kind: 'counter',
-    value: 1,
-    attributes: { surface: 'channel', message_kind: 'publish', reason: 'no_handler' }
-  });
+  assert.equal(
+    records.some((record) => record.name === 'zlink.mesh_node.messages.dropped'),
+    false
+  );
 });
 
 test('RMETRIC-015 off diagnostics do not emit flow records or overflow metrics', () => {

@@ -98,6 +98,13 @@ struct application_job_queue_status_t
     std::uint32_t capacity_waiters = 0;
     std::uint64_t capacity_wait_count = 0;
     std::chrono::nanoseconds capacity_wait_duration{};
+    std::uint32_t configured_pause_threshold_percent = 80;
+    std::uint32_t configured_resume_threshold_percent = 60;
+    std::uint32_t pause_permit_count = 1;
+    std::uint32_t resume_permit_count = 0;
+    application_job_queue_pressure_state_t pressure_state =
+      application_job_queue_pressure_state_t::running;
+    std::chrono::nanoseconds current_pause_duration{};
 
     friend bool operator== (const application_job_queue_status_t &,
                             const application_job_queue_status_t &) = default;

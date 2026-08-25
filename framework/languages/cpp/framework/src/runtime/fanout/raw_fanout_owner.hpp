@@ -46,8 +46,8 @@ struct fanout_received_t
     std::vector<std::uint8_t> publisher_routing_id;
     std::string topic;
     protocol::application_payload_t payload;
-    // The binding receive envelope carries the Core retained-credit owner.
-    // It remains live through the caller's dispatch terminal path.
+    // Keep the binding receive envelope alive through the caller's dispatch
+    // terminal path so its native payload storage remains valid.
     std::shared_ptr<zlink::topic_message_t> retained;
 };
 

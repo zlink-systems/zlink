@@ -90,7 +90,9 @@ internal static partial class ZLinkFrameworkRegistrationValidator
         _ = ZLinkApplicationJobQueueCapacityResolver.Resolve(
             options.ApplicationJobQueueProfile,
             options.MaxQueuedApplicationJobs,
-            effectiveProcessorCount);
+            effectiveProcessorCount,
+            options.ApplicationJobQueuePauseThresholdPercent,
+            options.ApplicationJobQueueResumeThresholdPercent);
     }
 
     private static void ValidateRelocationStoreRequirement(

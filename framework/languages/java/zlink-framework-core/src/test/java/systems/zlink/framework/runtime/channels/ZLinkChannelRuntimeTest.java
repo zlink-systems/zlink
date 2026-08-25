@@ -1718,6 +1718,9 @@ final class ZLinkChannelRuntimeTest {
             this.initialWeight = initialWeight;
         }
 
+        @Override public void setReceiveFlowState(
+            systems.zlink.contracts.sockets.ReceiveFlowState state) { }
+
         @Override
         public void setChannelName(String channelName) {
         }
@@ -1854,6 +1857,8 @@ final class ZLinkChannelRuntimeTest {
         final List<String> requestThreads = new CopyOnWriteArrayList<>();
         List<Message> requestReplyParts = List.of();
 
+        @Override public void setReceiveFlowState(
+            systems.zlink.contracts.sockets.ReceiveFlowState state) { }
         @Override public void setChannelName(String channelName) { }
         @Override public void bind(String endpoint) { }
         @Override public void connect(String endpoint) { connected.add(endpoint); }
@@ -1913,6 +1918,8 @@ final class ZLinkChannelRuntimeTest {
         RoutingId connectRoutingId;
         List<Message> requestReplyParts = List.of();
 
+        @Override public void setReceiveFlowState(
+            systems.zlink.contracts.sockets.ReceiveFlowState state) { }
         @Override public void setChannelName(String channelName) { }
         @Override public void setRoutingId(RoutingId routingId) { }
         @Override public void setConnectRoutingId(RoutingId routingId) { connectRoutingId = routingId; }

@@ -128,7 +128,7 @@ class channel_host_service_t::server_loop_t
             auto permit = _application_jobs->wait_for_supply_blocking ();
             if (!permit)
                 break;
-            const int rc = _router->recv_retained (_received, zlink::recv_flags_t::dontwait);
+            const int rc = _router->recv (_received, zlink::recv_flags_t::dontwait);
             if (rc == static_cast<int> (zlink::recv_result_t::no_data)) {
                 continue;
             }
@@ -453,7 +453,7 @@ class channel_host_service_t::subscriber_loop_t
             auto permit = _application_jobs->wait_for_supply_blocking ();
             if (!permit)
                 break;
-            const int rc = _subscriber->subscribe_retained (
+            const int rc = _subscriber->subscribe (
               _received_message, zlink::recv_flags_t::dontwait);
             if (rc == static_cast<int> (zlink::recv_result_t::no_data)) {
                 continue;

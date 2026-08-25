@@ -127,7 +127,7 @@ and the gist is as follows.
 | Request | Different node | Doesn't wait, `Unavailable` |
 | Control claim | Same runtime | A separate bound. Exceeding it gives `CapacityExceeded` |
 | Control claim | Different node | `Unavailable` |
-| Send-side backpressure | — | Waits for a send-ready notification. This isn't queue saturation but transport-layer flow control |
+| Send-side backpressure | — | Core waits and completes the binding operation. The Framework has no send-ready waiter |
 
 The standard that splits waiting from finishing immediately is
 **whether the caller can receive a result and judge from it**. A

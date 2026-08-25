@@ -885,15 +885,15 @@ status나 result 값을 반환하지 않으며 target handler 실행이나 remot
 queue도 비워지지 않으므로, remote의 지연은 별도 신호가 아니라 송신 대기로 전달된다.
 
 [One-way submit](05-async-execution-policy.ko.md#13-one-way-submit)이 비동기인 이유가 이
-대기다. Capacity가 부족하면 Framework는 family별 send timeout까지 기다렸다가 정확히 한 번
-제출하고, 그 안에 자리가 나지 않으면 [DeadlineExceeded](#deadlineexceeded)로 완료한다. 이때의
+대기다. 첫 binding operation을 시작한 뒤에는 Core가 HWM 재시도를 소유하고 operation별
+completion을 완료한다. Deadline이 먼저 끝나면 [DeadlineExceeded](#deadlineexceeded)로 완료한다. 이때의
 내부 상태를 [Backpressured](#backpressured)라 하며 public terminal result로 노출하지 않는다.
 
 <a id="backpressured"></a>
 ### Backpressured
 
-송신 경로나 queue의 capacity가 일시적으로 부족한 내부 상태다. Public terminal result가 아니며 Framework는
-family별 send timeout까지 capacity를 기다린다. Logical Multicast를 시작한 뒤에는 target별
+송신 경로나 queue의 capacity가 일시적으로 부족한 내부 상태다. Public terminal result가 아니며 Core가
+binding operation의 완료까지 HWM 재시도를 처리한다. Logical Multicast를 시작한 뒤에는 target별
 capacity 부족을 public 결과나 publish 전용 monitoring으로 집계하지 않는다.
 
 <a id="core-hwm-budget"></a>
@@ -912,6 +912,10 @@ Pre-receive에 terminal reply/error completion으로 식별되는 supply만 이 
 ingress는 receive/claim 전에 permit을 확보한다. Application record의 permit은 실제 handler 첫 instruction에서
 반환하고, control·malformed record는 내부 처리를 마친 직후 반환한다. Capacity가 없으면 cancellable wait로
 backpressure를 전파하며 일반 capacity reject, drop, polling, busy-spin이나 무제한 우회 queue를 만들지 않는다.
+
+Permits in use가 configured pause 경계 이상이면 host pressure state가 `paused`, configured resume 경계
+이하이면 `running`이 된다. 기본 percent는 80과 60이며 두 경계 사이에서는 현재 상태를 유지한다.
+이 상태는 지원 socket에 적용하는 절대 flow 상태이며 route ready나 transport liveness를 직접 바꾸지 않는다.
 
 <a id="timed-out"></a>
 ### DeadlineExceeded
@@ -1196,7 +1200,7 @@ connection과 chunk가 실은 exact identity로만 판정한다.
 | 공개 구성 | `RelocationId`, target attempt, chunk 순번과 encoded 길이를 가진다. 조립 결과를 검증하는 전체 payload checksum은 chunk가 아니라 Restore 요청이 싣는다. |
 | 생성·관리 | Source runtime이 capture한 payload를 유효 chunk 크기 이하로 나눠 만든다. 유효 크기는 server 설정 `RelocationPayloadChunkLimit`(기본 256 KiB), target이 알린 유효 수신 chunk 상한과 유효 [in-flight payload 예산](#in-flight-payload-budget) 중 가장 작은 값이다. |
 | 전달 | Restore 요청 뒤 같은 ordered mesh connection으로 `[send]`한다. Application message에는 노출하지 않는다. |
-| 수명 | Target이 조립 buffer로 복사한 직후 chunk의 Core retained lease를 해제한다. 순번 누락·중복, 이미 종료한 attempt의 chunk와 선언한 길이 초과는 조립에 넣지 않고 명시적 실패로 처리한다. |
+| 수명 | Core byte charge는 complete chunk message가 binding/Framework로 dequeue될 때 끝난다. Target은 chunk data를 조립 buffer로 복사한 뒤 입력 message buffer를 일반 Framework 소유권 규칙으로 정리한다. 순번 누락·중복, 이미 종료한 attempt의 chunk와 선언한 길이 초과는 조립에 넣지 않고 명시적 실패로 처리한다. |
 | Application 권한 | Application은 chunk를 생성·해석·변경하지 않는다. |
 
 <a id="in-flight-payload-budget"></a>

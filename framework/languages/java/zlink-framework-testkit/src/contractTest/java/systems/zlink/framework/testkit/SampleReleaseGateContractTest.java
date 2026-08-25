@@ -114,14 +114,14 @@ final class SampleReleaseGateContractTest {
             "missing aggregate PowerShell sample runner");
         String aggregateRunner = Files.readString(samplesRoot.resolve("run_samples.sh"));
         assertTrue(aggregateRunner.contains("ZLINK_LIBRARY_PATH")
-                && aggregateRunner.contains("core/build/lib/libzlink.so"),
-            "aggregate sample runner must use the local core runtime when it is available");
+                && aggregateRunner.contains(".artifacts/wsl/install/zlink-core/0.13.2/lib/libzlink.so"),
+            "aggregate sample runner must use the packaged 0.13.2 core runtime");
         assertTrue(aggregateRunner.contains("bash \"$script\""),
             "aggregate sample runner must invoke non-executable sample scripts through Bash");
         String aggregatePowerShellRunner = Files.readString(samplesRoot.resolve("run_samples.ps1"));
         assertTrue(aggregatePowerShellRunner.contains("ZLINK_LIBRARY_PATH")
-                && aggregatePowerShellRunner.contains("core/build/lib/libzlink.so"),
-            "aggregate PowerShell sample runner must use the local core runtime when it is available");
+                && aggregatePowerShellRunner.contains(".artifacts/wsl/install/zlink-core/0.13.2/lib/libzlink.so"),
+            "aggregate PowerShell sample runner must use the packaged 0.13.2 core runtime");
 
         for (String language : REQUIRED_LANGUAGES) {
             Path languageRoot = samplesRoot.resolve(language);

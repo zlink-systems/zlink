@@ -131,8 +131,10 @@ authority resolve through this source-local admission.
 
 #### Backpressure and error classification
 
-When queue capacity is unavailable, the Framework waits for send-ready or
-local capacity up to that family's send timeout, and follows these rules:
+When local framework capacity is unavailable, the framework waits up to that family's send
+timeout. When a binding operation waits on Core HWM, Core owns the retry and completes the
+per-operation completion awaitable. The framework does not create a separate readiness callback,
+retry waiter, or separate binding adapter, and follows these rules:
 
 - `Backpressured` is not a public terminal result.
 - If capacity becomes available first, the message is submitted exactly once and completes normally.
@@ -153,8 +155,8 @@ local capacity up to that family's send timeout, and follows these rules:
 #### Pending admission's target
 
 - Pending admission keeps the caller-specified Node RID, global Spot/Actor ID, and session binding token.
-- It does not switch to a different logical target after the send-ready signal.
-- A RouteMesh/ClientServer select-one Channel may re-select the current eligible member of the same [ChannelName](01-glossary.en.md#channelname) until admission succeeds, and the target is fixed at the moment the transport queue accepts it.
+- A RouteMesh/ClientServer select-one Channel picks one current eligible member of the same [ChannelName](01-glossary.en.md#channelname) immediately before starting the first binding operation. It may choose another eligible member only while checking route eligibility or source-local admission before any binding operation has started.
+- Starting the binding operation fixes the exact target selection. Core owns HWM retry and completion; the framework does not reselect for capacity or resubmit the binding operation.
 - There is no automatic resubmission after completion.
 
 #### Logical Multicast
@@ -271,7 +273,7 @@ owner after a timeout or connection failure.
 ### Waiting within the same turn
 
 A request sent within the same handler turn can be awaited. Because
-infrastructure work such as reply completion and send-ready proceeds
+infrastructure work such as reply completion and binding-operation completion proceeds
 separately from the application turn, the current turn can resume without
 running the Spot's or Actor's next application message.
 
@@ -332,7 +334,7 @@ sequenceDiagram
 
 - Each language's service runtime advances the application domain and the infrastructure domain independently.
 - Payload decoding, user callbacks, and exception mapping are handled on the application turn.
-- Request completion and bounded liveness/admission/relocation/reply-recovery service control arrive on the existing Completion connection, and send-ready arrives through the Core callback.
+- Request completion and bounded liveness/admission/relocation/reply-recovery service control arrive on the existing Completion connection. Core HWM retry arrives as the per-operation binding completion and is distinct from the Framework service-wire `SendReady` record.
 - Peer connection state changes and the shutdown barrier are also handled on infrastructure tasks.
 - Infrastructure tasks must be able to proceed even while an application handler is waiting.
 - Jobs that invoke user callbacks, such as Actor/Spot lifecycle, are counted as part of the application turn.
@@ -419,7 +421,7 @@ The rules for a call that arrives already pre-cancelled are:
 - `.NET`'s pre-cancelled `CancellationToken` and Node.js's already-aborted `AbortSignal` do not start runtime admission for an otherwise valid call — they complete with that language's cancelled awaitable.
 - Java's and Kotlin's submit have no cancellation input.
 - A valid, ordinary JVM call returns the stage to the caller only after its first non-blocking admission attempt, so a Java `cancel(false)` the caller runs after receiving the stage, or a Kotlin coroutine cancellation that awaits that stage, cannot cancel that first attempt.
-- If the operation is pending, this cancellation races later admissions and clears the send-ready waiter, queue reservation, and payload reservation.
+- If the operation is pending, this cancellation races binding completion and clears queue and payload reservations.
 - Therefore, the JVM path does not guarantee transport attempt 0 as a result of pre-cancellation.
 
 | Language | Cancellation input | Can the first admission attempt be cancelled? |

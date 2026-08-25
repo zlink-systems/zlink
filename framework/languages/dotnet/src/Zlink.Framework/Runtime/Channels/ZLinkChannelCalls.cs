@@ -12,7 +12,7 @@ internal sealed class ZLinkPublishCall(
 {
     private readonly ZLinkOneWayCallGate _submission = new("Fanout publish");
 
-    public async ValueTask Async(
+    public ValueTask Async(
         CancellationToken cancellationToken = default)
     {
         _submission.Claim();
@@ -24,8 +24,7 @@ internal sealed class ZLinkPublishCall(
         var (publisher, envelopedMsg) = Build();
         try
         {
-            await publisher.Publish(topic).Messages(envelopedMsg)
-                .Async(cancellationToken).ConfigureAwait(false);
+            publisher.Publish(topic).Messages(envelopedMsg).Submit();
         }
         catch (ZlinkSubmitException failure)
         {
@@ -36,6 +35,8 @@ internal sealed class ZLinkPublishCall(
         {
             ZLinkMessageParts.DisposeAll(envelopedMsg);
         }
+
+        return ValueTask.CompletedTask;
     }
 
     private (IPubSocket Publisher, IReadOnlyList<Message> Message) Build()

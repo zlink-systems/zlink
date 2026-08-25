@@ -25,6 +25,11 @@ namespace detail
 
 using task_scheduler_t = std::function<void (std::function<void ()>)>;
 
+// Returns a late-bound handoff to the host-owned coroutine executor. Pending
+// binding operations own no executor lifetime; invocation and post admission
+// are serialized with host shutdown.
+task_scheduler_t capture_runtime_native_continuation_scheduler ();
+
 struct serial_resume_failure_t
 {
     framework_error_kind_t kind;
@@ -107,7 +112,8 @@ class serial_turn_scope_t
     std::shared_ptr<serial_turn_t> _previous;
 };
 
-inline task_scheduler_t held_serial_turn_scheduler (std::shared_ptr<serial_turn_t> turn)
+inline task_scheduler_t held_serial_turn_scheduler (
+  std::shared_ptr<serial_turn_t> turn)
 {
     return [turn = std::move (turn)] (std::function<void ()> work) mutable {
         serial_turn_scope_t scope (turn);
@@ -199,18 +205,28 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
     auto turn_plan = prepare_serial_turn_await (false);
     task_scheduler_t turn_scheduler =
       turn_plan ? std::move (turn_plan->scheduler) : task_scheduler_t{};
+    task_scheduler_t runtime_scheduler =
+      capture_runtime_native_continuation_scheduler ();
     std::shared_ptr<void> ambient = capture_ambient_context ();
     return [turn_scheduler = std::move (turn_scheduler),
+            runtime_scheduler = std::move (runtime_scheduler),
             ambient = std::move (ambient)] (std::function<void ()> work) mutable {
         auto resume = [ambient, work = std::move (work)] () mutable {
             const auto ambient_guard = enter_ambient_context (ambient);
             if (work)
                 work ();
         };
-        if (turn_scheduler) {
-            turn_scheduler (std::move (resume));
+        auto dispatch = [turn_scheduler, resume = std::move (resume)] () mutable {
+            if (turn_scheduler) {
+                turn_scheduler (std::move (resume));
+            } else {
+                resume ();
+            }
+        };
+        if (runtime_scheduler) {
+            runtime_scheduler (std::move (dispatch));
         } else {
-            resume ();
+            dispatch ();
         }
     };
 }

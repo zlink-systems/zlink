@@ -132,18 +132,26 @@ public readonly record struct ZLinkCoreHwmStatus(
     ulong RetiredQueueCount,
     ulong DeferredOriginCreditBytes);
 
+public enum ZLinkApplicationJobQueuePressureState { Running, Paused }
+
 public readonly record struct ZLinkApplicationJobQueueStatus(
     ZLinkApplicationJobQueueProfile ConfiguredProfile,
     ulong? ConfiguredManualMax,
+    uint ConfiguredPauseThresholdPercent,
+    uint ConfiguredResumeThresholdPercent,
     ulong EffectiveProcessorCount,
     ulong EffectiveMaxQueuedApplicationJobs,
+    ulong PausePermitCount,
+    ulong ResumePermitCount,
     ulong ReservedSupplyPermits,
     ulong QueuedApplicationJobs,
     ulong PermitsInUse,
     ulong PeakPermitsInUse,
     ulong CapacityWaiters,
     ulong CapacityWaitCount,
-    TimeSpan CapacityWaitDuration);
+    TimeSpan CapacityWaitDuration,
+    ZLinkApplicationJobQueuePressureState PressureState,
+    TimeSpan CurrentPauseDuration);
 
 public readonly record struct ZLinkHostCapacityStatus(
     ulong MeasurementEpoch,
@@ -178,6 +186,11 @@ public interface IZLinkFrameworkRuntime
         CancellationToken cancellationToken = default);
 }
 ```
+
+In `ZLinkCoreHwmStatus`, `ApplicationAccountedBytes`, `OutstandingApplicationLeaseCount`,
+`RetiredQueueCount`, and `DeferredOriginCreditBytes` are ABI-reserved compatibility fields and
+are always `0` since 0.13.1. The framework projects them unchanged and does not reinterpret them
+as Application Job Queue pressure.
 
 `IsReady` is true only when `State == Serving`. `AcceptingWork` indicates
 whether the current host is accepting new application operations. The
@@ -477,10 +490,10 @@ affect other observers, topology connections, or host lifecycle.
 
 ## 8. Dispatch Policy And Diagnostics
 
-The unhandled-message policy and diagnostics configuration are handled by
-separate child interfaces. Dispatch configuration directly owns the Core HWM and
-application job queue settings and also provides both child interfaces. Tracing mode is
-owned by the diagnostics child; observer, error sink, and file output aren't provided.
+The unhandled-message policy and diagnostics configuration are handled by separate child
+interfaces under `ConfigureDispatch()`. Core HWM and application-job-queue settings are owned
+by the independent `ConfigureInboundDispatch()` surface. Tracing mode is owned by the
+diagnostics child; observer, error sink, and file output aren't provided.
 
 ```csharp
 public enum ZLinkUnhandledDispatchAction
@@ -517,11 +530,17 @@ public interface IZLinkDispatchOptions
 {
     IZLinkUnhandledDispatchOptions Unhandled { get; }
     IZLinkDiagnosticsOptions Diagnostics { get; }
+}
+
+public interface IZLinkInboundDispatchOptions
+{
     ulong? CoreHwmMemoryLimitBytes { get; set; }
     ulong? CoreHwmBudgetBytes { get; set; }
     ZLinkCoreHwmProfile CoreHwmProfile { get; set; }
     ZLinkApplicationJobQueueProfile ApplicationJobQueueProfile { get; set; }
     ulong? MaxQueuedApplicationJobs { get; set; }
+    uint ApplicationJobQueuePauseThresholdPercent { get; set; }
+    uint ApplicationJobQueueResumeThresholdPercent { get; set; }
 }
 
 public interface IZLinkDiagnosticsRuntime

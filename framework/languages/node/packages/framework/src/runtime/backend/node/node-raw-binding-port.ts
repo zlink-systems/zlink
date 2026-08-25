@@ -9,6 +9,7 @@ import {
   createPoller,
   createRouterSocket,
   PollEventFlag,
+  ReceiveFlowState,
   type Context,
   type DealerSocket,
   type MonitorEvent,
@@ -150,6 +151,13 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
     this.requireOpen();
     connectable(this.socket).disconnect(endpoint);
     this.endpoints.delete(`connect\0${endpoint}`);
+  }
+
+  setReceiveFlowState(state: 'running' | 'paused'): void {
+    this.requireOpen();
+    this.socket.setReceiveFlowState(
+      state === 'paused' ? ReceiveFlowState.PAUSED : ReceiveFlowState.RUNNING
+    );
   }
 
   monitor(handler: (event: ZLinkRawMonitorRecord) => void): ZLinkRawMonitorPort {
@@ -405,12 +413,12 @@ type RawReceivedReply = (
 ) => void;
 
 function receiveRecord(
-  socket: Pick<RouterSocket | DealerSocket, 'recvRetained'>,
+  socket: Pick<RouterSocket | DealerSocket, 'recv'>,
   dontWait: boolean,
   reply: RawReceivedReply | undefined
 ): ZLinkRawReceivedRecord | undefined {
   const received = new Received();
-  if (!socket.recvRetained(
+  if (!socket.recv(
     received,
     dontWait ? RecvFlags.DontWait : RecvFlags.None
   )) {

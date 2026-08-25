@@ -119,6 +119,23 @@ inline void validate_framework_options (const framework_options_state_t &options
           framework_error_kind_t::protocol_error,
           "maximum queued application jobs must be between 1 and 2147483647");
     }
+    if (options.application_job_queue_pause_threshold_percent < 1
+        || options.application_job_queue_pause_threshold_percent > 100) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "Application Job Queue pause threshold percent must be between 1 and 100");
+    }
+    if (options.application_job_queue_resume_threshold_percent > 99) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "Application Job Queue resume threshold percent must be between 0 and 99");
+    }
+    if (options.application_job_queue_resume_threshold_percent
+        >= options.application_job_queue_pause_threshold_percent) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "Application Job Queue resume threshold percent must be less than the pause threshold percent");
+    }
     for (const auto &channel_name : options.client_server_channels) {
         if (!options.client_server_channels_with_server.contains (channel_name)
             && !options.client_server_channels_with_client.contains (channel_name)) {

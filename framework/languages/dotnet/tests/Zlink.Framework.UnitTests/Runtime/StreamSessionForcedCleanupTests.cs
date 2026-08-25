@@ -174,7 +174,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_request_retains_core_credit_until_the_awaited_reply_send_is_terminal()
+    public async Task Stream_request_retains_payload_owner_until_the_awaited_reply_send_is_terminal()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new StreamFlowLifetime();
@@ -197,7 +197,7 @@ public sealed class StreamSessionForcedCleanupTests
             static _ => { },
             "test",
             TimeProvider.System);
-        var retainedCredit = new CountingCreditOwner();
+        var payloadOwner = new CountingPayloadOwner();
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Request,
             ZlinkStreamCodec.Json,
@@ -213,17 +213,17 @@ public sealed class StreamSessionForcedCleanupTests
                 Message.From(ZLinkStreamPacketPayloadCodec.EncodeJson(
                     new StreamFlowRequest("request"),
                     typeof(StreamFlowRequest))),
-                coreCreditOwner: retainedCredit);
+                payloadOwner: payloadOwner);
             Assert.Equal(ZLinkSerialPostAdmission.Accepted, admission);
 
             await socket.SendAsyncStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.Equal(0, retainedCredit.DisposeCount);
+            Assert.Equal(0, payloadOwner.DisposeCount);
             Assert.False(lifetime.ReplyCompleted.Task.IsCompleted);
 
             socket.AllowSendAsync.TrySetResult();
             await lifetime.ReplyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            await WaitUntilAsync(() => retainedCredit.DisposeCount == 1);
-            Assert.Equal(1, retainedCredit.DisposeCount);
+            await WaitUntilAsync(() => payloadOwner.DisposeCount == 1);
+            Assert.Equal(1, payloadOwner.DisposeCount);
         }
         finally
         {
@@ -560,7 +560,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_receive_retains_raw_credit_after_a_later_frame_parse_failure_until_the_admitted_handler_finishes()
+    public async Task Stream_receive_retains_payload_owner_after_a_later_frame_parse_failure_until_the_admitted_handler_finishes()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new SessionOrderingLifetime();
@@ -578,7 +578,7 @@ public sealed class StreamSessionForcedCleanupTests
             CancellationToken.None,
             runtime.ExecutionOwner);
         var node = new ZLinkStreamNodeRuntime(
-            "stream-retained-credit-parse-failure",
+            "stream-payload-owner-parse-failure",
             provider,
             socket,
             monitor,
@@ -586,7 +586,7 @@ public sealed class StreamSessionForcedCleanupTests
             runner,
             "test");
         var routingId = RoutingId.From("session-a");
-        var retainedCredit = new CountingCreditOwner();
+        var payloadOwner = new CountingPayloadOwner();
         try
         {
             node.Start();
@@ -603,16 +603,16 @@ public sealed class StreamSessionForcedCleanupTests
             socket.EnqueueRetainedRawPart(
                 routingId,
                 validFrame.Concat(invalidSecondPrefix).ToArray(),
-                retainedCredit);
+                payloadOwner);
 
             await lifetime.WaitDispatchStartedAsync(routingId);
             await WaitUntilAsync(() => socket.DisconnectCount == 1);
-            Assert.Equal(0, retainedCredit.DisposeCount);
+            Assert.Equal(0, payloadOwner.DisposeCount);
 
             lifetime.ReleaseFirst.TrySetResult();
             await lifetime.WaitDispatchCompletedAsync(routingId);
-            await WaitUntilAsync(() => retainedCredit.DisposeCount == 1);
-            Assert.Equal(1, retainedCredit.DisposeCount);
+            await WaitUntilAsync(() => payloadOwner.DisposeCount == 1);
+            Assert.Equal(1, payloadOwner.DisposeCount);
         }
         finally
         {
@@ -2011,7 +2011,7 @@ public sealed class StreamSessionForcedCleanupTests
             RoutingId? RoutingId,
             Message Part,
             bool HasMore,
-            IDisposable? RetainedCreditOwner)>
+            IDisposable? PayloadOwner)>
             _receivedParts = new();
         private readonly AutoResetEvent _receiveSignal = new(false);
         private int _recvPartCount;
@@ -2054,8 +2054,6 @@ public sealed class StreamSessionForcedCleanupTests
 
         public void SetTlsServer(string certPath, string keyPath, bool requireClientCert) { }
 
-        public void OnSendReady(Action handler) { }
-
         public IZLinkBackendSocketPoller CreateReceivePoller() =>
             new TestStreamSocketPoller(
                 () => !_receivedParts.IsEmpty,
@@ -2078,7 +2076,7 @@ public sealed class StreamSessionForcedCleanupTests
                     UnidentifiedPartConsumed.TrySetResult();
                 part = received.Part;
                 hasMore = received.HasMore;
-                received.RetainedCreditOwner?.Dispose();
+                received.PayloadOwner?.Dispose();
                 return true;
             }
 
@@ -2088,7 +2086,7 @@ public sealed class StreamSessionForcedCleanupTests
             return false;
         }
 
-        public bool RecvRetained(
+        public bool Recv(
             out ZLinkBackendStreamReceive? received,
             RecvFlags flags = RecvFlags.None)
         {
@@ -2104,11 +2102,11 @@ public sealed class StreamSessionForcedCleanupTests
                     part.RoutingId,
                     new[] { part.Part },
                     part.HasMore,
-                    part.RetainedCreditOwner is null
+                    part.PayloadOwner is null
                         ? part.Part
                         : new RetainedPartOwner(
                             part.Part,
-                            part.RetainedCreditOwner));
+                            part.PayloadOwner));
                 return true;
             }
 
@@ -2125,13 +2123,13 @@ public sealed class StreamSessionForcedCleanupTests
         public void EnqueueRetainedRawPart(
             RoutingId routingId,
             ReadOnlySpan<byte> bytes,
-            IDisposable retainedCreditOwner,
+            IDisposable payloadOwner,
             bool hasMore = false) =>
             EnqueuePart(
                 routingId,
                 Message.From(bytes),
                 hasMore,
-                retainedCreditOwner);
+                payloadOwner);
 
         public void EnqueueUnidentifiedRawPart(ReadOnlySpan<byte> bytes) =>
             EnqueuePart(null, Message.From(bytes), false);
@@ -2140,13 +2138,13 @@ public sealed class StreamSessionForcedCleanupTests
             RoutingId? routingId,
             Message part,
             bool hasMore,
-            IDisposable? retainedCreditOwner = null)
+            IDisposable? payloadOwner = null)
         {
             _receivedParts.Enqueue((
                 routingId,
                 part,
                 hasMore,
-                retainedCreditOwner));
+                payloadOwner));
             _receiveSignal.Set();
         }
 
@@ -2230,7 +2228,7 @@ public sealed class StreamSessionForcedCleanupTests
             while (_receivedParts.TryDequeue(out var received))
             {
                 received.Part.Dispose();
-                received.RetainedCreditOwner?.Dispose();
+                received.PayloadOwner?.Dispose();
             }
             _receiveSignal.Set();
             if (DisposeFailure is not null)
@@ -2239,10 +2237,10 @@ public sealed class StreamSessionForcedCleanupTests
 
         private sealed class RetainedPartOwner(
             Message part,
-            IDisposable retainedCreditOwner) : IDisposable
+            IDisposable payloadOwner) : IDisposable
         {
             private Message? _part = part;
-            private IDisposable? _retainedCreditOwner = retainedCreditOwner;
+            private IDisposable? _payloadOwner = payloadOwner;
 
             public void Dispose()
             {
@@ -2253,14 +2251,14 @@ public sealed class StreamSessionForcedCleanupTests
                 finally
                 {
                     Interlocked.Exchange(
-                        ref _retainedCreditOwner,
+                        ref _payloadOwner,
                         null)?.Dispose();
                 }
             }
         }
     }
 
-    private sealed class CountingCreditOwner : IDisposable
+    private sealed class CountingPayloadOwner : IDisposable
     {
         private int _disposeCount;
 

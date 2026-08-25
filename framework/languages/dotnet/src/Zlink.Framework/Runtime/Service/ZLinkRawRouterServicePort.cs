@@ -47,8 +47,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         {
             poller.Add(
                 _socket,
-                PollEventFlags.PollIn | PollEventFlags.PollErr
-                | PollEventFlags.PollPri,
+                PollEventFlags.PollIn | PollEventFlags.PollErr,
                 1);
             _receivePoller = poller;
         }
@@ -109,8 +108,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
 
         var readiness = _receiveEvents[0].Revents;
         if ((readiness & (PollEventFlags.PollIn
-                          | PollEventFlags.PollErr
-                          | PollEventFlags.PollPri)) == 0)
+                          | PollEventFlags.PollErr)) == 0)
         {
             envelope = null;
             return false;
@@ -118,7 +116,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         var received = Received.Create();
         try
         {
-            if (_socket.RecvRetained(received, RecvFlags.DontWait))
+            if (_socket.Recv(received, RecvFlags.DontWait))
             {
                 envelope = new ZLinkRawRouterEnvelope(received);
                 return true;
