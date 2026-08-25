@@ -88,8 +88,12 @@ class large_message_buffer_pool_t
 
 large_message_buffer_pool_t &large_message_buffer_pool ()
 {
-    static large_message_buffer_pool_t pool;
-    return pool;
+    // Core can run the native message release callback while global sockets
+    // and contexts are being torn down.  Keep this bounded cache alive until
+    // process exit so a late callback never reaches a destructed mutex/vector.
+    // The OS reclaims its at-most-8MiB retained storage on process exit.
+    static large_message_buffer_pool_t *const pool = new large_message_buffer_pool_t ();
+    return *pool;
 }
 
 void release_pooled_message_buffer (void *, void *hint_) noexcept
@@ -101,10 +105,11 @@ zlink_config_result_t init_owned_message_storage (zlink_msg_t *message_, size_t 
 {
     constexpr size_t pooled_size_min = 128u * 1024u;
     constexpr size_t pooled_size_max = 1024u * 1024u;
-    // Core 0.10.1 measurements use the native allocator for large payloads.
-    // The binding pool was slower on the selected request/reply cells; keep
-    // ownership and the native message callback shape unchanged.
-    constexpr bool use_large_message_pool = false;
+    // Reuse bounded, binding-owned storage for large payloads. The callback
+    // hands a sent message back to this pool only after Core releases it, so
+    // message ownership and the public send-consumes-on-success contract stay
+    // unchanged.
+    constexpr bool use_large_message_pool = true;
     if (!use_large_message_pool || size_ < pooled_size_min || size_ > pooled_size_max)
         return zlink_msg_init_size (message_, size_);
 

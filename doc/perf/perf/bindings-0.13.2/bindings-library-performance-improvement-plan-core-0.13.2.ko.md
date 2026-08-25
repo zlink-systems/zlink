@@ -102,7 +102,7 @@ private/native handle 우회, public ownership 변경, timeout/close 동작 변�
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | Aggregate / report / log |
 |---|---|---|---|---|---|---|---|---|
-| tcp | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| tcp | PAIR | 미달(94.91%) | 통과(100.44%) | 통과(97.84%) | 미달(85.87%) | 통과(95.56%) | 미달(91.62%) | **미달(94.37%)** — 후보 A 채택, 후보 B 64KiB timeout 폐기. `log/cpp-single-pair-tcp-20260825.ko.md` |
 | tcp | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | tcp | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | tcp | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -147,9 +147,11 @@ private/native handle 우회, public ownership 변경, timeout/close 동작 변�
 
 ## 6. 다음 작업
 
-1. local Core 0.13.2와 local C/C++ bindings를 새 build로 구성한다.
-2. C++ Single `PAIR / tcp`의 C→C++ 64B smoke와 6-size paired baseline을 수행한다.
-3. 결과를 이 문서, 측정 시트, `log/`에 기록한다. 미달이면 이 문서 4절의 개선 pass를 끝낸다.
+1. C++ Single `PAIR / tcp`의 후보 A/B와 read-only review 결과를 기록·commit·push한다.
+2. `PAIR / tcp`는 strict target 기준 `미달`로 확정하고, 같은 규칙으로 다음 C++ Single
+   `PUBSUB / tcp`의 C→C++ 64B smoke와 6-size paired baseline을 수행한다.
+3. 각 결과를 이 문서, 측정 시트, `log/`에 기록한다. 미달이면 이 문서 4절의 개선 pass를
+   끝낸 뒤에만 다음 항목으로 이동한다.
 
 ## 7. 완료 기준
 
