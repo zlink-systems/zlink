@@ -126,7 +126,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | ws | ROUTER_ROUTER_REQREP | 미달(31.00%) | 미달(32.61%) | 미달(33.55%) | 통과(86.02%) | 통과(91.03%) | 통과(85.14%) | **미달(59.98%)** — 후보 B 채택(56.86%→59.98%); latency median 2.15x로 개선됐지만 request/reply 85%·2.0x 목표에는 미달. 후보 A는 exact-target contract no-go. `log/cpp-single-router-router-reqrep-ws-20260825.ko.md` |
 | wss | PAIR | 통과(88.18%) | 통과(106.16%) | 통과(97.27%) | 통과(96.54%) | 통과(98.92%) | 통과(87.53%) | **통과(95.77%)** — secure 5-run median, latency median 1.07x. `log/cpp-single-pair-wss-20260825.ko.md` |
 | wss | PUBSUB | 통과(95.05%) | 통과(96.73%) | 통과(96.39%) | 통과(100.53%) | 통과(101.93%) | 통과(98.90%) | **통과(98.25%)** — secure 5-run median, latency median 1.04x. `log/cpp-single-pubsub-wss-20260825.ko.md` |
-| wss | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| wss | DEALER_DEALER | 통과(91.20%) | 통과(97.34%) | 통과(90.86%) | 통과(103.93%) | 통과(96.12%) | 통과(83.83%) | **통과(93.89%)** — secure 5-run median, latency median 1.07x. `log/cpp-single-dealer-dealer-wss-20260825.ko.md` |
 | wss | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | wss | DEALER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | wss | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -188,6 +188,8 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     `PUBSUB / wss`를 같은 secure 규칙으로 측정한다.
 12. `PUBSUB / wss`도 C→C++ 64B smoke와 6-size secure 5-run median을 통과했다. 다음은
     `DEALER_DEALER / wss`를 같은 secure 규칙으로 측정한다.
+13. `DEALER_DEALER / wss`도 C→C++ 64B smoke와 6-size secure 5-run median을 통과했다. 다음은
+    `DEALER_ROUTER / wss`를 같은 secure 규칙으로 측정한다.
 
 ## 7. 완료 기준
 
