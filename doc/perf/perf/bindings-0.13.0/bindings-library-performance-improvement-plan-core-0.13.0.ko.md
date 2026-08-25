@@ -683,9 +683,9 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `진행 중` (`PAIR / tcp` 보류, `PAIR / ws`와 `PUBSUB / tcp` 통과, 나머지 미측정)
+- Single 상태: `진행 중` (`PAIR / tcp` 보류, `PAIR / ws`, `PAIR / wss`, `PUBSUB / tcp` 통과, 나머지 미측정)
 - Multi 상태: `미측정`
-- 다음 작업: transport 순서에 따라 `PAIR / wss` paired 측정과 개선 pass를 진행한다.
+- 다음 작업: transport 순서에 따라 `PAIR / tls` paired 측정과 개선 pass를 진행한다.
 
 #### 9.1.1 Single suite
 
@@ -705,7 +705,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `PAIR` | 통과(93.53%) | 통과(96.66%) | 통과(96.69%) | 통과(86.44%; 개별 90% 미달) | 통과(100.10%) | 통과(89.66%; 개별 90% 미달) | 완화 목표 90% 선택; aggregate throughput 93.85%, latency 1.103x; `cpp-pair-wss-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-wss.md) |
 | `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1241,16 +1241,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | C++ |  |
-| 현재 pattern | `PAIR / wss` | `PAIR/tcp` 보류, `PAIR/ws` 통과, `PUBSUB/tcp` 통과(선측정) |
-| paired C | 준비 | 다음 `PAIR/wss` smoke부터 진행 |
-| 개선 반복 | 준비 | 다음 `PAIR/wss` 자체 pass와 Sol pass |
-| 커밋과 푸시 | 진행 중 | PAIR/ws 측정 기록 검증 후 수행 |
+| 현재 pattern | `PAIR / tls` | `PAIR/tcp` 보류, `PAIR/ws`, `PAIR/wss` 통과, `PUBSUB/tcp` 통과(선측정) |
+| paired C | 준비 | 다음 `PAIR/tls` smoke부터 진행 |
+| 개선 반복 | 준비 | 다음 `PAIR/tls` 자체 pass와 Sol pass |
+| 커밋과 푸시 | 진행 중 | PAIR/wss 측정 기록 검증 후 수행 |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 진행 중 | 미측정 | transport 순서에 따라 `PAIR / wss` paired 측정과 개선 pass를 진행한다. |
+| 1 | C++ | 진행 중 | 미측정 | transport 순서에 따라 `PAIR / tls` paired 측정과 개선 pass를 진행한다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
