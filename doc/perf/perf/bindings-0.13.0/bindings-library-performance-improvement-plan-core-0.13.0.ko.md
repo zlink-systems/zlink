@@ -716,7 +716,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tls` | `PUBSUB` | 보류(87.29%) | 보류(94.99%) | 보류(91.24%) | 보류(88.95%) | 보류(88.04%) | 보류(85.59%) | aggregate throughput 89.35%, latency 1.044x; 자체/Sol no-go; `cpp-pubsub-tls-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pubsub-tls.md) |
 | `tls` | `DEALER_DEALER` | 보류(87.90%) | 보류(92.49%) | 보류(84.90%) | 보류(84.89%) | 보류(84.42%) | 보류(81.75%) | aggregate throughput 86.06%, latency 1.043x; 자체 public-path no-go; `cpp-dealer-dealer-tls-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-dealer-tls.md) |
 | `tls` | `DEALER_ROUTER` | 통과(91.48%) | 통과(97.71%) | 통과(98.73%) | 통과(82.21%) | 통과(86.69%) | 통과(80.56%) | routed one-way 목표 85%; aggregate throughput 89.56%, latency 0.992x; `cpp-dealer-router-tls-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-router-tls.md) |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `DEALER_ROUTER_REQREP` | 보류(50.12%) | 보류(58.15%) | 보류(48.89%) | 보류(92.28%) | 보류(88.09%) | 보류(95.52%) | request/reply 목표 85%; aggregate throughput 72.17%, latency 1.606x; secure final5; [log](log/2026-08-25-cpp-dealer-router-reqrep-tls.md) |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PAIR` | 보류(99.16%) | 보류(98.97%) | 보류(93.68%) | 보류(19.25%; latency 3.000x) | 보류(36.15%; latency 2.133x) | 보류(87.85%) | aggregate throughput 72.51%, latency 1.485x; 자체/Sol no-go, dead-pool cleanup 기각; `cpp-pair-inproc-core0130-before-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-inproc.md) |
