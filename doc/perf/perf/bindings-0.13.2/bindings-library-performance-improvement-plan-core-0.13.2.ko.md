@@ -83,7 +83,9 @@ secure transport(`tls`, `wss`)와 목표 경계 ±5%p는 C→binding 모두 5회
 2. 같은 manifest에서 모든 size를 C로 측정한 직후 binding before를 측정한다.
 3. aggregate가 미달이면 **다음 transport·pattern·언어로 이동하지 않는다**.
 4. profiler·allocation·copy·callback/dispatch·native boundary를 확인하고, public hot path의
-   후보 A를 구현한다. before/after와 기능 회귀를 기록한다.
+   후보 A를 구현한다. 후보마다 POSDDD 책임 경계, 중복·불필요한 상태/할당/분기 제거 이득도
+   별도로 평가한다. 성능 A/B의 조건을 바꾸지 않도록 리팩토링은 후보와 같은 작은 경계에
+   한정하고, before/after와 기능 회귀를 기록한다.
 5. 후보 A가 목표를 못 맞추거나 no-go이면 read-only Sol review를 받고, 공개 contract를
    유지하는 후보 B를 구현·측정하거나 no-go 근거를 남긴다.
 6. 두 pass 후에도 목표를 못 맞추면 `미달`로 확정하고 C report, binding report, 후보 A/B,
@@ -96,6 +98,12 @@ private/native handle 우회, public ownership 변경, timeout/close 동작 변�
 제거, pool 확장, large-message pool 확대는 금지한다. POSDDD 개선만으로 성능 미달을 통과로
 바꾸지 않는다.
 
+각 후보는 `doc/principal/dev/posddd.ko.md`의 POSDDD 원칙을 유지해야 한다. 처리량 개선과
+별개로 정보 은닉·책임 경계·중복 제거·불필요한 상태/할당/분기 제거 이득을 평가해 기록한다.
+성능 회귀, 새 복잡성, contract 위험이 있으면 그 정리는 남기지 않는다. POSDDD 이득만 있는
+후보는 채택할 수 있지만 performance 상태를 `미달`에서 `통과`로 바꾸지 않으며, 성능 수치와
+POSDDD 채택 근거를 같은 log·시트에 남긴다.
+
 ## 5. C++ Single 측정 표
 
 모든 셀은 새 local Core 기준의 `미측정`으로 시작한다.
@@ -106,7 +114,7 @@ private/native handle 우회, public ownership 변경, timeout/close 동작 변�
 | tcp | PUBSUB | 통과(93.93%) | 통과(97.32%) | 통과(98.48%) | 통과(92.53%) | 통과(100.05%) | 통과(91.25%) | **통과(95.60%)** — latency median 1.07x. `log/cpp-single-pubsub-tcp-20260825.ko.md` |
 | tcp | DEALER_DEALER | outlier(79.63%) | 통과(96.84%) | 통과(92.81%) | outlier(78.94%) | 통과(82.43%) | 통과(86.87%) | **통과(86.25%)** — latency median 1.20x; 64B·64KiB 개별 outlier는 aggregate 판정을 바꾸지 않는다. `log/cpp-single-dealer-dealer-tcp-20260825.ko.md` |
 | tcp | DEALER_ROUTER | outlier(77.91%) | 통과(100.17%) | 통과(99.41%) | outlier(77.27%) | 통과(88.93%) | 통과(92.62%) | **통과(89.38%)** — latency median 1.05x; 64B·64KiB 개별 outlier는 aggregate 판정을 바꾸지 않는다. `log/cpp-single-dealer-router-tcp-20260825.ko.md` |
-| tcp | DEALER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| tcp | DEALER_ROUTER_REQREP | 미달(66.10%) | 미달(57.12%) | 미달(38.78%) | 미달(72.29%) | 통과(80.36%) | 통과(90.54%) | **미달(67.53%)** — 후보 A 채택(66.57%→67.53%), 후보 B는 63.87% 회귀로 폐기. latency median 1.53x. `log/cpp-single-dealer-router-reqrep-tcp-20260825.ko.md` |
 | tcp | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | tcp | ROUTER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ws | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -151,7 +159,9 @@ private/native handle 우회, public ownership 변경, timeout/close 동작 변�
    기록·commit·push했다.
 2. `PUBSUB / tcp`, `DEALER_DEALER / tcp`, `DEALER_ROUTER / tcp`의 C→C++ 64B smoke와 6-size
    paired final 측정을 기록했다. routed one-way의 개별 outlier는 aggregate 통과를 바꾸지 않는다.
-3. 같은 규칙으로 다음 C++ Single `DEALER_ROUTER_REQREP / tcp`를 C→C++ 순서로 측정한다. 미달이면
+3. `DEALER_ROUTER_REQREP / tcp`는 후보 A/B와 POSDDD gate를 마쳤지만 목표에 미달했다. 후보 A만
+   유지하고 후보 B는 회귀로 폐기했다. 같은 규칙으로 다음 C++ Single `ROUTER_ROUTER / tcp`를
+   C→C++ 순서로 측정한다. 미달이면
    이 문서 4절의 개선 pass를 끝낸 뒤에만 다음 항목으로 이동한다.
 
 ## 7. 완료 기준

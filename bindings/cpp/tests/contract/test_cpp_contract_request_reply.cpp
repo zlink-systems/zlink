@@ -1287,11 +1287,14 @@ void test_reply_submit_is_one_shot_without_ghost_retry ()
     zlink::message_t one_shot = make_request_message ("reply:one-shot");
     try {
         router.reply (dealer_rid, 41).message (one_shot).submit ();
-        assert (false && "reply without a route must complete as not connected");
+        assert (false && "reply without a route must report Core backpressure");
     }
     catch (const zlink::submit_error_t &error) {
-        assert (error.result () == zlink::submit_result_t::not_connected);
-        assert (error.internal_errno () == ENOTCONN);
+        // Core's exact route reply path reports a missing writable pipe as
+        // backpressure. The binding forwards that submit verdict unchanged;
+        // it must not queue or retry this one-shot reply after a peer appears.
+        assert (error.result () == zlink::submit_result_t::backpressured);
+        assert (error.internal_errno () == EAGAIN);
     }
     assert (!one_shot.valid ());
 
