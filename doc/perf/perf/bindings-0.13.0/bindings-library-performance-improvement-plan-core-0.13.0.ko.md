@@ -723,7 +723,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `inproc` | `PUBSUB` | 보류(92.40%) | 보류(97.64%) | 보류(86.72%) | 보류(22.66%; latency 3.333x) | 보류(46.01%) | 보류(76.18%) | aggregate throughput 70.27%, latency 1.517x; 자체/Sol no-go; `cpp-pubsub-inproc-core0130-before-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pubsub-inproc.md) |
 | `inproc` | `DEALER_DEALER` | 보류(82.56%) | 보류(96.09%) | 보류(78.19%) | 보류(17.44%; latency 4.571x) | 보류(36.32%; latency 2.286x) | 보류(58.09%) | aggregate throughput 61.45%, latency 1.815x; 자체 public-path no-go; `cpp-dealer-dealer-inproc-core0130-before-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-dealer-inproc.md) |
 | `inproc` | `DEALER_ROUTER` | 보류(86.00%) | 보류(84.97%) | 보류(79.07%) | 보류(19.50%) | 보류(42.65%) | 보류(82.72%) | aggregate throughput 65.82%, latency 1.886x; public terminal no-go; `cpp-dealer-router-inproc-core0130-before-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-router-inproc.md) |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `DEALER_ROUTER_REQREP` | 보류(38.98%) | 보류(37.47%) | 보류(37.71%) | 보류(26.33%) | 보류(29.38%) | 보류(57.98%) | request/reply 목표 85%; aggregate throughput 37.98%, latency 1.309x; public completion path no-go; [log](log/2026-08-25-cpp-dealer-router-reqrep-inproc.md) |
 | `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `PAIR` | 보류(81.65%) | 보류(91.17%) | 보류(95.58%) | 보류(82.77%) | 보류(75.36%) | 보류(82.05%) | aggregate throughput 84.77%, latency 1.167x; 자체/Sol no-go; `cpp-pair-ipc-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-ipc.md) |
