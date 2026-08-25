@@ -269,7 +269,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Contains("phase=received", matching[0], StringComparison.Ordinal);
         if (expectHandlerError)
         {
-            Assert.Contains("event_id=zlink.dispatch_error", matching[1], StringComparison.Ordinal);
+            Assert.Contains("event=zlink.dispatch_error", matching[1], StringComparison.Ordinal);
             Assert.DoesNotContain("phase=", matching[1], StringComparison.Ordinal);
         }
         else

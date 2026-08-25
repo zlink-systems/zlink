@@ -126,26 +126,62 @@ D1~D10과 별개로, 전체 게이트를 돌리다 드러난 발산에 대해 �
 기본값은 **`OwnerLeaseTtl` 15초**다([Location runtime §5](../../../framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md)).
 framework 구현 기본값은 4언어 모두 스펙과 일치하므로, 어긋난 것은 주석뿐이다.
 
-## 구현 부채 — 이 캠페인이 만들고 넘기는 목록
+## 구현 부채 — 처리 결과
 
-문서를 확정한 결과 "지금 구현이 계약과 다르다"가 확정된 항목이다. **이 캠페인에서는 코드를
-고치지 않는다.** 별도 구현 작업으로 넘긴다.
+작성 시점에는 "이 캠페인에서 코드는 고치지 않는다"는 전제였다. 이후 사용자 지시로
+**배치 1~4에서 실제로 고쳤고**, 4언어 단위·계약 테스트와 언어간 통신 smoke, 7샘플까지
+그린이다. 아래는 확인한 최종 상태다.
 
-| 출처 | 언어 | 할 일 |
+| 출처 | 언어 | 할 일 | 상태 |
+|---|---|---|---|
+| D4 | dotnet, jvm, node | 같은 host에서 같은 session type을 둘 이상의 node에 등록하면 startup 실패 | **완료** — 3언어 모두 검사와 회귀 테스트 있음 |
+| D5 | 4언어 | `SessionReplacementCallbackTimeout`(기본 30,000 ms) 도입, 하드코딩 제거 | **완료** — 4언어 모두 option 노출 |
+| D6 | dotnet, jvm, node | Actor factory 없음의 오류를 `NotFound`로 | **완료** |
+| D7 | dotnet, node, cpp | `boundSessionReplaced(51)`의 별도 재시도 제거 | **완료** |
+| D3 | dotnet, cpp, node | late·duplicate command 44에 `late_session_route_update` Warning | **완료** — 3언어 모두 기록 |
+| D10 | dotnet | `MaxMessageSize` 초과 로그에 `EMSGSIZE` | **완료** |
+| D1 | cpp | eager coroutine 첫 turn이 session thread에서 시작하는 동작 정정 | **완료** — Actor relay 제출을 별도 실행기로 전환 |
+| G15 | dotnet, jvm, node | lane 정책 타입이 의미 없는 조합을 표현하지 못하게 | **완료** — jvm에 `ZLinkExecutionLanePolicy`와 컴파일 검증 테스트 추가 |
+| G22 | jvm | `close_reason`을 `server_shutdown`으로, idle·heartbeat timeout을 counter에 계상 | **완료** |
+| R1 | node, jvm | matching seal identity에서 coordinator 제거 | **완료** |
+
+### 남은 것 — 0건
+
+| 출처 | 언어 | 결과 |
 |---|---|---|
-| D4 | dotnet, jvm, node | 같은 host 안에서 같은 session type을 둘 이상의 node에 등록하면 startup 실패시키는 검사 추가 |
-| D5 | jvm, cpp | 교체 callback deadline 5초 하드코딩 제거, `SessionReplacementCallbackTimeout`(기본 30,000 ms) 도입 |
-| D5 | dotnet, node | 같은 option 이름으로 노출(현재 30초는 `DefaultRequestTimeout` 등 다른 값에 얹혀 있음) |
-| D6 | dotnet, jvm, node | Actor factory 없음의 오류를 `NotFound`로 변경 |
-| D7 | dotnet, node, cpp | `boundSessionReplaced(51)` 전송에 얹은 별도 재시도 제거. send timeout·`DeadlineExceeded` 일반 규칙만 사용 |
-| D3 | dotnet, cpp, node | late·duplicate command 44에 `late_session_route_update` Warning 기록 |
-| D10 | dotnet | `MaxMessageSize` 초과 로그에 `EMSGSIZE` 포함 |
-| D1 | cpp | eager coroutine 첫 turn이 session thread에서 시작하는 동작 정정 |
-| G15 | dotnet, jvm, node | lane 정책 타입이 의미 없는 조합을 표현할 수 없게 변경 |
-| G22 | jvm | `close_reason`을 `server_drain`에서 `server_shutdown`으로, `idle_timeout`·`heartbeat_timeout` 종료를 `zlink.stream.connections.closed`에 계상 |
-| ZW-G4 | cpp | crash 교체 노드를 평소 config로 띄우지 않는다. ZoneWorld 스펙 7.5대로 이전 owner의 zone을 되찾지 않는 재기동으로 바꾼다(dotnet의 `allowEmptyZoneSet`, node의 빈 zone 대기가 기준) |
-| R2 | dotnet | `zlink flow:` 본문 첫 key를 `event_id`에서 `event`로 바꾼다 |
-| G16 | 언어별 | 단일 언어 이탈 묶음 — 판정표 J8~J12 참조 |
+| R2 | dotnet | **완료** — `zlink flow:` 본문 첫 key를 `event`로 바꿨다. telemetry attribute(`event_id`)와 본문 축약 key(`event`)는 다른 집합이며 본문의 첫 필드만 어긋나 있었다. 본문 문자열을 검증하던 테스트 3곳도 함께 맞췄고 `Tag("event_id")`(attribute 조회)는 그대로 두었다 |
+| ZW-G4 | cpp | **이탈 아님 — 판정 정정.** cpp ZoneNode는 startup에서 zone을 claim하지 않고 factory만 등록한 뒤 `zoneworld-role-ready`를 알린다(`Server/ZoneNode/main.cpp`). 이전 owner의 zone을 자동 복원하지 않으므로 §7.5에 이미 맞다. dotnet이 `allowEmptyZoneSet` 플래그를 따로 둔 것은 dotnet만 `BotSpawner`가 startup에서 zone 2개를 확보하는 구조이기 때문이다 |
 
-D9(bind 시 Message Follow relay)는 4언어 어디에도 구현이 없어 계약 의도 자체를 재확인해야
-하므로 이 목록에 넣지 않고 relocation 주제로 이월한다.
+### 더 큰 구조 차이 — zone을 언제 확보하는가
+
+ZW-G4를 파다가 드러났다. 세 언어의 ZoneNode가 **zone Spot을 만드는 시점**이 다르다.
+
+| 언어 | startup에서 zone 확보 | 재시도와 실패 처리 | crash 교체 시 |
+|---|---|---|---|
+| dotnet | 한다 — `BotSpawner` | 120회 × 250ms, 초과하면 예외로 프로세스 종료 | `allowEmptyZoneSet=true` |
+| java | 한다 — `ZoneBootstrap` | `attempt >= 119`, `IllegalStateException` | `allowsEmptyZoneSet()` |
+| kotlin | 한다 — `ZoneOperations` | `attempt < 119`, `check` 실패 | `allowsEmptyZoneSet()` |
+| node | 한다 — `bootstrapZones` | — | `bootstrapZones: false` |
+| cpp | **안 한다** — factory만 등록하고 `zoneworld-role-ready`. zone Spot은 첫 요청 때 만들어진다 | — | 별도 처리 불필요 |
+
+**4:1로 cpp만 다르다.** dotnet·java·kotlin은 재시도 횟수(120)와 조기 탈출 조건(`attempt >= 8`)
+까지 같아 한 설계를 포팅한 것이 분명하다. 스펙은 "언어별 runner가 일부 ID를 runner-driven으로
+구현할 수는 있으나 ID의 전제·행동·단언 의미는 바꾸지 않는다"고 허용하지만, 이 차이는
+관측 의미에 닿는다.
+
+- **dotnet만 "zone 확보 실패 → 30초 뒤 프로세스 종료"** 경로를 갖는다. 오늘 실패의 상당수가
+  이 경로였다(`topology=ready`를 못 찍음).
+- `ZW-C1`은 "두 ZoneNode의 Registered·Connected 각각 정확"을 단언한다. cpp에서는 zone을
+  하나도 갖지 않은 노드도 Registered·Connected가 참일 수 있어 같은 문장이 다른 상태를
+  통과시킨다.
+
+**판정이 필요하다** — 세 언어가 zone 확보 시점을 통일해야 하는지, 아니면 스펙이 그 시점을
+명시해야 하는지. 이 캠페인에서 정하지 않고 올린다.
+
+**ZW-G4 판정을 두 번 뒤집었다.** 처음엔 dotnet이 이탈이라 보고 cpp 방식으로 바꿨다가, §7.5를
+끝까지 읽고 dotnet이 맞음을 확인해 되돌렸고, 다시 cpp를 이탈로 올렸다가 cpp 구현을 직접 읽고
+아님을 확인했다. **문서의 요약 행만 보고 판단하지 말 것** — 그 행이 가리키는 절과 각 언어의
+실제 코드를 함께 읽어야 한다.
+
+G16(단일 언어 이탈 묶음, 판정표 J8~J12)은 session 주제 대조 때 기록한 것으로, 위 항목들과
+겹치는 부분이 처리되면서 대부분 해소됐다. 남은 항목은 판정표에서 개별 확인이 필요하다.

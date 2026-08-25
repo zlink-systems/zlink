@@ -137,6 +137,27 @@ flowchart LR
   precondition) deterministically exist — a diagonal split ({nw,se}/{ne,sw}) has no same-owner
   adjacent pair and would make E4 unsatisfiable, so it is excluded. The preference is only the
   claim-attempt ORDER, not owner computation; placement remains owned by Framework capacity.
+- **The readiness line is fixed.** When a ZoneNode finishes preparing it writes exactly one line
+  to standard output: `topology=ready node=<NodeId> zones=<comma-joined ZoneIds>`. With no zone,
+  nothing follows `zones=`. The runner waits on this line before moving to the next step, so a
+  per-language string makes a shared runner procedure impossible. No extra field is appended.
+- **Bootstrap announces readiness only after it holds two zones.** A ZoneNode claims at startup
+  and repeats until its own census holds two zones. Announcing readiness before that lets
+  `ZW-C1` — "the console observes both ZoneNodes as Registered and Connected" — pass a node that
+  holds no zone, which changes what the assertion means. Registering only the factory and
+  creating the Zone Spot on the first request does not satisfy this.
+- **Claim retry is `250 ms` apart, at most `120` attempts.** The other ZoneNode may not be up
+  yet, leaving capacity free, so a node retries instead of failing immediately. A node that
+  exhausts all 120 attempts without holding two zones fails startup — it never quietly announces
+  readiness with no zone. The values are fixed because a per-language interval or count makes the
+  same scenario fail at a different moment in each language, which splits the verdict.
+- **A crash-replacement process announces readiness without claiming a zone.** §7.5 defines a
+  crash replacement as "becoming able to accept new objects" and forbids restoring the previous
+  owner's objects. Only in this case is readiness announced with zero zones, and the runner turns
+  that intent on explicitly. The setting is named `allowEmptyZoneSet`, spelled to each language's
+  naming rule (`allow_empty_zone_set`, `allowsEmptyZoneSet`). On this path a node stops retrying
+  and announces readiness once `attempt` reaches `8` with an empty census. A normal startup never
+  takes this path.
 - `zoneworld.mesh` carries the ChannelName, Spot/Actor direct messages, and Logical Multicast.
 - `zoneworld.broadcast` is a classic fanout publisher/subscriber connection independent of the mesh.
 - Location Store placement selects the owner of objects such as Zone Spots and Player Actors.

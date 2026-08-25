@@ -10,12 +10,9 @@ public sealed class RegressionTests
         "README.ko.md",
         // 언어별 공개 계약은 시스템 구조, 인터페이스와 선택 capability의 정확한 시그니처를 고정한다.
         // 기능별 의미는 공통 스펙(framework/doc/framework/common/spec)이 소유한다.
-        "01-system-structure.ko.md",
-        "02-handler-interfaces.ko.md",
+        // 내용 없이 링크만 중계하던 이동 안내 문서는 지웠다 — 정확한 선언은
+        // languages/dotnet/interfaces/ 아래 범주별 문서가 소유한다.
         "03-stream-connector.ko.md",
-        "04-routing-id-allocation.ko.md",
-        "05-route-mesh.ko.md",
-        "06-location-store.ko.md",
         "dotnet-http-client.ko.md",
     ];
 
@@ -782,12 +779,13 @@ public sealed class RegressionTests
         var specRoot = Path.Combine(GetCommonSpecRoot(), "server");
         var deletedSpecRoot = Path.GetFullPath(
             Path.Combine(GetCommonSpecRoot(), "..", "..", "spec"));
+        //  주제 디렉터리로 재구성한 뒤의 경로다. 옛 전역 번호 문서는 archive/에 있다.
         var required = new[]
         {
-            "07-channel-topology.ko.md",
-            "14-actor-model.ko.md",
-            "20-session-actor-dispatch.ko.md",
-            "29-transport-liveness.ko.md"
+            "02-channel-transport/01-channel-topology.ko.md",
+            "03-spot-actor/04-actor-model.ko.md",
+            "04-session/02-session-actor-binding.ko.md",
+            "02-channel-transport/05-transport-liveness.ko.md"
         };
         var writingGuide = Path.GetFullPath(Path.Combine(
             GetCommonSpecRoot(),

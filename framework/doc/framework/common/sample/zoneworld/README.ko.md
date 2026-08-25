@@ -129,6 +129,27 @@ flowchart LR
   same-owner 인접쌍(ZW-E4의 전제)이 모두 결정적으로 존재한다 — 대각 분할({nw,se}/{ne,sw})은
   same-owner 인접쌍이 없어 E4를 불충족으로 만들므로 배제한다. 선호는 claim 시도 순서일 뿐
   owner 계산이 아니며, placement 판정은 여전히 Framework capacity가 소유한다.
+- **ready 신호 문자열을 고정한다.** ZoneNode는 준비를 마치면 표준 출력에
+  `topology=ready node=<NodeId> zones=<쉼표로 이은 ZoneId>`를 정확히 한 줄 낸다. zone이
+  없으면 `zones=` 뒤를 비운다. runner가 이 줄을 기다려 다음 단계로 넘어가므로 언어마다
+  문자열이 다르면 같은 runner 절차를 쓸 수 없다. 이 줄에 다른 field를 덧붙이지 않는다.
+- **Bootstrap은 zone 2개를 확보한 뒤에 ready를 알린다.** ZoneNode는 startup에서 claim을
+  시도하고, 자기 census가 zone 2개가 될 때까지 반복한다. 확보하기 전에 ready를 알리면
+  `ZW-C1`이 "두 ZoneNode의 Registered·Connected 각각 정확"을 단언할 때 zone을 갖지 않은
+  node도 통과시켜 단언의 뜻이 달라진다. factory만 등록하고 첫 요청에서 zone Spot을 만드는
+  구현은 이 조건을 만족하지 않는다.
+- **claim 재시도는 `250 ms` 간격으로 최대 `120`회다.** 다른 ZoneNode가 아직 뜨지 않아
+  capacity가 남아 있을 수 있으므로 즉시 실패하지 않고 반복한다. 120회를 모두 쓰고도 zone
+  2개를 확보하지 못하면 startup 실패로 끝낸다 — 조용히 zone 없이 ready를 알리지 않는다.
+  간격과 횟수를 언어마다 다르게 두면 같은 시나리오가 언어별로 다른 시점에 실패해 판정이
+  갈리므로 값을 고정한다.
+- **crash 교체 process는 zone을 확보하지 않고 ready를 알린다.** §7.5가 crash replacement를
+  "새 object를 수용할 수 있게 되는 것"으로 정의하고 이전 owner object의 자동 복원을 금지하기
+  때문이다. 이 경우에만 zone 0개로 ready이며, runner가 그 의도를 명시적으로 켠다. 설정
+  이름은 `allowEmptyZoneSet`으로 고정한다(각 언어의 이름 규칙을 따라 표기만 바꾼다 —
+  `allow_empty_zone_set`, `allowsEmptyZoneSet`). 이 경로에서는 `attempt`가 `8`에 이르고
+  census가 비어 있으면 재시도를 멈추고 ready를 알린다. 일반 startup에서는 이 경로를 쓰지
+  않는다.
 - zoneworld.mesh는 ChannelName, Spot·Actor direct message와 Logical Multicast를 운반한다.
 - zoneworld.broadcast는 mesh와 독립된 classic fanout publisher/subscriber 연결이다.
 - Zone Spot·Player Actor 같은 object의 owner는 Location Store placement가 선택한다.
