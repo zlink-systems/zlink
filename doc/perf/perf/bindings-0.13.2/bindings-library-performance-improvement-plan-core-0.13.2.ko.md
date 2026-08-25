@@ -116,7 +116,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | tcp | DEALER_ROUTER | outlier(77.91%) | 통과(100.17%) | 통과(99.41%) | outlier(77.27%) | 통과(88.93%) | 통과(92.62%) | **통과(89.38%)** — latency median 1.05x; 64B·64KiB 개별 outlier는 aggregate 판정을 바꾸지 않는다. `log/cpp-single-dealer-router-tcp-20260825.ko.md` |
 | tcp | DEALER_ROUTER_REQREP | 미달(66.10%) | 미달(57.12%) | 미달(38.78%) | 미달(72.29%) | 통과(80.36%) | 통과(90.54%) | **미달(67.53%)** — 후보 A 채택(66.57%→67.53%), 후보 B는 63.87% 회귀로 폐기. latency median 1.53x. `log/cpp-single-dealer-router-reqrep-tcp-20260825.ko.md` |
 | tcp | ROUTER_ROUTER | 통과(82.52%) | 통과(88.62%) | 통과(94.57%) | outlier(77.59%) | 통과(85.64%) | 통과(92.88%) | **통과(86.97%)** — latency median 1.10x; 64KiB 개별 outlier는 aggregate 판정을 바꾸지 않는다. `log/cpp-single-router-router-tcp-20260825.ko.md` |
-| tcp | ROUTER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| tcp | ROUTER_ROUTER_REQREP | 미달(67.02%) | 미달(57.02%) | 미달(39.58%) | 미달(69.36%) | 통과(79.75%) | 통과(99.21%) | **미달(68.66%)** — 후보 A 66.61% 회귀, 후보 B 68.66%로 개선 없음이라 모두 폐기. latency median 1.58x. `log/cpp-single-router-router-reqrep-tcp-20260825.ko.md` |
 | ws | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ws | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ws | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -160,9 +160,10 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 2. `PUBSUB / tcp`, `DEALER_DEALER / tcp`, `DEALER_ROUTER / tcp`의 C→C++ 64B smoke와 6-size
    paired final 측정을 기록했다. routed one-way의 개별 outlier는 aggregate 통과를 바꾸지 않는다.
 3. `DEALER_ROUTER_REQREP / tcp`는 후보 A/B와 POSDDD gate를 마쳤지만 목표에 미달했다. 후보 A만
-   유지하고 후보 B는 회귀로 폐기했다. `ROUTER_ROUTER / tcp`는 aggregate를 통과했다. 같은 규칙으로
-   다음 C++ Single `ROUTER_ROUTER_REQREP / tcp`를 C→C++ 순서로 측정한다. 미달이면
-   이 문서 4절의 개선 pass를 끝낸 뒤에만 다음 항목으로 이동한다.
+   유지하고 후보 B는 회귀로 폐기했다. `ROUTER_ROUTER / tcp`는 aggregate를 통과했다.
+   `ROUTER_ROUTER_REQREP / tcp`도 후보 A/B와 contract 검증을 끝냈으나 68.66%로 미달했고,
+   후보 A는 회귀·후보 B는 개선 없음이라 모두 폐기했다. 다음 C++ Single 항목도 같은 규칙으로
+   C→C++ 순서로 측정하며, 미달이면 이 문서 4절의 개선 pass를 끝낸 뒤에만 이동한다.
 
 ## 7. 완료 기준
 
