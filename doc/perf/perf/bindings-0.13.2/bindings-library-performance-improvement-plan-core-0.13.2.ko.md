@@ -136,7 +136,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | tls | DEALER_DEALER | 통과(84.62%) | 통과(98.89%) | 통과(94.83%) | 통과(80.48%) | 통과(86.20%) | 통과(80.34%) | **통과(87.56%)** — secure 5-run median, latency median 1.14x. `log/cpp-single-dealer-dealer-tls-20260825.ko.md` |
 | tls | DEALER_ROUTER | 통과(84.51%) | 통과(102.94%) | 통과(97.76%) | 통과(85.58%) | 통과(81.93%) | 통과(87.04%) | **통과(89.96%)** — secure 5-run median, latency median 1.10x. `log/cpp-single-dealer-router-tls-20260825.ko.md` |
 | tls | DEALER_ROUTER_REQREP | 미달(50.35%) | 미달(51.82%) | 미달(48.97%) | 통과(88.54%) | 통과(95.68%) | 통과(90.31%) | **미달(70.94%)** — secure 5-run median, latency median 1.62x. 후보 A는 exact-target contract no-go, 기존 async-only completion 후보 B는 contract 5/5 통과 상태로 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-dealer-router-reqrep-tls-20260825.ko.md` |
-| tls | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| tls | ROUTER_ROUTER | 통과(86.63%) | 통과(106.61%) | 통과(101.16%) | 통과(90.14%) | 통과(93.38%) | 통과(98.72%) | **통과(96.11%)** — secure 5-run median, latency median 1.07x. `log/cpp-single-router-router-tls-20260825.ko.md` |
 | tls | ROUTER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | inproc | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | inproc | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -220,6 +220,9 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     exact target을 생략해 terminal/no-reroute contract를 바꾸므로 no-go다. 후보 B인 async-only
     completion bridge는 contract 5/5를 통과하지만 throughput 70.94%로 request/reply 목표에는
     미달이다. 다음은 `ROUTER_ROUTER / tls`를 같은 secure 규칙으로 측정한다.
+23. `ROUTER_ROUTER / tls`는 C→C++ 64B smoke와 6-size secure 5-run median을 통과했다. 다음은
+    마지막 TLS Single 패턴 `ROUTER_ROUTER_REQREP / tls`를 같은 secure 규칙으로 측정하고, 미달이면
+    이 문서 4절의 개선 pass를 끝낸다.
 
 ## 7. 완료 기준
 
