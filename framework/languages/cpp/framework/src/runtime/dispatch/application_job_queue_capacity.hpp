@@ -215,7 +215,9 @@ inline application_job_queue_configuration_t
 resolve_application_job_queue_configuration (
   application_job_queue_profile_t profile,
   std::optional<std::uint32_t> configured_manual_max,
-  const application_job_queue_processor_limits_t &limits)
+  const application_job_queue_processor_limits_t &limits,
+  std::uint32_t pause_threshold_percent = 80,
+  std::uint32_t resume_threshold_percent = 60)
 {
     if (configured_manual_max
         && (*configured_manual_max == 0
@@ -233,7 +235,9 @@ resolve_application_job_queue_configuration (
       configured_manual_max,
       processors,
       configured_manual_max.value_or (
-        calculate_application_job_queue_limit (profile, processors))};
+        calculate_application_job_queue_limit (profile, processors)),
+      pause_threshold_percent,
+      resume_threshold_percent};
 }
 
 } // namespace zlink::framework::runtime

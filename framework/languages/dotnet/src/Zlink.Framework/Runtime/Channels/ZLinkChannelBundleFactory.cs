@@ -21,7 +21,9 @@ internal sealed class ZLinkChannelBundleFactory(
                 dealer,
                 dealer.Connect,
                 dealer.Disconnect,
-                socketRole: "client");
+                socketRole: "client",
+                receiveFlowRegistration:
+                    state.ApplicationJobQueue.RegisterReceiveFlowSocket(dealer));
 
             bundle.OwnManualConnectionAttachment(channel.Client.ManualConnections.Attach(
                 bundle.ConnectManual,
@@ -42,6 +44,7 @@ internal sealed class ZLinkChannelBundleFactory(
     {
         IRouterSocket? router = null;
         ZLinkChannelRuntimeBundle? bundle = null;
+        IDisposable? receiveFlowRegistration = null;
         try
         {
             router = state.Context.CreateRouterSocket();
@@ -50,6 +53,8 @@ internal sealed class ZLinkChannelBundleFactory(
             ApplySocketConfig(router.Options, channel.Server!.SocketConfig);
             router.Options.Mandatory = true;
             router.Options.Handover = true;
+            receiveFlowRegistration =
+                state.ApplicationJobQueue.RegisterReceiveFlowSocket(router);
             router.Bind(ZLinkNetworkEndpointResolver.Bind(
                 explicitEndpoint: null,
                 channel.Server.ListenPort,
@@ -73,11 +78,14 @@ internal sealed class ZLinkChannelBundleFactory(
                 router,
                 localRid: serverRid,
                 socketRole: "server",
-                clientServerServer: identity);
+                clientServerServer: identity,
+                receiveFlowRegistration: receiveFlowRegistration);
+            receiveFlowRegistration = null;
             return bundle;
         }
         catch (Exception initializationFailure)
         {
+            receiveFlowRegistration?.Dispose();
             await ThrowAfterCleanupAsync(initializationFailure, bundle, router).ConfigureAwait(false);
             throw new InvalidOperationException("Unreachable after startup cleanup failure propagation.");
         }

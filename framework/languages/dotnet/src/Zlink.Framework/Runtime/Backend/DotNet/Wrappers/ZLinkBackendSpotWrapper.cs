@@ -124,11 +124,6 @@ internal sealed class ZLinkBackendSpotWrapper :
         _pump.SetDispatchHandler(SpotId, handler);
     }
 
-    public void OnSendReady(Action handler)
-    {
-        _state.SendReadyHandler = handler;
-    }
-
     public bool RequestToChannel(
         string channelName,
         Message message,
@@ -365,9 +360,8 @@ internal sealed class ZLinkBackendSpotWrapper :
     }
 
     // Terminal admission failures (NotFound, InvalidState, ...) surface to the
-    // caller; Backpressured waits for send-ready; a NotConnected admission gap
-    // is a retriable transport window and rides the async submitter's retry
-    // classification instead of failing the blocking call outright.
+    // caller. Backpressured remains non-terminal only for the binding's accepted
+    // async operation; its completion is owned by the binding.
     private static bool AcceptRequestSubmit(SubmitResult submit, string targetDescription)
     {
         return submit switch

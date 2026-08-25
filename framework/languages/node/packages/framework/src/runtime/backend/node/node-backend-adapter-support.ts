@@ -15,6 +15,15 @@ export interface ZLinkBindingAsyncSendOperation {
   message(message: unknown): ZLinkBindingAsyncSendSubmitOperation;
 }
 
+export interface ZLinkBindingPublishOperation {
+  message(message: unknown): ZLinkBindingPublishSubmitOperation;
+}
+
+interface ZLinkBindingPublishSubmitOperation {
+  message(message: unknown): ZLinkBindingPublishSubmitOperation;
+  submit(): void;
+}
+
 interface ZLinkBindingAsyncSendSubmitOperation {
   message(message: unknown): ZLinkBindingAsyncSendSubmitOperation;
   timeout(timeoutMs: number): ZLinkBindingAsyncSendSubmitOperation;
@@ -78,6 +87,23 @@ export function submitBindingSend(
       current = current.message(toNativeMessageLike(payload));
     }
     return current.flags(flags).submit();
+  } catch (error) {
+    throw translateBindingResultError(error);
+  }
+}
+
+export function submitBindingPublish(
+  operation: ZLinkBindingPublishOperation,
+  payload: unknown
+): void {
+  try {
+    let current: ZLinkBindingPublishSubmitOperation | undefined;
+    const parts = Array.isArray(payload) ? payload : [payload];
+    for (const part of parts.length === 0 ? [Buffer.alloc(0)] : parts) {
+      const nativePart = toNativeMessageLike(part);
+      current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
+    }
+    current!.submit();
   } catch (error) {
     throw translateBindingResultError(error);
   }

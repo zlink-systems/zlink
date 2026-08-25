@@ -39,12 +39,19 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBri
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.dispatch
+    .ZLinkApplicationJobReceiveFlowController;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 
 final class ZLinkChannelSocketRegistry {
     private static final long READY_POLL_INTERVAL_MILLIS = 5;
 
     private final Map<String, ChannelRegistration> registrations = new HashMap<>();
+    private final ZLinkApplicationJobQueue applicationJobQueue;
+    private final Map<ZLinkBackendObject,
+        ZLinkApplicationJobReceiveFlowController.Registration>
+        receiveFlowRegistrations = new IdentityHashMap<>();
     private final Map<String, ZLinkBackendDealerSocket> clients = new HashMap<>();
     private final Map<String, ZLinkBackendRouterSocket> servers = new HashMap<>();
     private final Map<String, RoutingId> serverRoutingIds = new HashMap<>();
@@ -73,6 +80,14 @@ final class ZLinkChannelSocketRegistry {
     private static final long CLIENT_SERVER_DEADLINE_NANOS =
         TimeUnit.SECONDS.toNanos(15);
 
+    ZLinkChannelSocketRegistry() {
+        this(null);
+    }
+
+    ZLinkChannelSocketRegistry(ZLinkApplicationJobQueue applicationJobQueue) {
+        this.applicationJobQueue = applicationJobQueue;
+    }
+
     void registerChannel(ChannelRegistration registration) {
         registrations.put(registration.name(), registration);
     }
@@ -82,6 +97,7 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void registerClient(String channelName, ZLinkBackendDealerSocket socket) {
+        registerReceiveFlow(socket);
         clients.put(channelName, socket);
         ownedSockets.add(socket);
     }
@@ -90,6 +106,7 @@ final class ZLinkChannelSocketRegistry {
         String channelName,
         RoutingId routingId,
         ZLinkBackendRouterSocket socket) {
+        registerReceiveFlow(socket);
         servers.put(channelName, socket);
         serverRoutingIds.put(channelName, routingId);
         ownedSockets.add(socket);
@@ -110,6 +127,7 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void registerRouteRouter(String channelName, ZLinkBackendRouterSocket socket) {
+        registerReceiveFlow(socket);
         routeRouters.put(channelName, socket);
         routeSocketLocks.put(channelName, new Object());
         ownedSockets.add(socket);
@@ -224,15 +242,21 @@ final class ZLinkChannelSocketRegistry {
         }
     }
 
-    synchronized void addClientServerConnection(
+    void addClientServerConnection(
         String connectionId,
         ZLinkClientServerServerDescriptor descriptor,
         ZLinkBackendDealerSocket dealer) {
-        clientServerConnections.put(
-            connectionId,
-            new ClientServerConnection(
-                connectionId, descriptor, dealer, false));
-        ownedSockets.add(dealer);
+        // This method used to hold the registry monitor while adding the
+        // physical DEALER. The absolute flow-state application happens before
+        // that monitor is acquired so a binding call cannot block routing.
+        registerReceiveFlow(dealer);
+        synchronized (this) {
+            clientServerConnections.put(
+                connectionId,
+                new ClientServerConnection(
+                    connectionId, descriptor, dealer, false));
+            ownedSockets.add(dealer);
+        }
     }
 
     void registerClientServerMonitor(
@@ -898,6 +922,7 @@ final class ZLinkChannelSocketRegistry {
     private void closeClientServerPhysical(
         ClientServerConnection connection) {
         ZLinkBackendSocketMonitor monitor;
+        ZLinkApplicationJobReceiveFlowController.Registration receiveFlow;
         synchronized (this) {
             if (connection.physicalClosed) {
                 return;
@@ -909,7 +934,9 @@ final class ZLinkChannelSocketRegistry {
                 ownedSockets.removeIf(candidate -> candidate == monitor);
             }
             ownedSockets.removeIf(candidate -> candidate == connection.dealer);
+            receiveFlow = receiveFlowRegistrations.remove(connection.dealer);
         }
+        closeReceiveFlowRegistration(receiveFlow);
         synchronized (connection.transportLock) {
             if (monitor != null) {
                 try {
@@ -1155,8 +1182,52 @@ final class ZLinkChannelSocketRegistry {
             owned = List.copyOf(ownedSockets);
             ownedSockets.clear();
         }
+        owned.forEach(this::deregisterReceiveFlow);
         closeAll(owned, Collections.newSetFromMap(
             new IdentityHashMap<>()));
+    }
+
+    private void registerReceiveFlow(ZLinkBackendDealerSocket socket) {
+        if (applicationJobQueue == null) {
+            return;
+        }
+        ZLinkApplicationJobReceiveFlowController.Registration registration =
+            applicationJobQueue.registerReceiveFlowTarget(
+                socket::setReceiveFlowState);
+        ZLinkApplicationJobReceiveFlowController.Registration previous;
+        synchronized (this) {
+            previous = receiveFlowRegistrations.put(socket, registration);
+        }
+        closeReceiveFlowRegistration(previous);
+    }
+
+    private void registerReceiveFlow(ZLinkBackendRouterSocket socket) {
+        if (applicationJobQueue == null) {
+            return;
+        }
+        ZLinkApplicationJobReceiveFlowController.Registration registration =
+            applicationJobQueue.registerReceiveFlowTarget(
+                socket::setReceiveFlowState);
+        ZLinkApplicationJobReceiveFlowController.Registration previous;
+        synchronized (this) {
+            previous = receiveFlowRegistrations.put(socket, registration);
+        }
+        closeReceiveFlowRegistration(previous);
+    }
+
+    private void deregisterReceiveFlow(ZLinkBackendObject socket) {
+        ZLinkApplicationJobReceiveFlowController.Registration registration;
+        synchronized (this) {
+            registration = receiveFlowRegistrations.remove(socket);
+        }
+        closeReceiveFlowRegistration(registration);
+    }
+
+    private static void closeReceiveFlowRegistration(
+        ZLinkApplicationJobReceiveFlowController.Registration registration) {
+        if (registration != null) {
+            registration.close();
+        }
     }
 
     private void addAutoConnectSurfaces(

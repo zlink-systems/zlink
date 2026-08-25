@@ -932,9 +932,9 @@ send queue doesn't drain — meaning remote delay is conveyed as send-side waiti
 rather than as a separate signal.
 
 This wait is why [one-way submit](05-async-execution-policy.en.md#13-one-way-submit)
-is async. If capacity is insufficient, the framework waits up to the per-family send
-timeout, then submits exactly once; if no room opens up within that window, it
-completes with [DeadlineExceeded](#deadlineexceeded). The internal state at this
+is async. Once the first binding operation starts, Core owns HWM retry and completes the
+per-operation completion. If the deadline ends first, it completes with
+[DeadlineExceeded](#deadlineexceeded). The internal state at this
 point is called [Backpressured](#backpressured) and isn't exposed as a public
 terminal result.
 
@@ -942,8 +942,8 @@ terminal result.
 ### Backpressured
 
 The internal state where the send path or queue's capacity is temporarily
-insufficient. Not a public terminal result — the framework waits for capacity up to
-the per-family send timeout. Once Logical Multicast has started, per-target capacity
+insufficient. It is not a public terminal result; Core handles HWM retry until the binding
+operation completes. Once Logical Multicast has started, per-target capacity
 shortfalls aren't aggregated into public results or publish-only monitoring.
 
 <a id="core-hwm-budget"></a>
@@ -966,6 +966,12 @@ permit before receive/claim. An application record releases it at the handler's 
 instruction; a control or malformed record releases it immediately after internal
 processing. When capacity is unavailable, a cancellable wait propagates backpressure;
 there is no generic capacity reject, drop, polling, busy-spin, or unbounded bypass queue.
+
+At or above the configured pause boundary, permits in use changes the host pressure state to
+`paused`; at or below the configured resume boundary, it changes to `running`. The default
+percentages are 80 and 60, and the current state is kept between the boundaries. This is an
+absolute flow state applied to supported sockets; it does not directly change route readiness
+or transport liveness.
 
 <a id="timed-out"></a>
 ### DeadlineExceeded
@@ -1261,7 +1267,7 @@ connection and the exact identity the chunk carries.
 | Public composition | Carries the `RelocationId`, target attempt, chunk ordinal, and encoded length. The whole-payload checksum that validates the assembled result is carried by the Restore request, not by chunks. |
 | Creation/management | The source runtime splits the captured payload into pieces no larger than the effective chunk size. The effective size is the smallest of the server setting `RelocationPayloadChunkLimit` (default 256 KiB), the effective receive chunk bound announced by the target, and the effective [in-flight payload budget](#in-flight-payload-budget). |
 | Delivery | Sent with `[send]` on the same ordered mesh connection after the Restore request. Not exposed in application messages. |
-| Lifetime | The target releases the chunk's Core retained lease immediately after copying it into the assembly buffer. A missing or duplicate ordinal, a chunk of an already-ended attempt, or exceeding the declared length isn't added to the assembly and is treated as an explicit failure. |
+| Lifetime | Core's byte charge ends when the complete chunk message is dequeued into the binding/framework. The target copies the chunk data into the assembly buffer, then releases the input message buffer under ordinary framework ownership. A missing or duplicate ordinal, a chunk of an already-ended attempt, or exceeding the declared length isn't added to the assembly and is treated as an explicit failure. |
 | Application authority | The application doesn't create, interpret, or change chunks. |
 
 <a id="in-flight-payload-budget"></a>

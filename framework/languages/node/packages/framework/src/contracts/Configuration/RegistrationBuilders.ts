@@ -337,6 +337,22 @@ export class DefaultInboundDispatchOptionsBuilder implements ZLinkInboundDispatc
     };
     return this;
   }
+
+  applicationJobQueuePauseThresholdPercent(value: number): this {
+    this.options.applicationJobQueue = {
+      ...this.options.applicationJobQueue,
+      pauseThresholdPercent: value
+    };
+    return this;
+  }
+
+  applicationJobQueueResumeThresholdPercent(value: number): this {
+    this.options.applicationJobQueue = {
+      ...this.options.applicationJobQueue,
+      resumeThresholdPercent: value
+    };
+    return this;
+  }
 }
 
 function coreHwmProfileValue(value: ZLinkCoreHwmProfile): (typeof AutoHwmProfile)[keyof typeof AutoHwmProfile] {

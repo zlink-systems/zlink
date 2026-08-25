@@ -42,6 +42,7 @@ public interface ZLinkFrameworkOptions {
     void setApplicationVersion(long version);
     void setMaintenanceWave(String waveId);
     ZLinkLocationOptions configureLocations();
+    ZLinkInboundDispatchOptions configureInboundDispatch();
     ZLinkNetworkOptions configureNetwork();
     ZLinkMeshNodeBuilder addRouteMesh(String meshName);
     ClientServerChannelBuilder addClientServerChannel(String channelName);
@@ -67,6 +68,23 @@ public enum ZLinkApplicationJobQueueProfile {
     LOW_LATENCY,
     BALANCED,
     THROUGHPUT
+}
+
+public interface ZLinkInboundDispatchOptions {
+    OptionalLong coreHwmMemoryLimitBytes();
+    void setCoreHwmMemoryLimitBytes(long value);
+    OptionalLong coreHwmBudgetBytes();
+    void setCoreHwmBudgetBytes(long value);
+    ZLinkCoreHwmProfile coreHwmProfile();
+    void setCoreHwmProfile(ZLinkCoreHwmProfile value);
+    ZLinkApplicationJobQueueProfile applicationJobQueueProfile();
+    void setApplicationJobQueueProfile(ZLinkApplicationJobQueueProfile value);
+    OptionalLong maxQueuedApplicationJobs();
+    void setMaxQueuedApplicationJobs(long value);
+    int applicationJobQueuePauseThresholdPercent();
+    void setApplicationJobQueuePauseThresholdPercent(int value);
+    int applicationJobQueueResumeThresholdPercent();
+    void setApplicationJobQueueResumeThresholdPercent(int value);
 }
 
 public interface ZLinkLocationOptions {
@@ -235,12 +253,14 @@ public interface FanoutChannelBuilder {
 ```
 
 The `coreHwmMemoryLimitBytes`, `coreHwmBudgetBytes`, and `coreHwmProfile` members of the
-`ZLinkDispatchOptions` returned by `configureDispatch()` are forwarded to Core. The Java
+`ZLinkInboundDispatchOptions` returned by `configureInboundDispatch()` are forwarded to Core. The Java
 binding forwards a positive finite `Runtime.maxMemory()` runtime memory
 hint. Core and job-queue profiles are independent enums, both defaulting to `BALANCED`.
 Manual job cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and
-32/64/128/256 coefficients. Range violation and overflow fail before bind, and runtime does
-not recompute the result. The application
+32/64/128/256 coefficients. Pressure thresholds default to pause `80` and resume `60`; pause
+is an integer in `1..100`, resume is an integer in `0..99`, and resume must be less than pause.
+Violating these bounds or their ordering, or overflowing capacity, fails before bind, and runtime
+does not recompute the result. The application
 listener's default `maxMessageSize()` is
 `16_777_216L` bytes.
 
@@ -520,6 +540,8 @@ public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceSampleRate(double);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions includeMessageSizes(boolean);
+}
+public interface systems.zlink.framework.configuration.ZLinkInboundDispatchOptions {
   public abstract java.util.OptionalLong coreHwmMemoryLimitBytes();
   public abstract void setCoreHwmMemoryLimitBytes(long);
   public abstract java.util.OptionalLong coreHwmBudgetBytes();
@@ -530,6 +552,10 @@ public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
   public abstract void setApplicationJobQueueProfile(systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile);
   public abstract java.util.OptionalLong maxQueuedApplicationJobs();
   public abstract void setMaxQueuedApplicationJobs(long);
+  public abstract int applicationJobQueuePauseThresholdPercent();
+  public abstract void setApplicationJobQueuePauseThresholdPercent(int);
+  public abstract int applicationJobQueueResumeThresholdPercent();
+  public abstract void setApplicationJobQueueResumeThresholdPercent(int);
 }
 public interface systems.zlink.framework.configuration.ZLinkEndpointConnections {
   public abstract void connect(java.lang.String);
@@ -680,6 +706,7 @@ public interface systems.zlink.framework.configuration.ZLinkFrameworkOptions {
   public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder addStreamNode(java.lang.String);
   public abstract void addLocationStore(systems.zlink.framework.locations.ZLinkLocationStore);
   public abstract systems.zlink.framework.locations.ZLinkLocationOptions configureLocations();
+  public abstract systems.zlink.framework.configuration.ZLinkInboundDispatchOptions configureInboundDispatch();
   public abstract systems.zlink.framework.configuration.ZLinkNetworkOptions configureNetwork();
   public abstract void useFilter(java.lang.Class<? extends systems.zlink.framework.ZLinkHandlerFilter>);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions configureDispatch();

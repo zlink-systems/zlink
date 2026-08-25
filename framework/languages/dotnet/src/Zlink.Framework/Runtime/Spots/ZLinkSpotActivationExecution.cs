@@ -334,12 +334,12 @@ internal abstract partial class ZLinkSpotActivation
                     activation.DispatchActorJoinDrainTurnAsync(ct)),
                 () => QueueSerialized(static (activation, ct) =>
                     activation.DispatchActorLifecycleDrainAsync(ct)),
-                (actorParts, creditOwner) =>
+                (actorParts, payloadOwner) =>
                 {
                     var dispatchable = ZLinkActorHandoffIngress.CaptureMovingFrames(
                         _runtime,
                         actorParts,
-                        creditOwner);
+                        payloadOwner);
                     if (dispatchable.Count == 0)
                     {
                         dispatchable.Dispose();

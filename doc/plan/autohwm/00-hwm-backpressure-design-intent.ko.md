@@ -21,6 +21,10 @@ Core HWM은 “application이 힘들다”를 판단하지 않는다. Framework 
 사용량을 계산하지 않는다. 두 계층은 독립적으로 동작하며 한쪽 상태를 다른 쪽 counter에
 복사하지 않는다.
 
+`CoreHwmProfile`과 `ApplicationJobQueueProfile`은 같은 profile label을 사용해도 서로 다른
+public type과 계산이다. 둘의 기본값은 각각 `Balanced`이며 한쪽 설정이나 runtime 상태가 다른
+쪽 profile·상한을 바꾸지 않는다.
+
 ## 2. Core byte HWM의 목적
 
 ### 2.1 Message count가 아닌 byte
@@ -42,7 +46,11 @@ backpressured 상태가 되고, receiver가 충분한 byte를 소비하거나 bl
 - 기본적으로 HWM의 절반에 해당하는 byte를 소비하면 credit을 알린다.
 - LWM hint가 있으면 더 이른 credit 경계를 사용할 수 있다.
 - HWM에 실제로 막힌 writer가 있고 queue가 완전히 비면 LWM 전에도 진행을 복구한다.
-- Application send의 `EAGAIN`, send timeout, send-ready와 multipart 결과는 바뀌지 않는다.
+- Application send의 `EAGAIN`, send timeout, operation completion과 multipart 결과는 바뀌지 않는다.
+
+Core byte charge는 Core queue가 frame을 소유하는 동안만 유지한다. Complete message를 dequeue해
+binding에 넘기면 그 record의 Core HWM 계상은 끝난다. Framework payload ownership을 Core credit
+lease로 바꾸거나 handler·reply lifetime까지 byte charge를 연장하지 않는다.
 
 ### 2.2 Memory budget의 의미
 
@@ -86,9 +94,9 @@ application job permits in use
   + queued application jobs
 ```
 
-Queue hard 상한은 Framework가 제공하는 기본값 또는 Application 개발자가 성능 시험으로
-정한 값이다. Framework는 CPU 사용률이나 request payload 크기로 hard 상한을 자동 추측하지
-않는다.
+Queue hard 상한은 Framework가 effective processor 수와 독립된 job profile로 startup에서 계산한
+기본값 또는 Application 개발자가 성능 시험으로 정한 manual 값이다. Framework는 runtime CPU
+사용률이나 request payload 크기로 hard 상한을 동적으로 추측하지 않는다.
 
 ### 3.2 80% PAUSE와 60% RESUME
 
@@ -122,8 +130,9 @@ queue 상한과 오류는 기존 계약을 유지한다.
 ### 4.1 기존 completion lane 사용
 
 Paired DEALER/ROUTER는 application lane과 별도의 completion lane,
-`transport_lane_completion`을 사용한다. 첫 Core 구현은 이 lane에 Core가 내부 처리하는
-`PAUSED`·`RUNNING` 절대 상태를 추가한다.
+`transport_lane_completion`을 사용한다. Core는 이 lane에서 `PAUSED`·`RUNNING` 절대 상태를
+내부 처리한다. Framework가 Core HWM에 주는 runtime feedback은 지원 socket에 이 절대 상태를
+적용하는 state API 하나뿐이다.
 
 ```text
 Receiver Framework
@@ -168,8 +177,9 @@ send blocked
   OR pipe termination
 ```
 
-RESUME은 remote-pause 원인만 제거한다. Local HWM이 계속 full이면 send-ready가 발생하지
-않는다. 반대로 byte credit이 돌아와도 remote PAUSE가 남아 있으면 writable이 아니다.
+RESUME은 remote-pause 원인만 제거한다. Local HWM이 계속 full이면 operation completion은
+계속 대기한다. 반대로 byte credit이 돌아와도 remote PAUSE가 남아 있으면 Core가 operation을
+완료하지 않는다.
 
 Application이 보는 send 동작은 기존과 같아야 한다.
 
@@ -179,6 +189,12 @@ Application이 보는 send 동작은 기존과 같아야 한다.
 - 이미 시작한 multipart message는 기존 atomicity를 유지하고 다음 message부터 PAUSE를
   적용한다.
 - 이미 제출된 request나 one-way를 PAUSE 때문에 자동 replay하지 않는다.
+
+Core와 binding은 수용한 send의 HWM 대기, 내부 재시도와 operation별 completion을 소유한다.
+Framework는 exact target을 고른 뒤 binding operation 하나만 시작한다. 제거된 `send_ready`
+callback·event나 별도 readiness waiter·retry adapter를 복구하지 않고, operation 시작 뒤 target을
+다시 고르지 않는다. Framework service-wire `SendReady` kind `12`는 이 binding completion과
+다른 service control record다.
 
 ## 6. Heartbeat가 data line에 남는 이유
 
@@ -220,7 +236,7 @@ sequenceDiagram
     F->>RC: set receive flow RUNNING
     RC->>SC: RUNNING on completion lane
     SC->>SC: remove only remote-pause blocker
-    SC-->>A: send-ready only if no other blocker remains
+    SC-->>A: complete operation only if no other blocker remains
 ```
 
 PAUSE frame보다 먼저 application lane에 들어간 message는 FIFO 순서대로 남는다. Framework가
@@ -237,8 +253,9 @@ PAUSED
 ```
 
 실시간 messaging에서는 PAUSE가 몇 초·몇십 초 동안 계속되는 것을 무제한 정상 상태로 보지
-않는다. 기존 send·request deadline이 끝나면 기존 오류로 호출자에게 알린다. Retry, drop,
-다른 node 선택과 사용자 오류 처리는 기존 Application·Framework policy가 결정한다.
+않는다. 기존 send·request deadline이 끝나면 기존 오류로 호출자에게 알린다. Terminal 뒤 새
+operation의 retry·drop·target 선택과 사용자 오류 처리는 기존 Application policy가 결정한다.
+Framework는 끝난 operation을 replay하지 않는다.
 
 별도 public max-pause timeout은 첫 계약에 추가하지 않는다. 기존 send timeout과 topology
 liveness deadline이 각각 operation과 route의 종료 시점을 소유한다.

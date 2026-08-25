@@ -43,6 +43,7 @@ export interface ZLinkSpotNodeRuntimeOptionsFactoryOptions {
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly metrics: ZLinkRuntimeMetrics;
   readonly applicationJobQueue: ApplicationJobQueue;
+  readonly applicationJobReceiveFlowFailureSink: (error: unknown) => void;
 }
 
 export class ZLinkSpotNodeRuntimeOptionsFactory {
@@ -67,6 +68,8 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
       runtimeEventPublisher: this.options.runtimeEventPublisher,
       metrics: this.options.metrics,
       applicationJobQueue: this.options.applicationJobQueue,
+      applicationJobReceiveFlowFailureSink:
+        this.options.applicationJobReceiveFlowFailureSink,
       detachedTaskRunner: this.options.detachedTaskRunner,
       messageSerializers: this.options.registration.messageSerializers,
       entryActorRuntime: this.options.entryActorRuntime,

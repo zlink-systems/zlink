@@ -8,6 +8,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
@@ -106,9 +107,14 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             for (int index = 1; index < messages.size(); index++) {
                 submit.message(messages.get(index));
             }
-            CompletionStage<Void> completion = submit.submit()
-                .whenComplete((ignored, failure) ->
-                    Message.closeAll(messages));
+            CompletionStage<Void> completion;
+            try {
+                completion = submit.submit();
+            } catch (RuntimeException failure) {
+                completion = CompletableFuture.failedFuture(failure);
+            }
+            completion = completion.whenComplete((ignored, failure) ->
+                Message.closeAll(messages));
             submitted = true;
             return completion;
         } finally {
@@ -228,7 +234,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         Received received = new Received();
         boolean transferred = false;
         try {
-            if (!router.recvRetained(received, RecvFlags.DONT_WAIT)) {
+            if (!router.recv(received, RecvFlags.DONT_WAIT)) {
                 return Optional.empty();
             }
             RoutingId source = received.getRoutingId().orElseThrow(
@@ -295,11 +301,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         long transportPairId,
         long transportPairGeneration,
         List<byte[]> frames,
-        Received retained) implements AutoCloseable {
+        Received received) implements AutoCloseable {
         Inbound {
             Objects.requireNonNull(source, "source");
             frames = frames.stream().map(byte[]::clone).toList();
-            Objects.requireNonNull(retained, "retained");
+            Objects.requireNonNull(received, "received");
         }
 
         @Override
@@ -309,7 +315,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
 
         @Override
         public void close() {
-            retained.close();
+            received.close();
         }
     }
 }

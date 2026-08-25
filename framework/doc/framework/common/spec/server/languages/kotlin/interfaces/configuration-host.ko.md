@@ -65,6 +65,8 @@ public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceSampleRate(double);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions includeMessageSizes(boolean);
+}
+public interface systems.zlink.framework.configuration.ZLinkInboundDispatchOptions {
   public abstract java.util.OptionalLong coreHwmMemoryLimitBytes();
   public abstract void setCoreHwmMemoryLimitBytes(long);
   public abstract java.util.OptionalLong coreHwmBudgetBytes();
@@ -75,6 +77,10 @@ public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
   public abstract void setApplicationJobQueueProfile(systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile);
   public abstract java.util.OptionalLong maxQueuedApplicationJobs();
   public abstract void setMaxQueuedApplicationJobs(long);
+  public abstract int applicationJobQueuePauseThresholdPercent();
+  public abstract void setApplicationJobQueuePauseThresholdPercent(int);
+  public abstract int applicationJobQueueResumeThresholdPercent();
+  public abstract void setApplicationJobQueueResumeThresholdPercent(int);
 }
 public interface systems.zlink.framework.locations.ZLinkLocationOptions {
   public abstract java.time.Duration ownerLeaseRenewInterval();
@@ -126,6 +132,10 @@ public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
 }
 ```
 
+Core HWM과 application job queue 구성은 `options.configureInboundDispatch()`가 반환하는
+`ZLinkInboundDispatchOptions`에서 직접 설정한다. `configureDispatch { ... }`는 diagnostics DSL이며
+HWM이나 job queue 설정을 전달하지 않는다.
+
 `sessionRelocationSealTimeout()`은 Java와 같은 startup-only 양수 `Duration`이고 기본값은 3초다.
 Millisecond 변환 불가, 0, 음수와 무한대는 socket bind 전에 configuration error다.
 
@@ -149,7 +159,9 @@ StreamNode의 Core STREAM inbound에서 client→server complete message에만 �
 
 Kotlin binding은 Java runtime의 양수 유한 `Runtime.maxMemory()`를 Core runtime memory hint로 전달한다.
 Core profile과 Application job queue profile은 Java 공개 계약의 독립된 enum과 계산을 그대로 사용한다.
-Manual job cap, startup CPU snapshot과 overflow 검증도 Java 공개 계약과 같다.
+두 profile의 기본값은 `BALANCED`이고 pressure threshold 기본값은 pause `80`, resume `60`이다. Pause는
+`1..100`, resume은 `0..99`의 정수이며 resume은 pause보다 작아야 한다. Manual job cap, startup CPU
+snapshot과 bind 전 범위·순서·overflow 검증도 Java 공개 계약과 같다.
 
 ## Kotlin source signature
 

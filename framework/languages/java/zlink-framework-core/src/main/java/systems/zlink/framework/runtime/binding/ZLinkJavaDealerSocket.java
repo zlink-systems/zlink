@@ -6,6 +6,7 @@ import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.DealerSocket;
+import systems.zlink.contracts.sockets.ReceiveFlowState;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -27,6 +28,9 @@ final class ZLinkJavaDealerSocket
     @Override public synchronized void connect(String endpoint) { socket.connect(endpoint); }
     @Override public synchronized void disconnect(String endpoint) { socket.disconnect(endpoint); }
     @Override public synchronized void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
+    @Override public synchronized void setReceiveFlowState(ReceiveFlowState state) {
+        socket.options().receiveFlowState(state);
+    }
     @Override public boolean waitForReadable(Duration timeout) {
         return receivePoller.waitForReadable(timeout);
     }

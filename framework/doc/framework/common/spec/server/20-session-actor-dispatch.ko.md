@@ -449,7 +449,7 @@ process로 복구하지 않고 닫는다.
 제출한 뒤에는 Actor queue가 순서를 소유한다. Session turn과 Actor turn을 shared lock이나 callback stack으로 합치지
 않는다.
 
-Request completion, send-ready, binding update, relocation barrier와 disconnect cleanup은 infrastructure task에서
+Request와 binding operation completion, binding update, relocation barrier와 disconnect cleanup은 infrastructure task에서
 진행한다. Session 또는 Actor application callback이 비동기 작업을 기다리는 동안에도 진행해야 한다.
 
 Actor owner host의 Relocate는 §5 barrier를 사용한다. Session owner host의 Relocate와 Shutdown은 신규 session·binding을

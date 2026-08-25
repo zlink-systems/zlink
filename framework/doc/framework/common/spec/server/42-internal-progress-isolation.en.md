@@ -30,7 +30,7 @@ Runtime work splits into two groups of different character.
 | Region | What it does | Progress condition |
 |---|---|---|
 | application | Handler execution, Spot · Actor message, timer callback, session callback | Keeps order per Spot owner |
-| infrastructure | Peer accept, send-ready notification, call-completion confirmation, owner-info update, move procedure, shutdown procedure | **Progresses regardless of what application is waiting on** |
+| infrastructure | Peer accept, binding-operation completion, call-completion confirmation, owner-info update, move procedure, shutdown procedure | **Progresses regardless of what application is waiting on** |
 
 The formal spec's requirement is stronger than "progresses
 independently" — infrastructure work progresses in **an execution
@@ -63,8 +63,8 @@ Only supply identifiable before receive as terminal completion bypasses; every a
 control, or malformed ordinary record first uses the shared permit owned by the
 [dispatch loop](46-internal-dispatch-loop.en.md).
 
-Bounds with different purposes are not merged. Core directional byte HWM owns transport
-backpressure through retained credit; the host application job queue limits jobs before
+Bounds with different purposes are not merged. Core directional byte HWM creates transport
+backpressure from bytes currently owned by Core queues; the host application job queue limits jobs before
 callback start. Per-owner count/byte queues own ordering and structural isolation, and an
 outbound admission waiter owns its send deadline. A shared profile label or unit does not
 make their type, calculation, or error meaning the same.
@@ -174,18 +174,19 @@ The fact of being backpressured itself isn't a value the caller receives.
 the peer is slow, this side's memory would keep growing indefinitely,
 following the peer's processing speed.
 
-The receive side combines a Core retained-credit lease with a host-shared application job
-queue permit. An ordinary source receives/claims after permit readiness. An application job
-keeps the permit until actual callback start; a control or malformed ordinary record also
-acquires it and releases immediately after internal processing. A record received on an
-ordinary connection cannot gain terminal-completion bypass after classification.
+An ordinary source receives/claims after host-shared application job queue permit readiness.
+An application job keeps the permit until actual callback start. After receive, a payload owner
+manages native-storage lifetime but does not continue to occupy Core HWM budget. A control or
+malformed ordinary record also acquires the permit and releases it immediately after internal
+processing. A record received on an ordinary connection cannot gain terminal-completion bypass
+after classification.
 
 Terminal reply/error completion supply progresses on a separately identifiable pre-receive
 completion path, so correlation and terminal result remain live while ordinary queues are
 saturated. When a Core receive queue fills, directional byte HWM carries backpressure to the
 sender. Batch and 1:N never publish more jobs than secured permits. [Receive And Dispatch
 Loop](46-internal-dispatch-loop.en.md) owns fairness; [Payload Ownership](50-internal-message-ownership.en.md)
-owns retained-record lifetime.
+owns ordinary record-storage lifetime.
 
 StreamNode client-to-server complete-message `MaxMessageSize` is an independent wire guard.
 It checks header plus payload excluding the 6-byte prefix, defaults to `64 KiB`, and does
@@ -201,7 +202,7 @@ an unbounded backlog, polling, busy-spin, silent drop, or replay.
 
 | Bound | Measurement | Saturation meaning |
 |---|---|---|
-| Core HWM | Directional retained/accounted bytes | Backpressure from Core queue to sender |
+| Core HWM | Directional queued/accounted bytes | Backpressure from Core queue to sender |
 | Application job queue | Host-instance reserved/queued/in-use permits | Cancellable shared-cap wait |
 | Owner FIFO | Per-owner count and bytes | Structural owner-isolation error |
 | Outbound admission waiter | Bounded waiter per operation family | Original send deadline/cancellation result |
@@ -277,7 +278,21 @@ fail without waiting in every runtime.
 
 ## Progress Isolation Under Saturation
 
-Only terminal reply/error completion supply bypasses the shared permit. [Receive and Dispatch Loop](46-internal-dispatch-loop.en.md) owns permit ordering for ordinary/completion progress isolation; [Payload Ownership](50-internal-message-ownership.en.md) owns retained leases.
+Only terminal reply/error completion supply bypasses the shared permit. [Receive And Dispatch
+Loop](46-internal-dispatch-loop.en.md) owns permit ordering for ordinary/completion progress
+isolation. Post-receive storage follows [Payload Ownership](50-internal-message-ownership.en.md),
+but it is not Core HWM credit or a separate progress authority.
+
+## Pressure Transitions And Send Completion
+
+The host queue owner evaluates 80% pause and 60% resume hysteresis in the same synchronization
+boundary as permit-count changes. On a transition it applies the new absolute state to a snapshot
+of supported sockets; a new socket receives the current state before registry publication. Socket
+application is serialized per socket and skips stale sequences and an already-applied identical
+state. Binding calls run outside queue, registry, and user locks, and close removes the socket from
+the registry before proceeding. Because Core and the binding own HWM retry and per-operation
+completion, the framework infrastructure domain has no separate `send_ready` waiter or retry
+adapter.
 
 ---
 

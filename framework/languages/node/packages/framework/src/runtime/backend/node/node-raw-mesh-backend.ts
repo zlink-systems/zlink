@@ -207,7 +207,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     private readonly meshName: string,
     routingId: string | undefined,
     private readonly bindingPort: ZLinkRawBindingPort,
-    private readonly applicationJobQueue?: ApplicationJobQueuePort
+    private readonly applicationJobQueue?: ApplicationJobQueuePort,
+    private readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -359,6 +360,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         this.resolveAdvertisedEndpoint(boundEndpoint),
       bindingPort: this.bindingPort,
       applicationJobQueue: this.requireApplicationJobQueue(),
+      onReceiveFlowConfigFailure: this.applicationJobReceiveFlowFailureSink,
       onMailboxReady: (domain) => this.readyHandler?.(
         domain === 'application' ? ReadyDomain.Application : ReadyDomain.Infrastructure
       ),
@@ -1496,7 +1498,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         // inserting the idle polling interval between readable batches.
         delayMs = received ? 0 : MESH_BACKEND_IDLE_POLL_INTERVAL_MS;
       } finally {
-        if (!this.closed && this.pollTimer === undefined) this.schedulePoll(delayMs);
+        if (!this.closed) this.schedulePoll(delayMs);
       }
     }, delayMs);
   }

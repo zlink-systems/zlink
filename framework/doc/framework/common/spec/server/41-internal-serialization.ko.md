@@ -109,7 +109,7 @@ thread-local에 문맥을 두면, 다음 작업이 다른 thread에서 실행될
 | Request | 다른 node | 기다리지 않고 `Unavailable` |
 | Control claim | 같은 runtime | 별도 한도. 넘기면 `CapacityExceeded` |
 | Control claim | 다른 node | `Unavailable` |
-| 송신 backpressure | — | 송신 준비 알림을 기다린다. 대기열 포화가 아니라 전송 계층의 흐름 제어다 |
+| 송신 backpressure | — | Core가 기다린 뒤 binding operation을 완료한다. Framework send-ready waiter는 없다 |
 
 기다리는 것과 즉시 끝내는 것을 가르는 기준은 **호출자가 결과를 받아 판단할 수 있는가**다.
 Request는 받을 수 있으므로 기다리지 않고, send 계열은 받을 수 없으므로 기다린다. 이미

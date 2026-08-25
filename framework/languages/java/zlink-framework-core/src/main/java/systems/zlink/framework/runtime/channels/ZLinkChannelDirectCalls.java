@@ -156,12 +156,14 @@ final class PublishCall implements ZLinkFanoutPublishCall {
         try (var flowScope = runtime.enterApplicationFlow()) {
             List<Message> publishParts = ZLinkChannelCallRuntime.parts(
                 packetName, payload, contentType);
-            CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
-                publisher.publishAsync(
-                    topic, publishParts, SendFlags.DONT_WAIT));
-            result.whenComplete((ignored, failure) ->
-                publishParts.forEach(Message::close));
-            return result;
+            try {
+                return ZLinkOneWayCalls.oneWayStatus(
+                    publisher.publish(topic, publishParts, SendFlags.DONT_WAIT)
+                        ? ZLinkOneWayCalls.SUBMITTED
+                        : ZLinkOneWayCalls.BACKPRESSURED);
+            } finally {
+                publishParts.forEach(Message::close);
+            }
         }
     }
 }

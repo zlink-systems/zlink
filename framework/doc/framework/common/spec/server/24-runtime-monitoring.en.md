@@ -134,19 +134,23 @@ Host status's capacity item coherently reads the Core HWM snapshot and applicati
 job queue snapshot from one measurement epoch. It does not walk queues to build a snapshot.
 
 The Core HWM snapshot includes configured memory limit, manual budget, and profile;
-effective budget; total applied HWM; core-queue, application, current, provisional, and peak
-accounted bytes; completion current, peak, and pending; total messaging, monitor-queue
-applied/accounted, and total-instance applied/accounted bytes; blocked ratio; active
-ordinary, completion, send, and receive queue counts; outstanding application leases;
-retired queues; and deferred origin credit. It projects the Core runtime snapshot unchanged; the framework
-does not recompute it.
+effective budget; total applied HWM; core-queue, current, provisional, and peak accounted
+bytes; completion current, peak, and pending; total messaging, monitor-queue
+applied/accounted, and total-instance applied/accounted bytes; blocked ratio; and active
+ordinary, completion, send, and receive queue counts. The `application accounted bytes`,
+`outstanding application lease`, `retired queue`, and `deferred origin credit` fields are
+ABI-reserved compatibility fields and are always `0` since 0.13.1. They do not imply an
+application byte HWM or lease. The framework projects the Core runtime snapshot unchanged
+and neither recomputes nor repurposes it.
 
-The application job queue snapshot includes configured profile and manual maximum,
-effective processor count and effective maximum, reserved supply permits, queued
-application jobs, permits in use and peak, capacity waiters, capacity wait count, and
-capacity wait duration. Reset preserves configuration and current gauges and advances the
-measurement epoch. It rebases peak to current at the same boundary and clears epoch count
-and duration. A concurrent event belongs to exactly one epoch and peak cannot be below
+The application job queue snapshot includes configured profile and manual maximum;
+configured pause and resume percentages; effective processor count and effective maximum;
+computed pause and resume permit counts; reserved supply permits; queued application jobs;
+permits in use and peak; the `running|paused` pressure state; current pause duration;
+capacity waiters, wait count, and wait duration. Reset preserves configuration, the pressure
+state, and current pause duration and advances the measurement epoch. It clears metric pressure
+transition count, cumulative pause duration, and flow-state configuration failure count.
+A concurrent event belongs to exactly one epoch and peak cannot be below
 current.
 
 This status does not include payload, Actor ID, Spot ID, session ID, RID, endpoint, message

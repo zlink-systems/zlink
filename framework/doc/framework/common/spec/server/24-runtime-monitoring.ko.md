@@ -124,16 +124,20 @@ Host status의 capacity 항목은 같은 measurement epoch에서 Core HWM snapsh
 queue snapshot을 coherent하게 읽는다. Queue를 순회해서 snapshot을 만들지 않는다.
 
 Core HWM snapshot은 configured memory limit·manual budget·profile, effective budget,
-total applied HWM, core queue·application·current·provisional·peak accounted bytes,
+total applied HWM, core queue·current·provisional·peak accounted bytes,
 completion current·peak·pending, total messaging, monitor queue applied/accounted와 total instance
-applied/accounted bytes, blocked ratio, active ordinary/completion/send/receive queue 수,
-outstanding application lease, retired queue와 deferred origin credit를 포함한다. 이 값은 Core runtime
-snapshot을 그대로 투영하며 Framework가 다시 계산하지 않는다.
+applied/accounted bytes, blocked ratio, active ordinary/completion/send/receive queue 수를 포함한다.
+`application accounted bytes`, `outstanding application lease`, `retired queue`, `deferred origin credit`
+네 field는 ABI 호환을 위해 남은 reserved field이며 0.13.1 이후 항상 `0`이다. Application byte HWM이나
+lease가 존재한다는 뜻이 아니다. Framework는 Core runtime snapshot을 그대로 투영하며 다시 계산하거나
+다른 의미로 사용하지 않는다.
 
-Application job queue snapshot은 configured profile·manual max, effective processor count·effective max,
-reserved supply permits, queued application jobs, permits in use·peak, capacity waiters,
-capacity wait count·duration을 포함한다. Reset은 configuration과 current gauge를 유지하고 measurement
-epoch을 증가시킨다. Peak는 같은 경계의 current로 재기준화하고 epoch count·duration은 0으로 만든다.
+Application job queue snapshot은 configured profile·manual max, configured pause·resume percent,
+effective processor count·effective max, 계산된 pause·resume permit count, reserved supply permits,
+queued application jobs, permits in use·peak, `running|paused` pressure state, current pause duration,
+capacity waiter·wait count·duration을 포함한다. Reset은 configuration, pressure state와 current pause
+duration을 유지하고 measurement epoch을 증가시킨다. Metric의 pressure transition count, cumulative
+pause duration과 flow-state config failure count는 0으로 만든다.
 동시 event는 이전 또는 새 epoch 중 정확히 하나에만 포함되며 peak는 current보다 작을 수 없다.
 
 이 status는 payload, Actor ID, Spot ID, session ID, RID, endpoint, message type이나 owner별 목록을

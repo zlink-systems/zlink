@@ -594,6 +594,10 @@ enum class application_job_queue_profile_t {
     balanced = 2,
     throughput = 3
 };
+enum class application_job_queue_pressure_state_t {
+    running = 0,
+    paused = 1
+};
 
 class zlink_framework_options_t {
 public:
@@ -604,6 +608,8 @@ public:
     worker_options_t &worker();
     dispatch_options_t &configure_dispatch();
     dispatch_options_t dispatch_options() const;
+    core_hwm_options_t &configure_core_hwm();
+    inbound_dispatch_options_t &configure_inbound_dispatch();
     location_options_t &configure_locations();
     location_options_t location_options() const;
     zlink_framework_options_t &set_max_pending(std::size_t count);
@@ -679,11 +685,17 @@ handoff payload는 source memory에서 target으로 직접 전송한다. Store�
 재정의한다. `worker()`는 bounded worker pool의 최소·최대 thread 수, idle timeout과 queue 상한을 반환한다.
 두 option은 host 시작 전에만 변경할 수 있다.
 
-`configure_dispatch()`는 host 전체 dispatch 설정 하나를 반환한다. Core memory limit·manual budget·profile은
-Core에 그대로 전달하며 C++은 managed-runtime hint를 만들지 않는다. 두 profile의 기본값은 각각
-`balanced`지만 독립된 enum과 계산이다. Manual job cap은 `1..2,147,483,647`이고 생략하면 common spec의
-startup CPU snapshot과 32/64/128/256 계수로 계산한다. 범위 위반과 overflow는 socket bind 전에 실패하며
-runtime 중 다시 계산하지 않는다.
+`configure_dispatch()`는 host 전체 진단·unhandled dispatch 설정을 반환한다.
+`configure_inbound_dispatch()`는 Core HWM과 Application Job Queue 설정을 반환한다. C++의 기존
+`configure_core_hwm()`은 Core-only 설정 surface로 유지되지만 job profile·manual cap·80/60 pressure
+threshold는 inbound-dispatch surface만 소유한다. Core memory limit·manual budget·profile은 Core에
+그대로 전달하며 C++은 managed-runtime hint를 만들지 않는다. 두 surface의 Core HWM 항목은 동일한
+startup 상태를 보는 호환 view이며 별도 profile이나 controller를 만들지 않는다. Core profile과 job
+queue profile의 기본값은 각각 `balanced`지만 서로 독립된 enum과 계산이다. Manual job cap은
+`1..2,147,483,647`이고 생략하면 common spec의 startup CPU snapshot과 32/64/128/256 계수로 계산한다.
+Pressure threshold 기본값은 pause `80`, resume `60`이다. Pause는 `1..100`, resume은 `0..99`의
+정수이고 resume은 pause보다 작아야 한다. 이 범위·순서 위반과 capacity overflow는 socket bind 전에
+실패하며 runtime 중 다시 계산하지 않는다.
 
 Application version과 maintenance wave는 host 전체에 한 번 설정한다. Version은 기본값 0인 non-negative
 signed 64-bit deployment ordinal이고 모든 local MeshNode가 같은 값을 게시한다. Empty optional wave는

@@ -61,15 +61,23 @@ public record ZLinkCoreHwmStatus(
     long retiredQueueCount,
     long deferredOriginCreditBytes) {}
 
+public enum ZLinkApplicationJobQueuePressureState { RUNNING, PAUSED }
+
 public record ZLinkApplicationJobQueueStatus(
     ZLinkApplicationJobQueueProfile configuredProfile,
     Optional<Long> configuredManualMax,
+    int configuredPauseThresholdPercent,
+    int configuredResumeThresholdPercent,
     long effectiveProcessorCount,
     long effectiveMaxQueuedApplicationJobs,
+    long pausePermitCount,
+    long resumePermitCount,
     long reservedSupplyPermits,
     long queuedApplicationJobs,
     long permitsInUse,
     long peakPermitsInUse,
+    ZLinkApplicationJobQueuePressureState pressureState,
+    Duration currentPauseDuration,
     long capacityWaiters,
     long capacityWaitCount,
     Duration capacityWaitDuration) {}
@@ -90,6 +98,11 @@ public record ZLinkFrameworkRuntimeStatus(
     long sequence,
     Instant observedAt) {}
 ```
+
+In `ZLinkCoreHwmStatus`, `applicationAccountedBytes`, `outstandingApplicationLeaseCount`,
+`retiredQueueCount`, and `deferredOriginCreditBytes` are ABI-reserved compatibility fields and
+are always `0` since 0.13.1. The framework projects them unchanged and does not reinterpret them
+as Application Job Queue pressure.
 
 The interface that starts relocation and shutdown is determined by the
 host lifecycle contract. Monitoring doesn't provide separate drain

@@ -43,18 +43,21 @@ task_t<bool> raw_dealer_port_t::send (const raw_message_t &parts)
           "raw dealer send requires message parts");
     }
     auto messages = materialize_binding_parts (parts);
-    // Routed send is a synchronous binding terminal. The framework owns the
-    // execution model, so the submit runs on this task's current thread.
-    std::lock_guard lock (*_socket_mutex);
-    if (!_socket) {
-        co_return false;
-    }
-    auto operation = std::move (_socket->send ()).message (messages[0]);
-    for (std::size_t index = 1; index < messages.size (); ++index) {
-        operation = std::move (operation).message (messages[index]);
-    }
+    std::optional<zlink::async_result_t<void>> pending;
     try {
-        std::move (operation).submit ();
+        {
+            std::lock_guard lock (*_socket_mutex);
+            if (!_socket) {
+                co_return false;
+            }
+            auto operation =
+              std::move (_socket->send ()).message (messages[0]);
+            for (std::size_t index = 1; index < messages.size (); ++index) {
+                operation = std::move (operation).message (messages[index]);
+            }
+            pending.emplace (std::move (operation).async ());
+        }
+        co_await std::move (*pending);
         co_return true;
     }
     catch (const zlink::submit_error_t &) {
@@ -71,31 +74,27 @@ task_t<zlink::submit_result_t> raw_dealer_port_t::send (
           "raw dealer send requires message parts and a positive timeout");
     }
     auto messages = materialize_binding_parts (parts);
-    // SNDTIMEO is the Core-owned wait bound for the synchronous submit, so it
-    // has to stay installed for the whole call and be restored afterwards.
-    std::lock_guard lock (*_socket_mutex);
-    if (!_socket) {
-        co_return zlink::submit_result_t::terminated;
-    }
-    const auto configured_timeout = _socket->options ().send_timeout ();
-    _socket->options ().send_timeout (timeout);
-    zlink::submit_result_t result = zlink::submit_result_t::ok;
+    std::optional<zlink::async_result_t<void>> pending;
     try {
-        auto operation = std::move (_socket->send ()).message (messages[0]);
-        for (std::size_t index = 1; index < messages.size (); ++index) {
-            operation = std::move (operation).message (messages[index]);
+        {
+            std::lock_guard lock (*_socket_mutex);
+            if (!_socket) {
+                co_return zlink::submit_result_t::terminated;
+            }
+            auto operation =
+              std::move (_socket->send ()).message (messages[0]);
+            for (std::size_t index = 1; index < messages.size (); ++index) {
+                operation = std::move (operation).message (messages[index]);
+            }
+            pending.emplace (
+              std::move (operation).timeout (timeout).async ());
         }
-        std::move (operation).submit ();
+        co_await std::move (*pending);
+        co_return zlink::submit_result_t::ok;
     }
     catch (const zlink::submit_error_t &error) {
-        result = error.result ();
+        co_return error.result ();
     }
-    catch (...) {
-        _socket->options ().send_timeout (configured_timeout);
-        throw;
-    }
-    _socket->options ().send_timeout (configured_timeout);
-    co_return result;
 }
 
 task_t<raw_request_completion_t> raw_dealer_port_t::request (

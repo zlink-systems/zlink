@@ -348,8 +348,9 @@ optional initial Mesh와 stable type을 지정할 수 있다. Initial Mesh는 co
 placement에만 사용하며 기존 owner의 현재 Mesh를 제한하거나 이동시키지 않는다.
 
 Application payload는 owner의 application turn에서 직렬로 처리한다. Request completion과
-liveness·admission·relocation·reply recovery service control은 기존 Completion connection에서 받고
-send-ready는 Core callback으로 전달한다. Location reconcile과 reservation 같은 Framework 내부 작업도
+liveness·admission·relocation·reply recovery service control은 기존 Completion connection에서 받는다.
+Core HWM 재시도는 binding operation별 completion으로 끝나며 Framework send-ready callback이나 waiter는 없다.
+Location reconcile과 reservation 같은 Framework 내부 작업도
 application handler가 대기 중이어도 진행한다. Actor·Spot lifecycle application callback은 application turn에서 실행한다.
 Transport readiness callback에서 application handler를 직접 실행하지 않는다.
 

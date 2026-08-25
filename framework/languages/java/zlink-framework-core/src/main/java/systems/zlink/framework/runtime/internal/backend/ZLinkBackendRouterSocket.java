@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.ReceiveFlowState;
 
 public interface ZLinkBackendRouterSocket
     extends ZLinkBackendConnectableSocket, ZLinkBackendReceiveSocket {
@@ -44,5 +45,11 @@ public interface ZLinkBackendRouterSocket
     default void disconnectPeer(RoutingId routingId) {
         throw new UnsupportedOperationException(
             "router peer disconnect is not available");
+    }
+
+    /** Applies the host's absolute paired-socket receive-flow state. */
+    default void setReceiveFlowState(ReceiveFlowState state) {
+        throw new UnsupportedOperationException(
+            "paired router receive-flow control is not available");
     }
 }

@@ -286,12 +286,18 @@ export interface ZLinkCoreHwmStatus {
 export interface ZLinkApplicationJobQueueStatus {
   readonly configuredProfile: ZLinkApplicationJobQueueProfile;
   readonly configuredManualMax?: bigint;
+  readonly configuredPauseThresholdPercent: number;
+  readonly configuredResumeThresholdPercent: number;
   readonly effectiveProcessorCount: bigint;
   readonly effectiveMaxQueuedApplicationJobs: bigint;
+  readonly pausePermitCount: bigint;
+  readonly resumePermitCount: bigint;
   readonly reservedSupplyPermits: bigint;
   readonly queuedApplicationJobs: bigint;
   readonly permitsInUse: bigint;
   readonly peakPermitsInUse: bigint;
+  readonly pressureState: "running" | "paused";
+  readonly currentPauseDurationSeconds: number;
   readonly capacityWaiters: bigint;
   readonly capacityWaitCount: bigint;
   readonly capacityWaitDurationSeconds: number;
@@ -312,6 +318,10 @@ export interface ZLinkFrameworkRuntime {
   shutdown(options?: ZLinkFrameworkLifecycleOptions): Promise<ZLinkFrameworkTerminationResult>;
 }
 ```
+
+`ZLinkCoreHwmStatus`의 `applicationAccountedBytes`, `outstandingApplicationLeaseCount`,
+`retiredQueueCount`, `deferredOriginCreditBytes`는 ABI 호환용 reserved field이며 0.13.1 이후 항상 `0n`이다.
+Framework는 이를 그대로 투영하며 Application Job Queue pressure로 다시 해석하지 않는다.
 
 `diagnosticsLevel`을 읽으면 process의 현재 진단 수준을 반환하고 값을 바꾸면 이후 message processing
 boundary부터 새 수준을 적용한다. 변경은 message 처리를 기다리지 않는 원자적 상태 변경이며 이미 telemetry

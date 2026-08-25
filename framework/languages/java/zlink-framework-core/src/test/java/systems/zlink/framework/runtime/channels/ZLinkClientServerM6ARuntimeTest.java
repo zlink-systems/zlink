@@ -884,6 +884,8 @@ final class ZLinkClientServerM6ARuntimeTest {
         private final List<byte[]> sent = new ArrayList<>();
         private final List<byte[]> requests = new ArrayList<>();
 
+        @Override public void setReceiveFlowState(
+            systems.zlink.contracts.sockets.ReceiveFlowState state) { }
         @Override public String name() {
             return "controlled";
         }
@@ -936,6 +938,8 @@ final class ZLinkClientServerM6ARuntimeTest {
         private boolean acceptSend = true;
         private RuntimeException sendFailure;
 
+        @Override public void setReceiveFlowState(
+            systems.zlink.contracts.sockets.ReceiveFlowState state) { }
         @Override public String name() {
             return "controlled-router";
         }

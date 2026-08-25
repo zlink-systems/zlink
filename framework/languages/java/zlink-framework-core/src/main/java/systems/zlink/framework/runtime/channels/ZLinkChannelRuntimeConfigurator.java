@@ -70,10 +70,12 @@ final class ZLinkChannelRuntimeConfigurator {
                 : channel.routingId();
         router.setRoutingId(serverRoutingId);
         applyServerSocketOptions(channel, router);
+        // Apply the host's current absolute flow state before this ROUTER is
+        // bound and therefore visible to ClientServer peers.
+        sockets.registerServer(channel.name(), serverRoutingId, router);
         for (String endpoint : channel.serverBinds()) {
             router.bind(endpoint);
         }
-        sockets.registerServer(channel.name(), serverRoutingId, router);
         dispatchRegistry.registerClientServer(
             channel.name(),
             handlers.sendHandlers(channel),
@@ -120,11 +122,13 @@ final class ZLinkChannelRuntimeConfigurator {
         // RouteMesh does not expose a Framework message-size limit. Core owns
         // the frame boundary; Framework only applies the routing weight.
         router.setPeerWeight(channel.serverSocketOptions().weight());
+        // Register before any configured route is attached or bound so a
+        // PAUSED host never exposes a newly created RouteMesh ROUTER as RUNNING.
+        sockets.registerRouteRouter(channel.name(), router);
         channel.routeConnections().attach(router);
         for (String endpoint : channel.routeBinds()) {
             router.bind(endpoint);
         }
-        sockets.registerRouteRouter(channel.name(), router);
         dispatchRegistry.registerRoute(
             channel.name(),
             handlers.routeSendHandlers(channel),

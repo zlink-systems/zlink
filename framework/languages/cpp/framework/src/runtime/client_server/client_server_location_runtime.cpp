@@ -650,6 +650,7 @@ void client_server_location_runtime_t::start_server (
         : std::optional<std::string> (advertise->second)};
     options.transport_poller = _transport_poller.get ();
     options.transport_poller_slot = next_transport_poller_slot ();
+    options.application_jobs = _application_jobs;
     auto raw = std::make_shared<raw_client_server_server_t> (
       std::move (options), _channel_runtime.core_context ());
     raw->start ();
@@ -985,6 +986,7 @@ void client_server_location_runtime_t::reconcile_channel (
           std::move (expected)};
         options.transport_poller = _transport_poller.get ();
         options.transport_poller_slot = next_transport_poller_slot ();
+        options.application_jobs = _application_jobs;
         auto raw = std::make_shared<raw_client_server_client_t> (
           std::move (options), _channel_runtime.core_context ());
         raw->start ();

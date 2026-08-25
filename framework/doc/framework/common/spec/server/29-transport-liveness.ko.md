@@ -292,6 +292,14 @@ Orderly disconnect와 peer deadline 초과는 서로 다른 reason으로 기록�
 label에는 endpoint, RID와 connection ID를 넣지 않는다. 개별 identity는 항목 수가
 제한된 snapshot과 trace에서만 제공한다.
 
+### Application job pressure와 route 상태
+
+Host의 Application Job Queue pressure가 `paused`여도 그 사실만으로 route ready, host ready 또는
+transport liveness를 바꾸지 않는다. 기존 topology별 progress 증거와 deadline이 liveness를 판정한다.
+여기서 설명한 receive-flow 적용 범위는 RouteMesh와 ClientServer의 paired DEALER/ROUTER socket뿐이며
+PUB/SUB와 STREAM은 제외한다. 새 대상 socket에는 현재 pressure 절대 상태를 적용한 뒤 route를 게시하며,
+`running`과 `paused` 모두 같은 순서를 따른다.
+
 ## 9. 구현 및 contract test 검증 요구
 
 | 범위 | 반드시 검증할 결과 |

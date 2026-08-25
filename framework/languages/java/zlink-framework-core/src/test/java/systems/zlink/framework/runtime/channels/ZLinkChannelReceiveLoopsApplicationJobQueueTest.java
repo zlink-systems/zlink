@@ -110,6 +110,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         private final ArrayDeque<ZLinkBackendReceived> inbound = new ArrayDeque<>();
         private final AtomicInteger receiveCount = new AtomicInteger();
 
+        @Override public void setReceiveFlowState(
+            systems.zlink.contracts.sockets.ReceiveFlowState state) { }
         @Override public void setChannelName(String value) { }
         @Override public void setRoutingId(RoutingId value) { }
         @Override public void setConnectRoutingId(RoutingId value) { }

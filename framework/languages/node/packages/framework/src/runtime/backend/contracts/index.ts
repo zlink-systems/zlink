@@ -467,7 +467,8 @@ export interface ZLinkBackendSocketMonitorEvent {
   readonly routingId?: unknown;
   readonly localAddr: string;
   readonly remoteAddr: string;
-  readonly value: number;
+  /** Lossless native monitor value (Core exposes the full unsigned 64-bit field). */
+  readonly value: bigint;
 }
 
 export interface ZLinkBackendObject {
@@ -486,6 +487,7 @@ export interface ZLinkBackendSocket extends ZLinkBackendObject {
   readonly lastEndpoint?: string;
   bind(endpoint: string): void;
   setChannelName(channelName: string): void;
+  setReceiveFlowState?(state: 0 | 1): void;
   dispose(): Promise<void>;
 }
 
@@ -495,6 +497,7 @@ export interface ZLinkBackendConnectableSocket extends ZLinkBackendSocket {
 }
 
 export interface ZLinkBackendDealerSocket extends ZLinkBackendConnectableSocket {
+  setReceiveFlowState(state: 0 | 1): void;
   setRoutingId(routingId: RoutingId): void;
   peerWeight: number;
   sendHighWaterMark: number;
@@ -527,6 +530,7 @@ export interface ZLinkBackendRequestOperation {
 }
 
 export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket {
+  setReceiveFlowState(state: 0 | 1): void;
   /** Enables the native probe handshake for manually configured routes. */
   setProbe(enabled: boolean): void;
   peerWeight: number;
@@ -534,7 +538,6 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
   receiveHighWaterMark: number;
   sendTimeoutMs: number;
   maxMessageSize: number;
-  onSendReady(handler: () => void): void;
   setRoutingId(routingId: RoutingId): void;
   recv(flags?: ZLinkBackendRecvFlags): Received | undefined;
   send(
@@ -564,9 +567,7 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
 
 export interface ZLinkBackendPublisherSocket extends ZLinkBackendSocket {
   sendHighWaterMark: number;
-  onSendReady(handler: () => void): void;
-  publish(topic: string, message: Message | readonly Message[], flags: ZLinkBackendSendFlags): boolean;
-  publishAsync(topic: string, message: Message | readonly Message[], timeoutMs?: number): Promise<void>;
+  publish(topic: string, message: Message | readonly Message[]): void;
 }
 
 export interface ZLinkBackendSubscriberSocket extends ZLinkBackendConnectableSocket {
@@ -584,7 +585,6 @@ export interface ZLinkBackendStreamSocket extends ZLinkBackendSocket {
   readonly sendHighWaterMark: number;
   /** Framework stream ingress uses this bound while assembling raw recv parts. */
   maxMessageSize: number;
-  onSendReady(handler: () => void): void;
   setTlsServer(cert: string, key: string, requireClientCert?: boolean): void;
   recv(flags?: ZLinkBackendRecvFlags): Received | undefined;
   send(routingId: RoutingId, payload: Message | readonly Message[], flags: ZLinkBackendSendFlags): boolean;
@@ -731,6 +731,7 @@ export interface ZLinkMeshBackendAdapter {
       readonly routingId?: RoutingId;
       readonly trustProfile?: string;
       readonly applicationJobQueue: import('../../application-jobs/contracts').ApplicationJobQueuePort;
+      readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
     }
   ): ZLinkBackendMeshNode;
 }

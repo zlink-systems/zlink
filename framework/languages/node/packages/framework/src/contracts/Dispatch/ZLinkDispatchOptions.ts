@@ -20,6 +20,8 @@ export interface ZLinkInboundDispatchOptions {
   coreHwmProfile(value: ZLinkCoreHwmProfile): this;
   applicationJobQueueProfile(value: ZLinkApplicationJobQueueProfile): this;
   maxQueuedApplicationJobs(value: bigint | undefined): this;
+  applicationJobQueuePauseThresholdPercent(value: number): this;
+  applicationJobQueueResumeThresholdPercent(value: number): this;
 }
 
 export interface ZLinkDispatchOptions {

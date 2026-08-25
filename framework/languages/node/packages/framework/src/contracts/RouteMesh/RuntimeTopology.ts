@@ -120,12 +120,18 @@ export interface ZLinkCoreHwmStatus {
 export interface ZLinkApplicationJobQueueStatus {
   readonly configuredProfile: ZLinkApplicationJobQueueProfile;
   readonly configuredManualMax?: bigint;
+  readonly configuredPauseThresholdPercent: number;
+  readonly configuredResumeThresholdPercent: number;
   readonly effectiveProcessorCount: bigint;
   readonly effectiveMaxQueuedApplicationJobs: bigint;
+  readonly pausePermitCount: bigint;
+  readonly resumePermitCount: bigint;
   readonly reservedSupplyPermits: bigint;
   readonly queuedApplicationJobs: bigint;
   readonly permitsInUse: bigint;
   readonly peakPermitsInUse: bigint;
+  readonly pressureState: 'running' | 'paused';
+  readonly currentPauseDurationSeconds: number;
   readonly capacityWaiters: bigint;
   readonly capacityWaitCount: bigint;
   readonly capacityWaitDurationSeconds: number;

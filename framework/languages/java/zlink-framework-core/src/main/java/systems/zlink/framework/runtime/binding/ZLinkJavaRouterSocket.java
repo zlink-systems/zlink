@@ -7,6 +7,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.contracts.sockets.ReceiveFlowState;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
@@ -28,6 +29,9 @@ final class ZLinkJavaRouterSocket
     @Override public synchronized void connect(String endpoint) { socket.connect(endpoint); }
     @Override public synchronized void disconnect(String endpoint) { socket.disconnect(endpoint); }
     @Override public synchronized void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
+    @Override public synchronized void setReceiveFlowState(ReceiveFlowState state) {
+        socket.options().receiveFlowState(state);
+    }
     @Override public synchronized void setRoutingId(RoutingId routingId) { socket.setRoutingId(routingId); }
     @Override public synchronized void setConnectRoutingId(RoutingId routingId) { socket.options().setConnectRoutingId(routingId); }
     @Override public synchronized void setProbe(boolean enabled) { socket.options().probe(enabled); }

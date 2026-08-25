@@ -86,7 +86,7 @@ internal sealed class ZLinkSpotActorFrame(
 internal sealed class ZLinkSpotActorFrameBatch(
     IReadOnlyList<ZLinkSpotActorFrame> frames,
     Action? completion = null,
-    IDisposable? creditOwner = null) : IDisposable
+    IDisposable? payloadOwner = null) : IDisposable
 {
     private int _disposed;
 
@@ -95,7 +95,7 @@ internal sealed class ZLinkSpotActorFrameBatch(
     public ZLinkSpotActorFrame this[int index] => frames[index];
 
     internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission =>
-        (creditOwner as ZLinkApplicationJobQueueCreditOwner)?.Admission;
+        (payloadOwner as ZLinkApplicationJobQueueRecordOwner)?.Admission;
 
     public long RetainedBytes
     {
@@ -112,7 +112,7 @@ internal sealed class ZLinkSpotActorFrameBatch(
     }
 
     public ZLinkSpotActorFrameBatch WithCompletion(Action onCompleted) =>
-        new(frames, onCompleted, creditOwner);
+        new(frames, onCompleted, payloadOwner);
 
     public void Dispose()
     {
@@ -130,7 +130,7 @@ internal sealed class ZLinkSpotActorFrameBatch(
             }
             finally
             {
-                creditOwner?.Dispose();
+                payloadOwner?.Dispose();
             }
         }
     }

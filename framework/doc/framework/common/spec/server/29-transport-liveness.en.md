@@ -337,6 +337,15 @@ different reasons. Metric labels don't include endpoint, RID, or connection
 ID. Individual identity is only provided via a count-limited snapshot and
 trace.
 
+### Application Job Pressure And Route State
+
+A host Application Job Queue pressure state of `paused` does not by itself change route
+readiness, host readiness, or transport liveness. Existing per-topology progress evidence and
+deadlines determine liveness. The receive-flow application described here is limited to paired
+DEALER/ROUTER sockets for RouteMesh and ClientServer; it excludes PUB/SUB and STREAM. The
+runtime applies the current absolute pressure state to a new eligible socket before publishing
+its route; this ordering is the same for `running` and `paused`.
+
 ## 9. Implementation And Contract-Test Verification Requirements
 
 | Scope | Result that must be verified |

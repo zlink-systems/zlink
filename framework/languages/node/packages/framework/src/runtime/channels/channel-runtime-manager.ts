@@ -60,12 +60,15 @@ export class ZLinkChannelRuntimeManager {
     options: ZLinkChannelRuntimeManagerOptions = {}
   ) {
     this.registration = registration;
+    const applicationJobQueue = options.applicationJobQueue
+      ?? new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
     this.sockets = new ZLinkChannelSocketRegistry(
       registration,
       adapter,
       context,
       options.monitoringAdapter,
-      options.oneWayFailureSink
+      options.oneWayFailureSink,
+      applicationJobQueue
     );
     const codecs: ZLinkChannelEnvelopeCodecRegistry = { serializers: registration.messageSerializers };
     const dispatchServices = new ZLinkChannelDispatchServices(
@@ -74,8 +77,6 @@ export class ZLinkChannelRuntimeManager {
       options.messageFlowModeCell
     );
     const spotRouteBridges = new Map<string, ZLinkBackendSpotRouteBridge>();
-    const applicationJobQueue = options.applicationJobQueue
-      ?? new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
     this.spotRoutes = new ZLinkSpotRouteDispatchStrategy({
       registration,
       sockets: this.sockets,

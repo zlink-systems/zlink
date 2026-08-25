@@ -59,15 +59,23 @@ public record ZLinkCoreHwmStatus(
     long retiredQueueCount,
     long deferredOriginCreditBytes) {}
 
+public enum ZLinkApplicationJobQueuePressureState { RUNNING, PAUSED }
+
 public record ZLinkApplicationJobQueueStatus(
     ZLinkApplicationJobQueueProfile configuredProfile,
     Optional<Long> configuredManualMax,
+    int configuredPauseThresholdPercent,
+    int configuredResumeThresholdPercent,
     long effectiveProcessorCount,
     long effectiveMaxQueuedApplicationJobs,
+    long pausePermitCount,
+    long resumePermitCount,
     long reservedSupplyPermits,
     long queuedApplicationJobs,
     long permitsInUse,
     long peakPermitsInUse,
+    ZLinkApplicationJobQueuePressureState pressureState,
+    Duration currentPauseDuration,
     long capacityWaiters,
     long capacityWaitCount,
     Duration capacityWaitDuration) {}
@@ -88,6 +96,10 @@ public record ZLinkFrameworkRuntimeStatus(
     long sequence,
     Instant observedAt) {}
 ```
+
+`ZLinkCoreHwmStatus`의 `applicationAccountedBytes`, `outstandingApplicationLeaseCount`,
+`retiredQueueCount`, `deferredOriginCreditBytes`는 ABI 호환용 reserved field이며 0.13.1 이후 항상 `0`이다.
+Framework는 이를 그대로 투영하며 Application Job Queue pressure로 다시 해석하지 않는다.
 
 Relocation과 shutdown을 시작하는 interface는 host lifecycle 계약이 정한다. Monitoring은 별도 drain
 control이나 component별 termination result를 제공하지 않는다. Exact runtime method

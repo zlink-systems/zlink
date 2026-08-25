@@ -239,7 +239,6 @@ public sealed class LogicalMulticastSubmitTests
             return targetMethod.Name switch
             {
                 nameof(IZLinkBackendSpot.Publish) => Publish(args),
-                nameof(IZLinkBackendSpot.OnSendReady) => null,
                 nameof(IAsyncDisposable.DisposeAsync) => ValueTask.CompletedTask,
                 _ => throw new NotSupportedException(targetMethod.Name)
             };

@@ -210,7 +210,7 @@ internal class ZLinkBackendActorJoinRequest(
     IReadOnlyList<Message> parts,
     ZLinkCanonicalActorJoin? canonical = null) : IDisposable
 {
-    private IDisposable? _creditOwner;
+    private IDisposable? _payloadOwner;
     public ZLinkBackendActorRef SourceActor { get; } = sourceActor;
 
     public ZLinkBackendActorRef TargetActor { get; } = targetActor;
@@ -231,15 +231,15 @@ internal class ZLinkBackendActorJoinRequest(
     // lifecycle path.
     internal ZLinkCanonicalActorJoin? Canonical { get; } = canonical;
 
-    internal void AttachCreditOwner(IDisposable creditOwner)
+    internal void AttachPayloadOwner(IDisposable payloadOwner)
     {
-        ArgumentNullException.ThrowIfNull(creditOwner);
-        if (Interlocked.CompareExchange(ref _creditOwner, creditOwner, null) is not null)
-            throw new InvalidOperationException("Actor join already owns a receive credit.");
+        ArgumentNullException.ThrowIfNull(payloadOwner);
+        if (Interlocked.CompareExchange(ref _payloadOwner, payloadOwner, null) is not null)
+            throw new InvalidOperationException("Actor join already owns its payload envelope.");
     }
 
     internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission =>
-        (_creditOwner as ZLinkApplicationJobQueueCreditOwner)?.Admission;
+        (_payloadOwner as ZLinkApplicationJobQueueRecordOwner)?.Admission;
 
     public void Dispose()
     {
@@ -249,7 +249,7 @@ internal class ZLinkBackendActorJoinRequest(
         }
         finally
         {
-            Interlocked.Exchange(ref _creditOwner, null)?.Dispose();
+            Interlocked.Exchange(ref _payloadOwner, null)?.Dispose();
         }
     }
 }
@@ -265,11 +265,11 @@ internal readonly record struct ZLinkBackendSpotDispatchInfo(
     Action? DrainChannelReply = null,
     IReadOnlyList<ZLinkBackendActorPart>? ActorParts = null,
     IReadOnlyList<ZLinkBackendRouteReceived>? RoutedMessages = null,
-    IDisposable? ActorCreditOwner = null);
+    IDisposable? ActorPayloadOwner = null);
 
 internal readonly record struct ZLinkBackendSocketMonitorEvent(
     ZLinkSocketNativeEventType NativeEvent,
     RoutingId? RoutingId,
     string LocalAddr,
     string RemoteAddr,
-    uint Value);
+    ulong Value);

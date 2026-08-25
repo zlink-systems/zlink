@@ -6,6 +6,7 @@ namespace Zlink.Framework.Runtime.Host;
 internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 {
     private readonly object _disposeGate = new();
+    private readonly IDisposable _pressureMetricRegistration;
     private Task? _disposeTask;
     private int _operationFenced;
 
@@ -21,7 +22,11 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         Registration = registration;
         ErrorSink = errorSink;
         ApplicationJobQueue = new ZLinkApplicationJobQueue(
-            applicationJobQueueCapacity);
+            applicationJobQueueCapacity,
+            receiveFlowFailureReporter: exception =>
+                errorSink.ReportRuntimeTaskException(
+                    "application-job-queue-receive-flow",
+                    exception));
         context.ConfigureApplicationJobQueue(ApplicationJobQueue);
         Capacity = new ZLinkHostCapacityProjection(
             context,
@@ -33,6 +38,9 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             StopTokenSource.Token,
             executionOwner,
             ownsSupervisor: true);
+        _pressureMetricRegistration =
+            ZLinkRuntimeMetrics.RegisterApplicationJobQueuePressure(
+                ApplicationJobQueue.GetPressureMetrics);
     }
 
     public IZLinkBackendRuntimeContext Context { get; }
@@ -233,6 +241,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         await CaptureAsync(() => WaitForListenerTasksAsync(resources.ListenerTasks)).ConfigureAwait(false);
 
         await CaptureAsync(TimerScheduler.DisposeAsync).ConfigureAwait(false);
+        Capture(_pressureMetricRegistration.Dispose);
         Capture(ErrorSink.Dispose);
         Capture(ForceStopTokenSource.Dispose);
         Capture(StopTokenSource.Dispose);

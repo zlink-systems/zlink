@@ -180,6 +180,203 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
   }
 });
 
+test('raw RouteMesh applies current receive-flow state before bind and unregisters before close', async () => {
+  const calls = [];
+  const router = {
+    setRoutingId() {},
+    setReceiveFlowState(state) { calls.push(`flow:${state}`); },
+    bind() { calls.push('bind'); },
+    localEndpoint() { return 'tcp://127.0.0.1:9404'; },
+    monitor() { return { statusReady() { return true; }, close() { calls.push('monitor:close'); } }; },
+    close() { calls.push('router:close'); }
+  };
+  const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
+    maxQueuedApplicationJobs: 5n,
+    pauseThresholdPercent: 80,
+    resumeThresholdPercent: 40
+  }, () => 1n));
+  const permits = [];
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: {
+      meshName: 'flow', nodeRoutingId: 'flow-node', lifecycleGeneration: 1n,
+      descriptorRevision: 1n, advertisedEndpoint: 'tcp://127.0.0.1:9404', channels: [],
+      state: 'preparing', securityIdentity: 'test', applicationVersion: 1n,
+      protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY], objectRole: 'server',
+      placementWeight: 100, activeCapacityLimit: 100, pendingCapacityLimit: 10,
+      activeCapacityUsed: 0, pendingCapacityUsed: 0
+    },
+    bindingPort: {
+      createHost() {
+        return {
+          createRouter() { return router; },
+          close() { router.close(); }
+        };
+      }
+    },
+    applicationJobQueue: queue
+  });
+  runtime.start();
+  assert.deepEqual(calls.slice(0, 2), ['flow:paused', 'bind']);
+  permits.pop().releaseAfterInternalProcessing();
+  permits.pop().releaseAfterInternalProcessing();
+  assert.equal(calls.at(-1), 'flow:running');
+  for (const permit of permits) permit.releaseAfterInternalProcessing();
+  runtime.close();
+  assert.deepEqual(calls.slice(-2), ['monitor:close', 'router:close']);
+  const countAfterClose = calls.length;
+  const afterClose = [];
+  for (let index = 0; index < 4; index += 1) afterClose.push(await queue.acquire());
+  assert.equal(calls.length, countAfterClose);
+  for (const permit of afterClose) permit.releaseAfterInternalProcessing();
+});
+
+test('raw RouteMesh receive-flow controller preserves the latest reentrant transition', async () => {
+  const calls = [];
+  const permits = [];
+  let releaseDuringPause = true;
+  const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
+    maxQueuedApplicationJobs: 5n,
+    pauseThresholdPercent: 80,
+    resumeThresholdPercent: 40
+  }, () => 1n));
+  const router = {
+    setRoutingId() {},
+    setReceiveFlowState(state) {
+      calls.push(`flow:${state}`);
+      if (state === 'paused' && releaseDuringPause) {
+        releaseDuringPause = false;
+        permits[0].releaseAfterInternalProcessing();
+        permits[1].releaseAfterInternalProcessing();
+      }
+    },
+    bind() { calls.push('bind'); },
+    localEndpoint() { return 'tcp://127.0.0.1:9405'; },
+    monitor() { return { statusReady() { return true; }, close() {} }; },
+    close() {}
+  };
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: {
+      meshName: 'flow-race', nodeRoutingId: 'flow-race-node', lifecycleGeneration: 1n,
+      descriptorRevision: 1n, advertisedEndpoint: 'tcp://127.0.0.1:9405', channels: [],
+      state: 'preparing', securityIdentity: 'test', applicationVersion: 1n,
+      protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY], objectRole: 'server',
+      placementWeight: 100, activeCapacityLimit: 100, pendingCapacityLimit: 10,
+      activeCapacityUsed: 0, pendingCapacityUsed: 0
+    },
+    bindingPort: {
+      createHost() {
+        return {
+          createRouter() { return router; },
+          close() { router.close(); }
+        };
+      }
+    },
+    applicationJobQueue: queue
+  });
+
+  runtime.start();
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+
+  assert.equal(queue.pressureState(), 'running');
+  assert.deepEqual(calls, [
+    'flow:running',
+    'bind',
+    'flow:paused',
+    'flow:running'
+  ]);
+
+  for (const permit of permits) permit.releaseAfterInternalProcessing();
+  runtime.close();
+});
+
+test('raw RouteMesh reports a receive-flow configuration failure once', async () => {
+  const expected = new Error('receive-flow configuration failed');
+  const reported = [];
+  const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
+    maxQueuedApplicationJobs: 5n,
+    pauseThresholdPercent: 80,
+    resumeThresholdPercent: 40
+  }, () => 1n));
+  const router = {
+    setRoutingId() {},
+    setReceiveFlowState(state) {
+      if (state === 'paused') throw expected;
+    },
+    bind() {},
+    localEndpoint() { return 'tcp://127.0.0.1:9406'; },
+    monitor() { return { statusReady() { return true; }, close() {} }; },
+    close() {}
+  };
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: {
+      meshName: 'flow-failure', nodeRoutingId: 'flow-failure-node', lifecycleGeneration: 1n,
+      descriptorRevision: 1n, advertisedEndpoint: 'tcp://127.0.0.1:9406', channels: [],
+      state: 'preparing', securityIdentity: 'test', applicationVersion: 1n,
+      protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY], objectRole: 'server',
+      placementWeight: 100, activeCapacityLimit: 100, pendingCapacityLimit: 10,
+      activeCapacityUsed: 0, pendingCapacityUsed: 0
+    },
+    bindingPort: {
+      createHost() {
+        return {
+          createRouter() { return router; },
+          close() { router.close(); }
+        };
+      }
+    },
+    applicationJobQueue: queue,
+    onReceiveFlowConfigFailure(error) { reported.push(error); }
+  });
+  runtime.start();
+  const permits = [];
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+
+  assert.deepEqual(reported, [expected]);
+  assert.equal(queue.snapshot().flowStateConfigFailureCount, 1n);
+
+  for (const permit of permits) permit.releaseAfterInternalProcessing();
+  runtime.close();
+  assert.deepEqual(reported, [expected]);
+});
+
+test('raw RouteMesh startup fails when a paired backend omits receive-flow control', () => {
+  const reported = [];
+  const calls = [];
+  const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
+    maxQueuedApplicationJobs: 5n,
+    pauseThresholdPercent: 80,
+    resumeThresholdPercent: 40
+  }, () => 1n));
+  const router = {
+    setRoutingId() {},
+    bind() { calls.push('bind'); },
+    close() { calls.push('close'); }
+  };
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: {
+      meshName: 'missing-flow', nodeRoutingId: 'missing-flow-node', lifecycleGeneration: 1n,
+      descriptorRevision: 1n, advertisedEndpoint: 'tcp://127.0.0.1:9407', channels: [],
+      state: 'preparing', securityIdentity: 'test', applicationVersion: 1n,
+      protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY], objectRole: 'server',
+      placementWeight: 100, activeCapacityLimit: 100, pendingCapacityLimit: 10,
+      activeCapacityUsed: 0, pendingCapacityUsed: 0
+    },
+    bindingPort: {
+      createHost() {
+        return { createRouter() { return router; }, close() { router.close(); } };
+      }
+    },
+    applicationJobQueue: queue,
+    onReceiveFlowConfigFailure(error) { reported.push(error); }
+  });
+
+  assert.throws(() => runtime.start(), TypeError);
+  assert.equal(queue.snapshot().flowStateConfigFailureCount, 1n);
+  assert.equal(reported.length, 1);
+  assert.deepEqual(calls, ['close']);
+});
+
 function typedPacket(packetName, value) {
   const PacketType = typeof value === 'string'
     ? { [packetName]: class extends String {} }[packetName]
@@ -4904,7 +5101,6 @@ function fakeRuntimeBackendAdapterFactory(calls, router) {
 }
 
 function fakeRuntimeRouter(calls, received) {
-  let readyHandler = () => undefined;
   let nextReceived = received;
   return {
     nativeInstance: {},
@@ -4914,6 +5110,7 @@ function fakeRuntimeRouter(calls, received) {
     sendTimeoutMs: 0,
     maxMessageSize: 0,
     disposed: false,
+    setReceiveFlowState() {},
     setChannelName(channelName) {
       calls.push(`router:setChannelName:${channelName}`);
     },
@@ -4928,12 +5125,6 @@ function fakeRuntimeRouter(calls, received) {
     },
     disconnect(endpoint) {
       calls.push(`router:disconnect:${endpoint}`);
-    },
-    onSendReady(handler) {
-      readyHandler = handler;
-    },
-    ready() {
-      readyHandler();
     },
     recv() {
       const current = nextReceived;
@@ -5013,7 +5204,6 @@ function readyPoller() {
 }
 
 function fakeBackpressuredDealer() {
-  let readyHandler = () => undefined;
   return {
     nativeInstance: {},
     sendHighWaterMark: 1000,
@@ -5023,17 +5213,12 @@ function fakeBackpressuredDealer() {
     requestAttempts: 0,
     sentParts: undefined,
     replyParts: undefined,
+    setReceiveFlowState() {},
     setChannelName(channelName) {
       this.channelName = channelName;
     },
     connect(endpoint) {
       this.endpoint = endpoint;
-    },
-    onSendReady(handler) {
-      readyHandler = handler;
-    },
-    ready() {
-      readyHandler();
     },
     async send(parts) {
       this.sendAttempts++;
@@ -5055,7 +5240,6 @@ function fakeBackpressuredDealer() {
 }
 
 function fakeRouteRouter(options = {}) {
-  let readyHandler = () => undefined;
   return {
     nativeInstance: {},
     sendHighWaterMark: 1000,
@@ -5064,6 +5248,7 @@ function fakeRouteRouter(options = {}) {
     requestAttempts: 0,
     recvAttempts: 0,
     recvQueue: [],
+    setReceiveFlowState() {},
     setChannelName(channelName) {
       this.channelName = channelName;
     },
@@ -5078,12 +5263,6 @@ function fakeRouteRouter(options = {}) {
     },
     attachDiscovery(discovery) {
       this.discovery = discovery;
-    },
-    onSendReady(handler) {
-      readyHandler = handler;
-    },
-    ready() {
-      readyHandler();
     },
     request(_targetNodeRid, _parts, timeoutMs) {
       this.requestAttempts++;

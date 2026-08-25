@@ -127,18 +127,26 @@ public readonly record struct ZLinkCoreHwmStatus(
     ulong RetiredQueueCount,
     ulong DeferredOriginCreditBytes);
 
+public enum ZLinkApplicationJobQueuePressureState { Running, Paused }
+
 public readonly record struct ZLinkApplicationJobQueueStatus(
     ZLinkApplicationJobQueueProfile ConfiguredProfile,
     ulong? ConfiguredManualMax,
+    uint ConfiguredPauseThresholdPercent,
+    uint ConfiguredResumeThresholdPercent,
     ulong EffectiveProcessorCount,
     ulong EffectiveMaxQueuedApplicationJobs,
+    ulong PausePermitCount,
+    ulong ResumePermitCount,
     ulong ReservedSupplyPermits,
     ulong QueuedApplicationJobs,
     ulong PermitsInUse,
     ulong PeakPermitsInUse,
     ulong CapacityWaiters,
     ulong CapacityWaitCount,
-    TimeSpan CapacityWaitDuration);
+    TimeSpan CapacityWaitDuration,
+    ZLinkApplicationJobQueuePressureState PressureState,
+    TimeSpan CurrentPauseDuration);
 
 public readonly record struct ZLinkHostCapacityStatus(
     ulong MeasurementEpoch,
@@ -173,6 +181,10 @@ public interface IZLinkFrameworkRuntime
         CancellationToken cancellationToken = default);
 }
 ```
+
+`ZLinkCoreHwmStatus`의 `ApplicationAccountedBytes`, `OutstandingApplicationLeaseCount`,
+`RetiredQueueCount`, `DeferredOriginCreditBytes`는 ABI 호환용 reserved field이며 0.13.1 이후 항상 `0`이다.
+Framework는 이를 그대로 투영하며 Application Job Queue pressure로 다시 해석하지 않는다.
 
 `IsReady`는 `State == Serving`일 때만 true다. `AcceptingWork`는 현재 host가 새로운 application
 operation을 받아들이는지를 나타낸다. 두 값은 relocation unit 수나 queue 내부 상태를 application에
@@ -423,9 +435,9 @@ Identifier에
 
 ## 8. Dispatch policy와 diagnostics
 
-Unhandled message 정책과 diagnostics 설정은 별도의 child interface가 담당한다. Dispatch configuration은
-Core HWM과 Application job queue 설정을 직접 소유하고 두 child interface도 제공한다. Tracing mode는
-diagnostics child가 소유하며 observer, error sink와 file output은 제공하지 않는다.
+Unhandled message 정책과 diagnostics 설정은 `ConfigureDispatch()`의 별도 child interface가 담당한다.
+Core HWM과 Application Job Queue 설정은 독립된 `ConfigureInboundDispatch()` surface가 소유한다.
+Tracing mode는 diagnostics child가 소유하며 observer, error sink와 file output은 제공하지 않는다.
 
 ```csharp
 public enum ZLinkUnhandledDispatchAction
@@ -462,11 +474,17 @@ public interface IZLinkDispatchOptions
 {
     IZLinkUnhandledDispatchOptions Unhandled { get; }
     IZLinkDiagnosticsOptions Diagnostics { get; }
+}
+
+public interface IZLinkInboundDispatchOptions
+{
     ulong? CoreHwmMemoryLimitBytes { get; set; }
     ulong? CoreHwmBudgetBytes { get; set; }
     ZLinkCoreHwmProfile CoreHwmProfile { get; set; }
     ZLinkApplicationJobQueueProfile ApplicationJobQueueProfile { get; set; }
     ulong? MaxQueuedApplicationJobs { get; set; }
+    uint ApplicationJobQueuePauseThresholdPercent { get; set; }
+    uint ApplicationJobQueueResumeThresholdPercent { get; set; }
 }
 
 public interface IZLinkDiagnosticsRuntime

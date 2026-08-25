@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/dispatch/application_job_receive_flow.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
 #include "runtime/protocol/service_wire_codec.hpp"
@@ -623,6 +624,17 @@ void raw_mesh_node_owner_t::start ()
     router->options ().linger (std::chrono::milliseconds (0));
     router->set_routing_id (
       zlink::routing_id_t::from (_options.descriptor.node_routing_id));
+    application_job_queue_t::receive_flow_registration_t
+      receive_flow_registration;
+    if (_options.application_jobs) {
+        receive_flow_registration =
+          _options.application_jobs->register_receive_flow_socket (
+            [socket = router.get ()] (
+              application_job_queue_pressure_state_t state) {
+                return apply_application_job_receive_flow_state (
+                  *socket, state);
+            });
+    }
     auto monitor = std::make_unique<zlink::socket_monitor_t> (
       router->monitor_open (zlink::monitor_event::connection_ready
                             | zlink::monitor_event::disconnected));
@@ -645,6 +657,8 @@ void raw_mesh_node_owner_t::start ()
     _monitor_poller = std::move (monitor_poller);
     _monitor = std::move (monitor);
     _router = std::move (router);
+    _receive_flow_registration =
+      std::move (receive_flow_registration);
     // Keep the descriptor in preparing until the receive port, completion
     // control, and monitor path can accept the first admitted message.
     descriptor.state = service_node_state_t::serving;
@@ -658,6 +672,8 @@ void raw_mesh_node_owner_t::close () noexcept
     std::unique_ptr<zlink::router_socket_t> router;
     std::unique_ptr<zlink::poller_t> monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> monitor;
+    application_job_queue_t::receive_flow_registration_t
+      receive_flow_registration;
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
         _closed = true;
@@ -666,8 +682,11 @@ void raw_mesh_node_owner_t::close () noexcept
         port = std::move (_port);
         monitor = std::move (_monitor);
         monitor_poller = std::move (_monitor_poller);
+        receive_flow_registration =
+          std::move (_receive_flow_registration);
         router = std::move (_router);
     }
+    receive_flow_registration.close ();
     _mailbox.close ();
     _operations->shutdown ();
     if (port) {
@@ -757,6 +776,9 @@ bool raw_mesh_node_owner_t::connect_peer (
         std::lock_guard socket_lock (_socket_mutex);
         trace_mesh ("connect endpoint=" + endpoint
                     + " expected=" + owner_key (expected_descriptor.node_routing_id));
+        _router->options ().connect_routing_id (
+          zlink::routing_id_t::from (
+            expected_descriptor.node_routing_id));
         _router->connect (endpoint);
         _outbound_endpoints.insert (endpoint);
         return true;
@@ -3741,21 +3763,14 @@ task_t<std::size_t> raw_mesh_node_owner_t::drain_monitor_events (
                 port = _port;
             }
             if (port) {
-                bool hello_sent = false;
                 try {
-                    hello_sent = co_await send_header_only (
+                    (void) co_await send_header_only (
                       node_routing_id,
                       protocol::encode_route_mesh_admission (
                         protocol::command::hello,
                         _topology.local_descriptor ()));
                 }
                 catch (const zlink::submit_error_t &) {
-                }
-                if (!hello_sent) {
-                    std::lock_guard lifecycle_lock (
-                      _lifecycle_mutex);
-                    (void) _connections.disconnect (
-                      node_routing_id, connection_id);
                 }
             }
         }

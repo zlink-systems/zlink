@@ -733,6 +733,9 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
             super(calls, name);
         }
 
+        @Override public void setReceiveFlowState(
+            systems.zlink.contracts.sockets.ReceiveFlowState state) {
+        }
         @Override public void setChannelName(String channelName) { record("setChannelName." + channelName); }
         @Override public boolean waitForReadable(Duration timeout) { return false; }
         @Override public CompletionStage<Void> send(List<Message> parts) {
@@ -765,6 +768,10 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
         FakeRouterSocket(List<String> calls, String name) {
             super(calls, name);
+        }
+
+        @Override public void setReceiveFlowState(
+            systems.zlink.contracts.sockets.ReceiveFlowState state) {
         }
 
         void enqueueReceived(
@@ -884,7 +891,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         @Override public void setChannelName(String channelName) { record("setChannelName." + channelName); }
         @Override public void setRoutingId(RoutingId routingId) { record("setRoutingId"); }
         @Override public boolean publish(String topic, List<Message> parts, SendFlags flags) { record("publish." + topic + "." + firstPart(parts)); return true; }
-        @Override public CompletionStage<Void> publishAsync(String topic, List<Message> parts, SendFlags flags) { publish(topic, parts, flags); return CompletableFuture.completedFuture(null); }
     }
 
     private static final class FakeSubscriberSocket extends FakeConnectableSocket implements ZLinkBackendSubscriberSocket {

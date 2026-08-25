@@ -47,6 +47,8 @@ final class ZLinkApplicationJobQueueConfigurationTest {
         assertFalse(inbound.coreHwmMemoryLimitBytes().isPresent());
         assertFalse(inbound.coreHwmBudgetBytes().isPresent());
         assertFalse(inbound.maxQueuedApplicationJobs().isPresent());
+        assertEquals(80, inbound.applicationJobQueuePauseThresholdPercent());
+        assertEquals(60, inbound.applicationJobQueueResumeThresholdPercent());
     }
 
     @Test
@@ -75,5 +77,28 @@ final class ZLinkApplicationJobQueueConfigurationTest {
         assertThrows(
             ZLinkConfigurationException.class,
             () -> inbound.setMaxQueuedApplicationJobs((long) Integer.MAX_VALUE + 1));
+    }
+
+    @Test
+    void validatesStartupOnlyPauseAndResumeThresholds() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        ZLinkInboundDispatchOptions inbound = options.configureInboundDispatch();
+        inbound.setApplicationJobQueuePauseThresholdPercent(90);
+        inbound.setApplicationJobQueueResumeThresholdPercent(50);
+        assertEquals(90, inbound.applicationJobQueuePauseThresholdPercent());
+        assertEquals(50, inbound.applicationJobQueueResumeThresholdPercent());
+        assertThrows(
+            ZLinkConfigurationException.class,
+            () -> inbound.setApplicationJobQueuePauseThresholdPercent(0));
+        assertThrows(
+            ZLinkConfigurationException.class,
+            () -> inbound.setApplicationJobQueueResumeThresholdPercent(100));
+
+        DefaultZLinkFrameworkOptions invalid = new DefaultZLinkFrameworkOptions();
+        invalid.configureInboundDispatch()
+            .setApplicationJobQueuePauseThresholdPercent(60);
+        invalid.configureInboundDispatch()
+            .setApplicationJobQueueResumeThresholdPercent(60);
+        assertThrows(ZLinkConfigurationException.class, invalid::validate);
     }
 }

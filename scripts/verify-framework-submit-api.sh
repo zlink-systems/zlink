@@ -282,9 +282,8 @@ for (const relative of [
   'framework/languages/java/zlink-framework-core/src/main/java/'
     + 'systems/zlink/framework/runtime/host/ZLinkOneWayAdmissionStatus.java',
 ]) {
-  const source = read(relative);
-  if (/^\s*public\s+(?:final\s+)?(?:class|enum|interface)\s+ZLinkOneWay/m.test(source)) {
-    fail(`java internal one-way helper is exposed as public: ${relative}`);
+  if (fs.existsSync(path.join(root, relative))) {
+    fail(`java retains obsolete framework-owned one-way admission helper: ${relative}`);
   }
 }
 

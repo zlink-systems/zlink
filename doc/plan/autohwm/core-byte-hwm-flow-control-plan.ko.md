@@ -8,6 +8,16 @@
 먼저 읽는다. 공통 문서는 전체 책임과 message 흐름을 설명하고, 이 문서는 Core 실행 절차와
 완료 증거를 소유한다.
 
+> **0.13.2 현재 결과** — 0.13.1에서 이 계획의 중간 단계에 사용한 retained receive·application
+> credit lease와 공개 `send_ready` callback·event는 최종 계약에서 제거됐다. Core queue가
+> complete message를 dequeue해 binding에 넘기면 Core byte HWM charge가 끝난다. 수용한 send의
+> HWM 대기·재시도와 operation별 terminal은 Core가 소유하고 binding은 `send_completion`으로
+> 전달한다. 아래의 retained-credit 작업 기록은 당시 진단 이력이며 현재 계약이나 Framework
+> 구현 지시가 아니다. 0.13.2는 drained pipe의 oversize multipart가 stale peer credit으로
+> 막히던 판정 순서 결함을 수정했으며 이 책임 경계를 바꾸지 않는다. 현재 binding 경계는
+> `bindings/doc/spec/README.ko.md`의
+> "Byte HWM과 application job 경계"를 따른다.
+
 ## 1. 작업 범위
 
 현재 작업은 Core 변경과 성능 회복까지만 수행한다. Framework source, Framework public API,
@@ -63,8 +73,8 @@ Binding parity의 범위는 C ABI mirror만이 아니다. cpp, dotnet, go, java,
 | C perf 실행기 | `bindings/c/perf/README.md` | Local/release runtime, Auto-HWM과 CLI |
 | 기존 성능 handoff | `doc/plan/core-byte-hwm-performance-regression-handoff.ko.md` | 이미 통과한 test, 남은 회귀와 보호 대상 |
 | Context 계약 | `core/doc/spec/core/01-context.ko.md`, `.en.md` | Auto-HWM budget과 snapshot |
-| Socket 공통 계약 | `core/doc/spec/core/socket/README.ko.md`, `.en.md` | Byte HWM, LWM, oversize와 retained receive |
-| Paired socket 계약 | `core/doc/spec/core/socket/06-dealer.ko.md`, `07-router.ko.md`와 영어 mirror | Completion lane과 routed send-ready |
+| Socket 공통 계약 | `core/doc/spec/core/socket/README.ko.md`, `.en.md` | Byte HWM, LWM, oversize와 dequeue charge 종료 경계 |
+| Paired socket 계약 | `core/doc/spec/core/socket/06-dealer.ko.md`, `07-router.ko.md`와 영어 mirror | Completion lane, receive-flow state와 send completion |
 | Error·event·monitor | `core/doc/spec/core/03-errors.ko.md`, `05-events.ko.md`, `07-monitoring.ko.md`와 영어 mirror | Result enum, event namespace와 snapshot |
 | Runtime 경계 | `core/doc/spec/core/09-runtime-boundary.ko.md`, `.en.md` | Core 내부 처리와 binding 경계 |
 | C binding 계약 | `bindings/doc/spec/c/README.ko.md`, `.en.md` | C ABI와 public type |
@@ -80,7 +90,7 @@ Binding parity의 범위는 C ABI mirror만이 아니다. cpp, dotnet, go, java,
 | Pipe byte accounting·credit | `core/src/runtime/core/pipe.hpp`, `pipe.cpp` | `frame_accounted_bytes`, `check_hwm_for_message`, `account_inbound_frame`, `compute_lwm`, `apply_lwm_hint`, `_bytes_written`, `_peers_bytes_read` |
 | Auto-HWM 정책 | `core/src/runtime/core/auto_hwm_policy.hpp`, `.cpp` | Manual reservation, minimum·maximum, `budget_insufficient` |
 | Context 재계산·snapshot | `core/src/runtime/core/ctx_auto_hwm_recalc.cpp`, `ctx_auto_hwm_state.*` | Queue plan, recalculation과 monitoring snapshot |
-| Physical queue·retained credit | `core/src/runtime/core/ctx_physical_queue_registry.hpp`, `.cpp` | Queue generation, decoder reservation, retained origin과 lease |
+| Physical queue registry | `core/src/runtime/core/ctx_physical_queue_registry.hpp`, `.cpp` | Queue generation, decoder reservation·commit·release와 snapshot |
 | Decoder admission | `core/src/runtime/core/session_base_pipe_io.cpp`, `core/src/runtime/protocol/zmp_decoder.*`, `core/src/runtime/engine/asio/asio_zmp_engine.cpp` | Allocation 전 reservation과 commit/release |
 | Paired lane 생성 | `core/src/runtime/sockets/common/socket_base_endpoint.cpp` | `transport_lane_application`, `transport_lane_completion`, pair generation |
 | Paired 정책 | `core/src/runtime/core/transport_pair_policy.hpp`와 paired DEALER/ROUTER runtime | Completion socket buffer와 lifecycle |
@@ -94,8 +104,9 @@ registry를 새로 추가하기 전에 기존 abstraction이 책임을 소유하
 
 ## 2. 현재 상태와 기준점
 
-현재 작업 트리에는 byte-HWM 구현이 복구되어 있다. Pipe-local byte counter와 LWM wakeup,
-retained-credit, physical queue registry, decoder admission과 관련 lifecycle 코드가 존재한다.
+0.13.2 현재 구현에는 pipe-local byte counter와 LWM wakeup, physical queue registry,
+decoder admission과 관련 lifecycle 코드가 있다. Retained-credit lease 기능은 제거됐고
+Core queue가 complete message를 dequeue할 때 byte credit을 반환한다.
 
 Byte-HWM 전체 제거는 성능 원인을 확인하기 위한 임시 진단이었다. 제거 상태에서 짧은
 ROUTER/ROUTER TCP 256 B case의 처리량 회복 경향을 확인한 뒤 소스를 복구했다. 제거 상태를
@@ -114,19 +125,20 @@ ROUTER/ROUTER TCP 256 B case의 처리량 회복 경향을 확인한 뒤 소스�
 - `unittest_auto_hwm_policy`
 - `unittest_zmp_decoder`
 - `test_ctx_options`
-- `test_retained_hwm_credit`
 - `test_router_handover`
 - `test_connect_rid`
+- `test_flow_state_paired`
+- `test_flow_state_c_api`
 - ASAN PUBSUB TCP 64·256 B focused run
 
 `test_router_mandatory_hwm`은 기존 byte-HWM과 routed multipart 회귀를 소유하지만 위 focused
 7개 재실행에는 포함되지 않았다. 이번 작업의 필수 test에 추가한다.
 
 > [업데이트] `test_router_mandatory_hwm`은 stage0 baseline부터 focused 8개 재실행에
-> 포함되어 8/8 통과했다(`worklog/stage0-baseline.md`). `test_retained_hwm_credit`은
-> 원본 worktree에서 ROUTER typed recv 첫 frame의 lease가 항상 NULL로 나오는 결함이
-> 있었음이 이후 확인됐고 `router_recv_path.cpp`의 retained/non-retained fetch 순서
-> 수정으로 해결했다(commit `b54c9802a9`, `worklog/stage2-retained-credit-fix.md`).
+> 포함되어 8/8 통과했다(`worklog/stage0-baseline.md`). 0.13.1 중간 단계의
+> `test_retained_hwm_credit` 결함은 당시 수정했지만, 0.13.2에서 retained-credit lease와
+> 해당 test를 제거했다. 현재 gate는 `test_flow_state_paired`와
+> `test_flow_state_c_api`로 flow-state와 byte-HWM 독립성을 확인한다.
 
 ### 2.2 아직 완료되지 않은 결과
 
@@ -202,9 +214,10 @@ Reader는 다음 두 조건 중 하나에서 consumed byte의 누적 절대값�
 두 번째 조건은 in-flight byte가 LWM보다 작을 때 blocked writer가 영구 대기하는 것을
 막는다. 최소 재구현과 contract test는 두 wakeup 경로를 모두 유지한다.
 
-`read_retained()`와 retained-credit token 수명은 일반 dequeue credit과 별도 경로다. 이번
-작업에서 retained receive의 public 계약을 삭제하거나 변경하지 않는다. 필요성과 성능은
-별도 작업으로 다룬다.
+0.13.1 중간 구현에서는 `read_retained()`와 retained-credit token을 일반 dequeue
+credit과 별도로 조사했다. 0.13.2 최종 계약은 이 경로를 제거했으며, complete
+message dequeue에서 Core charge와 writer credit을 끝낸다. 아래 retained 단계와 증거는
+최종 구현 지시가 아니라 과거 진단 기록이다.
 
 ### 3.3 Core memory budget
 
@@ -270,8 +283,8 @@ send is blocked when
   OR remote flow state is PAUSED
 ```
 
-각 전이는 자신이 소유한 원인만 제거한다. 모든 원인이 사라졌을 때만 기존 send-ready를
-발생시킨다. `pipe_message_admission_too_large`는 writable 상태가 아니라 해당 message의
+각 전이는 자신이 소유한 원인만 제거한다. 모든 원인이 사라졌을 때만 기존 internal writer
+wakeup을 발생시킨다. `pipe_message_admission_too_large`는 writable 상태가 아니라 해당 message의
 admission 결과이므로 remote PAUSE와 별도로 판정한다.
 
 PAUSE가 multipart 중간에 도착하면 이미 시작한 message의 기존 atomicity를 유지하고 다음
@@ -362,13 +375,14 @@ Raw control send/recv, data queue의 선택적 receive와 remote PAUSE를 우회
 | 기준점 | `pipe.*`, `ctx_*hwm*`, physical queue와 decoder 연결 | 제거 전 symbol 목록, 제거 기준점 build와 report | Public HWM option을 unlimited로 바꾸지 않고 알려진 perf case가 회복됨 |
 | 최소 byte HWM | `pipe.hpp`, `pipe.cpp` | Pipe-local written/read byte, actual LWM과 두 credit wakeup | HWM·oversize·multipart focused test와 첫 paired perf 통과 |
 | Auto-HWM | `auto_hwm_policy.*`, `ctx_auto_hwm_*`, 필요한 registry snapshot | Budget plan, applied HWM과 snapshot | Manual·unlimited·minimum 부족 unit test와 paired perf 통과 |
-| Decoder·retained 연결 | `ctx_physical_queue_registry.*`, `session_base_pipe_io.cpp`, decoder | Allocation 전 admission과 기존 lease 수명 | Decoder·retained focused test와 paired perf 통과 |
+| Decoder·retained 연결(과거 단계) | `ctx_physical_queue_registry.*`, `session_base_pipe_io.cpp`, decoder | Allocation 전 admission과 당시 lease 수명 | 이 단계의 진단 결과는 기록하되 0.13.2 최종 계약에서 lease는 제거 |
 | Core flow state | Paired socket runtime, completion lane, `pipe.*` admission | Frame, generation·epoch, socket state와 reconnect | Flow state contract test와 항상 RUNNING perf 통과 |
 | Public API·관측 | `core/include`, `core/src/api`, monitoring, `bindings/c/include` | C ABI, result, event와 metric | ABI·event·snapshot test 통과 |
 | 언어 binding parity | `bindings/{cpp,dotnet,go,java,node,python,rust}/` | 언어별 flow-state type·method, 오류 mapping과 focused test | 7개 언어 binding test 통과 |
 
-기준점 제거는 진단 단계다. 제거된 구현을 그대로 최종 결과로 남기지 않는다. Retained receive
-API, public Auto-HWM option, monitoring ABI와 기존 test를 삭제해 기준점을 맞추지 않는다.
+기준점 제거는 진단 단계다. 제거된 구현을 그대로 최종 결과로 남기지 않는다. 당시에는
+retained receive API, public Auto-HWM option, monitoring ABI와 기존 test를 삭제해 기준점을
+맞추지 않았다. 후속 0.13.2 정리에서 retained receive는 정식으로 제거했다.
 성능 회귀의 원인이 registry나 decoder reservation으로 좁혀지면 그 owner에서 비용을 제거하되
 pipe-local HWM 계약을 호출자나 perf harness로 우회하지 않는다.
 
@@ -420,7 +434,7 @@ cpp를 먼저 구현해 mapping 패턴을 확정한 뒤 나머지 언어에 같�
 - Default LWM은 `ceil(HWM / 2)`이고 hint가 있으면 더 작은 실제 LWM을 사용한다.
 - LWM에 도달하면 consumed byte의 누적 절대값을 전달한다.
 - LWM 미만이어도 blocked writer가 있고 inbound queue가 완전히 비면 credit을 전달한다.
-- Finite HWM, drain과 send-ready가 기존 `EAGAIN`·`SNDTIMEO` 계약을 유지한다.
+- Finite HWM, drain과 internal writer wakeup이 기존 `EAGAIN`·`SNDTIMEO` 계약을 유지한다.
 - Oversize와 incremental multipart admission이 기존 결과를 유지한다.
 - Local HWM과 remote PAUSE 중 하나만 해제해도 writable이 되지 않는다.
 - PAUSE가 multipart 중간에 도착해도 시작한 message의 atomicity를 깨지 않는다.
@@ -443,7 +457,7 @@ cmake --build core/build --parallel 2
 cmake --build core/build-tests --parallel 2
 
 ctest --test-dir core/build-tests --output-on-failure \
-  -R '^(test_zmp_request_reply|unittest_auto_hwm_policy|unittest_zmp_decoder|test_ctx_options|test_retained_hwm_credit|test_router_handover|test_connect_rid|test_router_mandatory_hwm)$'
+  -R '^(test_zmp_request_reply|unittest_auto_hwm_policy|unittest_zmp_decoder|test_ctx_options|test_router_handover|test_connect_rid|test_router_mandatory_hwm|test_flow_state_paired|test_flow_state_c_api)$'
 ```
 
 새 flow-state test target 이름은 구현 시 기존 test naming 규칙에 맞춰 추가한다. Core source나
@@ -624,9 +638,9 @@ Framework work started: no
 | [ ] | 제거 기준점에서 public HWM option을 유지한 채 기능 test와 성능 회복을 확인했다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). 기능 측면은 stage1 최종 gate에서 재빌드한 baseline 8개 focused test 중 `test_retained_hwm_credit`이 원본 worktree에서 20/20 결정적 실패했으나(기존 결함), stage2에서 원인(`router_recv_path.cpp`의 retained/non-retained fetch 순서)을 찾아 수정했다(commit `b54c9802a9`, `worklog/stage2-retained-credit-fix.md`). 성능 회복만 미달로 이 행은 `[ ]` 유지. |
 | [x] | 일반·delimiter·join·leave frame charge를 최소 pipe-local 구현으로 복구했다. | `core/src/runtime/core/pipe.cpp`의 byte charge 계약(§3.1)이 현재 worktree에 존재하고 `test_zmp_request_reply`, `unittest_zmp_decoder`, `test_router_mandatory_hwm`이 stage0 baseline부터 8/8 통과(`worklog/stage0-baseline.md` §4-5), stage2 재확인 10/10(`worklog/stage2-retained-credit-fix.md` §4). |
 | [x] | Default·hint LWM과 blocked-writer drain wakeup을 복구했다. | 동일 focused test 통과 근거(위 행)와 stage3에서 remote PAUSE를 byte HWM과 독립으로 합성하면서 두 wakeup 경로(LWM 도달, blocked-writer drain)를 변경 없이 재확인함 (`worklog/stage3-flow-state.md` §4, `test_flow_state_paired::test_local_hwm_and_remote_pause_are_independent`). |
-| [x] | Oversize, incremental multipart, `EAGAIN`, `SNDTIMEO`와 send-ready test가 통과했다. | `test_zmp_request_reply`, `test_router_handover`, `test_connect_rid`, `test_router_mandatory_hwm` (stage0 8/8, stage2 10/10 재확인). Multipart atomicity는 stage3에서 `test_flow_state_paired::test_pause_mid_multipart_preserves_atomicity`로 추가 검증. |
+| [x] | Oversize, incremental multipart, `EAGAIN`, `SNDTIMEO`와 internal writer wakeup test가 통과했다. | `test_zmp_request_reply`, `test_router_handover`, `test_connect_rid`, `test_router_mandatory_hwm` (stage0 8/8, stage2 10/10 재확인). 여기의 writer wakeup은 제거된 public `send_ready` callback·event가 아니다. Multipart atomicity는 stage3에서 `test_flow_state_paired::test_pause_mid_multipart_preserves_atomicity`로 추가 검증. |
 | [x] | Auto-HWM budget을 planning input으로 복구하고 manual·unlimited·minimum 부족 test가 통과했다. | `unittest_auto_hwm_policy`, `test_ctx_options` — stage0 baseline 8/8, stage2 10/10 재확인 (`worklog/stage0-baseline.md`, `worklog/stage2-retained-credit-fix.md` §4). |
-| [x] | Decoder reservation과 retained lease 수명을 바꾸지 않고 관련 test가 통과했다. | `test_retained_hwm_credit`의 ROUTER typed recv lease NULL 결함을 수정(commit `b54c9802a9`, `worklog/stage2-retained-credit-fix.md`), application-pipe accounting을 registry ledger와 통일해 원본 worktree의 `test_xpub_nodrop`/`test_zmp_metadata`/`test_router_multiple_dealers` 결함을 해소(commit `f9328c7dec`, `worklog/preexisting-test-failures.md` "Correction for `f40de1c767`" — 수정 후 10/10 표준 실행 각각, 전체 sweep 89/89). |
+| [x] | 0.13.1 중간 단계의 decoder reservation·retained lease 회귀를 해소했고, 0.13.2에서 lease를 제거했다. | 중간 단계에서는 `test_retained_hwm_credit`의 ROUTER typed recv 결함을 수정했다(commit `b54c9802a9`). 0.13.2 최종 계약은 complete-message dequeue에서 charge를 끝내며 retained-credit ABI field를 항상 0으로 유지한다(`core/doc/spec/core/systems/05-connection-memory.*.md`, `06-auto-hwm.*.md`). |
 | [ ] | 각 복구 단계 뒤 첫 multi paired case의 모든 metric이 `0.10.1`보다 나쁘지 않다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
 
 ### 12.3 Core PAUSE와 RUNNING
@@ -637,7 +651,7 @@ Framework work started: no
 | [x] | Paired DEALER/ROUTER만 지원하고 다른 socket의 not-supported fallback을 구현했다. | `socket_base_t::socket_type_supports_receive_flow_state ()`. `test_flow_state_paired::test_unsupported_socket_types_report_not_supported` (PAIR·PUB·SUB·XPUB·XSUB·STREAM `ENOTSUP` + PAIR 송수신 불변) |
 | [x] | Socket-wide local state, reconnect와 close 경쟁을 구현했다. | `core/src/runtime/sockets/common/socket_base_flow_state.cpp`. Fanout과 새 pair 동기화가 `_transport_pairs_sync` 한 mutex를 공유하고, close 경쟁은 `socket_public_api_scope_t` 승인으로 결정한다. `test_flow_state_paired::test_new_and_reconnected_pairs_receive_the_latest_state`, `::test_invalid_state_is_rejected` |
 | [x] | Remote PAUSE를 local HWM과 독립된 send blocker로 합성했다. | `core/src/runtime/core/pipe.cpp:1071,1086,1116,1175,1200,1374`, `socket_base_api.cpp:723`. Byte HWM counter 미수정. `test_flow_state_paired::test_local_hwm_and_remote_pause_are_independent` (양방향) |
-| [x] | Multipart 중간 PAUSE와 모든 blocker가 해제된 뒤의 send-ready를 검증했다. | `pipe_t::remote_flow_blocked_unlocked ()`의 `_out_incomplete_bytes == 0` 조건. `test_flow_state_paired::test_pause_mid_multipart_preserves_atomicity`, `::test_remote_pause_blocks_sender_and_resume_releases_it` |
+| [x] | Multipart 중간 PAUSE와 모든 blocker가 해제된 뒤의 internal writer 재개를 검증했다. | `pipe_t::remote_flow_blocked_unlocked ()`의 `_out_incomplete_bytes == 0` 조건. 제거된 public `send_ready` callback·event와 별개다. `test_flow_state_paired::test_pause_mid_multipart_preserves_atomicity`, `::test_remote_pause_blocks_sender_and_resume_releases_it` |
 | [x] | C API, event와 metric focused test가 통과했다. | Stage7: `zlink_socket_set_receive_flow_state` public C API, 3개 monitor event(`SEND_FLOW_PAUSED`/`RESUMED`/`FLOW_STATE_STALE`), `zlink_monitor_status_t` ABI 4의 flow metric 5개 구현. 신규 `test_flow_state_c_api` 10/10, 계획 §8.1 focused 8개+신규 2개 ctest 10/10(`worklog/stage7-c-api.md` §8.1-8.2). `contract_public_surface`는 spec 미확정 상태에서 header에 새 심볼을 추가해 기대대로 실패하며(§8.4), 해결책은 §7 spec 제안서로 남겨 사용자 승인 대기. |
 | [ ] | Flow state가 계속 RUNNING인 paired perf가 기능 추가 전 수준을 유지한다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
 
@@ -662,7 +676,7 @@ Framework work started: no
 | [ ] | Single ROUTER_ROUTER·DEALER_ROUTER를 같은 방식으로 비교했다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
 | [ ] | 필요한 경우 multi STREAM을 single과 섞지 않고 별도로 비교했다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
 | [ ] | 모든 throughput·bandwidth·mean·p95·p99 median이 `0.10.1`보다 나쁘지 않다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
-| [ ] | 승인된 Core·binding spec과 영어 mirror가 최종 구현과 일치한다. | BLOCKED: 보호 경로 spec 반영은 사용자 승인 대기 (stage7-c-api.md §7 제안서) |
-| [x] | `git diff --check`와 관련 문서 검사가 통과했다. | `git diff --check` clean (exit 0, whitespace 오류 없음). 별도로 추적 중인 `contract_public_surface` spec-정합성 gate는 위 행과 같은 사유(보호 경로 spec 미승인)로 별도 BLOCKED 상태이며 이 행이 검사하는 diff 자체의 whitespace/formatting 문제는 없다. |
+| [x] | 승인된 Core·binding spec과 영어 mirror가 최종 구현과 일치한다. | 사용자 승인 후 Core HWM dequeue·completion 계약과 영어 mirror를 반영해 `f1a2f416f6`(`docs(core): align HWM dequeue and completion contract`)으로 commit·push했다. |
+| [x] | `git diff --check`와 관련 문서 검사가 통과했다. | `git diff --check` clean (exit 0, whitespace 오류 없음). 승인된 spec 반영은 `f1a2f416f6`에서 완료했고 Core·bindings working tree는 clean이다. |
 | [ ] | 완료 보고에 변경 source, test, paired report와 남은 실패를 기록했다. | (orchestrator가 최종 완료 보고 작성 시 기록) |
 | [x] | Framework source, public API, spec과 test를 변경하지 않았다. | `git log --stat 7d53a2c80c..HEAD -- framework/` → 0 commit, 변경 없음(확인 시점 HEAD `64a669f068`). |

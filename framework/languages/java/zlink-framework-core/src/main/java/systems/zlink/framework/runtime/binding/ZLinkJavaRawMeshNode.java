@@ -216,6 +216,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private volatile ZLinkMeshApplicationReceiver applicationReceiver;
     private volatile systems.zlink.framework.runtime.internal.dispatch
         .ZLinkApplicationJobQueue applicationJobQueue;
+    private volatile systems.zlink.framework.runtime.internal.dispatch
+        .ZLinkApplicationJobReceiveFlowController.Registration
+        receiveFlowRegistration = () -> { };
     private volatile ZLinkJavaRawSpotNode spotNode;
     private volatile ExecutorService pump;
     private volatile long routerHighWaterMark = 16_777_216L;
@@ -704,6 +707,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             // its HELLO reaches this node's admission pump. Node configures
             // the same option on every raw mesh router.
             opened.options().probe(true);
+            var queue = applicationJobQueue;
+            if (queue != null) {
+                // Apply the host's current absolute receive-flow state before
+                // this ROUTER becomes visible through bind or its receive
+                // poller. A failed initial application aborts startup.
+                receiveFlowRegistration = queue.registerReceiveFlowTarget(
+                    opened.options()::receiveFlowState);
+            }
             opened.bind(bindEndpoint);
             String boundEndpoint = opened.options().lastEndpoint();
             if (boundEndpoint != null && !boundEndpoint.isBlank()) {
@@ -747,6 +758,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 markServiceReady();
             }
         } catch (RuntimeException failure) {
+            // The service-port owner closes the opened ROUTER. Its close path
+            // first removes the receive-flow target, so a late queue
+            // transition cannot call a socket that failed to start.
+            try {
+                close();
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
             state = MeshNodeState.ERROR;
             throw failure;
         }
@@ -4236,6 +4255,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         if (currentMonitor != null) {
             currentMonitor.close();
         }
+        // Stop receiving queue transitions before the service port closes its
+        // ROUTER. The controller waits for any in-flight apply on this socket.
+        var currentReceiveFlowRegistration = receiveFlowRegistration;
+        receiveFlowRegistration = () -> { };
+        currentReceiveFlowRegistration.close();
         port.close();
     }
 

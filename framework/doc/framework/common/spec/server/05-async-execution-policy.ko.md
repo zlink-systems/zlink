@@ -122,8 +122,10 @@ admission까지 기다린다.
 
 #### Backpressure와 오류 분류
 
-Queue capacity가 부족하면 Framework는 해당 family의 send timeout까지 send-ready 또는 local capacity를 기다리며,
-다음 규칙을 따른다.
+Local Framework capacity가 부족하면 Framework가 해당 family의 send timeout까지 기다린다.
+Core HWM으로 binding operation이 대기하면 Core가 재시도를 소유하고 operation별 completion awaitable을
+완료한다. Framework는 별도 readiness callback, retry waiter 또는 binding adapter를 만들지 않으며 다음
+규칙을 따른다.
 
 - `Backpressured`는 public terminal result가 아니다.
 - Capacity가 먼저 확보되면 message를 정확히 한 번 제출하고 정상 완료한다.
@@ -144,8 +146,8 @@ Queue capacity가 부족하면 Framework는 해당 family의 send timeout까지 
 #### Pending admission의 target
 
 - Pending admission은 caller가 지정한 Node RID, global Spot·Actor ID와 session binding token을 유지한다.
-- Send-ready signal 뒤 다른 logical target으로 바꾸지 않는다.
-- RouteMesh·ClientServer select-one Channel은 성공한 admission 전까지 같은 [ChannelName](01-glossary.ko.md#channelname)의 현재 eligible member를 다시 선택할 수 있고 transport queue가 수락한 시점에 target이 확정된다.
+- RouteMesh·ClientServer select-one Channel은 첫 binding operation을 시작하기 직전에 같은 [ChannelName](01-glossary.ko.md#channelname)의 현재 eligible member 하나를 선택한다. Binding operation이 아직 시작되지 않은 route eligibility·source-local admission 확인 단계에서만 다른 eligible member를 선택할 수 있다.
+- Binding operation이 시작되면 exact target selection이 확정된다. Core가 HWM 재시도와 완료를 소유하며 Framework는 용량을 이유로 target을 다시 선택하거나 binding operation을 다시 제출하지 않는다.
 - 완료 뒤에는 자동 재제출하지 않는다.
 
 #### Logical Multicast
@@ -252,7 +254,7 @@ Global object request timeout은 current Ready authority resolve, outbound admis
 
 ### 같은 turn에서의 대기
 
-같은 handler turn에서 보낸 request를 기다릴 수 있다. reply completion과 send-ready 같은 infrastructure
+같은 handler turn에서 보낸 request를 기다릴 수 있다. Reply completion과 binding operation completion 같은 infrastructure
 작업은 application turn과 분리되어 진행되므로 해당 Spot이나 Actor의 다음 application message를 실행하지
 않고도 현재 turn을 재개할 수 있다.
 
@@ -308,7 +310,7 @@ sequenceDiagram
 
 - 각 언어 service runtime은 application domain과 infrastructure domain을 독립적으로 진행한다.
 - Payload decoding, user callback과 exception mapping은 application turn에서 처리한다.
-- Request completion과 bounded liveness·admission·relocation·reply recovery service control은 기존 Completion connection에서 받고 send-ready는 Core callback으로 전달한다.
+- Request completion과 bounded liveness·admission·relocation·reply recovery service control은 기존 Completion connection에서 받는다. Core HWM 재시도 결과는 binding operation별 completion으로 받으며 Framework service-wire `SendReady` record와 구분한다.
 - Peer connection 상태 변경과 shutdown barrier도 infrastructure task에서 처리한다.
 - Application handler가 대기 중이어도 infrastructure task를 진행할 수 있어야 한다.
 - Actor·Spot lifecycle처럼 user callback을 호출하는 job은 application turn에 포함한다.
@@ -390,7 +392,7 @@ Call이 pre-cancelled 상태로 도착했을 때의 규칙은 다음과 같다.
 - `.NET`의 pre-cancelled `CancellationToken`과 Node.js의 이미 abort된 `AbortSignal`은 유효한 call의 runtime admission을 시작하지 않고 해당 언어의 cancelled awaitable로 완료한다.
 - Java와 Kotlin의 submit에는 cancellation 입력이 없다.
 - 유효한 일반 JVM call은 첫 non-blocking admission 시도를 마친 뒤 stage를 caller에게 반환하므로, caller가 stage를 받은 뒤 실행하는 Java `cancel(false)`나 그 stage를 기다리는 Kotlin coroutine cancellation은 첫 시도를 취소할 수 없다.
-- Operation이 pending 상태이면 이 cancellation이 이후 admission과 경쟁하고 send-ready waiter, queue reservation과 payload reservation을 정리한다.
+- Operation이 pending 상태이면 이 cancellation이 binding completion과 경쟁하고 queue reservation과 payload reservation을 정리한다.
 - 따라서 JVM 경로는 pre-cancellation에 따른 transport attempt 0을 보장하지 않는다.
 
 | 언어 | cancellation 입력 | 첫 admission 시도 취소 가능 여부 |

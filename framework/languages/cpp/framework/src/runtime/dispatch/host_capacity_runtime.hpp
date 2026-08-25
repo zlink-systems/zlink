@@ -29,7 +29,7 @@ struct host_capacity_metric_descriptor_t
     bool state_label = false;
 };
 
-inline constexpr std::array<host_capacity_metric_descriptor_t, 10>
+inline constexpr std::array<host_capacity_metric_descriptor_t, 14>
   host_capacity_metric_catalog{{
     {"zlink.host.core_hwm.effective_budget",
      ::zlink::framework::detail::metric_instrument_kind_t::observable, "By", false},
@@ -51,6 +51,14 @@ inline constexpr std::array<host_capacity_metric_descriptor_t, 10>
      ::zlink::framework::detail::metric_instrument_kind_t::counter, "{wait}", false},
     {"zlink.host.application_job_queue.capacity_wait_duration",
      ::zlink::framework::detail::metric_instrument_kind_t::counter, "s", false},
+    {"zlink.host.application_job_queue.pressure_state",
+     ::zlink::framework::detail::metric_instrument_kind_t::observable, "{state}", true},
+    {"zlink.host.application_job_queue.pressure_transitions",
+     ::zlink::framework::detail::metric_instrument_kind_t::counter, "{transition}", true},
+    {"zlink.host.application_job_queue.pause_duration",
+     ::zlink::framework::detail::metric_instrument_kind_t::observable, "s", true},
+    {"zlink.host.application_job_queue.flow_state_config_failures",
+     ::zlink::framework::detail::metric_instrument_kind_t::counter, "{failure}", false},
   }};
 
 class host_capacity_runtime_t
@@ -84,11 +92,13 @@ class host_capacity_runtime_t
     {
         std::lock_guard lock (_mutex);
         const auto core = _core_context->core_hwm_budget_snapshot ();
+        const auto application_jobs =
+          _application_jobs->observation_snapshot ();
         host_capacity_status_t status;
         status.measurement_epoch = _measurement_epoch;
         status.core_hwm = project_core (core);
-        status.application_job_queue = _application_jobs->snapshot ();
-        emit_metrics (status);
+        status.application_job_queue = application_jobs.status;
+        emit_metrics (status, application_jobs.pressure);
         return status;
     }
 
@@ -133,7 +143,9 @@ class host_capacity_runtime_t
           core.deferred_origin_credit_bytes ()};
     }
 
-    void emit_metrics (const host_capacity_status_t &status) const noexcept
+    void emit_metrics (
+      const host_capacity_status_t &status,
+      const application_job_queue_pressure_metrics_t &pressure) const noexcept
     {
         if (!_monitoring
             || !_monitoring->diagnostics_logger.is_enabled (
@@ -209,6 +221,42 @@ class host_capacity_runtime_t
                  std::chrono::duration<double> (
                    jobs.capacity_wait_duration).count (),
                  "s", ::zlink::framework::detail::metric_instrument_kind_t::counter);
+        const auto pressure_state =
+          jobs.pressure_state
+              == application_job_queue_pressure_state_t::paused
+            ? "paused"
+            : "running";
+        publish ("zlink.host.application_job_queue.pressure_state",
+                 1.0, "{state}",
+                 ::zlink::framework::detail::metric_instrument_kind_t::observable,
+                 {{"state", pressure_state}});
+        publish ("zlink.host.application_job_queue.pressure_transitions",
+                 static_cast<double> (pressure.running_transition_count),
+                 "{transition}",
+                 ::zlink::framework::detail::metric_instrument_kind_t::counter,
+                 {{"state", "running"}});
+        publish ("zlink.host.application_job_queue.pressure_transitions",
+                 static_cast<double> (pressure.paused_transition_count),
+                 "{transition}",
+                 ::zlink::framework::detail::metric_instrument_kind_t::counter,
+                 {{"state", "paused"}});
+        publish ("zlink.host.application_job_queue.pause_duration",
+                 std::chrono::duration<double> (
+                   jobs.current_pause_duration).count (),
+                 "s",
+                 ::zlink::framework::detail::metric_instrument_kind_t::observable,
+                 {{"state", "current"}});
+        publish ("zlink.host.application_job_queue.pause_duration",
+                 std::chrono::duration<double> (
+                   pressure.cumulative_pause_duration).count (),
+                 "s",
+                 ::zlink::framework::detail::metric_instrument_kind_t::observable,
+                 {{"state", "cumulative"}});
+        publish ("zlink.host.application_job_queue.flow_state_config_failures",
+                 static_cast<double> (
+                   pressure.flow_state_config_failure_count),
+                 "{failure}",
+                 ::zlink::framework::detail::metric_instrument_kind_t::counter);
     }
 
     std::shared_ptr<zlink::context_t> _core_context;

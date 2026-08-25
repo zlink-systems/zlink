@@ -13,6 +13,9 @@ const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
 } = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  ApplicationJobReceiveFlowController
+} = require('../../packages/framework/dist/runtime/application-jobs/receive-flow-controller');
 const clientServerWire = require(
   '../../packages/framework/dist/runtime/channels/client-server-service-wire'
 );
@@ -188,7 +191,6 @@ test('ClientServer socket identity advertises the concrete port returned after b
     maxMessageSize: -1,
     setChannelName() {},
     setRoutingId(value) { this.routingId = value; },
-    onSendReady() {},
     bind(endpoint) {
       assert.equal(endpoint, 'tcp://0.0.0.0:0');
       this.lastEndpoint = 'tcp://0.0.0.0:49152';
@@ -207,6 +209,235 @@ test('ClientServer socket identity advertises the concrete port returned after b
   assert.equal(identity.endpoint, 'tcp://orders.internal:49152');
   assert.equal(identity.serverRid, router.routingId);
   assert.ok(identity.lifecycleGeneration > 0n);
+  await sockets.dispose();
+});
+
+test('paired ClientServer DEALER and ROUTER sockets receive absolute queue pressure state', async () => {
+  const registration = internal.createFrameworkRegistration({
+    channels: {
+      orders: {
+        client: { manualConnections: [] },
+        server: { bind: 'tcp://127.0.0.1:0' },
+        sendHandlers: [{ packetName: 'notice', handler: { handle() {} } }]
+      }
+    }
+  });
+  const calls = [];
+  const socket = (kind) => ({
+    nativeInstance: {},
+    peerWeight: 100,
+    sendHighWaterMark: 0,
+    receiveHighWaterMark: 0,
+    sendTimeoutMs: -1,
+    maxMessageSize: -1,
+    setReceiveFlowState(state) { calls.push(`${kind}:flow:${state}`); },
+    setChannelName() {},
+    setRoutingId() {},
+    bind() { calls.push(`${kind}:bind`); },
+    connect() {},
+    disconnect() {},
+    async dispose() { calls.push(`${kind}:dispose`); }
+  });
+  const dealer = socket('dealer');
+  const router = socket('router');
+  let now = 0;
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({
+      maxQueuedApplicationJobs: 5n,
+      pauseThresholdPercent: 80,
+      resumeThresholdPercent: 40
+    }, () => 1n),
+    () => now
+  );
+  const sockets = new ZLinkChannelSocketRegistry(
+    registration,
+    {
+      createDealerSocket() { return dealer; },
+      createRouterSocket() { return router; }
+    },
+    {},
+    undefined,
+    undefined,
+    queue
+  );
+
+  sockets.clientDealer('orders');
+  sockets.channelRouter('orders');
+  assert.deepEqual(calls.slice(0, 3), ['dealer:flow:0', 'router:flow:0', 'router:bind']);
+  const permits = [];
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+  assert.deepEqual(calls.slice(-2), ['dealer:flow:1', 'router:flow:1']);
+  permits.pop().releaseAfterInternalProcessing();
+  assert.equal(queue.pressureState(), 'paused');
+  permits.pop().releaseAfterInternalProcessing();
+  assert.equal(queue.pressureState(), 'running');
+  assert.deepEqual(calls.slice(-2), ['dealer:flow:0', 'router:flow:0']);
+  for (const permit of permits) permit.releaseAfterInternalProcessing();
+
+  await sockets.dispose();
+  const callCountAfterDispose = calls.length;
+  const afterDispose = [];
+  for (let index = 0; index < 4; index += 1) afterDispose.push(await queue.acquire());
+  assert.equal(calls.length, callCountAfterDispose);
+  for (const permit of afterDispose) permit.releaseAfterInternalProcessing();
+});
+
+test('queue-owned receive-flow transitions serialize reentrant listeners without duplicate native calls', async () => {
+  const registration = internal.createFrameworkRegistration({
+    channels: {
+      orders: { client: { manualConnections: ['tcp://127.0.0.1:9490'] } },
+      payments: { client: { manualConnections: ['tcp://127.0.0.1:9491'] } }
+    }
+  });
+  const calls = [];
+  const permits = [];
+  let releaseDuringPause = true;
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({
+      maxQueuedApplicationJobs: 5n,
+      pauseThresholdPercent: 80,
+      resumeThresholdPercent: 40
+    }, () => 1n)
+  );
+  const dealer = (kind, reentrant) => ({
+    nativeInstance: {},
+    sendHighWaterMark: 0,
+    receiveHighWaterMark: 0,
+    sendTimeoutMs: -1,
+    maxMessageSize: -1,
+    setReceiveFlowState(state) {
+      calls.push(`${kind}:${state}`);
+      if (reentrant && state === 1 && releaseDuringPause) {
+        releaseDuringPause = false;
+        permits.shift().releaseAfterInternalProcessing();
+        permits.shift().releaseAfterInternalProcessing();
+      }
+    },
+    setChannelName() {},
+    setRoutingId() {},
+    connect() {},
+    disconnect() {},
+    async dispose() {}
+  });
+  const dealers = [dealer('orders', true), dealer('payments', false)];
+  const sockets = new ZLinkChannelSocketRegistry(
+    registration,
+    { createDealerSocket() { return dealers.shift(); } },
+    {},
+    undefined,
+    undefined,
+    queue
+  );
+  sockets.clientDealer('orders');
+  sockets.clientDealer('payments');
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+
+  assert.equal(queue.pressureState(), 'running');
+  assert.deepEqual(calls, ['orders:0', 'payments:0', 'orders:1', 'orders:0']);
+
+  for (const permit of permits) permit.releaseAfterInternalProcessing();
+  assert.deepEqual(calls, ['orders:0', 'payments:0', 'orders:1', 'orders:0']);
+  await sockets.dispose();
+});
+
+test('initial receive-flow configuration failures are counted and prevent socket exposure', () => {
+  const registration = internal.createFrameworkRegistration({
+    channels: { orders: { client: { manualConnections: ['tcp://127.0.0.1:9401'] } } }
+  });
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 5n }, () => 1n)
+  );
+  const failures = [];
+  const sockets = new ZLinkChannelSocketRegistry(
+    registration,
+    {
+      createDealerSocket() {
+        return {
+          nativeInstance: {},
+          setReceiveFlowState() { throw new Error('flow config failed'); },
+          async dispose() {}
+        };
+      }
+    },
+    {},
+    undefined,
+    error => failures.push(error),
+    queue
+  );
+  assert.throws(() => sockets.clientDealer('orders'), /flow config failed/);
+  assert.equal(queue.snapshot().flowStateConfigFailureCount, 1n);
+  assert.deepEqual(failures.map(error => error.message), ['flow config failed']);
+});
+
+test('receive-flow controller fences reentrant disposal during initial state apply', () => {
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 5n }, () => 1n)
+  );
+  const controller = new ApplicationJobReceiveFlowController(
+    queue,
+    state => state === 'paused' ? 1 : 0
+  );
+  let calls = 0;
+  const target = {
+    setReceiveFlowState() {
+      calls += 1;
+      controller.dispose();
+    }
+  };
+
+  assert.throws(() => controller.register(target), /controller is disposed/);
+  assert.equal(calls, 1);
+  assert.throws(() => controller.register(target), /controller is disposed/);
+  assert.equal(queue.snapshot().flowStateConfigFailureCount, 0n);
+});
+
+test('RouteMesh ROUTER receives current absolute pressure before connect and bind', async () => {
+  const registration = internal.createFrameworkRegistration({
+    routeChannels: [{
+      routerChannelId: 'play.route',
+      bind: 'tcp://127.0.0.1:9402',
+      manualConnections: ['tcp://127.0.0.1:9403']
+    }]
+  });
+  const calls = [];
+  const router = {
+    nativeInstance: {},
+    peerWeight: 100,
+    sendHighWaterMark: 0,
+    receiveHighWaterMark: 0,
+    sendTimeoutMs: -1,
+    maxMessageSize: -1,
+    setReceiveFlowState(state) { calls.push(`flow:${state}`); },
+    setChannelName() {},
+    setRoutingId() {},
+    setProbe() {},
+    connect() { calls.push('connect'); },
+    bind() { calls.push('bind'); },
+    async dispose() { calls.push('dispose'); }
+  };
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({
+      maxQueuedApplicationJobs: 5n,
+      pauseThresholdPercent: 80,
+      resumeThresholdPercent: 40
+    }, () => 1n)
+  );
+  const permits = [];
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+  const sockets = new ZLinkChannelSocketRegistry(
+    registration,
+    { createRouterSocket() { return router; } },
+    {},
+    undefined,
+    undefined,
+    queue
+  );
+  sockets.routeRouter('play.route');
+  assert.deepEqual(calls.slice(0, 3), ['flow:1', 'connect', 'bind']);
+  permits.pop().releaseAfterInternalProcessing();
+  permits.pop().releaseAfterInternalProcessing();
+  assert.equal(calls.at(-1), 'flow:0');
+  for (const permit of permits) permit.releaseAfterInternalProcessing();
   await sockets.dispose();
 });
 
@@ -862,7 +1093,6 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
     maxMessageSize: 4096,
     setChannelName() {},
     setRoutingId() {},
-    onSendReady() {},
     bind() {},
     async send(routingId, message) {
       sent.push({ routingId, frame: Buffer.from(message.data()) });
@@ -1453,7 +1683,6 @@ function fakeDealer(id) {
     maxMessageSize: -1,
     setChannelName() {},
     setRoutingId() {},
-    onSendReady() {},
     connect() {},
     disconnect() {},
     async send() {},

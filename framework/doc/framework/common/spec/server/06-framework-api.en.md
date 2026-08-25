@@ -70,8 +70,9 @@ service liveness message, and reconnect contract are owned by
 ### 2.1 Separating the Core Memory Budget From the Application Job Queue
 
 The framework does not compute a separate application byte HWM. The root inbound-dispatch
-options forward the following Core memory settings from one framework host instance to the
-Core context it owns.
+options forward the following Core queue-memory settings from one framework host instance to
+the Core context it owns. This is startup configuration; it does not make Framework the owner
+of Core HWM calculation.
 
 | Setting | Meaning |
 |---|---|
@@ -85,18 +86,22 @@ runtime hint. Core owns OS/cgroup detection, budget calculation, queue census, d
 HWM allocation, and its runtime snapshot. The framework does not reproduce that calculation
 or divide the budget by a framework connection count. The settings are fixed at startup.
 
-A message retained from a Core receive keeps the Core receive credit until the framework
-releases the retained lease. Terminal reply/error completion bypasses both the application
-job queue permit and ordinary-ingress Core HWM path so that completion remains live while ordinary
-traffic is saturated.
+When a Core queue hands an application record to the binding, that Core byte charge ends.
+The payload then follows ordinary message lifetime from [Payload Ownership And
+Copying](50-internal-message-ownership.en.md); it is not Core HWM credit or another capacity token.
+Framework does not use retained receive to extend the charge through handler or reply terminal.
+Terminal reply/error completion bypasses both the Application Job Queue permit and the ordinary
+Core byte-HWM path.
 
-The same root options also configure one shared application job queue owned by the framework
-host instance.
+The root inbound-dispatch options also configure one shared application job queue owned by the
+framework host instance.
 
 | Setting | Meaning |
 |---|---|
 | `ApplicationJobQueueProfile` | Auto queue profile. The default is `Balanced`. |
 | `MaxQueuedApplicationJobs` | Optional exact manual capacity in `1..2,147,483,647`. Omission selects Auto. |
+| `ApplicationJobQueuePauseThresholdPercent` | Integer in `1..100`. The default is `80`. |
+| `ApplicationJobQueueResumeThresholdPercent` | Integer in `0..99`. The default is `60` and it must be below the pause value. |
 | `EffectiveMaxQueuedApplicationJobs` | Read-only startup result exposed by status. |
 
 A manual range violation or Auto multiplication overflow is a configuration error before
@@ -113,7 +118,14 @@ not recomputed at runtime.
 | `Throughput` | 256 |
 
 The `CoreHwmProfile` and `ApplicationJobQueueProfile` labels intentionally use the same
-four names, but they are independent public types and independent calculations.
+four names, but they are independent public types and independent calculations. Each defaults
+independently to `Balanced`, and selecting one does not change the other.
+
+The framework computes the pause permit count by rounding
+`effective maximum * pause percent / 100` up and the resume permit count by rounding
+`effective maximum * resume percent / 100` down. Startup validates both ranges and
+`resume < pause`; a violation is a configuration error before socket bind. The pressure
+count is permits in use, the sum of reserved supply permits and queued application jobs.
 
 Only supply identifiable before receive as terminal reply/error completion bypasses the
 shared supply permit. A record first received on an ordinary connection does not gain a
@@ -131,9 +143,14 @@ are granted in oldest-waiter order. Batch receive and 1:N fanout reserve one per
 application job and never publish more jobs than the secured permits. When Core receive
 queues fill, their byte HWM propagates backpressure to the sender.
 
-[Core Byte HWM And Application Job Flow](33-core-hwm-application-job-flow.en.md) defines the
-pre-handler asynchronous ownership flow, the distinct release boundaries of the Core lease and
-Framework permit, and the durable-relocation staging boundary.
+The only runtime feedback from Framework job pressure to Core is the absolute `RUNNING` or
+`PAUSED` receive-flow state on supported sockets. Framework does not change Core HWM settings
+or queued-byte counters during this transition. Core snapshot projection is read-only
+observation and is not an input to pressure calculation.
+
+[Core Byte HWM And Application Job Flow](33-core-hwm-application-job-flow.en.md) defines why
+the capacities are separate, the permit release boundary, and the durable-relocation staging
+exception.
 
 The root Location options own startup-only `SessionRelocationSealTimeout`. It defaults to
 `3,000 ms` and accepts only a finite positive duration. Zero, negative, infinite, or a
@@ -539,7 +556,7 @@ provide blocking wait or callback wakeup and uses periodic polling instead, that
 published in that language's documentation, since it becomes the best-case lower bound on
 one message's latency. Transport readiness isn't an application callback argument. Request
 completion and liveness/admission/relocation/reply-recovery service control are received on
-the existing Completion connection. Send-ready is delivered via a Core callback. This
+the existing Completion connection. Core HWM retry is delivered as per-operation binding completion. This
 infrastructure work proceeds in an execution area an application handler can't occupy. Jobs
 that call application callbacks, like Actor/Spot lifecycle, are processed in the application
 execution area.
@@ -876,13 +893,16 @@ The framework converts target-selection and transport-admission results into the
 common results. A Node direct call keeps a Node RID; a Spot/Actor message keeps a global ID;
 a session binding keeps the exact object generation and binding token. Physical peer
 lifecycle generation isn't a public commitment. A RouteMesh/ClientServer select-one
-ChannelName can re-select the current eligible member up to a successful admission, but
-doesn't resubmit the same operation after acceptance or terminal completion.
+ChannelName picks one current eligible member immediately before starting the first binding
+operation. It may pick another eligible member only while checking route eligibility or
+source-local admission before a binding operation starts. After that boundary, Core owns HWM
+retry and completion; the framework does not reselect for capacity or resubmit the binding
+operation.
 
 | Observed condition | Framework result |
 |---|---|
 | The source outbound admission of that operation family accepted the operation | one-way send/publish completes normally with no return value; request transitions to pending completion |
-| A regular one-way's first submit is backpressured | waits for send-ready up to send timeout. If capacity opens before timeout, submits once; if the deadline ends first, completes with a `DeadlineExceeded` exception |
+| A regular one-way's first submit | the binding's per-operation completion awaitable completes with Core's HWM-retry result. The framework does not wait for a separate readiness callback or retry; if the deadline ends first, it completes with a `DeadlineExceeded` exception |
 | Submission to some targets fails after Logical Multicast has started | already-accepted targets are kept. Per-target failures aren't turned into a public result or publish-only monitoring, and the whole operation isn't rolled back or automatically retried |
 | A known direct target's route isn't ready | `Unavailable` |
 | No Actor/Spot authority, or no Node/Channel send path | `NotFound` |
@@ -898,11 +918,13 @@ terminator atomically consumes the one-shot token before attempting transport. E
 completes via backpressure, timeout, or cancellation, that token can't be reused. If two
 calls race on the same token, only one starts transport admission.
 A direct pending one-way operation keeps a Node RID, global Spot/Actor ID, or session
-[binding token](01-glossary.en.md#binding-token). A retry after send-ready or a lifecycle
-signal uses only that identity's current route. If that route doesn't exist at retry time, it
-completes with `Unavailable` and doesn't move to a different logical target.
-A [Select-one](01-glossary.en.md#select-one) ChannelName can re-select an eligible member up
-to a successful admission, but doesn't replay to a different target once already accepted.
+[binding token](01-glossary.en.md#binding-token). Once the binding operation starts, its exact
+target selection is fixed and Core owns that operation's HWM retry. A later detach or timeout
+is terminal; the framework does not re-query the current route or replay to another logical
+target.
+A [Select-one](01-glossary.en.md#select-one) ChannelName follows the binding-operation-start
+boundary above. A later new operation can select from the then-eligible members, but an
+operation that has started isn't replayed to a different target.
 
 Missing/route/exact-incarnation results for a global object message are distinguished as
 follows.

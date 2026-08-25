@@ -83,7 +83,6 @@ public sealed class SpotOutboundTransportTests
             ArgumentNullException.ThrowIfNull(targetMethod);
             return targetMethod.Name switch
             {
-                nameof(IZLinkBackendSpot.OnSendReady) => null,
                 nameof(IZLinkBackendAuthorityObserver.ObserveSpotAuthority) =>
                     ObserveSpotAuthority(args),
                 nameof(IZLinkBackendSpot.SendToSpot) => SendToSpot(),

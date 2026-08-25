@@ -189,8 +189,10 @@ original bytes into each Message as-is.
 
 The framework does not recompute this profile's count, lengths, outer
 envelope, content-type frame, or framework metadata as a separate
-application byte HWM. The credit lease for the complete message retained
-from Core receive maintains byte backpressure until payload ownership ends.
+application byte HWM. Core's byte charge ends when the complete message is
+dequeued into the binding/framework, and the decoded payload follows ordinary
+framework ownership. The framework acquires an application job queue permit
+before receive/claim, limiting handler admission by job count.
 
 ## 3. Command space
 
@@ -260,7 +262,7 @@ service record carries a body closed by version `1` and its length. The
 body carries the source route, the target route, the hop count, the queue
 count/bytes at relay time, the original operation ID, and the original
 reply route ID. The two queue values are saturating `u32` diagnostic
-snapshots. `UINT32_MAX` means the actual count or retained byte size is at
+snapshots. `UINT32_MAX` means the actual count or queued byte size is at
 least that value; the snapshot never controls payload admission.
 
 #### Route validation
@@ -795,6 +797,13 @@ retention period.
 - Cleanup releases the reference from Location authority, then performs the Relocation Store delete.
 - A published reference's permanent missing state, a checksum mismatch, or an inventory digest mismatch is a non-retriable `RelocationDataLost`, and does not roll back a committed owner/membership back to the source.
 
+### `SendReady` Record And Binding Completion
+
+The schema's Framework service-wire `SendReady` record kind `12` is service control. Core 0.13
+per-operation `send_completion` and the binding awaitable are a separate contract that reports
+HWM-retry completion. Retiring the binding readiness callback does not remove the service-wire
+record or its schema value.
+
 ## 12. Implementation verification
 
 - The generated output and the checked-in codec tables match the schema.
@@ -813,7 +822,7 @@ retention period.
 
 ## Wire Records And Shared Capacity
 
-A wire command does not grant bypass; ordinary control and malformed records also use shared permits. [Receive and Dispatch Loop](46-internal-dispatch-loop.en.md) owns pre-classification permits; [Payload Ownership](50-internal-message-ownership.en.md) owns retained-record lifetime.
+A wire command does not grant bypass; ordinary control and malformed records also use shared permits. [Receive and Dispatch Loop](46-internal-dispatch-loop.en.md) owns pre-classification permits; [Payload Ownership](50-internal-message-ownership.en.md) owns ordinary record-storage lifetime.
 
 ---
 

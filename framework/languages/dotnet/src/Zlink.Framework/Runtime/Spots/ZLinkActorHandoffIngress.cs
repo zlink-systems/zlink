@@ -118,7 +118,7 @@ internal static class ZLinkActorHandoffIngress
     public static ZLinkSpotActorFrameBatch CaptureMovingFrames(
         ZLinkFrameworkRuntime runtime,
         IReadOnlyList<ZLinkBackendActorPart> parts,
-        IDisposable? creditOwner = null)
+        IDisposable? payloadOwner = null)
     {
         var dispatchable = new List<ZLinkSpotActorFrame>(parts.Count / 2);
         var index = 0;
@@ -179,7 +179,7 @@ internal static class ZLinkActorHandoffIngress
                     // TryCapture copied the payload into the durable handoff
                     // aggregate. The raw Message no longer owns any bytes for
                     // this child frame; the returned batch still owns the
-                    // physical-record credit until all sibling frames finish.
+                    // physical record envelope until all sibling frames finish.
                     frame.Dispose();
                     continue;
                 }
@@ -200,13 +200,13 @@ internal static class ZLinkActorHandoffIngress
                 finally
                 {
                     // No batch was returned, so this method remains the
-                    // physical-record credit owner on the abort path.
-                    creditOwner?.Dispose();
+                    // physical record payload owner on the abort path.
+                    payloadOwner?.Dispose();
                 }
                 throw;
             }
         }
 
-        return new ZLinkSpotActorFrameBatch(dispatchable, creditOwner: creditOwner);
+        return new ZLinkSpotActorFrameBatch(dispatchable, payloadOwner: payloadOwner);
     }
 }

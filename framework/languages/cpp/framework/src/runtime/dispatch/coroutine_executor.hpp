@@ -14,6 +14,7 @@
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/dispatch.hpp>
+#include <boost/asio/post.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/thread_pool.hpp>
 #include <boost/asio/use_awaitable.hpp>
@@ -85,6 +86,7 @@ class coroutine_executor_t
     }
 
     void drain ();
+    void post_native_continuation (std::function<void ()> work);
 
   private:
     std::mutex _mutex;

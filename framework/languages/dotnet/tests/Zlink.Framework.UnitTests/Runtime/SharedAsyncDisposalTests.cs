@@ -452,7 +452,6 @@ public sealed class SharedAsyncDisposalTests
             ArgumentNullException.ThrowIfNull(targetMethod);
             return targetMethod.Name switch
             {
-                nameof(IZLinkBackendSpot.OnSendReady) => null,
                 nameof(IAsyncDisposable.DisposeAsync) => Dispose(),
                 _ => throw new NotSupportedException(targetMethod.Name)
             };

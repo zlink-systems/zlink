@@ -67,9 +67,16 @@ job queue accounting. They do not walk queues or handlers to collect metrics.
 | `zlink.host.application_job_queue.capacity_waiters` | observable | `{waiter}` | none | Current capacity waiters. |
 | `zlink.host.application_job_queue.capacity_waits` | counter | `{wait}` | none | Capacity waits in the current epoch. |
 | `zlink.host.application_job_queue.capacity_wait_duration` | counter | `s` | none | Cumulative capacity-wait duration in the current epoch. |
+| `zlink.host.application_job_queue.pressure_state` | observable | `{state}` | `state` | Observes exactly one current `running` or `paused` series with value `1`. |
+| `zlink.host.application_job_queue.pressure_transitions` | counter | `{transition}` | `state` | Transitions into the labeled `running` or `paused` state in the current epoch. |
+| `zlink.host.application_job_queue.pause_duration` | observable | `s` | `state` | Pause time selected by `current` or `cumulative`. |
+| `zlink.host.application_job_queue.flow_state_config_failures` | counter | `{failure}` | none | Failures to apply an absolute Core flow state in the current epoch. |
 
-Reset preserves current gauges, rebases peak to current, and clears epoch counters and
-duration. Always-on metrics do not timestamp every job or create a queue-wait histogram.
+Reset preserves current gauges, including pressure state and current pause duration; rebases
+peak to current; and clears epoch counters and cumulative values, including transitions,
+cumulative pause duration, and configuration failures. If the state is already `paused`,
+cumulative pause duration starts accumulating again from the reset boundary as the new epoch.
+Always-on metrics do not timestamp every job or create a queue-wait histogram.
 MeshName, ChannelName, Actor ID, Spot ID, session ID, RID, endpoint, packet name, and owner
 are not labels.
 

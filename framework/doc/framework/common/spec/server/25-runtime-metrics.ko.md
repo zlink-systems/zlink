@@ -63,8 +63,12 @@ Metric 수집을 위해 queue나 handler를 순회하지 않는다.
 | `zlink.host.application_job_queue.capacity_waiters` | observable | `{waiter}` | 없음 | 현재 capacity waiter 수다. |
 | `zlink.host.application_job_queue.capacity_waits` | counter | `{wait}` | 없음 | 현재 epoch의 capacity wait 횟수다. |
 | `zlink.host.application_job_queue.capacity_wait_duration` | counter | `s` | 없음 | 현재 epoch의 capacity wait 누적 시간이다. |
+| `zlink.host.application_job_queue.pressure_state` | observable | `{state}` | `state` | 현재 상태에 해당하는 `running`·`paused` series 하나만 `1`로 관측한다. |
+| `zlink.host.application_job_queue.pressure_transitions` | counter | `{transition}` | `state` | 현재 epoch에서 해당 `running`·`paused` 상태로 전이한 횟수다. |
+| `zlink.host.application_job_queue.pause_duration` | observable | `s` | `state` | `current`·`cumulative` pause 시간이다. |
+| `zlink.host.application_job_queue.flow_state_config_failures` | counter | `{failure}` | 없음 | 현재 epoch에서 Core flow 절대 상태 적용에 실패한 횟수다. |
 
-Reset은 current gauge를 유지하고 peak를 current로 재기준화하며 epoch counter와 duration을 0으로 만든다.
+Reset은 pressure state와 current pause duration을 포함한 current gauge를 유지하고 peak를 current로 재기준화하며 transition·cumulative duration·config failure를 포함한 epoch counter와 누계를 0으로 만든다. Reset 시점에 이미 `paused`이면 cumulative pause duration은 그 시점을 새 epoch 시작점으로 삼아 다시 누적한다.
 Always-on metric은 job마다 timestamp나 queue-wait histogram을 만들지 않는다. MeshName, ChannelName,
 Actor ID, Spot ID, session ID, RID, endpoint, packet name과 owner는 label로 사용하지 않는다.
 

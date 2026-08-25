@@ -96,6 +96,7 @@ export interface RawServiceMeshRuntimeOptions {
   readonly peerTimeoutMs?: number;
   readonly bindingPort: ZLinkRawBindingPort;
   readonly applicationJobQueue?: ApplicationJobQueuePort;
+  readonly onReceiveFlowConfigFailure?: (error: unknown) => void;
   readonly onMailboxReady?: (domain: 'application' | 'infrastructure') => void;
   readonly onPeerNotRequired?: (
     nodeRoutingId: string,
@@ -179,6 +180,8 @@ export class RawServiceMeshRuntime {
   private readonly onPeerNotRequired?: RawServiceMeshRuntimeOptions['onPeerNotRequired'];
   private readonly onPeerDisconnected?: RawServiceMeshRuntimeOptions['onPeerDisconnected'];
   private readonly onProtocolError?: RawServiceMeshRuntimeOptions['onProtocolError'];
+  private readonly onReceiveFlowConfigFailure?:
+    RawServiceMeshRuntimeOptions['onReceiveFlowConfigFailure'];
   private readonly resolveAdvertisedEndpoint?: RawServiceMeshRuntimeOptions['resolveAdvertisedEndpoint'];
   private descriptor: ServiceNodeDescriptor;
   private host?: ZLinkRawHostPort;
@@ -201,6 +204,7 @@ export class RawServiceMeshRuntime {
     this.onPeerNotRequired = options.onPeerNotRequired;
     this.onPeerDisconnected = options.onPeerDisconnected;
     this.onProtocolError = options.onProtocolError;
+    this.onReceiveFlowConfigFailure = options.onReceiveFlowConfigFailure;
     this.resolveAdvertisedEndpoint = options.resolveAdvertisedEndpoint;
   }
 
@@ -208,9 +212,16 @@ export class RawServiceMeshRuntime {
     if (this.router !== undefined) return;
     if (this.closed) throw new Error('Raw service runtime cannot restart after close.');
     const host = this.bindingPort.createHost();
+    let router: ZLinkRawRouterPort | undefined;
     try {
-      const router = host.createRouter();
+      router = host.createRouter();
+      const receiveFlowRouter = router;
       router.setRoutingId(this.descriptor.nodeRoutingId);
+      this.applicationJobQueue.registerReceiveFlowTarget?.(
+        router,
+        state => receiveFlowRouter.setReceiveFlowState(state),
+        this.onReceiveFlowConfigFailure
+      );
       router.bind(this.descriptor.advertisedEndpoint);
       const boundEndpoint = router.localEndpoint();
       const next = {
@@ -248,6 +259,9 @@ export class RawServiceMeshRuntime {
       this.host = host;
       this.router = router;
     } catch (error) {
+      if (router !== undefined) {
+        this.applicationJobQueue.unregisterReceiveFlowTarget?.(router);
+      }
       host.close();
       throw error;
     }
@@ -1112,6 +1126,10 @@ export class RawServiceMeshRuntime {
     this.mailbox.close();
     this.operations.close('Raw service runtime closed.');
     this.serviceIngress = undefined;
+    const router = this.router;
+    if (router !== undefined) {
+      this.applicationJobQueue.unregisterReceiveFlowTarget?.(router);
+    }
     this.monitor?.close();
     this.monitor = undefined;
     const host = this.host;
@@ -1786,7 +1804,7 @@ function sameMonitorConnection(
 
 function isConnectionReadyEdge(event: ZLinkRawMonitorRecord): boolean {
   return event.flags === undefined
-    ? event.value > 0
+    ? event.value > 0n
     : (event.flags & MONITOR_CONNECTION_READY_EDGE) !== 0;
 }
 

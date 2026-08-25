@@ -121,7 +121,7 @@ public final class ZLinkChannelRuntime
 
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
-    private final ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+    private final ZLinkChannelSocketRegistry sockets;
     private final ZLinkChannelDispatchRegistry dispatchRegistry;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkChannelReplyDecoder replyDecoder;
@@ -150,16 +150,8 @@ public final class ZLinkChannelRuntime
     private ZLinkClientServerLocationRuntime clientServerLocationRuntime;
     private volatile Supplier<ZLinkFrameworkRuntimeState> hostState =
         () -> ZLinkFrameworkRuntimeState.SERVING;
-    private final ZLinkClientServerRuntime
-        clientServerRuntime = new ZLinkClientServerRuntimeView(
-            sockets,
-            () -> hostState.get());
-    private final ZLinkFanoutRuntime
-        fanoutRuntime = new ZLinkFanoutRuntimeView(
-            sockets,
-            () -> fanoutLocationRuntime,
-            () -> manualFanoutRuntime,
-            () -> hostState.get());
+    private final ZLinkClientServerRuntime clientServerRuntime;
+    private final ZLinkFanoutRuntime fanoutRuntime;
     private Supplier<ZLinkInternalSpotNode> spotRouteBridgeOwner;
     private final ScheduledExecutorService spotRouteBridgeDrainLoopExecutor =
         Executors.newSingleThreadScheduledExecutor(task -> {
@@ -438,6 +430,16 @@ public final class ZLinkChannelRuntime
                 Supplier<Boolean>,
                 Runnable,
                 CompletionStage<Void>>> admission) {
+        this.sockets = new ZLinkChannelSocketRegistry(
+            registration.applicationJobQueue());
+        this.clientServerRuntime = new ZLinkClientServerRuntimeView(
+            sockets,
+            () -> hostState.get());
+        this.fanoutRuntime = new ZLinkFanoutRuntimeView(
+            sockets,
+            () -> fanoutLocationRuntime,
+            () -> manualFanoutRuntime,
+            () -> hostState.get());
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.replyDecoder = new ZLinkChannelReplyDecoder(this.serializer);
         this.codecs = Objects.requireNonNull(registration.codecs(), "codecs");

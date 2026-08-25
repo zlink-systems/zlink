@@ -435,6 +435,32 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
         f'zlinkBindings = "{version}"',
         1,
     )
+    for relative in (
+        "framework/languages/java/samples/run_samples.sh",
+        "framework/languages/java/samples/run_samples.ps1",
+    ):
+        sync.regex(
+            relative,
+            rf"(\.artifacts/wsl/install/zlink-core/){SEMVER}(/lib/libzlink\.so)",
+            rf"\g<1>{version}\2",
+            1,
+        )
+    java_sample_contract = (
+        "framework/languages/java/zlink-framework-testkit/src/contractTest/java/"
+        "systems/zlink/framework/testkit/SampleReleaseGateContractTest.java"
+    )
+    sync.regex(
+        java_sample_contract,
+        rf"(\.artifacts/wsl/install/zlink-core/){SEMVER}(/lib/libzlink\.so)",
+        rf"\g<1>{version}\2",
+        2,
+    )
+    sync.regex(
+        java_sample_contract,
+        rf"packaged {SEMVER} core runtime",
+        f"packaged {version} core runtime",
+        2,
+    )
     sync.regex(
         "framework/languages/java/e2e/SubmitAdmission/Role/build.gradle.kts",
         rf'(\.orElse\("){SEMVER}("\))',

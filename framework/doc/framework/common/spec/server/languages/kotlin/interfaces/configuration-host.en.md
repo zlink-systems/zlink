@@ -91,6 +91,8 @@ public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceSampleRate(double);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions includeMessageSizes(boolean);
+}
+public interface systems.zlink.framework.configuration.ZLinkInboundDispatchOptions {
   public abstract java.util.OptionalLong coreHwmMemoryLimitBytes();
   public abstract void setCoreHwmMemoryLimitBytes(long);
   public abstract java.util.OptionalLong coreHwmBudgetBytes();
@@ -101,6 +103,10 @@ public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
   public abstract void setApplicationJobQueueProfile(systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile);
   public abstract java.util.OptionalLong maxQueuedApplicationJobs();
   public abstract void setMaxQueuedApplicationJobs(long);
+  public abstract int applicationJobQueuePauseThresholdPercent();
+  public abstract void setApplicationJobQueuePauseThresholdPercent(int);
+  public abstract int applicationJobQueueResumeThresholdPercent();
+  public abstract void setApplicationJobQueueResumeThresholdPercent(int);
 }
 public interface systems.zlink.framework.locations.ZLinkLocationOptions {
   public abstract java.time.Duration ownerLeaseRenewInterval();
@@ -152,6 +158,11 @@ public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
 }
 ```
 
+Core HWM and application-job-queue configuration is obtained directly
+from `options.configureInboundDispatch()`, which returns
+`ZLinkInboundDispatchOptions`; `configureDispatch { ... }` remains the
+diagnostics DSL and does not forward HWM or job-queue settings.
+
 `sessionRelocationSealTimeout()` is the same startup-only positive `Duration` as Java,
 defaulting to three seconds. A non-millisecond-representable, zero, negative, or infinite
 value is a configuration error before socket bind.
@@ -183,8 +194,10 @@ isn't added to ClientServer or RouteMesh SS.
 
 The Kotlin binding forwards a positive finite Java `Runtime.maxMemory()` value to Core as
 its runtime memory hint. Core and application-job-queue profiles use the Java public
-contract's independent enums and calculations. Manual job cap, startup CPU snapshot, and
-overflow validation also match the Java public contract.
+contract's independent enums and calculations, both defaulting to `BALANCED`. Pressure thresholds
+default to pause `80` and resume `60`; pause is an integer in `1..100`, resume is an integer in
+`0..99`, and resume must be less than pause. Manual job cap, startup CPU snapshot, and pre-bind
+bounds, ordering, and overflow validation also match the Java public contract.
 
 ## Kotlin Source Signature
 

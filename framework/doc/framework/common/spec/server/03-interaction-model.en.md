@@ -147,12 +147,10 @@ application callback sits between selection and submit.
 RouteMesh also excludes it from Logical Multicast remote targets. It doesn't affect
 RID direct or an already-submitted operation.
 
-If select-one's non-blocking submit isn't accepted due to insufficient capacity,
-that first selection isn't a public target commitment. The framework service
-runtime can pick a different target among the current eligible members of the same
-[ChannelName](01-glossary.en.md#channelname), up to a successful admission after
-send-ready. The target is confirmed at the moment the transport queue accepts the
-operation, and afterward the same operation isn't replayed to a different member.
+Immediately before starting the first binding operation, select-one picks one current
+eligible member of the same [ChannelName](01-glossary.en.md#channelname). Starting that
+binding operation fixes the exact target. Core owns HWM retry and completion for the
+operation; the Framework neither reselects for capacity nor replays it afterward.
 A direct call doesn't use this re-selection rule. Node direct keeps RID; Spot/Actor
 keeps global ID; session keeps a binding token — physical peer lifecycle generation
 isn't exposed as public target identity.
@@ -320,7 +318,7 @@ gate; a `SpotWide` User Spot's member Actor uses the User Spot's common gate. To
 read or change Spot-owned state, an explicit Spot send/request is submitted and
 processed on that Spot's turn.
 
-Node, Spot, and Actor completion and send-ready are processed in an
+Node, Spot, Actor, and binding-operation completion are processed in an
 infrastructure execution area that can proceed even while an application handler
 is waiting.
 

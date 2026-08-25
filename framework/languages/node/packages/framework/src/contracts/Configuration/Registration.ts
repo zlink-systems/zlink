@@ -98,7 +98,33 @@ function normalizeApplicationJobQueue(
       'applicationJobQueue.maxQueuedApplicationJobs must be a bigint in the range 1..2147483647.'
     );
   }
-  return Object.freeze({ profile, maxQueuedApplicationJobs });
+  const pauseThresholdPercent = value?.pauseThresholdPercent ?? 80;
+  const resumeThresholdPercent = value?.resumeThresholdPercent ?? 60;
+  if (!Number.isInteger(pauseThresholdPercent)
+      || pauseThresholdPercent < 1
+      || pauseThresholdPercent > 100) {
+    throw new TypeError(
+      'applicationJobQueue.pauseThresholdPercent must be an integer in the range 1..100.'
+    );
+  }
+  if (!Number.isInteger(resumeThresholdPercent)
+      || resumeThresholdPercent < 0
+      || resumeThresholdPercent > 99) {
+    throw new TypeError(
+      'applicationJobQueue.resumeThresholdPercent must be an integer in the range 0..99.'
+    );
+  }
+  if (resumeThresholdPercent >= pauseThresholdPercent) {
+    throw new TypeError(
+      'applicationJobQueue.resumeThresholdPercent must be less than pauseThresholdPercent.'
+    );
+  }
+  return Object.freeze({
+    profile,
+    maxQueuedApplicationJobs,
+    pauseThresholdPercent,
+    resumeThresholdPercent
+  });
 }
 
 function normalizeCoreHwm(

@@ -114,6 +114,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private volatile Func<bool>? _flowCaptureEnabled;
 
     private IRouterSocket? _socket;
+    private IDisposable? _receiveFlowRegistration;
     private ISocketMonitor? _socketMonitor;
     private IPoller? _poller;
     private CancellationTokenSource? _stop;
@@ -273,6 +274,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var socket = _context.CreateRouterSocket();
             ISocketMonitor? socketMonitor = null;
             IPoller? poller = null;
+            IDisposable? receiveFlowRegistration = null;
             try
             {
                 socket.Options.Mandatory = true;
@@ -289,6 +291,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (SendTimeout is { } timeout)
                     socket.Options.SendTimeout = timeout;
                 socket.SetRoutingId(_routingId);
+                receiveFlowRegistration =
+                    _applicationJobQueue?.RegisterReceiveFlowSocket(socket);
                 var configuredBindEndpoint = _bindEndpoint;
                 socket.Bind(configuredBindEndpoint);
                 _bindEndpoint = socket.Options.LastEndpoint;
@@ -307,6 +311,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     PollEventFlags.PollIn | PollEventFlags.PollErr,
                     1);
                 _socket = socket;
+                _receiveFlowRegistration = receiveFlowRegistration;
+                receiveFlowRegistration = null;
                 _socketMonitor = socketMonitor;
                 _activeSocketGeneration = _lifecycleGeneration;
                 _poller = poller;
@@ -329,6 +335,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _poller?.Dispose();
                 _poller = null;
                 poller?.Dispose();
+                _receiveFlowRegistration?.Dispose();
+                _receiveFlowRegistration = null;
+                receiveFlowRegistration?.Dispose();
                 _socketMonitor?.Dispose();
                 _socketMonitor = null;
                 socketMonitor?.Dispose();
@@ -2844,15 +2853,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         await CloseInboundOperationAdmissionAsync(shutdownToken).ConfigureAwait(false);
 
         IRouterSocket? socket;
+        IDisposable? receiveFlowRegistration;
         ISocketMonitor? socketMonitor;
         IPoller? poller;
         lock (_socketGate)
         {
             _activeSocketGeneration = 0;
             socket = _socket;
+            receiveFlowRegistration = _receiveFlowRegistration;
             socketMonitor = _socketMonitor;
             poller = _poller;
             _socket = null;
+            _receiveFlowRegistration = null;
             _socketMonitor = null;
             _poller = null;
         }
@@ -2884,6 +2896,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             await spot.DisposeAsync().ConfigureAwait(false);
         _spots.Clear();
 
+        receiveFlowRegistration?.Dispose();
         poller?.Dispose();
         socketMonitor?.Dispose();
         socket?.Dispose();
@@ -4938,7 +4951,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 received = Received.Create();
                 bool available;
                 lock (_socketGate)
-                    available = _socket!.RecvRetained(
+                    available = _socket!.Recv(
                         received, RecvFlags.DontWait);
                 if (!available)
                     return;
@@ -4973,11 +4986,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Volatile.Read(ref _received)
             ?? throw new ObjectDisposedException(nameof(RawIngressOwnership));
 
-        internal ZLinkSharedCreditOwner ShareCoreCredit()
+        internal ZLinkSharedEnvelopeOwner ShareEnvelope()
         {
-            var coreCreditOwner = Interlocked.Exchange(ref _received, null)
+            var envelopeOwner = Interlocked.Exchange(ref _received, null)
                 ?? throw new ObjectDisposedException(nameof(RawIngressOwnership));
-            return new ZLinkSharedCreditOwner(coreCreditOwner);
+            return new ZLinkSharedEnvelopeOwner(envelopeOwner);
         }
 
         internal ZLinkApplicationJobQueueLease? TakeAdmission() =>
@@ -4985,12 +4998,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         internal IDisposable TakeApplicationOwner()
         {
-            var coreCreditOwner = Interlocked.Exchange(ref _received, null)
+            var envelopeOwner = Interlocked.Exchange(ref _received, null)
                 ?? throw new ObjectDisposedException(nameof(RawIngressOwnership));
             var applicationAdmission =
                 Interlocked.Exchange(ref _admission, null);
             return AttachApplicationAdmission(
-                coreCreditOwner,
+                envelopeOwner,
                 applicationAdmission);
         }
 
@@ -5562,7 +5575,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     static spot => spot.RoutingId.ToHex(),
                     StringComparer.Ordinal)
                 .ToArray();
-            var creditOwner = ownership.ShareCoreCredit();
+            var envelopeOwner = ownership.ShareEnvelope();
             var delivered = false;
             try
             {
@@ -5570,7 +5583,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 {
                     var spot = matchingSpots[index];
                     ZLinkApplicationJobQueueLease? childAdmission = null;
-                    IDisposable? childCreditOwner = null;
+                    IDisposable? childRecordOwner = null;
                     try
                     {
                         childAdmission = index == 0
@@ -5580,8 +5593,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                     .AcquireAsync(cancellationToken)
                                     .ConfigureAwait(false)
                                 : null;
-                        childCreditOwner = AttachApplicationAdmission(
-                            creditOwner.Retain(),
+                        childRecordOwner = AttachApplicationAdmission(
+                            envelopeOwner.Retain(),
                             childAdmission);
                         childAdmission = null;
                         var multicastParts = CloneParts(decodedMulticastParts);
@@ -5606,22 +5619,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                     null),
                                 multicastParts,
                                 true,
-                                childCreditOwner))
+                                childRecordOwner))
                         {
                             delivered = true;
-                            childCreditOwner = null;
+                            childRecordOwner = null;
                         }
                     }
                     finally
                     {
-                        childCreditOwner?.Dispose();
+                        childRecordOwner?.Dispose();
                         childAdmission?.Dispose();
                     }
                 }
             }
             finally
             {
-                creditOwner.Dispose();
+                envelopeOwner.Dispose();
                 DisposeParts(decodedMulticastParts);
             }
             return delivered;
@@ -10351,12 +10364,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private static IDisposable AttachApplicationAdmission(
-        IDisposable coreCreditOwner,
+        IDisposable payloadOwner,
         ZLinkApplicationJobQueueLease? admission) =>
         admission is null
-            ? coreCreditOwner
-            : new ZLinkApplicationJobQueueCreditOwner(
-                coreCreditOwner,
+            ? payloadOwner
+            : new ZLinkApplicationJobQueueRecordOwner(
+                payloadOwner,
                 admission);
 
     private bool EnqueueOwned(
@@ -10364,11 +10377,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MeshReceiveRecord record,
         IReadOnlyList<Message> parts,
         bool admitApplication = false,
-        IDisposable? creditOwner = null)
+        IDisposable? payloadOwner = null)
     {
         var payloadBytes = GetApplicationPayloadBytes(record, parts);
         record.ApplicationPayloadBytes = payloadBytes;
-        var queued = new QueuedRecord(record, parts, payloadBytes, creditOwner);
+        var queued = new QueuedRecord(record, parts, payloadBytes, payloadOwner);
         try
         {
             var mailbox = _ownedMailboxes.GetOrAdd(
@@ -10377,7 +10390,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     RecordOwnedRecordEnqueued,
                     RecordOwnedRecordDequeued));
             if (admitApplication
-                && creditOwner is ZLinkApplicationJobQueueCreditOwner
+                && payloadOwner is ZLinkApplicationJobQueueRecordOwner
                 {
                     Admission: { } applicationAdmission
                 })
@@ -10454,7 +10467,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             batch.Add(
                 queued.Record,
                 queued.TakeParts(),
-                queued.TakeCreditOwner());
+                queued.TakePayloadOwner());
             count++;
         }
         return count > 0;

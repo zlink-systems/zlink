@@ -133,7 +133,7 @@ export class ZLinkSpotSubscriptionDispatch {
     if (message.parts.length === 0) {
       this.options.dispatchErrors?.report({
         surface: ZLinkDispatchErrorSurface.SpotSubscription,
-        messageKind: ZLinkDispatchMessageKind.Publish,
+        messageKind: ZLinkDispatchMessageKind.Send,
         reason: ZLinkDispatchErrorReason.InvalidFrame,
         action: ZLinkDispatchErrorAction.Drop,
         topic: message.topic,
@@ -149,7 +149,7 @@ export class ZLinkSpotSubscriptionDispatch {
     if (envelope.header.kind !== ZLinkChannelMessageKind.Publish) {
       this.options.dispatchErrors?.report({
         surface: ZLinkDispatchErrorSurface.SpotSubscription,
-        messageKind: ZLinkDispatchMessageKind.Publish,
+        messageKind: ZLinkDispatchMessageKind.Send,
         reason: ZLinkDispatchErrorReason.InvalidFrame,
         action: ZLinkDispatchErrorAction.Drop,
         packetName: envelope.packetName,
@@ -164,7 +164,7 @@ export class ZLinkSpotSubscriptionDispatch {
     if (registrations === undefined || registrations.length === 0) {
       this.options.dispatchErrors?.report({
         surface: ZLinkDispatchErrorSurface.SpotSubscription,
-        messageKind: ZLinkDispatchMessageKind.Publish,
+        messageKind: ZLinkDispatchMessageKind.Send,
         reason: ZLinkDispatchErrorReason.HandlerMissing,
         action: ZLinkDispatchErrorAction.Drop,
         packetName: envelope.packetName,
@@ -206,7 +206,7 @@ export class ZLinkSpotSubscriptionDispatch {
           } catch (error) {
             this.options.dispatchErrors?.report({
               surface: ZLinkDispatchErrorSurface.SpotSubscription,
-              messageKind: ZLinkDispatchMessageKind.Publish,
+              messageKind: ZLinkDispatchMessageKind.Send,
               reason: ZLinkDispatchErrorReason.HandlerException,
               action: ZLinkDispatchErrorAction.Drop,
               packetName: envelope.packetName,
@@ -228,7 +228,7 @@ export class ZLinkSpotSubscriptionDispatch {
         && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed) {
         this.options.dispatchErrors?.report({
           surface: ZLinkDispatchErrorSurface.SpotSubscription,
-          messageKind: ZLinkDispatchMessageKind.Publish,
+          messageKind: ZLinkDispatchMessageKind.Send,
           reason: ZLinkDispatchErrorReason.PayloadDecodeFailed,
           action: ZLinkDispatchErrorAction.Drop,
           packetName: envelope.packetName,

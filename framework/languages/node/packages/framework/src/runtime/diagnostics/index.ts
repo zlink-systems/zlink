@@ -310,7 +310,7 @@ function toSocketEvent(sourceName: string, raw: ZLinkBackendSocketMonitorEvent):
 
 function mapSocketEvent(
   nativeEvent: ZLinkSocketNativeEventType,
-  nativeValue: number
+  nativeValue: bigint
 ): ZLinkSocketEventKind | undefined {
   switch (nativeEvent) {
     case SocketNativeEventType.Connected:
@@ -320,7 +320,7 @@ function mapSocketEvent(
     case SocketNativeEventType.ConnectionReady:
       return SocketEventKind.ConnectionReady;
     case SocketNativeEventType.Disconnected:
-      return nativeValue === ZLINK_DISCONNECT_REASON_HANDSHAKE_FAILED
+      return nativeValue === BigInt(ZLINK_DISCONNECT_REASON_HANDSHAKE_FAILED)
         ? SocketEventKind.HandshakeFailed
         : SocketEventKind.Disconnected;
     case SocketNativeEventType.HandshakeFailedNoDetail:

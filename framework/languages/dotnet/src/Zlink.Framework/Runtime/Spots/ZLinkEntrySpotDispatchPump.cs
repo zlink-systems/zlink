@@ -146,7 +146,7 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
         var dispatchable = ZLinkActorHandoffIngress.CaptureMovingFrames(
             _runtime,
             actorParts,
-            info.ActorCreditOwner);
+            info.ActorPayloadOwner);
         if (dispatchable.Count == 0)
         {
             dispatchable.Dispose();

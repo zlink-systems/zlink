@@ -42,7 +42,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                         .AcquireAsync(cancellationToken)
                         .ConfigureAwait(false);
                     received = receiveStoragePool.Rent();
-                    if (!router.RecvRetained(received, RecvFlags.DontWait))
+                    if (!router.Recv(received, RecvFlags.DontWait))
                         continue;
 
                     if (received.RequestSeq is null
@@ -303,7 +303,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     admission = await applicationJobQueue
                         .AcquireAsync(cancellationToken)
                         .ConfigureAwait(false);
-                    if (!subscriber.SubscribeRetained(
+                    if (!subscriber.Subscribe(
                             topicMessage!, RecvFlags.DontWait))
                         continue;
 
@@ -404,7 +404,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     admission = await applicationJobQueue
                         .AcquireAsync(cancellationToken)
                         .ConfigureAwait(false);
-                    if (!subscriber.SubscribeRetained(
+                    if (!subscriber.Subscribe(
                             topicMessage!, RecvFlags.DontWait))
                         continue;
 

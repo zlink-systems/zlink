@@ -111,17 +111,17 @@ public sealed class MessagePayloadOwnershipConvergenceTests
                 ZlinkStreamMetadata.Empty),
             Message.From("owned"));
         var releases = 0;
-        var creditOwner = new DisposeProbe();
+        var payloadOwner = new DisposeProbe();
         var batch = new ZLinkSpotActorFrameBatch(
             [frame],
             () => releases++,
-            creditOwner: creditOwner);
+            payloadOwner: payloadOwner);
 
         batch.Dispose();
         batch.Dispose();
 
         Assert.Equal(expectedReleases, releases);
-        Assert.Equal(1, creditOwner.DisposeCount);
+        Assert.Equal(1, payloadOwner.DisposeCount);
         Assert.Throws<ObjectDisposedException>(() => _ = frame.Body);
     }
 

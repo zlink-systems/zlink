@@ -33,6 +33,7 @@ public interface IZLinkFrameworkOptions
     ZLinkLocationOptions ConfigureLocations();
     IZLinkNetworkOptions ConfigureNetwork();
     IZLinkDispatchOptions ConfigureDispatch();
+    IZLinkInboundDispatchOptions ConfigureInboundDispatch();
     IZLinkStreamCompressionBuilder ConfigureStreamCompression();
     void UseFilter<TFilter>() where TFilter : class, IZLinkHandlerFilter;
 
@@ -56,6 +57,12 @@ public enum ZLinkApplicationJobQueueProfile
     LowLatency = 1,
     Balanced = 2,
     Throughput = 3
+}
+
+public enum ZLinkApplicationJobQueuePressureState
+{
+    Running = 0,
+    Paused = 1
 }
 
 public interface IZLinkMeshNodeBuilder
@@ -774,13 +781,17 @@ before startup in `ConfigureRouterSocket()`.
 of a Framework-level complete-message cap. HWM, mailbox byte budgets, and
 service-wire representation bounds remain separate resource and wire guards.
 
-`ConfigureDispatch()` returns one host-wide dispatch setting. Core memory limit, manual
-budget, and profile are forwarded to Core. The .NET binding forwards a positive finite
-`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes` as its runtime memory hint. The two
-profiles are independent enums and calculations, both defaulting to `Balanced`. Manual job
-cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and 32/64/128/256
-coefficients. Range violation and overflow fail before socket bind, and runtime does not
-recompute the result.
+`ConfigureDispatch()` returns host-wide diagnostics and unhandled-dispatch settings.
+The `IZLinkInboundDispatchOptions` returned by `ConfigureInboundDispatch()` owns the Core HWM
+profile and the independent application-job-queue profile, manual cap, and pause/resume
+thresholds. Core memory limit, manual budget, and profile are forwarded to Core. The .NET
+binding forwards a positive finite `GC.GetGCMemoryInfo().TotalAvailableMemoryBytes` as its
+runtime memory hint. Both profiles independently default to `Balanced`, and the pressure
+thresholds default to `80`/`60`. Manual job cap is `1..2,147,483,647`; omission uses the common
+startup CPU snapshot and 32/64/128/256 coefficients. Pause threshold is an integer in `1..100`,
+resume threshold is an integer in `0..99`, and resume must be less than pause. Violating these
+bounds or their ordering, or overflowing capacity, fails before socket bind, and runtime does
+not recompute the result.
 
 ## 6. Messaging Metadata
 

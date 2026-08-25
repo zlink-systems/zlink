@@ -101,7 +101,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     if (this.publisher === undefined) {
       throw new ZLinkConfigurationException('Channel publisher runtime is not started.');
     }
-    const accepted = runWithOutboundFlow(true, () => appendParts(
+    runWithOutboundFlow(true, () => appendParts(
       this.publisher!.publish(topic),
       encodeChannelEnvelopeParts(
         ZLinkChannelMessageKind.Publish,
@@ -116,9 +116,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         metadata
       )
     ).submit());
-    return {
-      status: accepted === false ? ZLinkSubmitStatus.Backpressured : ZLinkSubmitStatus.Submitted
-    };
+    return { status: ZLinkSubmitStatus.Submitted };
   }
 
   async publish(

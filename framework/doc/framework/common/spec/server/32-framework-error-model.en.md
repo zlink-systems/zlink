@@ -150,10 +150,8 @@ To start a new operation, an Application directly checks the following.
    key prevents a duplicate effect.
 3. Re-query business state if needed, then start the new operation.
 
-A send-ready wait inside the Framework, a Store result re-check, and
-target reselection before acceptance are not Application retries. Once
-an operation has been accepted, or it has become unknowable whether it
-was accepted, the Framework does not automatically resubmit the same
+Core-owned HWM retry within one binding operation is not an Application retry.
+The Framework has no send-ready waiter and does not automatically resubmit that
 operation to a different logical target.
 
 ## 8. Per-Language Projection And Verification

@@ -113,6 +113,10 @@ meterProvider.getMeter('zlink.framework');
 | `zlink.host.application_job_queue.capacity_waiters` | 현재 permit capacity waiter 수 |
 | `zlink.host.application_job_queue.capacity_waits` | 현재 measurement epoch의 permit capacity wait 누계 |
 | `zlink.host.application_job_queue.capacity_wait_duration` | 현재 epoch의 permit capacity wait 누적 시간 |
+| `zlink.host.application_job_queue.pressure_state` | 현재 `running`·`paused` 상태 (`state`) |
+| `zlink.host.application_job_queue.pressure_transitions` | 상태별 전이 누계 (`state=running`·`paused`) |
+| `zlink.host.application_job_queue.pause_duration` | 현재·누적 pause 초 (`state=current`·`cumulative`) |
+| `zlink.host.application_job_queue.flow_state_config_failures` | Core flow 절대 상태 적용 실패 누계 |
 | `zlink.host.relocation.duration` | Host `relocate` 시작부터 terminal result까지의 시간 |
 | `zlink.host.relocation.blocked` | `Blocked`로 끝난 host `relocate` 수 |
 | `zlink.host.shutdown.duration` | Host `shutdown` 시작부터 terminal result까지의 시간 |
@@ -125,8 +129,9 @@ Host runtime의 capacity snapshot은 Core HWM과 Application Job Queue 상태를
 capacity wait를 연관 지어 볼 때 사용한다. 정확한 type과 member 이름은 해당
 [언어별 monitoring 계약](../../../common/spec/server/languages/README.ko.md)에서 확인한다.
 
-Measurement reset은 capacity를 바꾸지 않고 새 epoch를 시작한다. 현재 gauge와 구성은
-유지하고 각 peak는 현재값으로 재설정하며 epoch wait count와 duration은 0으로 만든다.
+Measurement reset은 capacity를 바꾸지 않고 새 epoch를 시작한다. 현재 pressure state와 current
+pause duration을 포함한 gauge와 구성은 유지한다. 각 peak는 현재값으로 재설정하고 epoch wait,
+pressure transition, cumulative pause duration과 flow-state config failure 누계를 0으로 만든다.
 동시에 발생한 event는 정확히 한 epoch에만 속한다. Always-on metric은 의도적으로 모든 job에
 timestamp를 찍거나 job별 queue-wait histogram을 만들지 않는다. 그런 분포는 bounded perf
 fixture 안에서만 기록한다. 정확한 snapshot·reset 규칙은

@@ -262,7 +262,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         Message header,
         Message payload,
         ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
-        IDisposable? coreCreditOwner = null)
+        IDisposable? payloadOwner = null)
     {
         if (Volatile.Read(ref _applicationDispatchClosed) != 0)
             return ZLinkSerialPostAdmission.Closed;
@@ -270,7 +270,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         var admission = _serial.EnqueueApplication(
             async cancellationToken =>
             {
-                using var coreCreditScope = coreCreditOwner;
+                using var payloadOwnerScope = payloadOwner;
                 using var admissionScope =
                     applicationJobAdmission is { } admission
                         ? ZLinkApplicationJobQueueInvocation.Enter(admission)
@@ -326,13 +326,13 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         Message header,
         Message payload,
         ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
-        IDisposable? coreCreditOwner = null)
+        IDisposable? payloadOwner = null)
     {
         var signal = ClassifyInboundLiveness(header, payload);
         var admission = _serial.EnqueueControl(
             async cancellationToken =>
             {
-                using var coreCreditScope = coreCreditOwner;
+                using var payloadOwnerScope = payloadOwner;
                 using var admissionScope =
                     applicationJobAdmission is { } admission
                         ? ZLinkApplicationJobQueueInvocation.Enter(admission)

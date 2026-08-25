@@ -31,7 +31,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         ZLinkServiceWireCodec.RequestSourceFence> _requestSources = new();
 
     private Action<ZLinkBackendRouteReceived>? _nodeRouteHandler;
-    private Action? _nodeSendReadyHandler;
     private readonly object _lifecycleGate = new();
     private readonly SemaphoreSlim _signal = new(0);
     private CancellationTokenSource? _stop;
@@ -152,11 +151,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     public void SetNodeRouteHandler(Action<ZLinkBackendRouteReceived> handler)
     {
         _nodeRouteHandler = handler;
-    }
-
-    public void SetNodeSendReadyHandler(Action handler)
-    {
-        _nodeSendReadyHandler = handler;
     }
 
     private MeshReadyDomains OnReady(MeshReadyDomains readyDomains)
@@ -331,10 +325,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                         admission = null;
 
                     // A malformed or unsupported pre-admitted record may not
-                    // transfer its owner. Return both Core credit and the queued
+                    // transfer its owner. Return both the payload owner and the queued
                     // permit in this same bounded turn.
                     if (receiveBatch.GetApplicationJobAdmission(record) is not null)
-                        receiveBatch.TakeCreditOwner(record)?.Dispose();
+                        receiveBatch.TakePayloadOwner(record)?.Dispose();
                 }
                 finally
                 {
@@ -401,9 +395,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     ownerSpotId,
                     ownerActor,
                     admission);
-            case MeshRecordKind.SendReady:
-                RaiseSendReady(record);
-                return false;
             default:
                 return false;
         }
@@ -444,8 +435,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             (record.SourceNodeRid, record.SourceBindingGeneration),
             out var requestSource);
         var parts = RetainParts(batch, index);
-        var creditOwner = AttachAdmission(
-            batch.TakeCreditOwner(index),
+        var payloadOwner = AttachAdmission(
+            batch.TakePayloadOwner(index),
             admission);
         var route = new ZLinkBackendRouteReceived(
             parts,
@@ -463,7 +454,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             requestSource: requestSource == default ? null : requestSource,
             deadlineUnixMs:
                 ZLinkMeshRecordAdapters.NormalizeDeadline(record.DeadlineUnixMs),
-            creditOwner: creditOwner);
+            payloadOwner: payloadOwner);
         state.Routes.Enqueue(route);
         state.Raise(ZLinkBackendSpotDispatchEvent.RouteReadable);
         return admission is not null;
@@ -494,8 +485,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 (parts, flags) => replyRecord.Reply(parts, flags))
             : null;
         var parts = RetainParts(batch, index);
-        var creditOwner = AttachAdmission(
-            batch.TakeCreditOwner(index),
+        var payloadOwner = AttachAdmission(
+            batch.TakePayloadOwner(index),
             admission);
         var received = new ZLinkBackendRouteReceived(
             parts,
@@ -513,7 +504,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             record.OwnerLeaseGeneration,
             record.MessageFollowHopCount,
             record.SourceBindingGeneration,
-            creditOwner: creditOwner);
+            payloadOwner: payloadOwner);
         var handler = _nodeRouteHandler;
         if (handler is null)
         {
@@ -548,7 +539,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             record.Topic ?? string.Empty,
             parts,
             metadata,
-            AttachAdmission(batch.TakeCreditOwner(index), admission));
+            AttachAdmission(batch.TakePayloadOwner(index), admission));
         state.Subscriptions.Enqueue(message);
         state.Raise(ZLinkBackendSpotDispatchEvent.SubscribeReadable);
         return admission is not null;
@@ -584,11 +575,11 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             // Actor-join admission record: build a framework join request.
             admission?.MarkQueued();
             var join = ZLinkMeshRecordAdapters.ToActorJoinRequest(batch, index, record);
-            var creditOwner = AttachAdmission(
-                batch.TakeCreditOwner(index),
+            var payloadOwner = AttachAdmission(
+                batch.TakePayloadOwner(index),
                 admission);
-            if (creditOwner is not null)
-                join.AttachCreditOwner(creditOwner);
+            if (payloadOwner is not null)
+                join.AttachPayloadOwner(payloadOwner);
             state.ActorJoins.Enqueue(join);
             state.Raise(ZLinkBackendSpotDispatchEvent.ActorJoinReadable);
             return admission is not null;
@@ -640,31 +631,18 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         admission?.MarkQueued();
         state.RaiseActor(
             parts,
-            AttachAdmission(batch.TakeCreditOwner(index), admission));
+            AttachAdmission(batch.TakePayloadOwner(index), admission));
         return admission is not null;
     }
 
     private static IDisposable? AttachAdmission(
-        IDisposable? coreCreditOwner,
+        IDisposable? payloadOwner,
         ZLinkApplicationJobQueueLease? admission) =>
         admission is null
-            ? coreCreditOwner
-            : new ZLinkApplicationJobQueueCreditOwner(
-                coreCreditOwner,
+            ? payloadOwner
+            : new ZLinkApplicationJobQueueRecordOwner(
+                payloadOwner,
                 admission);
-
-    private void RaiseSendReady(MeshReceiveRecord record)
-    {
-        if (record.SendReady is not { } ready) return;
-        if (string.IsNullOrEmpty(ready.TargetSpotId))
-        {
-            _nodeSendReadyHandler?.Invoke();
-            return;
-        }
-        var state = _spots.GetValueOrDefault(
-            ZLinkSpotId.FromBoundary(ready.TargetSpotId, nameof(ready.TargetSpotId)));
-        state?.RaiseSendReady();
-    }
 
     private SpotDispatchState ResolveSpotState(string spotId)
     {
@@ -717,8 +695,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     {
         public Action<ZLinkBackendSpotDispatchInfo>? DispatchHandler { get; set; }
 
-        public Action? SendReadyHandler { get; set; }
-
         public ConcurrentQueue<ZLinkBackendRouteReceived> Routes { get; } = new();
 
         public ConcurrentQueue<ZLinkBackendSubscribeMessage> Subscriptions { get; } = new();
@@ -734,14 +710,14 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
         public void RaiseActor(
             IReadOnlyList<ZLinkBackendActorPart> parts,
-            IDisposable? creditOwner)
+            IDisposable? payloadOwner)
         {
             var handler = DispatchHandler;
             if (handler is null)
             {
                 foreach (var part in parts)
                     part.Message.Dispose();
-                creditOwner?.Dispose();
+                payloadOwner?.Dispose();
                 return;
             }
             try
@@ -749,20 +725,16 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 handler(new ZLinkBackendSpotDispatchInfo(
                     ZLinkBackendSpotDispatchEvent.ActorReadable,
                     ActorParts: parts,
-                    ActorCreditOwner: creditOwner));
+                    ActorPayloadOwner: payloadOwner));
             }
             catch
             {
                 foreach (var part in parts)
                     part.Message.Dispose();
-                creditOwner?.Dispose();
+                payloadOwner?.Dispose();
                 throw;
             }
         }
 
-        public void RaiseSendReady()
-        {
-            SendReadyHandler?.Invoke();
-        }
     }
 }

@@ -182,7 +182,7 @@ test('raw protocol drop closes its retained Core record and permit exactly once'
   }
 });
 
-test('logical 1:N children acquire sequential permits and share one retained Core credit', async () => {
+test('logical 1:N children acquire sequential permits and share one Framework ingress record', async () => {
   const applicationJobs = queue();
   let retainedCloseCount = 0;
   const owner = ApplicationIngressRecordOwner.create(
@@ -223,7 +223,7 @@ test('logical 1:N children acquire sequential permits and share one retained Cor
   assert.equal(applicationJobs.snapshot().peakPermitsInUse, 1n);
 });
 
-test('mailbox shutdown closes queued permits and retained credit without a leak', async () => {
+test('mailbox shutdown closes queued permits and ingress records without a leak', async () => {
   const applicationJobs = queue();
   let retainedCloseCount = 0;
   const owner = ApplicationIngressRecordOwner.create(

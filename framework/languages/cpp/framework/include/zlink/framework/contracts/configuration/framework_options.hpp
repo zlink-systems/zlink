@@ -108,6 +108,20 @@ class inbound_dispatch_options_t
         return *this;
     }
 
+    inbound_dispatch_options_t &
+    set_application_job_queue_pause_threshold_percent (std::uint32_t value)
+    {
+        _options->application_job_queue_pause_threshold_percent = value;
+        return *this;
+    }
+
+    inbound_dispatch_options_t &
+    set_application_job_queue_resume_threshold_percent (std::uint32_t value)
+    {
+        _options->application_job_queue_resume_threshold_percent = value;
+        return *this;
+    }
+
   private:
     std::shared_ptr<detail::framework_options_state_t> _options;
 };
@@ -1460,6 +1474,16 @@ class zlink_framework_options_t
     std::optional<std::uint32_t> max_queued_application_jobs () const noexcept
     {
         return _options->max_queued_application_jobs;
+    }
+
+    std::uint32_t application_job_queue_pause_threshold_percent () const noexcept
+    {
+        return _options->application_job_queue_pause_threshold_percent;
+    }
+
+    std::uint32_t application_job_queue_resume_threshold_percent () const noexcept
+    {
+        return _options->application_job_queue_resume_threshold_percent;
     }
 
     location_options_t &configure_locations () { return _options->locations; }

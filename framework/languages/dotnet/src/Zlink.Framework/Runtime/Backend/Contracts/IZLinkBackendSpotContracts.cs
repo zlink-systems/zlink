@@ -66,8 +66,6 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         IZLinkSpotPublisherConfig? publisher,
         IZLinkSpotSubscriberConfig? subscriber);
 
-    void OnSendReady(Action handler);
-
     void ConnectPeer(string endpoint);
 
     void ConnectPeer(
@@ -443,8 +441,6 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
     ZLinkBackendRouteReceived? RecvRoute(RecvFlags flags);
 
     void OnDispatchEvent(Action<ZLinkBackendSpotDispatchInfo> handler);
-
-    void OnSendReady(Action handler);
 
     //  Submit surfaces return the binding SubmitResult (not a flattened bool)
     //  so the exact call contract can report Backpressured, TargetNotFound and

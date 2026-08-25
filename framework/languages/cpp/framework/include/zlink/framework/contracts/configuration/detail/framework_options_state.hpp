@@ -53,6 +53,12 @@ enum class application_job_queue_profile_t
     throughput = 3
 };
 
+enum class application_job_queue_pressure_state_t
+{
+    running = 0,
+    paused = 1
+};
+
 namespace detail
 {
 
@@ -459,6 +465,8 @@ struct framework_options_state_t
     application_job_queue_profile_t application_job_queue_profile =
       application_job_queue_profile_t::balanced;
     std::optional<std::uint32_t> max_queued_application_jobs;
+    std::uint32_t application_job_queue_pause_threshold_percent = 80;
+    std::uint32_t application_job_queue_resume_threshold_percent = 60;
     bool applied = false;
 
     void add_zlink_action (std::function<void (zlink_builder_t &)> action)

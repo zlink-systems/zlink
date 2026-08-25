@@ -6,24 +6,22 @@ import {
   isContextTerminatedError,
   isRouteRecvRetryable,
   submitBindingRequest,
+  submitBindingPublish,
   submitBindingRoutedSend,
   submitBindingSend,
   submitBindingAsyncSend,
   toNativeRoutingId,
   zlink,
   type ZLinkBindingRequestOperation,
+  type ZLinkBindingPublishOperation,
   type ZLinkBindingAsyncSendOperation,
   type ZLinkBindingRoutedSendOperation,
   type ZLinkBindingSendOperation
 } from './node-backend-adapter-support';
 
-export interface ZLinkNodeSocketWrapOptions {
-  readonly retainReceived?: boolean;
-}
 
 export function wrapSocket<T extends { close(): void }>(
-  nativeInstance: T,
-  options: ZLinkNodeSocketWrapOptions = {}
+  nativeInstance: T
 ): T & ZLinkBackendObject {
   const boundEndpoints = new Set<string>();
   const connectedEndpoints = new Set<string>();
@@ -74,6 +72,10 @@ export function wrapSocket<T extends { close(): void }>(
       const setChannelName = (nativeInstance as T & { setChannelName?: (value: string) => void }).setChannelName;
       setChannelName?.call(nativeInstance, channelName);
     },
+    setReceiveFlowState(state: 0 | 1): void {
+      (nativeInstance as T & { setReceiveFlowState(value: 0 | 1): void })
+        .setReceiveFlowState(state);
+    },
     setProbe(enabled: boolean): void {
       requireSocketOptions(socket).probe = enabled;
     },
@@ -98,9 +100,6 @@ export function wrapSocket<T extends { close(): void }>(
     },
     setRoutingId(routingId: unknown): void {
       (nativeInstance as T & { setRoutingId(value: unknown): void }).setRoutingId(toNativeRoutingId(routingId));
-    },
-    onSendReady(handler: () => void): void {
-      (nativeInstance as T & { setSendReadyHandler(value: () => void): void }).setSendReadyHandler(handler);
     },
     get peerWeight(): number {
       return socket.options?.peerWeight ?? 100;
@@ -208,13 +207,9 @@ export function wrapSocket<T extends { close(): void }>(
       const received = new zlink.Received();
       let ok = false;
       try {
-        ok = options.retainReceived === true
-          ? (nativeInstance as T & {
-            recvRetained(result: unknown, flags?: number): boolean;
-          }).recvRetained(received, flags)
-          : (nativeInstance as T & {
-            recv(result: unknown, flags?: number): boolean;
-          }).recv(received, flags);
+        ok = (nativeInstance as T & {
+          recv(result: unknown, flags?: number): boolean;
+        }).recv(received, flags);
       } catch (error) {
         received.close();
         if (isRouteRecvRetryable(error)) {
@@ -229,24 +224,15 @@ export function wrapSocket<T extends { close(): void }>(
       return received;
     },
     publish(...args: unknown[]): unknown {
-      if (args.length >= 3) {
-        const [topic, payload, flags] = args as [string, unknown, number];
-        return submitBindingSend(
-          (nativeInstance as T & { publish(topic: string): ZLinkBindingSendOperation }).publish(topic),
-          payload,
-          flags
+      if (args.length >= 2) {
+        const [topic, payload] = args as [string, unknown];
+        submitBindingPublish(
+          (nativeInstance as T & { publish(topic: string): ZLinkBindingPublishOperation }).publish(topic),
+          payload
         );
+        return;
       }
-      throw new TypeError('Backend publish requires a topic, payload, and flags.');
-    },
-    publishAsync(topic: string, payload: unknown, timeoutMs?: number): Promise<void> {
-      return submitBindingAsyncSend(
-        (nativeInstance as T & {
-          publishAsync(value: string): ZLinkBindingAsyncSendOperation;
-        }).publishAsync(topic),
-        payload,
-        timeoutMs
-      );
+      throw new TypeError('Backend publish requires a topic and payload.');
     },
     sendToSpot(targetRid: unknown, targetSpot: unknown, payload: unknown): Promise<void> {
       return submitBindingRoutedSend(

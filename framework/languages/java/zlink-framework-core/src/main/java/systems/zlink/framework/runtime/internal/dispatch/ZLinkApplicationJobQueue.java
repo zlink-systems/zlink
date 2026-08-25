@@ -15,9 +15,13 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkApplicationJobQueuePressureMetrics;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 /**
  * The single host-owned aggregate that admits ordinary inbound application jobs.
@@ -41,9 +45,14 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     private final Object lock = new Object();
     private final ZLinkApplicationJobQueueProfile configuredProfile;
     private final OptionalLong configuredManualMax;
+    private final int configuredPauseThresholdPercent;
+    private final int configuredResumeThresholdPercent;
     private final int effectiveProcessorCount;
     private final long effectiveLimit;
+    private final long pausePermitCount;
+    private final long resumePermitCount;
     private final LongSupplier nanoTime;
+    private final ZLinkApplicationJobReceiveFlowController receiveFlow;
     private final ArrayDeque<Waiter> waiters = new ArrayDeque<>();
     private long reservedSupplyPermits;
     private long queuedApplicationJobs;
@@ -51,13 +60,38 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     private long peakPermitsInUse;
     private long capacityWaitCount;
     private long capacityWaitDurationNanos;
+    private long metricsEpoch;
+    private long pressureTransitionSequence;
+    private long pausedTransitionCount;
+    private long runningTransitionCount;
+    private ZLinkApplicationJobQueuePressureState pressureState =
+        ZLinkApplicationJobQueuePressureState.RUNNING;
+    private long pausedAtNanos = -1;
+    private long cumulativePauseStartedAtNanos = -1;
+    private long cumulativePauseDurationNanos;
+    private long receiveFlowConfigurationFailureCount;
     private boolean closed;
 
     public ZLinkApplicationJobQueue(
         ZLinkApplicationJobQueueProfile profile,
         OptionalLong manualMax,
         ProcessorCandidates processorCandidates) {
-        this(profile, manualMax, processorCandidates, System::nanoTime);
+        this(profile, manualMax, processorCandidates, 80, 60, System::nanoTime);
+    }
+
+    public ZLinkApplicationJobQueue(
+        ZLinkApplicationJobQueueProfile profile,
+        OptionalLong manualMax,
+        ProcessorCandidates processorCandidates,
+        int pauseThresholdPercent,
+        int resumeThresholdPercent) {
+        this(
+            profile,
+            manualMax,
+            processorCandidates,
+            pauseThresholdPercent,
+            resumeThresholdPercent,
+            System::nanoTime);
     }
 
     ZLinkApplicationJobQueue(
@@ -65,29 +99,54 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         OptionalLong manualMax,
         ProcessorCandidates processorCandidates,
         LongSupplier nanoTime) {
+        this(profile, manualMax, processorCandidates, 80, 60, nanoTime);
+    }
+
+    ZLinkApplicationJobQueue(
+        ZLinkApplicationJobQueueProfile profile,
+        OptionalLong manualMax,
+        ProcessorCandidates processorCandidates,
+        int pauseThresholdPercent,
+        int resumeThresholdPercent,
+        LongSupplier nanoTime) {
         ResolvedCapacity capacity = resolveCapacity(
             profile, manualMax, processorCandidates);
+        validateThresholds(pauseThresholdPercent, resumeThresholdPercent);
         this.configuredProfile = capacity.configuredProfile();
         this.configuredManualMax = capacity.configuredManualMax();
+        this.configuredPauseThresholdPercent = pauseThresholdPercent;
+        this.configuredResumeThresholdPercent = resumeThresholdPercent;
         this.effectiveProcessorCount = capacity.effectiveProcessorCount();
         this.effectiveLimit = capacity.effectiveLimit();
+        this.pausePermitCount = ceilPercent(
+            this.effectiveLimit, this.configuredPauseThresholdPercent);
+        this.resumePermitCount = floorPercent(
+            this.effectiveLimit, this.configuredResumeThresholdPercent);
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+        this.receiveFlow = new ZLinkApplicationJobReceiveFlowController(this);
     }
 
     public CompletionStage<Permit> acquire() {
+        PressureSnapshot transition;
+        Permit permit;
         synchronized (lock) {
             if (closed) {
                 return CompletableFuture.failedFuture(
                     new CancellationException("Application Job Queue is closed"));
             }
             if (waiters.isEmpty() && permitsInUse < effectiveLimit) {
-                return CompletableFuture.completedFuture(reserveUnderLock());
+                permit = reserveUnderLock();
+                transition = evaluatePressureUnderLock();
+            } else {
+                Waiter waiter = new Waiter(
+                    this, nanoTime.getAsLong(), metricsEpoch);
+                waiters.addLast(waiter);
+                capacityWaitCount = saturatingIncrement(capacityWaitCount);
+                return waiter.future;
             }
-            Waiter waiter = new Waiter(this, nanoTime.getAsLong());
-            waiters.addLast(waiter);
-            capacityWaitCount = saturatingIncrement(capacityWaitCount);
-            return waiter.future;
         }
+        notifyPressureTransition(transition);
+        return CompletableFuture.completedFuture(permit);
     }
 
     /** Blocking bridge for dedicated receive-loop threads. */
@@ -115,12 +174,18 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
             return new Snapshot(
                 configuredProfile,
                 configuredManualMax,
+                configuredPauseThresholdPercent,
+                configuredResumeThresholdPercent,
                 effectiveProcessorCount,
                 effectiveLimit,
+                pausePermitCount,
+                resumePermitCount,
                 reservedSupplyPermits,
                 queuedApplicationJobs,
                 permitsInUse,
                 peakPermitsInUse,
+                pressureState,
+                currentPauseDurationUnderLock(),
                 waiters.stream().filter(Waiter::waiting).count(),
                 capacityWaitCount,
                 Duration.ofNanos(capacityWaitDurationNanos));
@@ -129,10 +194,20 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
 
     public void resetMetrics() {
         synchronized (lock) {
+            metricsEpoch = saturatingIncrement(metricsEpoch);
             peakPermitsInUse = permitsInUse;
             capacityWaitCount = 0;
             capacityWaitDurationNanos = 0;
+            pausedTransitionCount = 0;
+            runningTransitionCount = 0;
+            cumulativePauseDurationNanos = 0;
+            if (pressureState
+                == ZLinkApplicationJobQueuePressureState.PAUSED) {
+                cumulativePauseStartedAtNanos = nanoTime.getAsLong();
+            }
+            receiveFlowConfigurationFailureCount = 0;
         }
+        publishPressureMetrics();
     }
 
     @Override
@@ -143,6 +218,10 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 return;
             }
             closed = true;
+            // Fence registration and detach current targets at the same
+            // linearization point as queue close. This only sets close flags;
+            // each socket owner joins its registration before native close.
+            receiveFlow.beginClose();
             while (!waiters.isEmpty()) {
                 Waiter waiter = waiters.removeFirst();
                 if (waiter.state == WaiterState.WAITING) {
@@ -206,6 +285,134 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         };
     }
 
+    /** Registers a RouteMesh or ClientServer paired socket for receive flow. */
+    public ZLinkApplicationJobReceiveFlowController.Registration
+        registerReceiveFlowTarget(Consumer<systems.zlink.contracts.sockets
+            .ReceiveFlowState> setter) {
+        return receiveFlow.register(setter);
+    }
+
+    PressureSnapshot pressureSnapshot() {
+        synchronized (lock) {
+            return pressureSnapshotUnderLock();
+        }
+    }
+
+    void recordReceiveFlowConfigurationFailure() {
+        synchronized (lock) {
+            receiveFlowConfigurationFailureCount = saturatingIncrement(
+                receiveFlowConfigurationFailureCount);
+        }
+        publishPressureMetrics();
+    }
+
+    private PressureSnapshot evaluatePressureUnderLock() {
+        ZLinkApplicationJobQueuePressureState next = pressureState;
+        if (pressureState == ZLinkApplicationJobQueuePressureState.RUNNING
+            && permitsInUse >= pausePermitCount) {
+            next = ZLinkApplicationJobQueuePressureState.PAUSED;
+        } else if (pressureState == ZLinkApplicationJobQueuePressureState.PAUSED
+            && permitsInUse <= resumePermitCount) {
+            next = ZLinkApplicationJobQueuePressureState.RUNNING;
+        }
+        if (next == pressureState) {
+            return null;
+        }
+        long now = nanoTime.getAsLong();
+        pressureState = next;
+        pressureTransitionSequence = saturatingIncrement(
+            pressureTransitionSequence);
+        if (next == ZLinkApplicationJobQueuePressureState.PAUSED) {
+            pausedTransitionCount = saturatingIncrement(pausedTransitionCount);
+            pausedAtNanos = now;
+            cumulativePauseStartedAtNanos = now;
+        } else if (pausedAtNanos >= 0) {
+            runningTransitionCount = saturatingIncrement(runningTransitionCount);
+            cumulativePauseDurationNanos = saturatingAdd(
+                cumulativePauseDurationNanos,
+                elapsedSince(cumulativePauseStartedAtNanos, now));
+            pausedAtNanos = -1;
+            cumulativePauseStartedAtNanos = -1;
+        }
+        return pressureSnapshotUnderLock();
+    }
+
+    private void notifyPressureTransition(PressureSnapshot transition) {
+        if (transition != null) {
+            receiveFlow.onPressureTransition(transition);
+            publishPressureMetrics();
+        }
+    }
+
+    private PressureSnapshot pressureSnapshotUnderLock() {
+        return new PressureSnapshot(
+            pressureTransitionSequence,
+            pressureState,
+            currentPauseDurationUnderLock(),
+            cumulativePauseDurationUnderLock());
+    }
+
+    private Duration currentPauseDurationUnderLock() {
+        return pressureState == ZLinkApplicationJobQueuePressureState.PAUSED
+            && pausedAtNanos >= 0
+            ? Duration.ofNanos(elapsedSince(pausedAtNanos, nanoTime.getAsLong()))
+            : Duration.ZERO;
+    }
+
+    /** Internal metrics projection; public status deliberately omits counters. */
+    public ZLinkApplicationJobQueuePressureMetrics pressureMetrics() {
+        synchronized (lock) {
+            return new ZLinkApplicationJobQueuePressureMetrics(
+                pressureState,
+                runningTransitionCount,
+                pausedTransitionCount,
+                currentPauseDurationUnderLock(),
+                cumulativePauseDurationUnderLock(),
+                receiveFlowConfigurationFailureCount);
+        }
+    }
+
+    private Duration cumulativePauseDurationUnderLock() {
+        if (pressureState != ZLinkApplicationJobQueuePressureState.PAUSED) {
+            return Duration.ofNanos(cumulativePauseDurationNanos);
+        }
+        return Duration.ofNanos(saturatingAdd(
+            cumulativePauseDurationNanos,
+            elapsedSince(cumulativePauseStartedAtNanos, nanoTime.getAsLong())));
+    }
+
+    private void publishPressureMetrics() {
+        ZLinkRuntimeMetrics.publishApplicationJobQueuePressure(pressureMetrics());
+    }
+
+    private static long elapsedSince(long startedAtNanos, long nowNanos) {
+        return startedAtNanos < 0 || nowNanos <= startedAtNanos
+            ? 0L : nowNanos - startedAtNanos;
+    }
+
+    private static void validateThresholds(int pause, int resume) {
+        if (pause < 1 || pause > 100) {
+            throw new ZLinkConfigurationException(
+                "ApplicationJobQueuePauseThresholdPercent must be in 1..100");
+        }
+        if (resume < 0 || resume > 99) {
+            throw new ZLinkConfigurationException(
+                "ApplicationJobQueueResumeThresholdPercent must be in 0..99");
+        }
+        if (resume >= pause) {
+            throw new ZLinkConfigurationException(
+                "ApplicationJobQueueResumeThresholdPercent must be less than ApplicationJobQueuePauseThresholdPercent");
+        }
+    }
+
+    private static long ceilPercent(long value, int percent) {
+        return Math.addExact(Math.multiplyExact(value, percent), 99L) / 100L;
+    }
+
+    private static long floorPercent(long value, int percent) {
+        return Math.multiplyExact(value, percent) / 100L;
+    }
+
     private Permit reserveUnderLock() {
         if (permitsInUse >= effectiveLimit) {
             throw new IllegalStateException("Application Job Queue oversubscribed");
@@ -229,23 +436,29 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
 
     private void release(Permit permit) {
         Grant grant;
+        PressureSnapshot transition;
         synchronized (lock) {
             if (permit.state == PermitState.RELEASED) {
                 return;
             }
             grant = releaseUnderLock(permit);
+            transition = evaluatePressureUnderLock();
         }
+        notifyPressureTransition(transition);
         finishGrant(grant);
     }
 
     private void abandonReservation(Permit permit) {
         Grant grant;
+        PressureSnapshot transition;
         synchronized (lock) {
             if (permit.state != PermitState.RESERVED) {
                 return;
             }
             grant = releaseUnderLock(permit);
+            transition = evaluatePressureUnderLock();
         }
+        notifyPressureTransition(transition);
         finishGrant(grant);
     }
 
@@ -306,6 +519,9 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
             return;
         }
         waiter.durationRecorded = true;
+        if (waiter.metricsEpoch != metricsEpoch) {
+            return;
+        }
         long elapsed = Math.max(0L, nanoTime.getAsLong() - waiter.startedAtNanos);
         capacityWaitDurationNanos = saturatingAdd(
             capacityWaitDurationNanos, elapsed);
@@ -446,15 +662,28 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     public record Snapshot(
         ZLinkApplicationJobQueueProfile configuredProfile,
         OptionalLong configuredManualMax,
+        int configuredPauseThresholdPercent,
+        int configuredResumeThresholdPercent,
         long effectiveProcessorCount,
         long effectiveMaxQueuedApplicationJobs,
+        long pausePermitCount,
+        long resumePermitCount,
         long reservedSupplyPermits,
         long queuedApplicationJobs,
         long permitsInUse,
         long peakPermitsInUse,
+        ZLinkApplicationJobQueuePressureState pressureState,
+        Duration currentPauseDuration,
         long capacityWaiters,
         long capacityWaitCount,
         Duration capacityWaitDuration) {
+    }
+
+    record PressureSnapshot(
+        long sequence,
+        ZLinkApplicationJobQueuePressureState pressureState,
+        Duration currentPauseDuration,
+        Duration cumulativePauseDuration) {
     }
 
     public static final class Permit implements AutoCloseable {
@@ -495,13 +724,18 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
 
     private static final class Waiter {
         private final long startedAtNanos;
+        private final long metricsEpoch;
         private final WaitFuture future;
         private WaiterState state = WaiterState.WAITING;
         private Permit permit;
         private boolean durationRecorded;
 
-        private Waiter(ZLinkApplicationJobQueue owner, long startedAtNanos) {
+        private Waiter(
+            ZLinkApplicationJobQueue owner,
+            long startedAtNanos,
+            long metricsEpoch) {
             this.startedAtNanos = startedAtNanos;
+            this.metricsEpoch = metricsEpoch;
             this.future = new WaitFuture(owner, this);
         }
 

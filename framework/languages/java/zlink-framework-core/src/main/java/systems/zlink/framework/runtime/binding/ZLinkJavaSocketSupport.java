@@ -8,6 +8,7 @@ import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.AsyncSendOperation;
+import systems.zlink.contracts.messaging.PublishOperation;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
@@ -76,6 +77,17 @@ final class ZLinkJavaSocketSupport {
             submit.message(parts.get(i));
         }
         return submit.flags(flags).submit();
+    }
+
+    static void submit(
+        PublishOperation operation,
+        List<Message> parts,
+        SendFlags flags) {
+        var submit = operation.message(parts.get(0));
+        for (int i = 1; i < parts.size(); i++) {
+            submit.message(parts.get(i));
+        }
+        submit.flags(flags).submit();
     }
 
     static void submitReply(ReplyOperation operation, List<Message> parts) {

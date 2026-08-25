@@ -123,9 +123,8 @@ Application이 새 operation을 시작하려면 다음을 직접 확인한다.
 2. Operation이 idempotent한지, 또는 idempotency key로 중복 영향을 막는지 확인한다.
 3. 필요한 경우 업무 상태를 다시 조회한 뒤 새 operation을 시작한다.
 
-Framework 내부의 send-ready 대기, Store 결과 재확인과 수락 전 target 재선택은 Application retry가
-아니다. Framework는 operation이 수락됐거나 수락 여부를 알 수 없게 된 뒤 다른 logical target에 같은
-operation을 자동으로 제출하지 않는다.
+하나의 binding operation 안에서 Core가 소유하는 HWM 재시도는 Application retry가 아니다.
+Framework는 send-ready waiter를 두지 않고 같은 operation을 다른 logical target에 자동 제출하지 않는다.
 
 ## 8. 언어별 투영과 검증
 

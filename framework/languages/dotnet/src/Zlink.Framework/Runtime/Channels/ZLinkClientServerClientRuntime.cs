@@ -11,6 +11,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private readonly IZLinkMonitoringBackendAdapter _monitoring;
     private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
+    private readonly ZLinkApplicationJobQueue _applicationJobQueue;
     private readonly TimeSpan _requestTimeout;
     private readonly CancellationToken _stopToken;
     private readonly object _gate = new();
@@ -39,6 +40,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         IZLinkSocketConfig socketConfig,
         TimeSpan requestTimeout,
         CancellationToken stopToken,
+        ZLinkApplicationJobQueue applicationJobQueue,
         ZLinkMessageFlowTracer? flow = null)
     {
         _channelName = ZLinkChannelName.FromBoundary(
@@ -49,6 +51,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _socketConfig = socketConfig;
         _requestTimeout = requestTimeout;
         _stopToken = stopToken;
+        _applicationJobQueue = applicationJobQueue;
         _flow = flow;
     }
 
@@ -476,6 +479,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 _monitoring,
                 _socketConfig,
                 _stopToken,
+                _applicationJobQueue,
                 OnAdmitted,
                 InvalidateSelectionCache);
             _connections[key] = created;
@@ -655,6 +659,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private long _sentLivenessProbeCount;
         private ulong _physicalGeneration = 1;
         private ulong _admissionAttempt;
+        private IDisposable? _receiveFlowRegistration;
 
         internal Connection(
             string channelName,
@@ -664,6 +669,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             IZLinkMonitoringBackendAdapter monitoring,
             IZLinkSocketConfig socketConfig,
             CancellationToken stopToken,
+            ZLinkApplicationJobQueue applicationJobQueue,
             Action<Connection, string> onAdmitted,
             Action onSelectionChanged)
         {
@@ -686,6 +692,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             Socket.Options.Probe = false;
             _monitor = monitoring.OpenSocketMonitor(Socket);
             _monitor.OnEvent(OnMonitorEvent);
+            _receiveFlowRegistration =
+                applicationJobQueue.RegisterReceiveFlowSocket(Socket);
         }
 
         internal IDealerSocket Socket { get; }
@@ -916,6 +924,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         () => new ValueTask(
                             IgnoreCancellationAsync(_reconnectTask)))
                     .ConfigureAwait(false);
+            if (_receiveFlowRegistration is not null)
+                failures.Capture(_receiveFlowRegistration.Dispose);
             lock (_socketLifecycleGate)
             {
                 try

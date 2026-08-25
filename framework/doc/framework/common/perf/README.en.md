@@ -1443,9 +1443,11 @@ queue-wait p50/p95/p99 separately, but does not export it as a public metric.
 
 Start from an Auto profile and repeat the same steady/burst test while stepping down
 `CoreHwmBudgetBytes` candidates. For every candidate, record effective budget, applied HWM,
-current/peak accounted bytes, completion-accounted bytes, blocked ratio, outstanding
-application leases, RSS/managed heap, throughput, and latency. A Core budget is not a hard
-RSS cap, so judge the snapshot and process memory separately.
+current/peak accounted bytes, completion-accounted bytes, blocked ratio, active directional
+queue counts, RSS/managed heap, throughput, and latency. `application accounted bytes`,
+`outstanding application lease`, `retired queue`, and `deferred origin credit` are ABI-reserved
+compatibility fields that are always `0` since 0.13.1; do not use them as operating values. A Core
+budget is not a hard RSS cap, so judge the snapshot and process memory separately.
 
 Choose the smallest candidate that satisfies the workload's throughput, latency, and memory
 pass conditions, then apply the operator-selected safety margin. Completion progress must

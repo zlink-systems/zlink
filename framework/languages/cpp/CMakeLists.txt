@@ -42,9 +42,9 @@ set(ZLINK_FRAMEWORK_CPP_REPO_ROOT "${ZLINK_FRAMEWORK_CPP_DIR}/../../.." CACHE PA
   "Path to the zlink repository root")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.13.1" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.13.2" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.13.1" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.13.2" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT)
   if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.artifacts/windows/install/zlink-cpp/${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}")
@@ -103,6 +103,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/backend/raw_dealer_port.cpp
   framework/src/runtime/backend/raw_route_port.cpp
   framework/src/runtime/foundation/operation_registry.cpp
+  framework/src/runtime/dispatch/coroutine_executor.cpp
   framework/src/runtime/dispatch/offload_executor.cpp
   framework/src/runtime/messaging/call_facade_runtime.cpp
   framework/src/runtime/messaging/logical_multicast_runtime.cpp
@@ -212,7 +213,6 @@ add_library(zlink_framework STATIC
   framework/src/runtime/diagnostics/logging.cpp
   framework/src/runtime/diagnostics/health.cpp
   framework/src/runtime/diagnostics/monitoring_runtime.cpp
-  framework/src/runtime/dispatch/coroutine_executor.cpp
   framework/src/runtime/execution/serial_execution_queue.cpp
   framework/src/runtime/handlers/handler_registry.cpp
   framework/src/runtime/dispatch/projection.cpp
@@ -926,6 +926,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   target_link_libraries(test_cpp_framework_raw_route_port_contract PRIVATE
+    zlink_framework
     zlink::cpp
     Threads::Threads)
   add_test(NAME test_cpp_framework_raw_route_port_contract
