@@ -138,7 +138,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | tls | DEALER_ROUTER_REQREP | 미달(50.35%) | 미달(51.82%) | 미달(48.97%) | 통과(88.54%) | 통과(95.68%) | 통과(90.31%) | **미달(70.94%)** — secure 5-run median, latency median 1.62x. 후보 A는 exact-target contract no-go, 기존 async-only completion 후보 B는 contract 5/5 통과 상태로 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-dealer-router-reqrep-tls-20260825.ko.md` |
 | tls | ROUTER_ROUTER | 통과(86.63%) | 통과(106.61%) | 통과(101.16%) | 통과(90.14%) | 통과(93.38%) | 통과(98.72%) | **통과(96.11%)** — secure 5-run median, latency median 1.07x. `log/cpp-single-router-router-tls-20260825.ko.md` |
 | tls | ROUTER_ROUTER_REQREP | 미달(54.09%) | 미달(52.63%) | 미달(42.22%) | 통과(84.00%) | 통과(94.73%) | 통과(100.92%) | **미달(71.43%)** — secure 5-run median, latency median 1.65x. 후보 A는 exact-target contract no-go, 기존 async-only completion 후보 B는 contract 5/5 통과 상태로 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-router-router-reqrep-tls-20260825.ko.md` |
-| inproc | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| inproc | PAIR | 통과(84.71%) | 통과(100.01%) | 통과(91.40%) | 미달(22.71%) | 미달(73.70%) | 통과(84.04%) | **미달(76.09%)** — 5-run median, latency median 1.08x. 128KiB 이상 bounded pool은 이미 baseline이고 64KiB 하향은 TCP 25/30 partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-pair-inproc-20260825.ko.md` |
 | inproc | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | inproc | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | inproc | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -227,6 +227,11 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     exact target을 생략해 terminal/no-reroute contract를 바꾸므로 no-go다. 후보 B인 async-only
     completion bridge는 contract 5/5를 통과하지만 throughput 71.43%로 request/reply 목표에는
     미달이다. TLS Single 전체를 확정했으며, 다음은 `PAIR / inproc`를 C→C++ 순서로 측정한다.
+25. `PAIR / inproc`는 C→C++ 64B smoke와 6-size 5-run median을 완료했다. latency는 통과했지만
+    aggregate throughput 76.09%가 strict 95% 목표에 미달한다. 64KiB 22.71%가 주된 하락점이다.
+    128KiB–1MiB bounded pool 후보 A는 baseline에 이미 반영되어 있고, pool 하한을 64KiB로 낮추는
+    후보 B는 전역 정책이라 TCP의 25/30 partial timeout을 재도입할 수 있어 no-go다. cap 확대도
+    resource boundary를 깨므로 하지 않는다. 다음은 `PUBSUB / inproc`를 같은 C→C++ 순서로 측정한다.
 
 ## 7. 완료 기준
 
