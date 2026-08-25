@@ -683,9 +683,9 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `진행 중` (`PAIR / tcp`, `PAIR / tls`, `PAIR / inproc`, `PAIR / ipc`, `PUBSUB / tls`, `PUBSUB / inproc`, `DEALER_DEALER / tcp`, `DEALER_DEALER / tls`, `DEALER_DEALER / inproc`, `DEALER_DEALER / ipc`, `DEALER_ROUTER / inproc` 보류, `PAIR / ws`, `PAIR / wss`, `PUBSUB / tcp`, `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / ipc`, `DEALER_DEALER / ws`, `DEALER_DEALER / wss`, `DEALER_ROUTER / tcp`, `DEALER_ROUTER / ws`, `DEALER_ROUTER / wss`, `DEALER_ROUTER / tls` 통과, 나머지 미측정)
+- Single 상태: `진행 중` (`PAIR / tcp`, `PAIR / tls`, `PAIR / inproc`, `PAIR / ipc`, `PUBSUB / tls`, `PUBSUB / inproc`, `DEALER_DEALER / tcp`, `DEALER_DEALER / tls`, `DEALER_DEALER / inproc`, `DEALER_DEALER / ipc`, `DEALER_ROUTER / inproc` 보류, `PAIR / ws`, `PAIR / wss`, `PUBSUB / tcp`, `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / ipc`, `DEALER_DEALER / ws`, `DEALER_DEALER / wss`, `DEALER_ROUTER / tcp`, `DEALER_ROUTER / ws`, `DEALER_ROUTER / wss`, `DEALER_ROUTER / tls`, `DEALER_ROUTER / ipc` 통과, 나머지 미측정)
 - Multi 상태: `미측정`
-- 다음 작업: `DEALER_ROUTER / inproc` 자체 공개 경로를 검토했으나 목표 미달로 보류했다. 다음 `DEALER_ROUTER / ipc` paired 측정과 개선 pass를 진행한다.
+- 다음 작업: `DEALER_ROUTER`의 전 transport 판정을 마쳤으므로 `DEALER_ROUTER_REQREP / tcp` paired 측정과 개선 pass를 진행한다.
 
 #### 9.1.1 Single suite
 
@@ -1241,16 +1241,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | C++ |  |
-| 현재 pattern | `DEALER_ROUTER / ipc` | `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER/tcp`, `DEALER_ROUTER/ws`, `DEALER_ROUTER/wss`, `DEALER_ROUTER/tls`, `DEALER_ROUTER/inproc`의 판정 완료 |
-| paired C | 준비 | 다음 `DEALER_ROUTER/ipc` smoke부터 진행 |
-| 개선 반복 | 준비 | 다음 `DEALER_ROUTER/ipc` 자체 공개 경로 pass |
-| 커밋과 푸시 | 진행 중 | DEALER_ROUTER/inproc 기준 측정 기록을 커밋·푸시한 뒤 계속 |
+| 현재 pattern | `DEALER_ROUTER_REQREP / tcp` | `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`의 전 transport 판정 완료 |
+| paired C | 준비 | 다음 `DEALER_ROUTER_REQREP/tcp` smoke부터 진행 |
+| 개선 반복 | 준비 | 다음 `DEALER_ROUTER_REQREP/tcp` 자체 공개 경로 pass |
+| 커밋과 푸시 | 진행 중 | DEALER_ROUTER/ipc 최종 판정 기록을 커밋·푸시한 뒤 계속 |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 진행 중 | 미측정 | `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER / tcp`, `DEALER_ROUTER / ws`, `DEALER_ROUTER / wss`, `DEALER_ROUTER / tls`, `DEALER_ROUTER / inproc`를 판정했다. 다음 `DEALER_ROUTER / ipc` paired 측정과 개선 pass를 진행한다. |
+| 1 | C++ | 진행 중 | 미측정 | `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`의 전 transport를 판정했다. 다음 `DEALER_ROUTER_REQREP / tcp` paired 측정과 개선 pass를 진행한다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
