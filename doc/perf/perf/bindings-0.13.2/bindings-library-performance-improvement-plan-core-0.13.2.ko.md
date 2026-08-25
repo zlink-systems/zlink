@@ -129,7 +129,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | wss | DEALER_DEALER | 통과(91.20%) | 통과(97.34%) | 통과(90.86%) | 통과(103.93%) | 통과(96.12%) | 통과(83.83%) | **통과(93.89%)** — secure 5-run median, latency median 1.07x. `log/cpp-single-dealer-dealer-wss-20260825.ko.md` |
 | wss | DEALER_ROUTER | 통과(95.65%) | 통과(104.07%) | 통과(98.99%) | 통과(99.39%) | 통과(107.71%) | 통과(91.14%) | **통과(99.49%)** — secure 5-run median, latency median 0.99x. `log/cpp-single-dealer-router-wss-20260825.ko.md` |
 | wss | DEALER_ROUTER_REQREP | 미달(43.96%) | 미달(39.93%) | 미달(40.89%) | 통과(89.44%) | 통과(95.47%) | 통과(96.42%) | **미달(67.69%)** — secure 5-run median, latency median 1.82x. 후보 A는 exact-target contract no-go, 기존 async-only 완료 경로(B)는 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-dealer-router-reqrep-wss-20260825.ko.md` |
-| wss | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| wss | ROUTER_ROUTER | 통과(85.73%) | 통과(97.40%) | 통과(95.26%) | 통과(97.82%) | 통과(99.70%) | 통과(92.21%) | **통과(94.69%)** — secure 5-run median, latency median 1.05x. `log/cpp-single-router-router-wss-20260825.ko.md` |
 | wss | ROUTER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | tls | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | tls | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -195,6 +195,9 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 15. `DEALER_ROUTER_REQREP / wss`는 secure 5-run baseline과 contract gate를 마쳤다. exact target을
     생략하는 후보 A는 public terminal/failover contract no-go이며, 기존 async-only completion 후보 B는
     이미 source에 반영되어 있다. throughput 67.69%로 미달을 확정하고 다음은 `ROUTER_ROUTER / wss`다.
+16. `ROUTER_ROUTER / wss`는 C→C++ 64B smoke와 6-size secure 5-run median을 통과했다. 다음은
+    마지막 WSS Single 패턴 `ROUTER_ROUTER_REQREP / wss`를 같은 secure 규칙으로 측정하고, 미달이면
+    이 문서 4절의 개선 pass를 끝낸다.
 
 ## 7. 완료 기준
 
