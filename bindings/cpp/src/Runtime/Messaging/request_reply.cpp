@@ -234,33 +234,14 @@ void managed_request_trampoline (zlink_request_result_t result_,
     (*bridge_ref)->finish (result_, parts_, part_count_);
 }
 
-struct async_request_bridge_t
-{
-    std::shared_ptr<detail::async_operation_state_t<std::vector<message_t>>> completion;
+using async_request_completion_t =
+  detail::async_operation_state_t<std::vector<message_t>>;
 
-    void finish (zlink_request_result_t result_,
-                 zlink_msg_t *parts_, size_t part_count_) noexcept
-    {
-        if (result_ != ZLINK_REQUEST_OK) {
-            detail::close_message_array (parts_, part_count_);
-            const request_result_t result_kind = static_cast<request_result_t> (result_);
-            completion->fail (std::make_exception_ptr (
-              request_error_t (result_kind, request_result_errno (result_kind))));
-            return;
-        }
-        try {
-            completion->complete (detail::take_parts_from_native (parts_, part_count_));
-        }
-        catch (...) {
-            detail::close_message_array (parts_, part_count_);
-            completion->fail (std::current_exception ());
-        }
-    }
-};
-
-void delete_async_request_bridge (void *userdata_) noexcept
+void release_async_request_completion (void *userdata_) noexcept
 {
-    delete static_cast<async_request_bridge_t *> (userdata_);
+    auto *completion = static_cast<async_request_completion_t *> (userdata_);
+    if (completion)
+        completion->release_from_core ();
 }
 
 void delete_managed_request_bridge_ref (void *userdata_) noexcept
@@ -272,13 +253,26 @@ void async_request_trampoline (zlink_request_result_t result_,
                                zlink_msg_t *parts_, size_t part_count_,
                                void *userdata_)
 {
-    std::unique_ptr<async_request_bridge_t> bridge (
-      static_cast<async_request_bridge_t *> (userdata_));
-    if (!bridge) {
+    auto *completion = static_cast<async_request_completion_t *> (userdata_);
+    if (!completion) {
         detail::close_message_array (parts_, part_count_);
         return;
     }
-    bridge->finish (result_, parts_, part_count_);
+    if (result_ != ZLINK_REQUEST_OK) {
+        detail::close_message_array (parts_, part_count_);
+        const request_result_t result_kind = static_cast<request_result_t> (result_);
+        completion->fail (std::make_exception_ptr (
+          request_error_t (result_kind, request_result_errno (result_kind))));
+    } else {
+        try {
+            completion->complete (detail::take_parts_from_native (parts_, part_count_));
+        }
+        catch (...) {
+            detail::close_message_array (parts_, part_count_);
+            completion->fail (std::current_exception ());
+        }
+    }
+    completion->release_from_core ();
 }
 
 std::chrono::milliseconds resolved_request_timeout (
@@ -451,12 +445,10 @@ void submit_raw_request (detail::operation_state_t &state_,
 async_result_t<std::vector<message_t>>
 submit_raw_request_awaitable (detail::operation_state_t &state_)
 {
-    const auto completion = std::make_shared<
-      detail::async_operation_state_t<std::vector<message_t>>> ();
-    auto *bridge = new async_request_bridge_t ();
-    bridge->completion = completion;
-    submit_raw_request (state_, &async_request_trampoline, bridge,
-                        &delete_async_request_bridge);
+    const auto completion = std::make_shared<async_request_completion_t> ();
+    completion->retain_for_core (completion);
+    submit_raw_request (state_, &async_request_trampoline, completion.get (),
+                        &release_async_request_completion);
     return detail::async_result_access_t::make<std::vector<message_t>> (
       completion);
 }

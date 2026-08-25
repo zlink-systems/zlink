@@ -134,7 +134,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | wss | DEALER_ROUTER | 통과(95.65%) | 통과(104.07%) | 통과(98.99%) | 통과(99.39%) | 통과(107.71%) | 통과(91.14%) | **통과(99.49%)** — secure 5-run median, latency median 0.99x. `log/cpp-single-dealer-router-wss-20260825.ko.md` |
 | wss | DEALER_ROUTER_REQREP | 미달(43.78%) | 미달(38.22%) | 미달(38.62%) | 통과(89.15%) | 통과(92.75%) | 통과(96.56%) | **보류(미달 66.51%)** — clean-source secure 5-run final pair, latency median 1.87x. Sol review가 세 구현 후보의 실질 개선 없음을 확인해 안전 후보 소진으로 결론. `log/cpp-single-dealer-router-reqrep-wss-20260825.ko.md` |
 | wss | ROUTER_ROUTER | 통과(85.73%) | 통과(97.40%) | 통과(95.26%) | 통과(97.82%) | 통과(99.70%) | 통과(92.21%) | **통과(94.69%)** — secure 5-run median, latency median 1.05x. `log/cpp-single-router-router-wss-20260825.ko.md` |
-| wss | ROUTER_ROUTER_REQREP | 미달(41.85%) | 미달(38.80%) | 미달(38.61%) | 통과(89.44%) | 통과(90.03%) | 통과(87.36%) | **미달(64.35%)** — secure 5-run median, latency median 1.86x. 후보 A는 exact-target contract no-go, 기존 async-only completion 후보 B는 contract 5/5 통과 상태로 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-router-router-reqrep-wss-20260825.ko.md` |
+| wss | ROUTER_ROUTER_REQREP | 미달(44.58%) | 미달(40.00%) | 미달(40.69%) | 통과(92.76%) | 통과(83.37%) | 통과(88.97%) | **보류(미달 65.06%)** — C2 self-anchor/co-allocated callback bridge를 채택한 clean-source secure 5-run final pair, latency median 1.72x. Sol review가 C1/C3 측정 폐기와 C4 분석 폐기 뒤 안전 후보 소진을 승인했다. `log/cpp-single-router-router-reqrep-wss-20260825.ko.md` |
 | tls | PAIR | 미달(90.41%) | 통과(101.12%) | 통과(99.16%) | 미달(92.09%) | 미달(88.67%) | 미달(81.07%) | **미달(92.09%)** — secure 5-run median, latency median 0.99x. bounded pool 후보 A는 이미 baseline에 반영됐고 64KiB pool 후보 B는 기존 timeout no-go. `log/cpp-single-pair-tls-20260825.ko.md` |
 | tls | PUBSUB | 통과(88.23%) | 통과(102.62%) | 통과(94.91%) | 통과(87.35%) | 미달(81.85%) | 통과(97.83%) | **미달(92.13%)** — secure 5-run median, latency median 1.11x. single-part direct publish와 bounded pool은 이미 baseline에 반영됐고, mutex/lifetime guard 제거·pool 확대는 no-go. `log/cpp-single-pubsub-tls-20260825.ko.md` |
 | tls | DEALER_DEALER | 통과(84.62%) | 통과(98.89%) | 통과(94.83%) | 통과(80.48%) | 통과(86.20%) | 통과(80.34%) | **통과(87.56%)** — secure 5-run median, latency median 1.14x. `log/cpp-single-dealer-dealer-tls-20260825.ko.md` |
@@ -205,11 +205,15 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 16. `ROUTER_ROUTER / wss`는 C→C++ 64B smoke와 6-size secure 5-run median을 통과했다. 다음은
     마지막 WSS Single 패턴 `ROUTER_ROUTER_REQREP / wss`를 같은 secure 규칙으로 측정하고, 미달이면
     이 문서 4절의 개선 pass를 끝낸다.
-17. `ROUTER_ROUTER_REQREP / wss`는 secure 5-run baseline과 개선 gate를 마쳤다. 후보 A는 initial
-    exact target을 생략해 terminal/no-reroute contract를 바꾸므로 no-go다. 후보 B인 async-only
-    completion bridge는 ownership·exactly-once·callback/blocking 분리를 보존하고 contract 5/5를
-    통과하지만 throughput 64.35%로 request/reply 목표에는 미달이다. 다음은 `PAIR / tls`를 secure
-    5-run median 규칙으로 측정한다.
+17. `ROUTER_ROUTER_REQREP / wss`는 secure 5-run baseline 뒤 실제 후보 3개를 구현·계약 검증·paired
+    측정했다. C1(native reply-part adopt)은 control drift와 혼재되어 폐기했고, C2(self-anchor로
+    async completion state와 Core callback bridge를 co-allocation)는 작은 요청의 고정비 절감이
+    clean pair에서도 재현되어 채택했다. C3(inline resume slot)은 C2 대비 명확한 throughput 이득 없이
+    generic coroutine race 면만 넓혀 폐기했으며, C4(router native routing-id cache)는 public routing-id
+    저장을 중복해 비용 모델상 이득이 없어 분석 폐기했다. C2 포함 request/reply·exact target·message·socket·behavior
+    contract 5/5를 통과했고, Sol reviewer가 exact target/fallback, liveness guard, ownership/callback API,
+    harness 변경 외에는 안전 후보가 소진됐음을 최종 승인했다. clean C→C++ final pair는 65.06%, latency
+    1.72x이므로 **보류(미달 65.06%)**로 닫고 다음은 `PAIR / tls`를 secure 5-run median 규칙으로 측정한다.
 18. `PAIR / tls`는 C→C++ 64B smoke와 6-size secure 5-run median을 완료했다. latency는 통과했지만
     strict throughput aggregate가 92.09%로 미달이다. bounded pool 후보 A는 현재 baseline에 이미
     적용돼 있고, 64KiB pool 후보 B는 timeout no-go이므로 재도입하지 않는다. 다음은 `PUBSUB / tls`를

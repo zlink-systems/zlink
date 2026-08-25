@@ -136,6 +136,28 @@ class async_operation_state_t final : public async_result_state_t<T>
             _cancel = std::move (cancel_);
     }
 
+    // A Core callback receives only a raw userdata pointer. Keep this state
+    // alive until Core either invokes that callback or rejects submission,
+    // avoiding a separate bridge allocation solely for shared ownership.
+    void retain_for_core (std::shared_ptr<async_operation_state_t> self_)
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (!_terminal)
+            _core_lifetime = std::move (self_);
+    }
+
+    void release_from_core () noexcept
+    {
+        // Hold the anchor locally through the unlock: it may be the last
+        // reference when a callback completed after the awaiting result was
+        // abandoned.
+        std::shared_ptr<async_operation_state_t> keep_alive;
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            keep_alive = std::move (_core_lifetime);
+        }
+    }
+
     bool complete (T value_) noexcept
     {
         return finish ([&] { _value.emplace (std::move (value_)); });
@@ -199,6 +221,7 @@ class async_operation_state_t final : public async_result_state_t<T>
     std::exception_ptr _failure;
     cancel_fn_t _cancel;
     std::shared_ptr<async_resume_slot_t> _continuation;
+    std::shared_ptr<async_operation_state_t> _core_lifetime;
     async_continuation_scheduler_t _scheduler;
     bool _terminal = false;
     bool _consumed = false;
