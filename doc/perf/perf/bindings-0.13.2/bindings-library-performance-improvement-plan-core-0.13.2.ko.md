@@ -117,7 +117,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | tcp | DEALER_ROUTER_REQREP | 미달(66.10%) | 미달(57.12%) | 미달(38.78%) | 미달(72.29%) | 통과(80.36%) | 통과(90.54%) | **미달(67.53%)** — 후보 A 채택(66.57%→67.53%), 후보 B는 63.87% 회귀로 폐기. latency median 1.53x. `log/cpp-single-dealer-router-reqrep-tcp-20260825.ko.md` |
 | tcp | ROUTER_ROUTER | 통과(82.52%) | 통과(88.62%) | 통과(94.57%) | outlier(77.59%) | 통과(85.64%) | 통과(92.88%) | **통과(86.97%)** — latency median 1.10x; 64KiB 개별 outlier는 aggregate 판정을 바꾸지 않는다. `log/cpp-single-router-router-tcp-20260825.ko.md` |
 | tcp | ROUTER_ROUTER_REQREP | 미달(67.02%) | 미달(57.02%) | 미달(39.58%) | 미달(69.36%) | 통과(79.75%) | 통과(99.21%) | **미달(68.66%)** — 후보 A 66.61% 회귀, 후보 B 68.66%로 개선 없음이라 모두 폐기. latency median 1.58x. `log/cpp-single-router-router-reqrep-tcp-20260825.ko.md` |
-| ws | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| ws | PAIR | 미달(79.11%) | 통과(98.36%) | 통과(95.70%) | 통과(91.40%) | 통과(93.31%) | 통과(102.85%) | **미달(93.46%)** — strict 95% 목표 미달. 기존 direct single-part send·bounded pool·state reuse가 이미 적용됐고, 64KiB pool 하향은 이전 timeout 후보라 재시도하지 않음. mutex/weak 제거·pool 확대는 금지 no-go. `log/cpp-single-pair-ws-20260825.ko.md` |
 | ws | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ws | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ws | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -164,6 +164,10 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
    `ROUTER_ROUTER_REQREP / tcp`도 후보 A/B와 contract 검증을 끝냈으나 68.66%로 미달했고,
    후보 A는 회귀·후보 B는 개선 없음이라 모두 폐기했다. 다음 C++ Single 항목도 같은 규칙으로
    C→C++ 순서로 측정하며, 미달이면 이 문서 4절의 개선 pass를 끝낸 뒤에만 이동한다.
+4. `PAIR / ws`는 smoke와 6-size paired 기준선을 완료했다. 93.46%로 strict 95%에 미달했으나,
+   허용 가능한 public hot-path 후보가 이미 적용된 최종 경로와 중복되고, 64KiB pool 하향은 기존
+   timeout 근거가 있으며 mutex/weak 제거·pool 확대는 계약 금지라 no-go로 확정했다. 다음은
+   `PUBSUB / ws`를 동일한 C→C++ 순서로 측정한다.
 
 ## 7. 완료 기준
 
