@@ -683,9 +683,9 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `진행 중` (`PAIR / tcp`, `PAIR / tls`, `PAIR / inproc`, `PAIR / ipc`, `PUBSUB / tls`, `PUBSUB / inproc`, `DEALER_DEALER / tcp`, `DEALER_DEALER / tls`, `DEALER_DEALER / inproc`, `DEALER_DEALER / ipc` 보류, `PAIR / ws`, `PAIR / wss`, `PUBSUB / tcp`, `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / ipc`, `DEALER_DEALER / ws`, `DEALER_DEALER / wss`, `DEALER_ROUTER / tcp`, `DEALER_ROUTER / ws` 통과, 나머지 미측정)
+- Single 상태: `진행 중` (`PAIR / tcp`, `PAIR / tls`, `PAIR / inproc`, `PAIR / ipc`, `PUBSUB / tls`, `PUBSUB / inproc`, `DEALER_DEALER / tcp`, `DEALER_DEALER / tls`, `DEALER_DEALER / inproc`, `DEALER_DEALER / ipc` 보류, `PAIR / ws`, `PAIR / wss`, `PUBSUB / tcp`, `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / ipc`, `DEALER_DEALER / ws`, `DEALER_DEALER / wss`, `DEALER_ROUTER / tcp`, `DEALER_ROUTER / ws`, `DEALER_ROUTER / wss` 통과, 나머지 미측정)
 - Multi 상태: `미측정`
-- 다음 작업: `DEALER_ROUTER / ws` paired 판정을 마쳤으므로 secure transport 규칙을 적용한 `DEALER_ROUTER / wss` paired 측정과 개선 pass를 진행한다.
+- 다음 작업: `DEALER_ROUTER / wss` secure transport paired 최종 판정을 마쳤으므로 `DEALER_ROUTER / tls` paired 측정과 개선 pass를 진행한다.
 
 #### 9.1.1 Single suite
 
@@ -708,7 +708,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `wss` | `PAIR` | 통과(93.53%) | 통과(96.66%) | 통과(96.69%) | 통과(86.44%; 개별 90% 미달) | 통과(100.10%) | 통과(89.66%; 개별 90% 미달) | 완화 목표 90% 선택; aggregate throughput 93.85%, latency 1.103x; `cpp-pair-wss-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-wss.md) |
 | `wss` | `PUBSUB` | 통과(86.48%) | 통과(89.33%) | 통과(89.35%) | 통과(89.08%) | 통과(99.83%) | 통과(95.33%) | 완화 목표 90% 선택; aggregate throughput 91.57%, latency 1.156x; `cpp-pubsub-wss-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pubsub-wss.md) |
 | `wss` | `DEALER_DEALER` | 통과(110.87%) | 통과(101.77%) | 통과(109.02%) | 통과(106.30%) | 통과(112.03%) | 통과(103.34%) | 기본 목표 95%; aggregate throughput 107.22%, latency 0.925x; `cpp-dealer-dealer-wss-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-dealer-wss.md) |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `DEALER_ROUTER` | 통과(96.28%) | 통과(98.39%) | 통과(97.69%) | 통과(97.25%) | 통과(88.92%) | 통과(94.17%) | routed one-way 목표 85%; aggregate throughput 95.45%, latency 1.083x; `cpp-dealer-router-wss-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-router-wss.md) |
 | `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1241,16 +1241,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | C++ |  |
-| 현재 pattern | `DEALER_ROUTER / wss` | `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER/tcp`, `DEALER_ROUTER/ws`의 판정 완료 |
-| paired C | 준비 | 다음 `DEALER_ROUTER/wss` smoke부터 진행 |
-| 개선 반복 | 준비 | 다음 `DEALER_ROUTER/wss` 자체 공개 경로 pass |
-| 커밋과 푸시 | 진행 중 | DEALER_ROUTER/ws 기준 측정 기록을 커밋·푸시한 뒤 계속 |
+| 현재 pattern | `DEALER_ROUTER / tls` | `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER/tcp`, `DEALER_ROUTER/ws`, `DEALER_ROUTER/wss`의 판정 완료 |
+| paired C | 준비 | 다음 `DEALER_ROUTER/tls` smoke부터 진행 |
+| 개선 반복 | 준비 | 다음 `DEALER_ROUTER/tls` 자체 공개 경로 pass |
+| 커밋과 푸시 | 진행 중 | DEALER_ROUTER/wss 최종 판정 기록을 커밋·푸시한 뒤 계속 |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 진행 중 | 미측정 | `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER / tcp`, `DEALER_ROUTER / ws`를 판정했다. 다음 `DEALER_ROUTER / wss` paired 측정과 개선 pass를 진행한다. |
+| 1 | C++ | 진행 중 | 미측정 | `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER / tcp`, `DEALER_ROUTER / ws`, `DEALER_ROUTER / wss`를 판정했다. 다음 `DEALER_ROUTER / tls` paired 측정과 개선 pass를 진행한다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1286,6 +1286,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 | 2026-08-25 | C++ | Single `DEALER_DEALER / ipc` | `cpp-dealer-dealer-ipc-core0130-before-{c,cpp}-20260825` | 6 sizes, 5초, 3회 중앙값, Core 0.13.0 release, 공개 경로 자체 pass 완료 | 처리량 평균 82.30%로 보류, latency 1.167x 통과; public terminal 계약을 지키는 IPC 전용 후보 없음 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_120934_cpp-dealer-dealer-ipc-core0130-before-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_120934_cpp-dealer-dealer-ipc-core0130-before-cpp-20260825.txt`; [log](log/2026-08-25-cpp-dealer-dealer-ipc.md) |
 | 2026-08-25 | C++ | Single `DEALER_ROUTER / tcp` | `cpp-dealer-router-tcp-core0130-final5-{c,cpp}-20260825` | 6 sizes, 5초, 목표 경계 규칙에 따른 C→C++ 5회 중앙값, Core 0.13.0 release, 공개 경로 자체 pass 완료 | routed one-way 목표 85%; 처리량 평균 89.95%, latency 1.080x로 통과; 64KiB만 개별 최소 80% 미달 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_121448_cpp-dealer-router-tcp-core0130-final5-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_121729_cpp-dealer-router-tcp-core0130-final5-cpp-20260825.txt`; [log](log/2026-08-25-cpp-dealer-router-tcp.md) |
 | 2026-08-25 | C++ | Single `DEALER_ROUTER / ws` | `cpp-dealer-router-ws-core0130-before-{c,cpp}-20260825` | 6 sizes, 5초, 3회 중앙값, Core 0.13.0 release, 공개 경로 자체 pass 완료 | routed one-way 목표 85%; 처리량 평균 90.92%, latency 1.094x로 통과; 모든 개별 최소 80% 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_122327_cpp-dealer-router-ws-core0130-before-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_122504_cpp-dealer-router-ws-core0130-before-cpp-20260825.txt`; [log](log/2026-08-25-cpp-dealer-router-ws.md) |
+| 2026-08-25 | C++ | Single `DEALER_ROUTER / wss` | `cpp-dealer-router-wss-core0130-final5-{c,cpp}-20260825` | 6 sizes, 5초, secure transport 규칙에 따른 C→C++ 5회 중앙값, Core 0.13.0 release, 공개 경로 자체 pass 완료 | routed one-way 목표 85%; 처리량 평균 95.45%, latency 1.083x로 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_122817_cpp-dealer-router-wss-core0130-final5-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_123055_cpp-dealer-router-wss-core0130-final5-cpp-20260825.txt`; [log](log/2026-08-25-cpp-dealer-router-wss.md) |
 
 ## 12. 완료 기준
 
