@@ -729,7 +729,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `ipc` | `PAIR` | 보류(81.65%) | 보류(91.17%) | 보류(95.58%) | 보류(82.77%) | 보류(75.36%) | 보류(82.05%) | aggregate throughput 84.77%, latency 1.167x; 자체/Sol no-go; `cpp-pair-ipc-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-ipc.md) |
 | `ipc` | `PUBSUB` | 통과(90.29%) | 통과(95.23%) | 통과(102.71%) | 통과(90.91%) | 통과(98.06%) | 통과(96.37%) | 기본 목표 95%; aggregate throughput 95.60%, latency 1.025x; `cpp-pubsub-ipc-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pubsub-ipc.md) |
 | `ipc` | `DEALER_DEALER` | 보류(80.21%) | 보류(93.36%) | 보류(89.77%) | 보류(68.21%) | 보류(73.29%) | 보류(88.96%) | aggregate throughput 82.30%, latency 1.167x; 자체 public-path no-go; `cpp-dealer-dealer-ipc-core0130-before-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-dealer-ipc.md) |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `DEALER_ROUTER` | 통과(84.27%) | 통과(94.62%) | 통과(96.43%) | 통과(80.86%) | 통과(87.11%) | 통과(90.79%) | routed one-way 목표 85%; aggregate throughput 89.01%, latency 1.146x; `cpp-dealer-router-ipc-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-router-ipc.md) |
 | `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
