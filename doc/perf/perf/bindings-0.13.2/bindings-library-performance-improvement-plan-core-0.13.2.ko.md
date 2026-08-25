@@ -105,7 +105,7 @@ private/native handle 우회, public ownership 변경, timeout/close 동작 변�
 | tcp | PAIR | 미달(94.91%) | 통과(100.44%) | 통과(97.84%) | 미달(85.87%) | 통과(95.56%) | 미달(91.62%) | **미달(94.37%)** — 후보 A 채택, 후보 B 64KiB timeout 폐기. `log/cpp-single-pair-tcp-20260825.ko.md` |
 | tcp | PUBSUB | 통과(93.93%) | 통과(97.32%) | 통과(98.48%) | 통과(92.53%) | 통과(100.05%) | 통과(91.25%) | **통과(95.60%)** — latency median 1.07x. `log/cpp-single-pubsub-tcp-20260825.ko.md` |
 | tcp | DEALER_DEALER | outlier(79.63%) | 통과(96.84%) | 통과(92.81%) | outlier(78.94%) | 통과(82.43%) | 통과(86.87%) | **통과(86.25%)** — latency median 1.20x; 64B·64KiB 개별 outlier는 aggregate 판정을 바꾸지 않는다. `log/cpp-single-dealer-dealer-tcp-20260825.ko.md` |
-| tcp | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| tcp | DEALER_ROUTER | outlier(77.91%) | 통과(100.17%) | 통과(99.41%) | outlier(77.27%) | 통과(88.93%) | 통과(92.62%) | **통과(89.38%)** — latency median 1.05x; 64B·64KiB 개별 outlier는 aggregate 판정을 바꾸지 않는다. `log/cpp-single-dealer-router-tcp-20260825.ko.md` |
 | tcp | DEALER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | tcp | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | tcp | ROUTER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -149,9 +149,9 @@ private/native handle 우회, public ownership 변경, timeout/close 동작 변�
 
 1. `PAIR / tcp`는 strict target 기준 `미달`로 확정했고, 후보 A/B와 read-only review 결과를
    기록·commit·push했다.
-2. `PUBSUB / tcp`, `DEALER_DEALER / tcp`의 C→C++ 64B smoke와 6-size paired final 측정을
-   기록했다. `DEALER_DEALER / tcp`의 개별 outlier는 aggregate 통과를 바꾸지 않는다.
-3. 같은 규칙으로 다음 C++ Single `DEALER_ROUTER / tcp`를 C→C++ 순서로 측정한다. 미달이면
+2. `PUBSUB / tcp`, `DEALER_DEALER / tcp`, `DEALER_ROUTER / tcp`의 C→C++ 64B smoke와 6-size
+   paired final 측정을 기록했다. routed one-way의 개별 outlier는 aggregate 통과를 바꾸지 않는다.
+3. 같은 규칙으로 다음 C++ Single `DEALER_ROUTER_REQREP / tcp`를 C→C++ 순서로 측정한다. 미달이면
    이 문서 4절의 개선 pass를 끝낸 뒤에만 다음 항목으로 이동한다.
 
 ## 7. 완료 기준
