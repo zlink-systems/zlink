@@ -140,7 +140,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | tls | ROUTER_ROUTER_REQREP | 미달(54.09%) | 미달(52.63%) | 미달(42.22%) | 통과(84.00%) | 통과(94.73%) | 통과(100.92%) | **미달(71.43%)** — secure 5-run median, latency median 1.65x. 후보 A는 exact-target contract no-go, 기존 async-only completion 후보 B는 contract 5/5 통과 상태로 유지하되 throughput 목표 85%에는 미달. `log/cpp-single-router-router-reqrep-tls-20260825.ko.md` |
 | inproc | PAIR | 통과(84.71%) | 통과(100.01%) | 통과(91.40%) | 미달(22.71%) | 미달(73.70%) | 통과(84.04%) | **미달(76.09%)** — 5-run median, latency median 1.08x. 128KiB 이상 bounded pool은 이미 baseline이고 64KiB 하향은 TCP 25/30 partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-pair-inproc-20260825.ko.md` |
 | inproc | PUBSUB | 통과(99.46%) | 통과(91.11%) | 통과(92.14%) | 미달(24.09%) | 미달(79.24%) | 통과(86.24%) | **미달(78.71%)** — 5-run median, latency median 1.23x. direct single-part publish와 bounded pool은 baseline이며 64KiB pool 하향은 TCP partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-pubsub-inproc-20260825.ko.md` |
-| inproc | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| inproc | DEALER_DEALER | 미달(76.21%) | 통과(84.11%) | 통과(81.64%) | 미달(25.90%) | 미달(72.17%) | 통과(82.94%) | **미달(70.49%)** — 5-run median, latency median 1.22x. bounded pool은 baseline이며 64KiB 하향은 TCP partial timeout, cap 확대는 resource boundary no-go. `log/cpp-single-dealer-dealer-inproc-20260825.ko.md` |
 | inproc | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | inproc | DEALER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | inproc | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
