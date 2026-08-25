@@ -310,7 +310,11 @@ session 파일럿 리뷰에서 실제로 지적된 것들이다. 모두 가이�
 | 구현 부채 해소 | **거의 완료** — 배치 1~4 완료(§9.5). 사용자 결정으로 이 캠페인에서 코드까지 고친다 |
 | 계약 판정 R1 | **완료** — seal identity에서 coordinator 제거. node·jvm 두 트리에 적용 |
 | 전체 게이트 | **완료** — dotnet 1,879/1,879 · jvm BUILD SUCCESSFUL · cpp 44/44 · node 계약 전량 · 언어간 통신 passed |
-| 7샘플 × 3트리 | **완료** — node 7/7, cpp 7/7(일괄 실패 2건은 단독 재현 4/4 통과), dotnet 6/7. dotnet ZoneWorld는 **HEAD에서도 실패**(HEAD 9건 vs 현재 1건)라 이번 작업의 회귀가 아니다 |
+| 7샘플 × 3트리 | **완료** — node 7/7, cpp 7/7, dotnet 7/7. dotnet ZoneWorld는 세 조치로 닫았다(§9.5) |
+| ZoneWorld 언어별 통일 | **진행 중** — 브라우저 단계·owner lease·`.sln`·관측 예산은 완료. ready 문자열·재시도 250ms×120·설정 이름은 dotnet·node·java·kotlin 완료, cpp는 hosted service 전환과 함께 진행 |
+| 공통 스펙 §22 Hosted service | **완료** — 지금까지 공통 스펙에 없어 언어별 interface 문서가 따로 정의했고 모델이 갈렸다(G24) |
+| cpp hosted service coroutine 전환 | **진행 중** — `start`를 `task_t<void>` 반환으로. 구현체 10개·호출부 1곳·interface 문서 |
+| 나머지 6샘플 통일 | **계획 수립** — §9.6. Bingo·TicTacToe부터(runner 분량 편차 최대) |
 | 언어별 guide 재생성 | **완료** — `generate_language_guides.py`, 4개 갱신 |
 | 최상위 README | **완료** — `exact` 제거, `archive/` 안내 추가 |
 | `languages/` 트리 정리 | **완료** — 이동 안내 껍데기 18파일 삭제, 옛 평면 경로 835건 치환, anchor 10종 정정 |
@@ -434,6 +438,62 @@ node 4·cpp 4건이다. 대부분 상수·오류 코드·로그 문자열이고,
 | cpp | `ctest --test-dir framework/languages/cpp/build -L 'framework-(unit|contract)' -LE 'e2e|sample|perf'`. 빌드 직후 exit 86·SIGABRT(134)는 일시 현상이므로 한 번 재실행한다 |
 | node | `npx tsc -b tsconfig.build.json` 먼저(테스트가 `dist/`에서 import한다) |
 | dotnet | UnitTests csproj는 `EnableDefaultCompileItems=false`다. 새 테스트 파일은 `<Compile Include>`에 넣어야 인식된다 |
+
+## 9.6 샘플 언어별 통일 — 7샘플로 확장
+
+사용자 결정(2026-08-26): ZoneWorld에서 한 것을 **나머지 6샘플에도 적용한다.** 언어마다 갈라진
+자리를 찾아 **스펙을 상세화하거나 스펙에 맞춰 통일한다.**
+
+### 스펙 위치
+
+| 샘플 | 스펙 | 줄 수 |
+|---|---|---|
+| ZoneWorld | `sample/zoneworld/README.ko.md` | 827 |
+| ShoppingMall | `sample/event/shoppingmall.ko.md` | 825 |
+| Bingo | `sample/bingo/README.ko.md` | 803 |
+| TicTacToe | `sample/tictactoe/README.ko.md` | 704 |
+| SupportChat | `sample/supportchat/README.ko.md` | 602 |
+| DeliveryDispatch | `sample/deliverydispatch/README.ko.md` | 569 |
+| GameQuest | `sample/event/gamequest.ko.md` | 544 |
+
+### 찾는 방법 — ZoneWorld에서 실제로 갈라졌던 자리
+
+같은 축을 다른 샘플에도 적용한다.
+
+| 축 | ZoneWorld에서 발견된 것 |
+|---|---|
+| **실행 범위** | dotnet만 Playwright 브라우저 단계를 돌렸다. `run_sample.sh`의 playwright 참조 수를 언어별로 세어 찾았다 |
+| **runner 신호 문자열** | ready 줄이 언어마다 달랐다(`topology=ready …` vs `zoneworld-role-ready role=…`, dotnet만 `crash_replacement=True` 덧붙임). runner가 기다리는 문자열이므로 갈리면 공통 절차를 못 쓴다 |
+| **framework option 재정의** | node만 owner lease를 3초로 줄였다. 샘플이 framework 기본값을 덮어쓰는 곳을 전부 찾아 스펙이 요구하는지 확인한다 |
+| **재시도 간격·횟수** | 스펙에 없어 언어마다 달랐다. **재량이 아니라 계약이다** — 값이 다르면 같은 시나리오가 다른 시점에 실패해 판정이 갈린다 |
+| **설정 이름** | `allowEmptyZoneSet` / `bootstrapZones: false`로 갈렸다. 이름을 고정하고 표기 규칙만 언어별로 둔다 |
+| **object 생성 시점** | cpp만 startup에서 zone을 claim하지 않았다. 시나리오 단언의 의미가 달라진다 |
+| **솔루션·프로젝트 구성** | dotnet 7샘플 중 3개만 `.sln`이 있었다 |
+
+### 착수 전 조사 — runner 분량 편차
+
+같은 34개 시나리오를 검증하는데 runner 분량이 크게 다르면 검증 범위가 다를 가능성이 높다.
+ZoneWorld가 그랬다(dotnet만 브라우저 단계).
+
+| 샘플 | dotnet | cpp | node(실 러너) | 편차 |
+|---|---:|---:|---:|---|
+| Bingo | 275 | **414** | 154 | cpp가 dotnet의 1.5배, node의 2.7배 |
+| TicTacToe | 251 | **379** | 87 | cpp가 node의 4.4배 |
+| ShoppingMall | 268 | 283 | 41 | node가 1/7 |
+| GameQuest | 260 | 266 | 56 | node가 1/5 |
+| DeliveryDispatch | 243 | 284 | 66 | node가 1/4 |
+| SupportChat | 218 | 206 | 33 | node가 1/7 |
+
+node는 6샘플 모두 `run_sample.sh`가 5줄 wrapper이고 실제 로직은 `Runner/` 아래 별도 파일에
+있다. 위 숫자는 그 파일 기준이다. **Bingo와 TicTacToe부터 보는 것이 좋다** — 편차가 가장 크다.
+
+### 순서
+
+1. 한 샘플을 골라 5언어 구현을 나란히 읽고 위 축으로 대조표를 만든다.
+2. 갈라진 자리마다 **스펙이 이미 정하는가**를 먼저 본다 — 정하면 이탈한 언어를 고치고,
+   정하지 않으면 스펙을 상세화한 뒤 전 언어를 맞춘다.
+3. **값은 스펙이 고정한다.** "언어별 재량"은 관찰 결과가 같은 것에만 쓴다(가이드 §4.4).
+4. 샘플별로 게이트를 돌린다 — 부하가 결과를 바꾸므로 트리를 동시에 돌리지 않는다(§10.1).
 
 ## 10. 검증
 

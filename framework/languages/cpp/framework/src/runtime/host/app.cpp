@@ -318,7 +318,7 @@ class app_state_t
                                 std::vector<hosted_service_t *> &started)
     {
         for (const auto &service : hosted_services) {
-            service->start (provider);
+            service->start (provider).result ().value ();
             started.push_back (service.get ());
         }
     }

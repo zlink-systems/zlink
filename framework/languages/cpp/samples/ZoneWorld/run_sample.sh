@@ -106,17 +106,17 @@ CONFIG_DIR="$RUN_DIR/config"
 mkdir -p "$CONFIG_DIR"
 write_role_config() {
   local path="$1" node_id="$2" mesh_endpoint="$3" stream_endpoint="$4" http_endpoint="$5"
-  local mesh_advertise_host="${6:-}" subscriber_only="${7:-false}" disable_bots="${8:-false}"
+  local mesh_advertise_host="${6:-}" subscriber_only="${7:-false}" disable_bots="${8:-false}" allow_empty_zone_set="${9:-false}"
   python3 - "$path" "$node_id" "$mesh_endpoint" "$stream_endpoint" \
     "$http_endpoint" "tcp://127.0.0.1:${redis_port}" \
     "zoneworld:cpp:${RUN_ID}:" "$BROADCAST" "$LOG_DIR" "$mesh_advertise_host" \
-    "$subscriber_only" "$disable_bots" <<'CONFIG_PY'
+    "$subscriber_only" "$disable_bots" "$allow_empty_zone_set" <<'CONFIG_PY'
 import json
 import os
 import stat
 import sys
 
-path, node_id, mesh_endpoint, stream_endpoint, http_endpoint, redis_endpoint, redis_key_prefix, broadcast_endpoint, log_dir, mesh_advertise_host, subscriber_only, disable_bots = sys.argv[1:]
+path, node_id, mesh_endpoint, stream_endpoint, http_endpoint, redis_endpoint, redis_key_prefix, broadcast_endpoint, log_dir, mesh_advertise_host, subscriber_only, disable_bots, allow_empty_zone_set = sys.argv[1:]
 document = {
     "sample": {
         "zoneworld": {
@@ -131,6 +131,7 @@ document = {
         "faultTickZone": "zone-nw" if node_id.startswith("zone-node-") else None,
         "subscriberOnly": subscriber_only == "true",
         "disableBots": disable_bots == "true",
+        "allowEmptyZoneSet": allow_empty_zone_set == "true",
         }
     }
 }
@@ -146,6 +147,10 @@ write_role_config "$CONFIG_DIR/zone-node-1.json" zone-node-1 "$NODE1_MESH_BIND" 
   "$NODE1_STREAM" "${NODE1_HTTP/tcp:/http:}" "$NODE_MESH_ADVERTISE_HOST"
 write_role_config "$CONFIG_DIR/zone-node-2.json" zone-node-2 "$NODE2_MESH_BIND" \
   "$NODE2_STREAM" "${NODE2_HTTP/tcp:/http:}" "$NODE_MESH_ADVERTISE_HOST"
+write_role_config "$CONFIG_DIR/zone-node-1-replacement.json" zone-node-1 "$NODE1_MESH_BIND" \
+  "$NODE1_STREAM" "${NODE1_HTTP/tcp:/http:}" "$NODE_MESH_ADVERTISE_HOST" false true true
+write_role_config "$CONFIG_DIR/zone-node-2-replacement.json" zone-node-2 "$NODE2_MESH_BIND" \
+  "$NODE2_STREAM" "${NODE2_HTTP/tcp:/http:}" "$NODE_MESH_ADVERTISE_HOST" false true true
 write_role_config "$CONFIG_DIR/ops.json" ops "$OPS_MESH" "$OPS_STREAM" \
   "${OPS_HTTP/tcp:/http:}"
 write_role_config "$CONFIG_DIR/gateway.json" gateway "$GATEWAY_MESH_BIND" "$GAME_STREAM" \
@@ -207,16 +212,16 @@ wait_port() {
   return 1
 }
 start_zone_node() {
-  local label="$1" first_line
+  local label="$1" config_label="${2:-$1}" first_line
   first_line="$(next_log_line "$LOG_DIR/$label.log")"
   start_role "$label" "$BIN_DIR/sample_cpp_framework_zoneworld_zone_node" \
-    --config="$CONFIG_DIR/$label.json"
+    --config="$CONFIG_DIR/$config_label.json"
   if [[ "$label" == "zone-node-1" ]]; then
     wait_port "$NODE1_MESH"
   elif [[ "$label" == "zone-node-2" ]]; then
     wait_port "$NODE2_MESH"
   fi
-  wait_for_log_after "$label" "zoneworld-role-ready role=zone-node" "$first_line" 300
+  wait_for_log_after "$label" "topology=ready node=$label zones=" "$first_line" 300
 }
 routing_id_of() {
   local node_id="$1"
@@ -332,7 +337,7 @@ if [[ "$G4_CHILD" == "1" ]]; then
   set -e
   remove_owned_pid "$g4_pid"
   unset "ROLE_PID[client-g4]"
-  start_zone_node "$g4_node"
+  start_zone_node "$g4_node" "$g4_node-replacement"
   if ! g4_new_rid="$(wait_for_new_routing_id "$g4_node" "$g4_old_rid")"; then
     echo "zoneworld-g4=failed reason=replacement-not-observed" >&2
     exit 1

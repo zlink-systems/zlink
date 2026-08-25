@@ -15,7 +15,7 @@ class hosted_service_t
   public:
     virtual ~hosted_service_t () = default;
 
-    virtual void start (service_provider_t &services) = 0;
+    virtual task_t<void> start (service_provider_t &services) = 0;
     virtual void request_stop () noexcept {}
     virtual void stop () noexcept = 0;
 };

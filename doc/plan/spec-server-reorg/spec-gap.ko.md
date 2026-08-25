@@ -107,6 +107,44 @@ D1~D10과 별개로, 전체 게이트를 돌리다 드러난 발산에 대해 �
 관찰 근거 — ZoneWorld 샘플의 dotnet `zone-node-2.log`가 `zlink flow: event_id=zlink.message_flow`로
 시작한다. node 구현은 `event`를 쓴다.
 
+## 새로 발견 — G24: cpp hosted service가 coroutine 모델 밖에 있다
+
+| 항목 | 내용 |
+|---|---|
+| 종류 | 미지정 — 공통 스펙이 hosted service의 실행 모델을 정하지 않는다 |
+| 위치 | [cpp configuration과 host §4](../../../framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md) |
+
+Framework는 coroutine 기반인데 **cpp의 hosted service 진입점만 그 모델 밖에 있다.**
+
+| 언어 | hosted service startup |
+|---|---|
+| dotnet | `async Task StartAsync(CancellationToken)` — `await`로 그대로 쓴다 |
+| cpp | `virtual void start()` — **coroutine을 반환할 수 없다** |
+
+그래서 비동기 준비가 필요한 cpp hosted service는 **샘플 코드가 `std::thread`를 직접 만들어
+관리해야 한다.** ZoneWorld의 `zone_bootstrap_service_t`·`node_report_service_t`와
+DeliveryDispatch의 dispatch service가 모두 그렇다. `test_cpp_framework_layout_contract`가
+샘플 코드의 `.result()`를 금지하는 것도 이 구조가 만든 방어다 — 진입점이 coroutine이면
+`co_await`를 쓰면 되고 blocking을 막을 이유가 없다.
+
+**공통 스펙에 hosted service 항목 자체가 없었다.** 각 언어 interface 문서가 따로 정의해
+모델이 갈렸다.
+
+### 처리 — 사용자 지시(2026-08-26)로 framework를 고친다
+
+1. **공통 스펙에 §22 Hosted service를 신설했다**([Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)).
+   시작이 비동기 operation이라는 것, 시작 순서와 실패 처리, 정지 요청과 정지의 분리를 정한다.
+   비동기 표현만 `**언어별 재량**`이고(`Task`·`task_t`·`Promise`·`CompletionStage`) 관찰
+   결과는 고정이다 — 시작이 끝나야 다음이 시작하고, 실패하면 startup이 실패한다.
+   §22 삽입으로 뒤 절을 재번호하고 깨진 anchor 3곳을 고쳤다.
+2. **cpp `hosted_service_t::start`를 `task_t<void>` 반환으로 바꾼다.** 구현체 10개, 호출부
+   1곳, cpp interface 문서의 선언을 함께 고친다.
+3. 샘플이 `std::thread`로 비동기 준비를 흉내 내던 자리를 `co_await`로 바꾼다.
+
+`test_cpp_framework_layout_contract`가 샘플의 `.result()`를 금지하는 것도 이 결함이 만든
+방어였다 — framework 내부는 정작 `.result()`를 자유롭게 쓴다. 진입점이 coroutine이 되면
+그 금지의 근거가 달라지므로 계약 테스트도 함께 재검토한다.
+
 ## ZoneWorld 샘플 — 언어별 구현 불일치
 
 시나리오 ID 집합은 세 언어가 **34개 완전히 일치**하고, 각 ID의 전제·행동·단언은

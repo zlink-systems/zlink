@@ -663,7 +663,7 @@ struct extra_announce_handler_t
 class node_report_service_t final : public fw::hosted_service_t
 {
   public:
-    void start (fw::service_provider_t &services) override
+    fw::task_t<void> start (fw::service_provider_t &services) override
     {
         _routes = &services.get_required<fw::route_client_t> ();
         _running.store (true);
@@ -682,6 +682,7 @@ class node_report_service_t final : public fw::hosted_service_t
                 std::this_thread::sleep_for (std::chrono::milliseconds (100));
             }
         });
+        co_return;
     }
     void request_stop () noexcept override { _running.store (false); }
     void stop () noexcept override
@@ -751,6 +752,105 @@ class node_report_service_t final : public fw::hosted_service_t
     std::vector<fw::task_t<void>> _work;
 };
 
+class zone_bootstrap_service_t final : public fw::hosted_service_t
+{
+  public:
+    explicit zone_bootstrap_service_t (configuration_t configuration) :
+        _configuration (std::move (configuration))
+    {
+    }
+
+    fw::task_t<void> start (fw::service_provider_t &services) override
+    {
+        co_await bootstrap (services.get_required<fw::spot_manager_t> ());
+    }
+    void request_stop () noexcept override { _stopping.store (true); }
+    void stop () noexcept override
+    {
+        request_stop ();
+    }
+
+  private:
+    static constexpr auto retry_delay = std::chrono::milliseconds (250);
+    static constexpr int retry_attempts = 120;
+
+    std::vector<std::string> claim_order (const std::vector<std::string> &claimed) const
+    {
+        std::vector<std::string> order;
+        for (const auto &zone : claimed)
+            for (const auto &adjacent : adjacent_zones (zone))
+                if (std::find (claimed.begin (), claimed.end (), adjacent) == claimed.end ()
+                    && std::find (order.begin (), order.end (), adjacent) == order.end ())
+                    order.push_back (adjacent);
+        for (const auto &zone : all_zones ())
+            if (std::find (claimed.begin (), claimed.end (), zone) == claimed.end ()
+                && std::find (order.begin (), order.end (), zone) == order.end ())
+                order.push_back (zone);
+        return order;
+    }
+
+    fw::task_t<void> bootstrap (fw::spot_manager_t &spots)
+    {
+        if (_configuration.subscriber_only) {
+            print_ready ({});
+            co_return;
+        }
+
+        for (int attempt = 0; g_node_state->zone_snapshot ().size () != 2; ++attempt) {
+            if (_stopping.load ())
+                co_return;
+            const auto claimed = g_node_state->zone_snapshot ();
+            for (const auto &zone : claim_order (claimed)) {
+                if (_stopping.load () || g_node_state->zone_snapshot () != claimed)
+                    break;
+                try {
+                    co_await spots.get_or_create (fw::spot_id_t (zone), names_t::zone_spot)
+                      .in_mesh (names_t::mesh)
+                      .submit ();
+                }
+                catch (const std::exception &) {
+                    // A peer may still be entering the mesh. The fixed retry budget owns
+                    // the decision to surface that startup failure.
+                }
+            }
+
+            const auto zones = g_node_state->zone_snapshot ();
+            if (_configuration.allow_empty_zone_set && zones.empty () && attempt >= 8) {
+                print_ready (zones);
+                co_return;
+            }
+            if (attempt + 1 >= retry_attempts) {
+                std::cerr << "Zone Spot capacity did not settle. node=" << _configuration.node_id
+                          << " zones=";
+                for (std::size_t index = 0; index < zones.size (); ++index) {
+                    if (index != 0)
+                        std::cerr << ',';
+                    std::cerr << zones[index];
+                }
+                std::cerr << std::endl;
+                throw std::runtime_error ("Zone Spot capacity did not settle");
+            }
+            co_await fw::detail::delay (retry_delay);
+        }
+        print_ready (g_node_state->zone_snapshot ());
+        co_return;
+    }
+
+    void print_ready (const std::vector<std::string> &zones) const
+    {
+        std::cout << "topology=ready node=" << _configuration.node_id << " zones=";
+        for (std::size_t index = 0; index < zones.size (); ++index) {
+            if (index != 0)
+                std::cout << ',';
+            std::cout << zones[index];
+        }
+        std::cout << std::endl;
+    }
+
+    configuration_t _configuration;
+    std::atomic_bool _stopping{false};
+};
+
 } // namespace zlink::samples::zoneworld
 
 int main (int argc, char **argv)
@@ -813,10 +913,13 @@ int main (int argc, char **argv)
           .use_handler_group ("zoneworld-broadcast");
         options.http ().listen (configuration.bootstrap_http_endpoint).map_health ("/health");
     }
-    if (!configuration.subscriber_only)
+    if (!configuration.subscriber_only) {
+        app.add_hosted_service (
+          std::make_unique<zone_bootstrap_service_t> (configuration));
         app.add_hosted_service (std::make_unique<node_report_service_t> ());
-    std::cout << "zoneworld-role-ready role=zone-node node=" << configuration.node_id
-              << " subscriber-only=" << (configuration.subscriber_only ? "true" : "false")
-              << std::endl;
+    } else {
+        app.add_hosted_service (
+          std::make_unique<zone_bootstrap_service_t> (configuration));
+    }
     return app.run (argc, argv);
 }

@@ -229,7 +229,7 @@ class relocation_source_service_t final : public zlink::framework::hosted_servic
     {
     }
 
-    void start (zlink::framework::service_provider_t &services) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
         _runtime = &services.get_required<zlink::framework::route_mesh_runtime_t> ();
         auto manager = services.get_required<zlink::framework::spot_manager_t> ();
@@ -278,6 +278,7 @@ class relocation_source_service_t final : public zlink::framework::hosted_servic
               else
                   error = "readiness message submission failed";
           });
+        co_return;
     }
 
     void stop () noexcept override
@@ -434,12 +435,13 @@ class mesh_started_probe_service_t final : public zlink::framework::hosted_servi
     {
     }
 
-    void start (zlink::framework::service_provider_t &services) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
         (void) services.get_required<zlink::framework::route_mesh_runtime_t> ().snapshot (
           _mesh_name);
         started = true;
         _app.stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -623,13 +625,14 @@ void configure_relocation_app (
 class blocking_stop_service_t final : public zlink::framework::hosted_service_t
 {
   public:
-    void start (zlink::framework::service_provider_t &) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
     {
         {
             std::lock_guard lock (_mutex);
             _started = true;
         }
         _changed.notify_all ();
+        co_return;
     }
 
     void stop () noexcept override

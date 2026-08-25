@@ -1558,7 +1558,7 @@ mesh_node_host_service_t::close_user_spot (const std::shared_ptr<detail::mesh_no
     return output;
 }
 
-void mesh_node_host_service_t::start (service_provider_t &services)
+task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
 {
     try {
         _services = &services;
@@ -2384,6 +2384,7 @@ void mesh_node_host_service_t::start (service_provider_t &services)
         stop ();
         throw;
     }
+    return task_t<void> (result_t<void>::success ());
 }
 
 void mesh_node_host_service_t::request_stop () noexcept

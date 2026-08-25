@@ -237,7 +237,7 @@ async function runFullLane(ctx) {
   const targetAfterFailure = await zoneNodeConfig(ctx, shared, targetNode.nodeId, 'target-after-failure', {
     disableBots: true,
     waitForPlacementPeer: true,
-    bootstrapZones: false
+    allowEmptyZoneSet: true
   });
   await ctx.start('target-after-failure', 'dist/Server/ZoneNode/main.js', ['--config', targetAfterFailure.path]);
   await waitForExactLogLine(
@@ -281,7 +281,7 @@ async function runFullLane(ctx) {
   const targetAfterMaintenance = await zoneNodeConfig(ctx, shared, targetNode.nodeId, 'target-after-maintenance', {
     disableBots: true,
     waitForPlacementPeer: true,
-    bootstrapZones: false
+    allowEmptyZoneSet: true
   });
   await ctx.start('target-after-maintenance', 'dist/Server/ZoneNode/main.js', ['--config', targetAfterMaintenance.path]);
   await waitForExactLogLine(

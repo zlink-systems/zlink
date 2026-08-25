@@ -202,7 +202,7 @@ ready?
 - Detailed behavior: confirms duplicate-registration verification from
   [Framework API §8](../spec/server/00-foundation/06-framework-api.en.md#9-handler-registration-and-dispatch)
   and
-  [§14](../spec/server/00-foundation/06-framework-api.en.md#22-startup-validation).
+  [§14](../spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
 
 ### Track B — Typed Payload Codec Selection
 

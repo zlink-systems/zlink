@@ -4040,7 +4040,7 @@ stream_host_service_t::~stream_host_service_t ()
     stop ();
 }
 
-void stream_host_service_t::start (service_provider_t &services)
+task_t<void> stream_host_service_t::start (service_provider_t &services)
 {
     _services = &services;
     _stop.store (false, std::memory_order_release);
@@ -4096,6 +4096,7 @@ void stream_host_service_t::start (service_provider_t &services)
         stop ();
         throw;
     }
+    return task_t<void> (result_t<void>::success ());
 }
 
 void stream_host_service_t::notify_sessions_closing (stream_close_reason_t reason,

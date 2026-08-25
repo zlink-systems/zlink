@@ -59,7 +59,7 @@ class route_mesh_runtime_host_service_t final : public hosted_service_t
     explicit route_mesh_runtime_host_service_t (
       std::shared_ptr<route_mesh_runtime_service_t> runtime);
 
-    void start (service_provider_t &) override;
+    task_t<void> start (service_provider_t &) override;
     void request_stop () noexcept override;
     void stop () noexcept override;
 

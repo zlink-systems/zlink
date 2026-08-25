@@ -61,7 +61,7 @@ relocation) are defined by the channel-transport and spot-actor topics respectiv
 | What common error does an Application receive when Send·Request fails | [Framework Error Model](07-framework-error-model.en.md) |
 | How are `CapacityExceeded` and `Unavailable` distinguished | [Framework Error Model "5. Request Completion And Failure"](07-framework-error-model.en.md#5-request-completion-and-failure) |
 | What chunks is runtime code divided into, and which values must not be merged into one | [Layering Boundaries And Identifiers "6. Identifiers Are Not Merged"](08-layering.en.md#6-identifiers-are-not-merged) |
-| How does what is validated at startup differ from what is validated at runtime | [Framework API "22. Startup Validation"](06-framework-api.en.md#22-startup-validation) · [Layering Boundaries And Identifiers "5. Registration Declarations Are Validated Only Once, At Startup"](08-layering.en.md#5-registration-declarations-are-validated-only-once-at-startup) |
+| How does what is validated at startup differ from what is validated at runtime | [Framework API "22. Startup Validation"](06-framework-api.en.md#23-startup-validation) · [Layering Boundaries And Identifiers "5. Registration Declarations Are Validated Only Once, At Startup"](08-layering.en.md#5-registration-declarations-are-validated-only-once-at-startup) |
 
 ## 4. Reading Order
 

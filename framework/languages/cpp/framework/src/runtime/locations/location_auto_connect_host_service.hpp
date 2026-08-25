@@ -102,7 +102,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         return published;
     }
 
-    void start (service_provider_t &services) override
+    task_t<void> start (service_provider_t &services) override
     {
         _runtime = &services.get_required<location_runtime_t> ();
         _store = &services.get_required<location_repository_t> ();
@@ -252,6 +252,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             detail::channel_runtime_t::from (_bus).mark_auto_connect_active ();
         for (auto &loop : _loops)
             loop.thread = std::thread ([this, &loop] { run_loop (loop); });
+        return task_t<void> (result_t<void>::success ());
     }
 
     void stop () noexcept override

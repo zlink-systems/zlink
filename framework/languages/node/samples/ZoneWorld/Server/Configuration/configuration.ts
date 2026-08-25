@@ -14,7 +14,8 @@ type ZoneNodeSettings = {
   spotRouterEndpoint: string;
   spotRouterAdvertiseHost?: string;
   zoneCapacity: number;
-  bootstrapZones?: readonly string[] | false;
+  bootstrapZones?: readonly string[];
+  allowEmptyZoneSet?: boolean;
   faultTickZone?: string | null;
   faultTickSignalPath?: string;
   disableBots?: boolean;
@@ -115,12 +116,16 @@ function validateConfiguration(
   if (expectedRole === 'zoneNode' && role.faultTickSignalPath !== undefined) {
     requireString(role, 'faultTickSignalPath', expectedRole);
   }
-  if (expectedRole === 'zoneNode' && role.bootstrapZones !== undefined && role.bootstrapZones !== false) {
+  if (expectedRole === 'zoneNode' && role.bootstrapZones !== undefined) {
     if (!Array.isArray(role.bootstrapZones)
       || role.bootstrapZones.some((zoneId) => typeof zoneId !== 'string' || zoneId.length === 0)
       || new Set(role.bootstrapZones).size !== role.bootstrapZones.length) {
-      throw new Error(`Configuration value '${expectedRole}.bootstrapZones' must be false or distinct zone ids.`);
+      throw new Error(`Configuration value '${expectedRole}.bootstrapZones' must contain distinct zone ids.`);
     }
+  }
+  if (expectedRole === 'zoneNode' && role.allowEmptyZoneSet !== undefined
+    && typeof role.allowEmptyZoneSet !== 'boolean') {
+    throw new Error(`Configuration value '${expectedRole}.allowEmptyZoneSet' must be a boolean.`);
   }
   if (expectedRole === 'client' && role.targetNodeId !== undefined) {
     requireString(role, 'targetNodeId', expectedRole);

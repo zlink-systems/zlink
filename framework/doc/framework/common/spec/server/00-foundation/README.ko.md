@@ -59,7 +59,7 @@ channel-transport·spot-actor 주제가 정의한다.
 | Send·Request가 실패하면 Application은 어떤 공통 오류를 받는가 | [Framework 오류 모델](07-framework-error-model.ko.md) |
 | `CapacityExceeded`와 `Unavailable`은 어떻게 구분하는가 | [Framework 오류 모델 「5. Request 완료와 실패」](07-framework-error-model.ko.md#5-request-완료와-실패) |
 | runtime 코드는 어떤 덩어리로 나뉘고, 어떤 값을 하나로 합치면 안 되는가 | [계층 경계와 식별자 「6. 식별자를 합치지 않는다」](08-layering.ko.md#6-식별자를-합치지-않는다) |
-| startup에서 검증하는 것과 runtime에 검증하는 것은 어떻게 다른가 | [Framework API 「22. Startup validation」](06-framework-api.ko.md#22-startup-validation) · [계층 경계와 식별자 「5. 등록 선언은 시작할 때 한 번만 검증한다」](08-layering.ko.md#5-등록-선언은-시작할-때-한-번만-검증한다) |
+| startup에서 검증하는 것과 runtime에 검증하는 것은 어떻게 다른가 | [Framework API 「22. Startup validation」](06-framework-api.ko.md#23-startup-validation) · [계층 경계와 식별자 「5. 등록 선언은 시작할 때 한 번만 검증한다」](08-layering.ko.md#5-등록-선언은-시작할-때-한-번만-검증한다) |
 
 ## 4. 읽는 순서
 

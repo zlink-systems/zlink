@@ -83,7 +83,7 @@ internal sealed class ZoneNodeBootstrap(
         if (settings.AllowEmptyZoneSet && zones.Count == 0)
         {
             logger.LogInformation(
-                "topology=ready node={NodeId} zones= crash_replacement=True",
+                "topology=ready node={NodeId} zones=",
                 maintenance.OwnNodeId);
             return;
         }

@@ -54,7 +54,7 @@ class stream_host_service_t final : public hosted_service_t,
       std::shared_ptr<application_job_queue_t> application_jobs = {});
     ~stream_host_service_t () override;
 
-    void start (service_provider_t &services) override;
+    task_t<void> start (service_provider_t &services) override;
     void request_stop () noexcept override;
     void stop () noexcept override;
     int shutdown_request_priority () const noexcept override { return 100; }

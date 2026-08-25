@@ -996,7 +996,31 @@ Dispatch 실패 structured record의 reason, action과 caller 결과 대응은
 언어별 logger·telemetry provider integration은 그 닫힌 값을 같은 문자열로 기록하며 값을 추가하거나
 줄이지 않는다. 이 값 집합을 위한 public event DTO나 observer enum은 제공하지 않는다.
 
-## 22. Startup validation
+## 22. Hosted service
+
+Application이 host lifecycle에 묶어 돌리는 background 작업을 hosted service라고 한다.
+Framework는 startup에서 등록 순서대로 시작하고, 종료에서 역순으로 멈춘다.
+
+- **시작은 비동기 operation이다.** 시작 절차가 Store 조회나 원격 호출을 포함할 수 있으므로
+  Framework는 각 hosted service의 시작이 끝날 때까지 기다린 뒤 다음을 시작한다. Application이
+  시작 안에서 blocking 대기를 만들 필요가 없어야 한다 — Framework의 비동기 표현을 그대로
+  반환한다.
+- **한 hosted service의 시작 실패는 startup 실패다.** 이미 시작한 service는 역순으로
+  멈추고 host는 serving 상태로 가지 않는다.
+- **정지 요청과 정지는 분리한다.** 정지 요청은 새 작업을 받지 않겠다는 신호이고, 정지는
+  진행 중인 작업을 끝낸 뒤 자원을 놓는 단계다.
+
+| 단계 | 언제 | 실패하면 |
+|---|---|---|
+| 시작 | host가 serving으로 가기 전, 등록 순서대로 | startup 실패. 시작한 것만 역순 정지 |
+| 정지 요청 | 종료 시작 시 역순으로 | 기록하고 계속 진행한다 |
+| 정지 | 정지 요청 뒤 역순으로 | 기록하고 계속 진행한다 |
+
+**언어별 재량** — 비동기 표현은 각 언어의 것을 쓴다(`Task`, `task_t`, `Promise`,
+`CompletionStage`). 관찰 결과는 같다 — 시작이 끝나야 다음이 시작하고, 실패하면 startup이
+실패한다.
+
+## 23. Startup validation
 
 Framework는 host가 message를 받기 전에 최소한 다음 설정을 검증한다.
 
@@ -1027,7 +1051,7 @@ Framework는 host가 message를 받기 전에 최소한 다음 설정을 검증�
 
 설정 오류는 lazy first call까지 미루지 않고 host startup을 실패시킨다.
 
-## 23. Runtime query와 monitoring
+## 24. Runtime query와 monitoring
 
 Runtime query는 DI에서 사용할 수 있는 일반 public service다. MeshNode status, peer admission, RouteMesh
 Channel membership과 weight, object role·placement weight·active·pending capacity, ClientServer server
@@ -1037,7 +1061,7 @@ Monitoring event는 source kind, ChannelName, 조건부 MeshName 또는 server i
 구조화된 오류를 제공한다. Topic, Actor ID와 Spot ID처럼 값의 종류가 매우 많은 식별자는 metric label로
 사용하지 않는다.
 
-## 24. 검증 요구
+## 25. 검증 요구
 
 Root builder 등록 결과(startup 성공 또는 설정 오류), 메시징 call object가 반환하는 완료값, handler
 filter 실행 순서와 codec registry의 송수신 결과만으로 다음을 확인한다. 각 항목은 test 하나로

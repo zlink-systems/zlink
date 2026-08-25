@@ -26,10 +26,11 @@ class stop_after_start_service_t final : public hosted_service_t
   public:
     explicit stop_after_start_service_t (app_t &app) : _app (app) {}
 
-    void start (service_provider_t &) override
+    task_t<void> start (service_provider_t &) override
     {
         started = true;
         _app.stop ();
+        co_return;
     }
 
     void stop () noexcept override { stopped = true; }
@@ -59,7 +60,7 @@ class play_peer_route_readiness_service_t final : public hosted_service_t
     {
     }
 
-    void start (service_provider_t &services) override
+    task_t<void> start (service_provider_t &services) override
     {
         auto state = std::make_shared<state_t> ();
         _state = state;
@@ -89,6 +90,7 @@ class play_peer_route_readiness_service_t final : public hosted_service_t
                   std::this_thread::sleep_for (std::chrono::milliseconds (50));
               }
           });
+        co_return;
     }
 
     void request_stop () noexcept override
@@ -153,7 +155,7 @@ class route_mesh_readiness_service_t final : public hosted_service_t
     {
     }
 
-    void start (service_provider_t &services) override
+    task_t<void> start (service_provider_t &services) override
     {
         auto state = std::make_shared<state_t> ();
         _state = state;
@@ -169,6 +171,7 @@ class route_mesh_readiness_service_t final : public hosted_service_t
               std::cout << "bingo route ready node=" << node_name
                         << " mesh=" << label << std::endl;
           });
+        co_return;
     }
 
     void request_stop () noexcept override
@@ -205,7 +208,7 @@ class play_api_channel_readiness_service_t final : public hosted_service_t
     {
     }
 
-    void start (service_provider_t &services) override
+    task_t<void> start (service_provider_t &services) override
     {
         auto state = std::make_shared<state_t> ();
         _state = state;
@@ -254,6 +257,7 @@ class play_api_channel_readiness_service_t final : public hosted_service_t
                   return;
               }
           });
+        co_return;
     }
 
     void request_stop () noexcept override

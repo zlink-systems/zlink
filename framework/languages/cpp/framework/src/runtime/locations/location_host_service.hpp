@@ -19,10 +19,11 @@ class location_host_service_t final : public hosted_service_t
     {
     }
 
-    void start (service_provider_t &services) override
+    task_t<void> start (service_provider_t &services) override
     {
         _runtime = &services.get_required<location_runtime_t> ();
         _runtime->start (_node_rid);
+        return task_t<void> (result_t<void>::success ());
     }
 
     void stop () noexcept override

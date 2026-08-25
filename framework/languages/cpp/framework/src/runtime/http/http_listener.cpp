@@ -508,7 +508,7 @@ http_host_service_t::http_host_service_t (http_options_snapshot_t options,
 
 http_host_service_t::~http_host_service_t () = default;
 
-void http_host_service_t::start (service_provider_t &services)
+task_t<void> http_host_service_t::start (service_provider_t &services)
 {
     _stop.store (false, std::memory_order_release);
     for (const auto &endpoint : _options.endpoints) {
@@ -519,6 +519,7 @@ void http_host_service_t::start (service_provider_t &services)
         _listeners.push_back (std::move (listener));
         _threads.emplace_back ([raw] { raw->run (); });
     }
+    return task_t<void> (result_t<void>::success ());
 }
 
 void http_host_service_t::request_stop () noexcept

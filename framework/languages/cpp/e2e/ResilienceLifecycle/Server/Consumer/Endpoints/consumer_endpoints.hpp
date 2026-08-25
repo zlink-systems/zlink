@@ -413,7 +413,7 @@ class transient_profile_request_service_t final : public zlink::framework::hoste
     {
     }
 
-    void start (zlink::framework::service_provider_t &services) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
         try {
             auto &channels = services.get_required<zlink::framework::channel_client_t> ();
@@ -424,6 +424,7 @@ class transient_profile_request_service_t final : public zlink::framework::hoste
             _result->error = error.what ();
         }
         _app.stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -462,7 +463,7 @@ class transient_route_request_service_t final :
     {
     }
 
-    void start (zlink::framework::service_provider_t &services) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
         try {
             auto &runtime =
@@ -516,6 +517,7 @@ class transient_route_request_service_t final :
             _result->error = error.what ();
         }
         _app.stop ();
+        co_return;
     }
 
     void stop () noexcept override {}

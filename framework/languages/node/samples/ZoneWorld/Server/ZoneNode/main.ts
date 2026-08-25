@@ -36,6 +36,9 @@ import { ZoneSpot } from './Infrastructure/ZLink/Spots/zone-spot';
 import type { ZoneId } from '../../Shared/spec';
 
 let statusTimer: NodeJS.Timeout | undefined;
+const zoneClaimRetryDelayMs = 250;
+const zoneClaimRetryAttempts = 120;
+const allowEmptyZoneSetReadyAttempt = 8;
 
 async function bootstrap(): Promise<void> {
   const ZoneNodeModule = createZoneNodeModule(hasConfiguredZones());
@@ -55,12 +58,14 @@ async function bootstrap(): Promise<void> {
       const routeMeshRuntime = app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
       await waitForPlacementPeer(routeMeshRuntime, ZoneWorldNames.zoneMesh);
     }
-    if (node.bootstrapZones !== false) {
+    if (node.allowEmptyZoneSet === true) {
+      await waitForEmptyZoneSet(state, node.nodeId);
+    } else {
       await ensureZones(
         app,
         state,
         node.zoneCapacity,
-        node.bootstrapZones ?? Object.values(ZoneIds)
+        node.bootstrapZones ?? Object.values(ZoneIds),
       );
     }
     const zones = state.zones();
@@ -222,19 +227,17 @@ async function ensureZones(
   candidates: readonly string[]
 ): Promise<void> {
   const spots = app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER, { strict: false });
-  const pending = new Set<string>(candidates);
-  const deadline = Date.now() + 20_000;
-  while (pending.size > 0 && state.zones().length < expectedLocalCapacity) {
+  for (let attempt = 0; state.zones().length < expectedLocalCapacity; attempt += 1) {
     const claimed = state.zones();
     const claimOrder: string[] = [];
     for (const zoneId of claimed) {
       for (const adjacent of adjacentZones(zoneId as ZoneId)) {
-        if (pending.has(adjacent) && !claimed.includes(adjacent) && !claimOrder.includes(adjacent)) {
+        if (candidates.includes(adjacent) && !claimed.includes(adjacent) && !claimOrder.includes(adjacent)) {
           claimOrder.push(adjacent);
         }
       }
     }
-    claimOrder.push(...candidates.filter((zoneId) => pending.has(zoneId) && !claimOrder.includes(zoneId)));
+    claimOrder.push(...candidates.filter((zoneId) => !claimOrder.includes(zoneId)));
     for (const zoneId of claimOrder) {
       try {
         const result = await spots
@@ -242,7 +245,6 @@ async function ensureZones(
           .inMesh(ZoneWorldNames.zoneMesh)
           .submit();
         console.log(`zone spot create zone=${zoneId} state=${result.state}`);
-        if (result.state !== 'rejected') pending.delete(zoneId);
       } catch (error) {
         if (!(error instanceof Error) || !/capacity|eligible User Spot placement target/i.test(error.message)) {
           throw error;
@@ -250,17 +252,30 @@ async function ensureZones(
       }
       if (!sameZones(state.zones(), claimed)) break;
     }
-    if (pending.size === 0 || state.zones().length >= expectedLocalCapacity) break;
-    if (Date.now() >= deadline) {
-      throw new Error(`Zone Spot placement did not converge for '${[...pending].join(',')}'.`);
+    if (state.zones().length >= expectedLocalCapacity) break;
+    if (attempt + 1 >= zoneClaimRetryAttempts) {
+      throw new Error(
+        `Zone Spot capacity expected ${expectedLocalCapacity} local zones, observed ${state.zones().length}.`
+      );
     }
-    await delay(100);
+    await delay(zoneClaimRetryDelayMs);
   }
-  while (state.zones().length < expectedLocalCapacity && Date.now() < deadline) await delay(50);
   if (state.zones().length !== expectedLocalCapacity) {
     throw new Error(
       `Zone Spot capacity expected ${expectedLocalCapacity} local zones, observed ${state.zones().length}.`
     );
+  }
+}
+
+async function waitForEmptyZoneSet(state: NodeRuntimeState, nodeId: string): Promise<void> {
+  for (let attempt = 0; state.zones().length !== 2; attempt += 1) {
+    if (state.zones().length === 0 && attempt >= allowEmptyZoneSetReadyAttempt) return;
+    if (attempt + 1 >= zoneClaimRetryAttempts) {
+      throw new Error(
+        `Zone Spot capacity did not settle. node=${nodeId} zones=${state.zones().join(',')}.`
+      );
+    }
+    await delay(zoneClaimRetryDelayMs);
   }
 }
 

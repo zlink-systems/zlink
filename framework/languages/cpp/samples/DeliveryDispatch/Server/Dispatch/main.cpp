@@ -348,7 +348,7 @@ class offer_delivery_result_handler_t
 class offer_deadline_sweeper_t final : public hosted_service_t
 {
   public:
-    void start (service_provider_t &services) override
+    task_t<void> start (service_provider_t &services) override
     {
         _state = &services.get_required<dispatch_state_t> ();
         _worker = std::make_unique<dispatch_worker_t> (make_worker (
@@ -357,6 +357,7 @@ class offer_deadline_sweeper_t final : public hosted_service_t
           services.get_required<channel_client_t> ()));
         _running.store (true);
         _thread = std::thread ([this] { run (); });
+        co_return;
     }
 
     void stop () noexcept override

@@ -1146,7 +1146,31 @@ Each language's logger/telemetry-provider integration records those closed value
 same strings, without adding to or reducing the values. No public event DTO or observer enum
 is provided for this value set.
 
-## 22. Startup Validation
+## 22. Hosted Service
+
+Background work an application ties to the host lifecycle is a hosted service. The framework
+starts them in registration order at startup and stops them in reverse order at shutdown.
+
+- **Starting is an asynchronous operation.** A start may query a Store or make a remote call, so
+  the framework waits for one hosted service to finish starting before it starts the next. An
+  application must not have to build a blocking wait inside its start — it returns the
+  framework's own asynchronous representation.
+- **One hosted service failing to start fails startup.** Whatever already started is stopped in
+  reverse order and the host never reaches serving.
+- **Stop request and stop are separate.** A stop request signals that no new work is accepted;
+  stop finishes in-flight work and releases resources.
+
+| Stage | When | On failure |
+|---|---|---|
+| Start | Before the host reaches serving, in registration order | Startup fails. Only what started is stopped, in reverse |
+| Stop request | At the beginning of shutdown, in reverse order | Recorded, and shutdown continues |
+| Stop | After the stop request, in reverse order | Recorded, and shutdown continues |
+
+**Per-language discretion** — the asynchronous representation is each language's own (`Task`,
+`task_t`, `Promise`, `CompletionStage`). What is observed is the same: the next start begins
+only after the previous one finishes, and a failure fails startup.
+
+## 23. Startup Validation
 
 Framework validates at least the following configuration before a host can receive
 messages.
@@ -1184,7 +1208,7 @@ messages.
 
 A configuration error fails host startup rather than deferring to a lazy first call.
 
-## 23. Runtime Query And Monitoring
+## 24. Runtime Query And Monitoring
 
 Runtime query is a general public service available from DI. It returns MeshNode status,
 peer admission, RouteMesh Channel membership and weight, object role/placement weight/
@@ -1196,7 +1220,7 @@ identity, [lifecycle generation](02-glossary.en.md#lifecycle-generation), and a 
 error. Identifiers with a very large value space — like topic, Actor ID, and Spot ID —
 aren't used as metric labels.
 
-## 24. Verification Requirements
+## 25. Verification Requirements
 
 The following is confirmed using only the root builder's registration result (startup
 success or configuration error), the completion value a messaging call object returns,
