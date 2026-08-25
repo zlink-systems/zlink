@@ -620,9 +620,21 @@ real lease expiry (§4.2 and §8.1)". crash 시나리오가 실제 lease 만료�
 - `BotSpawner`의 재시도 예산 30초가 그 주석의 30초를 전제로 맞춰졌다면, 실제 15초 TTL +
   fencing margin과의 관계를 다시 봐야 한다.
 
-즉 **lease 만료 대기와 재시도 예산이 빠듯한 구조**이고, WSL처럼 느린 환경에서 30초를 넘긴다.
-다음 단계는 교체 노드가 던진 예외 원문을 확보해 "예산 부족"인지 "영영 claim 불가"인지
-가르는 것이다. 증거는 `ZLINK_SAMPLE_EVIDENCE_DIR`를 주고 실행해야 남는다.
+#### 실제 원인과 조치
+
+세 가지가 겹쳐 있었고 스펙을 근거로 하나씩 걷어냈다.
+
+| 조치 | 근거 | 실패 건수 |
+|---|---|---|
+| dotnet 전용 브라우저 단계를 기본에서 제외 | node·cpp runner에는 없는 단계다. 샘플 검증은 client connector 경로만 돈다 | 9 → 6 |
+| owner lease 재정의를 3언어에서 모두 제거 | ZoneWorld 스펙은 report TTL 15초(§2.2)만 정하고 owner lease 재정의를 요구하지 않는다. [Location runtime §5](../../../framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md)의 기본값을 쓴다 | 6 → 1 |
+| 관측 대기 예산을 30초로 통일 | 남은 1건이 매번 다른 시나리오에서 나왔고 유형은 전부 스트림 알림 타임아웃이었다. `NodeStatusNotify` 25곳(10초)과 `ZoneStateNotify` 18곳(15초)을 명명 상수로 올렸다. 같은 파일의 다른 관측 예산 셋이 이미 30초이며 "harness budget, not a public latency guarantee"로 적혀 있다 | 확인 중 |
+
+**ZW-G4는 판정을 한 번 뒤집었다.** 처음에는 dotnet의 `allowEmptyZoneSet`이 단언을 약화시킨다고
+보고 cpp 방식(평소 config)으로 바꿨는데, [스펙 §7.5](../../../framework/doc/framework/common/sample/zoneworld/README.ko.md)를
+끝까지 읽으니 반대였다 — "crash replacement는 새 object를 수용할 수 있게 되는 것이지 **이전
+Ready owner가 소유하던 object의 자동 복원·재생성이 아니다**". dotnet·node가 맞고 cpp가 이탈이다.
+표의 요약("새 process 정상")만 보고 그 표가 가리키는 절을 읽지 않은 것이 원인이었다.
 
 ```bash
 ZLINK_SAMPLE_EVIDENCE_DIR=<디렉터리> bash framework/languages/dotnet/samples/ZoneWorld/run_sample.sh

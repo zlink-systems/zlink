@@ -61,6 +61,10 @@ public static class Scenarios
             ["ZW-G4-fresh"] = G4FreshReplacementAcceptsObject
         };
 
+    // Zone state observation waits for one ZoneStateNotify after a join or move. The same
+    // harness-budget reasoning as the other observation timeouts applies.
+    private static readonly TimeSpan ZoneStateObservationTimeout = TimeSpan.FromSeconds(30);
+
     // Ops status observation waits for one NodeStatusNotify after a maintenance or lifecycle
     // change. A busy full-sample run competes for CPU with several server processes, so the
     // wait needs room. This is a harness budget, not a public latency guarantee.
@@ -107,7 +111,7 @@ public static class Scenarios
         var waiting = player.Connector.WaitFor<ZoneStateNotify>()
             .Where(message => message.Payload.Players.Any(p =>
                 p.PlayerId == player.PlayerId && p.X == targetX && p.Y == targetY))
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct);
         await player.MoveAsync(targetX, targetY);
         var state = (await waiting).Payload;
@@ -178,7 +182,7 @@ public static class Scenarios
             var state = (await client.Connector.WaitFor<ZoneStateNotify>()
                 .Where(message => message.Payload.Players.Any(p => p.PlayerId == firstId)
                                   && message.Payload.Players.Any(p => p.PlayerId == secondId))
-                .Timeout(TimeSpan.FromSeconds(15))
+                .Timeout(ZoneStateObservationTimeout)
                 .Async(ct)).Payload;
 
             ZlinkStreamAssert.Ensure(
@@ -203,7 +207,7 @@ public static class Scenarios
         var state = (await first.Connector.WaitFor<ZoneStateNotify>()
             .Where(message => message.Payload.Players.Any(p => p.PlayerId == firstId)
                               && message.Payload.Players.Any(p => p.PlayerId == secondId))
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct)).Payload;
         var ids = state.Players.Select(player => player.PlayerId).ToArray();
         ZlinkStreamAssert.Ensure(
@@ -352,7 +356,7 @@ public static class Scenarios
         {
             var initialState = player.Connector.WaitFor<ZoneStateNotify>()
                 .Where(message => message.Payload.Players.Any(p => p.PlayerId == playerId))
-                .Timeout(TimeSpan.FromSeconds(15))
+                .Timeout(ZoneStateObservationTimeout)
                 .Async(ct);
             await player.JoinWorldAsync(ct);
             await initialState;
@@ -377,7 +381,7 @@ public static class Scenarios
             var stateWait = player.Connector.WaitFor<ZoneStateNotify>()
                 .Where(message => message.Payload.Players.Any(p =>
                     p.PlayerId == player.PlayerId && p.X == continuedX && p.Y == target.Y))
-                .Timeout(TimeSpan.FromSeconds(15))
+                .Timeout(ZoneStateObservationTimeout)
                 .Async(ct);
             await player.MoveAsync(continuedX, target.Y);
             var state = (await stateWait).Payload;
@@ -417,7 +421,7 @@ public static class Scenarios
         await using var player = await GameClient.ConnectAsync(options, playerId, ct);
         var initialState = player.Connector.WaitFor<ZoneStateNotify>()
             .Where(message => message.Payload.Players.Any(p => p.PlayerId == playerId))
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct);
         await player.JoinWorldAsync(ct);
         await initialState;
@@ -505,7 +509,7 @@ public static class Scenarios
         await using var player = await GameClient.ConnectAsync(options, playerId, ct);
         var initialState = player.Connector.WaitFor<ZoneStateNotify>()
             .Where(message => message.Payload.Players.Any(p => p.PlayerId == playerId))
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct);
         await player.JoinWorldAsync(ct);
         await initialState;
@@ -584,7 +588,7 @@ public static class Scenarios
         var player = await GameClient.ConnectAsync(options, playerId, ct);
         var initialState = player.Connector.WaitFor<ZoneStateNotify>()
             .Where(message => message.Payload.Players.Any(candidate => candidate.PlayerId == playerId))
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct);
         await player.JoinWorldAsync(ct);
         await initialState;
@@ -660,7 +664,7 @@ public static class Scenarios
         CancellationToken cancellationToken)
     {
         var waiting = player.Connector.WaitFor<MoveRejectedNotify>()
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(cancellationToken);
         await player.MoveAsync(x, y);
         var rejected = (await waiting).Payload;
@@ -722,7 +726,7 @@ public static class Scenarios
                 var changed = player.Connector.WaitFor<ZoneChangedNotify>()
                     .Where(message => message.Payload.PlayerId == player.PlayerId
                                       && message.Payload.ZoneId == newZone)
-                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Timeout(ZoneStateObservationTimeout)
                     .Async(cancellationToken);
                 await player.MoveAsync(nextX, nextY);
                 lastCrossing = (await changed).Payload;
@@ -734,7 +738,7 @@ public static class Scenarios
                         candidate.PlayerId == player.PlayerId
                         && candidate.X == nextX
                         && candidate.Y == nextY))
-                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Timeout(ZoneStateObservationTimeout)
                     .Async(cancellationToken);
                 await player.MoveAsync(nextX, nextY);
                 await arrived;
@@ -756,7 +760,7 @@ public static class Scenarios
             var arrived = player.Connector.WaitFor<ZoneStateNotify>()
                 .Where(message => message.Payload.Players.Any(p =>
                     p.PlayerId == player.PlayerId && p.X == step.X && p.Y == step.Y))
-                .Timeout(TimeSpan.FromSeconds(15))
+                .Timeout(ZoneStateObservationTimeout)
                 .Async(ct);
             await player.MoveAsync(step.X, step.Y);
             await arrived;
@@ -764,7 +768,7 @@ public static class Scenarios
         }
 
         var changedWait = player.Connector.WaitFor<ZoneChangedNotify>()
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct);
         await player.MoveAsync(25, 52);
         var changed = (await changedWait).Payload;
@@ -959,7 +963,7 @@ public static class Scenarios
         }
         await using var player = await GameClient.ConnectAsync(options, Unique("e3"), ct);
         var initialState = player.Connector.WaitFor<ZoneStateNotify>()
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct);
         await player.JoinWorldAsync(ct);
         await initialState;
@@ -976,7 +980,7 @@ public static class Scenarios
             var moved = player.Connector.WaitFor<ZoneStateNotify>()
                 .Where(message => message.Payload.Players.Any(p =>
                     p.PlayerId == player.PlayerId && p.X == 30 && p.Y == 30))
-                .Timeout(TimeSpan.FromSeconds(15))
+                .Timeout(ZoneStateObservationTimeout)
                 .Async(ct);
             await player.MoveAsync(30, 30);
             await moved;
@@ -1012,7 +1016,7 @@ public static class Scenarios
         var initialMembership = player.Connector.WaitFor<ZoneStateNotify>()
             .Where(message => message.Payload.Players.Any(candidate =>
                 candidate.PlayerId == player.PlayerId))
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct);
         await player.JoinWorldAsync(ct);
         await initialMembership;
@@ -1570,14 +1574,14 @@ public static class Scenarios
 
         // A rejected move is the other push (§2.2), and a bot must not be sent one either.
         var rejected = player.Connector.WaitFor<MoveRejectedNotify>()
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct);
         await player.MoveAsync(-40, player.Position.Y);
         await rejected;
 
         var state = (await player.Connector.WaitFor<ZoneStateNotify>()
             .Where(message => message.Payload.Players.Any(p => p.PlayerId == player.PlayerId))
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(ZoneStateObservationTimeout)
             .Async(ct)).Payload;
         ZlinkStreamAssert.Ensure(state.Players.Any(p => p.IsBot), "the bots are in the world alongside the human");
     }
