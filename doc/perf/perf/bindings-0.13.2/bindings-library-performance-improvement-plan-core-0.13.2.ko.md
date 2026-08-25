@@ -124,7 +124,7 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | ws | DEALER_ROUTER_REQREP | 미달(25.08%) | 미달(28.82%) | 미달(31.73%) | 통과(85.39%) | 통과(89.18%) | 통과(89.86%) | **미달(58.34%)** — latency median 2.19x. 후보 A는 initial target terminal contract 위반, 후보 B는 54.58% 회귀로 폐기. `log/cpp-single-dealer-router-reqrep-ws-20260825.ko.md` |
 | ws | ROUTER_ROUTER | 통과(85.88%) | 통과(102.31%) | 통과(98.10%) | 통과(91.79%) | 통과(92.17%) | 통과(100.30%) | **통과(95.09%)** — latency median 1.08x. `log/cpp-single-router-router-ws-20260825.ko.md` |
 | ws | ROUTER_ROUTER_REQREP | 미달(31.00%) | 미달(32.61%) | 미달(33.55%) | 통과(86.02%) | 통과(91.03%) | 통과(85.14%) | **미달(59.98%)** — 후보 B 채택(56.86%→59.98%); latency median 2.15x로 개선됐지만 request/reply 85%·2.0x 목표에는 미달. 후보 A는 exact-target contract no-go. `log/cpp-single-router-router-reqrep-ws-20260825.ko.md` |
-| wss | PAIR | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
+| wss | PAIR | 통과(88.18%) | 통과(106.16%) | 통과(97.27%) | 통과(96.54%) | 통과(98.92%) | 통과(87.53%) | **통과(95.77%)** — secure 5-run median, latency median 1.07x. `log/cpp-single-pair-wss-20260825.ko.md` |
 | wss | PUBSUB | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | wss | DEALER_DEALER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | wss | DEALER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
@@ -184,6 +184,8 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     완료 bridge로 56.86%→59.98%, latency 2.41x→2.15x를 확인해 채택했다. 최종 수치는 여전히
     request/reply 목표에 미달이므로 `미달`로 기록했으며, 다음은 `PAIR / wss`를 secure transport
     5-run median 규칙으로 측정한다.
+11. `PAIR / wss`는 C→C++ 64B smoke와 6-size secure 5-run median을 통과했다. 다음은
+    `PUBSUB / wss`를 같은 secure 규칙으로 측정한다.
 
 ## 7. 완료 기준
 
