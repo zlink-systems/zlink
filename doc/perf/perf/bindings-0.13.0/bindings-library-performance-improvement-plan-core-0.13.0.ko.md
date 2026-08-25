@@ -683,9 +683,9 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `진행 중` (`PAIR / tcp`, `PAIR / tls` 보류, `PAIR / ws`, `PAIR / wss`, `PUBSUB / tcp` 통과, 나머지 미측정)
+- Single 상태: `진행 중` (`PAIR / tcp`, `PAIR / tls`, `PAIR / inproc` 보류, `PAIR / ws`, `PAIR / wss`, `PUBSUB / tcp` 통과, 나머지 미측정)
 - Multi 상태: `미측정`
-- 다음 작업: transport 순서에 따라 `PAIR / inproc` paired 측정과 개선 pass를 진행한다.
+- 다음 작업: transport 순서에 따라 `PAIR / ipc` paired 측정과 개선 pass를 진행한다.
 
 #### 9.1.1 Single suite
 
@@ -719,7 +719,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `PAIR` | 보류(99.16%) | 보류(98.97%) | 보류(93.68%) | 보류(19.25%; latency 3.000x) | 보류(36.15%; latency 2.133x) | 보류(87.85%) | aggregate throughput 72.51%, latency 1.485x; 자체/Sol no-go, dead-pool cleanup 기각; `cpp-pair-inproc-core0130-before-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-inproc.md) |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1241,16 +1241,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | C++ |  |
-| 현재 pattern | `PAIR / inproc` | `PAIR/tcp`, `PAIR/tls` 보류, `PAIR/ws`, `PAIR/wss` 통과, `PUBSUB/tcp` 통과(선측정) |
-| paired C | 준비 | 다음 `PAIR/inproc` smoke부터 진행 |
-| 개선 반복 | 준비 | 다음 `PAIR/inproc` 자체 pass와 Sol pass |
-| 커밋과 푸시 | 진행 중 | PAIR/tls 측정 기록 검증 후 수행 |
+| 현재 pattern | `PAIR / ipc` | `PAIR/tcp`, `PAIR/tls`, `PAIR/inproc` 보류, `PAIR/ws`, `PAIR/wss` 통과, `PUBSUB/tcp` 통과(선측정) |
+| paired C | 준비 | 다음 `PAIR/ipc` smoke부터 진행 |
+| 개선 반복 | 준비 | 다음 `PAIR/ipc` 자체 pass와 Sol pass |
+| 커밋과 푸시 | 진행 중 | PAIR/inproc 측정 기록 검증 후 수행 |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 진행 중 | 미측정 | transport 순서에 따라 `PAIR / inproc` paired 측정과 개선 pass를 진행한다. |
+| 1 | C++ | 진행 중 | 미측정 | transport 순서에 따라 `PAIR / ipc` paired 측정과 개선 pass를 진행한다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1271,6 +1271,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 | 2026-08-25 | C++ | Single `PAIR / ws` | `cpp-pair-ws-core0130-final5-{c,cpp}-20260825` | 6 sizes, 5초, 5회 중앙값, Core 0.13.0 release, 자체/Sol pass 완료 | 완화 목표 90% 선택; 처리량 평균 91.77%, latency 1.157x로 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_092245_cpp-pair-ws-core0130-final5-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_092532_cpp-pair-ws-core0130-final5-cpp-20260825.txt`; [log](log/2026-08-25-cpp-pair-ws.md) |
 | 2026-08-25 | C++ | Single `PAIR / wss` | `cpp-pair-wss-core0130-final5-{c,cpp}-20260825` | 6 sizes, 5초, 5회 중앙값, Core 0.13.0 release, 자체/Sol pass 완료 | 완화 목표 90% 선택; 처리량 평균 93.85%, latency 1.103x로 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_093700_cpp-pair-wss-core0130-final5-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_093945_cpp-pair-wss-core0130-final5-cpp-20260825.txt`; [log](log/2026-08-25-cpp-pair-wss.md) |
 | 2026-08-25 | C++ | Single `PAIR / tls` | `cpp-pair-tls-core0130-final5-{c,cpp}-20260825` | 6 sizes, 5초, 5회 중앙값, Core 0.13.0 release, 자체/Sol pass와 contract regression gate 완료 | 처리량 평균 85.29%로 보류, latency 1.008x 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_095114_cpp-pair-tls-core0130-final5-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_095401_cpp-pair-tls-core0130-final5-cpp-20260825.txt`; [log](log/2026-08-25-cpp-pair-tls.md) |
+| 2026-08-25 | C++ | Single `PAIR / inproc` | `cpp-pair-inproc-core0130-before-{c,cpp}-20260825` | 6 sizes, 5초, 3회 중앙값, Core 0.13.0 release, 자체/Sol pass와 dead-pool cleanup A/B 완료 | 처리량 평균 72.51%로 보류, latency 1.485x 통과; cleanup은 회귀 gate로 기각 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_100014_cpp-pair-inproc-core0130-before-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_100200_cpp-pair-inproc-core0130-before-cpp-20260825.txt`; [log](log/2026-08-25-cpp-pair-inproc.md) |
 
 ## 12. 완료 기준
 
