@@ -683,9 +683,9 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `진행 중` (`PAIR / tcp`, `PAIR / tls`, `PAIR / inproc`, `PAIR / ipc`, `PUBSUB / tls`, `PUBSUB / inproc` 보류, `PAIR / ws`, `PAIR / wss`, `PUBSUB / tcp`, `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / ipc` 통과, 나머지 미측정)
+- Single 상태: `진행 중` (`PAIR / tcp`, `PAIR / tls`, `PAIR / inproc`, `PAIR / ipc`, `PUBSUB / tls`, `PUBSUB / inproc`, `DEALER_DEALER / tcp` 보류, `PAIR / ws`, `PAIR / wss`, `PUBSUB / tcp`, `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / ipc` 통과, 나머지 미측정)
 - Multi 상태: `미측정`
-- 다음 작업: `PUBSUB`의 모든 transport 판정을 마쳤으므로 `DEALER_DEALER / tcp` paired 측정과 개선 pass를 진행한다.
+- 다음 작업: `DEALER_DEALER / tcp`의 자체 공개 경로 검토까지 마쳤으므로 `DEALER_DEALER / ws` paired 측정과 개선 pass를 진행한다.
 
 #### 9.1.1 Single suite
 
@@ -693,7 +693,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
 | `tcp` | `PAIR` | 보류(83.47%) | 보류(88.98%) | 보류(93.28%) | 보류(90.63%) | 보류(79.45%) | 보류(98.72%) | aggregate throughput 89.09%, latency 1.131x; `cpp-pair-tcp-core0130-parity-ab-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-tcp.md) |
 | `tcp` | `PUBSUB` | 통과(85.43%) | 통과(97.00%) | 통과(93.75%) | 통과(90.61%) | 통과(81.70%; 개별 최소 미달) | 통과(111.33%) | 완화 목표 90% 선택; aggregate throughput 93.30%, latency 1.089x; `cpp-pubsub-tcp-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pubsub-tcp.md) |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_DEALER` | 보류(77.39%) | 보류(98.24%) | 보류(95.90%) | 보류(70.89%) | 보류(81.95%) | 보류(85.40%) | aggregate throughput 84.96%, latency 1.126x; 자체 public-path no-go; `cpp-dealer-dealer-tcp-core0130-before-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-dealer-tcp.md) |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1241,16 +1241,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | C++ |  |
-| 현재 pattern | `DEALER_DEALER / tcp` | `PAIR`의 6개 transport 판정 완료; `PUBSUB`도 6개 transport 판정 완료(tls/inproc 보류, 나머지 통과) |
-| paired C | 준비 | 다음 `DEALER_DEALER/tcp` smoke부터 진행 |
-| 개선 반복 | 준비 | 다음 `DEALER_DEALER/tcp` 자체 pass와 필요 시 Sol pass |
-| 커밋과 푸시 | 진행 중 | PUBSUB/ipc 최종 5회 측정 기록을 커밋·푸시한 뒤 계속 |
+| 현재 pattern | `DEALER_DEALER / ws` | `PAIR`와 `PUBSUB`의 6개 transport, `DEALER_DEALER/tcp` 판정 완료 |
+| paired C | 준비 | 다음 `DEALER_DEALER/ws` smoke부터 진행 |
+| 개선 반복 | 준비 | 다음 `DEALER_DEALER/ws` 자체 공개 경로 pass |
+| 커밋과 푸시 | 진행 중 | DEALER_DEALER/tcp 기준 측정 기록을 커밋·푸시한 뒤 계속 |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 진행 중 | 미측정 | `PAIR`와 `PUBSUB`의 전 transport를 판정했다. 다음 `DEALER_DEALER / tcp` paired 측정과 개선 pass를 진행한다. |
+| 1 | C++ | 진행 중 | 미측정 | `PAIR`와 `PUBSUB`의 전 transport 및 `DEALER_DEALER / tcp`를 판정했다. 다음 `DEALER_DEALER / ws` paired 측정과 개선 pass를 진행한다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1278,6 +1278,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 | 2026-08-25 | C++ | Single `PUBSUB / tls` | `cpp-pubsub-tls-core0130-final5-{c,cpp}-20260825` | 6 sizes, 5초, secure transport 5회 중앙값, Core 0.13.0 release, 자체/Sol pass 완료 | 처리량 평균 89.35%로 보류, latency 1.044x 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_110413_cpp-pubsub-tls-core0130-final5-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_110733_cpp-pubsub-tls-core0130-final5-cpp-20260825.txt`; [log](log/2026-08-25-cpp-pubsub-tls.md) |
 | 2026-08-25 | C++ | Single `PUBSUB / inproc` | `cpp-pubsub-inproc-core0130-before-{c,cpp}-20260825` | 6 sizes, 5초, 3회 중앙값, Core 0.13.0 release, 자체/Sol pass 완료 | 처리량 평균 70.27%로 보류, latency 1.517x 통과; 64/128KiB cliff는 Core/native 별도 진단 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_111239_cpp-pubsub-inproc-core0130-before-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_111439_cpp-pubsub-inproc-core0130-before-cpp-20260825.txt`; [log](log/2026-08-25-cpp-pubsub-inproc.md) |
 | 2026-08-25 | C++ | Single `PUBSUB / ipc` | `cpp-pubsub-ipc-core0130-final5-{c,cpp}-20260825` | 6 sizes, 5초, 목표 경계 규칙에 따른 5회 중앙값, Core 0.13.0 release, 자체/Sol pass 완료 | 기본 목표 95%; 처리량 평균 95.60%, latency 1.025x로 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_112404_cpp-pubsub-ipc-core0130-final5-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_112715_cpp-pubsub-ipc-core0130-final5-cpp-20260825.txt`; [log](log/2026-08-25-cpp-pubsub-ipc.md) |
+| 2026-08-25 | C++ | Single `DEALER_DEALER / tcp` | `cpp-dealer-dealer-tcp-core0130-before-{c,cpp}-20260825` | 6 sizes, 5초, 3회 중앙값, Core 0.13.0 release, 공개 경로 자체 pass 완료 | 처리량 평균 84.96%로 보류, latency 1.126x 통과; terminal ownership/close/serialization 계약을 유지하는 후보 없음 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_113312_cpp-dealer-dealer-tcp-core0130-before-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_113312_cpp-dealer-dealer-tcp-core0130-before-cpp-20260825.txt`; [log](log/2026-08-25-cpp-dealer-dealer-tcp.md) |
 
 ## 12. 완료 기준
 
