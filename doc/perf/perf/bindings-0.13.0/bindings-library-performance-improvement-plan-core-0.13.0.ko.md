@@ -709,7 +709,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `wss` | `PUBSUB` | 통과(86.48%) | 통과(89.33%) | 통과(89.35%) | 통과(89.08%) | 통과(99.83%) | 통과(95.33%) | 완화 목표 90% 선택; aggregate throughput 91.57%, latency 1.156x; `cpp-pubsub-wss-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pubsub-wss.md) |
 | `wss` | `DEALER_DEALER` | 통과(110.87%) | 통과(101.77%) | 통과(109.02%) | 통과(106.30%) | 통과(112.03%) | 통과(103.34%) | 기본 목표 95%; aggregate throughput 107.22%, latency 0.925x; `cpp-dealer-dealer-wss-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-dealer-wss.md) |
 | `wss` | `DEALER_ROUTER` | 통과(96.28%) | 통과(98.39%) | 통과(97.69%) | 통과(97.25%) | 통과(88.92%) | 통과(94.17%) | routed one-way 목표 85%; aggregate throughput 95.45%, latency 1.083x; `cpp-dealer-router-wss-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-dealer-router-wss.md) |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `DEALER_ROUTER_REQREP` | 보류(40.01%) | 보류(36.34%) | 보류(37.74%) | 보류(94.40%) | 보류(89.15%) | 보류(89.56%) | request/reply 목표 85%; aggregate throughput 64.37%, latency 1.954x; secure final5; [log](log/2026-08-25-cpp-dealer-router-reqrep-wss.md) |
 | `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `PAIR` | 보류(83.71%) | 보류(85.09%) | 보류(85.41%) | 보류(92.56%) | 보류(86.62%) | 보류(78.38%) | aggregate throughput 85.29%, latency 1.008x; 자체/Sol no-go; `cpp-pair-tls-core0130-final5-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-tls.md) |
