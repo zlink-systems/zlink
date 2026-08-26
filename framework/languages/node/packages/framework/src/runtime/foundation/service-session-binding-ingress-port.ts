@@ -25,8 +25,8 @@ export interface ServiceSessionBindingIngressPort {
   retainOutbound(
     claim: ServiceSessionBindingAdmissionClaim,
     delivery: ServiceSessionBindingRetainedDelivery
-  ): ServiceSessionBindingAdmissionResult;
-  clearOutbound(actorId: string, error: unknown): void;
+  ): Promise<ServiceSessionBindingAdmissionResult>;
+  clearOutbound(actorId: string, error: unknown): Promise<void>;
 }
 
 const ports = new WeakMap<object, ServiceSessionBindingIngressPort>();

@@ -41,14 +41,14 @@ export class ZLinkRemoteActorPacketTargetStore {
 
   constructor(private readonly options: ZLinkRemoteActorPacketTargetStoreOptions) {}
 
-  updateFromWire(actorId: string, value: unknown): void {
+  async updateFromWire(actorId: string, value: unknown): Promise<void> {
     const actorPacketTarget = this.decodeFromWire(value);
     const state = this.options.actorManager()?.getState(actorId);
     if (actorPacketTarget !== undefined) {
       if (typeof state?.setRemoteActorPacketTarget === 'function') {
         state.setRemoteActorPacketTarget(actorPacketTarget);
       }
-      const sessionActor = this.options.streamBindingRuntime().find(actorId);
+      const sessionActor = await this.options.streamBindingRuntime().find(actorId);
       if (sessionActor !== undefined) {
         this.rememberSessionActorTarget(sessionActor, actorPacketTarget);
       }

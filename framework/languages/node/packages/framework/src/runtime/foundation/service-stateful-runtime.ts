@@ -2148,7 +2148,7 @@ export class ServiceStatefulRuntime {
       case 'boundSessionReplaced':
         return this.handleBoundSessionReplaced(ingress, record);
       case 'boundSessionSend':
-        return this.deliverBoundSession(
+        return await this.deliverBoundSession(
           ingress,
           record,
           payloadFrame
@@ -3487,11 +3487,11 @@ export class ServiceStatefulRuntime {
     return accepted;
   }
 
-  private deliverBoundSession(
+  private async deliverBoundSession(
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionSend' }>,
     payloadFrame: Uint8Array | undefined
-  ): RawServicePumpResult {
+  ): Promise<RawServicePumpResult> {
     const delivery = this.sessionDeliveries.get(actorKey(record.actor.actor));
     if (
       delivery === undefined
@@ -3523,7 +3523,7 @@ export class ServiceStatefulRuntime {
         settle();
       }
     };
-    const decision = delivery.bindingIngress?.retainOutbound({
+    const decision = await delivery.bindingIngress?.retainOutbound({
       actorId: record.actor.actor.actorId,
       objectGeneration: record.actor.actor.generation,
       actorNodeRid: record.actor.actor.nodeRid,

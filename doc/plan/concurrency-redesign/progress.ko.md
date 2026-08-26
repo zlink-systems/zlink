@@ -188,7 +188,7 @@ CP3 판정("이 작업의 하위 증상인가")에서 **끝내지 않는다.** �
 | cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | **완료** (stream_session_registry_t 31→0, 시그니처 무변경, admit_inbound 대기 lane 밖 분리+세대화, 반려 1회: notify_changed lost wakeup) | 대기 — 순서 조사 완료(l2-survey-cpp.ko.md, 후보 19) | unit·contract 그린 (layout_contract 제외 — 기존) |
 | java | JVM | **완료** (§7-5 보완 포함 — completeAsync·internal 패키지 이동) | **완료** (ZLinkSessionActorsRuntime 22→0, 인터페이스 불변·kotlin 파급 0) | 대기 | core 1,157 중 알려진 flake 1 |
 | kotlin | JVM | **완료** (golden 14/14, CoroutineContext.Element 전파) | **해당 없음** (자체 C2 상태 0 — l1-survey-kotlin.ko.md. java 전환을 인터페이스 뒤에서 승계) | java L2 승계 | kotlin 67/0 |
-| node | node | **완료** (golden 12 이식 + 동시성 2 제외, 사유 주석) | **요청됨** (ZLinkActorSessionBindingRegistry, 조사 l1-survey-node.ko.md) | 대기 | state-lane 12/12 |
+| node | node | **완료** (golden 12 이식 + 동시성 2 제외, 사유 주석) | **완료** (ZLinkActorSessionBindingRegistry — 재진입 19 분리, runtime 13파일 async 전파, public d.ts 불변) | 대기 | tsc·m6a 41/41·m6b 104/104·stream-runtime 147/147 (m6c 2건은 기존 — 아래) |
 
 **L0 4건은 서로도, dotnet과도 의존이 없다.** 지금 동시에 띄울 수 있다. 다만 java와 kotlin은
 같은 JVM 락을 쓰므로 빌드·테스트 구간에서만 순차가 된다.
@@ -230,6 +230,12 @@ CP3 마일스톤 전용이다.
 `samples/ShoppingMall/Server/OrderWorkflow/main.cpp` L350·L446의 blocking `result()` 지문 —
 base `3cbfbde4f9` 이후 무변경 파일이라 이 캠페인과 무관. 게이트 판정에서 제외하고,
 샘플 수정은 별도 작업으로 넘긴다.
+
+**node `verify:m6c-runtime` 2건도 기존 실패다** (2026-08-26 stash 대조로 확인 — baseline 동일
+110/112): ① legacy fence 불완전 시 ProtocolError 기대 vs actorType 경로 처리
+(m6c-actor-join-store-resolution L126 vs remote-actor-join-receiver L63), ② retain identity에
+coordinator fence 포함 기대 vs codec의 의도적 제외 (m6c-relocation-wire-codec L415 vs
+service-stateful-wire-codec L354). 관측 계약 판정이 필요하므로 별도 작업으로 넘긴다.
 
 ### 병렬 편성 규칙
 

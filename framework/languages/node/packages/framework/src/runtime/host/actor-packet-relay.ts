@@ -148,8 +148,8 @@ export class ZLinkActorPacketRelay {
     this.targets.clear(actorId);
   }
 
-  updateRemoteActorPacketTarget(actorId: string, value: unknown): void {
-    this.targets.updateFromWire(actorId, value);
+  async updateRemoteActorPacketTarget(actorId: string, value: unknown): Promise<void> {
+    await this.targets.updateFromWire(actorId, value);
   }
 
   actorPacketTargetForState(
@@ -626,12 +626,14 @@ export class ZLinkActorPacketRelay {
     signal?: AbortSignal
   ): Promise<boolean> {
     const streamRuntime = this.options.streamBindingRuntime();
-    const responseTarget = streamRuntime.captureBoundSessionResponseTarget(actor);
+    const responseTarget = await streamRuntime.captureBoundSessionResponseTarget(actor);
     const localNode = this.options.spotNodeRuntime()?.primaryMeshNode;
     const localNodeRid = localNode === undefined ? undefined : String(localNode.status().routingId);
-    const storedRoute = streamRuntime.sessionRouteFence(actor.actorId);
-    const aggregateRoute = actorSessionBindingRuntimeOwnerIfRegistered(streamRuntime)
-      ?.committedRoute(actor.actorId);
+    const storedRoute = await streamRuntime.sessionRouteFence(actor.actorId);
+    const aggregateOwner = actorSessionBindingRuntimeOwnerIfRegistered(streamRuntime);
+    const aggregateRoute = aggregateOwner === undefined
+      ? undefined
+      : await aggregateOwner.committedRoute(actor.actorId);
     const storedActorRef = aggregateRoute?.actor ?? storedRoute?.actor ?? actor.ref;
     if (
       localNodeRid !== undefined
@@ -756,7 +758,7 @@ export class ZLinkActorPacketRelay {
       return true;
     }
     if (reply.ok === false) {
-      const sent = this.sendCapturedOrCurrentBoundSessionError(
+      const sent = await this.sendCapturedOrCurrentBoundSessionError(
         responseTarget,
         actor.actorId,
         frameHeader.name,
@@ -769,7 +771,7 @@ export class ZLinkActorPacketRelay {
       }
       return true;
     }
-    const sent = this.sendCapturedOrCurrentBoundSessionResponse(
+    const sent = await this.sendCapturedOrCurrentBoundSessionResponse(
       responseTarget,
       actor.actorId,
       frameHeader.name,
@@ -909,7 +911,7 @@ export class ZLinkActorPacketRelay {
     ) {
       return false;
     }
-    const responseTarget = this.options.streamBindingRuntime().captureBoundSessionResponseTarget(actor);
+    const responseTarget = await this.options.streamBindingRuntime().captureBoundSessionResponseTarget(actor);
     const encodedHeader = encodeStreamHeader(frameHeader);
     //  encodeStreamHeader returns a fresh, unaliased array; view it without re-copying.
     const header = RuntimeMessage.fromOwned(
@@ -930,7 +932,7 @@ export class ZLinkActorPacketRelay {
           if (!returnResponse) {
             return;
           }
-          const sent = this.sendCapturedOrCurrentBoundSessionResponse(
+          const sent = await this.sendCapturedOrCurrentBoundSessionResponse(
             responseTarget,
             actor.actorId,
             frameHeader.name,
@@ -945,7 +947,7 @@ export class ZLinkActorPacketRelay {
           if (!returnResponse) {
             throw error;
           }
-          const sent = this.sendCapturedOrCurrentBoundSessionError(
+          const sent = await this.sendCapturedOrCurrentBoundSessionError(
             responseTarget,
             actor.actorId,
             frameHeader.name,
@@ -969,41 +971,41 @@ export class ZLinkActorPacketRelay {
     }
   }
 
-  private sendCapturedOrCurrentBoundSessionResponse(
+  private async sendCapturedOrCurrentBoundSessionResponse(
     target: ZLinkBoundSessionResponseTarget | undefined,
     actorId: string,
     packetName: string,
     requestSeq: bigint,
     response: unknown,
     metadata: ReadonlyMap<string, string>
-  ): boolean {
-    return target?.sendResponse(packetName, requestSeq, response, metadata)
-      ?? this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
-        actorId,
-        packetName,
-        requestSeq,
-        response,
-        metadata,
-        false
-      );
+  ): Promise<boolean> {
+    const sent = target?.sendResponse(packetName, requestSeq, response, metadata);
+    return sent ?? await this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
+      actorId,
+      packetName,
+      requestSeq,
+      response,
+      metadata,
+      false
+    );
   }
 
-  private sendCapturedOrCurrentBoundSessionError(
+  private async sendCapturedOrCurrentBoundSessionError(
     target: ZLinkBoundSessionResponseTarget | undefined,
     actorId: string,
     packetName: string,
     requestSeq: bigint,
     error: unknown,
     metadata: ReadonlyMap<string, string>
-  ): boolean {
-    return target?.sendError(packetName, requestSeq, error, metadata)
-      ?? this.options.streamBindingRuntime().sendLocalBoundSessionError(
-        actorId,
-        packetName,
-        requestSeq,
-        error,
-        metadata
-      );
+  ): Promise<boolean> {
+    const sent = target?.sendError(packetName, requestSeq, error, metadata);
+    return sent ?? await this.options.streamBindingRuntime().sendLocalBoundSessionError(
+      actorId,
+      packetName,
+      requestSeq,
+      error,
+      metadata
+    );
   }
 
   private requireSpotNodeRuntime(): ZLinkSpotNodeRuntimeManager {

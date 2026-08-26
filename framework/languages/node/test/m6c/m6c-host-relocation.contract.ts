@@ -156,7 +156,7 @@ test('Session owner applies an exact relocation without an Actor authority or le
       ownerNodeGeneration: 2n
     }
   };
-  registry.bind(context, actor, 'binding-token');
+  await registry.bind(context, actor, 'binding-token');
   await registry.sealRelocation({
     actorId: actor.actorId,
     actorGeneration: 7n,
@@ -170,7 +170,7 @@ test('Session owner applies an exact relocation without an Actor authority or le
     bindingGeneration: 3n
   });
 
-  const snapshot = registry.relocationSnapshot(actor.actorId, 'relocation-1')!;
+  const snapshot = (await registry.relocationSnapshot(actor.actorId, 'relocation-1'))!;
   assert.equal('actorOwnershipGeneration' in snapshot, false);
   assert.equal('ownerLeaseGeneration' in snapshot, false);
   await registry.applyRelocation(
@@ -179,7 +179,7 @@ test('Session owner applies an exact relocation without an Actor authority or le
     'route-fingerprint',
     'commit',
     async () => {
-      assert.equal(registry.abortSeal(actor.actorId, 'relocation-1'), true);
+      assert.equal(await registry.abortSeal(actor.actorId, 'relocation-1'), true);
     },
     {
       actorId: actor.actorId,
@@ -190,7 +190,7 @@ test('Session owner applies an exact relocation without an Actor authority or le
       bindingGeneration: 3n
     }
   );
-  registry.observeRelocationTerminal(actor.actorId, 'relocation-1', 'route-fingerprint');
+  await registry.observeRelocationTerminal(actor.actorId, 'relocation-1', 'route-fingerprint');
 });
 
 test('pre-cutover rollback restores the source queue and state before one-way Session abort', async () => {

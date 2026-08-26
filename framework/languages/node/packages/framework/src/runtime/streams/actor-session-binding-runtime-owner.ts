@@ -21,17 +21,17 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
   relocationSnapshot(
     actorId: string,
     sealId: string
-  ): ZLinkActorSessionRelocationSnapshot | undefined;
+  ): Promise<ZLinkActorSessionRelocationSnapshot | undefined>;
   retainRelocationOutbound(
     actorId: string,
     operation: ZLinkActorSessionRetainedOutbound,
     sealId?: string
-  ): ServiceSessionBindingAdmissionResult;
+  ): Promise<ServiceSessionBindingAdmissionResult>;
   admitRelocationOutbound(
     claim: ServiceSessionBindingAdmissionClaim,
     operation: ZLinkActorSessionRetainedOutbound
-  ): ServiceSessionBindingAdmissionResult;
-  discardRelocationOutbound(actorId: string, sealId: string, error: unknown): void;
+  ): Promise<ServiceSessionBindingAdmissionResult>;
+  discardRelocationOutbound(actorId: string, sealId: string, error: unknown): Promise<void>;
   applyRelocation(
     actorId: string,
     sealId: string,
@@ -44,12 +44,12 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
     actorId: string,
     sealId: string,
     applyFingerprint: string
-  ): void;
-  clearRelocation(actorId: string, error: unknown): void;
-  committedRoute(actorId: string): {
+  ): Promise<void>;
+  clearRelocation(actorId: string, error: unknown): Promise<void>;
+  committedRoute(actorId: string): Promise<{
     readonly actor: ActorRef;
     readonly authorityFence?: ZLinkActorSessionAuthorityFence;
-  } | undefined;
+  } | undefined>;
 }
 
 const owners = new WeakMap<object, ZLinkActorSessionBindingRuntimeOwner>();

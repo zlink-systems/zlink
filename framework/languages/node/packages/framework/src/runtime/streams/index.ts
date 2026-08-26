@@ -413,8 +413,8 @@ export class ZLinkStreamBindingRuntime {
       applyRelocation: (...args) => this.routes.applyRelocation(...args),
       observeRelocationTerminal: (...args) => this.routes.observeRelocationTerminal(...args),
       clearRelocation: (actorId, error) => this.routes.clearRelocation(actorId, error),
-      committedRoute: actorId => {
-        const route = this.routes.route(actorId);
+      committedRoute: async actorId => {
+        const route = await this.routes.route(actorId);
         return route === undefined
           ? undefined
           : { actor: route.actor.ref, authorityFence: route.authorityFence };
@@ -455,20 +455,22 @@ export class ZLinkStreamBindingRuntime {
     return await this.sessionActors.bindOrGet(context, actorRef, signal);
   }
 
-  find(actorId: string): DefaultZLinkSessionActor | undefined {
-    return this.routes.find(actorId);
+  async find(actorId: string): Promise<DefaultZLinkSessionActor | undefined> {
+    return await this.routes.find(actorId);
   }
 
-  hasBoundSession(actorId: string): boolean {
-    return this.routes.find(actorId) !== undefined;
+  async hasBoundSession(actorId: string): Promise<boolean> {
+    return (await this.routes.find(actorId)) !== undefined;
   }
 
-  captureBoundSessionResponseTarget(actor: ZLinkSessionActor): ZLinkBoundSessionResponseTarget | undefined {
+  async captureBoundSessionResponseTarget(
+    actor: ZLinkSessionActor
+  ): Promise<ZLinkBoundSessionResponseTarget | undefined> {
     const bindingToken = (actor as { readonly bindingToken?: unknown }).bindingToken;
     if (typeof bindingToken !== 'string') {
       return undefined;
     }
-    const claim = this.routes.capturePendingReplyClaim(actor.actorId, actor, bindingToken);
+    const claim = await this.routes.capturePendingReplyClaim(actor.actorId, actor, bindingToken);
     if (claim === undefined) return undefined;
     return new DefaultZLinkBoundSessionResponseTarget(
       this.frameMessages,
@@ -507,31 +509,31 @@ export class ZLinkStreamBindingRuntime {
     );
   }
 
-  authorityFence(actorId: string): {
+  async authorityFence(actorId: string): Promise<{
     readonly authorityOwnerGeneration: bigint;
     readonly ownerLeaseGeneration: bigint;
-  } | undefined {
-    return this.sessionActors.authorityFence(actorId);
+  } | undefined> {
+    return await this.sessionActors.authorityFence(actorId);
   }
 
-  sessionRouteFence(actorId: string) {
-    return this.sessionActors.sessionRouteFence(actorId);
+  async sessionRouteFence(actorId: string) {
+    return await this.sessionActors.sessionRouteFence(actorId);
   }
 
-  abortActorRouteSeal(actorId: string, sealId: string): boolean {
-    return this.routes.abortSeal(actorId, sealId);
+  async abortActorRouteSeal(actorId: string, sealId: string): Promise<boolean> {
+    return await this.routes.abortSeal(actorId, sealId);
   }
 
-  validateActorRouteSeal(actorId: string, sealId: string): boolean {
-    return this.routes.validateSeal(actorId, sealId);
+  async validateActorRouteSeal(actorId: string, sealId: string): Promise<boolean> {
+    return await this.routes.validateSeal(actorId, sealId);
   }
 
-  unbind(actorId: string, context: DefaultZLinkSessionContext, bindingToken: string): void {
-    this.routes.unbind(actorId, context, bindingToken);
+  async unbind(actorId: string, context: DefaultZLinkSessionContext, bindingToken: string): Promise<void> {
+    await this.routes.unbind(actorId, context, bindingToken);
   }
 
-  unbindActor(actorId: string): void {
-    this.routes.unbindActor(actorId);
+  async unbindActor(actorId: string): Promise<void> {
+    await this.routes.unbindActor(actorId);
   }
 
   async cleanup(context: DefaultZLinkSessionContext): Promise<void> {
@@ -558,24 +560,24 @@ export class ZLinkStreamBindingRuntime {
     return await this.boundSessions.submitLocalBoundSession(actorId, message, packetName, metadata, signal);
   }
 
-  sendLocalBoundSession(
+  async sendLocalBoundSession(
     actorId: string,
     message: unknown,
     packetName: string | undefined,
     metadata: ReadonlyMap<string, string>
-  ): boolean {
-    return this.boundSessions.sendLocalBoundSession(actorId, message, packetName, metadata);
+  ): Promise<boolean> {
+    return await this.boundSessions.sendLocalBoundSession(actorId, message, packetName, metadata);
   }
 
-  sendLocalBoundSessionResponse(
+  async sendLocalBoundSessionResponse(
     actorId: string,
     packetName: string,
     requestSeq: bigint,
     message: unknown,
     metadata: ReadonlyMap<string, string>,
     compressPayload: boolean
-  ): boolean {
-    return this.boundSessions.sendLocalBoundSessionResponse(
+  ): Promise<boolean> {
+    return await this.boundSessions.sendLocalBoundSessionResponse(
       actorId,
       packetName,
       requestSeq,
@@ -585,14 +587,14 @@ export class ZLinkStreamBindingRuntime {
     );
   }
 
-  sendLocalBoundSessionError(
+  async sendLocalBoundSessionError(
     actorId: string,
     packetName: string,
     requestSeq: bigint,
     error: unknown,
     metadata: ReadonlyMap<string, string>
-  ): boolean {
-    return this.boundSessions.sendLocalBoundSessionError(actorId, packetName, requestSeq, error, metadata);
+  ): Promise<boolean> {
+    return await this.boundSessions.sendLocalBoundSessionError(actorId, packetName, requestSeq, error, metadata);
   }
 
 

@@ -99,7 +99,7 @@ export class ZLinkSessionActorCoordinator {
       );
     }
 
-    const previous = this.routes.route(actorRef.actorId);
+    const previous = await this.routes.route(actorRef.actorId);
     const sameIncarnation =
       previous !== undefined
       && previous.context === context
@@ -139,9 +139,9 @@ export class ZLinkSessionActorCoordinator {
           true
         );
       }
-      this.routes.bind(context, sessionActor, bindingToken, authorityFence, sessionIdentity);
+      await this.routes.bind(context, sessionActor, bindingToken, authorityFence, sessionIdentity);
     } else if (releaseSeal !== undefined) {
-      this.routes.replaceAndReleaseSeal(
+      await this.routes.replaceAndReleaseSeal(
         previous,
         context,
         sessionActor,
@@ -151,7 +151,7 @@ export class ZLinkSessionActorCoordinator {
         sessionIdentity
       );
     } else {
-      this.routes.replace(
+      await this.routes.replace(
         previous,
         context,
         sessionActor,
@@ -199,7 +199,7 @@ export class ZLinkSessionActorCoordinator {
             // the public bind. It is separately observable for diagnosis.
             reportFailure(cleanupError);
           } finally {
-            this.routes.unbind(actorRef.actorId, context, bindingToken);
+            await this.routes.unbind(actorRef.actorId, context, bindingToken);
           }
           throw error;
         }
@@ -259,7 +259,7 @@ export class ZLinkSessionActorCoordinator {
     );
     return await this.lifecycle.run(normalizedActorRef.actorId, async () => {
       throwIfAborted(signal);
-      const existing = this.routes.find(normalizedActorRef.actorId);
+      const existing = await this.routes.find(normalizedActorRef.actorId);
       if (existing !== undefined && sameActorRef(existing.ref, normalizedActorRef)) {
         if (context.findBoundActor(normalizedActorRef.actorId) === existing) {
           return existing;
@@ -289,7 +289,7 @@ export class ZLinkSessionActorCoordinator {
     );
     await this.lifecycle.run(normalizedActorRef.actorId, async () => {
       throwIfAborted(signal);
-      const route = this.routes.route(normalizedActorRef.actorId);
+      const route = await this.routes.route(normalizedActorRef.actorId);
       if (route === undefined || sameActorRef(route.actor.ref, normalizedActorRef)) return;
       requireSameIncarnation(route.actor.ref, normalizedActorRef);
       await this.replaceBinding(route.context, normalizedActorRef, signal);
@@ -303,7 +303,7 @@ export class ZLinkSessionActorCoordinator {
     );
     await this.lifecycle.run(normalizedActorRef.actorId, async () => {
       throwIfAborted(signal);
-      const route = this.routes.route(normalizedActorRef.actorId);
+      const route = await this.routes.route(normalizedActorRef.actorId);
       if (route === undefined) return;
       requireSameIncarnation(route.actor.ref, normalizedActorRef);
       await this.replaceBinding(route.context, normalizedActorRef, signal);
@@ -326,13 +326,13 @@ export class ZLinkSessionActorCoordinator {
     );
     await this.lifecycle.run(normalizedActorRef.actorId, async () => {
       throwIfAborted(signal);
-      const route = this.routes.route(normalizedActorRef.actorId);
+      const route = await this.routes.route(normalizedActorRef.actorId);
       if (route === undefined) return;
       requireSameIncarnation(route.actor.ref, normalizedActorRef);
       if (routingIdsEqual(route.actor.ref.nodeRid, normalizedActorRef.nodeRid)) {
         const authorityFence = await this.resolveAuthorityFence(normalizedActorRef, signal);
         if (options.releaseSeal !== undefined
-          && !this.routes.validateSeal(
+          && !await this.routes.validateSeal(
             normalizedActorRef.actorId,
             options.releaseSeal.sealId
           )) {
@@ -344,10 +344,10 @@ export class ZLinkSessionActorCoordinator {
         }
         route.actor.updateRef(normalizedActorRef);
         if (authorityFence !== undefined) {
-          this.routes.updateAuthorityFence(normalizedActorRef.actorId, authorityFence);
+          await this.routes.updateAuthorityFence(normalizedActorRef.actorId, authorityFence);
         }
         if (options.releaseSeal !== undefined
-          && !this.routes.abortSeal(
+          && !await this.routes.abortSeal(
             normalizedActorRef.actorId,
             options.releaseSeal.sealId
           )) {
@@ -377,7 +377,7 @@ export class ZLinkSessionActorCoordinator {
   ): Promise<boolean> {
     return await this.lifecycle.run(actorRef.actorId, async () => {
       throwIfAborted(signal);
-      const route = this.routes.route(actorRef.actorId);
+      const route = await this.routes.route(actorRef.actorId);
       if (
         route === undefined
         || !sameActorRef(route.actor.ref, actorRef)
@@ -389,24 +389,24 @@ export class ZLinkSessionActorCoordinator {
       // A late legacy tombstone may remove only the still-current exact route.
       // A replacement route has a different token or ActorRef, so this path
       // cannot roll it back or wait on the retired session owner.
-      this.routes.unbind(actorRef.actorId, route.context, route.bindingToken);
+      await this.routes.unbind(actorRef.actorId, route.context, route.bindingToken);
       return true;
     });
   }
 
-  authorityFence(actorId: string): {
+  async authorityFence(actorId: string): Promise<{
     readonly authorityOwnerGeneration: bigint;
     readonly ownerLeaseGeneration: bigint;
-  } | undefined {
-    return this.routes.route(actorId)?.authorityFence;
+  } | undefined> {
+    return (await this.routes.route(actorId))?.authorityFence;
   }
 
-  sessionRouteFence(actorId: string): {
+  async sessionRouteFence(actorId: string): Promise<{
     readonly actor: ActorRef;
     readonly sessionRid: ActorRef['nodeRid'];
     readonly bindingGeneration: bigint;
-  } | undefined {
-    const route = this.routes.route(actorId);
+  } | undefined> {
+    const route = await this.routes.route(actorId);
     const sessionRid = route?.sessionIdentity;
     const actor = route?.actor.ref as (ActorRef & { readonly bindingGeneration?: bigint }) | undefined;
     if (
