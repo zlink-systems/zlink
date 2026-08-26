@@ -3,6 +3,7 @@
 
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_route_port.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include <zlink/framework/contracts/errors/error.hpp>
@@ -89,8 +90,8 @@ class raw_client_server_server_t
       mesh::service_liveness_registry_t::clock_t::time_point now,
       std::shared_ptr<application_job_queue_t::permit_t>
         application_permit = {});
-    bool has_pending_application () const noexcept;
-    std::size_t last_pump_bytes () const noexcept { return _last_pump_bytes; }
+    bool has_pending_application () const;
+    std::size_t last_pump_bytes () const;
     task_t<mesh::service_liveness_tick_t> tick_liveness (
       mesh::service_liveness_registry_t::clock_t::time_point now);
     std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
@@ -117,7 +118,8 @@ class raw_client_server_server_t
     };
 
     raw_client_server_server_options_t _options;
-    mutable std::mutex _mutex;
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
     std::mutex _socket_mutex;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
@@ -159,12 +161,12 @@ class raw_client_server_client_t
 
     void start ();
     void close () noexcept;
-    bool ready () const noexcept;
+    bool ready () const;
     task_t<std::size_t> drain_monitor_events (
       mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<client_server_pump_result_t> pump_one (
       mesh::service_liveness_registry_t::clock_t::time_point now);
-    std::size_t last_pump_bytes () const noexcept { return _last_pump_bytes; }
+    std::size_t last_pump_bytes () const;
     task_t<mesh::service_liveness_tick_t> tick_liveness (
       mesh::service_liveness_registry_t::clock_t::time_point now);
     std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
@@ -194,7 +196,8 @@ class raw_client_server_client_t
       mesh::service_liveness_registry_t::clock_t::time_point now);
 
     raw_client_server_client_options_t _options;
-    mutable std::mutex _mutex;
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
     std::mutex _socket_mutex;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::dealer_socket_t> _dealer;
