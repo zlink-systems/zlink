@@ -32,6 +32,12 @@ final class ZLinkActorDispatchSerials {
     private final Set<String> activeActorIds = new HashSet<>();
     private final Map<String, CompletionStage<Void>> teardowns = new HashMap<>();
     private final Map<String, Object> admissionGates = new HashMap<>();
+    // An accepted packet claims admission while its queue entry is installed
+    // outside the admission monitor.  Teardown waits for those claims before
+    // it puts its lifecycle barrier on the queue, preserving the monitor-era
+    // admission ordering without invoking the queue under that monitor.
+    private final Map<String, Set<CompletableFuture<Void>>> pendingAdmissions =
+        new HashMap<>();
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
 
     ZLinkActorDispatchSerials() {
@@ -155,6 +161,7 @@ final class ZLinkActorDispatchSerials {
                     });
                 });
         };
+        CompletableFuture<Void> admission = new CompletableFuture<>();
         synchronized (admissionGate) {
             boolean closed = inStateLane(() -> teardowns.containsKey(turn.actorId));
             if (closed) {
@@ -163,10 +170,16 @@ final class ZLinkActorDispatchSerials {
                             "actor dispatch admission is closed: "
                                 + turn.actorId));
             }
-            return turn.queue.enqueueWithPayloadBytes(
-                payloadBytes,
-                turnOperation);
+            inStateLane(() -> {
+                pendingAdmissions.computeIfAbsent(turn.actorId,
+                    ignored -> new HashSet<>()).add(admission);
+                return null;
+            });
         }
+        return enqueueAfterAdmission(
+            turn.actorId,
+            admission,
+            () -> turn.queue.enqueueWithPayloadBytes(payloadBytes, turnOperation));
     }
 
     CompletionStage<Void> enqueue(
@@ -199,6 +212,7 @@ final class ZLinkActorDispatchSerials {
                     });
                 });
         };
+        CompletableFuture<Void> admission = new CompletableFuture<>();
         synchronized (admissionGate) {
             boolean closed = inStateLane(() -> teardowns.containsKey(turn.actorId));
             if (closed) {
@@ -214,14 +228,22 @@ final class ZLinkActorDispatchSerials {
             //  entry into the relocation envelope - the reader takes the first
             //  byte of every journal record as its `kind`, so the empty entry
             //  makes it read the following field and reject the envelope.
-            return acceptedJournalRecord == null
+            inStateLane(() -> {
+                pendingAdmissions.computeIfAbsent(turn.actorId,
+                    ignored -> new HashSet<>()).add(admission);
+                return null;
+            });
+        }
+        return enqueueAfterAdmission(
+            turn.actorId,
+            admission,
+            () -> acceptedJournalRecord == null
                 || acceptedJournalRecord.length == 0
                 ? turn.queue.enqueue(turnOperation)
                 : turn.queue.enqueueRelocatable(
                     acceptedJournalRecord,
                     turnOperation,
-                    relocationRelease);
-        }
+                    relocationRelease));
     }
 
     CompletionStage<Void> enqueueLazyRecord(
@@ -244,6 +266,7 @@ final class ZLinkActorDispatchSerials {
                     });
                 });
         };
+        CompletableFuture<Void> admission = new CompletableFuture<>();
         synchronized (admissionGate) {
             boolean closed = inStateLane(() -> teardowns.containsKey(turn.actorId));
             if (closed) {
@@ -252,24 +275,29 @@ final class ZLinkActorDispatchSerials {
                             "actor dispatch admission is closed: "
                                 + turn.actorId));
             }
-            return turn.queue.enqueueRelocatableLazyRecord(
+            inStateLane(() -> {
+                pendingAdmissions.computeIfAbsent(turn.actorId,
+                    ignored -> new HashSet<>()).add(admission);
+                return null;
+            });
+        }
+        return enqueueAfterAdmission(
+            turn.actorId,
+            admission,
+            () -> turn.queue.enqueueRelocatableLazyRecord(
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
                 turnOperation,
-                relocationRelease);
-        }
+                relocationRelease));
     }
 
     CompletionStage<Void> beginTeardown(
         String actorId,
         Supplier<CompletionStage<Void>> cleanup) {
-        CompletionStage<Void> teardown;
-        ZLinkAsyncSerialQueue queue = null;
-        CompletableFuture<Void> terminal = null;
-        boolean created = false;
+        TeardownSetup setup;
         Object admissionGate = admissionGate(actorId);
         synchronized (admissionGate) {
-            TeardownSetup setup = inStateLane(() -> {
+            setup = inStateLane(() -> {
                 CompletionStage<Void> existing = teardowns.get(actorId);
                 if (existing == null) {
                     ZLinkAsyncSerialQueue createdQueue = queues.computeIfAbsent(
@@ -278,49 +306,22 @@ final class ZLinkActorDispatchSerials {
                     CompletableFuture<Void> createdTerminal = new CompletableFuture<>();
                     teardowns.put(actorId, createdTerminal);
                     return new TeardownSetup(
-                        createdTerminal, createdQueue, createdTerminal, true);
+                        createdTerminal, createdQueue, createdTerminal,
+                        List.copyOf(pendingAdmissions.getOrDefault(
+                            actorId, Set.of())), true);
                 }
-                return new TeardownSetup(existing, null, null, false);
+                return new TeardownSetup(existing, null, null, List.of(), false);
             });
-            teardown = setup.teardown();
-            queue = setup.queue();
-            terminal = setup.terminal();
-            created = setup.created();
-            if (created) {
-                ZLinkAsyncSerialQueue teardownQueue = queue;
-                CompletableFuture<Void> teardownTerminal = terminal;
-                try {
-                    teardownQueue.enqueueLifecycleBarrier(cleanup)
-                        .whenComplete((ignored, error) -> {
-                            inStateLane(() -> {
-                                teardowns.remove(actorId, teardownTerminal);
-                                if (error == null) {
-                                    queues.remove(actorId, teardownQueue);
-                                    activeActorIds.remove(actorId);
-                                }
-                                return null;
-                            });
-                            if (error == null) {
-                                teardownTerminal.complete(null);
-                            } else {
-                                teardownTerminal.completeExceptionally(error);
-                            }
-                        });
-                } catch (RuntimeException failure) {
-                    inStateLane(() -> {
-                        teardowns.remove(actorId, teardownTerminal);
-                        return null;
-                    });
-                    teardownTerminal.completeExceptionally(failure);
-                }
-            }
+        }
+        if (setup.created()) {
+            startTeardown(actorId, setup, cleanup);
         }
         // Waiting for a barrier queued behind the current turn would make the
         // current Actor handler wait for itself. Cleanup still runs next, but
         // the initiating turn may complete normally.
         return isCurrent(actorId)
             ? CompletableFuture.completedFuture(null)
-            : teardown;
+            : setup.teardown();
     }
 
     CompletionStage<Void> enqueueBarrier(
@@ -436,6 +437,78 @@ final class ZLinkActorDispatchSerials {
         }
     }
 
+    private CompletionStage<Void> enqueueAfterAdmission(
+        String actorId,
+        CompletableFuture<Void> admission,
+        Supplier<CompletionStage<Void>> enqueue) {
+        try {
+            CompletionStage<Void> queued = enqueue.get();
+            admission.complete(null);
+            removeAdmission(actorId, admission);
+            return queued;
+        } catch (RuntimeException failure) {
+            admission.completeExceptionally(failure);
+            removeAdmission(actorId, admission);
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    private void removeAdmission(
+        String actorId,
+        CompletableFuture<Void> admission) {
+        inStateLane(() -> {
+            Set<CompletableFuture<Void>> admissions = pendingAdmissions.get(actorId);
+            if (admissions != null) {
+                admissions.remove(admission);
+                if (admissions.isEmpty()) {
+                    pendingAdmissions.remove(actorId);
+                }
+            }
+            return null;
+        });
+    }
+
+    private void startTeardown(
+        String actorId,
+        TeardownSetup setup,
+        Supplier<CompletionStage<Void>> cleanup) {
+        CompletableFuture<?>[] admitted = setup.pendingAdmissions().stream()
+            .map(CompletableFuture::toCompletableFuture)
+            .toArray(CompletableFuture[]::new);
+        CompletableFuture.allOf(admitted).whenComplete((ignored, admissionError) -> {
+            if (admissionError != null) {
+                completeTeardown(actorId, setup, admissionError);
+                return;
+            }
+            try {
+                setup.queue().enqueueLifecycleBarrier(cleanup)
+                    .whenComplete((nothing, error) ->
+                        completeTeardown(actorId, setup, error));
+            } catch (RuntimeException failure) {
+                completeTeardown(actorId, setup, failure);
+            }
+        });
+    }
+
+    private void completeTeardown(
+        String actorId,
+        TeardownSetup setup,
+        Throwable error) {
+        inStateLane(() -> {
+            teardowns.remove(actorId, setup.terminal());
+            if (error == null) {
+                queues.remove(actorId, setup.queue());
+                activeActorIds.remove(actorId);
+            }
+            return null;
+        });
+        if (error == null) {
+            setup.terminal().complete(null);
+        } else {
+            setup.terminal().completeExceptionally(error);
+        }
+    }
+
     record QueuedTurn(String actorId, ZLinkAsyncSerialQueue queue) {
     }
 
@@ -443,6 +516,7 @@ final class ZLinkActorDispatchSerials {
         CompletionStage<Void> teardown,
         ZLinkAsyncSerialQueue queue,
         CompletableFuture<Void> terminal,
+        List<CompletableFuture<Void>> pendingAdmissions,
         boolean created) {
     }
 }

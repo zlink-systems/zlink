@@ -53,6 +53,8 @@ interface ZLinkRoutedSpotPacketContext {
   readonly workOptions?: ZLinkSerialWorkOptions;
   readonly admissionTimeoutMs?: number;
   readonly signal?: AbortSignal;
+  /** Wait until a recovered activation has actually entered its first handler. */
+  readonly awaitFirstHandlerTurn?: boolean;
 }
 
 export class ZLinkRoutedSpotPacketDispatch {
@@ -124,29 +126,45 @@ export class ZLinkRoutedSpotPacketDispatch {
 
     let response: unknown;
     let detached = false;
+    let resolveFirstHandlerTurn: (() => void) | undefined;
+    let rejectFirstHandlerTurn: ((error: unknown) => void) | undefined;
+    const firstHandlerTurn = context.awaitFirstHandlerTurn
+      ? new Promise<void>((resolve, reject) => {
+        resolveFirstHandlerTurn = resolve;
+        rejectFirstHandlerTurn = reject;
+      })
+      : undefined;
+    void firstHandlerTurn?.catch(() => undefined);
     const applicationClaim = activation.meshName === undefined
       ? undefined
       : this.options.claimApplicationWork?.(activation.meshName);
     const runHandler = async () => {
-      // Decode only after the Spot has acquired both application admission
-      // and its execution authority.
-      const payload = decodePayload();
-      for (const registration of registrations) {
-        const handler = await resolveLifecycleHandler(
-          activation.spot,
-          registration.handlerType as Type<
-            ZLinkSpotPacketHandler<ZLinkSpot, unknown> |
-            ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
-          >,
-          this.options.providerResolver
-        );
-        releaseApplicationJobPermitBeforeHandler();
-        response = await handler.handle(activation.spot, payload, {
-          channelName: context.channelName,
-          contentType: context.contentType,
-          packetName: packetName!,
-          metadata: zlinkMessageMetadata({})
-        });
+      try {
+        // Decode only after the Spot has acquired both application admission
+        // and its execution authority.
+        const payload = decodePayload();
+        for (const registration of registrations) {
+          const handler = await resolveLifecycleHandler(
+            activation.spot,
+            registration.handlerType as Type<
+              ZLinkSpotPacketHandler<ZLinkSpot, unknown> |
+              ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
+            >,
+            this.options.providerResolver
+          );
+          resolveFirstHandlerTurn?.();
+          resolveFirstHandlerTurn = undefined;
+          releaseApplicationJobPermitBeforeHandler();
+          response = await handler.handle(activation.spot, payload, {
+            channelName: context.channelName,
+            contentType: context.contentType,
+            packetName: packetName!,
+            metadata: zlinkMessageMetadata({})
+          });
+        }
+      } catch (error) {
+        rejectFirstHandlerTurn?.(error);
+        throw error;
       }
     };
     try {
@@ -167,9 +185,11 @@ export class ZLinkRoutedSpotPacketDispatch {
             context.workOptions,
             { signal: context.signal }
           );
+          await firstHandlerTurn;
         } catch (error) {
           detached = false;
           detachedApplicationPermit?.releaseAfterInternalProcessing();
+          rejectFirstHandlerTurn?.(error);
           throw error;
         }
       } else {

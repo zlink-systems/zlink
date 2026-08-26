@@ -1,3 +1,8 @@
+import { AsyncResource } from 'node:async_hooks';
+import { ZLinkStateLane } from '../execution/state-lane';
+
+const detachedStateLaneResource = new AsyncResource('zlink:service-maintenance-runtime');
+
 export type ServiceMaintenanceKind = 'retire' | 'shutdown';
 export type ServiceMaintenanceState =
   | 'serving' | 'preparing' | 'retiring' | 'draining'
@@ -25,6 +30,7 @@ export interface ServiceMaintenanceOptions {
 
 /** Owns first-intent-wins maintenance admission and terminal observation. */
 export class ServiceMaintenanceRuntime {
+  private readonly lane = new ZLinkStateLane();
   private readonly units: ServiceRelocationUnit[] = [];
   private readonly observers = new Set<(snapshot: ServiceMaintenanceSnapshot) => void>();
   private activeOutbound = 0;
@@ -63,11 +69,25 @@ export class ServiceMaintenanceRuntime {
       throw new RangeError('Maintenance deadline must be non-negative and finite.');
     }
     this.kind = kind;
-    this.operation = this.run(kind, deadlineMs, stopStartingSignal, abortSignal);
-    return this.operation;
+    let resolve!: (snapshot: ServiceMaintenanceSnapshot) => void;
+    let reject!: (error: unknown) => void;
+    const operation = new Promise<ServiceMaintenanceSnapshot>((complete, fail) => {
+      resolve = complete;
+      reject = fail;
+    });
+    // Install first: publishing the synchronous preparing transition can
+    // re-enter start(), which must observe this first intent rather than
+    // create a second maintenance operation.
+    this.operation = operation;
+    void this.run(kind, deadlineMs, stopStartingSignal, abortSignal).then(resolve, reject);
+    return operation;
   }
 
   snapshot(): ServiceMaintenanceSnapshot {
+    return this.snapshotCore();
+  }
+
+  private snapshotCore(): ServiceMaintenanceSnapshot {
     return {
       ...(this.kind === undefined ? {} : { kind: this.kind }),
       state: this.state,
@@ -94,27 +114,27 @@ export class ServiceMaintenanceRuntime {
     try {
       this.transition('preparing');
       if (!await this.options.preflight(kind, controller.signal)) {
-        this.transition('blocked');
-        return this.snapshot();
+        return await this.transitionAsync('blocked');
       }
       if (kind === 'retire') {
         this.options.publishState('retiring');
-        this.transition('retiring');
+        await this.transitionAsync('retiring');
         await this.runUnits(controller.signal, stopStartingSignal);
       }
       this.options.publishState('draining');
-      this.transition('draining');
-      this.transition('completed');
-      return this.snapshot();
+      await this.transitionAsync('draining');
+      return await this.transitionAsync('completed');
     } catch (error) {
-      this.terminalError = error;
-      if (this.state === 'preparing') {
-        this.transition('blocked');
+      const blocked = await this.lane.run(() => {
+        this.terminalError = error;
+        return this.state === 'preparing';
+      });
+      if (blocked) {
+        return await this.transitionAsync('blocked');
       } else {
         await this.options.forceStop();
-        this.transition('forceStopped');
+        return await this.transitionAsync('forceStopped');
       }
-      return this.snapshot();
     } finally {
       clearTimeout(timer);
       abortSignal?.removeEventListener('abort', abort);
@@ -126,30 +146,43 @@ export class ServiceMaintenanceRuntime {
     stopStartingSignal?: AbortSignal
   ): Promise<void> {
     const pending = new Set<Promise<void>>();
-    while (this.units.length > 0 || pending.size > 0) {
+    for (;;) {
+      const queued = await this.lane.run(() => this.units.length > 0);
+      if (!queued && pending.size === 0) return;
       signal.throwIfAborted();
       if (stopStartingSignal?.aborted === true) {
         await Promise.allSettled(pending);
         stopStartingSignal.throwIfAborted();
       }
       let admitted = false;
-      for (let index = 0; index < this.units.length;) {
+      for (let index = 0;;) {
         if (stopStartingSignal?.aborted === true) break;
-        const unit = this.units[index]!;
+        const unit = await this.lane.run(() => this.units.at(index));
+        if (unit === undefined) break;
         if (!unit.ready()) {
           index++;
           continue;
         }
-        this.units.splice(index, 1);
-        admitted = true;
-        this.activeOutbound++;
-        const running = unit.relocate(signal).finally(() => {
-          this.activeOutbound--;
-          pending.delete(running);
-          this.publish();
+        const claim = await this.lane.run(() => {
+          const current = this.units.indexOf(unit);
+          if (current < 0) return { claimed: false };
+          this.units.splice(current, 1);
+          this.activeOutbound++;
+          return { claimed: true, publication: this.publishCore() };
         });
+        if (!claim.claimed || claim.publication === undefined) continue;
+        admitted = true;
+        let running!: Promise<void>;
+        running = startOutsideStateLane(() => unit.relocate(signal).finally(async () => {
+          const publication = await this.lane.run(() => {
+            this.activeOutbound--;
+            pending.delete(running);
+            return this.publishCore();
+          });
+          this.notify(publication);
+        }));
         pending.add(running);
-        this.publish();
+        this.notify(claim.publication);
       }
       if (pending.size === 0) {
         if (!admitted) throw new Error('No relocation unit is ready to start.');
@@ -164,10 +197,36 @@ export class ServiceMaintenanceRuntime {
     this.publish();
   }
 
-  private publish(): void {
-    const snapshot = this.snapshot();
-    for (const observer of this.observers) observer(snapshot);
+  private async transitionAsync(state: ServiceMaintenanceState): Promise<ServiceMaintenanceSnapshot> {
+    const publication = await this.lane.run(() => {
+      this.state = state;
+      return this.publishCore();
+    });
+    this.notify(publication);
+    return publication.snapshot;
   }
+
+  private publish(): void {
+    this.notify(this.publishCore());
+  }
+
+  private publishCore(): {
+    readonly snapshot: ServiceMaintenanceSnapshot;
+    readonly observers: readonly ((snapshot: ServiceMaintenanceSnapshot) => void)[];
+  } {
+    return { snapshot: this.snapshotCore(), observers: [...this.observers] };
+  }
+
+  private notify(publication: {
+    readonly snapshot: ServiceMaintenanceSnapshot;
+    readonly observers: readonly ((snapshot: ServiceMaintenanceSnapshot) => void)[];
+  }): void {
+    for (const observer of publication.observers) observer(publication.snapshot);
+  }
+}
+
+function startOutsideStateLane<T>(work: () => T): T {
+  return detachedStateLaneResource.runInAsyncScope(work);
 }
 
 export function classifyRelocationRecovery(
