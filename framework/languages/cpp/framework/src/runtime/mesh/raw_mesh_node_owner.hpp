@@ -4,6 +4,7 @@
 #include "runtime/backend/raw_route_port.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/mesh/service_liveness_registry.hpp"
 #include "runtime/mesh/service_mailbox.hpp"
@@ -419,10 +420,7 @@ class raw_mesh_node_owner_t
     bool wait_for_activity (std::chrono::milliseconds timeout,
                             bool accept_application_receive = true) noexcept;
     void signal_activity () noexcept;
-    std::size_t last_pump_bytes () const noexcept
-    {
-        return _last_pump_bytes;
-    }
+    std::size_t last_pump_bytes () const;
     task_t<std::size_t> drain_monitor_events (
       service_liveness_registry_t::clock_t::time_point now);
     task_t<service_liveness_tick_t>
@@ -508,6 +506,11 @@ class raw_mesh_node_owner_t
       service_mailbox_record_t record,
       raw_mesh_pump_result_t accepted_result);
     raw_mesh_node_options_t _options;
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
+    // These gates serialize native socket and lifecycle work whose critical
+    // section extends beyond a state turn (discovery 7).  Mutable owner state
+    // itself is admitted through _lane.
     mutable std::mutex _lifecycle_mutex;
     std::mutex _socket_mutex;
     std::shared_ptr<zlink::context_t> _context;
