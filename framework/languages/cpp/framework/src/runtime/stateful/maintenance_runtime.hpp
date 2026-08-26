@@ -3,6 +3,7 @@
 
 #include "runtime/protocol/relocation_envelope_codec.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/stateful/relocation_transfer.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
@@ -719,8 +720,8 @@ class host_maintenance_runtime_t
     maintenance_runtime_t &_relocation;
     std::shared_ptr<target_preflight_port_t> _targets;
     observer_t _observer;
-    mutable std::mutex _mutex;
-    std::condition_variable _changed;
+    offload_executor_t _lane_executor;
+    mutable state_lane_t _lane;
     maintenance_admission_state_t _state =
       maintenance_admission_state_t::preparing;
     bool _active = false;
