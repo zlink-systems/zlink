@@ -200,3 +200,13 @@ grep -rhoE 'AwaitStateLane' --include=*.cs . | wc -l                   # 호환 
 - **(7, #8 판정)** 외부 await를 품는 원자 async 임계 구역(SemaphoreSlim)은 상태 보호가 아니라
   **작업 프로토콜 직렬화**로 재해석해 semaphore를 유지하고, 그 안의 상태 변이만 lane turn으로
   감싼다(#5·6 _socketLifecycleGate 전례). lane turn 안에서 semaphore 획득 대기는 금지(역방향만 허용).
+- **(9, java 배치4·dotnet 배치19 실측)** **등록·캡처는 반환 전에 완료한다.** 원본이 monitor/lock
+  아래서 "호출 반환 시점에 이미 끝나 있던" 등록·판독(waiter 등록+epoch 캡처, store 읽기 완료 등)을
+  lane 비동기 게시로 바꾸면 호출자가 완료 전에 진행해 관측 타이밍이 깨진다(NPE·epoch 오귀속
+  실측). 처방: 그런 표면은 동기 join(inStateLane/AwaitStateLane)으로 반환-전-완료를 보존하고,
+  완료 신호 대기만 비동기로 남긴다. CP1 리뷰 체크리스트: "원본에서 반환 전에 보장되던 완료가
+  전환 후에도 반환 전인가".
+- **(8, node L2 판정)** node에서 **동기 메서드는 이미 JS turn 원자성으로 lane turn과 동등**하다.
+  따라서 동기 공개 계약(d.ts의 sync 시그니처)을 Promise로 바꾸면서까지 lane으로 감싸지 않는다.
+  lane 적용 대상은 ① 메서드 내부 await로 상태 읽기·쓰기가 갈라지는 비동기 경로 ② 재진입 검출이
+  필요한 public 표면뿐이다. 동기 표면은 무변경으로 두고 근거를 보고에 기록한다.

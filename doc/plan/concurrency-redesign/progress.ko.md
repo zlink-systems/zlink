@@ -19,7 +19,7 @@ jvm 열은 java·kotlin을 함께 적는다(빌드 트리 공유). 언어별 클
 | **L0** primitive + golden 14 | **완료** | **완료** (14/14) | java **완료**(+발견5 보완) · kotlin **완료**(14/14) | **완료** (12, 동시성 2 제외·사유 주석) |
 | **L1** 표본 전환 | **완료** `3cc6f5f615` | **완료** `f4d0df006b` (registry 31→0, 반려 1) | java **완료**(SessionActorsRuntime 22→0) · kotlin **해당없음**(자체 C2 상태 0) | **완료** `ca32669168` (registry, 13파일 전파) |
 | **L2** 순서 조사 | **완료** (conversion-order-survey) | **완료** (후보 19 — l2-survey-cpp) | **완료** (후보 23+9 — l2-survey-java) | **완료** (l2-survey-node) |
-| **L2** 클래스 전환 (§2 상세) | **진행 중** — 대형 9 · 소형 59/99 (+제외 2·재분류 2) | **진행 중** — 순서 1~8 완료 (10클래스), 9·10 요청됨 | **진행 중** — 순서 1~8 완료 (8클래스), 9·10 요청됨 | **진행 중** — 순서 1~10 완료, 11·12 요청됨 |
+| **L2** 클래스 전환 (§2 상세) | **진행 중** — 대형 9 · 소형 70/99 (+제외 6·재분류 2) | **진행 중** — 순서 1~10 완료 · 11·12 마일스톤 보류(참조 반환 구조) · 13 진행 중 | **진행 중** — 순서 1~12 완료 (12클래스, kotlin 승계) | **진행 중** — 순서 1~14 완료 (후보 소진 시 보고 예정) |
 | **마무리** 호환 경계 회수 | 대기 (AwaitStateLane 121+) | 대기 (.get 사유 기록) | 대기 (inStateLane join) | **해당없음** (L1에서 완전 전파) |
 | **마무리** posddd ② 잔여 | 대기 (최우선: OperationLease 할당) | 대기 | 대기 | 대기 |
 | **마일스톤 게이트** (CP3 — unit·계약 + 샘플 **일괄 러너**(회귀 확인) + 스냅샷 재측정 + sol 리뷰) | 대기 (+§8 결함 판정·스펙 06 개정) | 대기 | 대기 | 대기 |
@@ -59,8 +59,8 @@ jvm 열은 java·kotlin을 함께 적는다(빌드 트리 공유). 언어별 클
 | — | 소형 배치 2~5 (15클래스 전환 + CompletionDispatcher 제외 재분류) | **완료** | 커밋 3건 | CP2-4 unit 1896/0·6샘플 OK. 반려 2(NRE 테스트·무할당 계약 위반→원복) |
 | — | 소형 배치 6~9 (17클래스) | **완료** | 합본 커밋 | CP2-5 unit 1896/0·6샘플 OK. 반려 1(dispose Task memoization) |
 | — | 소형 배치 10~15 (23클래스) | **완료** | `135c134b2c` | CP2-6 unit 1896/0·6샘플 OK. 반려 1(Bundle dispose 발견7 역방향 데드락). ChannelRuntimeManager·FrameworkComponentState는 #10 범위 재분류 |
-| — | 소형 배치 16~19 (16클래스) | **요청됨** | | 병렬 4잡 (2026-08-27) |
-| — | 소형 배치 20~22 (잔여) | 대기 | | FrameworkComponentState 제외(#10), ManagedActor/ManagedSpot은 #9에서 처리됨 확인 예정 |
+| — | 소형 배치 16~19 (11클래스 + 제외 4) | **완료** | `aed9ee8d05` | CP2-7 unit 1899/0·7샘플 exit 0. 반려 3(발견9 계열 2·false 관측 보존 1). 제외: MeshCompletionTable·WorkerPool·SerialWorkItem·SpotSerialExecutor(primitive) |
+| — | 소형 배치 20~22 (+MonitorHub 이월) | **요청됨** | | 병렬 3잡 (2026-08-27). FrameworkComponentState·ChannelRuntimeManager는 #10 범위 |
 | 제외 | ZLinkSerialExecutionQueue (25) | 제외 | | lane primitive 자체 (스펙 06 §9) |
 | 제외 | ZLinkCompletionDispatcher (5) | 제외 | | dispatch primitive — 무할당 hot path 계약(0→408 실측)이 lane 클로저와 양립 불가 (CP2-4 판정) |
 
@@ -74,8 +74,8 @@ node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 
 | 지표 | 시작 | 현재 | 목표 |
 |---|---:|---:|---|
-| dotnet `lock` 문 | 999 | **314** (−69%) | ~60 (lane·큐 내부만) |
-| `_gate` 보유 클래스 | 61 | **13** | 0 |
-| state lane 사용 파일 | 0 | **57** | — |
+| dotnet `lock` 문 | 999 | **242** (−76%) | ~60 (lane·큐 내부만) |
+| `_gate` 보유 클래스 | 61 | **8** | 0 |
+| state lane 사용 파일 | 0 | **67** | — |
 | **async 경계 스냅샷** *(진짜 지표)* | ~465 | 미측정 | **0** |
-| 호환 경계 `AwaitStateLane` *(부채)* | 0 | **439** | 0 (마무리에서 회수) |
+| 호환 경계 `AwaitStateLane` *(부채)* | 0 | **512** | 0 (마무리에서 회수) |
