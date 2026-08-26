@@ -7,6 +7,43 @@
 
 브랜치 `refactor/lane-ownership-concurrency` · 시작 2026-08-26
 
+## 0. 한눈에
+
+> 수치는 배치 게이트(CP2)마다 갱신한다. 마지막 측정 2026-08-26.
+
+| 지표 | 시작 | 현재 | 목표 |
+|---|---:|---:|---|
+| dotnet `lock` 문 | 999 | **783** (−22%) | ~60 (lane·큐 내부 구현만) |
+| `_gate` 보유 클래스 | 61 | **55** | 0 |
+| state lane 사용 클래스 | 0 | **7** | — |
+| **async 경계 스냅샷** *(진짜 지표)* | ~465 | 미측정 | **0** |
+| 호환 경계 `AwaitStateLane` *(부채)* | 0 | **58** | 0 (§3에서 회수) |
+
+**`lock` 개수는 성공 지표가 아니다.** `SemaphoreSlim`으로 바꾸기만 해도 0이 된다. 판정은
+"async 경계를 넘는 스냅샷"이 0이 되는가로 한다. 호환 경계 58은 전환의 부산물인 **부채**이며
+늘어나는 것이 정상이고, §3에서 회수한다.
+
+### 진행 단계
+
+| 단계 | 범위 | 상태 |
+|---|---|---|
+| 설계·primitive | 스펙 06, `ZLinkStateLane`, golden 14 | **완료** |
+| **.NET 전환** | 61클래스 | **진행 중** — 완료 3 · 진행 4 · 대기 ~54 (§2) |
+| .NET 마무리 | 호환 경계 회수, posddd ②, 마일스톤 게이트 | 대기 (§3) |
+| 언어 확산 | cpp · JVM · node — L0 → L1 → L2 | L0 착수 가능 (§4) |
+
+## 0.1 일을 어떻게 자르는가
+
+| 단위 | 크기 | 무엇으로 끝나는가 | 누가 |
+|---|---|---|---|
+| **요청 1건** | 클래스 1개 (대형은 2개 묶음) | 에이전트 보고 (CP1) | codex 1잡 |
+| **커밋 1건** | 요청 1건 | 리뷰 승인 후 커밋 | Claude |
+| **배치** | 2~4 요청 | 전체 unit + 6샘플 게이트 → 푸시 (CP2) | Claude |
+| **마일스톤** | .NET 전체 | §3 전 항목 (CP3) | Claude |
+
+**병렬은 요청 단위로만 한다.** 서로 다른 파일을 만지는 요청은 동시에 띄우되, 빌드·테스트는
+트리 락으로 직렬화한다(§4). 게이트와 커밋은 항상 중앙에서 한 번씩이다.
+
 ## 1. 진행 방식 (확정)
 
 - **역할**: 전환 = codex(표본급 난이도만 sol, 이후 terra) · 감독/리뷰/판정/커밋 = Claude.
@@ -23,13 +60,18 @@
 
 ## 2. .NET 전환 현황
 
+상태 값은 다섯이다. **`요청됨`이 있어야 새 세션이 "이미 띄웠나"를 알 수 있다.**
+
+`대기` → `요청됨`(잡 실행 중) → `보고됨`(CP1 대기) → `완료`(리뷰 승인·커밋) / `반려`(재요청)
+
+
 | # | 클래스 | lock | 상태 | 커밋 | 비고 |
 |---|---|---:|---|---|---|
 | 표본 | ZLinkSessionActorBindingTable | 30 | **완료** | `3cc6f5f615` | sol. 재진입 2, 호환 경계 25(부채) |
 | 1 | ZLinkInMemoryLocationStore | 27 | **완료** | `2bdf463ee3` | 재진입 0, posddd ② 생략(근거 커밋에) |
 | 2 | ZLinkActorHandoffAdmissions | 25 | **완료** | `326133ca03` | SuppressFlow 1, 호환 경계 4 |
-| 3 | ZLinkActorOwnershipCoordinator | 26 | 진행 중(병렬) | | 재진입 의심 8 |
-| 4 | ZLinkSpotNodeCatalog | 48 | 진행 중(병렬) | | detached 작업 3 |
+| 3 | ZLinkActorOwnershipCoordinator | 26 | **완료(CP2 게이트 대기)** | `e1f5ade349` | 재진입 8 해소(순차 await+lane 내부화), _disposeStartGate=C3, 호환 경계 3 |
+| 4 | ZLinkSpotNodeCatalog | 48 | **완료(CP2 게이트 대기)** | `0fef22fa62` | SuppressFlow 5, 호환 경계 9(범위 밖 호출자 2 포함) |
 | 5·6 | ZLinkClientServerClientRuntime + Connection | 20+44 | 진행 중(병렬) | | 장기 작업 5, lane 2개 |
 | 7 | ZLinkActorHandoffState | 58 | 대기 | | 2× 난이도 |
 | 8 | ZLinkActorRuntimeState | 35 | 대기 | | semaphore + 재진입 ~20 |
@@ -114,12 +156,60 @@
 - **L0는 언어 간 무의존**이라 4트리 동시 착수 가능. L1·L2는 각 언어의 앞 단계에만 의존하고
   다른 언어를 기다리지 않는다.
 
-## 5. 보고·리뷰 프로토콜
+## 5. 작업 주기 — 요청 → 보고 → 리뷰
 
 전환은 에이전트가, **판정·커밋은 Claude가** 한다(§1). 그 사이를 잇는 규칙이다.
+
+### 5.0 요청 템플릿
+
+**아래 공통 규칙 블록을 그대로 쓴다.** 매번 새로 쓰면 빠지는 항목이 생기고, 이 캠페인에서
+검증 없이 변경만 남기거나 검증을 약화시킨 사례가 실제로 있었다.
+
+```
+# 공통 규칙 (state lane 전환)
+
+작업 디렉터리: /home/hep7/project/zlink (브랜치 refactor/lane-ownership-concurrency)
+
+먼저 읽기:
+  ① framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md (규칙 스펙)
+  ② doc/plan/concurrency-redesign/sample-conversion-report.ko.md (함정: lane 안에서 시작한
+     장기 작업의 AsyncLocal 소유권 상속 → ExecutionContext.SuppressFlow 처방, out 실패부가값 함정)
+  ③ doc/plan/concurrency-redesign/conversion-order-survey.ko.md 의 해당 클래스 절
+  ④ Runtime/Execution/ZLinkStateLane.cs
+
+절차: 재진입 자리를 private 분리 → lock 제거·본문을 _lane.RunAsync로 감싸기(본문 로직 한
+글자도 불변) → lane 안에서 시작하는 장기 작업(timer/expiry/loop)은 시작점에 SuppressFlow →
+out은 스펙 06 §7대로 반환 타입화(실패 시 부가값 있으면 결과 타입 보존) → 호출자 전파(완전
+전파가 허용 파일 밖으로 번지면 AwaitStateLane 호환 경계:
+private static T AwaitStateLane<T>(ValueTask<T> op) => op.GetAwaiter().GetResult(); 개수 보고)
+→ 직접 단위 테스트 시그니처 추종(assertion 의미 불변).
+
+금지: ConcurrentDictionary/SemaphoreSlim 치환, posddd 리팩토링(별도 패스), spec/** 수정,
+git 명령 전부, 관측 동작 변경, 허용 파일 밖 수정.
+
+빌드·테스트 직렬화 (병렬 잡이 같은 트리를 쓰므로 필수):
+  flock -w 7200 /tmp/zlink-<tree>-gate.lock <build/test 명령>
+전체 게이트는 마지막에 1회만, 실패 0 확인 후 완료 선언.
+
+보고: 재진입 실측·SuppressFlow 지점 / 시그니처·전파·호환 경계 수 / 본문 조정 목록(없으면
+없음) / 테스트 결과 / 예상과 달랐던 점 / 걸린 시간.
+
+# 대상: <클래스명>
+
+<파일 경로>
+(lock <n>, <분류> — <근거>. 조사: <장기 작업/재진입/특이점>. 호출자: <파일 목록>.)
+
+허용 파일: 대상, 위 호출자 <n>파일, 해당 단위 테스트.
+```
+
+**대상 절의 내용은 지어내지 않는다.** `conversion-order-survey.ko.md`의 해당 클래스 절에서
+옮긴다. 조사가 없으면 조사부터 한다 — 조사 없이 띄우면 허용 파일을 못 정하고 범위가 샌다.
+
+### 5.1 보고 시점
+
 보고 시점은 셋이고, 각각 리뷰 깊이와 산출이 다르다.
 
-### CP1 — 클래스 하나 완료
+#### CP1 — 클래스 하나 완료
 
 에이전트가 아래를 **반드시 포함해** 보고한다. 빠지면 리뷰하지 않고 반려한다.
 
@@ -141,21 +231,21 @@ Claude 리뷰:
 
 산출: **승인 → §2 표 갱신 + 커밋**, 또는 **반려 → 구체 지시와 함께 재작업**.
 
-### CP2 — 배치(2~4클래스) 완료
+#### CP2 — 배치(2~4클래스) 완료
 
 - Claude가 **전체 unit 게이트 + 6샘플 게이트**를 중앙에서 1회 실행한다(에이전트에게 맡기지
   않는다 — 이 세션에서 에이전트 보고가 여러 번 사실과 달랐다).
 - 통과 → 푸시. 실패 → 배치 안에서 이분 탐색으로 원인 클래스를 가른다.
 - §2 표와 §7을 갱신한다.
 
-### CP3 — 마일스톤 (§3 항목 전부)
+#### CP3 — 마일스톤 (§3 항목 전부)
 
 - 전체 unit + 6샘플 + cross-language harness
 - **"async 경계 스냅샷" 재측정** — 진짜 지표. lock 개수가 아니다
 - §8 기존 결함 3건이 이 작업으로 해소됐는지 판정
 - codex sol 마일스톤 리뷰 + 스펙 06 보완 필요 여부 판정
 
-### 즉시 중단(STOP) 조건
+#### 즉시 중단(STOP) 조건
 
 아래는 진행하지 말고 Claude에게 올린다.
 
