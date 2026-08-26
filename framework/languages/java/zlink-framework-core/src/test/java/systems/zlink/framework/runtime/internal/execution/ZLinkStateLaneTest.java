@@ -1,4 +1,4 @@
-package systems.zlink.framework.execution;
+package systems.zlink.framework.runtime.internal.execution;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -51,6 +51,19 @@ final class ZLinkStateLaneTest {
             }).toCompletableFuture().join());
 
         assertEquals(7, lane.runAsync(() -> 7).toCompletableFuture().get(3, TimeUnit.SECONDS));
+        lane.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void dependentContinuationCanReenterTheSameLaneAfterRunAsyncCompletes() throws Exception {
+        ZLinkStateLane lane = new ZLinkStateLane();
+
+        assertEquals(
+            42,
+            lane.runAsync(() -> 1)
+                .thenApply(ignored -> lane.runAsync(() -> 42).toCompletableFuture().join())
+                .toCompletableFuture().get(3, TimeUnit.SECONDS));
+
         lane.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
     }
 

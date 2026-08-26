@@ -1,4 +1,4 @@
-package systems.zlink.framework.execution;
+package systems.zlink.framework.runtime.internal.execution;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 
 /**
  * Single-owner execution lane for a component's mutable state.
@@ -24,7 +25,7 @@ import java.util.function.Supplier;
  * continuations; work that schedules an asynchronous continuation on an executor must use
  * {@link #propagateCurrent(Executor)} to retain this diagnostic ownership marker.</p>
  */
-final class ZLinkStateLane {
+public final class ZLinkStateLane {
     private static final int DRAIN_BATCH_LIMIT = 100;
     private static final ThreadLocal<ZLinkStateLane> CURRENT = new ThreadLocal<>();
 
@@ -35,25 +36,25 @@ final class ZLinkStateLane {
     private final ExecutorService ownedExecutor;
     private final Executor executor;
 
-    ZLinkStateLane() {
+    public ZLinkStateLane() {
         ownedExecutor = Executors.newVirtualThreadPerTaskExecutor();
         executor = ownedExecutor;
     }
 
-    ZLinkStateLane(Executor executor) {
+    public ZLinkStateLane(Executor executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
         ownedExecutor = null;
     }
 
-    static ZLinkStateLane current() {
+    public static ZLinkStateLane current() {
         return CURRENT.get();
     }
 
-    boolean isOnLane() {
+    public boolean isOnLane() {
         return CURRENT.get() == this;
     }
 
-    <T> CompletionStage<T> runAsync(Supplier<T> work) {
+    public <T> CompletionStage<T> runAsync(Supplier<T> work) {
         Objects.requireNonNull(work, "work");
         throwIfReentrant();
         throwIfClosed();
@@ -61,9 +62,15 @@ final class ZLinkStateLane {
         CompletableFuture<T> result = new CompletableFuture<>();
         mailbox.add(() -> {
             try {
-                result.complete(work.get());
+                T value = work.get();
+                // CompletableFuture's non-async dependents run on the completing thread. Complete
+                // this future asynchronously so caller continuations never inherit the lane's
+                // ThreadLocal ownership marker.
+                result.completeAsync(() -> value);
             } catch (RuntimeException | Error error) {
-                result.completeExceptionally(error);
+                result.completeAsync(() -> {
+                    throw error;
+                });
             }
             return CompletableFuture.completedFuture(null);
         });
@@ -71,7 +78,7 @@ final class ZLinkStateLane {
         return result;
     }
 
-    CompletionStage<Void> runAsync(Runnable work) {
+    public CompletionStage<Void> runAsync(Runnable work) {
         Objects.requireNonNull(work, "work");
         return runAsync(() -> {
             work.run();
@@ -79,7 +86,7 @@ final class ZLinkStateLane {
         });
     }
 
-    boolean tryPost(Supplier<? extends CompletionStage<Void>> work) {
+    public boolean tryPost(Supplier<? extends CompletionStage<Void>> work) {
         Objects.requireNonNull(work, "work");
         if (closed.get() != 0) {
             return false;
@@ -96,7 +103,7 @@ final class ZLinkStateLane {
         return true;
     }
 
-    void throwIfReentrant() {
+    public void throwIfReentrant() {
         if (isOnLane()) {
             throw new IllegalStateException(
                 "This code already runs on the state lane it is trying to enter. Call the "
@@ -105,7 +112,7 @@ final class ZLinkStateLane {
         }
     }
 
-    CompletionStage<Void> closeAsync() {
+    public CompletionStage<Void> closeAsync() {
         if (closed.compareAndSet(0, 1)) {
             if (scheduled.get() == 0 && mailbox.isEmpty()) {
                 completed.complete(null);
@@ -117,7 +124,7 @@ final class ZLinkStateLane {
         return completed;
     }
 
-    static Executor propagateCurrent(Executor executor) {
+    public static Executor propagateCurrent(Executor executor) {
         Objects.requireNonNull(executor, "executor");
         return command -> {
             ZLinkStateLane lane = CURRENT.get();
