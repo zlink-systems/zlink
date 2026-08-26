@@ -12,7 +12,7 @@ title: "State Ownership And State Lanes"
 > and error codes is owned by other documents, and the rules this document defines do not
 > change that observable behavior.
 
-## 1. What This Document Defines
+## 1. State Ownership Overview
 
 A component owns mutable state — fields and collections. This document defines the rules
 for the mechanism that guarantees only one piece of code touches that state at a time: the
@@ -29,13 +29,17 @@ codes an application observes.
 ## 2. Terminology — State Lane Versus Application/Lifecycle Lane
 
 This document's **state lane** is the execution unit through which one component owns its
-mutable state. Each owner has one, and every piece of code that reads or writes that
-component's state runs only on this lane.
+mutable state. Every piece of code that reads or writes that component's state runs only on
+this lane.
 
 This term is a different concept from the "application lane" and "lifecycle lane" used by
 [Handler Turn And Execution Gate "7. Lane Separation And Priority
 (Implementation)"](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation).
 The two documents use the same word "lane" for different things, so they must be kept apart.
+The application lane and lifecycle lane exist as a pair per
+[owner](../00-foundation/02-glossary.en.md#owner) — the party that currently runs the
+[Spot](../00-foundation/02-glossary.en.md#spot), a stateful logical instance with an address,
+or the Actor inside it — while a state lane exists per component that owns state.
 
 | | State lane (this document) | Application lane / lifecycle lane (02 §7) |
 |---|---|---|
@@ -52,7 +56,7 @@ touches may be serialized on a different component's state lane.
 
 ## 3. The Prohibited Shape
 
-There is one shape a state lane rules out — **taking a snapshot of state inside an exclusive
+A state lane rules out the following shape — **taking a snapshot of state inside an exclusive
 section such as a lock, releasing that section, and then deciding on the far side of an async
 boundary using that snapshot.**
 
@@ -73,10 +77,10 @@ A state lane removes this shape entirely. Because there is no release point insi
 turn — the code that reads the state and the code that acts on it stay in the same turn — no
 snapshot is ever produced.
 
-## 4. Three State Classifications And How To Tell Them Apart
+## 4. State Classifications And How To Tell Them Apart
 
-A component's mutable state falls into one of three classifications. Once classified, the
-mechanism that guards it follows mechanically.
+A component's mutable state falls into one of the following classifications. Once classified,
+the mechanism that guards it follows mechanically.
 
 | Classification | Criteria | Mechanism |
 |---|---|---|
@@ -113,18 +117,28 @@ A state lane guarantees the following.
   stays an ordinary structure — it is the lane's single execution, not a lock, that provides
   exclusivity, so the collection itself has no need to be thread-safe.
 
-**A reentrancy violation must be detected as an exception, not a deadlock.** A call that
-re-enters the same lane's turn from inside that turn has no way to proceed — waiting for the
-earlier turn to finish is itself happening inside that turn, which is the same as waiting on
-itself. Left as is, this becomes a wait that never ends — a hang. The lane must detect this as
-an exception, diagnosable immediately at the call site, rather than as a hang — raising an
-error right there that identifies which lane was re-entered means the reentrancy points
-straight at its cause instead of quietly stalling somewhere in execution.
+**A reentrancy violation must be detected as an exception, not a deadlock.** Why reentrancy
+has no way to proceed shows up once the sequence is spelled out concretely.
+
+1. Public method A of some component is already running on the lane's turn.
+2. A's body calls public method B of the same component.
+3. B also needs to enter the same lane to touch the state, so it waits for "the turn currently
+   running on this lane" to finish.
+4. But the turn currently running on this lane is A itself — the one that called B.
+
+B is waiting for A to finish, and A cannot finish its own turn until B finishes — which comes
+down to A waiting for itself. No other turn can break this wait, so it never ends.
+
+Left as a hang, this stops the server silently. Nothing in a log or stack trace names the call
+that caused it, so finding the cause means combing through an execution dump taken at that
+moment. The lane must instead end this at the exact call site where the reentrant call
+happened, as an exception. Raising an error right there that names which lane was re-entered
+means the stack trace points straight at the offending code.
 
 ## 6. Removing Reentrancy
 
 When converting a component classified as C2 to a lane, reentrancy is removed first. In
-practice a conversion encounters two kinds of reentrancy.
+practice a conversion encounters the following kinds of reentrancy.
 
 **Kind ① — a spot where code inside the lane calls back into the same component's public
 surface.** If one public entry point, already inside a turn admitted to the lane, calls
@@ -169,15 +183,17 @@ The signature of a state-accessing method converts under the following rules.
   that boundary — boundary redesign is not the purpose of this conversion.
 - **The conversion unit is one class.** One component — the one exclusive-access section its
   class holds — moves at a time.
-- **Every conversion must pass verification before moving to the next.** That language's full
-  unit test suite must be green, and the sample gate must hold.
+- **Every conversion must pass verification before moving to the next.** What to check is
+  owned by [Verification Requirements](#10-verification-requirements).
 - **The success metric is not the lock count.** A drop in the number of exclusive-access
   statements is not evidence. What must shrink is the count of "snapshots used across an async
-  boundary," compared before and after per component.
+  boundary," compared before and after per component. This comparison is an **internal
+  confirmation condition** measured by internal instrumentation rather than the public
+  surface, and is not carried into the verification requirements section.
 
 ## 9. Per-Language Mapping
 
-In .NET, `Zlink.Framework.Runtime.Execution.ZLinkStateLane` is the canonical implementation of
+In .NET, `Zlink.Framework.Runtime.Execution.ZLinkStateLane` is the reference implementation of
 the state lane this document defines. State access runs as work submitted to this lane, and
 the collections the lane owns stay plain `Dictionary` instances. Reentrancy is detected, not as
 a hang, but as an `InvalidOperationException` raised immediately at the call site.
@@ -193,6 +209,29 @@ When porting to another language, rather than carrying over the concrete type or
 is, use that language's primitive that satisfies the same guarantees this document defines —
 one turn executing at a time, FIFO, immediate exception detection on reentrancy, and no locking
 on owned collections.
+
+## 10. Verification Requirements
+
+The following is confirmed using only the public surface — the return value and exception of
+work submitted to a state lane, the error a reentrant call receives, and the converted
+language's unit test and sample gate results. Each item leads to one test.
+
+**Reentrancy And Execution Order**
+
+- If code already running on a lane's turn attempts to re-enter the same lane, this ends in an
+  exception raised immediately at the call site, not a hang.
+- If different callers submit work to the same lane concurrently, updates to the lane-owned,
+  unlocked plain collection are not lost.
+- Work submitted to the same lane executes in the order it was submitted.
+- Submitting a call that waits for a result to a closed lane ends immediately in an exception;
+  submitting work that does not wait for a result returns failure.
+
+**Conversion Verification**
+
+- Before and after a conversion, that language's full unit test suite is green.
+- Before and after a conversion, the sample gate holds.
+- Before and after a conversion, the ordering, timeouts, and error codes a caller observes do
+  not change.
 
 ---
 
