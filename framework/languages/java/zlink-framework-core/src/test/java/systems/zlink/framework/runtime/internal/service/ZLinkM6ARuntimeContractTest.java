@@ -477,6 +477,28 @@ final class ZLinkM6ARuntimeContractTest {
     }
 
     @Test
+    void topologyReadinessPredicateCanReenterTheRegistry() {
+        var topology = new ZLinkServiceTopologyRegistry(
+            descriptor("mesh", "local", 1, 1, List.of(), 100));
+        var peer = descriptor(
+            "mesh",
+            "peer-a",
+            1,
+            1,
+            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+            100);
+        topology.admit(peer, "pipe-a");
+
+        assertEquals(
+            peer.nodeRoutingId(),
+            topology.selectChannel("orders", candidate ->
+                topology.peer(candidate.descriptor().nodeRoutingId()).isPresent())
+                .orElseThrow()
+                .descriptor()
+                .nodeRoutingId());
+    }
+
+    @Test
     void mailboxSerializesEachOwnerAndKeepsInfrastructureReserve() {
         var mailbox = new ZLinkServiceMailbox(2, 512, 1, 256);
         assertTrue(mailbox.tryEnqueue(record(

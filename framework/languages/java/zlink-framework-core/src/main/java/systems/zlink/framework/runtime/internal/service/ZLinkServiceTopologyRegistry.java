@@ -9,14 +9,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletionException;
 import java.util.function.Predicate;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
  * Owns immutable peer snapshots and rejects updates from stale physical
  * connections.
  */
 public final class ZLinkServiceTopologyRegistry {
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<RoutingId, Peer> peers = new HashMap<>();
     private final Map<String, Map<String, Long>> selectionCurrents = new HashMap<>();
     private final Map<String, Long> placementSelectionCursors = new HashMap<>();
@@ -26,11 +29,33 @@ public final class ZLinkServiceTopologyRegistry {
         this.local = Objects.requireNonNull(local, "local");
     }
 
-    public synchronized ZLinkServiceNodeDescriptor localDescriptor() {
-        return local;
+    private <T> T inStateLane(java.util.function.Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
 
-    public synchronized void publishLocal(ZLinkServiceNodeDescriptor descriptor) {
+    public ZLinkServiceNodeDescriptor localDescriptor() {
+        return inStateLane(() -> local);
+    }
+
+    public void publishLocal(ZLinkServiceNodeDescriptor descriptor) {
+        inStateLane(() -> {
+            publishLocalOnLane(descriptor);
+            return null;
+        });
+    }
+
+    private void publishLocalOnLane(ZLinkServiceNodeDescriptor descriptor) {
         Objects.requireNonNull(descriptor, "descriptor");
         if (!descriptor.meshName().equals(local.meshName())
             || !descriptor.nodeRoutingId().equals(local.nodeRoutingId())
@@ -48,7 +73,7 @@ public final class ZLinkServiceTopologyRegistry {
         local = descriptor;
     }
 
-    public synchronized AdmissionResult admit(
+    public AdmissionResult admit(
         ZLinkServiceNodeDescriptor descriptor,
         String connectionId) {
         return admit(
@@ -59,7 +84,13 @@ public final class ZLinkServiceTopologyRegistry {
                 connectionId));
     }
 
-    public synchronized AdmissionResult admit(
+    public AdmissionResult admit(
+        ZLinkServiceNodeDescriptor descriptor,
+        Connection connection) {
+        return inStateLane(() -> admitOnLane(descriptor, connection));
+    }
+
+    private AdmissionResult admitOnLane(
         ZLinkServiceNodeDescriptor descriptor,
         Connection connection) {
         String connectionId =
@@ -170,7 +201,13 @@ public final class ZLinkServiceTopologyRegistry {
         return true;
     }
 
-    public synchronized boolean disconnect(
+    public boolean disconnect(
+        RoutingId nodeRoutingId,
+        String connectionId) {
+        return inStateLane(() -> disconnectOnLane(nodeRoutingId, connectionId));
+    }
+
+    private boolean disconnectOnLane(
         RoutingId nodeRoutingId,
         String connectionId) {
         Peer current = peers.get(nodeRoutingId);
@@ -182,27 +219,33 @@ public final class ZLinkServiceTopologyRegistry {
         return true;
     }
 
-    public synchronized Optional<Peer> peer(RoutingId nodeRoutingId) {
-        return Optional.ofNullable(peers.get(nodeRoutingId));
+    public Optional<Peer> peer(RoutingId nodeRoutingId) {
+        return inStateLane(() -> Optional.ofNullable(peers.get(nodeRoutingId)));
     }
 
-    public synchronized List<Peer> peers() {
+    public List<Peer> peers() {
+        return inStateLane(this::peersOnLane);
+    }
+
+    private List<Peer> peersOnLane() {
         return peers.values().stream()
             .sorted(Comparator.comparing(
                 peer -> peer.descriptor().nodeRoutingId().toString()))
             .toList();
     }
 
-    public synchronized Optional<Peer> selectChannel(String channelName) {
+    public Optional<Peer> selectChannel(String channelName) {
         return selectChannel(channelName, ignored -> true);
     }
 
-    public synchronized Optional<Peer> selectChannel(
+    public Optional<Peer> selectChannel(
         String channelName,
         Predicate<Peer> isReady) {
-        return select(
-            "channel:" + requireChannelName(channelName),
-            eligibleChannelTargets(channelName, isReady));
+        String requiredChannelName = requireChannelName(channelName);
+        List<WeightedPeer> eligible = eligibleChannelTargets(
+            requiredChannelName, isReady, peers());
+        return inStateLane(() -> selectOnLane(
+            "channel:" + requiredChannelName, eligible));
     }
 
     /**
@@ -211,33 +254,36 @@ public final class ZLinkServiceTopologyRegistry {
      * candidate: RouteMesh selection uses only remote Server memberships
      * published through admitted peer descriptors.
      */
-    public synchronized boolean hasSelectableChannel(String channelName) {
+    public boolean hasSelectableChannel(String channelName) {
         return hasSelectableChannel(channelName, ignored -> true);
     }
 
-    public synchronized boolean hasSelectableChannel(
+    public boolean hasSelectableChannel(
         String channelName,
         Predicate<Peer> isReady) {
-        return !eligibleChannelTargets(channelName, isReady).isEmpty();
+        String requiredChannelName = requireChannelName(channelName);
+        return !eligibleChannelTargets(requiredChannelName, isReady, peers()).isEmpty();
     }
 
-    public synchronized Optional<Peer> selectPlacement() {
+    public Optional<Peer> selectPlacement() {
         return selectPlacement(ignored -> true);
     }
 
-    public synchronized Optional<Peer> selectPlacement(
+    public Optional<Peer> selectPlacement(
         Predicate<Peer> isReady) {
-        return selectRange(
-            "placement",
-            peers().stream()
-                .filter(peer -> peer.descriptor().acceptsPlacement())
-                .filter(isReady)
-                .map(peer -> new WeightedPeer(
-                    peer, peer.descriptor().placementWeight()))
-                .toList());
+        Objects.requireNonNull(isReady, "isReady");
+        List<WeightedPeer> eligible = peers().stream()
+            .filter(peer -> peer.descriptor().acceptsPlacement())
+            .filter(isReady)
+            .map(peer -> new WeightedPeer(
+                peer, peer.descriptor().placementWeight()))
+            .toList();
+        return inStateLane(() -> selectRangeOnLane("placement", eligible));
     }
 
-    private Optional<Peer> selectRange(String key, List<WeightedPeer> eligible) {
+    private Optional<Peer> selectRangeOnLane(
+        String key,
+        List<WeightedPeer> eligible) {
         long total = 0;
         for (WeightedPeer candidate : eligible) {
             total = Math.addExact(total, candidate.weight());
@@ -261,7 +307,7 @@ public final class ZLinkServiceTopologyRegistry {
         throw new IllegalStateException("weighted placement did not select a peer");
     }
 
-    private Optional<Peer> select(String key, List<WeightedPeer> eligible) {
+    private Optional<Peer> selectOnLane(String key, List<WeightedPeer> eligible) {
         long total = 0;
         for (WeightedPeer candidate : eligible) {
             total = Math.addExact(total, candidate.weight());
@@ -312,11 +358,12 @@ public final class ZLinkServiceTopologyRegistry {
 
     private List<WeightedPeer> eligibleChannelTargets(
         String channelName,
-        Predicate<Peer> isReady) {
+        Predicate<Peer> isReady,
+        List<Peer> candidates) {
         String requiredChannelName = requireChannelName(channelName);
         Objects.requireNonNull(isReady, "isReady");
         List<WeightedPeer> eligible = new ArrayList<>();
-        for (Peer peer : peers()) {
+        for (Peer peer : candidates) {
             if (!isReady.test(peer)) {
                 continue;
             }

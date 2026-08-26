@@ -6,8 +6,6 @@ import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEvent;
@@ -18,6 +16,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkSpotCloseReason;
 import systems.zlink.framework.spots.ZLinkSpotClosingContext;
@@ -25,17 +24,17 @@ import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 final class ZLinkInstanceSpotActivation
     extends SpotActivationBase<DefaultInstanceSpotContext> {
     private final ZLinkInstanceSpot spot;
-    private final AtomicBoolean resourcesClosed = new AtomicBoolean();
-    private final Object idleLock = new Object();
-    private volatile CompletionStage<Boolean> closeFuture;
-    private volatile ScheduledFuture<?> idleCheck;
-    private volatile long idleTimeoutNanos;
-    private volatile long lastActivityNanos = System.nanoTime();
-    private volatile boolean closeStarted;
-    private volatile String expectedOwnerId;
-    private volatile long expectedOwnerLeaseGeneration = -1;
-    private volatile long expectedAuthorityOwnerGeneration = -1;
-    private volatile long expectedNodeGeneration = -1;
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private boolean resourcesClosed;
+    private CompletionStage<Boolean> closeFuture;
+    private ScheduledFuture<?> idleCheck;
+    private long idleTimeoutNanos;
+    private long lastActivityNanos = System.nanoTime();
+    private boolean closeStarted;
+    private String expectedOwnerId;
+    private long expectedOwnerLeaseGeneration = -1;
+    private long expectedAuthorityOwnerGeneration = -1;
+    private long expectedNodeGeneration = -1;
     // expectedNodeGeneration carries a node lifecycle-generation opaque
     // equality token (.NET ulong, spec 01-glossary "Lifecycle generation"):
     // full 64-bit range, only zero is unassigned, so a value with bit 63 set
@@ -45,8 +44,8 @@ final class ZLinkInstanceSpotActivation
     // bounded to 1..long.MaxValue, so a negative sentinel can never collide
     // with a real value), -1 cannot safely double as "not yet set" for this
     // field. authorityFenceEstablished is the non-sign-based presence flag.
-    private volatile boolean authorityFenceEstablished;
-    private volatile String sealedStoreVersion;
+    private boolean authorityFenceEstablished;
+    private String sealedStoreVersion;
 
     ZLinkInstanceSpotActivation(
         ZLinkSpotRuntime host,
@@ -58,22 +57,52 @@ final class ZLinkInstanceSpotActivation
         this.spot = spot;
     }
 
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
+    private <T> CompletionStage<T> onStateLane(Supplier<T> work) {
+        return stateLane.runAsync(work);
+    }
+
     CompletionStage<Void> handleDispatchEvent(ZLinkBackendSpotDispatchInfo info) {
+        return onStateLane(() -> handleDispatchEventOnLane(info))
+            .thenCompose(dispatch -> dispatch
+                ? drainRoutes()
+                : CompletableFuture.completedFuture(null))
+            .whenComplete((ignored, failure) -> {
+                if (failure == null) {
+                    onStateLane(() -> {
+                        lastActivityNanos = System.nanoTime();
+                        return null;
+                    });
+                }
+            });
+    }
+
+    private boolean handleDispatchEventOnLane(
+        ZLinkBackendSpotDispatchInfo info) {
         if (host.isClosing()
             || closeStarted
             || info.event() != ZLinkBackendSpotDispatchEvent.ROUTED_READABLE) {
-            return CompletableFuture.completedFuture(null);
+            return false;
         }
         // The route drain only reads frames and submits each payload after its
         // header has been admitted. Wrapping the whole drain in the same
         // queue would make the payload admission wait behind its own active
         // turn.
-        CompletionStage<Void> dispatch = drainRoutes();
-        return dispatch.whenComplete((ignored, failure) -> {
-            if (failure == null) {
-                lastActivityNanos = System.nanoTime();
-            }
-        });
+        return true;
     }
 
     void setAuthorityFence(
@@ -81,42 +110,54 @@ final class ZLinkInstanceSpotActivation
         long ownerLeaseGeneration,
         long authorityOwnerGeneration,
         long nodeGeneration) {
-        expectedOwnerId = ownerId;
-        expectedOwnerLeaseGeneration = ownerLeaseGeneration;
-        expectedAuthorityOwnerGeneration = authorityOwnerGeneration;
-        expectedNodeGeneration = nodeGeneration;
-        authorityFenceEstablished = true;
+        inStateLane(() -> {
+            expectedOwnerId = ownerId;
+            expectedOwnerLeaseGeneration = ownerLeaseGeneration;
+            expectedAuthorityOwnerGeneration = authorityOwnerGeneration;
+            expectedNodeGeneration = nodeGeneration;
+            authorityFenceEstablished = true;
+            return null;
+        });
     }
 
     boolean authorityFenceMatches(
         String ownerId,
         long ownerLeaseGeneration,
         long authorityOwnerGeneration) {
-        return (expectedOwnerId == null || expectedOwnerId.equals(ownerId))
-            && (expectedOwnerLeaseGeneration < 0
-                || expectedOwnerLeaseGeneration == ownerLeaseGeneration)
-            && (expectedAuthorityOwnerGeneration < 0
-                || expectedAuthorityOwnerGeneration == authorityOwnerGeneration);
+        return inStateLane(() ->
+            (expectedOwnerId == null || expectedOwnerId.equals(ownerId))
+                && (expectedOwnerLeaseGeneration < 0
+                    || expectedOwnerLeaseGeneration == ownerLeaseGeneration)
+                && (expectedAuthorityOwnerGeneration < 0
+                    || expectedAuthorityOwnerGeneration == authorityOwnerGeneration));
     }
 
     void markSealedStoreVersion(String storeVersion) {
-        sealedStoreVersion = storeVersion;
+        inStateLane(() -> {
+            sealedStoreVersion = storeVersion;
+            return null;
+        });
     }
 
     String sealedStoreVersion() {
-        return sealedStoreVersion;
+        return inStateLane(() -> sealedStoreVersion);
     }
 
     long expectedNodeGeneration() {
-        return expectedNodeGeneration;
+        return inStateLane(() -> expectedNodeGeneration);
     }
 
     boolean hasExpectedNodeGeneration() {
-        return authorityFenceEstablished;
+        return inStateLane(() -> authorityFenceEstablished);
     }
 
     systems.zlink.framework.runtime.internal.service
         .ZLinkServiceM6BWireCodec.InstanceRouteFence authorityRouteFence() {
+        return inStateLane(this::authorityRouteFenceOnLane);
+    }
+
+    private systems.zlink.framework.runtime.internal.service
+        .ZLinkServiceM6BWireCodec.InstanceRouteFence authorityRouteFenceOnLane() {
         if (!authorityFenceEstablished) {
             // Guards against ever shipping the unset -1 sentinel as a node
             // lifecycle-generation opaque token: unlike a bounded field, -1
@@ -148,42 +189,65 @@ final class ZLinkInstanceSpotActivation
         } catch (ArithmeticException overflow) {
             nanos = Long.MAX_VALUE;
         }
-        idleTimeoutNanos = Math.max(1L, nanos);
-        synchronized (idleLock) {
-            scheduleIdleCheckLocked(idleTimeoutNanos);
+        long timeoutNanos = Math.max(1L, nanos);
+        IdleSchedule schedule = inStateLane(() -> {
+            idleTimeoutNanos = timeoutNanos;
+            ScheduledFuture<?> previous = idleCheck;
+            idleCheck = null;
+            return new IdleSchedule(previous, idleTimeoutNanos);
+        });
+        if (schedule.previous() != null) {
+            schedule.previous().cancel(false);
+        }
+        scheduleIdleCheck(schedule.delayNanos());
+    }
+
+    private void scheduleIdleCheck(long delayNanos) {
+        ScheduledFuture<?> scheduled = host.scheduleInstanceSpotIdleCheck(
+            this::idleTimerFired,
+            Math.max(1L, delayNanos));
+        ScheduledFuture<?> discarded = inStateLane(() -> {
+            if (idleTimeoutNanos <= 0 || closeStarted || resourcesClosed) {
+                return scheduled;
+            }
+            ScheduledFuture<?> previous = idleCheck;
+            idleCheck = scheduled;
+            return previous;
+        });
+        if (discarded != null) {
+            discarded.cancel(false);
         }
     }
 
-    private void scheduleIdleCheckLocked(long delayNanos) {
-        if (idleTimeoutNanos <= 0 || closeStarted || resourcesClosed.get()) {
-            return;
+    private boolean canScheduleIdleCheckOnLane() {
+        if (idleTimeoutNanos <= 0 || closeStarted || resourcesClosed) {
+            return false;
         }
-        if (idleCheck != null) {
-            idleCheck.cancel(false);
-        }
-        idleCheck = host.scheduleInstanceSpotIdleCheck(
-            this::idleTimerFired,
-            Math.max(1L, delayNanos));
+        return true;
     }
 
     private void idleTimerFired() {
-        synchronized (idleLock) {
+        onStateLane(() -> {
             idleCheck = null;
-        }
-        if (!isIdleCandidate()) {
-            rescheduleIdleCheck();
-            return;
-        }
-        context.awaitQuiescence().whenComplete((ignored, failure) -> {
-            if (failure != null || !isIdleCandidate()) {
+            return isIdleCandidateOnLane();
+        }).thenAccept(idleCandidate -> {
+            if (!idleCandidate) {
                 rescheduleIdleCheck();
                 return;
             }
-            closeWithReason(ZLinkSpotCloseReason.IDLE_EVICTED);
+            context.awaitQuiescence().whenComplete((ignored, failure) -> {
+                boolean stillIdle = failure == null
+                    && inStateLane(this::isIdleCandidateOnLane);
+                if (!stillIdle) {
+                    rescheduleIdleCheck();
+                    return;
+                }
+                closeWithReason(ZLinkSpotCloseReason.IDLE_EVICTED);
+            });
         });
     }
 
-    private boolean isIdleCandidate() {
+    private boolean isIdleCandidateOnLane() {
         long timeout = idleTimeoutNanos;
         return timeout > 0
             && !host.isClosing()
@@ -195,10 +259,10 @@ final class ZLinkInstanceSpotActivation
     }
 
     private void rescheduleIdleCheck() {
-        synchronized (idleLock) {
-            if (idleTimeoutNanos > 0 && !closeStarted) {
-                scheduleIdleCheckLocked(idleTimeoutNanos);
-            }
+        long delayNanos = inStateLane(() ->
+            canScheduleIdleCheckOnLane() ? idleTimeoutNanos : 0L);
+        if (delayNanos > 0) {
+            scheduleIdleCheck(delayNanos);
         }
     }
 
@@ -260,7 +324,10 @@ final class ZLinkInstanceSpotActivation
     }
 
     void close(ZLinkSpotCloseReason reason, Instant deadline) {
-        closeStarted = true;
+        inStateLane(() -> {
+            closeStarted = true;
+            return null;
+        });
         try {
             host.awaitClosing(context.runClosing(() -> spot.onClosing(
                 new ZLinkSpotClosingContext(reason, deadline))));
@@ -275,34 +342,35 @@ final class ZLinkInstanceSpotActivation
 
     private CompletionStage<Boolean> closeWithReason(
         ZLinkSpotCloseReason reason) {
-        CompletableFuture<Boolean> result;
-        boolean retryIdle;
-        synchronized (this) {
+        CloseStart start = inStateLane(() -> {
             if (closeFuture != null) {
-                return closeFuture;
+                return new CloseStart(closeFuture, null, false, null);
             }
-            retryIdle = reason == ZLinkSpotCloseReason.IDLE_EVICTED
-                && (!isIdleCandidate()
+            boolean retryIdle = reason == ZLinkSpotCloseReason.IDLE_EVICTED
+                && (!isIdleCandidateOnLane()
                     || context.hasActiveTimers()
                     || hasActiveRouteReceives());
             if (retryIdle) {
-                result = null;
-            } else {
-                closeStarted = true;
-                synchronized (idleLock) {
-                    if (idleCheck != null) {
-                        idleCheck.cancel(false);
-                        idleCheck = null;
-                    }
-                }
-                result = new CompletableFuture<>();
-                closeFuture = result;
+                return new CloseStart(null, null, true, null);
             }
+            closeStarted = true;
+            ScheduledFuture<?> previous = idleCheck;
+            idleCheck = null;
+            CompletableFuture<Boolean> result = new CompletableFuture<>();
+            closeFuture = result;
+            return new CloseStart(null, result, false, previous);
+        });
+        if (start.existing() != null) {
+            return start.existing();
         }
-        if (retryIdle) {
+        if (start.cancelledIdleCheck() != null) {
+            start.cancelledIdleCheck().cancel(false);
+        }
+        if (start.retryIdle()) {
             rescheduleIdleCheck();
             return CompletableFuture.completedFuture(false);
         }
+        CompletableFuture<Boolean> result = start.result();
         CompletionStage<Boolean> seal;
         try {
             seal = host.sealInstanceSpotAuthority(this);
@@ -337,33 +405,42 @@ final class ZLinkInstanceSpotActivation
             })
             .whenComplete((closed, failure) -> {
                 if (failure != null) {
-                    synchronized (this) {
+                    inStateLane(() -> {
                         if (closeFuture == result) {
                             closeFuture = null;
                             closeStarted = false;
                         }
-                    }
+                        return null;
+                    });
                     if (reason == ZLinkSpotCloseReason.IDLE_EVICTED) {
                         rescheduleIdleCheck();
                     }
-                    result.completeExceptionally(failure);
+                    result.completeAsync(() -> {
+                        throw new CompletionException(failure);
+                    });
                     return;
                 }
-                result.complete(closed);
+                result.completeAsync(() -> closed);
             });
         return result;
     }
 
     void closeResources() {
-        if (!resourcesClosed.compareAndSet(false, true)) {
+        CloseResources start = inStateLane(() -> {
+            if (resourcesClosed) {
+                return null;
+            }
+            resourcesClosed = true;
+            closeStarted = true;
+            ScheduledFuture<?> previous = idleCheck;
+            idleCheck = null;
+            return new CloseResources(previous);
+        });
+        if (start == null) {
             return;
         }
-        closeStarted = true;
-        synchronized (idleLock) {
-            if (idleCheck != null) {
-                idleCheck.cancel(false);
-                idleCheck = null;
-            }
+        if (start.cancelledIdleCheck() != null) {
+            start.cancelledIdleCheck().cancel(false);
         }
         backendSpot.closeInstanceSpot();
         closeActiveRouteReceives();
@@ -372,7 +449,21 @@ final class ZLinkInstanceSpotActivation
 
     @Override
     public void close() {
-        closeStarted = true;
         close(ZLinkSpotCloseReason.EXPLICIT_CLOSE, Instant.now());
+    }
+
+    private record IdleSchedule(
+        ScheduledFuture<?> previous,
+        long delayNanos) {
+    }
+
+    private record CloseStart(
+        CompletionStage<Boolean> existing,
+        CompletableFuture<Boolean> result,
+        boolean retryIdle,
+        ScheduledFuture<?> cancelledIdleCheck) {
+    }
+
+    private record CloseResources(ScheduledFuture<?> cancelledIdleCheck) {
     }
 }
