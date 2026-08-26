@@ -118,13 +118,13 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
             _backgroundStopping = false;
         }
         stopped?.Dispose();
-        ActorOwnership.ResumeBackgroundWork();
+        AwaitStateLane(ActorOwnership.ResumeBackgroundWorkAsync());
     }
 
     internal void ResetGeneration()
     {
         SpotLocations.ResetGeneration();
-        ActorOwnership.ResetGeneration();
+        AwaitStateLane(ActorOwnership.ResetGenerationAsync());
     }
 
     private void OnOwnershipLost(ZLinkLocationKind kind, string canonicalKey)
@@ -132,7 +132,8 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
         Func<CancellationToken, ValueTask>? deactivate = null;
         if (kind == ZLinkLocationKind.Actor)
         {
-            deactivate = ActorOwnership.TakeOwnershipLostDeactivation(canonicalKey);
+            deactivate = AwaitStateLane(
+                ActorOwnership.TakeOwnershipLostDeactivationAsync(canonicalKey));
         }
         else if (kind == ZLinkLocationKind.Spot)
         {
@@ -142,6 +143,12 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
         if (deactivate is not null)
             TryRunBackground(deactivate);
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     private async ValueTask PauseBackgroundWorkCoreAsync(bool pauseActorOwnership)
     {

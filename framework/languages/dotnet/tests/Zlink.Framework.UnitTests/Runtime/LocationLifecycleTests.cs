@@ -131,7 +131,7 @@ public sealed class LocationLifecycleTests
         // lifecycle coordinator only rolls back its failed Ready authority.
         Assert.Null(await node.Resolvers.ResolveActorRowAsync(
             new ZLinkActorLocationKey(ActorId)));
-        Assert.False(node.ActorOwnership.OwnsActor(Actor(ActorId)));
+        Assert.False(await node.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
     }
 
     [Fact]
@@ -159,11 +159,11 @@ public sealed class LocationLifecycleTests
             failure.InnerExceptions,
             exception => exception is InvalidOperationException { Message: "factory failed" });
         for (var attempt = 0;
-             attempt < 50 && node.ActorOwnership.OwnsActor(Actor(ActorId));
+             attempt < 50 && await node.ActorOwnership.OwnsActorAsync(Actor(ActorId));
              attempt++)
             await Task.Delay(20);
 
-        Assert.False(node.ActorOwnership.OwnsActor(Actor(ActorId)));
+        Assert.False(await node.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
         Assert.Null(await node.Resolvers.ResolveActorRowAsync(
             new ZLinkActorLocationKey(ActorId)));
     }
@@ -202,7 +202,7 @@ public sealed class LocationLifecycleTests
         Assert.Null(second.Activated);
         Assert.Null(second.ExistingLocation);
         Assert.Equal(0, secondActivated);
-        Assert.True(node.ActorOwnership.OwnsActor(Actor(ActorId)));
+        Assert.True(await node.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
         Assert.NotNull(await node.Resolvers.ResolveActorRowAsync(key));
     }
 
@@ -246,7 +246,7 @@ public sealed class LocationLifecycleTests
 
         // ActorManager committed the reservation, but this target runtime did
         // not run the ordinary claim path that installs local ownership.
-        Assert.False(node.ActorOwnership.OwnsActor(Actor(ActorId)));
+        Assert.False(await node.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
 
         await node.ActorOwnership.AdoptCommittedActorAuthorityAsync(
             ActorId,
@@ -258,7 +258,7 @@ public sealed class LocationLifecycleTests
             "spot-after-create",
             spotGeneration: 9);
 
-        Assert.True(node.ActorOwnership.OwnsActor(Actor(ActorId)));
+        Assert.True(await node.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
         var joined = await node.Resolvers.ResolveActorRowAsync(
             new ZLinkActorLocationKey(ActorId));
         Assert.NotNull(joined);
@@ -322,7 +322,7 @@ public sealed class LocationLifecycleTests
         await Task.WhenAll(first, second);
 
         Assert.Equal(1, controlled.RemoveCalls);
-        Assert.False(node.ActorOwnership.OwnsActor(Actor(ActorId)));
+        Assert.False(await node.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
     }
 
     [Fact]
@@ -557,7 +557,7 @@ public sealed class LocationLifecycleTests
             await nodeA.ActorOwnership.NotifyActorJoinedSpotAsync(
                 ActorId, "spot-1", spotGeneration: 1));
         await deactivated.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.False(nodeA.ActorOwnership.OwnsActor(Actor(ActorId)));
+        Assert.False(await nodeA.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
         var currentSnapshot = Assert.IsType<ZLinkAuthorityReadResult.Found>(
             await fixture.Store.ReadAuthorityAsync(
                 ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId))).Snapshot;
@@ -619,7 +619,7 @@ public sealed class LocationLifecycleTests
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, stale.Kind);
 
         await deactivated.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.False(nodeA.ActorOwnership.OwnsActor(Actor(ActorId)));
+        Assert.False(await nodeA.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
 
         // The stale owner must not be able to damage the new row.
         await nodeA.ActorOwnership.ReleaseActorAsync(Actor(ActorId));

@@ -1378,9 +1378,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                         cancellationToken)
                     .ConfigureAwait(false);
             if (released is { } releasedSnapshot)
-                actorLocations.UpdateTrackedSnapshot(
-                    request.ActorId,
-                    releasedSnapshot);
+                await actorLocations.UpdateTrackedSnapshotAsync(
+                        request.ActorId,
+                        releasedSnapshot)
+                    .ConfigureAwait(false);
             if (request.OperationIdHigh != 0 || request.OperationIdLow != 0)
             {
                 var actor = actorState.Actor
@@ -3965,12 +3966,13 @@ internal sealed partial class ZLinkFrameworkRuntime
         if (LocationLifecycle is { } locations)
         {
             if (committedAuthority is { } snapshot)
-                locations.ActorOwnership.AdoptCommittedActorAuthority(
-                    actorId,
-                    actorType,
-                    committedActor,
-                    snapshot,
-                    _ => DeactivateActorOnOwnershipLossAsync(actorId));
+                await locations.ActorOwnership.AdoptCommittedActorAuthorityAsync(
+                        actorId,
+                        actorType,
+                        committedActor,
+                        snapshot,
+                        _ => DeactivateActorOnOwnershipLossAsync(actorId))
+                    .ConfigureAwait(false);
             else
                 await locations.ActorOwnership.AdoptCommittedActorAuthorityAsync(
                         actorId,
