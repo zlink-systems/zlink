@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkClientServerServerIdentity(
@@ -11,7 +13,7 @@ internal sealed class ZLinkClientServerServerIdentity(
 {
     private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PeerDeadline = TimeSpan.FromSeconds(15);
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<RoutingId, Peer> _peers = [];
     private ulong _revision = 1;
     private ulong _nextProbeId = 1;
@@ -39,145 +41,87 @@ internal sealed class ZLinkClientServerServerIdentity(
         Interlocked.Read(ref _livenessProbeCount);
     internal long ReceivedLivenessProbeCount =>
         Interlocked.Read(ref _receivedLivenessProbeCount);
-    internal int AdmittedPeerCount
-    {
-        get { lock (_gate) return _peers.Count; }
-    }
-    internal Snapshot Read()
-    {
-        lock (_gate)
-            return new Snapshot(
-                _revision,
-                _weight,
-                _state,
-                _advertisedEndpoint);
-    }
+    internal ValueTask<int> GetAdmittedPeerCountAsync() =>
+        _lane.RunAsync(() => _peers.Count);
 
-    internal void SetAdvertisedEndpoint(string endpoint)
+    internal ValueTask<Snapshot> ReadAsync() =>
+        _lane.RunAsync(ReadOnLane);
+
+    internal ValueTask SetAdvertisedEndpointAsync(string endpoint)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
-        lock (_gate)
-            _advertisedEndpoint = endpoint;
+        return _lane.RunAsync(() => { _advertisedEndpoint = endpoint; });
     }
 
-    internal Snapshot MarkDraining()
+    internal async ValueTask<Snapshot> MarkDrainingAsync()
     {
-        Snapshot snapshot;
-        lock (_gate)
-        {
-            _revision++;
-            _weight = 0;
-            _state = ZLinkFrameworkRuntimeState.Draining;
-            snapshot = new Snapshot(
-                _revision,
-                _weight,
-                _state,
-                _advertisedEndpoint);
-        }
+        var snapshot = await _lane.RunAsync(MarkDrainingOnLane).ConfigureAwait(false);
         PushUpdate(snapshot);
         SnapshotChanged?.Invoke(snapshot);
         return snapshot;
     }
 
-    internal Snapshot MarkRetiring() => SetLifecycleState(
+    internal ValueTask<Snapshot> MarkRetiringAsync() => SetLifecycleStateAsync(
         ZLinkFrameworkRuntimeState.Relocating);
 
-    internal Snapshot MarkServing() => SetLifecycleState(
+    internal ValueTask<Snapshot> MarkServingAsync() => SetLifecycleStateAsync(
         ZLinkFrameworkRuntimeState.Serving);
 
-    private Snapshot SetLifecycleState(ZLinkFrameworkRuntimeState state)
+    private async ValueTask<Snapshot> SetLifecycleStateAsync(ZLinkFrameworkRuntimeState state)
     {
-        Snapshot snapshot;
-        lock (_gate)
-        {
-            _revision++;
-            _state = state;
-            _weight = state == ZLinkFrameworkRuntimeState.Serving
-                ? _servingWeight
-                : 0;
-            snapshot = new Snapshot(
-                _revision,
-                _weight,
-                _state,
-                _advertisedEndpoint);
-        }
+        var snapshot = await _lane.RunAsync(() => SetLifecycleStateOnLane(state))
+            .ConfigureAwait(false);
         PushUpdate(snapshot);
         SnapshotChanged?.Invoke(snapshot);
         return snapshot;
     }
 
-    internal Snapshot SetWeight(int weight)
+    internal async ValueTask<Snapshot> SetWeightAsync(int weight)
     {
         ZLinkSocketConfig.ValidatePeerWeight(weight);
-        Snapshot snapshot;
-        lock (_gate)
-        {
-            if (_state != ZLinkFrameworkRuntimeState.Serving)
-                throw new ZLinkConfigurationException(
-                    $"ClientServer Server '{ChannelName}' is not serving.");
-            _revision = checked(_revision + 1);
-            _weight = weight;
-            _servingWeight = weight;
-            snapshot = new Snapshot(
-                _revision,
-                _weight,
-                _state,
-                _advertisedEndpoint);
-        }
+        var snapshot = await _lane.RunAsync(() => SetWeightOnLane(weight))
+            .ConfigureAwait(false);
         PushUpdate(snapshot);
         SnapshotChanged?.Invoke(snapshot);
         return snapshot;
     }
 
-    internal void AttachRouter(IRouterSocket router)
-    {
-        lock (_gate) _router = router;
-    }
+    internal ValueTask AttachRouterAsync(IRouterSocket router) =>
+        _lane.RunAsync(() => { _router = router; });
 
-    internal void DetachRouter(IRouterSocket router)
-    {
-        lock (_gate)
+    internal ValueTask DetachRouterAsync(IRouterSocket router) =>
+        _lane.RunAsync(() =>
         {
             if (ReferenceEquals(_router, router))
                 _router = null;
             _peers.Clear();
-        }
-    }
+        });
 
-    internal void AdmitPeer(
+    internal ValueTask AdmitPeerAsync(
         RoutingId routingId,
         uint normalizedEffectiveMaxMessageBytes)
     {
         var now = DateTimeOffset.UtcNow;
-        lock (_gate)
+        return _lane.RunAsync(() =>
+        {
             _peers[routingId] = new Peer(
                 routingId,
                 normalizedEffectiveMaxMessageBytes,
                 now + ProbeInterval,
                 now + PeerDeadline);
+        });
     }
 
-    internal bool TryGetAdmittedMaximumMessageBytes(
-        RoutingId routingId,
-        out uint maximumMessageBytes)
-    {
-        lock (_gate)
-        {
-            if (_peers.TryGetValue(routingId, out var peer))
-            {
-                maximumMessageBytes = peer.NormalizedEffectiveMaxMessageBytes;
-                return true;
-            }
-        }
-        maximumMessageBytes = 0;
-        return false;
-    }
+    internal ValueTask<(bool Found, uint MaximumMessageBytes)>
+        GetAdmittedMaximumMessageBytesAsync(RoutingId routingId) =>
+        _lane.RunAsync(() => _peers.TryGetValue(routingId, out var peer)
+            ? (true, peer.NormalizedEffectiveMaxMessageBytes)
+            : (false, 0u));
 
-    internal void AcceptLivenessAck(
+    internal ValueTask AcceptLivenessAckAsync(
         RoutingId routingId,
-        ulong probeId)
-    {
-        lock (_gate)
+        ulong probeId) =>
+        _lane.RunAsync(() =>
         {
             if (!_peers.TryGetValue(routingId, out var peer)
                 || peer.OutstandingProbeId != probeId)
@@ -185,8 +129,7 @@ internal sealed class ZLinkClientServerServerIdentity(
             peer.OutstandingProbeId = null;
             peer.Deadline = DateTimeOffset.UtcNow + PeerDeadline;
             Interlocked.Increment(ref _livenessAckCount);
-        }
-    }
+        });
 
     internal void RecordLivenessProbe(RoutingId routingId)
     {
@@ -198,26 +141,9 @@ internal sealed class ZLinkClientServerServerIdentity(
         IRouterSocket router,
         CancellationToken cancellationToken)
     {
-        List<(RoutingId RoutingId, ulong ProbeId)> probes = [];
-        List<RoutingId> expired = [];
         var now = DateTimeOffset.UtcNow;
-        lock (_gate)
-        {
-            foreach (var (key, peer) in _peers.ToArray())
-            {
-                if (now >= peer.Deadline)
-                {
-                    _peers.Remove(key);
-                    expired.Add(peer.RoutingId);
-                    continue;
-                }
-                if (now < peer.NextProbe)
-                    continue;
-                peer.NextProbe = now + ProbeInterval;
-                peer.OutstandingProbeId ??= AllocateProbeId();
-                probes.Add((peer.RoutingId, peer.OutstandingProbeId.Value));
-            }
-        }
+        var (probes, expired) = await _lane.RunAsync(() => PrepareLivenessTick(now))
+            .ConfigureAwait(false);
         foreach (var routingId in expired)
             try
             {
@@ -238,17 +164,7 @@ internal sealed class ZLinkClientServerServerIdentity(
 
     private void PushUpdate(Snapshot snapshot)
     {
-        IRouterSocket? router;
-        (RoutingId RoutingId, uint MaximumMessageBytes)[] peers;
-        lock (_gate)
-        {
-            router = _router;
-            peers = _peers.Values
-                .Select(static peer => (
-                    peer.RoutingId,
-                    peer.NormalizedEffectiveMaxMessageBytes))
-                .ToArray();
-        }
+        var (router, peers) = AwaitStateLane(_lane.RunAsync(GetPushUpdateTargets));
         if (router is null)
             return;
         foreach (var peer in peers)
@@ -263,6 +179,71 @@ internal sealed class ZLinkClientServerServerIdentity(
                     }),
                 CancellationToken.None);
     }
+
+    private Snapshot ReadOnLane() => new(
+        _revision,
+        _weight,
+        _state,
+        _advertisedEndpoint);
+
+    private Snapshot MarkDrainingOnLane()
+    {
+        _revision++;
+        _weight = 0;
+        _state = ZLinkFrameworkRuntimeState.Draining;
+        return ReadOnLane();
+    }
+
+    private Snapshot SetLifecycleStateOnLane(ZLinkFrameworkRuntimeState state)
+    {
+        _revision++;
+        _state = state;
+        _weight = state == ZLinkFrameworkRuntimeState.Serving
+            ? _servingWeight
+            : 0;
+        return ReadOnLane();
+    }
+
+    private Snapshot SetWeightOnLane(int weight)
+    {
+        if (_state != ZLinkFrameworkRuntimeState.Serving)
+            throw new ZLinkConfigurationException(
+                $"ClientServer Server '{ChannelName}' is not serving.");
+        _revision = checked(_revision + 1);
+        _weight = weight;
+        _servingWeight = weight;
+        return ReadOnLane();
+    }
+
+    private ((RoutingId RoutingId, ulong ProbeId)[] Probes, RoutingId[] Expired)
+        PrepareLivenessTick(DateTimeOffset now)
+    {
+        List<(RoutingId RoutingId, ulong ProbeId)> probes = [];
+        List<RoutingId> expired = [];
+        foreach (var (key, peer) in _peers.ToArray())
+        {
+            if (now >= peer.Deadline)
+            {
+                _peers.Remove(key);
+                expired.Add(peer.RoutingId);
+                continue;
+            }
+            if (now < peer.NextProbe)
+                continue;
+            peer.NextProbe = now + ProbeInterval;
+            peer.OutstandingProbeId ??= AllocateProbeId();
+            probes.Add((peer.RoutingId, peer.OutstandingProbeId.Value));
+        }
+        return ([.. probes], [.. expired]);
+    }
+
+    private (IRouterSocket? Router,
+        (RoutingId RoutingId, uint MaximumMessageBytes)[] Peers) GetPushUpdateTargets() =>
+        (_router, _peers.Values
+            .Select(static peer => (
+                peer.RoutingId,
+                peer.NormalizedEffectiveMaxMessageBytes))
+            .ToArray());
 
     internal ZLinkClientServerControlProtocol.Admission ToAdmission(
         Snapshot snapshot) =>
@@ -283,6 +264,9 @@ internal sealed class ZLinkClientServerServerIdentity(
         _nextProbeId = result == long.MaxValue ? 1 : result + 1;
         return result;
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
     private static async ValueTask<bool> SendOwnedAsync(
         IRouterSocket router,

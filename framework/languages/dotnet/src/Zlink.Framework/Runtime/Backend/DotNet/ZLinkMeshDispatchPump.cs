@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Zlink.Framework.Contracts.Streams;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
 
@@ -31,7 +32,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         ZLinkServiceWireCodec.RequestSourceFence> _requestSources = new();
 
     private Action<ZLinkBackendRouteReceived>? _nodeRouteHandler;
-    private readonly object _lifecycleGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly SemaphoreSlim _signal = new(0);
     private CancellationTokenSource? _stop;
     private Task? _loop;
@@ -75,14 +76,17 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
     public void EnsureStarted()
     {
-        lock (_lifecycleGate)
-        {
-            if (_started || _disposed) return;
-            _started = true;
-            _stop = new CancellationTokenSource();
-            _node.SetReadyHandler(OnReady);
+        AwaitStateLane(_lane.RunAsync(EnsureStartedOnLane));
+    }
+
+    private void EnsureStartedOnLane()
+    {
+        if (_started || _disposed) return;
+        _started = true;
+        _stop = new CancellationTokenSource();
+        _node.SetReadyHandler(OnReady);
+        using (ExecutionContext.SuppressFlow())
             _loop = Task.Run(() => RunAsync(_stop.Token));
-        }
     }
 
     // Registers (or replaces) the per-spot dispatch-event handler and returns the
@@ -162,11 +166,16 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     private void SignalReady(MeshReadyDomains readyDomains)
     {
         if (readyDomains == MeshReadyDomains.None) return;
-        lock (_lifecycleGate)
-        {
-            if (_disposed) return;
-            _pendingReadyDomains |= readyDomains;
-        }
+        if (_lane.IsOnLane)
+            SignalReadyOnLane(readyDomains);
+        else
+            AwaitStateLane(_lane.RunAsync(() => SignalReadyOnLane(readyDomains)));
+    }
+
+    private void SignalReadyOnLane(MeshReadyDomains readyDomains)
+    {
+        if (_disposed) return;
+        _pendingReadyDomains |= readyDomains;
         try
         {
             _signal.Release();
@@ -178,12 +187,14 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
     private MeshReadyDomains TakePendingReadyDomains()
     {
-        lock (_lifecycleGate)
-        {
-            var pending = _pendingReadyDomains;
-            _pendingReadyDomains = MeshReadyDomains.None;
-            return pending;
-        }
+        return AwaitStateLane(_lane.RunAsync(TakePendingReadyDomainsOnLane));
+    }
+
+    private MeshReadyDomains TakePendingReadyDomainsOnLane()
+    {
+        var pending = _pendingReadyDomains;
+        _pendingReadyDomains = MeshReadyDomains.None;
+        return pending;
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
@@ -656,14 +667,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        Task? loop;
-        lock (_lifecycleGate)
-        {
-            if (_disposed) return;
-            _disposed = true;
-            _stop?.Cancel();
-            loop = _loop;
-        }
+        var stopped = await _lane.RunAsync(StopOnLane).ConfigureAwait(false);
+        if (stopped is null) return;
+        var (stop, loop) = stopped.Value;
+        stop?.Cancel();
 
         Exception? loopFailure = null;
         if (loop is not null)
@@ -685,10 +692,23 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         await failures.CaptureAsync(() =>
                 new ValueTask(_completions.CompletionDrained))
             .ConfigureAwait(false);
-        failures.Capture(() => _stop?.Dispose());
+        failures.Capture(() => stop?.Dispose());
         failures.Capture(_signal.Dispose);
         failures.ThrowIfAny();
     }
+
+    private (CancellationTokenSource? Stop, Task? Loop)? StopOnLane()
+    {
+        if (_disposed) return null;
+        _disposed = true;
+        return (_stop, _loop);
+    }
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
     // Per-spot decoded-record queues plus the registered dispatch-event handler.
     internal sealed class SpotDispatchState

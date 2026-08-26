@@ -39,7 +39,7 @@ internal sealed class ZLinkClientServerRuntimeService(
 
         if (state.Server is { } localServer)
         {
-            var local = localServer.Read();
+            var local = AwaitStateLane(localServer.ReadAsync());
             var existing = servers.FindIndex(
                 entry => entry.ServerRid == localServer.ServerRid
                          && entry.LifecycleGeneration
@@ -516,4 +516,6 @@ internal sealed class ZLinkClientServerRuntimeService(
     private sealed record SequenceState(
         ulong Sequence,
         Fingerprint Fingerprint);
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }

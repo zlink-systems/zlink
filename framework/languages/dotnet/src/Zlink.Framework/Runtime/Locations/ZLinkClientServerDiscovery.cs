@@ -42,7 +42,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                         router.Options.LastEndpoint,
                         registration.Server!.AdvertiseHost),
                     router);
-                server.Identity.SetAdvertisedEndpoint(server.Endpoint);
+                await server.Identity.SetAdvertisedEndpointAsync(server.Endpoint)
+                    .ConfigureAwait(false);
                 await PublishAsync(server, ZLinkLocationWriteIntent.NewClaim, cancellationToken)
                     .ConfigureAwait(false);
                 _servers.Add(server);
@@ -72,7 +73,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         var published = true;
         foreach (var server in _servers)
         {
-            server.Identity.MarkDraining();
+            await server.Identity.MarkDrainingAsync().ConfigureAwait(false);
             var result = await PublishAsync(
                     server,
                     ZLinkLocationWriteIntent.Renew,
@@ -85,19 +86,19 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
     }
 
     internal ValueTask<bool> MarkRetiringAsync(CancellationToken cancellationToken) =>
-        PublishStateAsync(static identity => identity.MarkRetiring(), cancellationToken);
+        PublishStateAsync(static identity => identity.MarkRetiringAsync(), cancellationToken);
 
     internal ValueTask<bool> MarkServingAsync(CancellationToken cancellationToken) =>
-        PublishStateAsync(static identity => identity.MarkServing(), cancellationToken);
+        PublishStateAsync(static identity => identity.MarkServingAsync(), cancellationToken);
 
     private async ValueTask<bool> PublishStateAsync(
-        Action<ZLinkClientServerServerIdentity> transition,
+        Func<ZLinkClientServerServerIdentity, ValueTask<ZLinkClientServerServerIdentity.Snapshot>> transition,
         CancellationToken cancellationToken)
     {
         var published = true;
         foreach (var server in _servers)
         {
-            transition(server.Identity);
+            await transition(server.Identity).ConfigureAwait(false);
             var result = await PublishAsync(
                     server,
                     ZLinkLocationWriteIntent.Renew,
@@ -182,7 +183,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var owner = _locationRuntime.AdmissionOwnerToken;
-        var snapshot = server.Identity.Read();
+        var snapshot = await server.Identity.ReadAsync().ConfigureAwait(false);
         var descriptor = new ZLinkClientServerServerDescriptor(
             server.ChannelName,
             server.Identity.ServerRid,

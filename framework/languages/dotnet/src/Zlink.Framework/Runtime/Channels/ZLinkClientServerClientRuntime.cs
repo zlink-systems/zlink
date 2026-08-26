@@ -69,7 +69,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         string endpoint,
         ZLinkClientServerServerIdentity identity)
     {
-        var snapshot = identity.Read();
+        var snapshot = AwaitStateLane(identity.ReadAsync());
         var key =
             $"local:{identity.ServerRid.ToHex()}:{identity.LifecycleGeneration}";
         AddOrReplace(

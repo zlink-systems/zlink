@@ -1,5 +1,6 @@
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -36,7 +37,9 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
     private readonly System.Collections.Concurrent.ConcurrentDictionary<
         (ZLinkLocationAutoConnectType Type, ZLinkMeshName MeshName, ZLinkLocationRole Role),
         ZLinkAutoConnectLoop> _localLoops = new();
-    private readonly object _disposeGate = new();
+    // _lifecycleGate serializes the external start/stop/dispose protocol. The
+    // dispose-task memoization itself is component state and belongs to _lane.
+    private readonly ZLinkStateLane _lane = new();
     private ZLinkClientServerDiscovery? _clientServerDiscovery;
     private ZLinkFanoutDiscovery? _fanoutDiscovery;
     private int _disposed;
@@ -336,18 +339,19 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
 
     public ValueTask DisposeAsync()
     {
-        Task task;
-        TaskCompletionSource? start = null;
-        lock (_disposeGate)
+        var (task, start) = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_disposeTask is null)
             {
                 Volatile.Write(ref _disposed, 1);
-                start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _disposeTask = DisposeCoreAsync(start.Task);
+                var gate = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                using (ExecutionContext.SuppressFlow())
+                    _disposeTask = DisposeCoreAsync(gate.Task);
+                return (_disposeTask!, gate);
             }
-            task = _disposeTask;
-        }
+            return (_disposeTask!, (TaskCompletionSource?)null);
+        }));
         start?.TrySetResult();
         return new ValueTask(task);
     }
@@ -700,5 +704,8 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             return node.DisconnectPeerAuto(target.NodeRid, target.Endpoint);
         }
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
 }

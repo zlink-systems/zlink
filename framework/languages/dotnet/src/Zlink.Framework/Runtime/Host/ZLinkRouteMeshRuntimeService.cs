@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
@@ -22,9 +23,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
     private readonly ZLinkFrameworkHostLifecycleState _hostLifecycle;
     private readonly ZLinkLocationStoreHealth? _storeHealth;
     private readonly IZLinkLocationDescriptorQuery? _locationQuery;
-    private readonly object _sequenceGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<ZLinkMeshName, ulong> _sequences = [];
-    private readonly object _monitorGate = new();
     private readonly Dictionary<ZLinkMeshName, MonitorHub> _monitorHubs = [];
     private IDisposable? _metricRegistration;
     private bool _stopped;
@@ -208,20 +208,21 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
 
     internal void Stop()
     {
-        MonitorHub[] hubs;
-        lock (_monitorGate)
-        {
-            if (_stopped)
-                return;
-            _stopped = true;
-            hubs = [.. _monitorHubs.Values];
-        }
+        var hubs = AwaitStateLane(_lane.RunAsync(StopOnLane));
+        if (hubs is null) return;
         _hostLifecycle.Changed -= OnHostStateChanged;
         Interlocked.Exchange(ref _metricRegistration, null)?.Dispose();
         foreach (var hub in hubs)
             hub.Stop();
-        lock (_monitorGate)
-            _monitorHubs.Clear();
+        AwaitStateLane(_lane.RunAsync(() => _monitorHubs.Clear()));
+    }
+
+    private MonitorHub[]? StopOnLane()
+    {
+        if (_stopped)
+            return null;
+        _stopped = true;
+        return [.. _monitorHubs.Values];
     }
 
     public void Dispose() => Stop();
@@ -280,18 +281,26 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         string meshName,
         ZLinkSpotNodeRuntime nodeRuntime)
     {
+        if (_lane.IsOnLane)
+            return GetOrCreateHubOnLane(meshName, nodeRuntime);
+        return AwaitStateLane(_lane.RunAsync(
+            () => GetOrCreateHubOnLane(meshName, nodeRuntime)));
+    }
+
+    private MonitorHub GetOrCreateHubOnLane(
+        string meshName,
+        ZLinkSpotNodeRuntime nodeRuntime)
+    {
         var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
-        lock (_monitorGate)
-        {
-            if (_monitorHubs.TryGetValue(meshKey, out var hub))
-                return hub;
-            if (_stopped)
-                throw new ObjectDisposedException(nameof(ZLinkRouteMeshRuntimeService));
-            hub = new MonitorHub(this, meshKey, nodeRuntime);
-            _monitorHubs.Add(meshKey, hub);
-            hub.Start();
+        if (_monitorHubs.TryGetValue(meshKey, out var hub))
             return hub;
-        }
+        if (_stopped)
+            throw new ObjectDisposedException(nameof(ZLinkRouteMeshRuntimeService));
+        hub = new MonitorHub(this, meshKey, nodeRuntime);
+        _monitorHubs.Add(meshKey, hub);
+        using (ExecutionContext.SuppressFlow())
+            hub.Start();
+        return hub;
     }
 
     public async IAsyncEnumerable<ZLinkObservedStatus<ZLinkRouteMeshStatus>> ObserveAsync(
@@ -316,7 +325,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         ZLinkObservationQueue<ZLinkRouteMeshStatus> Observer) SubscribeMonitor(
         string meshName)
     {
-        lock (_monitorGate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_stopped)
                 throw new ObjectDisposedException(
@@ -324,14 +333,13 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             var nodeRuntime = _runtime.GetMeshNodeRuntime(meshName);
             var hub = GetOrCreateHub(meshName, nodeRuntime);
             return (hub, hub.Subscribe());
-        }
+        }));
     }
 
     private void OnHostStateChanged(ZLinkFrameworkRuntimeState state)
     {
-        MonitorHub[] hubs;
-        lock (_monitorGate)
-            hubs = [.. _monitorHubs.Values];
+        var hubs = AwaitStateLane(_lane.RunAsync(
+            () => _monitorHubs.Values.ToArray()));
         foreach (var hub in hubs)
             hub.PublishHostStateChanged(state);
     }
@@ -358,11 +366,11 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         MonitorHub hub,
         ZLinkObservationQueue<ZLinkRouteMeshStatus> observer)
     {
-        lock (_monitorGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             _ = meshName;
             hub.Unsubscribe(observer);
-        }
+        }));
     }
 
     private IReadOnlyList<ZLinkMeshRuntimeEvent> MapMonitorEvents(
@@ -445,13 +453,23 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
 
     private ulong NextSequence(ZLinkMeshName meshName)
     {
-        lock (_sequenceGate)
-        {
-            var next = _sequences.TryGetValue(meshName, out var current) ? current + 1 : 1;
-            _sequences[meshName] = next;
-            return next;
-        }
+        if (_lane.IsOnLane)
+            return NextSequenceOnLane(meshName);
+        return AwaitStateLane(_lane.RunAsync(() => NextSequenceOnLane(meshName)));
     }
+
+    private ulong NextSequenceOnLane(ZLinkMeshName meshName)
+    {
+        var next = _sequences.TryGetValue(meshName, out var current) ? current + 1 : 1;
+        _sequences[meshName] = next;
+        return next;
+    }
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
     private ZLinkMeshRuntimeEvent Event(
         string identifier,

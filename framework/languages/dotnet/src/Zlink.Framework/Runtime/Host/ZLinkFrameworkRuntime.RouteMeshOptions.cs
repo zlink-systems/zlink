@@ -109,7 +109,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     {
         ExecuteOperation(() =>
         {
-            identity.SetWeight(weight);
+            AwaitStateLane(identity.SetWeightAsync(weight));
             registration.SocketConfig.Weight = weight;
             _autoConnect?.SetClientServerWeight(identity.ChannelName.Value, weight);
             return true;

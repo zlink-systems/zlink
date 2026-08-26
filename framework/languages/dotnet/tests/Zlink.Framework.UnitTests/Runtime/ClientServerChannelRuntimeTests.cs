@@ -237,7 +237,7 @@ public sealed class ClientServerChannelRuntimeTests
             catch (TimeoutException exception)
             {
                 throw new TimeoutException(
-                    $"clientAck={clientTransport.LivenessAckCount}, clientProbe={clientTransport.ReceivedLivenessProbeCount}, clientSent={clientTransport.SentLivenessProbeCount}, serverAck={serverIdentity.LivenessAckCount}, serverProbe={serverIdentity.LivenessProbeCount}, serverReceived={serverIdentity.ReceivedLivenessProbeCount}, peers={serverIdentity.AdmittedPeerCount}, {clientTransport.AdmissionDiagnostics}",
+                    $"clientAck={clientTransport.LivenessAckCount}, clientProbe={clientTransport.ReceivedLivenessProbeCount}, clientSent={clientTransport.SentLivenessProbeCount}, serverAck={serverIdentity.LivenessAckCount}, serverProbe={serverIdentity.LivenessProbeCount}, serverReceived={serverIdentity.ReceivedLivenessProbeCount}, peers={await serverIdentity.GetAdmittedPeerCountAsync()}, {clientTransport.AdmissionDiagnostics}",
                     exception);
             }
             await client.GetRequiredService<IZLinkRouteClient>()
@@ -520,15 +520,15 @@ public sealed class ClientServerChannelRuntimeTests
                 TimeSpan.FromSeconds(5));
             var serverState = await serverRuntime.EnsureStartedStateAsync(
                 CancellationToken.None);
-            GetServerBundle(serverState, "work")
+            await GetServerBundle(serverState, "work")
                 .ClientServerServer!
-                .MarkDraining();
+                .MarkDrainingAsync();
             await WaitUntilAsync(
                 () => transport.ReadyCount == 0,
                 TimeSpan.FromSeconds(8));
-            GetServerBundle(serverState, "work")
+            await GetServerBundle(serverState, "work")
                 .ClientServerServer!
-                .MarkServing();
+                .MarkServingAsync();
             await WaitUntilAsync(
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(8));
@@ -563,9 +563,9 @@ public sealed class ClientServerChannelRuntimeTests
 
             var state = await runtime.EnsureStartedStateAsync(
                 CancellationToken.None);
-            GetServerBundle(state, "work")
+            await GetServerBundle(state, "work")
                 .ClientServerServer!
-                .MarkDraining();
+                .MarkDrainingAsync();
             await WaitUntilAsync(
                 () => transport.ReadyCount == 0,
                 TimeSpan.FromSeconds(2));
@@ -631,9 +631,9 @@ public sealed class ClientServerChannelRuntimeTests
                 ZLinkPeerState.Draining);
             var state = await runtime.EnsureStartedStateAsync(
                 CancellationToken.None);
-            GetServerBundle(state, "work")
+            await GetServerBundle(state, "work")
                 .ClientServerServer!
-                .MarkDraining();
+                .MarkDrainingAsync();
 
             Assert.True(await firstChange);
             Assert.True(await secondChange);

@@ -3,7 +3,7 @@ namespace Zlink.Framework.Runtime.Execution;
 internal sealed class ZLinkRuntimeTaskRunner
 {
     private static readonly AsyncLocal<ExecutionLease?> AmbientExecution = new();
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly HashSet<Task> _active = [];
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly object _executionOwner;
@@ -37,7 +37,7 @@ internal sealed class ZLinkRuntimeTaskRunner
         _executionOwner = executionOwner ?? this;
         _supervisor = executionOwner is ZLinkRuntimeExecutionScope scope
             ? scope.Supervisor
-            : new ZLinkRuntimeTaskSupervisor(_executionOwner);
+            : new ZLinkRuntimeTaskSupervisor();
         _ownsSupervisor = ownsSupervisor;
     }
 
@@ -91,10 +91,7 @@ internal sealed class ZLinkRuntimeTaskRunner
             throw new InvalidOperationException(
                 "A runtime task cannot synchronously stop the runner that owns it.");
 
-        lock (_gate)
-        {
-            _accepting = false;
-        }
+        await _lane.RunAsync(() => _accepting = false).ConfigureAwait(false);
 
         if (_ownsSupervisor)
         {
@@ -104,13 +101,12 @@ internal sealed class ZLinkRuntimeTaskRunner
 
         while (true)
         {
-            Task[] active;
-            lock (_gate)
+            var active = await _lane.RunAsync(() =>
             {
                 _active.RemoveWhere(static candidate => candidate.IsCompleted);
-                if (_active.Count == 0) return;
-                active = _active.ToArray();
-            }
+                return _active.ToArray();
+            }).ConfigureAwait(false);
+            if (active.Length == 0) return;
 
             await Task.WhenAll(active).ConfigureAwait(false);
         }
@@ -122,50 +118,72 @@ internal sealed class ZLinkRuntimeTaskRunner
         TaskCreationOptions creationOptions,
         out Task task)
     {
-        // The outer task is created cold and started only after both gates are
-        // released, so the thread-pool enqueue never runs inside the runner or
-        // supervisor locks shared with the dispatch path.
-        Task<Task>? outer = null;
-        lock (_gate)
+        // The outer task is created cold and started only after both state lanes
+        // release it, so its synchronous callback prefix cannot inherit either
+        // lane's AsyncLocal ownership.
+        var outer = new Task<Task>(
+            static state => RunDetachedCoreAsync((TaskState)state!),
+            new TaskState(this, name, callback, _errorSink, _shutdownToken),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach | creationOptions);
+        var startedTask = outer.Unwrap();
+        var acceptsRunnerExecution = AmbientExecution.Value is { IsActive: true } lease
+                                     && (ReferenceEquals(lease.Runner, this)
+                                         || _ownsSupervisor
+                                         && ReferenceEquals(lease.Owner, _executionOwner));
+        var acceptsOwnerExecution = AmbientExecution.Value is { IsActive: true } ownerLease
+                                    && ReferenceEquals(ownerLease.Owner, _executionOwner);
+        var accepted = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!_accepting
-                && !(AmbientExecution.Value is { IsActive: true } lease
-                     && (ReferenceEquals(lease.Runner, this)
-                         || _ownsSupervisor && ReferenceEquals(lease.Owner, _executionOwner))))
+                && !acceptsRunnerExecution)
             {
-                task = Task.CompletedTask;
                 return false;
             }
 
-            if (!_supervisor.TryStart(
-                    () =>
-                    {
-                        outer = new Task<Task>(
-                            static state => RunDetachedCoreAsync((TaskState)state!),
-                            new TaskState(this, name, callback, _errorSink, _shutdownToken),
-                            CancellationToken.None,
-                            TaskCreationOptions.DenyChildAttach | creationOptions);
-                        return outer.Unwrap();
-                    },
-                    out task))
+            if (!_supervisor.TryStart(startedTask, acceptsOwnerExecution))
                 return false;
-            _active.Add(task);
+            _active.Add(startedTask);
+            RegisterCompletion(startedTask);
+            return true;
+        }));
+
+        if (!accepted)
+        {
+            task = Task.CompletedTask;
+            return false;
+        }
+        task = startedTask;
+        outer.Start(TaskScheduler.Default);
+        return true;
+    }
+
+    private void RemoveCompletedTask(Task completed)
+    {
+        AwaitStateLane(_lane.RunAsync(() => _active.Remove(completed)));
+        _supervisor.Remove(completed);
+    }
+
+    private void RegisterCompletion(Task task)
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+        {
             _ = task.ContinueWith(
                 static (completed, state) => ((ZLinkRuntimeTaskRunner)state!).RemoveCompletedTask(completed),
                 this,
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
+            return;
         }
 
-        outer!.Start(TaskScheduler.Default);
-        return true;
-    }
-
-    private void RemoveCompletedTask(Task completed)
-    {
-        lock (_gate) _active.Remove(completed);
-        _supervisor.Remove(completed);
+        using (ExecutionContext.SuppressFlow())
+            _ = task.ContinueWith(
+                static (completed, state) => ((ZLinkRuntimeTaskRunner)state!).RemoveCompletedTask(completed),
+                this,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
     }
 
     private static async Task RunDetachedCoreAsync(TaskState state)
@@ -206,6 +224,12 @@ internal sealed class ZLinkRuntimeTaskRunner
 
     internal IZLinkRuntimeFailureReporter ErrorSink => _errorSink;
 
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
     private sealed record TaskState(
         ZLinkRuntimeTaskRunner Runner,
         string Name,
@@ -233,51 +257,49 @@ internal sealed class ZLinkRuntimeExecutionScope
 
     public ZLinkRuntimeExecutionScope()
     {
-        Supervisor = new ZLinkRuntimeTaskSupervisor(this);
+        Supervisor = new ZLinkRuntimeTaskSupervisor();
     }
 }
 
-internal sealed class ZLinkRuntimeTaskSupervisor(object executionOwner)
+internal sealed class ZLinkRuntimeTaskSupervisor
 {
     private readonly HashSet<Task> _active = [];
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private bool _accepting = true;
 
-    public bool TryStart(Func<Task> start, out Task task)
+    public bool TryStart(Task task, bool acceptsOwnerExecution)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (!_accepting && !ZLinkRuntimeTaskRunner.IsCurrentExecutionFor(executionOwner))
-            {
-                task = Task.CompletedTask;
+            if (!_accepting && !acceptsOwnerExecution)
                 return false;
-            }
 
-            task = start();
             _active.Add(task);
             return true;
-        }
+        }));
     }
 
     public void Remove(Task completed)
     {
-        lock (_gate) _active.Remove(completed);
+        AwaitStateLane(_lane.RunAsync(() => _active.Remove(completed)));
     }
 
     public async ValueTask StopAsync()
     {
         while (true)
         {
-            Task[] active;
-            lock (_gate)
+            var active = await _lane.RunAsync(() =>
             {
                 _accepting = false;
                 _active.RemoveWhere(static candidate => candidate.IsCompleted);
-                if (_active.Count == 0) return;
-                active = _active.ToArray();
-            }
+                return _active.ToArray();
+            }).ConfigureAwait(false);
+            if (active.Length == 0) return;
 
             await Task.WhenAll(active).ConfigureAwait(false);
         }
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }
