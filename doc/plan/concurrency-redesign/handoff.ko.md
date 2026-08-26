@@ -94,7 +94,12 @@ private void ScheduleExecution() {
 이미 있고(1,118줄) Spot/Actor **실행**에 쓰인다. 다만 relocation seal·lifecycle admission이
 얹혀 있어 **상태 소유**용으로는 과하다. 실행용은 그대로 두고 소유용만 새로 뒀다.
 
-## 5. 다음 작업 — 표본 전환
+## 5. 표본 전환 — **완료 (2026-08-26, `3cc6f5f615`)**
+
+결과와 실측(재진입 2곳, 호환 경계 25곳, 32분)은
+[sample-conversion-report.ko.md](sample-conversion-report.ko.md). 다음 단계는 §6의
+순서 재산정과 lane 소유 규칙의 `spec/server/01-execution` 승격(작성=sonnet, Fable=리뷰)이다.
+아래는 표본 당시의 작업 명세를 기록으로 남긴 것이다.
 
 **대상: `framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkSessionActorBindingTable.cs`**
 
