@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletionException;
 import java.time.Duration;
 import java.time.Instant;
 import systems.zlink.contracts.core.RoutingId;
@@ -42,13 +43,16 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.dispatch
     .ZLinkApplicationJobReceiveFlowController;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import java.util.function.Supplier;
 
 final class ZLinkChannelSocketRegistry {
     private static final long READY_POLL_INTERVAL_MILLIS = 5;
 
     private final Map<String, ChannelRegistration> registrations = new HashMap<>();
     private final ZLinkApplicationJobQueue applicationJobQueue;
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<ZLinkBackendObject,
         ZLinkApplicationJobReceiveFlowController.Registration>
         receiveFlowRegistrations = new IdentityHashMap<>();
@@ -88,18 +92,43 @@ final class ZLinkChannelSocketRegistry {
         this.applicationJobQueue = applicationJobQueue;
     }
 
+    // The package-private surface remains synchronous: registration and
+    // selection were complete before its callers returned under the monitor.
+    // Do not post these turns asynchronously, or callers can observe a
+    // partially registered channel.
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
     void registerChannel(ChannelRegistration registration) {
-        registrations.put(registration.name(), registration);
+        inStateLane(() -> {
+            registrations.put(registration.name(), registration);
+            return null;
+        });
     }
 
     ChannelRegistration registration(String channelName) {
-        return registrations.get(channelName);
+        return inStateLane(() -> registrations.get(channelName));
     }
 
     void registerClient(String channelName, ZLinkBackendDealerSocket socket) {
         registerReceiveFlow(socket);
-        clients.put(channelName, socket);
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            clients.put(channelName, socket);
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     void registerServer(
@@ -107,37 +136,53 @@ final class ZLinkChannelSocketRegistry {
         RoutingId routingId,
         ZLinkBackendRouterSocket socket) {
         registerReceiveFlow(socket);
-        servers.put(channelName, socket);
-        serverRoutingIds.put(channelName, routingId);
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            servers.put(channelName, socket);
+            serverRoutingIds.put(channelName, routingId);
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     void registerPublisher(
         String channelName,
         RoutingId routingId,
         ZLinkBackendPublisherSocket socket) {
-        publishers.put(channelName, socket);
-        publisherRoutingIds.put(channelName, routingId);
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            publishers.put(channelName, socket);
+            publisherRoutingIds.put(channelName, routingId);
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     void registerSubscriber(String channelName, ZLinkBackendSubscriberSocket socket) {
-        subscribers.put(channelName, socket);
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            subscribers.put(channelName, socket);
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     void registerRouteRouter(String channelName, ZLinkBackendRouterSocket socket) {
         registerReceiveFlow(socket);
-        routeRouters.put(channelName, socket);
-        routeSocketLocks.put(channelName, new Object());
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            routeRouters.put(channelName, socket);
+            routeSocketLocks.put(channelName, new Object());
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     ZLinkBackendDealerSocket client(String channelName) {
-        return clients.get(channelName);
+        return inStateLane(() -> clients.get(channelName));
     }
 
-    synchronized ZLinkBackendDealerSocket clientForOutbound(String channelName) {
+    ZLinkBackendDealerSocket clientForOutbound(String channelName) {
+        return inStateLane(() -> clientForOutboundCore(channelName));
+    }
+
+    private ZLinkBackendDealerSocket clientForOutboundCore(String channelName) {
         Set<ClientServerConnection> physical =
             Collections.newSetFromMap(new IdentityHashMap<>());
         physical.addAll(clientServerConnections.values());
