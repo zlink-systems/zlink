@@ -35,6 +35,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindO
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 
@@ -52,8 +53,9 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         new AtomicLong(1);
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ZLinkJavaSocketReceivePoller receivePoller;
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private SocketMonitor monitor;
-    private boolean sessionServiceStarted;
+    private volatile boolean sessionServiceStarted;
 
     ZLinkJavaStreamSocket(StreamSocket socket, ZLinkJavaRawMeshNode meshNode) {
         this(socket, meshNode, null, null, null);
@@ -95,28 +97,61 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             : nativeClose;
     }
 
-    @Override public synchronized Socket nativeSocket() { return socket; }
-    @Override public synchronized String name() { return "stream"; }
-    @Override public synchronized String lastEndpoint() {
-        return socket.options().lastEndpoint();
+    private <T> T inStateLane(java.util.function.Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
-    @Override public synchronized void setTlsServer(
+
+    @Override public Socket nativeSocket() { return inStateLane(() -> socket); }
+    @Override public String name() { return "stream"; }
+    @Override public String lastEndpoint() {
+        return inStateLane(() -> socket.options().lastEndpoint());
+    }
+    @Override public void setTlsServer(
         String certificatePath,
         String keyPath,
         boolean requireClientCertificate) {
-        socket.setTlsServer(certificatePath, keyPath, requireClientCertificate);
+        inStateLane(() -> {
+            socket.setTlsServer(certificatePath, keyPath, requireClientCertificate);
+            return null;
+        });
     }
-    @Override public synchronized void setMaxMessageSize(long value) {
-        socket.options().maxMessageSize(value == 0 ? -1 : value);
+    @Override public void setMaxMessageSize(long value) {
+        inStateLane(() -> {
+            socket.options().maxMessageSize(value == 0 ? -1 : value);
+            return null;
+        });
     }
-    @Override public synchronized void bind(String endpoint) { socket.bind(endpoint); }
-    @Override public synchronized void enableNotifications() {
-        socket.options().notify(true);
+    @Override public void bind(String endpoint) {
+        inStateLane(() -> {
+            socket.bind(endpoint);
+            return null;
+        });
+    }
+    @Override public void enableNotifications() {
+        inStateLane(() -> {
+            socket.options().notify(true);
+            return null;
+        });
     }
     @Override public boolean waitForReadable(Duration timeout) {
         return receivePoller.waitForReadable(timeout);
     }
-    @Override public synchronized ZLinkBackendStreamReceived recv() {
+    @Override public ZLinkBackendStreamReceived recv() {
+        return inStateLane(this::recvOnLane);
+    }
+
+    private ZLinkBackendStreamReceived recvOnLane() {
         Received received = new Received();
         boolean transferred = false;
         try {
@@ -135,27 +170,42 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             }
         }
     }
-    @Override public synchronized void disconnectPeer(RoutingId routingId) {
-        socket.disconnectRid(routingId);
+    @Override public void disconnectPeer(RoutingId routingId) {
+        inStateLane(() -> {
+            socket.disconnectRid(routingId);
+            return null;
+        });
     }
-    @Override public synchronized void onTransportError(ZLinkBackendStreamErrorHandler handler) {
+    @Override public void onTransportError(ZLinkBackendStreamErrorHandler handler) {
+        inStateLane(() -> {
         closeMonitor();
         monitor = socket.monitorOpen(MonitorEventType.DISCONNECTED);
         monitor.onEvent(event -> event.routingId().ifPresent(routingId ->
             handler.handle(routingId, 0, event.event().name())));
+            return null;
+        });
     }
     @Override public void startSessionService() {
-        if (meshNode != null && !sessionServiceStarted) {
-            sessionServiceStarted = true;
-        }
+        inStateLane(() -> {
+            if (meshNode != null && !sessionServiceStarted) {
+                sessionServiceStarted = true;
+            }
+            return null;
+        });
     }
-    @Override public synchronized boolean send(RoutingId routingId, List<Message> parts, SendFlags flags) {
-        return ZLinkJavaStreamFraming.submit(socket.send(routingId), 1, null, null, parts, flags);
+    @Override public boolean send(RoutingId routingId, List<Message> parts, SendFlags flags) {
+        return inStateLane(() -> ZLinkJavaStreamFraming.submit(
+            socket.send(routingId), 1, null, null, parts, flags));
     }
-    @Override public synchronized boolean sendBoundSessionPush(
+    @Override public boolean sendBoundSessionPush(
         RoutingId routingId,
         List<Message> parts,
         SendFlags flags) {
+        return inStateLane(() -> sendBoundSessionPushOnLane(routingId, parts, flags));
+    }
+
+    private boolean sendBoundSessionPushOnLane(
+        RoutingId routingId, List<Message> parts, SendFlags flags) {
         if (boundSessionSink != null) {
             return boundSessionSink.send(routingId, parts, flags);
         }
@@ -163,10 +213,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             throw new IllegalArgumentException(
                 "bound Session push requires one encoded STREAM frame");
         }
-        return socket.send(routingId)
-            .message(parts.getFirst())
-            .flags(flags)
-            .submit();
+        return socket.send(routingId).message(parts.getFirst()).flags(flags).submit();
     }
 
     CompletionStage<Void> sendBoundSessionPushAsync(
@@ -180,8 +227,8 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             throw new IllegalArgumentException(
                 "bound Session push requires one encoded STREAM frame");
         }
-        return FrameworkStreamOperations.send(
-            socket, routingId, parts, timeout);
+        return inStateLane(() -> FrameworkStreamOperations.send(
+            socket, routingId, parts, timeout));
     }
 
     @Override public CompletionStage<Void> sendBoundSessionPushAsync(
@@ -190,11 +237,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         return sendBoundSessionPushAsync(
             routingId, parts, admissionTimeout());
     }
-    @Override public synchronized boolean send(RoutingId routingId, String packetName, List<Message> parts, SendFlags flags) {
-        return ZLinkJavaStreamFraming.submit(socket.send(routingId), 1, null, packetName, parts, flags);
+    @Override public boolean send(RoutingId routingId, String packetName, List<Message> parts, SendFlags flags) {
+        return inStateLane(() -> ZLinkJavaStreamFraming.submit(
+            socket.send(routingId), 1, null, packetName, parts, flags));
     }
-    @Override public synchronized boolean send(RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, SendFlags flags) {
-        return ZLinkJavaStreamFraming.submit(socket.send(routingId), header, parts, flags);
+    @Override public boolean send(RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, SendFlags flags) {
+        return inStateLane(() -> ZLinkJavaStreamFraming.submit(
+            socket.send(routingId), header, parts, flags));
     }
     @Override public CompletionStage<Void> sendAsync(
         RoutingId routingId,
@@ -209,11 +258,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         Duration timeout) {
         return submitStreamFrameAsync(routingId, header, parts, timeout);
     }
-    @Override public synchronized boolean reply(RoutingId routingId, long requestSeq, String packetName, List<Message> parts, SendFlags flags) {
-        return ZLinkJavaStreamFraming.submit(socket.send(routingId), 3, requestSeq, packetName, parts, flags);
+    @Override public boolean reply(RoutingId routingId, long requestSeq, String packetName, List<Message> parts, SendFlags flags) {
+        return inStateLane(() -> ZLinkJavaStreamFraming.submit(
+            socket.send(routingId), 3, requestSeq, packetName, parts, flags));
     }
-    @Override public synchronized boolean reply(RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, SendFlags flags) {
-        return ZLinkJavaStreamFraming.submit(socket.send(routingId), header, parts, flags);
+    @Override public boolean reply(RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, SendFlags flags) {
+        return inStateLane(() -> ZLinkJavaStreamFraming.submit(
+            socket.send(routingId), header, parts, flags));
     }
     @Override public CompletionStage<Void> replyAsync(
         RoutingId routingId,
@@ -235,8 +286,8 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             return CompletableFuture.failedFuture(failure);
         }
         try {
-            return FrameworkStreamOperations.send(
-                socket, routingId, List.of(frame), timeout);
+            return inStateLane(() -> FrameworkStreamOperations.send(
+                socket, routingId, List.of(frame), timeout));
         } finally {
             frame.close();
         }
@@ -471,7 +522,14 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             }
         }
     }
-    @Override public synchronized void close() {
+    @Override public void close() {
+        inStateLane(() -> {
+            closeOnLane();
+            return null;
+        });
+    }
+
+    private void closeOnLane() {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
