@@ -3,6 +3,7 @@
 
 #include "runtime/channels/channel_pending_requests.hpp"
 #include "runtime/channels/route_connection_set.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 
 #include <zlink/Contracts/Core/routing_id.hpp>
@@ -43,12 +44,12 @@ class route_channel_runtime_t
 
     const std::string &router_channel_id () const noexcept;
     void routing_id (zlink::routing_id_t routing_id);
-    const std::optional<zlink::routing_id_t> &routing_id () const noexcept;
+    std::optional<zlink::routing_id_t> routing_id () const;
     void default_request_timeout (std::chrono::milliseconds timeout);
-    std::chrono::milliseconds default_request_timeout () const noexcept;
-    void start () noexcept;
-    void stop () noexcept;
-    bool running () const noexcept;
+    std::chrono::milliseconds default_request_timeout () const;
+    void start ();
+    void stop ();
+    bool running () const;
 
     bool connect (std::string endpoint);
     bool connect (zlink::routing_id_t peer_rid, std::string endpoint);
@@ -60,7 +61,7 @@ class route_channel_runtime_t
     void mark_peer_ready (const zlink::routing_id_t &peer_rid);
     void mark_peer_disconnected (const zlink::routing_id_t &peer_rid);
     void bind_endpoint (std::string endpoint);
-    const std::string &bind_endpoint () const noexcept;
+    std::string bind_endpoint () const;
     void manual_connections (std::vector<std::string> endpoints);
     std::vector<std::string> manual_connections () const;
 
@@ -119,8 +120,8 @@ class route_channel_runtime_t
     result_t<void> complete_request (std::uint64_t request_seq);
     void set_send_backend (send_backend_t backend);
     void set_request_backend (request_backend_t backend);
-    const std::vector<route_outbound_packet_t> &outbound_packets () const noexcept;
-    std::size_t pending_request_count () const noexcept;
+    std::vector<route_outbound_packet_t> outbound_packets () const;
+    std::size_t pending_request_count () const;
     result_t<void> wait_until_connected (std::chrono::milliseconds timeout) const;
     result_t<void> wait_until_peer_ready (const zlink::routing_id_t &target_node_rid,
                                           std::chrono::milliseconds timeout) const;
@@ -137,7 +138,8 @@ class route_channel_runtime_t
                                runtime::messaging::message_parts_t parts);
     result_t<void> ensure_connected () const;
     std::string _router_channel_id;
-    mutable std::mutex _mutex;
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
     std::optional<zlink::routing_id_t> _routing_id;
     std::chrono::milliseconds _default_request_timeout{std::chrono::seconds (30)};
     std::string _bind_endpoint;

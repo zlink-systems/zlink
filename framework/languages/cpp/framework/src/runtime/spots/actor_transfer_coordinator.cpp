@@ -32,16 +32,17 @@ bool actor_transfer_coordinator_t::try_reserve_source (
   const std::string &actor_key,
   std::string transfer_id)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     return _moves.emplace (
                    actor_key,
                    move_state_t{actor_move_phase_t::source_reserved, std::move (transfer_id)})
       .second;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::try_begin_local (const std::string &actor_key)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     if (auto found = _moves.find (actor_key); found != _moves.end ()) {
         if (found->second.phase != actor_move_phase_t::source_reserved)
             return false;
@@ -50,12 +51,13 @@ bool actor_transfer_coordinator_t::try_begin_local (const std::string &actor_key
     }
     return _moves.emplace (actor_key, move_state_t{actor_move_phase_t::local, std::string{}})
       .second;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::try_begin_source_remote (const std::string &actor_key,
                                                             std::string transfer_id)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     if (auto found = _moves.find (actor_key); found != _moves.end ()) {
         if (found->second.phase != actor_move_phase_t::source_reserved)
             return false;
@@ -68,13 +70,15 @@ bool actor_transfer_coordinator_t::try_begin_source_remote (const std::string &a
       .emplace (actor_key, move_state_t{actor_move_phase_t::source_remote, std::move (transfer_id),
                                         std::chrono::steady_clock::now ()})
       .second;
+    }).get ();
 }
 
 void actor_transfer_coordinator_t::cancel_move (const std::string &actor_key)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     _moves.erase (actor_key);
     _backlogs.erase (actor_key);
+    }).get ();
 }
 
 void actor_transfer_coordinator_t::mark_reconcile (
@@ -82,7 +86,7 @@ void actor_transfer_coordinator_t::mark_reconcile (
   std::chrono::steady_clock::duration bound,
   std::optional<reconcile_target_context_t> context)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto deadline = std::chrono::steady_clock::now () + bound;
     auto found = _moves.find (actor_key);
     if (found == _moves.end ()) {
@@ -95,12 +99,13 @@ void actor_transfer_coordinator_t::mark_reconcile (
     found->second.phase = actor_move_phase_t::reconcile;
     found->second.reconcile_deadline = deadline;
     found->second.reconcile_context = std::move (context);
+    }).get ();
 }
 
 std::vector<expired_reconcile_t> actor_transfer_coordinator_t::reconcile_keys_expired (
   std::chrono::steady_clock::time_point now) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     std::vector<expired_reconcile_t> expired;
     for (const auto &[key, move] : _moves) {
         if (move.phase == actor_move_phase_t::reconcile && move.reconcile_deadline
@@ -109,12 +114,13 @@ std::vector<expired_reconcile_t> actor_transfer_coordinator_t::reconcile_keys_ex
         }
     }
     return expired;
+    }).get ();
 }
 
 std::optional<std::chrono::steady_clock::duration>
 actor_transfer_coordinator_t::complete_move (const std::string &actor_key)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] () -> std::optional<std::chrono::steady_clock::duration> {
     const auto found = _moves.find (actor_key);
     if (found == _moves.end ()) {
         return std::nullopt;
@@ -125,12 +131,13 @@ actor_transfer_coordinator_t::complete_move (const std::string &actor_key)
     }
     _moves.erase (found);
     return elapsed;
+    }).get ();
 }
 
 actor_move_completion_t actor_transfer_coordinator_t::complete_move_and_take_backlog (
   const std::string &actor_key)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _moves.find (actor_key);
     if (found == _moves.end ())
         return actor_move_completion_t{std::nullopt, {}, true};
@@ -145,12 +152,13 @@ actor_move_completion_t actor_transfer_coordinator_t::complete_move_and_take_bac
     }
     _moves.erase (found);
     return actor_move_completion_t{std::move (elapsed), std::move (backlog), true};
+    }).get ();
 }
 
 actor_move_completion_t actor_transfer_coordinator_t::finish_move_replay (
   const std::string &actor_key)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _moves.find (actor_key);
     if (found == _moves.end ())
         return actor_move_completion_t{std::nullopt, {}, true};
@@ -167,13 +175,14 @@ actor_move_completion_t actor_transfer_coordinator_t::finish_move_replay (
     }
     _moves.erase (found);
     return actor_move_completion_t{std::move (elapsed), {}, true};
+    }).get ();
 }
 
 handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog (
   const std::string &actor_key,
   handoff_packet_t packet)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto moving = _moves.find (actor_key);
     if (moving == _moves.end ()) {
         return handoff_append_result_t::not_moving;
@@ -215,13 +224,14 @@ handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog (
     auto &backlog = _backlogs[actor_key];
     backlog.push_back (std::move (packet));
     return handoff_append_result_t::appended;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::stage_commit_backlog (
   const std::string &transfer_id,
   std::vector<handoff_packet_t> backlog)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto admission = _admissions.find (transfer_id);
     if (admission == _admissions.end ())
         return false;
@@ -266,12 +276,13 @@ bool actor_transfer_coordinator_t::stage_commit_backlog (
                    std::make_move_iterator (backlog.begin ()),
                    std::make_move_iterator (backlog.end ()));
     return true;
+    }).get ();
 }
 
 std::vector<handoff_packet_t>
 actor_transfer_coordinator_t::take_backlog (const std::string &actor_key)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] () -> std::vector<handoff_packet_t> {
     const auto found = _backlogs.find (actor_key);
     if (found == _backlogs.end ()) {
         return {};
@@ -279,6 +290,7 @@ actor_transfer_coordinator_t::take_backlog (const std::string &actor_key)
     auto backlog = std::move (found->second);
     _backlogs.erase (found);
     return backlog;
+    }).get ();
 }
 
 void actor_transfer_coordinator_t::activate_message_follow (
@@ -290,7 +302,7 @@ void actor_transfer_coordinator_t::activate_message_follow (
   std::chrono::steady_clock::time_point remove_at,
   std::string transfer_id)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     auto &routes = _message_follow_routes[actor_key];
     const auto existing = std::find_if (
       routes.begin (), routes.end (), [&] (const auto &route) {
@@ -319,13 +331,14 @@ void actor_transfer_coordinator_t::activate_message_follow (
     existing->target_fence = std::move (target_fence);
     existing->remove_at = std::max (existing->remove_at, remove_at);
     existing->transfer_id = std::move (transfer_id);
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::matches_message_follow_source (
   const std::string &actor_key,
   const runtime::protocol::actor_route_fence_t &source_fence) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return false;
@@ -333,6 +346,7 @@ bool actor_transfer_coordinator_t::matches_message_follow_source (
     return std::ranges::any_of (found->second, [&] (const auto &route) {
         return route.remove_at > now && route.source_fence == source_fence;
     });
+    }).get ();
 }
 
 std::optional<actor_message_follow_target_t>
@@ -340,7 +354,7 @@ actor_transfer_coordinator_t::message_follow_target (
   const std::string &actor_key,
   const runtime::protocol::actor_route_fence_t &source_fence) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] () -> std::optional<actor_message_follow_target_t> {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return std::nullopt;
@@ -355,12 +369,13 @@ actor_transfer_coordinator_t::message_follow_target (
     return actor_message_follow_target_t{
       route->target_actor, route->target_route, route->source_fence,
       route->target_fence};
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::message_follow_targets_node (
   const std::string &actor_key, const zlink::routing_id_t &node) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return false;
@@ -372,12 +387,13 @@ bool actor_transfer_coordinator_t::message_follow_targets_node (
                     .to_bytes ()
                     == node.to_bytes ();
     });
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::has_message_follow_route (
   const std::string &actor_key) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return false;
@@ -385,13 +401,15 @@ bool actor_transfer_coordinator_t::has_message_follow_route (
     return std::ranges::any_of (found->second, [&] (const auto &route) {
         return route.remove_at > now;
     });
+    }).get ();
 }
 
 std::optional<runtime::protocol::actor_route_fence_t>
 actor_transfer_coordinator_t::message_follow_source_for_generation (
   const std::string &actor_key, std::uint64_t generation) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run (
+      [&, this] () -> std::optional<runtime::protocol::actor_route_fence_t> {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return std::nullopt;
@@ -404,6 +422,7 @@ actor_transfer_coordinator_t::message_follow_source_for_generation (
     if (route == found->second.end ())
         return std::nullopt;
     return route->source_fence;
+    }).get ();
 }
 
 result_t<std::optional<actor_message_follow_target_t>>
@@ -416,7 +435,7 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
 {
     constexpr std::size_t max_hops =
       zlink::framework::runtime::protocol::messageFollowHopCount;
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ()) {
         return result_t<std::optional<actor_message_follow_target_t>>::success (
@@ -459,14 +478,15 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
       actor_message_follow_target_t{
         route->target_actor, route->target_route,
         route->source_fence, route->target_fence});
+    }).get ();
 }
 
 void actor_transfer_coordinator_t::release_message_follow (
   const std::string &actor_key,
   const runtime::protocol::actor_route_fence_t &source_fence,
-  std::size_t payload_bytes) noexcept
+  std::size_t payload_bytes)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return;
@@ -482,6 +502,7 @@ void actor_transfer_coordinator_t::release_message_follow (
       payload_bytes >= route->in_flight_bytes
         ? 0
         : route->in_flight_bytes - payload_bytes;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::try_begin_message_follow_notification (
@@ -489,7 +510,7 @@ bool actor_transfer_coordinator_t::try_begin_message_follow_notification (
   const runtime::protocol::actor_route_fence_t &source_fence,
   const runtime::protocol::actor_route_fence_t &target_fence)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return false;
@@ -502,6 +523,7 @@ bool actor_transfer_coordinator_t::try_begin_message_follow_notification (
         || route->remove_at <= std::chrono::steady_clock::now ())
         return false;
     return _message_follow_suppression.try_begin (route->suppression_key);
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::complete_message_follow_notification (
@@ -510,7 +532,7 @@ bool actor_transfer_coordinator_t::complete_message_follow_notification (
   const runtime::protocol::actor_route_fence_t &target_fence,
   bool transport_accepted)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return false;
@@ -524,13 +546,14 @@ bool actor_transfer_coordinator_t::complete_message_follow_notification (
     return transport_accepted
              ? _message_follow_suppression.mark_sent (route->suppression_key)
              : _message_follow_suppression.abort (route->suppression_key);
+    }).get ();
 }
 
 std::vector<removed_actor_message_follow_t>
 actor_transfer_coordinator_t::remove_expired_message_follow (
   std::chrono::steady_clock::time_point now)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     std::vector<removed_actor_message_follow_t> removed;
     for (auto found = _message_follow_routes.begin ();
          found != _message_follow_routes.end ();) {
@@ -552,6 +575,7 @@ actor_transfer_coordinator_t::remove_expired_message_follow (
         }
     }
     return removed;
+    }).get ();
 }
 
 std::optional<removed_actor_message_follow_t>
@@ -560,7 +584,7 @@ actor_transfer_coordinator_t::remove_message_follow (
   const runtime::protocol::actor_route_fence_t &source_fence,
   const runtime::protocol::actor_route_fence_t &target_fence)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] () -> std::optional<removed_actor_message_follow_t> {
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return std::nullopt;
@@ -579,37 +603,41 @@ actor_transfer_coordinator_t::remove_message_follow (
     if (routes.empty ())
         _message_follow_routes.erase (found);
     return removed;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::blocks_dispatch (const std::string &actor_key) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     return _moves.contains (actor_key);
+    }).get ();
 }
 
 std::optional<actor_move_phase_t>
 actor_transfer_coordinator_t::phase (const std::string &actor_key) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _moves.find (actor_key);
     return found == _moves.end () ? std::nullopt : std::make_optional (found->second.phase);
+    }).get ();
 }
 
 std::optional<std::string>
 actor_transfer_coordinator_t::transfer_id (const std::string &actor_key) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _moves.find (actor_key);
     return found == _moves.end () || found->second.transfer_id.empty ()
              ? std::nullopt
              : std::make_optional (found->second.transfer_id);
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::try_submit_source_leave (
   const std::string &actor_key,
   const std::string &transfer_id)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _moves.find (actor_key);
     if (found == _moves.end ()
         || found->second.phase != actor_move_phase_t::source_remote
@@ -619,24 +647,26 @@ bool actor_transfer_coordinator_t::try_submit_source_leave (
     }
     found->second.source_leave_submitted = true;
     return true;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::source_leave_submitted (
   const std::string &actor_key,
   const std::string &transfer_id) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _moves.find (actor_key);
     return found != _moves.end ()
            && found->second.phase == actor_move_phase_t::source_remote
            && found->second.transfer_id == transfer_id
            && found->second.source_leave_submitted;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::try_add_admission (std::string transfer_id,
                                                       pending_actor_admission_t admission)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     if (_admissions.contains (transfer_id) || _completed_admissions.contains (transfer_id)) {
         return false;
     }
@@ -673,26 +703,29 @@ bool actor_transfer_coordinator_t::try_add_admission (std::string transfer_id,
     _moves.emplace (actor_key, move_state_t{actor_move_phase_t::target_pending, transfer_id});
     _admissions.emplace (std::move (transfer_id), std::move (admission));
     return true;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::is_current (
   const std::string &actor_key,
   const std::string &transfer_id) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto moving = _moves.find (actor_key);
     return moving != _moves.end () && moving->second.transfer_id == transfer_id;
+    }).get ();
 }
 
 std::optional<pending_actor_admission_t>
 actor_transfer_coordinator_t::admission (
   const std::string &transfer_id) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _admissions.find (transfer_id);
     return found == _admissions.end ()
              ? std::nullopt
              : std::make_optional (found->second);
+    }).get ();
 }
 
 std::optional<pending_actor_admission_t>
@@ -700,7 +733,7 @@ actor_transfer_coordinator_t::begin_commit (const std::string &transfer_id,
                                             const actor_ref_t &source_actor,
                                             const spot_id_t &target_spot_id)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] () -> std::optional<pending_actor_admission_t> {
     const auto found = _admissions.find (transfer_id);
     if (found == _admissions.end ()) {
         return std::nullopt;
@@ -726,6 +759,7 @@ actor_transfer_coordinator_t::begin_commit (const std::string &transfer_id,
     }
     moving->second.phase = actor_move_phase_t::target_committing;
     return found->second;
+    }).get ();
 }
 
 std::optional<pending_actor_admission_t>
@@ -733,7 +767,7 @@ actor_transfer_coordinator_t::pending_commit (const std::string &transfer_id,
                                               const actor_ref_t &source_actor,
                                               const spot_id_t &target_spot_id) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] () -> std::optional<pending_actor_admission_t> {
     const auto found = _admissions.find (transfer_id);
     if (found == _admissions.end ()) {
         return std::nullopt;
@@ -750,6 +784,7 @@ actor_transfer_coordinator_t::pending_commit (const std::string &transfer_id,
         return std::nullopt;
     }
     return found->second;
+    }).get ();
 }
 
 std::optional<pending_actor_admission_t>
@@ -758,7 +793,7 @@ actor_transfer_coordinator_t::completed_commit (
   const actor_ref_t &source_actor,
   const spot_id_t &target_spot_id) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] () -> std::optional<pending_actor_admission_t> {
     const auto found = _completed_admissions.find (transfer_id);
     if (found == _completed_admissions.end ()
         || found->second.deadline <= std::chrono::steady_clock::now ()
@@ -769,6 +804,7 @@ actor_transfer_coordinator_t::completed_commit (
           found->second.completion_operation_id_low))
         return std::nullopt;
     return found->second;
+    }).get ();
 }
 
 std::optional<std::vector<handoff_packet_t>>
@@ -777,7 +813,7 @@ actor_transfer_coordinator_t::complete_commit_and_take_backlog (
   const actor_ref_t &source_actor,
   const spot_id_t &target_spot_id)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] () -> std::optional<std::vector<handoff_packet_t>> {
     const auto found = _admissions.find (transfer_id);
     if (found == _admissions.end ())
         return std::nullopt;
@@ -807,6 +843,7 @@ actor_transfer_coordinator_t::complete_commit_and_take_backlog (
     _completed_admissions.insert_or_assign (transfer_id, found->second);
     _admissions.erase (found);
     return backlog;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::stage_session_relocation_route (
@@ -818,7 +855,7 @@ bool actor_transfer_coordinator_t::stage_session_relocation_route (
     if (route.empty () || actor_type.empty ()
         || target_owner_lease_generation == 0)
         return false;
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     auto found = _admissions.find (transfer_id);
     if (found == _admissions.end ()) {
         found = _completed_admissions.find (transfer_id);
@@ -837,6 +874,7 @@ bool actor_transfer_coordinator_t::stage_session_relocation_route (
     admission.session_relocation_target_owner_lease_generation =
       target_owner_lease_generation;
     return true;
+    }).get ();
 }
 
 bool actor_transfer_coordinator_t::commit_session_relocation_route_authority (
@@ -847,7 +885,7 @@ bool actor_transfer_coordinator_t::commit_session_relocation_route_authority (
     if (previous_authority_owner_generation == 0
         || target_authority_owner_generation <= previous_authority_owner_generation)
         return false;
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     auto found = _admissions.find (transfer_id);
     if (found == _admissions.end ()) {
         found = _completed_admissions.find (transfer_id);
@@ -868,13 +906,14 @@ bool actor_transfer_coordinator_t::commit_session_relocation_route_authority (
     admission.session_relocation_committed_target_authority_owner_generation =
       target_authority_owner_generation;
     return true;
+    }).get ();
 }
 
 std::optional<pending_actor_admission_t>
 actor_transfer_coordinator_t::session_relocation_admission (
   const std::string &transfer_id) const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] () -> std::optional<pending_actor_admission_t> {
     if (const auto found = _admissions.find (transfer_id);
         found != _admissions.end ())
         return found->second;
@@ -882,11 +921,12 @@ actor_transfer_coordinator_t::session_relocation_admission (
         found != _completed_admissions.end ())
         return found->second;
     return std::nullopt;
+    }).get ();
 }
 
 void actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, bool reconcile)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _admissions.find (transfer_id);
     if (found == _admissions.end ()) {
         return;
@@ -909,11 +949,12 @@ void actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, 
         _moves.erase (actor_key);
         _backlogs.erase (actor_key);
     }
+    }).get ();
 }
 
 void actor_transfer_coordinator_t::complete_commit (const std::string &transfer_id)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     const auto found = _admissions.find (transfer_id);
     if (found == _admissions.end ()) {
         return;
@@ -922,12 +963,13 @@ void actor_transfer_coordinator_t::complete_commit (const std::string &transfer_
     _completed_admissions.insert_or_assign (
       transfer_id, found->second);
     _admissions.erase (found);
+    }).get ();
 }
 
 std::vector<expired_actor_admission_t>
 actor_transfer_coordinator_t::cleanup_expired (std::chrono::steady_clock::time_point now)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     std::vector<expired_actor_admission_t> removed;
     for (auto found = _admissions.begin (); found != _admissions.end ();) {
         const auto moving = _moves.find (found->second.actor_key);
@@ -950,18 +992,21 @@ actor_transfer_coordinator_t::cleanup_expired (std::chrono::steady_clock::time_p
             ++found;
     }
     return removed;
+    }).get ();
 }
 
 std::size_t actor_transfer_coordinator_t::pending_count () const
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     return _admissions.size ();
+    }).get ();
 }
 
 std::string actor_transfer_coordinator_t::next_transfer_id (const std::string &node_rid)
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([&, this] {
     return node_rid + ":" + std::to_string (_next_transfer_id++);
+    }).get ();
 }
 
 } // namespace zlink::framework::detail
