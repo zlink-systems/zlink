@@ -2275,13 +2275,14 @@ mesh_node_builder_t zlink_framework_options_t::add_route_mesh (
     builder._state->framework_options = _options;
     builder._state->handler_groups = _handler_groups;
     std::weak_ptr<detail::framework_options_state_t> options = _options;
-    std::lock_guard lock (builder._state->mutex);
-    builder._state->channel_name_observer =
-      [options] (const std::string &channel_name) {
-          if (const auto state = options.lock ()) {
-              state->mesh_node_channel_names.insert (channel_name);
-          }
-      };
+    builder._state->lane.run ([&] {
+        builder._state->channel_name_observer =
+          [options] (const std::string &channel_name) {
+              if (const auto state = options.lock ()) {
+                  state->mesh_node_channel_names.insert (channel_name);
+              }
+          };
+    }).get ();
     return builder;
 }
 

@@ -7,6 +7,7 @@
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/locations/sha256.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <algorithm>
@@ -30,11 +31,11 @@ struct owner_lease_row_t
 class in_memory_location_repository_t : public location_repository_t
 {
   public:
-    in_memory_location_repository_t () = default;
+    in_memory_location_repository_t () : _lane_executor (), _lane (_lane_executor) {}
 
     explicit in_memory_location_repository_t (
       std::uint64_t initial_store_revision) :
-        _store_revision (initial_store_revision)
+        _lane_executor (), _lane (_lane_executor), _store_revision (initial_store_revision)
     {
     }
 
@@ -45,7 +46,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (!valid_mesh_node_descriptor (descriptor))
             throw std::invalid_argument (
               "mesh node descriptor is incomplete");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         const auto key = mesh_node_key (
           descriptor.mesh_name, descriptor.rid);
@@ -111,13 +112,14 @@ class in_memory_location_repository_t : public location_repository_t
             static_cast<std::int64_t> (
               descriptor.descriptor_revision),
             now));
+        }).get ();
     }
 
     task_t<location_write_status_t> remove_mesh_node (
       mesh_node_descriptor_key_t key,
       location_owner_token_t owner) override
     {
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto found = _mesh_nodes.find (
           mesh_node_key (key.mesh_name, key.rid));
         if (found == _mesh_nodes.end ()
@@ -131,13 +133,14 @@ class in_memory_location_repository_t : public location_repository_t
           mesh_node_key (key.mesh_name, key.rid));
         _mesh_nodes.erase (found);
         return completed (location_write_status_t::stored);
+        }).get ();
     }
 
     task_t<location_page_t<mesh_node_descriptor_t>>
     list_mesh_nodes (std::string mesh_name,
                      location_page_request_t page = {}) override
     {
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         std::vector<mesh_node_descriptor_t> matched;
         for (const auto &[_, descriptor] : _mesh_nodes) {
             if (descriptor.mesh_name == mesh_name) {
@@ -164,6 +167,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (next < matched.size ())
             result.continuation_token = std::to_string (next);
         return completed (std::move (result));
+        }).get ();
     }
 
     task_t<location_write_result_t> update_client_server (
@@ -173,7 +177,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (!valid_client_server_descriptor (descriptor))
             throw std::invalid_argument (
               "ClientServer descriptor is incomplete");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         const auto key = client_server_key (
           descriptor.channel_name, descriptor.server_rid);
@@ -229,13 +233,14 @@ class in_memory_location_repository_t : public location_repository_t
             static_cast<std::int64_t> (
               descriptor.descriptor_revision),
             now));
+        }).get ();
     }
 
     task_t<location_write_status_t> remove_client_server (
       client_server_server_descriptor_key_t key,
       location_owner_token_t owner) override
     {
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto found = _client_servers.find (
           client_server_key (key.channel_name, key.server_rid));
         if (found == _client_servers.end ()
@@ -246,6 +251,7 @@ class in_memory_location_repository_t : public location_repository_t
               location_write_status_t::ignored_stale);
         _client_servers.erase (found);
         return completed (location_write_status_t::stored);
+        }).get ();
     }
 
     task_t<location_page_t<client_server_server_descriptor_t>>
@@ -256,7 +262,7 @@ class in_memory_location_repository_t : public location_repository_t
             || page.page_size > 1000)
             throw std::invalid_argument (
               "ClientServer list arguments are invalid");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         std::vector<client_server_server_descriptor_t> matched;
         for (const auto &[_, descriptor] : _client_servers) {
             if (descriptor.channel_name == channel_name)
@@ -277,6 +283,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (next < matched.size ())
             result.continuation_token = std::to_string (next);
         return completed (std::move (result));
+        }).get ();
     }
 
     task_t<location_write_result_t> update_fanout_publisher (
@@ -286,7 +293,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (!valid_fanout_descriptor (descriptor))
             throw std::invalid_argument (
               "fanout publisher descriptor is incomplete");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         const auto key = fanout_key (
           descriptor.channel_name, descriptor.publisher_rid);
@@ -351,13 +358,14 @@ class in_memory_location_repository_t : public location_repository_t
             static_cast<std::int64_t> (
               descriptor.descriptor_revision),
             now));
+        }).get ();
     }
 
     task_t<location_write_status_t> remove_fanout_publisher (
       fanout_publisher_descriptor_key_t key,
       location_owner_token_t owner) override
     {
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto found = _fanout_publishers.find (
           fanout_key (key.channel_name, key.publisher_rid));
         if (found == _fanout_publishers.end ()
@@ -368,6 +376,7 @@ class in_memory_location_repository_t : public location_repository_t
               location_write_status_t::ignored_stale);
         _fanout_publishers.erase (found);
         return completed (location_write_status_t::stored);
+        }).get ();
     }
 
     task_t<location_page_t<fanout_publisher_descriptor_t>>
@@ -379,7 +388,7 @@ class in_memory_location_repository_t : public location_repository_t
             || page.page_size > 1000)
             throw std::invalid_argument (
               "fanout publisher list arguments are invalid");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto offset =
           page.continuation_token
             ? parse_offset (*page.continuation_token)
@@ -414,6 +423,7 @@ class in_memory_location_repository_t : public location_repository_t
             throw std::invalid_argument (
               "fanout publisher continuation token is invalid");
         return completed (std::move (result));
+        }).get ();
     }
 
     task_t<owner_lease_claim_result_t> claim_owner_lease (
@@ -423,7 +433,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (owner_id.empty () || lease_ttl.count () <= 0)
             throw std::invalid_argument (
               "owner lease claim is incomplete");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         const auto existing = _leases.find (owner_id);
         if (existing != _leases.end ()
@@ -453,12 +463,13 @@ class in_memory_location_repository_t : public location_repository_t
               {std::move (owner_id), generation},
               expires_at,
               now}});
+        }).get ();
     }
 
     task_t<owner_lease_read_result_t> read_owner_lease (
       std::string owner_id) override
     {
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         const auto lease = _leases.find (owner_id);
         const auto generation =
@@ -479,6 +490,7 @@ class in_memory_location_repository_t : public location_repository_t
               {std::move (owner_id), generation->second},
               lease->second.lease_expires_at,
               now}});
+        }).get ();
     }
 
     task_t<owner_lease_renew_result_t> renew_owner_lease (
@@ -488,7 +500,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (lease_ttl.count () <= 0)
             throw std::invalid_argument (
               "owner lease TTL must be positive");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         const auto lease = _leases.find (token.owner_id);
         if (!owner_token_is_live (token, now))
@@ -501,12 +513,13 @@ class in_memory_location_repository_t : public location_repository_t
         return completed (
           owner_lease_renew_result_t{
             owner_lease_renewed_t{expires_at, now}});
+        }).get ();
     }
 
     task_t<owner_lease_release_result_t> release_owner_lease (
       location_owner_token_t token) override
     {
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         if (!owner_token_is_live (token, now))
             return completed (
@@ -517,6 +530,7 @@ class in_memory_location_repository_t : public location_repository_t
         return completed (
           owner_lease_release_result_t{
             owner_lease_released_t{}});
+        }).get ();
     }
 
     task_t<authority_read_result_t> read_authority (
@@ -525,7 +539,7 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<authority_read_result_t> ();
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         const auto found = _authorities.find (key.value);
         if (found == _authorities.end ())
@@ -535,6 +549,7 @@ class in_memory_location_repository_t : public location_repository_t
         snapshot.store_now = now;
         return completed (
           authority_read_result_t{std::move (snapshot)});
+        }).get ();
     }
 
     task_t<authority_compare_exchange_result_t>
@@ -546,7 +561,7 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<authority_compare_exchange_result_t> ();
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         auto found = _authorities.find (key.value);
         if (found == _authorities.end ()
@@ -716,6 +731,7 @@ class in_memory_location_repository_t : public location_repository_t
         return completed (
           authority_compare_exchange_result_t{
             authority_stored_t{std::move (snapshot)}});
+        }).get ();
     }
 
     task_t<authority_scan_result_t> list_authorities (
@@ -729,7 +745,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (limit == 0 || limit > 1000)
             throw std::invalid_argument (
               "authority scan limit must be between 1 and 1000");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         cleanup_scans (now);
 
@@ -793,6 +809,7 @@ class in_memory_location_repository_t : public location_repository_t
         }
         return completed (
           authority_scan_result_t{std::move (page)});
+        }).get ();
     }
 
     task_t<std::optional<creation_terminal_record_t>>
@@ -802,7 +819,7 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<std::optional<creation_terminal_record_t>> ();
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto key = creation_operation_key (operation);
         const auto found = _creation_terminals.find (key);
         if (found == _creation_terminals.end ()
@@ -813,7 +830,8 @@ class in_memory_location_repository_t : public location_repository_t
               std::optional<creation_terminal_record_t>{});
         }
         return completed (
-          std::optional<creation_terminal_record_t>{found->second});
+            std::optional<creation_terminal_record_t>{found->second});
+        }).get ();
     }
 
     task_t<object_complete_creation_result_t>
@@ -836,7 +854,7 @@ class in_memory_location_repository_t : public location_repository_t
               "creation terminal envelope or SHA-256 is invalid");
         const auto expires_at =
           publication.operation_deadline + std::chrono::minutes (5);
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         if (expires_at <= now)
             throw std::invalid_argument (
@@ -939,6 +957,7 @@ class in_memory_location_repository_t : public location_repository_t
           object_complete_creation_result_t{
             object_creation_completed_result_t{
               std::move (terminal), std::move (ready)}});
+        }).get ();
     }
 
     task_t<object_reserve_result_t> reserve (
@@ -951,7 +970,7 @@ class in_memory_location_repository_t : public location_repository_t
             || request.intent.request_encoded_size > 1024u * 1024u)
             throw std::invalid_argument (
               "object reservation payload exceeds 1 MiB");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = clock_t::now ();
         const auto key = object_key (request.key);
         if (request.key.kind != placement_object_kind_t::actor) {
@@ -1057,6 +1076,7 @@ class in_memory_location_repository_t : public location_repository_t
           object_reserve_result_t{
             object_reserved_t{std::move (fence),
                               std::move (creating)}});
+        }).get ();
     }
 
     task_t<object_commit_result_t> commit (
@@ -1068,7 +1088,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (request.ready_payload.size () > 1024u * 1024u)
             throw std::invalid_argument (
               "object commit payload exceeds 1 MiB");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto key = object_key (request.key);
         const auto reservation = _reservations.find (key);
         if (reservation == _reservations.end ())
@@ -1134,6 +1154,7 @@ class in_memory_location_repository_t : public location_repository_t
         return completed (
           object_commit_result_t{
             object_committed_t{authority->second}});
+        }).get ();
     }
 
     task_t<object_abort_result_t> abort (
@@ -1142,7 +1163,7 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<object_abort_result_t> ();
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto key = object_key (request.key);
         const auto reservation = _reservations.find (key);
         if (reservation == _reservations.end ())
@@ -1177,6 +1198,7 @@ class in_memory_location_repository_t : public location_repository_t
         reservation->second.status = reservation_status_t::aborted;
         return completed (
           object_abort_result_t{object_aborted_t{}});
+        }).get ();
     }
 
     task_t<aggregate_prepare_result_t> prepare_aggregate (
@@ -1186,7 +1208,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (cancellation.stop_requested ())
             return cancelled<aggregate_prepare_result_t> ();
         const auto inventory_tree = aggregate_inventory::build_tree (request.participants);
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         if (request.aggregate_generation == 0
             || request.aggregate_generation > max_generation
             || request.participants.empty ()
@@ -1320,6 +1342,7 @@ class in_memory_location_repository_t : public location_repository_t
               {stored.aggregate_id,
                stored.aggregate_generation,
                stored.inventory_digest}}});
+        }).get ();
     }
 
     task_t<aggregate_commit_result_t> commit_aggregate (
@@ -1328,7 +1351,7 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<aggregate_commit_result_t> ();
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto aggregate =
           _aggregates.find (aggregate_id_key (fence.aggregate_id));
         if (aggregate == _aggregates.end ()
@@ -1450,6 +1473,7 @@ class in_memory_location_repository_t : public location_repository_t
         aggregate->second.status = aggregate_status_t::committed;
         return completed (
           aggregate_commit_result_t::committed);
+        }).get ();
     }
 
     task_t<aggregate_abort_result_t> abort_aggregate (
@@ -1458,7 +1482,7 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<aggregate_abort_result_t> ();
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto aggregate =
           _aggregates.find (aggregate_id_key (fence.aggregate_id));
         if (aggregate == _aggregates.end ()
@@ -1486,6 +1510,7 @@ class in_memory_location_repository_t : public location_repository_t
           false);
         aggregate->second.status = aggregate_status_t::aborted;
         return completed (aggregate_abort_result_t::aborted);
+        }).get ();
     }
 
     task_t<std::optional<std::vector<aggregate_participant_t>>>
@@ -1495,7 +1520,7 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<std::optional<std::vector<aggregate_participant_t>>> ();
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto aggregate =
           _aggregates.find (aggregate_id_key (fence.aggregate_id));
         if (aggregate == _aggregates.end ()
@@ -1509,12 +1534,13 @@ class in_memory_location_repository_t : public location_repository_t
         return completed (
           std::optional<std::vector<aggregate_participant_t>>{
             aggregate->second.request.participants});
+        }).get ();
     }
 
     task_t<std::int64_t> remove_all_by_owner (
       location_owner_token_t owner) override
     {
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         if (!owner_token_is_live (owner, clock_t::now ()))
             return completed (std::int64_t{0});
         std::int64_t removed = 0;
@@ -1557,6 +1583,7 @@ class in_memory_location_repository_t : public location_repository_t
         removed += static_cast<std::int64_t> (
           fanout_keys.size ());
         return completed (removed);
+        }).get ();
     }
 
   private:
@@ -2503,7 +2530,8 @@ class in_memory_location_repository_t : public location_repository_t
         }
     }
 
-    mutable std::mutex _gate;
+    runtime::offload_executor_t _lane_executor;
+    runtime::state_lane_t _lane;
     std::map<std::string, mesh_node_descriptor_t> _mesh_nodes;
     std::map<std::string, entry_spot_id_claim_t>
       _entry_spot_id_claims;

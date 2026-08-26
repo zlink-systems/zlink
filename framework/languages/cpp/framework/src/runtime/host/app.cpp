@@ -1293,8 +1293,10 @@ void app_t::_apply_zlink_framework ()
     const auto shared_core_context =
       detail::zlink_builder_access_t::shared_core_context (_state->zlink);
     for (const auto &registration : mesh_node_registrations) {
-        registration->core_context = shared_core_context;
-        registration->application_jobs = _state->application_job_queue;
+        registration->lane.run ([&] {
+            registration->core_context = shared_core_context;
+            registration->application_jobs = _state->application_job_queue;
+        }).get ();
     }
     _state->has_manual_service_topology = [options, mesh_node_registrations,
                                            channel_runtime_manager] () mutable {
@@ -1303,8 +1305,9 @@ void app_t::_apply_zlink_framework ()
             return true;
         }
         for (const auto &registration : mesh_node_registrations) {
-            std::lock_guard lock (registration->mutex);
-            if (!registration->peer_connections.empty ())
+            if (registration->lane.run ([&] {
+                    return !registration->peer_connections.empty ();
+                }).get ())
                 return true;
         }
         for (const auto &route_id : channel_runtime_manager.route_channel_ids ()) {

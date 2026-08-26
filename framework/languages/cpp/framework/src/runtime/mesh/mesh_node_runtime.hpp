@@ -6,6 +6,7 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/route_handler_registry.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -122,7 +123,8 @@ struct mesh_node_builder_state_t
 {
     explicit mesh_node_builder_state_t (std::string name);
 
-    std::mutex mutex;
+    runtime::offload_executor_t lane_executor;
+    runtime::state_lane_t lane;
     std::string mesh_name;
     std::string listen_endpoint;
     std::optional<std::uint16_t> listen_port;

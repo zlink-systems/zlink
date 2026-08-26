@@ -460,6 +460,8 @@ std::uint64_t next_connection_intent_id ()
 } // namespace
 
 mesh_node_builder_state_t::mesh_node_builder_state_t (std::string name) :
+    lane_executor (),
+    lane (lane_executor),
     mesh_name (name),
     spot_state (std::make_shared<spot_node_builder_state_t> (name)),
     spot_builder (spot_state)
@@ -476,11 +478,10 @@ void bind_mesh_handler_services (std::shared_ptr<mesh_node_builder_state_t> stat
         throw configuration_error ("MeshNode registration is required");
     }
     std::vector<std::function<void (service_collection_t &)>> registrars;
-    {
-        std::lock_guard lock (state->mutex);
+    state->lane.run ([&] {
         state->services = &services;
         registrars.swap (state->pending_handler_service_registrars);
-    }
+    }).get ();
     for (auto &registrar : registrars) {
         registrar (services);
     }
@@ -493,14 +494,16 @@ void register_mesh_handler_service (std::shared_ptr<mesh_node_builder_state_t> s
         throw configuration_error ("MeshNode handler service registration is invalid");
     }
     service_collection_t *services = nullptr;
-    {
-        std::lock_guard lock (state->mutex);
+    services = state->lane.run ([&] {
         services = state->services;
         if (services == nullptr) {
             state->pending_handler_service_registrars.push_back (std::move (registrar));
-            return;
+            return static_cast<service_collection_t *> (nullptr);
         }
-    }
+        return services;
+    }).get ();
+    if (services == nullptr)
+        return;
     registrar (*services);
 }
 
@@ -525,8 +528,7 @@ void mesh_node_runtime_t::bind_serializers (serializer_registry_t &serializers) 
 void mesh_node_runtime_t::bind_descriptor_publisher (
   std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher)
 {
-    std::lock_guard lock (_state->mutex);
-    _descriptor_publisher = std::move (publisher);
+    _state->lane.run ([&] { _descriptor_publisher = std::move (publisher); }).get ();
 }
 
 host::actor_join_operation_result_t
@@ -680,8 +682,7 @@ void mesh_node_runtime_t::start ()
 
     std::shared_ptr<handler_group_options_state_t> handler_groups;
     std::vector<std::pair<std::string, std::string>> mesh_handler_groups;
-    {
-        std::lock_guard state_lock (_state->mutex);
+    _state->lane.run ([&] {
         handler_groups = _state->handler_groups;
         if (handler_groups) {
             for (const auto &[channel_name, channel] : _state->channels) {
@@ -690,7 +691,7 @@ void mesh_node_runtime_t::start ()
                 }
             }
         }
-    }
+    }).get ();
     if (handler_groups) {
         for (const auto &[channel_name, group_name] : mesh_handler_groups) {
             mesh_channel_server_builder_t channel (_state, channel_name);
@@ -698,21 +699,22 @@ void mesh_node_runtime_t::start ()
         }
     }
 
-    std::lock_guard lock (_state->mutex);
-    if (const auto options = _state->framework_options.lock ()) {
-        if (!_state->bind_host_override) {
-            _state->bind_host = options->bind_host;
+    _state->lane.run ([&] {
+        if (const auto options = _state->framework_options.lock ()) {
+            if (!_state->bind_host_override) {
+                _state->bind_host = options->bind_host;
+            }
+            if (!_state->advertise_host_override) {
+                _state->advertise_host = options->advertise_host;
+            }
         }
-        if (!_state->advertise_host_override) {
-            _state->advertise_host = options->advertise_host;
+        if (_state->listen_port) {
+            _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
+              "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
+              + std::to_string (*_state->listen_port));
         }
-    }
-    if (_state->listen_port) {
-        _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
-          "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
-          + std::to_string (*_state->listen_port));
-    }
-    _state->spot_state->one_way_send_timeout = one_way_send_timeout (*_state);
+        _state->spot_state->one_way_send_timeout = one_way_send_timeout (*_state);
+    }).get ();
     _state->spot_state->instance_spot_idle_timeout = _state->instance_spot_idle_timeout;
     if (_state->mesh_name.empty ()) {
         throw configuration_error ("MeshName is required");
@@ -1802,11 +1804,10 @@ void mesh_node_runtime_t::stop () noexcept
     }
     _stopping.store (true, std::memory_order_release);
     _completion_ready.notify_all ();
-    {
-        std::lock_guard state_lock (_state->mutex);
+    _state->lane.run ([&] {
         _state->runtime_peer_connect = {};
         _state->runtime_peer_disconnect = {};
-    }
+    }).get ();
     {
         std::unique_lock callback_lock (_peer_callback_gate->mutex);
         _peer_callback_gate->stopping = true;
@@ -4253,77 +4254,73 @@ host::node_status_t mesh_node_runtime_t::status () const
 
 std::string mesh_node_runtime_t::mesh_name () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->mesh_name;
+    return _state->lane.run ([&] { return _state->mesh_name; }).get ();
 }
 
 std::optional<zlink::routing_id_t> mesh_node_runtime_t::routing_id () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->routing_id;
+    return _state->lane.run ([&] { return _state->routing_id; }).get ();
 }
 
 std::string mesh_node_runtime_t::listen_endpoint () const
 {
-    std::lock_guard lock (_state->mutex);
-    if (_state->listen_port && !_state->bind_host_override) {
-        if (const auto options = _state->framework_options.lock ()) {
-            return mesh_endpoint_notation::normalize_endpoint (
-              "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (options->bind_host) + ":"
-              + std::to_string (*_state->listen_port));
+    return _state->lane.run ([&] {
+        if (_state->listen_port && !_state->bind_host_override) {
+            if (const auto options = _state->framework_options.lock ()) {
+                return mesh_endpoint_notation::normalize_endpoint (
+                  "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (options->bind_host) + ":"
+                  + std::to_string (*_state->listen_port));
+            }
         }
-    }
-    return _state->listen_endpoint;
+        return _state->listen_endpoint;
+    }).get ();
 }
 
 object_role_t mesh_node_runtime_t::object_role () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->object_role;
+    return _state->lane.run ([&] { return _state->object_role; }).get ();
 }
 
 std::vector<std::string> mesh_node_runtime_t::channel_names () const
 {
-    std::lock_guard lock (_state->mutex);
-    std::vector<std::string> result;
-    result.reserve (_state->channels.size ());
-    for (const auto &[name, _] : _state->channels)
-        result.push_back (name);
-    return result;
+    return _state->lane.run ([&] {
+        std::vector<std::string> result;
+        result.reserve (_state->channels.size ());
+        for (const auto &[name, _] : _state->channels)
+            result.push_back (name);
+        return result;
+    }).get ();
 }
 
 std::map<std::string, int> mesh_node_runtime_t::channel_weights () const
 {
-    std::lock_guard lock (_state->mutex);
-    std::map<std::string, int> result;
-    for (const auto &[name, registration] : _state->channels)
-        if (registration.server)
-            result.emplace (name, registration.weight);
-    return result;
+    return _state->lane.run ([&] {
+        std::map<std::string, int> result;
+        for (const auto &[name, registration] : _state->channels)
+            if (registration.server)
+                result.emplace (name, registration.weight);
+        return result;
+    }).get ();
 }
 
 int mesh_node_runtime_t::placement_weight () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->placement_weight;
+    return _state->lane.run ([&] { return _state->placement_weight; }).get ();
 }
 
 std::int32_t mesh_node_runtime_t::actor_limit () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->actor_limit;
+    return _state->lane.run ([&] { return _state->actor_limit; }).get ();
 }
 
 std::int32_t mesh_node_runtime_t::spot_limit () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->spot_limit;
+    return _state->lane.run ([&] { return _state->spot_limit; }).get ();
 }
 
 std::int32_t mesh_node_runtime_t::activation_concurrency_limit () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->activation_concurrency_limit;
+    return _state->lane.run ([&] { return _state->activation_concurrency_limit; }).get ();
 }
 
 void mesh_node_runtime_t::set_placement_weight (int weight)
@@ -4339,18 +4336,16 @@ void mesh_node_runtime_t::set_placement_weight (int weight)
     ++descriptor.descriptor_revision;
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher;
     std::map<std::string, int> channel_weights;
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         publisher = _descriptor_publisher;
         for (const auto &[name, registration] : _state->channels)
             if (registration.server)
                 channel_weights.emplace (name, registration.weight);
-    }
+    }).get ();
     if (publisher)
         publisher (channel_weights, weight, descriptor.descriptor_revision);
     native_node ().transport ().topology ().publish_local (std::move (descriptor));
-    std::lock_guard lock (_state->mutex);
-    _state->placement_weight = weight;
+    _state->lane.run ([&] { _state->placement_weight = weight; }).get ();
 }
 
 std::size_t mesh_node_runtime_t::max_pending () const noexcept
@@ -4378,8 +4373,7 @@ void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, i
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher;
     std::map<std::string, int> channel_weights;
     int placement_weight = 100;
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         const auto found = _state->channels.find (channel_name);
         if (found == _state->channels.end () || !found->second.server)
             throw configuration_error ("RouteMesh channel is not configured: " + _state->mesh_name
@@ -4389,12 +4383,11 @@ void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, i
                 channel_weights.emplace (name, name == channel_name ? weight : registration.weight);
         placement_weight = _state->placement_weight;
         publisher = _descriptor_publisher;
-    }
+    }).get ();
     if (publisher)
         publisher (channel_weights, placement_weight, descriptor.descriptor_revision);
     native_node ().transport ().topology ().publish_local (std::move (descriptor));
-    std::lock_guard lock (_state->mutex);
-    _state->channels.at (channel_name).weight = weight;
+    _state->lane.run ([&] { _state->channels.at (channel_name).weight = weight; }).get ();
 }
 
 void mesh_node_runtime_t::application_work_enqueued () noexcept
@@ -4481,11 +4474,10 @@ void mesh_peer_connections_t::connect (std::string endpoint)
     mesh_peer_connection_t connection{
       detail::next_connection_intent_id (), {}, std::move (endpoint)};
     std::function<void (const mesh_peer_connection_t &)> activate;
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         _state->peer_connections.push_back (connection);
         activate = _state->runtime_peer_connect;
-    }
+    }).get ();
     if (activate)
         activate (connection);
 }
@@ -4499,11 +4491,10 @@ void mesh_peer_connections_t::connect (zlink::routing_id_t expected_routing_id,
     mesh_peer_connection_t connection{detail::next_connection_intent_id (),
                                       std::move (expected_routing_id), std::move (endpoint)};
     std::function<void (const mesh_peer_connection_t &)> activate;
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         _state->peer_connections.push_back (connection);
         activate = _state->runtime_peer_connect;
-    }
+    }).get ();
     if (activate)
         activate (connection);
 }
@@ -4512,8 +4503,7 @@ void mesh_peer_connections_t::disconnect (std::string endpoint)
 {
     std::vector<mesh_peer_connection_t> removed;
     std::function<void (const mesh_peer_connection_t &)> deactivate;
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         for (auto it = _state->peer_connections.begin (); it != _state->peer_connections.end ();) {
             if (it->endpoint != endpoint) {
                 ++it;
@@ -4523,7 +4513,7 @@ void mesh_peer_connections_t::disconnect (std::string endpoint)
             it = _state->peer_connections.erase (it);
         }
         deactivate = _state->runtime_peer_disconnect;
-    }
+    }).get ();
     if (deactivate)
         for (const auto &connection : removed)
             deactivate (connection);
@@ -4531,8 +4521,7 @@ void mesh_peer_connections_t::disconnect (std::string endpoint)
 
 std::vector<mesh_peer_connection_t> mesh_peer_connections_t::list_connections () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->peer_connections;
+    return _state->lane.run ([&] { return _state->peer_connections; }).get ();
 }
 
 mesh_channel_builder_t::mesh_channel_builder_t (
@@ -4543,25 +4532,27 @@ mesh_channel_builder_t::mesh_channel_builder_t (
 
 mesh_channel_client_builder_t mesh_channel_builder_t::client ()
 {
-    std::lock_guard lock (_state->mutex);
-    auto &channel = _state->channels[_channel_name];
-    if (channel.role_selected)
-        throw detail::configuration_error ("RouteMesh channel role is already selected: "
-                                           + _channel_name);
-    channel.role_selected = true;
-    channel.server = false;
-    return {};
+    return _state->lane.run ([&] {
+        auto &channel = _state->channels[_channel_name];
+        if (channel.role_selected)
+            throw detail::configuration_error ("RouteMesh channel role is already selected: "
+                                               + _channel_name);
+        channel.role_selected = true;
+        channel.server = false;
+        return mesh_channel_client_builder_t{};
+    }).get ();
 }
 
 mesh_channel_server_builder_t mesh_channel_builder_t::server ()
 {
-    std::lock_guard lock (_state->mutex);
-    auto &channel = _state->channels[_channel_name];
-    if (channel.role_selected)
-        throw detail::configuration_error ("RouteMesh channel role is already selected: "
-                                           + _channel_name);
-    channel.role_selected = true;
-    channel.server = true;
+    _state->lane.run ([&] {
+        auto &channel = _state->channels[_channel_name];
+        if (channel.role_selected)
+            throw detail::configuration_error ("RouteMesh channel role is already selected: "
+                                               + _channel_name);
+        channel.role_selected = true;
+        channel.server = true;
+    }).get ();
     return mesh_channel_server_builder_t (_state, _channel_name);
 }
 
@@ -4576,8 +4567,7 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::set_weight (int we
     if (weight < 0 || weight > 10000) {
         throw detail::configuration_error ("ChannelName weight must be in range 0..10000");
     }
-    std::lock_guard lock (_state->mutex);
-    _state->channels[_channel_name].weight = weight;
+    _state->lane.run ([&] { _state->channels[_channel_name].weight = weight; }).get ();
     return *this;
 }
 
@@ -4588,11 +4578,10 @@ mesh_channel_server_builder_t::use_handler_group (std::string group_name)
         throw detail::configuration_error ("handler group name is required");
     }
     std::shared_ptr<detail::handler_group_options_state_t> handler_groups;
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         _state->channels[_channel_name].handler_group = group_name;
         handler_groups = _state->handler_groups;
-    }
+    }).get ();
     if (handler_groups) {
         handler_groups->add_mesh_channel (
           group_name, _channel_name,
@@ -4619,8 +4608,9 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler_regist
                                                   registration.owner_type,
                                                   registration.message_type,
                                                   registration.reply_type};
-    std::lock_guard lock (_state->mutex);
-    _state->handlers.add_handler (std::move (descriptor), std::move (registration.invoke));
+    _state->lane.run ([&] {
+        _state->handlers.add_handler (std::move (descriptor), std::move (registration.invoke));
+    }).get ();
     return *this;
 }
 
@@ -4636,11 +4626,10 @@ mesh_channel_builder_t mesh_node_builder_t::channel_name (std::string channel_na
         throw detail::configuration_error ("ChannelName is required");
     }
     std::function<void (const std::string &)> observer;
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         _state->channels.try_emplace (channel_name);
         observer = _state->channel_name_observer;
-    }
+    }).get ();
     if (observer) {
         observer (channel_name);
     }
@@ -4657,19 +4646,21 @@ mesh_node_builder_t &mesh_node_builder_t::listen (std::string endpoint)
     if (endpoint.empty ()) {
         throw detail::configuration_error ("MeshNode listen endpoint is required");
     }
-    std::lock_guard lock (_state->mutex);
-    _state->listen_port.reset ();
-    _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (endpoint);
+    _state->lane.run ([&] {
+        _state->listen_port.reset ();
+        _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (endpoint);
+    }).get ();
     return *this;
 }
 
 mesh_node_builder_t &mesh_node_builder_t::listen (std::uint16_t port)
 {
-    std::lock_guard lock (_state->mutex);
-    _state->listen_port = port;
-    _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
-      "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
-      + std::to_string (port));
+    _state->lane.run ([&] {
+        _state->listen_port = port;
+        _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
+          "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
+          + std::to_string (port));
+    }).get ();
     return *this;
 }
 
@@ -4677,14 +4668,15 @@ mesh_node_builder_t &mesh_node_builder_t::set_bind_host (std::string host)
 {
     if (host.empty ())
         throw detail::configuration_error ("MeshNode bind host is required");
-    std::lock_guard lock (_state->mutex);
-    _state->bind_host_override = host;
-    _state->bind_host = std::move (host);
-    if (_state->listen_port) {
-        _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
-          "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
-          + std::to_string (*_state->listen_port));
-    }
+    _state->lane.run ([&] {
+        _state->bind_host_override = host;
+        _state->bind_host = std::move (host);
+        if (_state->listen_port) {
+            _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
+              "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
+              + std::to_string (*_state->listen_port));
+        }
+    }).get ();
     return *this;
 }
 
@@ -4692,20 +4684,22 @@ mesh_node_builder_t &mesh_node_builder_t::set_advertise_host (std::string host)
 {
     if (host.empty ())
         throw detail::configuration_error ("MeshNode advertise host is required");
-    std::lock_guard lock (_state->mutex);
-    _state->advertise_host_override = host;
-    _state->advertise_host = std::move (host);
+    _state->lane.run ([&] {
+        _state->advertise_host_override = host;
+        _state->advertise_host = std::move (host);
+    }).get ();
     return *this;
 }
 
 mesh_node_builder_t &mesh_node_builder_t::set_routing_id (zlink::routing_id_t routing_id)
 {
-    std::lock_guard lock (_state->mutex);
-    if (_state->automatic_routing_id_prefix)
-        throw detail::configuration_error (
-          "MeshNode cannot configure both a fixed routing id and an automatic routing id prefix");
-    _state->spot_state->snapshot.routing_id = routing_id;
-    _state->routing_id = std::move (routing_id);
+    _state->lane.run ([&] {
+        if (_state->automatic_routing_id_prefix)
+            throw detail::configuration_error (
+              "MeshNode cannot configure both a fixed routing id and an automatic routing id prefix");
+        _state->spot_state->snapshot.routing_id = routing_id;
+        _state->routing_id = std::move (routing_id);
+    }).get ();
     return *this;
 }
 
@@ -4714,20 +4708,20 @@ mesh_node_builder_t &mesh_node_builder_t::set_automatic_routing_id_prefix (std::
     if (!detail::valid_routing_id_prefix (prefix))
         throw detail::configuration_error ("MeshNode automatic routing id prefix must contain "
                                            "1..64 ASCII letters, digits, '.', '_' or '-'");
-    std::lock_guard lock (_state->mutex);
-    if (_state->routing_id)
-        throw detail::configuration_error (
-          "MeshNode cannot configure both a fixed routing id and an automatic routing id prefix");
-    _state->automatic_routing_id_prefix = prefix;
-    _state->routing_id = zlink::routing_id_t::from (prefix + "-" + detail::new_uuid_v4 ());
-    _state->spot_state->snapshot.routing_id = *_state->routing_id;
+    _state->lane.run ([&] {
+        if (_state->routing_id)
+            throw detail::configuration_error (
+              "MeshNode cannot configure both a fixed routing id and an automatic routing id prefix");
+        _state->automatic_routing_id_prefix = prefix;
+        _state->routing_id = zlink::routing_id_t::from (prefix + "-" + detail::new_uuid_v4 ());
+        _state->spot_state->snapshot.routing_id = *_state->routing_id;
+    }).get ();
     return *this;
 }
 
 mesh_node_builder_t &mesh_node_builder_t::set_object_role (object_role_t role)
 {
-    std::lock_guard lock (_state->mutex);
-    _state->object_role = role;
+    _state->lane.run ([&] { _state->object_role = role; }).get ();
     return *this;
 }
 
@@ -4735,8 +4729,7 @@ mesh_node_builder_t &mesh_node_builder_t::set_placement_weight (int weight)
 {
     if (weight < 0 || weight > 10000)
         throw detail::configuration_error ("placement weight must be in range 0..10000");
-    std::lock_guard lock (_state->mutex);
-    _state->placement_weight = weight;
+    _state->lane.run ([&] { _state->placement_weight = weight; }).get ();
     return *this;
 }
 
@@ -4744,8 +4737,7 @@ mesh_node_builder_t &mesh_node_builder_t::set_actor_limit (std::int32_t limit)
 {
     if (limit < 0)
         throw detail::configuration_error ("Actor capacity limit must be non-negative");
-    std::lock_guard lock (_state->mutex);
-    _state->actor_limit = limit;
+    _state->lane.run ([&] { _state->actor_limit = limit; }).get ();
     return *this;
 }
 
@@ -4753,8 +4745,7 @@ mesh_node_builder_t &mesh_node_builder_t::set_spot_limit (std::int32_t limit)
 {
     if (limit < 0)
         throw detail::configuration_error ("Spot capacity limit must be non-negative");
-    std::lock_guard lock (_state->mutex);
-    _state->spot_limit = limit;
+    _state->lane.run ([&] { _state->spot_limit = limit; }).get ();
     return *this;
 }
 
@@ -4763,9 +4754,10 @@ mesh_node_builder_t::set_instance_spot_idle_timeout (std::chrono::milliseconds t
 {
     if (timeout < std::chrono::milliseconds::zero ())
         throw detail::configuration_error ("Instance Spot idle timeout must not be negative");
-    std::lock_guard lock (_state->mutex);
-    _state->instance_spot_idle_timeout = timeout;
-    _state->spot_state->instance_spot_idle_timeout = timeout;
+    _state->lane.run ([&] {
+        _state->instance_spot_idle_timeout = timeout;
+        _state->spot_state->instance_spot_idle_timeout = timeout;
+    }).get ();
     return *this;
 }
 
@@ -4773,8 +4765,7 @@ mesh_node_builder_t &mesh_node_builder_t::set_activation_concurrency (std::int32
 {
     if (limit <= 0)
         throw detail::configuration_error ("Activation concurrency limit must be positive");
-    std::lock_guard lock (_state->mutex);
-    _state->activation_concurrency_limit = limit;
+    _state->lane.run ([&] { _state->activation_concurrency_limit = limit; }).get ();
     return *this;
 }
 
@@ -4794,15 +4785,13 @@ mesh_node_builder_t::set_default_request_timeout (std::chrono::milliseconds time
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw detail::configuration_error ("request timeout must be greater than zero");
     }
-    std::lock_guard lock (_state->mutex);
-    _state->default_request_timeout = timeout;
+    _state->lane.run ([&] { _state->default_request_timeout = timeout; }).get ();
     return *this;
 }
 
 void mesh_node_builder_t::mark_node_direct_handler ()
 {
-    std::lock_guard lock (_state->mutex);
-    _state->has_node_direct_handler = true;
+    _state->lane.run ([&] { _state->has_node_direct_handler = true; }).get ();
 }
 
 spot_node_builder_t &mesh_node_builder_t::spot_builder ()
@@ -4812,8 +4801,7 @@ spot_node_builder_t &mesh_node_builder_t::spot_builder ()
 
 std::string mesh_node_builder_t::route_dispatch_name () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->mesh_name;
+    return _state->lane.run ([&] { return _state->mesh_name; }).get ();
 }
 
 } // namespace zlink::framework
