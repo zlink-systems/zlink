@@ -26,6 +26,8 @@ reply·timeout·cancellation·shutdown 가운데 먼저 확정된 결과로 완�
   handler 시작 전 대기하는 job의 capacity를 다룬다.
 - [Payload ownership과 codec](05-payload-ownership-and-codec.ko.md)은 message가 socket에서
   handler에 이르는 동안의 소유권과 복사를 다룬다.
+- [상태 소유와 state lane](06-state-ownership-and-lanes.ko.md)은 컴포넌트가 자신의 mutable
+  상태를 어떤 메커니즘으로 지키는지를 다룬다.
 
 이 주제가 다루지 않는 것 — Spot이 등록하는 반복 callback은
 [Spot timer](../03-spot-actor/10-spot-timer.ko.md)가, Actor·Spot 모델 자체와 queue 구조는
@@ -87,6 +89,8 @@ flowchart LR
 | message가 socket에서 handler까지 가는 동안 byte를 몇 번 복사하는가 | [Payload ownership과 codec](05-payload-ownership-and-codec.ko.md) |
 | 응답·timeout·취소·종료가 동시에 오면 무엇이 이기는가 | [Submit과 완료 「9. Request completion — 완료 경쟁과 timeout budget」](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget) |
 | 제한은 무엇인가 (`MaxQueuedApplicationJobs`, pause/resume %, lane 상한, dispatcher 4,096) | [§6](#6-수치-요약표) |
+| 컴포넌트 상태는 왜 lock 대신 state lane으로 지키는가 | [상태 소유와 state lane 「3. 금지되는 형태」](06-state-ownership-and-lanes.ko.md#3-금지되는-형태) |
+| state lane과 Application lane은 무엇이 다른가 | [상태 소유와 state lane 「2. 용어 구분 — state lane과 Application/lifecycle lane」](06-state-ownership-and-lanes.ko.md#2-용어-구분--state-lane과-applicationlifecycle-lane) |
 
 ## 5. 문서와 읽는 순서
 
@@ -96,11 +100,12 @@ flowchart LR
 03-cancellation-and-shutdown.ko.md           이미 시작된 작업의 취소·종료
 04-application-job-queue-and-backpressure.ko.md  handler 시작 전 capacity
 05-payload-ownership-and-codec.ko.md         message의 소유권과 복사
+06-state-ownership-and-lanes.ko.md           컴포넌트 상태를 지키는 메커니즘
 ```
 
 처음 읽는 개발자는 이 순서대로 읽는다 — submit이 무엇을 완료로 보는지(01) 알아야
-handler 실행 순서(02)를 이해할 수 있고, 그 위에서 취소(03)·capacity(04)·payload 소유권(05)이
-각각 좁은 범위를 다룬다.
+handler 실행 순서(02)를 이해할 수 있고, 그 위에서 취소(03)·capacity(04)·payload 소유권(05)·
+상태 소유(06)가 각각 좁은 범위를 다룬다.
 
 ## 6. 수치 요약표
 

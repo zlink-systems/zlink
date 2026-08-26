@@ -20,8 +20,9 @@ namespace Zlink.Framework.Runtime.Execution;
 /// </para>
 /// <para>
 /// A lane is <b>not</b> reentrant. Calling <see cref="RunAsync{T}"/> from inside a lane turn on the
-/// same lane deadlocks. Code reached from a turn must call the component's private state methods
-/// directly rather than re-entering through its public surface.
+/// same lane would deadlock, so it throws <see cref="InvalidOperationException"/> at the call site
+/// instead. Code reached from a turn must call the component's private state methods directly
+/// rather than re-entering through its public surface.
 /// </para>
 /// <para>
 /// Use this for state ownership. Spot and Actor <i>execution</i> keeps using

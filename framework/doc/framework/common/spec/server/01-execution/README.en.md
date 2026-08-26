@@ -26,6 +26,8 @@ decided first. This topic covers that entire path — from submit to completion.
   covers the capacity of jobs waiting before a handler starts.
 - [Payload Ownership And Codec](05-payload-ownership-and-codec.en.md) covers ownership and
   copying of a message on its way from the socket to the handler.
+- [State Ownership And State Lanes](06-state-ownership-and-lanes.en.md) covers the mechanism
+  by which a component guards its own mutable state.
 
 What this topic does not define — the repeating callback a Spot registers is owned by
 [Spot Timer](../03-spot-actor/10-spot-timer.en.md), the Actor/Spot model itself and queue
@@ -88,6 +90,8 @@ owned by
 | How many times is a byte copied on its way from the socket to the handler | [Payload Ownership And Codec](05-payload-ownership-and-codec.en.md) |
 | When reply, timeout, cancellation, and shutdown arrive at the same time, which one wins | [Submit And Completion "9. Request Completion — The Completion Race And Timeout Budget"](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget) |
 | What are the limits (`MaxQueuedApplicationJobs`, pause/resume %, lane caps, dispatcher 4,096) | [§6](#6-numeric-summary-table) |
+| Why does a component guard state with a state lane instead of a lock | [State Ownership And State Lanes "3. The Prohibited Shape"](06-state-ownership-and-lanes.en.md#3-the-prohibited-shape) |
+| What is the difference between a state lane and the Application lane | [State Ownership And State Lanes "2. Terminology — State Lane Versus Application/Lifecycle Lane"](06-state-ownership-and-lanes.en.md#2-terminology--state-lane-versus-applicationlifecycle-lane) |
 
 ## 5. Documents And Reading Order
 
@@ -97,12 +101,13 @@ owned by
 03-cancellation-and-shutdown.en.md           cancellation/shutdown of work already started
 04-application-job-queue-and-backpressure.en.md  capacity before handler start
 05-payload-ownership-and-codec.en.md         ownership and copying of a message
+06-state-ownership-and-lanes.en.md           the mechanism that guards a component's state
 ```
 
 A developer reading this for the first time reads in this order — understanding what
 submit treats as completion (01) is a prerequisite for understanding handler execution
-order (02), and on top of that, cancellation (03), capacity (04), and payload ownership (05)
-each cover a narrow scope.
+order (02), and on top of that, cancellation (03), capacity (04), payload ownership (05), and
+state ownership (06) each cover a narrow scope.
 
 ## 6. Numeric Summary Table
 
