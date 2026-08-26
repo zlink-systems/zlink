@@ -86,19 +86,24 @@ CP2 배치 1(#3·#4·#5·6) 게이트 2026-08-26 통과 — unit 1893/0, 7샘플
 | — | 소형 잔여 (~50클래스, lock<20) | ~300 | 대기 | | 3~5개 배치, C1/C3 다수 예상 |
 | 제외 | ZLinkSerialExecutionQueue | 25 | 제외 | | lane primitive 자체 (스펙 06 §9) |
 
-## 3. .NET 마무리 항목 (클래스 전환 후)
+## 3. 마무리 항목 — **모든 언어 공통** (해당 언어 클래스 전환 후)
 
-- [ ] **호환 경계 제거** — `AwaitStateLane` 잔여(표본 25 + 이후 발생분)를 async 전파로
-  해소. 남는 게 있으면 사유 기록.
-- [ ] **posddd ②패스 잔여** — survey의 관찰 목록 기준. 최우선: `ZLinkFrameworkRuntime`
-  hot path의 `ZLinkRuntimeOperationLease` class 할당.
-- [ ] **마일스톤 게이트** — 전체 unit + 6샘플 + cross-language harness 재확인,
-  "async 경계 스냅샷" 계열 재측정, **§8 기존 결함 3건 재확인**(cpp ZoneWorld
-  split-brain / dotnet ZoneWorld mesh admission / fast_mutex abort — 이 작업의 하위
-  증상인지 판정), **codex sol 마일스톤 리뷰**, 스펙 06 보완 필요 여부 판정.
+> 2026-08-26 사용자 지적으로 dotnet 전용에서 언어 공통으로 확장. dotnet이 먼저 지나가며
+> 절차를 확정하고, 각 언어는 자기 L2 완료 후 같은 항목을 밟는다.
+
+- [ ] **호환 경계 제거** — 블로킹 브리지 잔여를 async 전파로 해소하고, 남는 게 있으면 사유
+  기록. 언어별 대상: dotnet `AwaitStateLane`(현재 121+), java `inStateLane`의 `join()`,
+  cpp `lane.run(...).get()`(동기 표면 유지가 설계인 곳은 사유 기록으로 남김), node 해당
+  없음(블로킹 불가 — L1에서 완전 전파 완료).
+- [ ] **posddd ②패스 잔여** — 각 언어 survey의 관찰 목록 기준. dotnet 최우선:
+  `ZLinkFrameworkRuntime` hot path의 `ZLinkRuntimeOperationLease` class 할당.
+- [ ] **마일스톤 게이트 (언어별)** — 해당 언어 전체 unit·계약 + 샘플 게이트,
+  "async 경계 스냅샷" 계열 재측정(언어별 대응 지표), **codex sol 마일스톤 리뷰**.
+  dotnet 마일스톤에서 추가로: §8 기존 결함 3건 재확인(하위 증상 판정), 스펙 06 보완
+  필요 여부 판정(§7 발견 일괄 반영).
 - [ ] **ZoneWorld 결함 해소 (§3.1)** — 판정 후 남는 결함을 직접 수정하고 ZoneWorld를
   게이트에 복귀시킨다. 캠페인의 최종 단계다. **샘플 작업 전 cross-language e2e 선행(Z0),
-  샘플은 1개 완료마다 사용자 리뷰 요청**(§3.1 진행 규칙).
+  샘플은 1개 완료마다 감독관 리뷰**(§3.1 진행 규칙).
 
 ### 3.1 ZoneWorld 결함 해소 — 캠페인 최종 단계 (2026-08-26 사용자 지시)
 
