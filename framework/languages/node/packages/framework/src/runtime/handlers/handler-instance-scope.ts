@@ -258,10 +258,10 @@ class LifecycleHandlerInstanceScope {
   ): Promise<TResult> {
     await this.lane.run(() => this.beginInvocationCore());
     try {
-      return await startOutsideStateLane(() => activeLifecycleScope.run(
+      return await activeLifecycleScope.run(
         this,
         async () => callback(await this.instances.resolve(type))
-      ));
+      );
     } finally {
       await this.lane.run(() => this.completeInvocationCore());
     }
