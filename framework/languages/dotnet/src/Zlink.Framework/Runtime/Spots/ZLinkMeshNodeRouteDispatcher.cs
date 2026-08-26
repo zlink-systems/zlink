@@ -341,8 +341,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         CancellationToken cancellationToken)
     {
         using var applicationAdmission =
-            received.ApplicationJobAdmission is { } admission
-                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+            received.ApplicationJobAdmission is { } queuedAdmission
+                ? ZLinkApplicationJobQueueInvocation.Enter(queuedAdmission)
                 : null;
         using (received)
         {
@@ -374,18 +374,17 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 ZLinkFlowOrigin.Inbound);
 
             var infrastructure = IsInfrastructureRelay(received, header);
-            ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease operation;
-            if (infrastructure)
-            {
-                operation = new ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease();
-            }
+            var admission = infrastructure
+                ? new ZLinkInboundOperationAdmission(
+                    true,
+                    new ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease())
             //  This dispatcher only invokes registered channel and node
             //  route handlers. Neither is object work, so an expired owner
             //  lease must not turn them away (spec 21 §4).
-            else if (!_runtime.TryEnterInboundOperation(
-                         header.Kind == ZLinkMessageKind.Request,
-                         out operation,
-                         ownsObjectWork: false))
+                : _runtime.TryEnterInboundOperation(
+                    header.Kind == ZLinkMessageKind.Request,
+                    ownsObjectWork: false);
+            if (!admission.Accepted)
             {
                 //  With ownsObjectWork false the only refusal here is the drain
                 //  seal, which spec 06 §13.1 classifies as `ShuttingDown` -
@@ -407,7 +406,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 return;
             }
 
-            using (operation)
+            using (admission.Lease)
             {
                 if (received.ChannelName is { } channelName)
                     await DispatchChannelAsync(received, channelName, header, cancellationToken)

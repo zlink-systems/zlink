@@ -16,8 +16,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             || sourceNodeRid != authority.TargetNodeRid)
             return false;
 
-        var nodeRuntime = _state?.SpotNodes.Values.SingleOrDefault(
-            node => node.Node.RoutingId == receivingNodeRid);
+        var state = _state;
+        var nodeRuntime = state is null
+            ? null
+            : AwaitStateLane(state.RunStateAsync(() =>
+                state.SpotNodes.Values.SingleOrDefault(
+                    node => node.Node.RoutingId == receivingNodeRid)));
         if (nodeRuntime is null
             || nodeRuntime.Node.MeshStatus().LifecycleGeneration
                != retired.SessionOwnerNodeGeneration

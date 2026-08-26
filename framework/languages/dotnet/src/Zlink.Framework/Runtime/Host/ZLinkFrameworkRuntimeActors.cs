@@ -249,7 +249,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 var plan = new ZLinkRetirePreflightPlan();
                 ZLinkFrameworkRelocationReason? targetBlocker = null;
                 preflightStage = "spot_preflight";
-                foreach (var node in GetOrStartState().SpotNodes.Values)
+                var state = GetOrStartState();
+                var spotNodes = AwaitStateLane(state.RunStateAsync(
+                    () => state.SpotNodes.Values.ToArray()));
+                foreach (var node in spotNodes)
                 {
                     var blocker = await node.Catalog.PreflightRetireAsync(
                             plan,
@@ -2118,8 +2121,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                             ZLinkFrameworkErrorKind.DataLost,
                             $"Actor authority '{actorAuthority.Key.Value}' has an invalid relocation payload.",
                             retryAdvice: ZLinkRetryAdvice.DoNotRetry);
-                    var localNode = _state?.SpotNodes.Values.SingleOrDefault(
-                        node => node.Node.RoutingId == actorPayload.NodeRid);
+                    var state = _state;
+                    var localNode = state is null
+                        ? null
+                        : AwaitStateLane(state.RunStateAsync(() =>
+                            state.SpotNodes.Values.SingleOrDefault(
+                                node => node.Node.RoutingId == actorPayload.NodeRid)));
                     if (localNode is null
                         || actorPayload.NodeGeneration
                         != localNode.Node.MeshStatus().LifecycleGeneration)
@@ -2767,9 +2774,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 userSpot.NodeRid,
                 userSpot,
                 null);
-        var entryNode = state.SpotNodes.Values.FirstOrDefault(
-            node => node.EntrySpotActivation is { } entrySpot
-                    && string.Equals(entrySpot.SpotId, spotId, StringComparison.Ordinal));
+        var entryNode = AwaitStateLane(state.RunStateAsync(() =>
+            state.SpotNodes.Values.FirstOrDefault(
+                node => node.EntrySpotActivation is { } entrySpot
+                        && string.Equals(entrySpot.SpotId, spotId, StringComparison.Ordinal))));
         if (entryNode?.EntrySpotActivation is { } entrySpot)
             return new ActorHandoffTarget(
                 spotId,
@@ -4488,19 +4496,24 @@ internal sealed partial class ZLinkFrameworkRuntime
         // Per-actor FIFO across concurrently handled relay records: sibling
         // forwarded frames must not overtake each other (spec 23 §10.2).
         var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
-        Task chained;
-        lock (_remoteFrameChainGate)
+        var chained = AwaitStateLane(_stateLane.RunAsync(() =>
         {
             var prior = _remoteFrameChains.TryGetValue(actorKey, out var chain)
                 ? chain
                 : Task.CompletedTask;
-            chained = DispatchRemoteFrameAfterAsync(
-                prior,
-                batch,
-                deadlineUnixMs,
-                cancellationToken);
-            _remoteFrameChains[actorKey] = chained;
-        }
+            // The chain's async method can run its synchronous prefix before its
+            // first incomplete await.  Start it outside this lane so it neither
+            // inherits nor immediately re-enters this lane's AsyncLocal owner.
+            Task next;
+            using (ExecutionContext.SuppressFlow())
+                next = Task.Run(() => DispatchRemoteFrameAfterAsync(
+                    prior,
+                    batch,
+                    deadlineUnixMs,
+                    cancellationToken));
+            _remoteFrameChains[actorKey] = next;
+            return next;
+        }));
 
         try
         {
@@ -4508,12 +4521,12 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         finally
         {
-            lock (_remoteFrameChainGate)
+            AwaitStateLane(_stateLane.RunAsync(() =>
             {
                 if (_remoteFrameChains.TryGetValue(actorKey, out var current)
                     && ReferenceEquals(current, chained))
                     _remoteFrameChains.Remove(actorKey);
-            }
+            }));
         }
     }
 
@@ -4559,7 +4572,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
     }
 
-    private readonly object _remoteFrameChainGate = new();
     private readonly Dictionary<ZLinkActorId, Task> _remoteFrameChains = new();
 
     /// <summary>Session-node relay for a frame whose bound actor lives on
@@ -5255,6 +5267,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 using var admissionDeadline = CancellationTokenSource
                     .CreateLinkedTokenSource(ShutdownToken);
                 admissionDeadline.CancelAfter(timeout);
+                // Encoding and admission-token setup can consume the last
+                // slice of a reply deadline. Recheck at the submit boundary
+                // so a stale relay never reaches the node transport.
+                if (RemainingReplyTime(
+                        replyDeadlineUnixMs,
+                        Registration.DefaultRequestTimeout) <= TimeSpan.Zero)
+                    return;
                 try
                 {
                     await nodeRuntime.Node.SendToNodeAsync(

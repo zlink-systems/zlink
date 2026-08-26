@@ -72,7 +72,8 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
                                 continue;
                             }
 
-                            if (!_runtime.TryEnterInboundOperation(received.CanReply, out var operation))
+                            var admission = _runtime.TryEnterInboundOperation(received.CanReply);
+                            if (!admission.Accepted)
                             {
                                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
                                     received,
@@ -88,12 +89,12 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
                                     "entry-spot-route-dispatch",
                                     async ct =>
                                     {
-                                        using (operation)
+                                        using (admission.Lease)
                                             await _activation.DispatchRouteAsync(received, ct)
                                                 .ConfigureAwait(false);
                                     }))
                             {
-                                operation.Dispose();
+                                admission.Lease.Dispose();
                                 received.Dispose();
                             }
                         }
@@ -110,9 +111,9 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
                     info.DrainChannelReply?.Invoke();
                     return;
                 case ZLinkBackendSpotDispatchEvent.SubscribeReadable:
-                    if (!_runtime.TryEnterInboundOperation(
-                            countAsRequest: false,
-                            out var subscriptionOperation))
+                    var subscriptionAdmission = _runtime.TryEnterInboundOperation(
+                        countAsRequest: false);
+                    if (!subscriptionAdmission.Accepted)
                     {
                         _taskRunner.RunDetached(
                             "entry-spot-subscription-discard",
@@ -123,7 +124,7 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
                         "entry-spot-subscription-dispatch",
                         async ct =>
                         {
-                            using (subscriptionOperation)
+                            using (subscriptionAdmission.Lease)
                                 await _activation.DispatchSubscriptionsAsync(ct).ConfigureAwait(false);
                         });
                     return;
@@ -153,13 +154,14 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
             return;
         }
 
-        if (!_runtime.TryEnterInboundOperation(countAsRequest: false, out var actorOperation))
+        var actorAdmission = _runtime.TryEnterInboundOperation(countAsRequest: false);
+        if (!actorAdmission.Accepted)
         {
             dispatchable.Dispose();
             return;
         }
 
-        EnqueueActorBatch(dispatchable.WithCompletion(actorOperation.Dispose));
+        EnqueueActorBatch(dispatchable.WithCompletion(actorAdmission.Lease.Dispose));
     }
 
     private void EnqueueActorBatch(ZLinkSpotActorFrameBatch frames)

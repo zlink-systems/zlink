@@ -34,15 +34,16 @@ internal sealed partial class ZLinkFrameworkRuntime
                     ?? throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.InvalidOperation,
                         "Framework runtime is not started.");
-        var candidates = state.SpotNodes.Values
-            .Where(node => node.Registration.ObjectRoleSelected
-                && (meshName is null
-                    || string.Equals(
-                        node.Registration.SpotMeshChannelName
-                        ?? node.Registration.SpotNodeName,
-                        meshName,
-                        StringComparison.Ordinal)))
-            .ToArray();
+        var candidates = AwaitStateLane(state.RunStateAsync(() =>
+            state.SpotNodes.Values
+                .Where(node => node.Registration.ObjectRoleSelected
+                    && (meshName is null
+                        || string.Equals(
+                            node.Registration.SpotMeshChannelName
+                            ?? node.Registration.SpotNodeName,
+                            meshName,
+                            StringComparison.Ordinal)))
+                .ToArray()));
         if (candidates.Length == 1)
             return candidates[0];
         throw new ZLinkFrameworkException(
@@ -219,16 +220,18 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal ZLinkSpotNodeRuntime? GetActorSpotNodeRuntime(
         string? actorType = null)
     {
+        var state = _state;
+        if (state is null) return null;
         if (actorType is not null)
-            return _state?.SpotNodes.Values
-                .SingleOrDefault(node =>
+            return AwaitStateLane(state.RunStateAsync(() =>
+                state.SpotNodes.Values.SingleOrDefault(node =>
                     node.Registration.Router is not null
-                    && node.Registration.ActorFactories.ContainsKey(actorType));
+                    && node.Registration.ActorFactories.ContainsKey(actorType))));
 
-        return _state?.SpotNodes.Values
-            .SingleOrDefault(static node =>
+        return AwaitStateLane(state.RunStateAsync(() =>
+            state.SpotNodes.Values.SingleOrDefault(static node =>
                 node.Registration.Router is not null
-                && node.Registration.ActorFactories.Count > 0);
+                && node.Registration.ActorFactories.Count > 0)));
     }
 
     /// <summary>Any router-capable node, or null before startup — the
@@ -236,9 +239,13 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// without local actor factories (a session host binding remote actors).</summary>
     internal IZLinkBackendSpotNode? GetRouterSpotNodeOrNull()
     {
-        return _state?.SpotNodes.Values
-            .FirstOrDefault(static node => node.Registration.Router is not null)
-            ?.Node;
+        var state = _state;
+        return state is null
+            ? null
+            : AwaitStateLane(state.RunStateAsync(() =>
+                state.SpotNodes.Values
+                    .FirstOrDefault(static node => node.Registration.Router is not null)
+                    ?.Node));
     }
 
     /// <summary>The registered MeshNode for a physical mesh. ChannelName
@@ -247,33 +254,37 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal ZLinkSpotNodeRuntime GetMeshNodeRuntime(string meshName)
     {
         var state = GetOrStartState();
-        return state.SpotNodes.TryGetValue(meshName, out var nodeRuntime)
-            ? nodeRuntime
-            : throw new ZLinkConfigurationException(
-                $"RouteMesh '{meshName}' is not registered.");
+        return AwaitStateLane(state.RunStateAsync(() =>
+            state.SpotNodes.TryGetValue(meshName, out var nodeRuntime)
+                ? nodeRuntime
+                : throw new ZLinkConfigurationException(
+                    $"RouteMesh '{meshName}' is not registered.")));
     }
 
     internal ZLinkSpotNodeRuntime ResolveRouteMeshNodeForChannel(string channelName)
     {
         var state = GetOrStartState();
-        if (state.RouteMeshNodesByChannel.TryGetValue(channelName, out var nodeRuntime))
-            return nodeRuntime;
+        return AwaitStateLane(state.RunStateAsync(() =>
+        {
+            if (state.RouteMeshNodesByChannel.TryGetValue(channelName, out var nodeRuntime))
+                return nodeRuntime;
 
-        throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.NotFound,
-            $"No process-local RouteMesh or ClientServer client is registered for ChannelName '{channelName}'.");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"No process-local RouteMesh or ClientServer client is registered for ChannelName '{channelName}'.");
+        }));
     }
 
     internal ZLinkSpotNodeRuntime GetActorClientSpotNodeRuntime()
     {
         var state = GetOrStartState();
-        lock (state.SyncRoot)
+        return AwaitStateLane(state.RunStateAsync(() =>
         {
             return state.SpotNodes.Values
                        .FirstOrDefault(static node => node.Registration.Router is not null)
                    ?? throw new ZLinkConfigurationException(
                        "Actor client requires a router-capable SPOT node.");
-        }
+        }));
     }
 
     internal ValueTask<bool> TrySubmitEntrySpotActorAsync(
@@ -410,9 +421,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         return ExecuteOperation(() =>
         {
             var state = GetOrStartState();
-            return state.SpotNodes.TryGetValue(spotNodeName, out var node)
-                ? node
-                : throw new ZLinkConfigurationException($"SPOT node '{spotNodeName}' is not registered.");
+            return AwaitStateLane(state.RunStateAsync(() =>
+                state.SpotNodes.TryGetValue(spotNodeName, out var node)
+                    ? node
+                    : throw new ZLinkConfigurationException(
+                        $"SPOT node '{spotNodeName}' is not registered.")));
         });
     }
 }

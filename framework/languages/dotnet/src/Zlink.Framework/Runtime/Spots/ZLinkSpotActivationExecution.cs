@@ -802,11 +802,12 @@ internal abstract partial class ZLinkSpotActivation
         TState state,
         CancellationToken cancellationToken)
     {
-        if (!_runtime.TryEnterInboundOperation(countAsRequest: false, out var lease))
+        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest: false);
+        if (!operationAdmission.Accepted)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Rejected,
                 "SPOT application admission is sealed for drain.");
-        using (lease)
+        using (operationAdmission.Lease)
             await _serial.ExecuteAsync(operation, state, cancellationToken).ConfigureAwait(false);
     }
 
@@ -832,7 +833,8 @@ internal abstract partial class ZLinkSpotActivation
         bool countAsRequest,
         Action? onRejected = null)
     {
-        if (!_runtime.TryEnterInboundOperation(countAsRequest, out var lease))
+        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest);
+        if (!operationAdmission.Accepted)
         {
             onRejected?.Invoke();
             ReportUnobservedInboundAdmission(
@@ -844,17 +846,17 @@ internal abstract partial class ZLinkSpotActivation
         var admission = _serial.QueueWithAdmission(
             async (activation, ct) =>
             {
-                using (lease)
+                using (operationAdmission.Lease)
                     await operation(activation, ct).ConfigureAwait(false);
             },
             () =>
             {
-                lease.Dispose();
+                operationAdmission.Lease.Dispose();
                 onRejected?.Invoke();
             },
             reportUnobservedAdmission: onRejected is null);
         if (admission != ZLinkSerialPostAdmission.Accepted)
-            lease.Dispose();
+            operationAdmission.Lease.Dispose();
         return admission == ZLinkSerialPostAdmission.Accepted;
     }
 
@@ -863,7 +865,8 @@ internal abstract partial class ZLinkSpotActivation
         bool countAsRequest,
         Action? onRejected = null)
     {
-        if (!_runtime.TryEnterInboundOperation(countAsRequest, out var lease))
+        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest);
+        if (!operationAdmission.Accepted)
         {
             onRejected?.Invoke();
             ReportUnobservedInboundAdmission(
@@ -875,17 +878,17 @@ internal abstract partial class ZLinkSpotActivation
         var admission = _serial.QueueNextWithAdmission(
             async (activation, ct) =>
             {
-                using (lease)
+                using (operationAdmission.Lease)
                     await operation(activation, ct).ConfigureAwait(false);
             },
             () =>
             {
-                lease.Dispose();
+                operationAdmission.Lease.Dispose();
                 onRejected?.Invoke();
             },
             reportUnobservedAdmission: onRejected is null);
         if (admission != ZLinkSerialPostAdmission.Accepted)
-            lease.Dispose();
+            operationAdmission.Lease.Dispose();
         return admission == ZLinkSerialPostAdmission.Accepted;
     }
 
@@ -895,7 +898,8 @@ internal abstract partial class ZLinkSpotActivation
         bool countAsRequest,
         Action? onRejected = null)
     {
-        if (!_runtime.TryEnterInboundOperation(countAsRequest, out var lease))
+        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest);
+        if (!operationAdmission.Accepted)
         {
             onRejected?.Invoke();
             return false;
@@ -904,16 +908,16 @@ internal abstract partial class ZLinkSpotActivation
         var queued = QueueSerialized(
             async (activation, captured, ct) =>
             {
-                using (lease)
+                using (operationAdmission.Lease)
                     await operation(activation, captured, ct).ConfigureAwait(false);
             },
             state,
             () =>
             {
-                lease.Dispose();
+                operationAdmission.Lease.Dispose();
                 onRejected?.Invoke();
             });
-        if (!queued) lease.Dispose();
+        if (!queued) operationAdmission.Lease.Dispose();
         return queued;
     }
 
@@ -941,7 +945,8 @@ internal abstract partial class ZLinkSpotActivation
         Action onMoving,
         Action relocationRelease)
     {
-        if (!_runtime.TryEnterInboundOperation(countAsRequest, out var lease))
+        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest);
+        if (!operationAdmission.Accepted)
         {
             onRejected(ZLinkAcceptedWorkAdmission.Closed);
             return false;
@@ -953,7 +958,7 @@ internal abstract partial class ZLinkSpotActivation
         void ReleaseForRelocation()
         {
             if (Interlocked.Exchange(ref released, 1) != 0) return;
-            lease.Dispose();
+            operationAdmission.Lease.Dispose();
             relocationRelease();
         }
 
@@ -962,7 +967,7 @@ internal abstract partial class ZLinkSpotActivation
             acceptedJournalFactory,
             async (activation, ct) =>
             {
-                using (lease)
+                using (operationAdmission.Lease)
                     await capturedOperation(activation, capturedState, ct).ConfigureAwait(false);
             },
             ReleaseForRelocation,
@@ -971,7 +976,7 @@ internal abstract partial class ZLinkSpotActivation
         if (admission == ZLinkAcceptedWorkAdmission.Accepted)
             return true;
 
-        lease.Dispose();
+        operationAdmission.Lease.Dispose();
         if (admission == ZLinkAcceptedWorkAdmission.RelocationMoving)
             onMoving();
         else
@@ -1081,20 +1086,21 @@ internal abstract partial class ZLinkSpotActivation
 
     private bool QueueActorFrames(ZLinkSpotActorFrameBatch frames)
     {
-        if (!_runtime.TryEnterInboundOperation(countAsRequest: false, out var lease))
+        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest: false);
+        if (!operationAdmission.Accepted)
             return false;
 
         if (_serial.TryRunDetached(
                 "user-spot-actor-frames",
                 async ct =>
                 {
-                    using (lease)
+                    using (operationAdmission.Lease)
                         await _dispatcher.DispatchActorFramesAsync(frames, _serial, ct)
                             .ConfigureAwait(false);
                 }))
             return true;
 
-        lease.Dispose();
+        operationAdmission.Lease.Dispose();
         return false;
     }
 
@@ -2083,7 +2089,8 @@ internal abstract partial class ZLinkSpotActivation
         if (_timers.IsFrozen)
             return false;
         var state = new TimerDispatchState(descriptor, tick);
-        if (!_runtime.TryEnterInboundOperation(countAsRequest: false, out var lease))
+        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest: false);
+        if (!operationAdmission.Accepted)
         {
             // Host admission or the owner fence can close before this Spot
             // reaches its relocation turn. Keep the exact tick pending for
@@ -2092,7 +2099,7 @@ internal abstract partial class ZLinkSpotActivation
             _timers.FreezeForApplicationAdmissionSeal();
             return false;
         }
-        using (lease)
+        using (operationAdmission.Lease)
             await _serial.ExecuteTimerAsync(
                 descriptor.Name,
                 async static (activation, state, innerCt) =>

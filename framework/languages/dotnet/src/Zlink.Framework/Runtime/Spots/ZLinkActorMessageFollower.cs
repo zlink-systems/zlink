@@ -404,6 +404,13 @@ internal sealed class ZLinkActorMessageFollower
                         TimeSpan.FromMilliseconds(remaining),
                         cancellationToken)
                     .ConfigureAwait(false);
+            // Keep the expired route claimable during terminal retention. The
+            // first late reply observes IsExpired and completes it without
+            // invoking the callback; a route with no reply is retired below.
+            await Task.Delay(
+                    ZLinkRelocationReplyLifetime.TerminalRetention,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {

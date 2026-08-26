@@ -28,43 +28,46 @@ internal sealed partial class ZLinkFrameworkRuntime
         return ExecuteOperation<IZLinkMeshChannelRuntimeOptions>(() =>
         {
             var state = GetOrStartState();
-            foreach (var registration in Registration.SpotNodes.Values)
+            return AwaitStateLane(state.RunStateAsync(() =>
             {
-                var membership = registration.ChannelMemberships.FirstOrDefault(
-                    candidate => candidate.IsServer
-                        && string.Equals(
-                        candidate.ChannelName,
-                        channelName,
-                        StringComparison.Ordinal));
-                if (membership is null)
-                    continue;
-                if (!state.SpotNodes.TryGetValue(
+                foreach (var registration in Registration.SpotNodes.Values)
+                {
+                    var membership = registration.ChannelMemberships.FirstOrDefault(
+                        candidate => candidate.IsServer
+                            && string.Equals(
+                                candidate.ChannelName,
+                                channelName,
+                                StringComparison.Ordinal));
+                    if (membership is null)
+                        continue;
+                    if (!state.SpotNodes.TryGetValue(
+                            registration.SpotNodeName,
+                            out var nodeRuntime))
+                        break;
+                    return new ZLinkMeshChannelRuntimeOptions(
+                        this,
+                        nodeRuntime.Node,
+                        membership,
                         registration.SpotNodeName,
-                        out var nodeRuntime))
-                    break;
-                return new ZLinkMeshChannelRuntimeOptions(
-                    this,
-                    nodeRuntime.Node,
-                    membership,
-                    registration.SpotNodeName,
-                    null,
-                    null);
-            }
-            if (Registration.Channels.TryGetValue(channelName, out var channel)
-                && channel.Server is { } server
-                && state.ClientServerServerBundles.TryGetValue(
-                    channelName,
-                    out var bundle)
-                && bundle.ClientServerServer is { } identity)
-                return new ZLinkMeshChannelRuntimeOptions(
-                    this,
-                    null,
-                    null,
-                    null,
-                    server,
-                    identity);
-            throw new ZLinkConfigurationException(
-                $"No local RouteMesh or ClientServer Server membership '{channelName}' is registered.");
+                        null,
+                        null);
+                }
+                if (Registration.Channels.TryGetValue(channelName, out var channel)
+                    && channel.Server is { } server
+                    && state.ClientServerServerBundles.TryGetValue(
+                        channelName,
+                        out var bundle)
+                    && bundle.ClientServerServer is { } identity)
+                    return new ZLinkMeshChannelRuntimeOptions(
+                        this,
+                        null,
+                        null,
+                        null,
+                        server,
+                        identity);
+                throw new ZLinkConfigurationException(
+                    $"No local RouteMesh or ClientServer Server membership '{channelName}' is registered.");
+            }));
         });
     }
 
@@ -124,10 +127,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"RouteMesh '{meshName}' is not registered on this node.");
 
         var state = GetOrStartState();
-        if (!state.SpotNodes.TryGetValue(meshName, out var nodeRuntime))
-            throw new ZLinkConfigurationException(
-                $"RouteMesh '{meshName}' is not running on this node.");
+        return AwaitStateLane(state.RunStateAsync(() =>
+        {
+            if (!state.SpotNodes.TryGetValue(meshName, out var nodeRuntime))
+                throw new ZLinkConfigurationException(
+                    $"RouteMesh '{meshName}' is not running on this node.");
 
-        return (nodeRuntime, registration);
+            return (nodeRuntime, registration);
+        }));
     }
 }
