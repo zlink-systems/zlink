@@ -660,14 +660,14 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             if (_stopSourceDisposed) return;
             _stopSource.Cancel();
         }
-        _spots.RequestStop();
+        AwaitStateLane(_spots.RequestStopAsync());
         _entryDispatchPump?.RequestStop();
         _entrySpotActivation?.RequestStop();
     }
 
     internal void CancelActiveOperations()
     {
-        _spots.CancelActiveOperations();
+        AwaitStateLane(_spots.CancelActiveOperationsAsync());
     }
 
     internal async ValueTask CloseLifecycleAsync()
@@ -842,6 +842,9 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     {
         return _monitoringSnapshots.MonitorStatus();
     }
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     internal IReadOnlyList<ZLinkInstanceSpotTypeSnapshot>
         GetInstanceSpotMonitoringSnapshots()
