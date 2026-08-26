@@ -52,9 +52,9 @@ jvm 열은 java·kotlin을 함께 적는다(빌드 트리 공유). 언어별 클
 | 7 | ZLinkActorHandoffState (58) | **완료** | `b49b1ef55d` | 재진입 3(유형③ — 발견6), 호환 경계 63, 반려 2회. unit 1893/0 |
 | 8 | ZLinkActorRuntimeState (35) | **완료** | `b78c555cf7` | semaphore=작업 직렬화 유지(발견7), 재진입 다수 OnLane core 분리, SuppressFlow+Task.Run 4, 호환 경계 38. 반려 1(ExecuteLockedAsync 안 public 재호출 데드락 — 행 덤프로 진단). unit 1893/0·행 없음 |
 | CP2-2 | 배치 2 게이트 (#7·#8) | **통과** | unit 1893/0 · 6샘플 placement OK (ZoneWorld=기존 Z2 증상, 제외) | 2026-08-26. 지표 재측정 690/54/9/128 |
-| 9 | ZLinkManagedMeshNode (130) | 대기 | | 4×+, 정독 리뷰 필수 |
+| 9 | ZLinkManagedMeshNode (130) | **요청됨** | | codex terra (2026-08-26). 4×+, 정독 리뷰 필수. gate별 판정 지침 포함 |
 | 10 | ZLinkFrameworkRuntime (27) | 대기(최종) | | 사용 45파일, 재진입 ~57, 정독 리뷰 필수 |
-| — | 소형 잔여 ~50클래스 (lock<20, ~300) | 대기 | | 3~5개 배치, C1/C3 다수 예상 |
+| — | 소형 잔여 **99클래스** (전수 조사 small-class-survey.ko.md — C2 91·C1 3·C3 4·혼합 1) | 배치 1 **요청됨** | | 배치 22개 편성. 배치 21·22(ManagedActor·ManagedSpot)는 #9 완료 후 |
 | 제외 | ZLinkSerialExecutionQueue (25) | 제외 | | lane primitive 자체 (스펙 06 §9) |
 
 ### cpp · java · node
