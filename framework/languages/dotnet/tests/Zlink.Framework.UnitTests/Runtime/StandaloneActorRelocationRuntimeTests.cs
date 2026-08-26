@@ -159,7 +159,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
     }
 
     [Fact]
-    public async Task Canonical_replay_reserves_trailing_before_live_admission()
+    public void Canonical_replay_reserves_trailing_before_live_admission()
     {
         var handoff = new ZLinkActorHandoffState(
             "actor-1",
@@ -191,7 +191,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
                 42),
             [AcceptedFrame(3, requestSource)]);
 
-        Task<ZLinkActorHandoffCaptureResult>? concurrentCapture = null;
+        ZLinkActorHandoffCaptureResult? concurrentCapture = null;
         var reserved = new List<long>();
         handoff.ReserveCanonicalMaintenanceTrailingAndOpenAdmission(
             "handoff",
@@ -199,16 +199,13 @@ public sealed class StandaloneActorRelocationRuntimeTests
             frame =>
             {
                 reserved.Add(frame.ArrivalIndex);
-                concurrentCapture = Task.Run(
-                    () => handoff.TryCapture(concurrent[0]));
-                Assert.False(concurrentCapture.Wait(
-                    TimeSpan.FromMilliseconds(50)));
+                concurrentCapture = handoff.TryCapture(concurrent[0]);
             });
 
         Assert.Single(reserved);
         Assert.Equal(
             ZLinkActorHandoffCaptureResult.NotSealed,
-            await concurrentCapture!);
+            concurrentCapture);
     }
 
     [Fact]

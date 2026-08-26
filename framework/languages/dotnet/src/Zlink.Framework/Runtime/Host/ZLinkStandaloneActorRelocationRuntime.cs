@@ -3304,11 +3304,11 @@ internal sealed partial class ZLinkFrameworkRuntime
     {
         if (frames.Count == 0)
             return [];
-        if (actorState.Handoff.RouteFrame(
-                sourceActorRef,
-                sourceActorRef,
-                out var messageFollowRoute) != ZLinkActorFrameRoute.MessageFollow
-            || messageFollowRoute is null)
+        var resolution = actorState.Handoff.RouteFrame(
+            sourceActorRef,
+            sourceActorRef);
+        if (resolution.Route != ZLinkActorFrameRoute.MessageFollow
+            || resolution.MessageFollowRoute is null)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Actor '{actorState.ActorId}' committed Message Follow route is unavailable.");
@@ -3317,7 +3317,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             using var body = Message.From(frame.Body);
             deliveries.Add(ActorMessageFollower.EnqueueTracked(
-                messageFollowRoute.Value,
+                resolution.MessageFollowRoute.Value,
                 frame.SourceNodeRid.Length == 0
                     ? default
                     : RoutingId.From(frame.SourceNodeRid),

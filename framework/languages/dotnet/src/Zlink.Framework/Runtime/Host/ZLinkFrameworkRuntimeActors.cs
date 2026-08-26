@@ -580,8 +580,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 var import = await actorState.ExecuteHandoffTransitionAsync(
                         () =>
                         {
-                            var owned = actorState.Handoff.Import(request, out var preparation);
-                            return (Owned: owned, Preparation: preparation);
+                            var import = actorState.Handoff.Import(request);
+                            return (Owned: import.OwnsImport, import.Preparation);
                         },
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -795,10 +795,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                          $"Actor '{request.ActorId}' handoff target '{spotId}' is not active.");
         await _actorHandoffAdmissions.BeginCommitAsync(request, spotId)
             .ConfigureAwait(false);
-        var ownsImport = actorState.Handoff.Import(request, out var preparation);
-        if (!ownsImport)
+        var import = actorState.Handoff.Import(request);
+        if (!import.OwnsImport)
         {
-            _ = await preparation.WaitAsync(cancellationToken)
+            _ = await import.Preparation.WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
             return;
         }

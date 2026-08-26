@@ -7,10 +7,11 @@ internal static class ZLinkActorMessageFollowDispatcher
         ZLinkBackendActorRef frameActor,
         ZLinkBackendActorRouteContext routeContext)
     {
-        var route = actorState.Handoff.RouteFrame(
+        var resolution = actorState.Handoff.RouteFrame(
             actorState.NativeActorRef,
-            frameActor,
-            out var messageFollowRoute);
+            frameActor);
+        var route = resolution.Route;
+        var messageFollowRoute = resolution.MessageFollowRoute;
         if (route != ZLinkActorFrameRoute.MessageFollow)
             return false;
         try
@@ -41,10 +42,11 @@ internal static class ZLinkActorMessageFollowDispatcher
         Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null,
         ReadOnlyMemory<byte> applicationMetadata = default)
     {
-        var route = actorState.Handoff.RouteFrame(
+        var resolution = actorState.Handoff.RouteFrame(
             actorState.NativeActorRef,
-            frameActor,
-            out var messageFollowRoute);
+            frameActor);
+        var route = resolution.Route;
+        var messageFollowRoute = resolution.MessageFollowRoute;
         if (route is not ZLinkActorFrameRoute.Current)
         {
             var currentActor = actorState.NativeActorRef;

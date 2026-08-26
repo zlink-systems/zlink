@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed class ZLinkActorHandoffState(
@@ -7,10 +9,12 @@ internal sealed class ZLinkActorHandoffState(
     ZLinkBoundedIngressAdmission? sourceIngressAdmission = null,
     ZLinkBoundedIngressAdmission? sourceHoldAdmission = null)
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly List<ZLinkActorHandoffFrame> _frames = [];
     private readonly List<ZLinkActorHandoffFrame> _sourceHoldFrames = [];
-    private readonly Dictionary<long, Task>
+    // A null value claims the arrival index while ReserveCanonicalMaintenanceTrailing
+    // invokes the caller-owned reservation callback outside the state lane.
+    private readonly Dictionary<long, Task?>
         _canonicalMaintenanceReplayReservations = [];
     private readonly ZLinkBoundedIngressAdmission _sourceIngressAdmission =
         sourceIngressAdmission ?? new ZLinkBoundedIngressAdmission();
@@ -54,18 +58,21 @@ internal sealed class ZLinkActorHandoffState(
     /// </summary>
     internal IDisposable? PendingShutdownToken
     {
-        get => _pendingShutdownToken;
-        set
-        {
-            var previous = Interlocked.Exchange(ref _pendingShutdownToken, value);
-            if (!ReferenceEquals(previous, value))
-                previous?.Dispose();
-        }
+        get => AwaitStateLane(_lane.RunAsync(() => _pendingShutdownToken));
+        set => AwaitStateLane(_lane.RunAsync(() => SetPendingShutdownToken(value)));
+    }
+
+    private void SetPendingShutdownToken(IDisposable? value)
+    {
+        var previous = _pendingShutdownToken;
+        _pendingShutdownToken = value;
+        if (!ReferenceEquals(previous, value))
+            previous?.Dispose();
     }
 
     public void BeginCapture()
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_sourcePhase is ZLinkActorSourceHandoffPhase.Capturing
                 or ZLinkActorSourceHandoffPhase.CutoverPending
@@ -128,12 +135,12 @@ internal sealed class ZLinkActorHandoffState(
             _frames.Clear();
             _sourceHoldFrames.Clear();
             _arrivalIndex = 0;
-        }
+        }));
     }
 
     public Task? BeginDeferredJoinCapture()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_deferredJoinCapture
                 || _deferredJoinAwaitingTarget
@@ -163,7 +170,7 @@ internal sealed class ZLinkActorHandoffState(
 
             BeginDeferredJoinCaptureLocked();
             return null;
-        }
+        }));
     }
 
     private void BeginDeferredJoinCaptureLocked()
@@ -186,7 +193,7 @@ internal sealed class ZLinkActorHandoffState(
 
     public IReadOnlyList<ZLinkActorHandoffFrame> EndDeferredJoinCapture()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_deferredJoinAwaitingTarget)
             {
@@ -207,18 +214,18 @@ internal sealed class ZLinkActorHandoffState(
             _sourceHoldFrames.Clear();
             _arrivalIndex = 0;
             return frames;
-        }
+        }));
     }
 
     public bool IsSourceMigrationInProgress
     {
         get
         {
-            lock (_gate)
-                return _sourcePhase is ZLinkActorSourceHandoffPhase.Capturing
+            return AwaitStateLane(_lane.RunAsync(() =>
+                _sourcePhase is ZLinkActorSourceHandoffPhase.Capturing
                     or ZLinkActorSourceHandoffPhase.CutoverPending
                     or ZLinkActorSourceHandoffPhase.AbortRestoring
-                    or ZLinkActorSourceHandoffPhase.MessageFollowCommitted;
+                    or ZLinkActorSourceHandoffPhase.MessageFollowCommitted));
         }
     }
 
@@ -226,9 +233,9 @@ internal sealed class ZLinkActorHandoffState(
     {
         get
         {
-            lock (_gate)
-                return _deferredJoinCapture
-                       || _sourcePhase == ZLinkActorSourceHandoffPhase.Capturing;
+            return AwaitStateLane(_lane.RunAsync(() =>
+                _deferredJoinCapture
+                || _sourcePhase == ZLinkActorSourceHandoffPhase.Capturing));
         }
     }
 
@@ -236,7 +243,7 @@ internal sealed class ZLinkActorHandoffState(
     {
         get
         {
-            lock (_gate) return _staleSourceActor is not null;
+            return AwaitStateLane(_lane.RunAsync(() => _staleSourceActor is not null));
         }
     }
 
@@ -244,8 +251,8 @@ internal sealed class ZLinkActorHandoffState(
     {
         get
         {
-            lock (_gate)
-                return _sourcePhase is ZLinkActorSourceHandoffPhase.Capturing
+            return AwaitStateLane(_lane.RunAsync(() =>
+                _sourcePhase is ZLinkActorSourceHandoffPhase.Capturing
                            or ZLinkActorSourceHandoffPhase.CutoverPending
                            or ZLinkActorSourceHandoffPhase.AbortRestoring
                            or ZLinkActorSourceHandoffPhase.MessageFollowCommitted
@@ -255,14 +262,14 @@ internal sealed class ZLinkActorHandoffState(
                            or ZLinkActorTargetHandoffPhase.Prepared
                            or ZLinkActorTargetHandoffPhase.Replaying
                            or ZLinkActorTargetHandoffPhase.Failed
-                           or ZLinkActorTargetHandoffPhase.Quarantined;
+                           or ZLinkActorTargetHandoffPhase.Quarantined));
         }
     }
 
     public void CompleteSourceMigration()
     {
         TaskCompletionSource? completion;
-        lock (_gate)
+        completion = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_sourcePhase is not (ZLinkActorSourceHandoffPhase.CutoverPending
                 or ZLinkActorSourceHandoffPhase.MessageFollowCommitted))
@@ -271,7 +278,8 @@ internal sealed class ZLinkActorHandoffState(
             _sourcePhase = ZLinkActorSourceHandoffPhase.Retired;
             completion = _sourceCompletion;
             _sourceCompletion = null;
-        }
+            return completion;
+        }));
         completion?.TrySetResult();
     }
 
@@ -283,7 +291,7 @@ internal sealed class ZLinkActorHandoffState(
     /// </summary>
     internal void PrepareForTransferredActivation()
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_deferredJoinCapture)
                 throw new InvalidOperationException(
@@ -307,13 +315,13 @@ internal sealed class ZLinkActorHandoffState(
             _staleSourceActor = null;
             ClearMessageFollowRouteLocked();
             diagnostic?.Invoke("source_handoff_state_cleared_for_target_activation");
-        }
+        }));
     }
 
     public Task WaitForSourceCompletionAsync(CancellationToken cancellationToken)
     {
         Task completion;
-        lock (_gate)
+        completion = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_sourcePhase is not (ZLinkActorSourceHandoffPhase.Capturing
                 or ZLinkActorSourceHandoffPhase.CutoverPending
@@ -321,7 +329,8 @@ internal sealed class ZLinkActorHandoffState(
                 return Task.CompletedTask;
             completion = (_sourceCompletion ??= new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously)).Task;
-        }
+            return completion;
+        }));
         return completion.WaitAsync(cancellationToken);
     }
 
@@ -335,7 +344,7 @@ internal sealed class ZLinkActorHandoffState(
         TState prepareState,
         Action<TState, ZLinkSpotActorFrame>? prepareCapture)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             var capturesSourceIngress =
                 _deferredJoinCapture
@@ -431,18 +440,17 @@ internal sealed class ZLinkActorHandoffState(
             diagnostic?.Invoke(
                 $"handoff_backlog actor={actorId} arrival={_arrivalIndex - 1} kind={frame.Header.Kind} request_id={frame.RequestId} flags={frame.Flags}");
             return ZLinkActorHandoffCaptureResult.Captured;
-        }
+        }));
     }
 
-    public bool Import(
-        ZLinkRemoteActorJoinRequest request,
-        out Task<ZLinkRemoteActorJoinReply> preparation)
+    public ZLinkActorHandoffImportResult Import(
+        ZLinkRemoteActorJoinRequest request)
     {
         var handoffId = request.HandoffId;
         if (string.IsNullOrWhiteSpace(handoffId))
             throw new InvalidOperationException("Actor handoff id must not be empty.");
 
-        lock (_gate)
+        var imported = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_sourcePhase is ZLinkActorSourceHandoffPhase.Capturing
                 or ZLinkActorSourceHandoffPhase.CutoverPending
@@ -455,10 +463,9 @@ internal sealed class ZLinkActorHandoffState(
                     || !ZLinkActorHandoffRequestIdentity.Matches(_joinRequest, request))
                     throw new InvalidOperationException(
                         $"Actor '{actorId}' handoff '{handoffId}' was retried with different commit data.");
-                preparation = _preparation?.Task
-                              ?? throw new InvalidOperationException(
-                                  $"Actor '{actorId}' handoff '{handoffId}' has no preparation result.");
-                return false;
+                return (false, _preparation?.Task
+                    ?? throw new InvalidOperationException(
+                        $"Actor '{actorId}' handoff '{handoffId}' has no preparation result."));
             }
             if (_targetPhase == ZLinkActorTargetHandoffPhase.Importing)
             {
@@ -494,7 +501,6 @@ internal sealed class ZLinkActorHandoffState(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             _targetReplayCompletion = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            preparation = _preparation.Task;
             _targetPhase = ZLinkActorTargetHandoffPhase.Importing;
             _sourceIngressAdmission.ReleaseAll();
             _sourceHoldAdmission.ReleaseAll();
@@ -513,8 +519,20 @@ internal sealed class ZLinkActorHandoffState(
             }
             _importedFrameCount = _frames.Count;
             _sourceTrailingImported = false;
-            return true;
-        }
+            return (true, _preparation.Task);
+        }));
+        return new ZLinkActorHandoffImportResult(imported.Item1, imported.Item2);
+    }
+
+    // Direct legacy tests still exercise the historical out surface. Production callers use the
+    // typed result above; this boundary owns no state and only projects that result.
+    public bool Import(
+        ZLinkRemoteActorJoinRequest request,
+        out Task<ZLinkRemoteActorJoinReply> preparation)
+    {
+        var result = Import(request);
+        preparation = result.Preparation;
+        return result.OwnsImport;
     }
 
     internal void BeginCanonicalMaintenanceImport(
@@ -523,7 +541,7 @@ internal sealed class ZLinkActorHandoffState(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(handoffId);
         ArgumentNullException.ThrowIfNull(frames);
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             var adoptingPreparedRemoteJoin =
                 string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
@@ -589,7 +607,7 @@ internal sealed class ZLinkActorHandoffState(
             _arrivalIndex = checked(previousSequence + 1);
             _importedFrameCount = _frames.Count;
             _sourceTrailingImported = true;
-        }
+        }));
     }
 
     internal void AppendCanonicalMaintenanceImport(
@@ -598,7 +616,7 @@ internal sealed class ZLinkActorHandoffState(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(handoffId);
         ArgumentNullException.ThrowIfNull(frames);
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
                 || _targetPhase != ZLinkActorTargetHandoffPhase.Importing)
@@ -621,7 +639,7 @@ internal sealed class ZLinkActorHandoffState(
                 _arrivalIndex++;
             }
             _importedFrameCount = _frames.Count;
-        }
+        }));
     }
 
     internal void AppendPreparedImport(
@@ -630,7 +648,7 @@ internal sealed class ZLinkActorHandoffState(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(handoffId);
         ArgumentNullException.ThrowIfNull(frames);
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
                 || _joinRequest is null
@@ -648,14 +666,14 @@ internal sealed class ZLinkActorHandoffState(
                     $"backlog_enqueued actor={actorId} arrival={_arrivalIndex - 1} request_id={frame.RequestId} flags={frame.Flags}");
             }
             _importedFrameCount = _frames.Count;
-        }
+        }));
     }
 
     public void CompleteJoinedNotification(
         string handoffId,
         ZLinkRemoteActorJoinReply reply)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
                 || _targetPhase != ZLinkActorTargetHandoffPhase.NotifyingJoined)
@@ -663,7 +681,7 @@ internal sealed class ZLinkActorHandoffState(
                     $"Actor '{actorId}' handoff joined notification is not active.");
             _targetPhase = ZLinkActorTargetHandoffPhase.Prepared;
             _preparation!.TrySetResult(reply);
-        }
+        }));
     }
 
     public Task<ZLinkRemoteActorJoinReply> WaitForPreparationAsync(
@@ -671,14 +689,15 @@ internal sealed class ZLinkActorHandoffState(
         CancellationToken cancellationToken)
     {
         Task<ZLinkRemoteActorJoinReply> preparation;
-        lock (_gate)
+        preparation = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
                 || _preparation is null)
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' does not have an active handoff preparation.");
             preparation = _preparation.Task;
-        }
+            return preparation;
+        }));
         return preparation.WaitAsync(cancellationToken);
     }
 
@@ -693,32 +712,32 @@ internal sealed class ZLinkActorHandoffState(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actorId}' target changed ObjectGeneration during handoff.");
 
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
                 || _targetPhase != ZLinkActorTargetHandoffPhase.Importing)
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' cannot commit authority for an inactive handoff.");
             _targetPhase = ZLinkActorTargetHandoffPhase.AuthorityCommitted;
-        }
+        }));
     }
 
     public bool IsAuthorityCommitted(string handoffId)
     {
-        lock (_gate)
-            return string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
+        return AwaitStateLane(_lane.RunAsync(() =>
+            string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
                    && _targetPhase is ZLinkActorTargetHandoffPhase.AuthorityCommitted
                        or ZLinkActorTargetHandoffPhase.NotifyingJoined
                        or ZLinkActorTargetHandoffPhase.Prepared
                        or ZLinkActorTargetHandoffPhase.Replaying
                        or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
                        or ZLinkActorTargetHandoffPhase.Failed
-                       or ZLinkActorTargetHandoffPhase.Completed;
+                       or ZLinkActorTargetHandoffPhase.Completed));
     }
 
     public bool TryBeginJoinedNotification(string handoffId)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
                 throw new InvalidOperationException(
@@ -727,35 +746,35 @@ internal sealed class ZLinkActorHandoffState(
                 return false;
             _targetPhase = ZLinkActorTargetHandoffPhase.NotifyingJoined;
             return true;
-        }
+        }));
     }
 
     public bool IsJoinedNotificationCompleted(string handoffId)
     {
-        lock (_gate)
-            return string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
+        return AwaitStateLane(_lane.RunAsync(() =>
+            string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
                    && _targetPhase is ZLinkActorTargetHandoffPhase.Prepared
                        or ZLinkActorTargetHandoffPhase.Replaying
                        or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
-                       or ZLinkActorTargetHandoffPhase.Completed;
+                       or ZLinkActorTargetHandoffPhase.Completed));
     }
 
     public void RetryJoinedNotification(string handoffId)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
                 || _targetPhase != ZLinkActorTargetHandoffPhase.NotifyingJoined)
                 return;
             _targetPhase = ZLinkActorTargetHandoffPhase.AuthorityCommitted;
-        }
+        }));
     }
 
     public bool FailJoinedNotification(
         string handoffId,
         ZLinkRemoteActorJoinReply reply)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
                 throw new InvalidOperationException(
@@ -780,12 +799,12 @@ internal sealed class ZLinkActorHandoffState(
             _sourceTrailingImported = false;
             _canonicalMaintenanceReplayReservations.Clear();
             return true;
-        }
+        }));
     }
 
     public void RejectPreparation(string handoffId, ZLinkRemoteActorJoinReply reply)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)) return;
             if (_targetPhase is not (ZLinkActorTargetHandoffPhase.Importing
@@ -797,37 +816,38 @@ internal sealed class ZLinkActorHandoffState(
                 or ZLinkActorTargetHandoffPhase.Quarantined))
                 return;
             _preparation?.TrySetResult(reply);
-        }
+        }));
     }
 
     public bool IsKnown(string handoffId)
     {
-        lock (_gate) return string.Equals(_handoffId, handoffId, StringComparison.Ordinal);
+        return AwaitStateLane(_lane.RunAsync(() =>
+            string.Equals(_handoffId, handoffId, StringComparison.Ordinal)));
     }
 
     public bool IsQuarantined(string handoffId)
     {
-        lock (_gate)
-            return _targetPhase == ZLinkActorTargetHandoffPhase.Quarantined
-                   && string.Equals(_handoffId, handoffId, StringComparison.Ordinal);
+        return AwaitStateLane(_lane.RunAsync(() =>
+            _targetPhase == ZLinkActorTargetHandoffPhase.Quarantined
+            && string.Equals(_handoffId, handoffId, StringComparison.Ordinal)));
     }
 
     public void Quarantine(string handoffId)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
                 _targetPhase = ZLinkActorTargetHandoffPhase.Quarantined;
-        }
+        }));
     }
 
     public void AbortImport(string handoffId)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)) return;
             AbortImportLocked(handoffId);
-        }
+        }));
     }
 
     private void AbortImportLocked(
@@ -861,7 +881,7 @@ internal sealed class ZLinkActorHandoffState(
 
     public void Complete(string handoffId)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
                 throw new InvalidOperationException(
@@ -870,17 +890,17 @@ internal sealed class ZLinkActorHandoffState(
                 return;
             throw new InvalidOperationException(
                 $"Actor '{actorId}' cannot complete before target replay drains.");
-        }
+        }));
     }
 
     internal bool TryCompleteTransferredActorReplay(string handoffId)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
                 return false;
             return TryCompleteTargetHandoffLocked(handoffId);
-        }
+        }));
     }
 
     private bool TryCompleteTargetHandoffLocked(string handoffId)
@@ -924,24 +944,24 @@ internal sealed class ZLinkActorHandoffState(
 
     public IReadOnlyList<ZLinkActorHandoffFrame> SnapshotFrames()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_sourcePhase != ZLinkActorSourceHandoffPhase.Capturing)
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' source handoff capture is not active.");
             return _frames.ToArray();
-        }
+        }));
     }
 
     internal void SealCapture()
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!CanSealCaptureLocked())
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' source handoff capture cannot be sealed.");
             _sourceCaptureSealed = true;
-        }
+        }));
     }
 
     /// <summary>
@@ -955,7 +975,7 @@ internal sealed class ZLinkActorHandoffState(
     internal void SealCapture(IDisposable shutdownToken)
     {
         ArgumentNullException.ThrowIfNull(shutdownToken);
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!CanSealCaptureLocked())
             {
@@ -964,19 +984,19 @@ internal sealed class ZLinkActorHandoffState(
                     $"Actor '{actorId}' source handoff capture cannot be sealed.");
             }
             _sourceCaptureSealed = true;
-            PendingShutdownToken = shutdownToken;
-        }
+            SetPendingShutdownToken(shutdownToken);
+        }));
     }
 
     //  Shared by both SealCapture overloads: a capture may be sealed exactly
-    //  once, and only while still in progress. Caller must hold _gate.
+    //  once, and only while still in progress. Caller must run on this state lane.
     private bool CanSealCaptureLocked() =>
         _sourcePhase == ZLinkActorSourceHandoffPhase.Capturing
         && !_sourceCaptureSealed;
 
     internal ZLinkActorHandoffCommitBoundary FreezeCaptureCommitBoundary()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_sourcePhase != ZLinkActorSourceHandoffPhase.Capturing
                 || !_sourceCaptureSealed
@@ -994,7 +1014,7 @@ internal sealed class ZLinkActorHandoffState(
                 checked((ulong)frames.Length),
                 _sourceHoldAdmission.RemainingRecordCapacity,
                 _sourceHoldAdmission.RemainingByteCapacity);
-        }
+        }));
     }
 
     public IReadOnlyList<ZLinkActorHandoffFrame> CutoverCaptureToMessageFollow(
@@ -1022,7 +1042,7 @@ internal sealed class ZLinkActorHandoffState(
             throw new ArgumentOutOfRangeException(
                 nameof(targetAuthorityOwnerGeneration),
                 "Actor Message Follow requires an exact committed source-to-target authority fence.");
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_sourcePhase != ZLinkActorSourceHandoffPhase.Capturing)
                 throw new InvalidOperationException(
@@ -1062,7 +1082,7 @@ internal sealed class ZLinkActorHandoffState(
                 .Concat(_sourceHoldFrames.Skip(_sourceCommittedHoldCount))
                 .OrderBy(static frame => frame.ArrivalIndex)
                 .ToArray();
-        }
+        }));
     }
 
     /// <param name="duration">
@@ -1080,9 +1100,7 @@ internal sealed class ZLinkActorHandoffState(
         TimeSpan duration,
         TimeSpan retransmissionWindow = default)
     {
-        CancellationTokenSource expiry;
-        long committedAt;
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_sourcePhase != ZLinkActorSourceHandoffPhase.CutoverPending
                 || _messageFollowRoute is not { } messageFollowRoute)
@@ -1095,23 +1113,25 @@ internal sealed class ZLinkActorHandoffState(
             _sourceHoldFrames.Clear();
             _sourcePhase = ZLinkActorSourceHandoffPhase.MessageFollowCommitted;
             _sourceCaptureSealed = true;
-            expiry = new CancellationTokenSource();
+            var expiry = new CancellationTokenSource();
             _messageFollowExpiry = expiry;
             //  S1 (spec 25 §5): the cutover submit terminal this class
             //  observes. Taken from timeProvider so it is source-local
             //  and deterministic under a fake clock in tests.
-            committedAt = timeProvider.GetTimestamp();
+            var committedAt = timeProvider.GetTimestamp();
             messageFollowRoute.Lease.Commit(duration);
-        }
-
-        _ = RemoveMessageFollowRouteAfterDelayAsync(
-            duration, retransmissionWindow, committedAt, expiry);
+            using (ExecutionContext.SuppressFlow())
+            {
+                _ = Task.Run(() => RemoveMessageFollowRouteAfterDelayAsync(
+                    duration, retransmissionWindow, committedAt, expiry));
+            }
+        }));
     }
 
     public IReadOnlyList<ZLinkActorHandoffFrame> PrepareImportedReplay(
         IReadOnlyList<ZLinkActorHandoffFrame> sourceTrailingFrames)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed
                 && sourceTrailingFrames.Count == 0)
@@ -1147,13 +1167,13 @@ internal sealed class ZLinkActorHandoffState(
             }
 
             return _frames.ToArray();
-        }
+        }));
     }
 
     internal IReadOnlyList<ZLinkActorHandoffFrame>
         PrepareCanonicalMaintenanceReplay(string handoffId)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
                 || _targetPhase is not (
@@ -1163,20 +1183,20 @@ internal sealed class ZLinkActorHandoffState(
                     $"Actor '{actorId}' has no committed canonical maintenance import.");
             _targetPhase = ZLinkActorTargetHandoffPhase.Replaying;
             return _frames.ToArray();
-        }
+        }));
     }
 
     internal bool IsCanonicalMaintenanceReplayComplete(string handoffId)
     {
-        lock (_gate)
-            return string.Equals(_handoffId, handoffId,
+        return AwaitStateLane(_lane.RunAsync(() =>
+            string.Equals(_handoffId, handoffId,
                 StringComparison.Ordinal)
-                   && _targetPhase == ZLinkActorTargetHandoffPhase.Completed;
+            && _targetPhase == ZLinkActorTargetHandoffPhase.Completed));
     }
 
     internal bool IsCanonicalMaintenanceHandoff(string handoffId)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             // Canonical maintenance imports do not have a remote join request.
             // That identity keeps recovery from starting a second replay of the
@@ -1193,21 +1213,22 @@ internal sealed class ZLinkActorHandoffState(
                        or ZLinkActorTargetHandoffPhase.Replaying
                        or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
                        or ZLinkActorTargetHandoffPhase.Completed;
-        }
+        }));
     }
 
     internal Task WaitForTargetReplayCompletionAsync(
         CancellationToken cancellationToken)
     {
         Task completion;
-        lock (_gate)
+        completion = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed)
                 return Task.CompletedTask;
             completion = _targetReplayCompletion?.Task
                          ?? throw new InvalidOperationException(
                              $"Actor '{actorId}' target handoff has no replay completion boundary.");
-        }
+            return completion;
+        }));
         return completion.WaitAsync(cancellationToken);
     }
 
@@ -1215,7 +1236,7 @@ internal sealed class ZLinkActorHandoffState(
         string handoffId,
         long queuedThroughArrivalIndex)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId,
                     StringComparison.Ordinal)
@@ -1227,7 +1248,7 @@ internal sealed class ZLinkActorHandoffState(
             _targetPhase =
                 ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
             return true;
-        }
+        }));
     }
 
     internal void ReserveCanonicalMaintenanceTrailingAndOpenAdmission(
@@ -1303,7 +1324,7 @@ internal sealed class ZLinkActorHandoffState(
             bool openAdmission)
     {
         ArgumentNullException.ThrowIfNull(reserveReplay);
-        lock (_gate)
+        var claimed = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId,
                     StringComparison.Ordinal)
@@ -1329,8 +1350,10 @@ internal sealed class ZLinkActorHandoffState(
             var reservations =
                 _canonicalMaintenanceReplayReservations
                     .OrderBy(static reservation => reservation.Key)
-                    .Select(static reservation => reservation.Value)
+                    .Where(static reservation => reservation.Value is not null)
+                    .Select(static reservation => reservation.Value!)
                     .ToList();
+            var claimedFrames = new List<ZLinkActorHandoffFrame>();
             foreach (var frame in trailing)
             {
                 if (_canonicalMaintenanceReplayReservations.TryGetValue(
@@ -1338,23 +1361,72 @@ internal sealed class ZLinkActorHandoffState(
                         out _))
                     continue;
 
-                var reservation = reserveReplay(frame)
-                                  ?? throw new InvalidOperationException(
-                                      $"Actor '{actorId}' replay reservation returned no completion task.");
                 _canonicalMaintenanceReplayReservations.Add(
                     frame.ArrivalIndex,
-                    reservation);
-                reservations.Add(reservation);
+                    null);
+                claimedFrames.Add(frame);
             }
             if (openAdmission)
             {
-                // New target ingress can bypass capture only after every
-                // preserved frame has reserved its mailbox position.
+                // Once every preserved frame has claimed its mailbox position,
+                // direct target ingress observes the same open-admission state
+                // that followed the original atomic reservation block. The
+                // caller-owned reservation callback runs outside this lane.
                 _targetPhase =
                     ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
             }
-            return reservations;
+            return (Reservations: reservations, ClaimedFrames: claimedFrames);
+        }));
+
+        var completedReservations = new List<(long ArrivalIndex, Task Task)>();
+        try
+        {
+            foreach (var frame in claimed.ClaimedFrames)
+            {
+                var reservation = reserveReplay(frame)
+                                  ?? throw new InvalidOperationException(
+                                      $"Actor '{actorId}' replay reservation returned no completion task.");
+                completedReservations.Add((frame.ArrivalIndex, reservation));
+            }
         }
+        catch
+        {
+            AwaitStateLane(_lane.RunAsync(() =>
+            {
+                foreach (var (arrivalIndex, reservation) in completedReservations)
+                {
+                    if (_canonicalMaintenanceReplayReservations.TryGetValue(
+                            arrivalIndex,
+                            out var claim)
+                        && claim is null)
+                        _canonicalMaintenanceReplayReservations[arrivalIndex] = reservation;
+                }
+                foreach (var frame in claimed.ClaimedFrames)
+                {
+                    if (_canonicalMaintenanceReplayReservations.TryGetValue(
+                            frame.ArrivalIndex,
+                            out var claim)
+                        && claim is null)
+                        _canonicalMaintenanceReplayReservations.Remove(frame.ArrivalIndex);
+                }
+            }));
+            throw;
+        }
+
+        return AwaitStateLane(_lane.RunAsync(() =>
+        {
+            foreach (var (arrivalIndex, reservation) in completedReservations)
+            {
+                if (_canonicalMaintenanceReplayReservations.TryGetValue(
+                        arrivalIndex,
+                        out var claim)
+                    && claim is null)
+                    _canonicalMaintenanceReplayReservations[arrivalIndex] = reservation;
+            }
+            claimed.Reservations.AddRange(
+                completedReservations.Select(static reservation => reservation.Task));
+            return claimed.Reservations;
+        }));
     }
 
     internal void RegisterCanonicalMaintenanceDrain(
@@ -1362,7 +1434,7 @@ internal sealed class ZLinkActorHandoffState(
         Task drain)
     {
         ArgumentNullException.ThrowIfNull(drain);
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId,
                     StringComparison.Ordinal)
@@ -1372,21 +1444,21 @@ internal sealed class ZLinkActorHandoffState(
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' cannot register the canonical drain.");
             _canonicalMaintenanceDrain = drain;
-        }
+        }));
     }
 
     internal Task? GetCanonicalMaintenanceDrain(string handoffId)
     {
-        lock (_gate)
-            return string.Equals(_handoffId, handoffId,
+        return AwaitStateLane(_lane.RunAsync(() =>
+            string.Equals(_handoffId, handoffId,
                 StringComparison.Ordinal)
-                ? _canonicalMaintenanceDrain
-                : null;
+            ? _canonicalMaintenanceDrain
+            : null));
     }
 
     internal bool TryCompleteCanonicalMaintenanceReplay(string handoffId)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!string.Equals(_handoffId, handoffId,
                     StringComparison.Ordinal)
@@ -1400,12 +1472,12 @@ internal sealed class ZLinkActorHandoffState(
             _targetReplayCompletion?.TrySetResult();
             ReleaseTargetCompletionLocked(handoffId);
             return true;
-        }
+        }));
     }
 
     public IReadOnlyList<ZLinkActorHandoffFrame> SnapshotFinalReplay()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed)
                 return [];
@@ -1415,12 +1487,12 @@ internal sealed class ZLinkActorHandoffState(
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' target handoff replay is not active.");
             return _frames.ToArray();
-        }
+        }));
     }
 
     public void AcknowledgeReplayedFrame()
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_targetPhase is not (
                     ZLinkActorTargetHandoffPhase.Replaying
@@ -1431,12 +1503,12 @@ internal sealed class ZLinkActorHandoffState(
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' does not have a handoff frame to acknowledge.");
             _frames.RemoveAt(0);
-        }
+        }));
     }
 
     internal void AcknowledgeReplayedFrame(long arrivalIndex)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_targetPhase is not (
                     ZLinkActorTargetHandoffPhase.Replaying
@@ -1449,12 +1521,12 @@ internal sealed class ZLinkActorHandoffState(
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' does not have replay frame '{arrivalIndex}' to acknowledge.");
             _frames.RemoveAt(index);
-        }
+        }));
     }
 
     internal void AcknowledgeCanonicalReplayThrough(ulong acceptedSequence)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_targetPhase is not (
                     ZLinkActorTargetHandoffPhase.Replaying
@@ -1466,23 +1538,27 @@ internal sealed class ZLinkActorHandoffState(
             {
                 _frames.RemoveAt(0);
             }
-        }
+        }));
     }
 
     public IReadOnlyList<ZLinkActorHandoffFrame> AbortCapture()
     {
-        var frames = BeginAbortCaptureRestore();
+        var frames = AwaitStateLane(_lane.RunAsync(BeginAbortCaptureRestoreCore));
         foreach (var frame in frames)
-            AcknowledgeAbortRestoreEnqueued(frame.ArrivalIndex);
-        CompleteAbortCaptureRestore();
+            AwaitStateLane(_lane.RunAsync(() =>
+                AcknowledgeAbortRestoreEnqueuedCore(frame.ArrivalIndex)));
+        AwaitStateLane(_lane.RunAsync(CompleteAbortCaptureRestoreCore));
         return frames;
     }
 
     internal IReadOnlyList<ZLinkActorHandoffFrame> BeginAbortCaptureRestore()
     {
-        lock (_gate)
-        {
-            if (_sourcePhase is not (ZLinkActorSourceHandoffPhase.Capturing
+        return AwaitStateLane(_lane.RunAsync(BeginAbortCaptureRestoreCore));
+    }
+
+    private IReadOnlyList<ZLinkActorHandoffFrame> BeginAbortCaptureRestoreCore()
+    {
+        if (_sourcePhase is not (ZLinkActorSourceHandoffPhase.Capturing
                 or ZLinkActorSourceHandoffPhase.CutoverPending
                 or ZLinkActorSourceHandoffPhase.AbortRestoring))
                 throw new InvalidOperationException(
@@ -1495,14 +1571,17 @@ internal sealed class ZLinkActorHandoffState(
                 .Concat(_sourceHoldFrames)
                 .OrderBy(static frame => frame.ArrivalIndex)
                 .ToArray();
-        }
     }
 
     internal void AcknowledgeAbortRestoreEnqueued(long arrivalIndex)
     {
-        lock (_gate)
-        {
-            if (_sourcePhase != ZLinkActorSourceHandoffPhase.AbortRestoring)
+        AwaitStateLane(_lane.RunAsync(() =>
+            AcknowledgeAbortRestoreEnqueuedCore(arrivalIndex)));
+    }
+
+    private void AcknowledgeAbortRestoreEnqueuedCore(long arrivalIndex)
+    {
+        if (_sourcePhase != ZLinkActorSourceHandoffPhase.AbortRestoring)
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' does not have an active abort restore.");
             var sourceIndex = _frames.Count == 0
@@ -1538,15 +1617,17 @@ internal sealed class ZLinkActorHandoffState(
                     _sourceHoldAdmission.Release(
                         frame.CanonicalEncodedLength);
             }
-        }
     }
 
     internal void CompleteAbortCaptureRestore()
     {
+        AwaitStateLane(_lane.RunAsync(CompleteAbortCaptureRestoreCore));
+    }
+
+    private void CompleteAbortCaptureRestoreCore()
+    {
         TaskCompletionSource? completion;
-        lock (_gate)
-        {
-            if (_sourcePhase != ZLinkActorSourceHandoffPhase.AbortRestoring)
+        if (_sourcePhase != ZLinkActorSourceHandoffPhase.AbortRestoring)
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' does not have an abort restore to complete.");
             if (_frames.Count != 0 || _sourceHoldFrames.Count != 0)
@@ -1568,7 +1649,19 @@ internal sealed class ZLinkActorHandoffState(
             _sourceCompletion = null;
             ClearMessageFollowRouteLocked();
             completion?.TrySetResult();
-        }
+    }
+
+    public ZLinkActorFrameRouteResolution ResolveFrameRoute(
+        ZLinkBackendActorRef? currentActor,
+        ZLinkBackendActorRef frameActor)
+    {
+        var result = AwaitStateLane(_lane.RunAsync(() =>
+        {
+            var target = default(ZLinkBackendActorRef);
+            var route = ResolveFrameRouteLocked(currentActor, frameActor, out target);
+            return (route, target);
+        }));
+        return new ZLinkActorFrameRouteResolution(result.route, result.target);
     }
 
     public ZLinkActorFrameRoute ResolveFrameRoute(
@@ -1576,10 +1669,27 @@ internal sealed class ZLinkActorHandoffState(
         ZLinkBackendActorRef frameActor,
         out ZLinkBackendActorRef targetActor)
     {
-        lock (_gate)
+        var result = ResolveFrameRoute(currentActor, frameActor);
+        targetActor = result.TargetActor;
+        return result.Route;
+    }
+
+    public ZLinkActorMessageFollowRouteResolution RouteFrame(
+        ZLinkBackendActorRef? currentActor,
+        ZLinkBackendActorRef frameActor)
+    {
+        var result = AwaitStateLane(_lane.RunAsync(() =>
         {
-            return ResolveFrameRouteLocked(currentActor, frameActor, out targetActor);
-        }
+            var targetActor = default(ZLinkBackendActorRef);
+            var route = ResolveFrameRouteLocked(currentActor, frameActor, out targetActor);
+            var messageFollowRoute = route == ZLinkActorFrameRoute.MessageFollow
+                ? _messageFollowRoute
+                : null;
+            return (route, messageFollowRoute);
+        }));
+        return new ZLinkActorMessageFollowRouteResolution(
+            result.route,
+            result.messageFollowRoute);
     }
 
     public ZLinkActorFrameRoute RouteFrame(
@@ -1587,20 +1697,14 @@ internal sealed class ZLinkActorHandoffState(
         ZLinkBackendActorRef frameActor,
         out ZLinkActorMessageFollowRoute? messageFollowRoute)
     {
-        lock (_gate)
-        {
-            var targetActor = default(ZLinkBackendActorRef);
-            var route = ResolveFrameRouteLocked(currentActor, frameActor, out targetActor);
-            messageFollowRoute = route == ZLinkActorFrameRoute.MessageFollow
-                ? _messageFollowRoute
-                : null;
-            return route;
-        }
+        var result = RouteFrame(currentActor, frameActor);
+        messageFollowRoute = result.MessageFollowRoute;
+        return result.Route;
     }
 
     public void Reset()
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             _sourcePhase = ZLinkActorSourceHandoffPhase.Idle;
             _targetPhase = ZLinkActorTargetHandoffPhase.Idle;
@@ -1631,14 +1735,14 @@ internal sealed class ZLinkActorHandoffState(
             _sourceCompletion = null;
             _staleSourceActor = null;
             ClearMessageFollowRouteLocked();
-        }
+        }));
     }
 
     public void AbortRuntimeGeneration(Exception failure)
     {
         ArgumentNullException.ThrowIfNull(failure);
         TaskCompletionSource<ZLinkRemoteActorJoinReply>? preparation;
-        lock (_gate)
+        preparation = AwaitStateLane(_lane.RunAsync(() =>
         {
             preparation = _preparation;
             _sourcePhase = ZLinkActorSourceHandoffPhase.Idle;
@@ -1666,7 +1770,8 @@ internal sealed class ZLinkActorHandoffState(
             _sourceCompletion = null;
             _staleSourceActor = null;
             ClearMessageFollowRouteLocked();
-        }
+            return preparation;
+        }));
 
         preparation?.TrySetException(failure);
     }
@@ -1742,13 +1847,13 @@ internal sealed class ZLinkActorHandoffState(
             if (remainder > TimeSpan.Zero)
                 await Task.Delay(remainder, timeProvider, expiry.Token)
                     .ConfigureAwait(false);
-            lock (_gate)
+            await _lane.RunAsync(() =>
             {
                 if (!ReferenceEquals(_messageFollowExpiry, expiry)) return;
 
                 ClearMessageFollowRouteLocked();
                 diagnostic?.Invoke("message_follow_route_removed entries=0");
-            }
+            }).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (expiry.IsCancellationRequested)
         {
@@ -1776,8 +1881,14 @@ internal sealed class ZLinkActorHandoffState(
         //  (BeginPendingRelocationUnit) always releases exactly once, no
         //  matter how the unit ends. The setter disposes the token it
         //  replaces.
-        PendingShutdownToken = null;
+        SetPendingShutdownToken(null);
     }
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }
 
 internal readonly record struct ZLinkActorMessageFollowRoute(
@@ -1791,6 +1902,18 @@ internal readonly record struct ZLinkActorMessageFollowRoute(
     ulong SourceOwnerLeaseGeneration,
     ulong TargetOwnerLeaseGeneration,
     ZLinkActorMessageFollowLease Lease);
+
+internal readonly record struct ZLinkActorHandoffImportResult(
+    bool OwnsImport,
+    Task<ZLinkRemoteActorJoinReply> Preparation);
+
+internal readonly record struct ZLinkActorFrameRouteResolution(
+    ZLinkActorFrameRoute Route,
+    ZLinkBackendActorRef TargetActor);
+
+internal readonly record struct ZLinkActorMessageFollowRouteResolution(
+    ZLinkActorFrameRoute Route,
+    ZLinkActorMessageFollowRoute? MessageFollowRoute);
 
 internal sealed class ZLinkActorMessageFollowLease(TimeProvider timeProvider)
 {
