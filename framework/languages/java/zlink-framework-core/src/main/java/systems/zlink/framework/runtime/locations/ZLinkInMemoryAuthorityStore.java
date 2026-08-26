@@ -98,7 +98,7 @@ final class ZLinkInMemoryAuthorityStore {
     public CompletionStage<ZLinkAuthorityReadResult> read(
         String key,
         ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             Row row = rows.get(key);
             return completed(row == null
@@ -112,7 +112,7 @@ final class ZLinkInMemoryAuthorityStore {
         ZLinkAuthorityExpectation expectation,
         ZLinkAuthorityMutation mutation,
         ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             Row current = rows.get(key);
             if (!matches(current, expectation)) {
@@ -196,7 +196,7 @@ final class ZLinkInMemoryAuthorityStore {
         Optional<ZLinkAuthorityScanCursor> cursor,
         int limit,
         ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             if (limit <= 0) {
                 throw new IllegalArgumentException(
                     "authority scan limit must be positive");
@@ -230,7 +230,7 @@ final class ZLinkInMemoryAuthorityStore {
     public CompletionStage<ZLinkObjectReserveResult> reserve(
         ZLinkObjectReservationRequest request,
         ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             if (request.objectKind()
                     != ZLinkPlacementObjectKind.ACTOR
                 && spotIdentityClaimed.test(
@@ -350,7 +350,7 @@ final class ZLinkInMemoryAuthorityStore {
         ZLinkObjectReservation reservation,
         byte[] readyPayload,
         ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             return completed(commitLocked(reservation, readyPayload, null));
         });
     }
@@ -364,7 +364,7 @@ final class ZLinkInMemoryAuthorityStore {
             reservation,
             terminal,
             ZLinkCreationTerminalState.CREATED);
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             return completed(commitLocked(reservation, readyPayload, terminal));
         });
     }
@@ -436,7 +436,7 @@ final class ZLinkInMemoryAuthorityStore {
             reservation,
             terminal,
             ZLinkCreationTerminalState.REJECTED);
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             if (activeTerminal(terminal.operation()) != null) {
                 return completed(terminalMatches(terminal)
                     ? ZLinkObjectRejectResult.ALREADY_REJECTED
@@ -475,7 +475,7 @@ final class ZLinkInMemoryAuthorityStore {
     public CompletionStage<ZLinkObjectAbortResult> abort(
         ZLinkObjectReservation reservation,
         ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             ReservationState state = reservations.get(
                 reservation.authorityKey());
             if (!sameReservation(state, reservation)) {
@@ -509,7 +509,7 @@ final class ZLinkInMemoryAuthorityStore {
             reservation,
             terminal,
             ZLinkCreationTerminalState.FAILED);
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             if (activeTerminal(terminal.operation()) != null) {
                 return completed(terminalMatches(terminal)
                     ? ZLinkObjectAbortResult.ALREADY_ABORTED
@@ -547,7 +547,7 @@ final class ZLinkInMemoryAuthorityStore {
         readCreationTerminal(
             ZLinkCreationOperationIdentity operation,
             ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             ZLinkCreationOperationTerminal terminal =
                 activeTerminal(operation);
             if (terminal == null) {
@@ -623,7 +623,7 @@ final class ZLinkInMemoryAuthorityStore {
     public CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
         ZLinkAggregatePrepareRequest request,
         ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             AggregateState existing = aggregates.get(request.aggregateId());
             ZLinkAggregateFence fence = new ZLinkAggregateFence(
                 request.aggregateId(),
@@ -724,7 +724,7 @@ final class ZLinkInMemoryAuthorityStore {
     public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
         ZLinkAggregateFence fence,
         ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             AggregateState state = aggregates.get(fence.aggregateId());
             if (!sameAggregate(state, fence)) {
                 return completed(ZLinkAggregateCommitResult.STALE);
@@ -808,7 +808,7 @@ final class ZLinkInMemoryAuthorityStore {
     public CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
         ZLinkAggregateFence fence,
         ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             AggregateState state = aggregates.get(fence.aggregateId());
             if (!sameAggregate(state, fence)) {
                 return completed(ZLinkAggregateAbortResult.STALE);
@@ -833,7 +833,7 @@ final class ZLinkInMemoryAuthorityStore {
         readAggregateProgress(
             ZLinkAggregateFence fence,
             ZLinkStoreCancellation cancellation) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             AggregateState state = aggregates.get(fence.aggregateId());
             if (!sameAggregate(state, fence)
                 || state.state != State.COMMITTED) {
@@ -848,7 +848,7 @@ final class ZLinkInMemoryAuthorityStore {
         String expectedStoreVersion,
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(expectedStoreVersion, "expectedStoreVersion");
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             AggregateState state = aggregates.get(fence.aggregateId());
             if (!sameAggregate(state, fence)
                 || state.state != State.COMMITTED
@@ -1559,15 +1559,10 @@ final class ZLinkInMemoryAuthorityStore {
         return CompletableFuture.completedFuture(value);
     }
 
-    private <T> CompletionStage<T> onStateLane(
-        Supplier<? extends CompletionStage<T>> work) {
+    private <T> T inStateLane(Supplier<T> work) {
         if (stateLane.isOnLane()) {
             return work.get();
         }
-        return stateLane.runAsync(work).thenCompose(stage -> stage);
-    }
-
-    private <T> T inStateLane(Supplier<T> work) {
         try {
             return stateLane.runAsync(work).toCompletableFuture().join();
         } catch (CompletionException failure) {

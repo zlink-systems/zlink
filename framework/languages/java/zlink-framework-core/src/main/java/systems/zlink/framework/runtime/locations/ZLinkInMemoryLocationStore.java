@@ -49,7 +49,7 @@ import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.function.Function;
+import java.util.concurrent.CompletionException;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
@@ -272,7 +272,7 @@ public final class ZLinkInMemoryLocationStore
         ZLinkLocationWriteIntent intent) {
         Objects.requireNonNull(descriptor, "descriptor");
         Objects.requireNonNull(intent, "intent");
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             ZLinkLocationOwnerToken owner =
                 new ZLinkLocationOwnerToken(
                     descriptor.ownerId(),
@@ -377,7 +377,7 @@ public final class ZLinkInMemoryLocationStore
     public CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
         ZLinkMeshNodeDescriptorKey key,
         ZLinkLocationOwnerToken owner) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             ZLinkMeshNodeDescriptor current =
                 meshNodes.rows.get(meshNodeKey(key));
             if (current == null
@@ -404,7 +404,7 @@ public final class ZLinkInMemoryLocationStore
     @Override
     public CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>
         listMeshNodes(String meshName, ZLinkPageRequest page) {
-        return onStateLane(() -> completed(page(
+        return inStateLane(() -> completed(page(
                 meshNodes,
                 descriptor -> descriptor.meshName().equals(meshName),
                 page)))
@@ -423,7 +423,7 @@ public final class ZLinkInMemoryLocationStore
         Objects.requireNonNull(intent, "intent");
         ZLinkLocationOwnerToken owner = new ZLinkLocationOwnerToken(
             descriptor.ownerId(), descriptor.leaseGeneration());
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             if (!isExactOwnerLeaseLive(owner)) {
                 return completed(ZLinkLocationWriteResult.ignoredStale());
             }
@@ -463,7 +463,7 @@ public final class ZLinkInMemoryLocationStore
         ZLinkLocationOwnerToken owner) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(owner, "owner");
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             String encoded = key.channelName() + ":" + key.serverRid().toHex();
             ZLinkClientServerServerDescriptor current = clientServers.rows.get(encoded);
             if (current == null || !current.ownerId().equals(owner.ownerId())
@@ -479,7 +479,7 @@ public final class ZLinkInMemoryLocationStore
     public CompletionStage<ZLinkLocationPage<ZLinkClientServerServerDescriptor>>
         listClientServers(String channelName, ZLinkPageRequest page) {
         Objects.requireNonNull(channelName, "channelName");
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             return completed(page(
                 clientServers,
                 row -> row.channelName().equals(channelName)
@@ -496,7 +496,7 @@ public final class ZLinkInMemoryLocationStore
         Objects.requireNonNull(descriptor, "descriptor");
         Objects.requireNonNull(intent, "intent");
         validateFanoutDescriptor(descriptor);
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             ZLinkLocationOwnerToken owner = new ZLinkLocationOwnerToken(
                 descriptor.ownerId(),
                 descriptor.leaseGeneration());
@@ -566,7 +566,7 @@ public final class ZLinkInMemoryLocationStore
         ZLinkLocationOwnerToken owner) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(owner, "owner");
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             String encoded = fanoutPublisherKey(key);
             ZLinkFanoutPublisherDescriptor current =
                 fanoutPublishers.rows.get(encoded);
@@ -584,7 +584,7 @@ public final class ZLinkInMemoryLocationStore
     public CompletionStage<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
         listFanoutPublishers(String channelName, ZLinkPageRequest page) {
         Objects.requireNonNull(channelName, "channelName");
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             return completed(page(
                 fanoutPublishers,
                 row -> row.channelName().equals(channelName)
@@ -600,7 +600,7 @@ public final class ZLinkInMemoryLocationStore
         claimOwnerLease(
         String ownerId,
         Duration leaseTtl) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             LeaseRow current = leases.get(ownerId);
             if (current != null && current.expiresAt().isAfter(now)) {
@@ -621,7 +621,7 @@ public final class ZLinkInMemoryLocationStore
     @Override
     public CompletionStage<ZLinkOwnerLeaseReadResult>
         readOwnerLease(String ownerId) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             LeaseRow current = leases.get(ownerId);
             if (current == null || !current.expiresAt().isAfter(now)) {
@@ -640,7 +640,7 @@ public final class ZLinkInMemoryLocationStore
         renewOwnerLease(
             ZLinkLocationOwnerToken token,
             Duration leaseTtl) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             LeaseRow current = leases.get(token.ownerId());
             if (current == null
@@ -657,7 +657,7 @@ public final class ZLinkInMemoryLocationStore
     @Override
     public CompletionStage<ZLinkOwnerLeaseReleaseResult>
         releaseOwnerLease(ZLinkLocationOwnerToken token) {
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             LeaseRow current = leases.get(token.ownerId());
             if (current == null
@@ -678,7 +678,7 @@ public final class ZLinkInMemoryLocationStore
     public CompletionStage<Long> removeAllByOwner(
         ZLinkLocationOwnerToken owner) {
         Objects.requireNonNull(owner, "owner");
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             if (!isExactOwnerLeaseLive(owner)) {
                 return CompletableFuture.failedFuture(
                     new IllegalStateException(
@@ -730,7 +730,7 @@ public final class ZLinkInMemoryLocationStore
         if (meshName == null || meshName.isBlank()) {
             throw new IllegalArgumentException("meshName must be non-blank");
         }
-        return onStateLane(() -> {
+        return inStateLane(() -> {
             Long stamp = meshNodeStamps.get(meshName);
             return completed(stamp == null
                 ? OptionalLong.empty()
@@ -1050,12 +1050,22 @@ public final class ZLinkInMemoryLocationStore
         return CompletableFuture.completedFuture(value);
     }
 
-    private <T> CompletionStage<T> onStateLane(
-        Supplier<? extends CompletionStage<T>> work) {
+    private <T> T inStateLane(Supplier<T> work) {
         if (stateLane.isOnLane()) {
             return work.get();
         }
-        return stateLane.runAsync(work).thenCompose(Function.identity());
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
 
     private static final class RowTable<TRow> {
