@@ -459,7 +459,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 if (_admissionOwner != ZLinkDrainOwner.Relocation
                     || _relocationFenceGeneration != expectedFence.Generation)
                     return false;
-                if (!_actorHandoffAdmissions.SnapshotDrain().IsSafe)
+                if (!AwaitStateLane(_actorHandoffAdmissions.SnapshotDrainAsync()).IsSafe)
                     return false;
                 _admissionOwner = ZLinkDrainOwner.None;
                 _relocationFenceGeneration = 0;
@@ -508,7 +508,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                                    && _relocationFenceGeneration
                                       == expectedFence.Generation
                                    && _activeOperations == 0
-                                   && _actorHandoffAdmissions.SnapshotDrain().IsSafe;
+                                   && AwaitStateLane(_actorHandoffAdmissions.SnapshotDrainAsync()).IsSafe;
                     if (acquired)
                         _admissionOwner = ZLinkDrainOwner.RelocationRollback;
                     return acquired;
@@ -531,7 +531,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     if (_admissionOwner != ZLinkDrainOwner.RelocationRollback
                         || _relocationFenceGeneration
                            != expectedFence.Generation
-                        || !_actorHandoffAdmissions.SnapshotDrain().IsSafe)
+                        || !AwaitStateLane(_actorHandoffAdmissions.SnapshotDrainAsync()).IsSafe)
                         return false;
                     _admissionOwner = ZLinkDrainOwner.None;
                     _relocationFenceGeneration = 0;
@@ -557,7 +557,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 var currentOperation = new ZLinkRuntimeOperationAdmissionSnapshot(
                     _operationEpoch,
                     _activeOperations);
-                var currentHandoff = _actorHandoffAdmissions.SnapshotDrain();
+                var currentHandoff = AwaitStateLane(_actorHandoffAdmissions.SnapshotDrainAsync());
                 if (_admissionOwner != ZLinkDrainOwner.None
                     || !_acceptingOperations
                     || currentOperation != operationBaseline
@@ -620,6 +620,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             return Interlocked.CompareExchange(ref _executionScope, created, null) ?? created;
         }
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
     internal ZLinkRuntimeOperationLease EnterOperation(bool countAsRequest = false)
     {

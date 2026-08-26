@@ -1841,7 +1841,7 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
-    public void PendingAdmission_IsCorrelatedByHandoffId_AndEnforcesItsDeadline()
+    public async Task PendingAdmission_IsCorrelatedByHandoffId_AndEnforcesItsDeadline()
     {
         var time = new ManualTimeProvider();
         var admissions = new ZLinkActorHandoffAdmissions(time);
@@ -1857,22 +1857,23 @@ public sealed class ActorHandoffTests
         var reply = new ZLinkRemoteActorAdmissionReply(true, "application/json", [], request.DeadlineUnixTimeMilliseconds);
         const string targetSpotId = "spot-1";
 
-        admissions.Register(request, targetSpotId, reply);
-        Assert.True(admissions.TryGetReply(request, targetSpotId, out var stored));
+        await admissions.RegisterAsync(request, targetSpotId, reply);
+        var stored = await admissions.TryGetReplyAsync(request, targetSpotId);
+        Assert.NotNull(stored);
         Assert.Same(reply, stored);
         var wrongActorCommit = JoinRequest("other-actor");
-        Assert.Throws<InvalidOperationException>(() =>
-            admissions.BeginCommit(wrongActorCommit, targetSpotId));
-        Assert.Throws<InvalidOperationException>(() =>
-            admissions.BeginCommit(JoinRequest("actor-1") with { SourceNodeRid = [9] }, targetSpotId));
-        Assert.Throws<InvalidOperationException>(() =>
-            admissions.BeginCommit(JoinRequest("actor-1"), "spot-other"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            admissions.BeginCommitAsync(wrongActorCommit, targetSpotId).AsTask());
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            admissions.BeginCommitAsync(JoinRequest("actor-1") with { SourceNodeRid = [9] }, targetSpotId).AsTask());
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            admissions.BeginCommitAsync(JoinRequest("actor-1"), "spot-other").AsTask());
 
         time.Advance(TimeSpan.FromSeconds(6));
-        var timeout = Assert.Throws<ZLinkFrameworkException>(() =>
-            admissions.BeginCommit(JoinRequest("actor-1"), targetSpotId));
+        var timeout = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            admissions.BeginCommitAsync(JoinRequest("actor-1"), targetSpotId).AsTask());
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, timeout.Kind);
-        Assert.False(admissions.TryGetReply(request, targetSpotId, out _));
+        Assert.Null(await admissions.TryGetReplyAsync(request, targetSpotId));
 
         ZLinkRemoteActorJoinRequest JoinRequest(string actorId) => new(
             ActorId: actorId,
@@ -1953,7 +1954,7 @@ public sealed class ActorHandoffTests
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
         Assert.Equal(0, callbackCount);
-        Assert.True(admissions.SnapshotDrain().IsSafe);
+        Assert.True((await admissions.SnapshotDrainAsync()).IsSafe);
     }
 
     [Fact]
@@ -2003,14 +2004,14 @@ public sealed class ActorHandoffTests
                 reservation.TargetSpotAuthorityOwnerGeneration
         };
 
-        Assert.Throws<InvalidOperationException>(() =>
-            admissions.BeginCommit(
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            admissions.BeginCommitAsync(
                 commit with { ReservationToken = "other" },
-                target));
-        admissions.BeginCommit(commit, target);
+                target).AsTask());
+        await admissions.BeginCommitAsync(commit, target);
 
-        admissions.Complete(request.HandoffId);
-        Assert.True(admissions.SnapshotDrain().IsSafe);
+        await admissions.CompleteAsync(request.HandoffId);
+        Assert.True((await admissions.SnapshotDrainAsync()).IsSafe);
     }
 
     [Fact]
@@ -2040,10 +2041,10 @@ public sealed class ActorHandoffTests
                 .AsTask()));
 
         Assert.All(replies, static reply => Assert.True(reply.Accepted));
-        Assert.False(admissions.SnapshotDrain().IsSafe);
+        Assert.False((await admissions.SnapshotDrainAsync()).IsSafe);
         foreach (var request in requests)
-            admissions.Complete(request.HandoffId);
-        Assert.True(admissions.SnapshotDrain().IsSafe);
+            await admissions.CompleteAsync(request.HandoffId);
+        Assert.True((await admissions.SnapshotDrainAsync()).IsSafe);
     }
 
     [Fact]
@@ -2079,7 +2080,7 @@ public sealed class ActorHandoffTests
         await admission;
         Assert.False(drainSafe.IsCompleted);
 
-        admissions.Complete(request.HandoffId);
+        await admissions.CompleteAsync(request.HandoffId);
         await drainSafe.WaitAsync(TimeSpan.FromSeconds(1));
     }
 
@@ -2119,8 +2120,8 @@ public sealed class ActorHandoffTests
 
         var commit = CommitRequest(request.HandoffId, [])
             with { ReservationToken = "handoff-reservation-token", TargetNodeRid = new byte[] { 9 } };
-        admissions.BeginCommit(commit, target);
-        admissions.Complete(request.HandoffId);
+        await admissions.BeginCommitAsync(commit, target);
+        await admissions.CompleteAsync(request.HandoffId);
 
         await admissions.WaitUntilDrainSafeAsync(CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(1));
@@ -2134,20 +2135,20 @@ public sealed class ActorHandoffTests
         const string targetSpot = "spot-1";
         var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2));
 
-        admissions.RecordJoinOutcome(request, targetSpot, reply);
+        await admissions.RecordJoinOutcomeAsync(request, targetSpot, reply);
         await admissions.AbortAsync(request.HandoffId);
 
-        Assert.True(admissions.TryGetJoinOutcome(request, targetSpot, out var stored));
+        var stored = await admissions.TryGetJoinOutcomeAsync(request, targetSpot);
+        Assert.NotNull(stored);
         Assert.Same(reply, stored);
         var terminalCompletion = admissions.WaitForTerminalCompletionAsync(
             request,
             targetSpot,
             CancellationToken.None);
         Assert.False(terminalCompletion.IsCompleted);
-        Assert.False(admissions.TryGetJoinOutcome(
+        Assert.Null(await admissions.TryGetJoinOutcomeAsync(
             request with { RelocationReference = "changed-root" },
-            targetSpot,
-            out _));
+            targetSpot));
         var completion = new ZLinkRemoteActorHandoffCompletionRequest(
             request.ActorId,
             request.HandoffId,
@@ -2155,10 +2156,10 @@ public sealed class ActorHandoffTests
             request.SourceNodeRid,
             targetSpot,
             []);
-        Assert.True(admissions.TryBeginCompletion(completion, targetSpot));
-        admissions.CancelCompletion(completion, targetSpot);
-        Assert.Throws<InvalidOperationException>(() =>
-            admissions.TryBeginCompletion(
+        Assert.True(await admissions.TryBeginCompletionAsync(completion, targetSpot));
+        await admissions.CancelCompletionAsync(completion, targetSpot);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            admissions.TryBeginCompletionAsync(
                 completion with
                 {
                     Frames =
@@ -2166,17 +2167,17 @@ public sealed class ActorHandoffTests
                         new ZLinkActorHandoffFrame([], 0, [], [], 1, 0, [], [], 0)
                     ]
                 },
-                targetSpot));
-        Assert.True(admissions.TryBeginCompletion(completion, targetSpot));
-        admissions.RecordCompletion(completion, targetSpot);
+                targetSpot).AsTask());
+        Assert.True(await admissions.TryBeginCompletionAsync(completion, targetSpot));
+        await admissions.RecordCompletionAsync(completion, targetSpot);
         await terminalCompletion.WaitAsync(TimeSpan.FromSeconds(1));
-        Assert.False(admissions.TryBeginCompletion(completion, targetSpot));
+        Assert.False(await admissions.TryBeginCompletionAsync(completion, targetSpot));
         // A completion this target no longer honors is terminal for the
         // source's reconciliation (RequestRejected), never retried.
-        var changedTarget = Assert.Throws<ZLinkFrameworkException>(() =>
-            admissions.TryBeginCompletion(
+        var changedTarget = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            admissions.TryBeginCompletionAsync(
                 completion with { TargetSpotId = "spot-other" },
-                targetSpot));
+                targetSpot).AsTask());
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, changedTarget.Kind);
     }
 
@@ -2205,27 +2206,25 @@ public sealed class ActorHandoffTests
             true,
             ActorRef("node-b", 2));
 
-        admissions.RecordJoinOutcome(enriched, targetSpot, accepted);
+        await admissions.RecordJoinOutcomeAsync(enriched, targetSpot, accepted);
         await admissions.AbortAsync(raw.HandoffId);
 
-        Assert.True(admissions.TryGetJoinOutcome(raw, targetSpot, out var recorded));
+        var recorded = await admissions.TryGetJoinOutcomeAsync(raw, targetSpot);
+        Assert.NotNull(recorded);
         Assert.Same(accepted, recorded);
-        Assert.False(admissions.TryGetJoinOutcome(
+        Assert.Null(await admissions.TryGetJoinOutcomeAsync(
             raw with { RelocationChecksumCrc32c = raw.RelocationChecksumCrc32c + 1 },
-            targetSpot,
-            out _));
-        Assert.False(admissions.TryGetJoinOutcome(
+            targetSpot));
+        Assert.Null(await admissions.TryGetJoinOutcomeAsync(
             raw with { ReservationToken = "reservation-2" },
-            targetSpot,
-            out _));
-        Assert.False(admissions.TryGetJoinOutcome(
+            targetSpot));
+        Assert.Null(await admissions.TryGetJoinOutcomeAsync(
             raw with { TargetNodeGeneration = raw.TargetNodeGeneration + 1 },
-            targetSpot,
-            out _));
+            targetSpot));
     }
 
     [Fact]
-    public void HandoffCompletion_RejectsAChangedBoundSessionRoute()
+    public async Task HandoffCompletion_RejectsAChangedBoundSessionRoute()
     {
         var admissions = new ZLinkActorHandoffAdmissions();
         const string targetSpot = "spot-1";
@@ -2243,7 +2242,7 @@ public sealed class ActorHandoffTests
             BoundSessionOwnerNodeGeneration = 23,
             BoundSessionAcceptedHighWater = 29
         };
-        admissions.RecordJoinOutcome(
+        await admissions.RecordJoinOutcomeAsync(
             request,
             targetSpot,
             ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2)));
@@ -2266,17 +2265,17 @@ public sealed class ActorHandoffTests
             BoundSessionOwnerNodeGeneration: request.BoundSessionOwnerNodeGeneration,
             BoundSessionAcceptedHighWater: request.BoundSessionAcceptedHighWater);
 
-        Assert.True(admissions.TryBeginCompletion(completion, targetSpot));
-        admissions.CancelCompletion(completion, targetSpot);
-        var changedRoute = Assert.Throws<ZLinkFrameworkException>(() =>
-            admissions.TryBeginCompletion(
+        Assert.True(await admissions.TryBeginCompletionAsync(completion, targetSpot));
+        await admissions.CancelCompletionAsync(completion, targetSpot);
+        var changedRoute = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            admissions.TryBeginCompletionAsync(
                 completion with { BoundSessionOwnerLeaseGeneration = 31 },
-                targetSpot));
+                targetSpot).AsTask());
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, changedRoute.Kind);
     }
 
     [Fact]
-    public void ActiveTerminalOutcomes_AreNotEvictedByTheCompletedResultCapacity()
+    public async Task ActiveTerminalOutcomes_AreNotEvictedByTheCompletedResultCapacity()
     {
         var admissions = new ZLinkActorHandoffAdmissions();
         const string targetSpot = "spot-1";
@@ -2284,17 +2283,17 @@ public sealed class ActorHandoffTests
         for (var index = 0; index < 1025; index++)
         {
             var request = CommitRequest($"handoff-{index}", []);
-            admissions.RecordJoinOutcome(
+            await admissions.RecordJoinOutcomeAsync(
                 request,
                 targetSpot,
                 ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", (ulong)index + 1)));
         }
 
-        Assert.True(admissions.TryGetJoinOutcome(first, targetSpot, out _));
+        Assert.NotNull(await admissions.TryGetJoinOutcomeAsync(first, targetSpot));
     }
 
     [Fact]
-    public void PreparedCommit_ExpiresToRejectedOutcome_AndRejectsLateCompletion()
+    public async Task PreparedCommit_ExpiresToRejectedOutcome_AndRejectsLateCompletion()
     {
         var time = new ManualTimeProvider();
         var admissions = new ZLinkActorHandoffAdmissions(time);
@@ -2302,12 +2301,13 @@ public sealed class ActorHandoffTests
         var request = CommitRequest("handoff-expiring", []);
         var accepted = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2));
         var rejected = ZLinkRemoteActorJoinPackets.CreateJoinReply(false, ActorRef("rejected", 0));
-        admissions.RecordJoinOutcome(request, targetSpot, accepted, TimeSpan.FromSeconds(5));
+        await admissions.RecordJoinOutcomeAsync(request, targetSpot, accepted, TimeSpan.FromSeconds(5));
 
         time.Advance(TimeSpan.FromSeconds(5));
 
-        Assert.True(admissions.TryExpirePreparedCommit(request, targetSpot, rejected));
-        Assert.True(admissions.TryGetJoinOutcome(request, targetSpot, out var outcome));
+        Assert.True(await admissions.TryExpirePreparedCommitAsync(request, targetSpot, rejected));
+        var outcome = await admissions.TryGetJoinOutcomeAsync(request, targetSpot);
+        Assert.NotNull(outcome);
         Assert.False(outcome.Accepted);
         var completion = new ZLinkRemoteActorHandoffCompletionRequest(
             request.ActorId,
@@ -2318,13 +2318,13 @@ public sealed class ActorHandoffTests
             []);
         // A completion the target no longer honors is terminal for the
         // source's reconciliation (RequestRejected), never retried.
-        var lateCompletion = Assert.Throws<ZLinkFrameworkException>(() =>
-            admissions.TryBeginCompletion(completion, targetSpot));
+        var lateCompletion = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            admissions.TryBeginCompletionAsync(completion, targetSpot).AsTask());
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, lateCompletion.Kind);
     }
 
     [Fact]
-    public void PreparedAcceptance_CanBeAtomicallyCompensatedToRejection()
+    public async Task PreparedAcceptance_CanBeAtomicallyCompensatedToRejection()
     {
         var admissions = new ZLinkActorHandoffAdmissions();
         const string targetSpot = "spot-1";
@@ -2332,10 +2332,11 @@ public sealed class ActorHandoffTests
         var accepted = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2));
         var rejected = ZLinkRemoteActorJoinPackets.CreateJoinReply(false, ActorRef("rejected", 0));
 
-        admissions.RecordJoinOutcome(request, targetSpot, accepted, TimeSpan.FromSeconds(5));
-        admissions.RejectPreparedJoinOutcome(request, targetSpot, rejected);
+        await admissions.RecordJoinOutcomeAsync(request, targetSpot, accepted, TimeSpan.FromSeconds(5));
+        await admissions.RejectPreparedJoinOutcomeAsync(request, targetSpot, rejected);
 
-        Assert.True(admissions.TryGetJoinOutcome(request, targetSpot, out var outcome));
+        var outcome = await admissions.TryGetJoinOutcomeAsync(request, targetSpot);
+        Assert.NotNull(outcome);
         Assert.False(outcome.Accepted);
     }
 
@@ -2346,7 +2347,7 @@ public sealed class ActorHandoffTests
         var admissions = new ZLinkActorHandoffAdmissions(time);
         const string targetSpot = "spot-1";
         var expired = AdmissionRequest(time, "handoff-1");
-        admissions.Register(
+        await admissions.RegisterAsync(
             expired,
             targetSpot,
             new ZLinkRemoteActorAdmissionReply(true, "application/json", [1], expired.DeadlineUnixTimeMilliseconds));
@@ -2370,7 +2371,8 @@ public sealed class ActorHandoffTests
 
         Assert.Equal(1, calls);
         Assert.Equal([2], reply.Reply);
-        Assert.True(admissions.TryGetReply(replacement, targetSpot, out var stored));
+        var stored = await admissions.TryGetReplyAsync(replacement, targetSpot);
+        Assert.NotNull(stored);
         Assert.Same(reply, stored);
     }
 

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal readonly record struct ZLinkActorHandoffDrainSnapshot(
@@ -8,7 +10,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
     TimeProvider? timeProvider = null,
     Action<string>? diagnostic = null)
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<string, PendingAdmission> _pending = new(StringComparer.Ordinal);
     private readonly Dictionary<string, AdmissionExecution> _admitting = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TerminalOutcome> _terminal = new(StringComparer.Ordinal);
@@ -18,19 +20,16 @@ internal sealed class ZLinkActorHandoffAdmissions(
     private bool _drainUnsafe;
     private long _drainEpoch;
 
-    internal ZLinkActorHandoffDrainSnapshot SnapshotDrain()
-    {
-        lock (_gate)
-            return new(
+    internal ValueTask<ZLinkActorHandoffDrainSnapshot> SnapshotDrainAsync() =>
+        _lane.RunAsync(() =>
+            new ZLinkActorHandoffDrainSnapshot(
                 _drainEpoch,
-                !_drainUnsafe && _admitting.Count == 0 && _pending.Count == 0);
-    }
+                !_drainUnsafe && _admitting.Count == 0 && _pending.Count == 0));
 
-    public Task WaitUntilDrainSafeAsync(CancellationToken cancellationToken)
+    public async Task WaitUntilDrainSafeAsync(CancellationToken cancellationToken)
     {
-        Task wait;
-        lock (_gate) wait = _drainSafe.Task;
-        return wait.WaitAsync(cancellationToken);
+        var wait = await _lane.RunAsync(() => _drainSafe.Task).ConfigureAwait(false);
+        await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ZLinkRemoteActorAdmissionReply> AdmitAsync(
@@ -40,10 +39,9 @@ internal sealed class ZLinkActorHandoffAdmissions(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(admit);
-        AdmissionExecution execution;
-        var ownsExecution = false;
-        lock (_gate)
+        var start = await _lane.RunAsync(() =>
         {
+            AdmissionExecution execution;
             if (_pending.TryGetValue(request.HandoffId, out var pending))
             {
                 if (pending.Deadline <= _timeProvider.GetUtcNow())
@@ -57,7 +55,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
                     if (!pending.Matches(request, targetSpotId))
                         throw new InvalidOperationException(
                             $"Handoff admission '{request.HandoffId}' was retried with different request data.");
-                    return pending.Reply;
+                    return new AdmissionStart(null, false, pending.Reply);
                 }
             }
 
@@ -72,11 +70,16 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 execution = new AdmissionExecution(request, targetSpotId);
                 _admitting.Add(request.HandoffId, execution);
                 MarkDrainUnsafeLocked();
-                ownsExecution = true;
+                return new AdmissionStart(execution, true, null);
             }
-        }
+            return new AdmissionStart(execution, false, null);
+        }).ConfigureAwait(false);
 
-        if (!ownsExecution)
+        if (start.Reply is not null)
+            return start.Reply;
+
+        var execution = start.Execution!;
+        if (!start.OwnsExecution)
             return await execution.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
@@ -86,8 +89,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
             await RegisterReservedAsync(
                     request,
                     targetSpotId,
-                    reply,
-                    cancellationToken)
+                    reply)
                 .ConfigureAwait(false);
             execution.Complete(reply);
             return reply;
@@ -99,55 +101,47 @@ internal sealed class ZLinkActorHandoffAdmissions(
         }
         finally
         {
-            lock (_gate)
+            await _lane.RunAsync(() =>
             {
                 if (_admitting.TryGetValue(request.HandoffId, out var current)
                     && ReferenceEquals(current, execution))
                     _admitting.Remove(request.HandoffId);
                 TryCompleteDrainSafeLocked();
-            }
+            }).ConfigureAwait(false);
         }
     }
 
-    public bool TryGetReply(
+    public ValueTask<ZLinkRemoteActorAdmissionReply?> TryGetReplyAsync(
         ZLinkRemoteActorAdmissionRequest request,
-        string targetSpotId,
-        out ZLinkRemoteActorAdmissionReply reply)
-    {
-        lock (_gate)
+        string targetSpotId) =>
+        _lane.RunAsync(() =>
         {
             if (_pending.TryGetValue(request.HandoffId, out var pending))
             {
                 if (pending.Deadline <= _timeProvider.GetUtcNow())
                 {
                     RemovePendingLocked(request.HandoffId, pending);
-                    reply = null!;
-                    return false;
+                    return null;
                 }
                 else if (pending.Matches(request, targetSpotId))
                 {
-                    reply = pending.Reply;
-                    return true;
+                    return pending.Reply;
                 }
             }
-        }
 
-        reply = null!;
-        return false;
-    }
+            return null;
+        });
 
-    public void Register(
+    public ValueTask RegisterAsync(
         ZLinkRemoteActorAdmissionRequest request,
         string targetSpotId,
         ZLinkRemoteActorAdmissionReply reply)
-    {
-        RegisterReserved(
+        => RegisterReservedAsync(
             request,
             targetSpotId,
             reply);
-    }
 
-    public void RegisterRecoveredReservation(
+    public ValueTask RegisterRecoveredReservationAsync(
         ZLinkRemoteActorJoinRequest request,
         string targetSpotId,
         DateTimeOffset deadline)
@@ -178,13 +172,13 @@ internal sealed class ZLinkActorHandoffAdmissions(
             request.TargetSpotGeneration,
             request.TargetAuthorityOwnerGeneration,
             request.TargetSpotAuthorityOwnerGeneration);
-        RegisterReserved(
+        return RegisterReservedAsync(
             admission,
             targetSpotId,
             reply);
     }
 
-    private void RegisterReserved(
+    private async ValueTask RegisterReservedAsync(
         ZLinkRemoteActorAdmissionRequest request,
         string targetSpotId,
         ZLinkRemoteActorAdmissionReply reply)
@@ -203,7 +197,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
             targetSpotId,
             deadline,
             reply);
-        lock (_gate)
+        var added = await _lane.RunAsync(() =>
         {
             if (_pending.TryGetValue(request.HandoffId, out var existing))
             {
@@ -218,32 +212,28 @@ internal sealed class ZLinkActorHandoffAdmissions(
                     if (!existing.Matches(request, targetSpotId))
                         throw new InvalidOperationException(
                             $"Handoff admission '{request.HandoffId}' is already assigned to another actor.");
-                    return;
+                    return false;
                 }
             }
 
             _pending.Add(request.HandoffId, pending);
             if (reply.Accepted) MarkDrainUnsafeLocked();
+            return true;
+        }).ConfigureAwait(false);
+
+        if (!added)
+            return;
+
+        var generationToken = await _lane.RunAsync(() => _generationStop.Token)
+            .ConfigureAwait(false);
+        using (ExecutionContext.SuppressFlow())
+        {
+            pending.SetExpirationTask(
+                ExpireAsync(
+                    request.HandoffId,
+                    pending,
+                    generationToken));
         }
-
-        CancellationToken generationToken;
-        lock (_gate) generationToken = _generationStop.Token;
-        pending.SetExpirationTask(
-            ExpireAsync(
-                request.HandoffId,
-                pending,
-                generationToken));
-    }
-
-    private ValueTask RegisterReservedAsync(
-        ZLinkRemoteActorAdmissionRequest request,
-        string targetSpotId,
-        ZLinkRemoteActorAdmissionReply reply,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        RegisterReserved(request, targetSpotId, reply);
-        return ValueTask.CompletedTask;
     }
 
     private void EnsureDeadlineAndCancellation(
@@ -259,11 +249,10 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 $"Actor '{request.ActorId}' handoff admission deadline has expired.");
     }
 
-    public void BeginCommit(
+    public ValueTask BeginCommitAsync(
         ZLinkRemoteActorJoinRequest request,
-        string targetSpotId)
-    {
-        lock (_gate)
+        string targetSpotId) =>
+        _lane.RunAsync(() =>
         {
             if (!_pending.TryGetValue(request.HandoffId, out var pending)
                 || !pending.Matches(request, targetSpotId))
@@ -283,14 +272,12 @@ internal sealed class ZLinkActorHandoffAdmissions(
 
             pending.ValidateCommit(request, targetSpotId);
             pending.Committing = true;
-        }
-    }
+        });
 
-    public void RollbackCommit(
+    public ValueTask RollbackCommitAsync(
         ZLinkRemoteActorJoinRequest request,
-        string targetSpotId)
-    {
-        lock (_gate)
+        string targetSpotId) =>
+        _lane.RunAsync(() =>
         {
             if (!_pending.TryGetValue(request.HandoffId, out var pending))
                 return;
@@ -301,29 +288,25 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 return;
             }
             pending.Committing = false;
-        }
-    }
+        });
 
-    public void Complete(string handoffId)
-    {
-        lock (_gate)
+    public ValueTask CompleteAsync(string handoffId) =>
+        _lane.RunAsync(() =>
         {
             _pending.Remove(handoffId);
             TryCompleteDrainSafeLocked();
-        }
-    }
+        });
 
     public ValueTask AbortAsync(
         string handoffId,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync(() =>
         {
             _pending.Remove(handoffId);
             TryCompleteDrainSafeLocked();
-        }
-        return ValueTask.CompletedTask;
+        });
     }
 
     public ValueTask AbortReservationAsync(
@@ -332,45 +315,38 @@ internal sealed class ZLinkActorHandoffAdmissions(
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync(() =>
         {
             if (!_pending.TryGetValue(request.HandoffId, out var pending))
-                return ValueTask.CompletedTask;
+                return;
             if (!pending.MatchesAbort(request, targetSpotId))
                 throw new InvalidOperationException(
                     $"Actor '{request.ActorId}' admission abort does not match reservation '{request.HandoffId}'.");
             _pending.Remove(request.HandoffId);
             TryCompleteDrainSafeLocked();
-        }
-        return ValueTask.CompletedTask;
+        });
     }
 
-    public bool TryGetJoinOutcome(
+    public ValueTask<ZLinkRemoteActorJoinReply?> TryGetJoinOutcomeAsync(
         ZLinkRemoteActorJoinRequest request,
-        string targetSpotId,
-        out ZLinkRemoteActorJoinReply reply)
-    {
-        lock (_gate)
+        string targetSpotId) =>
+        _lane.RunAsync(() =>
         {
             if (_terminal.TryGetValue(request.HandoffId, out var terminal)
                 && terminal.Matches(request, targetSpotId))
             {
-                reply = terminal.Reply;
-                return true;
+                return terminal.Reply;
             }
-        }
 
-        reply = null!;
-        return false;
-    }
+            return null;
+        });
 
-    public void RecordJoinOutcome(
+    public ValueTask RecordJoinOutcomeAsync(
         ZLinkRemoteActorJoinRequest request,
         string targetSpotId,
         ZLinkRemoteActorJoinReply reply,
-        TimeSpan? preparedCompletionTimeout = null)
-    {
-        lock (_gate)
+        TimeSpan? preparedCompletionTimeout = null) =>
+        _lane.RunAsync(() =>
         {
             if (_terminal.TryGetValue(request.HandoffId, out var existing))
             {
@@ -389,10 +365,9 @@ internal sealed class ZLinkActorHandoffAdmissions(
                     reply.Accepted && preparedCompletionTimeout is { } timeout
                         ? _timeProvider.GetUtcNow() + timeout
                         : null));
-        }
-    }
+        });
 
-    public void RejectPreparedJoinOutcome(
+    public ValueTask RejectPreparedJoinOutcomeAsync(
         ZLinkRemoteActorJoinRequest request,
         string targetSpotId,
         ZLinkRemoteActorJoinReply rejectedReply)
@@ -400,7 +375,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
         if (rejectedReply.Accepted)
             throw new ArgumentException("A compensated handoff outcome must be rejected.", nameof(rejectedReply));
 
-        lock (_gate)
+        return _lane.RunAsync(() =>
         {
             if (!_terminal.TryGetValue(request.HandoffId, out var terminal))
             {
@@ -418,14 +393,13 @@ internal sealed class ZLinkActorHandoffAdmissions(
 
             terminal.Reply = rejectedReply;
             terminal.Phase = ZLinkActorCommitPhase.Rejected;
-        }
+        });
     }
 
-    public bool TryBeginCompletion(
+    public ValueTask<bool> TryBeginCompletionAsync(
         ZLinkRemoteActorHandoffCompletionRequest request,
-        string targetSpotId)
-    {
-        lock (_gate)
+        string targetSpotId) =>
+        _lane.RunAsync(() =>
         {
             var terminal = ValidateCompletionLocked(request, targetSpotId);
             switch (terminal.Phase)
@@ -450,27 +424,23 @@ internal sealed class ZLinkActorHandoffAdmissions(
                     throw new ZLinkActorHandoffRejectedException(
                         $"Actor '{request.ActorId}' handoff completion is no longer accepted.");
             }
-        }
-    }
+        });
 
-    public void CancelCompletion(
+    public ValueTask CancelCompletionAsync(
         ZLinkRemoteActorHandoffCompletionRequest request,
-        string targetSpotId)
-    {
-        lock (_gate)
+        string targetSpotId) =>
+        _lane.RunAsync(() =>
         {
             var terminal = ValidateCompletionLocked(request, targetSpotId);
             if (terminal.Phase == ZLinkActorCommitPhase.Completing)
                 terminal.Phase = ZLinkActorCommitPhase.Prepared;
-        }
-    }
+        });
 
-    public bool TryExpirePreparedCommit(
+    public ValueTask<bool> TryExpirePreparedCommitAsync(
         ZLinkRemoteActorJoinRequest request,
         string targetSpotId,
-        ZLinkRemoteActorJoinReply rejectedReply)
-    {
-        lock (_gate)
+        ZLinkRemoteActorJoinReply rejectedReply) =>
+        _lane.RunAsync(() =>
         {
             if (!_terminal.TryGetValue(request.HandoffId, out var terminal)
                 || !terminal.Matches(request, targetSpotId)
@@ -482,45 +452,40 @@ internal sealed class ZLinkActorHandoffAdmissions(
             terminal.Reply = rejectedReply;
             terminal.Phase = ZLinkActorCommitPhase.Expired;
             return true;
-        }
-    }
+        });
 
-    public bool IsPreparedCommitPending(
+    public ValueTask<bool> IsPreparedCommitPendingAsync(
         ZLinkRemoteActorJoinRequest request,
-        string targetSpotId)
-    {
-        lock (_gate)
+        string targetSpotId) =>
+        _lane.RunAsync(() =>
         {
             return _terminal.TryGetValue(request.HandoffId, out var terminal)
                    && terminal.Matches(request, targetSpotId)
                    && terminal.Reply.Accepted
                    && terminal.Phase is ZLinkActorCommitPhase.Prepared
                        or ZLinkActorCommitPhase.Completing;
-        }
-    }
+        });
 
-    public Task WaitForTerminalCompletionAsync(
+    public async Task WaitForTerminalCompletionAsync(
         ZLinkRemoteActorJoinRequest request,
         string targetSpotId,
         CancellationToken cancellationToken)
     {
-        Task completion;
-        lock (_gate)
+        var completion = await _lane.RunAsync(() =>
         {
             if (!_terminal.TryGetValue(request.HandoffId, out var terminal)
                 || !terminal.Matches(request, targetSpotId))
                 throw new InvalidOperationException(
                     $"Actor '{request.ActorId}' does not have a matching terminal handoff.");
-            completion = terminal.TerminalCompletion;
-        }
-        return completion.WaitAsync(cancellationToken);
+            return terminal.TerminalCompletion;
+        }).ConfigureAwait(false);
+        await completion.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public void RecordCompletion(
+    public ValueTask RecordCompletionAsync(
         ZLinkRemoteActorHandoffCompletionRequest request,
-        string targetSpotId)
-    {
-        lock (_gate)
+        string targetSpotId) =>
+        _lane.RunAsync(() =>
         {
             if (!_terminal.TryGetValue(request.HandoffId, out var terminal)
                 || !string.Equals(terminal.Request.ActorId, request.ActorId, StringComparison.Ordinal))
@@ -535,8 +500,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
                     $"Actor '{request.ActorId}' handoff completion is not active.");
             terminal.Phase = ZLinkActorCommitPhase.Completed;
             terminal.CompleteTerminal();
-        }
-    }
+        });
 
     private TerminalOutcome ValidateCompletionLocked(
         ZLinkRemoteActorHandoffCompletionRequest request,
@@ -557,22 +521,20 @@ internal sealed class ZLinkActorHandoffAdmissions(
     public async ValueTask ResetGenerationAsync(
         CancellationToken cancellationToken = default)
     {
-        CancellationTokenSource stopped;
-        AdmissionExecution[] admitting;
-        PendingAdmission[] pending;
-        lock (_gate)
+        var reset = await _lane.RunAsync(() =>
         {
-            stopped = _generationStop;
+            var stopped = _generationStop;
             _generationStop = new CancellationTokenSource();
-            admitting = _admitting.Values.ToArray();
+            var admitting = _admitting.Values.ToArray();
             _admitting.Clear();
-            pending = _pending.Values.ToArray();
+            var pending = _pending.Values.ToArray();
             _terminal.Clear();
-        }
+            return new GenerationReset(stopped, admitting, pending);
+        }).ConfigureAwait(false);
 
-        stopped.Cancel();
-        stopped.Dispose();
-        foreach (var admission in pending)
+        reset.Stopped.Cancel();
+        reset.Stopped.Dispose();
+        foreach (var admission in reset.Pending)
         {
             try
             {
@@ -585,21 +547,21 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 // Generation cancellation hands cleanup to this shutdown path.
             }
         }
-        foreach (var admission in pending)
+        foreach (var admission in reset.Pending)
         {
-            lock (_gate)
+            await _lane.RunAsync(() =>
             {
                 if (_pending.TryGetValue(
                         admission.HandoffId,
                         out var current)
                     && ReferenceEquals(current, admission))
                     _pending.Remove(admission.HandoffId);
-            }
+            }).ConfigureAwait(false);
         }
-        lock (_gate) TryCompleteDrainSafeLocked();
+        await _lane.RunAsync(TryCompleteDrainSafeLocked).ConfigureAwait(false);
         var failure = new InvalidOperationException(
             "Actor handoff admission belongs to a stopped framework runtime generation.");
-        foreach (var execution in admitting) execution.Fail(failure);
+        foreach (var execution in reset.Admitting) execution.Fail(failure);
     }
 
     private async Task ExpireAsync(
@@ -618,9 +580,9 @@ internal sealed class ZLinkActorHandoffAdmissions(
             return;
         }
 
-        PendingAdmission? expired = null;
-        lock (_gate)
+        var expired = await _lane.RunAsync(() =>
         {
+            PendingAdmission? expired = null;
             if (_pending.TryGetValue(handoffId, out var current)
                 && ReferenceEquals(current, pending)
                 && !current.Committing)
@@ -628,7 +590,8 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 _pending.Remove(handoffId, out expired);
                 TryCompleteDrainSafeLocked();
             }
-        }
+            return expired;
+        }).ConfigureAwait(false);
         if (expired is not null)
         {
             diagnostic?.Invoke(
@@ -676,6 +639,16 @@ internal sealed class ZLinkActorHandoffAdmissions(
         signal.SetResult();
         return signal;
     }
+
+    private readonly record struct AdmissionStart(
+        AdmissionExecution? Execution,
+        bool OwnsExecution,
+        ZLinkRemoteActorAdmissionReply? Reply);
+
+    private readonly record struct GenerationReset(
+        CancellationTokenSource Stopped,
+        AdmissionExecution[] Admitting,
+        PendingAdmission[] Pending);
 
     private sealed class PendingAdmission(
         ZLinkRemoteActorAdmissionRequest request,
