@@ -1113,6 +1113,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         TrackedActor tracked,
         CancellationToken stopToken)
     {
+        await Task.Yield();
         try
         {
             await ZLinkReconciliationRunner.RunAsync(
