@@ -175,9 +175,20 @@ design.ko.md §7의 순서는 `_gate` 밀도로 정한 초안이다. **표본이
 
 ## 7. 이어받을 때 알아야 할 제약
 
-- **.NET만 먼저 한다.** cpp·java·kotlin·node는 .NET에서 규칙이 확정된 뒤 옮긴다.
+- **진행 방식·현황·병렬 단계·보고 프로토콜은 [progress.ko.md](progress.ko.md)가 정본이다.**
+  이 문서는 배경과 설계 근거를 담고, 살아 있는 상태는 그쪽에서 갱신한다. 새 세션은
+  progress §2(현황) → §4(언어 병렬 단계) → §5(보고·리뷰 프로토콜) 순으로 읽으면 된다.
+- **.NET이 규칙의 정본이다.** 다른 언어는 .NET에서 확정된 규칙을 옮긴다. 다만 언어별
+  primitive 포팅(progress §4 L0)은 dotnet 전환과 무의존이라 **지금 병렬로 착수 가능**하다.
+  빌드 트리는 4개(dotnet·cpp·node·JVM)이고 **java와 kotlin은 Gradle 트리를 공유하므로
+  절대 동시에 빌드하지 않는다.**
 - **스펙이 정한 관측 가능한 동작은 바꾸지 않는다.** 순서·타임아웃·오류 코드 그대로.
-  `framework/doc/framework/common/spec/server/**`는 이 작업으로 수정하지 않는다.
+  전환이 관측 동작을 바꿔야만 통과된다면 그건 스펙 문제일 수 있으므로 **임의로 바꾸지 말고
+  올린다**(progress §5 STOP 조건).
+- **스펙 수정은 lane 규칙에 한해 열려 있다.** 이 작업이
+  `spec/server/01-execution/06-state-ownership-and-lanes.{ko,en}.md`를 신설했고(`0fe461fc6c`),
+  전환 중 나온 새 유형은 progress §7에 모았다가 마일스톤에서 스펙 06에 반영한다.
+  **그 외 스펙 문서는 이 작업으로 수정하지 않는다.**
 - **`main`에 직접 커밋하지 않는다.** 이 브랜치에서 작업한다.
 - 에이전트에게 맡길 때는 스펙 수정 금지·`git add/commit/stash/reset/checkout` 금지를
   프롬프트에 넣는다. 이 세션에서 codex가 검증 없이 변경만 남기고 죽은 사례가 있었고, 그 변경이
