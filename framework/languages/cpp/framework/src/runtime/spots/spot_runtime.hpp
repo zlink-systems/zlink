@@ -58,9 +58,18 @@ using instance_spot_close_begin_callback_t =
 class spot_node_builder_state_t
 {
   public:
-    explicit spot_node_builder_state_t (std::string name) : snapshot{.name = std::move (name)} {}
+    explicit spot_node_builder_state_t (std::string name) :
+        lane_executor (), lane (lane_executor), snapshot{.name = std::move (name)}
+    {
+    }
     ~spot_node_builder_state_t ();
 
+    // Builder configuration is synchronously admitted through this lane.  The
+    // MeshNode start path takes its configuration projection only after those
+    // turns have completed, so a caller observes registration before the
+    // configuring API returns (discovery 9).
+    runtime::offload_executor_t lane_executor;
+    runtime::state_lane_t lane;
     mutable std::recursive_mutex mutex;
     spot_node_snapshot_t snapshot;
     std::map<std::string, std::type_index> spot_factories;
@@ -172,10 +181,12 @@ class spot_node_builder_state_t
       actor_leave_notification_sender;
     // Requests currently dispatched to each actor and not yet replied. Sampled
     // once per transfer right at the moving transition (runtime-metrics §4.3
-    // pending_requests). Guarded by its own mutex: dispatch runs on the
-    // packet-drain thread while the sample is taken on the transfer path.
+    // pending_requests). This is an independent ownership region: dispatch
+    // runs on the packet-drain thread while the sample is taken on the
+    // transfer path.
     std::map<std::string, std::size_t> actor_pending_requests;
-    std::mutex actor_pending_requests_mutex;
+    runtime::offload_executor_t actor_pending_requests_lane_executor;
+    runtime::state_lane_t actor_pending_requests_lane{actor_pending_requests_lane_executor};
     struct pending_remote_source_cleanup_t
     {
         actor_ref_t source_actor;

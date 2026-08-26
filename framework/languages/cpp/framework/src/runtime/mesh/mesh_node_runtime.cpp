@@ -700,89 +700,103 @@ void mesh_node_runtime_t::start ()
         }
     }
 
-    auto [node_options, spot_state, mesh_name, routing_id] = _state->lane.run ([&] {
-        if (const auto options = _state->framework_options.lock ()) {
-            if (!_state->bind_host_override) {
-                _state->bind_host = options->bind_host;
+    auto [node_options, spot_state, spot_snapshot, mesh_name, routing_id] =
+      _state->lane
+        .run ([&] {
+            if (const auto options = _state->framework_options.lock ()) {
+                if (!_state->bind_host_override) {
+                    _state->bind_host = options->bind_host;
+                }
+                if (!_state->advertise_host_override) {
+                    _state->advertise_host = options->advertise_host;
+                }
             }
-            if (!_state->advertise_host_override) {
-                _state->advertise_host = options->advertise_host;
+            if (_state->listen_port) {
+                _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
+                  "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
+                  + std::to_string (*_state->listen_port));
             }
-        }
-        if (_state->listen_port) {
-            _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
-              "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
-              + std::to_string (*_state->listen_port));
-        }
-        _state->spot_state->one_way_send_timeout = one_way_send_timeout (*_state);
-        _state->spot_state->instance_spot_idle_timeout = _state->instance_spot_idle_timeout;
-        if (_state->mesh_name.empty ()) {
-            throw configuration_error ("MeshName is required");
-        }
-        if (_state->listen_endpoint.empty ()) {
-            throw configuration_error ("MeshNode listen endpoint is required");
-        }
-        if (!_state->routing_id) {
-            throw configuration_error ("MeshNode routing id is required");
-        }
-        if (!_state->core_context) {
-            throw configuration_error ("MeshNode shared Core Context is required");
-        }
-        for (const auto &[channel_name, channel] : _state->channels) {
-            if (!channel.role_selected)
-                throw configuration_error ("RouteMesh channel requires a Client or Server role: "
-                                           + channel_name);
-        }
-        if (_state->object_role == object_role_t::client && _state->has_node_direct_handler) {
-            throw configuration_error (
-              "Object Client cannot register application Node direct handlers");
-        }
-        if (_state->socket.send_timeout
-            && (_state->socket.send_timeout->count () <= 0
-                || _state->socket.send_timeout->count () > std::numeric_limits<int>::max ())) {
-            throw configuration_error (
-              "MeshNode send timeout must be between 1 and INT_MAX milliseconds");
-        }
+            const auto spot_snapshot = _state->spot_state->lane
+                                         .run ([&] {
+                                             _state->spot_state->one_way_send_timeout =
+                                               one_way_send_timeout (*_state);
+                                             _state->spot_state->instance_spot_idle_timeout =
+                                               _state->instance_spot_idle_timeout;
+                                             return _state->spot_state->snapshot;
+                                         })
+                                         .get ();
+            if (_state->mesh_name.empty ()) {
+                throw configuration_error ("MeshName is required");
+            }
+            if (_state->listen_endpoint.empty ()) {
+                throw configuration_error ("MeshNode listen endpoint is required");
+            }
+            if (!_state->routing_id) {
+                throw configuration_error ("MeshNode routing id is required");
+            }
+            if (!_state->core_context) {
+                throw configuration_error ("MeshNode shared Core Context is required");
+            }
+            for (const auto &[channel_name, channel] : _state->channels) {
+                if (!channel.role_selected)
+                    throw configuration_error (
+                      "RouteMesh channel requires a Client or Server role: " + channel_name);
+            }
+            if (_state->object_role == object_role_t::client && _state->has_node_direct_handler) {
+                throw configuration_error (
+                  "Object Client cannot register application Node direct handlers");
+            }
+            if (_state->socket.send_timeout
+                && (_state->socket.send_timeout->count () <= 0
+                    || _state->socket.send_timeout->count () > std::numeric_limits<int>::max ())) {
+                throw configuration_error (
+                  "MeshNode send timeout must be between 1 and INT_MAX milliseconds");
+            }
 
-        std::vector<runtime::mesh::service_channel_descriptor_t> channels;
-        channels.reserve (_state->channels.size ());
-        for (const auto &[channel_name, channel] : _state->channels) {
-            if (channel.server)
-                channels.push_back (
-                  runtime::mesh::service_channel_descriptor_t{channel_name, channel.weight});
-        }
-        std::sort (channels.begin (), channels.end (),
-                   [] (const auto &left, const auto &right) { return left.name < right.name; });
-        std::set<std::string> stable_types (_state->spot_state->snapshot.actor_types.begin (),
-                                            _state->spot_state->snapshot.actor_types.end ());
-        stable_types.insert ("framework.spot");
-        auto options = host::host_options_t{
-          runtime::mesh::raw_mesh_node_options_t{
-            runtime::mesh::service_node_descriptor_t{
-              .mesh_name = _state->mesh_name,
-              .node_routing_id = _state->routing_id->to_bytes (),
-              .lifecycle_generation = make_lifecycle_generation (),
-              .descriptor_revision = 1,
-              .advertised_endpoint = _state->listen_endpoint,
-              .channels = std::move (channels),
-              .state = runtime::mesh::service_node_state_t::preparing,
-              .object_role = _state->object_role == object_role_t::client
-                               ? runtime::mesh::service_object_role_t::client
-                             : _state->object_role == object_role_t::server
-                               ? runtime::mesh::service_object_role_t::server
-                               : runtime::mesh::service_object_role_t::none,
-              .placement_weight = _state->placement_weight},
-            runtime::dispatch_limits::application_mailbox_messages,
-            runtime::dispatch_limits::application_mailbox_bytes,
-            runtime::dispatch_limits::control_mailbox_messages,
-            runtime::dispatch_limits::control_mailbox_bytes, _state->advertise_host,
-            _state->auto_hwm_profile, _state->application_jobs},
-          _state->spot_state->snapshot.entry_spot_name.value_or ("entry"),
-          std::move (stable_types), _route_cache_max_age, _owner_lease_fencing_margin,
-          _state->core_context, _session_relocation_seal_timeout};
-        return std::make_tuple (std::move (options), _state->spot_state, _state->mesh_name,
-                                *_state->routing_id);
-    }).get ();
+            std::vector<runtime::mesh::service_channel_descriptor_t> channels;
+            channels.reserve (_state->channels.size ());
+            for (const auto &[channel_name, channel] : _state->channels) {
+                if (channel.server)
+                    channels.push_back (
+                      runtime::mesh::service_channel_descriptor_t{channel_name, channel.weight});
+            }
+            std::sort (channels.begin (), channels.end (),
+                       [] (const auto &left, const auto &right) { return left.name < right.name; });
+            std::set<std::string> stable_types (spot_snapshot.actor_types.begin (),
+                                                spot_snapshot.actor_types.end ());
+            stable_types.insert ("framework.spot");
+            auto options = host::host_options_t{
+              runtime::mesh::raw_mesh_node_options_t{
+                runtime::mesh::service_node_descriptor_t{
+                  .mesh_name = _state->mesh_name,
+                  .node_routing_id = _state->routing_id->to_bytes (),
+                  .lifecycle_generation = make_lifecycle_generation (),
+                  .descriptor_revision = 1,
+                  .advertised_endpoint = _state->listen_endpoint,
+                  .channels = std::move (channels),
+                  .state = runtime::mesh::service_node_state_t::preparing,
+                  .object_role = _state->object_role == object_role_t::client
+                                   ? runtime::mesh::service_object_role_t::client
+                                 : _state->object_role == object_role_t::server
+                                   ? runtime::mesh::service_object_role_t::server
+                                   : runtime::mesh::service_object_role_t::none,
+                  .placement_weight = _state->placement_weight},
+                runtime::dispatch_limits::application_mailbox_messages,
+                runtime::dispatch_limits::application_mailbox_bytes,
+                runtime::dispatch_limits::control_mailbox_messages,
+                runtime::dispatch_limits::control_mailbox_bytes, _state->advertise_host,
+                _state->auto_hwm_profile, _state->application_jobs},
+              spot_snapshot.entry_spot_name.value_or ("entry"),
+              std::move (stable_types),
+              _route_cache_max_age,
+              _owner_lease_fencing_margin,
+              _state->core_context,
+              _session_relocation_seal_timeout};
+            return std::make_tuple (std::move (options), _state->spot_state,
+                                    std::move (spot_snapshot), _state->mesh_name,
+                                    *_state->routing_id);
+        })
+        .get ();
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
     /* flow-correlation §4: thread the flow-capture provider so the host's
      * cold decode paths skip flow validation/materialization at level Off. */
@@ -928,17 +942,19 @@ void mesh_node_runtime_t::start ()
         if (--callback_gate->active == 0)
             callback_gate->changed.notify_all ();
     };
-    _state->lane.run ([&] {
-        _state->runtime_peer_connect = std::move (runtime_peer_connect);
-        _state->runtime_peer_disconnect = std::move (runtime_peer_disconnect);
-    }).get ();
+    _state->lane
+      .run ([&] {
+          _state->runtime_peer_connect = std::move (runtime_peer_connect);
+          _state->runtime_peer_disconnect = std::move (runtime_peer_disconnect);
+      })
+      .get ();
     spot_node_runtime_t spot_runtime (spot_state);
     spot_runtime.attach_native_node (_node);
-    if (spot_state->snapshot.entry_spot_name) {
+    if (spot_snapshot.entry_spot_name) {
         auto native_entry = _node->entry_spot ();
         (void) spot_runtime.get_or_create_spot (
-          *spot_state->snapshot.entry_spot_name, spot_id_t (native_entry.spot_id ()),
-          zlink::message_t{}, native_entry.status ().lifecycle_generation (), mesh_name);
+          *spot_snapshot.entry_spot_name, spot_id_t (native_entry.spot_id ()), zlink::message_t{},
+          native_entry.status ().lifecycle_generation (), mesh_name);
     }
 }
 
@@ -4708,22 +4724,28 @@ mesh_node_builder_t &mesh_node_builder_t::set_advertise_host (std::string host)
 {
     if (host.empty ())
         throw detail::configuration_error ("MeshNode advertise host is required");
-    _state->lane.run ([&] {
-        _state->advertise_host_override = host;
-        _state->advertise_host = std::move (host);
-    }).get ();
+    _state->lane
+      .run ([&] {
+          _state->advertise_host_override = host;
+          _state->advertise_host = std::move (host);
+      })
+      .get ();
     return *this;
 }
 
 mesh_node_builder_t &mesh_node_builder_t::set_routing_id (zlink::routing_id_t routing_id)
 {
-    _state->lane.run ([&] {
-        if (_state->automatic_routing_id_prefix)
-            throw detail::configuration_error (
-              "MeshNode cannot configure both a fixed routing id and an automatic routing id prefix");
-        _state->spot_state->snapshot.routing_id = routing_id;
-        _state->routing_id = std::move (routing_id);
-    }).get ();
+    _state->lane
+      .run ([&] {
+          if (_state->automatic_routing_id_prefix)
+              throw detail::configuration_error ("MeshNode cannot configure both a fixed routing "
+                                                 "id and an automatic routing id prefix");
+          _state->spot_state->lane
+            .run ([&] { _state->spot_state->snapshot.routing_id = routing_id; })
+            .get ();
+          _state->routing_id = std::move (routing_id);
+      })
+      .get ();
     return *this;
 }
 
@@ -4732,14 +4754,18 @@ mesh_node_builder_t &mesh_node_builder_t::set_automatic_routing_id_prefix (std::
     if (!detail::valid_routing_id_prefix (prefix))
         throw detail::configuration_error ("MeshNode automatic routing id prefix must contain "
                                            "1..64 ASCII letters, digits, '.', '_' or '-'");
-    _state->lane.run ([&] {
-        if (_state->routing_id)
-            throw detail::configuration_error (
-              "MeshNode cannot configure both a fixed routing id and an automatic routing id prefix");
-        _state->automatic_routing_id_prefix = prefix;
-        _state->routing_id = zlink::routing_id_t::from (prefix + "-" + detail::new_uuid_v4 ());
-        _state->spot_state->snapshot.routing_id = *_state->routing_id;
-    }).get ();
+    _state->lane
+      .run ([&] {
+          if (_state->routing_id)
+              throw detail::configuration_error ("MeshNode cannot configure both a fixed routing "
+                                                 "id and an automatic routing id prefix");
+          _state->automatic_routing_id_prefix = prefix;
+          _state->routing_id = zlink::routing_id_t::from (prefix + "-" + detail::new_uuid_v4 ());
+          _state->spot_state->lane
+            .run ([&] { _state->spot_state->snapshot.routing_id = *_state->routing_id; })
+            .get ();
+      })
+      .get ();
     return *this;
 }
 
@@ -4778,10 +4804,14 @@ mesh_node_builder_t::set_instance_spot_idle_timeout (std::chrono::milliseconds t
 {
     if (timeout < std::chrono::milliseconds::zero ())
         throw detail::configuration_error ("Instance Spot idle timeout must not be negative");
-    _state->lane.run ([&] {
-        _state->instance_spot_idle_timeout = timeout;
-        _state->spot_state->instance_spot_idle_timeout = timeout;
-    }).get ();
+    _state->lane
+      .run ([&] {
+          _state->instance_spot_idle_timeout = timeout;
+          _state->spot_state->lane
+            .run ([&] { _state->spot_state->instance_spot_idle_timeout = timeout; })
+            .get ();
+      })
+      .get ();
     return *this;
 }
 

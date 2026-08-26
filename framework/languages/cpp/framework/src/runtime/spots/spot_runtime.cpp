@@ -3777,7 +3777,7 @@ spot_node_builder_t &spot_node_builder_t::operator= (spot_node_builder_t &&) noe
 spot_node_builder_t &
 spot_node_builder_t::set_message_follow_duration (std::chrono::milliseconds duration)
 {
-    _state->message_follow_duration = duration;
+    _state->lane.run ([this, duration] { _state->message_follow_duration = duration; }).get ();
     return *this;
 }
 
@@ -3795,17 +3795,21 @@ spot_node_builder_t::accept_implicit_route_mesh (std::string route_channel_name,
                                          "accepted SPOT route manual endpoint is required");
         }
     }
-    const auto duplicate =
-      std::any_of (_state->snapshot.accepted_route_channels.begin (),
-                   _state->snapshot.accepted_route_channels.end (), [&] (const auto &accepted) {
-                       return accepted.channel_name == route_channel_name;
-                   });
-    if (duplicate) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "duplicate accepted SPOT route channel");
-    }
-    _state->snapshot.accepted_route_channels.push_back (accepted_spot_route_channel_t{
-      std::move (route_channel_name), std::move (manual_connections)});
+    _state->lane
+      .run ([this, route_channel_name = std::move (route_channel_name),
+             manual_connections = std::move (manual_connections)] () mutable {
+          const auto duplicate = std::any_of (
+            _state->snapshot.accepted_route_channels.begin (),
+            _state->snapshot.accepted_route_channels.end (),
+            [&] (const auto &accepted) { return accepted.channel_name == route_channel_name; });
+          if (duplicate) {
+              throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                           "duplicate accepted SPOT route channel");
+          }
+          _state->snapshot.accepted_route_channels.push_back (accepted_spot_route_channel_t{
+            std::move (route_channel_name), std::move (manual_connections)});
+      })
+      .get ();
     return *this;
 }
 
@@ -3829,29 +3833,37 @@ spot_node_builder_t &spot_node_builder_t::add_spot_factory_erased (
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "Spot preserve-state relocation callbacks must not be empty");
     }
-    const auto [_, inserted] = _state->spot_factories.emplace (spot_name, spot_type);
-    if (!inserted) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "duplicate spot factory registration");
-    }
-    if (entry_spot) {
-        if (_state->snapshot.entry_spot_name) {
-            throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                         "entry spot is already registered");
-        }
-        _state->snapshot.entry_spot_name = spot_name;
-    }
-    if (instance_spot) {
-        _state->snapshot.instance_spot_names.push_back (spot_name);
-    }
-    if (!entry_spot) {
-        _state->spot_factory_relocations.emplace (spot_name, relocation);
-        _state->spot_stable_type_limits.emplace (spot_name, stable_type_limit);
-        _state->spot_relocation_coordination_modes.emplace (spot_name,
-                                                            relocation_coordination_mode);
-    }
-    _state->snapshot.spot_execution_modes.emplace (spot_name, execution_mode);
-    _state->snapshot.spot_names.push_back (std::move (spot_name));
+    _state->lane
+      .run ([this, spot_name = std::move (spot_name), spot_type, kind, execution_mode,
+             stable_type_limit, relocation_coordination_mode,
+             relocation = std::move (relocation)] () mutable {
+          const bool entry_spot = kind == detail::spot_runtime_kind_t::entry;
+          const bool instance_spot = kind == detail::spot_runtime_kind_t::instance;
+          const auto [_, inserted] = _state->spot_factories.emplace (spot_name, spot_type);
+          if (!inserted) {
+              throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                           "duplicate spot factory registration");
+          }
+          if (entry_spot) {
+              if (_state->snapshot.entry_spot_name) {
+                  throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                               "entry spot is already registered");
+              }
+              _state->snapshot.entry_spot_name = spot_name;
+          }
+          if (instance_spot) {
+              _state->snapshot.instance_spot_names.push_back (spot_name);
+          }
+          if (!entry_spot) {
+              _state->spot_factory_relocations.emplace (spot_name, relocation);
+              _state->spot_stable_type_limits.emplace (spot_name, stable_type_limit);
+              _state->spot_relocation_coordination_modes.emplace (spot_name,
+                                                                  relocation_coordination_mode);
+          }
+          _state->snapshot.spot_execution_modes.emplace (spot_name, execution_mode);
+          _state->snapshot.spot_names.push_back (std::move (spot_name));
+      })
+      .get ();
     return *this;
 }
 
@@ -3880,24 +3892,40 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory_erased (
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "Actor preserve-state relocation callbacks must not be empty");
     }
-    const auto [_, inserted] = _state->actor_factories.emplace (
-      actor_type, detail::spot_node_builder_state_t::actor_factory_registration_t{
-                    actor_instance_type, relocation, std::move (create_instance),
-                    std::move (configure_instance), std::move (serialize_instance),
-                    std::move (deserialize_instance), std::move (create_context_instance),
-                    std::move (on_join_completed), std::move (capture), std::move (restore)});
-    if (!inserted) {
-        throw framework_exception_t (framework_error_kind_t::already_exists,
-                                     "duplicate actor factory registration");
-    }
-    _state->snapshot.actor_types.push_back (std::move (actor_type));
+    _state->lane
+      .run ([this, actor_type = std::move (actor_type), actor_instance_type,
+             create_instance = std::move (create_instance),
+             configure_instance = std::move (configure_instance),
+             serialize_instance = std::move (serialize_instance),
+             deserialize_instance = std::move (deserialize_instance),
+             create_context_instance = std::move (create_context_instance),
+             on_join_completed = std::move (on_join_completed), relocation = std::move (relocation),
+             capture = std::move (capture), restore = std::move (restore)] () mutable {
+          const auto [_, inserted] = _state->actor_factories.emplace (
+            actor_type, detail::spot_node_builder_state_t::actor_factory_registration_t{
+                          actor_instance_type, relocation, std::move (create_instance),
+                          std::move (configure_instance), std::move (serialize_instance),
+                          std::move (deserialize_instance), std::move (create_context_instance),
+                          std::move (on_join_completed), std::move (capture), std::move (restore)});
+          if (!inserted) {
+              throw framework_exception_t (framework_error_kind_t::already_exists,
+                                           "duplicate actor factory registration");
+          }
+          _state->snapshot.actor_types.push_back (std::move (actor_type));
+      })
+      .get ();
     return *this;
 }
 
 void spot_node_builder_t::register_lifecycle_erased (std::string spot_name,
                                                      detail::spot_lifecycle_callbacks_t callbacks)
 {
-    _state->spot_lifecycles[std::move (spot_name)] = std::move (callbacks);
+    _state->lane
+      .run (
+        [this, spot_name = std::move (spot_name), callbacks = std::move (callbacks)] () mutable {
+            _state->spot_lifecycles[std::move (spot_name)] = std::move (callbacks);
+        })
+      .get ();
 }
 
 spot_node_builder_t &spot_node_builder_t::add_spot_resolver (
@@ -3907,17 +3935,22 @@ spot_node_builder_t &spot_node_builder_t::add_spot_resolver (
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "spot resolver requires a name and callback");
     }
-    const auto [_, inserted] = _state->resolvers.emplace (std::move (name), std::move (resolver));
-    if (!inserted) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "duplicate spot resolver registration");
-    }
+    _state->lane
+      .run ([this, name = std::move (name), resolver = std::move (resolver)] () mutable {
+          const auto [_, inserted] =
+            _state->resolvers.emplace (std::move (name), std::move (resolver));
+          if (!inserted) {
+              throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                           "duplicate spot resolver registration");
+          }
+      })
+      .get ();
     return *this;
 }
 
 spot_node_snapshot_t spot_node_builder_t::snapshot () const
 {
-    return _state->snapshot;
+    return _state->lane.run ([this] { return _state->snapshot; }).get ();
 }
 
 detail::local_spot_create_result_t spot_node_builder_t::create_spot (std::string spot_name)
@@ -3989,8 +4022,11 @@ task_t<bool> spot_node_builder_t::close_spot (spot_id_t spot_id)
 
 void spot_node_builder_t::retain_factory_builder (std::shared_ptr<void> builder)
 {
-    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-    _state->factory_builder_lifetimes.push_back (std::move (builder));
+    _state->lane
+      .run ([this, builder = std::move (builder)] () mutable {
+          _state->factory_builder_lifetimes.push_back (std::move (builder));
+      })
+      .get ();
 }
 
 std::optional<std::string> spot_node_builder_t::spot_name_for (spot_id_t spot_id) const
@@ -6663,15 +6699,16 @@ result_t<spot_node_runtime_t::remote_actor_transfer_t> spot_node_runtime_t::tran
     {
         runtime::runtime_metrics_t metrics (_state->monitoring);
         if (metrics.enabled ()) {
-            std::size_t pending = 0;
-            {
-                const std::lock_guard<std::mutex> pending_lock (
-                  _state->actor_pending_requests_mutex);
+            const auto pending =
+              _state->actor_pending_requests_lane
+                .run ([this, &key] {
                 const auto found = _state->actor_pending_requests.find (key);
                 if (found != _state->actor_pending_requests.end ()) {
-                    pending = found->second;
+                    return found->second;
                 }
-            }
+                return std::size_t{0};
+                })
+                .get ();
             metrics.histogram ("zlink.actor.transfer.pending_requests.count", "{request}",
                                static_cast<double> (pending));
         }
@@ -9096,19 +9133,27 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         pending_request_scope_t &operator= (const pending_request_scope_t &) = delete;
         ~pending_request_scope_t ()
         {
-            const std::lock_guard<std::mutex> lock (state->actor_pending_requests_mutex);
-            const auto found = state->actor_pending_requests.find (key);
-            if (found != state->actor_pending_requests.end () && --found->second == 0) {
-                state->actor_pending_requests.erase (found);
+            try {
+                state->actor_pending_requests_lane
+                  .run ([this] {
+                      const auto found = state->actor_pending_requests.find (key);
+                      if (found != state->actor_pending_requests.end () && --found->second == 0) {
+                          state->actor_pending_requests.erase (found);
+                      }
+                  })
+                  .get ();
+            }
+            catch (...) {
+                // Scope destruction must not turn a handler terminal into a process abort
+                // while the node's state lane is closing.
             }
         }
     };
     std::optional<pending_request_scope_t> pending_request_scope;
     if (message_kind == stream_message_kind_t::request) {
-        {
-            const std::lock_guard<std::mutex> lock (_state->actor_pending_requests_mutex);
+        _state->actor_pending_requests_lane.run ([this, &key] {
             _state->actor_pending_requests[key]++;
-        }
+        }).get ();
         pending_request_scope.emplace (_state, key);
     }
     report_spot_dispatch_trace (_state, message_flow_outcome_t::received,
@@ -9281,8 +9326,10 @@ std::vector<spot_node_snapshot_t> spot_node_runtime_t::snapshots (const zlink_bu
     for (const auto &[_, registration] : builder._state->mesh_nodes) {
         if (!registration || !registration->spot_state)
             continue;
-        std::lock_guard<std::recursive_mutex> lock (registration->spot_state->mutex);
-        result.push_back (registration->spot_state->snapshot);
+        result.push_back (
+          registration->spot_state->lane.run ([state = registration->spot_state] {
+              return state->snapshot;
+          }).get ());
     }
     return result;
 }
@@ -9890,10 +9937,9 @@ result_t<bool> spot_node_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
         (void) _state->dispatched_request_replies.erase_if ([&] (const auto &request_key) {
             return request_key.starts_with (actor_request_dedup_prefix (key));
         });
-        {
-            const std::lock_guard<std::mutex> pending_lock (_state->actor_pending_requests_mutex);
+        _state->actor_pending_requests_lane.run ([this, &key] {
             _state->actor_pending_requests.erase (key);
-        }
+        }).get ();
         destroy_registry = _state->destroy_actor_registry;
         _state->destroying_actors.erase (key);
     }

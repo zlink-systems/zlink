@@ -5,6 +5,7 @@
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
+#include "runtime/execution/state_lane.hpp"
 
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
@@ -1209,27 +1210,35 @@ class stream_host_service_t::listener_t
                                  std::shared_ptr<session_liveness_t> liveness,
                                  std::function<void ()> force_close)
     {
-        const std::lock_guard<std::mutex> lock (_active_streams_mutex);
-        _active_streams.push_back (
-          active_session_t{stream, std::move (liveness), std::move (force_close)});
+        _active_streams_lane
+          .run ([this, stream, liveness = std::move (liveness),
+                 force_close = std::move (force_close)] () mutable {
+              _active_streams.push_back (
+                active_session_t{stream, std::move (liveness), std::move (force_close)});
+          })
+          .get ();
     }
 
     void unregister_active_stream (const stream_t &stream)
     {
-        const std::lock_guard<std::mutex> lock (_active_streams_mutex);
-        for (auto it = _active_streams.begin (); it != _active_streams.end (); ++it) {
-            if (it->stream.session_id () == stream.session_id ()) {
-                _active_streams.erase (it);
-                break;
-            }
-        }
+        _active_streams_lane
+          .run ([this, &stream] {
+              for (auto it = _active_streams.begin (); it != _active_streams.end (); ++it) {
+                  if (it->stream.session_id () == stream.session_id ()) {
+                      _active_streams.erase (it);
+                      break;
+                  }
+              }
+          })
+          .get ();
     }
 
     std::size_t active_session_count ()
     {
-        std::scoped_lock lock (_active_streams_mutex, _core_sessions_mutex);
-        return _active_streams.size () + _core_sessions.size ()
-               + _retired_core_sessions.size ();
+        const auto active =
+          _active_streams_lane.run ([this] { return _active_streams.size (); }).get ();
+        const std::lock_guard lock (_core_sessions_mutex);
+        return active + _core_sessions.size () + _retired_core_sessions.size ();
     }
 
     void begin_drain_sessions ()
@@ -1241,11 +1250,7 @@ class stream_host_service_t::listener_t
 
     void notify_sessions_closing (stream_close_reason_t reason, std::string_view diagnostic)
     {
-        std::vector<active_session_t> sessions;
-        {
-            const std::lock_guard<std::mutex> lock (_active_streams_mutex);
-            sessions = _active_streams;
-        }
+        auto sessions = _active_streams_lane.run ([this] { return _active_streams; }).get ();
         for (auto &entry : sessions) {
             _runtime.send_session_closing (entry.stream, reason, diagnostic);
         }
@@ -1256,11 +1261,7 @@ class stream_host_service_t::listener_t
      * connection would later be re-labeled by the liveness loop. */
     void force_close_sessions (stream_close_reason_t reason, std::string_view diagnostic)
     {
-        std::vector<active_session_t> sessions;
-        {
-            const std::lock_guard<std::mutex> lock (_active_streams_mutex);
-            sessions = _active_streams;
-        }
+        auto sessions = _active_streams_lane.run ([this] { return _active_streams; }).get ();
         for (auto &entry : sessions) {
             terminate_session (entry, reason, diagnostic);
         }
@@ -1284,11 +1285,7 @@ class stream_host_service_t::listener_t
      * per-session timers, one loop per node). */
     void sweep_liveness_once ()
     {
-        std::vector<active_session_t> sessions;
-        {
-            const std::lock_guard<std::mutex> lock (_active_streams_mutex);
-            sessions = _active_streams;
-        }
+        auto sessions = _active_streams_lane.run ([this] { return _active_streams; }).get ();
         for (auto &entry : sessions) {
             switch (entry.liveness->evaluate ()) {
                 case session_liveness_t::decision_t::none:
@@ -3972,7 +3969,8 @@ class stream_host_service_t::listener_t
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::chrono::milliseconds _session_replacement_callback_timeout;
-    std::mutex _active_streams_mutex;
+    runtime::offload_executor_t _active_streams_lane_executor;
+    runtime::state_lane_t _active_streams_lane{_active_streams_lane_executor};
     std::vector<active_session_t> _active_streams;
     asio::io_context _io;
     std::mutex _io_mutex;

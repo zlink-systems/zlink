@@ -1341,8 +1341,7 @@ void public_host_runtime_t::configure_user_spot_operations (
         throw std::logic_error ("User Spot operations must be configured before start");
     _user_spot_store = std::move (store);
     _user_spot_materializer = std::move (materializer);
-    std::lock_guard route_cache_lock (_route_cache_mutex);
-    _spot_route_fences.clear ();
+    _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
 }
 
 void public_host_runtime_t::configure_spot_route_fence_resolver (
@@ -1352,8 +1351,7 @@ void public_host_runtime_t::configure_spot_route_fence_resolver (
     if (_started)
         throw std::logic_error ("Spot route fence resolver must be configured before host start");
     _spot_route_fence_resolver = std::move (resolver);
-    std::lock_guard route_cache_lock (_route_cache_mutex);
-    _spot_route_fences.clear ();
+    _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
 }
 
 void public_host_runtime_t::configure_peer_readiness_resolver (peer_readiness_resolver_t resolver)
@@ -2380,14 +2378,20 @@ public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &targ
     }
 
     const auto key = spot_route_cache_key (target_node_rid, target_spot_id, target_spot_generation);
-    {
-        std::lock_guard lock (_route_cache_mutex);
-        const auto found = _spot_route_fences.find (key);
-        if (found != _spot_route_fences.end ()) {
+    const auto cached =
+      _route_cache_lane
+        .run ([this, &key] () -> std::optional<route_fence_t> {
+            const auto found = _spot_route_fences.find (key);
+            if (found == _spot_route_fences.end ())
+                return std::nullopt;
             if (std::chrono::steady_clock::now () < found->second.expires_at)
                 return found->second.fence;
             _spot_route_fences.erase (found);
-        }
+            return std::nullopt;
+        })
+        .get ();
+    if (cached) {
+        return cached;
     }
 
     const auto measured_at = std::chrono::steady_clock::now ();
@@ -2403,9 +2407,12 @@ public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &targ
           std::min (std::chrono::duration_cast<std::chrono::steady_clock::duration> (
                       _options.route_cache_max_age),
                     *read->admission_lifetime);
-        std::lock_guard lock (_route_cache_mutex);
-        _spot_route_fences.insert_or_assign (
-          key, cached_spot_route_fence_t{read->fence, measured_at + lifetime});
+        _route_cache_lane
+          .run ([this, &key, fence = read->fence, expires_at = measured_at + lifetime] {
+              _spot_route_fences.insert_or_assign (
+                key, cached_spot_route_fence_t{std::move (fence), expires_at});
+          })
+          .get ();
     }
     return read ? std::optional<route_fence_t> (read->fence) : std::nullopt;
 }
@@ -2418,17 +2425,17 @@ void public_host_runtime_t::invalidate_spot_route_fence (
         return;
     const auto target_node = zlink::routing_id_t::from (source->target_node_routing_id);
     const auto key = spot_route_cache_key (target_node, source->spot_id, source->object_generation);
-    std::lock_guard lock (_route_cache_mutex);
-    const auto found = _spot_route_fences.find (key);
-    if (found == _spot_route_fences.end ())
-        return;
-
     // A late notice may describe an older owner lease. Do not remove a
     // route that was published after that notice.
     const route_fence_t source_fence{source->authority_owner_generation,
                                      source->owner_lease_generation};
-    if (found->second.fence == source_fence)
-        _spot_route_fences.erase (found);
+    _route_cache_lane
+      .run ([this, &key, &source_fence] {
+          const auto found = _spot_route_fences.find (key);
+          if (found != _spot_route_fences.end () && found->second.fence == source_fence)
+              _spot_route_fences.erase (found);
+      })
+      .get ();
 }
 
 task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (

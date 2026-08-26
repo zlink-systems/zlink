@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/stateful/maintenance_runtime.hpp"
@@ -932,7 +933,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         route_fence_t fence;
         std::chrono::steady_clock::time_point expires_at;
     };
-    std::mutex _route_cache_mutex;
+    runtime::offload_executor_t _route_cache_lane_executor;
+    mutable runtime::state_lane_t _route_cache_lane{_route_cache_lane_executor};
     std::map<std::string, cached_spot_route_fence_t> _spot_route_fences;
     actor_create_operation_target_t _actor_create_target;
     actor_join_operation_target_t _actor_join_target;
