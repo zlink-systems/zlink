@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using System.Threading;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
@@ -52,10 +52,9 @@ internal static class ZLinkEnvelopeCodec
 {
     private const string JsonContentType = "application/json";
     private const int MaximumSimpleHeaderCacheEntries = 4096;
-    private static readonly ConcurrentDictionary<SimpleHeaderKey, byte[]> SimpleHeaderCache = new();
+    private static readonly ZLinkStateLane CacheLane = new();
+    private static readonly Dictionary<SimpleHeaderKey, byte[]> SimpleHeaderCache = new();
     private static readonly ConcurrentQueue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
-    private static readonly object SimpleHeaderCacheGate = new();
-    private static readonly object DecodedHeaderCacheGate = new();
     private static HeaderCacheEntry[] DecodedHeaderCache = [];
 
     public static string DefaultContentType => JsonContentType;
@@ -266,12 +265,9 @@ internal static class ZLinkEnvelopeCodec
     {
         var bytes = message.AsReadOnlySpan();
         var hash = HashBytes(bytes);
-        var cache = Volatile.Read(ref DecodedHeaderCache);
-        foreach (var entry in cache)
-        {
-            if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(bytes))
-                return ValidateDecodedFlow(entry.Header, validateFlow);
-        }
+        var cached = FindDecodedHeaderCacheEntry(message, hash);
+        if (cached is not null)
+            return ValidateDecodedFlow(cached, validateFlow);
 
         ZLinkEnvelopeHeader header;
         try
@@ -621,26 +617,23 @@ internal static class ZLinkEnvelopeCodec
 
     private static byte[] GetSimpleHeaderBytes(SimpleHeaderKey key)
     {
-        if (SimpleHeaderCache.TryGetValue(key, out var cached))
-            return cached;
-
         // Message and channel names are application input. Keep a bounded
         // replacement cache so hot keys remain cheap after arbitrary keys
         // have filled the cache.
-        lock (SimpleHeaderCacheGate)
+        return AwaitStateLane(CacheLane.RunAsync(() =>
         {
-            if (SimpleHeaderCache.TryGetValue(key, out cached))
+            if (SimpleHeaderCache.TryGetValue(key, out var cached))
                 return cached;
 
             while (SimpleHeaderCache.Count >= MaximumSimpleHeaderCacheEntries
                    && SimpleHeaderCacheOrder.TryDequeue(out var evicted))
-                SimpleHeaderCache.TryRemove(evicted, out _);
+                SimpleHeaderCache.Remove(evicted);
 
             var encoded = EncodeSimpleHeaderBytes(key);
             SimpleHeaderCache[key] = encoded;
             SimpleHeaderCacheOrder.Enqueue(key);
             return encoded;
-        }
+        }));
     }
 
     private static byte[] EncodeSimpleHeaderBytes(SimpleHeaderKey key) =>
@@ -664,17 +657,39 @@ internal static class ZLinkEnvelopeCodec
         ZLinkEnvelopeHeader header)
     {
         if (bytes.Length > 1024) return;
+        var copy = bytes.ToArray();
+        AddDecodedHeaderCacheEntry(copy, hash, header);
+    }
 
-        lock (DecodedHeaderCacheGate)
+    private static ZLinkEnvelopeHeader? FindDecodedHeaderCacheEntry(
+        Message message,
+        ulong hash) =>
+        AwaitStateLane(CacheLane.RunAsync(() =>
         {
             var cache = DecodedHeaderCache;
             foreach (var entry in cache)
             {
-                if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(bytes))
+                if (entry.Hash == hash
+                    && entry.Bytes.AsSpan().SequenceEqual(message.AsReadOnlySpan()))
+                    return entry.Header;
+            }
+
+            return null;
+        }));
+
+    private static void AddDecodedHeaderCacheEntry(
+        byte[] copy,
+        ulong hash,
+        ZLinkEnvelopeHeader header) =>
+        AwaitStateLane(CacheLane.RunAsync(() =>
+        {
+            var cache = DecodedHeaderCache;
+            foreach (var entry in cache)
+            {
+                if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(copy))
                     return;
             }
 
-            var copy = bytes.ToArray();
             var next = cache.Length < 64
                 ? new HeaderCacheEntry[cache.Length + 1]
                 : new HeaderCacheEntry[cache.Length];
@@ -689,9 +704,14 @@ internal static class ZLinkEnvelopeCodec
                 next[^1] = new HeaderCacheEntry(copy, hash, header);
             }
 
-            Volatile.Write(ref DecodedHeaderCache, next);
-        }
-    }
+            DecodedHeaderCache = next;
+        }));
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     private static ulong HashBytes(ReadOnlySpan<byte> bytes)
     {

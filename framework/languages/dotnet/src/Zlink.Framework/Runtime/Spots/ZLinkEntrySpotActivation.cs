@@ -112,6 +112,7 @@ internal sealed partial class ZLinkEntrySpotActivation :
 
     internal void RequestStop()
     {
+        if (IsDisposed) return;
         _serial?.Complete();
         _stopSource.Cancel();
     }

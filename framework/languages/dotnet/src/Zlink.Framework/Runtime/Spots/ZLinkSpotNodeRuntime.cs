@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Timers;
 
@@ -21,7 +22,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
     private readonly ZLinkTimerScheduler _timerScheduler;
     private readonly ZLinkLocationLifecycle? _locationLifecycle;
-    private readonly object _disposeGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private Task? _disposeTask;
     private IDisposable? _manualConnectionAttachment;
     private bool _stopSourceDisposed;
@@ -655,11 +656,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
     internal void RequestStop()
     {
-        lock (_disposeGate)
-        {
-            if (_stopSourceDisposed) return;
-            _stopSource.Cancel();
-        }
+        AwaitStateLane(_lane.RunAsync(RequestStopOnLane));
         AwaitStateLane(_spots.RequestStopAsync());
         _entryDispatchPump?.RequestStop();
         _entrySpotActivation?.RequestStop();
@@ -682,16 +679,23 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        lock (_disposeGate)
-            return new ValueTask(
-                _disposeTask ??= DisposeCoreAsync(CancellationToken.None));
+        return new ValueTask(AwaitStateLane(_lane.RunAsync(
+            () => _disposeTask ??= StartDisposeCore(CancellationToken.None))));
     }
 
     internal ValueTask ForceStopAsync(CancellationToken cancellationToken)
     {
-        lock (_disposeGate)
-            return new ValueTask(
-                _disposeTask ??= DisposeCoreAsync(cancellationToken));
+        return new ValueTask(AwaitStateLane(_lane.RunAsync(
+            () => _disposeTask ??= StartDisposeCore(cancellationToken))));
+    }
+
+    private Task StartDisposeCore(CancellationToken forceStopToken)
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+            return Task.Run(() => DisposeCoreAsync(forceStopToken), CancellationToken.None);
+
+        using (ExecutionContext.SuppressFlow())
+            return Task.Run(() => DisposeCoreAsync(forceStopToken), CancellationToken.None);
     }
 
     private async Task DisposeCoreAsync(CancellationToken forceStopToken)
@@ -716,15 +720,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 ? () => Node.ForceStopAsync(forceStopToken)
                 : Node.DisposeAsync)
             .ConfigureAwait(false);
-        Capture(() =>
-        {
-            lock (_disposeGate)
-            {
-                if (_stopSourceDisposed) return;
-                _stopSource.Dispose();
-                _stopSourceDisposed = true;
-            }
-        });
+        Capture(() => AwaitStateLane(_lane.RunAsync(DisposeStopSourceOnLane)));
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures.Count > 1) throw new AggregateException(failures);
@@ -758,18 +754,15 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     internal void OwnManualConnectionAttachment(IDisposable attachment)
     {
         ArgumentNullException.ThrowIfNull(attachment);
-        IDisposable? previous = null;
-        var dispose = false;
-        lock (_disposeGate)
+        var (previous, dispose) = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_disposeTask is not null)
-                dispose = true;
-            else
-            {
-                previous = _manualConnectionAttachment;
-                _manualConnectionAttachment = attachment;
-            }
-        }
+                return ((IDisposable?)null, true);
+
+            var previous = _manualConnectionAttachment;
+            _manualConnectionAttachment = attachment;
+            return (previous, false);
+        }));
         previous?.Dispose();
         if (!dispose) return;
         attachment.Dispose();
@@ -778,13 +771,26 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
     private void DetachManualConnections()
     {
-        IDisposable? attachment;
-        lock (_disposeGate)
+        var attachment = AwaitStateLane(_lane.RunAsync(() =>
         {
-            attachment = _manualConnectionAttachment;
+            var attachment = _manualConnectionAttachment;
             _manualConnectionAttachment = null;
-        }
+            return attachment;
+        }));
         attachment?.Dispose();
+    }
+
+    private void RequestStopOnLane()
+    {
+        if (_stopSourceDisposed) return;
+        _stopSource.Cancel();
+    }
+
+    private void DisposeStopSourceOnLane()
+    {
+        if (_stopSourceDisposed) return;
+        _stopSource.Dispose();
+        _stopSourceDisposed = true;
     }
 
     public async ValueTask InitializeEntrySpotAsync()

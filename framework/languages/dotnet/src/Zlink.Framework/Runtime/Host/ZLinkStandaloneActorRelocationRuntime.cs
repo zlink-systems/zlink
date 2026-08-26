@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
@@ -3049,7 +3050,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkActorRelocationRecoveryRecord? remoteJoinRecovery,
         bool createdTransferredActor)
     {
-        private readonly object _readySubmissionGate = new();
+        private readonly ZLinkStateLane _lane = new();
         private readonly List<ZLinkActorHandoffFrame> _acceptedFrames =
             [.. acceptedFrames];
         private TargetReadySubmissionPhase _readySubmissionPhase;
@@ -3103,7 +3104,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
 
         internal void BeginReadySubmission()
         {
-            lock (_readySubmissionGate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
                 switch (_readySubmissionPhase)
                 {
@@ -3126,15 +3127,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             "Standalone Actor target cleanup is still in progress.",
                             retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff);
                 }
-            }
+            }));
         }
 
         internal bool TryMarkReadySubmitted(Func<bool> isCurrent)
         {
-            lock (_readySubmissionGate)
+            var claimed = AwaitStateLane(_lane.RunAsync(() =>
             {
-                if (!isCurrent()
-                    || _readySubmissionPhase == TargetReadySubmissionPhase.Aborting)
+                if (_readySubmissionPhase == TargetReadySubmissionPhase.Aborting)
                     return false;
                 if (_readySubmissionPhase == TargetReadySubmissionPhase.Submitted)
                     return false;
@@ -3143,43 +3143,63 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         "Standalone Actor READY submission has no prepared owner.");
                 _readySubmissionPhase = TargetReadySubmissionPhase.Submitted;
                 return true;
-            }
+            }));
+            // The state transition is claimed in the lane before this
+            // caller-owned check. It may re-enter the relocation owner.
+            return claimed && isCurrent();
         }
 
         internal bool TryMarkReadySubmissionFailed(Func<bool> isCurrent)
         {
-            lock (_readySubmissionGate)
+            var claimed = AwaitStateLane(_lane.RunAsync(() =>
             {
-                if (!isCurrent()
-                    || _readySubmissionPhase != TargetReadySubmissionPhase.Pending)
+                if (_readySubmissionPhase != TargetReadySubmissionPhase.Pending)
                     return false;
                 _readySubmissionPhase = TargetReadySubmissionPhase.None;
                 return true;
-            }
+            }));
+            return claimed && isCurrent();
         }
 
         internal bool TryBeginAbort(Func<bool> remove)
         {
-            lock (_readySubmissionGate)
+            var claimed = AwaitStateLane(_lane.RunAsync(() =>
             {
                 if (_readySubmissionPhase != TargetReadySubmissionPhase.Pending)
                     return false;
-                if (!remove()) return false;
                 _readySubmissionPhase = TargetReadySubmissionPhase.Aborting;
                 return true;
-            }
+            }));
+            if (!claimed)
+                return false;
+            // Removal is caller-owned and can re-enter the attempt owner, so
+            // it deliberately runs outside the TargetStage state lane.
+            if (remove())
+                return true;
+            AwaitStateLane(_lane.RunAsync(() =>
+            {
+                if (_readySubmissionPhase == TargetReadySubmissionPhase.Aborting)
+                    _readySubmissionPhase = TargetReadySubmissionPhase.Pending;
+            }));
+            return false;
         }
 
         internal void RestorePendingAfterAbortSchedulingFailure()
         {
-            lock (_readySubmissionGate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
                 if (_readySubmissionPhase != TargetReadySubmissionPhase.Aborting)
                     throw DataLost(
                         "Standalone Actor abort scheduling rejection lost its READY owner.");
                 _readySubmissionPhase = TargetReadySubmissionPhase.Pending;
-            }
+            }));
         }
+
+        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+            operation.GetAwaiter().GetResult();
+
+        private static void AwaitStateLane(ValueTask operation) =>
+            operation.GetAwaiter().GetResult();
 
         internal void ValidateRetry(
             ZLinkServiceWireCodec.RelocationPrepareRecord retry,

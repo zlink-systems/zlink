@@ -16,8 +16,6 @@ internal sealed record ZLinkSpotRelocationApplicationState(
 internal abstract partial class ZLinkSpotActivation
 {
     private const int MaxConcurrentRelocationAdapterCallbacks = 8;
-    private readonly object _relocationReadyGate = new();
-    private readonly object _messageFollowPendingGate = new();
     private readonly Queue<PendingMessageFollowRoute> _messageFollowPending = new();
     private ZLinkSpotMessageFollow? _messageFollow;
     private long _messageFollowPendingBytes;
@@ -42,18 +40,21 @@ internal abstract partial class ZLinkSpotActivation
 
     public ValueTask DisposeAsync()
     {
-        TaskCompletionSource completion;
-        lock (_lifecycleGate)
+        var state = AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (_finalization is not null) return new ValueTask(_finalization);
+            if (_finalization is not null)
+                return (_finalization, (TaskCompletionSource?)null);
 
             Volatile.Write(ref _disposed, 1);
-            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
             _finalization = completion.Task;
-        }
+            return (_finalization, completion);
+        }));
 
-        _ = CompleteFinalizationAsync(completion);
-        return new ValueTask(completion.Task);
+        if (state.Item2 is not null)
+            _ = CompleteFinalizationAsync(state.Item2);
+        return new ValueTask(state.Item1);
     }
 
     private async Task CompleteFinalizationAsync(TaskCompletionSource completion)
@@ -165,31 +166,30 @@ internal abstract partial class ZLinkSpotActivation
             throw new InvalidOperationException(
                 "Only ApplicationSignaled readiness waits for an application turn.");
 
-        Task<ZLinkSpotRelocationSeal> signal;
-        lock (_relocationReadyGate)
+        var signal = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_relocationReadyRequest is not null)
                 throw new InvalidOperationException(
                     "A relocation-ready turn is already pending.");
             _relocationReadyRequest = new RelocationReadySealRequest(
                 cancellationToken);
-            signal = _relocationReadyRequest.Completion.Task;
-        }
+            return _relocationReadyRequest.Completion.Task;
+        }));
         return signal.WaitAsync(cancellationToken);
     }
 
     internal void CompleteRelocationReadyTurn()
     {
-        RelocationReadySealRequest? pending;
-        lock (_relocationReadyGate)
+        var pending = AwaitStateLane(_lane.RunAsync(() =>
         {
-            pending = _relocationReadyRequest;
+            var pending = _relocationReadyRequest;
             if (pending is not null)
             {
                 _relocationReadyCompletionPending = true;
                 _relocationReadyRequest = null;
             }
-        }
+            return pending;
+        }));
 
         if (pending is not null)
         {
@@ -234,12 +234,14 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(admissionSeal);
-        lock (_relocationReadyGate)
-        {
-            if (!_relocationReadyCompletionPending)
-                return;
-            _relocationReadyCompletionPending = false;
-        }
+        if (!await _lane.RunAsync(() =>
+            {
+                if (!_relocationReadyCompletionPending)
+                    return false;
+                _relocationReadyCompletionPending = false;
+                return true;
+            }).ConfigureAwait(false))
+            return;
         await _serial.ExecuteSealedRelocationAsync(
                 admissionSeal.QueueSeal,
                 static (activation, ct) =>
@@ -285,11 +287,11 @@ internal abstract partial class ZLinkSpotActivation
 
     internal void CancelRelocationReadyWait()
     {
-        lock (_relocationReadyGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             _relocationReadyRequest = null;
             _relocationReadyCompletionPending = false;
-        }
+        }));
     }
 
     private ValueTask InvokeRelocationReadyCompletedAsync(
@@ -763,9 +765,9 @@ internal abstract partial class ZLinkSpotActivation
                 || PerActorShellRelocationPlan is not null
                 || Volatile.Read(ref _messageFollow) is not null)
                 return true;
-            lock (_messageFollowPendingGate)
-                return _holdIngressForMessageFollow
-                       || _messageFollowPending.Count != 0;
+            return AwaitStateLane(_lane.RunAsync(
+                () => _holdIngressForMessageFollow
+                      || _messageFollowPending.Count != 0));
         }
     }
 
@@ -1635,7 +1637,7 @@ internal abstract partial class ZLinkSpotActivation
         ZLinkBackendRouteReceived received,
         long encodedBytes)
     {
-        lock (_messageFollowPendingGate)
+        var held = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (Volatile.Read(ref _messageFollow) is null)
             {
@@ -1647,7 +1649,11 @@ internal abstract partial class ZLinkSpotActivation
                     _messageFollowPendingBytes + encodedBytes);
                 return true;
             }
-        }
+            return false;
+        }));
+
+        if (held)
+            return true;
 
         return HandleMessageFollow(received);
     }
@@ -1682,14 +1688,7 @@ internal abstract partial class ZLinkSpotActivation
 
     private void RelayPendingMessageFollowRoutes()
     {
-        PendingMessageFollowRoute[] pending;
-        lock (_messageFollowPendingGate)
-        {
-            _holdIngressForMessageFollow = false;
-            pending = _messageFollowPending.ToArray();
-            _messageFollowPending.Clear();
-            _messageFollowPendingBytes = 0;
-        }
+        var pending = TakePendingMessageFollowRoutes();
 
         foreach (var route in pending)
             if (!HandleMessageFollow(route.Received))
@@ -1702,14 +1701,7 @@ internal abstract partial class ZLinkSpotActivation
 
     private void ResumePendingMessageFollowRoutes()
     {
-        PendingMessageFollowRoute[] pending;
-        lock (_messageFollowPendingGate)
-        {
-            _holdIngressForMessageFollow = false;
-            pending = _messageFollowPending.ToArray();
-            _messageFollowPending.Clear();
-            _messageFollowPendingBytes = 0;
-        }
+        var pending = TakePendingMessageFollowRoutes();
 
         foreach (var route in pending)
             AdmitNativeRoute(route.Received);
@@ -1717,14 +1709,7 @@ internal abstract partial class ZLinkSpotActivation
 
     private void RejectPendingMessageFollowRoutes()
     {
-        PendingMessageFollowRoute[] pending;
-        lock (_messageFollowPendingGate)
-        {
-            _holdIngressForMessageFollow = false;
-            pending = _messageFollowPending.ToArray();
-            _messageFollowPending.Clear();
-            _messageFollowPendingBytes = 0;
-        }
+        var pending = TakePendingMessageFollowRoutes();
 
         foreach (var route in pending)
             ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
@@ -1735,14 +1720,7 @@ internal abstract partial class ZLinkSpotActivation
 
     private void DisposePendingMessageFollowRoutes()
     {
-        PendingMessageFollowRoute[] pending;
-        lock (_messageFollowPendingGate)
-        {
-            _holdIngressForMessageFollow = false;
-            pending = _messageFollowPending.ToArray();
-            _messageFollowPending.Clear();
-            _messageFollowPendingBytes = 0;
-        }
+        var pending = TakePendingMessageFollowRoutes();
         foreach (var route in pending)
             route.Received.Dispose();
     }
@@ -1938,16 +1916,32 @@ internal abstract partial class ZLinkSpotActivation
         out IReadOnlyList<ZLinkAcceptedWorkRecord> held)
     {
         ArgumentNullException.ThrowIfNull(seal);
-        lock (_messageFollowPendingGate)
-            _holdIngressForMessageFollow = true;
+        AwaitStateLane(_lane.RunAsync(
+            () => _holdIngressForMessageFollow = true));
         if (_serial.TryFreezeRelocationIngress(
                 seal.QueueSeal,
                 out held))
             return true;
-        lock (_messageFollowPendingGate)
-            _holdIngressForMessageFollow = false;
+        AwaitStateLane(_lane.RunAsync(
+            () => _holdIngressForMessageFollow = false));
         return false;
     }
+
+    private PendingMessageFollowRoute[] TakePendingMessageFollowRoutes() =>
+        AwaitStateLane(_lane.RunAsync(() =>
+        {
+            _holdIngressForMessageFollow = false;
+            var pending = _messageFollowPending.ToArray();
+            _messageFollowPending.Clear();
+            _messageFollowPendingBytes = 0;
+            return pending;
+        }));
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     internal void RestoreLogicalTimers(
         IReadOnlyList<ZLinkRelocationLogicalTimer> logicalTimers)

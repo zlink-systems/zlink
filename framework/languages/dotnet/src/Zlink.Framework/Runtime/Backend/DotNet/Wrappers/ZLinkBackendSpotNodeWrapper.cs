@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Spots;
 using Systems.Zlink.Framework.Runtime.Protocol;
 
@@ -30,10 +31,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     private readonly ConcurrentDictionary<string, ulong> _peerIntents =
         new(StringComparer.Ordinal);
     private readonly ZLinkSpotSubscriptionTracker _subscriptions = new();
-    private readonly object _forwardGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<ZLinkBackendActorRef, List<Message>> _forwardBuffers = new();
-    private readonly object _lifecycleGate = new();
-    private readonly object _entrySpotGate = new();
     private IZLinkBackendSpot? _entrySpot;
 
     // First registered mesh channel; spot wrappers publish/subscribe on it
@@ -215,12 +214,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
     private void BindOnce(string endpoint)
     {
-        lock (_lifecycleGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_bound) return;
             _bound = true;
             _node.SetBind(endpoint);
-        }
+        }));
     }
 
     // Startup channel sequencing (spec 21-mesh-node §3): AddChannel/SetChannelWeight
@@ -924,24 +923,25 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
     public IZLinkBackendSpot EntrySpot()
     {
-        if (_entrySpot is { } entrySpot) return entrySpot;
-        lock (_entrySpotGate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
-            EnsureStarted();
+            EnsureStartedCore();
             return _entrySpot ??= new ZLinkBackendSpotWrapper(
                 _node, _node.EntrySpot(), _pump, _completions, _subscriptions);
-        }
+        }));
     }
 
     private void EnsureStarted()
     {
-        lock (_lifecycleGate)
+        AwaitStateLane(_lane.RunAsync(EnsureStartedCore));
+    }
+
+    private void EnsureStartedCore()
+    {
+        if (!_started && !_disposed)
         {
-            if (!_started && !_disposed)
-            {
-                _started = true;
-                _node.Start();
-            }
+            _started = true;
+            _node.Start();
         }
     }
 
@@ -1317,7 +1317,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     {
         if (hasMore)
         {
-            lock (_forwardGate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
                 if (!_forwardBuffers.TryGetValue(actor, out var pending))
                 {
@@ -1326,14 +1326,17 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 }
 
                 pending.Add(Message.From(message));
-            }
+            }));
 
             return true;
         }
 
         List<Message>? buffered;
-        lock (_forwardGate)
-            _forwardBuffers.Remove(actor, out buffered);
+        buffered = AwaitStateLane(_lane.RunAsync(() =>
+        {
+            _forwardBuffers.Remove(actor, out var pending);
+            return pending;
+        }));
 
         var terminal = Message.From(message);
         var parts = new List<Message>((buffered?.Count ?? 0) + 1);
@@ -1350,8 +1353,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
         terminal.Dispose();
         if (buffered is not null)
-            lock (_forwardGate)
-                _forwardBuffers[actor] = buffered;
+            AwaitStateLane(_lane.RunAsync(
+                () => _forwardBuffers[actor] = buffered));
         return false;
     }
 
@@ -1385,25 +1388,25 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
     private bool TryBeginDispose()
     {
-        lock (_lifecycleGate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_disposed) return false;
             _disposed = true;
             return true;
-        }
+        }));
     }
 
     private async Task DisposeCoreAsync(
         bool forceStop,
         CancellationToken cancellationToken)
     {
-        lock (_forwardGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             foreach (var pending in _forwardBuffers.Values)
                 foreach (var part in pending)
                     part.Dispose();
             _forwardBuffers.Clear();
-        }
+        }));
 
         await _pump.DisposeAsync().ConfigureAwait(false);
         if (forceStop)
@@ -1508,6 +1511,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             }
         }
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     //  Spec 32-framework-error-model:91-92 — an Ok terminal whose reply lacks
     //  the operation-specific completion cannot be processed: ProtocolError,

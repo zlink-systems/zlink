@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -27,10 +28,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly IZLinkBackendStreamSocket _socket;
     private readonly string _transport;
     private readonly TimeProvider _timeProvider;
-    private readonly object _disposeGate = new();
-    private readonly object _terminalGate = new();
-    private readonly object _transportCloseGate = new();
-    private readonly object _replacementGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly HashSet<ActorBindingReplacementIdentity>
         _receivedBindingReplacements = [];
     private readonly Dictionary<ActorBindingReplacementIdentity, ITimer>
@@ -182,8 +180,17 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        lock (_disposeGate)
-            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+        return new ValueTask(AwaitStateLane(_lane.RunAsync(
+            () => _disposeTask ??= StartDisposeCore())));
+    }
+
+    private Task StartDisposeCore()
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+            return Task.Run(DisposeCoreAsync, CancellationToken.None);
+
+        using (ExecutionContext.SuppressFlow())
+            return Task.Run(DisposeCoreAsync, CancellationToken.None);
     }
 
     private async Task DisposeCoreAsync()
@@ -305,14 +312,16 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             sessionRid,
             retiredBindingGeneration,
             bindingToken);
-        lock (_replacementGate)
+        if (!AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!_receivedBindingReplacements.Add(identity))
-                return true;
+                return false;
             _serial.CloseApplicationAdmission();
             Interlocked.Exchange(ref _applicationDispatchClosed, 1);
             Interlocked.Exchange(ref _actorBindingReplacementClosing, 1);
-        }
+            return true;
+        })))
+            return true;
 
         if (_serial.EnqueueInfrastructure(
                 () => InvokeActorBindingReplacedAsync(identity)))
@@ -772,12 +781,11 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             return;
         }
 
-        ITimer timer;
-        lock (_replacementGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_replacementCloseTimers.ContainsKey(identity))
                 return;
-            timer = _timeProvider.CreateTimer(
+            var timer = _timeProvider.CreateTimer(
                 static state =>
                 {
                     var closure = (ReplacementCloseTimerState)state!;
@@ -787,16 +795,18 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 TimeSpan.FromMilliseconds(100),
                 Timeout.InfiniteTimeSpan);
             _replacementCloseTimers.Add(identity, timer);
-        }
+        }));
     }
 
     private void OnReplacementCloseTimer(ActorBindingReplacementIdentity identity)
     {
-        lock (_replacementGate)
+        var timer = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_replacementCloseTimers.Remove(identity, out var timer))
-                timer.Dispose();
-        }
+                return timer;
+            return null;
+        }));
+        timer?.Dispose();
         _ = CloseRetiredSessionIfExactAsync(identity);
     }
 
@@ -836,27 +846,29 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private void DisposeReplacementCloseTimers()
     {
-        lock (_replacementGate)
+        var timers = AwaitStateLane(_lane.RunAsync(() =>
         {
-            foreach (var timer in _replacementCloseTimers.Values)
-                timer.Dispose();
+            var timers = _replacementCloseTimers.Values.ToArray();
             _replacementCloseTimers.Clear();
-        }
+            return timers;
+        }));
+        foreach (var timer in timers)
+            timer.Dispose();
     }
 
     private bool TryScheduleTerminal(string reason, Func<ValueTask> finalWork)
     {
-        var rejected = false;
-        lock (_terminalGate)
+        var (scheduled, rejected) = AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (_terminalClose is not null) return false;
+            if (_terminalClose is not null) return (Scheduled: false, Rejected: false);
 
             _terminalClose = new TerminalClose(reason, DisposeOwnsClose: false);
-            if (_serial.EnqueueFinal(finalWork)) return true;
+            if (EnqueueTerminalOutsideStateLane(finalWork))
+                return (Scheduled: true, Rejected: false);
 
             _terminalClose = new TerminalClose(reason, DisposeOwnsClose: true);
-            rejected = true;
-        }
+            return (Scheduled: false, Rejected: true);
+        }));
 
         if (rejected)
         {
@@ -866,17 +878,29 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 $"stream-session-rejected-terminal-dispose:{Stream.SessionId}",
                 _runtime.ErrorSink);
         }
-        return false;
+        return scheduled;
+    }
+
+    private bool EnqueueTerminalOutsideStateLane(Func<ValueTask> finalWork)
+    {
+        // The serial runner creates its task while this state-lane turn owns
+        // terminal state. Do not let that task inherit the lane's AsyncLocal:
+        // terminal completion re-enters this runtime to start finalization.
+        if (ExecutionContext.IsFlowSuppressed())
+            return _serial.EnqueueFinal(finalWork);
+
+        using (ExecutionContext.SuppressFlow())
+            return _serial.EnqueueFinal(finalWork);
     }
 
     private bool ClaimCloseForDisposal()
     {
-        lock (_terminalGate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_terminalClose is { } terminalClose) return terminalClose.DisposeOwnsClose;
             _terminalClose = new TerminalClose("transport_error", DisposeOwnsClose: true);
             return true;
-        }
+        }));
     }
 
     private static InboundLivenessSignal ClassifyInboundLiveness(
@@ -1003,20 +1027,32 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private Task CloseTransportAsync()
     {
-        TaskCompletionSource? owner = null;
-        Task closeTask;
-        lock (_transportCloseGate)
+        var (closeTask, owner) = AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (_transportCloseTask is not null) return _transportCloseTask;
+            if (_transportCloseTask is not null) return (_transportCloseTask, (TaskCompletionSource?)null);
             if (_transportClosed.Task.IsCompletedSuccessfully
                 && _transportClosed.Task.Result)
-                return Task.CompletedTask;
-            owner = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            closeTask = _transportCloseTask = owner.Task;
+                return (Task.CompletedTask, (TaskCompletionSource?)null);
+            var owner = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _transportCloseTask = owner.Task;
+            return (_transportCloseTask, owner);
+        }));
+
+        if (owner is not null)
+            StartCloseTransportCore(owner);
+        return closeTask;
+    }
+
+    private void StartCloseTransportCore(TaskCompletionSource completion)
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+        {
+            _ = CloseTransportCoreAsync(completion);
+            return;
         }
 
-        _ = CloseTransportCoreAsync(owner);
-        return closeTask;
+        using (ExecutionContext.SuppressFlow())
+            _ = CloseTransportCoreAsync(completion);
     }
 
     private async Task CloseTransportCoreAsync(TaskCompletionSource completion)
@@ -1064,40 +1100,45 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private void RequestTerminalCallbackStop()
     {
-        lock (_terminalGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_terminalCallbackStopDisposed
                 || _terminalCallbackStopFinalizing
                 || _terminalCallbackStop.IsCancellationRequested)
                 return;
             _terminalCallbackCancellation = _terminalCallbackStop.CancelAsync();
-        }
+        }));
     }
 
     private async ValueTask DisposeTerminalCallbackStopAsync()
     {
-        Task cancellation;
-        lock (_terminalGate)
+        var cancellation = AwaitStateLane(_lane.RunAsync(() =>
         {
             _terminalCallbackStopFinalizing = true;
-            cancellation = _terminalCallbackCancellation;
-        }
+            return _terminalCallbackCancellation;
+        }));
         try
         {
             await cancellation.ConfigureAwait(false);
         }
         finally
         {
-            lock (_terminalGate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
                 if (!_terminalCallbackStopDisposed)
                 {
                     _terminalCallbackStop.Dispose();
                     _terminalCallbackStopDisposed = true;
                 }
-            }
+            }));
         }
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     private void MarkTerminalFailed()
     {
