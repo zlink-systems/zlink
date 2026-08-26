@@ -87,7 +87,7 @@
 | 5·6 | ZLinkClientServerClientRuntime + Connection | 20+44 | **완료** | `39d71acd6c` | lane 2개(소유 분리), SuppressFlow 7, 재진입 0, 호환 경계 4, _socketLifecycleGate 유지 |
 
 CP2 배치 1(#3·#4·#5·6) 게이트 2026-08-26 통과 — unit 1893/0, 7샘플 러너 exit 0.
-| 7 | ZLinkActorHandoffState | 58 | **요청됨** | | codex terra 실행 중 (2026-08-26). 2× 난이도 |
+| 7 | ZLinkActorHandoffState | 58 | **완료** | `b49b1ef55d` | 재진입 3(유형③ 신규 — §7-6), SuppressFlow+Task.Run 1, 호환 경계 63(부채), 반려 2회 |
 | 8 | ZLinkActorRuntimeState | 35 | 대기 | | semaphore + 재진입 ~20 |
 | 9 | ZLinkManagedMeshNode | 130 | 대기 | | 4×+, 정독 리뷰 필수 |
 | 10 | ZLinkFrameworkRuntime | 27 | 대기(최종) | | 사용 45파일, 재진입 ~57, 정독 리뷰 필수 |
@@ -105,7 +105,8 @@ CP2 배치 1(#3·#4·#5·6) 게이트 2026-08-26 통과 — unit 1893/0, 7샘플
   split-brain / dotnet ZoneWorld mesh admission / fast_mutex abort — 이 작업의 하위
   증상인지 판정), **codex sol 마일스톤 리뷰**, 스펙 06 보완 필요 여부 판정.
 - [ ] **ZoneWorld 결함 해소 (§3.1)** — 판정 후 남는 결함을 직접 수정하고 ZoneWorld를
-  게이트에 복귀시킨다. 캠페인의 최종 단계다.
+  게이트에 복귀시킨다. 캠페인의 최종 단계다. **샘플 작업 전 cross-language e2e 선행(Z0),
+  샘플은 1개 완료마다 사용자 리뷰 요청**(§3.1 진행 규칙).
 
 ### 3.1 ZoneWorld 결함 해소 — 캠페인 최종 단계 (2026-08-26 사용자 지시)
 
@@ -113,6 +114,14 @@ CP3 판정("이 작업의 하위 증상인가")에서 **끝내지 않는다.** �
 결함을 직접 수정해 ZoneWorld를 게이트에 복귀시키는 것까지가 이 캠페인의 완료 조건이다.
 진입 조건: dotnet 마일스톤 게이트(§3) 통과 후. lane 전환으로 자연 해소된 항목은 재현
 불가 확인(반복 실행)으로 닫는다.
+
+**샘플 작업 진행 규칙 (2026-08-26 사용자 지시):**
+- **Z0 — cross-language e2e 선행**: 샘플 작업에 들어가기 **전에**
+  `framework/languages/cpp/cross-language/run_cross_language_smoke.sh`
+  (`ZLINK_CPP_BUILD_DIR=../build`, 모든 언어 락 단독 점유)를 먼저 그린으로 만든다.
+  실패가 있으면 샘플보다 먼저 해소한다.
+- **샘플은 7개 일괄이 아니라 하나씩**: 샘플 1개를 완료할 때마다 결과를 정리해
+  **사용자에게 리뷰를 요청**하고, 승인 후 다음 샘플로 넘어간다.
 
 | # | 결함 | 언어 | 상태 | 비고 |
 |---|---|---|---|---|
