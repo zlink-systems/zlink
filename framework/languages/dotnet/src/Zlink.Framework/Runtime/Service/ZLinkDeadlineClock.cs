@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Service;
 
 // Absolute operation deadlines must continue moving forward when the system
@@ -5,7 +7,7 @@ namespace Zlink.Framework.Runtime.Service;
 internal sealed class ZLinkDeadlineClock
 {
     private readonly TimeProvider _timeProvider;
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private DateTimeOffset _observedUtc;
     private long _observedTimestamp;
 
@@ -18,7 +20,7 @@ internal sealed class ZLinkDeadlineClock
 
     internal long GetUnixTimeMilliseconds()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             var wallUtc = _timeProvider.GetUtcNow();
             var timestamp = _timeProvider.GetTimestamp();
@@ -32,6 +34,9 @@ internal sealed class ZLinkDeadlineClock
             _observedUtc = wallUtc > monotonicUtc ? wallUtc : monotonicUtc;
             _observedTimestamp = timestamp;
             return _observedUtc.ToUnixTimeMilliseconds();
-        }
+        }));
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }

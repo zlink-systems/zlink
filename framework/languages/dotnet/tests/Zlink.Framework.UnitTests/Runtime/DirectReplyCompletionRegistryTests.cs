@@ -29,6 +29,7 @@ public sealed class DirectReplyCompletionRegistryTests
             terminalRetention: TimeSpan.FromMinutes(1));
         var owner = new object();
         Assert.True(registry.TryRegister("reply", owner));
+        Assert.Same(owner, registry.TryGet("reply"));
 
         Assert.False(registry.TryRemove(
             "reply",

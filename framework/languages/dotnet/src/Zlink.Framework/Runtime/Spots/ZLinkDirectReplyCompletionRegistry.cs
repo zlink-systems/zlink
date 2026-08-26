@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Spots;
 
 // Owns only direct-reply identity, bounded admission, atomic removal, and
@@ -7,7 +9,7 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
     where TKey : notnull
     where TValue : class
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<TKey, TValue> _pending = [];
     private readonly Dictionary<TKey, DateTimeOffset> _terminals = [];
     private readonly Queue<TKey> _terminalOrder = [];
@@ -29,7 +31,7 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
     internal bool TryRegister(TKey key, TValue value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             RemoveExpiredTerminalsUnderLock(DateTimeOffset.UtcNow);
             if (_terminals.ContainsKey(key)
@@ -38,13 +40,13 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
                 return false;
             _pending.Add(key, value);
             return true;
-        }
+        }));
     }
 
-    internal bool TryGet(TKey key, out TValue value)
+    internal TValue? TryGet(TKey key)
     {
-        lock (_gate)
-            return _pending.TryGetValue(key, out value!);
+        return AwaitStateLane(_lane.RunAsync(() =>
+            _pending.TryGetValue(key, out var value) ? value : null));
     }
 
     internal bool TryRemove(
@@ -52,7 +54,7 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
         TValue expected,
         bool rememberTerminal)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!_pending.TryGetValue(key, out var current)
                 || !ReferenceEquals(current, expected))
@@ -61,7 +63,7 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
             if (rememberTerminal)
                 RememberTerminalUnderLock(key, DateTimeOffset.UtcNow);
             return true;
-        }
+        }));
     }
 
     private void RememberTerminalUnderLock(TKey key, DateTimeOffset now)
@@ -86,4 +88,7 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
             _terminals.Remove(oldest);
         }
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }

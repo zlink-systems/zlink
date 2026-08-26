@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
@@ -170,20 +172,20 @@ internal sealed class ZLinkObservedLocationGenerations
     private sealed class Observed<TKey>
         where TKey : notnull
     {
-        private readonly object _gate = new();
+        private readonly ZLinkStateLane _lane = new();
         private readonly Dictionary<TKey, ObservedVersion> _versions = [];
 
         internal void Forget(TKey key)
         {
-            lock (_gate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
                 _versions.Remove(key);
-            }
+            }));
         }
 
         internal void ForgetWhere(Func<TKey, bool> predicate)
         {
-            lock (_gate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
                 List<TKey>? stale = null;
                 foreach (var key in _versions.Keys)
@@ -192,12 +194,18 @@ internal sealed class ZLinkObservedLocationGenerations
                 if (stale is null) return;
                 foreach (var key in stale)
                     _versions.Remove(key);
-            }
+            }));
         }
+
+        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+            operation.GetAwaiter().GetResult();
+
+        private static void AwaitStateLane(ValueTask operation) =>
+            operation.GetAwaiter().GetResult();
 
         internal bool Accept(TKey key, ObservedVersion version)
         {
-            lock (_gate)
+            return AwaitStateLane(_lane.RunAsync(() =>
             {
                 if (_versions.TryGetValue(key, out var observed)
                     && version.CompareTo(observed) < 0)
@@ -207,17 +215,17 @@ internal sealed class ZLinkObservedLocationGenerations
 
                 _versions[key] = version;
                 return true;
-            }
+            }));
         }
 
         internal void Observe(TKey key, ObservedVersion version)
         {
-            lock (_gate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
                 if (!_versions.TryGetValue(key, out var observed)
                     || version.CompareTo(observed) > 0)
                     _versions[key] = version;
-            }
+            }));
         }
     }
 }
