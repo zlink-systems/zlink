@@ -83,7 +83,7 @@
 | 2 | ZLinkActorHandoffAdmissions | 25 | **완료** | `326133ca03` | SuppressFlow 1, 호환 경계 4 |
 | 3 | ZLinkActorOwnershipCoordinator | 26 | **완료(CP2 게이트 대기)** | `e1f5ade349` | 재진입 8 해소(순차 await+lane 내부화), _disposeStartGate=C3, 호환 경계 3 |
 | 4 | ZLinkSpotNodeCatalog | 48 | **완료(CP2 게이트 대기)** | `0fef22fa62` | SuppressFlow 5, 호환 경계 9(범위 밖 호출자 2 포함) |
-| 5·6 | ZLinkClientServerClientRuntime + Connection | 20+44 | **요청됨** | | codex `p5-clientserver` 실행 중. 장기 작업 5, lane 2개 |
+| 5·6 | ZLinkClientServerClientRuntime + Connection | 20+44 | **완료(CP2 게이트 대기)** | `39d71acd6c` | lane 2개(소유 분리), SuppressFlow 7, 재진입 0, 호환 경계 4, _socketLifecycleGate 유지 |
 | 7 | ZLinkActorHandoffState | 58 | 대기 | | 2× 난이도 |
 | 8 | ZLinkActorRuntimeState | 35 | 대기 | | semaphore + 재진입 ~20 |
 | 9 | ZLinkManagedMeshNode | 130 | 대기 | | 4×+, 정독 리뷰 필수 |
@@ -166,10 +166,10 @@
 | 언어 | 트리 | L0 primitive | L1 표본 | L2 확산 | 마지막 게이트 |
 |---|---|---|---|---|---|
 | **dotnet** | dotnet | **완료** (`ZLinkStateLane` + golden 14) | **완료** (`3cc6f5f615`) | **진행 중** — §2 | unit 실패 0 · 6샘플 OK |
-| cpp | cpp | 대기 | 대기 (L0 후) | 대기 | — |
-| java | JVM | 대기 | 대기 (L0 후) | 대기 | — |
-| kotlin | JVM | 대기 | 대기 (L0 후) | 대기 | — |
-| node | node | 대기 | 대기 (L0 후) | 대기 | — |
+| cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | 대기 | 대기 | framework-unit 40/40 |
+| java | JVM | **요청됨** (2026-08-26 codex terra) | 대기 (L0 후) | 대기 | — |
+| kotlin | JVM | **요청됨** (2026-08-26 codex terra) | 대기 (L0 후) | 대기 | — |
+| node | node | **요청됨** (2026-08-26 codex terra) | 대기 (L0 후) | 대기 | — |
 
 **L0 4건은 서로도, dotnet과도 의존이 없다.** 지금 동시에 띄울 수 있다. 다만 java와 kotlin은
 같은 JVM 락을 쓰므로 빌드·테스트 구간에서만 순차가 된다.
@@ -351,3 +351,12 @@ grep -rhoE 'AwaitStateLane' --include=*.cs . | wc -l                   # 호환 
 - (2번) `_operationGate` 안에서 lane 블로킹 대기 시 데드락 판정 기준: lane 큐 항목이
   그 gate를 재획득하지 않고, 완료 신호 TCS가 전부 `RunContinuationsAsynchronously`면
   안전. 호환 경계 리뷰 체크리스트로 사용.
+- **(4번, 스펙 06 §6 유형② 보완 필요)** `SuppressFlow`는 **스레드 전환 이후에만** 유효하다.
+  lane turn 안에서 시작한 async 메서드의 **동기 프리픽스**는 여전히 lane 위에서 실행되므로,
+  프리픽스가 `_lane.RunAsync`에 도달하면 SuppressFlow가 있어도 재진입 예외가 터진다
+  (`ZLinkSpotNodeCatalog.DisposeCoreAsync`에서 실측 — unit 128개 연쇄 실패). 처방:
+  `Task.Run`으로 시작 자체를 lane 밖 스레드로 밀어낸다. 프리픽스가 await로 먼저 양보하는
+  경우(Task.Delay로 시작하는 timeout 등)만 SuppressFlow 단독으로 충분하다. **CP1 리뷰
+  체크리스트에 추가**: lane 안 장기 작업 시작점마다 "동기 프리픽스가 lane에 재진입하는가"를
+  확인한다. 이 결함은 CP2 중앙 게이트(병렬 이웃 잡의 전체 실행)가 잡아냈다 — 배치 게이트를
+  생략하지 말 것의 실증.

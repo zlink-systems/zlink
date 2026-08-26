@@ -214,6 +214,7 @@ add_library(zlink_framework STATIC
   framework/src/runtime/diagnostics/health.cpp
   framework/src/runtime/diagnostics/monitoring_runtime.cpp
   framework/src/runtime/execution/serial_execution_queue.cpp
+  framework/src/runtime/execution/state_lane.cpp
   framework/src/runtime/handlers/handler_registry.cpp
   framework/src/runtime/dispatch/projection.cpp
   framework/src/runtime/host/app.cpp
@@ -1454,6 +1455,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
     ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/serial-execution-v1.json"
     ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/runtime-observation-v1.json")
+  add_zlink_framework_test(
+    test_cpp_framework_state_lane
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp
+    "framework-unit;framework-regression;execution")
+  target_link_libraries(test_cpp_framework_state_lane PRIVATE
+    GTest::gtest_main)
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
