@@ -7,6 +7,7 @@
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/location_lifecycle.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
@@ -442,8 +443,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     {
         auto lifetime_guard = shared_from_this ();
         {
-            std::lock_guard<std::mutex> callback_lock (callback_mutex);
-            callback_admission_closed = true;
+            callback_lane.run ([this] { callback_admission_closed = true; }).get ();
         }
         auto instance = std::move (spot_instance);
         std::exception_ptr callback_error;
@@ -489,7 +489,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             }
         }
         {
-            std::lock_guard<std::mutex> callback_lock (callback_mutex);
+            const auto deferred = callback_lane.run ([this, &completion] {
             if (callback_depth != 0) {
                 callback_admission_closed = true;
                 close_requested = true;
@@ -501,6 +501,10 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             callback_admission_closed = true;
             close_requested = false;
             closed = true;
+            return false;
+            }).get ();
+            if (deferred)
+                return true;
         }
         try {
             close_application_then_release_location (owner, spot_close_reason_t::explicit_close);
@@ -519,8 +523,9 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     bool is_current_callback_thread () const;
     bool admission_blocked () const noexcept
     {
-        std::lock_guard<std::mutex> lock (callback_mutex);
-        return callback_admission_closed || idle_eviction_in_progress;
+        return callback_lane.run ([this] {
+            return callback_admission_closed || idle_eviction_in_progress;
+        }).get ();
     }
 
     bool idle_quiescent () const;
@@ -595,15 +600,14 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     bool closed = false;
     std::size_t actor_count = 0;
     std::atomic<std::int64_t> last_application_work_completed_ns{0};
-    mutable std::mutex callback_mutex;
-    std::thread::id callback_thread;
+    runtime::offload_executor_t callback_lane_executor;
+    mutable runtime::state_lane_t callback_lane{callback_lane_executor};
     std::size_t callback_depth = 0;
     service::instance_spot_close_completion_t pending_instance_spot_close_completion;
 
     bool has_active_callback () const
     {
-        std::lock_guard<std::mutex> lock (callback_mutex);
-        return callback_depth > 0;
+        return callback_lane.run ([this] { return callback_depth > 0; }).get ();
     }
 
     bool is_entry_spot () const noexcept { return lifecycle_domain.is_entry (); }
@@ -640,13 +644,17 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             return false;
         }
         {
-            std::lock_guard<std::mutex> callback_lock (callback_mutex);
+            const auto may_close = callback_lane.run ([this] {
             if (!idle_eviction_in_progress || callback_depth != 0 || close_requested
                 || callback_admission_closed) {
                 return false;
             }
             callback_admission_closed = true;
             closed = true;
+            return true;
+            }).get ();
+            if (!may_close)
+                return false;
         }
         close_application_then_release_location (owner, spot_close_reason_t::idle_evicted);
         return true;

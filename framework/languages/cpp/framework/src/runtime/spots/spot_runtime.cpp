@@ -855,6 +855,27 @@ void configure_spot_execution (const std::shared_ptr<detail::spot_context_state_
 namespace detail
 {
 
+namespace
+{
+
+thread_local const spot_context_state_t *current_callback_context = nullptr;
+
+class callback_context_scope_t final
+{
+  public:
+    explicit callback_context_scope_t (const spot_context_state_t *owner) noexcept :
+        _previous (std::exchange (current_callback_context, owner))
+    {
+    }
+
+    ~callback_context_scope_t () { current_callback_context = _previous; }
+
+  private:
+    const spot_context_state_t *_previous;
+};
+
+} // namespace
+
 spot_node_builder_state_t::~spot_node_builder_state_t () = default;
 
 void drain_spot_node_executors (spot_node_builder_state_t &node)
@@ -1764,34 +1785,31 @@ bool spot_context_state_t::idle_quiescent () const
 
 bool spot_context_state_t::enter_callback ()
 {
-    std::lock_guard<std::mutex> lock (callback_mutex);
-    if (callback_admission_closed || idle_eviction_in_progress) {
-        return false;
-    }
-    if (callback_depth == 0) {
-        callback_thread = std::this_thread::get_id ();
-    }
-    ++callback_depth;
-    return true;
+    return callback_lane.run ([this] {
+        if (callback_admission_closed || idle_eviction_in_progress)
+            return false;
+        ++callback_depth;
+        return true;
+    }).get ();
 }
 
 void spot_context_state_t::leave_callback () noexcept
 {
     bool should_close = false;
     service::instance_spot_close_completion_t completion;
-    {
-        std::lock_guard<std::mutex> lock (callback_mutex);
+    std::tie (should_close, completion) = callback_lane.run ([this] {
+        bool close = false;
+        service::instance_spot_close_completion_t pending;
         if (callback_depth > 0) {
             --callback_depth;
         }
         if (callback_depth == 0) {
-            callback_thread = std::thread::id ();
-            should_close = close_requested;
-            if (should_close) {
-                completion = std::move (pending_instance_spot_close_completion);
-            }
+            close = close_requested;
+            if (close)
+                pending = std::move (pending_instance_spot_close_completion);
         }
-    }
+        return std::make_pair (close, std::move (pending));
+    }).get ();
     if (should_close) {
         bool local_closed = false;
         try {
@@ -1799,12 +1817,11 @@ void spot_context_state_t::leave_callback () noexcept
             if (owner) {
                 std::lock_guard<std::recursive_mutex> node_lock (owner->mutex);
                 if (!closed && actor_count == 0) {
-                    {
-                        std::lock_guard<std::mutex> callback_lock (callback_mutex);
+                    callback_lane.run ([this] {
                         close_requested = false;
                         callback_admission_closed = true;
                         closed = true;
-                    }
+                    }).get ();
                     try {
                         close_application_then_release_location (
                           owner, spot_close_reason_t::explicit_close);
@@ -1829,8 +1846,7 @@ void spot_context_state_t::leave_callback () noexcept
 
 bool spot_context_state_t::is_current_callback_thread () const
 {
-    std::lock_guard<std::mutex> lock (callback_mutex);
-    return callback_depth > 0 && callback_thread == std::this_thread::get_id ();
+    return current_callback_context == this;
 }
 
 bool spot_context_state_t::try_post_serial (std::string name,
@@ -1838,27 +1854,31 @@ bool spot_context_state_t::try_post_serial (std::string name,
                                             runtime::serial_work_options_t options)
 {
     // Close and idle-eviction sealing cannot cross the queue admission point.
-    std::unique_lock admission_lock (callback_mutex);
-    if (callback_admission_closed || idle_eviction_in_progress) {
-        return false;
-    }
-    if (!serial_queue) {
-        admission_lock.unlock ();
+    auto queue = callback_lane.run ([this] {
+        if (callback_admission_closed || idle_eviction_in_progress)
+            return std::shared_ptr<runtime::serial_execution_queue_t>{};
+        return serial_queue;
+    }).get ();
+    if (!queue) {
+        if (admission_blocked ())
+            return false;
         work ();
         return true;
     }
-    return serial_queue->try_post (std::move (name), std::move (work), std::move (options));
+    return queue->try_post (std::move (name), std::move (work), std::move (options));
 }
 
 bool spot_context_state_t::try_post_serial_after_current_turn (
   std::string name, std::function<void ()> work, runtime::serial_work_options_t options)
 {
-    std::unique_lock admission_lock (callback_mutex);
-    if (callback_admission_closed || idle_eviction_in_progress) {
-        return false;
-    }
-    if (!serial_queue) {
-        admission_lock.unlock ();
+    auto queue = callback_lane.run ([this] {
+        if (callback_admission_closed || idle_eviction_in_progress)
+            return std::shared_ptr<runtime::serial_execution_queue_t>{};
+        return serial_queue;
+    }).get ();
+    if (!queue) {
+        if (admission_blocked ())
+            return false;
         work ();
         return true;
     }
@@ -1869,9 +1889,9 @@ bool spot_context_state_t::try_post_serial_after_current_turn (
      * the normal next-turn continuation. */
     const auto current_turn = detail::capture_current_serial_turn ();
     if (owns_current_serial_turn () && current_turn && !current_turn->is_after_active_phase ()) {
-        return serial_queue->try_post_deferred (std::move (name), std::move (work));
+        return queue->try_post_deferred (std::move (name), std::move (work));
     }
-    return serial_queue->try_post (std::move (name), std::move (work), std::move (options));
+    return queue->try_post (std::move (name), std::move (work), std::move (options));
 }
 
 bool spot_context_state_t::try_post_serial_async (
@@ -1879,12 +1899,14 @@ bool spot_context_state_t::try_post_serial_async (
   runtime::serial_execution_queue_t::async_work_t work,
   runtime::serial_work_options_t options)
 {
-    std::unique_lock admission_lock (callback_mutex);
-    if (callback_admission_closed || idle_eviction_in_progress) {
-        return false;
-    }
-    if (!serial_queue) {
-        admission_lock.unlock ();
+    auto queue = callback_lane.run ([this] {
+        if (callback_admission_closed || idle_eviction_in_progress)
+            return std::shared_ptr<runtime::serial_execution_queue_t>{};
+        return serial_queue;
+    }).get ();
+    if (!queue) {
+        if (admission_blocked ())
+            return false;
         work ([] (std::function<void ()> completion) {
             if (completion) {
                 completion ();
@@ -1892,7 +1914,7 @@ bool spot_context_state_t::try_post_serial_async (
         });
         return true;
     }
-    return serial_queue->try_post_async (std::move (name), std::move (work), std::move (options));
+    return queue->try_post_async (std::move (name), std::move (work), std::move (options));
 }
 
 void spot_context_state_t::run_serial_task_async (
@@ -1911,21 +1933,22 @@ void spot_context_state_t::run_serial_task_async (
         return;
     }
 
-    std::unique_lock admission_lock (callback_mutex);
-    if (callback_admission_closed || idle_eviction_in_progress) {
-        admission_lock.unlock ();
+    const auto queue = callback_lane.run ([this] {
+        if (callback_admission_closed || idle_eviction_in_progress)
+            return std::shared_ptr<runtime::serial_execution_queue_t>{};
+        return serial_queue;
+    }).get ();
+    if (!queue && admission_blocked ()) {
         completion (result_t<void>::failure (framework_error_kind_t::unavailable,
                                              "spot is closing for idle eviction"));
         return;
     }
-    const bool run_inline =
-      !serial_queue || (callback_depth > 0 && callback_thread == std::this_thread::get_id ())
-      || owns_current_serial_turn ();
+    const bool run_inline = !queue || is_current_callback_thread () || owns_current_serial_turn ();
     if (run_inline) {
-        admission_lock.unlock ();
         try {
             if (activation_callback)
                 activation_callback ();
+            callback_context_scope_t callback_scope (this);
             auto observed = std::make_shared<task_t<void>> (work ());
             detail::observe_task_completion (*observed, [observed,
                                                          completion = std::move (completion)] (
@@ -1997,7 +2020,7 @@ void spot_context_state_t::run_serial_task_async (
         }
     };
     const std::weak_ptr<spot_context_state_t> weak_owner = weak_from_this ();
-    const auto submitted = serial_queue->try_post_cancellable_async (
+    const auto submitted = queue->try_post_cancellable_async (
       std::move (name),
       [weak_owner, work = std::move (work), state, settle,
        activation_callback = std::move (activation_callback)] (auto complete) mutable {
@@ -2032,6 +2055,7 @@ void spot_context_state_t::run_serial_task_async (
           }
           auto turn = detail::capture_current_serial_turn ();
           try {
+              callback_context_scope_t callback_scope (owner.get ());
               auto observed = std::make_shared<task_t<void>> (work ());
               detail::observe_task_completion (
                 *observed,
@@ -2079,8 +2103,7 @@ void spot_context_state_t::run_serial_task_async (
       runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle,
                                      runtime::serial_execution_queue_t::fixed_work_byte_cost});
     if (submitted && submission_callback)
-        submission_callback (serial_queue, submitted.value ());
-    admission_lock.unlock ();
+        submission_callback (queue, submitted.value ());
     if (!submitted) {
         settle (result_t<void>::failure (submitted.error_kind (), submitted.error () != nullptr
                                                                     ? submitted.error ()->what ()
@@ -2108,6 +2131,7 @@ bool spot_context_state_t::run_serial_sync (std::string name, std::function<void
         return false;
     }
     if (is_current_callback_thread () || owns_current_serial_turn ()) {
+        callback_context_scope_t callback_scope (this);
         work ();
         return true;
     }
@@ -2122,6 +2146,7 @@ bool spot_context_state_t::run_serial_sync (std::string name, std::function<void
               return;
           }
           try {
+              callback_context_scope_t callback_scope (this);
               work ();
           }
           catch (...) {
@@ -2157,15 +2182,14 @@ void spot_context_state_t::defer_relocation_ready ()
                                      "application-signaled SpotWide User Spot turn");
     }
     bool complete_without_relocation = false;
-    {
-        std::lock_guard lock (callback_mutex);
+    complete_without_relocation = callback_lane.run ([this] {
         if (relocation_ready_deferred) {
             throw framework_exception_t (framework_error_kind_t::not_configured,
                                          "relocation readiness is already deferred");
         }
         relocation_ready_deferred = true;
-        complete_without_relocation = !relocation_boundary_active;
-    }
+        return !relocation_boundary_active;
+    }).get ();
     if (complete_without_relocation
         && !try_post_serial (
           "relocation-ready-continued",
@@ -2173,8 +2197,7 @@ void spot_context_state_t::defer_relocation_ready ()
           runtime::serial_work_options_t{
             runtime::serial_work_lane_t::lifecycle,
             runtime::serial_execution_queue_t::fixed_work_byte_cost})) {
-        std::lock_guard lock (callback_mutex);
-        relocation_ready_deferred = false;
+        callback_lane.run ([this] { relocation_ready_deferred = false; }).get ();
         throw framework_exception_t (framework_error_kind_t::capacity_exceeded,
                                      "relocation readiness completion queue is full");
     }
@@ -2185,8 +2208,10 @@ void spot_context_state_t::ensure_relocation_turn_open () const
     const auto current_turn = detail::capture_current_serial_turn ();
     if (!owns_current_serial_turn () || !current_turn || current_turn->is_after_active_phase ())
         return;
-    std::lock_guard lock (callback_mutex);
-    if (relocation_ready_deferred) {
+    const auto deferred = callback_lane.run ([this] {
+        return relocation_ready_deferred;
+    }).get ();
+    if (deferred) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "Framework operations are not allowed after relocation "
                                      "readiness is deferred in the current Spot turn");
@@ -2195,24 +2220,24 @@ void spot_context_state_t::ensure_relocation_turn_open () const
 
 void spot_context_state_t::complete_relocation_ready (spot_relocation_ready_outcome_t outcome)
 {
-    bool pending = false;
-    {
-        std::lock_guard lock (callback_mutex);
-        pending = relocation_ready_deferred;
-    }
+    const auto pending = callback_lane.run ([this] {
+        return relocation_ready_deferred;
+    }).get ();
     if (!pending)
         return;
     (void) run_serial_sync ("relocation-ready-completed", [this, outcome] {
         std::shared_ptr<void> instance;
         std::function<void (void *, const spot_relocation_ready_completion_t &)> callback;
-        {
-            std::lock_guard lock (callback_mutex);
+        std::tie (instance, callback) = callback_lane.run ([this] {
+            std::shared_ptr<void> current_instance;
+            std::function<void (void *, const spot_relocation_ready_completion_t &)> current_callback;
             if (!relocation_ready_deferred)
-                return;
+                return std::make_pair (std::move (current_instance), std::move (current_callback));
             relocation_ready_deferred = false;
-            instance = spot_instance;
-            callback = lifecycle.on_relocation_ready_completed;
-        }
+            current_instance = spot_instance;
+            current_callback = lifecycle.on_relocation_ready_completed;
+            return std::make_pair (std::move (current_instance), std::move (current_callback));
+        }).get ();
         if (instance && callback) {
             callback (instance.get (), spot_relocation_ready_completion_t{outcome});
         }
@@ -3413,6 +3438,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       detail::boundary_error_t::closed, "spot activation is closed"));
                 }
                 try {
+                    detail::callback_context_scope_t callback_scope (state.get ());
                     auto carrier =
                       std::make_shared<std::pair<zlink::message_t, spot_inbound_message_t>> (
                         std::move (message), std::move (metadata));
@@ -3597,6 +3623,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   }
                   auto turn = detail::capture_current_serial_turn ();
                   try {
+                      detail::callback_context_scope_t callback_scope (state.get ());
                       if (before_application_handler) {
                           before_application_handler ();
                       }
@@ -5583,9 +5610,10 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
             && materialized.context._state->execution_mode == user_spot_execution_mode_t::spot_wide
             && materialized.context._state->relocation_coordination_mode
                  == spot_relocation_coordination_mode_t::application_signaled) {
-            std::lock_guard callback_lock (materialized.context._state->callback_mutex);
-            materialized.context._state->relocation_boundary_active = true;
-            materialized.context._state->relocation_ready_deferred = true;
+            materialized.context._state->callback_lane.run ([state = materialized.context._state] {
+                state->relocation_boundary_active = true;
+                state->relocation_ready_deferred = true;
+            }).get ();
         }
         const auto current = _state->pending_spot_creations_by_id.find (target.key);
         if (current != _state->pending_spot_creations_by_id.end ()
@@ -6269,10 +6297,9 @@ bool spot_node_runtime_t::commit_relocation_materialization (
         }
     }
     for (const auto &state : ready) {
-        {
-            std::lock_guard callback_lock (state->callback_mutex);
+        state->callback_lane.run ([state] {
             state->relocation_boundary_active = false;
-        }
+        }).get ();
         state->complete_relocation_ready (spot_relocation_ready_outcome_t::relocated);
     }
     for (auto &completion : actor_join_completions) {
@@ -10215,16 +10242,20 @@ void spot_node_runtime_t::evict_idle_spots () noexcept
                 if (last_ns <= 0 || now_ns < last_ns || now_ns - last_ns < timeout_ns)
                     continue;
                 {
-                    std::lock_guard callback_lock (state->callback_mutex);
+                    const auto sealed = state->callback_lane.run ([state] {
                     if (state->callback_admission_closed || state->callback_depth != 0
                         || state->close_requested || state->idle_eviction_in_progress)
-                        continue;
+                        return false;
                     /* Seal admission only after the candidate checks above.
                     * try_close_idle repeats the quiescence and idle-age
                      * checks after the Location Store transaction. */
                     state->idle_eviction_in_progress = true;
+                    return true;
+                    }).get ();
+                    if (!sealed)
+                        continue;
+                    candidates.push_back (std::move (state));
                 }
-                candidates.push_back (std::move (state));
             }
         }
 
@@ -10241,8 +10272,9 @@ void spot_node_runtime_t::evict_idle_spots () noexcept
             if (!evicted) {
                 std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
                 if (!state->closed) {
-                    std::lock_guard callback_lock (state->callback_mutex);
-                    state->idle_eviction_in_progress = false;
+                    state->callback_lane.run ([state] {
+                        state->idle_eviction_in_progress = false;
+                    }).get ();
                 }
             }
         }
@@ -10537,8 +10569,9 @@ std::vector<spot_id_t> spot_node_runtime_t::deferred_relocation_ready_spots () c
         const auto state = context._state;
         if (!state || state->is_entry_spot () || state->is_instance_spot ())
             continue;
-        std::lock_guard callback_lock (state->callback_mutex);
-        if (state->relocation_ready_deferred)
+        if (state->callback_lane.run ([state] {
+              return state->relocation_ready_deferred;
+            }).get ())
             result.push_back (state->spot_id);
     }
     return result;
@@ -10558,10 +10591,9 @@ spot_node_runtime_t::application_relocation_units () const
                  != spot_relocation_coordination_mode_t::application_signaled)
             continue;
         application_relocation_unit_t unit{state->spot_id, state->spot_name, false, {}};
-        {
-            std::lock_guard callback_lock (state->callback_mutex);
-            unit.ready = state->relocation_ready_deferred;
-        }
+        unit.ready = state->callback_lane.run ([state] {
+            return state->relocation_ready_deferred;
+        }).get ();
         for (const auto &[key, actor_spot_id] : _state->actor_spot_ids) {
             if (actor_spot_id != state->spot_id)
                 continue;
@@ -10591,8 +10623,9 @@ void spot_node_runtime_t::begin_relocation_readiness ()
             || state->relocation_coordination_mode
                  != spot_relocation_coordination_mode_t::application_signaled)
             continue;
-        std::lock_guard callback_lock (state->callback_mutex);
-        state->relocation_boundary_active = true;
+        state->callback_lane.run ([state] {
+            state->relocation_boundary_active = true;
+        }).get ();
     }
 }
 
@@ -10605,12 +10638,14 @@ void spot_node_runtime_t::end_relocation_readiness (const std::vector<spot_id_t>
             const auto state = context._state;
             if (!state)
                 continue;
-            {
-                std::lock_guard callback_lock (state->callback_mutex);
+            const auto was_active = state->callback_lane.run ([state] {
                 if (!state->relocation_boundary_active)
-                    continue;
+                    return false;
                 state->relocation_boundary_active = false;
-            }
+                return true;
+            }).get ();
+            if (!was_active)
+                continue;
             states.push_back (state);
         }
     }

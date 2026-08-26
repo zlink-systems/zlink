@@ -605,10 +605,9 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
       "readiness without a prepared relocation must complete "
       "continued exactly once on the next Spot serial turn");
 
-    {
-        std::lock_guard lock (state->callback_mutex);
+    state->callback_lane.run ([state] {
         state->relocation_boundary_active = true;
-    }
+    }).get ();
     const auto prepared_deferred = state->run_serial_sync (
       "defer-prepared-relocation", [&] { context.relocation_ready ().defer (); });
     state->complete_relocation_ready (spot_relocation_ready_outcome_t::relocated);

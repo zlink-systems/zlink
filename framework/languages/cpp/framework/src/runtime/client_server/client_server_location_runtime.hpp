@@ -5,6 +5,7 @@
 #include "runtime/diagnostics/runtime_observation.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/eventing/runtime_wake_timer.hpp"
@@ -153,7 +154,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::unique_ptr<application_supply_slot_t> _application_supply;
     std::map<std::string, std::string> _advertise_hosts;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
-    mutable std::mutex _gate;
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
     std::map<std::string, std::unique_ptr<server_entry_t>> _servers;
     std::map<std::string, std::unique_ptr<client_channel_t>> _clients;
     std::map<std::string, std::uint64_t> _snapshot_sequences;
