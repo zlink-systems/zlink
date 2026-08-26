@@ -30,7 +30,18 @@
 | 설계·primitive | 스펙 06, `ZLinkStateLane`, golden 14 | **완료** |
 | **.NET 전환** | 61클래스 | **진행 중** — 완료 3 · 진행 4 · 대기 ~54 (§2) |
 | .NET 마무리 | 호환 경계 회수, posddd ②, 마일스톤 게이트 | 대기 (§3) |
-| 언어 확산 | cpp · JVM · node — L0 → L1 → L2 | L0 착수 가능 (§4) |
+| 언어 확산 | cpp · JVM · node — L0 → L1 → L2 | L0 **지금 착수 가능** (§4) |
+
+### 언어별 (상세 §4)
+
+| | dotnet | cpp | java | kotlin | node |
+|---|---|---|---|---|---|
+| L0 primitive | **완료** | 대기 | 대기 | 대기 | 대기 |
+| L1 표본 | **완료** | 대기 | 대기 | 대기 | 대기 |
+| L2 확산 | **진행 중** | 대기 | 대기 | 대기 | 대기 |
+
+빌드 트리는 4개(dotnet·cpp·node·JVM)이고 **java와 kotlin은 JVM 트리를 공유**하므로
+동시 실행 상한은 4다. L0는 언어 간·dotnet과 무의존이라 **4트리 동시 착수 가능**하다.
 
 ## 0.1 일을 어떻게 자르는가
 
@@ -147,6 +158,54 @@
 
 .NET에서 확정된 클래스 목록·순서·규칙을 각 언어의 대응부에 적용한다. 언어별로
 `conversion-order-survey`에 해당하는 파급 실측을 먼저 하고 순서를 정한다.
+
+### 언어별 진행표
+
+`대기` → `요청됨` → `보고됨` → `완료` / `반려` (§2와 같은 상태 값)
+
+| 언어 | 트리 | L0 primitive | L1 표본 | L2 확산 | 마지막 게이트 |
+|---|---|---|---|---|---|
+| **dotnet** | dotnet | **완료** (`ZLinkStateLane` + golden 14) | **완료** (`3cc6f5f615`) | **진행 중** — §2 | unit 실패 0 · 6샘플 OK |
+| cpp | cpp | 대기 | 대기 (L0 후) | 대기 | — |
+| java | JVM | 대기 | 대기 (L0 후) | 대기 | — |
+| kotlin | JVM | 대기 | 대기 (L0 후) | 대기 | — |
+| node | node | 대기 | 대기 (L0 후) | 대기 | — |
+
+**L0 4건은 서로도, dotnet과도 의존이 없다.** 지금 동시에 띄울 수 있다. 다만 java와 kotlin은
+같은 JVM 락을 쓰므로 빌드·테스트 구간에서만 순차가 된다.
+
+### 게이트 매트릭스
+
+**게이트는 언제나 Claude가 중앙에서 돌린다**(§5.1 CP2). 에이전트에게 맡기지 않는다 — 이
+캠페인에서 에이전트 보고가 여러 번 사실과 달랐다.
+
+| 언어 | 단위·계약 | 7샘플 일괄 | 비고 |
+|---|---|---|---|
+| dotnet | `dotnet test tests/Zlink.Framework.UnitTests` | `framework/languages/dotnet/samples/run_samples.sh` | 기준 1879+ / 실패 0 |
+| cpp | `ctest` (`tests/Zlink.Framework.ContractTests`) | `framework/languages/cpp/samples/run_samples.sh` | 알려진 flake: Bingo 후반 ~1/5, TTT teardown ~1/15 |
+| java | `./gradlew :zlink-framework-core:test` | `framework/languages/java/samples/run_samples.sh` | 러너가 java→kotlin **순차** 실행 |
+| kotlin | `./gradlew :zlink-framework-kotlin:test` | (위와 같은 러너) | `ZLINK_SAMPLE_LANGUAGES`로 분리 가능 |
+| node | `npx tsc -b tsconfig.build.json --force` 후 `node --test test/contract/*.test.js` | `framework/languages/node/samples/run_samples.sh` | **`--force` 필수** — dist가 src보다 최신이면 옛 dist로 돈다 |
+
+**cross-language e2e**: `framework/languages/cpp/cross-language/run_cross_language_smoke.sh`
+(`ZLINK_CPP_BUILD_DIR=../build`). 트리를 가로지르므로 **모든 언어 락을 잡고 단독으로** 돌린다.
+CP3 마일스톤 전용이다.
+
+#### 어느 체크포인트에서 무엇을 도는가
+
+| | CP1 (요청 1건) | CP2 (배치 2~4) | CP3 (마일스톤) |
+|---|---|---|---|
+| 대상 클래스 집중 테스트 | 에이전트 | — | — |
+| 해당 언어 단위·계약 | — | **Claude** | Claude |
+| 해당 언어 7샘플 | — | **Claude** | Claude |
+| cross-language e2e | — | — | **Claude** |
+| async 경계 스냅샷 재측정 | — | — | **Claude** |
+
+**ZoneWorld는 게이트에서 제외한다.** cpp·dotnet에 이 작업 이전부터 있던 결함 2건이 있고
+(§8), CP3에서 "이 작업의 하위 증상인지" 판정한다. 그 전까지 ZoneWorld 실패를 회귀로 읽지
+않는다.
+
+**간헐 실패는 알려진 flake 목록과 대조하기 전에 회귀로도 flake로도 단정하지 않는다**(§5.1 STOP).
 
 ### 병렬 편성 규칙
 
