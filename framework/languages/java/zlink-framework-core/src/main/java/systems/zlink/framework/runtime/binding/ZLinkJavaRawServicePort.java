@@ -10,6 +10,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CompletionException;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -22,6 +24,7 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
  * Private binding-facing port for the JVM service runtime.
@@ -37,6 +40,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     private final Map<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
         new IdentityHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
 
     ZLinkJavaRawServicePort() {
         this(Zlink.createContext(), true);
@@ -53,7 +57,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         this.ownsContext = ownsContext;
     }
 
-    synchronized RouterSocket openRouter(RoutingId routingId) {
+    RouterSocket openRouter(RoutingId routingId) {
+        return inStateLane(() -> openRouterOnLane(routingId));
+    }
+
+    private RouterSocket openRouterOnLane(RoutingId routingId) {
         ensureOpen();
         RouterSocket router = context.createRouterSocket();
         boolean accepted = false;
@@ -71,25 +79,38 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         }
     }
 
-    synchronized void ensureReceivePollerRegistered(RouterSocket router) {
-        ensureOwned(router);
-        receivePollers.get(router).ensureRegistered();
+    void ensureReceivePollerRegistered(RouterSocket router) {
+        inStateLane(() -> {
+            ensureOwnedOnLane(router);
+            receivePollers.get(router).ensureRegistered();
+            return null;
+        });
     }
 
-    synchronized CompletionStage<Void> send(
+    CompletionStage<Void> send(
         RouterSocket router,
         RoutingId target,
         List<byte[]> frames) {
         return send(router, target, 0L, 0L, frames);
     }
 
-    synchronized CompletionStage<Void> send(
+    CompletionStage<Void> send(
         RouterSocket router,
         RoutingId target,
         long transportPairId,
         long transportPairGeneration,
         List<byte[]> frames) {
-        ensureOwned(router);
+        return inStateLane(() -> sendOnLane(
+            router, target, transportPairId, transportPairGeneration, frames));
+    }
+
+    private CompletionStage<Void> sendOnLane(
+        RouterSocket router,
+        RoutingId target,
+        long transportPairId,
+        long transportPairGeneration,
+        List<byte[]> frames) {
+        ensureOwnedOnLane(router);
         Objects.requireNonNull(target, "target");
         if (frames.isEmpty()) {
             throw new IllegalArgumentException("service multipart must not be empty");
@@ -134,7 +155,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             new ZLinkServiceWireFrame(command, flags, frames)));
     }
 
-    synchronized CompletionStage<List<byte[]>> request(
+    CompletionStage<List<byte[]>> request(
         RouterSocket router,
         RoutingId target,
         List<byte[]> frames,
@@ -142,14 +163,25 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         return request(router, target, 0L, 0L, frames, timeout);
     }
 
-    synchronized CompletionStage<List<byte[]>> request(
+    CompletionStage<List<byte[]>> request(
         RouterSocket router,
         RoutingId target,
         long transportPairId,
         long transportPairGeneration,
         List<byte[]> frames,
         Duration timeout) {
-        ensureOwned(router);
+        return inStateLane(() -> requestOnLane(
+            router, target, transportPairId, transportPairGeneration, frames, timeout));
+    }
+
+    private CompletionStage<List<byte[]>> requestOnLane(
+        RouterSocket router,
+        RoutingId target,
+        long transportPairId,
+        long transportPairGeneration,
+        List<byte[]> frames,
+        Duration timeout) {
+        ensureOwnedOnLane(router);
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(timeout, "timeout");
         if (frames.isEmpty()) {
@@ -188,12 +220,23 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         }
     }
 
-    synchronized void reply(
+    void reply(
         RouterSocket router,
         RoutingId target,
         long requestSequence,
         List<byte[]> frames) {
-        ensureOwned(router);
+        inStateLane(() -> {
+            replyOnLane(router, target, requestSequence, frames);
+            return null;
+        });
+    }
+
+    private void replyOnLane(
+        RouterSocket router,
+        RoutingId target,
+        long requestSequence,
+        List<byte[]> frames) {
+        ensureOwnedOnLane(router);
         if (requestSequence <= 0 || frames.isEmpty()) {
             throw new IllegalArgumentException(
                 "service reply requires request sequence and frames");
@@ -220,13 +263,19 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     SocketMonitor openMonitor(
         RouterSocket router,
         MonitorEventType... eventTypes) {
-        ensureOwned(router);
-        return router.monitorOpen(eventTypes);
+        return inStateLane(() -> {
+            ensureOwnedOnLane(router);
+            return router.monitorOpen(eventTypes);
+        });
     }
 
-    synchronized Optional<Inbound> receive(RouterSocket router) {
-        ensureOwned(router);
-        ZLinkJavaSocketReceivePoller receivePoller = receivePoller(router);
+    Optional<Inbound> receive(RouterSocket router) {
+        return inStateLane(() -> receiveOnLane(router));
+    }
+
+    private Optional<Inbound> receiveOnLane(RouterSocket router) {
+        ensureOwnedOnLane(router);
+        ZLinkJavaSocketReceivePoller receivePoller = receivePollerOnLane(router);
         if (receivePoller == null
             || !receivePoller.waitForReadable(Duration.ZERO)) {
             return Optional.empty();
@@ -257,7 +306,14 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
+        inStateLane(() -> {
+            closeOnLane();
+            return null;
+        });
+    }
+
+    private void closeOnLane() {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
@@ -276,17 +332,32 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         }
     }
 
-    private synchronized void ensureOwned(RouterSocket router) {
+    private void ensureOwnedOnLane(RouterSocket router) {
         ensureOpen();
         if (!routers.contains(Objects.requireNonNull(router, "router"))) {
             throw new IllegalArgumentException("router is not owned by this service port");
         }
     }
 
-    private synchronized ZLinkJavaSocketReceivePoller receivePoller(
+    private ZLinkJavaSocketReceivePoller receivePollerOnLane(
         RouterSocket router) {
-        ensureOwned(router);
+        ensureOwnedOnLane(router);
         return receivePollers.get(router);
+    }
+
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
 
     private void ensureOpen() {
