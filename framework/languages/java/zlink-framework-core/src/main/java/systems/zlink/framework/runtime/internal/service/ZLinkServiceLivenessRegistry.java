@@ -7,7 +7,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletionException;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
  * Tracks probe round trips on a monotonic clock. Application traffic never
@@ -27,6 +30,7 @@ public final class ZLinkServiceLivenessRegistry {
     private final long probeIntervalNanos;
     private final long notReadyProbeRetryNanos;
     private final long peerTimeoutNanos;
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<RoutingId, PeerState> peers = new HashMap<>();
     private long nextProbeId = 1;
 
@@ -50,7 +54,32 @@ public final class ZLinkServiceLivenessRegistry {
         peerTimeoutNanos = peerTimeout.toNanos();
     }
 
-    public synchronized void admit(
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
+    public void admit(
+        RoutingId nodeRoutingId,
+        String connectionId,
+        long nowNanos) {
+        inStateLane(() -> {
+            admitCore(nodeRoutingId, connectionId, nowNanos);
+            return null;
+        });
+    }
+
+    private void admitCore(
         RoutingId nodeRoutingId,
         String connectionId,
         long nowNanos) {
@@ -70,7 +99,15 @@ public final class ZLinkServiceLivenessRegistry {
     }
 
     /** Requests the first probe immediately after a new connection is admitted. */
-    public synchronized boolean requestProbe(
+    public boolean requestProbe(
+        RoutingId nodeRoutingId,
+        String connectionId,
+        long nowNanos) {
+        return inStateLane(() -> requestProbeCore(
+            nodeRoutingId, connectionId, nowNanos));
+    }
+
+    private boolean requestProbeCore(
         RoutingId nodeRoutingId,
         String connectionId,
         long nowNanos) {
@@ -86,7 +123,13 @@ public final class ZLinkServiceLivenessRegistry {
         return true;
     }
 
-    public synchronized boolean disconnect(
+    public boolean disconnect(
+        RoutingId nodeRoutingId,
+        String connectionId) {
+        return inStateLane(() -> disconnectCore(nodeRoutingId, connectionId));
+    }
+
+    private boolean disconnectCore(
         RoutingId nodeRoutingId,
         String connectionId) {
         PeerState current = peers.get(nodeRoutingId);
@@ -97,7 +140,15 @@ public final class ZLinkServiceLivenessRegistry {
         return true;
     }
 
-    public synchronized Optional<Probe> acknowledgeProbe(
+    public Optional<Probe> acknowledgeProbe(
+        RoutingId nodeRoutingId,
+        String connectionId,
+        long probeId) {
+        return inStateLane(() -> acknowledgeProbeCore(
+            nodeRoutingId, connectionId, probeId));
+    }
+
+    private Optional<Probe> acknowledgeProbeCore(
         RoutingId nodeRoutingId,
         String connectionId,
         long probeId) {
@@ -110,7 +161,16 @@ public final class ZLinkServiceLivenessRegistry {
         return Optional.of(new Probe(nodeRoutingId, connectionId, probeId));
     }
 
-    public synchronized boolean acknowledge(
+    public boolean acknowledge(
+        RoutingId nodeRoutingId,
+        String connectionId,
+        long probeId,
+        long nowNanos) {
+        return inStateLane(() -> acknowledgeCore(
+            nodeRoutingId, connectionId, probeId, nowNanos));
+    }
+
+    private boolean acknowledgeCore(
         RoutingId nodeRoutingId,
         String connectionId,
         long probeId,
@@ -129,7 +189,13 @@ public final class ZLinkServiceLivenessRegistry {
         return true;
     }
 
-    public synchronized boolean isReady(
+    public boolean isReady(
+        RoutingId nodeRoutingId,
+        String connectionId) {
+        return inStateLane(() -> isReadyCore(nodeRoutingId, connectionId));
+    }
+
+    private boolean isReadyCore(
         RoutingId nodeRoutingId,
         String connectionId) {
         PeerState state = peers.get(nodeRoutingId);
@@ -138,7 +204,11 @@ public final class ZLinkServiceLivenessRegistry {
             && state.ready;
     }
 
-    public synchronized Tick tick(long nowNanos) {
+    public Tick tick(long nowNanos) {
+        return inStateLane(() -> tickCore(nowNanos));
+    }
+
+    private Tick tickCore(long nowNanos) {
         List<Probe> probes = new ArrayList<>();
         List<RoutingId> timedOut = new ArrayList<>();
         for (Map.Entry<RoutingId, PeerState> entry : peers.entrySet()) {
@@ -163,7 +233,11 @@ public final class ZLinkServiceLivenessRegistry {
         return new Tick(List.copyOf(probes), List.copyOf(timedOut));
     }
 
-    public synchronized int size() {
+    public int size() {
+        return inStateLane(this::sizeCore);
+    }
+
+    private int sizeCore() {
         return peers.size();
     }
 
