@@ -19,7 +19,7 @@ jvm 열은 java·kotlin을 함께 적는다(빌드 트리 공유). 언어별 클
 | **L0** primitive + golden 14 | **완료** | **완료** (14/14) | java **완료**(+발견5 보완) · kotlin **완료**(14/14) | **완료** (12, 동시성 2 제외·사유 주석) |
 | **L1** 표본 전환 | **완료** `3cc6f5f615` | **완료** `f4d0df006b` (registry 31→0, 반려 1) | java **완료**(SessionActorsRuntime 22→0) · kotlin **해당없음**(자체 C2 상태 0) | **완료** `ca32669168` (registry, 13파일 전파) |
 | **L2** 순서 조사 | **완료** (conversion-order-survey) | **완료** (후보 19 — l2-survey-cpp) | **완료** (후보 23+9 — l2-survey-java) | **완료** (l2-survey-node) |
-| **L2** 클래스 전환 (§2 상세) | **진행 중** — 대형 9 · 소형 70/99 (+제외 6·재분류 2) | **진행 중** — 순서 1~10 완료 · 11·12 마일스톤 보류(참조 반환 구조) · 13 진행 중 | **진행 중** — 순서 1~12 완료 (12클래스, kotlin 승계) | **진행 중** — 순서 1~14 완료 (후보 소진 시 보고 예정) |
+| **L2** 클래스 전환 (§2 상세) | **완료** (대형 10 + 소형 22배치, 제외 6·보류·재분류는 §2) | **진행 중** — 순서 1~10 완료 · 11·12 마일스톤 보류(참조 반환 구조) · 13 진행 중 | **진행 중** — 순서 1~12 완료 (12클래스, kotlin 승계) | **진행 중** — 순서 1~14 완료 (후보 소진 시 보고 예정) |
 | **마무리** 호환 경계 회수 | 대기 (AwaitStateLane 121+) | 대기 (.get 사유 기록) | 대기 (inStateLane join) | **해당없음** (L1에서 완전 전파) |
 | **마무리** posddd ② 잔여 | 대기 (최우선: OperationLease 할당) | 대기 | 대기 | 대기 |
 | **마일스톤 게이트** (CP3 — unit·계약 + 샘플 **일괄 러너**(회귀 확인) + 스냅샷 재측정 + sol 리뷰) | 대기 (+§8 결함 판정·스펙 06 개정) | 대기 | 대기 | 대기 |
@@ -54,7 +54,7 @@ jvm 열은 java·kotlin을 함께 적는다(빌드 트리 공유). 언어별 클
 | CP2-2 | 배치 2 게이트 (#7·#8) | **통과** | unit 1893/0 · 6샘플 placement OK (ZoneWorld=기존 Z2 증상, 제외) | 2026-08-26. 지표 재측정 690/54/9/128 |
 | 9 | ZLinkManagedMeshNode (130) | **완료** | `b3497532a6` | 4잡 연속. lane 5개 분리+ManagedActor별 lane, _socketGate·_disposeGate 유지(발견7), 호환 경계 25. unit 1893/0·행 없음 |
 | CP2-3 | 배치 3 게이트 (#9·소형1) | **통과** | unit 1893/0 · 7샘플 전부 placement OK (ZoneWorld 포함 — Z2 간헐성 증거) | 2026-08-26 |
-| 10 | ZLinkFrameworkRuntime (27) + FrameworkComponentState + ChannelRuntimeManager SyncRoot | **요청됨** | | 최종 대형 (2026-08-27). 사용 45파일, 재진입 ~57, 정독 리뷰 필수 |
+| 10 | ZLinkFrameworkRuntime + FrameworkComponentState + ChannelRuntimeManager SyncRoot | **완료** | `ecbe9dfcb6` | 2잡+반려 1(부정확 보고 검출 — 발견9 fence·deadline 재확인). 호환 경계 58. unit 1899/0 |
 | — | 소형 배치 1 (4클래스 — C3·C1 기계 전환) | **완료** | `960be4c785` | 재진입 0, 호환 경계 0 |
 | — | 소형 배치 2~5 (15클래스 전환 + CompletionDispatcher 제외 재분류) | **완료** | 커밋 3건 | CP2-4 unit 1896/0·6샘플 OK. 반려 2(NRE 테스트·무할당 계약 위반→원복) |
 | — | 소형 배치 6~9 (17클래스) | **완료** | 합본 커밋 | CP2-5 unit 1896/0·6샘플 OK. 반려 1(dispose Task memoization) |
@@ -74,8 +74,8 @@ node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 
 | 지표 | 시작 | 현재 | 목표 |
 |---|---:|---:|---|
-| dotnet `lock` 문 | 999 | **150** (−85%) | ~60 (lane·큐 내부만) |
+| dotnet `lock` 문 | 999 | **118** (−88%) | ~60 (lane·큐 내부만) |
 | `_gate` 보유 클래스 | 61 | **6** | 0 |
-| state lane 사용 파일 | 0 | **75** | — |
+| state lane 사용 파일 | 0 | **77** | — |
 | **async 경계 스냅샷** *(진짜 지표)* | ~465 | 미측정 | **0** |
-| 호환 경계 `AwaitStateLane` *(부채)* | 0 | **597** | 0 (마무리에서 회수) |
+| 호환 경계 `AwaitStateLane` *(부채)* | 0 | **656** | 0 (마무리에서 회수) |
