@@ -2203,7 +2203,7 @@ int main ()
              "pending.completion->complete (result)")
              != std::string::npos
         && actor_gateway_runtime.find (
-             "[state, actor_id, pending = std::move (pending), dispatched,")
+             "[state, actor_id, pending = std::move (*pending), dispatched,")
              != std::string::npos
         && actor_gateway_runtime.find (
              "continue_gate] (const result_t<void> &result) mutable {")
