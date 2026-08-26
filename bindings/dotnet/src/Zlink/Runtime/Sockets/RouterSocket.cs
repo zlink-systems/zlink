@@ -21,6 +21,13 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
         return new RoutedAsyncSendOperation(this, routingId);
     }
 
+    internal Task SendSingleAsyncCore(RoutingId routingId, Message message,
+        CancellationToken cancellationToken)
+    {
+        return Kernel.SendCompletion.SendSingleAsync(routingId, message,
+            cancellationToken);
+    }
+
     public void SetRoutingId(RoutingId routingId)
     {
         Kernel.SetOption(SocketOptions.RoutingId, routingId.ToBytes());

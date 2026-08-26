@@ -352,6 +352,8 @@ class socket_base_t : public own_t,
                            size_t part_count_,
                            const zlink_send_async_options_t *options_,
                            zlink_send_op_id_t *op_id_out_);
+    bool try_send_async_routed_single_immediate (
+      const zlink_routing_id_t *target_rid_, zlink_msg_t *part_);
     int send_async_cancel (zlink_send_op_id_t op_id_);
     bool send_complete_handler_active () const;
     //  Admit whatever the current pipe state allows, then hand resolved
@@ -892,6 +894,10 @@ class socket_base_t : public own_t,
                                       uint64_t *async_mailbox_drains_out_);
     void test_set_receive_wait_hook (receive_runtime_t::wait_hook_fn hook_,
                                      void *userdata_);
+    void test_set_send_pending_gate_release_hook (
+      socket_send_pending_runtime_t::gate_release_hook_fn hook_,
+      void *userdata_);
+    void test_set_send_next_op_id (zlink_send_op_id_t next_op_id_);
   private:
 #endif
     //  close / ctx term: fail every pending record fast. LINGER does not
@@ -903,6 +909,15 @@ class socket_base_t : public own_t,
     //  Claim/finish helpers used by the admit loop.
     bool claim_send_pending_head (send_pending_record_t **out_);
     int try_admit_send_pending (send_pending_record_t *record_);
+    int try_admit_send_parts (zlink_msg_t *parts_,
+                              size_t part_count_,
+                              const routed_send_target_key_t &target_,
+                              bool has_target_);
+    int try_admit_send_parts_scoped (
+      zlink_msg_t *parts_, size_t part_count_,
+      const routed_send_target_key_t &target_, bool has_target_,
+      socket_public_send_scope_t &scope_,
+      zlink::pipe_t **attempted_pipe_out_ = NULL);
     void finish_send_pending (send_pending_record_t *record_,
                               zlink_send_complete_result_t result_,
                               int terminal_errno_);

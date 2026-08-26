@@ -889,6 +889,7 @@ set(socket-common-sources
     src/runtime/sockets/common/socket_dispatch_context.cpp
     src/runtime/sockets/common/socket_dispatch_bridge.cpp
     src/runtime/sockets/common/socket_send_complete.cpp
+    src/runtime/sockets/common/socket_send_async_submit.cpp
     src/runtime/sockets/common/socket_command_runtime.cpp
     src/runtime/sockets/common/socket_base_endpoint.cpp
     src/runtime/sockets/common/socket_base_endpoint_factory.cpp

@@ -353,8 +353,12 @@ operation은 nonzero id를 기록한다.
 
 nonzero `op_id`는 Core가 부여하는 socket local 단조 증가 값이다. `0`은 즉시
 admission되어 callback이 필요 없다는 뜻이며 cancel 대상이 아니다. `userdata`는
-submit option에 넘긴 값을 그대로 돌려준다. target identity field는 항상 채워지며
-routed target이 없는 socket에서는 0이다.
+submit option에 넘긴 값을 그대로 돌려준다. target identity field는 확정된
+pending key를 나타낸다. routed target이 없는 socket에서는 `peer_rid`가 비어
+있고 두 transport-pair field가 0이다. operation id는 재사용하지 않는다.
+socket local `uint64_t` sequence가 소진된 뒤 pending id가 필요한 submit은
+`EOVERFLOW`와 함께 `ZLINK_SUBMIT_SEQ_EXHAUSTED`를 반환하고 소유권은
+호출자에게 남긴다.
 
 #### zlink_reply_handler_fn
 
@@ -930,7 +934,9 @@ identity를 지정하면 `ZLINK_CONNECT_NOT_FOUND`를 반환한다.
 ### 비동기 송신 admission
 
 완전한 multipart record 하나를 Core에 인계한다. 즉시 admission은 반환값으로
-완료하고, HWM 때문에 Core가 보관한 operation만 완료 통지를 정확히 한 번 받는다.
+완료한다. nonzero operation id를 받은 operation만 완료 통지를 정확히 한 번
+받으며, 여기에는 HWM/FIFO admission을 위해 보관한 record와 Core가 소유권을
+가져간 뒤 terminal 결과를 보고해야 하는 record가 포함된다.
 
 ```c
 ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
@@ -954,11 +960,14 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
 결과에서는 소유권이 호출자에게 남는다.
 
 이 호출은 blocking하지 않는다. target에 여유가 있으면 호출 thread에서 그대로
-admit하고 `op_id_out_`에 `0`을 기록하며 callback은 실행하지 않는다. target이
-backpressure 상태면 record를 pending operation으로 보관하고 nonzero id를
-기록한다. 이 operation은 admission, timeout, cancel 또는 종료 시 callback으로
-완료된다. byte HWM 회계는 동기 multipart send와 동일하게 record 하나를 message
-하나로 계산한다.
+admit하고 `op_id_out_`에 `0`을 기록하며 callback은 실행하지 않는다. Core가
+즉시 admission을 완료하지 못하면 record를 pending operation으로 보관하고
+nonzero id를 기록한다. 일반적으로 target HWM이나 같은 target의 앞선 record
+때문이지만 물리
+admission 경합도 이 경로를 사용할 수 있다. 이 operation은 admission, timeout,
+cancel 또는 종료 시 callback으로 완료된다. nonzero id의 callback은
+`zlink_send_async`가 반환하기 전에 실행될 수도 있다. byte HWM 회계는 동기
+multipart send와 동일하게 record 하나를 message 하나로 계산한다.
 
 ```mermaid
 sequenceDiagram
@@ -970,7 +979,7 @@ sequenceDiagram
         Note over Core: 호출 thread에서 그대로 admit
         Core-->>App: ZLINK_SUBMIT_OK, op_id=0 반환
         Note over App: binding이 awaitable을 즉시 완료
-    else target이 backpressure 상태
+    else 즉시 admission이 완료되지 않음
         Note over Core: record를 pending operation으로 예약
         Core-->>App: ZLINK_SUBMIT_OK, op_id=nonzero 반환
         Core-->>App: 이후 완료 callback (ADMITTED·TIMED_OUT·TERMINAL 중 하나, 정확히 한 번)
@@ -984,36 +993,48 @@ HWM 진입은 submit 실패가 아니라 비동기 대기다. 앱이 명시적�
 넘기면 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하고 part 소유권은 호출자에게 남는다.
 두 옵션의 기본값 `0`은 unlimited다.
 
-같은 target의 pending operation은 제출 순서대로 admit되고 그 순서대로
-완료된다. target 내부의 head-of-line 차단은 의도된 동작이다. 그 target
-queue가 하나의 논리 stream이기 때문이다. 서로 다른 target 사이에는 순서
-보장이 없고, 동기 send는 같은 HWM을 두고 동등하게 경쟁한다. 동기 send를
-pending 앞뒤로 재배치하는 특례는 없다.
+같은 target의 pending operation은 제출 순서대로 admit된다. target 내부의
+head-of-line 차단은 의도된 동작이다. 그 target queue가 하나의 논리 stream이기
+때문이다. 한 target의 block 자체가 다른 target을 pending으로 만들지는 않지만,
+socket 하나의 물리 admission attempt는 직렬화된다. callback은 socket 단위로
+직렬화되지만 제출 순서를 나타내지는 않는다. timeout, cancel, terminal route
+경합에서는 뒤 operation이 먼저 완료될 수 있다. 동기 send는 같은 HWM을 두고
+동등하게 경쟁하며, 같은 target의 앞선 pending operation을 건너뛰는 특례는 없다.
 
-ROUTER는 `options_->target`이 필요하다. raw STREAM async send도 non-NULL exact
-target이 필요하다. DEALER는 `NULL`을 넘길 수 있으며 이
-경우 Core가 제출 시점에 선택을 확정한다. 선택을 완료 시점까지 미루면
-target별 순서를 정의할 수 없기 때문이다. PAIR는 이 field를 무시한다.
+ROUTER와 raw STREAM은 `options_->target`이 필요하다. 호출자는
+`zlink_select_routed_submit_target()`이 반환한 exact target을 넘기거나, 두
+transport-pair field를 0으로 둔 peer-only target을 넘길 수 있다. peer-only
+target이면 Core가 이 submit 안에서 exact pair를 snapshot한다. record가
+pending이 되어도 그 exact pair가 FIFO key로 유지되고 다른 pair로
+retarget되지 않는다. DEALER는 `NULL`을 넘길 수 있으며 이 경우 Core가 제출
+시점에 선택을 확정한다. PAIR는 이 field를 무시한다.
 
 `zlink_send_complete_handler`는 교체 전용이고 `NULL`은 유효하지 않다. 첫
 `zlink_send_async` 이전에 반드시 설치해야 하며, 그렇지 않으면 submit이
 `errno=EINVAL`로 실패한다. 결과를 보고할 곳이 없는 operation이 되기
-때문이다. 이 socket 자신의 완료 callback 안에서 핸들러를 교체하면
-`errno=EDEADLK`로 실패한다.
+때문이다. 완료 callback 안에서 send-completion handler를 교체하면 대상이 다른
+socket이어도 `errno=EDEADLK`로 실패한다.
 
 callback 계약은 다음과 같다.
 
 - `ZLINK_SUBMIT_OK`과 nonzero `op_id`를 반환한 pending operation마다 완료가
   정확히 한 번 실행된다. `op_id == 0`인 즉시 admission에는 callback이 없다.
-- 같은 target의 완료는 제출 순서대로 실행된다.
 - 한 socket의 완료끼리는 절대 동시에 실행되지 않는다.
+- 같은 target의 admission은 FIFO지만 timeout, cancel, terminal route event가 뒤
+  operation을 먼저 확정하면 callback 순서는 제출 순서와 다를 수 있다.
+- exact target detach와 진행 중인 admission attempt가 경합하면 pipe queue admission이
+  먼저 끝난 operation은 `ZLINK_SEND_ADMITTED`, detach가 아직 pending인 operation을 먼저
+  확정하면 `ZLINK_SEND_TERMINAL`이다. 두 결과 모두 정상이며 callback은 정확히 한 번이다.
+- nonzero operation id의 callback은 해당 `zlink_send_async`가 반환하기 전에
+  실행될 수도 있다.
 - 고정된 thread를 약속하지 않는다. callback은 backpressure가 풀린 뒤에는 Core
   async mailbox thread에서, timeout에서는 Core deadline thread에서, close나
   context 종료에서는 그것을 호출한 thread에서, 그리고 이 socket에
   `ZLINK_POLLCOMPLETION` 등록이 있으면 `zlink_poller_wait`를 호출한 thread에서
   실행될 수 있다.
-- callback은 완료를 앱 상태에 전달하는 일만 해야 한다. callback 안에서 send,
-  publish, request 계열 진입점을 호출하면 `errno=EDEADLK`로 실패한다.
+- callback은 완료를 앱 상태에 전달하는 일만 해야 한다. callback 안에서 어떤
+  socket이든 send, publish, request 계열 진입점을 호출하면 `errno=EDEADLK`로
+  실패하며 send-completion handler 교체도 동일하다.
 
 `ZLINK_POLLCOMPLETION`으로 socket을 poller에 등록하면 이 callback의 dispatch
 소유권이 Core async mailbox thread에서 `zlink_poller_wait` 호출 thread로
@@ -1025,8 +1046,11 @@ pending operation을 모두 보관하고 각각 정확히 한 번 완료하므�
 `zlink_send_async_cancel`은 요청이다. `ZLINK_SUBMIT_OK`은 취소가 접수됐고
 완료가 `ZLINK_SEND_TERMINAL` + `ECANCELED`로 온다는 뜻이다.
 `ZLINK_SUBMIT_NOT_FOUND`는 그 id의 pending operation이 없다는 뜻이다.
-`ZLINK_SUBMIT_INVALID_STATE`는 admit이 이미 커밋되어 완료가
-`ZLINK_SEND_ADMITTED`로 온다는 뜻이다. 취소된 operation도 완료는 정확히 한
+`ZLINK_SUBMIT_INVALID_STATE`는 다른 resolver가 이미 operation을 claim하여
+cancel이 이기지 못했다는 뜻이다. 기존 resolver가 완료를 정확히 한 번 발생시키며,
+일반적으로 `ZLINK_SEND_ADMITTED`지만 이미 처리 중인 route failure라면
+`ZLINK_SEND_TERMINAL`일 수 있다. op id 0은 유효하지 않고 cancel 전에 이미
+완료된 id는 `ZLINK_SUBMIT_NOT_FOUND`다. 취소된 operation도 완료는 정확히 한
 번 발생한다. 통지가 없으면 호출자의 suspension이 영원히 매달리기 때문이다.
 
 `zlink_close`와 `zlink_ctx_term`은 반환 전에 모든 pending operation을 각각
@@ -1070,6 +1094,12 @@ DEALER는 연결됐고 가중치가 양수인 application pipe 전체를 대상�
 route 결과를 반환할 수 있다. 이 값은 이후 exact submit이 가리킬 target을 지정하며
 `zlink_send_async_options_t`의 `target` field가 그중 하나다. 그 target의 pending 상태는 Core가
 소유한다. stale pair generation은 다른 연결로 retarget하지 않는다.
+
+ROUTER와 raw STREAM에서 `zlink_send_async_options_t::target`은 `peer_rid`만
+채우고 두 transport-pair field를 0으로 둘 수도 있다. 이는 selection을
+생략하는 값이 아니라 fused selection 요청이다. Core는 pending record를
+만들기 전에 `zlink_send_async` 호출 안에서 동일한 exact identity를
+snapshot하며, 위 exact-pair FIFO와 stale-generation 규칙은 그대로 적용된다.
 
 Core part sequence는 첫 part가 선택한 exact pair fence를 FINAL까지 유지하고 중간 실패를
 전체 rollback하므로 peer에 prefix가 보이지 않는다. `zlink_send_async`는 완전한 record를 한
@@ -1210,12 +1240,12 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - `zlink_disconnect_transport_pair`는 두 값 중 하나라도 0이면 잘못된 인자로 실패하고, 이미 제거된 identity에는 `ZLINK_CONNECT_NOT_FOUND`다.
 
 **비동기 송신**
-- 완료 handler를 설치하지 않은 채 `zlink_send_async`를 호출하면 `errno=EINVAL`로 실패하고, 자신의 완료 callback 안에서 handler를 교체하면 `EDEADLK`다.
-- `ZLINK_SUBMIT_OK`을 반환한 operation마다 완료 callback이 정확히 한 번 실행되고, 같은 target의 완료는 제출 순서대로 실행되며, 한 socket의 완료끼리는 동시에 실행되지 않는다.
+- 완료 handler를 설치하지 않은 채 `zlink_send_async`를 호출하면 `errno=EINVAL`로 실패하고, 완료 callback 안에서 어떤 socket의 handler든 교체하면 `EDEADLK`다.
+- `ZLINK_SUBMIT_OK`과 nonzero op id를 반환한 operation마다 완료 callback이 정확히 한 번 실행되며 op id 0인 즉시 admission에는 callback이 없다. 같은 target의 admission은 FIFO지만 timeout·cancel·terminal 경합에서 callback 순서는 달라질 수 있다. 한 socket의 완료끼리는 동시에 실행되지 않고 callback은 submit 반환 전에도 실행될 수 있다.
 - pending 상한 옵션의 기본값 `0`은 unlimited다. 앱이 nonzero 상한을 명시했고 이를 초과하면 `ZLINK_SUBMIT_BACKPRESSURED`이며 part 소유권은 호출자에게 남는다.
-- `zlink_send_async_cancel`이 `ZLINK_SUBMIT_OK`이면 완료가 `ZLINK_SEND_TERMINAL`+`ECANCELED`로, `ZLINK_SUBMIT_INVALID_STATE`이면 `ZLINK_SEND_ADMITTED`로 오고, 없는 id는 `ZLINK_SUBMIT_NOT_FOUND`다.
+- `zlink_send_async_cancel`이 `ZLINK_SUBMIT_OK`이면 완료가 `ZLINK_SEND_TERMINAL`+`ECANCELED`로 온다. `ZLINK_SUBMIT_INVALID_STATE`이면 기존 resolver가 정확히 한 번 `ADMITTED` 또는 `TERMINAL`을 완료하며, 없는 id는 `ZLINK_SUBMIT_NOT_FOUND`다.
 - `zlink_close`와 `zlink_ctx_term`은 반환 전에 모든 pending operation을 각각 `ECANCELED`·`ETERM`으로 완료시키며 `ZLINK_OPT_LINGER`는 적용하지 않는다.
-- 완료 callback 안에서 send·publish·request 계열 진입점을 호출하면 `EDEADLK`다.
+- 완료 callback 안에서 어떤 socket이든 send·publish·request 계열 진입점을 호출하면 `EDEADLK`다.
 - 지원하지 않는 socket 타입의 `zlink_send_async`는 `ZLINK_SUBMIT_NOT_SUPPORTED`이고, STREAM record는 정확히 1 part만 허용된다.
 
 **request completion**

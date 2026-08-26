@@ -14,6 +14,7 @@
 #include "api/socket/socket_api_internal.hpp"
 #include "core/msg.hpp"
 #include "utils/err.hpp"
+#include "utils/routing_id.hpp"
 
 zlink_submit_result_t zlink_send_async (void *s_,
                                         zlink_msg_t *parts_,
@@ -44,6 +45,18 @@ zlink_submit_result_t zlink_send_async (void *s_,
         return zlink::submit_result_internal::from_errno (errno);
     }
 
+    if (part_count_ == 1
+        && options_->struct_size == sizeof (zlink_send_async_options_t)
+        && socket->socket_type () == ZLINK_CORE_SOCKET_ROUTER
+        && options_->target
+        && options_->target->transport_pair_id == 0
+        && options_->target->transport_pair_generation == 0
+        && zlink::valid_routing_id (&options_->target->peer_rid)
+        && socket->send_complete_handler_active ()
+        && socket->try_send_async_routed_single_immediate (
+          &options_->target->peer_rid, parts_))
+        return ZLINK_SUBMIT_OK;
+
     return zlink::submit_result_internal::from_rc (
       socket->send_async_submit (parts_, part_count_, options_, op_id_out_));
 }
@@ -60,8 +73,9 @@ zlink_submit_result_t zlink_send_async_cancel (void *s_,
     const int rc = socket->send_async_cancel (op_id_);
     if (rc == 0)
         return ZLINK_SUBMIT_OK;
-    //  EBUSY here means admission already committed: the operation is not
-    //  cancellable any more but it still completes exactly once, as ADMITTED.
+    //  EBUSY means another resolver already claimed the operation. It is no
+    //  longer cancellable but still completes exactly once as that resolver's
+    //  ADMITTED or TERMINAL result.
     if (errno == EBUSY)
         return ZLINK_SUBMIT_INVALID_STATE;
     if (errno == ENOENT)

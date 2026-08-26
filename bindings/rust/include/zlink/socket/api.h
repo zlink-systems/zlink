@@ -114,8 +114,11 @@ typedef struct zlink_send_complete_event_t
  * - An operation that returned `ZLINK_SUBMIT_OK` with a non-zero operation id
  *   receives exactly one completion. An operation id of zero means the record
  *   was admitted immediately and no completion callback runs.
- * - Completions for the same target run in submit order.
+ * - Pending admission is FIFO per target. Callback order can differ from
+ *   submit order when timeout, cancel, or terminal-route resolution wins.
  * - Completions for one socket never run concurrently with each other.
+ * - A callback for a non-zero operation id can run before the corresponding
+ *   `zlink_send_async` call returns.
  * - No fixed thread is promised. The callback can run on the Core async
  *   mailbox thread after backpressure clears, on the Core deadline thread on
  *   timeout, on the closing thread during close, or on the thread
@@ -123,7 +126,8 @@ typedef struct zlink_send_complete_event_t
  *   registration owns completion dispatch for this socket.
  * - The callback must only hand the completion to application state. Calling
  *   any send, publish, or request entry point on any socket from inside it
- *   fails with errno=EDEADLK, as does replacing this handler.
+ *   fails with errno=EDEADLK, as does replacing a send-completion handler on
+ *   any socket.
  */
 typedef void (*zlink_send_complete_handler_fn) (
   void *subject_, const zlink_send_complete_event_t *event_, void *userdata_);
@@ -138,9 +142,11 @@ typedef struct zlink_send_async_options_t
     uint32_t timeout_ms;
     /* Returned unchanged in the completion event. */
     void *userdata;
-    /* Exact routed target, or NULL. ROUTER requires a target. DEALER may pass
-       NULL, in which case Core commits one selection at submit time. PAIR and
-       STREAM ignore the field unless STREAM addresses an exact peer. */
+    /* Routed target, or NULL. ROUTER requires a target. A target with both
+       transport-pair fields zero requests an exact-pair snapshot by peer_rid
+       during this submit; otherwise all three identity fields select the
+       already-snapshotted pair. DEALER may pass NULL, in which case Core
+       commits one selection at submit time. PAIR ignores the field. */
     const zlink_routed_submit_target_t *target;
 } zlink_send_async_options_t;
 
@@ -190,9 +196,10 @@ ZLINK_EXPORT zlink_handler_result_t zlink_stream_packet_handler (
  *
  * The call never blocks. When the target has room the record is admitted on
  * the calling thread, `*op_id_out_` is set to zero, and no completion callback
- * runs. When the target is backpressured the record is reserved as a pending
- * operation, `*op_id_out_` is set to a non-zero id, and exactly one completion
- * reports admission, timeout, cancellation, or termination. The byte
+ * runs. When immediate admission cannot complete, the record is retained,
+ * `*op_id_out_` is set to a non-zero id, and exactly one completion reports
+ * admission, timeout, cancellation, or termination. That callback may run
+ * before this function returns. The byte
  * high-water mark accounts the record as one message, exactly as a synchronous
  * multipart send does.
  *
@@ -203,9 +210,11 @@ ZLINK_EXPORT zlink_handler_result_t zlink_stream_packet_handler (
  * configured non-zero bound fails with `ZLINK_SUBMIT_BACKPRESSURED` and leaves
  * part ownership with the caller.
  *
- * Pending operations for one target are admitted, and completed, in submit
- * order. There is no ordering guarantee between different targets, and a
- * synchronous send competes for the same high-water mark on equal terms.
+ * Pending operations for one target are admitted in submit order. Completion
+ * callbacks are serialized per socket but may be reordered by timeout,
+ * cancellation, or terminal-route resolution. A blocked target alone does not
+ * make another target pending, and a synchronous send competes for the same
+ * high-water mark on equal terms.
  * A completion callback must be installed with `zlink_send_complete_handler`
  * first because the call can become pending; without one the call fails with
  * errno=EINVAL. `op_id_out_` may be NULL when the caller does not need to
@@ -225,8 +234,8 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
  * @brief Install or replace the send completion callback.
  *
  * Replace-only; passing NULL is invalid. Supported subjects are the same set
- * `zlink_send_async` accepts. Replacing the handler from inside this socket's
- * own completion callback fails with errno=EDEADLK.
+ * `zlink_send_async` accepts. Replacing a send-completion handler on any
+ * socket from inside a completion callback fails with errno=EDEADLK.
  *
  * Registering the socket on a poller with `ZLINK_POLLCOMPLETION` transfers
  * dispatch ownership of this callback from the Core async mailbox thread to
@@ -243,8 +252,10 @@ ZLINK_EXPORT zlink_handler_result_t zlink_send_complete_handler (
  * `ZLINK_SUBMIT_OK` means the cancel was accepted and the completion will
  * report `ZLINK_SEND_TERMINAL` with errno `ECANCELED`.
  * `ZLINK_SUBMIT_NOT_FOUND` means no pending operation carries that id.
- * `ZLINK_SUBMIT_INVALID_STATE` means admission is already committed and the
- * completion will report `ZLINK_SEND_ADMITTED`.
+ * `ZLINK_SUBMIT_INVALID_STATE` means another resolver already claimed the
+ * operation. That resolver still reports exactly one completion, normally
+ * `ZLINK_SEND_ADMITTED` but possibly `ZLINK_SEND_TERMINAL` for a route failure
+ * already being resolved.
  *
  * A cancelled operation still completes exactly once.
  */

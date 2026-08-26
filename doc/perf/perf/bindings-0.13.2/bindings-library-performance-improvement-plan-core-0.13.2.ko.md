@@ -157,6 +157,18 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
 | ipc | ROUTER_ROUTER | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 | ipc | ROUTER_ROUTER_REQREP | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | |
 
+## 5-1. .NET Multi 측정 표
+
+local Core 0.13.2, TCP, 100 clients, server/client I/O threads 4/4, 2초×3회 median의
+공식 paired C→.NET 결과다. 표의 각 size는 `.NET throughput / C throughput` 비율이다.
+
+| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | Aggregate / report / log |
+|---|---|---|---|---|---|---|---|---|
+| tcp | ROUTER_ROUTER_SENDSEND | 통과(79.85%) | 통과(81.79%) | 통과(84.44%) | 통과(91.93%) | 통과(139.53%) | 통과(126.79%) | **통과(100.72%)** — latency median 1.13x. C: `perf_c_multi_linux_20260826_114758_final-direct-fastpath-paired-r3.txt`, .NET: `perf_dotnet_multi_linux_20260826_114946_final-direct-fastpath-paired-r3.txt`. `log/dotnet-multi-router-router-tcp-20260826.ko.md` |
+| tcp | ROUTER_ROUTER_REQREP | 통과(67.36%) | 통과(70.29%) | 통과(77.87%) | 통과(92.01%) | 통과(114.63%) | 통과(120.26%) | **통과(90.40%)** — latency median 1.46x. C: `perf_c_multi_linux_20260826_114758_final-direct-fastpath-paired-r3.txt`, .NET: `perf_dotnet_multi_linux_20260826_114946_final-direct-fastpath-paired-r3.txt`. `log/dotnet-multi-router-router-tcp-20260826.ko.md` |
+
+나머지 .NET Multi pattern/transport는 유효한 paired final report가 생기기 전까지 `미측정`이다.
+
 ## 6. 다음 작업
 
 1. `PAIR / tcp`는 strict target 기준 `미달`로 확정했고, 후보 A/B와 read-only review 결과를
@@ -294,6 +306,67 @@ POSDDD 채택 근거를 같은 log·시트에 남긴다.
     (`perf_dotnet_single_linux_20260826_054616_core0132-send-admission-fastpath-tcp64-paired5-v2-20260826.txt`).
     이 수치는 async send 경로 진단이며 위 표의 동기 C 대비 공식 paired 판정을 대체하지
     않는다.
+32. .NET Multi `ROUTER_ROUTER_SENDSEND/REQREP / tcp`를 local Core 0.13.2, 100 clients,
+    I/O 4/4, 2초×3회 median으로 처음부터 다시 짝지어 측정했다. 기존 40%대 판단은 Single과
+    Multi 결과가 혼재된 비교였으며, clean transition A/B에서 `send_complete`는 과도기
+    `send_ready`보다 SENDSEND 26.366→128.098 Kmsg/s, REQREP 0.075→57.714 Kmsg/s로 빨라
+    completion 방식 자체를 회귀 원인에서 제외했다. 실제 남은 overhead는 Multi helper가 단일
+    routed message마다 operation builder를 생성하던 경로였다. public 단일-message
+    `RouterSocket.SendAsync(routingId, message)`를 직접 사용하도록 바꾼 A/B에서 REQREP은
+    64B +4.97%, 64KiB +11.81%, 128KiB +7.86% 개선되어 채택했다. SENDSEND도 64B +5.21%,
+    64KiB +1.35%였고 128KiB -1.60%는 run 변동 범위였다. 내부 `Task<bool>`→`ValueTask<bool>`
+    후보는 일관된 이득이 없어 폐기했다. 최종 paired aggregate는 SENDSEND 100.72%, REQREP
+    90.40%이며 모든 크기 throughput 50% 이상, latency 3.0x 이하로 두 항목 모두 통과했다.
+    .NET tests 177/177도 통과했다. 상세 근거는
+    [`log/dotnet-multi-router-router-tcp-20260826.ko.md`](log/dotnet-multi-router-router-tcp-20260826.ko.md)에
+    기록했다.
+33. C++ Multi 전체 7 patterns × 4 transports × 6 sizes를 local Core 0.13.2, 100 clients
+    (`STREAM` 포함), I/O 4/4, 2초×3회로 실행했다. 최초 `DEALER_DEALER` 정지는 active backlog
+    뒤의 stop token을 `linger=0` 종료가 유실시키는 harness lifecycle 결함과, 동기
+    `submit()`이 HWM에서 `SNDTIMEO`의 `EAGAIN`을 fatal로 취급하는 backpressure 소비 오류였다.
+    runner↔client 종료 handshake와 public `async()` await로 수정한 뒤 합계 168/168 성공,
+    실패 0, RESULT 840/840를 확인했다. 같은 revision의 C 전체 Multi baseline은 아직 없으므로
+    이 결과를 C 대비 통과/미달로 판정하지 않으며 공식 비교 셀은 `미측정`으로 유지한다.
+    상세 근거는
+    [`log/cpp-multi-full-inventory-20260826.ko.md`](log/cpp-multi-full-inventory-20260826.ko.md)에
+    기록했다.
+34. C++ Multi Router↔Router TCP를 release 0.10.1 성능 작업 종료 시점과 local 0.13.2에서
+    100 clients, I/O 4/4, 2초×3회로 연속 재측정했다. `0.13.2 / 0.10.1` throughput 평균은
+    SENDSEND 92.15%, REQREP 104.67%다. SENDSEND는 256B–4096B에서 82.62%–87.04%로
+    회귀했고, REQREP은 대용량 처리량 증가에도 mean latency 중앙 비율이 1.49x로 악화됐다.
+    이는 Core·C++ binding·harness·auto-HWM 정책을 포함한 end-to-end 버전 비교이며 Core-only
+    ABI 격리 비교는 아니다. 상세 수치와 보고서는
+    [`log/cpp-multi-router-router-0101-vs-0132-20260826.ko.md`](log/cpp-multi-router-router-0101-vs-0132-20260826.ko.md)에
+    기록했다.
+35. Core Router 경로를 POSDDD 기준으로 다시 검토했다. completion TLS 상태를 callback scope에
+    응집하고, 1,065줄의 send-completion 구현을 queue/dispatch와 public submit/cancel 두 모듈로
+    분리했다. 단일 메시지 pipe fast path는 깨끗한 multipart 상태를 명시적 불변식으로 삼아
+    불필요한 누적 산술·초기화 store를 제거했다. 검증 중 소켓 전체 `pending_msgs`가 한 대상의
+    HWM을 다른 대상까지 막는 exact-target 결함을 재현해, 대상별 inline reservation과 물리 제출
+    gate의 책임을 분리했다. 관련 CTest 6/6, C/C++ focused Multi 각각 4/4가 통과했다. 전체
+    CTest의 유일한 실패였던 삭제된 threading 문서 경로 참조도 현재 guide 경로로 고쳐 재검증했다. 처리량은
+    크기별로 혼재해 micro 최적화의 일관된 향상을 주장하지 않지만, exact-target head-of-line
+    차단 제거와 구조 응집 효과가 있어 변경을 채택한다. auto-HWM 하향 후보는 일부 개선이
+    보였으나 동일 1MiB 조건에서도 큰 run drift가 관찰되어 정책 변경 근거가 부족하므로 보류했다.
+    상세 근거는
+    [`log/core-router-posddd-review-20260826.ko.md`](log/core-router-posddd-review-20260826.ko.md)에
+    기록했다.
+36. Core 전체 Multi 7패턴의 TCP/WSS 경로를 POSDDD 기준으로 검토하고 리팩토링했다. WSS engine이
+    종료 시 weak-guard 만료로 취소 callback을 버리면서 pending flag를 영구 유지하던 수명주기 결함을
+    수정하고, handshake/read/write 완료까지 engine이 명시적으로 생존하게 했다. TCP/WS/WSS
+    completion은 copy 대신 move ownership으로 전달하고, ROUTER exact-target의 RID 중복 조회를
+    제거했으며, STREAM buffer/message dispatch send의 중복 정책을 하나의 도메인 함수로 응집했다.
+    기존 WSS 기준선은 기본 3초 cooldown에서도 allocator 손상으로 partial이었지만 수정 후 secure
+    5-run 전체 42/42가 완주했다. TCP도 3-run 전체 42/42가 완주했고 7패턴 중 6패턴의 before 대비
+    평균 처리량이 103.92%~122.76%였다. PUBSUB 전체 run의 90.91%는 즉시 재측정에서 104.68%로
+    반전되어 run drift로 판정했다. WSS 유효 셀 비교는 ROUTER_ROUTER_SENDSEND 97.48%와
+    DEALER_DEALER 97.19%를 제외하면 103.54%~119.98%이며, 핵심 판정은 실패 0의 lifecycle
+    안정성이다. exact-target detach/admission 경합 테스트는 실제 completion 유실이 아니라
+    ADMITTED가 detach보다 먼저 확정된 합법 결과였으므로 operation id별 exactly-once를 검증하게
+    고치고 한·영 spec에 두 합법 결과를 명시했다. ASAN/LSAN WS/WSS 13/13, STREAM 경합 10회,
+    전체 Core CTest 103/103이 통과했다. 상세 근거는
+    [`log/core-all-pattern-posddd-tcp-wss-20260826.ko.md`](log/core-all-pattern-posddd-tcp-wss-20260826.ko.md)에
+    기록했다.
 
 ## 7. 완료 기준
 

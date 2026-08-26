@@ -28,16 +28,35 @@ public static class PerfSocketIo
         return size;
     }
 
-    public static async Task<int> SendAsync(IRouterSocket socket,
+    public static ValueTask<int> SendAsync(IRouterSocket socket,
         RoutingId routingId, byte[] payload, SendFlags flags = SendFlags.None)
     {
         _ = flags;
         Message message = CreatePooledMessage(payload);
         try
         {
-            await socket.Send(routingId).Message(message).Async()
-                .ConfigureAwait(false);
-            return payload.Length;
+            Task submit = socket.SendAsync(routingId, message);
+            if (submit.IsCompletedSuccessfully)
+            {
+                message.Dispose();
+                return new ValueTask<int>(payload.Length);
+            }
+            return AwaitRoutedSendAsync(submit, message, payload.Length);
+        }
+        catch
+        {
+            message.Dispose();
+            throw;
+        }
+    }
+
+    private static async ValueTask<int> AwaitRoutedSendAsync(Task submit,
+        Message message, int size)
+    {
+        try
+        {
+            await submit.ConfigureAwait(false);
+            return size;
         }
         finally
         {
@@ -45,14 +64,22 @@ public static class PerfSocketIo
         }
     }
 
-    public static async Task<int> SendAsync(IRouterSocket socket,
+    public static ValueTask<int> SendAsync(IRouterSocket socket,
         RoutingId routingId,
         Message message, SendFlags flags = SendFlags.None)
     {
         _ = flags;
         int size = message.Size;
-        await socket.Send(routingId).Message(message).Async()
-            .ConfigureAwait(false);
+        Task submit = socket.SendAsync(routingId, message);
+        if (submit.IsCompletedSuccessfully)
+            return new ValueTask<int>(size);
+        return AwaitRoutedSendAsync(submit, size);
+    }
+
+    private static async ValueTask<int> AwaitRoutedSendAsync(Task submit,
+        int size)
+    {
+        await submit.ConfigureAwait(false);
         return size;
     }
 

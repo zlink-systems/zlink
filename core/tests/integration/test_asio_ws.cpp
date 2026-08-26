@@ -733,6 +733,56 @@ void test_zlink_wss_pair_message ()
     cleanup_tls_test_files (files);
     teardown_zlink_ctx ();
 }
+
+//  Closing an established WSS peer leaves an async read pending in the WS
+//  engine. Repeating that lifecycle guards against callbacks being discarded
+//  before they clear the engine's pending-I/O ownership state.
+void test_zlink_wss_repeated_pending_read_close ()
+{
+    setup_zlink_ctx ();
+
+    const tls_test_files_t files = make_tls_test_files ();
+    void *server = zlink_socket (g_ctx, ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (server);
+
+    const int zero = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      server, ZLINK_OPT_TLS_CERT, files.server_cert.c_str (), files.server_cert.size ()));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      server, ZLINK_OPT_TLS_KEY, files.server_key.c_str (), files.server_key.size ()));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "wss://127.0.0.1:*"));
+
+    char endpoint[256];
+    size_t endpoint_len = sizeof (endpoint);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (server, ZLINK_OPT_LAST_ENDPOINT, endpoint, &endpoint_len));
+
+    const int trust_system = 0;
+    const char hostname[] = "localhost";
+    for (int iteration = 0; iteration != 16; ++iteration) {
+        void *client = zlink_socket (g_ctx, ZLINK_SOCKET_DEALER);
+        TEST_ASSERT_NOT_NULL (client);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (client, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+          client, ZLINK_OPT_TLS_TRUST_SYSTEM, &trust_system, sizeof (trust_system)));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+          client, ZLINK_OPT_TLS_CA, files.ca_cert.c_str (), files.ca_cert.size ()));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+          client, ZLINK_OPT_TLS_HOSTNAME, hostname, strlen (hostname)));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
+
+        send_string_expect_success (client, "pending-read-close", 0);
+        recv_string_expect_success (server, "pending-read-close", 0);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_close (client));
+    }
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_close (server));
+    cleanup_tls_test_files (files);
+    teardown_zlink_ctx ();
+}
 #endif // ZLINK_HAVE_WSS
 
 #endif // ZLINK_HAVE_WS
@@ -780,6 +830,7 @@ int main ()
     RUN_TEST (test_zlink_ws_with_path);
 #if defined ZLINK_HAVE_WSS
     RUN_TEST (test_zlink_wss_pair_message);
+    RUN_TEST (test_zlink_wss_repeated_pending_read_close);
 #endif
 #endif // ZLINK_HAVE_WS
 

@@ -405,10 +405,15 @@ struct socket_send_pending_runtime_t
         handler (NULL),
         handler_userdata (NULL),
         handler_installed (false),
+        admission_gate (false),
         next_op_id (1),
         pending_msgs (0),
+        enqueue_epoch (0),
         pending_bytes (0),
         failing (false)
+#ifdef ZLINK_BUILD_TESTS
+        , gate_release_hook (NULL), gate_release_hook_userdata (NULL)
+#endif
     {
     }
 
@@ -416,22 +421,34 @@ struct socket_send_pending_runtime_t
     zlink_send_complete_handler_fn handler;
     void *handler_userdata;
     std::atomic<bool> handler_installed;
+    //  Serializes physical asynchronous admission. With no queued work the
+    //  submitter acquires this atomically and avoids the pending mutex/maps.
+    std::atomic<bool> admission_gate;
     zlink_send_op_id_t next_op_id;
     //  Plain sockets use the default-constructed key; routed sockets key by
     //  peer rid + transport pair identity + generation.
     std::map<routed_send_target_key_t, std::deque<send_pending_record_t *> >
       queues;
-    //  A target in this set is being attempted directly by the submitting
-    //  thread. Later operations queue behind it until that attempt either
-    //  admits or becomes the head pending record.
+    //  Reserves per-target ordering while a submitter attempts the direct
+    //  admission path outside the pending mutex. Different targets may still
+    //  admit independently when one target is backpressured.
     std::set<routed_send_target_key_t> inline_attempts;
     std::map<zlink_send_op_id_t, send_pending_record_t *> by_op;
-    uint64_t pending_msgs;
+    std::atomic<uint64_t> pending_msgs;
+    //  Incremented after every queue insertion.  The admission driver uses
+    //  this to close the empty-scan/gate-release handoff window without
+    //  confusing an already blocked queue with newly published work.
+    std::atomic<uint64_t> enqueue_epoch;
     uint64_t pending_bytes;
     std::deque<send_complete_record_t> completions;
     //  Set once close or context termination has failed every pending record.
     //  New submits are refused from that point on.
     bool failing;
+#ifdef ZLINK_BUILD_TESTS
+    typedef void (*gate_release_hook_fn) (void *userdata_);
+    gate_release_hook_fn gate_release_hook;
+    void *gate_release_hook_userdata;
+#endif
 };
 
 struct socket_dispatch_bridge_t
@@ -626,11 +643,15 @@ class socket_send_complete_dispatch_scope_t
     explicit socket_send_complete_dispatch_scope_t (socket_base_t *socket_);
     ~socket_send_complete_dispatch_scope_t ();
 
-    static socket_base_t *current_socket ();
-    static bool dispatching_socket (const socket_base_t *socket_);
-    static bool dispatching_any ();
+    static socket_base_t *current_socket () { return _dispatch_socket; }
+    static bool dispatching_socket (const socket_base_t *socket_)
+    {
+        return _dispatch_socket == socket_;
+    }
+    static bool dispatching_any () { return _dispatch_socket != NULL; }
 
   private:
+    inline static thread_local socket_base_t *_dispatch_socket = NULL;
     socket_base_t *_previous;
 };
 

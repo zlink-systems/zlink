@@ -117,10 +117,10 @@ async_result_t<void> submit_send_async (detail::operation_state_t &state_)
           detail::target_first_rid_native (state_.raw.target);
         if (!rid)
             throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
-        const zlink_submit_result_t target_result =
-          zlink_select_routed_submit_target (state_.raw.socket, rid, &target);
-        if (target_result != ZLINK_SUBMIT_OK)
-            throw submit_error_t (static_cast<submit_result_t> (target_result), zlink_errno ());
+        // A peer-only target asks zlink_send_async to snapshot the exact pair
+        // in the same admission call. This preserves exact-pair FIFO while
+        // avoiding a second Core boundary on every routed message.
+        target.peer_rid = *rid;
         target_ptr = &target;
     }
 

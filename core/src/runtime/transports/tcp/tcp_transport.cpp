@@ -185,7 +185,8 @@ void tcp_transport_t::async_read_some (unsigned char *buffer,
         if (tcp_stats_on) {
             socket->async_read_some (
               boost::asio::buffer (buffer, buffer_size),
-              [handler, socket] (const boost::system::error_code &ec, std::size_t bytes) {
+              [handler = std::move (handler),
+               socket] (const boost::system::error_code &ec, std::size_t bytes) {
                   LIBZLINK_UNUSED (socket);
                   if (ec)
                       ++tcp_async_read_errors;
@@ -197,7 +198,8 @@ void tcp_transport_t::async_read_some (unsigned char *buffer,
         } else {
             socket->async_read_some (
               boost::asio::buffer (buffer, buffer_size),
-              [handler, socket] (const boost::system::error_code &ec, std::size_t bytes) {
+              [handler = std::move (handler),
+               socket] (const boost::system::error_code &ec, std::size_t bytes) {
                   LIBZLINK_UNUSED (socket);
                   if (handler)
                       handler (ec, bytes);
@@ -312,8 +314,9 @@ void tcp_transport_t::async_write_some (const unsigned char *buffer,
     if (_socket) {
         const std::shared_ptr<boost::asio::ip::tcp::socket> socket = _socket;
         if (tcp_stats_on) {
-            const auto stats_handler = [handler, socket] (const boost::system::error_code &ec,
-                                                          std::size_t bytes) {
+            auto stats_handler = [handler = std::move (handler),
+                                  socket] (const boost::system::error_code &ec,
+                                           std::size_t bytes) {
                 LIBZLINK_UNUSED (socket);
                 if (ec)
                     ++tcp_async_write_errors;
@@ -323,24 +326,26 @@ void tcp_transport_t::async_write_some (const unsigned char *buffer,
                     handler (ec, bytes);
             };
             if (tcp_use_async_write_some_on) {
-                socket->async_write_some (boost::asio::buffer (buffer, buffer_size), stats_handler);
+                socket->async_write_some (boost::asio::buffer (buffer, buffer_size),
+                                          std::move (stats_handler));
             } else {
                 boost::asio::async_write (*socket, boost::asio::buffer (buffer, buffer_size),
-                                          stats_handler);
+                                          std::move (stats_handler));
             }
         } else {
-            const auto wrapped_handler = [handler, socket] (const boost::system::error_code &ec,
-                                                            std::size_t bytes) {
+            auto wrapped_handler = [handler = std::move (handler),
+                                    socket] (const boost::system::error_code &ec,
+                                             std::size_t bytes) {
                 LIBZLINK_UNUSED (socket);
                 if (handler)
                     handler (ec, bytes);
             };
             if (tcp_use_async_write_some_on) {
                 socket->async_write_some (boost::asio::buffer (buffer, buffer_size),
-                                          wrapped_handler);
+                                          std::move (wrapped_handler));
             } else {
                 boost::asio::async_write (*socket, boost::asio::buffer (buffer, buffer_size),
-                                          wrapped_handler);
+                                          std::move (wrapped_handler));
             }
         }
     } else if (handler) {
@@ -367,12 +372,12 @@ void tcp_transport_t::async_writev (const unsigned char *header,
     const std::shared_ptr<boost::asio::ip::tcp::socket> socket = _socket;
 
     if (body_size == 0) {
-        async_write_some (header, header_size, handler);
+        async_write_some (header, header_size, std::move (handler));
         return;
     }
 
     if (header_size == 0) {
-        async_write_some (body, body_size, handler);
+        async_write_some (body, body_size, std::move (handler));
         return;
     }
 
@@ -389,7 +394,7 @@ void tcp_transport_t::async_writev (const unsigned char *header,
     };
 
     const std::shared_ptr<writev_state_t> state (
-      new writev_state_t{header, header_size, 0, body, body_size, 0, handler});
+      new writev_state_t{header, header_size, 0, body, body_size, 0, std::move (handler)});
 
     const std::shared_ptr<std::function<void (const boost::system::error_code &)>> do_write (
       new std::function<void (const boost::system::error_code &)>);
@@ -491,8 +496,9 @@ void tcp_transport_t::async_writev (const unsigned char *header,
 #else
     if (tcp_use_asio_writev_on) {
         if (tcp_stats_on) {
-            const auto stats_handler = [handler, socket] (const boost::system::error_code &ec,
-                                                          std::size_t bytes) {
+            auto stats_handler = [handler = std::move (handler),
+                                  socket] (const boost::system::error_code &ec,
+                                           std::size_t bytes) {
                 LIBZLINK_UNUSED (socket);
                 if (ec)
                     ++tcp_async_write_errors;
@@ -503,17 +509,18 @@ void tcp_transport_t::async_writev (const unsigned char *header,
             };
             std::array<boost::asio::const_buffer, 2> buffers = {
               boost::asio::buffer (header, header_size), boost::asio::buffer (body, body_size)};
-            boost::asio::async_write (*socket, buffers, stats_handler);
+            boost::asio::async_write (*socket, buffers, std::move (stats_handler));
         } else {
-            const auto wrapped_handler = [handler, socket] (const boost::system::error_code &ec,
-                                                            std::size_t bytes) {
+            auto wrapped_handler = [handler = std::move (handler),
+                                    socket] (const boost::system::error_code &ec,
+                                             std::size_t bytes) {
                 LIBZLINK_UNUSED (socket);
                 if (handler)
                     handler (ec, bytes);
             };
             std::array<boost::asio::const_buffer, 2> buffers = {
               boost::asio::buffer (header, header_size), boost::asio::buffer (body, body_size)};
-            boost::asio::async_write (*socket, buffers, wrapped_handler);
+            boost::asio::async_write (*socket, buffers, std::move (wrapped_handler));
         }
         return;
     }
@@ -530,7 +537,7 @@ void tcp_transport_t::async_writev (const unsigned char *header,
     };
 
     const std::shared_ptr<writev_state_t> state (
-      new writev_state_t{header, header_size, 0, body, body_size, 0, handler});
+      new writev_state_t{header, header_size, 0, body, body_size, 0, std::move (handler)});
 
     const std::shared_ptr<std::function<void (const boost::system::error_code &)>> do_write (
       new std::function<void (const boost::system::error_code &)>);

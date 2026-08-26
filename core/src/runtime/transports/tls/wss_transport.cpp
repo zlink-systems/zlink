@@ -158,7 +158,9 @@ void wss_transport_t::async_read_some (unsigned char *buffer,
     if (buffer_size == 0) {
         if (handler) {
             boost::asio::post (stream->get_executor (),
-                               [handler] () { handler (boost::system::error_code (), 0); });
+                               [handler = std::move (handler)] () {
+                                   handler (boost::system::error_code (), 0);
+                               });
         }
         return;
     }
@@ -170,16 +172,18 @@ void wss_transport_t::async_read_some (unsigned char *buffer,
                                   read_state->message_buffer.data ());
         read_state->message_buffer.consume (deliver);
         if (handler) {
-            boost::asio::post (stream->get_executor (), [handler, deliver] () {
+            boost::asio::post (stream->get_executor (),
+                               [handler = std::move (handler), deliver] () {
                 handler (boost::system::error_code (), deliver);
             });
         }
         return;
     }
 
-    stream->async_read (read_state->message_buffer, [stream, read_state, buffer, buffer_size,
-                                                     handler] (const boost::system::error_code &ec,
-                                                               std::size_t) {
+    stream->async_read (read_state->message_buffer,
+                        [stream, read_state, buffer, buffer_size,
+                         handler = std::move (handler)] (const boost::system::error_code &ec,
+                                                         std::size_t) {
         if (read_state->closed) {
             if (handler) {
                 handler (boost::asio::error::operation_aborted, 0);
@@ -274,7 +278,8 @@ void wss_transport_t::async_write_some (const unsigned char *buffer,
     //  WebSocket writes are frame-based
     stream->async_write (
       boost::asio::buffer (buffer, buffer_size),
-      [stream, handler] (const boost::system::error_code &ec, std::size_t bytes_transferred) {
+      [stream, handler = std::move (handler)] (const boost::system::error_code &ec,
+                                               std::size_t bytes_transferred) {
           ASIO_DBG ("WSS", "write complete: ec=%s, bytes=%zu", ec.message ().c_str (),
                     bytes_transferred);
           if (handler) {
@@ -300,8 +305,10 @@ void wss_transport_t::async_writev (const unsigned char *header,
     std::array<boost::asio::const_buffer, 2> buffers = {boost::asio::buffer (header, header_size),
                                                         boost::asio::buffer (body, body_size)};
 
-    stream->async_write (buffers, [stream, handler] (const boost::system::error_code &ec,
-                                                     std::size_t bytes_transferred) {
+    stream->async_write (buffers,
+                         [stream, handler = std::move (handler)] (
+                           const boost::system::error_code &ec,
+                           std::size_t bytes_transferred) {
         ASIO_DBG ("WSS", "writev complete: ec=%s, bytes=%zu", ec.message ().c_str (),
                   bytes_transferred);
         if (handler) {
@@ -414,7 +421,9 @@ void wss_transport_t::async_handshake (int handshake_type, completion_handler_t 
     }
 
     stream->next_layer ().async_handshake (
-      ssl_hs_type, [this, stream, handler] (const boost::system::error_code &ec) {
+      ssl_hs_type,
+      [this, stream,
+       handler = std::move (handler)] (const boost::system::error_code &ec) mutable {
           if (ec) {
               ASIO_DBG_WSS ("SSL handshake failed: %s", ec.message ().c_str ());
               if (handler) {
@@ -427,7 +436,7 @@ void wss_transport_t::async_handshake (int handshake_type, completion_handler_t 
           ASIO_DBG_WSS ("SSL handshake complete, continuing with WebSocket");
 
           //  Now do WebSocket handshake
-          continue_ws_handshake (stream, handler);
+          continue_ws_handshake (stream, std::move (handler));
       });
 }
 
@@ -443,7 +452,9 @@ void wss_transport_t::continue_ws_handshake (const std::shared_ptr<wss_stream_t>
     if (_handshake_type == client) {
         //  Client-side WebSocket handshake
         stream->async_handshake (
-          _host, _path, [this, stream, handler] (const boost::system::error_code &ec) {
+          _host, _path,
+          [this, stream,
+           handler = std::move (handler)] (const boost::system::error_code &ec) {
               if (!ec) {
                   _ws_handshake_complete = true;
                   ASIO_DBG_WSS ("WebSocket client handshake complete");
@@ -456,7 +467,9 @@ void wss_transport_t::continue_ws_handshake (const std::shared_ptr<wss_stream_t>
           });
     } else {
         //  Server-side WebSocket handshake
-        stream->async_accept ([this, stream, handler] (const boost::system::error_code &ec) {
+        stream->async_accept (
+          [this, stream,
+           handler = std::move (handler)] (const boost::system::error_code &ec) {
             if (!ec) {
                 _ws_handshake_complete = true;
                 ASIO_DBG_WSS ("WebSocket server handshake complete");

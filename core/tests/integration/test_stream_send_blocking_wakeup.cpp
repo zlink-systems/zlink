@@ -46,6 +46,7 @@ stream_route_probe_t *g_stream_route_probe = NULL;
 
 struct stream_routed_ready_event_t
 {
+    zlink_send_op_id_t op_id;
     zlink_routing_id_t rid;
     uint64_t pair_id;
     uint64_t pair_generation;
@@ -70,6 +71,7 @@ void capture_stream_routed_ready (void *,
 
     stream_routed_ready_event_t copy;
     memset (&copy, 0, sizeof (copy));
+    copy.op_id = event_->op_id;
     copy.rid = event_->peer_rid;
     copy.pair_id = event_->transport_pair_id;
     copy.pair_generation = event_->transport_pair_generation;
@@ -81,10 +83,11 @@ void capture_stream_routed_ready (void *,
     probe->changed.notify_all ();
 }
 
-bool wait_stream_routed_ready (stream_routed_ready_probe_t *probe_,
-                               const zlink_routing_id_t *rid_,
-                               zlink_send_complete_result_t result_,
-                               int timeout_ms_ = 3000)
+bool wait_stream_routed_completion (stream_routed_ready_probe_t *probe_,
+                                    const zlink_routing_id_t *rid_,
+                                    zlink_send_op_id_t op_id_,
+                                    zlink_send_complete_result_t *result_out_,
+                                    int timeout_ms_ = 3000)
 {
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
@@ -92,9 +95,12 @@ bool wait_stream_routed_ready (stream_routed_ready_probe_t *probe_,
     while (true) {
         for (size_t i = 0; i < probe_->events.size (); ++i) {
             const stream_routed_ready_event_t &event = probe_->events[i];
-            if (event.result == result_ && event.rid.size == rid_->size
-                && memcmp (event.rid.data, rid_->data, rid_->size) == 0)
+            if (event.op_id == op_id_ && event.rid.size == rid_->size
+                && memcmp (event.rid.data, rid_->data, rid_->size) == 0) {
+                if (result_out_)
+                    *result_out_ = event.result;
                 return true;
+            }
         }
         if (probe_->changed.wait_until (lock, deadline)
             == std::cv_status::timeout)
@@ -538,8 +544,10 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
     TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, errno);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&stale_message));
 
-    //  Back the queue up so the next record stays reserved, then end the
-    //  route: the reserved record is what reports the terminal failure.
+    //  Back the queue up so the next record starts pending, then end the
+    //  route. Admission can win before detach is observed; otherwise detach
+    //  resolves the exact target as terminal. Both outcomes are defined, but
+    //  the nonzero operation must complete exactly once for this target.
     fill_stream_send_queue_until_backpressured_once (server, &rid);
     zlink_send_op_id_t parked_op = 0;
     TEST_ASSERT_EQUAL_INT (
@@ -548,10 +556,13 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
     TEST_ASSERT_NOT_EQUAL (0, parked_op);
 
     close_raw_fd (raw_fd);
+    zlink_send_complete_result_t parked_result = ZLINK_SEND_TIMED_OUT;
     TEST_ASSERT_TRUE_MESSAGE (
-      wait_stream_routed_ready (&before_attach_probe, &rid,
-                                ZLINK_SEND_TERMINAL),
-      "STREAM detach did not fail the reserved record for the exact target");
+      wait_stream_routed_completion (&before_attach_probe, &rid, parked_op,
+                                     &parked_result),
+      "STREAM detach race did not complete the reserved exact-target record");
+    TEST_ASSERT_TRUE (parked_result == ZLINK_SEND_ADMITTED
+                      || parked_result == ZLINK_SEND_TERMINAL);
     test_context_socket_close (server);
 
     void *late_server = test_context_socket (ZLINK_SOCKET_STREAM);

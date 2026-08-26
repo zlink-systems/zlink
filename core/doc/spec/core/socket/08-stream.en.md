@@ -244,8 +244,11 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
 
 STREAM carries raw bytes without frame boundaries, so a STREAM record always
 contains exactly one part. If `part_count_` is not 1, the result is
-`ZLINK_SUBMIT_NOT_SUPPORTED`. `options_->target` selects one exact peer, and
-its identity comes from `zlink_select_routed_submit_target()`.
+`ZLINK_SUBMIT_NOT_SUPPORTED`. `options_->target` is required. It may contain
+the exact identity returned by `zlink_select_routed_submit_target()`, or only
+`peer_rid` with both transport-pair fields zero. In the latter form Core
+snapshots the exact connection during this submit and never retargets a
+pending record.
 
 Completion means admission to the Core send queue, not peer delivery.
 [Socket Common](README.en.md) owns the complete contract, including ownership

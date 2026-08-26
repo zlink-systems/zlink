@@ -145,7 +145,9 @@ void ws_transport_t::async_read_some (unsigned char *buffer,
     if (buffer_size == 0) {
         if (handler) {
             boost::asio::post (stream->get_executor (),
-                               [handler] () { handler (boost::system::error_code (), 0); });
+                               [handler = std::move (handler)] () {
+                                   handler (boost::system::error_code (), 0);
+                               });
         }
         return;
     }
@@ -157,16 +159,18 @@ void ws_transport_t::async_read_some (unsigned char *buffer,
                                   read_state->message_buffer.data ());
         read_state->message_buffer.consume (deliver);
         if (handler) {
-            boost::asio::post (stream->get_executor (), [handler, deliver] () {
+            boost::asio::post (stream->get_executor (),
+                               [handler = std::move (handler), deliver] () {
                 handler (boost::system::error_code (), deliver);
             });
         }
         return;
     }
 
-    stream->async_read (read_state->message_buffer, [stream, read_state, buffer, buffer_size,
-                                                     handler] (const boost::system::error_code &ec,
-                                                               std::size_t) {
+    stream->async_read (read_state->message_buffer,
+                        [stream, read_state, buffer, buffer_size,
+                         handler = std::move (handler)] (const boost::system::error_code &ec,
+                                                         std::size_t) {
         if (read_state->closed) {
             if (handler) {
                 handler (boost::asio::error::operation_aborted, 0);
@@ -257,7 +261,8 @@ void ws_transport_t::async_write_some (const unsigned char *buffer,
     //  as a single binary frame
     stream->async_write (
       boost::asio::buffer (buffer, buffer_size),
-      [stream, handler] (const boost::system::error_code &ec, std::size_t bytes_transferred) {
+      [stream, handler = std::move (handler)] (const boost::system::error_code &ec,
+                                               std::size_t bytes_transferred) {
           ASIO_DBG ("WS", "write complete: ec=%s, bytes=%zu", ec.message ().c_str (),
                     bytes_transferred);
           if (handler) {
@@ -283,8 +288,10 @@ void ws_transport_t::async_writev (const unsigned char *header,
     std::array<boost::asio::const_buffer, 2> buffers = {boost::asio::buffer (header, header_size),
                                                         boost::asio::buffer (body, body_size)};
 
-    stream->async_write (buffers, [stream, handler] (const boost::system::error_code &ec,
-                                                     std::size_t bytes_transferred) {
+    stream->async_write (buffers,
+                         [stream, handler = std::move (handler)] (
+                           const boost::system::error_code &ec,
+                           std::size_t bytes_transferred) {
         ASIO_DBG ("WS", "writev complete: ec=%s, bytes=%zu", ec.message ().c_str (),
                   bytes_transferred);
         if (handler) {
@@ -374,7 +381,8 @@ void ws_transport_t::async_handshake (int handshake_type, completion_handler_t h
     if (handshake_type == client) {
         //  Client-side WebSocket handshake
         _ws_stream->async_handshake (
-          _host, _path, [this, handler] (const boost::system::error_code &ec) {
+          _host, _path,
+          [this, handler = std::move (handler)] (const boost::system::error_code &ec) {
               if (!ec) {
                   _handshake_complete = true;
                   ASIO_DBG_WS ("client handshake complete");
@@ -387,7 +395,8 @@ void ws_transport_t::async_handshake (int handshake_type, completion_handler_t h
           });
     } else {
         //  Server-side WebSocket handshake
-        _ws_stream->async_accept ([this, handler] (const boost::system::error_code &ec) {
+        _ws_stream->async_accept (
+          [this, handler = std::move (handler)] (const boost::system::error_code &ec) {
             if (!ec) {
                 _handshake_complete = true;
                 ASIO_DBG_WS ("server handshake complete");

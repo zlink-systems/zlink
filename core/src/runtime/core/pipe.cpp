@@ -1492,24 +1492,19 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
     // same byte-HWM decision under _out_sync.
     if (likely (!_registry_accounting && !_conflate
                 && (msg_->flags () & msg_t::more) == 0
-                && !msg_->is_delimiter ())) {
+                && !msg_->is_delimiter ()
+                && _out_incomplete_bytes == 0
+                && _out_incomplete_payload_bytes == 0
+                && !_out_multipart_started_empty
+                && !_out_owner_message_started
+                && !_out_owner_message_start_pending)) {
         if (admission_out_)
             *admission_out_ = pipe_message_admission_invalid;
         const uint64_t payload_bytes = static_cast<uint64_t> (msg_->size ());
         const uint64_t frame_bytes = frame_accounted_bytes (msg_);
-        const uint64_t message_bytes =
-          frame_bytes == UINT64_MAX
-              || UINT64_MAX - _out_incomplete_bytes < frame_bytes
-            ? UINT64_MAX
-            : _out_incomplete_bytes + frame_bytes;
-        const uint64_t message_payload_bytes =
-          UINT64_MAX - _out_incomplete_payload_bytes < payload_bytes
-            ? UINT64_MAX
-            : _out_incomplete_payload_bytes + payload_bytes;
-        if (unlikely (message_bytes == UINT64_MAX
-                      || message_payload_bytes == UINT64_MAX
+        if (unlikely (frame_bytes == UINT64_MAX
                       || (_max_message_bytes != 0
-                          && message_payload_bytes > _max_message_bytes))) {
+                          && payload_bytes > _max_message_bytes))) {
             errno = EMSGSIZE;
             if (admission_out_)
                 *admission_out_ = pipe_message_admission_too_large;
@@ -1517,9 +1512,7 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
         }
 
         if (unlikely (!can_commit_bytes_with_peer_snapshot_unlocked (
-                        message_bytes, message_payload_bytes,
-                        _out_incomplete_bytes == 0
-                          || _out_multipart_started_empty))) {
+                        frame_bytes, payload_bytes, true))) {
             if (_bytes_written > _peers_bytes_read) {
                 _out_active = false;
                 _waiting_for_byte_credit.store (true,
@@ -1536,21 +1529,16 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
           _bytes_written > _peers_bytes_read
             ? _bytes_written - _peers_bytes_read
             : 0;
-        if (_hwm > 0 && in_flight == 0 && message_bytes > _hwm) {
+        if (_hwm > 0 && in_flight == 0 && frame_bytes > _hwm) {
             ++_oversize_message_admission_count;
             _oversize_message_admission_max_bytes = std::max (
-              _oversize_message_admission_max_bytes, message_bytes);
+              _oversize_message_admission_max_bytes, frame_bytes);
         }
-        _bytes_written = UINT64_MAX - _bytes_written < message_bytes
+        _bytes_written = UINT64_MAX - _bytes_written < frame_bytes
                            ? UINT64_MAX
-                           : _bytes_written + message_bytes;
+                           : _bytes_written + frame_bytes;
         if (!msg_->is_routing_id () && !msg_->is_credential ())
             ++_msgs_written;
-        _out_incomplete_bytes = 0;
-        _out_incomplete_payload_bytes = 0;
-        _out_multipart_started_empty = false;
-        _out_owner_message_started = false;
-        _out_owner_message_start_pending = false;
         if (admission_out_)
             *admission_out_ = pipe_message_admission_ready;
         flush_unlocked ();
