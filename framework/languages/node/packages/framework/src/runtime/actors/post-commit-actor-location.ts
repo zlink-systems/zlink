@@ -1,4 +1,5 @@
 import type { RoutingId } from '../../contracts';
+import { ZLinkStateLane } from '../execution/state-lane';
 import type { ZLinkLocationLifecycle } from '../locations';
 import { ZLinkActorRetryDelay } from './actor-retry-delay';
 
@@ -15,6 +16,7 @@ interface ActorOperationQueue {
 }
 
 export class ZLinkPostCommitActorLocation {
+  private readonly lane = new ZLinkStateLane();
   private readonly queues = new Map<string, ActorOperationQueue>();
   private readonly tasks = new Map<string, Promise<void>>();
 
@@ -66,7 +68,12 @@ export class ZLinkPostCommitActorLocation {
     if (this.tasks.has(actorId)) {
       return;
     }
-    const task = this.run(actorId).finally(() => this.tasks.delete(actorId));
+    let task!: Promise<void>;
+    task = this.run(actorId).finally(async () => await this.lane.run(() => {
+      if (this.tasks.get(actorId) === task) {
+        this.tasks.delete(actorId);
+      }
+    }));
     this.tasks.set(actorId, task);
   }
 
@@ -81,7 +88,7 @@ export class ZLinkPostCommitActorLocation {
       }
       try {
         await operation();
-        this.complete(queue);
+        await this.lane.run(() => this.completeCore(queue));
         retryDelay.reset();
       } catch (error) {
         this.options.reportError?.(error);
@@ -92,7 +99,7 @@ export class ZLinkPostCommitActorLocation {
     }
   }
 
-  private complete(queue: ActorOperationQueue): void {
+  private completeCore(queue: ActorOperationQueue): void {
     queue.operations[queue.head] = undefined;
     queue.head += 1;
     queue.count -= 1;

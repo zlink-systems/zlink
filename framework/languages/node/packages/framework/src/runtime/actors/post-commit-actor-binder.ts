@@ -1,4 +1,5 @@
 import type { ActorRef } from '../../contracts';
+import { ZLinkStateLane } from '../execution/state-lane';
 import { ZLinkActorRetryDelay } from './actor-retry-delay';
 
 export interface ZLinkPostCommitActorBinderOptions {
@@ -8,6 +9,7 @@ export interface ZLinkPostCommitActorBinderOptions {
 }
 
 export class ZLinkPostCommitActorBinder {
+  private readonly lane = new ZLinkStateLane();
   private readonly desiredRefs = new Map<string, ActorRef>();
   private readonly tasks = new Map<string, Promise<void>>();
 
@@ -21,8 +23,13 @@ export class ZLinkPostCommitActorBinder {
     this.desiredRefs.set(actorRef.actorId, actorRef);
     const existing = this.tasks.get(actorRef.actorId);
     if (existing !== undefined) return existing;
-    const task = this.run(actorRef.actorId)
-      .finally(() => this.tasks.delete(actorRef.actorId));
+    let task!: Promise<void>;
+    task = this.run(actorRef.actorId)
+      .finally(async () => await this.lane.run(() => {
+        if (this.tasks.get(actorRef.actorId) === task) {
+          this.tasks.delete(actorRef.actorId);
+        }
+      }));
     this.tasks.set(actorRef.actorId, task);
     return task;
   }
@@ -38,8 +45,7 @@ export class ZLinkPostCommitActorBinder {
       }
       try {
         await this.options.bind(actorRef, true);
-        if (this.desiredRefs.get(actorId) === actorRef) {
-          this.desiredRefs.delete(actorId);
+        if (await this.lane.run(() => this.completeBindCore(actorId, actorRef))) {
           return;
         }
         retryDelay.reset();
@@ -54,5 +60,11 @@ export class ZLinkPostCommitActorBinder {
     return typeof this.options.signal === 'function'
       ? this.options.signal()
       : this.options.signal;
+  }
+
+  private completeBindCore(actorId: string, actorRef: ActorRef): boolean {
+    if (this.desiredRefs.get(actorId) !== actorRef) return false;
+    this.desiredRefs.delete(actorId);
+    return true;
   }
 }

@@ -1,6 +1,7 @@
 import type { RoutingId, ZLinkActor } from '../../contracts';
 import type { ZLinkDeferredJoinAcceptedRoot } from '../actors';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
+import { ZLinkStateLane } from '../execution/state-lane';
 
 export interface ZLinkFormalRemoteActorTransfer {
   readonly actor: ZLinkActor;
@@ -14,6 +15,7 @@ export interface ZLinkFormalRemoteActorTransfer {
 
 /** Keeps the source-leave fence attached to one admitted formal transfer. */
 export class ZLinkFormalRemoteActorTransferRegistry {
+  private readonly lane = new ZLinkStateLane();
   private readonly transfers = new Map<string, {
     readonly transfer: ZLinkFormalRemoteActorTransfer;
     readonly resolveTargetLifecycleCompleted: () => void;
@@ -100,12 +102,45 @@ export class ZLinkFormalRemoteActorTransferRegistry {
     transferId: string,
     succeeded: boolean
   ): Promise<boolean> {
-    const pending = this.transfers.get(actorId);
-    if (pending === undefined || pending.transfer.transferId !== transferId) {
-      return false;
-    }
+    // The synchronous lookup remains in the caller's JS turn. Only the
+    // target-lifecycle wait crosses turns, so the completion must re-check
+    // the exact entry after that external await.
+    const pending = this.completeSourceLeaveTerminalStartCore(actorId, transferId);
+    if (pending === undefined) return false;
     await pending.transfer.targetLifecycleCompleted;
-    if (this.transfers.get(actorId) !== pending) return false;
+    return await this.lane.run(() => this.completeSourceLeaveTerminalCore(
+      actorId,
+      transferId,
+      pending,
+      succeeded
+    ));
+  }
+
+  private completeSourceLeaveTerminalStartCore(actorId: string, transferId: string): {
+    readonly transfer: ZLinkFormalRemoteActorTransfer;
+    readonly resolveTargetLifecycleCompleted: () => void;
+    readonly resolveSourceLeaveTerminal: (succeeded: boolean) => void;
+  } | undefined {
+    const pending = this.transfers.get(actorId);
+    return pending === undefined || pending.transfer.transferId !== transferId
+      ? undefined
+      : pending;
+  }
+
+  private completeSourceLeaveTerminalCore(
+    actorId: string,
+    transferId: string,
+    pending: {
+      readonly transfer: ZLinkFormalRemoteActorTransfer;
+      readonly resolveTargetLifecycleCompleted: () => void;
+      readonly resolveSourceLeaveTerminal: (succeeded: boolean) => void;
+    },
+    succeeded: boolean
+  ): boolean {
+    if (
+      pending.transfer.transferId !== transferId
+      || this.transfers.get(actorId) !== pending
+    ) return false;
     pending.resolveSourceLeaveTerminal(succeeded);
     return true;
   }
