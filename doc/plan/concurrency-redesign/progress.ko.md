@@ -81,9 +81,11 @@
 | 표본 | ZLinkSessionActorBindingTable | 30 | **완료** | `3cc6f5f615` | sol. 재진입 2, 호환 경계 25(부채) |
 | 1 | ZLinkInMemoryLocationStore | 27 | **완료** | `2bdf463ee3` | 재진입 0, posddd ② 생략(근거 커밋에) |
 | 2 | ZLinkActorHandoffAdmissions | 25 | **완료** | `326133ca03` | SuppressFlow 1, 호환 경계 4 |
-| 3 | ZLinkActorOwnershipCoordinator | 26 | **완료(CP2 게이트 대기)** | `e1f5ade349` | 재진입 8 해소(순차 await+lane 내부화), _disposeStartGate=C3, 호환 경계 3 |
-| 4 | ZLinkSpotNodeCatalog | 48 | **완료(CP2 게이트 대기)** | `0fef22fa62` | SuppressFlow 5, 호환 경계 9(범위 밖 호출자 2 포함) |
-| 5·6 | ZLinkClientServerClientRuntime + Connection | 20+44 | **완료(CP2 게이트 대기)** | `39d71acd6c` | lane 2개(소유 분리), SuppressFlow 7, 재진입 0, 호환 경계 4, _socketLifecycleGate 유지 |
+| 3 | ZLinkActorOwnershipCoordinator | 26 | **완료** | `e1f5ade349` | 재진입 8 해소(순차 await+lane 내부화), _disposeStartGate=C3, 호환 경계 3. reconciliation 시작 Task.Yield 보강(§7-4) |
+| 4 | ZLinkSpotNodeCatalog | 48 | **완료** | `0fef22fa62` | SuppressFlow 5, 호환 경계 9(범위 밖 호출자 2 포함). dispose 재진입 fix `1bd23dc1ff` |
+| 5·6 | ZLinkClientServerClientRuntime + Connection | 20+44 | **완료** | `39d71acd6c` | lane 2개(소유 분리), SuppressFlow 7, 재진입 0, 호환 경계 4, _socketLifecycleGate 유지 |
+
+CP2 배치 1(#3·#4·#5·6) 게이트 2026-08-26 통과 — unit 1893/0, 7샘플 러너 exit 0.
 | 7 | ZLinkActorHandoffState | 58 | 대기 | | 2× 난이도 |
 | 8 | ZLinkActorRuntimeState | 35 | 대기 | | semaphore + 재진입 ~20 |
 | 9 | ZLinkManagedMeshNode | 130 | 대기 | | 4×+, 정독 리뷰 필수 |
