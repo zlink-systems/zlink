@@ -97,6 +97,28 @@ concurrent map이나 별도 lock으로 남기면, C2가 막으려는 교차 불�
 그대로 남는다 — 얻는 것은 숫자(잠금 개수)가 줄었다는 것뿐이고, "배타적 접근 해제 뒤
 스냅샷으로 행동한다"는 구조는 바뀌지 않는다.
 
+### 상태 보호와 작업 프로토콜 직렬화를 구분한다
+
+외부 비동기 작업 전체를 하나씩 실행하기 위한 semaphore·socket gate·dispose gate는
+컴포넌트의 mutable 상태를 보호하는 state lane과 책임이 다르다. 다음 조건을 모두
+만족할 때만 그 gate를 작업 프로토콜 primitive로 유지할 수 있다.
+
+- gate가 보호하는 것이 외부 resource operation의 시작·종료 또는 exact-once
+  disposal이며, C2 상태의 일부를 별도로 소유하지 않는다.
+- operation을 시작하기 전에 필요한 generation·identity·ownership을 gate 안에서
+  확정한다.
+- gate를 놓은 뒤에는 mutable 상태 스냅샷이 아니라 Task, reservation, seal token 또는
+  단독 ownership을 이전받은 resource를 사용한다.
+- 완료 경로는 같은 ownership을 정확히 한 번 반납한다.
+
+작업 프로토콜 gate 안에서 state lane의 완료를 기다리는 것은 허용한다. 그러나 반대
+방향 — state lane의 turn 안에서 그 gate의 획득이나 장기 operation의 완료를 기다리는
+것 — 은 금지한다. 두 방향을 모두 허용하면 서로가 서로의 완료를 기다리는 역방향
+deadlock이 생긴다.
+
+이 예외는 C2 상태를 여러 lock으로 나누는 허가가 아니다. 같은 불변식에 참여하는
+field와 collection은 여전히 하나의 state lane이 소유한다.
+
 ## 5. state lane의 보장과 제약
 
 state lane은 다음을 보장한다.
@@ -128,6 +150,24 @@ Lane은 이 상황을 hang이 아니라 재진입이 일어난 바로 그 호출
 한다 — 어느 lane에 재진입했는지 알려주는 오류가 그 자리에서 발생하면, 스택 트레이스가
 원인 코드를 곧바로 가리킨다.
 
+### 완료 신호와 블로킹 호환 경계
+
+Lane work의 완료 신호는 lane의 현재 소유권 표시가 해제된 뒤에 caller continuation을
+실행해야 한다. 완료 API가 dependent continuation을 완료 thread에서 inline 실행할 수
+있는 언어에서는, 완료 신호를 lane-current scope 안에서 직접 완료하지 않는다. 완료를
+scope 밖 scheduler에 게시하거나 continuation을 비동기로 강제한다.
+
+기존 동기 표면이 state lane의 완료를 블로킹 대기하는 호환 경계는 다음 조건을 모두
+만족할 때만 허용한다.
+
+- 제출한 lane 항목이 현재 보유 중인 외부 gate를 다시 획득하지 않는다.
+- lane 항목의 모든 완료 신호는 continuation을 비동기로 실행한다.
+- 그 동기 표면이 반환되기 전에 상태 등록·캡처가 완료돼야 하는 계약이 있거나, 공개 동기
+  signature를 이 전환에서 바꿀 수 없다는 사유가 기록돼 있다.
+
+이 세 조건 중 하나라도 확인할 수 없으면 gate를 보유한 채 lane 완료를 기다리지 않는다.
+호출 경로를 비동기로 전파하거나, gate와 lane의 책임을 다시 분리한다.
+
 ## 6. 재진입 제거 규칙
 
 C2로 분류한 컴포넌트를 lane으로 전환할 때 재진입을 먼저 걷어낸다. 실제 전환에서
@@ -140,12 +180,29 @@ private 메서드로 분리한다. Public 진입점은 lane에 한 번만 들어
 private 메서드의 본문을 직접 호출한다.
 
 **유형 ② — lane turn 안에서 시작한 장기 비동기 작업이 lane 소유권을 상속하는 경우.**
-Turn 안에서 timeout처럼 지연 후 완료되는 비동기 작업을 시작하면, 그 작업이 실행되는
+Turn 안에서 timeout·retry·background loop 같은 작업을 시작하면, 그 작업이 실행되는
 문맥이 "지금 이 lane 위에서 실행 중"이라는 표시를 그대로 물려받을 수 있다. 지연이 끝난
 뒤 그 작업이 같은 lane에 다시 들어가려 하면, 실제로는 원래 turn이 이미 끝난 뒤인데도
-재진입으로 검출된다. 이런 장기 작업을 시작하는 자리에서는 실행 문맥의 흐름을 끊어 그
-작업이 새 호출자로 lane에 진입하게 만든다 — lane 소유권 표시가 비동기 문맥으로
-상속되는 언어에서는 장기 작업을 시작하는 지점에서 그 상속을 명시적으로 끊는다.
+재진입으로 검출된다.
+
+이런 장기 작업을 시작하는 자리에서는 실행 문맥의 흐름을 끊는다. 다만 문맥 흐름을
+끊는 조치는 그 비동기 작업이 실제로 thread 전환을 거친 뒤에만 효력이 있다. 호출한
+async 함수의 동기 prefix가 첫 `await` 전에 같은 lane에 재진입할 수 있다면, 문맥 흐름을
+끊는 것만으로는 충분하지 않다 — 이 경우 작업 시작 자체를 별도 scheduler에 게시해 동기
+prefix까지 원래 turn 밖에서 실행되게 한다. 반대로 첫 동작이 실제 비동기 지연이고 그
+전에 lane 재진입이 없다면, 문맥 흐름을 끊는 것만으로 충분하다.
+
+**유형 ③ — 기존 배타적 접근 안에서 외부 callback을 호출하던 경우.** Monitor 재진입으로
+동작하던 callback을 lane turn 안에서 직접 호출하면, 그 callback이 같은 컴포넌트의
+public 표면에 재진입한다. 다음 세 단계로 나눈다.
+
+1. turn A에서 검증, 결과 산출, 원본이 callback 전에 끝내던 상태 전이 전부와 placeholder
+   ownership claim을 완료한다.
+2. callback은 lane turn 밖에서 호출한다.
+3. turn B에서는 그 placeholder를 callback 결과 Task로 정확히 교체하거나 실패를 정산한다.
+
+원본이 callback 전에 끝내던 상태 전이를 turn B로 미루지 않는다. Callback 실행 창의
+경쟁 관측자는 원본의 "배타적 접근이 끝난 뒤"와 같은 상태를 봐야 한다.
 
 ## 7. 시그니처 전환 규칙
 
@@ -163,20 +220,51 @@ Turn 안에서 timeout처럼 지연 후 완료되는 비동기 작업을 시작�
   값을 동시에 담지 못한다. 이런 경우는 성공 여부와 값(그리고 실패 시 부가 값)을 함께
   담는 결과 타입을 만들어 보존한다. 기계적인 nullable 치환은 관측 가능한 동작을
   바꾸므로 허용하지 않는다.
+- **반환 전 완료 보장을 보존한다.** 원본 동기 메서드가 waiter 등록, epoch·generation
+  캡처, store 판독 또는 exact ownership claim을 반환 전에 완료했다면, 전환 뒤에도
+  caller가 반환을 관찰하기 전에 그 작업이 완료돼 있어야 한다. 비동기 fire-and-forget
+  게시로 바꾸지 않는다.
+- 이 보장을 유지하기 위해 동기 호환 경계가 필요하면 [§5 「완료 신호와 블로킹 호환
+  경계」](#완료-신호와-블로킹-호환-경계) 조건을 확인하고 사유를 기록한다. 완료 신호를
+  기다리는 이후 단계는 비동기로 남길 수 있지만, 등록·캡처 자체를 반환 뒤로 미루지는
+  않는다.
+- 공개 또는 언어별 exact interface가 동기 계약이면, state lane 도입만을 이유로
+  Promise나 Task 반환으로 바꾸지 않는다. 내부 호출자가 이미 비동기이고 관측 계약이
+  변하지 않을 때만 async signature를 전파한다.
 
 ## 8. 전환 단위와 검증
 
-- **전환 경계는 기존 gate 단위를 그대로 쓴다.** 배타적 접근 하나가 지키던 범위가 이미
-  소유 단위다. 전환한다고 해서 그 경계를 넓히거나 쪼개지 않는다 — 경계 재설계는 이
-  전환의 목적이 아니다.
-- **전환 단위는 클래스 하나다.** 한 컴포넌트(그 클래스가 가진 배타적 접근 하나)를
-  한 번에 옮긴다.
+- **전환 경계는 기존 gate가 소유하던 상태 영역을 그대로 쓴다.** 클래스 하나에 서로
+  독립적인 gate가 여러 개 있었다면, 각각을 별도 ownership region으로 옮길 수 있다. 이
+  경우 두 영역에 걸친 field·collection 불변식이 없고, 영역 사이의 호출 방향이
+  단방향임을 기록한다.
+- 교차 불변식이나 양방향 대기가 하나라도 있으면 여러 lane으로 나누지 않고 한
+  ownership region으로 합친다. "클래스 하나"는 기본 작업 단위일 뿐, 한 클래스 안에
+  근거 없이 여러 state lane을 만드는 허가가 아니다.
+- socket·completion·worker 같은 작업 프로토콜 gate는 [§4 「상태 보호와 작업 프로토콜
+  직렬화를 구분한다」](#상태-보호와-작업-프로토콜-직렬화를-구분한다) 조건을 만족할
+  때만 state lane 전환 대상에서 제외한다. 제외 사유에는 ownership transfer,
+  generation fence, completion 방식과 lock-order를 기록한다.
 - **전환마다 검증을 통과해야 다음으로 간다.** 확인할 항목은
   [검증 요구](#10-검증-요구)가 소유한다.
 - **성공 지표는 lock 개수가 아니다.** 배타적 접근 문의 개수가 줄어든 것은 증거가
   아니다. 줄여야 하는 것은 "async 경계를 넘어 쓰이는 스냅샷"의 수이며, 이 수를 컴포넌트
   단위로 전후 비교한다. 이 비교는 공개 표면이 아니라 내부 계측으로 확인하는 **내부
   확인 조건**이며, 검증 요구 절에는 두지 않는다.
+
+Async 경계 snapshot의 계수 단위는 source의 배타적 접근 위치다. 단순 문자열 검색
+결과가 아니라 실제 언어 token을 센다. 각 위치에서 배타적 접근 안에서 산출한 값·참조·
+결정이 다음 중 하나를 넘어 쓰이는지 추적한다.
+
+- `await` 또는 Task·Promise·future 반환
+- detached task, queue, worker thread 또는 callback dispatcher 제출
+- 비동기 continuation을 실행하는 completion signal
+- nonblocking transport operation 제출
+
+그 경계를 넘더라도 immutable completion signal, exact token, reservation 또는 단독
+ownership transfer로 유효성이 고정되면, primitive/protocol 제외군으로 따로 센다.
+Mutable authorization을 그대로 넘겨 쓰면 잔존 결함이다. 최종 보고는 `전체 / 제외군 /
+잔존 결함` 세 값을 모두 적는다.
 
 ## 9. 언어별 매핑
 
@@ -195,6 +283,21 @@ Turn 안에서 timeout처럼 지연 후 완료되는 비동기 작업을 시작�
 정의하는 같은 보장 — 한 번에 한 turn만 실행, FIFO, 재진입의 즉시 예외 검출, 소유
 collection의 무잠금 — 을 만족하는 그 언어의 primitive를 쓴다.
 
+.NET은 lane 소유권 표시에 `AsyncLocal`을 쓰므로, 장기 작업을 시작하는 지점에서는
+`ExecutionContext.SuppressFlow`로 그 상속을 끊는다. Async 함수의 동기 prefix가 첫
+`await` 전에 lane에 재진입할 수 있으면, `Task.Run` 등으로 시작 자체를 별도
+scheduler에 게시한다.
+
+Java는 lane-current `ThreadLocal` scope 안에서 `CompletableFuture.complete`를 호출하지
+않는다. `complete`는 비동기 표시가 없는 dependent를 완료 thread에서 inline 실행할 수
+있다. Current scope를 해제한 뒤 완료하거나, `completeAsync`처럼 별도 scheduler에서
+완료하는 API를 쓴다.
+
+Node.js의 동기 메서드는 하나의 JavaScript turn 안에서 끝나는 동안 다른 callback과
+동시에 실행되지 않는다. 따라서 `await` 전후로 상태 접근이 갈라지지 않고 public
+재진입 검출도 필요 없는 동기 표면은 Promise로 바꾸지 않는다. State lane 전환 대상은
+`await` 전후로 상태가 갈라지는 비동기 경로와, 재진입 검출이 필요한 표면뿐이다.
+
 ## 10. 검증 요구
 
 공개 표면(state lane에 제출한 작업의 반환값과 예외, 재진입 호출이 받는 오류, 전환한
@@ -210,6 +313,18 @@ collection의 무잠금 — 을 만족하는 그 언어의 primitive를 쓴다.
 - 같은 lane에 제출한 작업은 제출한 순서대로 실행된다.
 - 닫힌 lane에 결과를 기다리는 호출을 제출하면 즉시 예외로 끝나고, 결과를 기다리지
   않는 제출은 실패를 반환한다.
+- Lane turn에서 시작한 장기 작업은 원래 turn이 끝난 뒤 같은 lane에 정상 진입하며,
+  거짓 재진입 예외를 만들지 않는다.
+- 동기 prefix가 있는 장기 작업도 원래 turn 밖에서 시작됨을 확인한다.
+- 완료 continuation은 lane-current scope 밖에서 실행된다.
+- 외부 callback은 turn 밖에서 실행되며, callback이 관찰하는 상태는 원본 배타적 접근이
+  끝난 시점과 같다.
+- 작업 프로토콜 gate를 보유한 채 lane 완료를 기다리는 허용 사례는, lane 항목이 그
+  gate를 재획득하지 않으며 모든 completion continuation이 비동기임을 확인한다.
+- 반환 전 등록·캡처 계약이 있는 메서드는, caller가 반환을 관찰하는 시점에 그 등록·
+  캡처가 이미 완료돼 있다.
+- async 경계 snapshot 재측정에서 잔존 결함이 0이고, primitive/protocol 제외 위치에는
+  각각 유효성 보존 근거가 기록돼 있다.
 
 **전환 검증**
 
