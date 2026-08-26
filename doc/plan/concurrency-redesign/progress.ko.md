@@ -70,12 +70,15 @@ L2 개방 시(dotnet 마일스톤 후) 각 survey의 후보 순서대로 요청 
 후보 목록: cpp = l2-survey-cpp.ko.md(19개), java = l2-survey-java.ko.md(23+9개),
 node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 
-## 3. 지표 (CP2마다 재측정 — 명령은 rules §6. 마지막 2026-08-26)
+## 3. 지표 (마지막 재측정 2026-08-27)
 
-| 지표 | 시작 | 현재 | 목표 |
+| 지표 | 시작 | 현재 | 판정 |
 |---|---:|---:|---|
-| dotnet `lock` 문 | 999 | **118** (−88%) | ~60 (lane·큐 내부만) |
-| `_gate` 보유 클래스 | 61 | **6** | 0 |
-| state lane 사용 파일 | 0 | **77** | — |
-| **async 경계 스냅샷** *(진짜 지표)* | ~465 | 미측정 | **0** |
-| 호환 경계 `AwaitStateLane` *(부채)* | 0 | **656** | 0 (마무리에서 회수) |
+| **async 경계 스냅샷** *(진짜 지표)* | ~465 | **실질 0** | **목표 달성** — cp3-audit 전수: source 48 = 정당화 45(primitive·프로토콜) + 결함 3(수정 완료) |
+| dotnet `lock` 문 | 999 | **113** (−89%) | 잔존 전부 파일별 정당화(실행 primitive·무할당 계약·socket/dispose 프로토콜 — cp3-audit 표). 초기 목표 "~60"은 추정치였고 실측 분류가 대체 |
+| dotnet `_gate` 클래스 | 61 | **5** | 전부 판정된 프로토콜 gate |
+| dotnet lane 파일 | 0 | **77** | — |
+| cpp mutex 취득 | ~1,303 | **~204** (−84%) | recursive_mutex(actor_gateway 71) 제거. 잔존=실행 순서 소유 11영역·socket 수명(판정표) |
+| java 상위 후보 monitor | 683/94클래스 | **후보 32클래스 0** | 잔존 synchronized=native 작업 프로토콜·primitive 4종(판정) |
+| node | await 교차 기준 | **후보 34 전건 판정** | 전환 필요분 완료, 발견8 불요·executor 제외군 판정 |
+| 호환 경계(블로킹 브리지) | 0 | dotnet 663 등 | §5 조건 충족·사유 기록 잔존(스펙 06 개정 반영). 핫패스 회수는 이월 |
