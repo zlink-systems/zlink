@@ -83,7 +83,7 @@
 | 2 | ZLinkActorHandoffAdmissions | 25 | **완료** | `326133ca03` | SuppressFlow 1, 호환 경계 4 |
 | 3 | ZLinkActorOwnershipCoordinator | 26 | **완료(CP2 게이트 대기)** | `e1f5ade349` | 재진입 8 해소(순차 await+lane 내부화), _disposeStartGate=C3, 호환 경계 3 |
 | 4 | ZLinkSpotNodeCatalog | 48 | **완료(CP2 게이트 대기)** | `0fef22fa62` | SuppressFlow 5, 호환 경계 9(범위 밖 호출자 2 포함) |
-| 5·6 | ZLinkClientServerClientRuntime + Connection | 20+44 | 진행 중(병렬) | | 장기 작업 5, lane 2개 |
+| 5·6 | ZLinkClientServerClientRuntime + Connection | 20+44 | **요청됨** | | codex `p5-clientserver` 실행 중. 장기 작업 5, lane 2개 |
 | 7 | ZLinkActorHandoffState | 58 | 대기 | | 2× 난이도 |
 | 8 | ZLinkActorRuntimeState | 35 | 대기 | | semaphore + 재진입 ~20 |
 | 9 | ZLinkManagedMeshNode | 130 | 대기 | | 4×+, 정독 리뷰 필수 |
