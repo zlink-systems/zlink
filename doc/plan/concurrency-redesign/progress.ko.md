@@ -186,7 +186,7 @@ CP3 판정("이 작업의 하위 증상인가")에서 **끝내지 않는다.** �
 |---|---|---|---|---|---|
 | **dotnet** | dotnet | **완료** (`ZLinkStateLane` + golden 14) | **완료** (`3cc6f5f615`) | **진행 중** — §2 | unit 실패 0 · 6샘플 OK |
 | cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | **완료** (stream_session_registry_t 31→0, 시그니처 무변경, admit_inbound 대기 lane 밖 분리+세대화, 반려 1회: notify_changed lost wakeup) | 대기 | unit·contract 그린 (layout_contract 제외 — 기존) |
-| java | JVM | **완료** (§7-5 보완 포함 — completeAsync·internal 패키지 이동) | **요청됨** (ZLinkSessionActorsRuntime, 조사 l1-survey-java.ko.md, ~2×) | 대기 | core 1,144 중 flake 1 |
+| java | JVM | **완료** (§7-5 보완 포함 — completeAsync·internal 패키지 이동) | **완료** (ZLinkSessionActorsRuntime 22→0, 인터페이스 불변·kotlin 파급 0) | 대기 | core 1,157 중 알려진 flake 1 |
 | kotlin | JVM | **완료** (golden 14/14, CoroutineContext.Element 전파) | 대기 (java 조사: kotlin 파급 0 — 인터페이스 유지 시) | 대기 | kotlin 67/0 |
 | node | node | **완료** (golden 12 이식 + 동시성 2 제외, 사유 주석) | **요청됨** (ZLinkActorSessionBindingRegistry, 조사 l1-survey-node.ko.md) | 대기 | state-lane 12/12 |
 
@@ -391,3 +391,9 @@ grep -rhoE 'AwaitStateLane' --include=*.cs . | wc -l                   # 호환 
   lane 표식을 물려받아 **거짓 재진입 예외**가 난다. 처방: 완료를 CURRENT 스코프 밖으로 뺀다.
   kotlin(awaiter 자기 문맥 재개)·node(microtask, resolver 문맥 비전파)·cpp(future)는 해당 없음.
   L0 포팅 리뷰 체크리스트: "완료 신호의 continuation이 어느 문맥에서 실행되는가"를 언어마다 확인.
+- **(6번, 스펙 06 §6 유형 ③ 후보 — #7에서 실측)** **lock 안에서 외부 콜백을 호출하던 자리.**
+  원본이 `lock (_gate)` 안에서 호출자 제공 콜백(reserveReplay)을 불렀고, 콜백이 같은 컴포넌트의
+  public 표면(TryCapture)을 다시 불러도 C# Monitor 재진입 허용으로 동작했다. lane은 이를
+  금지하므로 콜백 호출을 turn 밖으로 뺀다: turn A(검증+대상 산출+placeholder claim으로 이중
+  예약 방지) → 콜백 실행(turn 밖) → turn B(기록·전이). 유형 ①과 달리 콜백은 외부 코드라
+  private core 분리로 해소할 수 없다. 마일스톤에서 스펙 06 §6에 유형 ③으로 승격.
