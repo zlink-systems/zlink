@@ -50,6 +50,10 @@ import {
   endpointConnections
 } from '../../contracts/Configuration/RuntimeEndpointConnections';
 import type { ApplicationJobQueue } from '../host/application-job-queue';
+import { AsyncResource } from 'node:async_hooks';
+import { ZLinkStateLane } from '../execution/state-lane';
+
+const detachedStateLaneResource = new AsyncResource('zlink:channel-runtime-lifecycle');
 
 interface ManualFanoutSubscriberState {
   readonly channelName: string;
@@ -70,6 +74,21 @@ interface ManualFanoutSubscriberActive {
   readonly loop: ZLinkSubscriberReceiveLoop;
 }
 
+interface LocationAutoConnectStart {
+  readonly location: ZLinkChannelLocationAutoConnectContext;
+  readonly clientServerLocation?: ZLinkClientServerLocationRuntime;
+}
+
+interface ChannelRuntimeDisposeWork {
+  readonly channelLoops: readonly ZLinkChannelReceiveLoop[];
+  readonly subscriberLoops: readonly ZLinkSubscriberReceiveLoop[];
+  readonly manualTransitions: readonly Promise<void>[];
+  readonly routeLoops: readonly { stop(): Promise<void> }[];
+  readonly clientServerLocation?: ZLinkClientServerLocationRuntime;
+  readonly fanoutLocation?: ZLinkFanoutLocationRuntime;
+  readonly spotRouteBridges: readonly ZLinkBackendSpotRouteBridge[];
+}
+
 export interface ZLinkChannelRuntimeLifecycleOptions {
   readonly registration: ZLinkFrameworkRegistration;
   readonly adapter: ZLinkChannelBackendAdapter;
@@ -84,6 +103,7 @@ export interface ZLinkChannelRuntimeLifecycleOptions {
 }
 
 export class ZLinkChannelRuntimeLifecycle {
+  private readonly lane = new ZLinkStateLane();
   private readonly receiveRoundRobin = new ZLinkReceiveRoundRobinCoordinator();
   private readonly channelReceiveLoops: ZLinkChannelReceiveLoop[] = [];
   private readonly subscriberReceiveLoops: ZLinkSubscriberReceiveLoop[] = [];
@@ -110,53 +130,86 @@ export class ZLinkChannelRuntimeLifecycle {
     this.locationAutoConnect = createChannelLocationAutoConnectContext(runtime, stores, options, events);
   }
 
-  async startLocationAutoConnect(signal?: AbortSignal): Promise<void> {
+  private beginLocationAutoConnectCore(): LocationAutoConnectStart | undefined {
     const location = this.locationAutoConnect;
     if (location === undefined
       || this.clientServerLocation !== undefined
       || this.fanoutLocation !== undefined) {
-      return;
+      return undefined;
     }
 
-    try {
-      if (hasClientServerLocationTopology(this.options.registration)) {
-        this.clientServerLocation = new ZLinkClientServerLocationRuntime(
-          this.options.registration,
-          this.options.sockets,
-          location.runtime,
-          location.stores,
-          location.options
-        );
-        await this.clientServerLocation.start(signal);
-      }
-      if (hasFanoutLocationTopology(this.options.registration)) {
-        this.fanoutLocation = new ZLinkFanoutLocationRuntime(
-          this.options.registration,
-          this.options.sockets,
-          location.runtime,
-          location.stores,
-          location.options,
-          (channelName, connectionId, subscriber) =>
-            this.startFanoutSubscriberLoop(
-              channelName,
-              connectionId,
-              subscriber
-            )
-        );
-        await this.fanoutLocation.start(signal);
-      }
-    } catch (error) {
-      await this.clientServerLocation?.stop(signal).catch(() => undefined);
+    const clientServerLocation = hasClientServerLocationTopology(this.options.registration)
+      ? new ZLinkClientServerLocationRuntime(
+        this.options.registration,
+        this.options.sockets,
+        location.runtime,
+        location.stores,
+        location.options
+      )
+      : undefined;
+    this.clientServerLocation = clientServerLocation;
+    return { location, clientServerLocation };
+  }
+
+  private beginFanoutLocationAutoConnectCore(
+    start: LocationAutoConnectStart
+  ): ZLinkFanoutLocationRuntime | undefined {
+    if (!hasFanoutLocationTopology(this.options.registration)) return undefined;
+    const fanoutLocation = new ZLinkFanoutLocationRuntime(
+      this.options.registration,
+      this.options.sockets,
+      start.location.runtime,
+      start.location.stores,
+      start.location.options,
+      (channelName, connectionId, subscriber) =>
+        this.startFanoutSubscriberLoop(channelName, connectionId, subscriber)
+    );
+    this.fanoutLocation = fanoutLocation;
+    return fanoutLocation;
+  }
+
+  private resetLocationAutoConnectCore(
+    start: LocationAutoConnectStart,
+    fanoutLocation: ZLinkFanoutLocationRuntime | undefined
+  ): void {
+    if (this.clientServerLocation === start.clientServerLocation) {
       this.clientServerLocation = undefined;
-      await this.fanoutLocation?.stop(signal).catch(() => undefined);
+    }
+    if (this.fanoutLocation === fanoutLocation) {
       this.fanoutLocation = undefined;
+    }
+  }
+
+  async startLocationAutoConnect(signal?: AbortSignal): Promise<void> {
+    const start = await this.lane.run(() => this.beginLocationAutoConnectCore());
+    if (start === undefined) return;
+
+    let fanoutLocation: ZLinkFanoutLocationRuntime | undefined;
+    try {
+      await startOutsideStateLane(
+        () => start.clientServerLocation?.start(signal) ?? Promise.resolve()
+      );
+      fanoutLocation = await this.lane.run(() => this.beginFanoutLocationAutoConnectCore(start));
+      await startOutsideStateLane(() => fanoutLocation?.start(signal) ?? Promise.resolve());
+    } catch (error) {
+      await startOutsideStateLane(() => Promise.all([
+        start.clientServerLocation?.stop(signal).catch(() => undefined),
+        fanoutLocation?.stop(signal).catch(() => undefined)
+      ]));
+      await this.lane.run(() => this.resetLocationAutoConnectCore(start, fanoutLocation));
       throw error;
     }
   }
 
   async reclaimLocationOwnerRows(signal?: AbortSignal): Promise<void> {
-    await this.clientServerLocation?.reclaimOwnerRows(signal);
-    await this.fanoutLocation?.reclaimOwnerRows(signal);
+    const clientServerLocation = await this.lane.run(() => this.clientServerLocation);
+    await startOutsideStateLane(
+      () => clientServerLocation?.reclaimOwnerRows(signal) ?? Promise.resolve()
+    );
+    const fanoutLocation = await this.lane.run(() => this.fanoutLocation);
+    await startOutsideStateLane(
+      () => fanoutLocation?.reclaimOwnerRows(signal) ?? Promise.resolve()
+    );
   }
 
   bindRouteMeshRouters(): void {
@@ -299,6 +352,40 @@ export class ZLinkChannelRuntimeLifecycle {
   }
 
   async dispose(signal?: AbortSignal): Promise<void> {
+    const work = await this.lane.run(() => this.beginDisposeCore());
+    const transportStopped = await startOutsideStateLane(() => Promise.allSettled([
+      ...work.channelLoops.map((loop) => loop.stop()),
+      ...work.subscriberLoops.map((loop) => loop.stop()),
+      ...work.routeLoops.map((loop) => loop.stop()),
+      ...work.manualTransitions
+    ]));
+    const descriptorStopped = work.clientServerLocation === undefined
+      ? []
+      : await startOutsideStateLane(
+        () => Promise.allSettled([work.clientServerLocation?.stop(signal)])
+      );
+    const fanoutDescriptorStopped = work.fanoutLocation === undefined
+      ? []
+      : await startOutsideStateLane(
+        () => Promise.allSettled([work.fanoutLocation?.stop(signal)])
+      );
+    const cleanup = await startOutsideStateLane(() => Promise.allSettled([
+      ...work.spotRouteBridges.map((bridge) => bridge.dispose()),
+      this.options.sockets.dispose()
+    ]));
+    const errors = [
+      ...transportStopped,
+      ...descriptorStopped,
+      ...fanoutDescriptorStopped,
+      ...cleanup
+    ]
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map((result) => result.reason);
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'Channel runtime cleanup failed.');
+  }
+
+  private beginDisposeCore(): ChannelRuntimeDisposeWork {
     const channelLoops = [...this.channelReceiveLoops];
     const manualStates = [...this.manualFanoutSubscribers.values()];
     this.disposed = true;
@@ -315,7 +402,7 @@ export class ZLinkChannelRuntimeLifecycle {
     );
     const subscriberLoops = [...this.subscriberReceiveLoops]
       .filter(loop => !manualLoops.has(loop));
-    const manualTransitions = manualStates.map(state => this.drainManualFanoutSubscriber(state));
+    const manualTransitions = manualStates.map(state => this.drainManualFanoutSubscriberCore(state));
     const routeLoops = [...this.routeReceiveLoops];
     const clientServerLocation = this.clientServerLocation;
     const fanoutLocation = this.fanoutLocation;
@@ -329,35 +416,15 @@ export class ZLinkChannelRuntimeLifecycle {
     this.meshChannelDispatchers.clear();
     this.meshRouteDispatchers.clear();
     this.options.spotRouteBridges.clear();
-    const loopStops = [
-      ...channelLoops.map((loop) => loop.stop()),
-      ...subscriberLoops.map((loop) => loop.stop()),
-      ...routeLoops.map((loop) => loop.stop())
-    ];
-    const transportStopped = await Promise.allSettled([
-      ...loopStops,
-      ...manualTransitions
-    ]);
-    const descriptorStopped = clientServerLocation === undefined
-      ? []
-      : await Promise.allSettled([clientServerLocation.stop(signal)]);
-    const fanoutDescriptorStopped = fanoutLocation === undefined
-      ? []
-      : await Promise.allSettled([fanoutLocation.stop(signal)]);
-    const cleanup = await Promise.allSettled([
-      ...spotRouteBridges.map((bridge) => bridge.dispose()),
-      this.options.sockets.dispose()
-    ]);
-    const errors = [
-      ...transportStopped,
-      ...descriptorStopped,
-      ...fanoutDescriptorStopped,
-      ...cleanup
-    ]
-      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map((result) => result.reason);
-    if (errors.length === 1) throw errors[0];
-    if (errors.length > 1) throw new AggregateError(errors, 'Channel runtime cleanup failed.');
+    return {
+      channelLoops,
+      subscriberLoops,
+      manualTransitions,
+      routeLoops,
+      clientServerLocation,
+      fanoutLocation,
+      spotRouteBridges
+    };
   }
 
   private openOutboundSockets(): void {
@@ -539,7 +606,9 @@ export class ZLinkChannelRuntimeLifecycle {
       try {
         await this.closeManualFanoutSubscriber(state);
       } finally {
-        if (!state.desired) this.manualFanoutSubscribers.delete(state.connectionId);
+        await this.lane.run(() => {
+          if (!state.desired) this.manualFanoutSubscribers.delete(state.connectionId);
+        });
       }
     });
   }
@@ -549,7 +618,10 @@ export class ZLinkChannelRuntimeLifecycle {
     transition: () => Promise<void> | void
   ): void {
     state.transition = state.transition
-      .then(transition, transition)
+      .then(
+        () => startOutsideStateLane(transition),
+        () => startOutsideStateLane(transition)
+      )
       .catch(error => state.taskRunner.errorSink.reportRuntimeTaskException(
         `subscriber:${state.channelName}:manual:${state.index}:lifecycle`,
         error
@@ -648,21 +720,22 @@ export class ZLinkChannelRuntimeLifecycle {
     state: ManualFanoutSubscriberState,
     expectedToken?: symbol
   ): Promise<void> {
-    const active = state.active;
-    if (active === undefined || (expectedToken !== undefined && active.token !== expectedToken)) return;
-    state.active = undefined;
-    state.stopping = active;
+    const active = await this.lane.run(
+      () => this.beginCloseManualFanoutSubscriberCore(state, expectedToken)
+    );
+    if (active === undefined) return;
     const errors: unknown[] = [];
     try {
-      await active.loop.stop();
+      await startOutsideStateLane(() => active.loop.stop());
     } catch (error) {
       errors.push(error);
     } finally {
-      this.removeSubscriberReceiveLoop(active.loop);
-      state.stopping = undefined;
+      await this.lane.run(() => this.finishCloseManualFanoutSubscriberCore(state, active));
     }
     try {
-      await this.options.sockets.closeFanoutSubscriberConnection(state.connectionId);
+      await startOutsideStateLane(
+        () => this.options.sockets.closeFanoutSubscriberConnection(state.connectionId)
+      );
     } catch (error) {
       errors.push(error);
     }
@@ -676,10 +749,31 @@ export class ZLinkChannelRuntimeLifecycle {
     return !this.disposed && state.desired;
   }
 
-  private drainManualFanoutSubscriber(state: ManualFanoutSubscriberState): Promise<void> {
+  private beginCloseManualFanoutSubscriberCore(
+    state: ManualFanoutSubscriberState,
+    expectedToken?: symbol
+  ): ManualFanoutSubscriberActive | undefined {
+    const active = state.active;
+    if (active === undefined || (expectedToken !== undefined && active.token !== expectedToken)) {
+      return undefined;
+    }
+    state.active = undefined;
+    state.stopping = active;
+    return active;
+  }
+
+  private finishCloseManualFanoutSubscriberCore(
+    state: ManualFanoutSubscriberState,
+    active: ManualFanoutSubscriberActive
+  ): void {
+    this.removeSubscriberReceiveLoopCore(active.loop);
+    state.stopping = undefined;
+  }
+
+  private drainManualFanoutSubscriberCore(state: ManualFanoutSubscriberState): Promise<void> {
     state.transition = state.transition.then(
-      () => this.closeManualFanoutSubscriber(state),
-      () => this.closeManualFanoutSubscriber(state)
+      () => startOutsideStateLane(() => this.closeManualFanoutSubscriber(state)),
+      () => startOutsideStateLane(() => this.closeManualFanoutSubscriber(state))
     );
     return state.transition;
   }
@@ -731,12 +825,12 @@ export class ZLinkChannelRuntimeLifecycle {
       signal => loop.run(signal)
     );
     return async () => {
-      await loop.stop();
-      this.removeSubscriberReceiveLoop(loop);
+      await startOutsideStateLane(() => loop.stop());
+      await this.lane.run(() => this.removeSubscriberReceiveLoopCore(loop));
     };
   }
 
-  private removeSubscriberReceiveLoop(loop: ZLinkSubscriberReceiveLoop): void {
+  private removeSubscriberReceiveLoopCore(loop: ZLinkSubscriberReceiveLoop): void {
     const index = this.subscriberReceiveLoops.indexOf(loop);
     if (index >= 0) this.subscriberReceiveLoops.splice(index, 1);
   }
@@ -868,4 +962,8 @@ function hasFanoutLocationTopology(
     }
   }
   return false;
+}
+
+function startOutsideStateLane<T>(work: () => T): T {
+  return detachedStateLaneResource.runInAsyncScope(work);
 }
