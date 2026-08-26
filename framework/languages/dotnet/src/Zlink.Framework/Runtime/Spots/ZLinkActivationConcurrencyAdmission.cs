@@ -8,7 +8,6 @@ namespace Zlink.Framework.Runtime.Spots;
 /// </summary>
 internal sealed class ZLinkActivationConcurrencyAdmission
 {
-    private readonly object _gate = new();
     private readonly int _limit;
     private readonly Action<int>? _activeChanged;
     private int _active;
@@ -25,40 +24,47 @@ internal sealed class ZLinkActivationConcurrencyAdmission
 
     internal int Active
     {
-        get
-        {
-            lock (_gate) return _active;
-        }
+        get => Volatile.Read(ref _active);
     }
 
     internal int Limit => _limit;
 
     internal void Acquire(string objectDescription)
     {
-        int active;
-        lock (_gate)
+        while (true)
         {
-            if (_active >= _limit)
+            var active = Volatile.Read(ref _active);
+            if (active >= _limit)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.CapacityExceeded,
                     $"Object activation concurrency limit was reached for {objectDescription}.",
                     ZLinkRetryAdvice.RetryAfterBackoff);
-            active = ++_active;
+
+            var next = active + 1;
+            if (Interlocked.CompareExchange(ref _active, next, active) != active)
+                continue;
+
+            _activeChanged?.Invoke(next);
+            return;
         }
-        _activeChanged?.Invoke(active);
     }
 
     internal void Release()
     {
-        int active;
-        lock (_gate)
+        while (true)
         {
-            if (_active <= 0)
+            var active = Volatile.Read(ref _active);
+            if (active <= 0)
                 throw new InvalidOperationException(
                     "Object activation admission count became negative.");
-            active = --_active;
+
+            var next = active - 1;
+            if (Interlocked.CompareExchange(ref _active, next, active) != active)
+                continue;
+
+            _activeChanged?.Invoke(next);
+            return;
         }
-        _activeChanged?.Invoke(active);
     }
 
 }

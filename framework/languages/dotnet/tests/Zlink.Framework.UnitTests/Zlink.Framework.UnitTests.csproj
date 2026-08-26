@@ -72,6 +72,7 @@
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
         <Compile Include="Runtime/StateLaneTests.cs"/>
+        <Compile Include="Runtime/SmallStateOwnershipMechanismTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
         <Compile Include="Runtime/ApplicationJobQueueTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementLifecycleTests.cs"/>

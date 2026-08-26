@@ -1,21 +1,15 @@
+using System.Collections.Concurrent;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotActorMembership
 {
-    private readonly Dictionary<ZLinkActorId, IZLinkActor> _actorsById = [];
-    private readonly object _gate = new();
+    private readonly ConcurrentDictionary<ZLinkActorId, IZLinkActor> _actorsById = new();
 
     public int Count
     {
-        get
-        {
-            lock (_gate)
-            {
-                return _actorsById.Count;
-            }
-        }
+        get => _actorsById.Count;
     }
 
     public void Add(IZLinkActor actor)
@@ -23,23 +17,15 @@ internal sealed class ZLinkSpotActorMembership
         var actorId = ZLinkActorId.FromBoundary(
             actor.Context.ActorId,
             nameof(actor));
-        lock (_gate)
-        {
-            if (_actorsById.TryGetValue(actorId, out var existing)
-                && !ReferenceEquals(existing, actor))
-                throw new InvalidOperationException(
-                    $"SPOT already has an actor with id '{actor.Context.ActorId}'.");
-
-            _actorsById[actorId] = actor;
-        }
+        var existing = _actorsById.GetOrAdd(actorId, actor);
+        if (!ReferenceEquals(existing, actor))
+            throw new InvalidOperationException(
+                $"SPOT already has an actor with id '{actor.Context.ActorId}'.");
     }
 
     internal bool TryGetActor(ZLinkActorId actorId, out IZLinkActor? actor)
     {
-        lock (_gate)
-        {
-            return _actorsById.TryGetValue(actorId, out actor);
-        }
+        return _actorsById.TryGetValue(actorId, out actor);
     }
 
     public void RemoveIfCurrent(IZLinkActor actor)
@@ -47,19 +33,16 @@ internal sealed class ZLinkSpotActorMembership
         var actorId = ZLinkActorId.FromBoundary(
             actor.Context.ActorId,
             nameof(actor));
-        lock (_gate)
-        {
-            if (_actorsById.TryGetValue(actorId, out var existing)
-                && ReferenceEquals(existing, actor))
-                _actorsById.Remove(actorId);
-        }
+        if (_actorsById.TryGetValue(actorId, out var existing)
+            && ReferenceEquals(existing, actor))
+            ((ICollection<KeyValuePair<ZLinkActorId, IZLinkActor>>)_actorsById).Remove(
+                new KeyValuePair<ZLinkActorId, IZLinkActor>(actorId, actor));
     }
 
     public IReadOnlyList<IZLinkActor> Snapshot()
     {
-        lock (_gate)
-            return _actorsById.Values
-                .OrderBy(static actor => actor.Context.ActorId, StringComparer.Ordinal)
-                .ToArray();
+        return _actorsById.Values
+            .OrderBy(static actor => actor.Context.ActorId, StringComparer.Ordinal)
+            .ToArray();
     }
 }
