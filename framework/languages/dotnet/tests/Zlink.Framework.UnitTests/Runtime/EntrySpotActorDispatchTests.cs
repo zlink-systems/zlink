@@ -690,7 +690,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     cancellationToken);
                 await lifecycle.ReleaseActorAsync(actorState.RuntimeActorId, cancellationToken);
                 await actorState.ExecuteLockedAsync(
-                    () => actorState.ClearAfterDestroy(),
+                    () => actorState.ClearAfterDestroyOnLane(),
                     CancellationToken.None);
             });
 

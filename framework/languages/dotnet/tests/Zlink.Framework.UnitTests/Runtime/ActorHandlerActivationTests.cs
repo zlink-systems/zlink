@@ -219,7 +219,7 @@ public sealed class ActorHandlerActivationTests
         var cleanup = state.BeginHandlerActivationCompletion(
                 () =>
                 {
-                    state.ClearAfterDestroy();
+                        state.ClearAfterDestroyOnLane();
                     return true;
                 })
             .Completion;
@@ -269,7 +269,7 @@ public sealed class ActorHandlerActivationTests
         var terminal = state.BeginHandlerActivationCompletion(
             () =>
             {
-                state.ClearAfterDestroy();
+                state.ClearAfterDestroyOnLane();
                 return true;
             });
         var reset = registry.ResetGenerationAsync().AsTask();
@@ -332,7 +332,7 @@ public sealed class ActorHandlerActivationTests
                 var terminal = state.BeginHandlerActivationCompletion(
                     () =>
                     {
-                        state.ClearAfterDestroy();
+                        state.ClearAfterDestroyOnLane();
                         return true;
                     });
                 Assert.True(terminal.RequiresDispatchRelease);
@@ -368,7 +368,7 @@ public sealed class ActorHandlerActivationTests
             var terminal = state.BeginHandlerActivationCompletion(
                 () =>
                 {
-                    state.ClearAfterDestroy();
+                    state.ClearAfterDestroyOnLane();
                     return true;
                 });
 
