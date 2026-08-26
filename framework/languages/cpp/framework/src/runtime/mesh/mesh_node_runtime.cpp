@@ -2096,6 +2096,19 @@ bool mesh_node_runtime_t::has_admitted_peer (const zlink::routing_id_t &peer_rid
     return peer && peer->descriptor.state == runtime::mesh::service_node_state_t::serving;
 }
 
+std::optional<std::uint64_t>
+mesh_node_runtime_t::admitted_peer_epoch (const zlink::routing_id_t &peer_rid,
+                                          std::uint64_t lifecycle_generation) const
+{
+    if (!_node || lifecycle_generation == 0)
+        return std::nullopt;
+    const auto peer = _node->transport ().topology ().peer (peer_rid.to_bytes ());
+    if (!peer || peer->descriptor.lifecycle_generation != lifecycle_generation
+        || peer->descriptor.state != runtime::mesh::service_node_state_t::serving)
+        return std::nullopt;
+    return peer->admission_epoch;
+}
+
 host::public_host_runtime_t &mesh_node_runtime_t::native_node ()
 {
     if (!_node) {

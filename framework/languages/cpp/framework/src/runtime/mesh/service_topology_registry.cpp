@@ -353,12 +353,11 @@ peer_admission_result_t service_topology_registry_t::admit_impl (
 
     _not_required_peers.erase (descriptor.node_routing_id);
     auto key = descriptor.node_routing_id;
+    const auto admission_epoch = ++_topology_version;
     _peers.insert_or_assign (
-      std::move (key),
-      admitted_peer_t{std::move (descriptor), std::move (connection_id),
-                      direction.value_or (
-                        service_connection_direction_t::inbound)});
-    ++_topology_version;
+      std::move (key), admitted_peer_t{std::move (descriptor), std::move (connection_id),
+                                       direction.value_or (service_connection_direction_t::inbound),
+                                       admission_epoch});
     auto changed = _change_handler;
     lock.unlock ();
     if (changed)

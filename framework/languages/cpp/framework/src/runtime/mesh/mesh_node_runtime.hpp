@@ -452,6 +452,9 @@ class mesh_node_runtime_t
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid,
                             std::uint64_t lifecycle_generation) const;
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid) const;
+    std::optional<std::uint64_t> admitted_peer_epoch (
+      const zlink::routing_id_t &peer_rid,
+      std::uint64_t lifecycle_generation) const;
     struct observed_spot_authority_t
     {
         std::uint64_t target_node_generation = 0;

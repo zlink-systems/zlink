@@ -92,8 +92,11 @@ struct admitted_peer_t
 {
     service_node_descriptor_t descriptor;
     std::vector<std::uint8_t> connection_id;
-    service_connection_direction_t direction =
-      service_connection_direction_t::inbound;
+    service_connection_direction_t direction = service_connection_direction_t::inbound;
+    // Changes whenever this exact admitted connection is replaced.  Callers
+    // use it only as an operation-local availability epoch; it is not a wire
+    // generation or an ordering token.
+    std::uint64_t admission_epoch = 0;
 };
 
 bool route_mesh_connection_not_required (
