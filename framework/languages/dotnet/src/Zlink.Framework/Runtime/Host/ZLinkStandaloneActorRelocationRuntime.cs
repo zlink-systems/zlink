@@ -1031,21 +1031,19 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 out var routedJoinRecovery))
             lease.Slot.ObserveRoutedJoinPreparation(
                 routedJoinRecovery.Request);
-        await lease.Slot.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await StageTargetCoreAsync(
+            await lease.Slot.RunAsync(async () => await StageTargetCoreAsync(
                     lease.Slot,
                     prepare,
                     envelope,
                     authenticatedSourceNodeRid,
                     targetAuthorityOwnerGeneration,
                     cancellationToken)
-                .ConfigureAwait(false);
+                .ConfigureAwait(false)).ConfigureAwait(false);
         }
         finally
         {
-            lease.Slot.Gate.Release();
             CloseTargetAttemptIfEmpty(key, lease.Slot);
         }
     }
@@ -1063,32 +1061,34 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             throw DataLost(
                 "Standalone Actor relocation data has no prepared target.");
         using var attemptLease = lease;
-        await lease.Slot.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (lease.Slot.Stage is not { } stage)
-                throw DataLost(
-                    "Standalone Actor relocation data has no prepared target.");
-            stage.ValidateData(data, authenticatedSourceNodeRid);
-            stage.TrackRelayRecord(data.FrozenRecord.Encoded.Span);
-            var nextArrival = stage.NextArrivalIndex;
-            var frame = ZLinkCanonicalActorAcceptedJournal.Decode(
-                    data.FrozenRecord.Encoded.Span,
-                    nextArrival)
-                .Frame;
-            if (stage.RemoteJoinRequest is not null)
-                stage.ActorState.Handoff.AppendPreparedImport(
-                    stage.Envelope.AggregateId.ToString("N"),
-                    [frame]);
-            else
-                stage.ActorState.Handoff.AppendCanonicalMaintenanceImport(
-                    stage.Envelope.AggregateId.ToString("N"),
-                    [frame]);
-            stage.Append(frame);
+            await lease.Slot.RunAsync(() =>
+            {
+                if (lease.Slot.Stage is not { } stage)
+                    throw DataLost(
+                        "Standalone Actor relocation data has no prepared target.");
+                stage.ValidateData(data, authenticatedSourceNodeRid);
+                stage.TrackRelayRecord(data.FrozenRecord.Encoded.Span);
+                var nextArrival = stage.NextArrivalIndex;
+                var frame = ZLinkCanonicalActorAcceptedJournal.Decode(
+                        data.FrozenRecord.Encoded.Span,
+                        nextArrival)
+                    .Frame;
+                if (stage.RemoteJoinRequest is not null)
+                    stage.ActorState.Handoff.AppendPreparedImport(
+                        stage.Envelope.AggregateId.ToString("N"),
+                        [frame]);
+                else
+                    stage.ActorState.Handoff.AppendCanonicalMaintenanceImport(
+                        stage.Envelope.AggregateId.ToString("N"),
+                        [frame]);
+                stage.Append(frame);
+                return ValueTask.CompletedTask;
+            }).ConfigureAwait(false);
         }
         finally
         {
-            lease.Slot.Gate.Release();
             CloseTargetAttemptIfEmpty(key, lease.Slot);
         }
     }
@@ -1120,9 +1120,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             return;
         }
         using var attemptLease = lease;
-        await lease.Slot.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            await lease.Slot.RunAsync(async () =>
+            {
             if (lease.Slot.Stage is not { } stage)
             {
                 ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -1218,10 +1219,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             ZLinkRuntimeMetrics.RecordRelocationTargetResume(
                 Stopwatch.GetElapsedTime(resumeStartedTimestamp),
                 "actor");
+            }).ConfigureAwait(false);
         }
         finally
         {
-            lease.Slot.Gate.Release();
             CloseTargetAttemptIfEmpty(key, lease.Slot);
         }
     }
@@ -1334,10 +1335,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 continue;
             using (lease)
             {
-                await pair.Value.Gate.WaitAsync(CancellationToken.None)
-                    .ConfigureAwait(false);
                 try
                 {
+                    await pair.Value.RunAsync(async () =>
+                    {
                     if (pair.Value.Abort is { } abort
                         && abort.IsCompleted
                         && abort.CreatedAt <= cutoff)
@@ -1355,10 +1356,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                 CancellationToken.None)
                             .ConfigureAwait(false);
                     }
+                    }).ConfigureAwait(false);
                 }
                 finally
                 {
-                    pair.Value.Gate.Release();
                     CloseTargetAttemptIfEmpty(pair.Key, pair.Value);
                 }
             }
@@ -2352,8 +2353,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         if (!TryAcquireTargetAttempt(key, out var lease))
             return;
         using var attemptLease = lease;
-        await lease.Slot.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
+        {
+        await lease.Slot.RunAsync(async () =>
         {
         if (lease.Slot.Stage is not { } stage
             || !stage.AuthorityPublished)
@@ -2438,10 +2440,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 cancellationToken)
             .ConfigureAwait(false);
         RemoveTargetStage(key, lease.Slot, stage);
+        }).ConfigureAwait(false);
         }
         finally
         {
-            lease.Slot.Gate.Release();
             CloseTargetAttemptIfEmpty(key, lease.Slot);
         }
     }
@@ -2477,25 +2479,27 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         if (!TryAcquireTargetAttempt(key, out var lease))
             return;
         using var attemptLease = lease;
-        await lease.Slot.Gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
+            await lease.Slot.RunAsync(() =>
+            {
             if (lease.Slot.Abort is { } existingAbort)
             {
                 existingAbort.Stage.ValidateRetry(
                     prepare,
                     authenticatedSourceNodeRid);
-                return;
+                return ValueTask.CompletedTask;
             }
             if (lease.Slot.Stage is not { } stage
                 || stage.AuthorityPublished)
-                return;
+                return ValueTask.CompletedTask;
             stage.ValidateRetry(prepare, authenticatedSourceNodeRid);
             _ = BeginTargetAbortLocked(key, lease.Slot, stage);
+            return ValueTask.CompletedTask;
+            }).ConfigureAwait(false);
         }
         finally
         {
-            lease.Slot.Gate.Release();
             CloseTargetAttemptIfEmpty(key, lease.Slot);
         }
     }
@@ -2534,10 +2538,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             Task? terminal = null;
             try
             {
-                await lease.Slot.Gate.WaitAsync(cancellationToken)
-                    .ConfigureAwait(false);
                 try
                 {
+                    terminal = await lease.Slot.RunAsync(() =>
+                    {
                     var stage = lease.Slot.Stage;
                     var request = stage?.RemoteJoinRequest;
                     if (stage is null
@@ -2552,16 +2556,16 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             actorId,
                             StringComparison.Ordinal)
                         || request.ActorGeneration != actorGeneration)
-                        continue;
+                        return (Task?)null;
 
-                    terminal = BeginTargetAbortLocked(
+                    return BeginTargetAbortLocked(
                         pair.Key,
                         lease.Slot,
                         stage)?.Terminal;
+                    }).ConfigureAwait(false);
                 }
                 finally
                 {
-                    lease.Slot.Gate.Release();
                     CloseTargetAttemptIfEmpty(pair.Key, lease.Slot);
                 }
             }
@@ -2917,12 +2921,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
 
     private sealed class AttemptSlot
     {
+        private readonly ZLinkStateLane _lane = new();
         private readonly ZLinkRelocationAttemptLeaseState _leases = new();
         private RoutedJoinPreparationIdentity? _routedJoinPreparation;
         private TargetStage? _stage;
         private TargetAbort? _abort;
 
-        internal SemaphoreSlim Gate { get; } = new(1, 1);
         internal TargetStage? Stage => Volatile.Read(ref _stage);
         internal TargetAbort? Abort => Volatile.Read(ref _abort);
         internal bool IsEmpty => Stage is null && Abort is null;
@@ -2986,6 +2990,30 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             Volatile.Write(ref _stage, null);
             Volatile.Write(ref _abort, null);
         }
+
+        internal ValueTask RunAsync(Func<ValueTask> work)
+        {
+            _lane.ThrowIfReentrant();
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_lane.TryPost(async () =>
+                {
+                    try
+                    {
+                        await work().ConfigureAwait(false);
+                        completion.TrySetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        completion.TrySetException(exception);
+                    }
+                }))
+                completion.TrySetException(new ObjectDisposedException(nameof(AttemptSlot)));
+            return new ValueTask(completion.Task);
+        }
+
+        internal async ValueTask<T> RunAsync<T>(Func<T> work) =>
+            await _lane.RunAsync(work).ConfigureAwait(false);
     }
 
     private sealed record RoutedJoinPreparationIdentity(
@@ -3238,7 +3266,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
 
 internal sealed class ZLinkRelocationAttemptLeaseState
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly TaskCompletionSource _quiesced = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private int _users;
@@ -3248,47 +3276,45 @@ internal sealed class ZLinkRelocationAttemptLeaseState
 
     internal bool TryAcquire()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_closing) return false;
             _users++;
             return true;
-        }
+        }));
     }
 
     internal bool Release()
     {
-        var quiesced = false;
-        lock (_gate)
+        var quiesced = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_users == 0)
                 throw new InvalidOperationException(
                     "Relocation attempt lease was released without an owner.");
             _users--;
-            quiesced = _closing && _users == 0;
-        }
+            return _closing && _users == 0;
+        }));
         if (quiesced) _quiesced.TrySetResult();
         return quiesced;
     }
 
     internal void MarkClosing()
     {
-        var quiesced = false;
-        lock (_gate)
+        var quiesced = AwaitStateLane(_lane.RunAsync(() =>
         {
             _closing = true;
-            quiesced = _users == 0;
-        }
+            return _users == 0;
+        }));
         if (quiesced) _quiesced.TrySetResult();
     }
 
     internal bool CanRemove
     {
-        get
-        {
-            lock (_gate) return _closing && _users == 0;
-        }
+        get => AwaitStateLane(_lane.RunAsync(() => _closing && _users == 0));
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }
 
 internal sealed partial class ZLinkFrameworkRuntime

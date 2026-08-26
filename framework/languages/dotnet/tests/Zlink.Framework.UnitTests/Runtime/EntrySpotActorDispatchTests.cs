@@ -6037,7 +6037,8 @@ public sealed partial class EntrySpotActorDispatchTests
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(node);
         object? targetAttemptLease = null;
-        SemaphoreSlim? targetAttemptGate = null;
+        Task? targetAttemptRun = null;
+        TaskCompletionSource? releaseTargetAttempt = null;
         try
         {
             var owner = runtime.StandaloneActorRelocationRuntime;
@@ -6075,13 +6076,30 @@ public sealed partial class EntrySpotActorDispatchTests
                            .GetValue(targetAttemptLease)
                        ?? throw new InvalidOperationException(
                            "Target attempt slot was not found.");
-            targetAttemptGate = Assert.IsType<SemaphoreSlim>(
-                slot.GetType()
-                    .GetProperty(
-                        "Gate",
-                        BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(slot));
-            Assert.True(await targetAttemptGate.WaitAsync(0));
+            var runAsync = slot.GetType().GetMethod(
+                               "RunAsync",
+                               BindingFlags.Instance | BindingFlags.NonPublic,
+                               binder: null,
+                               types: [typeof(Func<ValueTask>)],
+                               modifiers: null)
+                           ?? throw new InvalidOperationException(
+                               "Target attempt state-lane runner was not found.");
+            var targetAttemptStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            releaseTargetAttempt = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Func<ValueTask> holdTargetAttempt = () =>
+            {
+                targetAttemptStarted.TrySetResult();
+                return new ValueTask(releaseTargetAttempt.Task);
+            };
+            targetAttemptRun = ((ValueTask)(runAsync.Invoke(
+                slot,
+                [holdTargetAttempt])
+                ?? throw new InvalidOperationException(
+                    "Target attempt state-lane work was not scheduled."))).AsTask();
+            await targetAttemptStarted.Task.WaitAsync(
+                TimeSpan.FromSeconds(1));
 
             using var deadline = new CancellationTokenSource(
                 TimeSpan.FromMilliseconds(100));
@@ -6093,7 +6111,9 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         finally
         {
-            targetAttemptGate?.Release();
+            releaseTargetAttempt?.TrySetResult();
+            if (targetAttemptRun is not null)
+                await targetAttemptRun;
             (targetAttemptLease as IDisposable)?.Dispose();
             await runtime.StopAsync(CancellationToken.None);
         }
