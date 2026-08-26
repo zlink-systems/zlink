@@ -377,7 +377,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             var admission = infrastructure
                 ? new ZLinkInboundOperationAdmission(
                     true,
-                    new ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease())
+                    ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease.None)
             //  This dispatcher only invokes registered channel and node
             //  route handlers. Neither is object work, so an expired owner
             //  lease must not turn them away (spec 21 §4).

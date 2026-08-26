@@ -3099,6 +3099,35 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task EnterOperation_Nested_Lease_Does_Not_Allocate()
+    {
+        var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        try
+        {
+            var allocated = await Task.Run(() =>
+            {
+                using var outer = runtime.EnterOperation();
+                using (runtime.EnterOperation())
+                {
+                }
+
+                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                for (var index = 0; index < 100_000; index++)
+                {
+                    using var nested = runtime.EnterOperation();
+                }
+                return GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+            });
+
+            Assert.Equal(0, allocated);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task RuntimeStop_RejectsOwnedStopBeforeWaitingForAnExternalStopGate()
     {
         var node = new CapturingSpotNode();

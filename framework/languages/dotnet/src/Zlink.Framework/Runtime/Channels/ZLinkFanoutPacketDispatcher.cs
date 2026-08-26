@@ -68,7 +68,7 @@ internal sealed class ZLinkFanoutPacketDispatcher
         var admission = _runtime is null
             ? new ZLinkInboundOperationAdmission(
                 true,
-                new ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease())
+                ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease.None)
         //  Delivering a fanout record to its handler changes nothing in the
         //  Location Store, so it is not object work (spec 21 §4).
             : _runtime.TryEnterInboundOperation(

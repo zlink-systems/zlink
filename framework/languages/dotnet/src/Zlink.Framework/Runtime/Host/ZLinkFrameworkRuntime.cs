@@ -35,7 +35,7 @@ internal readonly record struct ZLinkInboundOperationAdmission(
 
 internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 {
-    private static readonly AsyncLocal<ZLinkRuntimeOperationOwnership?> AmbientOperation = new();
+    private static readonly AsyncLocal<ZLinkRuntimeOperationLease?> AmbientOperation = new();
     private readonly ZLinkActorDrainCoordinator _actorDrainCoordinator;
     private readonly ZLinkStandaloneActorRelocationRuntime
         _standaloneActorRelocationRuntime;
@@ -653,11 +653,16 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             && ReferenceEquals(current.Runtime, this))
         {
             EnsureAmbientOperationCurrent(current);
-            if (!countAsRequest) return new ZLinkRuntimeOperationLease();
+            if (!countAsRequest) return ZLinkRuntimeOperationLease.None;
             AwaitStateLane(_stateLane.RunAsync(() => _activeRequests++));
             return new ZLinkRuntimeOperationLease(this, countsRequest: true);
         }
 
+        return EnterOperationUnnested(countAsRequest);
+    }
+
+    private ZLinkRuntimeOperationLease EnterOperationUnnested(bool countAsRequest)
+    {
         ZLinkFrameworkComponentState admitted;
         admitted = AwaitStateLane(_stateLane.RunAsync(
             () => AdmitOperationOnLane(countAsRequest)));
@@ -678,7 +683,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             && ReferenceEquals(current.Runtime, this))
         {
             EnsureAmbientOperationCurrent(current);
-            return new ZLinkRuntimeOperationLease();
+            return ZLinkRuntimeOperationLease.None;
         }
 
         ZLinkFrameworkComponentState admitted;
@@ -740,7 +745,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             {
                 return new ZLinkInboundOperationAdmission(
                     true,
-                    new ZLinkRuntimeOperationLease());
+                    ZLinkRuntimeOperationLease.None);
             }
             AwaitStateLane(_stateLane.RunAsync(() => _activeRequests++));
             return new ZLinkInboundOperationAdmission(
@@ -748,6 +753,13 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 new ZLinkRuntimeOperationLease(this, countsRequest: true));
         }
 
+        return TryEnterInboundOperationUnnested(countAsRequest, ownsObjectWork);
+    }
+
+    private ZLinkInboundOperationAdmission TryEnterInboundOperationUnnested(
+        bool countAsRequest,
+        bool ownsObjectWork)
+    {
         ZLinkFrameworkComponentState admitted;
         var admission = AwaitStateLane(_stateLane.RunAsync(() =>
         {
@@ -772,13 +784,13 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             return new ZLinkInboundOperationAdmission(
                 false,
-                new ZLinkRuntimeOperationLease());
+                ZLinkRuntimeOperationLease.None);
         }
         if (admission.Neutral)
         {
             return new ZLinkInboundOperationAdmission(
                 true,
-                new ZLinkRuntimeOperationLease());
+                ZLinkRuntimeOperationLease.None);
         }
         admitted = admission.Admitted!;
 
@@ -1217,27 +1229,26 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         return state;
     }
 
-    // Runs outside the state lane: the ownership/lease allocations and the
-    // AsyncLocal write (an execution-context copy) touch only caller-local
-    // state, and the admission counters incremented under the gate already
-    // keep drain from completing before the lease is attached.
+    // Runs outside the state lane: the ownership/lease allocation and the AsyncLocal
+    // write (an execution-context copy) touch only caller-local state, and the
+    // admission counters incremented under the gate already keep drain from
+    // completing before the lease is attached.
     private ZLinkRuntimeOperationLease AttachOperation(
         ZLinkFrameworkComponentState state,
         bool countAsRequest)
     {
         var previous = AmbientOperation.Value;
-        var ownership = new ZLinkRuntimeOperationOwnership(this, state);
-        AmbientOperation.Value = ownership;
-        return new ZLinkRuntimeOperationLease(this, ownership, previous, countAsRequest);
+        var lease = new ZLinkRuntimeOperationLease(this, state, previous, countAsRequest);
+        AmbientOperation.Value = lease;
+        return lease;
     }
 
-    private bool IsAmbientOperationCurrent(
-        ZLinkRuntimeOperationOwnership ownership) =>
-        !ownership.State.IsOperationFenced
-        && ReferenceEquals(ownership.State, Volatile.Read(ref _state));
+    private bool IsAmbientOperationCurrent(ZLinkRuntimeOperationLease ownership) =>
+        ownership.State is { } state
+        && !state.IsOperationFenced
+        && ReferenceEquals(state, Volatile.Read(ref _state));
 
-    private void EnsureAmbientOperationCurrent(
-        ZLinkRuntimeOperationOwnership ownership)
+    private void EnsureAmbientOperationCurrent(ZLinkRuntimeOperationLease ownership)
     {
         if (!IsAmbientOperationCurrent(ownership))
             throw new InvalidOperationException(
@@ -1270,14 +1281,16 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     internal sealed class ZLinkRuntimeOperationLease : IDisposable
     {
+        internal static readonly ZLinkRuntimeOperationLease None = new();
+
         private readonly ZLinkFrameworkRuntime? _runtime;
-        private readonly ZLinkRuntimeOperationOwnership? _ownership;
-        private readonly ZLinkRuntimeOperationOwnership? _previous;
+        private readonly ZLinkRuntimeOperationLease? _previous;
         private readonly bool _countsOperation;
         private readonly bool _countsRequest;
+        private int _active;
         private int _disposed;
 
-        internal ZLinkRuntimeOperationLease()
+        private ZLinkRuntimeOperationLease()
         {
         }
 
@@ -1300,42 +1313,35 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
         internal ZLinkRuntimeOperationLease(
             ZLinkFrameworkRuntime runtime,
-            ZLinkRuntimeOperationOwnership ownership,
-            ZLinkRuntimeOperationOwnership? previous,
+            ZLinkFrameworkComponentState state,
+            ZLinkRuntimeOperationLease? previous,
             bool countsRequest)
         {
             _runtime = runtime;
-            _ownership = ownership;
+            State = state;
             _previous = previous;
             _countsOperation = true;
             _countsRequest = countsRequest;
+            _active = 1;
         }
 
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0)
-            {
-                _ownership?.Deactivate();
-                if (_ownership is not null && ReferenceEquals(AmbientOperation.Value, _ownership))
-                    AmbientOperation.Value = _previous;
-                _runtime?.ExitOperation(_countsOperation, _countsRequest);
-            }
-        }
-    }
+        public ZLinkFrameworkRuntime Runtime => _runtime
+            ?? throw new InvalidOperationException("The operation lease has no runtime.");
 
-    internal sealed class ZLinkRuntimeOperationOwnership(
-        ZLinkFrameworkRuntime runtime,
-        ZLinkFrameworkComponentState state)
-    {
-        private int _active = 1;
-
-        public ZLinkFrameworkRuntime Runtime { get; } = runtime;
-
-        public ZLinkFrameworkComponentState State { get; } = state;
+        public ZLinkFrameworkComponentState? State { get; }
 
         public bool IsActive => Volatile.Read(ref _active) != 0;
 
         public void Deactivate() => Interlocked.Exchange(ref _active, 0);
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            Deactivate();
+            if (ReferenceEquals(AmbientOperation.Value, this))
+                AmbientOperation.Value = _previous;
+            _runtime?.ExitOperation(_countsOperation, _countsRequest);
+        }
     }
 }
 
