@@ -82,3 +82,17 @@ node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 | java 상위 후보 monitor | 683/94클래스 | **후보 32클래스 0** | 잔존 synchronized=native 작업 프로토콜·primitive 4종(판정) |
 | node | await 교차 기준 | **후보 34 전건 판정** | 전환 필요분 완료, 발견8 불요·executor 제외군 판정 |
 | 호환 경계(블로킹 브리지) | 0 | dotnet 663 등 | §5 조건 충족·사유 기록 잔존(스펙 06 개정 반영). 핫패스 회수는 이월 |
+
+## 4. 잔여 마감 추적 (2026-08-27 — 캠페인 꼬리)
+
+| # | 항목 | 상태 | 비고 |
+|---|---|---|---|
+| T1 | cpp actor_gateway 테스트 exit 172 (미변경 구간, batch 10 회귀 의심) | **진단 중** | ①런타임 회귀 ②테스트 추종 영향 격리 판별 잡 실행 중 |
+| T2 | node TicTacToe.Ts self-deadlock (오늘 handler-scope AsyncResource 분리가 Spot serial 문맥 절단) | **수정 완료·게이트 재검증 중** | 샘플 2/2 통과, m6a/b/c+contract 재실행 중 |
+| T3 | java 샘플 릴리스 게이트 지문 5건 (기존 드리프트 — 분류 확정) | **갱신 완료** | 22/22. 커밋 대기 |
+| T4 | java FrameworkModuleBoundaryTest ReceiveFlowState import 1건 | 분류 필요 | 캠페인 원인 여부 미판정 |
+| T5 | 언어별 샘플 스위트 그린 (cpp·java·node — ZoneWorld 제외 판정 유지) | 재실행 대기 | T1~T3 해소 후 트리별 단독 실행 |
+| T6 | Z4 — ZoneWorld 조용한 반복 측정(dotnet·cpp 각 8~30런) 후 게이트 복귀 | 대기 | Z1·Z2 수정 커밋됨. 부하 없는 상태에서 측정 |
+| T7 | 구조 보류 판정 (cpp channel_runtime_state·mesh_node_runtime, node STOP 9건, dotnet ChannelRuntimeManager 잔여 확인) | 마일스톤 기록 완료 | 필요 시 후속 캠페인 |
+| T8 | 기존 결함 이월 (cpp layout_contract 샘플 blocking result, node m6c 계약 2건, java module boundary?) | 이월 목록 | rules §4 |
+| T9 | 최종 문서·메모리 정리 + main 병합 판단(사용자) | 대기 | |
