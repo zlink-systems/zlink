@@ -75,7 +75,7 @@ async function main() {
       // in-flight payloads naturally precede the token, which wakes the
       // subscriber's `-1` poller wait. Mirrors the already-fixed cpp
       // perf_pubsub_server.cpp publish_stop_token.
-      while (!trySocketPublish(pub, TOPIC, STOP_TOKEN_BYTES)) {
+      while (!trySocketPublish(pub, TOPIC, [STOP_TOKEN_BYTES])) {
         poller.wait(pollBuffer, process.platform === 'win32' ? 50 : 100);
       }
       // Keep the PUB socket open until the runner sends STOP (after the

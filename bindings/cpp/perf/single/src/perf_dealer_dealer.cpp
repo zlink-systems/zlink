@@ -108,16 +108,20 @@ perf::async_task_t<bool> run_pattern_dealer_dealer_async (const std::string &tra
     // remaining ready parts until EAGAIN. The stop token is the only phase
     // terminator, matching the C harness.
     std::thread receiver_thread ([&] () {
-        auto handle_part = [&] (zlink::message_t &part_, bool *stop_out_) -> bool {
+        auto handle_message = [&] (zlink::received_t &received_, bool *stop_out_) -> bool {
             *stop_out_ = false;
-            if (perf::single::is_stop_token_message (part_)) {
+            const std::vector<zlink::message_t> &parts = received_.parts ();
+            if (parts.size () == 1 && perf::single::is_stop_token_message (parts.front ())) {
                 *stop_out_ = true;
                 return true;
             }
-            if (part_.size () != payload_size)
+            const zlink::message_t *part_ = perf::single::measurement_payload_part (parts);
+            if (!part_)
+                return true;
+            if (part_->size () != payload_size)
                 return true;
             perf_single_metric::header_t header;
-            if (!perf_single_metric::decode_payload_header (part_.data (), part_.size (), &header))
+            if (!perf_single_metric::decode_payload_header (part_->data (), part_->size (), &header))
                 return true;
             if (!perf_single_metric::is_expected (header, run_id, perf_single_metric::phase_active,
                                                   msg_size))
@@ -142,9 +146,9 @@ perf::async_task_t<bool> run_pattern_dealer_dealer_async (const std::string &tra
                 return;
             }
 
-            zlink::message_t part;
-            const int recv_rc = bind_socket.sock ().recv (
-              part, static_cast<int> (zlink::recv_flags_t::dontwait));
+            zlink::received_t received;
+            const int recv_rc = bind_socket.sock ().receive (
+              received, static_cast<int> (zlink::recv_flags_t::dontwait));
             if (recv_rc != 0) {
                 if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
                     continue;
@@ -152,7 +156,7 @@ perf::async_task_t<bool> run_pattern_dealer_dealer_async (const std::string &tra
                 return;
             }
             bool stop = false;
-            if (!handle_part (part, &stop)) {
+            if (!handle_message (received, &stop)) {
                 sender_ok.store (false, std::memory_order_release);
                 return;
             }
@@ -160,8 +164,8 @@ perf::async_task_t<bool> run_pattern_dealer_dealer_async (const std::string &tra
                 return;
 
             for (;;) {
-                zlink::message_t burst;
-                const int burst_rc = bind_socket.sock ().recv (
+                zlink::received_t burst;
+                const int burst_rc = bind_socket.sock ().receive (
                   burst, static_cast<int> (zlink::recv_flags_t::dontwait));
                 if (burst_rc != 0) {
                     if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
@@ -170,7 +174,7 @@ perf::async_task_t<bool> run_pattern_dealer_dealer_async (const std::string &tra
                     return;
                 }
                 bool burst_stop = false;
-                if (!handle_part (burst, &burst_stop)) {
+                if (!handle_message (burst, &burst_stop)) {
                     sender_ok.store (false, std::memory_order_release);
                     return;
                 }

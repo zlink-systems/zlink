@@ -18,11 +18,11 @@ bool perf_debug_enabled ()
 }
 
 int recv_pair_payload (zlink::pair_socket_t &socket_,
-                       zlink::message_t &part_,
+                       zlink::received_t &received_,
                        zlink::recv_flags_t flags_)
 {
     try {
-        return socket_.recv (part_, flags_);
+        return socket_.recv (received_, flags_);
     }
     catch (const zlink::recv_error_t &err) {
         errno = err.internal_errno ();
@@ -137,20 +137,24 @@ bool run_pattern_pair (const std::string &transport, size_t msg_size, const std:
             }
 
             for (;;) {
-                zlink::message_t part;
+                zlink::received_t received;
                 const int recv_rc =
-                  recv_pair_payload (bind_socket, part, zlink::recv_flags_t::dontwait);
+                  recv_pair_payload (bind_socket, received, zlink::recv_flags_t::dontwait);
                 if (recv_rc != 0) {
                     if (errno == EAGAIN || errno == EINTR)
                         break;
                     sender_ok.store (false, std::memory_order_release);
                     return;
                 }
-                if (perf::single::is_stop_token_message (part)) {
+                const std::vector<zlink::message_t> &parts = received.parts ();
+                if (parts.size () == 1 && perf::single::is_stop_token_message (parts.front ())) {
                     return;
                 }
+                const zlink::message_t *part = perf::single::measurement_payload_part (parts);
+                if (!part)
+                    continue;
                 if (std::chrono::steady_clock::now () < active_deadline
-                    && !record_pair_payload (part, run_id, msg_size, payload_size, received_count,
+                    && !record_pair_payload (*part, run_id, msg_size, payload_size, received_count,
                                              latency_builder)) {
                     sender_ok.store (false, std::memory_order_release);
                     return;

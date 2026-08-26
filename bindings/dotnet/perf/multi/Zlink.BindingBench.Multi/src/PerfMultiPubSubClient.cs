@@ -144,13 +144,17 @@ internal static class PerfMultiPubSubClient
                                 subscribed))
                             break;
 
-                        ReadOnlySpan<byte> body = subscribed.FirstPart()
-                            .AsReadOnlySpan();
-                        if (IsStopTokenPayload(body))
+                        if (subscribed.Parts.Count == 1
+                            && IsStopTokenPayload(subscribed.FirstPart()
+                                .AsReadOnlySpan()))
                         {
                             phaseDone = true;
                             break;
                         }
+                        if (!PerfSocketIo.TryMeasurementPayload(subscribed.Parts,
+                                out Message payloadPart))
+                            continue;
+                        ReadOnlySpan<byte> body = payloadPart.AsReadOnlySpan();
 
                         long recvTicks = Stopwatch.GetTimestamp();
                         if (recvTicks > benchDeadlineTicks)

@@ -26,7 +26,7 @@ async def _send_stop_token(sock):
     # through transient backpressure so the server's receive window observes
     # the per-socket wire stop token.
     for _ in range(1000):
-        if await send_routed(sock, STOP_TOKEN):
+        if await send_routed(sock, STOP_TOKEN, measurement=False):
             return True
     return False
 

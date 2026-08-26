@@ -74,6 +74,7 @@ export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Awarnings"
 # -- Defaults (matching core/perf) -------------------------------------------
 PATTERN="ALL"
 DURATION="${PERF_SINGLE_DURATION_SECONDS:-5}"
+PART_COUNT="${PERF_PART_COUNT:-2}"
 MSG_SIZES="${PERF_MSG_SIZES:-64,256,1024,65536,131072,262144}"
 TRANSPORTS="${PERF_TRANSPORTS:-}"
 RUNS="${PERF_RUNS:-1}"
@@ -103,6 +104,7 @@ Options:
   -h, --help
   --pattern NAME
   --duration N
+  --part-count N          Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST
   --transports LIST
   --runs N
@@ -142,6 +144,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --pattern)   PATTERN="$2";   shift 2 ;;
         --duration)  DURATION="$2";  shift 2 ;;
+        --part-count) PART_COUNT="$2"; shift 2 ;;
         --msg-sizes) MSG_SIZES="$2"; shift 2 ;;
         --transports) TRANSPORTS="$2"; shift 2 ;;
         --runs)      RUNS="$2";      shift 2 ;;
@@ -168,6 +171,12 @@ while [[ $# -gt 0 ]]; do
         *)           echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
+    echo "--part-count must be 1 or 2" >&2
+    exit 1
+fi
+export PERF_PART_COUNT="${PART_COUNT}"
 
 if [[ "${REUSE_BUILD}" -eq 1 && "${CLEAN_BUILD}" -eq 1 ]]; then
     echo "--reuse-build and --clean-build are mutually exclusive" >&2

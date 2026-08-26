@@ -146,13 +146,15 @@ internal static class PerfPubSub
                     if (string.Equals(maybe.Topic, Topic,
                             StringComparison.Ordinal))
                     {
-                        Message body = maybe.FirstPart();
-                        ReadOnlySpan<byte> payloadSpan = body.AsReadOnlySpan();
-                        if (StopToken.IsStopToken(payloadSpan))
+                        if (maybe.Parts.Count == 1
+                            && StopToken.IsStopToken(maybe.FirstPart().AsReadOnlySpan()))
                         {
                             stopReceived = true;
                             break;
                         }
+                        if (!PerfSocketIo.TryMeasurementPayload(maybe.Parts, out Message body))
+                            continue;
+                        ReadOnlySpan<byte> payloadSpan = body.AsReadOnlySpan();
 
                         long recvTicks = Stopwatch.GetTimestamp();
                         if (TryDecodeExpectedSingleHeader(payloadSpan,

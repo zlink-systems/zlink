@@ -34,9 +34,8 @@ func runDealerDealer(cfg benchmarkConfig) perfcommon.Result {
 	perfcommon.WaitConnectedWithTimeout(perfcommon.SingleReadyTimeout(), serverMon, clientMon)
 
 	result := runSingleOneWay(cfg, server, func(message *zlink.Message) (bool, error) {
-		return perfcommon.SubmitRoutedMessage(message, func(message *zlink.Message) error {
-			return client.Send().MoveMessage(message).Submit(context.Background())
-		})
+		err := perfcommon.SubmitMeasurementRouted(client.Send(), message)
+		return err == nil, err
 	}, func(message *zlink.Message) error {
 		return client.Send().MoveMessage(message).Submit(context.Background())
 	})

@@ -237,12 +237,14 @@ internal static class PerfRouterRouter
 
         bool ProcessReceived(Received receivedMessage)
         {
-            if (!TryGetPayloadPart(receivedMessage, out Message payloadMessage))
-                return false;
-
-            ReadOnlySpan<byte> body = payloadMessage.AsReadOnlySpan();
-            if (StopToken.IsStopToken(body))
+            if (receivedMessage.Parts.Count == 1
+                && StopToken.IsStopToken(receivedMessage.FirstPart().AsReadOnlySpan()))
                 return true;
+
+            if (!PerfSocketIo.TryMeasurementPayload(receivedMessage.Parts,
+                    out Message payloadMessage))
+                return false;
+            ReadOnlySpan<byte> body = payloadMessage.AsReadOnlySpan();
 
             if (!TryDecodeExpectedSingleHeader(body, msgSize, ActivePhase,
                     out var header, RunId))
@@ -290,7 +292,7 @@ internal static class PerfRouterRouter
                     seq++;
                     try
                     {
-                        if (await PerfSocketIo.SendAsync(sender,
+                        if (await PerfSocketIo.SendMeasurementAsync(sender,
                                 targetRoutingId, payload, SendFlags.None)
                                 .ConfigureAwait(false) == 0)
                             continue;

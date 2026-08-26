@@ -59,6 +59,7 @@ TRANSPORTS=""
 MSG_SIZES="${PERF_MSG_SIZES:-64,256,1024,65536,131072,262144}"
 RUNS=1
 DURATION="${PERF_SINGLE_DURATION_SECONDS:-${PERF_DURATION_SECONDS:-5}}"
+PART_COUNT="${PERF_PART_COUNT:-2}"
 RESULTS_TAG="${PERF_RESULTS_TAG:-}"
 BUILD_DIR=""
 OUTPUT_PATH=""
@@ -96,6 +97,7 @@ Options:
   --msg-sizes LIST       Payload sizes.
   --runs N               Iterations per pattern/transport/size.
   --duration N           Active duration seconds.
+  --part-count N         Application frame count per measured message (1 or 2; default: 2).
   --build-dir PATH       Build directory override.
   --reuse-build          Reuse existing installDist output.
   --clean-build          Delete build dir before installDist.
@@ -130,6 +132,7 @@ while [[ $# -gt 0 ]]; do
     --msg-sizes) MSG_SIZES="${2:-}"; shift ;;
     --runs) RUNS="${2:-}"; shift ;;
     --duration) DURATION="${2:-}"; shift ;;
+    --part-count) PART_COUNT="${2:-}"; shift ;;
     --build-dir) BUILD_DIR="${2:-}"; shift ;;
     --reuse-build) REUSE_BUILD=1 ;;
     --clean-build) CLEAN_BUILD=1 ;;
@@ -154,6 +157,12 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
+  echo "--part-count must be 1 or 2." >&2
+  exit 1
+fi
+export PERF_PART_COUNT="${PART_COUNT}"
 
 failure_reason_from_output() {
   local output_text="$1"

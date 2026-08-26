@@ -9,26 +9,6 @@ namespace Systems.Zlink;
 public static class MessageOperations
 {
     /// <summary>
-    ///     Sends one ROUTER message without allocating a multipart builder on
-    ///     the built-in socket implementation. External implementations fall
-    ///     back to the equivalent builder contract.
-    /// </summary>
-    public static Task SendAsync(this IRouterSocket socket,
-        RoutingId routingId, Message message,
-        CancellationToken cancellationToken = default)
-    {
-        if (socket == null)
-            throw new ArgumentNullException(nameof(socket));
-        if (message == null)
-            throw new ArgumentNullException(nameof(message));
-        return socket is RouterSocket builtIn
-            ? builtIn.SendSingleAsyncCore(routingId, message,
-                cancellationToken)
-            : socket.Send(routingId).Message(message).Async(
-                cancellationToken);
-    }
-
-    /// <summary>
     ///     Adds <paramref name="messages" /> as parts, in order. The parts are
     ///     consumed on a successful submit; see <see cref="SendOperation" /> for the
     ///     ownership contract.

@@ -65,7 +65,11 @@ def received_has_stop_token(received):
 def received_metric_payload(received, *, expected_size=None):
     if not received:
         return memoryview(b"")
-    return metric_payload_data(received.parts[-1].data, expected_size=expected_size)
+    parts = received.parts
+    expected_count = measurement_part_count()
+    if len(parts) != expected_count or (expected_count == 2 and len(parts[1].data) != 0):
+        return memoryview(b"")
+    return metric_payload_data(parts[0].data, expected_size=expected_size)
 
 
 def metric_payload_data(data, *, expected_size=None):
@@ -271,7 +275,15 @@ def _submit_backpressured_result():
     return _SUBMIT_BACKPRESSURED
 
 
-def send_nonblocking(sock, payload, *, method="send", routing_id=None):
+def measurement_part_count():
+    return 1 if os.environ.get("PERF_PART_COUNT") == "1" else 2
+
+
+def measurement_parts(payload):
+    return (payload,) if measurement_part_count() == 1 else (payload, b"")
+
+
+def send_nonblocking(sock, payload, *, method="send", routing_id=None, measurement=True):
     if method != "send":
         raise ValueError(f"unsupported send method: {method}")
     send_method = sock.send
@@ -281,7 +293,9 @@ def send_nonblocking(sock, payload, *, method="send", routing_id=None):
             op = send_method().flags(flag)
         else:
             op = send_method(routing_id).flags(flag)
-        if isinstance(payload, (list, tuple)):
+        if measurement and not isinstance(payload, (list, tuple)):
+            op.messages(*measurement_parts(payload))
+        elif isinstance(payload, (list, tuple)):
             op.messages(*payload)
         else:
             op.message(payload)
@@ -292,10 +306,12 @@ def send_nonblocking(sock, payload, *, method="send", routing_id=None):
         raise
 
 
-async def send_routed(sock, payload, *, routing_id=None):
+async def send_routed(sock, payload, *, routing_id=None, measurement=True):
     try:
         op = sock.send() if routing_id is None else sock.send(routing_id)
-        if isinstance(payload, (list, tuple)):
+        if measurement and not isinstance(payload, (list, tuple)):
+            op.messages(*measurement_parts(payload))
+        elif isinstance(payload, (list, tuple)):
             op.messages(*payload)
         else:
             op.message(payload)
@@ -308,11 +324,13 @@ async def send_routed(sock, payload, *, routing_id=None):
 
 
 
-def publish_nonblocking(sock, topic, payload):
+def publish_nonblocking(sock, topic, payload, *, measurement=True):
     flag = _dont_wait_flag()
     try:
         op = sock.publish(topic).flags(flag)
-        if isinstance(payload, (list, tuple)):
+        if measurement and not isinstance(payload, (list, tuple)):
+            op.messages(*measurement_parts(payload))
+        elif isinstance(payload, (list, tuple)):
             op.messages(*payload)
         else:
             op.message(payload)

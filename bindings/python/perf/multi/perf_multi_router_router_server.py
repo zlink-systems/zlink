@@ -12,6 +12,8 @@ from perf_multi_common import (
     perf_server_context,
     recv_nonblocking,
     safe_poll,
+    measurement_parts,
+    measurement_part_count,
 )
 
 
@@ -71,10 +73,14 @@ async def main(argv=None):
                         if received is None:
                             break
                         with received:
+                            if len(received.parts) != measurement_part_count():
+                                raise RuntimeError("invalid measured multipart request")
+                            if len(received.parts) == 2 and len(received.parts[1].data) != 0:
+                                raise RuntimeError("invalid measured multipart trailing frame")
                             payload = bytes(received.parts[0].data)
                             routing_id = bytes(received.routing_id)
                         task = asyncio.create_task(
-                            router.send(routing_id).message(payload).submit()
+                            router.send(routing_id).messages(*measurement_parts(payload)).submit()
                         )
                         pending_tasks.add(task)
                         task.add_done_callback(_on_send_done)

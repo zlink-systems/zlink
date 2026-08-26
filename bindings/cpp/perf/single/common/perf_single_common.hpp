@@ -35,6 +35,28 @@ inline zlink::message_t message_from_payload (const void *data_, size_t size_)
       std::as_bytes (std::span<const char> (static_cast<const char *> (data_), size_)));
 }
 
+// Keep the default benchmark wire shape aligned with production multipart
+// traffic.  The one-part case deliberately remains available for paired
+// comparisons and keeps the binding's direct-send fast path observable.
+inline int measurement_part_count ()
+{
+    const char *value = std::getenv ("PERF_PART_COUNT");
+    return value && std::strcmp (value, "1") == 0 ? 1 : 2;
+}
+
+inline bool measurement_parts_valid (const std::vector<zlink::message_t> &parts_)
+{
+    if (parts_.size () != static_cast<size_t> (measurement_part_count ()))
+        return false;
+    return measurement_part_count () == 1 || parts_[1].size () == 0;
+}
+
+inline const zlink::message_t *measurement_payload_part (
+  const std::vector<zlink::message_t> &parts_)
+{
+    return measurement_parts_valid (parts_) ? &parts_.front () : NULL;
+}
+
 class ctx_guard_t
 {
   public:
@@ -490,12 +512,19 @@ inline bool is_transient_routed_send_errno (int err_)
            || err_ == ENETUNREACH;
 }
 
-inline bool send_payload_blocking (zlink::pair_socket_t &socket_, const void *data_, size_t size_)
+inline bool send_payload_blocking (zlink::pair_socket_t &socket_,
+                                  const void *data_,
+                                  size_t size_,
+                                  bool measurement_ = true)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
         return false;
     try {
+        if (measurement_ && measurement_part_count () == 2) {
+            zlink::message_t tail = message_from_payload (NULL, 0);
+            return std::move (socket_.send ().message (msg)).message (tail).submit ();
+        }
         return socket_.send ().message (msg).submit ();
     }
     catch (const zlink::binding_error_t &err) {
@@ -512,7 +541,7 @@ inline bool send_payload_blocking_retry (zlink::pair_socket_t &socket_,
       std::chrono::steady_clock::now ()
       + std::chrono::milliseconds (resolve_single_stop_retry_timeout_ms ());
     while (std::chrono::steady_clock::now () < deadline) {
-        if (send_payload_blocking (socket_, data_, size_))
+        if (send_payload_blocking (socket_, data_, size_, false))
             return true;
         if (!is_transient_send_errno (errno))
             return false;
@@ -525,12 +554,17 @@ inline bool send_payload_blocking_retry (zlink::pair_socket_t &socket_,
 inline bool publish_payload_blocking (zlink::pub_socket_t &publisher_,
                                       const std::string &topic_,
                                       const void *data_,
-                                      size_t size_)
+                                      size_t size_,
+                                      bool measurement_ = true)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
         return false;
     try {
+        if (measurement_ && measurement_part_count () == 2) {
+            zlink::message_t tail = message_from_payload (NULL, 0);
+            return std::move (publisher_.publish (topic_).message (msg)).message (tail).submit ();
+        }
         return publisher_.publish (topic_).message (msg).submit ();
     }
     catch (const zlink::binding_error_t &err) {
@@ -546,7 +580,7 @@ inline bool publish_payload_blocking_retry (zlink::pub_socket_t &publisher_,
                                             int max_retries_ = 100)
 {
     for (int retry = 0; retry < max_retries_; ++retry) {
-        if (publish_payload_blocking (publisher_, topic_, data_, size_))
+        if (publish_payload_blocking (publisher_, topic_, data_, size_, false))
             return true;
         if (!is_transient_send_errno (errno))
             return false;
@@ -565,7 +599,10 @@ inline bool publish_payload_blocking_retry (zlink::pub_socket_t &publisher_,
 //         C's send_active_samples loop, so the delivered message never
 //         carries a stale timestamp.
 //  -1  -> fatal error
-inline int send_payload_active (zlink::pair_socket_t &socket_, const void *data_, size_t size_)
+inline int send_payload_active (zlink::pair_socket_t &socket_,
+                                const void *data_,
+                                size_t size_,
+                                bool measurement_ = true)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
@@ -574,7 +611,13 @@ inline int send_payload_active (zlink::pair_socket_t &socket_, const void *data_
         // operation_state_t defaults and resets flags to none.  Calling the
         // out-of-line flags(none) setter for every message adds C++-only
         // harness work while preserving no observable send semantics.
-        const bool sent = std::move (socket_.send ().message (msg)).submit ();
+        bool sent;
+        if (measurement_ && measurement_part_count () == 2) {
+            zlink::message_t tail = message_from_payload (NULL, 0);
+            sent = std::move (socket_.send ().message (msg)).message (tail).submit ();
+        } else {
+            sent = std::move (socket_.send ().message (msg)).submit ();
+        }
         return sent ? 1 : 0;
     }
     catch (const zlink::binding_error_t &err) {
@@ -586,13 +629,21 @@ inline int send_payload_active (zlink::pair_socket_t &socket_, const void *data_
 }
 
 inline int
-send_payload_active (perf_socket_t &socket_, const void *data_, size_t size_)
+send_payload_active (perf_socket_t &socket_,
+                     const void *data_,
+                     size_t size_,
+                     bool measurement_ = true)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
         return -1;
     try {
-        socket_.send_routed (msg);
+        if (measurement_ && measurement_part_count () == 2) {
+            zlink::message_t tail = message_from_payload (NULL, 0);
+            socket_.send_routed (msg, tail);
+        } else {
+            socket_.send_routed (msg);
+        }
         return 1;
     }
     catch (const zlink::binding_error_t &err) {
@@ -606,13 +657,19 @@ send_payload_active (perf_socket_t &socket_, const void *data_, size_t size_)
 inline int send_payload_active (perf_socket_t &socket_,
                                 const zlink::routing_id_t &routing_id_,
                                 const void *data_,
-                                size_t size_)
+                                size_t size_,
+                                bool measurement_ = true)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
         return -1;
     try {
-        socket_.send_routed (routing_id_, msg);
+        if (measurement_ && measurement_part_count () == 2) {
+            zlink::message_t tail = message_from_payload (NULL, 0);
+            socket_.send_routed (routing_id_, msg, tail);
+        } else {
+            socket_.send_routed (routing_id_, msg);
+        }
         return 1;
     }
     catch (const zlink::binding_error_t &err) {
@@ -627,13 +684,19 @@ inline async_task_t<int>
 send_payload_active_async (perf_socket_t &socket_,
                            const zlink::routing_id_t &routing_id_,
                            const void *data_,
-                           size_t size_)
+                           size_t size_,
+                           bool measurement_ = true)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
         co_return -1;
     try {
-        co_await socket_.send_routed_async (routing_id_, msg);
+        if (measurement_ && measurement_part_count () == 2) {
+            zlink::message_t tail = message_from_payload (NULL, 0);
+            co_await socket_.send_routed_async (routing_id_, msg, tail);
+        } else {
+            co_await socket_.send_routed_async (routing_id_, msg);
+        }
         co_return 1;
     }
     catch (const zlink::binding_error_t &err) {
@@ -647,7 +710,7 @@ send_payload_active_async (perf_socket_t &socket_,
 inline bool send_stop_token_active (perf_socket_t &socket_)
 {
     return send_payload_active (socket_, k_stop_token,
-                                std::strlen (k_stop_token))
+                                std::strlen (k_stop_token), false)
            > 0;
 }
 
@@ -655,7 +718,7 @@ inline bool send_stop_token_active (perf_socket_t &socket_,
                                     const zlink::routing_id_t &routing_id_)
 {
     return send_payload_active (socket_, routing_id_, k_stop_token,
-                                std::strlen (k_stop_token))
+                                std::strlen (k_stop_token), false)
            > 0;
 }
 
@@ -663,7 +726,7 @@ inline async_task_t<bool> send_stop_token_async (perf_socket_t &socket_,
                                                   const zlink::routing_id_t &routing_id_)
 {
     const int rc = co_await send_payload_active_async (
-      socket_, routing_id_, k_stop_token, std::strlen (k_stop_token));
+      socket_, routing_id_, k_stop_token, std::strlen (k_stop_token), false);
     co_return rc > 0;
 }
 

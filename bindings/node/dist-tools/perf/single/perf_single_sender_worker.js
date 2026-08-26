@@ -7,6 +7,13 @@ const { createPayload, integerEnv, stampPayload } = require('../common/perf_metr
 const { applyContextPolicy, applySocketPolicy, configureTlsClient, configureTlsServer, emitSingleSocketHwmDetail, waitForConnectionReady, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const DEFAULT_TOPIC = 'perf.topic';
+function appendMeasurement(op, payload) {
+    op = op.message(payload);
+    if (process.env.PERF_PART_COUNT !== '1') {
+        op = op.message(Buffer.alloc(0));
+    }
+    return op;
+}
 function ensureParentPort() {
     if (!parentPort) {
         throw new Error('sender worker requires parentPort');
@@ -109,22 +116,22 @@ async function submitOnce(kind, socket, body, receiverRoutingId, topic) {
         ? zlink.Message.from(body)
         : body;
     if (kind === 'pubsub') {
-        socket.publish(topic).message(message).submit();
+        appendMeasurement(socket.publish(topic), message).submit();
         return true;
     }
     if (kind === 'router_router') {
-        await socket.send(receiverRoutingId).message(message).submit();
+        await appendMeasurement(socket.send(receiverRoutingId), message).submit();
         return true;
     }
     if (kind === 'dealer_router') {
-        await socket.send().message(message).submit();
+        await appendMeasurement(socket.send(), message).submit();
         return true;
     }
     if (kind === 'dealer_dealer') {
-        await socket.send().message(message).submit();
+        await appendMeasurement(socket.send(), message).submit();
         return true;
     }
-    await socket.send().message(message).submit();
+    await appendMeasurement(socket.send(), message).submit();
     return true;
 }
 // Retry through transient backpressure until accepted (C send_step_retry

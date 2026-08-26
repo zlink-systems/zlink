@@ -116,7 +116,7 @@ async function main() {
     }
     for (let i = 0; i < dealers.length; i += 1) {
       const deadline = Date.now() + 5000;
-      while (!(await tryRoutedSocketSend(dealers[i], STOP_TOKEN_BYTES))) {
+      while (!(await tryRoutedSocketSend(dealers[i], [STOP_TOKEN_BYTES]))) {
         if (Date.now() >= deadline) {
           throw new Error('stop token send timeout');
         }

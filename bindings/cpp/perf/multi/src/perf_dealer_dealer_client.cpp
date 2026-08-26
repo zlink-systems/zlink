@@ -251,7 +251,12 @@ class dealer_dealer_client_bench_t
         // The public routed builder has no DONTWAIT terminal. Await Core's
         // admission completion so HWM pressure suspends this coroutine instead
         // of turning the socket's finite SNDTIMEO into a benchmark failure.
-        co_await std::move (state.sock->send ()).message (state.message).async ();
+        if (perf::multi::measurement_part_count () == 2) {
+            zlink::message_t tail = perf::multi::measurement_empty_part ();
+            co_await std::move (state.sock->send ()).message (state.message).message (tail).async ();
+        } else {
+            co_await std::move (state.sock->send ()).message (state.message).async ();
+        }
         ++_seq;
         if (count)
             ++(*count);

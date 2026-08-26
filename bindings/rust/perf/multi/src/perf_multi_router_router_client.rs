@@ -115,7 +115,7 @@ fn main() {
                 args.msg_size as u32,
                 seqs[index],
             );
-            match common::block_on(sockets[index].send(&server_rid).message(msg).submit()) {
+            match perf_submit_measurement!(sockets[index].send(&server_rid), msg) {
                 Ok(()) => {
                     waiting_reply[index] = true;
                     send_pending[index] = false;

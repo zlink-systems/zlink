@@ -91,6 +91,11 @@ executor가 아니다.
   operation builder를 반환한다.
 - payload와 timeout은 operation 시작점 인자가 아니라 builder 단계에서
   표현한다.
+- 하나의 part만 보내는 payload도 같은 builder를 사용한다. 호출자는
+  `Message(...)`를 한 번 추가한 뒤 terminal을 호출한다. `Send(Message)`,
+  `Send(RoutingId, Message)`, `Publish(topic, Message)` 같은 직접 single-part
+  단축 API는 공개 계약에 추가하지 않는다. 구현은 내부 one-part fast path를
+  선택할 수 있지만, 호출자가 고르는 별도 API가 되어서는 안 된다.
 - bindings 라이브러리는 framework coroutine scheduler, Kotlin `CoroutineScope`,
   C++ framework executor를 소유하지 않는다. **바인딩 라이브러리는 admission
   대기열이나 재시도 정책도 소유하지 않는다** — send, publish, routed send,

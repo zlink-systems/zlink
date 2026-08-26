@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
-const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, tryRoutedSocketSend, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, tryRoutedSocketSend, measurementPayload, waitPollerOne } = require('./perf_multi_runtime');
 const { resolveRoutedPattern, runRoutedSendSendServer } = require('./perf_multi_routed_sendsend');
 const PATTERN = 'MULTI_DEALER_ROUTER_REQREP';
 async function drainPending(router, pending) {
@@ -27,7 +27,11 @@ async function receiveAndQueueReplies(router, pending, received) {
             if (!received.routingId || received.requestSeq) {
                 continue;
             }
-            const payload = received.singlePartOrThrow();
+            const payload = measurementPayload(received.parts);
+            if (!payload) {
+                received.close();
+                continue;
+            }
             if (isStopTokenParts([payload])) {
                 return true;
             }

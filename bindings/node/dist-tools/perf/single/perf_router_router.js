@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, integerEnv, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, appendMeasurement, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const RECEIVER_ID = Buffer.from('ROUTER1', 'ascii');
 const SENDER_ID = Buffer.from('ROUTER2', 'ascii');
@@ -98,7 +98,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
             },
             sendActive: async (socket, payload, routingId) => {
                 try {
-                    await socket.send(routingId).message(payload).submit();
+                    await appendMeasurement(socket.send(routingId), payload).submit();
                     return true;
                 }
                 catch (error) {

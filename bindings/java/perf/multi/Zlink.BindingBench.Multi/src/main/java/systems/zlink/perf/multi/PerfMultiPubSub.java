@@ -192,10 +192,12 @@ final class PerfMultiPubSub {
                                                     Message message) {
         while (true) {
             try {
-                pub.publish(TOPIC)
-                    .message(message)
-                    .flags(SendFlags.DONT_WAIT)
-                    .submit();
+                if (PerfUtil.measurementPartCount() == 2) {
+                    pub.publish(TOPIC).message(message).message(PerfUtil.measurementTail())
+                        .flags(SendFlags.DONT_WAIT).submit();
+                } else {
+                    pub.publish(TOPIC).message(message).flags(SendFlags.DONT_WAIT).submit();
+                }
                 return;
             } catch (ZlinkSubmitException ex) {
                 if (!isTransientSubmit(ex)) {
@@ -231,11 +233,16 @@ final class PerfMultiPubSub {
             if (!sub.subscribe(received, RecvFlags.DONT_WAIT)) {
                 return false;
             }
-            if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+            if (received.parts().size() == 1
+                && PerfStopToken.isStopTokenMessage(received.firstPart())) {
                 return true;
             }
+            Message payload = PerfUtil.measurementPayload(received.parts());
+            if (payload == null) {
+                continue;
+            }
             int phase = PerfUtil.recordOneWayLatency(metrics,
-                received.firstPart(), config.size(), activeEnd);
+                payload, config.size(), activeEnd);
             if (phase == PerfUtil.PHASE_UNKNOWN) {
                 continue;
             }

@@ -67,7 +67,8 @@ final class PerfMultiSocketReqRep {
                     // not add an unconditional native DONT_WAIT recv after a
                     // poll wake that belongs to another event class.
                     while (server.recv(received, RecvFlags.DONT_WAIT)) {
-                        if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+                        if (received.parts().size() == 1
+                            && PerfStopToken.isStopTokenMessage(received.firstPart())) {
                             stops++;
                             received.close();
                             continue;
@@ -76,7 +77,16 @@ final class PerfMultiSocketReqRep {
                             received.close();
                             continue;
                         }
-                        received.reply().message(received.firstPart()).submit();
+                        Message payload = PerfUtil.measurementPayload(received.parts());
+                        if (payload == null) {
+                            received.close();
+                            continue;
+                        }
+                        if (PerfUtil.measurementPartCount() == 2) {
+                            received.reply().message(payload).message(PerfUtil.measurementTail()).submit();
+                        } else {
+                            received.reply().message(payload).submit();
+                        }
                         received.close();
                     }
                 }
@@ -167,9 +177,9 @@ final class PerfMultiSocketReqRep {
                 try {
                     long receivedAt = System.nanoTime();
                     Throwable cause = completionCause(error);
-                    if (cause == null && parts != null
-                        && !parts.isEmpty() && receivedAt < activeEnd) {
-                        PerfUtil.recordActiveLatency(metrics, parts.get(0),
+                    Message payload = PerfUtil.measurementPayload(parts);
+                    if (cause == null && payload != null && receivedAt < activeEnd) {
+                        PerfUtil.recordActiveLatency(metrics, payload,
                             config.size(), true, receivedAt);
                     } else if (cause != null
                         && (!(cause instanceof ZlinkRequestException request)
@@ -256,10 +266,16 @@ final class PerfMultiSocketReqRep {
                                Message payload, Duration timeout,
                                BiConsumer<List<Message>, Throwable> completion) {
         var stage = routedClients
-            ? ((RouterSocket) client).request(SERVER_RID)
-                .message(payload).timeout(timeout).submit()
-            : ((DealerSocket) client).request()
-                .message(payload).timeout(timeout).submit();
+            ? (PerfUtil.measurementPartCount() == 2
+                ? ((RouterSocket) client).request(SERVER_RID).message(payload)
+                    .message(PerfUtil.measurementTail()).timeout(timeout).submit()
+                : ((RouterSocket) client).request(SERVER_RID)
+                    .message(payload).timeout(timeout).submit())
+            : (PerfUtil.measurementPartCount() == 2
+                ? ((DealerSocket) client).request().message(payload)
+                    .message(PerfUtil.measurementTail()).timeout(timeout).submit()
+                : ((DealerSocket) client).request()
+                    .message(payload).timeout(timeout).submit());
         stage.whenComplete(completion);
     }
 

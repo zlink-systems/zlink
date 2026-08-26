@@ -154,8 +154,6 @@ internal static class PerfDealerRouter
         // (TryGetPayloadPart). Latency stays recv_now_ns - sent_ts_ns.
         bool ProcessBody(ReadOnlySpan<byte> body)
         {
-            if (StopToken.IsStopToken(body))
-                return true;
             if (TryDecodeExpectedSingleHeader(body, msgSize, ActivePhase,
                     out var header, RunId))
             {
@@ -199,7 +197,7 @@ internal static class PerfDealerRouter
                     seq++;
                     try
                     {
-                        if (await PerfSocketIo.SendAsync(sender, payload,
+                        if (await PerfSocketIo.SendMeasurementAsync(sender, payload,
                                 SendFlags.None).ConfigureAwait(false) <= 0)
                             continue;
                     }
@@ -237,13 +235,18 @@ internal static class PerfDealerRouter
 
                 while (TryReceive(receiver, maybe))
                 {
-                    if (TryGetPayloadPart(maybe, out Message payloadPart))
+                    if (maybe.Parts.Count == 1
+                        && StopToken.IsStopToken(maybe.FirstPart().AsReadOnlySpan()))
                     {
-                        if (ProcessBody(payloadPart.AsReadOnlySpan()))
-                        {
-                            stopReceived = true;
-                            break;
-                        }
+                        stopReceived = true;
+                        break;
+                    }
+                    if (PerfSocketIo.TryMeasurementPayload(maybe.Parts,
+                            out Message payloadPart)
+                        && ProcessBody(payloadPart.AsReadOnlySpan()))
+                    {
+                        stopReceived = true;
+                        break;
                     }
                 }
             }

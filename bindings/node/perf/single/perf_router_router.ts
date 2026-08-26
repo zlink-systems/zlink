@@ -13,6 +13,7 @@ const {
 const {
   applyContextPolicy,
   applySocketPolicy,
+  appendMeasurement,
   benchmarkEndpoint,
   closeSenderWorker,
   configureTlsServer,
@@ -122,7 +123,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
       },
       sendActive: async (socket, payload, routingId) => {
         try {
-          await socket.send(routingId).message(payload).submit();
+          await appendMeasurement(socket.send(routingId), payload).submit();
           return true;
         } catch (error) {
           if (error instanceof zlink.SubmitError

@@ -14,11 +14,13 @@ const {
 const {
   applyContextPolicy,
   applySocketPolicy,
+  appendMeasurement,
   benchmarkEndpoint,
   closeSenderWorker,
   configureTlsClient,
   drainRecvSocket,
   emitSingleSocketHwmDetail,
+  measurementPayload,
   parseSingleBinaryArgs,
   runLocalSocketOneWayBenchmark,
   spawnSenderWorker,
@@ -44,9 +46,16 @@ function trySubscribe(socket, received, buffer, flags) {
     if (!socket.subscribe(received, flags)) {
       return null;
     }
-    const data = received.singlePartOrThrow().data();
+    if (received.parts.length === 1 && received.parts[0].data().equals(STOP_TOKEN_BYTES)) {
+      return { stop: true, size: STOP_TOKEN_BYTES.length };
+    }
+    const payload = measurementPayload(received.parts);
+    if (!payload) {
+      return { valid: false, size: 0 };
+    }
+    const data = payload.data();
     data.copy(buffer, 0, 0, Math.min(buffer.length, data.length));
-    return { size: data.length };
+    return { valid: true, size: data.length };
   } catch (error) {
     if (error instanceof zlink.RecvError &&
         (error.result === zlink.RecvResult.NoData || error.nativeErrno === 2)) {
@@ -88,10 +97,13 @@ async function drainPubSubPayloadInto(
       }
       first = false;
       processed = true;
-      if (received.size === STOP_TOKEN_BYTES.length &&
-          buffer.subarray(0, received.size).equals(STOP_TOKEN_BYTES)) {
+      if (received.stop) {
         stopReceived = true;
         break;
+      }
+      if (!received.valid) {
+        onHeader(null, currentEpochNs());
+        continue;
       }
       if (recordUntilNs !== null && recordingActive) {
         recordingActive = currentEpochNs() <= recordUntilNs;
@@ -137,7 +149,7 @@ async function runPubSubBenchmark(msgSize, options) {
       senderHwmComponent: 'publisher',
       sendActive: (socket, payload) => {
         try {
-          socket.publish(TOPIC).message(payload).submit();
+          appendMeasurement(socket.publish(TOPIC), payload).submit();
           return true;
         } catch (error) {
           if (error instanceof zlink.SubmitError

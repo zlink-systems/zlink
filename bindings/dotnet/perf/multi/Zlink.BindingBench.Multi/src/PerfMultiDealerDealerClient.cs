@@ -118,7 +118,7 @@ internal static class PerfMultiDealerDealerClient
                     Message message = Message.Allocate(payloadSize);
                     StampMetricHeader(message.AsSpan(), runId,
                         PerfPhase.Active, msgSize, seq, EpochNs());
-                    bool sent = await PerfSocketIo.SendAsync(socket, message)
+                    bool sent = await PerfSocketIo.SendMeasurementAsync(socket, message)
                         .ConfigureAwait(false) > 0;
                     message.Dispose();
                     if (!sent)

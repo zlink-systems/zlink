@@ -1,7 +1,10 @@
 package perfcommon
 
 import (
+	"context"
 	"encoding/binary"
+	"fmt"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -18,6 +21,45 @@ const (
 )
 
 var metricSequence uint64
+
+// MeasurementPartCount controls the benchmark wire shape.  STREAM owns its
+// own packet framing and does not call these helpers.
+func MeasurementPartCount() int {
+	if os.Getenv("PERF_PART_COUNT") == "1" {
+		return 1
+	}
+	return 2
+}
+
+func SubmitMeasurement(op zlink.SendOp, message *zlink.Message, flags zlink.SendFlags) (bool, error) {
+	submit := op.MoveMessage(message)
+	if MeasurementPartCount() == 2 {
+		tail := NewMessageWithSize(0)
+		defer tail.Close()
+		submit = submit.Message(tail)
+	}
+	return submit.Flags(flags).Submit(context.Background())
+}
+
+func SubmitMeasurementRouted(op zlink.RoutedSendOp, message *zlink.Message) error {
+	submit := op.MoveMessage(message)
+	if MeasurementPartCount() == 2 {
+		tail := NewMessageWithSize(0)
+		defer tail.Close()
+		submit = submit.Message(tail)
+	}
+	return submit.Submit(context.Background())
+}
+
+func MeasurementPayload(parts []*zlink.Message) (*zlink.Message, error) {
+	if len(parts) != MeasurementPartCount() {
+		return nil, fmt.Errorf("expected %d benchmark parts, got %d", MeasurementPartCount(), len(parts))
+	}
+	if MeasurementPartCount() == 2 && (parts[1] == nil || len(parts[1].Data()) != 0) {
+		return nil, fmt.Errorf("benchmark trailing part must be empty")
+	}
+	return parts[0], nil
+}
 
 func StampPayload(payload []byte) {
 	StampPayloadPhase(payload, PhaseActive)

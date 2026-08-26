@@ -246,9 +246,6 @@ internal static class PerfMultiRouterRouterClient
             if (!routerSock.Recv(received, RecvFlags.DontWait))
                 break;
 
-            if (!received.IsSinglePart)
-                continue;
-
             if (!slot.WaitingForReply)
                 continue;
 
@@ -259,8 +256,10 @@ internal static class PerfMultiRouterRouterClient
                 // window; dropping replies that arrive after activeDeadline
                 // would lower throughput vs C for replies whose sends were
                 // inside the active phase.
-                if (PerfShared.TryDecodeMetricHeader(
-                        received.FirstPart().AsReadOnlySpan(),
+                if (PerfSocketIo.TryMeasurementPayload(received.Parts,
+                        out Message payloadPart)
+                    && PerfShared.TryDecodeMetricHeader(
+                        payloadPart.AsReadOnlySpan(),
                         out PerfMetricHeader header)
                     && header.RunId == runId
                     && header.MsgSize == (uint)msgSize
@@ -330,7 +329,7 @@ internal static class PerfMultiRouterRouterClient
             seq, EpochNs());
         using Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan(0, PerfMetricHeaderSize).CopyTo(message.AsSpan());
-        return await PerfSocketIo.SendAsync(slot.Socket, slot.ServerRoutingId,
+        return await PerfSocketIo.SendMeasurementAsync(slot.Socket, slot.ServerRoutingId,
             message).ConfigureAwait(false) > 0;
     }
 

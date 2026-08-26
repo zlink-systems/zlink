@@ -21,7 +21,9 @@ function isTransientSendError(error) {
 }
 function tryStreamSend(stream, routingId, frame) {
     try {
-        return trySocketSend(stream, routingId, frame);
+        // STREAM owns its packet framing; it must remain byte-for-byte unchanged
+        // when measurement multipart mode is enabled for the other patterns.
+        return trySocketSend(stream, routingId, [frame]);
     }
     catch (error) {
         if (isTransientSendError(error)) {

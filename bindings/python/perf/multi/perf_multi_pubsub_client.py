@@ -18,6 +18,7 @@ from perf_multi_common import (
     recv_nonblocking,
     resolve_multi_connect_ready_timeout_ms,
     result_metrics,
+    measurement_part_count,
     safe_poll,
     wait_monitor_event,
 )
@@ -93,10 +94,14 @@ def main(argv=None):
                                 parts = received.parts
                                 if not parts:
                                     continue
-                                data = parts[-1].data
-                                if len(data) == len(STOP_TOKEN) and data == STOP_TOKEN:
+                                if len(parts) == 1 and parts[0].data == STOP_TOKEN:
                                     phase_done = True
                                     break
+                                if len(parts) != measurement_part_count() or (
+                                    len(parts) == 2 and len(parts[1].data) != 0
+                                ):
+                                    raise RuntimeError("invalid measured multipart pubsub payload")
+                                data = parts[0].data
                                 active, latency = active_message_latency_ns(
                                     data,
                                     expected_msg_size=args.msg_size,

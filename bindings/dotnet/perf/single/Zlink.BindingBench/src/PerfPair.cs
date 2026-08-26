@@ -137,13 +137,15 @@ internal static class PerfPair
 
                 while (TryReceiveNonBlocking(receiver, maybe))
                 {
-                    ReadOnlySpan<byte> body = maybe.FirstPart()
-                        .AsReadOnlySpan();
-                    if (StopToken.IsStopToken(body))
+                    if (maybe.Parts.Count == 1
+                        && StopToken.IsStopToken(maybe.FirstPart().AsReadOnlySpan()))
                     {
                         stopReceived = true;
                         break;
                     }
+                    if (!PerfSocketIo.TryMeasurementPayload(maybe.Parts, out Message receivedPayload))
+                        continue;
+                    ReadOnlySpan<byte> body = receivedPayload.AsReadOnlySpan();
 
                     long recvTicks = Stopwatch.GetTimestamp();
                     if (TryDecodeExpectedSingleHeader(body, msgSize,

@@ -149,15 +149,13 @@ func recvSingleOneWayOnce(
 	if !ok {
 		return false, false, nil
 	}
-	part, partErr := perfPayloadPart(received)
+	parts := received.Parts()
+	if len(parts) == 1 && perfcommon.IsStopTokenMessage(parts[0]) {
+		return true, true, nil
+	}
+	part, partErr := perfcommon.MeasurementPayload(parts)
 	if partErr != nil {
 		return false, true, fmt.Errorf("unexpected multipart receive: %w", partErr)
-	}
-	if len(received.Parts()) != 1 {
-		return false, true, fmt.Errorf("unexpected multipart receive in single one-way")
-	}
-	if perfcommon.IsStopTokenMessage(part) {
-		return true, true, nil
 	}
 	if stats != nil {
 		perfcommon.RecordMessageLatency(stats, activeAt, stopAt, msgSize, part)
@@ -276,12 +274,5 @@ func perfPayloadPart(received *zlink.Received) (*zlink.Message, error) {
 	if received == nil {
 		return nil, nil
 	}
-	if received.IsSinglePart() {
-		return received.SinglePartOrError()
-	}
-	parts := received.Parts()
-	if received.HasRoutingID() && len(parts) > 0 {
-		return parts[len(parts)-1], nil
-	}
-	return received.SinglePartOrError()
+	return perfcommon.MeasurementPayload(received.Parts())
 }

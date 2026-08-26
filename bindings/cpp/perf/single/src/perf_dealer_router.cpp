@@ -171,22 +171,8 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
                 sender_ok.store (false, std::memory_order_release);
                 break;
             }
-            zlink::message_t msg =
-              perf::single::message_from_payload (payload.data (), payload.size ());
-            if (!msg.valid ()) {
-                sender_ok.store (false, std::memory_order_release);
-                break;
-            }
-
-            int send_rc = -1;
-            try {
-                dealer.sock ().send_routed (msg);
-                send_rc = 1;
-            }
-            catch (const zlink::binding_error_t &err) {
-                errno = err.internal_errno ();
-                send_rc = perf::single::is_transient_send_errno (errno) ? 0 : -1;
-            }
+            const int send_rc = perf::single::send_payload_active (
+              dealer.sock (), payload.data (), payload.size ());
             if (send_rc <= 0) {
                 const int err = errno;
                 if (perf::single::is_transient_send_errno (err)
@@ -214,18 +200,19 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
 
     unsigned long long received_count = 0;
     {
-        zlink::routing_id_t source_rid = zlink::routing_id_t::from (std::string ("placeholder"));
         bool stop_received = false;
-        auto handle_part = [&] (zlink::message_t &part_, bool *stop_out_) -> bool {
+        auto handle_message = [&] (zlink::received_t &received_, bool *stop_out_) -> bool {
             *stop_out_ = false;
-            if (perf::single::is_stop_token_message (part_)) {
+            const std::vector<zlink::message_t> &parts = received_.parts ();
+            if (parts.size () == 1 && perf::single::is_stop_token_message (parts.front ())) {
                 *stop_out_ = true;
                 return true;
             }
-            if (part_.size () != payload_size)
+            const zlink::message_t *part_ = perf::single::measurement_payload_part (parts);
+            if (!part_ || part_->size () != payload_size)
                 return true;
             perf_single_metric::header_t header;
-            if (!perf_single_metric::decode_payload_header (part_.data (), part_.size (), &header))
+            if (!perf_single_metric::decode_payload_header (part_->data (), part_->size (), &header))
                 return true;
             if (!perf_single_metric::is_expected (header, run_id, perf_single_metric::phase_active,
                                                   msg_size))
@@ -247,9 +234,9 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
                 break;
             }
 
-            zlink::message_t part;
-            const int recv_rc = router.sock ().recv (
-              source_rid, part, static_cast<int> (zlink::recv_flags_t::dontwait));
+            zlink::received_t received;
+            const int recv_rc = router.sock ().receive (
+              received, static_cast<int> (zlink::recv_flags_t::dontwait));
             if (recv_rc != 0) {
                 if (errno == EAGAIN || errno == EINTR)
                     continue;
@@ -258,7 +245,7 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
                 sender_ok.store (false, std::memory_order_release);
                 break;
             }
-            if (!handle_part (part, &stop_received)) {
+            if (!handle_message (received, &stop_received)) {
                 sender_ok.store (false, std::memory_order_release);
                 break;
             }
@@ -266,9 +253,9 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
                 break;
 
             for (;;) {
-                zlink::message_t burst;
-                const int burst_rc = router.sock ().recv (
-                  source_rid, burst, static_cast<int> (zlink::recv_flags_t::dontwait));
+                zlink::received_t burst;
+                const int burst_rc = router.sock ().receive (
+                  burst, static_cast<int> (zlink::recv_flags_t::dontwait));
                 if (burst_rc != 0) {
                     if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
                         break;
@@ -278,7 +265,7 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
                     break;
                 }
                 bool burst_stop = false;
-                if (!handle_part (burst, &burst_stop)) {
+                if (!handle_message (burst, &burst_stop)) {
                     sender_ok.store (false, std::memory_order_release);
                     break;
                 }

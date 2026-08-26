@@ -240,8 +240,10 @@ internal static class PerfMultiDealerRouterClient
                 // window; dropping replies that arrive after activeDeadline
                 // would lower throughput vs C for replies whose sends were
                 // inside the active phase.
-                if (PerfRunner.TryDecodeMetricHeader(
-                        receivedMessage.SinglePartOrThrow().AsReadOnlySpan(),
+                if (PerfSocketIo.TryMeasurementPayload(receivedMessage.Parts,
+                        out Message payloadPart)
+                    && PerfRunner.TryDecodeMetricHeader(
+                        payloadPart.AsReadOnlySpan(),
                         out PerfMetricHeader header)
                     && header.RunId == runId
                     && header.MsgSize == (uint)msgSize
@@ -309,7 +311,7 @@ internal static class PerfMultiDealerRouterClient
             seq, EpochNs());
         using Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan(0, PerfMetricHeaderSize).CopyTo(message.AsSpan());
-        return await PerfSocketIo.SendAsync((IDealerSocket)slot.Socket,
+        return await PerfSocketIo.SendMeasurementAsync((IDealerSocket)slot.Socket,
             message).ConfigureAwait(false) > 0;
     }
 

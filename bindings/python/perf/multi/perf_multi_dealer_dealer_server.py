@@ -16,6 +16,7 @@ from perf_multi_common import (
     parse_server_args,
     perf_server_context,
     result_metrics,
+    received_metric_payload,
     safe_poll,
 )
 
@@ -71,7 +72,11 @@ def main(argv=None):
                             with recv_storage:
                                 if not recv_storage.parts:
                                     continue
-                                data = recv_storage.parts[-1].data
+                                data = received_metric_payload(
+                                    recv_storage, expected_size=args.msg_size
+                                )
+                                if not data:
+                                    continue
                                 if len(data) == len(STOP_TOKEN) and data == STOP_TOKEN:
                                     continue
                                 active, latency = active_message_latency_ns(

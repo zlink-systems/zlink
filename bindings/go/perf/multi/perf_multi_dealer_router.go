@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -160,9 +159,9 @@ func sendMultiDealerRouterRequest(
 	window perfcommon.BenchmarkWindow,
 ) bool {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
-	sent, err := perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) error {
-		return socket.Send().MoveMessage(message).Submit(context.Background())
-	})
+	message := perfcommon.NewMessage(payload)
+	err := perfcommon.SubmitMeasurementRouted(socket.Send(), message)
+	sent := err == nil
 	if err != nil {
 		if perfcommon.IsTransient(err) {
 			return false
@@ -189,7 +188,7 @@ func recvMultiDealerRouterReply(
 	if !ok {
 		return false
 	}
-	part, partErr := reply.SinglePartOrError()
+	part, partErr := perfcommon.MeasurementPayload(reply.Parts())
 	if partErr == nil {
 		perfcommon.RecordMessageRTTLatency(stats, window.ActiveAt, window.StopAt, msgSize, part)
 	}

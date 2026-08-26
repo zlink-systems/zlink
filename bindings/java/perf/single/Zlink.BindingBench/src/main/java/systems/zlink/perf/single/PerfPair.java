@@ -70,13 +70,18 @@ final class PerfPair {
                                 break;
                             }
                             try {
-                                if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+                                if (received.parts().size() == 1
+                                    && PerfStopToken.isStopTokenMessage(received.firstPart())) {
                                     stop = true;
                                     break;
                                 }
+                                Message payload = PerfUtil.measurementPayload(received.parts());
+                                if (payload == null) {
+                                    continue;
+                                }
                                 long receivedNanoTime = System.nanoTime();
                                 PerfUtil.Header header = PerfUtil.decodeHeader(
-                                    received.firstPart(), config.size(),
+                                    payload, config.size(),
                                     receivedNanoTime);
                                 if (header == null) {
                                     continue;
@@ -156,8 +161,13 @@ final class PerfPair {
 
     private static boolean trySendBlocking(PairSocket sender, Message active) {
         try {
-            sender.send().message(active).submit()
-                .toCompletableFuture().join();
+            if (PerfUtil.measurementPartCount() == 2) {
+                sender.send().message(active).message(PerfUtil.measurementTail()).submit()
+                    .toCompletableFuture().join();
+            } else {
+                sender.send().message(active).submit()
+                    .toCompletableFuture().join();
+            }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
             if (ex.getResult()

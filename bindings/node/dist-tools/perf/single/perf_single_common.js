@@ -6,10 +6,12 @@ exports.applyContextPolicy = applyContextPolicy;
 exports.applySocketPolicy = applySocketPolicy;
 exports.emitSingleSocketHwmDetail = emitSingleSocketHwmDetail;
 exports.benchmarkEndpoint = benchmarkEndpoint;
+exports.appendMeasurement = appendMeasurement;
 exports.closeSenderWorker = closeSenderWorker;
 exports.drainRouterRecvInto = drainRouterRecvInto;
 exports.drainRecvSocket = drainRecvSocket;
 exports.parseSingleBinaryArgs = parseSingleBinaryArgs;
+exports.measurementPayload = measurementPayload;
 exports.runLocalSocketOneWayBenchmark = runLocalSocketOneWayBenchmark;
 exports.sendSocketRequired = sendSocketRequired;
 exports.spawnSenderWorker = spawnSenderWorker;
@@ -31,6 +33,25 @@ const { isStopTokenParts } = require('../perf_stop_token');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const { benchmarkEndpoint: commonBenchmarkEndpoint } = require('../common/perf_endpoint');
 const POLLIN = 1;
+function measurementPartCount() {
+    return process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+}
+function appendMeasurement(op, payload) {
+    op = op.message(payload);
+    if (measurementPartCount() === 2) {
+        op = op.message(Buffer.alloc(0));
+    }
+    return op;
+}
+function measurementPayload(parts) {
+    if (!Array.isArray(parts) || parts.length !== measurementPartCount()) {
+        return null;
+    }
+    if (measurementPartCount() === 2 && parts[1].data().length !== 0) {
+        return null;
+    }
+    return parts[0];
+}
 function pollEvents(mask) {
     const events = [];
     if ((mask & POLLIN) !== 0) {
@@ -364,21 +385,31 @@ async function drainRouterRecvInto(router, msgSize, onHeader, options = {}) {
             if (!recvNoWait(router, received, first ? RecvFlags.None : RecvFlags.DontWait)) {
                 break;
             }
-            const data = received.singlePartOrThrow().data();
-            const receivedSize = data.length;
             first = false;
-            if (isStopTokenPayload(data, receivedSize)) {
+            if (isStopTokenParts(received.parts)) {
                 stopReceived = true;
                 if (process.env.PERF_NODE_TRACE === '1') {
                     console.error(`[drainRouterRecvInto] stop totalReceived=${totalReceived}`);
                 }
                 break;
             }
+            const payload = measurementPayload(received.parts);
+            const receivedAtNs = currentEpochNs();
+            if (!payload) {
+                if (metricCollector !== null) {
+                    metricCollector.recordPayload(null, receivedAtNs);
+                }
+                else {
+                    onHeader(null, receivedAtNs);
+                }
+                continue;
+            }
+            const data = payload.data();
+            const receivedSize = data.length;
             totalReceived += 1;
             if (process.env.PERF_NODE_TRACE === '1' && (totalReceived % 100000) === 0) {
                 console.error(`[drainRouterRecvInto] received=${totalReceived}`);
             }
-            const receivedAtNs = currentEpochNs();
             if (recordUntilNs !== null && recordingActive) {
                 recordingActive = receivedAtNs <= recordUntilNs;
             }
@@ -410,7 +441,7 @@ function isTransientSubmit(error) {
 }
 async function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
     try {
-        await socket.send().message(payload).submit();
+        await appendMeasurement(socket.send(), payload).submit();
         return true;
     }
     catch (error) {
@@ -421,12 +452,12 @@ async function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWai
     }
 }
 async function sendSocketRequired(socket, payload, flags = zlink.SendFlags.None) {
-    await socket.send().message(payload).submit();
+    await appendMeasurement(socket.send(), payload).submit();
 }
 async function sendSocketStopWithRetry(socket) {
     for (let retry = 0; retry < 100; retry += 1) {
         try {
-            await sendSocketRequired(socket, STOP_TOKEN_BYTES);
+            await socket.send().message(STOP_TOKEN_BYTES).submit();
             return;
         }
         catch (error) {
@@ -448,7 +479,12 @@ function drainRecvSocketNoWaitUntilIdle(socket, collector, payloadSize, viaSubsc
             stopReceived = true;
             continue;
         }
-        const data = received.singlePartOrThrow().data();
+        const payload = measurementPayload(received.parts);
+        if (!payload) {
+            collector.recordPayload(null, currentEpochNs());
+            continue;
+        }
+        const data = payload.data();
         if (data.length !== payloadSize) {
             collector.recordPayload(null, currentEpochNs());
             continue;
@@ -712,10 +748,12 @@ module.exports = {
     configureTlsServer,
     emitSingleSocketHwmDetail,
     benchmarkEndpoint,
+    appendMeasurement,
     closeSenderWorker,
     drainRouterRecvInto,
     drainRecvSocket,
     parseSingleBinaryArgs,
+    measurementPayload,
     runLocalSocketOneWayBenchmark,
     sendSocketRequired,
     spawnSenderWorker,

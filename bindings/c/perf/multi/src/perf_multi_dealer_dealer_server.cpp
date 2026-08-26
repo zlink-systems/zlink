@@ -91,7 +91,7 @@ inline recv_result_t receive_one_message (void *server,
         return recv_fatal;
     }
 
-    if (source_rid || has_more != ZLINK_PART_FINAL) {
+    if (source_rid) {
         if (bench_transition_debug_enabled ()) {
             std::cerr << "[multi-dealer-dealer-server] unexpected recv metadata"
                       << " rid=" << (source_rid ? 1 : 0)
@@ -104,8 +104,18 @@ inline recv_result_t receive_one_message (void *server,
     }
 
     if (is_stop_token_message (part)) {
+        if (has_more != ZLINK_PART_FINAL) {
+            zlink_msg_close (&part);
+            return recv_fatal;
+        }
         zlink_msg_close (&part);
         return recv_stop;
+    }
+    if (!perf_zlink_recv_measurement_tail (
+          server, has_more, static_cast<zlink_recv_flags_t> (flags),
+          perf_zlink_recv_next_plain)) {
+        zlink_msg_close (&part);
+        return recv_fatal;
     }
 
     perf_multi_metric::header_t header;

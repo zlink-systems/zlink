@@ -61,7 +61,7 @@ pubsub_recv_result_t recv_one_pubsub_message (void *socket,
         return pubsub_recv_error;
     }
 
-    if (topic_len != std::strlen (k_pubsub_topic) || source_rid || has_more != ZLINK_PART_FINAL) {
+    if (topic_len != std::strlen (k_pubsub_topic) || source_rid) {
         if (bench_debug_enabled ()) {
             std::cerr << "[multi-pubsub-client] recv shape mismatch topic_len=" << topic_len
                       << " has_more=" << static_cast<int> (has_more) << std::endl;
@@ -71,8 +71,19 @@ pubsub_recv_result_t recv_one_pubsub_message (void *socket,
     }
 
     if (is_stop_token_message (part)) {
+        if (has_more != ZLINK_PART_FINAL) {
+            zlink_msg_close (&part);
+            return pubsub_recv_error;
+        }
         zlink_msg_close (&part);
         return pubsub_recv_stop;
+    }
+
+    if (!perf_zlink_recv_measurement_tail (
+          socket, has_more, ZLINK_RECV_FLAGS_DONTWAIT,
+          perf_zlink_recv_next_subscribe)) {
+        zlink_msg_close (&part);
+        return pubsub_recv_error;
     }
 
     perf_multi_metric::header_t header;

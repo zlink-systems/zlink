@@ -28,6 +28,17 @@ public sealed class test_socket_surface
                 .SequenceEqual(parameterTypes));
     }
 
+    private static bool HasPublicSinglePartRoutedSendShortcut()
+    {
+        return typeof(MessageOperations).GetMethods(
+                BindingFlags.Public | BindingFlags.Static)
+            .Any(method => method.Name == "SendAsync"
+                && method.GetParameters().Select(parameter => parameter.ParameterType)
+                    .Take(3)
+                    .SequenceEqual([typeof(IRouterSocket), typeof(RoutingId),
+                        typeof(Message)]));
+    }
+
     [Fact]
     public void runtime_implementation_types_are_not_public_contract()
     {
@@ -152,6 +163,7 @@ public sealed class test_socket_surface
                 or "RequestCallbackSubmitOperation");
         Assert.DoesNotContain(typeof(Zlink).Assembly.GetTypes(),
             type => type.Name == "LegacyRoutedSendOperation");
+        Assert.False(HasPublicSinglePartRoutedSendShortcut());
     }
 
     [Fact]

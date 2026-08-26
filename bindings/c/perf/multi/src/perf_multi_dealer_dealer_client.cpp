@@ -87,7 +87,8 @@ inline send_status_t send_one_message (void *socket,
         return send_status_fatal;
     }
 
-    const zlink_submit_result_t rc = ::perf_zlink_send_parts (socket, &part, 1, ZLINK_DONTWAIT);
+    const zlink_submit_result_t rc =
+      ::perf_zlink_send_measurement_parts (socket, &part, ZLINK_DONTWAIT);
     if (rc == ZLINK_SUBMIT_OK)
         return send_status_ok;
 

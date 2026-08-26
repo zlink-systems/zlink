@@ -7,7 +7,7 @@ const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, summari
 const { integerEnv } = require('../common/perf_args');
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, waitForConnectionReady } = require('./perf_multi_runtime');
+const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, measurementPayload, waitForConnectionReady } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 function isStopTokenPayload(buffer, size) {
     if (size !== STOP_TOKEN_BYTES.length) {
@@ -95,11 +95,15 @@ async function main() {
                             if (!subs[index].subscribe(received, zlink.RecvFlags.DontWait)) {
                                 break;
                             }
-                            const data = received.singlePartOrThrow().data();
-                            if (isStopTokenPayload(data, data.length)) {
+                            const parts = received.parts;
+                            if (parts.length === 1 && isStopTokenPayload(parts[0].data(), parts[0].data().length)) {
                                 stopReceived = true;
                                 continue;
                             }
+                            const payload = measurementPayload(parts);
+                            if (!payload)
+                                throw new Error('invalid multipart PUBSUB payload');
+                            const data = payload.data();
                             collector.recordPayload(data, currentEpochNs());
                         }
                     }

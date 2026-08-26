@@ -101,9 +101,6 @@ perf::async_task_t<bool> perf_dealer_router_server (const std::string &lib_name,
     bool failed = false;
     zlink::poller_t poller;
     std::vector<zlink::poll_event_t> events (1);
-    zlink::routing_id_t source_rid =
-      zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("x"), 1);
-    zlink::message_t part;
     poller.add (server, zlink::poll_event_flag_t::pollin, 0);
 
     // Bounded poll wait so the stdin/signal stop flag is observed promptly
@@ -131,11 +128,11 @@ perf::async_task_t<bool> perf_dealer_router_server (const std::string &lib_name,
             break;
         }
 
-        // Drain available single-part routed messages without blocking. This
-        // keeps the perf hot path on the public projected API while avoiding
-        // per-message received_t envelope state for the single-part echo case.
+        // Receive one complete logical message so the benchmark can preserve
+        // and validate its required empty trailing measurement frame.
         while (!g_stop_requested.load (std::memory_order_acquire)) {
-            const int recv_rc = server.recv (source_rid, part, zlink::recv_flags_t::dontwait);
+            zlink::received_t received;
+            const int recv_rc = server.recv (received, zlink::recv_flags_t::dontwait);
             if (recv_rc != 0) {
                 const int err = errno;
                 if (recv_rc == static_cast<int> (zlink::recv_result_t::no_data) || err == EAGAIN
@@ -145,12 +142,19 @@ perf::async_task_t<bool> perf_dealer_router_server (const std::string &lib_name,
                 break;
             }
 
-            // No socket stop-token handling: matches the C reference relay
-            // server, which terminates only via stdin STOP/QUIT + signals.
-            if (part.size () == 0)
+            if (!received.routing_id ().has_value ()
+                || !perf::multi::measurement_parts_valid (received.parts ())) {
                 continue;
+            }
             try {
-                std::move (server.send (source_rid)).message (part).submit ();
+                zlink::message_t &part = received.parts ().front ();
+                const zlink::routing_id_t source_rid = *received.routing_id ();
+                if (perf::multi::measurement_part_count () == 2) {
+                    zlink::message_t tail = perf::multi::measurement_empty_part ();
+                    std::move (server.send (source_rid).message (part)).message (tail).submit ();
+                } else {
+                    std::move (server.send (source_rid)).message (part).submit ();
+                }
             }
             catch (const zlink::submit_error_t &err) {
                 const int err_no = err.internal_errno ();

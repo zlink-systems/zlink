@@ -9,7 +9,10 @@ package native
 */
 import "C"
 
-import "unsafe"
+import (
+	"runtime"
+	"unsafe"
+)
 
 func closeNativeMultipart(parts []C.zlink_msg_t, count int) {
 	if count <= 0 || len(parts) == 0 {
@@ -145,6 +148,8 @@ func initNativeMessageFromBytes(native *C.zlink_msg_t, data []byte) error {
 }
 
 func submitMultipartFromClones(parts []*Message, consumeOriginal bool, submit multipartSubmitFunc) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	if consumeOriginal && len(parts) == 1 {
 		return submitSinglePartFromCopy(parts[0], submit)
 	}
@@ -237,6 +242,8 @@ func submitSinglePartFromBytes(data []byte, submit multipartSubmitFunc) error {
 }
 
 func submitMultipartFromBuilderParts(parts []sendBuilderPart, submit multipartSubmitFunc) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	if len(parts) == 0 {
 		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}

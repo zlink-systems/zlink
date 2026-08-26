@@ -208,10 +208,16 @@ internal static class PerfReqRep
             msgSize,
             durationSeconds,
             latencyCap,
-            async message => await client.Request()
-                .Message(message)
-                .Timeout(ResolveReqRepTimeout())
-                .Async().ConfigureAwait(false)).ConfigureAwait(false);
+            async message =>
+            {
+                using Message? tail = PerfSocketIo.MeasurementPartCount == 2
+                    ? Message.Allocate(0) : null;
+                return tail == null
+                    ? await client.Request().Message(message)
+                        .Timeout(ResolveReqRepTimeout()).Async().ConfigureAwait(false)
+                    : await client.Request().Message(message).Message(tail)
+                        .Timeout(ResolveReqRepTimeout()).Async().ConfigureAwait(false);
+            }).ConfigureAwait(false);
         stop.Set();
         if (!await SendStopTokenAsync(client,
                 "[single-dealer-router-reqrep]").ConfigureAwait(false))
@@ -343,10 +349,16 @@ internal static class PerfReqRep
             msgSize,
             durationSeconds,
             latencyCap,
-            async message => await client.Request(targetRid)
-                .Message(message)
-                .Timeout(ResolveReqRepTimeout())
-                .Async().ConfigureAwait(false)).ConfigureAwait(false);
+            async message =>
+            {
+                using Message? tail = PerfSocketIo.MeasurementPartCount == 2
+                    ? Message.Allocate(0) : null;
+                return tail == null
+                    ? await client.Request(targetRid).Message(message)
+                        .Timeout(ResolveReqRepTimeout()).Async().ConfigureAwait(false)
+                    : await client.Request(targetRid).Message(message).Message(tail)
+                        .Timeout(ResolveReqRepTimeout()).Async().ConfigureAwait(false);
+            }).ConfigureAwait(false);
         stop.Set();
         if (!await SendRoutedStopTokenAsync(client, targetRid,
                 "[single-router-router-reqrep]").ConfigureAwait(false))
@@ -437,10 +449,10 @@ internal static class PerfReqRep
                 try
                 {
                     parts = await request.ConfigureAwait(false);
-                    if (parts.Count <= 0)
-                        return;
-                    if (!TryDecodeExpectedSingleHeader(
-                            parts[parts.Count - 1].AsReadOnlySpan(), msgSize,
+                    if (!PerfSocketIo.TryMeasurementPayload(parts,
+                            out Message replyPayload)
+                        || !TryDecodeExpectedSingleHeader(
+                            replyPayload.AsReadOnlySpan(), msgSize,
                             ActivePhase, out var header, RunId))
                     {
                         return;
@@ -538,17 +550,25 @@ internal static class PerfReqRep
             if (!TryReceiveBlocking(server, received))
                 continue;
             Interlocked.Increment(ref serverReceived);
-            if (!TryGetPayloadPart(received, out Message payloadPart))
-                continue;
-            if (StopToken.IsStopToken(payloadPart.AsReadOnlySpan()))
+            if (received.Parts.Count == 1
+                && StopToken.IsStopToken(received.FirstPart().AsReadOnlySpan()))
                 return;
+            if (!PerfSocketIo.TryMeasurementPayload(received.Parts,
+                    out Message payloadPart))
+                continue;
             if (!received.RequestSeq.HasValue)
                 continue;
 
             // HOT PATH: the C replier transfers the received native message
             // into the reply. Preserve that ownership transfer instead of
             // adding a binding-only allocation and full-payload copy.
-            received.Reply().Message(payloadPart).Submit();
+            using (Message tail = Message.Allocate(0))
+            {
+                if (PerfSocketIo.MeasurementPartCount == 2)
+                    received.Reply().Message(payloadPart).Message(tail).Submit();
+                else
+                    received.Reply().Message(payloadPart).Submit();
+            }
             Interlocked.Increment(ref serverReplied);
         }
     }

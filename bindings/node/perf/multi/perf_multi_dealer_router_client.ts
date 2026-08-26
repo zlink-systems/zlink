@@ -25,6 +25,7 @@ const {
   recvNoWaitInto,
   sendStopTokenOnce,
   tryRoutedSocketSend,
+  measurementPayload,
   waitForConnectionReady
 } = require('./perf_multi_runtime');
 const {
@@ -96,7 +97,9 @@ async function main() {
         return false;
       }
       waiting[index] = false;
-      collector.recordPayload(echoed.parts[0].data(), currentEpochNs());
+      const payload = measurementPayload(echoed.parts);
+      if (!payload) throw new Error('invalid multipart echo reply');
+      collector.recordPayload(payload.data(), currentEpochNs());
       // HOT PATH: C receives only after this socket's POLLIN event, then
       // allows its next send.  Avoid probing every non-ready socket through
       // the Node/native boundary on each round.
@@ -158,7 +161,7 @@ async function main() {
     // first stop token observed.
     await sendStopTokenOnce(
       dealers[0],
-      (bytes) => tryRoutedSocketSend(dealers[0], bytes)
+      (bytes) => tryRoutedSocketSend(dealers[0], [bytes])
     );
 
     const result = await collector.finish();

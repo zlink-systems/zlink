@@ -143,7 +143,11 @@ inline void on_request_reply (zlink_request_result_t result,
     std::lock_guard<std::mutex> lock (state->callback_mutex);
     slot->waiting_reply = false;
 
-    if (result != ZLINK_REQUEST_OK || !parts || part_count == 0)
+    if (result != ZLINK_REQUEST_OK || !parts
+        || part_count != perf_measurement_part_count ())
+        return;
+
+    if (part_count == 2 && zlink_msg_size (&parts[1]) != 0)
         return;
 
     perf_multi_metric::header_t header;
@@ -214,12 +218,13 @@ inline bool submit_request (const endpoint_config_t &config,
             errno = EINVAL;
             return false;
         }
-        rc = zlink_router_request_part (slot->socket, target_rid, &part, ZLINK_SEND_FLAGS_NONE,
-                                        ZLINK_PART_FINAL, timeout_ms, on_request_reply, slot);
+        rc = perf_zlink_router_request_measurement_part (
+          slot->socket, target_rid, &part, ZLINK_SEND_FLAGS_NONE, timeout_ms,
+          on_request_reply, slot);
     } else {
-        rc = zlink_dealer_request_part (slot->socket, &part, ZLINK_SEND_FLAGS_NONE,
-                                        ZLINK_PART_FINAL,
-                                        timeout_ms, on_request_reply, slot);
+        rc = perf_zlink_dealer_request_measurement_part (
+          slot->socket, &part, ZLINK_SEND_FLAGS_NONE, timeout_ms,
+          on_request_reply, slot);
     }
 
     if (rc == ZLINK_SUBMIT_OK) {
@@ -504,6 +509,30 @@ inline bool submit_router_reply_with_retry (void *server,
     if (!server || !source_rid || request_seq == 0 || !part)
         return false;
 
+    if (perf_measurement_part_count () == 2u) {
+        const zlink_submit_result_t payload_rc = zlink_router_reply_part (
+          server, source_rid, request_seq, part, ZLINK_PART_MORE);
+        if (payload_rc != ZLINK_SUBMIT_OK)
+            return false;
+        while (!perf_stop_requested ().load (std::memory_order_acquire)) {
+            zlink_msg_t empty_part;
+            if (zlink_msg_init (&empty_part) != 0)
+                return false;
+            const zlink_submit_result_t final_rc = zlink_router_reply_part (
+              server, source_rid, request_seq, &empty_part, ZLINK_PART_FINAL);
+            if (final_rc == ZLINK_SUBMIT_OK)
+                return true;
+            zlink_msg_close (&empty_part);
+            if (final_rc != ZLINK_SUBMIT_BACKPRESSURED)
+                return false;
+            zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
+            if (perf_socket_poll (&item, 1, perf_aux_poll_wait_ms ()) < 0
+                && zlink_errno () != EINTR && zlink_errno () != EAGAIN)
+                return false;
+        }
+        return false;
+    }
+
     // Reply submission consumes the supplied part on backpressure. Keep a
     // shared-storage copy so the retry preserves the received metric payload.
     zlink_msg_t retry_template;
@@ -579,7 +608,9 @@ inline server_recv_step_t reply_one_request (void *server,
         return server_recv_step_error;
     }
 
-    if (!source_rid || source_rid->size == 0 || request_seq == 0 || has_more != ZLINK_PART_FINAL) {
+    if (!source_rid || source_rid->size == 0 || request_seq == 0
+        || !perf_zlink_recv_measurement_tail (
+          server, has_more, ZLINK_RECV_FLAGS_DONTWAIT, perf_zlink_recv_next_router)) {
         zlink_msg_close (&part);
         errno = EPROTO;
         return server_recv_step_error;

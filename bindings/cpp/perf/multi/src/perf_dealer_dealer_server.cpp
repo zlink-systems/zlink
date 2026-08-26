@@ -66,21 +66,18 @@ bool drain_phase_until_idle (zlink::dealer_socket_t &server,
         std::chrono::duration<double> (max_wait_seconds));
     auto idle_deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (idle_wait_ms);
-    zlink::message_t part;
     std::vector<zlink::poll_event_t> events (1);
 
     while (std::chrono::steady_clock::now () < deadline) {
-        part.init ();
-        const int rc = server.recv (part, zlink::recv_flags_t::dontwait);
+        zlink::received_t received;
+        const int rc = server.recv (received, zlink::recv_flags_t::dontwait);
         if (rc == 0) {
-            part.close ();
             idle_deadline =
               std::chrono::steady_clock::now () + std::chrono::milliseconds (idle_wait_ms);
             continue;
         }
 
         const int err = errno;
-        part.close ();
         if (rc == static_cast<int> (zlink::recv_result_t::no_data) || err == EAGAIN
             || err == EWOULDBLOCK || err == EINTR) {
             if (err == EINTR)
@@ -158,7 +155,6 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
         unsigned long long active_count = 0;
         perf::multi::bench_latency_sampler_t latency (static_cast<size_t> (active_seconds)
                                                       * 5000000U);
-        zlink::message_t part;
         std::vector<zlink::poll_event_t> events (1);
         size_t stop_count = 0;
         bool phase_complete = false;
@@ -180,29 +176,28 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
             }
 
             for (;;) {
-                part.init ();
-                const int rc = server.recv (part, zlink::recv_flags_t::dontwait);
+                zlink::received_t received;
+                const int rc = server.recv (received, zlink::recv_flags_t::dontwait);
                 if (rc != 0) {
                     if (rc == static_cast<int> (zlink::recv_result_t::no_data) || errno == EAGAIN
                         || errno == EWOULDBLOCK) {
-                        part.close ();
                         break;
                     }
                     if (errno == EINTR) {
-                        part.close ();
                         continue;
                     }
-                    part.close ();
                     failed = true;
                     break;
                 }
+
+                const std::vector<zlink::message_t> &parts = received.parts ();
 
                 // Check the wire-level stop token before decoding the payload
                 // header (matches C reference lines 113-116). The stop token
                 // marks active-phase end; the steady_clock deadline still bounds
                 // the window.
-                if (perf::multi::is_stop_token (part.data (), part.size ())) {
-                    part.close ();
+                if (parts.size () == 1
+                    && perf::multi::is_stop_token (parts.front ().data (), parts.front ().size ())) {
                     ++stop_count;
                     if (stop_count >= settings.clients) {
                         phase_complete = true;
@@ -211,20 +206,20 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
                     continue;
                 }
 
-                perf_metric::header_t header;
-                if (!perf_metric::decode_payload_header (part.data (), part.size (), &header)) {
-                    part.close ();
+                if (!perf::multi::measurement_parts_valid (parts)) {
                     continue;
                 }
+                const zlink::message_t &payload = parts.front ();
+                perf_metric::header_t header;
+                if (!perf_metric::decode_payload_header (payload.data (), payload.size (), &header))
+                    continue;
                 if (!perf_metric::is_expected (header, 1U, perf_metric::phase_active, msg_size)) {
-                    part.close ();
                     continue;
                 }
 
                 ++active_count;
                 latency.add (
                   perf_metric::elapsed_latency_ns (perf_metric::now_ns (), header.sent_ts_ns));
-                part.close ();
             }
             if (failed)
                 break;

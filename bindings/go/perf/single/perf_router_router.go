@@ -64,9 +64,8 @@ func runRouterRouter(cfg benchmarkConfig) perfcommon.Result {
 	targetID := waitRouterRouterRouteReady(server, client, serverID)
 
 	result := runSingleRoutedOneWayWithTransient(cfg, server, func(message *zlink.Message) (bool, error) {
-		return perfcommon.SubmitRoutedMessage(message, func(message *zlink.Message) error {
-			return client.SendTo(targetID).MoveMessage(message).Submit(context.Background())
-		})
+		err := perfcommon.SubmitMeasurementRouted(client.SendTo(targetID), message)
+		return err == nil, err
 	}, func(message *zlink.Message) error {
 		return client.SendTo(targetID).MoveMessage(message).Submit(context.Background())
 	}, isRouterRouterSendTransient)

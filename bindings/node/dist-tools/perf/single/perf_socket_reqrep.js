@@ -15,6 +15,21 @@ function closeParts(parts) {
     for (const part of parts ?? [])
         part?.close?.();
 }
+function appendMeasurement(op, payload) {
+    op = op.message(payload);
+    if (process.env.PERF_PART_COUNT !== '1') {
+        op = op.message(Buffer.alloc(0));
+    }
+    return op;
+}
+function measurementPayload(parts) {
+    const count = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+    if (!Array.isArray(parts) || parts.length !== count)
+        return null;
+    if (count === 2 && parts[1].data().length !== 0)
+        return null;
+    return parts[0];
+}
 function transientSubmit(error) {
     return error instanceof zlink.SubmitError
         && (error.result === zlink.SubmitResult.Backpressured
@@ -62,8 +77,8 @@ function drainServer(server) {
     const received = new zlink.Received();
     try {
         while (server.recv(received, zlink.RecvFlags.DontWait)) {
-            const part = received.firstPart();
-            if (isStopToken(part.data())) {
+            const parts = received.parts;
+            if (parts.length === 1 && isStopToken(parts[0].data())) {
                 stop = true;
                 received.close();
                 continue;
@@ -72,7 +87,12 @@ function drainServer(server) {
                 received.close();
                 continue;
             }
-            received.reply().message(Buffer.from(part.data())).submit();
+            const payload = measurementPayload(parts);
+            if (!payload) {
+                received.close();
+                continue;
+            }
+            appendMeasurement(received.reply(), Buffer.from(payload.data())).submit();
             received.close();
         }
     }
@@ -157,8 +177,12 @@ async function runSocketReqRep(msgSize, options, routedClient) {
             let parts = null;
             try {
                 parts = await request;
-                if (parts?.length > 0) {
-                    collector.recordPayload(parts[0].data(), currentEpochNs());
+                const payload = measurementPayload(parts);
+                if (payload) {
+                    collector.recordPayload(payload.data(), currentEpochNs());
+                }
+                else {
+                    collector.recordPayload(null, currentEpochNs());
                 }
             }
             catch (error) {
@@ -178,7 +202,7 @@ async function runSocketReqRep(msgSize, options, routedClient) {
                 stampPayload(payload, { phase: 1, runId, msgSize, seq });
                 try {
                     const operation = routedClient ? client.request(SERVER_RID) : client.request();
-                    const request = operation.message(payload)
+                    const request = appendMeasurement(operation, payload)
                         .timeout(requestTimeoutMs).submit();
                     outstanding += 1;
                     completionSignal = observe(request);

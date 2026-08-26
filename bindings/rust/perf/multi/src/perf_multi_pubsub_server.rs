@@ -71,11 +71,14 @@ fn main() {
             args.msg_size as u32,
             seq,
         );
-        match pub_sock
-            .publish(TOPIC)
-            .message(msg)
-            .flags(SendFlags::DONT_WAIT)
-            .submit()
+        match if common::measurement_part_count() == 2 {
+            pub_sock.publish(TOPIC).message(msg)
+                .message(Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
+                .flags(SendFlags::DONT_WAIT).submit()
+        } else {
+            pub_sock.publish(TOPIC).message(msg)
+                .flags(SendFlags::DONT_WAIT).submit()
+        }
         {
             Ok(()) => {
                 seq += 1;

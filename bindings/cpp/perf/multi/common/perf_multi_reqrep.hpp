@@ -221,21 +221,31 @@ template <typename SocketT> class client_bench_t
                 // PERF_POLICY / C parity: the C reference builds the constant
                 // server routing id once per active client state, not once per
                 // request. Keep routing-id construction out of the measured loop.
-                observe_request (
-                  slot_.waiting, _completion,
-                  std::move (slot_.socket->request (_target_rid))
-                            .message (request)
-                            .timeout (std::chrono::milliseconds (
-                              std::max (1, _settings.rcvtimeo_ms)))
-                            .async ());
+                if (measurement_part_count () == 2) {
+                    zlink::message_t tail = measurement_empty_part ();
+                    observe_request (
+                      slot_.waiting, _completion,
+                      std::move (slot_.socket->request (_target_rid)).message (request).message (tail)
+                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms))).async ());
+                } else {
+                    observe_request (
+                      slot_.waiting, _completion,
+                      std::move (slot_.socket->request (_target_rid)).message (request)
+                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms))).async ());
+                }
             } else {
-                observe_request (
-                  slot_.waiting, _completion,
-                  std::move (slot_.socket->request ())
-                            .message (request)
-                            .timeout (std::chrono::milliseconds (
-                              std::max (1, _settings.rcvtimeo_ms)))
-                            .async ());
+                if (measurement_part_count () == 2) {
+                    zlink::message_t tail = measurement_empty_part ();
+                    observe_request (
+                      slot_.waiting, _completion,
+                      std::move (slot_.socket->request ()).message (request).message (tail)
+                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms))).async ());
+                } else {
+                    observe_request (
+                      slot_.waiting, _completion,
+                      std::move (slot_.socket->request ()).message (request)
+                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms))).async ());
+                }
             }
             ++slot_.next_seq;
             return true;
@@ -256,7 +266,7 @@ template <typename SocketT> class client_bench_t
     {
         try {
             std::vector<zlink::message_t> parts = co_await std::move (result_);
-            if (!parts.empty ()) {
+            if (measurement_parts_valid (parts)) {
                 perf_metric::header_t header;
                 if (perf_metric::decode_payload_header (
                       parts.front ().data (), parts.front ().size (), &header)
@@ -329,7 +339,12 @@ inline bool submit_router_reply_with_retry (zlink::received_t &received_,
     const zlink::message_t retry_template = part_;
     while (!server_stop_flag ().load (std::memory_order_acquire)) {
         try {
-            std::move (received_.reply ().message (part_)).submit ();
+            if (measurement_part_count () == 2) {
+                zlink::message_t tail = measurement_empty_part ();
+                std::move (received_.reply ().message (part_)).message (tail).submit ();
+            } else {
+                std::move (received_.reply ().message (part_)).submit ();
+            }
             return true;
         }
         catch (const zlink::submit_error_t &err) {
@@ -416,9 +431,9 @@ inline bool run_server (const config_t &config_,
             // PERF_POLICY / C parity: the reference server receives and echoes
             // one native part. Use the public single-part view so the C++ case
             // does not add vector materialization that is absent from C.
-            if (!received.is_single_part () || !received.request_seq ().has_value ())
+            if (!measurement_parts_valid (received.parts ()) || !received.request_seq ().has_value ())
                 continue;
-            zlink::message_t &part = received.first_part ();
+            zlink::message_t &part = received.parts ().front ();
             if (!submit_router_reply_with_retry (received, part, writable_poller,
                                                  writable_event))
                 return false;

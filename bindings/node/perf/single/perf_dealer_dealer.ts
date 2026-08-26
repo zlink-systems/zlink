@@ -19,6 +19,7 @@ const {
   configureTlsServer,
   drainRecvSocket,
   emitSingleSocketHwmDetail,
+  measurementPayload,
   parseSingleBinaryArgs,
   runLocalSocketOneWayBenchmark,
   spawnSenderWorker,
@@ -87,7 +88,12 @@ async function runDealerDealerBenchmark(msgSize, options) {
     const recvTask = drainRecvSocket(
       server,
       (received) => {
-        const data = received.singlePartOrThrow().data();
+        const payload = measurementPayload(received.parts);
+        if (!payload) {
+          collector.recordPayload(null, currentEpochNs());
+          return;
+        }
+        const data = payload.data();
         if (data.length !== Math.max(msgSize, HEADER_SIZE)) {
           collector.recordPayload(null, currentEpochNs());
           return;

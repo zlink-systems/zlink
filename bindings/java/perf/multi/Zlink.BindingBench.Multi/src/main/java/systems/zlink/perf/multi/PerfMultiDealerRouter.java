@@ -72,11 +72,20 @@ final class PerfMultiDealerRouter {
                             break;
                         }
                         RoutingId rid = receivedBuffer.getRoutingId().orElseThrow();
-                        Message reply = Message.from(receivedBuffer.firstPart());
+                        Message payload = PerfUtil.measurementPayload(receivedBuffer.parts());
+                        if (payload == null) {
+                            receivedBuffer.close();
+                            continue;
+                        }
+                        Message reply = Message.from(payload);
                         receivedBuffer.close();
                         try (reply) {
-                            PerfUtil.awaitStage(server.send(rid)
-                                .message(reply).submit());
+                            if (PerfUtil.measurementPartCount() == 2) {
+                                PerfUtil.awaitStage(server.send(rid).message(reply)
+                                    .message(PerfUtil.measurementTail()).submit());
+                            } else {
+                                PerfUtil.awaitStage(server.send(rid).message(reply).submit());
+                            }
                         }
                     }
                 }
@@ -200,7 +209,12 @@ final class PerfMultiDealerRouter {
     }
 
     private static void sendPayload(DealerSocket client, Message payload) {
-        PerfUtil.awaitStage(client.send().message(payload).submit());
+        if (PerfUtil.measurementPartCount() == 2) {
+            PerfUtil.awaitStage(client.send().message(payload)
+                .message(PerfUtil.measurementTail()).submit());
+        } else {
+            PerfUtil.awaitStage(client.send().message(payload).submit());
+        }
     }
 
     private static void drainReplies(DealerSocket client, int idx,
@@ -216,8 +230,10 @@ final class PerfMultiDealerRouter {
                 replyBuffer.close();
                 continue;
             }
-            PerfUtil.recordActiveLatency(metrics, replyBuffer.firstPart(),
-                msgSize, true);
+            Message payload = PerfUtil.measurementPayload(replyBuffer.parts());
+            if (payload != null) {
+                PerfUtil.recordActiveLatency(metrics, payload, msgSize, true);
+            }
             waitingReply[idx] = false;
         }
     }

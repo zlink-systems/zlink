@@ -5,7 +5,7 @@ const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, HEADER_SIZE, currentEpochNs, summarizeMetrics, stampPayload } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, recvNoWaitInto, sendStopTokenOnce, tryRoutedSocketSend, waitForConnectionReady } = require('./perf_multi_runtime');
+const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, recvNoWaitInto, sendStopTokenOnce, tryRoutedSocketSend, measurementPayload, waitForConnectionReady } = require('./perf_multi_runtime');
 const { resolveRoutedPattern, runRoutedSendSendClient } = require('./perf_multi_routed_sendsend');
 const PATTERN = 'MULTI_DEALER_ROUTER_REQREP';
 async function main() {
@@ -65,7 +65,10 @@ async function main() {
                 return false;
             }
             waiting[index] = false;
-            collector.recordPayload(echoed.parts[0].data(), currentEpochNs());
+            const payload = measurementPayload(echoed.parts);
+            if (!payload)
+                throw new Error('invalid multipart echo reply');
+            collector.recordPayload(payload.data(), currentEpochNs());
             // HOT PATH: C receives only after this socket's POLLIN event, then
             // allows its next send.  Avoid probing every non-ready socket through
             // the Node/native boundary on each round.
@@ -118,7 +121,7 @@ async function main() {
         // PERF_MULTI_TEST_POLICY § 1.3.1: signal phase end to the echo server
         // via the wire-level stop token. The server's recv loop exits on the
         // first stop token observed.
-        await sendStopTokenOnce(dealers[0], (bytes) => tryRoutedSocketSend(dealers[0], bytes));
+        await sendStopTokenOnce(dealers[0], (bytes) => tryRoutedSocketSend(dealers[0], [bytes]));
         const result = await collector.finish();
         for (const metricLine of summarizeMetrics(PATTERN, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted)) {
             console.log(metricLine);

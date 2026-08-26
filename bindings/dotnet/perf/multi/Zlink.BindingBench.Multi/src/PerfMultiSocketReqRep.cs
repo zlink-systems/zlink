@@ -254,15 +254,21 @@ internal static class PerfMultiSocketReqRep
             try
             {
                 slot.InFlight = true;
-                Task<IReadOnlyList<Message>> request = routerRouter
-                    ? ((IRouterSocket)slot.Socket).Request(ServerRoutingId)
-                        .Message(message)
-                        .Timeout(requestTimeout)
-                        .Async()
-                    : ((IDealerSocket)slot.Socket).Request()
-                        .Message(message)
-                        .Timeout(requestTimeout)
-                        .Async();
+                using Message? tail = PerfSocketIo.MeasurementPartCount == 2
+                    ? Message.Allocate(0) : null;
+                Task<IReadOnlyList<Message>> request;
+                if (routerRouter)
+                    request = tail == null
+                        ? ((IRouterSocket)slot.Socket).Request(ServerRoutingId)
+                            .Message(message).Timeout(requestTimeout).Async()
+                        : ((IRouterSocket)slot.Socket).Request(ServerRoutingId)
+                            .Message(message).Message(tail).Timeout(requestTimeout).Async();
+                else
+                    request = tail == null
+                        ? ((IDealerSocket)slot.Socket).Request()
+                            .Message(message).Timeout(requestTimeout).Async()
+                        : ((IDealerSocket)slot.Socket).Request()
+                            .Message(message).Message(tail).Timeout(requestTimeout).Async();
                 _ = ObserveRequestAsync(slot, request);
             }
             catch (ZlinkException ex)
@@ -291,9 +297,10 @@ internal static class PerfMultiSocketReqRep
                     DebugLogLimited(ref s_debugClientReplyLogs,
                         $"socket_reqrep_client: completion parts={parts.Count}");
                 }
-                if (parts.Count > 0
+                if (PerfSocketIo.TryMeasurementPayload(parts,
+                        out Message replyPayload)
                     && PerfShared.TryDecodeMetricHeader(
-                        parts[parts.Count - 1].AsReadOnlySpan(),
+                        replyPayload.AsReadOnlySpan(),
                         out PerfMetricHeader header)
                     && header.RunId == RunId
                     && header.MsgSize == (uint)msgSize
@@ -375,7 +382,8 @@ internal static class PerfMultiSocketReqRep
     private static bool ReplyReceived(IReadOnlyList<ISocket> pollSockets,
         PollManager pollManager, Received received, CancellationToken stopToken)
     {
-        if (!TryGetPayloadPart(received, out Message payloadPart))
+        if (!PerfSocketIo.TryMeasurementPayload(received.Parts,
+                out Message payloadPart))
             return true;
         if (!received.RequestSeq.HasValue)
             return true;
@@ -397,7 +405,11 @@ internal static class PerfMultiSocketReqRep
                 // Keep a template and submit a fresh copy on every attempt,
                 // matching the C retry contract when backpressure consumes a
                 // native message part.
-                received.Reply().Message(reply).Submit();
+                using Message tail = Message.Allocate(0);
+                if (PerfSocketIo.MeasurementPartCount == 2)
+                    received.Reply().Message(reply).Message(tail).Submit();
+                else
+                    received.Reply().Message(reply).Submit();
                 break;
             }
             catch (ZlinkSubmitException ex)

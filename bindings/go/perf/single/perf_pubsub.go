@@ -64,9 +64,8 @@ func runPubSub(cfg benchmarkConfig) perfcommon.Result {
 	}()
 
 	for time.Now().Before(window.StopAt) {
-		_, err := perfcommon.SubmitMessage(perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt), func(message *zlink.Message) (bool, error) {
-			return publisher.Publish(singlePubSubTopic).MoveMessage(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
-		})
+		_, err := perfcommon.SubmitMeasurement(publisher.Publish(singlePubSubTopic),
+			perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt), zlink.SendFlagsDontWait)
 		if err != nil {
 			if perfcommon.IsTransient(err) {
 				continue
@@ -146,15 +145,16 @@ func recvSinglePubSubOnce(
 	if !ok {
 		return false, false, nil
 	}
-	if received.Topic() != singlePubSubTopic || len(received.Parts()) != 1 {
+	parts := received.Parts()
+	if received.Topic() != singlePubSubTopic {
 		return false, true, fmt.Errorf("unexpected PUBSUB metadata topic=%q parts=%d", received.Topic(), len(received.Parts()))
 	}
-	part, partErr := received.SinglePartOrError()
+	if len(parts) == 1 && perfcommon.IsStopTokenMessage(parts[0]) {
+		return true, true, nil
+	}
+	part, partErr := perfcommon.MeasurementPayload(parts)
 	if partErr != nil {
 		return false, true, partErr
-	}
-	if perfcommon.IsStopTokenMessage(part) {
-		return true, true, nil
 	}
 	perfcommon.RecordMessageLatency(stats, activeAt, stopAt, msgSize, part)
 	return false, true, nil

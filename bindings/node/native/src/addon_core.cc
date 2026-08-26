@@ -3211,40 +3211,21 @@ int try_subscribe_message_value (napi_env env,
 
     for (;;) {
         memset (&routing_id, 0, sizeof (routing_id));
-        const zlink_routing_id_t *source_rid = NULL;
-        zlink_msg_t first_part;
-        if (zlink_msg_init (&first_part) != 0)
-            return ZLINK_RECV_INTERNAL_ERROR;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        int rc = zlink_subscribe_part (sock, &source_rid, topic.data (), topic.size (), &topic_len,
-                                       &first_part, &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
+        std::vector<zlink_msg_t> parts;
+        const int rc = subscribe_parts (sock, &routing_id, topic.data (), topic.size (), &topic_len,
+                                        &parts, ZLINK_RECV_FLAGS_DONTWAIT);
         if (rc == ZLINK_RECV_OK) {
-            copy_routing_id (&routing_id, source_rid);
-            if (!has_more) {
-                if (received_bytes)
-                    *received_bytes = zlink_msg_size (&first_part);
-                *out = create_subscribed_value (env, routing_id, topic.data (), topic_len,
-                                                &first_part, 1);
-                zlink_msg_close (&first_part);
-                return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
+            if (received_bytes) {
+                *received_bytes = 0;
+                for (size_t index = 0; index < parts.size (); ++index)
+                    *received_bytes += zlink_msg_size (&parts[index]);
             }
-
-            std::vector<zlink_msg_t> parts;
-            rc = collect_recv_parts (sock, &first_part, has_more, &parts);
-            if (rc == ZLINK_RECV_OK) {
-                if (received_bytes) {
-                    *received_bytes = 0;
-                    for (size_t index = 0; index < parts.size (); ++index)
-                        *received_bytes += zlink_msg_size (&parts[index]);
-                }
-                *out = create_subscribed_value (env, routing_id, topic.data (), topic_len,
-                                                parts.data (), parts.size ());
-                close_msg_vector (parts);
-                return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
-            }
+            *out = create_subscribed_value (env, routing_id, topic.data (), topic_len,
+                                            parts.data (), parts.size ());
+            close_msg_vector (parts);
+            return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
         }
         const int err = zlink_errno ();
-        zlink_msg_close (&first_part);
         if (err == EAGAIN)
             return rc;
         if (err != EMSGSIZE)

@@ -34,7 +34,7 @@ struct router_router_recv_state_t
 bool record_router_router_sample (uint32_t run_id_,
                                   size_t msg_size_,
                                   size_t payload_size_,
-                                  zlink::message_t &part_,
+                                  const zlink::message_t &part_,
                                   perf::single::latency_stats_builder_t *latency_,
                                   unsigned long long *received_)
 {
@@ -93,11 +93,12 @@ perf::async_task_t<bool> send_router_samples (::perf::socket_t *sender_,
         if (!msg.valid ())
             co_return false;
         try {
-            // Keep one coroutine for the entire sender loop. Going through
-            // send_payload_active_async() would create and destroy a child
-            // coroutine frame for every message and would measure the perf
-            // helper rather than the public binding awaitable.
-            co_await sender_->send_routed_async (*state_->target_rid, msg);
+            if (perf::single::measurement_part_count () == 2) {
+                zlink::message_t tail = perf::single::message_from_payload (NULL, 0);
+                co_await sender_->send_routed_async (*state_->target_rid, msg, tail);
+            } else {
+                co_await sender_->send_routed_async (*state_->target_rid, msg);
+            }
             send_rc = 1;
         }
         catch (const zlink::binding_error_t &err) {
@@ -199,18 +200,13 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
     perf::single::latency_stats_t latency;
     // C-faithful receiver (bindings/c/perf single perf_router_router.cpp
     // run_active_phase): blocking recv (flags=0, bounded by rcvtimeo) into
-    // a reused routing id and a single message_t, exiting on the wire-level
-    // stop token. The previous poller.wait()+received_t drain allocated a
-    // fresh std::vector<message_t> per message (received_t::parts ()
-    // materialize), capping ROUTER_ROUTER throughput at ~76-80% of C; C
-    // uses one reused zlink_msg_t recv buffer with no per-message heap
-    // churn.
+    // a complete received_t, so the benchmark can validate the required
+    // payload + empty-tail message shape before decoding the payload.
     {
-        zlink::routing_id_t source_rid = zlink::routing_id_t::from (std::string ("placeholder"));
         bool stop_received = false;
         while (!stop_received) {
-            zlink::message_t part;
-            const int recv_rc = receiver.sock ().recv (source_rid, part, 0);
+            zlink::received_t message;
+            const int recv_rc = receiver.sock ().receive (message, 0);
             if (recv_rc != 0) {
                 if (errno == EAGAIN || errno == EINTR)
                     continue;
@@ -219,11 +215,15 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
                 sender_ok.store (false, std::memory_order_release);
                 break;
             }
-            if (perf::single::is_stop_token_message (part)) {
+            const std::vector<zlink::message_t> &parts = message.parts ();
+            if (parts.size () == 1 && perf::single::is_stop_token_message (parts.front ())) {
                 stop_received = true;
                 break;
             }
-            if (!record_router_router_sample (run_id, msg_size, payload_size, part, &state.latency,
+            const zlink::message_t *part = perf::single::measurement_payload_part (parts);
+            if (!part)
+                continue;
+            if (!record_router_router_sample (run_id, msg_size, payload_size, *part, &state.latency,
                                               &received)) {
                 sender_ok.store (false, std::memory_order_release);
                 break;

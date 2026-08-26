@@ -62,15 +62,23 @@ internal static class PerfMultiPubSubServer
 
     private static bool PublishNoWait(IPubSocket server, Message message)
     {
+        Message? tail = PerfSocketIo.MeasurementPartCount == 2
+            ? Message.Allocate(0) : null;
         try
         {
-            return server.TryPublish(Topic).Message(message)
-                .Flags(SendFlags.DontWait).Submit();
+            var submit = server.TryPublish(Topic).Message(message);
+            if (tail != null)
+                submit = submit.Message(tail);
+            return submit.Flags(SendFlags.DontWait).Submit();
         }
         catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
                                         || IsInterrupted(ex.NativeErrno))
         {
             return false;
+        }
+        finally
+        {
+            tail?.Dispose();
         }
     }
 
