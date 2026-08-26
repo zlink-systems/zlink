@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Streams;
 
@@ -16,7 +17,7 @@ internal sealed class ZLinkDeferredActorJoinHandlerScope : IDisposable
     private readonly List<ZLinkDeferredActorJoin> _joins = [];
     private readonly bool _allowed;
     private readonly ZLinkDeferredActorJoinHandlerScope? _previous;
-    private readonly object _sync = new();
+    private readonly ZLinkStateLane _lane = new();
     private int _requestBytes;
     private bool _completed;
     private bool _sealed;
@@ -45,7 +46,7 @@ internal sealed class ZLinkDeferredActorJoinHandlerScope : IDisposable
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor Join request exceeds the {MaxRequestBytes}-byte limit.");
 
-        lock (scope._sync)
+        AwaitStateLane(scope._lane.RunAsync(() =>
         {
             if (!scope._allowed)
                 throw new ZLinkFrameworkException(
@@ -67,37 +68,46 @@ internal sealed class ZLinkDeferredActorJoinHandlerScope : IDisposable
             join.ReserveBarrier();
             scope._joins.Add(join);
             scope._requestBytes += requestBytes;
-        }
+        }));
     }
 
     public void Complete()
     {
-        lock (_sync)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_sealed) return;
             _completed = true;
             _sealed = true;
-        }
+        }));
     }
 
     public void Dispose()
     {
-        List<ZLinkDeferredActorJoin> joins;
-        lock (_sync)
+        var completion = AwaitStateLane(_lane.RunAsync(() =>
         {
             _sealed = true;
-            joins = [.. _joins];
-        }
+            return new Completion(_completed, [.. _joins]);
+        }));
 
         CurrentScope.Value = _previous;
-        if (_completed)
+        if (completion.Completed)
         {
-            foreach (var join in joins) join.Activate();
+            foreach (var join in completion.Joins) join.Activate();
             return;
         }
 
-        foreach (var join in joins) join.Discard();
+        foreach (var join in completion.Joins) join.Discard();
     }
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private readonly record struct Completion(
+        bool Completed,
+        List<ZLinkDeferredActorJoin> Joins);
 }
 
 internal sealed class ZLinkDeferredActorJoin(

@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -68,7 +69,7 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         if (Interlocked.Exchange(ref _stopped, 1) != 0)
             return;
 
-        ReplyGate.Close();
+        await ReplyGate.CloseAsync().ConfigureAwait(false);
         _queue.Writer.TryComplete();
         await _stop.CancelAsync().ConfigureAwait(false);
 
@@ -161,24 +162,73 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
 
 internal sealed class ZLinkChannelReplyGate
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private bool _open = true;
+    private int _activeReplies;
+    private TaskCompletionSource? _repliesDrained;
 
-    internal bool TryInvoke(Action reply)
+    internal async ValueTask<bool> TryInvokeAsync(Action reply)
     {
         ArgumentNullException.ThrowIfNull(reply);
-        lock (_gate)
+        if (!await _lane.RunAsync(BeginReply).ConfigureAwait(false))
+            return false;
+        try
         {
-            if (!_open)
-                return false;
             reply();
-            return true;
         }
+        finally
+        {
+            var completed = await _lane.RunAsync(CompleteReply)
+                .ConfigureAwait(false);
+            completed?.TrySetResult();
+        }
+        return true;
     }
 
-    internal void Close()
+    internal async ValueTask CloseAsync()
     {
-        lock (_gate)
+        var wait = await _lane.RunAsync(() =>
+        {
             _open = false;
+            if (_activeReplies == 0)
+                return (Task?)null;
+            _repliesDrained ??= new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            return _repliesDrained.Task;
+        }).ConfigureAwait(false);
+        if (wait is not null)
+            await wait.ConfigureAwait(false);
     }
+
+    private bool BeginReply()
+    {
+        if (!_open)
+            return false;
+        _activeReplies++;
+        return true;
+    }
+
+    private TaskCompletionSource? CompleteReply()
+    {
+        _activeReplies--;
+        if (_activeReplies == 0)
+        {
+            var completed = _repliesDrained;
+            _repliesDrained = null;
+            return completed;
+        }
+        return null;
+    }
+
+    internal bool TryInvoke(Action reply) =>
+        AwaitStateLane(TryInvokeAsync(reply));
+
+    internal void Close() =>
+        AwaitStateLane(CloseAsync());
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }

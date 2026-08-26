@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Timers;
 
@@ -18,7 +19,6 @@ internal sealed partial class ZLinkEntrySpotActivation :
     private readonly ZLinkSpotActorJoinRegistry _actorJoins = new();
     private readonly ZLinkSpotActorMembership _actors = new();
     private ZLinkSpotActivationDispatcher _dispatcher = null!;
-    private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ZLinkEntrySpotHandlerExecutor _handlerExecutor;
     private readonly ZLinkScopedHandlerInstanceOwner _handlerInstances;
     private readonly ZLinkSpotHandlerInvoker _invoker;
@@ -32,7 +32,7 @@ internal sealed partial class ZLinkEntrySpotActivation :
     private readonly CancellationTokenSource _stopSource = new();
     private readonly ZLinkSpotSubscriptionRegistry _subscriptions = new();
     private readonly ZLinkSpotTimerRegistry _timers;
-    private readonly object _lifecycleGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private bool _configurationOpen = true;
     private Task? _finalization;
     private int _disposed;
@@ -143,19 +143,28 @@ internal sealed partial class ZLinkEntrySpotActivation :
 
     public ValueTask DisposeAsync()
     {
-        TaskCompletionSource completion;
-        lock (_lifecycleGate)
+        var result = AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (_finalization is not null) return new ValueTask(_finalization);
+            if (_finalization is not null)
+                return (Task: _finalization, Completion: (TaskCompletionSource?)null);
 
             Volatile.Write(ref _disposed, 1);
-            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
             _finalization = completion.Task;
-        }
+            return (Task: _finalization, Completion: completion);
+        }));
 
-        _ = CompleteFinalizationAsync(completion);
-        return new ValueTask(completion.Task);
+        if (result.Completion is not null)
+            //  CompleteFinalizationAsync calls cleanup before its first await. It must start
+            //  outside this lane, not merely with the execution context flow suppressed.
+            using (ExecutionContext.SuppressFlow())
+                _ = Task.Run(() => CompleteFinalizationAsync(result.Completion));
+        return new ValueTask(result.Task);
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
     private async Task CompleteFinalizationAsync(TaskCompletionSource completion)
     {

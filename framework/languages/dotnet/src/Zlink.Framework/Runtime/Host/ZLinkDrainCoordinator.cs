@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -181,7 +182,7 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
     private readonly IZLinkDrainExecutor _executor;
     private readonly Func<bool> _flowCaptureEnabled;
     private readonly ILogger<ZLinkDrainCoordinator>? _logger;
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly TaskCompletionSource<ZLinkDrainResult> _terminal =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task<ZLinkDrainResult>? _operation;
@@ -235,43 +236,75 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
                 deadline,
                 "Drain deadline must be greater than zero.");
 
-        Task<ZLinkDrainResult> operation;
-        lock (_gate)
-        {
-            if (_operation is null)
-            {
-                Action? effectiveRelocationDetached = relocationDetached;
-                if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
-                {
-                    _admission.BeginDrain(ZLinkDrainOwner.Shutdown);
-                }
-                else
-                {
-                    effectiveRelocationDetached = () =>
-                    {
-                        _admission.BeginDrain(ZLinkDrainOwner.Relocation);
-                        relocationDetached?.Invoke();
-                    };
-                }
-                _operation = ExecuteSharedAsync(
-                    intent,
-                    deadline,
-                    effectiveRelocationDetached);
-            }
-            operation = _operation;
-        }
+        var preparation = await _lane.RunAsync(() =>
+            PrepareOperation(intent, deadline, relocationDetached)).ConfigureAwait(false);
+        preparation.Start?.Invoke();
+        var operation = preparation.Operation;
 
         var result = await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (intent == ZLinkFrameworkLifecycleIntent.Relocate
             && result is Drained)
         {
-            lock (_gate)
+            await _lane.RunAsync(() =>
             {
                 if (ReferenceEquals(_operation, operation))
                     _operation = null;
-            }
+            }).ConfigureAwait(false);
         }
         return result;
+    }
+
+    private DrainOperationPreparation PrepareOperation(
+        ZLinkFrameworkLifecycleIntent intent,
+        TimeSpan deadline,
+        Action? relocationDetached)
+    {
+        if (_operation is not null)
+            return new DrainOperationPreparation(_operation, null);
+
+        var completion = new TaskCompletionSource<ZLinkDrainResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _operation = completion.Task;
+        return new DrainOperationPreparation(
+            _operation,
+            () => StartSharedOperation(intent, deadline, relocationDetached, completion));
+    }
+
+    private void StartSharedOperation(
+        ZLinkFrameworkLifecycleIntent intent,
+        TimeSpan deadline,
+        Action? relocationDetached,
+        TaskCompletionSource<ZLinkDrainResult> completion)
+    {
+        Action? effectiveRelocationDetached = relocationDetached;
+        if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
+        {
+            _admission.BeginDrain(ZLinkDrainOwner.Shutdown);
+        }
+        else
+        {
+            effectiveRelocationDetached = () =>
+            {
+                _admission.BeginDrain(ZLinkDrainOwner.Relocation);
+                relocationDetached?.Invoke();
+            };
+        }
+
+        using (ExecutionContext.SuppressFlow())
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    completion.TrySetResult(await ExecuteSharedAsync(
+                        intent,
+                        deadline,
+                        effectiveRelocationDetached).ConfigureAwait(false));
+                }
+                catch (Exception exception)
+                {
+                    completion.TrySetException(exception);
+                }
+            });
     }
 
     public async ValueTask<ZLinkDrainResult> AwaitDrainedAsync(
@@ -383,8 +416,7 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
 
         if (result is DrainBlocked)
         {
-            lock (_gate)
-                _operation = null;
+            await _lane.RunAsync(() => _operation = null).ConfigureAwait(false);
             return result;
         }
 
@@ -409,19 +441,26 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         return result;
     }
 
-    private ValueTask<ZLinkDrainResult> ForceStopAsync(
+    private async ValueTask<ZLinkDrainResult> ForceStopAsync(
         ZLinkDrainForceReason reason,
         TimeSpan deadline,
         bool hasCommitted = false,
         ulong committedUnitCount = 0)
     {
-        lock (_gate)
-            _forceStopOperation ??= ExecuteForceStopAsync(
-                reason,
-                deadline,
-                hasCommitted,
-                committedUnitCount);
-        return new ValueTask<ZLinkDrainResult>(_forceStopOperation);
+        var operation = await _lane.RunAsync(() =>
+        {
+            if (_forceStopOperation is not null)
+                return _forceStopOperation;
+
+            using (ExecutionContext.SuppressFlow())
+                _forceStopOperation = Task.Run(() => ExecuteForceStopAsync(
+                    reason,
+                    deadline,
+                    hasCommitted,
+                    committedUnitCount));
+            return _forceStopOperation;
+        }).ConfigureAwait(false);
+        return await operation.ConfigureAwait(false);
     }
 
     private async Task<ZLinkDrainResult> ExecuteForceStopAsync(
@@ -483,6 +522,10 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
     }
 
     private static bool AlwaysDisabled() => false;
+
+    private readonly record struct DrainOperationPreparation(
+        Task<ZLinkDrainResult> Operation,
+        Action? Start);
 
     public void Dispose()
     {

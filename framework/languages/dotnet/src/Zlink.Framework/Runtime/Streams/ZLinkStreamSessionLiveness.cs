@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Streams;
 
 internal enum ZLinkStreamLivenessDecision
@@ -16,33 +18,34 @@ internal sealed class ZLinkStreamSessionLiveness(TimeProvider? timeProvider = nu
     public static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private long _lastApplicationInbound = (timeProvider ?? TimeProvider.System).GetTimestamp();
     private long _lastHeartbeatPing = (timeProvider ?? TimeProvider.System).GetTimestamp();
     private bool _heartbeatOutstanding;
 
     public void RecordApplicationInbound()
     {
-        lock (_gate) _lastApplicationInbound = _time.GetTimestamp();
+        AwaitStateLane(_lane.RunAsync(() =>
+            _lastApplicationInbound = _time.GetTimestamp()));
     }
 
     public void RecordHeartbeatPong()
     {
-        lock (_gate) _heartbeatOutstanding = false;
+        AwaitStateLane(_lane.RunAsync(() => _heartbeatOutstanding = false));
     }
 
     public void RecordHeartbeatPing()
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             _lastHeartbeatPing = _time.GetTimestamp();
             _heartbeatOutstanding = true;
-        }
+        }));
     }
 
     public ZLinkStreamLivenessDecision Evaluate()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             var now = _time.GetTimestamp();
             if (_heartbeatOutstanding
@@ -57,6 +60,12 @@ internal sealed class ZLinkStreamSessionLiveness(TimeProvider? timeProvider = nu
                 return ZLinkStreamLivenessDecision.SendHeartbeat;
 
             return ZLinkStreamLivenessDecision.None;
-        }
+        }));
     }
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }

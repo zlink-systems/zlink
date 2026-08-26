@@ -1,5 +1,6 @@
 using Zlink.Framework.Runtime.Timers;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -15,7 +16,7 @@ internal sealed class ZLinkSpotTimerRegistry(
 {
     private readonly ZLinkTimerScheduler _scheduler = scheduler ?? new();
     private readonly bool _ownsScheduler = scheduler is null;
-    private readonly object _lifecycleGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly List<ZLinkSpotTimerRegistration> _timers = [];
     private Task? _finalization;
     private bool _closed;
@@ -23,31 +24,25 @@ internal sealed class ZLinkSpotTimerRegistry(
     private bool _restorePending = restorePending;
 
     internal bool IsFrozen
-    {
-        get
-        {
-            lock (_lifecycleGate)
-                return _frozen;
-        }
-    }
+        => AwaitStateLane(_lane.RunAsync(() => _frozen));
 
     public ValueTask DisposeAsync()
     {
-        TaskCompletionSource completion;
-        ZLinkSpotTimerRegistration[] timers;
-        lock (_lifecycleGate)
-        {
-            if (_finalization is not null) return new ValueTask(_finalization);
+        return new ValueTask(AwaitStateLane(_lane.RunAsync(GetOrStartFinalization)));
+    }
 
-            _closed = true;
-            timers = _timers.ToArray();
-            _timers.Clear();
-            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _finalization = completion.Task;
-        }
+    private Task GetOrStartFinalization()
+    {
+        if (_finalization is not null) return _finalization;
 
-        _ = CompleteFinalizationAsync(timers, completion);
-        return new ValueTask(completion.Task);
+        _closed = true;
+        var timers = _timers.ToArray();
+        _timers.Clear();
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _finalization = completion.Task;
+        using (ExecutionContext.SuppressFlow())
+            _ = Task.Run(() => CompleteFinalizationAsync(timers, completion));
+        return _finalization;
     }
 
     public ValueTask<IZLinkTimer> AddAsync(
@@ -62,7 +57,7 @@ internal sealed class ZLinkSpotTimerRegistry(
             reportFailureAsync,
         CancellationToken cancellationToken)
     {
-        lock (_lifecycleGate)
+        return _lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(_closed, this);
             cancellationToken.ThrowIfCancellationRequested();
@@ -98,13 +93,12 @@ internal sealed class ZLinkSpotTimerRegistry(
                 timer,
                 handlerType,
                 spotType));
-            return ValueTask.FromResult<IZLinkTimer>(timer);
-        }
+            return (IZLinkTimer)timer;
+        });
     }
 
     internal IReadOnlyList<ZLinkSpotLogicalTimerSnapshot> Freeze()
-    {
-        lock (_lifecycleGate)
+        => AwaitStateLane(_lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(_closed, this);
             _frozen = true;
@@ -116,8 +110,7 @@ internal sealed class ZLinkSpotTimerRegistry(
                     registration.Timer.Freeze()))
                 .OrderBy(static snapshot => snapshot.Timer.Name, StringComparer.Ordinal)
                 .ToArray();
-        }
-    }
+        }));
 
     internal IReadOnlyList<ZLinkRelocationLogicalTimer> FreezeRelocation()
     {
@@ -130,17 +123,16 @@ internal sealed class ZLinkSpotTimerRegistry(
         SnapshotFrozenRelocationAfterDispatchesAsync(
             CancellationToken cancellationToken)
     {
-        ZLinkSpotTimerRegistration[] registrations;
-        lock (_lifecycleGate)
+        var registrations = await _lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(_closed, this);
             if (!_frozen)
                 throw new InvalidOperationException(
                     "SPOT logical timers must be frozen before relocation snapshot.");
-            registrations = _timers
+            return _timers
                 .Where(static registration => !registration.Timer.IsDisposed)
                 .ToArray();
-        }
+        }).ConfigureAwait(false);
 
         await Task.WhenAll(registrations.Select(
                 static registration =>
@@ -148,7 +140,7 @@ internal sealed class ZLinkSpotTimerRegistry(
             .WaitAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        lock (_lifecycleGate)
+        return await _lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(_closed, this);
             if (!_frozen)
@@ -166,12 +158,12 @@ internal sealed class ZLinkSpotTimerRegistry(
                     StringComparer.Ordinal)
                 .Select(ZLinkSpotTimerRelocationCodec.Encode)
                 .ToArray();
-        }
+        }).ConfigureAwait(false);
     }
 
     internal void FreezeForApplicationAdmissionSeal()
     {
-        lock (_lifecycleGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_closed || _frozen) return;
             _frozen = true;
@@ -180,7 +172,7 @@ internal sealed class ZLinkSpotTimerRegistry(
                 if (!registration.Timer.IsDisposed)
                     _ = registration.Timer.Freeze();
             }
-        }
+        }));
     }
 
     internal void RestoreRelocation(
@@ -205,7 +197,7 @@ internal sealed class ZLinkSpotTimerRegistry(
             reportFailureAsync)
     {
         ArgumentNullException.ThrowIfNull(logicalTimers);
-        lock (_lifecycleGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(_closed, this);
             var names = new HashSet<string>(StringComparer.Ordinal);
@@ -263,7 +255,7 @@ internal sealed class ZLinkSpotTimerRegistry(
                     snapshot.SpotType));
             }
             _frozen = true;
-        }
+        }));
     }
 
     private void RestoreConfiguredTimers(
@@ -321,13 +313,13 @@ internal sealed class ZLinkSpotTimerRegistry(
 
     internal void Resume()
     {
-        lock (_lifecycleGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!_frozen || _closed) return;
             _frozen = false;
             foreach (var registration in _timers)
                 registration.Timer.Resume();
-        }
+        }));
     }
 
     internal static ZLinkTimerOptions ValidateRegistration(
@@ -406,6 +398,12 @@ internal sealed class ZLinkSpotTimerRegistry(
         else
             completion.TrySetException(new AggregateException(failures));
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     private sealed record ZLinkSpotTimerRegistration(
         ZLinkTimer Timer,
