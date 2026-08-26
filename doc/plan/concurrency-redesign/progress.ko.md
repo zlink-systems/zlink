@@ -54,13 +54,13 @@ jvm 열은 java·kotlin을 함께 적는다(빌드 트리 공유). 언어별 클
 | CP2-2 | 배치 2 게이트 (#7·#8) | **통과** | unit 1893/0 · 6샘플 placement OK (ZoneWorld=기존 Z2 증상, 제외) | 2026-08-26. 지표 재측정 690/54/9/128 |
 | 9 | ZLinkManagedMeshNode (130) | **완료** | `b3497532a6` | 4잡 연속. lane 5개 분리+ManagedActor별 lane, _socketGate·_disposeGate 유지(발견7), 호환 경계 25. unit 1893/0·행 없음 |
 | CP2-3 | 배치 3 게이트 (#9·소형1) | **통과** | unit 1893/0 · 7샘플 전부 placement OK (ZoneWorld 포함 — Z2 간헐성 증거) | 2026-08-26 |
-| 10 | ZLinkFrameworkRuntime (27) | 대기(최종) | | 사용 45파일, 재진입 ~57, 정독 리뷰 필수 |
+| 10 | ZLinkFrameworkRuntime (27) + FrameworkComponentState + ChannelRuntimeManager SyncRoot | **요청됨** | | 최종 대형 (2026-08-27). 사용 45파일, 재진입 ~57, 정독 리뷰 필수 |
 | — | 소형 배치 1 (4클래스 — C3·C1 기계 전환) | **완료** | `960be4c785` | 재진입 0, 호환 경계 0 |
 | — | 소형 배치 2~5 (15클래스 전환 + CompletionDispatcher 제외 재분류) | **완료** | 커밋 3건 | CP2-4 unit 1896/0·6샘플 OK. 반려 2(NRE 테스트·무할당 계약 위반→원복) |
 | — | 소형 배치 6~9 (17클래스) | **완료** | 합본 커밋 | CP2-5 unit 1896/0·6샘플 OK. 반려 1(dispose Task memoization) |
 | — | 소형 배치 10~15 (23클래스) | **완료** | `135c134b2c` | CP2-6 unit 1896/0·6샘플 OK. 반려 1(Bundle dispose 발견7 역방향 데드락). ChannelRuntimeManager·FrameworkComponentState는 #10 범위 재분류 |
 | — | 소형 배치 16~19 (11클래스 + 제외 4) | **완료** | `aed9ee8d05` | CP2-7 unit 1899/0·7샘플 exit 0. 반려 3(발견9 계열 2·false 관측 보존 1). 제외: MeshCompletionTable·WorkerPool·SerialWorkItem·SpotSerialExecutor(primitive) |
-| — | 소형 배치 20~22 (+MonitorHub 이월) | **요청됨** | | 병렬 3잡 (2026-08-27). FrameworkComponentState·ChannelRuntimeManager는 #10 범위 |
+| — | 소형 배치 20~22 (+MonitorHub 이월, 12클래스) | **완료** | `90ecdaedc0` | CP2-8 unit 1899/0·6샘플 OK. 반려 2. 잔여: SpotRetireTargetRuntime outer registry(#10 부근 정리) |
 | 제외 | ZLinkSerialExecutionQueue (25) | 제외 | | lane primitive 자체 (스펙 06 §9) |
 | 제외 | ZLinkCompletionDispatcher (5) | 제외 | | dispatch primitive — 무할당 hot path 계약(0→408 실측)이 lane 클로저와 양립 불가 (CP2-4 판정) |
 
@@ -74,8 +74,8 @@ node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 
 | 지표 | 시작 | 현재 | 목표 |
 |---|---:|---:|---|
-| dotnet `lock` 문 | 999 | **242** (−76%) | ~60 (lane·큐 내부만) |
-| `_gate` 보유 클래스 | 61 | **8** | 0 |
-| state lane 사용 파일 | 0 | **67** | — |
+| dotnet `lock` 문 | 999 | **150** (−85%) | ~60 (lane·큐 내부만) |
+| `_gate` 보유 클래스 | 61 | **6** | 0 |
+| state lane 사용 파일 | 0 | **75** | — |
 | **async 경계 스냅샷** *(진짜 지표)* | ~465 | 미측정 | **0** |
-| 호환 경계 `AwaitStateLane` *(부채)* | 0 | **512** | 0 (마무리에서 회수) |
+| 호환 경계 `AwaitStateLane` *(부채)* | 0 | **597** | 0 (마무리에서 회수) |
