@@ -185,8 +185,8 @@ CP3 판정("이 작업의 하위 증상인가")에서 **끝내지 않는다.** �
 | 언어 | 트리 | L0 primitive | L1 표본 | L2 확산 | 마지막 게이트 |
 |---|---|---|---|---|---|
 | **dotnet** | dotnet | **완료** (`ZLinkStateLane` + golden 14) | **완료** (`3cc6f5f615`) | **진행 중** — §2 | unit 실패 0 · 6샘플 OK |
-| cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | **요청됨** (stream_session_registry_t, 조사 l1-survey-cpp.ko.md) | 대기 | framework-unit 40/40 |
-| java | JVM | **완료**+보완 요청됨 (§7-5 inline continuation fix + internal 패키지 이동) | 대기 (primitive 보완 후, 대상 ZLinkSessionActorsRuntime — 조사 l1-survey-java.ko.md, ~2×) | 대기 | core 1,143/0 |
+| cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | **완료** (stream_session_registry_t 31→0, 시그니처 무변경, admit_inbound 대기 lane 밖 분리+세대화, 반려 1회: notify_changed lost wakeup) | 대기 | unit·contract 그린 (layout_contract 제외 — 기존) |
+| java | JVM | **완료** (§7-5 보완 포함 — completeAsync·internal 패키지 이동) | **요청됨** (ZLinkSessionActorsRuntime, 조사 l1-survey-java.ko.md, ~2×) | 대기 | core 1,144 중 flake 1 |
 | kotlin | JVM | **완료** (golden 14/14, CoroutineContext.Element 전파) | 대기 (java 조사: kotlin 파급 0 — 인터페이스 유지 시) | 대기 | kotlin 67/0 |
 | node | node | **완료** (golden 12 이식 + 동시성 2 제외, 사유 주석) | **요청됨** (ZLinkActorSessionBindingRegistry, 조사 l1-survey-node.ko.md) | 대기 | state-lane 12/12 |
 
@@ -225,6 +225,11 @@ CP3 마일스톤 전용이다.
 않는다.
 
 **간헐 실패는 알려진 flake 목록과 대조하기 전에 회귀로도 flake로도 단정하지 않는다**(§5.1 STOP).
+
+**cpp `test_cpp_framework_layout_contract`는 기존 실패다** (2026-08-26 확인):
+`samples/ShoppingMall/Server/OrderWorkflow/main.cpp` L350·L446의 blocking `result()` 지문 —
+base `3cbfbde4f9` 이후 무변경 파일이라 이 캠페인과 무관. 게이트 판정에서 제외하고,
+샘플 수정은 별도 작업으로 넘긴다.
 
 ### 병렬 편성 규칙
 
