@@ -254,6 +254,8 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         var applicationHash = System.Security.Cryptography.SHA256.HashData(applicationPayload);
         var contentReference = ZLinkInlineCreationIntentCodec.Encode(applicationPayload);
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var unavailablePeerEpochs =
+            new HashSet<ZLinkMeshNodeTargetAvailability.PeerEpoch>();
         var reservationRefreshAttempt = 0;
         var joinRetryAttempt = 0;
         while (true)
@@ -295,7 +297,10 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         static candidate => candidate.Rid,
                         ZLinkRoutingIdOrder.Instance)
                     .ToList();
-                eligible = FilterRouteReadyCandidates(source, placementEligible);
+                eligible = FilterRouteReadyCandidates(
+                    source,
+                    placementEligible,
+                    unavailablePeerEpochs);
                 continue;
             }
             var owner = new ZLinkLocationOwnerToken(target.OwnerId, target.LeaseGeneration);
@@ -399,7 +404,10 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         static candidate => candidate.Rid,
                         ZLinkRoutingIdOrder.Instance)
                     .ToList();
-                eligible = FilterRouteReadyCandidates(source, placementEligible);
+                eligible = FilterRouteReadyCandidates(
+                    source,
+                    placementEligible,
+                    unavailablePeerEpochs);
                 continue;
             }
             if (reserve is not ZLinkObjectReserveResult.Reserved reserved)
@@ -473,12 +481,32 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                                 .ConfigureAwait(false);
                         }
                         catch (ZlinkSubmitException error)
-                            when (error.Result is
-                                      ZlinkSubmitException.ErrorCode.NotConnected
-                                  or ZlinkSubmitException.ErrorCode.Backpressured)
+                            when (error.Result == ZlinkSubmitException.ErrorCode.NotConnected)
                         {
-                            // Retry only source-local admission against the
-                            // exact reservation target and generation.
+                            // A submitted actor-create found that this exact
+                            // admitted peer has no usable route. Do not demote
+                            // the Mesh peer here; exclude its current epoch
+                            // from this operation's next selection and let the
+                            // existing reconciliation path choose a fallback
+                            // or wait for a new peer epoch.
+                            if (ZLinkMeshNodeTargetAvailability.TryGetAdmittedPeerEpoch(
+                                    target.Rid,
+                                    target.LifecycleGeneration,
+                                    source.Node.MeshPeers(),
+                                    out var unavailablePeerEpoch))
+                                unavailablePeerEpochs.Add(unavailablePeerEpoch);
+                            throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.Unavailable,
+                                $"Actor create target '{target.Rid}' is not connected.",
+                                ZLinkRetryAdvice.RetryAfterBackoff,
+                                error);
+                        }
+                        catch (ZlinkSubmitException error)
+                            when (error.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+                        {
+                            // Backpressure doesn't disprove transport
+                            // availability, so preserve the reservation and
+                            // retry source-local admission against this target.
                             try
                             {
                                 await Task.Delay(
@@ -542,7 +570,10 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         static candidate => candidate.Rid,
                         ZLinkRoutingIdOrder.Instance)
                     .ToList();
-                eligible = FilterRouteReadyCandidates(source, placementEligible);
+                eligible = FilterRouteReadyCandidates(
+                    source,
+                    placementEligible,
+                    unavailablePeerEpochs);
                 continue;
             }
         }
@@ -586,11 +617,14 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
 
     private static List<ZLinkMeshNodeDescriptor> FilterRouteReadyCandidates(
         ZLinkSpotNodeRuntime source,
-        IReadOnlyList<ZLinkMeshNodeDescriptor> candidates) =>
+        IReadOnlyList<ZLinkMeshNodeDescriptor> candidates,
+        IReadOnlySet<ZLinkMeshNodeTargetAvailability.PeerEpoch>?
+            unavailablePeerEpochs = null) =>
         ZLinkMeshNodeTargetAvailability.FilterAdmitted(
                 source.Node.RoutingId,
                 candidates,
-                source.Node.MeshPeers())
+                source.Node.MeshPeers(),
+                unavailablePeerEpochs)
             .ToList();
 
     private ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(

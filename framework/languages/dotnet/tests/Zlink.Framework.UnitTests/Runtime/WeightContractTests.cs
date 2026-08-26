@@ -374,6 +374,64 @@ public sealed class WeightContractTests
             filtered);
     }
 
+    [Fact]
+    public void Placement_candidates_exclude_a_transport_rejected_peer_until_its_epoch_changes()
+    {
+        var local = Descriptor(
+            weight: 100,
+            actors: new ZLinkPopulationCapacity(0, 0, 10),
+            spots: new ZLinkPopulationCapacity(0, 0, 10),
+            spotType: new ZLinkSpotTypeCapacity(
+                ZLinkPlacementObjectKind.UserSpot,
+                "room",
+                0,
+                0,
+                10)) with
+        {
+            Rid = RoutingId.From("local-target")
+        };
+        var remote = local with
+        {
+            Rid = RoutingId.From("remote-target")
+        };
+        var admitted = new MeshNodePeer(
+            1,
+            MeshPeerSource.Discovery,
+            MeshPeerState.Admitted,
+            remote.Rid,
+            remote.LifecycleGeneration,
+            1,
+            remote.Endpoint,
+            0,
+            0,
+            10);
+        var unavailable = new HashSet<ZLinkMeshNodeTargetAvailability.PeerEpoch>
+        {
+            new(remote.Rid, remote.LifecycleGeneration, admitted.LastChangedMs)
+        };
+
+        var filtered = ZLinkMeshNodeTargetAvailability.FilterAdmitted(
+                local.Rid,
+                new[] { local, remote },
+                [admitted],
+                unavailable)
+            .Select(static candidate => candidate.Rid)
+            .ToArray();
+
+        Assert.Equal(new[] { local.Rid }, filtered);
+
+        var refreshed = admitted with { LastChangedMs = admitted.LastChangedMs + 1 };
+        var reselected = ZLinkMeshNodeTargetAvailability.FilterAdmitted(
+                local.Rid,
+                new[] { local, remote },
+                [refreshed],
+                unavailable)
+            .Select(static candidate => candidate.Rid)
+            .ToArray();
+
+        Assert.Equal(new[] { local.Rid, remote.Rid }, reselected);
+    }
+
     private static ZLinkMeshNodeDescriptor Descriptor(
         int weight,
         ZLinkPopulationCapacity actors,
