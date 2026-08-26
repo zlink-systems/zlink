@@ -45,7 +45,7 @@ test('transport gateway uses only the public binding package and retains receive
     router.bind(endpoint);
     dealer.setRoutingId('m5-dealer');
     dealer.connect(endpoint);
-    assert.equal(dealer.send([Buffer.from('foundation')]), true);
+    await dealer.send([Buffer.from('foundation')]);
     const received = await pollReceive(() => router.receive(true));
     assert.equal(received.sourceRid, 'm5-dealer');
     assert.deepEqual(received.parts.map(part => part.toString()), ['foundation']);

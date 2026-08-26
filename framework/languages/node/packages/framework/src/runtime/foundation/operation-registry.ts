@@ -100,6 +100,10 @@ export class OperationRegistry<T> {
   }
 
   fail(id: bigint, reason: unknown): boolean {
+    return this.failCore(id, reason);
+  }
+
+  private failCore(id: bigint, reason: unknown): boolean {
     const entry = this.take(id);
     if (entry === undefined) return false;
     entry.reject(reason);
@@ -107,7 +111,7 @@ export class OperationRegistry<T> {
   }
 
   cancel(id: bigint, message?: string): boolean {
-    return this.fail(id, new OperationCancelledError(id, message));
+    return this.failCore(id, new OperationCancelledError(id, message));
   }
 
   isPending(id: bigint): boolean {
