@@ -169,7 +169,7 @@
 | cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | 대기 | 대기 | framework-unit 40/40 |
 | java | JVM | **요청됨** (2026-08-26 codex terra) | 대기 (L0 후) | 대기 | — |
 | kotlin | JVM | **요청됨** (2026-08-26 codex terra) | 대기 (L0 후) | 대기 | — |
-| node | node | **요청됨** (2026-08-26 codex terra) | 대기 (L0 후) | 대기 | — |
+| node | node | **완료** (golden 12 이식 + 동시성 2 제외, 사유 주석) | 대기 | 대기 | state-lane 12/12 |
 
 **L0 4건은 서로도, dotnet과도 의존이 없다.** 지금 동시에 띄울 수 있다. 다만 java와 kotlin은
 같은 JVM 락을 쓰므로 빌드·테스트 구간에서만 순차가 된다.

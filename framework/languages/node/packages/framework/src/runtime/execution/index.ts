@@ -6,6 +6,8 @@ import {
   createInternalFrameworkException
 } from '../framework-errors-internal';
 
+export { ZLinkStateLane } from './state-lane';
+
 export interface ZLinkRuntimeTaskFailure {
   readonly taskName: string;
   readonly error: unknown;
