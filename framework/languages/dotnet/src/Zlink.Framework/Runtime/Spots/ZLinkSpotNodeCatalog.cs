@@ -297,9 +297,11 @@ internal sealed class ZLinkSpotNodeCatalog(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lifecycle?.SpotLocations.ForgetRelocated(
-            activation.RuntimeSpotId,
-            activation.ObjectGeneration);
+        if (lifecycle is not null)
+            await lifecycle.SpotLocations.ForgetRelocatedAsync(
+                    activation.RuntimeSpotId,
+                    activation.ObjectGeneration)
+                .ConfigureAwait(false);
         await _lane.RunAsync(() =>
         {
             _spots.Remove(activation.SpotId);

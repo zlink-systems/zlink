@@ -12,7 +12,7 @@ internal sealed class ZLinkSessionActorCoordinator(
 {
     private readonly ZLinkSessionActorBindingRegistry _bindings =
         new(runtime);
-    private readonly object _actorOperationGatesLock = new();
+    private readonly ZLinkStateLane _actorOperationGatesLane = new();
     private readonly Dictionary<ZLinkActorId, ActorOperationGate> _actorOperationGates = [];
 
     public IReadOnlyCollection<IZLinkSessionActor> BoundActors => _bindings.BoundActors;
@@ -53,16 +53,9 @@ internal sealed class ZLinkSessionActorCoordinator(
         var actorId = ZLinkActorId.FromBoundary(
             actor.ActorId,
             nameof(actor));
-        ActorOperationGate operation;
-        lock (_actorOperationGatesLock)
-        {
-            if (!_actorOperationGates.TryGetValue(actorId, out operation!))
-            {
-                operation = new ActorOperationGate();
-                _actorOperationGates.Add(actorId, operation);
-            }
-            operation.Users++;
-        }
+        var operation = await _actorOperationGatesLane.RunAsync(() =>
+                AcquireActorOperationGate(actorId))
+            .ConfigureAwait(false);
         ActorOperationGate.Lease? lease = null;
         try
         {
@@ -77,15 +70,32 @@ internal sealed class ZLinkSessionActorCoordinator(
         finally
         {
             lease?.Dispose();
-            lock (_actorOperationGatesLock)
-            {
-                operation.Users--;
-                if (operation.Users == 0
-                    && _actorOperationGates.Remove(actorId, out var removed)
-                    && ReferenceEquals(removed, operation))
-                    operation.Dispose();
-            }
+            await _actorOperationGatesLane.RunAsync(() =>
+                    ReleaseActorOperationGate(actorId, operation))
+                .ConfigureAwait(false);
         }
+    }
+
+    private ActorOperationGate AcquireActorOperationGate(ZLinkActorId actorId)
+    {
+        if (!_actorOperationGates.TryGetValue(actorId, out var operation))
+        {
+            operation = new ActorOperationGate();
+            _actorOperationGates.Add(actorId, operation);
+        }
+        operation.Users++;
+        return operation;
+    }
+
+    private void ReleaseActorOperationGate(
+        ZLinkActorId actorId,
+        ActorOperationGate operation)
+    {
+        operation.Users--;
+        if (operation.Users == 0
+            && _actorOperationGates.Remove(actorId, out var removed)
+            && ReferenceEquals(removed, operation))
+            operation.Dispose();
     }
 
     private sealed class ActorOperationGate

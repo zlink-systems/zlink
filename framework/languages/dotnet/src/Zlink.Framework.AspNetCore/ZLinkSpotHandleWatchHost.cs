@@ -121,8 +121,10 @@ internal sealed class ZLinkSpotHandleWatchHost(
                 // Each handle refreshes through its own logical lookup key;
                 // a key with no current row invalidates at its current
                 // version so a strictly newer row can resurrect it.
-                foreach (var handle in handles?.SnapshotLiveHandles()
-                         ?? Array.Empty<ZLinkResolvedSpotHandle>())
+                var liveHandles = handles is null
+                    ? Array.Empty<ZLinkResolvedSpotHandle>()
+                    : await handles.SnapshotLiveHandlesAsync().ConfigureAwait(false);
+                foreach (var handle in liveHandles)
                 {
                     if (!await handle.RefreshAsync(cancellationToken).ConfigureAwait(false))
                         handle.InvalidateCurrent();
@@ -154,12 +156,15 @@ internal sealed class ZLinkSpotHandleWatchHost(
             rows.InvalidateSpotRoute(spotKey);
             if (change.ChangeType is ZLinkLocationChangeType.Removed or ZLinkLocationChangeType.Expired)
             {
-                handles?.RemoveSpot(spotKey, change.Generation);
+                if (handles is not null)
+                    await handles.RemoveSpotAsync(spotKey, change.Generation)
+                        .ConfigureAwait(false);
                 return;
             }
 
             var row = await rows.ResolveSpotRowAsync(spotKey, cancellationToken).ConfigureAwait(false);
-            if (row is not null) handles?.UpdateSpot(row);
+            if (row is not null && handles is not null)
+                await handles.UpdateSpotAsync(row).ConfigureAwait(false);
             return;
         }
 
@@ -167,11 +172,13 @@ internal sealed class ZLinkSpotHandleWatchHost(
         rows.InvalidateActorRoute(actorKey);
         if (change.ChangeType is ZLinkLocationChangeType.Removed or ZLinkLocationChangeType.Expired)
         {
-            handles?.RemoveActor(actorKey);
+            if (handles is not null)
+                await handles.RemoveActorAsync(actorKey).ConfigureAwait(false);
             return;
         }
 
         var actor = await rows.ResolveActorRowAsync(actorKey, cancellationToken).ConfigureAwait(false);
-        if (actor is not null) handles?.UpdateActor(actor);
+        if (actor is not null && handles is not null)
+            await handles.UpdateActorAsync(actor).ConfigureAwait(false);
     }
 }

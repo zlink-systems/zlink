@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -12,85 +13,44 @@ internal sealed class ZLinkStreamSessionTable(
     TimeProvider timeProvider,
     bool actorDispatchEnabled)
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<RoutingId, ZLinkStreamSessionRuntime> _sessions = [];
     private readonly Dictionary<RoutingId, TaskCompletionSource<ZLinkStreamSessionRuntime?>>
         _sessionCreations = [];
     private bool _rejectNewSessions;
     private bool _stopping;
 
-    public bool IsStopping
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _stopping;
-            }
-        }
-    }
+    public ValueTask<bool> IsStoppingAsync() => _lane.RunAsync(() => _stopping);
 
-    public int Count
-    {
-        get
-        {
-            lock (_gate) return _sessions.Count;
-        }
-    }
+    public ValueTask<int> GetCountAsync() => _lane.RunAsync(() => _sessions.Count);
 
-    public ZLinkStreamSessionRuntime[] Snapshot()
-    {
-        lock (_gate) return _sessions.Values.ToArray();
-    }
+    public ValueTask<ZLinkStreamSessionRuntime[]> SnapshotAsync() =>
+        _lane.RunAsync(() => _sessions.Values.ToArray());
 
-    public ZLinkStreamSessionRuntime[] Stop()
-    {
-        lock (_gate)
-        {
-            _stopping = true;
-            var sessions = _sessions.Values.ToArray();
-            _sessions.Clear();
-            return sessions;
-        }
-    }
+    public ValueTask<ZLinkStreamSessionRuntime[]> StopAsync() =>
+        _lane.RunAsync(StopCore);
 
-    public void RequestStop()
+    public async ValueTask RequestStopAsync()
     {
-        ZLinkStreamSessionRuntime[] sessions;
-        lock (_gate) sessions = _sessions.Values.ToArray();
+        var sessions = await _lane.RunAsync(() => _sessions.Values.ToArray()).ConfigureAwait(false);
         foreach (var session in sessions) session.RequestStop();
     }
 
     public async ValueTask<ZLinkStreamSessionRuntime?> GetOrCreateAsync(RoutingId routingId)
     {
-        var reject = false;
-        var creator = false;
-        TaskCompletionSource<ZLinkStreamSessionRuntime?>? creation = null;
-        lock (_gate)
-        {
-            if (_stopping) return null;
-
-            if (_sessions.TryGetValue(routingId, out var existing))
-                return existing;
-            reject = _rejectNewSessions || drainAdmission.IsDraining;
-            if (!reject)
-            {
-                if (!_sessionCreations.TryGetValue(routingId, out creation))
-                {
-                    creation = new TaskCompletionSource<ZLinkStreamSessionRuntime?>(
-                        TaskCreationOptions.RunContinuationsAsynchronously);
-                    _sessionCreations.Add(routingId, creation);
-                    creator = true;
-                }
-            }
-        }
-        if (reject)
+        var admission = await _lane.RunAsync(() => PrepareGetOrCreate(routingId))
+            .ConfigureAwait(false);
+        if (admission.Existing is { } existing)
+            return existing;
+        if (admission.Stopped)
+            return null;
+        if (admission.Reject)
         {
             RejectNewSession(routingId);
             return null;
         }
 
-        if (creator)
+        if (admission.Creator)
         {
             try
             {
@@ -105,70 +65,35 @@ internal sealed class ZLinkStreamSessionTable(
                         actorDispatchEnabled,
                         requireConnectionReady: true)
                     .ConfigureAwait(false);
-                var result = created;
-                var disposeCreated = false;
-                var rejectCreated = false;
-                lock (_gate)
-                {
-                    _sessionCreations.Remove(routingId);
-                    if (_stopping)
-                    {
-                        result = null;
-                        disposeCreated = true;
-                    }
-                    else if (_sessions.TryGetValue(routingId, out var existing))
-                    {
-                        result = existing;
-                        disposeCreated = true;
-                    }
-                    else if (_rejectNewSessions || drainAdmission.IsDraining)
-                    {
-                        result = null;
-                        disposeCreated = true;
-                        rejectCreated = true;
-                    }
-                    else
-                        _sessions.Add(routingId, created);
-                }
+                var completion = await _lane.RunAsync(() => CompleteCreation(routingId, created))
+                    .ConfigureAwait(false);
 
-                if (disposeCreated)
+                if (completion.DisposeCreated)
                     await created.DisposeUncommittedAsync().ConfigureAwait(false);
-                if (rejectCreated) RejectNewSession(routingId);
-                creation!.TrySetResult(result);
+                if (completion.RejectCreated) RejectNewSession(routingId);
+                admission.Creation!.TrySetResult(completion.Result);
             }
             catch (Exception exception)
             {
-                lock (_gate) _sessionCreations.Remove(routingId);
-                creation!.TrySetException(exception);
+                await _lane.RunAsync(() => _sessionCreations.Remove(routingId))
+                    .ConfigureAwait(false);
+                admission.Creation!.TrySetException(exception);
             }
         }
 
-        return await creation!.Task.ConfigureAwait(false);
+        return await admission.Creation!.Task.ConfigureAwait(false);
     }
 
-    public bool TryGet(RoutingId routingId, out ZLinkStreamSessionRuntime session)
-    {
-        lock (_gate)
-        {
-            if (_sessions.TryGetValue(routingId, out var existing))
-            {
-                session = existing;
-                return true;
-            }
-        }
-
-        session = null!;
-        return false;
-    }
+    public ValueTask<ZLinkStreamSessionRuntime?> TryGetAsync(RoutingId routingId) =>
+        _lane.RunAsync(() => _sessions.GetValueOrDefault(routingId));
 
     public async ValueTask<bool> DrainSessionsAsync(CancellationToken cancellationToken)
     {
-        ZLinkStreamSessionRuntime[] sessions;
-        lock (_gate)
+        var sessions = await _lane.RunAsync(() =>
         {
             _rejectNewSessions = true;
-            sessions = _sessions.Values.ToArray();
-        }
+            return _sessions.Values.ToArray();
+        }).ConfigureAwait(false);
 
         var allClosed = true;
         const int maximumConcurrency = 16;
@@ -186,44 +111,87 @@ internal sealed class ZLinkStreamSessionTable(
         return allClosed;
     }
 
-    public void ForceStopSessions()
+    public async ValueTask ForceStopSessionsAsync()
     {
-        ZLinkStreamSessionRuntime[] sessions;
-        lock (_gate)
+        var sessions = await _lane.RunAsync(() =>
         {
             _rejectNewSessions = true;
-            sessions = _sessions.Values.ToArray();
-        }
+            return _sessions.Values.ToArray();
+        }).ConfigureAwait(false);
 
         foreach (var session in sessions) session.RequestForceStopForDrain();
     }
 
-    public bool TryResolveMonitorSession(
-        RoutingId? routingId,
-        out ZLinkStreamSessionRuntime session)
-    {
-        lock (_gate)
-        {
-            if (routingId is RoutingId streamRoutingId
-                && _sessions.TryGetValue(streamRoutingId, out var existing))
-            {
-                session = existing;
-                return true;
-            }
-        }
-
-        session = null!;
-        return false;
-    }
+    public ValueTask<ZLinkStreamSessionRuntime?> TryResolveMonitorSessionAsync(
+        RoutingId? routingId) => _lane.RunAsync(() =>
+            routingId is RoutingId streamRoutingId
+                ? _sessions.GetValueOrDefault(streamRoutingId)
+                : null);
 
     private void Remove(string sessionId)
     {
         var routingId = RoutingId.FromHex(sessionId);
-        lock (_gate)
-        {
-            _sessions.Remove(routingId);
-        }
+        AwaitStateLane(_lane.RunAsync(() => { _sessions.Remove(routingId); }));
     }
+
+    private ZLinkStreamSessionRuntime[] StopCore()
+    {
+        _stopping = true;
+        var sessions = _sessions.Values.ToArray();
+        _sessions.Clear();
+        return sessions;
+    }
+
+    private SessionCreationAdmission PrepareGetOrCreate(RoutingId routingId)
+    {
+        if (_stopping) return new(null, null, false, false, true);
+
+        if (_sessions.TryGetValue(routingId, out var existing))
+            return new(existing, null, false, false, false);
+        var reject = _rejectNewSessions || drainAdmission.IsDraining;
+        if (reject) return new(null, null, true, false, false);
+
+        if (!_sessionCreations.TryGetValue(routingId, out var creation))
+        {
+            creation = new TaskCompletionSource<ZLinkStreamSessionRuntime?>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _sessionCreations.Add(routingId, creation);
+            return new(null, creation, false, true, false);
+        }
+
+        return new(null, creation, false, false, false);
+    }
+
+    private SessionCreationCompletion CompleteCreation(
+        RoutingId routingId,
+        ZLinkStreamSessionRuntime created)
+    {
+        _sessionCreations.Remove(routingId);
+        if (_stopping)
+            return new(null, true, false);
+        if (_sessions.TryGetValue(routingId, out var existing))
+            return new(existing, true, false);
+        if (_rejectNewSessions || drainAdmission.IsDraining)
+            return new(null, true, true);
+
+        _sessions.Add(routingId, created);
+        return new(created, false, false);
+    }
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private readonly record struct SessionCreationAdmission(
+        ZLinkStreamSessionRuntime? Existing,
+        TaskCompletionSource<ZLinkStreamSessionRuntime?>? Creation,
+        bool Reject,
+        bool Creator,
+        bool Stopped);
+
+    private readonly record struct SessionCreationCompletion(
+        ZLinkStreamSessionRuntime? Result,
+        bool DisposeCreated,
+        bool RejectCreated);
 
     private void RejectNewSession(RoutingId routingId)
     {

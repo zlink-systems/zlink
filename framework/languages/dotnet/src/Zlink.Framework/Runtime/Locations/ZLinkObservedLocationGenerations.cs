@@ -110,58 +110,68 @@ internal sealed class ZLinkObservedLocationGenerations
     /// </summary>
     private sealed class ObservedDescriptors
     {
-        private readonly object _gate = new();
+        private readonly ZLinkStateLane _lane = new();
         private readonly Dictionary<ZLinkMeshNodeDescriptorKey, DescriptorObservation> _observed = [];
 
         internal DescriptorAcceptance Accept(
             ZLinkMeshNodeDescriptorKey key,
             string ownerId,
+            ObservedVersion version) =>
+            AwaitStateLane(_lane.RunAsync(() => AcceptCore(key, ownerId, version)));
+
+        private DescriptorAcceptance AcceptCore(
+            ZLinkMeshNodeDescriptorKey key,
+            string ownerId,
             ObservedVersion version)
         {
-            lock (_gate)
+            if (!_observed.TryGetValue(key, out var observed))
             {
-                if (!_observed.TryGetValue(key, out var observed))
-                {
-                    _observed[key] = new DescriptorObservation(ownerId, version, []);
-                    return DescriptorAcceptance.Accepted;
-                }
-
-                if (string.Equals(observed.OwnerId, ownerId, StringComparison.Ordinal))
-                {
-                    if (version.CompareTo(observed.Version) < 0)
-                        return DescriptorAcceptance.RejectedByOlderRevision;
-                    _observed[key] = observed with { Version = version };
-                    return DescriptorAcceptance.Accepted;
-                }
-
-                if (observed.RetiredOwners.Contains(ownerId))
-                    return DescriptorAcceptance.RejectedRetiredOwner;
-
-                observed.RetiredOwners.Add(observed.OwnerId);
-                _observed[key] = new DescriptorObservation(
-                    ownerId, version, observed.RetiredOwners);
+                _observed[key] = new DescriptorObservation(ownerId, version, []);
                 return DescriptorAcceptance.Accepted;
             }
+
+            if (string.Equals(observed.OwnerId, ownerId, StringComparison.Ordinal))
+            {
+                if (version.CompareTo(observed.Version) < 0)
+                    return DescriptorAcceptance.RejectedByOlderRevision;
+                _observed[key] = observed with { Version = version };
+                return DescriptorAcceptance.Accepted;
+            }
+
+            if (observed.RetiredOwners.Contains(ownerId))
+                return DescriptorAcceptance.RejectedRetiredOwner;
+
+            observed.RetiredOwners.Add(observed.OwnerId);
+            _observed[key] = new DescriptorObservation(
+                ownerId, version, observed.RetiredOwners);
+            return DescriptorAcceptance.Accepted;
         }
 
         internal void Observe(
             ZLinkMeshNodeDescriptorKey key,
             string ownerId,
-            ObservedVersion version) => Accept(key, ownerId, version);
+            ObservedVersion version) => AwaitStateLane(
+            _lane.RunAsync(() => AcceptCore(key, ownerId, version)));
 
         internal void ForgetWhere(Func<ZLinkMeshNodeDescriptorKey, bool> predicate)
         {
-            lock (_gate)
+            var keys = AwaitStateLane(_lane.RunAsync(() => _observed.Keys.ToArray()));
+            var stale = keys.Where(predicate).ToArray();
+            if (stale.Length == 0)
+                return;
+
+            AwaitStateLane(_lane.RunAsync(() =>
             {
-                List<ZLinkMeshNodeDescriptorKey>? stale = null;
-                foreach (var key in _observed.Keys)
-                    if (predicate(key))
-                        (stale ??= []).Add(key);
-                if (stale is null) return;
                 foreach (var key in stale)
                     _observed.Remove(key);
-            }
+            }));
         }
+
+        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+            operation.GetAwaiter().GetResult();
+
+        private static void AwaitStateLane(ValueTask operation) =>
+            operation.GetAwaiter().GetResult();
 
         private sealed record DescriptorObservation(
             string OwnerId,

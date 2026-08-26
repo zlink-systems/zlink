@@ -45,7 +45,8 @@ internal sealed class ZLinkLocationAddressResolvers
             row.SpotGeneration,
             ct => RefreshSpotAsync(key, ct),
             () => _rows.InvalidateSpotRoute(key));
-        _handles?.RegisterSpot(key, handle);
+        if (_handles is not null)
+            await _handles.RegisterSpotAsync(key, handle).ConfigureAwait(false);
         return handle;
     }
 
@@ -75,7 +76,8 @@ internal sealed class ZLinkLocationAddressResolvers
             row.MembershipEpoch,
             ct => RefreshActorAsync(key, ct),
             () => _rows.InvalidateActorRoute(key));
-        _handles?.RegisterActor(key, handle);
+        if (_handles is not null)
+            await _handles.RegisterActorAsync(key, handle).ConfigureAwait(false);
         return handle;
     }
 

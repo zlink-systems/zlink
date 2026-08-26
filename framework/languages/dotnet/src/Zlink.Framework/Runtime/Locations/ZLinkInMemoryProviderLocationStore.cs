@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -13,7 +14,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(
     private const int MaximumEncodedBatchBytes = 4 * 1024 * 1024;
     private const int MaximumEncodedPageBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan ScanRetention = TimeSpan.FromMinutes(1);
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly Dictionary<ZLinkStoreKey, Entry> _entries = [];
     private readonly Dictionary<string, Snapshot> _snapshots =
@@ -27,16 +28,14 @@ internal sealed class ZLinkInMemoryProviderLocationStore(
     {
         ValidateKey(key);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkStoreReadResult>(() =>
         {
             var now = _time.GetUtcNow();
             RemoveExpiredNoLock(now);
-            return ValueTask.FromResult<ZLinkStoreReadResult>(
-                _entries.TryGetValue(key, out var entry)
-                    ? new ZLinkStoreReadResult.Found(
-                        ToValue(entry, now))
-                    : new ZLinkStoreReadResult.Missing(now));
-        }
+            return _entries.TryGetValue(key, out var entry)
+                ? new ZLinkStoreReadResult.Found(ToValue(entry, now))
+                : new ZLinkStoreReadResult.Missing(now);
+        });
     }
 
     public ValueTask<ZLinkStoreWriteResult> WriteAsync(
@@ -46,7 +45,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkStoreWriteResult>(() =>
         {
             var now = _time.GetUtcNow();
             RemoveExpiredNoLock(now);
@@ -63,8 +62,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(
                 };
                 if (!satisfied)
                 {
-                    return ValueTask.FromResult<ZLinkStoreWriteResult>(
-                        new ZLinkStoreWriteResult.Conflict(now));
+                    return new ZLinkStoreWriteResult.Conflict(now);
                 }
             }
 
@@ -100,9 +98,8 @@ internal sealed class ZLinkInMemoryProviderLocationStore(
                         break;
                 }
             }
-            return ValueTask.FromResult<ZLinkStoreWriteResult>(
-                new ZLinkStoreWriteResult.Applied(versions, now));
-        }
+            return new ZLinkStoreWriteResult.Applied(versions, now);
+        });
     }
 
     public ValueTask<ZLinkStoreScanResult> ScanAsync(
@@ -121,7 +118,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(
                 "The scan prefix exceeds 1024 UTF-8 bytes.",
                 nameof(request));
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkStoreScanResult>(() =>
         {
             var now = _time.GetUtcNow();
             RemoveExpiredNoLock(now);
@@ -148,8 +145,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(
                         cursorValue[..separator],
                         out snapshot!))
                 {
-                    return ValueTask.FromResult<ZLinkStoreScanResult>(
-                        new ZLinkStoreScanResult.Expired());
+                    return new ZLinkStoreScanResult.Expired();
                 }
             }
             else
@@ -196,10 +192,9 @@ internal sealed class ZLinkInMemoryProviderLocationStore(
                 next = new ZLinkStoreScanCursor(
                     $"{id}:{nextOffset.ToString(CultureInfo.InvariantCulture)}");
             }
-            return ValueTask.FromResult<ZLinkStoreScanResult>(
-                new ZLinkStoreScanResult.Page(
-                    new ZLinkStoreScanPage(items.ToArray(), next, now)));
-        }
+            return new ZLinkStoreScanResult.Page(
+                new ZLinkStoreScanPage(items.ToArray(), next, now));
+        });
     }
 
     private static ZLinkStoreValue ToValue(Entry entry, DateTimeOffset now) =>

@@ -1136,7 +1136,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         }
         AwaitStateLane(_sessionBindings.ResetGenerationAsync());
         _boundSessions.Clear();
-        _remoteFrames.Clear();
+        AwaitStateLane(_remoteFrames.ClearAsync());
         Interlocked.Exchange(ref _bindingGeneration, 0);
         lock (_outboundProofGate)
         {
@@ -1587,18 +1587,19 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 sourceSessionRid,
                 requestSource,
                 routeContext);
-            if (!_remoteFrames.TryAppend(
-                    frameKey,
-                    message.ToArray(),
-                    hasMore,
-                    out var completed))
+            var assembled = AwaitStateLane(_remoteFrames.TryAppendAsync(
+                frameKey,
+                message.ToArray(),
+                hasMore));
+            if (!assembled.Accepted)
                 return false;
+            var completed = assembled.Completed;
             if (completed is null)
                 return true;
 
             if (completed.Parts.Count < 2)
             {
-                _remoteFrames.Reject(completed);
+                AwaitStateLane(_remoteFrames.RejectAsync(completed));
                 return false;
             }
             var header = completed.Parts[0];
@@ -1620,10 +1621,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             {
                 // The assembler accepts both runtime retry forms: a terminal-
                 // only retry reuses the prefix, while a new prefix replaces it.
-                _remoteFrames.Reject(completed);
+                AwaitStateLane(_remoteFrames.RejectAsync(completed));
                 return false;
             }
-            _remoteFrames.Commit(completed);
+            AwaitStateLane(_remoteFrames.CommitAsync(completed));
             return true;
         }
 
@@ -1647,21 +1648,22 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 sourceSessionRid,
                 requestSource,
                 routeContext);
-            if (!_remoteFrames.TryAppend(
-                    frameKey,
-                    message.ToArray(),
-                    hasMore,
-                    out var completed))
+            var assembled = AwaitStateLane(_remoteFrames.TryAppendAsync(
+                frameKey,
+                message.ToArray(),
+                hasMore));
+            if (!assembled.Accepted)
                 return false;
+            var completed = assembled.Completed;
             if (completed is null)
                 return true;
             var frame = ConcatParts(completed.Parts, 0);
             if (!relay(actorRef.ActorId, session, frame))
             {
-                _remoteFrames.Reject(completed);
+                AwaitStateLane(_remoteFrames.RejectAsync(completed));
                 return false;
             }
-            _remoteFrames.Commit(completed);
+            AwaitStateLane(_remoteFrames.CommitAsync(completed));
             return true;
         }
 

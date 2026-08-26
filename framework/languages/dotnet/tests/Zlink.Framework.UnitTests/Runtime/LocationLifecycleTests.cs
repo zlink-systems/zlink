@@ -496,10 +496,9 @@ public sealed class LocationLifecycleTests
             deactivate: null);
 
         Assert.Equal(ZLinkLocationWriteStatus.Stored, status);
-        Assert.True(node.SpotLocations.TryGetTrackedGeneration(
-            Spot(entrySpotId),
-            out var trackedGeneration));
-        Assert.Equal(ulong.MaxValue, trackedGeneration);
+        Assert.Equal(
+            ulong.MaxValue,
+            await node.SpotLocations.GetTrackedGenerationAsync(Spot(entrySpotId)));
     }
 
     [Fact]

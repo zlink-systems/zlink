@@ -174,11 +174,11 @@ public sealed class SharedAsyncDisposalTests
         var registry = new ZLinkSpotNodeBundleRegistry(node);
 
         var operations = Enumerable.Range(0, 100)
-            .Select(index => Task.Run(() =>
+            .Select(index => Task.Run(async () =>
             {
                 try
                 {
-                    registry.GetOrCreatePublisherBundle($"channel-{index}");
+                    await registry.GetOrCreatePublisherBundleAsync($"channel-{index}");
                 }
                 catch (ObjectDisposedException)
                 {
@@ -194,7 +194,8 @@ public sealed class SharedAsyncDisposalTests
         Assert.Same(first, second);
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(proxy.CreatedSpots.Count, proxy.CreatedSpots.Sum(static spot => spot.DisposeCount));
-        Assert.Throws<ObjectDisposedException>(() => registry.GetOrCreatePublisherBundle("after-close"));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await registry.GetOrCreatePublisherBundleAsync("after-close"));
     }
 
     [Fact]

@@ -846,6 +846,9 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     private static void AwaitStateLane(ValueTask operation) =>
         operation.GetAwaiter().GetResult();
 
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
     internal IReadOnlyList<ZLinkInstanceSpotTypeSnapshot>
         GetInstanceSpotMonitoringSnapshots()
     {
@@ -875,7 +878,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
     public ZLinkSpotPublisherBundle GetOrCreatePublisherBundle(string channelName)
     {
-        return _bundles.GetOrCreatePublisherBundle(channelName);
+        return AwaitStateLane(_bundles.GetOrCreatePublisherBundleAsync(channelName));
     }
 
     public async ValueTask<ZLinkSpotCreateResult> CreateAsync(

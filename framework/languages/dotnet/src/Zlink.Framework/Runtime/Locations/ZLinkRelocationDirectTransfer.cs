@@ -1,4 +1,6 @@
 using Zlink.Framework.Runtime.Service;
+using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -115,7 +117,7 @@ internal sealed class ZLinkRelocationTransferPayload
 internal sealed class ZLinkRelocationChunkAssembler
 {
     private readonly byte[] _buffer;
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly List<int> _chunkLengths = [];
     private readonly TaskCompletionSource _completed = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -146,8 +148,8 @@ internal sealed class ZLinkRelocationChunkAssembler
     internal Task Completed => _completed.Task;
 
     /// <summary>Poisons the assembly so a waiting prepare fails explicitly.</summary>
-    internal void Fail(Exception failure) =>
-        _completed.TrySetException(failure);
+    internal void Fail(Exception failure) => AwaitStateLane(
+        _lane.RunAsync(() => _completed.TrySetException(failure)));
 
     internal bool MatchesManifest(
         ulong totalLength,
@@ -165,24 +167,25 @@ internal sealed class ZLinkRelocationChunkAssembler
     /// </summary>
     internal void Append(uint ordinal, ReadOnlySpan<byte> data)
     {
-        lock (_gate)
+        var copied = data.ToArray();
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (ordinal < _chunkLengths.Count)
             {
-                if (data.Length != _chunkLengths[checked((int)ordinal)])
+                if (copied.Length != _chunkLengths[checked((int)ordinal)])
                     throw new ZLinkRelocationDataLostException(
                         "A duplicate relocation chunk changed its length.");
                 return;
             }
             if (ordinal != _chunkLengths.Count
                 || ordinal >= ChunkCount
-                || data.Length == 0
-                || (ulong)data.Length > TotalLength - (ulong)_received)
+                || copied.Length == 0
+                || (ulong)copied.Length > TotalLength - (ulong)_received)
                 throw new ZLinkRelocationDataLostException(
                     "A relocation chunk violated its declared manifest.");
-            data.CopyTo(_buffer.AsSpan(checked((int)_received)));
-            _received += data.Length;
-            _chunkLengths.Add(data.Length);
+            copied.CopyTo(_buffer.AsSpan(checked((int)_received)));
+            _received += copied.Length;
+            _chunkLengths.Add(copied.Length);
             if (_chunkLengths.Count == ChunkCount)
             {
                 if ((ulong)_received != TotalLength)
@@ -190,7 +193,7 @@ internal sealed class ZLinkRelocationChunkAssembler
                         "The assembled relocation payload length does not match its manifest.");
                 _completed.TrySetResult();
             }
-        }
+        }));
     }
 
     /// <summary>
@@ -200,7 +203,7 @@ internal sealed class ZLinkRelocationChunkAssembler
     /// </summary>
     internal ZLinkRelocationEnvelope VerifyAndDecode()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_chunkLengths.Count != ChunkCount
                 || (ulong)_received != TotalLength)
@@ -210,8 +213,14 @@ internal sealed class ZLinkRelocationChunkAssembler
                 throw new ZLinkRelocationDataLostException(
                     "The relocation payload checksum does not match its manifest.");
             return ZLinkRelocationTransferPayload.DecodeEnvelope(_buffer);
-        }
+        }));
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }
 
 /// <summary>
@@ -253,7 +262,7 @@ internal sealed class ZLinkRelocationTransferBudget
     internal const long ConservativeBudgetBytes = 16L * 1024 * 1024;
 
     private readonly long _budget;
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Queue<(long Bytes, TaskCompletionSource Waiter)> _waiters
         = new();
     private long _inFlight;
@@ -269,11 +278,7 @@ internal sealed class ZLinkRelocationTransferBudget
 
     internal long InFlightBytes
     {
-        get
-        {
-            lock (_gate)
-                return _inFlight;
-        }
+        get => AwaitStateLane(_lane.RunAsync(() => _inFlight));
     }
 
     internal bool Enabled => _budget > 0;
@@ -289,19 +294,9 @@ internal sealed class ZLinkRelocationTransferBudget
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bytes);
         if (_budget == 0)
             return;
-        TaskCompletionSource waiter;
-        lock (_gate)
-        {
-            if (_waiters.Count == 0
-                && (_inFlight == 0 || _inFlight + bytes <= _budget))
-            {
-                _inFlight += bytes;
-                return;
-            }
-            waiter = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            _waiters.Enqueue((bytes, waiter));
-        }
+        var waiter = await _lane.RunAsync(() => Charge(bytes)).ConfigureAwait(false);
+        if (waiter is null)
+            return;
         //  Release pre-charges the admitted waiter under the gate; the
         //  awaiter only observes the completion. On cancellation the
         //  reservation is returned if the waiter had already been admitted.
@@ -313,32 +308,58 @@ internal sealed class ZLinkRelocationTransferBudget
         catch (OperationCanceledException)
         {
             if (waiter.Task.IsCompletedSuccessfully)
-                Release(bytes);
+                await ReleaseAsync(bytes).ConfigureAwait(false);
             throw;
         }
     }
 
-    internal void Release(long bytes)
+    internal async ValueTask ReleaseAsync(long bytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bytes);
         if (_budget == 0)
             return;
-        List<TaskCompletionSource>? admitted = null;
-        lock (_gate)
-        {
-            _inFlight = Math.Max(0, _inFlight - bytes);
-            while (_waiters.Count > 0)
-            {
-                var (nextBytes, waiter) = _waiters.Peek();
-                if (_inFlight != 0 && _inFlight + nextBytes > _budget)
-                    break;
-                _waiters.Dequeue();
-                _inFlight += nextBytes;
-                (admitted ??= []).Add(waiter);
-            }
-        }
+        var admitted = await _lane.RunAsync(() => ReleaseCore(bytes)).ConfigureAwait(false);
         if (admitted is not null)
             foreach (var waiter in admitted)
                 waiter.TrySetResult();
     }
+
+    internal void Release(long bytes) =>
+        AwaitStateLane(ReleaseAsync(bytes));
+
+    private TaskCompletionSource? Charge(long bytes)
+    {
+        if (_waiters.Count == 0
+            && (_inFlight == 0 || _inFlight + bytes <= _budget))
+        {
+            _inFlight += bytes;
+            return null;
+        }
+        var waiter = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _waiters.Enqueue((bytes, waiter));
+        return waiter;
+    }
+
+    private List<TaskCompletionSource>? ReleaseCore(long bytes)
+    {
+        List<TaskCompletionSource>? admitted = null;
+        _inFlight = Math.Max(0, _inFlight - bytes);
+        while (_waiters.Count > 0)
+        {
+            var (nextBytes, waiter) = _waiters.Peek();
+            if (_inFlight != 0 && _inFlight + nextBytes > _budget)
+                break;
+            _waiters.Dequeue();
+            _inFlight += nextBytes;
+            (admitted ??= []).Add(waiter);
+        }
+        return admitted;
+    }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }

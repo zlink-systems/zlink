@@ -28,7 +28,7 @@ public sealed class RemoteRelayFrameAssemblerTests
     }
 
     [Fact]
-    public void ConcurrentOperationsForTheSameActorRemainSeparate()
+    public async Task ConcurrentOperationsForTheSameActorRemainSeparate()
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
@@ -36,58 +36,58 @@ public sealed class RemoteRelayFrameAssemblerTests
         var first = Key(operationLow: 1);
         var second = Key(operationLow: 2);
 
-        Assert.True(assembler.TryAppend(first, [1], true, out var incompleteFirst));
-        Assert.True(assembler.TryAppend(second, [2], true, out var incompleteSecond));
+        var incompleteFirst = await AppendAsync(assembler, first, [1], true);
+        var incompleteSecond = await AppendAsync(assembler, second, [2], true);
         Assert.Null(incompleteFirst);
         Assert.Null(incompleteSecond);
 
-        Assert.True(assembler.TryAppend(first, [3], false, out var completedFirst));
-        Assert.True(assembler.TryAppend(second, [4], false, out var completedSecond));
+        var completedFirst = await AppendAsync(assembler, first, [3], false);
+        var completedSecond = await AppendAsync(assembler, second, [4], false);
         Assert.Equal(new byte[][] { [1], [3] }, completedFirst!.Parts);
         Assert.Equal(new byte[][] { [2], [4] }, completedSecond!.Parts);
-        assembler.Commit(completedFirst);
-        assembler.Commit(completedSecond);
+        await assembler.CommitAsync(completedFirst);
+        await assembler.CommitAsync(completedSecond);
     }
 
     [Fact]
-    public void RejectedTerminalPartKeepsOnlyTheAcceptedPrefixForRetry()
+    public async Task RejectedTerminalPartKeepsOnlyTheAcceptedPrefixForRetry()
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
             static () => CancellationToken.None);
         var key = Key(operationLow: 3);
 
-        Assert.True(assembler.TryAppend(key, [1], true, out _));
-        Assert.True(assembler.TryAppend(key, [2], false, out var rejected));
-        assembler.Reject(rejected!);
-        Assert.True(assembler.TryAppend(key, [3], false, out var retried));
+        _ = await AppendAsync(assembler, key, [1], true);
+        var rejected = await AppendAsync(assembler, key, [2], false);
+        await assembler.RejectAsync(rejected!);
+        var retried = await AppendAsync(assembler, key, [3], false);
 
         Assert.Equal(new byte[][] { [1], [3] }, retried!.Parts);
-        assembler.Commit(retried);
+        await assembler.CommitAsync(retried);
     }
 
     [Fact]
-    public void FullFrameRetryReplacesTheRejectedAttemptPrefix()
+    public async Task FullFrameRetryReplacesTheRejectedAttemptPrefix()
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
             static () => CancellationToken.None);
         var key = Key(operationLow: 7);
 
-        Assert.True(assembler.TryAppend(key, [1], true, out _));
-        Assert.True(assembler.TryAppend(key, [2], false, out var rejected));
-        assembler.Reject(rejected!);
+        _ = await AppendAsync(assembler, key, [1], true);
+        var rejected = await AppendAsync(assembler, key, [2], false);
+        await assembler.RejectAsync(rejected!);
 
-        Assert.True(assembler.TryAppend(key, [3], true, out var restarted));
+        var restarted = await AppendAsync(assembler, key, [3], true);
         Assert.Null(restarted);
-        Assert.True(assembler.TryAppend(key, [4], false, out var retried));
+        var retried = await AppendAsync(assembler, key, [4], false);
 
         Assert.Equal(new byte[][] { [3], [4] }, retried!.Parts);
-        assembler.Commit(retried);
+        await assembler.CommitAsync(retried);
     }
 
     [Fact]
-    public void SourceRestartWithReusedOperationIdCannotReuseRetainedPrefix()
+    public async Task SourceRestartWithReusedOperationIdCannotReuseRetainedPrefix()
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
@@ -105,18 +105,18 @@ public sealed class RemoteRelayFrameAssemblerTests
             requestSourceLeaseGeneration: 22,
             requestSourceNodeGeneration: 21);
 
-        Assert.True(assembler.TryAppend(previousLifecycle, [1], true, out _));
-        Assert.True(assembler.TryAppend(previousLifecycle, [2], false, out var rejected));
-        assembler.Reject(rejected!);
+        _ = await AppendAsync(assembler, previousLifecycle, [1], true);
+        var rejected = await AppendAsync(assembler, previousLifecycle, [2], false);
+        await assembler.RejectAsync(rejected!);
 
-        Assert.True(assembler.TryAppend(restartedLifecycle, [3], true, out _));
-        Assert.True(assembler.TryAppend(restartedLifecycle, [4], false, out var restarted));
+        _ = await AppendAsync(assembler, restartedLifecycle, [3], true);
+        var restarted = await AppendAsync(assembler, restartedLifecycle, [4], false);
         Assert.Equal(new byte[][] { [3], [4] }, restarted!.Parts);
-        assembler.Commit(restarted);
+        await assembler.CommitAsync(restarted);
 
-        Assert.True(assembler.TryAppend(previousLifecycle, [5], false, out var previousRetry));
+        var previousRetry = await AppendAsync(assembler, previousLifecycle, [5], false);
         Assert.Equal(new byte[][] { [1], [5] }, previousRetry!.Parts);
-        assembler.Commit(previousRetry);
+        await assembler.CommitAsync(previousRetry);
     }
 
     [Fact]
@@ -127,32 +127,44 @@ public sealed class RemoteRelayFrameAssemblerTests
             TimeSpan.FromMilliseconds(20),
             () => shutdown.Token);
         var expired = Key(operationLow: 4);
-        Assert.True(assembler.TryAppend(expired, [1], true, out _));
+        _ = await AppendAsync(assembler, expired, [1], true);
         await Task.Delay(100);
 
-        Assert.True(assembler.TryAppend(expired, [2], false, out var afterExpiry));
+        var afterExpiry = await AppendAsync(assembler, expired, [2], false);
         Assert.Single(afterExpiry!.Parts);
 
         var stopped = Key(operationLow: 5);
-        Assert.True(assembler.TryAppend(stopped, [1], true, out _));
+        _ = await AppendAsync(assembler, stopped, [1], true);
         shutdown.Cancel();
         await Task.Delay(20);
-        Assert.False(assembler.TryAppend(stopped, [2], false, out _));
+        var stoppedAppend = await assembler.TryAppendAsync(stopped, [2], false);
+        Assert.False(stoppedAppend.Accepted);
     }
 
     [Fact]
-    public void FrameAndProcessByteBoundsReturnBackpressure()
+    public async Task FrameAndProcessByteBoundsReturnBackpressure()
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
             static () => CancellationToken.None);
         var oversized = new byte[(16 * 1024 * 1024) + 1];
 
-        Assert.False(assembler.TryAppend(
+        var oversizedAppend = await assembler.TryAppendAsync(
             Key(operationLow: 6),
             oversized,
-            true,
-            out _));
+            true);
+        Assert.False(oversizedAppend.Accepted);
+    }
+
+    private static async ValueTask<ZLinkRemoteRelayFrameAssembler.CompletedFrame?> AppendAsync(
+        ZLinkRemoteRelayFrameAssembler assembler,
+        ZLinkRemoteRelayFrameKey key,
+        byte[] part,
+        bool hasMore)
+    {
+        var append = await assembler.TryAppendAsync(key, part, hasMore);
+        Assert.True(append.Accepted);
+        return append.Completed;
     }
 
     private static ZLinkRemoteRelayFrameKey Key(

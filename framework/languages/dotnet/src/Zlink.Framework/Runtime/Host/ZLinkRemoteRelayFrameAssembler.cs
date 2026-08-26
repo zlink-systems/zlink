@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Host;
 
 internal readonly record struct ZLinkRemoteRelayFrameKey(
@@ -26,7 +28,7 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
     private const long MaxFrameBytes = 16L * 1024 * 1024;
     private const long MaxBufferedBytes = 16L * 1024 * 1024;
 
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<ZLinkRemoteRelayFrameKey, PendingFrame> _pending = [];
     private readonly TimeSpan _timeout;
     private readonly Func<CancellationToken> _getShutdownToken;
@@ -41,44 +43,45 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
         _getShutdownToken = getShutdownToken;
     }
 
-    internal bool TryAppend(
+    internal async ValueTask<ZLinkRemoteRelayFrameAppendResult> TryAppendAsync(
         ZLinkRemoteRelayFrameKey key,
         byte[] part,
-        bool hasMore,
-        out CompletedFrame? completed)
+        bool hasMore)
     {
         ArgumentNullException.ThrowIfNull(part);
-        completed = null;
-        lock (_gate)
+        var shutdownToken = _getShutdownToken();
+        var prepared = await _lane.RunAsync(() =>
         {
-            if (_disposed || _getShutdownToken().IsCancellationRequested)
-                return false;
+            if (_disposed || shutdownToken.IsCancellationRequested)
+                return new AppendPreparation(new(false, null), null);
 
             if (!_pending.TryGetValue(key, out var pending))
             {
                 if (!hasMore)
                 {
                     if (part.LongLength > MaxFrameBytes)
-                        return false;
-                    completed = new CompletedFrame(key, null, [part]);
-                    return true;
+                        return new AppendPreparation(new(false, null), null);
+                    return new AppendPreparation(
+                        new(true, new CompletedFrame(key, null, [part])),
+                        null);
                 }
                 if (_pending.Count >= MaxAssemblies
                     || part.LongLength > MaxFrameBytes
                     || _bufferedBytes + part.LongLength > MaxBufferedBytes)
-                    return false;
+                    return new AppendPreparation(new(false, null), null);
 
                 pending = new PendingFrame();
                 _pending.Add(key, pending);
                 pending.Parts.Add(part);
                 pending.Bytes = part.LongLength;
                 _bufferedBytes += part.LongLength;
-                pending.Expiry = ExpireAsync(key, pending);
-                return true;
+                return new AppendPreparation(
+                    new(true, null),
+                    new ExpiryStart(key, pending, shutdownToken, pending.Cancellation.Token));
             }
 
             if (pending.Completing)
-                return false;
+                return new AppendPreparation(new(false, null), null);
 
             // A failed terminal submit can be retried in either form used by
             // the runtime: the Message Follow worker resubmits only its terminal
@@ -90,29 +93,29 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
                 var retainedWithoutPrefix = _bufferedBytes - pending.Bytes;
                 if (part.LongLength > MaxFrameBytes
                     || retainedWithoutPrefix + part.LongLength > MaxBufferedBytes)
-                    return false;
+                    return new AppendPreparation(new(false, null), null);
 
                 _bufferedBytes = retainedWithoutPrefix + part.LongLength;
                 pending.Parts.Clear();
                 pending.Parts.Add(part);
                 pending.Bytes = part.LongLength;
                 pending.RestartOnNextPrefix = false;
-                return true;
+                return new AppendPreparation(new(true, null), null);
             }
 
             if (pending.Parts.Count + 1 > MaxPartsPerFrame
                 || pending.Bytes + part.LongLength > MaxFrameBytes
                 || _bufferedBytes + part.LongLength > MaxBufferedBytes)
-                return false;
+                return new AppendPreparation(new(false, null), null);
 
             if (hasMore)
             {
                 if (_bufferedBytes + part.LongLength > MaxBufferedBytes)
-                    return false;
+                    return new AppendPreparation(new(false, null), null);
                 pending.Parts.Add(part);
                 pending.Bytes += part.LongLength;
                 _bufferedBytes += part.LongLength;
-                return true;
+                return new AppendPreparation(new(true, null), null);
             }
 
             pending.RestartOnNextPrefix = false;
@@ -122,30 +125,34 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
             var parts = new byte[pending.Parts.Count + 1][];
             pending.Parts.CopyTo(parts, 0);
             parts[^1] = part;
-            completed = new CompletedFrame(key, pending, parts);
-            return true;
-        }
+            return new AppendPreparation(
+                new(true, new CompletedFrame(key, pending, parts)),
+                null);
+        }).ConfigureAwait(false);
+        if (prepared.Expiry is { } expiry)
+            ArmExpiry(expiry);
+        return prepared.Result;
     }
 
-    internal void Commit(CompletedFrame completed)
+    internal ValueTask CommitAsync(CompletedFrame completed)
     {
         ArgumentNullException.ThrowIfNull(completed);
         if (completed.Pending is null)
-            return;
-        lock (_gate)
+            return ValueTask.CompletedTask;
+        return _lane.RunAsync(() =>
         {
             if (_pending.TryGetValue(completed.Key, out var current)
                 && ReferenceEquals(current, completed.Pending))
                 Remove(completed.Key, current);
-        }
+        });
     }
 
-    internal void Reject(CompletedFrame completed)
+    internal ValueTask RejectAsync(CompletedFrame completed)
     {
         ArgumentNullException.ThrowIfNull(completed);
         if (completed.Pending is null)
-            return;
-        lock (_gate)
+            return ValueTask.CompletedTask;
+        return _lane.RunAsync(() =>
         {
             if (_pending.TryGetValue(completed.Key, out var current)
                 && ReferenceEquals(current, completed.Pending))
@@ -155,55 +162,69 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
                 current.TerminalBytes = 0;
                 current.RestartOnNextPrefix = true;
             }
-        }
+        });
     }
 
-    internal void Clear()
+    internal async ValueTask ClearAsync()
     {
-        PendingFrame[] removed;
-        lock (_gate)
+        var removed = await _lane.RunAsync(() =>
         {
-            removed = _pending.Values.ToArray();
+            var cleared = _pending.Values.ToArray();
             _pending.Clear();
             _bufferedBytes = 0;
-        }
+            return cleared;
+        }).ConfigureAwait(false);
         foreach (var pending in removed)
             pending.Cancel();
     }
 
     public void Dispose()
     {
-        lock (_gate)
+        var removed = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_disposed)
-                return;
+                return Array.Empty<PendingFrame>();
             _disposed = true;
-        }
-        Clear();
+            var cleared = _pending.Values.ToArray();
+            _pending.Clear();
+            _bufferedBytes = 0;
+            return cleared;
+        }));
+        foreach (var pending in removed)
+            pending.Cancel();
+        AwaitStateLane(_lane.DisposeAsync());
     }
 
-    private async Task ExpireAsync(
-        ZLinkRemoteRelayFrameKey key,
-        PendingFrame expected)
+    private void ArmExpiry(ExpiryStart expiry)
     {
-        using var expiry = CancellationTokenSource.CreateLinkedTokenSource(
-            _getShutdownToken(),
-            expected.Cancellation.Token);
+        using (ExecutionContext.SuppressFlow())
+            _ = Task.Run(() => ExpireAsync(expiry));
+    }
+
+    private async Task ExpireAsync(ExpiryStart expiry)
+    {
+        using var linkedExpiry = CancellationTokenSource.CreateLinkedTokenSource(
+            expiry.ShutdownToken,
+            expiry.PendingToken);
         try
         {
-            await Task.Delay(_timeout, expiry.Token).ConfigureAwait(false);
+            await Task.Delay(_timeout, linkedExpiry.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             return;
         }
 
-        lock (_gate)
+        try
         {
-            if (_pending.TryGetValue(key, out var current)
-                && ReferenceEquals(current, expected))
-                Remove(key, current);
+            await _lane.RunAsync(() =>
+            {
+                if (_pending.TryGetValue(expiry.Key, out var current)
+                    && ReferenceEquals(current, expiry.Pending))
+                    Remove(expiry.Key, current);
+            }).ConfigureAwait(false);
         }
+        catch (ObjectDisposedException) { }
     }
 
     private void Remove(
@@ -225,6 +246,16 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
         internal IReadOnlyList<byte[]> Parts { get; } = parts;
     }
 
+    private readonly record struct AppendPreparation(
+        ZLinkRemoteRelayFrameAppendResult Result,
+        ExpiryStart? Expiry);
+
+    private readonly record struct ExpiryStart(
+        ZLinkRemoteRelayFrameKey Key,
+        PendingFrame Pending,
+        CancellationToken ShutdownToken,
+        CancellationToken PendingToken);
+
     internal sealed class PendingFrame
     {
         internal List<byte[]> Parts { get; } = [];
@@ -233,12 +264,20 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
         internal long TerminalBytes { get; set; }
         internal bool Completing { get; set; }
         internal bool RestartOnNextPrefix { get; set; }
-        internal Task? Expiry { get; set; }
-
         internal void Cancel()
         {
             Cancellation.Cancel();
             Cancellation.Dispose();
         }
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }
+
+internal readonly record struct ZLinkRemoteRelayFrameAppendResult(
+    bool Accepted,
+    ZLinkRemoteRelayFrameAssembler.CompletedFrame? Completed);

@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Streams;
 
@@ -43,7 +44,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private readonly ZLinkDispatchErrorReporter _dispatchErrors;
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
-    private readonly object _orderedActorRelayGate = new();
+    private readonly ZLinkStateLane _orderedActorRelayLane = new();
     private readonly Dictionary<ZLinkActorId, TaskCompletionSource> _orderedActorRelayTails = [];
 
     private ZLinkMeshNodeRouteDispatcher(
@@ -270,16 +271,16 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header)
     {
-        Task prior;
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (_orderedActorRelayGate)
+        var prior = AwaitStateLane(_orderedActorRelayLane.RunAsync(() =>
         {
-            prior = _orderedActorRelayTails.TryGetValue(actorId, out var tail)
+            var prior = _orderedActorRelayTails.TryGetValue(actorId, out var tail)
                 ? tail.Task
                 : Task.CompletedTask;
             _orderedActorRelayTails[actorId] = completion;
-        }
+            return prior;
+        }));
 
         if (_taskRunner.TryRunDetached(
                 "mesh-node-actor-relay-dispatch",
@@ -320,11 +321,19 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         TaskCompletionSource completion)
     {
         completion.TrySetResult();
-        lock (_orderedActorRelayGate)
+        AwaitStateLane(_orderedActorRelayLane.RunAsync(() =>
+        {
             if (_orderedActorRelayTails.TryGetValue(actorId, out var current)
                 && ReferenceEquals(current, completion))
                 _orderedActorRelayTails.Remove(actorId);
+        }));
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     private async ValueTask DispatchAsync(
         ZLinkBackendRouteReceived received,

@@ -123,7 +123,7 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
 
     internal void ResetGeneration()
     {
-        SpotLocations.ResetGeneration();
+        AwaitStateLane(SpotLocations.ResetGenerationAsync());
         AwaitStateLane(ActorOwnership.ResetGenerationAsync());
     }
 
@@ -137,7 +137,8 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
         }
         else if (kind == ZLinkLocationKind.Spot)
         {
-            deactivate = SpotLocations.TakeOwnershipLostDeactivation(canonicalKey);
+            deactivate = AwaitStateLane(
+                SpotLocations.TakeOwnershipLostDeactivationAsync(canonicalKey));
         }
 
         if (deactivate is not null)
