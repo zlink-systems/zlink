@@ -1,0 +1,195 @@
+# 이어받기 — lane 소유 동시성 전환
+
+이 문서 하나로 새 세션이 이어받을 수 있게 쓴다. 설계 근거는
+[design.ko.md](design.ko.md), 이 문서는 **지금 어디까지 됐고 다음에 무엇을 하는가**다.
+
+작성: 2026-08-26 · 브랜치 `refactor/lane-ownership-concurrency` (base `3cbfbde4f9`)
+
+## 1. 이 작업이 왜 시작됐나
+
+사용자 관찰: **"두 달 넘게 뭐 하나 수정하면 samples에서 flake 잡는 데 시간이 너무 많이 든다.
+작은 기능 하나 추가해도 오래 걸린다."** 원인 가설이 "lock이 흩어져 있어서"였고, 세어 보니
+맞았다.
+
+| 계층 | mutex/lock 선언 | lock 취득 지점 |
+|---|---:|---:|
+| `core/src` (ZeroMQ 계열 transport) | 31 | 262 |
+| cpp framework | 133 | 1,303 |
+| **dotnet framework** | `_gate` 보유 클래스 **61** | **999** |
+
+dotnet 999개 중 **620개가 `_gate`** 하나에 걸려 있다.
+
+### 기계적 원인
+
+**C# `lock`은 `await`을 감쌀 수 없다.** 그래서 async 경로는 예외 없이 이 형태가 된다.
+
+```csharp
+lock (_gate) { if (!_entries.TryGetValue(key, out entry)) return; }   // 여기서 해제
+await SendAsync(entry.Route);                                         // 낡았을 수 있는 값으로 실행
+```
+
+트리에 ~465곳. **실수가 아니라 메커니즘이 강제하는 형태다.** 스냅샷은 구조적으로 낡을 수 있고,
+그래서 로직 한 줄을 추가하면 그 줄이 어떤 gate를 잡고 어느 스냅샷을 쓰는지에 따라 동작이 바뀐다.
+
+cpp에서 실제로 잡은 결함이 정확히 이 모양이었다 — resolve는 `match=true`인데 lock 밖 write가
+`unavailable`을 돌려주고, route tombstone은 실패 **뒤에** 왔다(`progress.ko.md` §8.1.5).
+
+## 2. 참조 구현 — playhouse
+
+사용자가 예전에 만든 https://github.com/kairos-code-dev/playhouse 를 참조한다.
+14,663줄에 `lock (` **10개**뿐이고 그마저 전부 transport/session 쪽이다.
+
+핵심은 `src/PlayHouse/Core/Play/Base/BaseStage.cs`의 60줄이다.
+
+```csharp
+private readonly Dictionary<string, BaseActor> _actors = new();   // ← 평범한 Dictionary
+private readonly ConcurrentQueue<StageMessage> _mailbox = new();
+private int _isScheduled;
+
+private void ScheduleExecution() {
+    if (Interlocked.CompareExchange(ref _isScheduled, 1, 0) == 0)
+        ThreadPool.QueueUserWorkItem(_ => _ = ExecuteAsync());
+}
+```
+
+`_actors`가 `ConcurrentDictionary`가 **아니라는 것**이 전부다. lane이 소유권을 보장하므로
+잠글 이유가 없다. `BaseStage`·`BaseActor`에 lock 0개.
+
+## 3. 확정된 설계
+
+상태를 셋으로 가르고, 분류가 정해지면 전환은 기계적이다. 자세한 판별 기준은 design.ko.md §4.
+
+- **C1** 순수 조회 레지스트리(map 하나, 교차 불변식 없음) → `ConcurrentDictionary`, lock 삭제
+- **C2** 여러 컬렉션에 걸친 불변식 → **lane 소유**, 컬렉션은 평범한 `Dictionary`로 두고 안 잠금
+- **C3** 원자 카운터·플래그 → `Interlocked`
+
+**C2에서 `ConcurrentDictionary`를 쓰면 안 된다.** 원자성이 map 하나 단위로 쪼개져 불변식이 깨진다.
+
+### 경계를 새로 긋지 않는다
+
+`_gate` 620개가 61개 클래스에 몰려 있다는 것은 **소유 단위가 이미 정해져 있다**는 뜻이다.
+틀린 것은 경계가 아니라 메커니즘이다. 클래스를 합치거나 쪼개지 않는다.
+
+## 4. 지금까지 만든 것 (전부 커밋됨)
+
+| 파일 | 내용 | 상태 |
+|---|---|---|
+| `doc/plan/concurrency-redesign/design.ko.md` | 설계 — 분류 기준·전환 규칙·검증 기준·적용 순서 | 완료 |
+| `framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkStateLane.cs` | lane primitive | 빌드 통과 |
+| `framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/StateLaneTests.cs` | primitive 명세 테스트 | **14/14 통과** |
+
+### `ZLinkStateLane`이 보장하는 것
+
+테스트가 곧 명세다. 특히 둘이 중요하다.
+
+- `ConcurrentCallers_MutateUnsynchronizedStateWithoutLosingUpdates` — 32스레드가 **잠금 없는
+  평범한 `Dictionary`**에 1,600회 써도 유실 0. "lane이 소유하면 안 잠가도 된다"의 증명이다.
+- `ReenteringTheSameLane_FailsInsteadOfHanging` — 재진입이 데드락이 아니라 예외로 터진다.
+
+**재진입 금지는 이 설계의 근본 제약이다.** 이 코드베이스는 cpp에서 `recursive_mutex`를 쓸 만큼
+재진입이 있으므로, 전환 중 반드시 만난다. 그래서 primitive에 검출을 넣었다.
+
+### 기존 `ZLinkSerialExecutionQueue`를 쓰지 않은 이유
+
+이미 있고(1,118줄) Spot/Actor **실행**에 쓰인다. 다만 relocation seal·lifecycle admission이
+얹혀 있어 **상태 소유**용으로는 과하다. 실행용은 그대로 두고 소유용만 새로 뒀다.
+
+## 5. 다음 작업 — 표본 전환
+
+**대상: `framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkSessionActorBindingTable.cs`**
+
+### 이미 조사해 둔 사실 (다시 세지 말 것)
+
+- 1,938줄, `lock` **30개 — 전부 `lock (_entries)`**
+- 소유 컬렉션 **5개**: `_entries`, `_tombstones`, `_outbound`, `_canonicalSealTimeouts`,
+  `_timedOutCanonicalSeals`
+- **30개 블록 중 14개가 컬렉션 2개 이상을 함께 만진다** → 클래스 전체가 **C2 확정**.
+  `ConcurrentDictionary` 치환은 불가.
+- public/internal 메서드 **37개**
+- **이 클래스를 쓰는 파일은 2개뿐** — 자기 자신과
+  `Runtime/Host/ZLinkActorBoundSessionCoordinator.cs`
+- 호출 지점 **35곳**(필드명 `_sessionBindings`), 그중 **22곳은 이미 async 메서드 안**.
+  나머지 13곳만 시그니처를 바꾸면 된다.
+
+즉 **파급이 한 파일에 갇혀 있다.** 표본으로 고른 이유가 이것이다.
+
+### 절차
+
+1. `lock (_entries)` 30곳을 C1/C2/C3로 표시한다 (위 조사대로 전부 C2)
+2. **재진입을 먼저 걷어낸다.** lane 안에서 이 클래스의 public 메서드를 다시 부르는 자리를
+   private 메서드로 분리한다. 안 하면 데드락이고, primitive가 예외로 잡아 준다.
+3. 컬렉션 5개에서 `lock` 제거, 각 메서드 본문을 `_lane.RunAsync(...)`로 감싼다.
+   **블록 본문은 한 글자도 바꾸지 않는다.**
+4. `out bool` → `ValueTask<T?>` 로 시그니처를 바꾸고 호출자 35곳을 `await`으로 전파한다
+5. 검증
+
+```csharp
+// before
+internal bool TryGetMemoizedOutboundProof(tenure, out proof)
+{
+    lock (_entries) { /* 컬렉션 A + entry 상태 + 컬렉션 B */ }
+}
+
+// after
+internal ValueTask<ZLinkSessionOutboundTenureProof?> GetMemoizedOutboundProofAsync(tenure) =>
+    _lane.RunAsync(() => { /* 같은 본문, lock 없음 */ });
+```
+
+### 검증 기준 (하나라도 못 넘으면 다음으로 가지 않는다)
+
+- `dotnet test tests/Zlink.Framework.UnitTests` → **1879 통과 / 0 실패** 유지
+  (여기에 StateLaneTests 14개가 더해지므로 1893이 될 수 있다. 실패 0이 기준이다)
+- `framework/languages/dotnet/samples/run_samples.sh` → 6샘플 placement marker 유지
+  (ZoneWorld는 아래 §7의 기존 결함으로 실패한다. 이 작업과 무관)
+
+### 이 표본에서 반드시 기록할 것
+
+나머지 60개 클래스 추정의 유일한 근거다.
+
+- 재진입이 실제로 몇 곳이었나
+- 시그니처가 async로 번진 호출자가 몇 개였나
+- 걸린 시간
+
+## 6. 그 다음 순서
+
+design.ko.md §7의 순서는 `_gate` 밀도로 정한 초안이다. **표본이 끝나면 다시 정한다** —
+파급 범위(그 클래스를 쓰는 파일 수)를 먼저 세고 작은 것부터 하면 빠르게 누적된다.
+
+| 후보 | lock |
+|---|---:|
+| `Runtime/Spots/ZLinkSpotNodeCatalog.cs` | 48 |
+| `Runtime/Actors/ZLinkActorHandoffState.cs` | 63 |
+| `Runtime/Actors/ZLinkActorRuntimeState.cs` | 35 |
+| `Runtime/Service/ZLinkManagedMeshNode.cs` | 141 (가장 크고 파급도 클 것이다. 마지막) |
+
+**전환 후 예상: dotnet 995 → 60 안팎(약 94% 감소).** 남는 60은 lane·큐 내부 구현이라
+없애면 안 된다.
+
+**다만 lock 개수는 성공 지표가 아니다.** 진짜 지표는 **"async 경계를 넘는 스냅샷" 465곳이
+0이 되는 것**이다. `lock`을 `SemaphoreSlim`으로 바꾸기만 해도 숫자는 0이 되지만 문제는 그대로다.
+
+## 7. 이어받을 때 알아야 할 제약
+
+- **.NET만 먼저 한다.** cpp·java·kotlin·node는 .NET에서 규칙이 확정된 뒤 옮긴다.
+- **스펙이 정한 관측 가능한 동작은 바꾸지 않는다.** 순서·타임아웃·오류 코드 그대로.
+  `framework/doc/framework/common/spec/server/**`는 이 작업으로 수정하지 않는다.
+- **`main`에 직접 커밋하지 않는다.** 이 브랜치에서 작업한다.
+- 에이전트에게 맡길 때는 스펙 수정 금지·`git add/commit/stash/reset/checkout` 금지를
+  프롬프트에 넣는다. 이 세션에서 codex가 검증 없이 변경만 남기고 죽은 사례가 있었고, 그 변경이
+  단위 테스트를 깨뜨려 되돌렸다.
+
+## 8. 별개로 남아 있는 캠페인 미완료 4건
+
+spec-server-reorg 캠페인은 본체가 끝나 `3cbfbde4f9`로 `main`에 푸시됐다. 남은 4건은 이 작업과
+별개이며 잊지 않도록 여기 적어 둔다. 상세는 `doc/plan/spec-server-reorg/progress.ko.md` §8.1.
+
+1. **cpp ZoneWorld 세션 split-brain** — 서버는 세션을 죽은 것으로 보는데 client는 살아 있다고
+   본다. 종료 경로 3개 중 하나는 고쳤으나 실패 경로 확정은 미완. 7샘플 일괄이 재현 경로다.
+2. **dotnet ZoneWorld mesh admission** — `Hello` 무한 반복. 직접 3회 실행 0/3. 기존 결함이며
+   codex 시도는 단위 테스트를 깨뜨려 되돌렸다.
+3. **`fast_mutex.hpp:76` abort** — `EINVAL` on unlock = 소유 객체 파괴. 1번과 같은 계열로 본다.
+4. **`spec/` 트리 재잠금** — 리뷰가 닫히면
+   `chmod -R a-w framework/doc/framework/common/spec` 한 줄.
+
+**1·2·3은 이 동시성 작업의 하위 증상으로 판단**해 개별 추적을 중단한 상태다. 표본 전환이
+성공하면 같은 원인인지 다시 본다.
