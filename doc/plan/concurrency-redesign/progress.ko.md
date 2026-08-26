@@ -86,7 +86,7 @@
 | 5·6 | ZLinkClientServerClientRuntime + Connection | 20+44 | **완료** | `39d71acd6c` | lane 2개(소유 분리), SuppressFlow 7, 재진입 0, 호환 경계 4, _socketLifecycleGate 유지 |
 
 CP2 배치 1(#3·#4·#5·6) 게이트 2026-08-26 통과 — unit 1893/0, 7샘플 러너 exit 0.
-| 7 | ZLinkActorHandoffState | 58 | 대기 | | 2× 난이도 |
+| 7 | ZLinkActorHandoffState | 58 | **요청됨** | | codex terra 실행 중 (2026-08-26). 2× 난이도 |
 | 8 | ZLinkActorRuntimeState | 35 | 대기 | | semaphore + 재진입 ~20 |
 | 9 | ZLinkManagedMeshNode | 130 | 대기 | | 4×+, 정독 리뷰 필수 |
 | 10 | ZLinkFrameworkRuntime | 27 | 대기(최종) | | 사용 45파일, 재진입 ~57, 정독 리뷰 필수 |
@@ -168,10 +168,10 @@ CP2 배치 1(#3·#4·#5·6) 게이트 2026-08-26 통과 — unit 1893/0, 7샘플
 | 언어 | 트리 | L0 primitive | L1 표본 | L2 확산 | 마지막 게이트 |
 |---|---|---|---|---|---|
 | **dotnet** | dotnet | **완료** (`ZLinkStateLane` + golden 14) | **완료** (`3cc6f5f615`) | **진행 중** — §2 | unit 실패 0 · 6샘플 OK |
-| cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | 대기 | 대기 | framework-unit 40/40 |
-| java | JVM | **완료** (golden 14/14, ThreadLocal + propagateCurrent) | 대기 | 대기 | core 1,143/0 |
-| kotlin | JVM | **완료** (golden 14/14, CoroutineContext.Element 전파) | 대기 | 대기 | kotlin 67/0 |
-| node | node | **완료** (golden 12 이식 + 동시성 2 제외, 사유 주석) | 대기 | 대기 | state-lane 12/12 |
+| cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | **요청됨** (stream_session_registry_t, 조사 l1-survey-cpp.ko.md) | 대기 | framework-unit 40/40 |
+| java | JVM | **완료**+보완 요청됨 (§7-5 inline continuation fix + internal 패키지 이동) | 대기 (primitive 보완 후, 대상 ZLinkSessionActorsRuntime — 조사 l1-survey-java.ko.md, ~2×) | 대기 | core 1,143/0 |
+| kotlin | JVM | **완료** (golden 14/14, CoroutineContext.Element 전파) | 대기 (java 조사: kotlin 파급 0 — 인터페이스 유지 시) | 대기 | kotlin 67/0 |
+| node | node | **완료** (golden 12 이식 + 동시성 2 제외, 사유 주석) | **요청됨** (ZLinkActorSessionBindingRegistry, 조사 l1-survey-node.ko.md) | 대기 | state-lane 12/12 |
 
 **L0 4건은 서로도, dotnet과도 의존이 없다.** 지금 동시에 띄울 수 있다. 다만 java와 kotlin은
 같은 JVM 락을 쓰므로 빌드·테스트 구간에서만 순차가 된다.
@@ -362,3 +362,10 @@ grep -rhoE 'AwaitStateLane' --include=*.cs . | wc -l                   # 호환 
   체크리스트에 추가**: lane 안 장기 작업 시작점마다 "동기 프리픽스가 lane에 재진입하는가"를
   확인한다. 이 결함은 CP2 중앙 게이트(병렬 이웃 잡의 전체 실행)가 잡아냈다 — 배치 게이트를
   생략하지 말 것의 실증.
+- **(5번, java L0 결함 — L1 조사가 발견)** 정본은 완료 TCS를 전부
+  `RunContinuationsAsynchronously`로 만들어 caller continuation이 lane 스레드에서 inline
+  실행되지 않는다. java `CompletableFuture.complete`는 비동기 아닌 dependent를 완료 스레드에서
+  inline 실행하므로, CURRENT ThreadLocal 스코프 안에서 complete하면 caller의 thenApply가
+  lane 표식을 물려받아 **거짓 재진입 예외**가 난다. 처방: 완료를 CURRENT 스코프 밖으로 뺀다.
+  kotlin(awaiter 자기 문맥 재개)·node(microtask, resolver 문맥 비전파)·cpp(future)는 해당 없음.
+  L0 포팅 리뷰 체크리스트: "완료 신호의 continuation이 어느 문맥에서 실행되는가"를 언어마다 확인.
