@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwn
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.spots.ZLinkTimer;
 import systems.zlink.framework.spots.ZLinkTimerOptions;
 import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
@@ -36,9 +37,25 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     private final ZLinkRuntimeEventDispatcher eventDispatcher;
     private final String sourceName;
     private final Dispatch dispatch;
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, ManagedTimer> timers = new LinkedHashMap<>();
     private Object spot;
     private boolean frozen;
+
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
 
     ZLinkSpotTimerRegistry(
         String spotId,
@@ -76,10 +93,27 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     void setSpot(Object spot) {
-        this.spot = spot;
+        inStateLane(() -> {
+            this.spot = spot;
+            return null;
+        });
     }
 
-    synchronized CompletionStage<ZLinkTimer> add(
+    CompletionStage<ZLinkTimer> add(
+        String name,
+        Duration period,
+        Class<?> handlerType,
+        ZLinkTimerOptions options) {
+        AddedTimer added = inStateLane(() -> addCore(
+            name, period, handlerType, options));
+        if (added.previous() != null) {
+            added.previous().close();
+        }
+        added.timer().start();
+        return CompletableFuture.completedFuture(added.timer());
+    }
+
+    private AddedTimer addCore(
         String name,
         Duration period,
         Class<?> handlerType,
@@ -110,44 +144,65 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
         ManagedTimer timer = new ManagedTimer(name, period, handlerType, timerOptions);
         ManagedTimer previous = timers.put(name, timer);
-        if (previous != null) {
-            previous.close();
-        }
-        timer.start();
-        return CompletableFuture.completedFuture(timer);
+        return new AddedTimer(timer, previous);
     }
 
-    synchronized FrozenTimers freeze() {
+    FrozenTimers freeze() {
+        FreezeState state = inStateLane(this::freezeCore);
+        state.futures().forEach(ZLinkSpotTimerRegistry::cancel);
+        return state.snapshot();
+    }
+
+    private FreezeState freezeCore() {
+        List<ScheduledFuture<?>> futures = List.of();
         if (!frozen) {
             frozen = true;
-            timers.values().forEach(ManagedTimer::freeze);
+            futures = timers.values().stream()
+                .map(ManagedTimer::freezeCore)
+                .flatMap(Optional::stream)
+                .toList();
         }
-        return new FrozenTimers(timers.values().stream()
-            .filter(timer -> !timer.isDisposed())
+        FrozenTimers snapshot = new FrozenTimers(timers.values().stream()
+            .filter(timer -> !timer.isDisposedCore())
             .map(ManagedTimer::snapshot)
             .sorted(Comparator.comparing(TimerSnapshot::name))
             .toList());
+        return new FreezeState(snapshot, futures);
     }
 
-    synchronized void resume() {
-        if (!frozen) {
-            return;
-        }
-        frozen = false;
-        timers.values().forEach(ManagedTimer::resume);
+    void resume() {
+        List<ManagedTimer> current = inStateLane(() -> {
+            if (!frozen) {
+                return List.of();
+            }
+            frozen = false;
+            return List.copyOf(timers.values());
+        });
+        current.forEach(ManagedTimer::resume);
     }
 
-    synchronized void restore(FrozenTimers state) {
+    void restore(FrozenTimers state) {
         stageRestore(state);
         publishStagedRestore();
     }
 
-    synchronized boolean hasActiveTimers() {
-        return timers.values().stream().anyMatch(timer -> !timer.isDisposed());
+    boolean hasActiveTimers() {
+        return inStateLane(() -> timers.values().stream()
+            .anyMatch(timer -> !timer.isDisposedCore()));
     }
 
-    synchronized void stageRestore(FrozenTimers state) {
-        close();
+    void stageRestore(FrozenTimers state) {
+        RestoreState previous = inStateLane(() -> stageRestoreCore(state));
+        previous.futures().forEach(ZLinkSpotTimerRegistry::cancel);
+    }
+
+    private RestoreState stageRestoreCore(FrozenTimers state) {
+        List<ManagedTimer> previous = List.copyOf(timers.values());
+        List<ScheduledFuture<?>> futures = previous.stream()
+            .map(ManagedTimer::disposeCore)
+            .flatMap(Optional::stream)
+            .toList();
+        timers.clear();
         frozen = true;
         for (TimerSnapshot snapshot : state.timers()) {
             ManagedTimer timer = new ManagedTimer(snapshot);
@@ -156,37 +211,47 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                     "duplicate timer in relocation envelope: " + snapshot.name());
             }
         }
+        return new RestoreState(futures);
     }
 
-    synchronized void publishStagedRestore() {
-        if (!frozen) {
-            throw new IllegalStateException(
-                "timer relocation staging is not active");
-        }
-        frozen = false;
-        timers.values().forEach(ManagedTimer::resume);
+    void publishStagedRestore() {
+        List<ManagedTimer> current = inStateLane(() -> {
+            if (!frozen) {
+                throw new IllegalStateException(
+                    "timer relocation staging is not active");
+            }
+            frozen = false;
+            return List.copyOf(timers.values());
+        });
+        current.forEach(ManagedTimer::resume);
     }
 
     @Override
-    public synchronized void close() {
-        timers.values().forEach(ManagedTimer::close);
-        timers.clear();
-        frozen = false;
-    }
-
-    private synchronized void removeTimer(String name, ManagedTimer timer) {
-        timers.remove(name, timer);
+    public void close() {
+        List<ScheduledFuture<?>> futures = inStateLane(() -> {
+            List<ScheduledFuture<?>> current = timers.values().stream()
+                .map(ManagedTimer::disposeCore)
+                .flatMap(Optional::stream)
+                .toList();
+            timers.clear();
+            frozen = false;
+            return current;
+        });
+        futures.forEach(ZLinkSpotTimerRegistry::cancel);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private CompletionStage<Void> invokeHandler(Class<?> handlerType, ZLinkTimerTick tick) {
+    private CompletionStage<Void> invokeHandler(
+        Object handlerSpot,
+        Class<?> handlerType,
+        ZLinkTimerTick tick) {
         try {
             Object handler = handlers.instance(handlerType);
             return ZLinkHandlerMethodInvoker
                 .invokeHandler(
                     handler,
                     "handle",
-                    new Object[] {spot, tick},
+                    new Object[] {handlerSpot, tick},
                     suspendHandlerInvokers)
                 .thenApply(ignored -> null);
         } catch (RuntimeException ex) {
@@ -230,8 +295,9 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         private final Class<?> handlerType;
         private final ZLinkTimerOptions options;
         private final ZLinkSpotTimerSchedule schedule;
-        private volatile boolean disposed;
+        private boolean disposed;
         private ScheduledFuture<?> future;
+        private ScheduleAttempt scheduled;
         private Instant nextScheduledAt;
         private ZLinkSpotTimerSchedule.PendingTick pendingTick;
 
@@ -256,107 +322,146 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         void start() {
-            scheduleNext(schedule.initialDelayNanos());
+            Long delay = inStateLane(() -> disposed
+                ? null
+                : schedule.initialDelayNanos());
+            if (delay != null) {
+                scheduleNext(delay);
+            }
         }
 
         private void scheduleNext(long delayNanos) {
-            if (disposed || frozen) {
+            SchedulePlan plan = inStateLane(() -> {
+                if (disposed || frozen) {
+                    return null;
+                }
+                long boundedDelay = Math.max(0L, delayNanos);
+                ScheduleAttempt attempt = new ScheduleAttempt();
+                scheduled = attempt;
+                nextScheduledAt = safePlusNanos(Instant.now(), boundedDelay);
+                return new SchedulePlan(attempt, boundedDelay);
+            });
+            if (plan == null) {
                 return;
             }
-            long boundedDelay = Math.max(0L, delayNanos);
-            nextScheduledAt = safePlusNanos(Instant.now(), boundedDelay);
-            future = executor.schedule(
-                this::run,
-                boundedDelay,
+            ScheduledFuture<?> task = executor.schedule(
+                () -> run(plan.attempt()),
+                plan.delayNanos(),
                 TimeUnit.NANOSECONDS);
+            boolean cancel = inStateLane(() -> {
+                if (disposed || frozen || scheduled != plan.attempt()) {
+                    return true;
+                }
+                future = task;
+                return false;
+            });
+            if (cancel) {
+                task.cancel(false);
+            }
         }
 
-        private void run() {
-            ZLinkSpotTimerSchedule.PendingTick selected;
-            synchronized (ZLinkSpotTimerRegistry.this) {
-                if (disposed || frozen) {
-                    return;
+        private void run(ScheduleAttempt attempt) {
+            ZLinkSpotTimerSchedule.PendingTick selected = inStateLane(() -> {
+                if (disposed || frozen || scheduled != attempt) {
+                    return null;
                 }
-                selected = schedule.nextTick(
+                scheduled = null;
+                future = null;
+                ZLinkSpotTimerSchedule.PendingTick next = schedule.nextTick(
                     schedule.startedElapsedNanos(),
                     Instant.now());
-                pendingTick = selected;
+                pendingTick = next;
                 nextScheduledAt = null;
+                return next;
+            });
+            if (selected != null) {
+                dispatchPending(selected);
             }
-            dispatchPending(selected);
         }
 
         private void dispatchPending(
             ZLinkSpotTimerSchedule.PendingTick selected) {
             ZLinkTimerTick tick = selected.tick();
             dispatch.enqueue(name, () -> {
-                synchronized (ZLinkSpotTimerRegistry.this) {
+                HandlerInvocation invocation = inStateLane(() -> {
                     if (disposed || frozen || pendingTick != selected) {
-                        return CompletableFuture.completedFuture(null);
+                        return null;
                     }
-                }
-                return invokeHandler(handlerType, tick);
+                    return new HandlerInvocation(spot, handlerType);
+                });
+                return invocation == null
+                    ? CompletableFuture.completedFuture(null)
+                    : invokeHandler(invocation.spot(), invocation.handlerType(), tick);
             })
                 .whenComplete((ignored, error) -> {
-                    boolean stopped = false;
-                    boolean reschedule = false;
-                    boolean stillCurrent;
-                    synchronized (ZLinkSpotTimerRegistry.this) {
-                        stillCurrent = !frozen
+                    DispatchResult result = inStateLane(() -> {
+                        boolean stillCurrent = !frozen
                             && !disposed
                             && pendingTick == selected;
-                        if (stillCurrent) {
-                            if (error == null) {
-                                schedule.markDelivered(selected);
-                                reschedule = true;
-                            } else {
-                                stopped = options.stopOnUnhandledException();
-                                reschedule = !stopped;
-                            }
-                            pendingTick = null;
+                        if (!stillCurrent) {
+                            return new DispatchResult(false, false, false);
                         }
-                    }
-                    if (!stillCurrent) {
+                        boolean stopped = error != null
+                            && options.stopOnUnhandledException();
+                        if (error == null) {
+                            schedule.markDelivered(selected);
+                        }
+                        pendingTick = null;
+                        return new DispatchResult(true, stopped, !stopped);
+                    });
+                    if (!result.stillCurrent()) {
                         return;
                     }
                     if (error != null) {
-                        if (stopped) {
+                        if (result.stopped()) {
                             close();
                         }
-                        publishFailure(this, tick, error, stopped);
+                        publishFailure(this, tick, error, result.stopped());
                     }
-                    if (reschedule) {
+                    if (result.reschedule()) {
                         scheduleAfterDispatch();
                     }
                 });
         }
 
         private void scheduleAfterDispatch() {
-            if (!disposed) {
-                scheduleNext(schedule.delayAfterDispatchNanos());
+            Long delay = inStateLane(() -> disposed
+                ? null
+                : schedule.delayAfterDispatchNanos());
+            if (delay != null) {
+                scheduleNext(delay);
             }
         }
 
-        void freeze() {
-            if (future != null) {
-                future.cancel(false);
-                future = null;
-            }
+        Optional<ScheduledFuture<?>> freezeCore() {
+            ScheduledFuture<?> current = future;
+            future = null;
+            scheduled = null;
+            return Optional.ofNullable(current);
         }
 
         void resume() {
-            if (disposed) {
+            ResumePlan plan = inStateLane(() -> {
+                if (disposed) {
+                    return null;
+                }
+                if (pendingTick != null) {
+                    return new ResumePlan(pendingTick, 0L);
+                }
+                Instant scheduledAt = nextScheduledAt;
+                long delay = scheduledAt == null
+                    ? schedule.delayAfterDispatchNanos()
+                    : nanosUntil(scheduledAt);
+                return new ResumePlan(null, delay);
+            });
+            if (plan == null) {
                 return;
             }
-            if (pendingTick != null) {
-                dispatchPending(pendingTick);
-                return;
+            if (plan.pendingTick() != null) {
+                dispatchPending(plan.pendingTick());
+            } else {
+                scheduleNext(plan.delayNanos());
             }
-            Instant scheduledAt = nextScheduledAt;
-            long delay = scheduledAt == null
-                ? schedule.delayAfterDispatchNanos()
-                : nanosUntil(scheduledAt);
-            scheduleNext(delay);
         }
 
         TimerSnapshot snapshot() {
@@ -368,27 +473,68 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                 Optional.ofNullable(pendingTick));
         }
 
+        boolean isDisposedCore() {
+            return disposed;
+        }
+
+        Optional<ScheduledFuture<?>> disposeCore() {
+            disposed = true;
+            ScheduledFuture<?> current = future;
+            future = null;
+            scheduled = null;
+            return Optional.ofNullable(current);
+        }
+
         @Override
         public boolean isDisposed() {
-            return disposed;
+            return inStateLane(this::isDisposedCore);
         }
 
         @Override
         public CompletionStage<Void> cancel() {
-            close();
-            removeTimer(name, this);
+            Optional<ScheduledFuture<?>> task = inStateLane(() -> {
+                timers.remove(name, this);
+                return disposeCore();
+            });
+            task.ifPresent(ZLinkSpotTimerRegistry::cancel);
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public void close() {
-            disposed = true;
-            if (future != null) {
-                future.cancel(false);
-                future = null;
-            }
+            Optional<ScheduledFuture<?>> task = inStateLane(this::disposeCore);
+            task.ifPresent(ZLinkSpotTimerRegistry::cancel);
         }
     }
+
+    private static void cancel(ScheduledFuture<?> task) {
+        if (task != null) {
+            task.cancel(false);
+        }
+    }
+
+    private static final class ScheduleAttempt {}
+
+    private record AddedTimer(ManagedTimer timer, ManagedTimer previous) {}
+
+    private record FreezeState(
+        FrozenTimers snapshot,
+        List<ScheduledFuture<?>> futures) {}
+
+    private record RestoreState(List<ScheduledFuture<?>> futures) {}
+
+    private record SchedulePlan(ScheduleAttempt attempt, long delayNanos) {}
+
+    private record ResumePlan(
+        ZLinkSpotTimerSchedule.PendingTick pendingTick,
+        long delayNanos) {}
+
+    private record HandlerInvocation(Object spot, Class<?> handlerType) {}
+
+    private record DispatchResult(
+        boolean stillCurrent,
+        boolean stopped,
+        boolean reschedule) {}
 
     record FrozenTimers(List<TimerSnapshot> timers) {
         FrozenTimers {
