@@ -185,9 +185,9 @@ CP3 판정("이 작업의 하위 증상인가")에서 **끝내지 않는다.** �
 | 언어 | 트리 | L0 primitive | L1 표본 | L2 확산 | 마지막 게이트 |
 |---|---|---|---|---|---|
 | **dotnet** | dotnet | **완료** (`ZLinkStateLane` + golden 14) | **완료** (`3cc6f5f615`) | **진행 중** — §2 | unit 실패 0 · 6샘플 OK |
-| cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | **완료** (stream_session_registry_t 31→0, 시그니처 무변경, admit_inbound 대기 lane 밖 분리+세대화, 반려 1회: notify_changed lost wakeup) | 대기 | unit·contract 그린 (layout_contract 제외 — 기존) |
+| cpp | cpp | **완료** (golden 14/14, close·try_post 재진입 가드는 정본보다 엄격) | **완료** (stream_session_registry_t 31→0, 시그니처 무변경, admit_inbound 대기 lane 밖 분리+세대화, 반려 1회: notify_changed lost wakeup) | 대기 — 순서 조사 완료(l2-survey-cpp.ko.md, 후보 19) | unit·contract 그린 (layout_contract 제외 — 기존) |
 | java | JVM | **완료** (§7-5 보완 포함 — completeAsync·internal 패키지 이동) | **완료** (ZLinkSessionActorsRuntime 22→0, 인터페이스 불변·kotlin 파급 0) | 대기 | core 1,157 중 알려진 flake 1 |
-| kotlin | JVM | **완료** (golden 14/14, CoroutineContext.Element 전파) | 대기 (java 조사: kotlin 파급 0 — 인터페이스 유지 시) | 대기 | kotlin 67/0 |
+| kotlin | JVM | **완료** (golden 14/14, CoroutineContext.Element 전파) | **해당 없음** (자체 C2 상태 0 — l1-survey-kotlin.ko.md. java 전환을 인터페이스 뒤에서 승계) | java L2 승계 | kotlin 67/0 |
 | node | node | **완료** (golden 12 이식 + 동시성 2 제외, 사유 주석) | **요청됨** (ZLinkActorSessionBindingRegistry, 조사 l1-survey-node.ko.md) | 대기 | state-lane 12/12 |
 
 **L0 4건은 서로도, dotnet과도 의존이 없다.** 지금 동시에 띄울 수 있다. 다만 java와 kotlin은
