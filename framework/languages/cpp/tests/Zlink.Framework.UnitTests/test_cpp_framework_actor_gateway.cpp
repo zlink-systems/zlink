@@ -234,30 +234,28 @@ int stale_session_unbind_preserves_rebind ()
                                  12);
 
     gateway.unbind_session_stream ("actor-1", "session-old", 11);
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto stale_unbind_preserved = state->sync ([&] {
         const auto actor_record = state->actors_by_id.find ("actor-1");
-        if (actor_record == state->actors_by_id.end ()
-            || actor_record->second.binding_session_id != "session-new"
-            || actor_record->second.binding_token != 12
-            || !actor_record->second.bound_session_stream_sink
-            || state->bound_session_sinks.count ("actor-1") != 1) {
-            return 1;
-        }
-    }
+        return actor_record != state->actors_by_id.end ()
+               && actor_record->second.binding_session_id == "session-new"
+               && actor_record->second.binding_token == 12
+               && actor_record->second.bound_session_stream_sink
+               && state->bound_session_sinks.count ("actor-1") == 1;
+    });
+    if (!stale_unbind_preserved)
+        return 1;
 
     gateway.unbind_session_stream ("actor-1", "session-new", 12);
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto current_unbind_cleared = state->sync ([&] {
         const auto actor_record = state->actors_by_id.find ("actor-1");
-        if (actor_record == state->actors_by_id.end ()
-            || !actor_record->second.binding_session_id.empty ()
-            || actor_record->second.binding_token != 0
-            || actor_record->second.bound_session_stream_sink
-            || state->bound_session_sinks.count ("actor-1") != 0) {
-            return 2;
-        }
-    }
+        return actor_record != state->actors_by_id.end ()
+               && actor_record->second.binding_session_id.empty ()
+               && actor_record->second.binding_token == 0
+               && !actor_record->second.bound_session_stream_sink
+               && state->bound_session_sinks.count ("actor-1") == 0;
+    });
+    if (!current_unbind_cleared)
+        return 2;
     return 0;
 }
 
@@ -332,11 +330,8 @@ int bind_or_get_reuses_same_physical_session_generation ()
     if (!first || !second || native_binds.load () != 1)
         return 1;
 
-    std::uint64_t reused_token = 0;
-    {
-        const std::lock_guard lock (state->mutex);
-        reused_token = state->actors_by_id.at ("bind-or-get-idempotent-actor").binding_token;
-    }
+    const auto reused_token = state->sync (
+      [&] { return state->actors_by_id.at ("bind-or-get-idempotent-actor").binding_token; });
     zlink_builder_t new_builder;
     new_builder.stream ("bind-or-get-idempotent").bind ("tcp://127.0.0.1:0");
     auto new_runtime = stream_runtime_t::from (new_builder);
@@ -355,11 +350,11 @@ int bind_or_get_reuses_same_physical_session_generation ()
     const auto reconnect = manager.bind_or_get (actor).submit ().result ();
     if (!reconnect || native_binds.load () != 2)
         return 3;
-    {
-        const std::lock_guard lock (state->mutex);
-        if (state->actors_by_id.at ("bind-or-get-idempotent-actor").binding_token <= reused_token) {
-            return 4;
-        }
+    if (state->sync ([&] {
+            return state->actors_by_id.at ("bind-or-get-idempotent-actor").binding_token
+                   <= reused_token;
+        })) {
+        return 4;
     }
     const auto delivered = gateway.dispatch_bound_session_send (
       actor, "reconnected-push", stream_codec_t::message_pack, zlink::message_t::from ("payload"));
@@ -536,11 +531,8 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
     if (!old_binding)
         return 2;
     auto stale_handle = std::move (old_binding.value ());
-    std::uint64_t old_token = 0;
-    {
-        const std::lock_guard lock (state->mutex);
-        old_token = state->actors_by_id.at ("direct-rebind-actor").binding_token;
-    }
+    const auto old_token =
+      state->sync ([&] { return state->actors_by_id.at ("direct-rebind-actor").binding_token; });
     const auto route_owner = zlink::routing_id_t::from ("session-owner");
     const auto route_session = zlink::routing_id_t::from ("same-session-rid");
     if (!gateway.record_bound_session_route (actor, route_owner, route_session, 11, 13, 17,
@@ -583,18 +575,18 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
         rebind_thread.join ();
         return 3;
     }
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto rebind_is_published = state->sync ([&] {
         const auto &record = state->actors_by_id.at ("direct-rebind-actor");
-        if (!record.bound || record.disconnected || record.binding_session_id != new_session_id
-            || record.binding_token == 0 || record.binding_token == old_token
-            || issued_generation.load (std::memory_order_acquire) != record.binding_token
-            || issued_generation.load (std::memory_order_acquire) <= old_token
-            || !record.bound_session_stream_sink) {
-            release_binder_source.set_value ();
-            rebind_thread.join ();
-            return 4;
-        }
+        return record.bound && !record.disconnected && record.binding_session_id == new_session_id
+               && record.binding_token != 0 && record.binding_token != old_token
+               && issued_generation.load (std::memory_order_acquire) == record.binding_token
+               && issued_generation.load (std::memory_order_acquire) > old_token
+               && record.bound_session_stream_sink;
+    });
+    if (!rebind_is_published) {
+        release_binder_source.set_value ();
+        rebind_thread.join ();
+        return 4;
     }
 
     release_binder_source.set_value ();
@@ -604,15 +596,13 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
         || gateway.actor_disconnected ("direct-rebind-actor") || disconnected != 0) {
         return 5;
     }
-    std::uint64_t committed_token = 0;
-    {
-        const std::lock_guard lock (state->mutex);
-        committed_token = state->actors_by_id.at ("direct-rebind-actor").binding_token;
+    const auto committed_token = state->sync ([&] {
+        const auto token = state->actors_by_id.at ("direct-rebind-actor").binding_token;
         const auto &route = state->actors_by_id.at ("direct-rebind-actor").bound_session_route;
-        if (!route || route->binding_token != committed_token) {
-            return 6;
-        }
-    }
+        return std::pair{token, route && route->binding_token == token};
+    });
+    if (!committed_token.second)
+        return 6;
     session_actor_manager_access_t::bind_native (
       new_session, [] (const actor_ref_t &, std::uint64_t) {
           return task_t<void> (result_t<void>::failure (framework_error_kind_t::unavailable,
@@ -623,14 +613,13 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
         || !new_session.find ("direct-rebind-actor")) {
         return 7;
     }
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto rebind_remained_published = state->sync ([&] {
         const auto &record = state->actors_by_id.at ("direct-rebind-actor");
-        if (!record.bound || record.disconnected || record.binding_session_id != new_session_id
-            || record.binding_token != committed_token || !record.bound_session_stream_sink) {
-            return 8;
-        }
-    }
+        return record.bound && !record.disconnected && record.binding_session_id == new_session_id
+               && record.binding_token == committed_token.first && record.bound_session_stream_sink;
+    });
+    if (!rebind_remained_published)
+        return 8;
     return 0;
 }
 
@@ -705,8 +694,7 @@ int get_or_create_does_not_reuse_disconnected_record ()
     auto state = std::make_shared<actor_gateway_state_t> ();
     const actor_ref_t stale = test_actor_ref ("actor-node-old", "player", "actor-reconnect", 7);
     const actor_ref_t current = test_actor_ref ("actor-node-new", "player", "actor-reconnect", 8);
-    {
-        const std::lock_guard lock (state->mutex);
+    state->sync ([&] {
         state->actors_by_id.emplace ("actor-reconnect", actor_record_t{stale, false, true});
         state->bound_session_sinks.emplace (
           "actor-reconnect", std::make_shared<bound_session_sink_t> (
@@ -717,7 +705,7 @@ int get_or_create_does_not_reuse_disconnected_record ()
                                               const std::optional<zlink::message_t> &) {
             return result_t<actor_ref_t>::success (current);
         };
-    }
+    });
 
     actor_gateway_runtime_t gateway (state);
     auto manager = gateway.manager ();
@@ -726,16 +714,15 @@ int get_or_create_does_not_reuse_disconnected_record ()
         || created.value ().ref ().object_generation () != 8) {
         return 1;
     }
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto disconnected_record_replaced = state->sync ([&] {
         const auto found = state->actors_by_id.find ("actor-reconnect");
-        if (found == state->actors_by_id.end ()
-            || found->second.ref.node_rid ().value () != "actor-node-new"
-            || found->second.disconnected
-            || state->bound_session_sinks.contains ("actor-reconnect")) {
-            return 2;
-        }
-    }
+        return found != state->actors_by_id.end ()
+               && found->second.ref.node_rid ().value () == "actor-node-new"
+               && !found->second.disconnected
+               && !state->bound_session_sinks.contains ("actor-reconnect");
+    });
+    if (!disconnected_record_replaced)
+        return 2;
     return 0;
 }
 
@@ -747,14 +734,13 @@ int get_or_create_refreshes_foreign_session_record ()
     auto state = std::make_shared<actor_gateway_state_t> ();
     const actor_ref_t stale = test_actor_ref ("actor-node-old", "player", "actor-foreign", 7);
     const actor_ref_t current = test_actor_ref ("actor-node-current", "player", "actor-foreign", 7);
-    {
-        const std::lock_guard lock (state->mutex);
+    state->sync ([&] {
         state->actors_by_id.emplace ("actor-foreign", actor_record_t{stale, true, false});
         state->create_dispatcher = [current] (std::string, std::string,
                                               const std::optional<zlink::message_t> &) {
             return result_t<actor_ref_t>::success (current);
         };
-    }
+    });
 
     actor_gateway_runtime_t gateway (state);
     gateway.bind_session_stream ("actor-foreign", stream_t{}, stream_codec_t::message_pack,
@@ -771,16 +757,15 @@ int get_or_create_refreshes_foreign_session_record ()
     if (!refreshed || refreshed.value ().ref ().node_rid ().value () != "actor-node-current") {
         return 1;
     }
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto foreign_session_record_replaced = state->sync ([&] {
         const auto found = state->actors_by_id.find ("actor-foreign");
-        if (found == state->actors_by_id.end ()
-            || found->second.ref.node_rid ().value () != "actor-node-current"
-            || found->second.binding_session_id == "session-old"
-            || state->bound_session_sinks.contains ("actor-foreign")) {
-            return 2;
-        }
-    }
+        return found != state->actors_by_id.end ()
+               && found->second.ref.node_rid ().value () == "actor-node-current"
+               && found->second.binding_session_id != "session-old"
+               && !state->bound_session_sinks.contains ("actor-foreign");
+    });
+    if (!foreign_session_record_replaced)
+        return 2;
     return 0;
 }
 
@@ -818,12 +803,11 @@ int session_disconnect_is_all_settled_and_token_fenced ()
         || !gateway.actor_disconnected ("actor-a") || !gateway.actor_disconnected ("actor-b")) {
         return 2;
     }
-    {
-        const std::lock_guard lock (state->mutex);
-        if (!state->actors_by_id.contains ("actor-a")
-            || !state->actors_by_id.contains ("actor-b")) {
-            return 3;
-        }
+    if (state->sync ([&] {
+            return !state->actors_by_id.contains ("actor-a")
+                   || !state->actors_by_id.contains ("actor-b");
+        })) {
+        return 3;
     }
     if (current.notify_disconnected ().result ())
         return 4;
@@ -854,14 +838,13 @@ int logical_disconnect_is_selected_and_keeps_session_live ()
     }
     if (disconnected != std::vector<std::string>{"actor-a"})
         return 4;
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto second_binding_remains_live = state->sync ([&] {
         const auto second_record = state->actors_by_id.find ("actor-b");
-        if (second_record == state->actors_by_id.end ()
-            || second_record->second.binding_token == 0) {
-            return 2;
-        }
-    }
+        return second_record != state->actors_by_id.end ()
+               && second_record->second.binding_token != 0;
+    });
+    if (!second_binding_remains_live)
+        return 2;
     if (!second_binding.notify_disconnected ().result ()
         || disconnected != std::vector<std::string>{"actor-a", "actor-b"}) {
         return 3;
@@ -1046,10 +1029,11 @@ int bound_session_send_does_not_publish_caller_location ()
     if (!sent || sends.load () != 1) {
         return 2;
     }
-    const std::lock_guard lock (state->mutex);
-    const auto found = state->actors_by_id.find ("send-route-owner");
-    if (found == state->actors_by_id.end ()
-        || found->second.ref.node_rid ().value () != "source-node") {
+    if (state->sync ([&] {
+            const auto found = state->actors_by_id.find ("send-route-owner");
+            return found == state->actors_by_id.end ()
+                   || found->second.ref.node_rid ().value () != "source-node";
+        })) {
         return 3;
     }
     return 0;
@@ -1102,18 +1086,17 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     if (!gateway.prepare_session_relocation_target_route (route, 37)) {
         return 2;
     }
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto prewarmed_route_matches = state->sync ([&] {
         const auto &record = state->actors_by_id.at ("relocation-prewarm");
-        if (record.ref.node_rid ().value () != target.node_rid ().value ()
-            || !record.bound_session_route
-            || record.bound_session_route->authority_owner_generation != 29
-            || record.bound_session_route->owner_lease_generation != 37
-            || record.bound_session_route->session_sequence != 0
-            || !record.bound_session_route->session_sequence_baseline_unknown) {
-            return 3;
-        }
-    }
+        return record.ref.node_rid ().value () == target.node_rid ().value ()
+               && record.bound_session_route
+               && record.bound_session_route->authority_owner_generation == 29
+               && record.bound_session_route->owner_lease_generation == 37
+               && record.bound_session_route->session_sequence == 0
+               && record.bound_session_route->session_sequence_baseline_unknown;
+    });
+    if (!prewarmed_route_matches)
+        return 3;
 
     const protocol::actor_route_fence_t target_fence{"relocation-prewarm",
                                                      7,
@@ -1125,12 +1108,12 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
         || !gateway.prepare_session_relocation_target_route (route, 37)) {
         return 4;
     }
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto prewarmed_sequence_is_admitted = state->sync ([&] {
         const auto &prepared = *state->actors_by_id.at ("relocation-prewarm").bound_session_route;
-        if (prepared.session_sequence != 25 || prepared.session_sequence_baseline_unknown)
-            return 5;
-    }
+        return prepared.session_sequence == 25 && !prepared.session_sequence_baseline_unknown;
+    });
+    if (!prewarmed_sequence_is_admitted)
+        return 5;
 
     const auto submitted = gateway.actor_context (target)
                              .bound_session ()
@@ -1161,22 +1144,22 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     });
     if (!fresh_gateway.prepare_session_relocation_target_route (route, 37))
         return 8;
-    {
-        const std::lock_guard lock (fresh_state->mutex);
+    const auto fresh_route_is_prewarmed = fresh_state->sync ([&] {
         const auto found = fresh_state->actors_by_id.find ("relocation-prewarm");
-        if (found == fresh_state->actors_by_id.end () || !found->second.bound
-            || found->second.disconnected
-            || found->second.ref.node_rid ().value () != target.node_rid ().value ()
-            || !found->second.bound_session_route
-            || found->second.bound_session_route->node_rid.to_bytes () != session_owner.to_bytes ()
-            || found->second.bound_session_route->session_rid != session_rid
-            || found->second.bound_session_route->authority_owner_generation != 29
-            || found->second.bound_session_route->owner_lease_generation != 37
-            || !found->second.bound_session_route->session_sequence_baseline_unknown
-            || !fresh_state->bound_session_sinks.contains ("relocation-prewarm")) {
-            return 9;
-        }
-    }
+        return found != fresh_state->actors_by_id.end () && found->second.bound
+               && !found->second.disconnected
+               && found->second.ref.node_rid ().value () == target.node_rid ().value ()
+               && found->second.bound_session_route
+               && found->second.bound_session_route->node_rid.to_bytes ()
+                    == session_owner.to_bytes ()
+               && found->second.bound_session_route->session_rid == session_rid
+               && found->second.bound_session_route->authority_owner_generation == 29
+               && found->second.bound_session_route->owner_lease_generation == 37
+               && found->second.bound_session_route->session_sequence_baseline_unknown
+               && fresh_state->bound_session_sinks.contains ("relocation-prewarm");
+    });
+    if (!fresh_route_is_prewarmed)
+        return 9;
     return 0;
 }
 
@@ -1204,16 +1187,15 @@ int bound_session_ref_normalization_preserves_type_and_rejects_conflicts ()
     if (!public_bind) {
         return 2;
     }
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto public_ref_is_enriched = state->sync ([&] {
         const auto found = state->actors_by_id.find ("actor-public-ref");
-        if (found == state->actors_by_id.end ()
-            || actor_ref_access_t::actor_type (found->second.ref) != "support-user"
-            || found->second.ref.mesh_name () != "mesh"
-            || found->second.ref.node_rid ().value () != "actor-node") {
-            return 3;
-        }
-    }
+        return found != state->actors_by_id.end ()
+               && actor_ref_access_t::actor_type (found->second.ref) == "support-user"
+               && found->second.ref.mesh_name () == "mesh"
+               && found->second.ref.node_rid ().value () == "actor-node";
+    });
+    if (!public_ref_is_enriched)
+        return 3;
 
     const auto route_recorded = gateway.record_bound_session_route (
       public_ref, zlink::routing_id_t::from (std::string ("session-node")));
@@ -1256,14 +1238,13 @@ int bound_session_ref_normalization_preserves_type_and_rejects_conflicts ()
         || !gateway.bind_session_sink (typed_second, sink)) {
         return 10;
     }
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto actor_type_is_enriched = state->sync ([&] {
         const auto found = state->actors_by_id.find ("actor-type-enrichment");
-        if (found == state->actors_by_id.end ()
-            || actor_ref_access_t::actor_type (found->second.ref) != "support-user") {
-            return 11;
-        }
-    }
+        return found != state->actors_by_id.end ()
+               && actor_ref_access_t::actor_type (found->second.ref) == "support-user";
+    });
+    if (!actor_type_is_enriched)
+        return 11;
     return 0;
 }
 
@@ -1282,15 +1263,14 @@ int bound_session_route_installs_sink_and_fence_together ()
     if (!bound) {
         return 1;
     }
-    {
-        const std::lock_guard lock (state->mutex);
+    const auto route_is_installed = state->sync ([&] {
         const auto found = state->actors_by_id.find ("route-actor");
-        if (found == state->actors_by_id.end () || !found->second.bound
-            || !found->second.bound_session_route
-            || state->bound_session_sinks.count ("route-actor") != 1) {
-            return 2;
-        }
-    }
+        return found != state->actors_by_id.end () && found->second.bound
+               && found->second.bound_session_route
+               && state->bound_session_sinks.count ("route-actor") == 1;
+    });
+    if (!route_is_installed)
+        return 2;
     const auto route = gateway.bound_session_route (actor);
     if (!route || route->node_rid.to_string () != "session-node" || !route->session_rid
         || route->session_rid->to_string () != "session-rid") {
@@ -1646,11 +1626,8 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
         return 14;
     if (!gateway.complete_session_relay (actor, session_owner, session_rid, 17, 3))
         return 15;
-    {
-        const std::lock_guard lock (state->mutex);
-        if (!state->active_session_relay_completions.empty ())
-            return 16;
-    }
+    if (state->sync ([&] { return !state->active_session_relay_completions.empty (); }))
+        return 16;
     if (gateway.complete_session_relay (actor, session_owner, session_rid, 17, 3)
         || gateway.begin_session_relay_completion (actor, session_owner, session_rid, 17, 4))
         return 17;
@@ -1663,17 +1640,12 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
                                                 0)
         || !gateway.begin_session_relay_completion (actor, session_owner, session_rid, 17, 1))
         return 18;
-    {
-        const std::lock_guard lock (state->mutex);
-        state->actors_by_id.at ("relay-actor").bound_session_route->session_sequence = 3;
-    }
+    state->sync (
+      [&] { state->actors_by_id.at ("relay-actor").bound_session_route->session_sequence = 3; });
     if (gateway.complete_session_relay (actor, session_owner, session_rid, 17, 1))
         return 19;
-    {
-        const std::lock_guard lock (state->mutex);
-        if (!state->active_session_relay_completions.empty ())
-            return 20;
-    }
+    if (state->sync ([&] { return !state->active_session_relay_completions.empty (); }))
+        return 20;
     return 0;
 }
 
@@ -1999,12 +1971,13 @@ int disconnect_notification_survives_pending_dispatcher_completion ()
     if (!notification.result ())
         return 2;
 
-    const std::lock_guard lock (state->mutex);
-    const auto found = state->actors_by_id.find (actor_id);
-    return found != state->actors_by_id.end () && found->second.binding_token == 0
-               && found->second.binding_session_id.empty ()
-             ? 0
-             : 3;
+    return state->sync ([&] {
+        const auto found = state->actors_by_id.find (actor_id);
+        return found != state->actors_by_id.end () && found->second.binding_token == 0
+                   && found->second.binding_session_id.empty ()
+                 ? 0
+                 : 3;
+    });
 }
 
 int relay_request_survives_pending_dispatcher_completion ()
@@ -3342,11 +3315,8 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
     if (!actor_owner.replace_session_route (actor, make_remote_sink (old_route), old_route)) {
         return 3;
     }
-    std::shared_ptr<bound_session_sink_t> staged_old_sink;
-    {
-        const std::lock_guard lock (actor_owner_state->mutex);
-        staged_old_sink = actor_owner_state->bound_session_sinks.at ("two-host-reconnect");
-    }
+    const auto staged_old_sink = actor_owner_state->sync (
+      [&] { return actor_owner_state->bound_session_sinks.at ("two-host-reconnect"); });
 
     if (!session_owner.replace_session_route (
           actor,

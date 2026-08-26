@@ -929,12 +929,14 @@ void verify_session_relocation_gateway_commit_is_atomic ()
       "relocating-actor", 7);
     assert (gateway.update_actor_ref (target_ref));
     {
-        const std::lock_guard lock (state->mutex);
-        const auto actor = state->actors_by_id.find (
-          "relocating-actor");
-        assert (actor != state->actors_by_id.end ());
-        assert (actor->second.ref.node_rid ().value ()
-                == "source-node");
+        const auto ref_is_source = state->sync ([&] {
+            const auto actor = state->actors_by_id.find (
+              "relocating-actor");
+            return actor != state->actors_by_id.end ()
+                   && actor->second.ref.node_rid ().value ()
+                        == "source-node";
+        });
+        assert (ref_is_source);
     }
     assert (gateway.commit_session_relocation_route (
       route, previous, target));
@@ -949,12 +951,14 @@ void verify_session_relocation_gateway_commit_is_atomic ()
             && committed_route->binding_generation == 17
             && committed_route->session_sequence == 19);
     {
-        const std::lock_guard lock (state->mutex);
-        const auto actor = state->actors_by_id.find (
-          "relocating-actor");
-        assert (actor != state->actors_by_id.end ());
-        assert (actor->second.ref.node_rid ().value ()
-                == "target-node");
+        const auto ref_is_target = state->sync ([&] {
+            const auto actor = state->actors_by_id.find (
+              "relocating-actor");
+            return actor != state->actors_by_id.end ()
+                   && actor->second.ref.node_rid ().value ()
+                        == "target-node";
+        });
+        assert (ref_is_target);
     }
 
     /* A later relocation can return the same Actor incarnation to its first

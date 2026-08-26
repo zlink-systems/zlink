@@ -305,13 +305,15 @@ void drain_session_relay (const std::shared_ptr<detail::actor_gateway_state_t> &
              * pending.dispatch; the observer below keeps `pending` (and that
              * closure's heap storage) alive until completion — do not shrink
              * the dispatch closure below SBO size. */
-            auto dispatched = std::make_shared<task_t<void>> (pending->dispatch ());
+            auto dispatch = std::make_shared<std::function<task_t<void> ()>> (
+              std::move (pending->dispatch));
+            auto dispatched = std::make_shared<task_t<void>> ((*dispatch) ());
             /* Whoever loses the exchange race hands the next turn to the
              * winner: a synchronous completion lets this loop continue, an
              * asynchronous one re-enters the drain from its own frame. */
             auto continue_gate = std::make_shared<std::atomic<bool>> (false);
             detail::observe_task_completion (
-              *dispatched, [state, actor_id, pending = std::move (*pending), dispatched,
+              *dispatched, [state, actor_id, pending = std::move (*pending), dispatch, dispatched,
                             continue_gate] (const result_t<void> &result) mutable {
                   if (!result) {
                       detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
@@ -1350,6 +1352,7 @@ task_t<void> session_actor_t::notify_disconnected ()
     detail::actor_gateway_state_t::disconnect_dispatcher_t dispatcher;
     std::string session_id;
     std::uint64_t binding_token = 0;
+    bool notify = false;
     const auto disconnected = _state->sync ([&] () -> result_t<void> {
         const auto found = _state->actors_by_id.find (std::string (_ref.actor_id ().value ()));
         if (found == _state->actors_by_id.end ()) {
@@ -1372,10 +1375,13 @@ task_t<void> session_actor_t::notify_disconnected ()
         session_id = found->second.binding_session_id;
         binding_token = found->second.binding_token;
         dispatcher = _state->disconnect_dispatcher;
+        notify = true;
         return result_t<void>::success ();
     });
     if (!disconnected)
         return task_t<void> (std::move (disconnected));
+    if (!notify)
+        return task_t<void> (result_t<void>::success ());
     return complete_session_actor_disconnect_notification (_state, std::move (dispatcher), _ref,
                                                            std::move (session_id), binding_token);
 }
