@@ -34,6 +34,7 @@ import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRelocationAdapterRegistry;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations
     .ZLinkServiceAuthorityPayloadCodec;
@@ -1095,13 +1096,38 @@ final class ZLinkUserSpotRetireSourceBuilder {
         private final List<SealedSessionRoute> sealedSessionRoutes;
         private final List<UnresolvedPreparation> unresolved;
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
             finalJournal = Map.of();
         private ZLinkUserSpotRelocationBarrier.RelocationCommit
             relocationCommit;
+        private CompletableFuture<ZLinkUserSpotRelocationBarrier.RelocationCommit>
+            relocationCommitClaim;
         private boolean captureFinished;
         private boolean sourceCommitted;
         private boolean terminal;
+
+        private record RetainClaim(
+            ZLinkUserSpotRelocationBarrier.RelocationCommit retained,
+            CompletableFuture<ZLinkUserSpotRelocationBarrier.RelocationCommit>
+                completion,
+            boolean owner) {
+        }
+
+        private <T> T inStateLane(Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
+            }
+        }
 
         private PreparedSource(
             ZLinkUserSpotRelocationBarrier barrier,
@@ -1139,19 +1165,63 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Duration timeout) {
             Objects.requireNonNull(client, "client");
             Objects.requireNonNull(timeout, "timeout");
-            ZLinkUserSpotRelocationBarrier.RelocationCommit retained;
-            synchronized (this) {
-                if (terminal || sourceCommitted) {
-                    return failed(new IllegalStateException(
-                        "source relocation relay boundary is terminal"));
-                }
-                if (relocationCommit == null) {
-                    relocationCommit = barrier.retainCommit(seal)
+            RetainClaim claim;
+            try {
+                claim = inStateLane(() -> {
+                    if (terminal || sourceCommitted) {
+                        throw new IllegalStateException(
+                            "source relocation relay boundary is terminal");
+                    }
+                    if (relocationCommit != null) {
+                        return new RetainClaim(relocationCommit, null, false);
+                    }
+                    if (relocationCommitClaim != null) {
+                        return new RetainClaim(
+                            null, relocationCommitClaim, false);
+                    }
+                    var completion =
+                        new CompletableFuture<ZLinkUserSpotRelocationBarrier
+                            .RelocationCommit>();
+                    relocationCommitClaim = completion;
+                    return new RetainClaim(null, completion, true);
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
+            }
+            if (claim.retained() == null && !claim.owner()) {
+                return claim.completion().thenCompose(ignored ->
+                    relayCapturedIngress(client, timeout));
+            }
+            ZLinkUserSpotRelocationBarrier.RelocationCommit retained =
+                claim.retained();
+            if (claim.owner()) {
+                try {
+                    retained = barrier.retainCommit(seal)
                         .orElseThrow(() -> new IllegalStateException(
                             "source relocation barrier was lost"));
                     installExpectedRelocationForwards();
+                    ZLinkUserSpotRelocationBarrier.RelocationCommit established =
+                        retained;
+                    retained = inStateLane(() -> {
+                        relocationCommit = established;
+                        relocationCommitClaim = null;
+                        return relocationCommit;
+                    });
+                    ZLinkUserSpotRelocationBarrier.RelocationCommit published =
+                        retained;
+                    claim.completion().completeAsync(() -> published);
+                } catch (RuntimeException failure) {
+                    inStateLane(() -> {
+                        if (relocationCommitClaim == claim.completion()) {
+                            relocationCommitClaim = null;
+                        }
+                        return null;
+                    });
+                    claim.completion().completeAsync(() -> {
+                        throw failure;
+                    });
+                    throw failure;
                 }
-                retained = relocationCommit;
             }
             ZLinkUserSpotRelocationBarrier.RelocationCommit.Cut cut;
             do {
@@ -1159,10 +1229,11 @@ final class ZLinkUserSpotRetireSourceBuilder {
             } while (!retained.tryEstablishAndFinishCapture(cut));
             Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> relayed =
                 cut.committed().heldIngress();
-            synchronized (this) {
+            inStateLane(() -> {
                 finalJournal = relayed;
                 captureFinished = true;
-            }
+                return null;
+            });
             CompletionStage<Void> chain =
                 CompletableFuture.completedFuture(null);
             for (List<ZLinkAsyncSerialQueue.QueuedRecord> lane
@@ -1274,31 +1345,46 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 throw new IllegalStateException(
                     "relocation reply runtime is unavailable");
             }
+            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
+                inStateLane(() -> finalJournal);
             relocationReplies.bindCanonicalRelocationReplies(
-                finalJournal,
+                journal,
                 stageRequest.targetNodeRid(),
                 stageRequest.targetNodeGeneration(),
                 Map.copyOf(replyFences));
         }
 
-        synchronized void completeSourceBarrierCommit() {
-            if (relocationCommit == null
+        void completeSourceBarrierCommit() {
+            ZLinkUserSpotRelocationBarrier.RelocationCommit retained =
+                inStateLane(() -> {
+                if (relocationCommit == null
                 || !sourceCommitted && !captureFinished) {
-                throw new IllegalStateException(
-                    "source relocation barrier is not durably committed");
-            }
-            sourceCommitted = true;
-            relocationCommit.complete();
+                    throw new IllegalStateException(
+                        "source relocation barrier is not durably committed");
+                }
+                sourceCommitted = true;
+                return relocationCommit;
+            });
+            // CompletableFuture dependents may run inline, so complete only
+            // after the lane turn has released its ownership marker.
+            retained.complete();
         }
 
-        synchronized boolean relayBoundaryCommitted() {
-            return sourceCommitted;
+        boolean relayBoundaryCommitted() {
+            return inStateLane(() -> sourceCommitted);
         }
 
-        synchronized CompletionStage<Void> abortPrecommit() {
-            if (terminal || sourceCommitted) {
-                return failed(new IllegalStateException(
-                    "committed source relocation cannot be aborted"));
+        CompletionStage<Void> abortPrecommit() {
+            try {
+                inStateLane(() -> {
+                    if (terminal || sourceCommitted) {
+                        throw new IllegalStateException(
+                            "committed source relocation cannot be aborted");
+                    }
+                    return null;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             //  Contract order: Aborted record, staged payload discard, queue
             //  restore, then terminal progress removal while the lanes are
@@ -1318,17 +1404,16 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     })
                 .thenCompose(ignored -> {
                     ZLinkUserSpotRelocationBarrier.RelocationCommit retained;
-                    synchronized (PreparedSource.this) {
-                        retained = relocationCommit;
-                    }
+                    retained = inStateLane(() -> relocationCommit);
                     if (retained != null) {
                         if (!retained.abort()) {
                             return failed(new IllegalStateException(
                                 "source relocation retained queue cannot be restored"));
                         }
-                        synchronized (PreparedSource.this) {
+                        inStateLane(() -> {
                             terminal = true;
-                        }
+                            return null;
+                        });
                         forgetUnresolved(unresolved, seal);
                         if (relocationReplies != null) {
                             captured.inventory().actorIds().forEach(
@@ -1338,9 +1423,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         return CompletableFuture.completedFuture(null);
                     }
                     return barrier.abortAsync(seal, () -> {
-                            synchronized (PreparedSource.this) {
+                            inStateLane(() -> {
                                 terminal = true;
-                            }
+                                return null;
+                            });
                             forgetUnresolved(unresolved, seal);
                         })
                         .thenAccept(aborted -> {
@@ -1358,18 +1444,17 @@ final class ZLinkUserSpotRetireSourceBuilder {
         }
 
         CompletionStage<Void> discardInitialAfterCommit() {
-            synchronized (this) {
+            try {
+                inStateLane(() -> {
                 if (!sourceCommitted || terminal) {
-                    return failed(new IllegalStateException(
-                        "source relocation is not committed"));
-                }
-            }
-            synchronized (this) {
-                if (!sourceCommitted || terminal) {
-                    return failed(new IllegalStateException(
-                        "source relocation cleanup is not ready to finish"));
+                    throw new IllegalStateException(
+                        "source relocation is not committed");
                 }
                 terminal = true;
+                    return null;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             return CompletableFuture.completedFuture(null);
         }

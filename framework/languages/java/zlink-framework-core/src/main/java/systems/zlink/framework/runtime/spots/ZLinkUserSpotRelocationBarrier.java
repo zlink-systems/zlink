@@ -15,6 +15,7 @@ import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkCompositeRelocationBarrier;
 
@@ -28,6 +29,7 @@ final class ZLinkUserSpotRelocationBarrier {
     private final ZLinkActorSessionCoordinator actors;
     private final ZLinkCompositeRelocationBarrier barrier =
         new ZLinkCompositeRelocationBarrier();
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private Seal active;
     private boolean sealing;
     private boolean committing;
@@ -41,6 +43,21 @@ final class ZLinkUserSpotRelocationBarrier {
             actors, "actors");
     }
 
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
     Optional<Seal> trySeal() {
         return trySeal(ignored -> true);
     }
@@ -52,11 +69,15 @@ final class ZLinkUserSpotRelocationBarrier {
         Optional<ZLinkCompositeRelocationBarrier.Seal> localSeal =
             Optional.empty();
         Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> captured;
-        synchronized (this) {
+        boolean begin = inStateLane(() -> {
             if (active != null || sealing || committing) {
-                return Optional.empty();
+                return false;
             }
             sealing = true;
+            return true;
+        });
+        if (!begin) {
+            return Optional.empty();
         }
         boolean timerFrozen = false;
         try {
@@ -104,21 +125,23 @@ final class ZLinkUserSpotRelocationBarrier {
             throw failure;
         }
 
-        Seal result;
-        synchronized (this) {
+        ZLinkCompositeRelocationBarrier.Seal sealedComposite =
+            localSeal.orElseThrow();
+        Seal result = inStateLane(() -> {
             if (active == null && sealing && admitted) {
-                result = new Seal(
-                    localSeal.get(),
+                Seal sealed = new Seal(
+                    sealedComposite,
                     timerEnvelope.clone(),
                     participantActorIds,
                     captured);
-                active = result;
+                active = sealed;
                 sealing = false;
+                return sealed;
             } else {
-                result = null;
                 sealing = false;
+                return null;
             }
-        }
+        });
         if (result != null) {
             return Optional.of(result);
         }
@@ -132,17 +155,19 @@ final class ZLinkUserSpotRelocationBarrier {
         BooleanSupplier cancelled) {
         Objects.requireNonNull(admission, "admission");
         Objects.requireNonNull(cancelled, "cancelled");
-        List<String> participantActorIds;
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes;
-        synchronized (this) {
+        boolean available = inStateLane(() -> {
             if (active != null || sealing || committing) {
-                return CompletableFuture
-                    .completedFuture(Optional.empty());
+                return false;
             }
-            participantActorIds =
-                actors.actorIdsInSpot(context.spotId());
-            lanes = relocationLanes(participantActorIds);
+            return true;
+        });
+        if (!available) {
+            return CompletableFuture.completedFuture(Optional.empty());
         }
+        List<String> participantActorIds =
+            actors.actorIdsInSpot(context.spotId());
+        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes =
+            relocationLanes(participantActorIds);
         return barrier.sealAtTurnBoundary(lanes, cancelled)
             .thenApply(sealed -> finishTurnBoundarySeal(
                 sealed,
@@ -163,7 +188,10 @@ final class ZLinkUserSpotRelocationBarrier {
             () -> trySeal(admission),
             cancelled)
             .thenApply(sealed -> {
-                sealed.ifPresent(Seal::markApplicationSignaled);
+                sealed.ifPresent(value -> inStateLane(() -> {
+                    value.markApplicationSignaled();
+                    return null;
+                }));
                 return sealed;
             });
     }
@@ -179,12 +207,13 @@ final class ZLinkUserSpotRelocationBarrier {
         ZLinkCompositeRelocationBarrier.Seal composite =
             sealed.orElseThrow();
         boolean begin;
-        synchronized (this) {
-            begin = active == null && !sealing && !committing;
-            if (begin) {
+        begin = inStateLane(() -> {
+            boolean allowed = active == null && !sealing && !committing;
+            if (allowed) {
                 sealing = true;
             }
-        }
+            return allowed;
+        });
         if (!begin) {
             rollback(composite);
             return Optional.empty();
@@ -209,21 +238,21 @@ final class ZLinkUserSpotRelocationBarrier {
                 participantActorIds,
                 captured));
 
-            Seal result;
-            synchronized (this) {
+            Seal result = inStateLane(() -> {
                 if (active == null && sealing && admitted) {
-                    result = new Seal(
+                    Seal value = new Seal(
                         composite,
                         timerEnvelope,
                         participantActorIds,
                         captured);
-                    active = result;
+                    active = value;
                     sealing = false;
+                    return value;
                 } else {
-                    result = null;
                     sealing = false;
+                    return null;
                 }
-            }
+            });
             if (result != null) {
                 return Optional.of(result);
             }
@@ -245,9 +274,10 @@ final class ZLinkUserSpotRelocationBarrier {
     <T> CompletionStage<T> runCapture(
         Seal seal,
         Supplier<CompletionStage<T>> capture) {
-        synchronized (this) {
+        inStateLane(() -> {
             requireActive(seal);
-        }
+            return null;
+        });
         return barrier.runCapture(seal.composite, capture);
     }
 
@@ -262,14 +292,16 @@ final class ZLinkUserSpotRelocationBarrier {
      * bookkeeping can finish while every lane is still paused.
      */
     CompletionStage<Boolean> abortAsync(Seal seal, Runnable beforeLaneResume) {
-        boolean completionRequired;
-        synchronized (this) {
+        Boolean completionRequired = inStateLane(() -> {
             if (committing || seal == null || seal != active
                 || !seal.markAbortInProgress()) {
-                return CompletableFuture.completedFuture(false);
+                return null;
             }
-            completionRequired = seal.applicationSignaled()
+            return seal.applicationSignaled()
                 && seal.markCompletionScheduled();
+        });
+        if (completionRequired == null) {
+            return CompletableFuture.completedFuture(false);
         }
 
         CompletionStage<Void> completion;
@@ -288,15 +320,19 @@ final class ZLinkUserSpotRelocationBarrier {
         }
         return completion.handle((ignored, completionFailure) -> {
             boolean shouldResume;
-            synchronized (this) {
+            boolean activeSeal = inStateLane(() -> {
                 if (seal != active) {
-                    if (completionFailure != null) {
-                        throw new CompletionException(completionFailure);
-                    }
                     return false;
                 }
-                shouldResume = true;
+                return true;
+            });
+            if (!activeSeal) {
+                if (completionFailure != null) {
+                    throw new CompletionException(completionFailure);
+                }
+                return false;
             }
+            shouldResume = true;
             if (beforeLaneResume != null) {
                 beforeLaneResume.run();
             }
@@ -304,11 +340,12 @@ final class ZLinkUserSpotRelocationBarrier {
                 throw new IllegalStateException(
                     "User Spot barrier abort lost local lane");
             }
-            synchronized (this) {
+            inStateLane(() -> {
                 if (seal == active) {
                     active = null;
                 }
-            }
+                return null;
+            });
             if (shouldResume) {
                 context.resumeTimersAfterRelocationAbort();
             }
@@ -343,24 +380,32 @@ final class ZLinkUserSpotRelocationBarrier {
     }
 
     Optional<RelocationCommit> retainCommit(Seal seal) {
-        synchronized (this) {
+        boolean begin = inStateLane(() -> {
             if (committing || seal == null || seal != active
                 || seal.aborting()) {
-                return Optional.empty();
+                return false;
             }
             committing = true;
+            return true;
+        });
+        if (!begin) {
+            return Optional.empty();
         }
         ZLinkCompositeRelocationBarrier.RelocationCommit committed =
             barrier.retainCommit(seal.composite)
                 .orElseThrow(() -> new IllegalStateException(
                     "User Spot barrier commit lost a lane"));
-        synchronized (this) {
+        boolean retainedActive = inStateLane(() -> {
             if (active != seal) {
                 committing = false;
-                return Optional.empty();
+                return false;
             }
             active = null;
             committing = false;
+            return true;
+        });
+        if (!retainedActive) {
+            return Optional.empty();
         }
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
             heldIngress = new LinkedHashMap<>(committed.records());
@@ -373,17 +418,23 @@ final class ZLinkUserSpotRelocationBarrier {
             committed));
     }
 
-    synchronized Optional<Map<String, List<
+    Optional<Map<String, List<
         ZLinkAsyncSerialQueue.QueuedRecord>>> freezeIngress(Seal seal) {
-        if (committing || seal == null || seal != active) {
-            return Optional.empty();
-        }
-        if (seal.aborting()) {
+        ZLinkCompositeRelocationBarrier.Seal composite = inStateLane(() -> {
+            if (committing || seal == null || seal != active) {
+                return null;
+            }
+            if (seal.aborting()) {
+                return null;
+            }
+            return seal.composite;
+        });
+        if (composite == null) {
             return Optional.empty();
         }
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> held =
             new LinkedHashMap<>();
-        held.putAll(barrier.freezeIngress(seal.composite)
+        held.putAll(barrier.freezeIngress(composite)
             .orElseThrow(() -> new IllegalStateException(
                 "User Spot barrier freeze lost a lane")));
         return Optional.of(Collections.unmodifiableMap(held));
@@ -397,9 +448,10 @@ final class ZLinkUserSpotRelocationBarrier {
     }
 
     private void clearSealing() {
-        synchronized (this) {
+        inStateLane(() -> {
             sealing = false;
-        }
+            return null;
+        });
     }
 
     private void requireActive(Seal seal) {
@@ -472,15 +524,15 @@ final class ZLinkUserSpotRelocationBarrier {
             return capturedRecords;
         }
 
-        synchronized void markApplicationSignaled() {
+        void markApplicationSignaled() {
             applicationSignaled = true;
         }
 
-        synchronized boolean applicationSignaled() {
+        boolean applicationSignaled() {
             return applicationSignaled;
         }
 
-        synchronized boolean markCompletionScheduled() {
+        boolean markCompletionScheduled() {
             if (completionScheduled) {
                 return false;
             }
@@ -488,7 +540,7 @@ final class ZLinkUserSpotRelocationBarrier {
             return true;
         }
 
-        synchronized boolean markAbortInProgress() {
+        boolean markAbortInProgress() {
             if (aborting) {
                 return false;
             }
@@ -496,7 +548,7 @@ final class ZLinkUserSpotRelocationBarrier {
             return true;
         }
 
-        synchronized boolean aborting() {
+        boolean aborting() {
             return aborting;
         }
     }

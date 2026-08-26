@@ -19,6 +19,7 @@ import type {
 } from '../locations';
 import type { ZLinkBackendSubscriberSocket } from '../backend/contracts';
 import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
+import { ZLinkStateLane } from '../execution/state-lane';
 
 interface ActiveFanoutTarget {
   descriptor: ZLinkFanoutPublisherDescriptor;
@@ -30,6 +31,7 @@ interface ActiveFanoutTarget {
 }
 
 export class ZLinkFanoutLocationRuntime {
+  private readonly lane = new ZLinkStateLane();
   private readonly options: Required<ZLinkLocationOptionOverrides>;
   private readonly store: ZLinkFanoutLocationStore;
   private readonly localDescriptors =
@@ -64,27 +66,39 @@ export class ZLinkFanoutLocationRuntime {
   }
 
   async start(signal?: AbortSignal): Promise<void> {
-    if (this.controller !== undefined) return;
+    if (await this.lane.run(() => this.controller !== undefined)) return;
     await this.publishLocalPublishers(signal);
     await this.reconcileSubscribers(signal);
-    this.controller = new AbortController();
+    const started = await this.lane.run(() => {
+      if (this.controller !== undefined) return false;
+      this.controller = new AbortController();
+      return true;
+    });
+    if (!started) return;
     this.schedule();
   }
 
   async tick(signal?: AbortSignal): Promise<void> {
+    await this.tickCore(signal);
+  }
+
+  private async tickCore(signal?: AbortSignal): Promise<void> {
     await this.publishLocalPublishers(signal);
     await this.reconcileSubscribers(signal);
   }
 
   async stop(signal?: AbortSignal): Promise<void> {
-    this.controller?.abort();
-    this.controller = undefined;
-    if (this.timer !== undefined) {
-      clearTimeout(this.timer);
+    const timer = await this.lane.run(() => {
+      this.controller?.abort();
+      this.controller = undefined;
+      const current = this.timer;
       this.timer = undefined;
-    }
+      return current;
+    });
+    if (timer !== undefined) clearTimeout(timer);
+    const connectionIds = await this.lane.run(() => [...this.connections.keys()]);
     await Promise.allSettled(
-      [...this.connections.keys()].map(id => this.closeConnection(id))
+      connectionIds.map(id => this.closeConnection(id))
     );
     await this.removeLocalPublishers(signal);
   }
@@ -98,7 +112,8 @@ export class ZLinkFanoutLocationRuntime {
 
   async reclaimOwnerRows(signal?: AbortSignal): Promise<void> {
     const owner = this.requireOwnerToken();
-    for (const [channelName, current] of this.localDescriptors) {
+    const descriptors = await this.lane.run(() => [...this.localDescriptors]);
+    for (const [channelName, current] of descriptors) {
       if (current.ownerId === owner.ownerId
         && current.leaseGeneration === owner.leaseGeneration) {
         continue;
@@ -118,10 +133,10 @@ export class ZLinkFanoutLocationRuntime {
           `Fanout publisher '${channelName}' descriptor recovery was fenced.`
         );
       }
-      this.localDescriptors.set(channelName, {
+      await this.lane.run(() => this.localDescriptors.set(channelName, {
         ...candidate,
         updatedAt: result.updatedAt
-      });
+      }));
     }
   }
 
@@ -139,7 +154,7 @@ export class ZLinkFanoutLocationRuntime {
           `Fanout publisher '${channelName}' did not report a bound endpoint.`
         );
       }
-      const current = this.localDescriptors.get(channelName);
+      const current = await this.lane.run(() => this.localDescriptors.get(channelName));
       if (current !== undefined) {
         const result = await this.store.updateFanoutPublisher(
           current,
@@ -151,23 +166,28 @@ export class ZLinkFanoutLocationRuntime {
             `Fanout publisher '${channelName}' descriptor renewal was fenced.`
           );
         }
-        this.localDescriptors.set(channelName, {
+        await this.lane.run(() => this.localDescriptors.set(channelName, {
           ...current,
           updatedAt: result.updatedAt
-        });
+        }));
         continue;
       }
       const generatedLifecycle = BigInt(
         `0x${randomUUID().replaceAll('-', '').slice(0, 16)}`
       ) & 0x7fff_ffff_ffff_ffffn;
-      const identity = this.publisherIdentities.get(channelName) ?? {
+      const identity = await this.lane.run(() => {
+        const currentIdentity = this.publisherIdentities.get(channelName);
+        if (currentIdentity !== undefined) return currentIdentity;
+        const created = {
         publisherRid: channel.routingId
           ?? `${channel.routingIdPrefix ?? 'fanout'}-${randomUUID()}`,
         lifecycleGeneration: generatedLifecycle === 0n
           ? 1n
           : generatedLifecycle
-      };
-      this.publisherIdentities.set(channelName, identity);
+        };
+        this.publisherIdentities.set(channelName, created);
+        return created;
+      });
       const descriptor: ZLinkFanoutPublisherDescriptor = {
         channelName,
         publisherRid: identity.publisherRid,
@@ -190,10 +210,10 @@ export class ZLinkFanoutLocationRuntime {
           `Fanout publisher '${channelName}' descriptor claim failed with '${result.status}'.`
         );
       }
-      this.localDescriptors.set(channelName, {
+      await this.lane.run(() => this.localDescriptors.set(channelName, {
         ...descriptor,
         updatedAt: result.updatedAt
-      });
+      }));
     }
   }
 
@@ -209,9 +229,9 @@ export class ZLinkFanoutLocationRuntime {
         row
       ]));
       for (const [connectionId, descriptor] of desired) {
-        const current = this.connections.get(connectionId);
+        const current = await this.lane.run(() => this.connections.get(connectionId));
         if (current === undefined) {
-          this.openConnection(connectionId, descriptor);
+          await this.openConnection(connectionId, descriptor);
           continue;
         }
         if (descriptor.descriptorRevision
@@ -229,12 +249,15 @@ export class ZLinkFanoutLocationRuntime {
           await this.closeConnection(connectionId);
           continue;
         }
-        current.descriptor = descriptor;
+        await this.lane.run(() => {
+          if (this.connections.get(connectionId) === current) current.descriptor = descriptor;
+        });
         if (current.state === 'ready') {
           this.sockets.admitFanoutPublisher(descriptor, connectionId);
         }
       }
-      for (const [connectionId, current] of [...this.connections]) {
+      const connections = await this.lane.run(() => [...this.connections]);
+      for (const [connectionId, current] of connections) {
         if (current.descriptor.channelName === channelName
           && !desired.has(connectionId)) {
           await this.closeConnection(connectionId);
@@ -243,10 +266,10 @@ export class ZLinkFanoutLocationRuntime {
     }
   }
 
-  private openConnection(
+  private async openConnection(
     connectionId: string,
     descriptor: ZLinkFanoutPublisherDescriptor
-  ): void {
+  ): Promise<void> {
     let target: ActiveFanoutTarget | undefined;
     const subscriber = this.sockets.openFanoutSubscriberConnection(
       descriptor.channelName,
@@ -284,7 +307,7 @@ export class ZLinkFanoutLocationRuntime {
       stopReceiver: async () => {},
       state: 'connecting'
     };
-    this.connections.set(connectionId, target);
+    await this.lane.run(() => this.connections.set(connectionId, target));
     target.stopReceiver = this.onSubscriberOpened(
       descriptor.channelName,
       connectionId,
@@ -293,10 +316,15 @@ export class ZLinkFanoutLocationRuntime {
   }
 
   private async closeConnection(connectionId: string): Promise<void> {
-    const current = this.connections.get(connectionId);
+    const current = await this.lane.run(() => {
+      const target = this.connections.get(connectionId);
+      if (target !== undefined) {
+        target.reconnectEligible = false;
+        this.connections.delete(connectionId);
+      }
+      return target;
+    });
     if (current === undefined) return;
-    current.reconnectEligible = false;
-    this.connections.delete(connectionId);
     this.sockets.removeFanoutPublisher(current.descriptor, connectionId);
     await current.stopReceiver();
     await this.sockets.closeFanoutSubscriberConnection(connectionId);
@@ -305,16 +333,19 @@ export class ZLinkFanoutLocationRuntime {
   private async replaceConnection(
     expected: ActiveFanoutTarget
   ): Promise<void> {
-    const controller = this.controller;
-    if (this.connections.get(expected.connectionId) !== expected
-      || !expected.reconnectEligible
-      || controller === undefined) {
+    const prepared = await this.lane.run(() => {
+      const controller = this.controller;
+      if (this.connections.get(expected.connectionId) !== expected
+        || !expected.reconnectEligible
+        || controller === undefined) return undefined;
+      return { controller, descriptor: expected.descriptor };
+    });
+    if (prepared === undefined) {
       return;
     }
-    const descriptor = expected.descriptor;
     await this.closeConnection(expected.connectionId);
-    if (this.controller === controller) {
-      this.openConnection(expected.connectionId, descriptor);
+    if (await this.lane.run(() => this.controller === prepared.controller)) {
+      await this.openConnection(expected.connectionId, prepared.descriptor);
     }
   }
 
@@ -356,13 +387,14 @@ export class ZLinkFanoutLocationRuntime {
   private async removeLocalPublishers(signal?: AbortSignal): Promise<void> {
     const owner = this.locationRuntime.currentOwnerToken;
     if (owner === undefined) return;
-    for (const descriptor of this.localDescriptors.values()) {
+    const descriptors = await this.lane.run(() => [...this.localDescriptors.values()]);
+    for (const descriptor of descriptors) {
       await this.store.removeFanoutPublisher({
         channelName: descriptor.channelName,
         publisherRid: descriptor.publisherRid
       }, owner, signal);
     }
-    this.localDescriptors.clear();
+    await this.lane.run(() => this.localDescriptors.clear());
   }
 
   private requireOwnerToken(): ZLinkLocationOwnerToken {
@@ -379,7 +411,7 @@ export class ZLinkFanoutLocationRuntime {
     if (this.controller === undefined) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void this.tick(this.controller?.signal)
+      void this.tickCore(this.controller?.signal)
         .catch(error => this.locationRuntime.reportDiscoveryFailure(error))
         .finally(() => this.schedule());
     }, this.options.pollingIntervalMs);
