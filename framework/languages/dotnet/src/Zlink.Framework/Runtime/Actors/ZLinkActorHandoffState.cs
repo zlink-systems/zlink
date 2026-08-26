@@ -1917,68 +1917,43 @@ internal readonly record struct ZLinkActorMessageFollowRouteResolution(
 
 internal sealed class ZLinkActorMessageFollowLease(TimeProvider timeProvider)
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly ZLinkMessageFollowSuppressionRegistry _suppression = new(capacity: 1);
     private ZLinkActorMessageFollowLeasePhase _phase;
     private long _committedAt;
     private TimeSpan _duration;
 
     public bool IsActive
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _phase switch
-                {
-                    ZLinkActorMessageFollowLeasePhase.Pending => true,
-                    ZLinkActorMessageFollowLeasePhase.Committed =>
-                        timeProvider.GetElapsedTime(_committedAt) < _duration,
-                    _ => false
-                };
-            }
-        }
-    }
+        => AwaitStateLane(_lane.RunAsync(IsActiveCore));
 
     public bool IsCommitted
-    {
-        get
-        {
-            lock (_gate)
-                return _phase == ZLinkActorMessageFollowLeasePhase.Committed
-                       && timeProvider.GetElapsedTime(_committedAt) < _duration;
-        }
-    }
+        => AwaitStateLane(_lane.RunAsync(IsCommittedCore));
 
     public void Commit(TimeSpan duration)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_phase != ZLinkActorMessageFollowLeasePhase.Pending)
                 throw new InvalidOperationException("Actor Message Follow lease is not pending.");
             _committedAt = timeProvider.GetTimestamp();
             _duration = duration;
             _phase = ZLinkActorMessageFollowLeasePhase.Committed;
-        }
+        }));
     }
 
     public void Cancel()
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             _phase = ZLinkActorMessageFollowLeasePhase.Cancelled;
             _suppression.ExpireAll();
-        }
+        }));
     }
 
     internal bool TryBeginMessageFollowNotice(ZLinkMessageFollowFence fence)
     {
-        lock (_gate)
-        {
-            return _phase == ZLinkActorMessageFollowLeasePhase.Committed
-                   && timeProvider.GetElapsedTime(_committedAt) < _duration
-                   && _suppression.TryBegin(fence);
-        }
+        return AwaitStateLane(_lane.RunAsync(() =>
+            IsCommittedCore() && _suppression.TryBegin(fence)));
     }
 
     internal void MarkMessageFollowNoticeSent(ZLinkMessageFollowFence fence) =>
@@ -1986,6 +1961,25 @@ internal sealed class ZLinkActorMessageFollowLease(TimeProvider timeProvider)
 
     internal void AbortMessageFollowNotice(ZLinkMessageFollowFence fence) =>
         _suppression.Abort(fence);
+
+    private bool IsActiveCore() =>
+        _phase switch
+        {
+            ZLinkActorMessageFollowLeasePhase.Pending => true,
+            ZLinkActorMessageFollowLeasePhase.Committed =>
+                timeProvider.GetElapsedTime(_committedAt) < _duration,
+            _ => false
+        };
+
+    private bool IsCommittedCore() =>
+        _phase == ZLinkActorMessageFollowLeasePhase.Committed
+        && timeProvider.GetElapsedTime(_committedAt) < _duration;
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }
 
 internal enum ZLinkActorMessageFollowLeasePhase
