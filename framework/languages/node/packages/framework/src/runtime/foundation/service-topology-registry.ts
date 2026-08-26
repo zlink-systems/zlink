@@ -213,6 +213,10 @@ export class ServiceTopologyRegistry {
   }
 
   peers(): readonly AdmittedServicePeer[] {
+    return this.peersCore();
+  }
+
+  private peersCore(): readonly AdmittedServicePeer[] {
     return [...this.peersByRid.values()]
       .sort((left, right) => compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId))
       .map(clonePeer);
@@ -394,7 +398,7 @@ export class ServiceTopologyRegistry {
     const prefix = 'instance-spot-type:';
     return [...new Set([
       this.local,
-      ...this.peers().map(peer => peer.descriptor)
+      ...this.peersCore().map(peer => peer.descriptor)
     ]
       .filter(descriptor =>
         descriptor.state === 'serving'

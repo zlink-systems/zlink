@@ -80,10 +80,14 @@ export class ServiceDiscoveryRegistry {
   }
 
   selectClientServer(channelName: string): ClientServerDescriptor | undefined {
-    return this.selectClientServerConnection(channelName)?.descriptor;
+    return this.selectClientServerConnectionCore(channelName)?.descriptor;
   }
 
   selectClientServerConnection(channelName: string): SelectedClientServer | undefined {
+    return this.selectClientServerConnectionCore(channelName);
+  }
+
+  private selectClientServerConnectionCore(channelName: string): SelectedClientServer | undefined {
     let selection = this.clientServerSelections.get(channelName);
     if (selection === undefined) {
       selection = new SmoothWeightedSelection(() => this.clientServerCandidates(channelName));
