@@ -1,6 +1,7 @@
 using Systems.Zlink;
 using Microsoft.Extensions.Configuration;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using SupportChat.Server.Configuration;
 using SupportChat.Server.Api.Handlers;
@@ -22,6 +23,14 @@ public static class ApiServerHostFactory
             builder.Logging,
             logDirectory,
             "api");
+        builder.Services.AddSingleton(new SupportChatReadiness(
+            SupportChatReadyKind.Public,
+            "api"));
+        builder.Services.AddSingleton(new SupportChatReadiness(
+            SupportChatReadyKind.SpotRoute,
+            "api",
+            SampleNames.MeshName));
+        builder.Services.AddHostedService<SupportChatReadinessReporter>();
         builder.Services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(new ZLinkRedisLocationStore(redis =>

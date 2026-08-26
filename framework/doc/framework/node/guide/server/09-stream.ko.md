@@ -195,6 +195,13 @@ outbound frame에 flow 식별자를 만들거나 부착하지 않아 관측 전�
 ([Stream Connector 공통 스펙 §13](../../../common/spec/stream-connector/32-stream-connector.ko.md#13-diagnostics-level)).
 Request/response 매칭에 쓰는 correlation은 protocol 정보라 `off`에서도 그대로 동작한다.
 
+```typescript
+const options = {
+    endpoint: 'ws://game.example.com:9100',
+    diagnosticsLevel: ZlinkStreamDiagnosticsLevel.Off,
+};
+```
+
 ## 6. Client send와 request
 
 ```typescript

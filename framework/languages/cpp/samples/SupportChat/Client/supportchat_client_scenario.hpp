@@ -4,7 +4,6 @@
 #include "../Shared/Contracts/messages.hpp"
 
 #include <zlink/framework/codecs/json_stream_connector.hpp>
-#include <zlink/http_client.hpp>
 #include <zlink/stream_connector.hpp>
 #include <zlink/stream_e2e_client.hpp>
 #include <zlink/stream_e2e_client/codecs/auto_codec.hpp>
@@ -31,20 +30,9 @@ class supportchat_client_scenario_t
   public:
     /* 공통 sample spec §1: client는 Session stream 하나만 사용한다. 서버 내부 불변식
      * 상담원 가용성과 대화 순서는 실제 request·push 흐름의 결과로 검증한다. */
-    void run (const std::string &session_stream_endpoint,
-              const std::string &support_http_url)
+    void run (const std::string &session_stream_endpoint)
     {
-        run_server_self_check (support_http_url);
         run_stream_conversation (session_stream_endpoint);
-
-        std::cout << "supportchat authentication=verified" << std::endl;
-        std::cout << "supportchat conversation-assignment=verified" << std::endl;
-        std::cout << "supportchat bound-push=verified" << std::endl;
-        std::cout << "supportchat reconnect=verified" << std::endl;
-        std::cout << "supportchat idle-resume=verified" << std::endl;
-        std::cout << "supportchat idle-close=verified" << std::endl;
-        std::cout << "supportchat closed-typing-ignore=verified" << std::endl;
-        std::cout << "supportchat=completed" << std::endl;
     }
 
   private:
@@ -60,22 +48,6 @@ class supportchat_client_scenario_t
         options.request_timeout = std::chrono::seconds (12);
         options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
         return zlink::stream_connector::connector_factory_t::create (options);
-    }
-
-    static void run_server_self_check (const std::string &support_http_url)
-    {
-        auto support = zlink::http_client::client_t::create (support_http_url)
-                         .timeout (std::chrono::seconds (5))
-                         .build ();
-        const auto assertion = support.post ("/self-check/assert")
-                                 .body (supportchat_server_assertion_req_t{})
-                                 .fetch<supportchat_server_assertion_res_t> ();
-        expect (assertion.ok, "SupportChat server self-check failed");
-        require_evidence (assertion.evidence, "one-agent-many-conversations=verified");
-        require_evidence (assertion.evidence, "conversation-sequence=verified");
-        require_evidence (assertion.evidence, "idle-resume=verified");
-        require_evidence (assertion.evidence, "closed-typing-ignore=verified");
-        require_evidence (assertion.evidence, "no-agent-waiting=verified");
     }
 
     static void run_stream_conversation (const std::string &endpoint)
@@ -96,6 +68,7 @@ class supportchat_client_scenario_t
           request<authenticate_res_t> (agent, authenticate_req_t{"agent"}, "agent auth failed");
         expect (customer_auth.role == role_t::customer, "customer role mismatch");
         expect (agent_auth.role == role_t::agent, "agent role mismatch");
+        std::cout << "supportchat authentication=verified" << std::endl;
 
         auto customer_availability =
           customer.request (set_agent_available_req_t{true})
@@ -117,6 +90,7 @@ class supportchat_client_scenario_t
         expect_public_contract (opened, "open conversation response");
         expect (assigned.get ().conversation_id == opened.conversation_id,
                 "assignment notification mismatch");
+        std::cout << "supportchat conversation-assignment=verified" << std::endl;
 
         auto joined_customer = wait_joined (
           customer, opened.conversation_id, "customer participant join wait failed");
@@ -160,6 +134,7 @@ class supportchat_client_scenario_t
                 "customer did not receive agent greeting");
         expect_public_contract (greeting, "agent greeting response");
         expect_public_contract (greeting_notify, "customer greeting notification");
+        std::cout << "supportchat bound-push=verified" << std::endl;
 
         auto reply_for_agent = wait_chat (
           agent, opened.conversation_id, "Payment keeps failing.");
@@ -301,6 +276,7 @@ class supportchat_client_scenario_t
                 "second reconnect must return current state");
         expect (rejoined_second.state.last_message_seq == 1,
                 "second conversation history must survive the reconnect");
+        std::cout << "supportchat reconnect=verified" << std::endl;
 
         /* Register both idle waits before the timer can publish. The first idle
          * transition is resumed within the grace window, then the next idle
@@ -341,6 +317,7 @@ class supportchat_client_scenario_t
           .metadata (conversation_id_metadata_key, second_opened.conversation_id)
           .submit ();
         closed_typing_none.get ();
+        std::cout << "supportchat-closed-typing-ignore=verified" << std::endl;
 
         expect (first_idle_customer.get ().state.status == conversation_status_t::waiting_for_close,
                 "customer did not receive idle notification");
@@ -357,6 +334,7 @@ class supportchat_client_scenario_t
                 "idle conversation did not resume within grace");
         expect (resumed_for_agent.get ().state.status == conversation_status_t::active,
                 "agent did not receive resumed conversation message");
+        std::cout << "supportchat idle-resume=verified" << std::endl;
 
         auto second_idle_customer = wait_idle (
           reconnected_customer, opened.conversation_id,
@@ -378,6 +356,7 @@ class supportchat_client_scenario_t
                 "customer did not receive closed notification");
         expect (first_closed_agent.get ().state.status == conversation_status_t::closed,
                 "agent did not receive closed notification");
+        std::cout << "supportchat idle-close=verified" << std::endl;
 
         (void) zlink::stream_connector::assertions::expect_failure ([&] {
             return reconnected_customer.request (send_chat_message_req_t{"are you there?"})
@@ -404,6 +383,7 @@ class supportchat_client_scenario_t
                   && no_agent_open.state.conversation_id == no_agent_open.conversation_id,
                 "no-agent conversation did not remain waiting");
         expect_public_contract (no_agent_open, "no-agent open response");
+        std::cout << "supportchat=completed" << std::endl;
     }
 
     static std::future<conversation_idle_notify_t> wait_idle (connector_t &connector,
@@ -539,13 +519,6 @@ class supportchat_client_scenario_t
             }
         };
         inspect (wire);
-    }
-
-    static void require_evidence (const std::vector<std::string> &evidence,
-                                  const std::string &expected)
-    {
-        const auto found = std::find (evidence.begin (), evidence.end (), expected);
-        expect (found != evidence.end (), "missing support evidence: " + expected);
     }
 
     static void expect (bool condition, const std::string &message)

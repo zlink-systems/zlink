@@ -16,7 +16,7 @@ class ContinueWorkflowHandler implements ZLinkSpotRequestHandler<OrderWorkflowSp
   ) {}
 
   async handle(spot: OrderWorkflowSpot, request: ContinueOrderWorkflowReq): Promise<ContinueOrderWorkflowRes> {
-    const response = this.workflow.continue(request, this.role);
+    const response = this.workflow.continue(request, this.role, BigInt(spot.context.objectGeneration));
     if (response.state.status === OrderStatuses.Confirmed || response.state.status === OrderStatuses.Failed) {
       await spot.context.close();
     }

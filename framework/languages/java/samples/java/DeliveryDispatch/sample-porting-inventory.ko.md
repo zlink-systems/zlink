@@ -60,7 +60,7 @@
 | delivery-success statuses | `DeliveryDispatchClientScenario` | validation | done | typed callback으로 기록한 실제 도착 순서가 `Assigned`, `Accepted`, `PickedUp`, `Delivered`인지 확인하고 각 알림의 `courier-a`를 검증한다. |
 | delivery-reassign statuses | `DeliveryDispatchClientScenario` | validation | done | typed callback으로 기록한 실제 도착 순서가 `Assigned`, `Reassigned`, `Accepted`, `Delivered`인지 확인하고 필요한 알림의 `courier-b`를 검증한다. |
 | server evidence check | `DispatchHttpServer`, `EvidenceStore` | validation | done | `/self-check/assert`가 두 delivery의 상태 순서를 검증한다. |
-| topology marker | `run_sample.sh` | validation | done | 모든 role readiness 뒤 `topology=ready`를 출력한다. |
+| readiness evidence | `run_sample.sh` | validation | done | 여섯 route와 dispatch의 courier actor route readiness를 확인한다. |
 | reassignment marker | `DeliveryDispatchClientScenario` | validation | done | `deliverydispatch-reassignment=completed`를 출력한다. |
 | server evidence marker | `DeliveryDispatchClientScenario` | validation | done | `deliverydispatch-server-evidence=completed`를 출력한다. |
 | final marker | `run_sample.sh`, client scenario | validation | done | `deliverydispatch=completed`와 runner 완료 marker를 검증한다. |

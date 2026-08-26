@@ -2,6 +2,7 @@
 
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
+#include "../Configuration/sample_readiness.hpp"
 #include "../../Shared/Contracts/messages.hpp"
 
 #include <zlink/framework.hpp>
@@ -314,6 +315,16 @@ class gamequest_session_t final : public packet_stream_session_t
         }
         if (packet == projection_admin_req_t::packet_name) {
             const auto request = payload.parse_json<projection_admin_req_t> ();
+            if (request.operation == "close") {
+                co_await _routes.send_to_spot (
+                  player_spot_id (request.player_id),
+                  close_player_quest_msg_t{std::string ("client-self-check")})
+                  .submit ();
+                stream.reply_packet (zlink::message_t::from_json (
+                  projection_admin_res_t{true, _store.projection (request.player_id)}))
+                  .submit ();
+                co_return;
+            }
             auto result =
               co_await _routes.request_to_spot (player_spot_id (request.player_id), request)
                 .instance_spot (sample_names_t::player_quest_spot)
@@ -332,7 +343,15 @@ class gamequest_session_t final : public packet_stream_session_t
             const auto request = payload.parse_json<kill_monster_req_t> ();
             const auto event = event_for (request.player_id, request.idempotency_key,
                                           "MonsterKilled", request.monster_id, 1);
-            co_await apply_event (event);
+            try {
+                co_await apply_event (event);
+            }
+            catch (const framework_exception_t &error) {
+                if (error.kind () == framework_error_kind_t::unavailable) {
+                    std::cerr << "gamequest-owner unavailable player=" << request.player_id << "\n";
+                }
+                throw;
+            }
             stream.reply_packet (zlink::message_t::from_json (kill_monster_res_t{event.event_id}))
               .submit ();
             co_return;
@@ -386,8 +405,7 @@ class gamequest_session_t final : public packet_stream_session_t
           .instance_spot (sample_names_t::player_quest_spot)
           .submit ();
         _store.record_event (event);
-        std::cerr << "gamequest api event routed player=" << event.player_id
-                  << " type=" << event.type << "\n";
+        std::cerr << "gamequest-api event-routed player=" << event.player_id << "\n";
         co_return;
     }
 
@@ -415,45 +433,6 @@ class server_assertion_http_handler_t
 
   private:
     game_api_store_t &_store;
-};
-
-class route_ready_http_handler_t
-{
-  public:
-    using dependency_types = dependency_list_t<route_mesh_runtime_t>;
-
-    explicit route_ready_http_handler_t (route_mesh_runtime_t &runtime) : _runtime (runtime) {}
-
-    http_response_t handle (const http_request_t &request)
-    {
-        const auto found = request.query_values.find ("targetRid");
-        if (found == request.query_values.end () || found->second.empty ()) {
-            return {.status = 400, .body = R"({"error":"targetRid is required"})"};
-        }
-
-        const auto snapshot = _runtime.snapshot ("gamequest");
-        for (const auto &peer : snapshot.peers) {
-            if (peer.node_rid.to_string () == found->second && snapshot.placement.is_available
-                && peer.state == peer_state_t::ready) {
-                return {.body =
-                          nlohmann::json{{"ready", true}, {"targetRid", found->second}}.dump ()};
-            }
-        }
-
-        nlohmann::json peers = nlohmann::json::array ();
-        for (const auto &peer : snapshot.peers) {
-            peers.push_back (
-              {{"rid", peer.node_rid.to_string ()}, {"state", static_cast<int> (peer.state)}});
-        }
-        return {.status = 503,
-                .body = nlohmann::json{{"ready", false},
-                                       {"targetRid", found->second},
-                                       {"peers", std::move (peers)}}
-                          .dump ()};
-    }
-
-  private:
-    route_mesh_runtime_t &_runtime;
 };
 
 } // namespace zlink::samples::gamequest
@@ -493,10 +472,13 @@ int main (int argc, char **argv)
     options.add_stream_node (sample_names_t::stream_node)
       .bind (topology.selected_api_stream_endpoint ())
       .register_session<gamequest_session_t> ();
+    app.add_hosted_service (
+      std::make_unique<sample_readiness_service_t> ("stream", topology.api_name));
+    app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (
+      "gamequest", topology.api_name));
     options.http ()
       .listen (topology.selected_api_http_url ())
       .map_health ("/health")
-      .map_get<route_ready_http_handler_t> ("/ready")
       .map_post<server_assertion_http_handler_t> ("/self-check/assert");
     return app.run (argc, argv);
 }

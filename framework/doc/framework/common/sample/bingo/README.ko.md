@@ -777,6 +777,52 @@ sample README에 기록한다.
 Docker를 사용할 수 없거나 Redis가 ready가 아니면 명확한 오류로 중단한다. 이미 실행 중인 host Redis를
 대신 사용하지 않는다. Readiness 전 client 실행이나 고정 sleep 후 실행은 허용하지 않는다.
 
+### 10.1 Runner가 확인하는 server-side evidence
+
+Runner는 아래 표의 문자열을 그대로 찾는다. 문자열은 언어별 재량이 아니다. 다섯 구현이 같은
+문자열을 같은 횟수로 출력해야 하며, 문구를 바꾸려면 이 표를 먼저 바꾼다.
+
+Readiness는 client를 시작하기 전에 확인한다. Node 이름은 `api-a`, `api-b`, `matchmaking`,
+`play-a`, `play-b`, `session-a`, `session-b`로 고정한다.
+
+| 확인하는 사실 | 로그 | 출력 node |
+| --- | --- | --- |
+| Play node가 상대 Play node를 peer로 admit했다 | `bingo-ready kind=peer-route node=<NodeId> peer=<PeerNodeId>` | `play-a`, `play-b` |
+| Node가 mesh route를 확보했다 | `bingo-ready kind=mesh-route node=<NodeId> mesh=<MeshName>` | `api-a`, `api-b`(`matchmaking`, `room`), `session-a`, `session-b`(`room`) |
+
+Play node가 API channel에 도달할 수 있다는 사실은 따로 readiness 행을 두지 않는다 — 아래
+`bingo-record fetched`/`reported`가 Play node에서 API로의 실제 request 왕복이 성공한 뒤에만
+찍히므로 그 두 행이 같은 사실을 업무 traffic으로 증명한다. Readiness를 위해 합성 request를
+보내지 않는다.
+
+업무 evidence는 client scenario가 끝난 뒤 확인한다. `<N>`은 십진수이며 앞자리를 채우지 않는다.
+
+| 확인하는 사실 | 로그 | 정확한 횟수 |
+| --- | --- | --- |
+| player record를 읽었다 | `bingo-record fetched actor=player-1 wins=0 losses=0` | 1 |
+| player record를 읽었다 | `bingo-record fetched actor=player-2 wins=0 losses=0` | 1 |
+| 승자 record를 기록했다 | `bingo-record reported actor=player-1 wins=1 losses=0` | 1 |
+| 패자 record를 기록했다 | `bingo-record reported actor=player-2 wins=0 losses=1` | 1 |
+| Observer는 record를 기록하지 않는다 | `bingo-record reported actor=observer` | 0 |
+| room에서 나갔다 | `bingo-lifecycle room-leave actor=<ActorId>` | `player-1` 1, `player-2` 1, `observer` 1 |
+| Entry Spot에서 나갔다 | `bingo-lifecycle entry-leave actor=<ActorId>` | `player-1` 1, `player-2` 1, `observer` 1 |
+| Entry Spot 복귀 뒤 destroy가 끝났다 | `bingo-lifecycle entry-destroy-complete actor=<ActorId>` | `player-1` 1, `player-2` 1 |
+| Observer는 destroy되지 않는다 | `bingo-lifecycle entry-destroy-complete actor=observer` | 0 |
+| disconnect가 actor를 destroy하지 않았다 | `bingo-lifecycle session-disconnect actor=<ActorId> destroy=false` | `player-1` 1, `player-2` 1 |
+
+`bingo-record`와 `bingo-lifecycle` 행은 두 Play node 로그를 합쳐 센다.
+`bingo-lifecycle session-disconnect` 행은 두 Session node 로그를 합쳐 센다.
+어느 player가 어느 node에 배치되는지는 확인 대상이 아니다 — §9의 배치 독립성 때문에 고정하지 않는다.
+
+Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 업무 evidence에 같이
+적용한다. 대기 없이 한 번만 읽거나 고정 sleep 뒤 읽는 방식은 허용하지 않는다.
+
+모든 행이 통과하면 runner가 마지막에 `bingo-placement=completed`를 출력한다. 한 행이라도 실패하면
+이 marker를 출력하지 않는다.
+
+기본 smoke는 §10의 여덟 단계만 실행한다. Drain, node 교체와 rolling relocation은 기본 sample의
+성공 조건이 아니다 — §7.6의 relocation 계약은 [Config 11 관측·운영 E2E](../../e2e/config-11-observability-ops.ko.md)가 검증한다.
+
 ## 11. 완료 기준
 
 다음 조건을 모두 만족하면 해당 언어의 Bingo sample이 완료된 것으로 본다.
@@ -792,7 +838,8 @@ Docker를 사용할 수 없거나 Redis가 ready가 아니면 명확한 오류�
 - Disconnect는 binding cleanup만 시작하며 Actor destroy나 room leave를 직접 실행하지 않는다.
 - Game 종료 뒤 result report, Entry Spot 복귀와 Actor destroy가 정해진 순서로 완료된다.
 - Client self-check의 모든 payload와 ordering assertion이 통과한다.
-- Runner가 readiness, Redis lifecycle, server-side evidence와 두 완료 marker를 확인한다.
+- Runner가 readiness, Redis lifecycle과 두 완료 marker를 확인하고, §10.1 표의 모든 행을
+  문자열과 횟수까지 통과시킨다.
 - Domain에는 Framework와 Redis type이 없고, sample 전용 route·codec·polling helper가 없다.
 - .NET, Java, Kotlin, Node와 C++ 구현은 같은 message schema, 업무 순서와 최종 결과를 유지한다.
 

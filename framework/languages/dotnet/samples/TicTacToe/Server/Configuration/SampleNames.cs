@@ -1,3 +1,5 @@
+using Systems.Zlink;
+
 namespace TicTacToe.Server.Configuration;
 
 internal static class SampleChannels
@@ -21,6 +23,9 @@ internal static class SampleNodes
 {
     public const string Mesh = "tictactoe";
     public const string ClientStream = "client-stream";
+
+    public static RoutingId RouteMeshRoutingId(string instanceName) =>
+        RoutingId.From($"tictactoe-{instanceName}");
 }
 
 internal static class SampleTopics

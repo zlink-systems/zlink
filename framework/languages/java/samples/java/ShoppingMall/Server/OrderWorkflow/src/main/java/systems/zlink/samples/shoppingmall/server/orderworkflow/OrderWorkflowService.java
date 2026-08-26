@@ -51,8 +51,12 @@ public final class OrderWorkflowService {
             store.findProjection(request.orderId()));
     }
 
-    public Messages.OrderState continueOrderInSpot(String orderId) {
+    public Messages.OrderState continueOrderInSpot(OrderWorkflowSpot spot, String orderId) {
         Messages.OrderState state = saveProjection(orderId);
+        if (Messages.OrderStatuses.InventoryReserved.equals(state.status())) {
+            System.out.println("shoppingmall-order replayed order=" + orderId
+                + " generation=" + spot.context().objectGeneration());
+        }
         if (Messages.OrderStatuses.Created.equals(state.status())) {
             state = reserveInventory(orderId, state);
         }

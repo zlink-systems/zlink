@@ -7,6 +7,10 @@ import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
@@ -144,8 +148,21 @@ public final class GameQuestSession implements ZLinkSession {
             1,
             true);
         store.recordGameplay(event);
-        return process(event).thenAccept(ignored ->
-            context.client().reply(new Messages.KillMonsterRes(event.eventId())).submit());
+        return process(event)
+            .thenRun(() -> System.out.printf(
+                "gamequest-api event-routed player=%s%n", event.playerId()))
+            .thenCompose(ignored ->
+                context.client().reply(new Messages.KillMonsterRes(event.eventId())).submit())
+            .exceptionallyCompose(error -> {
+                if (isUnavailable(error)) {
+                    System.out.printf("gamequest-owner unavailable player=%s%n", event.playerId());
+                    return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "Mission owner is unavailable",
+                        error));
+                }
+                return CompletableFuture.failedFuture(error);
+            });
     }
 
     private CompletionStage<Void> handleCollect(Messages.CollectItemMsg message) {
@@ -204,6 +221,22 @@ public final class GameQuestSession implements ZLinkSession {
             .instanceSpot(SampleNames.PlayerQuestSpotType)
             .inMesh(SampleNames.PlayerQuestSpotDiscovery)
             .submit();
+    }
+
+    private static boolean isUnavailable(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof ZLinkFrameworkException framework
+                && framework.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE) {
+                return true;
+            }
+            if (current instanceof ZlinkSubmitException submit
+                && submit.getResult() == SubmitResult.NOT_CONNECTED) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private CompletionStage<ActorRef> ensurePlayerActor(Messages.JoinSessionReq request) {

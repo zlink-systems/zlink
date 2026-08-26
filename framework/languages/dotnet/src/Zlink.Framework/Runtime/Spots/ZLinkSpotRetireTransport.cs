@@ -835,7 +835,12 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 "Standalone Actor relocation must be handled by the Actor maintenance owner.");
         //  Spec 28 §4.3: the aggregate envelope arrived over relocationState
         //  chunks and was verified before this call — no store handoff read.
+        // The canonical relocation envelope deliberately excludes the private
+        // participant-recovery projection.  A decoded canonical envelope
+        // therefore has empty recovery payloads; only decode the projection
+        // when this caller supplied one outside that canonical wire path.
         var recoveries = envelope.Participants
+            .Where(static participant => !participant.RecoveryPayload.IsEmpty)
             .Select(participant =>
                 ZLinkCanonicalParticipantRecoveryCodec.Decode(
                     participant.RecoveryPayload.Span))
@@ -854,9 +859,14 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     recovery.AuthorityPayload.ToArray());
             })
             .ToArray();
-        var spotRecovery = recoveries.Single(static recovery =>
+        var spotRecovery = recoveries.SingleOrDefault(static recovery =>
             recovery.ObjectKind is ZLinkPlacementObjectKind.UserSpot
                 or ZLinkPlacementObjectKind.InstanceSpot);
+        var stableType = spotRecovery?.StableType
+                         ?? await ResolveCanonicalSpotStableTypeAsync(
+                                 prepare,
+                                 cancellationToken)
+                             .ConfigureAwait(false);
         var context = new ZLinkCanonicalSpotStageContext(
             envelope.AggregateId,
             envelope.AggregateGeneration,
@@ -873,7 +883,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             prepare.Target.OwnerId,
             prepare.Target.OwnerLeaseGeneration,
             prepare.Object.ObjectId,
-            spotRecovery.StableType,
+            stableType,
             prepare.Object.Kind == 3,
             string.Empty,
             prepare.PayloadChecksumCrc32c,
@@ -889,6 +899,31 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 "Canonical target staging was rejected.", ZLinkRetryAdvice.RetryAfterBackoff);
+    }
+
+    private async ValueTask<string> ResolveCanonicalSpotStableTypeAsync(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        CancellationToken cancellationToken)
+    {
+        if (prepare.Object.Kind == (byte)ZLinkPlacementObjectKind.InstanceSpot)
+            return prepare.Object.StableType;
+
+        var authorityStore = registration.Locations.ResolveStore()
+                             ?? throw new ZLinkConfigurationException(
+                                 "Location Store is not registered.");
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(
+            prepare.Object.ObjectId);
+        var read = await authorityStore.ReadAuthorityAsync(key, cancellationToken)
+            .ConfigureAwait(false);
+        if (read is not ZLinkAuthorityReadResult.Found found
+            || !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
+                found.Snapshot.Payload.Span,
+                out var source)
+            || source.SpotId != prepare.Object.ObjectId
+            || string.IsNullOrEmpty(source.StableType))
+            throw new ZLinkRelocationDataLostException(
+                "Canonical User SPOT relocation source authority is invalid.");
+        return source.StableType;
     }
 
     internal void ScheduleCanonicalCutoverFallback(
@@ -1357,16 +1392,33 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 throw new ZLinkRelocationDataLostException(
                     $"Canonical relocation authority '{keys[index].Value}' is unavailable.");
             var state = orderedStates[index];
+            var objectKind = index == 0
+                ? request.InstanceSpot
+                    ? ZLinkPlacementObjectKind.InstanceSpot
+                    : ZLinkPlacementObjectKind.UserSpot
+                : ZLinkPlacementObjectKind.Actor;
+            var stableType = index == 0
+                ? request.StableType
+                : request.Actors[index - 1].StableType;
+            var authorityPayload = index == 0
+                ? found.Snapshot.Payload
+                : request.Actors[index - 1].AuthorityPayload;
             bound[index] = state with
             {
                 AuthorityKey = keys[index],
-                ObjectKind = index == 0
-                    ? request.InstanceSpot
-                        ? ZLinkPlacementObjectKind.InstanceSpot
-                        : ZLinkPlacementObjectKind.UserSpot
-                    : ZLinkPlacementObjectKind.Actor,
+                ObjectKind = objectKind,
                 ObjectGeneration = found.Snapshot.ObjectGeneration,
-                AuthorityOwnerGeneration = found.Snapshot.AuthorityOwnerGeneration
+                AuthorityOwnerGeneration = found.Snapshot.AuthorityOwnerGeneration,
+                RecoveryPayload = ZLinkCanonicalParticipantRecoveryCodec.Encode(
+                    new ZLinkCanonicalParticipantRecovery(
+                        keys[index],
+                        objectKind,
+                        found.Snapshot.ObjectGeneration,
+                        found.Snapshot.AuthorityOwnerGeneration,
+                        found.Snapshot.StoreVersion,
+                        stableType,
+                        authorityPayload,
+                        ReadOnlyMemory<byte>.Empty))
             };
         }
         return envelope with
@@ -2530,6 +2582,7 @@ internal sealed record TargetStage(
     public int ReplayedJobCount;
     public int LocalCatalogPublished;
     public int RelocationReadyDelivered;
+    public int RelocatedInitializationCompleted;
     private int _sessionRouteConvergenceRunning;
     private ZLinkRelocationParticipantEnvelope? _spotParticipant;
     public SemaphoreSlim PublishGate { get; } = new(1, 1);

@@ -825,3 +825,25 @@ self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열�
 언어별 runner가 일부 ID를 runner-driven으로 구현할 수는 있으나(예: C4 fault 주입), ID의
 전제·행동·단언 의미는 바꾸지 않는다. 이 표에 없는 ID를 새로 만들 때는 이 문서에 먼저
 추가한다.
+
+#### ZoneNode를 멈추고 다시 띄우는 시나리오의 고정값
+
+여러 시나리오가 ZoneNode를 멈춘다. **어떤 방식으로 멈추는지와 다시 띄울 때 어떤 zone 집합을
+갖는지는 언어별 재량이 아니다.** 이 값이 비어 있어서 네 구현이 서로 다른 신호를 썼고, 같은 ID가
+언어마다 다른 것을 시험했다.
+
+| ID | 멈추는 방식 | 근거 |
+| --- | --- | --- |
+| ZW-B4 | 급정지(abrupt) | publish가 즉시 끊겨야 3 tick expiry를 관측한다 |
+| ZW-C2 | 정상 종료(graceful) | 표의 전제가 "정상 종료"다. drain 경로의 disconnect event를 본다 |
+| ZW-C3 | 급정지(abrupt) | §2.2 — "crash된 node는 false report를 보낼 수 없으므로 이 TTL이 유일한 false 전환 규칙이다" |
+| ZW-E5 | 급정지(abrupt) | maintenance desired state가 process 밖 store에 있음을 보인다 |
+| ZW-G3 | 정상 종료(graceful) | 표의 전제가 "정상 교체(stop→start)"다 |
+| ZW-G4 | 급정지(abrupt) | 표의 전제가 "crash 교체(kill→start)"다 |
+
+**다시 띄운 ZoneNode는 zone을 되찾지 않는다.** §2.2가 "Ready owner 장애는 자동 replacement가
+아니다"라고 정하므로, 재기동한 process는 **zone 0개로 ready가 되는 replacement 구성**으로
+띄운다. 멈춘 방식이 정상 종료든 급정지든 같다. zone을 claim하는 것은 최초 cold start뿐이다.
+
+이 값을 비워 두면 재기동한 node가 zone 2개를 요구하며 claim을 반복하다 예산을 소진한다 —
+실제로 cpp 구현이 그 상태였다.

@@ -9,6 +9,15 @@ const SampleNames = {
   customerActorType: 'delivery-customer'
 } as const;
 
+const DeliveryDispatchNodeIds = {
+  dispatch: 'dispatch',
+  tracking: 'tracking',
+  courierNode1: 'courier-node-1',
+  courierNode2: 'courier-node-2',
+  customerGateway: 'customer-gateway',
+  courierSession: 'courier-session'
+} as const;
+
 const SampleTimings = {
   requestTimeout: 10000,
   offerDecisionTimeout: 700,
@@ -17,6 +26,7 @@ const SampleTimings = {
 } as const;
 
 export {
+  DeliveryDispatchNodeIds,
   SampleNames,
   SampleTimings
 };

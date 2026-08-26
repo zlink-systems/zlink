@@ -29,7 +29,9 @@ class DeliveryStatusChangedHandler implements ZLinkRequestHandler<DeliveryStatus
       request.occurredAtUnixMs,
       request.courierId
     )).submit();
-    console.error(`deliverydispatch tracking: status delivery=${request.deliveryId} status=${request.status} courier=${request.courierId ?? '-'}`);
+    if (request.status === 'Delivered') {
+      console.log(`deliverydispatch-tracking status=Delivered delivery=${request.deliveryId}`);
+    }
     return { deliveryId: request.deliveryId, status: request.status };
   }
 }

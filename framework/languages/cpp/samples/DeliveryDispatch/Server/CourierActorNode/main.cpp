@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "../Configuration/sample_names.hpp"
+#include "../Configuration/sample_readiness.hpp"
 #include "../Configuration/sample_timings.hpp"
 #include "../Configuration/sample_configuration.hpp"
 
@@ -84,6 +85,8 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
                                                      message_context_t &,
                                                      const bind_courier_session_req_t &request)
     {
+        std::cerr << "deliverydispatch-courier bind-relayed courier=" << request.courier_id
+                  << "\n";
         return {request.courier_id};
     }
 
@@ -163,5 +166,7 @@ int main (int argc, char **argv)
       .add_actor_factory<courier_actor_t, courier_actor_factory_t> (
         sample_names_t::courier_actor_type)
       .disable_relocation ();
+    app.add_hosted_service (std::make_unique<route_readiness_service_t> (
+      instance_name, sample_names_t::courier_actor_discovery));
     return app.run (argc, argv);
 }

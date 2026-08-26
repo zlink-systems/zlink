@@ -30,8 +30,7 @@ internal sealed class PlayActorLeaveGameHandler(ILogger<PlayActorLeaveGameHandle
         await spot.LeaveGameAsync(actor, message.RoomId, cancellationToken);
 
         logger.LogInformation(
-            "actor: LeaveGameMsg completed. actor={ActorId}, roomId={RoomId}",
-            actor.ActorId,
-            message.RoomId);
+            "tictactoe-lifecycle leave-completed actor={ActorId}",
+            actor.ActorId);
     }
 }

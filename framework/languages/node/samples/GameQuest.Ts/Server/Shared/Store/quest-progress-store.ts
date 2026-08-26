@@ -129,6 +129,16 @@ class QuestEventStore {
     });
   }
 
+  consumeReplayAfterClose(playerId: string): boolean {
+    return this.partitions.update(playerId, (state) => {
+      const closed = state.ownerLifecycle.some((entry) => entry.endsWith(`:close:${playerId}`));
+      const replayed = state.ownerLifecycle.some((entry) => entry.startsWith(`${playerId}:replayed:`));
+      if (!closed || replayed) return false;
+      state.ownerLifecycle.push(`${playerId}:replayed:${state.ownerLifecycle.length + 1}`);
+      return true;
+    });
+  }
+
   readQuestEventNames(): string[] {
     return this.partitions.keys().flatMap((playerId) => this.read(playerId).map((event) => event.type));
   }

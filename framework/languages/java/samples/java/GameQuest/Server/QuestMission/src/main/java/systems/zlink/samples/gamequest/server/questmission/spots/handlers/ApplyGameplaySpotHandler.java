@@ -20,6 +20,22 @@ public final class ApplyGameplaySpotHandler
         PlayerQuestSpot spot,
         Messages.GameplayMsg request) {
         Messages.QuestProcessingMsg result = spot.apply(request);
+        if (!result.duplicate()) {
+            String questId = questIdFor(request);
+            if (questId != null) {
+                System.out.printf("gamequest-mission processed player=%s quest=%s%n",
+                    request.playerId(), questId);
+            }
+        }
         return actors.sendToActor(request.playerId(), result).submit();
+    }
+
+    private static String questIdFor(Messages.GameplayMsg request) {
+        return switch (request.eventType()) {
+            case "kill" -> Messages.QuestIds.FirstHunt;
+            case "collect" -> Messages.QuestIds.HerbGathering;
+            case "feature" -> Messages.QuestIds.OpenAuction;
+            default -> null;
+        };
     }
 }

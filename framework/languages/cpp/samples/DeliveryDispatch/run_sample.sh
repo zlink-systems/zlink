@@ -11,6 +11,8 @@ if [[ ! -x "$BIN_DIR/sample_cpp_framework_deliverydispatch_client" && -x "$BIN_D
 fi
 
 PIDS=()
+WAIT_ATTEMPTS=300
+WAIT_INTERVAL_SECONDS=0.1
 RUN_DIR="$(mktemp -d)"
 LOG_DIR="$RUN_DIR/logs"
 CONFIG_DIR="$RUN_DIR/config"
@@ -24,11 +26,11 @@ cleanup() {
   for pid in "${PIDS[@]}"; do
     if kill -0 "${pid}" >/dev/null 2>&1; then
       kill "${pid}" >/dev/null 2>&1 || true
-      for _ in $(seq 1 300); do
+      for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
         if ! kill -0 "${pid}" >/dev/null 2>&1; then
           break
         fi
-        sleep 0.1
+        sleep "$WAIT_INTERVAL_SECONDS"
       done
       if kill -0 "${pid}" >/dev/null 2>&1; then
         echo "forced cleanup process ${pid}" >&2
@@ -165,8 +167,8 @@ write_role_config tracking
 write_role_config customer-gateway
 write_role_config courier-session
 write_role_config dispatch
-write_role_config delivery-courier-node-1 delivery-courier-node-1
-write_role_config delivery-courier-node-2 delivery-courier-node-2
+write_role_config courier-node-1 courier-node-1
+write_role_config courier-node-2 courier-node-2
 
 port_of() {
   local endpoint="$1"
@@ -176,11 +178,11 @@ port_of() {
 wait_port() {
   local label="$1"
   local port="$2"
-  for _ in $(seq 1 150); do
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
     if (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
       return 0
     fi
-    sleep 0.1
+    sleep "$WAIT_INTERVAL_SECONDS"
   done
   echo "timed out waiting for ${label} on ${port}" >&2
   for log in "$LOG_DIR"/*.log; do
@@ -222,12 +224,12 @@ start_role customer-gateway "$BIN_DIR/sample_cpp_framework_deliverydispatch_cust
   --config="$CONFIG_DIR/customer-gateway.json"
 start_role courier-session "$BIN_DIR/sample_cpp_framework_deliverydispatch_courier_session" \
   --config="$CONFIG_DIR/courier-session.json"
-start_role courier-actor-node-1 \
+start_role courier-node-1 \
   "$BIN_DIR/sample_cpp_framework_deliverydispatch_courier_actor_node" \
-  --config="$CONFIG_DIR/delivery-courier-node-1.json"
-start_role courier-actor-node-2 \
+  --config="$CONFIG_DIR/courier-node-1.json"
+start_role courier-node-2 \
   "$BIN_DIR/sample_cpp_framework_deliverydispatch_courier_actor_node" \
-  --config="$CONFIG_DIR/delivery-courier-node-2.json"
+  --config="$CONFIG_DIR/courier-node-2.json"
 start_role dispatch "$BIN_DIR/sample_cpp_framework_deliverydispatch_dispatch" \
   --config="$CONFIG_DIR/dispatch.json"
 
@@ -237,28 +239,79 @@ wait_port customer-stream "$(port_of "$CUSTOMER_STREAM")"
 wait_port customer-spot "$(port_of "$CUSTOMER_SPOT_ROUTER")"
 wait_port courier-stream "$(port_of "$COURIER_STREAM")"
 wait_port courier-session-spot "$(port_of "$COURIER_SESSION_SPOT_ROUTER")"
-wait_port courier-actor-node-1-spot "$(port_of "$COURIER_NODE1_ROUTER")"
-wait_port courier-actor-node-2-spot "$(port_of "$COURIER_NODE2_ROUTER")"
+wait_port courier-node-1-spot "$(port_of "$COURIER_NODE1_ROUTER")"
+wait_port courier-node-2-spot "$(port_of "$COURIER_NODE2_ROUTER")"
 wait_port dispatch "$(port_of "$DISPATCH_ROUTE")"
 wait_port dispatch-http "$API_HTTP_PORT"
 
-wait_route_ready() {
-  local target_rid="$1"
-  for _ in $(seq 1 120); do
-    if curl --connect-timeout 0.2 --max-time 0.5 -fsS \
-      "$API_HTTP_URL/ready?targetRid=${target_rid}" >/dev/null 2>&1; then
+log_line_count() {
+  local expected="$1"
+  shift
+  awk -v expected="$expected" '$0 == expected { count += 1 } END { print count + 0 }' "$@"
+}
+
+wait_log_count() {
+  local label="$1"
+  local expected="$2"
+  local count="$3"
+  shift 3
+  local actual=0
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
+    actual="$(log_line_count "$expected" "$@")"
+    if [[ "$actual" -eq "$count" ]]; then
       return 0
     fi
-    sleep 0.1
+    if [[ "$actual" -gt "$count" ]]; then
+      break
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
   done
-  curl --connect-timeout 0.2 --max-time 1 -sS \
-    "$API_HTTP_URL/ready?targetRid=${target_rid}" >&2 || true
-  echo "Timed out waiting for Dispatch route peer ${target_rid}" >&2
+  echo "Expected ${label} exactly ${count} time(s), found ${actual}." >&2
   return 1
 }
 
-wait_route_ready "delivery-courier-node-1"
-wait_route_ready "delivery-courier-node-2"
+log_prefix_count() {
+  local prefix="$1"
+  shift
+  awk -v prefix="$prefix" 'index($0, prefix) == 1 { count += 1 } END { print count + 0 }' "$@"
+}
+
+wait_log_prefix_count() {
+  local label="$1"
+  local prefix="$2"
+  local count="$3"
+  shift 3
+  local actual=0
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
+    actual="$(log_prefix_count "$prefix" "$@")"
+    if [[ "$actual" -eq "$count" ]]; then
+      return 0
+    fi
+    if [[ "$actual" -gt "$count" ]]; then
+      break
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+  echo "Expected ${label} exactly ${count} time(s), found ${actual}." >&2
+  return 1
+}
+
+wait_log_count "tracking route readiness" \
+  "deliverydispatch-ready kind=route node=tracking" 1 "$LOG_DIR/tracking.log"
+wait_log_count "customer gateway route readiness" \
+  "deliverydispatch-ready kind=route node=customer-gateway" 1 "$LOG_DIR/customer-gateway.log"
+wait_log_count "courier session route readiness" \
+  "deliverydispatch-ready kind=route node=courier-session" 1 "$LOG_DIR/courier-session.log"
+wait_log_count "courier node 1 route readiness" \
+  "deliverydispatch-ready kind=route node=courier-node-1" 1 "$LOG_DIR/courier-node-1.log"
+wait_log_count "courier node 2 route readiness" \
+  "deliverydispatch-ready kind=route node=courier-node-2" 1 "$LOG_DIR/courier-node-2.log"
+wait_log_count "dispatch route readiness" \
+  "deliverydispatch-ready kind=route node=dispatch" 1 "$LOG_DIR/dispatch.log"
+wait_log_count "dispatch actor route courier node 1" \
+  "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-1" 1 "$LOG_DIR/dispatch.log"
+wait_log_count "dispatch actor route courier node 2" \
+  "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2" 1 "$LOG_DIR/dispatch.log"
 
 "$BIN_DIR/sample_cpp_framework_deliverydispatch_client" \
   --api-url "$API_HTTP_URL" \
@@ -272,13 +325,48 @@ wait_route_ready "delivery-courier-node-2"
   exit 1
 }
 
-grep -q "deliverydispatch-server-evidence=completed" "$LOG_DIR/client.log"
-grep -q "deliverydispatch-reassignment=completed" "$LOG_DIR/client.log"
-grep -q "deliverydispatch=completed" "$LOG_DIR/client.log"
-grep -Rq "message flow" "$FLOW_LOG_DIR"
-grep -q "message flow" "$FLOW_LOG_DIR/flow-dispatch.log"
-grep -q "message flow" "$FLOW_LOG_DIR/flow-delivery-courier-node-1.log"
-grep -q "message flow" "$FLOW_LOG_DIR/flow-delivery-courier-node-2.log"
-grep -q "message flow" "$FLOW_LOG_DIR/flow-customer-gateway.log"
-grep -q "message flow" "$FLOW_LOG_DIR/flow-courier-session.log"
-echo "deliverydispatch sample result=passed"
+wait_log_count "client server evidence completion marker" \
+  "deliverydispatch-server-evidence=completed" 1 "$LOG_DIR/client.log"
+wait_log_count "client reassignment completion marker" \
+  "deliverydispatch-reassignment=completed" 1 "$LOG_DIR/client.log"
+wait_log_count "client completion marker" \
+  "deliverydispatch=completed" 1 "$LOG_DIR/client.log"
+wait_log_count "courier a bind" \
+  "deliverydispatch-courier bound courier=courier-a" 1 "$LOG_DIR/courier-session.log"
+wait_log_count "courier b bind" \
+  "deliverydispatch-courier bound courier=courier-b" 1 "$LOG_DIR/courier-session.log"
+wait_log_count "courier a bind relay" \
+  "deliverydispatch-courier bind-relayed courier=courier-a" 1 \
+  "$LOG_DIR/courier-node-1.log" "$LOG_DIR/courier-node-2.log"
+wait_log_count "courier b bind relay" \
+  "deliverydispatch-courier bind-relayed courier=courier-b" 1 \
+  "$LOG_DIR/courier-node-1.log" "$LOG_DIR/courier-node-2.log"
+wait_log_count "customer bind" \
+  "deliverydispatch-customer bound customer=customer-1" 1 "$LOG_DIR/customer-gateway.log"
+wait_log_count "delivered customer pushes" \
+  "deliverydispatch-customer pushed status=Delivered delivery=delivery-success" 1 \
+  "$LOG_DIR/customer-gateway.log"
+wait_log_count "reassigned delivered customer pushes" \
+  "deliverydispatch-customer pushed status=Delivered delivery=delivery-reassign" 1 \
+  "$LOG_DIR/customer-gateway.log"
+wait_log_prefix_count "all delivered customer pushes" \
+  "deliverydispatch-customer pushed status=Delivered delivery=" 2 "$LOG_DIR/customer-gateway.log"
+wait_log_count "delivered tracking status" \
+  "deliverydispatch-tracking status=Delivered delivery=delivery-success" 1 "$LOG_DIR/tracking.log"
+wait_log_count "reassigned delivered tracking status" \
+  "deliverydispatch-tracking status=Delivered delivery=delivery-reassign" 1 "$LOG_DIR/tracking.log"
+wait_log_prefix_count "all delivered tracking status" \
+  "deliverydispatch-tracking status=Delivered delivery=" 2 "$LOG_DIR/tracking.log"
+wait_log_count "stale courier decision" \
+  "deliverydispatch-dispatch stale-decision-ignored delivery=delivery-reassign courier=courier-a attempt=1" \
+  1 "$LOG_DIR/dispatch.log"
+wait_log_count "candidates exhausted" \
+  "deliverydispatch-dispatch failed delivery=delivery-exhausted reason=candidates-exhausted" \
+  1 "$LOG_DIR/dispatch.log"
+trap - EXIT
+cleanup
+cleanup_status=$?
+if [[ "$cleanup_status" -ne 0 ]]; then
+  exit "$cleanup_status"
+fi
+echo "deliverydispatch-placement=completed"

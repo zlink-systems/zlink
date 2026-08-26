@@ -111,8 +111,8 @@ mapping.ko.md §4 S10–S13에서 넘어온 항목. 이번 재작성에서는 �
 |---|---|---|---|
 | S10 | 01 §5의 automatic fanout 15초 record timeout이 `29-transport-liveness`(channel-transport 주제)가 소유하는 15초 peer deadline과 같은 상수 계열인지 이 문서 안에서 밝히지 않음 | 원문 그대로 "15초 동안 record가 없으면" 서술만 유지 | `02-channel-transport/05-transport-liveness.ko.md` |
 | S11 | 02 §6 label 표의 `close_reason` 닫힌집합(`client_close`…`transport_error`)의 실제 정의는 `04-session/01-stream-session.ko.md`가 인용하는 stream-connector 스펙 §6.3(다른 spec 트리)이 소유 | 값 목록만 표로 유지, 정의 문서는 밝히지 않음(원문 그대로) | `stream-connector/32-stream-connector.ko.md#63-종료-사유` |
-| S12 | 01 §3의 `SafeToShutdown` 판정 조건(Message Follow route 제거 가능 시점, cutover 재전송 창 종료)의 정의는 `05-location-relocation`(28·30)이 소유 | "정의는 [Actor와 Spot relocation 전체 흐름](../28-relocation-flow.ko.md)이 소유한다"로 링크만 유지 | `28-relocation-flow.ko.md` |
-| S13 | 02 §8의 relocation reason·outcome 식별자는 `30-host-relocation-flow`(location-relocation 주제)가 소유("Reason은 30의 식별자를 사용한다") — 재작성 순서상 이 주제가 먼저 끝나면 30 쪽 문서명이 바뀔 수 있음 | "Reason은 [Host relocation과 shutdown](../30-host-relocation-flow.ko.md)의 식별자를 사용한다"로 링크만 유지 | `30-host-relocation-flow.ko.md` |
+| S12 | 01 §3의 `SafeToShutdown` 판정 조건(Message Follow route 제거 가능 시점, cutover 재전송 창 종료)의 정의는 `05-location-relocation`(28·30)이 소유 | "정의는 [Actor와 Spot relocation 전체 흐름](../../../../framework/doc/framework/common/spec/server/05-location-relocation/04-relocation-flow.ko.md)이 소유한다"로 링크만 유지 | `28-relocation-flow.ko.md` |
+| S13 | 02 §8의 relocation reason·outcome 식별자는 `30-host-relocation-flow`(location-relocation 주제)가 소유("Reason은 30의 식별자를 사용한다") — 재작성 순서상 이 주제가 먼저 끝나면 30 쪽 문서명이 바뀔 수 있음 | "Reason은 [Host relocation과 shutdown](../../../../framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md)의 식별자를 사용한다"로 링크만 유지 | `30-host-relocation-flow.ko.md` |
 
 ## spec-gap 후보
 

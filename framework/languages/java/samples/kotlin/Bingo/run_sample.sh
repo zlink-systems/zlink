@@ -45,6 +45,42 @@ print_logs() {
   done
 }
 
+log_count() {
+  local evidence="$1"
+  shift
+  { grep -Fh -- "${evidence}" "$@" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'
+}
+
+wait_log_count() {
+  local expected="$1" evidence="$2"
+  shift 2
+  local actual
+  for _ in $(seq 1 300); do
+    actual="$(log_count "${evidence}" "$@")"
+    if [[ "${actual}" == "${expected}" ]]; then
+      return 0
+    fi
+    if (( actual > expected )); then
+      echo "Expected ${expected} matches for '${evidence}' in $*, found ${actual}." >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for ${expected} matches for '${evidence}' in $*." >&2
+  return 1
+}
+
+require_log_count() {
+  local expected="$1" evidence="$2"
+  shift 2
+  local actual
+  actual="$(log_count "${evidence}" "$@")"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "Expected ${expected} matches for '${evidence}' in $*, found ${actual}." >&2
+    return 1
+  fi
+}
+
 trap cleanup EXIT
 
 build_framework_jars() {
@@ -167,15 +203,20 @@ wait_port "${matchmaking_router_host}" "${matchmaking_router_port}"
 wait_port "${play_a_router_host}" "${play_a_router_port}"
 wait_port "${play_b_router_host}" "${play_b_router_port}"
 
-wait_framework_ready_logs "${log_dir}" 1
-wait_framework_peer_ready_counts "${log_dir}" \
-  "session-a.log:2" \
-  "session-b.log:2" \
-  "api-a.log:3" \
-  "api-b.log:3" \
-  "play-a.log:5" \
-  "play-b.log:5" \
-  "matchmaking.log:2"
+# Readiness is confirmed by the sample-owned bingo-ready rows below. Bingo §10.1 forbids gating
+# completion on framework-emitted lines: they change for framework reasons and break this runner
+# silently. This runner used to count ZLINK_FRAMEWORK_PEER_READY occurrences, which counted
+# duplicate re-admissions - a framework bug that has since been fixed, so the counts no longer
+# match. See doc/plan/spec-server-reorg/progress.ko.md §4.2.
+
+wait_log_count 1 "bingo-ready kind=peer-route node=play-a peer=play-b" "${log_dir}/play-a.log"
+wait_log_count 1 "bingo-ready kind=peer-route node=play-b peer=play-a" "${log_dir}/play-b.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=api-a mesh=matchmaking" "${log_dir}/api-a.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=api-a mesh=room" "${log_dir}/api-a.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=api-b mesh=matchmaking" "${log_dir}/api-b.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=api-b mesh=room" "${log_dir}/api-b.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=session-a mesh=room" "${log_dir}/session-a.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=session-b mesh=room" "${log_dir}/session-b.log"
 
 "$(app_bin Client Client)" --config "$client_config" >"${log_dir}/client.log" 2>&1
 
@@ -185,4 +226,44 @@ grep -Eq "zlink flow: event_id=zlink\.message_flow" "${log_dir}"/{session,api,pl
 grep -Eq "zlink metric .*name=zlink\.stream\.connections\.active" "${log_dir}"/session-*.log
 grep -Eq "zlink metric .*name=zlink\.spot\.count" "${log_dir}"/play-*.log
 
-echo "bingo full client/server self-check completed"
+play_logs=("${log_dir}/play-a.log" "${log_dir}/play-b.log")
+session_logs=("${log_dir}/session-a.log" "${log_dir}/session-b.log")
+business_evidence=(
+  "bingo-record fetched actor=player-1 wins=0 losses=0"
+  "bingo-record fetched actor=player-2 wins=0 losses=0"
+  "bingo-record reported actor=player-1 wins=1 losses=0"
+  "bingo-record reported actor=player-2 wins=0 losses=1"
+  "bingo-lifecycle room-leave actor=player-1"
+  "bingo-lifecycle room-leave actor=player-2"
+  "bingo-lifecycle room-leave actor=observer"
+  "bingo-lifecycle entry-leave actor=player-1"
+  "bingo-lifecycle entry-leave actor=player-2"
+  "bingo-lifecycle entry-leave actor=observer"
+  "bingo-lifecycle entry-destroy-complete actor=player-1"
+  "bingo-lifecycle entry-destroy-complete actor=player-2"
+)
+for evidence in "${business_evidence[@]}"; do
+  wait_log_count 1 "${evidence}" "${play_logs[@]}"
+done
+wait_log_count 1 \
+  "bingo-lifecycle session-disconnect actor=player-1 destroy=false" \
+  "${session_logs[@]}"
+wait_log_count 1 \
+  "bingo-lifecycle session-disconnect actor=player-2 destroy=false" \
+  "${session_logs[@]}"
+wait_log_count 0 "bingo-record reported actor=observer" "${play_logs[@]}"
+wait_log_count 0 "bingo-lifecycle entry-destroy-complete actor=observer" "${play_logs[@]}"
+
+for evidence in "${business_evidence[@]}"; do
+  require_log_count 1 "${evidence}" "${play_logs[@]}"
+done
+require_log_count 0 "bingo-record reported actor=observer" "${play_logs[@]}"
+require_log_count 0 "bingo-lifecycle entry-destroy-complete actor=observer" "${play_logs[@]}"
+require_log_count 1 \
+  "bingo-lifecycle session-disconnect actor=player-1 destroy=false" \
+  "${session_logs[@]}"
+require_log_count 1 \
+  "bingo-lifecycle session-disconnect actor=player-2 destroy=false" \
+  "${session_logs[@]}"
+
+echo "bingo-placement=completed"

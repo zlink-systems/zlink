@@ -32,6 +32,13 @@ public final class PlayerQuestSpot implements ZLinkInstanceSpot {
     @Override
     public CompletionStage<Void> onInitialize() {
         store.activate(playerId);
+        if (store.hasEvents(playerId)) {
+            System.out.printf("gamequest-mission replayed player=%s generation=%d%n",
+                playerId, context.objectGeneration());
+        }
+        if ("player-owner-unavailable".equals(playerId)) {
+            System.out.printf("gamequest-owner-ready player=%s node=%s%n", playerId, store.nodeId());
+        }
         return CompletableFuture.completedFuture(null);
     }
 

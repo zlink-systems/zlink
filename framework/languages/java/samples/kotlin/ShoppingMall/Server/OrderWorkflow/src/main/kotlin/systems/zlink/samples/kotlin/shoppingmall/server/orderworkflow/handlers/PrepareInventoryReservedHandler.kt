@@ -20,8 +20,12 @@ class PrepareInventoryReservedHandler(
         request: PrepareInventoryReservedReq,
     ): CompletionStage<PrepareInventoryReservedRes> {
         spot.requireOrder(request.command.orderId)
+        println("shoppingmall-order started order=${request.command.orderId} spot=${spot.context().spotId()}")
         return CompletableFuture.completedFuture(
-            PrepareInventoryReservedRes(workflow.prepareInventoryReserved(request.command)),
+            PrepareInventoryReservedRes(
+                workflow.prepareInventoryReserved(request.command),
+                spot.context().objectGeneration(),
+            ),
         )
     }
 }

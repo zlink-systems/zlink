@@ -112,12 +112,12 @@ process, stream runtime client, server evidence self-check를 실행한다.
 | `common: delivery-success status order` | `Client/.../Program.kt` + `Tracking` evidence | validation | done | stream connector wait API로 Assigned, Accepted, PickedUp, Delivered push를 검증했다. |
 | `common: delivery-reassign status order` | `Client/.../Program.kt` + `Tracking` evidence | validation | done | courier-a timeout 후 courier-b Reassigned, Accepted, Delivered push를 검증했다. |
 | `common: server evidence check` | `Client/.../Program.kt` + `DeliveryEvidenceStore.kt` | validation | done | Tracking evidence endpoint에서 두 delivery의 status sequence를 읽어 검증한다. |
-| `common: topology=ready` | `run_sample.sh` bound endpoint probes | validation | done | registry/channel/stream/HTTP endpoint readiness 확인 후 출력 |
+| route readiness evidence | `DeliveryDispatchReadinessReporter` | validation | done | 각 node의 public RouteMesh 상태와 Dispatch의 actor route 수용 상태를 수동 신호로 출력 |
 | `common: deliverydispatch-reassignment=completed` | `Client/.../Program.kt` | validation | done | 실제 worker/courier timeout 재배정 proof로 marker를 출력한다. |
 | `common: deliverydispatch-server-evidence=completed` | `Client/.../Program.kt` | validation | done | Tracking evidence store를 읽어 marker를 출력한다. |
 | `common: deliverydispatch=completed` | `Client/.../Program.kt` | validation | done | standalone framework runtime proof로 marker를 출력한다. |
 
 ## 남은 gap
 
-- 없음. Standalone `run_sample.sh`에서 `topology=ready`, `deliverydispatch-reassignment=completed`,
+- 없음. Standalone runner에서 route readiness evidence, `deliverydispatch-reassignment=completed`,
   `deliverydispatch-server-evidence=completed`, `deliverydispatch=completed` marker를 확인했다.

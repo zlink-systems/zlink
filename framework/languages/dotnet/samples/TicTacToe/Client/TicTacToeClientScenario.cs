@@ -56,12 +56,14 @@ public sealed class TicTacToeClientScenario(ILogger logger)
         ZlinkStreamAssert.Ensure(client1Authentication.Player.Wins == 99, "Assertion failed: client1Authentication.Player.Wins == 99");
 
         await observer.Connect.Async(cancellationToken);
+        logger.LogInformation("observer-connected endpoint={0}", observerPlayEndpoint);
         var observerAuthentication = await observer.Request(new AuthenticateReq(options.ObserverActorId))
             .Async<AuthenticateRes>(cancellationToken);
         ZlinkStreamAssert.Ensure(observerAuthentication.Player.ActorId == options.ObserverActorId, "Assertion failed: observerAuthentication.Player.ActorId == options.ObserverActorId");
         var observerSubscription =
             await observer.Request(new ObserveMilestoneReq()).Async<ObserveMilestoneRes>(cancellationToken);
         ZlinkStreamAssert.Ensure(observerSubscription.Subscribed, "Assertion failed: observerSubscription.Subscribed");
+        logger.LogInformation("observer-subscription=verified subscribed={0}", observerSubscription.Subscribed.ToString().ToLowerInvariant());
 
         var client1Join = await JoinGameAsync(client1, room.RoomId, cancellationToken);
         ZlinkStreamAssert.Ensure(client1Join.State.RoomId == room.RoomId, "Assertion failed: client1Join.State.RoomId == room.RoomId");

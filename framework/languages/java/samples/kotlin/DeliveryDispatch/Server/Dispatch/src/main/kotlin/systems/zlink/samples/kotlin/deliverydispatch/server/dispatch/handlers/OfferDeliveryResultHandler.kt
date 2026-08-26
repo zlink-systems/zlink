@@ -23,8 +23,9 @@ class OfferDeliveryResultHandler(
         val offer = offers.settle(message.deliveryId, message.attempt)
         if (offer == null) {
             println(
-                "deliverydispatch dispatch: dropped a late decision " +
-                    "delivery=${message.deliveryId} attempt=${message.attempt}",
+                "deliverydispatch-dispatch stale-decision-ignored " +
+                    "delivery=${message.deliveryId} courier=${message.courierId} " +
+                    "attempt=${message.attempt}",
             )
             return
         }

@@ -51,7 +51,7 @@ internal sealed class BingoEntrySpot(
             // when the client closes immediately after receiving the final result.
             await Context.DestroyActorAsync(actor, CancellationToken.None);
             logger.LogInformation(
-                "entry spot: actor destroy completed. actor={ActorId}",
+                "bingo-lifecycle entry-destroy-complete actor={ActorId}",
                 actor.ActorId);
             return;
         }
@@ -63,7 +63,7 @@ internal sealed class BingoEntrySpot(
         CancellationToken cancellationToken)
     {
         logger.LogInformation(
-            "entry spot: actor left. actor={ActorId}",
+            "bingo-lifecycle entry-leave actor={ActorId}",
             actor.ActorId);
         return ValueTask.CompletedTask;
     }

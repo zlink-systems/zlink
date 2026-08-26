@@ -12,6 +12,7 @@ function createBingoApiModule() {
   const configuration = createBingoConfigurationModule([
     'apiEndpoint',
     'apiMatchmakingEndpoint',
+    'nodeId',
     'redisEndpoint',
     'redisKeyPrefix',
     'logDir'

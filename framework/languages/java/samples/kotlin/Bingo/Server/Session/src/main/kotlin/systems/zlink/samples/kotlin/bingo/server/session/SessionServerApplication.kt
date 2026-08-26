@@ -16,11 +16,13 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleLocationStore
+import systems.zlink.samples.kotlin.bingo.server.configuration.BingoReadinessReporter
 import systems.zlink.samples.kotlin.bingo.server.session.sessions.BingoSession
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTopology
 import systems.zlink.samples.kotlin.bingo.server.configuration.BingoMetricsReporter
 import io.micrometer.core.instrument.MeterRegistry
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 
 
 
@@ -60,6 +62,12 @@ class SessionServerApplication {
     @Bean(destroyMethod = "close")
     fun bingoMetricsReporter(registry: MeterRegistry): BingoMetricsReporter =
         BingoMetricsReporter(registry, "session")
+
+    @Bean(destroyMethod = "close")
+    fun bingoReadinessReporter(
+        topology: SampleTopology,
+        meshes: ZLinkRouteMeshRuntime,
+    ): BingoReadinessReporter = BingoReadinessReporter.session(topology, meshes)
 
     companion object {
         fun run(args: Array<String> = emptyArray()): AutoCloseable {

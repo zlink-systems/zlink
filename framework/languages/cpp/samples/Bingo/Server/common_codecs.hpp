@@ -46,6 +46,8 @@ struct bingo_protobuf_codecs_t
                                        StopObservingBingoEventsReq);
         ZLINK_BINGO_REGISTER_PROTOBUF (stop_observing_bingo_events_res_t,
                                        StopObservingBingoEventsRes);
+        ZLINK_BINGO_REGISTER_PROTOBUF (observer_returned_to_entry_spot_notify_t,
+                                       ObserverReturnedToEntrySpotNotify);
         ZLINK_BINGO_REGISTER_PROTOBUF (player_joined_notify_t, PlayerJoinedNotify);
         ZLINK_BINGO_REGISTER_PROTOBUF (game_started_notify_t, BingoGameStartedNotify);
         ZLINK_BINGO_REGISTER_PROTOBUF (number_drawn_notify_t, BingoNumberDrawnNotify);

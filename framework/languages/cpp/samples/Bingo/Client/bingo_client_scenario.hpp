@@ -248,11 +248,19 @@ class bingo_client_scenario_t
 
             trace ("stop observing");
             const auto stop_observing_request = stop_observing_bingo_events_req_t{room_id};
+            auto observer_returned_to_entry =
+              observer.wait_for<observer_returned_to_entry_spot_notify_t> ()
+                .where (&observer_returned_to_entry_spot_notify_t::actor_id, observer_auth.actor_id)
+                .async ();
             auto stopped =
               co_await observer.request (stop_observing_request)
                 .async<stop_observing_bingo_events_res_t> ();
             trace ("stop observing completed");
             ensure (stopped.stopped);
+
+            trace ("wait observer Entry Spot return");
+            const auto returned_to_entry = co_await observer_returned_to_entry;
+            ensure (returned_to_entry.actor_id == observer_auth.actor_id);
 
             co_await client1.close ().async ();
             co_await client2.close ().async ();

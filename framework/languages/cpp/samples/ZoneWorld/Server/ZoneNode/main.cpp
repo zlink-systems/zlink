@@ -11,10 +11,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -762,12 +764,28 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
 
     fw::task_t<void> start (fw::service_provider_t &services) override
     {
-        co_await bootstrap (services.get_required<fw::spot_manager_t> ());
+        //  A subscriber-only node registers no Spots, so spot_manager_t is not in its container.
+        //  Resolving it eagerly killed those nodes with 'service is not registered'. Only the
+        //  zone-claiming path needs it, so resolve it there.
+        if (_configuration.subscriber_only) {
+            print_ready ({});
+            co_return;
+        }
+        _stopping.store (false);
+        auto *spots = &services.get_required<fw::spot_manager_t> ();
+        _worker = std::thread ([this, spots] { run_bootstrap (*spots); });
+        co_return;
     }
-    void request_stop () noexcept override { _stopping.store (true); }
+    void request_stop () noexcept override
+    {
+        _stopping.store (true);
+        _retry_ready.notify_all ();
+    }
     void stop () noexcept override
     {
         request_stop ();
+        if (_worker.joinable ())
+            _worker.join ();
     }
 
   private:
@@ -789,35 +807,64 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
         return order;
     }
 
-    fw::task_t<void> bootstrap (fw::spot_manager_t &spots)
+    fw::task_t<void> bootstrap (fw::spot_manager_t &spots,
+                                const std::vector<std::string> &claimed)
     {
-        if (_configuration.subscriber_only) {
-            print_ready ({});
-            co_return;
+        for (const auto &zone : claim_order (claimed)) {
+            if (_stopping.load () || g_node_state->zone_snapshot () != claimed)
+                break;
+            try {
+                co_await spots.get_or_create (fw::spot_id_t (zone), names_t::zone_spot)
+                  .in_mesh (names_t::mesh)
+                  .submit ();
+            }
+            catch (const std::exception &) {
+                // A peer may still be entering the mesh. The fixed retry budget owns
+                // the decision to surface that startup failure.
+            }
         }
+    }
 
+    bool await_bootstrap (fw::task_t<void> work)
+    {
+        struct completion_t
+        {
+            std::condition_variable ready;
+            std::mutex mutex;
+            bool completed = false;
+            bool succeeded = false;
+        };
+        auto completion = std::make_shared<completion_t> ();
+        fw::observe_task_completion (
+          work, [completion] (const fw::result_t<void> &result) {
+              {
+                  std::lock_guard lock (completion->mutex);
+                  completion->succeeded = static_cast<bool> (result);
+                  completion->completed = true;
+              }
+              completion->ready.notify_one ();
+          });
+        std::unique_lock lock (completion->mutex);
+        completion->ready.wait (lock, [&completion] { return completion->completed; });
+        return completion->succeeded;
+    }
+
+    void run_bootstrap (fw::spot_manager_t &spots)
+    {
         for (int attempt = 0; g_node_state->zone_snapshot ().size () != 2; ++attempt) {
             if (_stopping.load ())
-                co_return;
+                return;
             const auto claimed = g_node_state->zone_snapshot ();
-            for (const auto &zone : claim_order (claimed)) {
-                if (_stopping.load () || g_node_state->zone_snapshot () != claimed)
-                    break;
-                try {
-                    co_await spots.get_or_create (fw::spot_id_t (zone), names_t::zone_spot)
-                      .in_mesh (names_t::mesh)
-                      .submit ();
-                }
-                catch (const std::exception &) {
-                    // A peer may still be entering the mesh. The fixed retry budget owns
-                    // the decision to surface that startup failure.
-                }
+            if (!await_bootstrap (bootstrap (spots, claimed))) {
+                if (_stopping.load ())
+                    return;
+                std::cerr << "Zone Spot claim failed. node=" << _configuration.node_id
+                          << std::endl;
             }
-
             const auto zones = g_node_state->zone_snapshot ();
             if (_configuration.allow_empty_zone_set && zones.empty () && attempt >= 8) {
                 print_ready (zones);
-                co_return;
+                return;
             }
             if (attempt + 1 >= retry_attempts) {
                 std::cerr << "Zone Spot capacity did not settle. node=" << _configuration.node_id
@@ -828,12 +875,14 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
                     std::cerr << zones[index];
                 }
                 std::cerr << std::endl;
-                throw std::runtime_error ("Zone Spot capacity did not settle");
+                return;
             }
-            co_await fw::detail::delay (retry_delay);
+            std::unique_lock lock (_retry_mutex);
+            _retry_ready.wait_for (lock, retry_delay, [this] { return _stopping.load (); });
+            if (_stopping.load ())
+                return;
         }
         print_ready (g_node_state->zone_snapshot ());
-        co_return;
     }
 
     void print_ready (const std::vector<std::string> &zones) const
@@ -849,6 +898,9 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
 
     configuration_t _configuration;
     std::atomic_bool _stopping{false};
+    std::condition_variable _retry_ready;
+    std::mutex _retry_mutex;
+    std::thread _worker;
 };
 
 } // namespace zlink::samples::zoneworld
@@ -864,6 +916,7 @@ int main (int argc, char **argv)
     state.maintenance.store (maintenance.read (configuration.node_id));
     g_node_state = &state;
     app.logging ().use_console ().set_min_level (fw::log_level_t::info);
+
     app.monitoring ()
       .add_spot_events (names_t::mesh)
       .on_spot_event (

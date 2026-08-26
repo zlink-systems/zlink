@@ -4,6 +4,7 @@ namespace DeliveryDispatch.Client;
 
 public sealed record DeliveryDispatchClientConfiguration(
     string LogDirectory,
+    string WorkDirectory,
     string DispatchHttpUrl,
     string CustomerStreamEndpoint,
     string CourierStreamEndpoint)

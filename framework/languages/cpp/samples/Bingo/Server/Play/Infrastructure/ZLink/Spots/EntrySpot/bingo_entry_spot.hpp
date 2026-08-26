@@ -59,13 +59,17 @@ class bingo_entry_spot_t : public entry_spot_t<player_actor_t>
     task_t<void> on_actor_joined (player_actor_t &actor) override
     {
         joined_actor_ids.push_back (actor.actor_id);
+        if (actor.actor_id == bingo_sample_players_t::observer) {
+            actor.push (observer_returned_to_entry_spot_notify_t{actor.actor_id});
+            co_return;
+        }
         if (!actor.destroy_after_entry_spot_join) {
             co_return;
         }
         const auto actor_id = actor.actor_id;
         std::cout << "entry spot: actor destroy requested. actor=" << actor_id << std::endl;
         co_await _context.destroy_actor (actor);
-        std::cout << "entry spot: actor destroy completed. actor=" << actor_id << std::endl;
+        std::cout << "bingo-lifecycle entry-destroy-complete actor=" << actor_id << std::endl;
     }
 
     task_t<void> on_leave_actor (player_actor_t &actor) override
@@ -73,6 +77,7 @@ class bingo_entry_spot_t : public entry_spot_t<player_actor_t>
         joined_actor_ids.erase (
           std::remove (joined_actor_ids.begin (), joined_actor_ids.end (), actor.actor_id),
           joined_actor_ids.end ());
+        std::cout << "bingo-lifecycle entry-leave actor=" << actor.actor_id << std::endl;
         co_return;
     }
 

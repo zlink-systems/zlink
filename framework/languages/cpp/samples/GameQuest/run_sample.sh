@@ -11,12 +11,14 @@ if [[ ! -x "$BIN_DIR/sample_cpp_framework_gamequest_client" && -x "$BIN_DIR/linu
 fi
 
 PIDS=()
+WAIT_ATTEMPTS=300
+WAIT_MILLISECONDS=100
+WAIT_SECONDS="$(printf '0.%03d' "$WAIT_MILLISECONDS")"
 RUN_DIR="$(mktemp -d)"
 RUN_ID="$(basename "$RUN_DIR")-$$-${RANDOM}"
 LOG_DIR="$RUN_DIR/logs"
-FLOW_LOG_DIR="$RUN_DIR/flow-logs"
 REDIS_CONTAINER_NAME=""
-mkdir -p "$LOG_DIR" "$FLOW_LOG_DIR"
+mkdir -p "$LOG_DIR"
 
 cleanup() {
   local code=$?
@@ -29,7 +31,7 @@ cleanup() {
         if ! kill -0 "${pid}" >/dev/null 2>&1; then
           break
         fi
-        sleep 0.1
+        sleep "$WAIT_SECONDS"
       done
       if kill -0 "${pid}" >/dev/null 2>&1; then
         echo "forced cleanup process ${pid}" >&2
@@ -104,11 +106,11 @@ wait_port() {
   local endpoint="$2"
   local port
   port="$(port_of "$endpoint")"
-  for _ in $(seq 1 150); do
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
     if (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
       return 0
     fi
-    sleep 0.1
+    sleep "$WAIT_SECONDS"
   done
   echo "timed out waiting for ${label} at ${endpoint}" >&2
   dump_logs
@@ -116,7 +118,7 @@ wait_port() {
 }
 
 dump_logs() {
-  for log in "$LOG_DIR"/*.log "$FLOW_LOG_DIR"/flow-*.log; do
+  for log in "$LOG_DIR"/*.log; do
     if [[ -f "$log" ]]; then
       echo "===== ${log}" >&2
       cat "$log" >&2
@@ -138,7 +140,7 @@ mkdir -p "$CONFIG_DIR"
 
 # 각 role은 자기 설정 파일 하나만 받는다(공통 정책 sample-e2e-configuration-policy.ko.md §2.1).
 write_role_config() {
-  python3 - "$CONFIG_DIR/$1.json" "$1" "$2" "$3" "$FLOW_LOG_DIR" \
+  python3 - "$CONFIG_DIR/$1.json" "$1" "$2" "$3" "$LOG_DIR" \
     "$GAMEQUEST_REDIS_ENDPOINT" "$GAMEQUEST_REDIS_KEY_PREFIX" \
     "$GAMEQUEST_API_A_STREAM_ENDPOINT" "$GAMEQUEST_API_B_STREAM_ENDPOINT" \
     "$GAMEQUEST_API_A_HTTP_URL" "$GAMEQUEST_API_B_HTTP_URL" \
@@ -199,68 +201,189 @@ write_role_config api-a api-a mission-a
 write_role_config api-b api-b mission-a
 
 start_role mission-a "$BIN_DIR/sample_cpp_framework_gamequest_quest_mission" --config="$CONFIG_DIR/mission-a.json"
+MISSION_A_PID="${PIDS[$(( ${#PIDS[@]} - 1 ))]}"
 start_role mission-b "$BIN_DIR/sample_cpp_framework_gamequest_quest_mission" --config="$CONFIG_DIR/mission-b.json"
-start_role api-a "$BIN_DIR/sample_cpp_framework_gamequest_game_api" --config="$CONFIG_DIR/api-a.json"
-start_role api-b "$BIN_DIR/sample_cpp_framework_gamequest_game_api" --config="$CONFIG_DIR/api-b.json"
+MISSION_B_PID="${PIDS[$(( ${#PIDS[@]} - 1 ))]}"
 
-wait_port mission-a-route "$GAMEQUEST_MISSION_A_SPOT_ROUTE_ENDPOINT"
-wait_port mission-b-route "$GAMEQUEST_MISSION_B_SPOT_ROUTE_ENDPOINT"
-wait_port api-a-route "$GAMEQUEST_API_A_SPOT_ROUTE"
-wait_port api-b-route "$GAMEQUEST_API_B_SPOT_ROUTE"
-wait_port api-a-stream "$GAMEQUEST_API_A_STREAM_ENDPOINT"
-wait_port api-a-http "$GAMEQUEST_API_A_HTTP_URL"
-wait_port api-b-stream "$GAMEQUEST_API_B_STREAM_ENDPOINT"
-wait_port api-b-http "$GAMEQUEST_API_B_HTTP_URL"
-
-wait_route_ready() {
-  local api_url="$1"
-  local target_rid="$2"
-  for _ in $(seq 1 150); do
-    if curl --connect-timeout 0.2 --max-time 0.5 -fsS \
-      "$api_url/ready?targetRid=${target_rid}" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.1
+line_count () {
+  local expected="$1"
+  shift
+  local count=0
+  local log
+  for log in "$@"; do
+    [[ -f "$log" ]] || continue
+    count=$((count + $(grep -Fxc "$expected" "$log" || true)))
   done
-  curl --connect-timeout 0.2 --max-time 1 -sS \
-    "$api_url/ready?targetRid=${target_rid}" >&2 || true
-  echo "timed out waiting for GameQuest RouteMesh peer ${target_rid} from ${api_url}" >&2
+  echo "$count"
+}
+
+prefix_count () {
+  local prefix="$1"
+  shift
+  local count=0
+  local log
+  for log in "$@"; do
+    [[ -f "$log" ]] || continue
+    count=$((count + $(grep -F -c "${prefix}" "$log" || true)))
+  done
+  echo "$count"
+}
+
+wait_for_exact_count () {
+  local name="$1"
+  local expected="$2"
+  local line="$3"
+  shift 3
+  local actual=0
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
+    actual="$(line_count "$line" "$@")"
+    [[ "$actual" == "$expected" ]] && return 0
+    [[ "$actual" -gt "$expected" ]] && break
+    sleep "$WAIT_SECONDS"
+  done
+  echo "expected ${name} exactly ${expected} time(s), found ${actual}" >&2
   dump_logs
   return 1
 }
 
-# TCP listen readiness does not imply RouteMesh peer admission. Wait until both API
-# nodes can route to both QuestMission owners before issuing gameplay messages.
-wait_route_ready "$GAMEQUEST_API_A_HTTP_URL" "gamequest-mission-a-spot"
-wait_route_ready "$GAMEQUEST_API_A_HTTP_URL" "gamequest-mission-b-spot"
-wait_route_ready "$GAMEQUEST_API_A_HTTP_URL" "gamequest-api-b-spot"
-wait_route_ready "$GAMEQUEST_API_B_HTTP_URL" "gamequest-mission-a-spot"
-wait_route_ready "$GAMEQUEST_API_B_HTTP_URL" "gamequest-mission-b-spot"
-wait_route_ready "$GAMEQUEST_API_B_HTTP_URL" "gamequest-api-a-spot"
+wait_for_prefix_minimum () {
+  local name="$1"
+  local minimum="$2"
+  local prefix="$3"
+  shift 3
+  local actual=0
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
+    actual="$(prefix_count "$prefix" "$@")"
+    [[ "$actual" -ge "$minimum" ]] && return 0
+    sleep "$WAIT_SECONDS"
+  done
+  echo "expected ${name} at least ${minimum} time(s), found ${actual}" >&2
+  dump_logs
+  return 1
+}
 
-echo "topology=ready"
+wait_for_prefix_exact_count () {
+  local name="$1"
+  local expected="$2"
+  local prefix="$3"
+  shift 3
+  local actual=0
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
+    actual="$(prefix_count "$prefix" "$@")"
+    [[ "$actual" == "$expected" ]] && return 0
+    [[ "$actual" -gt "$expected" ]] && break
+    sleep "$WAIT_SECONDS"
+  done
+  echo "expected ${name} exactly ${expected} time(s), found ${actual}" >&2
+  dump_logs
+  return 1
+}
 
-"$BIN_DIR/sample_cpp_framework_gamequest_client" \
+remove_pid () {
+  local target="$1"
+  local remaining=()
+  local pid
+  for pid in "${PIDS[@]}"; do
+    [[ "$pid" == "$target" ]] || remaining+=("$pid")
+  done
+  PIDS=("${remaining[@]}")
+}
+
+wait_for_exact_count "mission-a instance factory readiness" 1 \
+  "gamequest-ready kind=instance-factory node=mission-a" "$LOG_DIR/mission-a.log"
+wait_for_exact_count "mission-b instance factory readiness" 1 \
+  "gamequest-ready kind=instance-factory node=mission-b" "$LOG_DIR/mission-b.log"
+
+start_role api-a "$BIN_DIR/sample_cpp_framework_gamequest_game_api" --config="$CONFIG_DIR/api-a.json"
+start_role api-b "$BIN_DIR/sample_cpp_framework_gamequest_game_api" --config="$CONFIG_DIR/api-b.json"
+wait_for_exact_count "api-a stream readiness" 1 \
+  "gamequest-ready kind=stream node=api-a" "$LOG_DIR/api-a.log"
+wait_for_exact_count "api-b stream readiness" 1 \
+  "gamequest-ready kind=stream node=api-b" "$LOG_DIR/api-b.log"
+wait_for_exact_count "api-a Mission spot route readiness" 1 \
+  "gamequest-ready kind=spot-route node=api-a mesh=gamequest" "$LOG_DIR/api-a.log"
+wait_for_exact_count "api-b Mission spot route readiness" 1 \
+  "gamequest-ready kind=spot-route node=api-b mesh=gamequest" "$LOG_DIR/api-b.log"
+
+OWNER_LOSS_RELEASE_FILE="$RUN_DIR/owner-loss-release"
+start_role client "$BIN_DIR/sample_cpp_framework_gamequest_client" \
   --api-a-stream-endpoint "$GAMEQUEST_API_A_STREAM_ENDPOINT" \
   --api-b-stream-endpoint "$GAMEQUEST_API_B_STREAM_ENDPOINT" \
   --api-a-http-url "$GAMEQUEST_API_A_HTTP_URL" \
-  --api-b-http-url "$GAMEQUEST_API_B_HTTP_URL" >"$LOG_DIR/client.log" 2>&1 || {
+  --api-b-http-url "$GAMEQUEST_API_B_HTTP_URL" \
+  --owner-loss-release-file "$OWNER_LOSS_RELEASE_FILE"
+CLIENT_PID="${PIDS[$(( ${#PIDS[@]} - 1 ))]}"
+
+wait_for_exact_count "owner-loss client stage" 1 \
+  "gamequest-owner-loss-stage-ready player=player-owner-failure" "$LOG_DIR/client.log"
+
+OWNER_NODE=""
+for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
+  if [[ "$(line_count "gamequest-owner ready player=player-owner-failure node=mission-a" "$LOG_DIR/mission-a.log")" == "1" ]]; then
+    OWNER_NODE="mission-a"
+    break
+  fi
+  if [[ "$(line_count "gamequest-owner ready player=player-owner-failure node=mission-b" "$LOG_DIR/mission-b.log")" == "1" ]]; then
+    OWNER_NODE="mission-b"
+    break
+  fi
+  sleep "$WAIT_SECONDS"
+done
+if [[ -z "$OWNER_NODE" ]]; then
+  echo "owner-ready marker was not found for player-owner-failure" >&2
+  dump_logs
+  exit 1
+fi
+
+if [[ "$OWNER_NODE" == "mission-a" ]]; then
+  OWNER_PID="$MISSION_A_PID"
+else
+  OWNER_PID="$MISSION_B_PID"
+fi
+kill -9 "$OWNER_PID"
+set +e
+wait "$OWNER_PID"
+OWNER_STATUS=$?
+set -e
+if [[ "$OWNER_STATUS" != "137" ]]; then
+  echo "owner Mission process exited with unexpected status ${OWNER_STATUS}" >&2
+  exit 1
+fi
+remove_pid "$OWNER_PID"
+: >"$OWNER_LOSS_RELEASE_FILE"
+
+set +e
+wait "$CLIENT_PID"
+CLIENT_STATUS=$?
+set -e
+remove_pid "$CLIENT_PID"
+if [[ "$CLIENT_STATUS" != "0" ]]; then
   cat "$LOG_DIR/client.log" >&2
   dump_logs
   exit 1
-}
+fi
 
-grep -q "gamequest-server-evidence=completed" "$LOG_DIR/client.log"
-grep -q "gamequest=completed" "$LOG_DIR/client.log"
-grep -q "gamequest api event routed" "$LOG_DIR/api-a.log"
-grep -q "gamequest api event routed" "$LOG_DIR/api-b.log"
-grep -q "gamequest mission processed" "$LOG_DIR/mission-a.log"
-grep -q "gamequest mission processed" "$LOG_DIR/mission-b.log"
-grep -Rq "message flow" "$FLOW_LOG_DIR"
-grep -q "message flow" "$FLOW_LOG_DIR/flow-api-a.log"
-grep -q "message flow" "$FLOW_LOG_DIR/flow-api-b.log"
-grep -q "message flow" "$FLOW_LOG_DIR/flow-mission-a.log"
-grep -q "message flow" "$FLOW_LOG_DIR/flow-mission-b.log"
+wait_for_exact_count "client self-check completion marker" 1 \
+  "gamequest=completed" "$LOG_DIR/client.log"
+wait_for_exact_count "client server-evidence completion marker" 1 \
+  "gamequest-server-evidence=completed" "$LOG_DIR/client.log"
+wait_for_prefix_minimum "Api event routing across nodes" 4 \
+  "gamequest-api event-routed player=" "$LOG_DIR/api-a.log" "$LOG_DIR/api-b.log"
+wait_for_prefix_minimum "Mission event processing across nodes" 4 \
+  "gamequest-mission processed player=" "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+wait_for_exact_count "player-alice reconcile" 1 \
+  "gamequest-mission reconciled player=player-alice quest=first-hunt" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+wait_for_prefix_exact_count "player-alice replay" 1 \
+  "gamequest-mission replayed player=player-alice generation=" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+wait_for_exact_count "owner unavailable" 1 \
+  "gamequest-owner unavailable player=player-owner-failure" \
+  "$LOG_DIR/api-a.log" "$LOG_DIR/api-b.log"
+wait_for_exact_count "replacement handler absence" 0 \
+  "gamequest-owner replacement-handler-invoked player=player-owner-failure" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
 
-echo "PASS GameQuest.Cpp"
-echo "gamequest sample result=passed"
+trap - EXIT
+cleanup
+echo "gamequest-placement=completed"

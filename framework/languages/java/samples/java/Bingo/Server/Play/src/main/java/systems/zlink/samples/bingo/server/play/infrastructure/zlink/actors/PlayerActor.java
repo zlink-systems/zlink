@@ -3,6 +3,8 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
@@ -11,6 +13,8 @@ import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
 public final class PlayerActor implements ZLinkActor {
+    private static final Logger logger = LoggerFactory.getLogger(PlayerActor.class);
+
     private final String actorId;
     private final ZLinkActorContext context;
     private String displayName;
@@ -80,6 +84,7 @@ public final class PlayerActor implements ZLinkActor {
             matchedRoomId = joined.getState().getRoomId();
         }
         joinRoom(matchedRoomId);
+        logger.info("bingo-lifecycle entry-leave actor={}", actorId);
         return CompletableFuture.completedFuture(null);
     }
 

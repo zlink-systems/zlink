@@ -6,6 +6,7 @@
 #include <zlink/http_client.hpp>
 
 #include <chrono>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -48,10 +49,19 @@ inline bool is_started_or_confirmed (const order_state_t &state)
            || state.status == order_status_t::confirmed;
 }
 
+inline void emit_produced_order (const std::string &name, const std::string &order_id)
+{
+    std::cout << "shoppingmall-produced name=" << name << " order=" << order_id << std::endl;
+}
+
 class shoppingmall_client_scenario_t
 {
   public:
-    void run (const std::string &api_a_http_url, const std::string &api_b_http_url)
+    void run (const std::string &api_a_http_url,
+              const std::string &api_b_http_url,
+              const std::string &resume_order_id,
+              const std::string &projection_continue_order_id,
+              const std::string &projection_rebuild_order_id)
     {
         auto api_a = zlink::http_client::client_t::create (api_a_http_url)
                        .timeout (std::chrono::milliseconds (5000))
@@ -66,6 +76,7 @@ class shoppingmall_client_scenario_t
         /* 공통 sample spec §15: 새 주문의 StartOrderRes는 `Created`만 담고 즉시 돌아온다. 종료는
      * GetOrderStateReq 폴링으로 확인한다. */
         ensure (success.state.status == order_status_t::created, "new order responds Created");
+        emit_produced_order ("success", success.order_id);
         auto created = get_order (api_a, success.order_id);
         ensure (is_started_or_confirmed (created), "successful order was created");
         ensure (created.shipping_address_id.value_or ("") == success_req.shipping_address_id,
@@ -87,47 +98,37 @@ class shoppingmall_client_scenario_t
         auto concurrent_b =
           api_b.post ("/orders/start").body (concurrent_req).fetch<start_order_res_t> ();
         ensure (concurrent_a.order_id == concurrent_b.order_id, "concurrent idempotency");
+        emit_produced_order ("concurrent", concurrent_a.order_id);
         auto concurrent_confirmed =
           wait_for_status (api_a, concurrent_a.order_id, order_status_t::confirmed);
         ensure (concurrent_confirmed.status == order_status_t::confirmed, "concurrent confirmed");
 
         const auto pending_req =
           start_order_req_t{"cart-success", "addr-office", "pm-ok", "order-pending-001"};
-        auto pending_ok = api_a.post ("/self-check/idempotency/pending")
-                            .body (pending_mapping_req_t{pending_req.idempotency_key,
-                                                         "order-pending-0001"})
-                            .fetch<ok_res_t> ();
-        ensure (pending_ok.ok, "pending hook");
         auto pending = api_b.post ("/orders/start").body (pending_req).fetch<start_order_res_t> ();
-        ensure (pending.order_id == "order-pending-0001", "pending order id");
+        emit_produced_order ("pending", pending.order_id);
         ensure (pending.state.status == order_status_t::created, "pending recovered as Created");
         auto pending_confirmed =
           wait_for_status (api_a, pending.order_id, order_status_t::confirmed);
         ensure (pending_confirmed.status == order_status_t::confirmed, "pending confirmed");
 
-        const auto resume_req =
-          start_order_req_t{"cart-success", "addr-home", "pm-ok", "order-resume-001"};
-        auto inventory_reserved = api_a.post ("/self-check/workflow/inventory-reserved")
-                                    .body (resume_req)
-                                    .fetch<start_order_res_t> ();
-        ensure (inventory_reserved.state.status == order_status_t::inventory_reserved,
-                "inventory reserved checkpoint");
-        auto resumed = api_b.post ("/self-check/workflow/continue")
-                         .body (continue_order_workflow_req_t{inventory_reserved.order_id,
-                                                              "continue:" + inventory_reserved.order_id})
+        auto resumed = api_b.post ("/orders/continue")
+                         .body (continue_order_workflow_req_t{resume_order_id,
+                                                              "continue:" + resume_order_id})
                          .fetch<continue_order_workflow_res_t> ();
         ensure (resumed.state.status == order_status_t::confirmed, "resumed confirmed");
         ensure (resumed.state.reservation_id.value_or ("")
-                  == "reservation-" + inventory_reserved.order_id,
+                  == "reservation-" + resume_order_id,
                 "resumed reservation");
         ensure (resumed.state.payment_id.value_or ("")
-                  == "payment-" + inventory_reserved.order_id,
+                  == "payment-" + resume_order_id,
                 "resumed payment");
 
         const auto inventory_req =
           start_order_req_t{"cart-inventory-fail", "addr-home", "pm-ok", "order-inventory-001"};
         auto inventory_started =
           api_a.post ("/orders/start").body (inventory_req).fetch<start_order_res_t> ();
+        emit_produced_order ("inventory-failure", inventory_started.order_id);
         auto inventory_failed =
           wait_for_status (api_a, inventory_started.order_id, order_status_t::failed);
         ensure (inventory_failed.reason.value_or ("").find ("inventory") != std::string::npos,
@@ -137,33 +138,26 @@ class shoppingmall_client_scenario_t
           start_order_req_t{"cart-success", "addr-home", "pm-decline", "order-payment-001"};
         auto payment_started =
           api_b.post ("/orders/start").body (payment_req).fetch<start_order_res_t> ();
+        emit_produced_order ("payment-failure", payment_started.order_id);
         auto payment_failed =
           wait_for_status (api_b, payment_started.order_id, order_status_t::failed);
         ensure (payment_failed.reservation_id.has_value (), "payment failure reservation");
         ensure (payment_failed.reason.value_or ("").find ("payment") != std::string::npos,
                 "payment failure");
 
-        ensure (api_a.post ("/self-check/projection/delete")
-                  .body (delete_projection_req_t{success.order_id})
-                  .fetch<ok_res_t> ()
-                  .ok,
-                "delete projection");
-        auto healed = api_b.post ("/self-check/workflow/continue")
-                        .body (continue_order_workflow_req_t{success.order_id,
-                                                             "continue:" + success.order_id})
+        auto healed = api_b.post ("/orders/continue")
+                        .body (continue_order_workflow_req_t{projection_continue_order_id,
+                                                             "continue:" + projection_continue_order_id})
                         .fetch<continue_order_workflow_res_t> ();
         ensure (healed.state.status == order_status_t::confirmed, "healed projection");
-        ensure (api_a.post ("/self-check/projection/delete")
-                  .body (delete_projection_req_t{success.order_id})
-                  .fetch<ok_res_t> ()
-                  .ok,
-                "delete projection again");
-        auto rebuilt = api_a.post ("/self-check/projection/rebuild")
-                         .body (rebuild_order_projection_req_t{success.order_id,
-                                                               "rebuild:" + success.order_id})
+        auto healed_read = get_order (api_a, projection_continue_order_id);
+        ensure (healed_read.status == order_status_t::confirmed, "healed read");
+        auto rebuilt = api_a.post ("/orders/rebuild")
+                         .body (rebuild_order_projection_req_t{projection_rebuild_order_id,
+                                                               "rebuild:" + projection_rebuild_order_id})
                          .fetch<rebuild_order_projection_res_t> ();
         ensure (rebuilt.state.status == order_status_t::confirmed, "rebuilt projection");
-        auto rebuilt_read = get_order (api_b, success.order_id);
+        auto rebuilt_read = get_order (api_b, projection_rebuild_order_id);
         ensure (rebuilt_read.status == order_status_t::confirmed, "rebuilt read");
 
         auto delayed_first = get_order (api_b, payment_started.order_id);
@@ -174,16 +168,9 @@ class shoppingmall_client_scenario_t
         const auto scale_req =
           start_order_req_t{"cart-success", "addr-office", "pm-ok", "order-scale-001"};
         auto scale = api_b.post ("/orders/start").body (scale_req).fetch<start_order_res_t> ();
+        emit_produced_order ("scale-out", scale.order_id);
         auto scale_confirmed = wait_for_status (api_a, scale.order_id, order_status_t::confirmed);
         ensure (scale_confirmed.status == order_status_t::confirmed, "scale confirmed");
-
-        auto assertion =
-          api_a.post ("/self-check/assert")
-            .body (server_assertion_req_t{success.order_id, pending.order_id, concurrent_a.order_id,
-                                          inventory_reserved.order_id, inventory_started.order_id,
-                                          payment_started.order_id, scale.order_id})
-            .fetch<server_assertion_res_t> ();
-        ensure (assertion.passed, "server evidence");
     }
 };
 

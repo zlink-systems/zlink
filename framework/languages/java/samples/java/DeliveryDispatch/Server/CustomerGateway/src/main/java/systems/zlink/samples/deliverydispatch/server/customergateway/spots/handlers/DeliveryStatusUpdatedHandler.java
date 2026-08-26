@@ -19,9 +19,15 @@ public final class DeliveryStatusUpdatedHandler
         ZLinkMessageContext context,
         Messages.DeliveryStatusUpdatedMsg message) {
         return actor.push(new Messages.DeliveryStatusNotify(
-            message.deliveryId(),
-            message.status(),
-            message.courierId(),
-            message.occurredAt()));
+                message.deliveryId(),
+                message.status(),
+                message.courierId(),
+                message.occurredAt()))
+            .thenRun(() -> {
+                if (message.status() == Messages.DeliveryStatus.Delivered) {
+                    System.out.println("deliverydispatch-customer pushed status=Delivered delivery="
+                        + message.deliveryId());
+                }
+            });
     }
 }

@@ -138,6 +138,13 @@ message StopObservingBingoEventsRes {
   reserved 2;
 }
 
+// Sent only after an observer has left its observer room and has been
+// admitted back into the Entry Spot. The client keeps its STREAM session
+// alive until this lifecycle transition completes.
+message ObserverReturnedToEntrySpotNotify {
+  string actor_id = 1;
+}
+
 message PlayerJoinedNotify {
   string room_id = 1;
   string actor_id = 2;

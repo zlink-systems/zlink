@@ -145,6 +145,423 @@ DeliveryDispatch의 dispatch service가 모두 그렇다. `test_cpp_framework_la
 방어였다 — framework 내부는 정작 `.result()`를 자유롭게 쓴다. 진입점이 coroutine이 되면
 그 금지의 근거가 달라지므로 계약 테스트도 함께 재검토한다.
 
+## Bingo 샘플 — 완료
+
+### 스펙이 정하는 것과 정하지 않는 것
+
+[Bingo 스펙 §11](../../../framework/doc/framework/common/sample/bingo/README.ko.md)은 완료
+기준을 서술로 정하고 **시나리오 ID 체계가 없다**(ZoneWorld는 34개 ID 표가 있다). 그중
+runner에 걸리는 항목은 이것뿐이다.
+
+> Runner가 readiness, Redis lifecycle, **server-side evidence**와 두 완료 marker를 확인한다.
+
+**어떤 증거를 어떤 문자열로 확인하는지는 정하지 않는다.** 그래서 세 언어가 갈렸다.
+
+### 갈라진 것 — 같은 사실을 다른 문자열로, 또는 다른 사실을
+
+| 확인 대상 | dotnet | node | cpp |
+|---|---|---|---|
+| player record 로드 | `bingo room: player record loaded. room=… actor=player-1, wins=0, losses=0` | `bingo-record fetched actor=player-1 wins=0 losses=0` | 확인하지 않음 |
+| 결과 보고 | `bingo room: result reported. room=… won=True, wins=1, losses=0` | `bingo-record reported actor=player-1 wins=1 losses=0` | 확인하지 않음 |
+| room leave | `bingo room: actor left. room=… actor=player-1` | `bingo-lifecycle room-leave actor=player-1` | 확인하지 않음 |
+| entry destroy | `entry spot: actor destroy completed. actor=player-1` | `bingo-lifecycle entry-destroy-complete actor=player-1` | 확인하지 않음 |
+| route readiness | 확인하지 않음 | 확인하지 않음 | `bingo route ready node=api-a mesh=room` |
+
+로그 단언 수도 dotnet 16, cpp 17, node 5로 갈린다. **cpp만 route readiness를 보고
+dotnet·node가 보는 업무 증거를 보지 않는다** — 같은 완료 기준을 서로 다른 증거로 검증한다.
+
+추가 조사에서 java·kotlin은 더 나빴다 — **서버가 evidence 로그를 하나도 찍지 않고**,
+runner는 `bingo=completed`와 `stream-inbound sample=Bingo` 두 줄만 본다. 그리고
+`bingo-placement=completed`(스펙 §9가 요구하는 marker)는 dotnet만 출력한다.
+node만 drain·node 교체(rolling replacement) 단계를 추가로 돌린다.
+
+### 처리 — 스펙 §10.1 신설
+
+[Bingo 스펙](../../../framework/doc/framework/common/sample/bingo/README.ko.md)에
+**§10.1 Runner가 확인하는 server-side evidence**를 ko/en 양쪽에 넣었다. ZoneWorld에서
+`topology=ready node=… zones=…`를 고정한 것과 같은 유형이다.
+
+1. **문자열 고정** — readiness `bingo-ready kind=api-channel|peer-route|mesh-route …`,
+   업무 evidence `bingo-record fetched|reported …`, `bingo-lifecycle room-leave|entry-leave|entry-destroy-complete|session-disconnect …`.
+   "언어별 재량이 아니다, 문구를 바꾸려면 이 표를 먼저 바꾼다"를 명시했다.
+2. **node 이름 고정** — `api-a, api-b, matchmaking, play-a, play-b, session-a, session-b`.
+   cpp가 쓰던 `node=a`도 여기에 맞춘다.
+3. **횟수 고정** — actor별 정확한 횟수. 0회 행(`bingo-record reported actor=observer`,
+   `entry-destroy-complete actor=observer`)까지 표에 넣었다. dotnet의 집계식(`player record loaded` 2회)이
+   아니라 node의 actor별 형식을 택했다 — 승패 tally가 dotnet의 `won=True` 플래그보다 검증력이 높다.
+4. **대기 예산 고정** — `100 ms` 간격 최대 `300`회(30초), readiness와 evidence 동일 적용.
+   dotnet은 대기 없이 사후 grep이었다.
+5. **배치 독립성 보호** — node가 `session-b→player-1`로 노드를 고정해 세던 것을
+   "두 Session node 로그를 합쳐 센다"로 바꿨다. 스펙 §9의 배치 독립성과 충돌하던 부분이다.
+6. **기본 smoke 경계** — drain·node 교체·rolling relocation은 기본 샘플 성공 조건이 아니고
+   §7.6 relocation 계약은 Config 11이 검증한다고 명시. node만 하던 단계다.
+7. §11 완료 기준을 "§10.1 표의 모든 행을 문자열과 횟수까지 통과시킨다"로 교체했다.
+
+구현 정렬은 5개 언어 각각 진행 중이다(java·kotlin은 서버 로깅 추가부터).
+
+### 스펙 정정 — `api-channel` readiness 행 삭제
+
+처음 §10.1을 쓸 때 cpp가 이미 찍던 `bingo play api channel ready node=a`를 그대로 표에 올렸다.
+**그 행이 무슨 사실을 어떻게 증명하는지 확인하지 않은 것이 잘못이었다.** node 실행에서 드러났다.
+
+- cpp는 이 행을 **합성 business request**로 증명한다 — `authenticate_player_req_t{"player-readiness"}`를
+  500 ms 재시도 루프로 보내 accepted가 될 때까지 기다린다. readiness를 위해 가짜 player를
+  샘플의 업무 경로에 밀어 넣는 것이다.
+- node는 수동 신호(`clientServerRuntime.snapshot('bingo.api').isReady`)를 썼는데 켜지지 않는다.
+  Play node는 이 채널의 `.client()`라 host state가 없고, `isReady`는 host state로 계산된다.
+  **node 버그가 아니다.**
+- 그리고 이 행은 커버리지를 더하지 않는다. `bingo-record fetched`/`reported`가 Play node에서
+  API로의 실제 request 왕복이 성공한 뒤에만, 실제 승패 tally와 함께 찍힌다. 같은 사실을
+  업무 traffic으로 이미 증명한다.
+
+그래서 ko/en 양쪽에서 행을 지우고 "readiness를 위해 합성 request를 보내지 않는다"를 명시했다.
+cpp의 probe hosted service와 node의 `observeApiChannel`을 함께 걷어냈고, cpp 계약 테스트
+`test_cpp_framework_sample_parity.cpp`가 붙들고 있던 옛 문자열 `observer returned to entry spot`도
+새 `bingo-lifecycle room-leave actor=`로 교체했다.
+
+**교훈**: 스펙에 문자열을 고정할 때 기존 구현의 로그를 그대로 옮기지 말 것. 그 줄이 어떤
+사실을 어떻게 증명하는지, 다른 행이 이미 증명하지는 않는지 먼저 읽어야 한다.
+
+### 결과 — 5언어 전부 통과
+
+| 언어 | 결과 |
+|---|---|
+| node | `bingo-placement=completed` (Claude가 직접 실행) |
+| dotnet | `bingo-placement=completed` + 회귀 테스트 12/12 |
+| cpp | `bingo-placement=completed` + `test_cpp_framework_sample_parity` 통과 |
+| java | `bingo-placement=completed` |
+| kotlin | `bingo-placement=completed` |
+
+직접 재확인: `api-channel` 잔여 0건, 다섯 러너 모두 `bingo-placement=completed` 정확히 1회,
+observer 4개 행(room-leave 1·entry-leave 1·entry-destroy-complete 0·record reported 0) 전부 검증.
+cpp는 `for actor in player-1 player-2 observer` 루프로 덮는다.
+
+**과정에서 배운 것**: codex 기본 sandbox는 loopback bind와 Docker를 막아 샘플을 못 돌린다.
+네 언어 작업이 전부 "구현 완료, 실행 미검증"으로 끝났고 그중 node는 **실제로 깨져 있었다**
+(§10.1의 `api-channel` 행 자체가 잘못이었다). 실행 검증 없는 구현 보고는 신뢰하지 않는다.
+`codex exec -s danger-full-access`로 직접 기동하면 이 제약이 풀린다.
+
+## TicTacToe 샘플 — 조사 결과 (스펙 상세화 대기)
+
+Bingo와 **같은 병**이다. [TicTacToe 스펙 §11](../../../framework/doc/framework/common/sample/tictactoe/README.ko.md)도
+문자열을 정하지 않고 서술만 한다 — "Runner가 Actor별 결과를 확인한다", "self-check와 server
+evidence를 확인한다".
+
+| 확인 대상 | dotnet | node | cpp | java | kotlin |
+|---|---|---|---|---|---|
+| actor destroy | `entry spot: actor destroy completed. actor=player-x` | 확인하지 않음 | 확인하지 않음 | `tictactoe actor destroy completed actor=player-x` | java와 같음 |
+| leave 완료 | `actor: LeaveGameMsg completed. actor=player-x` | 확인하지 않음 | 확인하지 않음 | 확인하지 않음 | 확인하지 않음 |
+| readiness | 확인하지 않음 | `spotPeerReady` (**framework 내부 문자열**) | 확인하지 않음 | `Started PlayProgram` / `Started ApiProgram` (**program boilerplate**) | java와 같음 |
+| exact identity | `play stream: existing actor exact identity verified … actor=player-x` | 확인하지 않음 | 확인하지 않음 | 확인하지 않음 | 확인하지 않음 |
+| client marker | 3종(`stream-inbound` + seq + Notify) + milestone·reconnect 2종 | 1종 | 1종 | — | — |
+
+세 가지가 문제다.
+
+1. **같은 사실을 다른 문자열로 쓴다** — destroy를 dotnet은 `entry spot: actor destroy completed.`,
+   java·kotlin은 `tictactoe actor destroy completed`로 쓴다.
+2. **readiness를 샘플이 아닌 남의 문자열로 확인한다** — node는 framework 내부 문자열
+   `spotPeerReady`를, java·kotlin은 program boilerplate `Started PlayProgram`을 본다.
+   둘 다 샘플이 소유하지 않는 문자열이라 framework·boilerplate가 바뀌면 조용히 깨진다.
+3. **cpp는 client marker 한 줄만 본다** — server evidence를 전혀 확인하지 않는다.
+
+처리는 Bingo와 같다 — 스펙에 §10.1 형식의 evidence 표(문자열·정확한 횟수·대기 예산·node 이름)를
+넣고 다섯 언어를 맞춘다.
+
+## DeliveryDispatch 샘플 — 조사 결과 (스펙 상세화 대기)
+
+Bingo·TicTacToe와 같은 문자열 문제가 있고, **그보다 심한 것이 두 가지 더** 있다.
+
+### 심각 — 스펙이 요구하는 시나리오를 아예 실행하지 않는다
+
+이건 "검증 문자열이 갈렸다"가 아니라 **스펙 요구사항이 4~5개 언어에서 실행조차 되지 않는다**는
+문제다.
+
+| 스펙 요구 | 실행 상태 |
+|---|---|
+| §9-6 늦게 도착한 `CourierDecisionMsg`가 효과 없음 | **node만 실제로 시험한다.** node는 courier-b가 수락한 *뒤에* courier-a 결정을 보내고, 서버가 `ignored stale decision delivery=… courier=courier-a attempt=1`을 남기는지 확인한다(`dispatch-worker.ts:94`). **dotnet·cpp·java·kotlin은 courier-a가 결정을 아예 보내지 않는다** — 늦은 메시지가 없으니 "재수락 안 함" 보장이 시험되지 않는다 |
+| §9-9 server evidence 직접 검증 | **dotnet은 `/self-check/assert` 엔드포인트가 서버에 존재하지 않는다.** cpp·java·kotlin은 있고 러너가 확인한다. node는 있지만 **하네스가 확인하지 않는다** |
+| §9-7 후보 없는 delivery가 `Failed`에 정확히 한 번 도달 | **다섯 언어 모두 확인하지 않는다.** 후보 없는 delivery를 만드는 시나리오 자체가 없다 |
+| §9-8 response·push에 ActorRef·NodeRid·session route가 없음 | 다섯 언어 모두 런타임 확인 없음. DTO 모양으로만 보장 |
+
+### 같은 문자열이 다른 순간을 증명한다
+
+`topology=ready` — **dotnet은 두 courier bind가 끝난 *뒤*에** client가 출력하고
+(`DeliveryDispatchClientScenario.cs:37`), **kotlin은 아무것도 연결하기 *전*에** 출력한다
+(`Program.kt:45`). java는 client가 출력하지 않고 **bash 러너가 client 시작 전에 스스로 echo한다**
+(`run_sample.sh:283`) — 아무것도 증명하지 않는다. 같은 리터럴이 세 언어에서 세 가지 의미다.
+
+### 샘플이 소유하지 않는 문자열에 의존
+
+- **java·kotlin**: `ZLINK_FRAMEWORK_READY`·`ZLINK_FRAMEWORK_PEER_READY`·`ZLINK_FRAMEWORK_TERMINATION`
+  (`ZLinkFrameworkRuntime.java:533`, `ZLinkJavaRawMeshNode.java:6836`, `ZLinkFrameworkLifecycle.java:257`).
+  `runner-common.sh`를 통해 **모든 java/kotlin 샘플이 공유**하므로 framework 로그 형식이 바뀌면
+  전 샘플 러너가 동시에, 조용히 깨진다.
+- **cpp**: `message flow` — framework 진단 tracer가 찍는 문자열이다
+  (`message_flow_tracer.hpp:438`). TicTacToe·ShoppingMall·Bingo·SupportChat도 같이 쓴다.
+
+### 언어별로만 존재하는 검증
+
+dotnet은 서버 로그 5행(tracking·customer-gateway·courier-session)을 보는데 **다른 언어는 하나도
+안 본다**. java만 `courier-bind-relayed=<id>`를 본다. node만 role별 `deliverydispatch-route-ready`를
+본다. cpp만 `/ready?targetRid=` HTTP probe로 actor 수용 준비를 확인한다(**러너가 만들어 보내는
+합성 요청** — Bingo에서 걷어낸 것과 같은 범주다. 다른 언어는 TCP connect나 로그로 공짜로 얻는다).
+java·kotlin만 프로세스를 띄우기 전에 `rg` 정적 소스 가드레일을 돌린다.
+
+### 대기 예산
+
+| | 포트 | HTTP | 로그 marker |
+|---|---|---|---|
+| dotnet | 60초 | 12초 | 16초 |
+| cpp | 15초 | 12초 | 없음(사후 grep) |
+| node | 30초 | 30초 | 30초 |
+| java·kotlin | 60초 | 60초 | 60초 |
+
+신호 종류마다 예산이 다르고 언어마다 또 다르다. 고정 sleep을 readiness 대신 쓰는 곳은 **없다**
+— 이 항목만은 다섯 언어가 스펙(§10, "고정 sleep 금지")을 지킨다.
+
+### 완료 marker
+
+`deliverydispatch=completed`는 스펙이 유일하게 문자열까지 고정한 것이고 다섯 언어가 일치한다.
+다만 **node는 출력만 하고 확인하지 않는다** — 완료 판정을 browser의
+`window.__zlinkSampleResult.status === 'passed'`로만 한다. 내일 client가 이 문자열을 안 찍어도
+node 러너는 모른다.
+
+## GameQuest 샘플 — 조사 결과 (스펙 상세화 대기)
+
+**모두 직접 재확인한 사실이다.**
+
+### 버그 3건
+
+| 문제 | 근거 |
+|---|---|
+| **dotnet은 스펙이 정한 완료 marker를 아예 출력하지 않는다** | `gamequest=completed`가 dotnet GameQuest 트리 전체에 **0건**. `gamequest-server-evidence=completed`로 대체해 버렸다. 스펙 §10이 문자열까지 고정한 그 marker다 |
+| **dotnet `.ps1`과 `.sh`의 대기 예산이 20배 다르다** | 같은 readiness 검사에 `.ps1`은 `-Attempts 30`(×100 ms = **3초**), `.sh`는 `seq 1 600`(×0.1초 = **60초**) |
+| **dotnet `grep -q`가 AND가 아니라 OR로 동작한다** | `run_sample.sh:252`가 `grep -q "gamequest api event routed" api-a.log api-b.log` — `grep -q`는 **어느 한 파일**만 맞아도 0을 반환한다. 바로 위(250·251행)와 아래(253·254행)는 파일별로 나눠 쓴 올바른 형태라 의도는 AND가 분명하다. 한 노드만 라우팅해도 통과한다 |
+
+### 스펙 요구인데 다섯 언어 모두 확인하지 않음
+
+- **§9-9 Ready owner 프로세스 종료 → 다음 호출이 `Unavailable`, 자동 대체 없음.** §11 완료 기준에도
+  "Ready owner 장애를 crash failover로 표시하지 않고 Unavailable 경계를 확인한다"고 적혀 있는데
+  **다섯 러너 어디에도 이 단계가 없다.**
+
+### 언어별 검증 범위 편차가 극단적
+
+node 러너는 **로그 단언이 0건**이다(`sample-runner.mjs` 전체 56줄, `/health` 폴링 뒤 browser에
+넘긴다). kotlin은 shell 단언 2건. 반면 java는 **rehydrate 재실행 단계**(클라이언트를 두 번째로
+띄워 전용 로그에 marker 확인)와 **scale-out 단계**, 그리고 프로세스를 띄우기도 전에 도는
+**`rg` 정적 소스 게이트**까지 있다. kotlin 러너는 java에서 그 단계들을 **지운** 사본이다.
+
+주의: node·kotlin이 "덜 검증"하는 건 아니다. 업무 단언은 클라이언트 안 `ensure`/`check`에 있고
+실패하면 프로세스가 비정상 종료해 `set -euo pipefail`로 러너가 죽는다. 다만 **러너가 독립적으로
+관찰하는 사실**은 확연히 적다.
+
+### 같은 사실 다른 문자열 / 샘플이 소유하지 않는 문자열
+
+- reconcile 증거: dotnet `QuestReconciled` vs java `"eventType":"QuestProgressReconciledEvent"`.
+- mesh 라우팅 증거: **두 언어도 같은 문자열을 쓰지 않는다** — dotnet
+  `surface=stream kind=request packet=JoinSessionReq`(framework의 `TestHostMessageFlowListener.cs:37`),
+  cpp `message flow`(`message_flow_tracer.hpp:438`), java `surface=spot kind=send…`(framework의
+  Spec-26 trace 포맷 `ZLinkTraceFormat.java`), node·kotlin은 확인 안 함. **전부 framework 소유
+  문자열이다.**
+- java·kotlin은 `ZLINK_FRAMEWORK_READY`·`ZLINK_FRAMEWORK_PEER_READY`에 의존.
+
+### 합성 probe
+
+java·node·kotlin이 `POST /self-check/owner/player-alice/close`,
+`/self-check/gameplay/kill-without-publish/{id}`, `/self-check/projection/{…}/delete|rebuild`로
+**상태를 인위적으로 만들어** 증거를 생산한다. cpp만 합성 probe가 없다.
+
+## ShoppingMall 샘플 — 조사 결과 (스펙 상세화 대기)
+
+### 스펙을 정면으로 어기는 것 — 5개 중 4개 언어
+
+스펙 §9는 runner 전용 hook(pending 매핑, 중단 fixture, server evidence)을 **Client 프로세스
+바깥에서** 호출하라고 명시한다. Client는 CommerceApi의 공개 order API만 쓴다.
+
+- **cpp·node·java·kotlin은 `/self-check/*`를 Client 안에서 호출한다.** dotnet만 shell 러너에서
+  Client 시작 전에 `curl`로 처리해 스펙대로다.
+- **kotlin은 더 나아간다 — Client가 HTTP를 아예 쓰지 않는다.** 내부 RouteMesh channel API로
+  CommerceApi에 직접 말한다(`channels.requestToChannel(...)`). 스펙이 말하는 "공개 order API 표면"이
+  **전혀 시험되지 않는다.**
+
+### 스펙 요구인데 다섯 언어 모두 확인하지 않음
+
+- **§9.2-11 계획된 relocation 단계.** 다섯 언어 모두 서버 부트스트랩에 `RelocationStore`·
+  `recreateOnRelocation`을 배선해 놓았지만, **어느 러너도 노드를 죽이거나 relocation을 강제하지
+  않고 "stream replay·`ReserveInventoryReq` 재전송 없음"을 단언하지 않는다.**
+
+### 그 밖
+
+- **cpp ShoppingMall에는 `run_sample.ps1`이 아예 없다**(직접 확인). dotnet·java·kotlin은 있다.
+- **kotlin은 `shoppingmall=completed`를 출력하지만 러너가 확인하지 않는다.** node도 출력만 하고
+  프로세스 종료 코드로만 판정한다.
+- dotnet의 `/self-check/assert` probe는 **하드코딩된 order ID**(`order-0001`…)를 보낸다 — 실제
+  실행이 만든 ID와 대조하지 않는다.
+- §10.6이 요구하는 "runner placement marker"가 세 가지로 갈리고(`PASS ShoppingMall.Cpp`,
+  `PASS ShoppingMall.Ts`, 없음×3) 표기 주체도 shell/client로 갈린다.
+- "workflow가 order를 시작했다"를 dotnet은 **OR**로, cpp·kotlin은 **AND**로 확인하고 java는
+  확인하지 않는다. cpp만 `.*spot=` 정규식으로 더 엄격하다.
+- 상태 폴링 예산: java 30초, dotnet·cpp 8초, node 4초, kotlin 12초(서버는 8초).
+
+## SupportChat 샘플 — 조사 결과 (스펙 상세화 대기)
+
+### 가장 심각 — cpp의 단언 8건이 아무것도 증명하지 않는다
+
+`Client/supportchat_client_scenario.hpp:36-48`을 직접 확인했다. `run_server_self_check()`와
+`run_stream_conversation()`을 부른 **뒤에 8개 marker를 한 블록에서 무조건 출력**한다.
+
+```
+run_server_self_check (support_http_url);
+run_stream_conversation (session_stream_endpoint);
+std::cout << "supportchat authentication=verified" ...   // 8줄이 조건 없이 연달아
+```
+
+위에서 예외가 나면 한 줄도 안 찍히고, 러너는 그 전에 client 종료 코드로 이미 죽는다
+(`run_sample.sh:187-190`). **따라서 러너의 `grep -q` 8건은 "프로세스가 0으로 끝났다"는 사실
+하나를 여덟 번 확인하는 것과 같다.** 어느 사실이 실제로 일어났는지 구분하지 못한다.
+
+### 두 번째 — cpp의 self-check는 실제 경로를 우회한다
+
+`POST /self-check/assert`가 서버에서 `supportchat_server_story_t::run()`을 돌리는데
+(`Server/Support/main.cpp:834-932`), 이건 **`Conversation` 도메인 객체를 직접 만들어 굴리는
+in-process 전용 이야기**다 — actor Spot도, Session relay도, wire codec도 타지 않는다. 그러고는
+`one-agent-many-conversations=verified` 같은 **미리 정해진 문자열**을 돌려준다.
+같은 사실들은 뒤이어 `run_stream_conversation()`이 실제 stream으로 다시 시험한다.
+**Bingo에서 걷어낸 합성 probe와 정확히 같은 구조이고, 실제 증거와 중복이기까지 하다.**
+
+### 버그 — kotlin `.ps1`이 잘못된 파일을 본다
+
+`run_sample.ps1:173`은 `status=WaitingForAgent`를 **support.log**에서 찾고,
+`run_sample.sh:142`는 같은 사실을 **api.log**에서 찾는다. 두 파일을 직접 확인했다.
+같은 샘플의 두 러너가 같은 사실을 다른 파일에서 찾고 있다.
+
+### 그 밖
+
+- **cpp와 java에는 `run_sample.ps1`이 없다.** dotnet·kotlin만 있다.
+- **node와 java는 완료 marker `supportchat=completed`를 확인하지 않는다** — 출력만 한다.
+- dotnet `.ps1`의 `Assert-SampleLogContains`는 **재시도 없는 단발 검사**인데 `.sh`의 같은 검사는
+  0.2초 × 50회(10초) 폴링이다. `.ps1`이 경합에 그대로 노출된다.
+- 상태 전이 증거(`status=Active` 등) 확인 개수: dotnet 6, kotlin `.sh` 6, kotlin `.ps1` 5(그중 1건
+  위 버그), java 4, **cpp 0**.
+- `supportchat-closed-typing-ignore=verified`가 cpp만 **하이픈 대신 공백**
+  (`supportchat closed-typing-ignore=verified`).
+- framework 소유 문자열 의존은 다른 샘플과 동일 — java·kotlin `ZLINK_FRAMEWORK_READY`·
+  `ZLINK_FRAMEWORK_PEER_READY`·`zlink flow: event_id=zlink.message_flow`, cpp `message flow`.
+- 대기 예산 10초~60초, dotnet은 `.sh`와 `.ps1`이 6배 차이.
+
+### 내 단서가 틀렸다 — kotlin `api-channel`은 합성 probe가 아니다
+
+조사 전에 나는 kotlin SupportChat의 `api-channel`이 Bingo에서 지운 것과 같은 종류일 것이라고
+단서를 줬다. **틀렸다.** `wait_port api-channel`은 그냥 TCP connect-and-close이고
+(`runner-common.sh:269-322`), dotnet의 `wait_port api-mesh`, node의 `waitTcp(apiChannelEndpoint)`와
+구조가 같은 **수동 신호**다. 지울 게 아니라 다른 언어와 표기만 맞추면 된다.
+SupportChat의 진짜 합성 probe는 위의 cpp `/self-check/assert`다.
+
+## 고정 RID + Object role — 언어별 framework 계약 불일치 (판정 필요)
+
+TicTacToe 통일 과정에서 드러났다. **같은 설정을 cpp·java는 받아들이고 dotnet만 거부한다.**
+
+- **cpp**: `game_spot.set_routing_id(routing_id_t::from("tictactoe-play-a"))`를 Object role mesh에
+  걸고 **정상 동작한다**(`play_server_host_factory.hpp:56`). TicTacToe cpp 러너는 통과한다.
+- **java**: 실행 로그의 peer 이름이 `tictactoe-play-a`/`tictactoe-play-b`로, 마찬가지로 고정
+  RID를 쓴다.
+- **dotnet**: 같은 조합을 **설정 검증에서 거부**한다
+  (`ZLinkSpotRegistrationValidator.cs:48`) —
+  `HasExplicitRoutingId && (automatic || ObjectRoleSelected)` → `ZLinkConfigurationException`
+  `"MeshNode 'tictactoe' cannot use a fixed routing ID with automatic discovery or an Object role."`
+
+이 때문에 dotnet TicTacToe가 기동조차 못 한다.
+
+### 왜 여기서 걸렸나
+
+내가 §10.1에 "`kind=peer-route` 행은 **표에 적힌 그 peer가 ready인지** 확인한다"를 넣었는데,
+dotnet의 공개 API로는 그 요구를 만족할 수단이 없다. `ZLinkPeerStatus`는 `NodeRid`·`State`·
+`UnavailableReason`만 노출하고 **endpoint를 주지 않으므로**, RID가 자동 생성되면 어느 peer가
+상대인지 식별할 방법이 없다. cpp·java는 RID를 고정해 그 문제를 피했고 dotnet은 그 길이 막혀 있다.
+
+### 판정 — 스펙에 이미 답이 있었다
+
+규칙이 **문서에 이미 있다.** 두 곳이 같은 말을 한다.
+
+- `languages/dotnet/interfaces/03-configuration-topology.ko.md:356` — "Fixed `SetRoutingId(...)`는
+  **object role과 Store descriptor가 없는 manual topology에서만** 허용한다."
+- `languages/kotlin/interfaces/configuration-host.ko.md:202` — "Fixed RID는 **object role이나
+  automatic Store descriptor가 없는 manual topology에서만** 사용할 수 있다."
+
+**kotlin 문서에도 적혀 있는데 kotlin은 강제하지 않는다.** framework 소스에서 이 검증을 실제로
+하는 것은 dotnet 하나뿐이다 — java·node에서 검색되는 "fixed routing ID" 문자열은 전부 **channel
+publisher용 다른 규칙**이고 spot-node mesh의 object role 조합과 무관하다.
+
+| | 문서 규칙 | 검증 구현 | 샘플이 위반 |
+|---|---|---|---|
+| dotnet | 있음 | **있음** | 못 함(거부당함) |
+| kotlin | 있음 | 없음 | 확인 필요 |
+| cpp | 확인 필요 | 없음 | **있음** — `set_routing_id`를 object role mesh에 |
+| java | 확인 필요 | 없음 | **있음** — `tictactoe-play-a` |
+| node | 확인 필요 | 없음 | 확인 필요 |
+
+**dotnet이 스펙대로이고 나머지가 검증을 빠뜨렸다.** 그 틈으로 TicTacToe 샘플이 문서가 금지한
+설정을 쓰고 있었다.
+
+### 처리 (1) — 샘플 스펙: 완료
+
+§10.1의 "표에 적힌 그 peer가 ready인지 확인한다"를 **내렸다.** 고정 RID가 금지된 이상
+`ZLinkPeerStatus`에 endpoint가 없어 자동 RID인 peer를 이름으로 식별할 공개 수단이 없다.
+내가 만족 불가능한 요구를 스펙에 넣은 것이었다. `peer=` 값은 "누구를 기대하는지 읽는 사람에게
+알리는 표시"로 남기고, 판정은 "ready인 peer가 하나 이상"으로 되돌렸다.
+
+dotnet TicTacToe는 고정 RID를 걷어내고 러너 통과를 확인했다(`tictactoe-placement=completed`).
+
+### 처리 (2) — framework: 미착수, 캠페인 범위 밖
+
+cpp·java·kotlin·node에 dotnet과 같은 검증이 없다. 넣으면 **지금 그 설정을 쓰는 샘플들이 기동
+불가가 된다**(cpp·java TicTacToe가 확실히 해당). 검증 추가와 샘플 정리를 함께 해야 하므로
+별도 항목으로 둔다.
+
+**교훈**: 스펙에 새 요구를 넣기 전에 **그 언어의 공개 API로 만족 가능한지** 확인할 것. 이번에는
+`ZLinkPeerStatus`가 endpoint를 노출하지 않는다는 사실 하나로 요구 전체가 불가능해졌다.
+
+## TicTacToe java/kotlin — 고정 sleep이 덮고 있던 것 (미해결, 판단 필요)
+
+TicTacToe 구현 정렬에서 dotnet·cpp·node는 `tictactoe-placement=completed`로 통과했고
+**java·kotlin만 실패**한다. 고정 `sleep 30`을 걷어낸 뒤 client의 첫 호출이 timeout된다.
+
+### 1차 원인은 내 스펙이었다 — 고쳤다
+
+세 언어 모두 `tictactoe-ready kind=http`를 **HTTP가 listen하자마자** 찍는다
+(`ApiServer.cs:56`, `host_support.hpp:239`). 라우팅에 대해 아무것도 증명하지 않는다. 즉
+dotnet·cpp·node는 **타이밍 운으로 통과**하고 있었다. DeliveryDispatch에 `kind=actor-route`,
+ShoppingMall에 `kind=object-route` 행을 넣으면서 **TicTacToe에만 같은 행을 빠뜨린 것**이
+내 잘못이다. 세 번째 readiness 행 `kind=spot-route`를 추가하고 다섯 언어에 구현했다.
+다섯 언어 모두 route mesh 준비를 관찰한 자리에서 emit하는 것을 diff로 직접 확인했다.
+
+### 그런데 java는 여전히 실패한다 — 더 깊은 것이 있다
+
+실행 로그의 시간선이다(`run-ttt-java.log`).
+
+| 시각 | 사건 |
+|---|---|
+| 02:13:47.282 | api-a에 `PEER_READY … peer=tictactoe-play-a` |
+| 02:13:47.332 | api-a가 `tictactoe-ready kind=spot-route node=api-a mesh=tictactoe` 출력 — **신호는 스펙대로 동작했다** |
+| 02:14:00.21 | client 인증·observer 구독 성공 |
+| 02:14:00.2x | 다음 호출이 `TimeoutException` |
+
+**같은 peer(`tictactoe-play-a`)에 대한 `PEER_READY`가 api-a 로그에 15회, 약 2.5초 간격으로
+반복된다.** 캡처된 출력에는 그 사이에 lost/disconnect 줄이 없다.
+
+**확인한 것**: readiness 신호 자체는 스펙대로 동작했고, 그 시점에 play-a는 실제로 READY였다.
+**확인하지 못한 것**: 이 반복이 재연결(flapping)인지 주기적 재공지인지, 그리고 그것이 timeout의
+원인인지. lost 이벤트가 INFO로 안 찍히는 것일 수도 있다.
+
+### 판단 필요
+
+이 증상이 flapping이라면 **java·kotlin이 애초에 `sleep 30`을 두었던 진짜 이유**가 "route 수렴이
+느려서"가 아니라 **"peer가 안정될 때까지 기다리려고"**였다는 뜻이다. 그렇다면 sample 스펙으로
+닫을 수 없고 framework 영역이다. abort 건과 같은 성격이라 사용자 판단을 받는다.
+
+**임시로 sleep을 되살리지 않는다** — 그건 스펙 §10 3단계가 금지하는 것이고, 무엇보다 이 증상을
+다시 숨긴다.
+
 ## ZoneWorld 샘플 — 언어별 구현 불일치
 
 시나리오 ID 집합은 세 언어가 **34개 완전히 일치**하고, 각 ID의 전제·행동·단언은

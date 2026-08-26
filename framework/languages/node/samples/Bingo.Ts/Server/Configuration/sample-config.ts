@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 import { Module, type DynamicModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 type BingoSampleConfig = {
+  nodeId: string;
+  peerNodeId?: string;
   sessionEndpoint: string;
   sessionSpotEndpoint: string;
   sessionSpotPubSubEndpoint: string;

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "../Configuration/sample_names.hpp"
+#include "../Configuration/sample_readiness.hpp"
 #include "../Configuration/sample_configuration.hpp"
 
 #include <zlink/framework.hpp>
@@ -137,13 +138,15 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
                       << status.delivery_id << " actor=" << actor.actor_id << "\n";
             return;
         }
-        std::cerr << "deliverydispatch customer-entry: push status delivery=" << status.delivery_id
-                  << " status=" << status.status << "\n";
         actor.context ()
           .bound_session ()
           .send (delivery_status_notify_t{status.delivery_id, status.status, status.courier_id,
                                           status.occurred_at_unix_ms})
           .submit ();
+        if (status.status == delivery_status_t::delivered) {
+            std::cerr << "deliverydispatch-customer pushed status=Delivered delivery="
+                      << status.delivery_id << "\n";
+        }
     }
 
   private:
@@ -200,8 +203,13 @@ class customer_gateway_session_t final : public packet_stream_session_t
                                                                 ? actor.error ()->what ()
                                                                 : "customer actor create failed");
         }
-        auto bound = co_await actors.bind_or_get (actor.value ().ref ()).submit ();
-        const auto actor_id = std::string (bound.actor_id ());
+        std::string actor_id = sample_names_t::customer_id;
+        if (!_bound_actors.contains (actor_id)) {
+            auto bound = co_await actors.bind_or_get (actor.value ().ref ()).submit ();
+            actor_id = std::string (bound.actor_id ());
+            _bound_actors.insert (actor_id);
+            std::cerr << "deliverydispatch-customer bound customer=" << actor_id << "\n";
+        }
         auto current = actors.find (actor_id);
         if (!current) {
             throw framework_exception_t (framework_error_kind_t::not_found,
@@ -209,10 +217,8 @@ class customer_gateway_session_t final : public packet_stream_session_t
         }
         auto reply =
           co_await current->relay_request (zlink::message_t::from_json (request)).submit ();
-        _bound_actors.insert (actor_id);
         _sessions.subscribe (actor_id, request.delivery_id, stream);
         stream.reply_packet (reply).submit ();
-        std::cerr << "deliverydispatch customer-session: bound customer actor=" << actor_id << "\n";
         std::cerr << "deliverydispatch customer-session: subscribed customer="
                   << sample_names_t::customer_id << " delivery=" << request.delivery_id << "\n";
     }
@@ -269,5 +275,7 @@ int main (int argc, char **argv)
     options.add_stream_node (sample_names_t::customer_stream_node)
       .bind (topology.customer_stream_endpoint)
       .register_session<customer_gateway_session_t> ();
+    app.add_hosted_service (std::make_unique<route_readiness_service_t> (
+      sample_names_t::customer_gateway_node, sample_names_t::customer_actor_discovery));
     return app.run (argc, argv);
 }

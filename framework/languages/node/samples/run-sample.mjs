@@ -130,7 +130,22 @@ function createContext(redisEndpoint) {
         configPath
       ];
       if (entryName) args.push('--entry', entryName);
-      run(process.execPath, args, { cwd: sampleRoot, env });
+      //  Tee the browser scenario's output into browser-client.log as well as this runner's
+      //  stdout. The client's completion markers are only observable there, and a sample runner
+      //  must confirm them from a log rather than trusting the browser's own verdict.
+      const browserLog = path.join(logDir, 'browser-client.log');
+      const result = spawnSync(platformExecutable(process.execPath), args, {
+        cwd: sampleRoot,
+        env,
+        encoding: 'utf8'
+      });
+      if (result.error) throw result.error;
+      const captured = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      fs.writeFileSync(browserLog, captured, { mode: 0o600 });
+      process.stdout.write(captured);
+      if (result.status !== 0) {
+        throw new Error(`browser sample exited with ${result.status}. See ${browserLog}.`);
+      }
     },
     startBrowser(definition, entryName) {
       const completionSignalPath = path.join(runDir, 'browser-lifecycle-complete');

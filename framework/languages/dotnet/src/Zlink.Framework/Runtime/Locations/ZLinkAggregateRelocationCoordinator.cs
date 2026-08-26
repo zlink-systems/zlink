@@ -70,8 +70,17 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         Validate(request);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var inventoryDigest = ZLinkAggregateInventoryDigest.Compute(
-            request.Participants);
+        // Canonical wire envelopes carry the source-captured inventory digest.
+        // Their target-local participant recovery is reconstructed from the
+        // source authorities and is deliberately not part of that wire
+        // projection, so recomputing the digest here would reject the
+        // immutable canonical root.
+        var inventoryDigest = request.CanonicalEnvelope is
+            {
+                CanonicalLogicalStream.IsEmpty: false
+            }
+            ? request.CanonicalEnvelope.InventoryDigest.ToArray()
+            : ZLinkAggregateInventoryDigest.Compute(request.Participants);
         var envelope = request.CanonicalEnvelope ?? new ZLinkRelocationEnvelope(
             request.AggregateId,
             request.AggregateGeneration,

@@ -3,6 +3,7 @@ import { GameplayDomain } from '../Domain/gameplay-domain';
 import { GameplayEventPublisher } from '../Infrastructure/ZLink/gameplay-event-publisher';
 import { GameplayStateStore } from '../../Shared/Store/quest-progress-store';
 import { GAMEQUEST_INSTANCE_ID } from '../../Configuration/tokens';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '@zlink-systems/framework';
 import type {
   CollectItemMsg,
   CompleteMissionReq,
@@ -75,9 +76,19 @@ class GameplayActionService {
     candidate: GameplayEventEnvelope
   ): Promise<{ response: TResponse; projection: QuestProgress[]; completedQuestId?: string }> {
     const { event: stored, recorded } = this.store.recordGameplayEvent(candidate);
-    await this.publisher.send(stored);
+    try {
+      await this.publisher.send(stored);
+    } catch (error) {
+      if (
+        error instanceof ZLinkFrameworkException
+        && error.kind === ZLinkFrameworkErrorKind.Unavailable
+      ) {
+        console.error(`gamequest-owner unavailable player=${stored.playerId}`);
+      }
+      throw error;
+    }
     if (recorded) {
-      console.error(`gamequest api event routed api=${this.apiName} player=${stored.playerId} event=${stored.eventId}`);
+      console.error(`gamequest-api event-routed player=${stored.playerId}`);
     } else {
       console.error(`gamequest api event replayed api=${this.apiName} player=${stored.playerId} event=${stored.eventId}`);
     }

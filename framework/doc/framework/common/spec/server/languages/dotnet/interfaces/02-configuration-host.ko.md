@@ -134,7 +134,7 @@ Host는 network bind 전에 다음 조건을 검증한다.
 - `RecreateOnRelocation` 또는 `PreserveStateWith` factory가 하나라도 있거나 Instance Spot factory가 하나라도 있을 때 Relocation
  Store가 정확히 하나 등록되었는지 여부
 - 자동 discovery 또는 분산 location 기능에 필요한 store instance
-- [automatic discovery](../../../00-foundation/02-glossary.ko.md#automatic-discovery)·object role과 fixed routing ID의 잘못된 조합, RID prefix 형식
+- RID prefix 형식과 fixed RID 재claim 충돌
 - TLS certificate, key와 trust 설정
 
 검증 실패는 `ZLinkConfigurationException`으로 host startup을 실패시킨다. Runtime을 first call에서 만들지

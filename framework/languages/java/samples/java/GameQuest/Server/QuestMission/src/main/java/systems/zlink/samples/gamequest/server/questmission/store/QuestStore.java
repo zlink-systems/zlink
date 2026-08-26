@@ -17,11 +17,13 @@ public final class QuestStore implements AutoCloseable {
     private final QuestDomain domain = new QuestDomain();
     private final RedisSampleStore shared;
     private final GameplayStateStore gameplay;
+    private final String nodeId;
     private final Map<String, PlayerState> states = new ConcurrentHashMap<>();
 
     public QuestStore(SampleTopology topology) {
         shared = new RedisSampleStore(topology);
         gameplay = new GameplayStateStore(topology);
+        nodeId = topology.questMission().instanceName();
     }
 
     public void activate(String playerId) {
@@ -92,6 +94,8 @@ public final class QuestStore implements AutoCloseable {
             state.events.add(reconciledEvent);
             shared.writeProjection(playerId, projection);
             shared.appendQuestEvents(List.of(reconciledEvent));
+            System.out.printf("gamequest-mission reconciled player=%s quest=%s%n",
+                playerId, Messages.QuestIds.FirstHunt);
         }
         return new Messages.SyncQuestProgressRes(copyProjection(state));
     }
@@ -131,6 +135,14 @@ public final class QuestStore implements AutoCloseable {
 
     public Set<String> players() {
         return new HashSet<>(states.keySet());
+    }
+
+    public boolean hasEvents(String playerId) {
+        return !state(playerId).events.isEmpty();
+    }
+
+    public String nodeId() {
+        return nodeId;
     }
 
     @Override

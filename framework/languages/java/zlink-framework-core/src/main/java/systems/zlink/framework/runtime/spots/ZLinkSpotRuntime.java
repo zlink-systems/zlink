@@ -704,7 +704,7 @@ public final class ZLinkSpotRuntime
             handlerExecutor,
             spotLocations,
             initializedSpotTypes,
-            activationFactory::activate,
+            activationFactory,
             actorSessions::hasActorsInSpot);
         for (EntrySpotInitialization initialization : entrySpotInitializations) {
             for (Class<? extends ZLinkEntrySpot<?>> entrySpotType :

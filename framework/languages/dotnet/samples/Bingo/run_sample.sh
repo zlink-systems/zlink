@@ -133,16 +133,23 @@ wait_port() {
   return 1
 }
 
-require_log_count() {
+wait_log_count() {
   local expected="$1"
   local pattern="$2"
   shift 2
-  local actual
-  actual="$({ grep -Eh "${pattern}" "$@" 2>/dev/null || true; } | wc -l)"
-  if [[ "${actual}" != "${expected}" ]]; then
-    echo "Expected ${expected} matches for '${pattern}' in $*, found ${actual}." >&2
-    return 1
-  fi
+  local actual=0
+  for _ in $(seq 1 300); do
+    actual="$({ grep -Eh "${pattern}" "$@" 2>/dev/null || true; } | wc -l)"
+    if [[ "${actual}" == "${expected}" ]]; then
+      return 0
+    fi
+    if (( actual > expected )); then
+      break
+    fi
+    sleep 0.1
+  done
+  echo "Expected ${expected} matches for '${pattern}' in $*, found ${actual}." >&2
+  return 1
 }
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -226,44 +233,40 @@ start_server session-b "${SCRIPT_DIR}/Server/Session/Bingo.Server.Session.csproj
 wait_port session-b-mesh "${BINGO_SESSION_B_MESH_ENDPOINT}"
 wait_port session-b-stream "${BINGO_SESSION_B_STREAM_ENDPOINT}"
 
+wait_log_count 1 "bingo-ready kind=peer-route node=play-a peer=play-b" "${LOG_DIR}/play-a.log"
+wait_log_count 1 "bingo-ready kind=peer-route node=play-b peer=play-a" "${LOG_DIR}/play-b.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=api-a mesh=matchmaking" "${LOG_DIR}/api-a.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=api-a mesh=room" "${LOG_DIR}/api-a.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=api-b mesh=matchmaking" "${LOG_DIR}/api-b.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=api-b mesh=room" "${LOG_DIR}/api-b.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=session-a mesh=room" "${LOG_DIR}/session-a.log"
+wait_log_count 1 "bingo-ready kind=mesh-route node=session-b mesh=room" "${LOG_DIR}/session-b.log"
+
 dotnet run --no-build --project "${SCRIPT_DIR}/Client/Bingo.Client.csproj" -- \
   --config "${CLIENT_CONFIG_FILE}" >"${LOG_DIR}/client.log" 2>&1
-
-
-# Server-side evidence is written asynchronously after the client exits;
-# poll briefly instead of failing on the first read.
-wait_log() {
-  local pattern="$1"
-  shift
-  for _ in $(seq 1 50); do
-    if grep -Eq "${pattern}" "$@"; then
-      return 0
-    fi
-    sleep 0.2
-  done
-  echo "Timed out waiting for '${pattern}' in $*" >&2
-  return 1
-}
 
 grep -q "bingo=completed" "${LOG_DIR}/client.log"
 grep -q "stream-inbound sample=Bingo" "${LOG_DIR}/client.log"
 grep -Eq "stream-inbound sample=Bingo .* seq=[0-9]" "${LOG_DIR}/client.log"
 grep -Eq "stream-inbound sample=Bingo .* name=.*Notify" "${LOG_DIR}/client.log"
 PLAY_LOGS=("${LOG_DIR}/play-a.log" "${LOG_DIR}/play-b.log")
-wait_log "bingo room: player record loaded. room=.*actor=player-1, wins=0, losses=0" "${PLAY_LOGS[@]}"
-wait_log "bingo room: player record loaded. room=.*actor=player-2, wins=0, losses=0" "${PLAY_LOGS[@]}"
-wait_log "bingo room: result reported. room=.*actor=player-1, won=True, wins=1, losses=0" "${PLAY_LOGS[@]}"
-wait_log "bingo room: result reported. room=.*actor=player-2, won=False, wins=0, losses=1" "${PLAY_LOGS[@]}"
-wait_log "bingo observer room: actor left. observedRoom=.*observer=observer" "${PLAY_LOGS[@]}"
-wait_log "bingo room: actor left. room=.*actor=player-1" "${PLAY_LOGS[@]}"
-wait_log "bingo room: actor left. room=.*actor=player-2" "${PLAY_LOGS[@]}"
-wait_log "entry spot: actor destroy completed. actor=player-1" "${PLAY_LOGS[@]}"
-wait_log "entry spot: actor destroy completed. actor=player-2" "${PLAY_LOGS[@]}"
-require_log_count 1 "entry spot: actor destroy completed\\. actor=player-1" "${PLAY_LOGS[@]}"
-require_log_count 1 "entry spot: actor destroy completed\\. actor=player-2" "${PLAY_LOGS[@]}"
-require_log_count 0 "entry spot: actor destroy completed\\. actor=observer" "${PLAY_LOGS[@]}"
-require_log_count 2 "bingo room: player record loaded\\." "${PLAY_LOGS[@]}"
-require_log_count 2 "bingo room: result reported\\." "${PLAY_LOGS[@]}"
+SESSION_LOGS=("${LOG_DIR}/session-a.log" "${LOG_DIR}/session-b.log")
+wait_log_count 1 "bingo-record fetched actor=player-1 wins=0 losses=0" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-record fetched actor=player-2 wins=0 losses=0" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-record reported actor=player-1 wins=1 losses=0" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-record reported actor=player-2 wins=0 losses=1" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle room-leave actor=player-1" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle room-leave actor=player-2" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle room-leave actor=observer" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle entry-leave actor=player-1" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle entry-leave actor=player-2" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle entry-leave actor=observer" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle entry-destroy-complete actor=player-1" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle entry-destroy-complete actor=player-2" "${PLAY_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle session-disconnect actor=player-1 destroy=false" "${SESSION_LOGS[@]}"
+wait_log_count 1 "bingo-lifecycle session-disconnect actor=player-2 destroy=false" "${SESSION_LOGS[@]}"
+wait_log_count 0 "bingo-record reported actor=observer" "${PLAY_LOGS[@]}"
+wait_log_count 0 "bingo-lifecycle entry-destroy-complete actor=observer" "${PLAY_LOGS[@]}"
 grep -Eq "zlink metric name=zlink\.stream\.connections\.(active|opened)" "${LOG_DIR}/session-a.log"
 grep -Eq "zlink metric name=zlink\.spot\.(count|queue\.depth)" "${LOG_DIR}/play-a.log"
 # Reaching this marker proves the six placement checks in the common sample

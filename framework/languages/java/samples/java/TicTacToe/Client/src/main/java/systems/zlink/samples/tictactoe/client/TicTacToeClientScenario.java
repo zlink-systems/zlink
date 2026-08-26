@@ -49,6 +49,7 @@ public final class TicTacToeClientScenario {
             host.connect().submit().toCompletableFuture().join();
             guest.connect().submit().toCompletableFuture().join();
             observer.connect().submit().toCompletableFuture().join();
+            System.out.println("observer-connected endpoint=" + game.playEndpoints().get(1));
 
             ensure(game.roomId() != null && !game.roomId().isBlank());
             ensure(options.gameName().equals(game.gameName()));
@@ -74,8 +75,6 @@ public final class TicTacToeClientScenario {
                 .request(new ObserveMilestoneReq())
                 .submit(ObserveMilestoneRes.class).toCompletableFuture().join();
             ensure(subscribed.subscribed());
-            System.out.println(
-                "observer-connected endpoint=" + game.playEndpoints().get(1));
             System.out.println("observer-subscription=verified subscribed=" + subscribed.subscribed());
 
             AtomicInteger hostOwnJoinNotifications = new AtomicInteger();
@@ -274,13 +273,10 @@ public final class TicTacToeClientScenario {
 
             // LeaveGameMsg is one-way. The runners wait for the separate
             // leave and Entry Spot destroy lifecycle evidence.
-            CompletableFuture.allOf(
-                reconnectedHost.send(new LeaveGameMsg(game.roomId()))
-                    .submit().toCompletableFuture(),
-                guest.send(new LeaveGameMsg(game.roomId()))
-                    .submit().toCompletableFuture())
-                .join();
-            System.out.println("tictactoe completed");
+            reconnectedHost.send(new LeaveGameMsg(game.roomId()))
+                .submit().toCompletableFuture().join();
+            guest.send(new LeaveGameMsg(game.roomId()))
+                .submit().toCompletableFuture().join();
         } finally {
             if (!hostClosed) {
                 host.close().submit().toCompletableFuture().join();

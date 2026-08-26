@@ -199,8 +199,7 @@ selection은 후보 weight 합계를 최소 64-bit 정수로 계산한다.
 MeshNode와 Store-backed fanout publisher의 automatic RID는
 `prefix-<lowercase-canonical-uuid-v4>` 형식이다. UUID v4는 `8-4-4-4-12` 자리의 lowercase canonical
 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 1..64자이고 full RID는 UTF-8 255 bytes 이하다.
-Active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `RoutingIdConflict`로 실패한다. Fixed RID는 object role이나 automatic Store [descriptor](../../../00-foundation/02-glossary.ko.md#descriptor)가
-없는 manual topology에서만 사용할 수 있다. Slot count, allocation group과 public allocation provider는 없다.
+Active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `RoutingIdConflict`로 실패한다. Fixed RID는 automatic discovery topology에서도, object role이 있는 MeshNode에서도 허용한다. 구현·시험 시나리오가 peer를 이름으로 지목해야 할 때가 있고, 자동 UUID로는 그럴 수 없기 때문이다. Fixed RID를 쓴 node가 재시작해 이전 active owner claim과 충돌하면 자동 RID와 같은 규칙으로 처리한다 — 새 값을 만들어 재시도하지 않고 즉시 conflict로 실패하며, 이전 owner lease가 만료된 뒤 재시작이 성공한다. Slot count, allocation group과 public allocation provider는 없다.
 
 Object Server의 Entry Spot ID는 같은 prefix의
 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식이며 MeshNode와 별도로 생성한 UUID v4를 사용한다.

@@ -170,9 +170,7 @@ The host validates the following conditions before network bind.
  Spot factory
 - The store instance needed for automatic discovery or distributed
  location features
-- An invalid combination of
- [automatic discovery](../../../00-foundation/02-glossary.en.md#automatic-discovery)/
- object role and fixed routing ID, and RID prefix format
+- RID prefix format, and a fixed-RID reclaim conflict
 - TLS certificate, key, and trust configuration
 
 A validation failure fails host startup with

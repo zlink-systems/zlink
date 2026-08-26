@@ -47,7 +47,12 @@ function startDispatchApi(
           { status: 'PickedUp', courierId: 'courier-b' },
           { status: 'Delivered', courierId: 'courier-b' }
         ]);
-        sendJson(response, 200, { passed: success && reassigned, evidence: evidence.readLines() } satisfies ServerAssertionRes);
+        const exhausted = evidence.hasExactSequence('delivery-exhausted', [
+          { status: 'Assigned', courierId: 'courier-a' },
+          { status: 'Reassigned', courierId: 'courier-b' },
+          { status: 'Failed' }
+        ]);
+        sendJson(response, 200, { passed: success && reassigned && exhausted, evidence: evidence.readLines() } satisfies ServerAssertionRes);
         return;
       }
       sendJson(response, 404, { error: 'not-found' });

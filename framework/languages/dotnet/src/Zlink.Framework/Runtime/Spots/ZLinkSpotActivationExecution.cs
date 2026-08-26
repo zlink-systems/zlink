@@ -268,6 +268,21 @@ internal abstract partial class ZLinkSpotActivation
             .ConfigureAwait(false);
     }
 
+    internal ValueTask InitializeRelocatedUserSpotAsync(
+        ZLinkSpotRelocationSeal admissionSeal,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(admissionSeal);
+        // A relocation target is constructed with invokeCreate:false, so its
+        // normal creation path never reaches OnInitializeAsync. Run that
+        // lifecycle hook while the target admission seal still excludes
+        // external ingress.
+        return _serial.ExecuteSealedRelocationAsync(
+            admissionSeal.QueueSeal,
+            static (activation, ct) => activation.UserSpot.OnInitializeAsync(ct),
+            cancellationToken);
+    }
+
     internal void CancelRelocationReadyWait()
     {
         lock (_relocationReadyGate)

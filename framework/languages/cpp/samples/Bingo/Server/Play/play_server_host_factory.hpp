@@ -62,10 +62,9 @@ class play_server_host_factory_t
             sample_names_t::player_actor_type)
           .preserve_state_with<player_actor_relocation_adapter_t> ();
         app.add_hosted_service (std::make_unique<play_peer_route_readiness_service_t> (
-          sample_names_t::room_spot_mesh, topology.play_node,
-          "bingo-play-" + (topology.play_node == "a" ? std::string ("b") : std::string ("a"))));
-        app.add_hosted_service (
-          std::make_unique<play_api_channel_readiness_service_t> (topology.play_node));
+          sample_names_t::room_spot_mesh, "play-" + topology.play_node,
+          "bingo-play-" + (topology.play_node == "a" ? std::string ("b") : std::string ("a")),
+          "play-" + (topology.play_node == "a" ? std::string ("b") : std::string ("a"))));
         return app;
     }
 };

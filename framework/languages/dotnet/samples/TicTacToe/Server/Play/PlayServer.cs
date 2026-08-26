@@ -25,6 +25,12 @@ internal sealed class PlayServer(SampleSettings settings)
         SampleLogging.Configure(builder.Logging, settings.LogDirectory, "play");
 
         builder.Services.AddSingleton(settings);
+        builder.Services.AddSingleton(new TicTacToeMeshReadiness(
+            TicTacToeReadyKind.PeerRoute,
+            settings.InstanceName,
+            SampleNodes.Mesh,
+            settings.InstanceName == "play-a" ? "play-b" : "play-a"));
+        builder.Services.AddHostedService<TicTacToeMeshReadinessReporter>();
         builder.Services.AddZLinkFramework(options =>
         {
             options.DisableImplicitHandlerAutoRegistration();
@@ -53,7 +59,13 @@ internal sealed class PlayServer(SampleSettings settings)
             foreach (var endpoint in settings.ApiChannelPeerEndpoints)
                 apiChannel.Connect(endpoint);
 
+                // Spec 10.1 wants a fixed RID here so the expected peer can be named. .NET cannot
+                // yet: ZLinkSpotNodeInitializer.RequiresDescriptorClaim skips the object descriptor
+                // claim when a routing ID is explicit, so an object-role node with a fixed RID is
+                // never matched as a User Spot target. Tracked in
+                // doc/plan/spec-server-reorg/spec-gap.ko.md; revert to automatic RID until fixed.
             var mesh = options.AddRouteMesh(SampleNodes.Mesh)
+                .SetRoutingId(SampleNodes.RouteMeshRoutingId(settings.InstanceName))
                 .Listen(settings.MeshEndpoint);
             mesh.Objects().Server()
                 .AddEntrySpot<PlayEntrySpot>()
@@ -63,7 +75,10 @@ internal sealed class PlayServer(SampleSettings settings)
                     SampleTypes.GameSpot, factory => factory.DisableRelocation());
             mesh.Channel(SampleTopics.PlayerMilestoneChannel).Server();
             foreach (var endpoint in settings.PeerMeshEndpoints)
-                mesh.PeerConnections.Connect(endpoint);
+                mesh.PeerConnections.Connect(
+                    SampleNodes.RouteMeshRoutingId(
+                        settings.InstanceName == "play-a" ? "play-b" : "play-a"),
+                    endpoint);
         });
 
         return builder.Build();

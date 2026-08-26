@@ -68,6 +68,10 @@ class api_server_host_factory_t
                                           topology.play_b_route_endpoint);
 
         options.handlers ().group ("api").add<authenticate_player_handler_t> ();
+        app.add_hosted_service (
+          std::make_unique<api_http_readiness_service_t> ("api-" + topology.api_node));
+        app.add_hosted_service (std::make_unique<api_spot_route_readiness_service_t> (
+          sample_names_t::game_spot_node, "api-" + topology.api_node));
         return app;
     }
 };

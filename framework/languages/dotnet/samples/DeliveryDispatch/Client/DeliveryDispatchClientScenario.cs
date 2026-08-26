@@ -19,6 +19,7 @@ internal sealed class DeliveryDispatchClientScenario(ILogger logger)
         IZlinkStreamConnector customer,
         IZlinkStreamConnector courierA,
         IZlinkStreamConnector courierB,
+        string evidencePath,
         CancellationToken cancellationToken = default)
     {
         // The sample uses three logical client sessions:
@@ -34,11 +35,12 @@ internal sealed class DeliveryDispatchClientScenario(ILogger logger)
         var courierBBinding = await courierB.Request(new BindCourierSessionReq("courier-b"))
             .Async<BindCourierSessionRes>(cancellationToken);
         ZlinkStreamAssert.Ensure(courierBBinding.CourierId == "courier-b", "courier-b binding id mismatch.");
-        logger.LogInformation("topology=ready");
-
         // Run both dispatch paths: direct acceptance first, then timeout-based reassignment.
         await RunSuccessfulDeliveryAsync(http, customer, courierA, courierB, cancellationToken);
         await RunReassignedDeliveryAsync(http, customer, courierA, courierB, cancellationToken);
+        await RunCandidatesExhaustedDeliveryAsync(http, customer, courierA, courierB, cancellationToken);
+        VerifyServerEvidence(evidencePath);
+        logger.LogInformation("deliverydispatch-server-evidence=completed");
     }
 
     private static async ValueTask RunSuccessfulDeliveryAsync(
@@ -172,6 +174,104 @@ internal sealed class DeliveryDispatchClientScenario(ILogger logger)
         ZlinkStreamAssert.Ensure(reassigned.CourierId == "courier-b", "reassigned courier mismatch.");
         ZlinkStreamAssert.Ensure(accepted.CourierId == "courier-b", "accepting courier mismatch.");
         ZlinkStreamAssert.Ensure(delivered.CourierId == "courier-b", "final courier mismatch.");
+
+        var noStaleAcceptance = customer.ExpectNone<DeliveryStatusNotify>()
+            .Within(TimeSpan.FromSeconds(1))
+            .Async(cancellationToken).AsTask();
+        await courierA.Send(new CourierDecisionMsg(
+                deliveryId,
+                "courier-a",
+                true,
+                null))
+            .Async(cancellationToken);
+        await noStaleAcceptance;
         logger.LogInformation("deliverydispatch-reassignment=completed");
+    }
+
+    private static async ValueTask RunCandidatesExhaustedDeliveryAsync(
+        ZLinkHttpClient http,
+        IZlinkStreamConnector customer,
+        IZlinkStreamConnector courierA,
+        IZlinkStreamConnector courierB,
+        CancellationToken cancellationToken)
+    {
+        const string deliveryId = "delivery-exhausted";
+        var courierAOffer = courierA.WaitFor<OfferDeliveryNotify>()
+            .Where(message => message.Payload.DeliveryId == deliveryId)
+            .Where(message => message.Payload.CourierId == "courier-a")
+            .Async(cancellationToken);
+        var courierBOffer = courierB.WaitFor<OfferDeliveryNotify>()
+            .Where(message => message.Payload.DeliveryId == deliveryId)
+            .Where(message => message.Payload.CourierId == "courier-b")
+            .Async(cancellationToken);
+
+        var subscribed = await customer.Request(new SubscribeDeliveryReq(deliveryId))
+            .Async<SubscribeDeliveryRes>(cancellationToken);
+        ZlinkStreamAssert.Ensure(subscribed.DeliveryId == deliveryId, "exhausted subscription id mismatch.");
+        var statusSequenceTask = customer.WaitForSequence<DeliveryStatusNotify>()
+            .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Assigned }
+                               && id == deliveryId)
+            .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Reassigned }
+                               && id == deliveryId)
+            .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Failed }
+                               && id == deliveryId)
+            .Timeout(customer.Options.WaitTimeout)
+            .Async(cancellationToken).AsTask();
+
+        var created = await http.Post("/deliveries")
+            .Body(new CreateDeliveryReq(
+                deliveryId,
+                "customer-1",
+                "Kitchen 12",
+                "Customer Lobby"))
+            .Fetch<CreateDeliveryRes>(cancellationToken);
+        ZlinkStreamAssert.Ensure(created.DeliveryId == deliveryId, "created exhausted delivery id mismatch.");
+
+        _ = await courierAOffer;
+        await courierA.Send(new CourierDecisionMsg(deliveryId, "courier-a", false, "refused"))
+            .Async(cancellationToken);
+        _ = await courierBOffer;
+        await courierB.Send(new CourierDecisionMsg(deliveryId, "courier-b", false, "refused"))
+            .Async(cancellationToken);
+
+        var statuses = await statusSequenceTask;
+        ZlinkStreamAssert.Ensure(statuses[2].Payload.CourierId == "courier-b", "failed courier mismatch.");
+    }
+
+    private static void VerifyServerEvidence(string evidencePath)
+    {
+        var byDelivery = File.ReadLines(evidencePath)
+            .Select(ParseEvidence)
+            .GroupBy(status => status.DeliveryId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Select(status => status.Status).ToArray(), StringComparer.Ordinal);
+
+        EnsureEvidenceSequence(
+            byDelivery,
+            "delivery-success",
+            [DeliveryStatus.Assigned, DeliveryStatus.Accepted, DeliveryStatus.PickedUp, DeliveryStatus.Delivered]);
+        EnsureEvidenceSequence(
+            byDelivery,
+            "delivery-reassign",
+            [DeliveryStatus.Assigned, DeliveryStatus.Reassigned, DeliveryStatus.Accepted, DeliveryStatus.Delivered]);
+        EnsureEvidenceSequence(
+            byDelivery,
+            "delivery-exhausted",
+            [DeliveryStatus.Assigned, DeliveryStatus.Reassigned, DeliveryStatus.Failed]);
+    }
+
+    private static (string DeliveryId, DeliveryStatus Status) ParseEvidence(string line)
+    {
+        var values = line.Split('|');
+        return (values[0], Enum.Parse<DeliveryStatus>(values[2]));
+    }
+
+    private static void EnsureEvidenceSequence(
+        IReadOnlyDictionary<string, DeliveryStatus[]> byDelivery,
+        string deliveryId,
+        DeliveryStatus[] expected)
+    {
+        ZlinkStreamAssert.Ensure(
+            byDelivery.TryGetValue(deliveryId, out var actual) && actual.SequenceEqual(expected),
+            $"server evidence sequence mismatch for {deliveryId}.");
     }
 }

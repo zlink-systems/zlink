@@ -8,6 +8,7 @@ data class SampleTopology(
     val redisKeyPrefix: String?,
     val logDirectory: String?,
     val apiChannelEndpoint: String?,
+    val apiSpotRouterEndpoint: String?,
     val apiHttpEndpoint: String?,
     val supportChannelEndpoint: String?,
     val sessionRouterEndpoint: String?,
@@ -23,6 +24,7 @@ data class SampleTopology(
 
     fun api(): ApiTopology = ApiTopology(
         channelEndpoint = required(apiChannelEndpoint, "apiChannelEndpoint"),
+        routerEndpoint = required(apiSpotRouterEndpoint, "apiSpotRouterEndpoint"),
         httpEndpoint = required(apiHttpEndpoint, "apiHttpEndpoint"),
     )
 
@@ -51,7 +53,11 @@ data class SampleTopology(
 
 data class SampleLocation(val redisEndpoint: String, val redisKeyPrefix: String)
 
-data class ApiTopology(val channelEndpoint: String, val httpEndpoint: String)
+data class ApiTopology(
+    val channelEndpoint: String,
+    val routerEndpoint: String,
+    val httpEndpoint: String,
+)
 
 data class SupportTopology(
     val channelEndpoint: String,

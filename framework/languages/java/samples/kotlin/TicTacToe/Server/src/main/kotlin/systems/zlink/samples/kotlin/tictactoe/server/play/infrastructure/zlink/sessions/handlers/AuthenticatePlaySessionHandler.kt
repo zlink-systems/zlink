@@ -48,13 +48,8 @@ class AuthenticatePlaySessionHandler(
         }
         if (playActor is ZLinkActorCreateResult.Existing) {
             logger.info(
-                "play stream: existing actor exact identity verified. " +
-                    "sessionId={}, actor={}, generation={}, mesh={}, nodeRid={}",
-                context.sessionId(),
+                "tictactoe-lifecycle actor-bound actor={}",
                 boundActor.actorId(),
-                boundActor.ref().objectGeneration(),
-                boundActor.ref().meshName(),
-                boundActor.ref().nodeRid(),
             )
         }
         context.client()

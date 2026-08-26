@@ -68,6 +68,15 @@ function Wait-Grep([string]$Pattern, [string]$Path) {
     }
 }
 
+function Wait-LogCount([string[]]$Path, [string]$Pattern, [int]$Expected) {
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        $actual = @(Select-String -Path $Path -Pattern $Pattern -SimpleMatch -ErrorAction SilentlyContinue).Count
+        if ($actual -eq $Expected) { return }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Expected $Expected '$Pattern' entries in $($Path -join ', ')."
+}
+
 function Wait-RouteReady([string]$BaseUrl, [string]$TargetRid, [int]$TimeoutSeconds = 30) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $uri = "$BaseUrl/ready?targetRid=$TargetRid"
@@ -221,6 +230,13 @@ try {
     Wait-RouteReady $ApiAHttpEndpoint "tictactoe-play-a"
     Wait-RouteReady $ApiAHttpEndpoint "tictactoe-play-b"
 
+    Wait-LogCount (Join-Path $LogDir "play-a.log") "tictactoe-ready kind=peer-route node=play-a peer=play-b" 1
+    Wait-LogCount (Join-Path $LogDir "play-b.log") "tictactoe-ready kind=peer-route node=play-b peer=play-a" 1
+    Wait-LogCount (Join-Path $LogDir "api-a.log") "tictactoe-ready kind=http node=api-a" 1
+    Wait-LogCount (Join-Path $LogDir "api-b.log") "tictactoe-ready kind=http node=api-b" 1
+    Wait-LogCount (Join-Path $LogDir "api-a.log") "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" 1
+    Wait-LogCount (Join-Path $LogDir "api-b.log") "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" 1
+
     $clientLog = Join-Path $LogDir "client.log"
     & $ClientBin --api-http-endpoint $ApiAHttpEndpoint *> $clientLog
     if ($LASTEXITCODE -ne 0) {
@@ -228,15 +244,18 @@ try {
         exit $LASTEXITCODE
     }
 
-    Wait-Grep "observer-connected endpoint=tcp://127.0.0.1:" $clientLog
-    Wait-Grep "observer-subscription=verified subscribed=true" $clientLog
-    Wait-Grep "observer-win-milestone=verified actor=player-x wins=100" $clientLog
-    Wait-Grep "tictactoe completed" $clientLog
-    Wait-Grep "tictactoe=completed" $clientLog
-    Wait-Grep "actor: LeaveGameMsg completed. actor=player-x" (Join-Path $LogDir "play-*.log")
-    Wait-Grep "actor: LeaveGameMsg completed. actor=player-o" (Join-Path $LogDir "play-*.log")
-    Wait-Grep "entry spot: actor destroy completed. actor=player-x" (Join-Path $LogDir "play-*.log")
-    Wait-Grep "entry spot: actor destroy completed. actor=player-o" (Join-Path $LogDir "play-*.log")
+    Wait-LogCount $clientLog "observer-connected endpoint=$PlayBStreamEndpoint" 1
+    Wait-LogCount $clientLog "observer-subscription=verified subscribed=true" 1
+    Wait-LogCount $clientLog "observer-win-milestone=verified actor=player-x wins=100" 1
+    Wait-LogCount $clientLog "reconnected-game-state=verified actor=player-x room=" 1
+    Wait-LogCount $clientLog "tictactoe=completed" 1
+    $playLogs = Join-Path $LogDir "play-*.log"
+    Wait-LogCount $playLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle leave-completed actor=player-x" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle leave-completed actor=player-o" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle actor-destroy-complete actor=player-x" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle actor-destroy-complete actor=player-o" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle actor-destroy-complete actor=observer" 0
     if (-not (Select-String -Path (Join-Path $env:TICTACTOE_LOG_DIR "*.log") -Pattern "packet=LeaveGameMsg" -Quiet)) {
         throw "TicTacToe C++ sample logs did not contain LeaveGameMsg evidence."
     }
@@ -251,5 +270,5 @@ try {
 if ($Status -ne 0) {
     exit $Status
 }
-Write-Host "PASS TicTacToe.Cpp"
-Write-Host "tictactoe full client/server self-check completed"
+# full client/server self-check completed
+Write-Host "tictactoe-placement=completed"

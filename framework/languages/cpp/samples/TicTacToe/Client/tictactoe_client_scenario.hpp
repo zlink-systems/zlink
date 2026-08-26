@@ -181,7 +181,7 @@ class tictactoe_client_scenario_t
             co_await client2.connect ().async ();
             trace ("connect observer");
             co_await observer.connect ().async ();
-            std::cout << "observer-connected endpoint=" << guest_endpoint (room) << '\n';
+            std::cout << "observer-connected endpoint=" << guest_endpoint (room) << std::endl;
 
             trace ("authenticate client1");
             const auto client1_auth_request = authenticate_req_t{options.x_actor_id};
@@ -434,7 +434,6 @@ class tictactoe_client_scenario_t
             co_await reconnected_client.close ().async ();
             co_await client2.close ().async ();
             co_await observer.close ().async ();
-            std::cout << "tictactoe completed\n";
             co_return true;
         }
         catch (const std::exception &ex) {

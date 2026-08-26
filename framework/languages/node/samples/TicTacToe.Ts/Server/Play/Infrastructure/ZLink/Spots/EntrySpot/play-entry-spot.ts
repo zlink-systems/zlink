@@ -80,7 +80,7 @@ class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
     void this.context.runIoWorker(async () => true).submit().then(async () => {
       console.log(`entry spot: actor destroy started. actor=${actor.actorId}`);
       await this.context.destroyActor(actor);
-      console.log(`entry spot: actor destroyed. actor=${actor.actorId}`);
+      console.log(`tictactoe-lifecycle actor-destroy-complete actor=${actor.actorId}`);
     });
   }
 }

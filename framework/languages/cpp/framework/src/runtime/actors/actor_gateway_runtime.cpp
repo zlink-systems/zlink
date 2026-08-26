@@ -118,10 +118,16 @@ bool actor_types_compatible (const actor_ref_t &left, const actor_ref_t &right) 
     return left_type.empty () || right_type.empty () || left_type == right_type;
 }
 
+//  `reason` is what a reader has to go on: message-flow tracing §3 fixes the value set, and
+//  `stage`/`result` are emitted only at `detailed`. Reporting an unavailable delivery executor as
+//  `target_closed` therefore read as "the client's session went away" in every errors-mode log,
+//  which is a different defect with a different fix. Observability §3 keeps `backpressure` for a
+//  send path or queue that is momentarily short of capacity, so let the caller pick.
 void trace_detached_bound_session_send_failure (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const std::string &actor_id,
-  std::string_view result)
+  std::string_view result,
+  message_flow_reason_t reason = message_flow_reason_t::target_closed)
 {
     detail::message_flow_tracer_t (state->dispatch).trace (message_flow_outcome_t::dropped, [&] {
         auto event = message_flow_event_t{
@@ -130,7 +136,7 @@ void trace_detached_bound_session_send_failure (
         event.actor_id = actor_id;
         event.detail_stage = "detached_delivery";
         event.detail_result = std::string (result);
-        event.reason = message_flow_reason_t::target_closed;
+        event.reason = reason;
         return event;
     });
 }
@@ -227,7 +233,8 @@ bool drain_bound_session_sends (const std::shared_ptr<detail::actor_gateway_stat
             return true;
         }
         trace_detached_bound_session_send_failure (state, actor_id,
-                                                   "accepted=false detached_queue_full=true");
+                                                   "accepted=false detached_queue_full=true",
+                                                   message_flow_reason_t::backpressure);
         if (completion_fence) {
             completion_fence->complete (
               result_t<void>::failure (framework_error_kind_t::capacity_exceeded,
@@ -3071,9 +3078,12 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
                                                  "session_node_stream_write_submit", "begin");
         auto sent = (*sink) (std::move (packet_name), codec, payload).result ();
         if (!sent) {
+            //  The error kind alone does not name a site: `unavailable` is returned from several
+            //  places in the STREAM host. Carry the message so a trace identifies which one.
             trace_detached_bound_session_send_stage (
               state, actor_id, "session_node_stream_write_terminal",
-              "failed error_kind=" + std::to_string (static_cast<int> (sent.error_kind ())));
+              "failed error_kind=" + std::to_string (static_cast<int> (sent.error_kind ()))
+                + " error=" + (sent.error () ? sent.error ()->what () : "none"));
             trace_detached_bound_session_send_failure (state, actor_id,
                                                        "session_node_stream_write_terminal failed");
             return result_t<void>::failure (sent.error_kind (),

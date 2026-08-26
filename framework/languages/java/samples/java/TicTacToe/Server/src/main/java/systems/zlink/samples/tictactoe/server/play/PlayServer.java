@@ -1,5 +1,6 @@
 package systems.zlink.samples.tictactoe.server.play;
 
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
@@ -34,7 +35,7 @@ public final class PlayServer {
                 ? settings.spotEndpoint()
                 : settings.routeEndpoint();
             node.listen(routeEndpoint)
-                .setRoutingIdPrefix("tictactoe-play");
+                .setRoutingId(RoutingId.from("tictactoe-" + settings.nodeId()));
             node.channelName(SampleNames.PlayNode).server();
             node.peerConnections().connect(settings.peerSpotEndpoint());
             node.objects()

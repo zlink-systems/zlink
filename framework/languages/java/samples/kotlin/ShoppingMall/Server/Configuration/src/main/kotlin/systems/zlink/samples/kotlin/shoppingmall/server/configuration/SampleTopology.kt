@@ -10,6 +10,7 @@ import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.OrderStatuses
 @ConfigurationProperties("sample")
 data class SampleTopology(
     val instanceId: String? = null,
+    val httpEndpoint: String? = null,
     val logDirectory: String? = null,
     val channelEndpoint: String? = null,
     val redisEndpoint: String? = null,
@@ -18,6 +19,7 @@ data class SampleTopology(
 ) {
     fun role(): Role = Role(
         required(instanceId, "instanceId"),
+        required(httpEndpoint, "httpEndpoint"),
         required(logDirectory, "logDirectory"),
         required(channelEndpoint, "channelEndpoint"),
         required(storeDirectory, "storeDirectory"),
@@ -36,6 +38,7 @@ data class SampleTopology(
 
     data class Role(
         val instanceId: String,
+        val httpEndpoint: String,
         val logDirectory: String,
         val channelEndpoint: String,
         val storeDirectory: String,

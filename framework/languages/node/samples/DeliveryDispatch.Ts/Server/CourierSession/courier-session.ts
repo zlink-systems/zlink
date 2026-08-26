@@ -39,7 +39,7 @@ class BindCourierSessionHandler {
     const request = payload.decode(BindCourierSessionReq);
     const actorRef = await this.findOrEnsureActor(request.courierId);
     const actor = await context.actors.bindOrGet(actorRef);
-    console.error(`deliverydispatch courier-session: bound courier=${request.courierId} actor=${actorRef.actorId}`);
+    console.log(`deliverydispatch-courier bound courier=${request.courierId}`);
     await actor.relay(payload);
   }
 

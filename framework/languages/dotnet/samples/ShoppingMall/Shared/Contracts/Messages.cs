@@ -73,6 +73,18 @@ public sealed record RebuildOrderProjectionRes(OrderState State);
 
 public sealed record PrepareInventoryReservedCheckpointReq(StartOrderWorkflowReq Command);
 
+public sealed record CloseOrderWorkflowForPlannedRelocationReq;
+
+public sealed record CloseOrderWorkflowForPlannedRelocationRes(bool Closed);
+
+public sealed record StartPlannedRelocationReq;
+
+public sealed record StartPlannedRelocationRes(bool Started);
+
+public sealed record SignalPlannedRelocationReadyReq;
+
+public sealed record SignalPlannedRelocationReadyRes(bool Deferred);
+
 public sealed record OrderProjectionUpdatedEvent(
     string OrderId,
     string Status);

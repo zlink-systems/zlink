@@ -15,6 +15,7 @@ function createBingoSessionModule() {
     'sessionEndpoint',
     'sessionSpotEndpoint',
     'sessionSpotPubSubEndpoint',
+    'nodeId',
     'redisEndpoint',
     'redisKeyPrefix',
     'logDir'

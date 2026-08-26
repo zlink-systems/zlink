@@ -20,6 +20,8 @@ public final class ContinueOrderWorkflowSpotHandler
         OrderWorkflowSpot spot,
         Messages.ContinueOrderWorkflowReq request) {
         return CompletableFuture.completedFuture(
-            new Messages.ContinueOrderWorkflowRes(workflow.continueOrderInSpot(request.orderId())));
+            new Messages.ContinueOrderWorkflowRes(
+                workflow.continueOrderInSpot(spot, request.orderId()),
+                spot.context().objectGeneration()));
     }
 }

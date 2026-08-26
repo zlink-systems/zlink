@@ -116,18 +116,20 @@ internal sealed class QuestStore : IQuestStore, IAsyncDisposable
             .ToArray();
     }
 
-    public async ValueTask RecordOwnerRehydratedAsync(
+    public async ValueTask<int> RecordOwnerRehydratedAsync(
         string playerId,
         CancellationToken cancellationToken)
     {
+        var generation = 0;
         await UpdateAsync(
             Key("owner-rehydrates"),
             new Dictionary<string, int>(StringComparer.Ordinal),
             evidence =>
             {
-                evidence[playerId] = evidence.GetValueOrDefault(playerId) + 1;
+                generation = evidence[playerId] = evidence.GetValueOrDefault(playerId) + 1;
             },
             cancellationToken);
+        return generation;
     }
 
     public async ValueTask<Dictionary<string, int>> ReadOwnerRehydrateCountsAsync(CancellationToken cancellationToken)

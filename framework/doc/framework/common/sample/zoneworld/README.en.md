@@ -855,3 +855,26 @@ to the Gateway".
 A per-language runner may implement some IDs runner-driven (e.g. the C4 fault injection), but it
 must not change an ID's precondition/action/assertion semantics. A new ID is added to this
 document first before any runner introduces it.
+
+#### Fixed values for the scenarios that stop and restart a ZoneNode
+
+Several scenarios stop a ZoneNode. **How it is stopped, and which zone set it comes back with, is
+not a per-language choice.** Leaving these values unstated is why four implementations used
+different signals, so the same ID tested something different in each language.
+
+| ID | Stop | Why |
+| --- | --- | --- |
+| ZW-B4 | abrupt | publishing has to cut out at once for the 3-tick expiry to be observable |
+| ZW-C2 | graceful | the row's precondition is a normal shutdown; it observes the drain path's disconnect event |
+| ZW-C3 | abrupt | §2.2 — "a crashed node cannot send a false report, so this TTL is the only false transition rule" |
+| ZW-E5 | abrupt | shows the maintenance desired state lives in a store outside the process |
+| ZW-G3 | graceful | the row's precondition is a normal replacement (stop→start) |
+| ZW-G4 | abrupt | the row's precondition is a crash replacement (kill→start) |
+
+**A restarted ZoneNode does not take its zones back.** §2.2 fixes that a Ready owner failure is
+never an automatic replacement, so the restarted process comes up with the **replacement
+configuration that reaches ready with zero zones** — the same whether the stop was graceful or
+abrupt. Only the initial cold start claims zones.
+
+Leaving this unstated makes a restarted node demand two zones and retry the claim until its budget
+runs out, which is exactly the state the cpp implementation was in.

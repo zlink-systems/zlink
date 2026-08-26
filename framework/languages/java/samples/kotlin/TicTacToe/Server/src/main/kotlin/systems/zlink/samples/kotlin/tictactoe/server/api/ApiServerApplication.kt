@@ -13,13 +13,18 @@ import org.springframework.boot.web.servlet.server.ConfigurableServletWebServerF
 import org.springframework.core.env.StandardEnvironment
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
+import org.springframework.context.ApplicationListener
+import org.springframework.boot.web.context.WebServerInitializedEvent
+import org.slf4j.LoggerFactory
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.tictactoe.server.api.handlers.AuthenticatePlayerHandler
 import systems.zlink.samples.kotlin.tictactoe.server.api.handlers.CreateGameHttpHandler
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleSettings
+import systems.zlink.samples.kotlin.tictactoe.server.configuration.TicTacToeReadinessReporter
 
 
 
@@ -41,6 +46,12 @@ class ApiServerApplication {
     @Bean(destroyMethod = "close")
     fun locationStore(settings: SampleSettings): ZLinkRedisLocationStore =
         SampleLocationStore.create(settings)
+
+    @Bean(destroyMethod = "close")
+    fun ticTacToeReadinessReporter(
+        settings: SampleSettings,
+        meshes: ZLinkRouteMeshRuntime,
+    ): TicTacToeReadinessReporter = TicTacToeReadinessReporter.api(settings.nodeId, meshes)
 
     companion object {
         fun run(configPath: String): ConfigurableApplicationContext {
@@ -64,5 +75,12 @@ class ApiServerApplication {
             val endpoint = URI.create(settings.apiBindUrl)
             server.setAddress(InetAddress.getLoopbackAddress())
             server.setPort(endpoint.port)
+        }
+
+    @Bean
+    fun ticTacToeHttpReadiness(settings: SampleSettings): ApplicationListener<WebServerInitializedEvent> =
+        ApplicationListener {
+            LoggerFactory.getLogger(ApiServerApplication::class.java)
+                .info("tictactoe-ready kind=http node={}", settings.nodeId)
         }
 }

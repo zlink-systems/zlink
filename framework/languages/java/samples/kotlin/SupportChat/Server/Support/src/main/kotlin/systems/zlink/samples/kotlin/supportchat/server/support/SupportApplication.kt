@@ -10,6 +10,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.core.env.StandardEnvironment
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
+import org.springframework.boot.ApplicationRunner
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
@@ -85,6 +86,10 @@ class SupportApplication {
                     ConversationSpot::class.java,
                 ) { factory -> factory.disableRelocation() }
         }
+
+    @Bean
+    fun supportPublicReadiness(): ApplicationRunner =
+        ApplicationRunner { println("supportchat-ready kind=public node=support") }
 
     @Bean
     fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore = SampleLocationStore.create(topology)

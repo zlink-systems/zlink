@@ -16,6 +16,8 @@ function createBingoPlayModule() {
   const configuration = createBingoConfigurationModule([
     'playSpotEndpoint',
     'playSpotPubSubEndpoint',
+    'nodeId',
+    'peerNodeId',
     'redisEndpoint',
     'redisKeyPrefix',
     'logDir'

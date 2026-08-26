@@ -1,5 +1,5 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { SampleNames } from '../../Shared/Configuration/sample-names';
+import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 import { CourierActorDirectory, CourierActorFactory } from './courier-actor';
 import { CourierEntrySpot } from './courier-entry-spot';
 import { createDeliveryDispatchLocationStore, deliveryDispatchLocationOptions } from '../Configuration/location-store';
@@ -39,8 +39,11 @@ function createCourierActorNodeModule(options: CourierOptions) {
             .messageFlow('normal');
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
+          const nodeId = options.courierId === 'courier-a'
+            ? DeliveryDispatchNodeIds.courierNode1
+            : DeliveryDispatchNodeIds.courierNode2;
           const mesh = builder.addRouteMesh(SampleNames.courierMeshName)
-              .listen(spotEndpoint).setRoutingIdPrefix('delivery-courier');
+              .listen(spotEndpoint).routingId(nodeId);
           const objectServer = mesh.objects().server();
           objectServer.addEntrySpot(CourierEntrySpot);
           objectServer.addActorFactory(

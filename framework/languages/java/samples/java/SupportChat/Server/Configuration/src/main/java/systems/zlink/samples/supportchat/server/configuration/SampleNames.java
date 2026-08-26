@@ -1,9 +1,12 @@
 package systems.zlink.samples.supportchat.server.configuration;
 
+import systems.zlink.contracts.core.RoutingId;
+
 public final class SampleNames {
     public static final String ApiChannel = "supportchat-api";
     public static final String SupportChannel = "supportchat-support";
     public static final String SupportActorMesh = "supportchat-actors";
+    public static final RoutingId SupportNodeRoutingId = RoutingId.from("support");
     public static final String SupportActorType = "support-user";
     public static final String ConversationSpotType = "supportchat.conversation";
     public static final String StreamNode = "supportchat-session";

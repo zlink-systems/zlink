@@ -174,7 +174,7 @@ public sealed partial class RegressionTests
             "echo \"bingo-placement=completed\"",
             StringComparison.Ordinal);
         var finalEvidence = runner.LastIndexOf(
-            "require_log_count 2 \"bingo room: result reported",
+            "wait_log_count 0 \"bingo-lifecycle entry-destroy-complete actor=observer\"",
             StringComparison.Ordinal);
 
         Assert.True(playBStart >= 0 && playAStart > playBStart);
@@ -259,7 +259,45 @@ public sealed partial class RegressionTests
         Assert.Contains("$SampleLogDir = Join-Path $RunDir \"sample-logs\"", powershellRunner,
             StringComparison.Ordinal);
         Assert.DoesNotContain("Join-Path $ScriptDir \"logs\"", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("function Wait-LogContains", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("function Wait-LogCount", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("[int]$Attempts = 300", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("Start-Sleep -Milliseconds 100", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("for _ in $(seq 1 300)", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("sleep 0.1", shellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "wait_log_count 1 \"bingo-ready kind=peer-route node=play-a peer=play-b\"",
+            shellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "wait_log_count 0 \"bingo-record reported actor=observer\"",
+            shellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "wait_log_count 0 \"bingo-lifecycle entry-destroy-complete actor=observer\"",
+            shellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "wait_log_count 1 \"bingo-lifecycle session-disconnect actor=player-2 destroy=false\"",
+            shellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Wait-LogCount -Path $playA -Pattern \"bingo-ready kind=peer-route node=play-a peer=play-b\" -Expected 1",
+            powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Wait-LogCount -Path $playLogs -Pattern \"bingo-record reported actor=observer\" -Expected 0",
+            powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Wait-LogCount -Path $playLogs -Pattern \"bingo-lifecycle entry-destroy-complete actor=observer\" -Expected 0",
+            powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Wait-LogCount -Path $sessionLogs -Pattern \"bingo-lifecycle session-disconnect actor=player-2 destroy=false\" -Expected 1",
+            powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("Write-Host \"bingo-placement=completed\"", powershellRunner,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("intentionally derived here, not read", powershellRunner, StringComparison.Ordinal);
 

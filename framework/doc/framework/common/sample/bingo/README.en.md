@@ -810,6 +810,57 @@ If Docker isn't available or Redis isn't ready, abort with a clear error. An alr
 Redis isn't used as a substitute. Running the client before readiness, or after a fixed sleep, isn't
 allowed.
 
+### 10.1 Server-Side Evidence the Runner Confirms
+
+The runner matches the strings in the tables below verbatim. These strings are not a per-language
+choice. All five implementations emit the same string the same number of times; changing the
+wording means changing this table first.
+
+Readiness is confirmed before the client starts. Node names are fixed as `api-a`, `api-b`,
+`matchmaking`, `play-a`, `play-b`, `session-a`, and `session-b`.
+
+| Fact confirmed | Log | Emitting node |
+| --- | --- | --- |
+| The Play node admitted the other Play node as a peer | `bingo-ready kind=peer-route node=<NodeId> peer=<PeerNodeId>` | `play-a`, `play-b` |
+| The node acquired a mesh route | `bingo-ready kind=mesh-route node=<NodeId> mesh=<MeshName>` | `api-a`, `api-b` (`matchmaking`, `room`); `session-a`, `session-b` (`room`) |
+
+The Play node's reachability to the API channel gets no readiness row of its own — the
+`bingo-record fetched`/`reported` rows below are emitted only after a real request round trip from
+the Play node to the API succeeds, so those two rows prove the same fact with business traffic. Do
+not send a synthetic request for readiness.
+
+Business evidence is confirmed after the client scenario finishes. `<N>` is decimal and is not
+zero-padded.
+
+| Fact confirmed | Log | Exact count |
+| --- | --- | --- |
+| The player record was read | `bingo-record fetched actor=player-1 wins=0 losses=0` | 1 |
+| The player record was read | `bingo-record fetched actor=player-2 wins=0 losses=0` | 1 |
+| The winner record was written | `bingo-record reported actor=player-1 wins=1 losses=0` | 1 |
+| The loser record was written | `bingo-record reported actor=player-2 wins=0 losses=1` | 1 |
+| The observer writes no record | `bingo-record reported actor=observer` | 0 |
+| The actor left the room | `bingo-lifecycle room-leave actor=<ActorId>` | `player-1` 1, `player-2` 1, `observer` 1 |
+| The actor left the Entry Spot | `bingo-lifecycle entry-leave actor=<ActorId>` | `player-1` 1, `player-2` 1, `observer` 1 |
+| Destroy completed after the Entry Spot return | `bingo-lifecycle entry-destroy-complete actor=<ActorId>` | `player-1` 1, `player-2` 1 |
+| The observer is not destroyed | `bingo-lifecycle entry-destroy-complete actor=observer` | 0 |
+| Disconnect did not destroy the actor | `bingo-lifecycle session-disconnect actor=<ActorId> destroy=false` | `player-1` 1, `player-2` 1 |
+
+`bingo-record` and `bingo-lifecycle` rows are counted across both Play node logs.
+`bingo-lifecycle session-disconnect` rows are counted across both Session node logs.
+Which player lands on which node is not a confirmed fact — the placement independence in §9 keeps
+it unpinned.
+
+Log waits poll every `100 ms` for at most `300` attempts. This budget applies to readiness and to
+business evidence alike. Reading once without waiting, or reading after a fixed sleep, is not
+allowed.
+
+Once every row passes, the runner prints `bingo-placement=completed` last. If any row fails, it
+does not print this marker.
+
+The base smoke runs only the eight steps in §10. Drain, node replacement, and rolling relocation
+are not success conditions of the base sample — the relocation contract in §7.6 is verified by
+[Config 11 observability and operations E2E](../../e2e/config-11-observability-ops.en.md).
+
 ## 11. Completion Criteria
 
 That language's Bingo sample is considered complete once all of the following conditions are met.
@@ -831,8 +882,8 @@ That language's Bingo sample is considered complete once all of the following co
 - After the game ends, the result report, Entry Spot return, and Actor destroy complete in the
   defined order.
 - Every payload and ordering assertion in the client self-check passes.
-- The runner confirms readiness, Redis lifecycle, server-side evidence, and both completion
-  markers.
+- The runner confirms readiness, Redis lifecycle, and both completion markers, and passes every
+  row of the §10.1 table down to the string and the count.
 - Domain has no Framework or Redis types, and no sample-only route/codec/polling helper.
 - The .NET, Java, Kotlin, Node, and C++ implementations keep the same message schema, business
   order, and final result.

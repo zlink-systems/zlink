@@ -2,6 +2,7 @@ package systems.zlink.samples.supportchat.server.session;
 
 import java.nio.file.Path;
 import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -12,11 +13,13 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.samples.supportchat.server.configuration.SampleLocationStore;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.server.configuration.SampleTopology;
+import systems.zlink.samples.supportchat.server.configuration.SupportChatReadinessReporter;
 import systems.zlink.samples.supportchat.server.session.sessions.SupportChatSession;
 
 @EnableZLinkFramework
@@ -64,6 +67,16 @@ public final class Program {
                 .enableActorDispatch()
                 .registerSession(SupportChatSession.class);
         };
+    }
+
+    @Bean
+    ApplicationRunner sessionStreamReadiness() {
+        return arguments -> System.out.println("supportchat-ready kind=stream node=session");
+    }
+
+    @Bean(destroyMethod = "close")
+    SupportChatReadinessReporter sessionSpotRouteReadiness(ZLinkRouteMeshRuntime meshes) {
+        return new SupportChatReadinessReporter("session", meshes);
     }
 
     @Bean(destroyMethod = "close")

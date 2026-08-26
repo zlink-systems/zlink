@@ -607,7 +607,14 @@ Request/response 매칭에 쓰는 correlation은 protocol 정보라 `Off`에서�
         .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
     ```
 
-=== "TypeScript"
+=== "Kotlin"
+
+    ```kotlin
+    ZLinkStreamConnectorOptions.createDefault(endpoint)
+        .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
+    ```
+
+=== "Node/TypeScript"
 
     ```typescript
     const options = {

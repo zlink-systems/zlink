@@ -2,6 +2,7 @@
 
 #include "../Common/store.hpp"
 #include "../Configuration/sample_configuration.hpp"
+#include "../Configuration/sample_readiness.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink/http_client.hpp>
@@ -10,47 +11,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <nlohmann/json.hpp>
 #include <thread>
 
 namespace zlink::samples::shoppingmall
 {
 using namespace zlink::framework;
-
-class route_ready_http_handler_t
-{
-  public:
-    using dependency_types = dependency_list_t<route_mesh_runtime_t>;
-
-    explicit route_ready_http_handler_t (route_mesh_runtime_t &runtime) : _runtime (runtime) {}
-
-    http_response_t handle (const http_request_t &request)
-    {
-        const auto found = request.query_values.find ("targetRid");
-        if (found == request.query_values.end () || found->second.empty ())
-            return {.status = 400, .body = R"({"error":"targetRid is required"})"};
-
-        const auto snapshot = _runtime.snapshot (sample_names_t::order_workflow_channel);
-        for (const auto &peer : snapshot.peers) {
-            if (peer.node_rid.to_string () == found->second && peer.state == peer_state_t::ready)
-                return {.body =
-                          nlohmann::json{{"ready", true}, {"targetRid", found->second}}.dump ()};
-        }
-
-        nlohmann::json peers = nlohmann::json::array ();
-        for (const auto &peer : snapshot.peers)
-            peers.push_back (
-              {{"rid", peer.node_rid.to_string ()}, {"state", static_cast<int> (peer.state)}});
-        return {.status = 503,
-                .body = nlohmann::json{{"ready", false},
-                                       {"targetRid", found->second},
-                                       {"peers", std::move (peers)}}
-                          .dump ()};
-    }
-
-  private:
-    route_mesh_runtime_t &_runtime;
-};
 
 class commerce_api_handlers_t
 {
@@ -115,14 +80,22 @@ class commerce_api_handlers_t
         });
     }
 
-    ok_res_t create_pending (const pending_mapping_req_t &request)
+    start_order_res_t create_pending (const pending_mapping_req_t &request)
     {
-        _store.update ([&] (nlohmann::json &state) {
+        const auto order_id = _store.update ([&] (nlohmann::json &state) {
+            const auto next = state.value ("nextOrderSequence", 0) + 1;
+            state["nextOrderSequence"] = next;
+            const auto order_id = "order-"
+                                  + std::string (4 - std::to_string (next).size (), '0')
+                                  + std::to_string (next);
             state["idempotency"][request.idempotency_key] =
-              nlohmann::json{{"orderId", request.order_id}, {"started", false}};
-            return true;
+              nlohmann::json{{"orderId", order_id}, {"started", false}};
+            return order_id;
         });
-        return {};
+        /* The runner receives this freshly allocated value and supplies it to
+         * the Client as its fixture identity; it never posts a guessed order
+         * id to a self-check hook. */
+        return {order_id, order_state_t{order_id, order_status_t::created}};
     }
 
     /* self-check hook(§15 "죽은 뒤 재개"): 배경 재개를 InventoryReserved에서 멈춰 중간 상태를
@@ -217,11 +190,16 @@ class commerce_api_handlers_t
                                 "InventoryReleasedEvent", "OrderFailedEvent"})
               && has_sequence (state, request.scale_out_order_id, success)
               && state["paymentAttempts"].size () >= 1 && state["releasedReservations"].size () >= 1
-              && state["idempotency"].size () == 7;
-            std::cerr << "shoppingmall evidence: ";
-            for (const auto &line : evidence)
-                std::cerr << line << "; ";
-            std::cerr << "\n";
+              /* Five runner fixtures (including planned relocation) plus five Client keys are
+               * expected.  The
+               * assertion still receives every Client-created order id from
+               * this run, rather than relying on guessed order numbers. */
+              && state["idempotency"].size () == 10;
+            if (passed) {
+                std::cerr << "shoppingmall-evidence order=" << request.successful_order_id
+                          << " events=" << event_types_for (state, request.successful_order_id).size ()
+                          << "\n";
+            }
             return server_assertion_res_t{passed, evidence};
         });
     }
@@ -283,7 +261,7 @@ class commerce_api_handlers_t
 
 SHOPPINGMALL_HANDLER (start_order_handler_t, start_order_req_t, start_order_res_t, start_order)
 SHOPPINGMALL_HANDLER (get_order_handler_t, get_order_state_req_t, get_order_state_res_t, get_order)
-SHOPPINGMALL_HANDLER (pending_handler_t, pending_mapping_req_t, ok_res_t, create_pending)
+SHOPPINGMALL_HANDLER (pending_handler_t, pending_mapping_req_t, start_order_res_t, create_pending)
 SHOPPINGMALL_HANDLER (prepare_handler_t,
                       start_order_req_t,
                       start_order_res_t,
@@ -345,14 +323,21 @@ int main (int argc, char **argv)
     options.http ()
       .listen (instance.http_url)
       .map_health ("/health")
-      .map_get<route_ready_http_handler_t> ("/ready")
       .map_post<start_order_handler_t> ("/orders/start")
       .map_post<get_order_handler_t> ("/orders/get")
       .map_post<pending_handler_t> ("/self-check/idempotency/pending")
       .map_post<prepare_handler_t> ("/self-check/workflow/inventory-reserved")
-      .map_post<continue_handler_t> ("/self-check/workflow/continue")
+      .map_post<continue_handler_t> ("/orders/continue")
       .map_post<delete_projection_handler_t> ("/self-check/projection/delete")
-      .map_post<rebuild_projection_handler_t> ("/self-check/projection/rebuild")
+      .map_post<rebuild_projection_handler_t> ("/orders/rebuild")
       .map_post<assert_handler_t> ("/self-check/assert");
+    app.add_hosted_service (std::make_unique<shoppingmall_http_readiness_service_t> (
+      instance.instance_id));
+    app.add_hosted_service (std::make_unique<shoppingmall_object_route_readiness_service_t> (
+      sample_names_t::order_workflow_channel, instance.instance_id,
+      "shoppingmall-workflow-a-workflow", "workflow-a"));
+    app.add_hosted_service (std::make_unique<shoppingmall_object_route_readiness_service_t> (
+      sample_names_t::order_workflow_channel, instance.instance_id,
+      "shoppingmall-workflow-b-workflow", "workflow-b"));
     return app.run (argc, argv);
 }

@@ -11,7 +11,8 @@ public record GameQuestClientOptions(
     String apiBStreamEndpoint,
     String apiAHttpEndpoint,
     String apiBHttpEndpoint,
-    String scenario) {
+    String scenario,
+    String ownerUnavailableReleaseFile) {
 
     public static GameQuestClientOptions load(String[] args) throws IOException {
         if (args.length != 2 || !"--config".equals(args[0]) || args[1].isBlank()) {
@@ -26,7 +27,8 @@ public record GameQuestClientOptions(
             required(properties, "sample.apiBStreamEndpoint"),
             required(properties, "sample.apiAHttpEndpoint"),
             required(properties, "sample.apiBHttpEndpoint"),
-            properties.getProperty("sample.scenario", "full"));
+            properties.getProperty("sample.scenario", "full"),
+            properties.getProperty("sample.ownerUnavailableReleaseFile", ""));
     }
 
     private static String required(Properties properties, String name) {

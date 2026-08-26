@@ -373,6 +373,14 @@ Spot의 `OnActorJoinAsync`, `OnJoinedActorAsync`, `OnLeaveActorAsync`를 호출�
 않는다. Source User Spot instance를 정리할 때는 `RelocationOut` 이유로
 `OnClosingAsync`를 호출한다.
 
+Relocation target에서 User Spot instance를 다시 만들 때는 factory가 instance를 만든 뒤
+`Configure`와 `OnInitializeAsync`를 실행한다. Creation request가 없으므로 `OnCreateAsync`는
+실행하지 않는다. `OnInitializeAsync`는 target admission seal이 외부 ingress를 막고 있는 동안
+실행하며, 이 callback이 끝나야 target이 Ready가 된다. 이는 §5.1 callback 표가 정한
+"생성된 Spot instance의 application 초기화를 완료한다"를 relocation으로 재생성한 instance에도
+그대로 적용한다는 뜻이다 — application이 여기에 둔 초기화(예: event replay)를 건너뛰면
+target이 source와 다른 상태로 Ready가 된다.
+
 Member Actor가 Session에 bind되어 있으면 Spot과 Actor를 target에 복원하고 aggregate owner를
 commit하고 queue 병합·regular route 전환·lifecycle 뒤 dispatch를 연 다음 target runtime이 각
 Session owner에 command 44 `sessionRelocationRoute` commit을 one-way로 보낸다.

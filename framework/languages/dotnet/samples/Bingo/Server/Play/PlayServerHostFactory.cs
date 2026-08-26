@@ -79,9 +79,11 @@ public static class PlayServerHostFactory
             mesh.Channel(SampleNames.RoomChannel).Server();
             options.AddClientServerChannel(SampleNames.ApiChannel).Client();
         });
-        builder.Services.AddSingleton(new BingoMeshStatusReport(
-            "play",
-            SampleNames.PlayMeshName));
+        builder.Services.AddSingleton(new BingoReadyReport(
+            BingoReadyKind.PeerRoute,
+            $"play-{nodeName}",
+            SampleNames.PlayMeshName,
+            nodeName == "a" ? "play-b" : "play-a"));
         builder.Services.AddHostedService<BingoMeshStatusReporter>();
         return builder.Build();
     }

@@ -49,7 +49,7 @@ class PlayEntrySpot(
     override suspend fun onJoinedActorSuspending(actor: PlayActor) {
         if (actor.destroyAfterEntrySpotJoin) {
             context.destroyActor(actor).await()
-            logger.info("tictactoe actor destroy completed actor={}", actor.actorId)
+            logger.info("tictactoe-lifecycle actor-destroy-complete actor={}", actor.actorId)
         }
     }
 

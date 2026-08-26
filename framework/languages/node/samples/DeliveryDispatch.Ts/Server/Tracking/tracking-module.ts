@@ -1,5 +1,5 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { SampleNames } from '../../Shared/Configuration/sample-names';
+import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 import { EvidenceStore } from '../Configuration/evidence-store';
 import { createDeliveryDispatchLocationStore, deliveryDispatchLocationOptions } from '../Configuration/location-store';
 import {
@@ -33,7 +33,7 @@ function createTrackingModule() {
           deliveryDispatchLocationOptions(builder.configureLocations());
           const mesh = builder.addRouteMesh(SampleNames.customerMeshName)
             .listen(config.trackingSpotEndpoint)
-            .setRoutingIdPrefix('delivery-tracking');
+            .routingId(DeliveryDispatchNodeIds.tracking);
           mesh.objects().client();
           builder.addClientServerChannel(SampleNames.trackingChannel)
             .server()

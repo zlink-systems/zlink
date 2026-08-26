@@ -44,12 +44,13 @@ internal sealed class OrderWorkflowService(
 
     public async ValueTask<OrderState> StartAndContinueAsync(
         StartOrderWorkflowReq command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<OrderState, ValueTask>? onTerminal = null)
     {
         var state = await StartAsync(command, cancellationToken);
         if (state.Status is nameof(OrderStatus.Confirmed) or nameof(OrderStatus.Failed)) return state;
 
-        _ = ContinueWorkflowInBackgroundAsync(command.OrderId)
+        _ = ContinueWorkflowInBackgroundAsync(command.OrderId, onTerminal)
             .ContinueWith(
                 static task => _ = task.Exception,
                 CancellationToken.None,
@@ -58,16 +59,21 @@ internal sealed class OrderWorkflowService(
         return state;
     }
 
-    private async Task ContinueWorkflowInBackgroundAsync(string orderId)
+    private async Task ContinueWorkflowInBackgroundAsync(
+        string orderId,
+        Func<OrderState, ValueTask>? onTerminal)
     {
+        await Task.Yield();
+        OrderState state;
         for (var attempt = 0; attempt < 20; attempt++)
         {
             try
             {
-                await ContinueAsync(
+                state = await ContinueAsync(
                         new ContinueOrderWorkflowReq(orderId, $"continue:{orderId}"),
                         CancellationToken.None)
                     .ConfigureAwait(false);
+                if (onTerminal is not null) await onTerminal(state).ConfigureAwait(false);
                 return;
             }
             catch (OrderStreamVersionConflictException)
@@ -76,20 +82,23 @@ internal sealed class OrderWorkflowService(
             }
         }
 
-        await ContinueAsync(
+        state = await ContinueAsync(
                 new ContinueOrderWorkflowReq(orderId, $"continue:{orderId}"),
                 CancellationToken.None)
             .ConfigureAwait(false);
+        if (onTerminal is not null) await onTerminal(state).ConfigureAwait(false);
     }
 
     public async ValueTask<OrderState> ContinueAsync(
         ContinueOrderWorkflowReq command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? externalEffectRepeated = null)
     {
         var state = await ContinueUntilAsync(
             command.OrderId,
             static status => status is OrderStatus.Confirmed or OrderStatus.Failed,
-            cancellationToken);
+            cancellationToken,
+            externalEffectRepeated);
         return OrderContractMapper.ToContract(state);
     }
 
@@ -102,14 +111,16 @@ internal sealed class OrderWorkflowService(
             static status => status is OrderStatus.InventoryReserved
                 or OrderStatus.Confirmed
                 or OrderStatus.Failed,
-            cancellationToken);
+            cancellationToken,
+            externalEffectRepeated: null);
         return OrderContractMapper.ToContract(state);
     }
 
     private async ValueTask<OrderProjectionState> ContinueUntilAsync(
         string orderId,
         Func<OrderStatus?, bool> shouldStop,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? externalEffectRepeated)
     {
         while (true)
         {
@@ -122,26 +133,26 @@ internal sealed class OrderWorkflowService(
 
             var next = aggregate.Status switch
             {
-                OrderStatus.Created => aggregate.ApplyInventoryResult(
-                    await commerce.ReserveInventoryAsync(
-                        new ReserveInventoryCommand(
-                            orderId,
-                            ReservationId(orderId),
-                            stored.OfTypeStored<OrderStartedEvent>().Single().Lines),
-                        cancellationToken),
-                    NewEventId("inventory", orderId),
-                    NewEventId("failed", orderId),
-                    NowUnixMs()),
+                OrderStatus.Created => await ReserveInventoryAsync(
+                    aggregate,
+                    stored,
+                    orderId,
+                    cancellationToken,
+                    externalEffectRepeated),
                 OrderStatus.InventoryReserved => await AuthorizePaymentAsync(
                     aggregate,
                     current,
+                    stored,
                     await commerce.GetOrderPaymentMethodAsync(orderId, cancellationToken),
-                    cancellationToken),
+                    cancellationToken,
+                    externalEffectRepeated),
                 OrderStatus.PaymentAuthorized => aggregate.Confirm(NewEventId("confirmed", orderId), NowUnixMs()),
                 OrderStatus.PaymentFailed => await ReleaseInventoryAsync(
                     aggregate,
                     current,
-                    cancellationToken),
+                    stored,
+                    cancellationToken,
+                    externalEffectRepeated),
                 OrderStatus.InventoryReleased => aggregate.FailAfterInventoryRelease(
                     NewEventId("failed", orderId),
                     NowUnixMs()),
@@ -171,9 +182,14 @@ internal sealed class OrderWorkflowService(
     private async ValueTask<IReadOnlyList<OrderDomainEvent>> AuthorizePaymentAsync(
         OrderAggregate aggregate,
         OrderProjectionState current,
+        IReadOnlyList<StoredOrderEvent> stored,
         string paymentMethodId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? externalEffectRepeated)
     {
+        if (stored.OfTypeStored<PaymentAuthorizedEvent>().Any()
+            || stored.OfTypeStored<PaymentFailedEvent>().Any())
+            externalEffectRepeated?.Invoke();
         var result = await commerce.AuthorizePaymentAsync(
             new AuthorizePaymentCommand(
                 current.OrderId,
@@ -191,8 +207,12 @@ internal sealed class OrderWorkflowService(
     private async ValueTask<IReadOnlyList<OrderDomainEvent>> ReleaseInventoryAsync(
         OrderAggregate aggregate,
         OrderProjectionState current,
-        CancellationToken cancellationToken)
+        IReadOnlyList<StoredOrderEvent> stored,
+        CancellationToken cancellationToken,
+        Action? externalEffectRepeated)
     {
+        if (stored.OfTypeStored<InventoryReleasedEvent>().Any())
+            externalEffectRepeated?.Invoke();
         var reservationId = current.ReservationId
                             ?? throw new InvalidOperationException("Reservation is required for compensation.");
         var reason = current.Reason ?? "payment failed";
@@ -201,6 +221,29 @@ internal sealed class OrderWorkflowService(
             cancellationToken);
         return aggregate.ReleaseInventory(
             NewEventId("release", current.OrderId),
+            NowUnixMs());
+    }
+
+    private async ValueTask<IReadOnlyList<OrderDomainEvent>> ReserveInventoryAsync(
+        OrderAggregate aggregate,
+        IReadOnlyList<StoredOrderEvent> stored,
+        string orderId,
+        CancellationToken cancellationToken,
+        Action? externalEffectRepeated)
+    {
+        if (stored.OfTypeStored<InventoryReservedEvent>().Any()
+            || stored.OfTypeStored<InventoryReservationFailedEvent>().Any())
+            externalEffectRepeated?.Invoke();
+        var result = await commerce.ReserveInventoryAsync(
+            new ReserveInventoryCommand(
+                orderId,
+                ReservationId(orderId),
+                stored.OfTypeStored<OrderStartedEvent>().Single().Lines),
+            cancellationToken);
+        return aggregate.ApplyInventoryResult(
+            result,
+            NewEventId("inventory", orderId),
+            NewEventId("failed", orderId),
             NowUnixMs());
     }
 

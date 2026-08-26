@@ -3,6 +3,7 @@ package systems.zlink.samples.kotlin.tictactoe.server.api
 
 import java.net.URI
 import kotlinx.coroutines.Dispatchers
+import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
@@ -35,11 +36,15 @@ object ApiServer {
                     AuthenticatePlayerRes::class.java,
                 )
             val mesh = options.addRouteMesh(SampleNames.SpotMesh)
-            mesh.listen(settings.routeEndpoint)
-                .setRoutingIdPrefix("tictactoe-api")
+            mesh.setRoutingId(RoutingId.from("tictactoe-api-${settings.nodeId}"))
+                .listen(settings.routeEndpoint)
             mesh.objects().client()
-            settings.spotEndpoints.forEach { endpoint ->
-                mesh.peerConnections().connect(endpoint)
+            settings.spotEndpoints.forEachIndexed { index, endpoint ->
+                val playNodeId = if (index == 0) "play-a" else "play-b"
+                mesh.peerConnections().connect(
+                    RoutingId.from("tictactoe-play-$playNodeId"),
+                    endpoint,
+                )
             }
         }
 }

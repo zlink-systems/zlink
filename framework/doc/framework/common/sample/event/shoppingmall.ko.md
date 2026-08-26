@@ -805,6 +805,70 @@ Smoke runner는 server internal endpoint, store direct query와 test-only adapte
 호출하며, 이 호출은 Client process code path가 아니다. Runner observation은 public response와
 state에 대한 Client assertion을 대신하지 않는다.
 
+### 10.1 Runner가 확인하는 evidence
+
+Runner는 아래 표의 문자열을 그대로 찾는다. 문자열은 언어별 재량이 아니다. 다섯 구현이 같은
+문자열을 같은 횟수로 출력해야 하며, 문구를 바꾸려면 이 표를 먼저 바꾼다. Node 이름은 `api-a`,
+`api-b`, `workflow-a`, `workflow-b`로 고정한다.
+
+**Evidence는 샘플이 소유한 문자열이어야 한다.** Framework가 찍는 줄(runtime readiness 로그,
+message flow tracer, structured trace 투영, process 기동 boilerplate)을 성공 기준으로 삼지 않는다.
+그 줄들은 framework 사정으로 바뀌고, 바뀌면 샘플 runner가 조용히 깨진다.
+
+Readiness는 Client scenario를 실행하기 전에 확인한다. §10 4단계가 요구하는 두 가지다.
+
+| 확인하는 사실 | 로그 | 출력 node |
+| --- | --- | --- |
+| HTTP edge가 열렸다 | `shoppingmall-ready kind=http node=<NodeId>` | `api-a`, `api-b` |
+| RouteMesh object capability를 확보했다 | `shoppingmall-ready kind=object-route node=<NodeId> target=<WorkflowNodeId>` | `api-a`, `api-b` (`workflow-a`, `workflow-b` 각각) |
+
+두 번째 행은 **수동 신호로 확인한다.** Runner가 `/ready?targetRid=` 같은 요청을 만들어 보내
+readiness를 증명하지 않는다.
+
+Server evidence는 Client scenario가 끝난 뒤 확인한다.
+
+| 확인하는 사실 | 로그 | 정확한 횟수 |
+| --- | --- | --- |
+| Workflow node가 order를 시작했다 | `shoppingmall-order started order=<OrderId> spot=<SpotId>` | **각 Workflow node 로그에서 따로** 1 이상 |
+| CommerceApi가 evidence를 남겼다 | `shoppingmall-evidence order=<OrderId> events=<N>` | 1 이상 |
+| planned relocation 뒤 같은 generation에서 replay하고 다음 단계로 진행했다(§9.2-11) | `shoppingmall-order replayed order=<OrderId> generation=<N>` | 1 |
+| 이미 완료한 외부 효과를 반복하지 않았다(§9.2-11) | `shoppingmall-order external-effect-repeated order=<OrderId>` | 0 |
+
+**첫 행은 각 node 로그를 따로 센다.** 두 로그 파일을 한 번의 검색에 함께 넘겨 "둘 중 하나라도
+맞으면 통과"가 되게 하지 않는다.
+
+**마지막 두 행은 relocation을 실제로 일으켜야 한다.** §11은 "planned relocation이 같은
+`ObjectGeneration`을 유지하고 event replay 뒤 다음 단계부터 진행하며 이미 완료한 외부 효과를
+반복하지 않는다"를 완료 기준으로 요구한다. Store를 배선해 두는 것만으로는 이 기준을 만족하지
+않는다. 그 단계를 실행하지 않으면 이 행들은 통과할 수 없으며, 통과하지 못하는 것이 맞다.
+
+#### Runner-only hook의 경계
+
+§9가 정한 경계를 runner가 검사할 수 있는 형태로 다시 적는다.
+
+- **Client는 CommerceApi의 public order API만 호출한다.** `/self-check/*` 계열 hook을 Client
+  process 안에서 호출하지 않는다. Fixture 준비와 server evidence 확인은 Client를 시작하기 전이나
+  끝난 뒤 runner가 직접 호출한다.
+- **Client는 public transport로 호출한다.** 내부 channel·mesh API로 CommerceApi에 직접 말하지
+  않는다. 그렇게 하면 §9가 시험하려는 public order API 표면이 시험되지 않는다.
+- Runner가 self-check hook에 보내는 식별자는 **이번 실행이 실제로 만든 값**을 쓴다. 미리 적어 둔
+  order ID를 보내지 않는다 — 그 ID가 이번 실행과 무관해져도 통과해 버린다.
+
+완료 marker는 둘이다.
+
+| marker | 출력 주체 | 뜻 |
+| --- | --- | --- |
+| `shoppingmall=completed` | Client | §9 client self-check 전체 통과 |
+| `shoppingmall-placement=completed` | Runner | §10.1 표의 모든 행 통과 |
+
+**Runner는 `shoppingmall=completed`를 직접 확인한다.** Client 프로세스의 종료 코드로 대신하지
+않는다. `PASS ShoppingMall.<Lang>` 같은 언어별 placement marker는 쓰지 않는다 — §10 6단계가
+말하는 runner placement marker는 위의 `shoppingmall-placement=completed` 하나다.
+
+Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
+적용하며 **`.sh`와 `.ps1`이 같은 값을 쓴다.** 대기 없이 한 번만 읽지 않는다. 다섯 언어 모두
+`.sh`와 `.ps1`을 함께 제공한다.
+
 ## 11. 완료 기준
 
 - [ ] 문서가 ShoppingMall의 업무 문제, 시작·종료 범위와 기존 방식 비교를 설명한다.
@@ -822,4 +886,5 @@ state에 대한 Client assertion을 대신하지 않는다.
 - [ ] Client self-check가 public response와 state, 금지 결과를 직접 확인하고 runner observation hook가
       event와 external effect를 별도로 확인한다.
 - [ ] sample code가 public Framework API와 기본 typed JSON codec만 사용한다.
-- [ ] smoke 실행이 readiness를 bounded wait로 확인하고 성공 marker를 조건부로 출력한다.
+- [ ] smoke 실행이 readiness를 bounded wait로 확인하고 성공 marker를 조건부로 출력하며,
+      §10.1 표의 모든 행을 문자열과 횟수까지 통과시킨다.

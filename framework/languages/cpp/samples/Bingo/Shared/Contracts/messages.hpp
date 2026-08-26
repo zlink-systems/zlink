@@ -280,6 +280,22 @@ struct stop_observing_bingo_events_res_t
     bool stopped = false;
 };
 
+struct observer_returned_to_entry_spot_notify_t
+{
+    static constexpr const char *packet_name = "ObserverReturnedToEntrySpotNotify";
+    std::string actor_id;
+};
+
+inline void to_json (nlohmann::json &json, const observer_returned_to_entry_spot_notify_t &value)
+{
+    json = {{"actorId", value.actor_id}};
+}
+
+inline void from_json (const nlohmann::json &json, observer_returned_to_entry_spot_notify_t &value)
+{
+    value.actor_id = json_string (json, "actorId", "actor_id");
+}
+
 struct player_joined_notify_t
 {
     static constexpr const char *packet_name = "PlayerJoinedNotify";

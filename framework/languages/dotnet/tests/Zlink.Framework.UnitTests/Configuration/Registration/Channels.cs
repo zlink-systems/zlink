@@ -128,20 +128,21 @@ public sealed class ChannelsTests : RegistrationValidationSupport
     }
 
     [Fact]
-    public void AutomaticRouteMesh_RejectsFixedRoutingId()
+    public void AutomaticRouteMesh_AcceptsFixedRoutingId()
     {
+        // Implementation and test scenarios need to name a specific peer, and an auto-assigned
+        // UUID cannot be named, so a fixed RID is allowed here. A reclaim that collides with a
+        // live owner still fails as RoutingIdConflict, exactly as an automatic RID does.
+        // See spec/server/languages/dotnet/interfaces/03-configuration-topology.ko.md.
         var services = new ServiceCollection();
 
-        var error = Assert.Throws<ZLinkConfigurationException>(() =>
-            services.AddZLinkFramework(options =>
-            {
-                options.UseTestLocationStore();
-                options.AddRouteMesh("play")
-                    .Listen("tcp://127.0.0.1:7101")
-                    .SetRoutingId(RoutingId.From("fixed"));
-            }));
-
-        Assert.Contains("fixed routing ID", error.Message, StringComparison.Ordinal);
+        services.AddZLinkFramework(options =>
+        {
+            options.UseTestLocationStore();
+            options.AddRouteMesh("play")
+                .Listen("tcp://127.0.0.1:7101")
+                .SetRoutingId(RoutingId.From("fixed"));
+        });
     }
 
     [Fact]

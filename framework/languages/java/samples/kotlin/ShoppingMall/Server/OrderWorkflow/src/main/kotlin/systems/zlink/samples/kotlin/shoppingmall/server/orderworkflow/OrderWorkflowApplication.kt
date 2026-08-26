@@ -17,6 +17,8 @@ import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import systems.zlink.contracts.core.RoutingId
+import org.springframework.context.ConfigurableApplicationContext
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceStore
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleNames
@@ -53,7 +55,7 @@ class OrderWorkflowApplication {
             }
             configurer.addHandlersFromPackageOf(OrderWorkflowApplication::class.java)
             configurer.addRouteMesh(SampleNames.OrderWorkflowMesh)
-                .setRoutingIdPrefix("shoppingmall-workflow")
+                .setRoutingId(RoutingId.from(role.instanceId))
                 .listen(role.channelEndpoint)
                 .objects().server()
                 .addInstanceSpotFactory(
@@ -64,7 +66,7 @@ class OrderWorkflowApplication {
     }
 
     companion object {
-        fun run(configPath: String): AutoCloseable {
+        fun run(configPath: String): ConfigurableApplicationContext {
             val environment = StandardEnvironment().apply {
                 propertySources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME)
                 propertySources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)
@@ -75,7 +77,7 @@ class OrderWorkflowApplication {
                 .properties("spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}")
             builder.application().setKeepAlive(true)
             val context = builder.run()
-            return AutoCloseable { context.close() }
+            return context
         }
     }
 }

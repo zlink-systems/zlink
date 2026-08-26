@@ -50,6 +50,7 @@ ZLINK_BINGO_PROTOBUF_CODEC_TRAITS (zlink::samples::bingo::observe_bingo_events_r
 ZLINK_BINGO_PROTOBUF_CODEC_TRAITS (zlink::samples::bingo::observe_bingo_events_res_t)
 ZLINK_BINGO_PROTOBUF_CODEC_TRAITS (zlink::samples::bingo::stop_observing_bingo_events_req_t)
 ZLINK_BINGO_PROTOBUF_CODEC_TRAITS (zlink::samples::bingo::stop_observing_bingo_events_res_t)
+ZLINK_BINGO_PROTOBUF_CODEC_TRAITS (zlink::samples::bingo::observer_returned_to_entry_spot_notify_t)
 ZLINK_BINGO_PROTOBUF_CODEC_TRAITS (zlink::samples::bingo::player_joined_notify_t)
 ZLINK_BINGO_PROTOBUF_CODEC_TRAITS (zlink::samples::bingo::game_started_notify_t)
 ZLINK_BINGO_PROTOBUF_CODEC_TRAITS (zlink::samples::bingo::number_drawn_notify_t)

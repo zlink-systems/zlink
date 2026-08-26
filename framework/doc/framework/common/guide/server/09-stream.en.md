@@ -618,7 +618,14 @@ working at `Off`.
         .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
     ```
 
-=== "TypeScript"
+=== "Kotlin"
+
+    ```kotlin
+    ZLinkStreamConnectorOptions.createDefault(endpoint)
+        .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
+    ```
+
+=== "Node/TypeScript"
 
     ```typescript
     const options = {

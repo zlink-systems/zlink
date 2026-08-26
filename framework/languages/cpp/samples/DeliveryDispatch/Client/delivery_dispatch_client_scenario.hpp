@@ -61,6 +61,7 @@ class delivery_dispatch_client_scenario_t
                           .build ();
             run_successful_delivery (http, customer, courier_a);
             run_reassigned_delivery (http, customer, courier_a, courier_b);
+            run_candidates_exhausted_delivery (http, customer, courier_a, courier_b);
             assert_server_evidence (http);
             return true;
         }
@@ -203,7 +204,62 @@ class delivery_dispatch_client_scenario_t
         ensure (received.value ()[1].courier_id == "courier-b", "reassigned courier mismatch");
         ensure (received.value ()[2].courier_id == "courier-b", "accepted courier mismatch");
         ensure (received.value ()[3].courier_id == "courier-b", "delivered courier mismatch");
+        /* This decision belongs to A's expired offer.  Send it only after B's
+         * acceptance path has completed so the dispatch worker must reject it
+         * as stale rather than treating it as the active attempt. */
+        send_decision (courier_a, delivery_id, "courier-a", true);
         std::cout << "deliverydispatch-reassignment=completed\n";
+    }
+
+    static void run_candidates_exhausted_delivery (zlink::http_client::client_t &http,
+                                                    connector_t &customer,
+                                                    connector_t &courier_a,
+                                                    connector_t &courier_b)
+    {
+        const std::string delivery_id = "delivery-exhausted";
+        const auto subscribed =
+          customer.request (subscribe_delivery_req_t{delivery_id})
+            .async<subscribe_delivery_res_t> ()
+            .result ();
+        if (!subscribed) {
+            throw std::runtime_error (subscribed.error () ? subscribed.error ()->message
+                                                          : "delivery-exhausted subscription failed");
+        }
+        ensure (subscribed.value ().delivery_id == delivery_id,
+                "delivery-exhausted subscription id mismatch");
+        auto first_offer = wait_offer (courier_a, delivery_id, "courier-a");
+        auto second_offer = wait_offer (courier_b, delivery_id, "courier-b");
+        auto statuses = customer.wait_for_sequence<delivery_status_notify_t> ()
+                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                              return message.delivery_id == delivery_id
+                                     && message.status == delivery_status_t::assigned;
+                          })
+                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                              return message.delivery_id == delivery_id
+                                     && message.status == delivery_status_t::reassigned;
+                          })
+                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                              return message.delivery_id == delivery_id
+                                     && message.status == delivery_status_t::failed;
+                          })
+                          .timeout (std::chrono::seconds (12))
+                          .async ();
+        auto created_future = std::async (std::launch::async, [&http, delivery_id] {
+            return http.post ("/deliveries")
+              .body (create_delivery_req_t{
+                delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
+              .fetch<create_delivery_res_t> ();
+        });
+        const auto rejected_a = first_offer.get ();
+        send_decision (courier_a, rejected_a.delivery_id, rejected_a.courier_id, false);
+        const auto rejected_b = second_offer.get ();
+        send_decision (courier_b, rejected_b.delivery_id, rejected_b.courier_id, false);
+        const auto created = created_future.get ();
+        ensure (created.delivery_id == delivery_id, "delivery-exhausted create failed");
+        const auto received = statuses.result ();
+        ensure (static_cast<bool> (received), "delivery-exhausted status sequence failed");
+        ensure (received.value ()[2].status == delivery_status_t::failed,
+                "delivery-exhausted did not reach failed");
     }
 
     static void assert_server_evidence (zlink::http_client::client_t &http)

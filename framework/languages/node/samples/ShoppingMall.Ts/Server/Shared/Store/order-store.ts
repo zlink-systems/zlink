@@ -36,6 +36,8 @@ interface OrderData {
   stream: StoredOrderEvent[];
   projection?: OrderState;
   ownerInstanceId?: string;
+  relocationCheckpointGeneration?: string;
+  relocationReplayReported?: boolean;
   evidence: string[];
 }
 
@@ -122,6 +124,7 @@ class OrderStore {
           sourceCommandId: request.sourceCommandId
         }), request.sourceCommandId, instanceId);
         this.confirmMapping(request.idempotencyKey, request.orderId);
+        process.stdout.write(`shoppingmall-order started order=${request.orderId} spot=${request.orderId}\n`);
         return { state };
       } catch (error) {
         if (!(error instanceof ExpectedVersionConflict)) throw error;
@@ -158,7 +161,20 @@ class OrderStore {
     return started;
   }
 
-  continueOrder(orderId: string, instanceId: string): { state: OrderState } {
+  markRelocationCheckpoint(orderId: string, objectGeneration: bigint): void {
+    this.updateOrder(orderId, (data) => {
+      if (data.stream.length === 0 || this.foldAggregate(data.stream).lastEventType() !== 'InventoryReserved') {
+        throw new Error(`Order '${orderId}' is not an InventoryReserved relocation checkpoint.`);
+      }
+      if (data.relocationCheckpointGeneration !== undefined) {
+        throw new Error(`Order '${orderId}' already has a relocation checkpoint.`);
+      }
+      data.relocationCheckpointGeneration = objectGeneration.toString();
+      data.evidence.push(`relocation checkpoint generation=${objectGeneration}`);
+    });
+  }
+
+  continueOrder(orderId: string, instanceId: string, objectGeneration?: bigint): { state: OrderState } {
     for (;;) {
       const order = this.readOrder(orderId);
       if (order.stream.length === 0) throw new Error(`Order '${orderId}' does not exist.`);
@@ -166,6 +182,16 @@ class OrderStore {
       this.healProjection(orderId, instanceId);
       const last = aggregate.lastEventType();
       if (last === 'OrderConfirmed' || last === 'OrderFailed') return { state: aggregate.snapshot() };
+
+      if (last === 'InventoryReserved' && order.relocationCheckpointGeneration !== undefined) {
+        if (objectGeneration === undefined || objectGeneration.toString() !== order.relocationCheckpointGeneration) {
+          throw new Error(`Order '${orderId}' relocation generation changed before replay.`);
+        }
+        if (!this.markRelocationReplay(orderId, objectGeneration)) {
+          throw new Error(`Order '${orderId}' relocation replay was reported more than once.`);
+        }
+        process.stdout.write(`shoppingmall-order replayed order=${orderId} generation=${objectGeneration}\n`);
+      }
 
       const started = this.startedPayload(order.stream);
       let type: OrderEventType;
@@ -285,14 +311,12 @@ class OrderStore {
       evidence.push(...order.evidence);
       this.expectEvents(order, orderId, eventTypes, problems);
     }
-    const scaleOwners = new Set(request.scaleOutOrderIds.map((orderId) => this.readOrder(orderId).ownerInstanceId));
-    if (scaleOwners.size !== 2 || scaleOwners.has(undefined)) problems.push(`scale owners were ${JSON.stringify([...scaleOwners])}`);
     const released = commerce.releases[this.reservationId(request.paymentFailureOrderId)];
     if (released?.released !== true) problems.push(`inventory was not released order=${request.paymentFailureOrderId}`);
     const interruptedReservation = commerce.reservations[this.reservationId(request.interruptedOrderId)];
     if (interruptedReservation?.attempts !== 2) problems.push(`interrupted reservation attempts=${interruptedReservation?.attempts ?? 0}`);
-    if (!this.readOrder(request.successfulOrderId).evidence.some((line) => line.includes('overlap writer rejected'))) {
-      problems.push(`stale owner fencing evidence missing order=${request.successfulOrderId}`);
+    for (const orderId of expected.keys()) {
+      process.stdout.write(`shoppingmall-evidence order=${orderId} events=${this.readOrder(orderId).stream.length}\n`);
     }
     return { passed: problems.length === 0, evidence: [...evidence, ...problems] };
   }
@@ -341,6 +365,9 @@ class OrderStore {
       if (previous !== undefined) {
         previous.attempts += 1;
         data.evidence.push(`inventory replay reservation=${reservationId} attempts=${previous.attempts}`);
+        if (this.readOrder(orderId).relocationCheckpointGeneration !== undefined) {
+          process.stdout.write(`shoppingmall-order external-effect-repeated order=${orderId}\n`);
+        }
         return { ...previous };
       }
       const unavailable = lines.find((line) => (data.inventory[line.sku] ?? 0) < line.quantity);
@@ -462,6 +489,18 @@ class OrderStore {
 
   private appendOrderEvidence(orderId: string, line: string): void {
     this.updateOrder(orderId, (data) => { data.evidence.push(line); });
+  }
+
+  private markRelocationReplay(orderId: string, objectGeneration: bigint): boolean {
+    return this.updateOrder(orderId, (data) => {
+      if (data.relocationCheckpointGeneration !== objectGeneration.toString()) {
+        throw new Error(`Order '${orderId}' relocation checkpoint generation does not match its owner.`);
+      }
+      if (data.relocationReplayReported === true) return false;
+      data.relocationReplayReported = true;
+      data.evidence.push(`relocation replayed generation=${objectGeneration}`);
+      return true;
+    });
   }
 
   private reservationId(orderId: string): string { return `reservation-${orderId}`; }

@@ -525,9 +525,89 @@ sleep을 성공 기준으로 사용하지 않는다.
 gamequest=completed
 ```
 
-언어별 runner는 위 공통 completion marker와 함께 API·mission server evidence를 검사한다.
-rehydrate나 scale-out처럼 특정 runner가 별도로 출력하는 marker는 해당 언어 runner의 실제
-출력만 사용하고, 공통 message 계약으로 간주하지 않는다.
+언어별 runner는 위 공통 completion marker와 함께 §10.1이 정한 evidence를 모두 검사한다.
+
+### 10.1 Runner가 확인하는 evidence
+
+Runner는 아래 표의 문자열을 그대로 찾는다. 문자열은 언어별 재량이 아니다. 다섯 구현이 같은
+문자열을 같은 횟수로 출력해야 하며, 문구를 바꾸려면 이 표를 먼저 바꾼다. Node 이름은 `api-a`,
+`api-b`, `mission-a`, `mission-b`로 고정한다.
+
+**Evidence는 샘플이 소유한 문자열이어야 한다.** Framework가 찍는 줄(runtime readiness 로그,
+message flow tracer, structured trace 투영, process 기동 boilerplate)을 성공 기준으로 삼지 않는다.
+그 줄들은 framework 사정으로 바뀌고, 바뀌면 샘플 runner가 조용히 깨진다. 진단 목적으로 읽는
+것은 무방하나 완료 판정의 근거가 될 수 없다.
+
+Readiness는 client를 시작하기 전에 확인한다.
+
+| 확인하는 사실 | 로그 | 출력 node |
+| --- | --- | --- |
+| Mission node의 Instance factory가 준비됐다 | `gamequest-ready kind=instance-factory node=<NodeId>` | `mission-a`, `mission-b` |
+| Api node의 STREAM endpoint가 준비됐다 | `gamequest-ready kind=stream node=<NodeId>` | `api-a`, `api-b` |
+| Api node가 Mission spot mesh로 가는 route를 확보했다 | `gamequest-ready kind=spot-route node=<NodeId> mesh=<MeshName>` | `api-a`, `api-b` |
+
+**STREAM endpoint가 열렸다는 사실만으로 client를 시작하지 않는다.** `kind=stream`은 endpoint가
+listen한다는 것만 증명한다 — 그 시점에 Api node가 Mission spot mesh로 가는 route를 아직 못 잡았으면
+첫 `JoinSessionReq`가 remote actor 생성을 끝내지 못하고 죽는다. 세 번째 행이 그 구간을 덮는다.
+이 행이 없으면 route 수렴이 빠른 구현은 우연히 통과하고 느린 구현만 실패하는데, 그 차이를 고정
+sleep으로 메우는 것이 정확히 §10이 금지하는 일이다.
+
+Server evidence는 client scenario가 끝난 뒤 확인한다.
+
+| 확인하는 사실 | 로그 | 정확한 횟수 |
+| --- | --- | --- |
+| Api node가 client event를 라우팅했다 | `gamequest-api event-routed player=<PlayerId>` | 두 Api node 로그를 합쳐 4 이상 |
+| Mission node가 event를 처리했다 | `gamequest-mission processed player=<PlayerId> quest=<QuestId>` | 두 Mission node 로그를 합쳐 4 이상 |
+| reconcile이 결과를 만들었다(§9-7) | `gamequest-mission reconciled player=<PlayerId> quest=<QuestId>` | reconcile을 일으킨 **player마다** 1 |
+| owner close 뒤 새 generation이 replay했다(§9-8) | `gamequest-mission replayed player=<PlayerId> generation=<N>` | 1 |
+| Ready owner 종료 뒤 다음 호출이 `Unavailable`이었다(§9-9) | `gamequest-owner unavailable player=<PlayerId>` | 1 (**살아 있는 Api node가 출력한다**) |
+| 자동 replacement handler가 실행되지 않았다(§9-9) | `gamequest-owner replacement-handler-invoked player=<PlayerId>` | 0 (**두 Mission node 로그를 합쳐 센다**) |
+
+**앞의 두 행은 두 node 로그를 합쳐, 정확한 하한을 두고 센다.** 어느 node가 무엇을 처리하는지는
+확인 대상이 아니다 — Actor send handler는 stream이 도착한 node가 아니라 **actor가 사는 node에서**
+실행되고, 배치는 Framework가 정한다. 그래서 "각 node에서 따로 1건 이상"은 만족할 수 없는 요구다.
+
+다만 **두 로그 파일을 한 번의 검색에 함께 넘겨 "둘 중 하나라도 맞으면 통과"가 되게 하지 않는다.**
+`grep -q`에 파일 두 개를 넘기면 정확히 그렇게 동작한다. 합계를 세고 하한과 비교한다 — 그래야 한
+흐름이 통째로 사라졌을 때 걸린다.
+
+`unavailable` 행은 **죽은 Mission node가 찍을 수 없다.** 실패한 Spot send를 받아 낸 살아 있는
+Api node가 출력한다. `replacement-handler-invoked` 0회는 **두 Mission 로그를 합쳐** 세고
+`player=` 를 붙여야 뜻이 있다 — 그러지 않으면 "replacement가 없었다"와 "runner가 엉뚱한 파일을
+봤다"를 구분하지 못한다.
+
+**마지막 세 행은 그 상황을 실제로 만들어야 한다.**
+
+- §9-8은 `ClosePlayerQuestMsg` 뒤 다음 intent를 실행해야 성립한다. dotnet·java·kotlin은 이미 Mission
+  self-check endpoint로 그 message를 보낼 수 있다. node는 같은 자리에서 `ClosePlayerQuestReq/Res`를
+  쓰고 있고, cpp는 handler는 있으나 client에 노출된 통로가 없다 — 둘 다 **샘플 계약을 맞추면 되고
+  framework 변경은 필요 없다.**
+- §9-9는 Ready owner process를 강제 종료한 뒤 다음 gameplay call을 실행해야 성립한다. 새 endpoint나
+  message type 없이 기존 `KillMonsterReq`로 가능하지만, **runner가 owner-ready 표시를 읽어 그
+  Mission process를 특정해 죽이고 client를 그 뒤에 진행시키는 단계 제어가 필요하다.** §9-9는
+  §11이 완료 기준으로 요구하는 항목이다.
+
+그 단계를 실행하지 않으면 이 행들은 통과할 수 없으며, 통과하지 못하는 것이 맞다.
+
+완료 marker는 둘이며 client가 출력한다.
+
+| marker | 뜻 |
+| --- | --- |
+| `gamequest=completed` | §9 client self-check 전체 통과 |
+| `gamequest-server-evidence=completed` | server evidence 검증 통과 |
+
+**두 marker는 서로를 대신하지 않는다.** 한쪽만 출력하고 다른 쪽을 생략하지 않으며, runner는
+둘 다 직접 확인한다. Client 프로세스의 종료 코드나 browser 판정으로 대신하지 않는다.
+
+rehydrate·scale-out처럼 한 언어만 돌리던 단계는 별도 marker를 만들지 않는다. 그 단계가 증명하는
+사실은 위 표의 `replayed`·`processed` 행이 이미 담고 있다.
+
+Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
+적용하며 **`.sh`와 `.ps1`이 같은 값을 쓴다.** 대기 없이 한 번만 읽거나 고정 sleep 뒤 읽지 않는다.
+다섯 언어 모두 `.sh`와 `.ps1`을 함께 제공한다 — 지금 C++·Java에는 `.ps1`이 없다.
+
+모든 행이 통과하면 runner가 마지막에 `gamequest-placement=completed`를 출력한다. 한 행이라도
+실패하면 이 marker를 출력하지 않는다.
 
 ## 11. 완료 기준
 
@@ -541,4 +621,5 @@ rehydrate나 scale-out처럼 특정 runner가 별도로 출력하는 marker는 �
 - reconnect 뒤 session binding은 갱신되지만 player owner state는 유지된다.
 - Framework public API와 기본 typed JSON codec만 사용하며 raw frame, private runtime과
   message별 codec registry를 추가하지 않는다.
-- runner가 build, readiness, self-check, evidence와 cleanup을 수행한다.
+- runner가 build, readiness, self-check, cleanup을 수행하고 §10.1 표의 모든 행을 문자열과
+  횟수까지 통과시킨다.

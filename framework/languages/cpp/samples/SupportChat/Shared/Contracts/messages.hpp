@@ -699,34 +699,4 @@ inline void from_json (const nlohmann::json &json, typing_changed_notify_t &valu
     value.state = json.value ("state", conversation_state_t{});
 }
 
-/* Test/evidence-only HTTP assertion messages. The runner uses them to inspect server-owned
- * evidence; they are not a public SupportChat application API. */
-struct supportchat_server_assertion_req_t
-{
-};
-
-struct supportchat_server_assertion_res_t
-{
-    bool ok{false};
-    std::vector<std::string> evidence;
-};
-
-inline void to_json (nlohmann::json &json, const supportchat_server_assertion_req_t &)
-{
-    json = nlohmann::json::object ();
-}
-
-inline void from_json (const nlohmann::json &, supportchat_server_assertion_req_t &) {}
-
-inline void to_json (nlohmann::json &json, const supportchat_server_assertion_res_t &value)
-{
-    json = {{"ok", value.ok}, {"evidence", value.evidence}};
-}
-
-inline void from_json (const nlohmann::json &json, supportchat_server_assertion_res_t &value)
-{
-    value.ok = json.value ("ok", false);
-    value.evidence = json.value ("evidence", std::vector<std::string>{});
-}
-
 } // namespace zlink::samples::supportchat

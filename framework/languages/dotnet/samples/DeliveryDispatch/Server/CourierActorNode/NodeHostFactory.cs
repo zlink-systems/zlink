@@ -27,6 +27,13 @@ public static class NodeHostFactory
         builder.Services.AddSingleton(configuration);
         builder.Services.AddSingleton(topology);
         builder.Services.AddSingleton<ActorDirectory>();
+        var nodeId = configuration.Role.Name;
+        builder.Services.AddSingleton(new DeliveryDispatchReadiness(
+            DeliveryDispatchReadyKind.Route,
+            nodeId,
+            SampleNames.CourierMeshName,
+            RequiredReadyPeers: 0));
+        builder.Services.AddHostedService<DeliveryDispatchReadinessReporter>();
         builder.Services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(new ZLinkRedisLocationStore(redis =>

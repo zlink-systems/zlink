@@ -31,6 +31,7 @@ import systems.zlink.framework.spots.ZLinkSpotPacketHandler
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import systems.zlink.contracts.core.RoutingId
 import systems.zlink.samples.kotlin.gamequest.server.configuration.RedisSampleStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleNames
@@ -58,10 +59,12 @@ import systems.zlink.samples.kotlin.gamequest.shared.contracts.SyncQuestProgress
 fun main(args: Array<String>) {
     val app = Program.run(SampleTopology.configPath(args))
     val store = Program.store
+    val topology = app.getBean(SampleTopology::class.java)
+    println("gamequest-ready kind=instance-factory node=${topology.questMission().instanceName}")
     val http = startHttp(
         store,
         app.getBean(ZLinkRouteClient::class.java),
-        app.getBean(SampleTopology::class.java),
+        topology,
     )
     Runtime.getRuntime().addShutdownHook(Thread {
         http.stop(0)
@@ -98,7 +101,7 @@ class Program {
 
 
             options.addRouteMesh(SampleNames.PlayerQuestMesh)
-                .setRoutingIdPrefix("gamequest-mission-owner")
+                .setRoutingId(RoutingId.from("gamequest-mission-${mission.instanceName}"))
                 .listen(mission.channelEndpoint)
                 .objects().server()
                 .addInstanceSpotFactory(
@@ -166,7 +169,14 @@ class PlayerQuestSpot(
     override fun context(): ZLinkInstanceSpotContext = instanceContext
 
     override fun onInitialize(): CompletionStage<Void> {
-        store.markRehydrated(instanceContext.spotId())
+        val generation = store.markRehydrated(instanceContext.spotId())
+        if (generation > 1) {
+            println("gamequest-mission replayed player=${instanceContext.spotId()} generation=$generation")
+        }
+        println(
+            "gamequest-owner-ready player=${instanceContext.spotId()} " +
+                "node=${store.nodeName()} generation=$generation",
+        )
         return CompletableFuture.completedFuture(null)
     }
 
@@ -189,7 +199,11 @@ class GameplayMsgRouteHandler(
         spot: PlayerQuestSpot,
         request: GameplayMsg,
     ): CompletionStage<Void> {
-        actors.sendToActor(request.playerId, spot.apply(request)).submit()
+        val processed = spot.apply(request)
+        processed.projection.firstOrNull()?.let { progress ->
+            println("gamequest-mission processed player=${request.playerId} quest=${progress.questId}")
+        }
+        actors.sendToActor(request.playerId, processed).submit()
         return CompletableFuture.completedFuture(null)
     }
 }
@@ -253,7 +267,7 @@ class ClosePlayerQuestSpotHandler : ZLinkSpotPacketHandler<PlayerQuestSpot, Clos
     ): CompletionStage<Void> = spot.context().close().thenApply { null }
 }
 
-class QuestStore(topology: SampleTopology) : AutoCloseable {
+class QuestStore(private val topology: SampleTopology) : AutoCloseable {
     private val domain = QuestDomain()
     private val shared = RedisSampleStore(topology)
     private val projections = mutableMapOf<String, MutableList<QuestProgress>>()
@@ -326,6 +340,7 @@ class QuestStore(topology: SampleTopology) : AutoCloseable {
             events += reconciledEvent
             shared.writeProjection(playerId, projection)
             shared.appendQuestEvents(listOf(reconciledEvent))
+            println("gamequest-mission reconciled player=$playerId quest=${QuestIds.FirstHunt}")
         }
         return SyncQuestProgressRes(copyProjection(playerId))
     }
@@ -362,11 +377,13 @@ class QuestStore(topology: SampleTopology) : AutoCloseable {
     }
 
     @Synchronized
-    fun markRehydrated(playerId: String) {
+    fun markRehydrated(playerId: String): Long {
         restorePlayer(playerId)
         rehydrates.merge(playerId, 1, Int::plus)
-        shared.recordRehydrated(playerId)
+        return shared.recordRehydrated(playerId)
     }
+
+    fun nodeName(): String = topology.questMission().instanceName
 
     @Synchronized
     fun projection(playerId: String): List<QuestProgress> {

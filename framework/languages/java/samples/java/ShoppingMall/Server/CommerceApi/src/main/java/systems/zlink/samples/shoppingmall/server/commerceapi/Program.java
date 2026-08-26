@@ -8,6 +8,7 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import systems.zlink.contracts.core.RoutingId;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import org.springframework.boot.WebApplicationType;
@@ -20,6 +21,7 @@ import org.springframework.core.env.StandardEnvironment;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleLocationStore;
@@ -39,7 +41,10 @@ public final class Program {
 
     public static void main(String[] args) throws Exception {
         ConfigurableApplicationContext app = run(SampleTopology.configPath(args));
-        HttpServer http = startHttp(app.getBean(CommerceApiService.class), app.getBean(SampleTopology.class));
+        HttpServer http = startHttp(
+            app.getBean(CommerceApiService.class),
+            app.getBean(SampleTopology.class),
+            app.getBean(ZLinkRouteMeshRuntime.class));
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             http.stop(0);
             app.close();
@@ -67,7 +72,7 @@ public final class Program {
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addRouteMesh(SampleNames.OrderSpotDiscovery)
-                .setRoutingIdPrefix("shoppingmall-api")
+                .setRoutingId(RoutingId.from(api.instanceName()))
                 .listen()
                 .objects().client();
         };
@@ -88,14 +93,51 @@ public final class Program {
         return new CommerceApiService(store, routes, topology);
     }
 
-    private static HttpServer startHttp(CommerceApiService api, SampleTopology topology) throws IOException {
+    private static HttpServer startHttp(
+        CommerceApiService api,
+        SampleTopology topology,
+        ZLinkRouteMeshRuntime routeRuntime) throws IOException {
         ObjectMapper json = new ObjectMapper().findAndRegisterModules();
         URI uri = URI.create(topology.api().httpUrl());
         HttpServer server = HttpServer.create(new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
         server.createContext("/health", exchange -> writeJson(exchange, json, 200, new Health("ok")));
         server.createContext("/", exchange -> route(exchange, json, api));
         server.start();
+        System.out.println("shoppingmall-ready kind=http node=" + topology.api().instanceName());
+        startObjectRouteReadinessSignal(topology.api().instanceName(), routeRuntime);
         return server;
+    }
+
+    private static void startObjectRouteReadinessSignal(
+        String nodeId,
+        ZLinkRouteMeshRuntime routeRuntime) {
+        Thread readiness = new Thread(() -> {
+            for (int attempt = 0; attempt < 300; attempt++) {
+                try {
+                    var mesh = routeRuntime.snapshot(SampleNames.OrderSpotDiscovery);
+                    boolean ready = mesh.isReady() && mesh.peers().stream()
+                        .filter(peer -> peer.state().name().equals("READY"))
+                        .count() >= 2;
+                    if (ready) {
+                        System.out.println("shoppingmall-ready kind=object-route node=" + nodeId
+                            + " target=workflow-a");
+                        System.out.println("shoppingmall-ready kind=object-route node=" + nodeId
+                            + " target=workflow-b");
+                        return;
+                    }
+                } catch (RuntimeException ignored) {
+                    // The framework is still starting; the next passive snapshot retries it.
+                }
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }, "shoppingmall-object-route-readiness-" + nodeId);
+        readiness.setDaemon(true);
+        readiness.start();
     }
 
     private static void route(

@@ -206,6 +206,13 @@ flow identifiers on outbound frames, removing the observation-only cost
 The correlation used for request/response matching is protocol information and keeps
 working at `off`.
 
+```typescript
+const options = {
+    endpoint: 'ws://game.example.com:9100',
+    diagnosticsLevel: ZlinkStreamDiagnosticsLevel.Off,
+};
+```
+
 ## 6. Client Send And Request
 
 ```typescript

@@ -1,5 +1,6 @@
 using ShoppingMall.Client.Configuration;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 using Zlink.HttpClient;
 using Zlink.Samples.Logging;
 
@@ -21,7 +22,11 @@ internal static class Program
             .Timeout(SampleTimings.HttpTimeout)
             .Build();
 
-        await new ShoppingMallClientScenario().RunAsync(apiA, apiB, CancellationToken.None);
+        var orders = await new ShoppingMallClientScenario().RunAsync(apiA, apiB, CancellationToken.None);
+        await File.WriteAllTextAsync(
+            Path.Combine(configuration.LogDirectory, "shoppingmall-client-orders.json"),
+            JsonSerializer.Serialize(orders),
+            CancellationToken.None);
         logger.LogInformation("shoppingmall=completed");
     }
 }

@@ -54,6 +54,7 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
       const previous = this.offers.get(request.deliveryId);
       if (previous !== undefined) this.saveStatus(previous, 'Failed');
       await this.publishStatus(deliveryStatusChanged(request.deliveryId, request.customerId, 'Failed'));
+      console.log(`deliverydispatch-dispatch failed delivery=${request.deliveryId} reason=candidates-exhausted`);
       return;
     }
     const courierId = courierCandidates[attempt - 1];
@@ -90,8 +91,8 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
       current.attempt !== result.attempt ||
       current.courierId !== result.courierId
     ) {
-      console.error(
-        `deliverydispatch dispatch: ignored stale decision delivery=${result.deliveryId} `
+      console.log(
+        `deliverydispatch-dispatch stale-decision-ignored delivery=${result.deliveryId} `
         + `courier=${result.courierId} attempt=${result.attempt}`
       );
       return;

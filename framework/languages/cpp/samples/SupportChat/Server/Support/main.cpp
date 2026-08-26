@@ -2,6 +2,7 @@
 
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
+#include "../Configuration/sample_readiness.hpp"
 #include "Application/ConversationAssignment/agent_assignment_service.hpp"
 #include "Domain/SupportChat/conversation.hpp"
 
@@ -370,10 +371,12 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         }
         auto transition = _conversation->advance_time (now_unix_ms ());
         if (const auto *idle = std::get_if<conversation_idle_notify_t> (&transition)) {
+            report_status (idle->state);
             co_await broadcast (*idle, conversation_idle_notify_t::packet_name);
         }
         if (const auto *closed = std::get_if<conversation_closed_notify_t> (&transition)) {
             _runtime.release_conversation (closed->conversation_id);
+            report_status (closed->state);
             co_await broadcast (*closed, conversation_closed_notify_t::packet_name);
         }
         co_return;
@@ -384,8 +387,12 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         auto create = request.decode<conversation_create_req_t> ();
         _conversation =
           conversation_t (_context.spot_id (), create.subject, create.customer_actor_id);
+        const auto state = _conversation->snapshot ();
+        std::cout << "supportchat-conversation created conversation=" << state.conversation_id
+                  << std::endl;
+        report_status (state);
         co_return spot_create_response_t::accept (
-          conversation_create_res_t{_conversation->snapshot ()});
+          conversation_create_res_t{state});
     }
 
     task_t<spot_actor_join_result_t>
@@ -448,8 +455,12 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
                                                   message_context_t &,
                                                   const send_chat_message_req_t &request)
     {
+        const auto previous = require_conversation ().snapshot ();
         auto sent =
           require_conversation ().send_message (actor.participant_id, request.text, now_unix_ms ());
+        if (sent.state.status != previous.status) {
+            report_status (sent.state);
+        }
         if (auto peer = peer_for (actor.participant_id)) {
             co_await send_to_actor (
               *peer, chat_message_notify_t{sent.state.conversation_id, sent.message, sent.state},
@@ -478,6 +489,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         (void) request;
         auto closed = require_conversation ().close ();
         _runtime.release_conversation (closed.state.conversation_id);
+        report_status (closed.state);
         /* 종료 알림은 대화의 모든 참가자가 받는다(공통 sample spec §14). */
         co_await broadcast (
           conversation_closed_notify_t{closed.state.conversation_id, closed.state},
@@ -486,6 +498,12 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
     }
 
   private:
+    static void report_status (const conversation_state_t &state)
+    {
+        std::cout << "supportchat-conversation status=" << state.status
+                  << " conversation=" << state.conversation_id << std::endl;
+    }
+
     task_t<join_conversation_res_t> join_actor (support_user_actor_t &actor)
     {
         if (actor.participant_id.empty ()) {
@@ -494,6 +512,9 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         if (actor.role == role_t::agent) {
             auto joined =
               require_conversation ().join_agent (actor.participant_id, actor.display_name);
+            std::cout << "supportchat-conversation agent-joined conversation="
+                      << joined.conversation_id << " agent=" << actor.participant_id << std::endl;
+            report_status (joined.state);
             co_await broadcast (participant_joined_notify_t{joined.conversation_id,
                                                             actor.participant_id, actor.role,
                                                             joined.state},
@@ -834,153 +855,6 @@ class ensure_agent_conversation_handler_t
     supportchat_conversation_runtime_t &_runtime;
 };
 
-class supportchat_server_story_t
-{
-  public:
-    supportchat_server_assertion_res_t run ()
-    {
-        _evidence.clear ();
-        agent_availability_directory_t agents (2);
-        agent_assignment_service_t assignment (agents);
-        assignment.set_available ("agent-1", "Agent One", true);
-        record ("agent-availability=registered");
-
-        auto room1 = open_conversation ("supportchat-conversation-1", "checkout payment failed",
-                                        "customer-1", assignment);
-        auto room2 = open_conversation ("supportchat-conversation-2", "cannot log in", "customer-2",
-                                        assignment);
-        require (room1.snapshot ().agent_actor_id == std::optional<std::string>{"agent-1"},
-                 "room1 assigned agent mismatch");
-        require (room2.snapshot ().agent_actor_id == std::optional<std::string>{"agent-1"},
-                 "room2 assigned agent mismatch");
-        record ("one-agent-many-conversations=verified");
-
-        const auto room1_join = room1.join_agent ("agent-1", "Agent One");
-        const auto room2_join = room2.join_agent ("agent-1", "Agent One");
-        require (room1_join.state.status == conversation_status_t::active,
-                 "room1 did not activate");
-        require (room2_join.state.status == conversation_status_t::active,
-                 "room2 did not activate");
-        record ("agent-join=verified");
-
-        const auto greet1 = room1.send_message ("agent-1", "How can I help?", 1000);
-        const auto reply1 = room1.send_message ("customer-1", "Payment keeps failing.", 1200);
-        const auto greet2 = room2.send_message ("agent-1", "Let me check your account.", 1300);
-        require (greet1.message.message_seq == 1 && reply1.message.message_seq == 2,
-                 "room1 sequence mismatch");
-        require (greet2.message.message_seq == 1, "room2 sequence did not start at 1");
-        record ("conversation-sequence=verified");
-
-        const auto typing = room1.set_typing ("agent-1", true);
-        require (typing.is_typing && typing.actor_id == "agent-1", "typing event mismatch");
-        record ("typing-one-way=verified");
-
-        const auto rejoin = room1.join_customer ("customer-1", "Customer One");
-        require (rejoin.state.last_message_seq == 2, "reconnect state did not preserve messages");
-        record ("reconnect-state=verified");
-
-        const auto room1_idle_deadline = room1.snapshot ().idle_deadline_unix_ms;
-        require (room1_idle_deadline.has_value (), "active conversation has no idle deadline");
-        const auto idle1 = room1.advance_time (*room1_idle_deadline);
-        const auto *idle_notify = std::get_if<conversation_idle_notify_t> (&idle1);
-        require (idle_notify != nullptr
-                   && idle_notify->state.status == conversation_status_t::waiting_for_close,
-                 "idle did not move to WaitingForClose");
-        const auto resumed = room1.send_message (
-          "customer-1", "The customer resumed the conversation.", *room1_idle_deadline + 1);
-        require (resumed.message.message_seq == 3
-                   && resumed.state.status == conversation_status_t::active,
-                 "idle conversation did not resume within grace");
-        record ("idle-resume=verified");
-
-        const auto closed2 = room2.close ();
-        require (closed2.state.status == conversation_status_t::closed,
-                 "explicit close did not close room2");
-        bool duplicate_close_failed = false;
-        try {
-            (void) room2.send_message ("customer-2", "again", 1400);
-        }
-        catch (const std::logic_error &) {
-            duplicate_close_failed = true;
-        }
-        require (duplicate_close_failed, "closed room accepted a message");
-        (void) room2.set_typing ("customer-2", true);
-        record ("closed-typing-ignore=verified");
-        record ("explicit-close=verified");
-
-        const auto room1_state = room1.snapshot ();
-        require (room1_state.idle_deadline_unix_ms.has_value (),
-                 "active conversation has no idle deadline");
-        const auto idle_again = room1.advance_time (*room1_state.idle_deadline_unix_ms);
-        require (std::get_if<conversation_idle_notify_t> (&idle_again) != nullptr,
-                 "resumed conversation did not reach idle again");
-        const auto closed1 =
-          room1.advance_time (*room1_state.idle_deadline_unix_ms + conversation_t::close_grace_ms);
-        const auto *closed_notify = std::get_if<conversation_closed_notify_t> (&closed1);
-        require (closed_notify != nullptr
-                   && closed_notify->state.status == conversation_status_t::closed,
-                 "idle close did not close room1");
-        record ("idle-close=verified");
-
-        auto no_agent = open_conversation ("supportchat-conversation-3", "agent unavailable",
-                                           "customer-3", assignment);
-        require (!no_agent.snapshot ().agent_actor_id
-                   && no_agent.snapshot ().status == conversation_status_t::waiting_for_agent,
-                 "no-agent conversation did not wait");
-        record ("no-agent-waiting=verified");
-
-        return {.ok = true, .evidence = _evidence};
-    }
-
-  private:
-    conversation_t open_conversation (const std::string &conversation_id,
-                                      const std::string &subject,
-                                      const std::string &customer_id,
-                                      agent_assignment_service_t &assignment)
-    {
-        conversation_t conversation (conversation_id, subject, customer_id);
-        const auto customer_join = conversation.join_customer (customer_id, customer_id);
-        require (customer_join.state.status == conversation_status_t::waiting_for_agent,
-                 "customer join state mismatch");
-        if (auto agent = assignment.assign_for_conversation (conversation_id)) {
-            const auto assigned = conversation.assign_agent (agent->roster_actor_id);
-            require (assigned.state.agent_actor_id == agent->roster_actor_id,
-                     "assigned agent mismatch");
-        }
-        record ("open:" + conversation_id + ":" + conversation.snapshot ().status);
-        return conversation;
-    }
-
-    void record (std::string entry) { _evidence.push_back (std::move (entry)); }
-
-    static void require (bool condition, const std::string &message)
-    {
-        if (!condition) {
-            throw std::logic_error (message);
-        }
-    }
-
-    std::vector<std::string> _evidence;
-};
-
-class supportchat_assert_handler_t
-{
-  public:
-    using dependency_types = zlink::framework::dependency_list_t<supportchat_server_story_t>;
-    using request_type = supportchat_server_assertion_req_t;
-    using reply_type = supportchat_server_assertion_res_t;
-
-    explicit supportchat_assert_handler_t (supportchat_server_story_t &story) : _story (story) {}
-
-    supportchat_server_assertion_res_t handle (const supportchat_server_assertion_req_t &)
-    {
-        return _story.run ();
-    }
-
-  private:
-    supportchat_server_story_t &_story;
-};
-
 } // namespace zlink::samples::supportchat
 
 int main (int argc, char **argv)
@@ -988,8 +862,6 @@ int main (int argc, char **argv)
     using namespace zlink::framework;
     using namespace zlink::samples::supportchat;
 
-    /* dispatch 로그는 framework message-flow가 남긴다(공통 sample spec §5). 샘플이 직접
-     * "message flow" 줄을 쓰지 않는다. */
     auto app = app_t::create ();
     const auto configuration = load_sample_configuration (app, argc, argv);
     const auto &topology = configuration.topology;
@@ -1005,7 +877,6 @@ int main (int argc, char **argv)
       .set_connection_string (topology.redis_endpoint)
       .set_key_prefix (topology.redis_key_prefix + "relocation:");
     options.services ().add_singleton<supportchat_conversation_runtime_t> ();
-    options.services ().add_singleton<supportchat_server_story_t> ();
     options.add_client_server_channel ("supportchat.support")
       .server ()
       .set_bind_host (host_from_tcp_endpoint (topology.support_route_endpoint))
@@ -1019,8 +890,7 @@ int main (int argc, char **argv)
       .add<ensure_agent_conversation_handler_t> ();
     options.http ()
       .listen (topology.support_http_url)
-      .map_health ("/health")
-      .map_post<supportchat_assert_handler_t> ("/self-check/assert");
+      .map_health ("/health");
     auto support_spot = options.add_route_mesh (sample_names_t::mesh);
     support_spot.set_routing_id (zlink::routing_id_t::from ("supportchat-support"));
     support_spot.listen (topology.support_spot_router_endpoint);
@@ -1033,5 +903,7 @@ int main (int argc, char **argv)
       .add_actor_factory<support_user_actor_t, support_user_actor_factory_t> (
         support_user_actor_type)
       .preserve_state_with<support_user_actor_relocation_adapter_t> ();
+    app.add_hosted_service (
+      std::make_unique<sample_readiness_service_t> ("public", "support"));
     return app.run (argc, argv);
 }

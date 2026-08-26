@@ -59,10 +59,14 @@ ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kt
 pids=()
 redis_container_id=""
 log_dir="build/sample-logs"
+# Graceful-shutdown verification in runner-common.sh needs the role log list; without it the
+# cleanup hook fails with "Framework role logs are not configured for this sample".
 ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="tracking.log customer-gateway.log courier-session.log courier-node1.log courier-node2.log dispatch.log"
 state_dir="$(pwd)/build/sample-state"
 flow_log_dir="$(pwd)/logs"
 config_dir="build/sample-config"
+readonly log_wait_attempts=300
+readonly log_wait_interval=0.1
 export ZLINK_JAVA_STREAM_TRACE="${ZLINK_JAVA_STREAM_TRACE:-1}"
 mkdir -p "${log_dir}" "${flow_log_dir}" "${config_dir}"
 rm -f "${log_dir}"/*.log
@@ -80,6 +84,31 @@ print_logs() {
     echo "===== ${log} =====" >&2
     tail -n 200 "${log}" >&2 || true
   done
+}
+
+log_count() {
+  local evidence="$1"
+  shift
+  { grep -Fh -- "${evidence}" "$@" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'
+}
+
+wait_log_count() {
+  local expected="$1" evidence="$2"
+  shift 2
+  local actual
+  for _ in $(seq 1 "${log_wait_attempts}"); do
+    actual="$(log_count "${evidence}" "$@")"
+    if [[ "${actual}" == "${expected}" ]]; then
+      return 0
+    fi
+    if (( actual > expected )); then
+      echo "Expected ${expected} matches for '${evidence}' in $*, found ${actual}." >&2
+      return 1
+    fi
+    sleep "${log_wait_interval}"
+  done
+  echo "Timed out waiting for ${expected} matches for '${evidence}' in $*." >&2
+  return 1
 }
 
 trap cleanup EXIT
@@ -180,21 +209,29 @@ wait_port "$(endpoint_host "${courier_node2_spot}")" "$(endpoint_port "${courier
 pids+=("$!")
 wait_port "$(endpoint_host "${dispatch_http}")" "$(endpoint_port "${dispatch_http}")"
 wait_port "$(endpoint_host "${dispatch_spot}")" "$(endpoint_port "${dispatch_spot}")"
-wait_framework_ready_logs "${log_dir}" 1
-wait_framework_peer_ready_counts "${log_dir}" \
-  "tracking.log:1" \
-  "customer-gateway.log:1" \
-  "courier-session.log:2" \
-  "courier-node1.log:3" \
-  "courier-node2.log:3" \
-  "dispatch.log:2"
+wait_log_count 1 "deliverydispatch-ready kind=route node=tracking" "${log_dir}/tracking.log"
+wait_log_count 1 "deliverydispatch-ready kind=route node=customer-gateway" "${log_dir}/customer-gateway.log"
+wait_log_count 1 "deliverydispatch-ready kind=route node=courier-session" "${log_dir}/courier-session.log"
+wait_log_count 1 "deliverydispatch-ready kind=route node=courier-node-1" "${log_dir}/courier-node1.log"
+wait_log_count 1 "deliverydispatch-ready kind=route node=courier-node-2" "${log_dir}/courier-node2.log"
+wait_log_count 1 "deliverydispatch-ready kind=route node=dispatch" "${log_dir}/dispatch.log"
+wait_log_count 1 "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-1" "${log_dir}/dispatch.log"
+wait_log_count 1 "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2" "${log_dir}/dispatch.log"
 
-echo "topology=ready"
 "$(app_bin Client Client)" --config "$client_config" >"${log_dir}/client.log" 2>&1
 cat "${log_dir}/client.log"
 
-grep -q "deliverydispatch-reassignment=completed" "${log_dir}/client.log"
-grep -q "deliverydispatch-server-evidence=completed" "${log_dir}/client.log"
-grep -q "deliverydispatch=completed" "${log_dir}/client.log"
+wait_log_count 1 "deliverydispatch-reassignment=completed" "${log_dir}/client.log"
+wait_log_count 1 "deliverydispatch-server-evidence=completed" "${log_dir}/client.log"
+wait_log_count 1 "deliverydispatch=completed" "${log_dir}/client.log"
+wait_log_count 1 "deliverydispatch-courier bound courier=courier-a" "${log_dir}/courier-session.log"
+wait_log_count 1 "deliverydispatch-courier bound courier=courier-b" "${log_dir}/courier-session.log"
+wait_log_count 1 "deliverydispatch-courier bind-relayed courier=courier-a" "${log_dir}"/courier-node*.log
+wait_log_count 1 "deliverydispatch-courier bind-relayed courier=courier-b" "${log_dir}"/courier-node*.log
+wait_log_count 1 "deliverydispatch-customer bound customer=customer-1" "${log_dir}/customer-gateway.log"
+wait_log_count 2 "deliverydispatch-customer pushed status=Delivered" "${log_dir}/customer-gateway.log"
+wait_log_count 2 "deliverydispatch-tracking status=Delivered" "${log_dir}/tracking.log"
+wait_log_count 1 "deliverydispatch-dispatch stale-decision-ignored delivery=delivery-reassign courier=courier-a attempt=1" "${log_dir}/dispatch.log"
+wait_log_count 1 "deliverydispatch-dispatch failed delivery=delivery-exhausted reason=candidates-exhausted" "${log_dir}/dispatch.log"
 
-echo "deliverydispatch full client/server self-check completed"
+echo "deliverydispatch-placement=completed"

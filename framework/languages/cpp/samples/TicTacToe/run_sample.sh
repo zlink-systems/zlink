@@ -148,6 +148,25 @@ wait_any_grep() {
   grep -q "$pattern" "$@"
 }
 
+log_count() {
+  local evidence="$1"
+  shift
+  { grep -Fh -- "${evidence}" "$@" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'
+}
+
+wait_log_count() {
+  local expected="$1" evidence="$2"
+  shift 2
+  for _ in $(seq 1 300); do
+    if [[ "$(log_count "${evidence}" "$@")" == "${expected}" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for ${expected} '${evidence}'" >&2
+  return 1
+}
+
 RUN_DIR="$(mktemp -d)"
 LOG_DIR="$RUN_DIR/logs"
 FLOW_LOG_DIR="$RUN_DIR/flow-logs"
@@ -327,10 +346,12 @@ wait_port api-b-channel "$API_B_ENDPOINT"
 wait_port api-b-http "$API_B_HTTP_ENDPOINT"
 wait_port api-b-object-route "$API_B_ROUTE_ENDPOINT"
 
-wait_grep "tictactoe play route ready node=a peer=tictactoe-play-b" "$LOG_DIR/play-a.stdout.log"
-wait_grep "tictactoe play route ready node=b peer=tictactoe-play-a" "$LOG_DIR/play-b.stdout.log"
-wait_grep "tictactoe play api channel ready node=a" "$LOG_DIR/play-a.stdout.log"
-wait_grep "tictactoe play api channel ready node=b" "$LOG_DIR/play-b.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=peer-route node=play-a peer=play-b" "$LOG_DIR/play-a.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=peer-route node=play-b peer=play-a" "$LOG_DIR/play-b.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=http node=api-a" "$LOG_DIR/api-a.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=http node=api-b" "$LOG_DIR/api-b.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" "$LOG_DIR/api-a.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" "$LOG_DIR/api-b.stdout.log"
 
 wait_route_ready() {
   local target_rid="$1"
@@ -358,22 +379,22 @@ wait_route_ready "tictactoe-play-b"
   exit 1
 }
 
-wait_grep "observer-connected endpoint=tcp://127.0.0.1:" "$LOG_DIR/client.stdout.log"
-wait_grep "observer-subscription=verified subscribed=true" "$LOG_DIR/client.stdout.log"
-wait_grep "observer-win-milestone=verified actor=player-x wins=100" "$LOG_DIR/client.stdout.log"
-wait_grep "tictactoe completed" "$LOG_DIR/client.stdout.log"
-grep -q "stream-inbound sample=TicTacToe" "$LOG_DIR/client.stdout.log"
-grep -Eq "stream-inbound sample=TicTacToe .* seq=[0-9]" "$LOG_DIR/client.stdout.log"
-wait_grep "tictactoe=completed" "$LOG_DIR/client.stdout.log"
-wait_any_grep "actor: LeaveGameMsg completed. actor=player-x" "$LOG_DIR"/play-*.stdout.log
-wait_any_grep "actor: LeaveGameMsg completed. actor=player-o" "$LOG_DIR"/play-*.stdout.log
-wait_any_grep "entry spot: actor destroy completed. actor=player-x" "$LOG_DIR"/play-*.stdout.log
-wait_any_grep "entry spot: actor destroy completed. actor=player-o" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "observer-connected endpoint=${PLAY_B_STREAM_ENDPOINT}" "$LOG_DIR/client.stdout.log"
+wait_log_count 1 "observer-subscription=verified subscribed=true" "$LOG_DIR/client.stdout.log"
+wait_log_count 1 "observer-win-milestone=verified actor=player-x wins=100" "$LOG_DIR/client.stdout.log"
+wait_log_count 1 "reconnected-game-state=verified actor=player-x room=" "$LOG_DIR/client.stdout.log"
+wait_log_count 1 "tictactoe=completed" "$LOG_DIR/client.stdout.log"
+wait_log_count 1 "tictactoe-lifecycle actor-bound actor=player-x" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-x" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-o" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-x" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-o" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 0 "tictactoe-lifecycle actor-destroy-complete actor=observer" "$LOG_DIR"/play-*.stdout.log
 grep -Rq "packet=LeaveGameMsg" "$FLOW_LOG_DIR"
 grep -Rq "message flow" "$FLOW_LOG_DIR"
 
 cleanup
 trap - EXIT
 
-echo "PASS TicTacToe.Cpp"
-echo "tictactoe full client/server self-check completed"
+# full client/server self-check completed
+echo "tictactoe-placement=completed"

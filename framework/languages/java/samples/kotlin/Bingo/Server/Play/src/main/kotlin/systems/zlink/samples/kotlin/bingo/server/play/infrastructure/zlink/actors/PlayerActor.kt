@@ -2,6 +2,7 @@ package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.acto
 
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
+import org.slf4j.LoggerFactory
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.framework.actors.ZLinkActor
@@ -12,6 +13,8 @@ class PlayerActor(
     private val actorId: String,
     private val context: ZLinkActorContext,
 ) : ZLinkActor {
+    private val logger = LoggerFactory.getLogger(PlayerActor::class.java)
+
     var displayName: String = actorId
         private set
     var roomId: String = ""
@@ -61,6 +64,7 @@ class PlayerActor(
             matchedRoomId = joined.state.roomId
         }
         joinRoom(matchedRoomId.orEmpty())
+        logger.info("bingo-lifecycle entry-leave actor={}", actorId)
         return CompletableFuture.completedFuture(null)
     }
 

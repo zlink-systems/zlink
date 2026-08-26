@@ -11,6 +11,9 @@ RUN_DIR=""
 LOG_DIR=""
 REDIS_CONTAINER=""
 pids=()
+declare -A role_pids
+readonly WAIT_ATTEMPTS=300
+readonly WAIT_INTERVAL_SECONDS=0.1
 
 on_exit() {
   local status="$?"
@@ -74,6 +77,8 @@ mission_b_config="$RUN_DIR/mission-b.properties"
 api_a_config="$RUN_DIR/api-a.properties"
 api_b_config="$RUN_DIR/api-b.properties"
 client_config="$RUN_DIR/client.properties"
+control_dir="$RUN_DIR/control"
+mkdir -p "$control_dir"
 write_role_config "$mission_a_config" mission-a channelEndpoint "$mission_a_channel" "$mission_a_http"
 write_role_config "$mission_b_config" mission-b channelEndpoint "$mission_b_channel" "$mission_b_http"
 write_role_config "$api_a_config" api-a streamEndpoint "$api_a_stream" "$api_a_http"
@@ -85,6 +90,7 @@ sample.apiAHttpEndpoint=${api_a_http}
 sample.apiBHttpEndpoint=${api_b_http}
 sample.missionAHttpEndpoint=${mission_a_http}
 sample.missionBHttpEndpoint=${mission_b_http}
+sample.controlDirectory=${control_dir}
 EOF
 chmod 0600 "$mission_a_config" "$mission_b_config" "$api_a_config" "$api_b_config" "$client_config"
 
@@ -102,6 +108,93 @@ start_role() {
   local name="$1" binary="$2" config="$3"
   "$binary" --config "$config" >"$LOG_DIR/$name.log" 2>&1 &
   pids+=("$!")
+  role_pids["$name"]="$!"
+}
+
+wait_for_line() {
+  local log="$1" line="$2"
+  local attempt
+  for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do
+    if grep -qF -- "$line" "$log"; then
+      return
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+  echo "Timed out waiting for sample evidence '$line' in $log" >&2
+  return 1
+}
+
+wait_for_min_count() {
+  local log="$1" line="$2" minimum="$3"
+  local attempt count
+  for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do
+    count=$(grep -cF -- "$line" "$log" || true)
+    if (( count >= minimum )); then
+      return
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+  echo "Timed out waiting for $minimum sample evidence rows '$line' in $log" >&2
+  return 1
+}
+
+wait_for_min_total() {
+  local minimum="$1" line="$2"
+  shift 2
+  local attempt file count matches
+  for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do
+    count=0
+    for file in "$@"; do
+      matches=$(grep -cF -- "$line" "$file" || true)
+      ((count += matches)) || true
+    done
+    if (( count >= minimum )); then
+      return
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+  echo "Timed out waiting for at least $minimum sample evidence rows '$line'" >&2
+  return 1
+}
+
+wait_for_exact_total() {
+  local expected="$1" line="$2"
+  shift 2
+  local attempt file count matches
+  for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do
+    count=0
+    for file in "$@"; do
+      matches=$(grep -cF -- "$line" "$file" || true)
+      ((count += matches)) || true
+    done
+    if (( count == expected )); then
+      return
+    fi
+    if (( count > expected )); then
+      echo "Found $count sample evidence rows '$line'; expected $expected" >&2
+      return 1
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+  echo "Timed out waiting for exactly $expected sample evidence rows '$line'" >&2
+  return 1
+}
+
+wait_for_replayed_owner() {
+  local attempt
+  for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do
+    if grep -qF -- "gamequest-mission replayed player=player-alice generation=" "$LOG_DIR/mission-a.log"; then
+      printf '%s' mission-a
+      return
+    fi
+    if grep -qF -- "gamequest-mission replayed player=player-alice generation=" "$LOG_DIR/mission-b.log"; then
+      printf '%s' mission-b
+      return
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+  echo "Timed out waiting for the replayed player-alice owner" >&2
+  return 1
 }
 
 start_role mission-a "$(app_bin Server/QuestMission QuestMission)" "$mission_a_config"
@@ -118,17 +211,46 @@ wait_port "$api_b_stream"
 wait_http "$api_a_http"
 wait_http "$api_b_http"
 
-wait_framework_ready_logs "$LOG_DIR" 1
-wait_framework_peer_ready_counts \
-  "$LOG_DIR" \
-  mission-a.log:3 \
-  mission-b.log:3 \
-  api-a.log:3 \
-  api-b.log:3
+wait_for_line "$LOG_DIR/mission-a.log" "gamequest-ready kind=instance-factory node=mission-a"
+wait_for_line "$LOG_DIR/mission-b.log" "gamequest-ready kind=instance-factory node=mission-b"
+wait_for_line "$LOG_DIR/api-a.log" "gamequest-ready kind=stream node=api-a"
+wait_for_line "$LOG_DIR/api-b.log" "gamequest-ready kind=stream node=api-b"
+wait_for_line "$LOG_DIR/api-a.log" "gamequest-ready kind=spot-route node=api-a mesh=gamequest.player-quests"
+wait_for_line "$LOG_DIR/api-b.log" "gamequest-ready kind=spot-route node=api-b mesh=gamequest.player-quests"
 
 echo "topology=ready"
-"$(app_bin Client Client)" --config "$client_config" >"$LOG_DIR/client.log" 2>&1
+"$(app_bin Client Client)" --config "$client_config" >"$LOG_DIR/client.log" 2>&1 &
+client_pid="$!"
+pids+=("$client_pid")
+wait_for_line "$LOG_DIR/client.log" "gamequest-owner-termination-ready player=player-alice"
+owner_role="$(wait_for_replayed_owner)"
+owner_pid="${role_pids[$owner_role]}"
+kill -KILL "$owner_pid"
+remaining_pids=()
+for pid in "${pids[@]}"; do
+  [[ "$pid" == "$owner_pid" ]] || remaining_pids+=("$pid")
+done
+pids=("${remaining_pids[@]}")
+if [[ "$owner_role" == mission-a ]]; then
+  ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="mission-b.log api-a.log api-b.log"
+else
+  ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="mission-a.log api-a.log api-b.log"
+fi
+touch "$control_dir/owner-terminated"
+wait "$client_pid"
 cat "$LOG_DIR/client.log"
-grep -q "gamequest-server-evidence=completed" "$LOG_DIR/client.log"
-grep -q "gamequest=completed" "$LOG_DIR/client.log"
-echo "gamequest kotlin full client/server self-check completed"
+wait_for_line "$LOG_DIR/client.log" "gamequest=completed"
+wait_for_line "$LOG_DIR/client.log" "gamequest-server-evidence=completed"
+wait_for_min_total 4 "gamequest-api event-routed player=" \
+  "$LOG_DIR/api-a.log" "$LOG_DIR/api-b.log"
+wait_for_min_total 4 "gamequest-mission processed player=" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+wait_for_exact_total 1 "gamequest-mission reconciled player=player-alice quest=first-hunt" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+wait_for_exact_total 1 "gamequest-mission replayed player=player-alice generation=" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+wait_for_exact_total 1 "gamequest-owner unavailable player=player-alice" \
+  "$LOG_DIR/api-a.log" "$LOG_DIR/api-b.log"
+wait_for_exact_total 0 "gamequest-owner replacement-handler-invoked player=player-alice" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+echo "gamequest-placement=completed"

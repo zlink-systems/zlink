@@ -27,8 +27,8 @@ public sealed class SampleTopologyOptions
         var tracking = role == "tracking";
         var customer = role == "customer-gateway";
         var courierSession = role == "courier-session";
-        var courierNode1 = role == "courier-actor-node1";
-        var courierNode2 = role == "courier-actor-node2";
+        var courierNode1 = role == SampleNames.CourierNode1;
+        var courierNode2 = role == SampleNames.CourierNode2;
         if (!dispatch && !tracking && !customer && !courierSession && !courierNode1 && !courierNode2)
             throw new InvalidOperationException($"Unknown DeliveryDispatch server role '{role}'.");
         return new SampleTopology(

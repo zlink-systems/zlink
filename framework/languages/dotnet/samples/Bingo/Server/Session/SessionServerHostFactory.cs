@@ -52,9 +52,11 @@ public static class SessionServerHostFactory
                 .EnableActorDispatch()
                 .AddSession<BingoSession>();
         });
-        builder.Services.AddSingleton(new BingoMeshStatusReport(
-            "session",
-            SampleNames.PlayMeshName));
+        builder.Services.AddSingleton(new BingoReadyReport(
+            BingoReadyKind.MeshRoute,
+            $"session-{nodeName}",
+            SampleNames.PlayMeshName,
+            "room"));
         builder.Services.AddHostedService<BingoMeshStatusReporter>();
         return builder.Build();
     }

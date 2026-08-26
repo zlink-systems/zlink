@@ -8,17 +8,21 @@ import { EvidenceStore } from '../Configuration/evidence-store';
 import { DELIVERYDISPATCH_SAMPLE_CONFIG } from '../Configuration/sample-config';
 import { closeNestRuntime, observeDeliveryRouteReadiness, waitForShutdown } from '../runtime-support';
 import type { DeliveryDispatchServerConfig } from '../Configuration/sample-config';
-import { SampleNames } from '../../Shared/Configuration/sample-names';
+import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 
 async function bootstrap(): Promise<void> {
   const center = await NestFactory.createApplicationContext(createDispatchCenterModule(), {
     logger: false,
     abortOnError: false
   });
-  observeDeliveryRouteReadiness(center.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME), SampleNames.courierMeshName, 'dispatch');
+  observeDeliveryRouteReadiness(
+    center.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME),
+    SampleNames.courierMeshName,
+    DeliveryDispatchNodeIds.dispatch,
+    [DeliveryDispatchNodeIds.courierNode1, DeliveryDispatchNodeIds.courierNode2]
+  );
   const config = center.get<DeliveryDispatchServerConfig>(DELIVERYDISPATCH_SAMPLE_CONFIG);
   const server = await startDispatchApi(center, config, new EvidenceStore(config.workDir));
-  process.stdout.write(`${JSON.stringify({ event: 'ready', role: 'dispatch' })}\n`);
   try {
     await waitForShutdown();
   } finally {

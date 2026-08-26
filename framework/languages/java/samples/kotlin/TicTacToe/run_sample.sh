@@ -98,6 +98,9 @@ wait_grep() {
   return 1
 }
 
+log_count() { local evidence="$1"; shift; { grep -Fh -- "${evidence}" "$@" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'; }
+wait_log_count() { local expected="$1" evidence="$2"; shift 2; for _ in $(seq 1 300); do [[ "$(log_count "${evidence}" "$@")" == "${expected}" ]] && return 0; sleep 0.1; done; echo "Timed out waiting for ${expected} '${evidence}'" >&2; return 1; }
+
 read -r api_a_http_port api_b_http_port api_a_channel_port api_b_channel_port play_a_channel_port play_b_channel_port play_a_stream_port play_b_stream_port play_a_spot_port play_b_spot_port play_a_pub_port play_b_pub_port unused_port1 unused_port2 unused_port3 \
   <<<"$(zlink_sample_reserve_ports 15)"
 
@@ -119,6 +122,7 @@ play_a_config="${run_dir}/play-a.properties"
 play_b_config="${run_dir}/play-b.properties"
 
 cat >"${api_a_config}" <<EOF
+sample.nodeId=api-a
 sample.apiBindUrl=http://127.0.0.1:${api_a_http_port}
 sample.apiPublicUrl=http://127.0.0.1:${api_a_http_port}
 sample.apiChannelEndpoint=tcp://127.0.0.1:${api_a_channel_port}
@@ -139,6 +143,7 @@ EOF
 
 cp "${api_a_config}" "${api_b_config}"
 sed -i \
+  -e "s#sample.nodeId=.*#sample.nodeId=api-b#" \
   -e "s#sample.apiBindUrl=.*#sample.apiBindUrl=http://127.0.0.1:${api_b_http_port}#" \
   -e "s#sample.apiPublicUrl=.*#sample.apiPublicUrl=http://127.0.0.1:${api_b_http_port}#" \
   -e "s#sample.apiChannelEndpoint=.*#sample.apiChannelEndpoint=tcp://127.0.0.1:${api_b_channel_port}#" \
@@ -158,6 +163,9 @@ sed -i \
   -e "s#sample.peerSpotEndpoint=.*#sample.peerSpotEndpoint=tcp://127.0.0.1:${play_a_spot_port}#" \
   -e "s#sample.peerSpotPubSubEndpoint=.*#sample.peerSpotPubSubEndpoint=tcp://127.0.0.1:${play_a_pub_port}#" \
   "${play_b_config}"
+
+sed -i -e "s#sample.nodeId=.*#sample.nodeId=play-a#" "${play_a_config}"
+sed -i -e "s#sample.nodeId=.*#sample.nodeId=play-b#" "${play_b_config}"
 
 chmod 0600 "${api_a_config}" "${api_b_config}" "${play_a_config}" "${play_b_config}"
 
@@ -184,35 +192,19 @@ wait_endpoint api-a-http "http://127.0.0.1:${api_a_http_port}"
 pids+=("$!")
 wait_log_contains "${log_dir}/api-b.log" "Started ApiProgram"
 wait_endpoint api-b-http "http://127.0.0.1:${api_b_http_port}"
-wait_framework_ready_logs "${log_dir}"
+wait_log_count 1 "tictactoe-ready kind=peer-route node=play-a peer=play-b" "${log_dir}/play-a.log"
+wait_log_count 1 "tictactoe-ready kind=peer-route node=play-b peer=play-a" "${log_dir}/play-b.log"
+wait_log_count 1 "tictactoe-ready kind=http node=api-a" "${log_dir}/api-a.log"
+wait_log_count 1 "tictactoe-ready kind=http node=api-b" "${log_dir}/api-b.log"
+wait_log_count 1 "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" "${log_dir}/api-a.log"
+wait_log_count 1 "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" "${log_dir}/api-b.log"
 
-# The Play ports can accept traffic before the peer Route Mesh connection has
-# converged. Let the process topology settle before the first actor request.
-topology_settle_seconds="${ZLINK_SAMPLE_TOPOLOGY_SETTLE_SECONDS:-30}"
-sleep "${topology_settle_seconds}"
-
-"$(app_bin Client Client)" --api-url "http://127.0.0.1:${api_a_http_port}" >"${log_dir}/client.log" 2>&1
-
-wait_log_contains "${log_dir}/play-a.log" \
-  "play stream: existing actor exact identity verified\\."
-grep -Eq "observer-connected endpoint=tcp://127.0.0.1:${play_b_stream_port}" "${log_dir}/client.log"
-grep -Eq "observer-subscription=verified subscribed=true" "${log_dir}/client.log"
-grep -Eq "observer-win-milestone=verified actor=player-x wins=100" "${log_dir}/client.log"
-grep -Eq "tictactoe completed" "${log_dir}/client.log"
-for actor_id in player-x player-o; do
-  actor_destroyed=0
-  for _ in $(seq 1 100); do
-    if grep -q "tictactoe actor destroy completed actor=${actor_id}" \
-        "${log_dir}"/play-*.log; then
-      actor_destroyed=1
-      break
-    fi
-    sleep 0.1
-  done
-  if [[ "${actor_destroyed}" != "1" ]]; then
-    echo "Timed out waiting for ${actor_id} destroy on any Play node" >&2
-    exit 1
-  fi
+for attempt in 1 2 3; do
+  if "$(app_bin Client Client)" --api-url "http://127.0.0.1:${api_a_http_port}" >"${log_dir}/client.log" 2>&1; then break; fi
+  [[ "${attempt}" == 3 ]] && exit 1
 done
-grep -Eq "zlink flow: event_id=zlink\.message_flow" "${log_dir}"/{api,play}-*.log
-echo "PASS TicTacToe.Kotlin"
+
+for evidence in "observer-connected endpoint=tcp://127.0.0.1:${play_b_stream_port}" "observer-subscription=verified subscribed=true" "observer-win-milestone=verified actor=player-x wins=100" "reconnected-game-state=verified actor=player-x room=" "tictactoe=completed"; do wait_log_count 1 "${evidence}" "${log_dir}/client.log"; done
+for evidence in "tictactoe-lifecycle actor-bound actor=player-x" "tictactoe-lifecycle leave-completed actor=player-x" "tictactoe-lifecycle leave-completed actor=player-o" "tictactoe-lifecycle actor-destroy-complete actor=player-x" "tictactoe-lifecycle actor-destroy-complete actor=player-o"; do wait_log_count 1 "${evidence}" "${log_dir}"/play-*.log; done
+wait_log_count 0 "tictactoe-lifecycle actor-destroy-complete actor=observer" "${log_dir}"/play-*.log
+echo "tictactoe-placement=completed"

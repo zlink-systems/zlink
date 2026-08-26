@@ -25,10 +25,12 @@ import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingor
 import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.entryspot.BingoEntrySpot;
 import systems.zlink.samples.bingo.server.configuration.SampleLocationStore;
 import systems.zlink.samples.bingo.server.configuration.SampleApplication;
+import systems.zlink.samples.bingo.server.configuration.BingoReadinessReporter;
 import systems.zlink.samples.bingo.server.configuration.SampleNames;
 import systems.zlink.samples.bingo.server.configuration.SampleTopology;
 import systems.zlink.samples.bingo.server.configuration.BingoMetricsReporter;
 import io.micrometer.core.instrument.MeterRegistry;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 
 
 
@@ -105,5 +107,12 @@ public final class PlayServerApplication {
     @Bean(destroyMethod = "close")
     BingoMetricsReporter bingoMetricsReporter(MeterRegistry registry) {
         return new BingoMetricsReporter(registry, "play");
+    }
+
+    @Bean(destroyMethod = "close")
+    BingoReadinessReporter bingoReadinessReporter(
+        SampleTopology topology,
+        ZLinkRouteMeshRuntime meshes) {
+        return BingoReadinessReporter.play(topology, meshes);
     }
 }

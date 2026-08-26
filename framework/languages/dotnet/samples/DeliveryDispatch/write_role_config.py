@@ -38,6 +38,7 @@ def main() -> None:
                 "dispatchHttpUrl": args.dispatch_http,
                 "customerStreamEndpoint": args.customer_stream,
                 "courierStreamEndpoint": args.courier_stream,
+                "workDirectory": args.work_dir,
             }
         }
     else:
@@ -57,8 +58,8 @@ def main() -> None:
             "courier-session": {
                 "courierStreamEndpoint": args.courier_stream,
             },
-            "courier-actor-node1": {},
-            "courier-actor-node2": {},
+            "courier-node-1": {},
+            "courier-node-2": {},
         }
         topology.update(role_topology[args.role])
         document = {

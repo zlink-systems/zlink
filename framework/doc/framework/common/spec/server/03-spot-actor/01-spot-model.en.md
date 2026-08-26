@@ -420,6 +420,16 @@ Spot's `OnActorJoinAsync`, `OnJoinedActorAsync`, and `OnLeaveActorAsync`
 aren't called for member Actors. When cleaning up the source User Spot
 instance, `OnClosingAsync` is called with reason `RelocationOut`.
 
+When the relocation target rebuilds the User Spot instance, the factory creates
+the instance and then `Configure` and `OnInitializeAsync` run. There is no
+creation request, so `OnCreateAsync` does not run. `OnInitializeAsync` runs
+while the target admission seal still excludes external ingress, and the target
+becomes Ready only after that callback completes. This applies the §5.1 callback
+table's "completes the application initialization of a created Spot instance" to
+an instance recreated by relocation as well — skipping the initialization the
+application put there (an event replay, say) makes the target reach Ready in a
+different state from the source.
+
 If a member Actor is bound to a Session, once the Spot and Actor are restored
 on the target and aggregate owner is committed, queue merge, regular-route
 switch, lifecycle, and dispatch opening finish before target runtime sends

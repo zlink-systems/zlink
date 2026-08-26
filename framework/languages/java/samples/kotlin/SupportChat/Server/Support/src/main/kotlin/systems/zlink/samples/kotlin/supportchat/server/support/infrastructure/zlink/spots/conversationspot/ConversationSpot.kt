@@ -12,6 +12,7 @@ import systems.zlink.framework.spots.ZLinkSpotCreateResponse
 import systems.zlink.framework.spots.ZLinkTimer
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
+import systems.zlink.samples.kotlin.supportchat.server.configuration.ConversationStatuses
 import systems.zlink.samples.kotlin.supportchat.server.support.application.AgentAssignmentService
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.Conversation
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.ConversationChange
@@ -56,10 +57,11 @@ class ConversationSpot(
                 500,
             ),
         )
+        logger.info("supportchat-conversation created conversation={}", conversationId)
         logger.info(
-            "support conversation: created. conversation={}, customer={}",
+            "supportchat-conversation status={} conversation={}",
+            ConversationStatuses.WaitingForAgent,
             conversationId,
-            create.customerActorId,
         )
         return ZLinkSpotCreateResponse.accept()
     }
@@ -100,6 +102,11 @@ class ConversationSpot(
         if (actor.role == SupportChatRoles.Agent) {
             val change = joinAgent(actor)
             publishChange(change)
+            logger.info(
+                "supportchat-conversation agent-joined conversation={} agent={}",
+                conversation.conversationId,
+                actor.participantId,
+            )
             return
         }
 
@@ -185,10 +192,9 @@ class ConversationSpot(
         notifications.publish(change.events, actors)
         for (event in change.events) {
             logger.info(
-                "support conversation: state changed. conversation={}, status={}, event={}",
-                event.state.conversationId,
+                "supportchat-conversation status={} conversation={}",
                 event.state.status,
-                event.kind,
+                event.state.conversationId,
             )
         }
         if (change.events.any { it.kind == ConversationEventKind.Closed }) {

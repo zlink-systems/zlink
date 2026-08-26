@@ -26,10 +26,8 @@ internal sealed class DeliveryStatusUpdatedHandler(
             message.Status);
         await actor.PushStatusAsync(message, cancellationToken);
         logger.LogInformation(
-            "deliverydispatch customer-entry: pushed status delivery={DeliveryId} customer={CustomerId} actor={ActorId} status={Status}",
-            message.DeliveryId,
-            message.CustomerId,
-            actor.ActorId,
-            message.Status);
+            "deliverydispatch-customer pushed status={Status} delivery={DeliveryId}",
+            message.Status,
+            message.DeliveryId);
     }
 }

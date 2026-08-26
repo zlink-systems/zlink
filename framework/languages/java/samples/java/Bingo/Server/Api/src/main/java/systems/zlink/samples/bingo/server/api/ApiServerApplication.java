@@ -12,8 +12,10 @@ import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.samples.bingo.server.configuration.SampleLocationStore;
 import systems.zlink.samples.bingo.server.configuration.SampleApplication;
+import systems.zlink.samples.bingo.server.configuration.BingoReadinessReporter;
 import systems.zlink.samples.bingo.server.configuration.SampleNames;
 import systems.zlink.samples.bingo.server.configuration.SampleTopology;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 
 
 
@@ -60,5 +62,12 @@ public final class ApiServerApplication {
     @Bean
     ZLinkRedisLocationStore locationStore(SampleTopology topology) {
         return SampleLocationStore.create(topology);
+    }
+
+    @Bean(destroyMethod = "close")
+    BingoReadinessReporter bingoReadinessReporter(
+        SampleTopology topology,
+        ZLinkRouteMeshRuntime meshes) {
+        return BingoReadinessReporter.api(topology, meshes);
     }
 }

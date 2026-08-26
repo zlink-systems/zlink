@@ -15,6 +15,8 @@ internal sealed class PlayerQuestSpot(
     ILogger<PlayerQuestSpot> logger) : IZLinkInstanceSpot
 {
     public string PlayerId { get; private set; } = string.Empty;
+    private int Generation { get; set; }
+    private bool ReplayEvidencePending { get; set; }
     public IZLinkInstanceSpotContext Context { get; } = context;
 
     public void Configure()
@@ -25,11 +27,13 @@ internal sealed class PlayerQuestSpot(
         CancellationToken cancellationToken)
     {
         PlayerId = Context.SpotId;
-        await store.RecordOwnerRehydratedAsync(PlayerId, cancellationToken);
+        Generation = await store.RecordOwnerRehydratedAsync(PlayerId, cancellationToken);
+        ReplayEvidencePending = Generation > 1;
         logger.LogInformation(
-            "gamequest player quest spot ready player={PlayerId} spot={SpotId}",
+            "gamequest-owner ready player={PlayerId} generation={Generation} node={NodeId}",
             PlayerId,
-            Context.SpotId);
+            Generation,
+            processor.MissionName);
     }
 
     public ValueTask OnClosingAsync(
@@ -38,6 +42,11 @@ internal sealed class PlayerQuestSpot(
     {
         _ = context;
         cleanupCancellationToken.ThrowIfCancellationRequested();
+        logger.LogInformation(
+            "gamequest-owner closed player={PlayerId} generation={Generation} node={NodeId}",
+            PlayerId,
+            Generation,
+            processor.MissionName);
         return ValueTask.CompletedTask;
     }
 
@@ -47,6 +56,7 @@ internal sealed class PlayerQuestSpot(
     {
         await processor.ProcessAsync(
             QuestContractMapper.ToDomain(message),
+            TakeReplayEvidenceGeneration(),
             cancellationToken);
     }
 
@@ -54,9 +64,19 @@ internal sealed class PlayerQuestSpot(
         SyncQuestProgressReq request,
         CancellationToken cancellationToken)
     {
-        var projection = await processor.SyncAsync(request.PlayerId, cancellationToken);
+        var projection = await processor.SyncAsync(
+            request.PlayerId,
+            TakeReplayEvidenceGeneration(),
+            cancellationToken);
         return new SyncQuestProgressRes(
             projection.Select(QuestContractMapper.ToContract).ToArray());
+    }
+
+    private int? TakeReplayEvidenceGeneration()
+    {
+        if (!ReplayEvidencePending) return null;
+        ReplayEvidencePending = false;
+        return Generation;
     }
 }
 

@@ -64,7 +64,7 @@ internal sealed class PlayEntrySpot(
         // when the client closes immediately after receiving the leave reply.
         await Context.DestroyActorAsync(actor, CancellationToken.None);
         logger.LogInformation(
-            "entry spot: actor destroy completed. actor={ActorId}",
+            "tictactoe-lifecycle actor-destroy-complete actor={ActorId}",
             actor.ActorId);
     }
 

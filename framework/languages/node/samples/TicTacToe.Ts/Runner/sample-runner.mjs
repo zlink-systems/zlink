@@ -42,7 +42,7 @@ export async function runSample(ctx) {
   ];
   const apiKeys = [
     'apiHttpEndpoint', 'apiEndpoints', 'apiSpotEndpoint', 'apiIndex', 'playSpotEndpoints', 'playEndpoints',
-    'redisEndpoint', 'redisKeyPrefix', 'logDir'
+    'redisEndpoint', 'redisKeyPrefix', 'logDir', 'instanceName'
   ];
   const configs = {
     playA: roleConfig('play-a', playA, playKeys),
@@ -55,12 +55,16 @@ export async function runSample(ctx) {
   await ctx.waitTcp(endpoints.playStream[1]);
   await ctx.start('play-a', 'dist/Server/Play/main.js', ['--config', configs.playA]);
   await ctx.waitTcp(endpoints.playStream[0]);
-  await ctx.waitLog('play-a', 'spotPeerReady');
-  await ctx.waitLog('play-b', 'spotPeerReady');
+  await ctx.waitLog('play-a', 'tictactoe-ready kind=peer-route node=play-a peer=play-b');
+  await ctx.waitLog('play-b', 'tictactoe-ready kind=peer-route node=play-b peer=play-a');
   await ctx.start('api-a', 'dist/Server/Api/main.js', ['--config', configs.apiA]);
   await ctx.waitTcp(endpoints.apiHttp[0]);
   await ctx.start('api-b', 'dist/Server/Api/main.js', ['--config', configs.apiB]);
   await ctx.waitTcp(endpoints.apiHttp[1]);
+  await ctx.waitLog('api-a', 'tictactoe-ready kind=http node=api-a');
+  await ctx.waitLog('api-b', 'tictactoe-ready kind=http node=api-b');
+  await ctx.waitLog('api-a', 'tictactoe-ready kind=spot-route node=api-a mesh=tictactoe');
+  await ctx.waitLog('api-b', 'tictactoe-ready kind=spot-route node=api-b mesh=tictactoe');
   const browser = ctx.startBrowser({
     timeoutMs: 90_000,
     config: {
@@ -69,14 +73,36 @@ export async function runSample(ctx) {
     },
     proxies: [{ prefix: '/api/tictactoe', target: endpoints.apiHttp[0] }]
   });
-  await waitPlayLog(ctx, 'tictactoe-auth existing-actor-bound actor=player-x ');
-  for (const actorId of ['player-x', 'player-o']) {
-    await waitPlayLog(ctx, `actor: LeaveGameMsg completed. actor=${actorId}`);
-    await waitPlayLog(ctx, `entry spot: actor destroyed. actor=${actorId}`);
+  const playEvidence = [
+    ['tictactoe-lifecycle actor-bound actor=player-x', 1],
+    ['tictactoe-lifecycle leave-completed actor=player-x', 1],
+    ['tictactoe-lifecycle leave-completed actor=player-o', 1],
+    ['tictactoe-lifecycle actor-destroy-complete actor=player-x', 1],
+    ['tictactoe-lifecycle actor-destroy-complete actor=player-o', 1],
+    ['tictactoe-lifecycle actor-destroy-complete actor=observer', 0]
+  ];
+  for (const [marker, expected] of playEvidence) {
+    if (expected > 0) await waitPlayLog(ctx, marker);
   }
   await browser.complete();
-  console.log('tictactoe=completed');
-  console.log('PASS TicTacToe.Ts');
+  const clientEvidence = [
+    [`observer-connected endpoint=${endpoints.playStream[1]}`, 1],
+    ['observer-subscription=verified subscribed=true', 1],
+    ['observer-win-milestone=verified actor=player-x wins=100', 1],
+    ['reconnected-game-state=verified actor=player-x room=', 1],
+    ['tictactoe=completed', 1]
+  ];
+  for (const [marker, expected] of clientEvidence) ctx.assertLogCount('browser-client', marker, expected);
+  for (const [marker, expected] of playEvidence) assertCombinedLogCount(ctx, ['play-a', 'play-b'], marker, expected);
+  console.log('tictactoe-placement=completed');
+}
+
+function assertCombinedLogCount(ctx, roles, marker, expected) {
+  const actual = roles.reduce((count, role) => {
+    const file = path.join(ctx.logDir, `${role}.log`);
+    return count + (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split(marker).length - 1 : 0);
+  }, 0);
+  if (actual !== expected) throw new Error(`${marker} count was ${actual}; expected ${expected}.`);
 }
 
 async function waitPlayLog(ctx, marker) {

@@ -25,6 +25,12 @@ public static class CourierSessionHostFactory
         builder.Services.AddSingleton(configuration);
         builder.Services.AddSingleton(topology);
         builder.Services.AddSingleton<CourierSessionBinder>();
+        builder.Services.AddSingleton(new DeliveryDispatchReadiness(
+            DeliveryDispatchReadyKind.Route,
+            SampleNames.CourierSessionNode,
+            SampleNames.CourierMeshName,
+            RequiredReadyPeers: 1));
+        builder.Services.AddHostedService<DeliveryDispatchReadinessReporter>();
         builder.Services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(new ZLinkRedisLocationStore(redis =>

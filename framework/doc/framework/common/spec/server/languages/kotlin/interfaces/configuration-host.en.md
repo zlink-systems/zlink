@@ -242,9 +242,12 @@ represented as a lowercase canonical string in `8-4-4-4-12` digit
 groups. Prefix is ASCII `[A-Za-z0-9._-]` 1..64 characters, and the full
 RID is at most 255 UTF-8 bytes. On conflict with an active owner, it
 fails immediately with `RoutingIdConflict` instead of retrying with a
-new UUID. Fixed RID can only be used in a manual topology with no
-object role or automatic Store
-[descriptor](../../../00-foundation/02-glossary.en.md#descriptor). There's no slot
+new UUID. A fixed RID is allowed in an automatic discovery topology and on a MeshNode that has an
+object role. Implementation and test scenarios sometimes need to name a specific peer, and an
+auto-assigned UUID cannot be named. When a node using a fixed RID restarts and collides with the
+previous active owner claim, the same rule as an automatic RID applies — it does not retry with a
+new value but fails immediately with a conflict, and the restart succeeds once the previous owner
+lease expires. There's no slot
 count, allocation group, or public allocation provider.
 
 The Object Server's Entry Spot ID has the same-prefix format

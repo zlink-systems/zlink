@@ -4,14 +4,9 @@ import {
 } from '@zlink-systems/nestjs';
 import { questMissionSpotId, SampleNames } from '../../../../Shared/Configuration/sample-names';
 import {
-  ClosePlayerQuestReq,
-  type ClosePlayerQuestRes
+  ClosePlayerQuestMsg
 } from '../../../../Shared/Contracts/messages';
-import {
-  ZLinkFrameworkException,
-  ZLinkFrameworkErrorKind,
-  type ZLinkSpotOutbound
-} from '@zlink-systems/framework';
+import type { ZLinkSpotOutbound } from '@zlink-systems/framework';
 
 class PlayerQuestSpotProvisioner {
   constructor(
@@ -33,23 +28,10 @@ class PlayerQuestSpotProvisioner {
   }
 
   async deactivate(playerId: string): Promise<boolean> {
-    try {
-      // ClosePlayerQuestReq is existing-only. A missing Spot must not be
-      // recreated merely to receive a close request. The response also fences
-      // lifecycle completion; one-way admission cannot provide that ordering.
-      const result = await this.outbound
-        .requestToSpot(questMissionSpotId(playerId), new ClosePlayerQuestReq())
-        .submit<ClosePlayerQuestRes>();
-      return result.closed;
-    } catch (error) {
-      if (
-        error instanceof ZLinkFrameworkException
-        && error.kind === ZLinkFrameworkErrorKind.NotFound
-      ) {
-        return false;
-      }
-      throw error;
-    }
+    // The close is intentionally one-way: the next instance intent observes
+    // the completed lifecycle and creates the generation that replays state.
+    await this.send(playerId, new ClosePlayerQuestMsg());
+    return true;
   }
 }
 

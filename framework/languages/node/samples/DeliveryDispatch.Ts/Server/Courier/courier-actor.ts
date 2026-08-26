@@ -18,6 +18,7 @@ class CourierActor implements ZLinkActor {
     if (request.courierId !== this.actorId) {
       throw new Error(`Courier session '${request.courierId}' does not match actor '${this.actorId}'.`);
     }
+    console.log(`deliverydispatch-courier bind-relayed courier=${request.courierId}`);
     return { courierId: this.actorId };
   }
 

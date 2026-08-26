@@ -601,9 +601,79 @@ specific log lines are not used as success criteria.
 supportchat=completed
 ```
 
-The per-language runner checks closed-typing and server evidence together with the common
-completion marker above. Self-check names such as authentication, assignment, and reconnect are not
-duplicated as a common completion marker.
+The per-language runner checks every piece of evidence fixed by §10.1 together with the common
+completion marker above.
+
+### 10.1 Evidence the Runner Confirms
+
+The runner matches the strings in the tables below verbatim. These strings are not a per-language
+choice. All five implementations emit the same string the same number of times; changing the
+wording means changing this table first. Node names are fixed as `api`, `session`, and `support`.
+
+**Evidence must be a string the sample owns.** Lines the framework prints — runtime readiness logs,
+the message-flow tracer, structured-trace projections, process startup boilerplate — are not success
+criteria. They change for framework reasons, and when they do, the sample runner breaks silently.
+
+Readiness is confirmed before the clients run.
+
+| Fact confirmed | Log | Emitting node |
+| --- | --- | --- |
+| The public endpoint is open | `supportchat-ready kind=public node=<NodeId>` | `api`, `support` |
+| The STREAM endpoint is open | `supportchat-ready kind=stream node=session` | `session` |
+| A route to the Support spot mesh is available | `supportchat-ready kind=spot-route node=<NodeId> mesh=<MeshName>` | `api`, `session` |
+
+**Do not start the clients on the strength of an open endpoint alone.** `kind=public` and
+`kind=stream` prove only that the endpoint is listening — if `api` or `session` has not yet
+acquired a route to the Support spot mesh at that moment, the first conversation request dies.
+The third row covers that window. Without it, an implementation whose routes converge quickly
+passes by luck while a slower one fails, and papering over that difference with a fixed sleep is
+exactly what §10 forbids.
+
+Server evidence is confirmed after the client scenario finishes.
+
+| Fact confirmed | Log | Exact count |
+| --- | --- | --- |
+| A conversation was created | `supportchat-conversation created conversation=<ConversationId>` | at least 1 |
+| An agent joined the conversation | `supportchat-conversation agent-joined conversation=<ConversationId> agent=<AgentId>` | at least 1 |
+| The status changed | `supportchat-conversation status=<Status> conversation=<ConversationId>` | at least 1 each for `WaitingForAgent`, `Active`, `WaitingForClose`, `Closed` |
+
+**Status rows are counted across the `api` and `support` logs together.** Which node emits which
+status is not a confirmed fact — pinning it in the runner breaks silently when ownership of a
+transition moves, and it is how a `.sh` and a `.ps1` end up reading different files for the same
+fact.
+
+There are two completion markers, both printed by the client.
+
+| Marker | Meaning |
+| --- | --- |
+| `supportchat=completed` | the whole §9 client self-check passed |
+| `supportchat-closed-typing-ignore=verified` | typing and close requests after Closed were ignored |
+
+The second marker has exactly the spelling above. Do not use a variant with a space instead of the
+hyphen, such as `supportchat closed-typing-ignore=verified`. **The runner confirms both markers
+directly** — a client process exit code or a browser verdict does not stand in for them.
+
+#### Print a marker where the fact happened
+
+**Do not print several markers unconditionally in one block at the end of a scenario.** If anything
+upstream throws, not one line is printed, and the runner has already failed on the client's exit
+code before it looks. A check for several markers then becomes **the same "the process exited 0"
+fact confirmed several times**, unable to distinguish which fact actually occurred. Print each
+marker at the point where its fact holds.
+
+#### The self-check must travel the real path
+
+A server-side self-check does not produce its result through an **in-process-only path that builds
+domain objects directly**. A result that never passed through the Actor Spot, the Session relay, and
+the wire codec does not verify what this sample exists to verify — it is no different from returning
+pre-written `…=verified` strings. The real stream scenario already exercises the same facts.
+
+Log waits poll every `100 ms` for at most `300` attempts. This budget applies to readiness and to
+evidence alike, and **`.sh` and `.ps1` use the same value.** A single-shot check with no retry is
+not allowed. All five languages ship both a `.sh` and a `.ps1`.
+
+Once every row passes, the runner prints `supportchat-placement=completed` last. If any row fails,
+it does not print this marker.
 
 ## 11. Completion Criteria
 
@@ -620,4 +690,5 @@ duplicated as a common completion marker.
 - Only the Framework public API and the typed JSON codec are used, with no private runtime, raw
   frames, or sample-only routing helpers added.
 - A Ready owner failure is not shown as crash failover, and the Unavailable boundary is kept.
-- The runner performs build, readiness, self-check, evidence, and cleanup.
+- The runner performs build, readiness, self-check, and cleanup, and passes every row of the §10.1
+  table down to the string and the count.

@@ -2474,7 +2474,13 @@ class stream_host_service_t::listener_t
           *created->session, created->stream,
           [this, created, rid] (const result_t<void> &result) {
               if (!result) {
-                  close_core_session (rid, "connected_dispatch_error");
+                  //  The client is still connected here: only the server's connect dispatch
+                  //  failed. `close_core_session` retires the server-side session and tombstones
+                  //  the bound-session routes but neither notifies nor drops the physical
+                  //  connection, so the client sees nothing and waits out its own deadline.
+                  //  Spec 2.2 requires an observable disconnect, which is what
+                  //  `disconnect_core_peer` produces.
+                  disconnect_core_peer (rid, "connected_dispatch_error");
               }
           });
         if (!connected) {

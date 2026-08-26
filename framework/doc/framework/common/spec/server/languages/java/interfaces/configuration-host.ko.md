@@ -386,8 +386,7 @@ Instance Spot뿐이고 Entry Spot과 User Spot은 이 설정의 영향을 받지
 Automatic RID는 `prefix-<lowercase-canonical-uuid-v4>` 형식이다. UUID v4는 `8-4-4-4-12` 자리의
 lowercase canonical 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 1..64자이며 active
 [owner](../../../00-foundation/02-glossary.ko.md#owner)와 충돌하면 새 UUID로 다시 시도하지 않고 즉시
-`ROUTING_ID_CONFLICT`로 실패한다. Fixed RID는 object role과 Store descriptor가 없는 manual
-topology에서만 허용한다. Slot count, allocation group과 public allocation provider는 제공하지 않는다.
+`ROUTING_ID_CONFLICT`로 실패한다. Fixed RID는 automatic discovery topology에서도, object role이 있는 MeshNode에서도 허용한다. 구현·시험 시나리오가 peer를 이름으로 지목해야 할 때가 있고, 자동 UUID로는 그럴 수 없기 때문이다. Fixed RID를 쓴 node가 재시작해 이전 active owner claim과 충돌하면 자동 RID와 같은 규칙으로 처리한다 — 새 값을 만들어 재시도하지 않고 즉시 conflict로 실패하며, 이전 owner lease가 만료된 뒤 재시작이 성공한다. Slot count, allocation group과 public allocation provider는 제공하지 않는다.
 
 Framework가 모든 registration에서 만든 fully encoded MeshNode descriptor는 1 MiB 이하여야 한다.
 [Spot](../../../00-foundation/02-glossary.ko.md#spot) type과 object capability collection은 각각 최대 1024개다. Relocation adapter class와 opaque application

@@ -17,7 +17,10 @@ class ContinueOrderWorkflowHandler(
     ): CompletionStage<ContinueOrderWorkflowRes> {
         spot.requireOrder(request.orderId)
         return CompletableFuture.completedFuture(
-            ContinueOrderWorkflowRes(workflow.continueWorkflow(request.orderId)),
+            ContinueOrderWorkflowRes(
+                workflow.continueWorkflow(spot, request.orderId),
+                spot.context().objectGeneration(),
+            ),
         )
     }
 }

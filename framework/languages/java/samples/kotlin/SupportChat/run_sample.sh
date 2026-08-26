@@ -48,25 +48,55 @@ on_exit() {
 
 trap on_exit EXIT
 
-read -r -a PORTS <<<"$(zlink_sample_reserve_ports 6)"
+read -r -a PORTS <<<"$(zlink_sample_reserve_ports 7)"
 
 api_channel_endpoint="tcp://127.0.0.1:${PORTS[0]}"
 api_http_endpoint="http://127.0.0.1:${PORTS[1]}"
-support_channel_endpoint="tcp://127.0.0.1:${PORTS[2]}"
-session_router_endpoint="tcp://127.0.0.1:${PORTS[3]}"
-support_router_endpoint="tcp://127.0.0.1:${PORTS[4]}"
-stream_endpoint="tcp://127.0.0.1:${PORTS[5]}"
+api_router_endpoint="tcp://127.0.0.1:${PORTS[2]}"
+support_channel_endpoint="tcp://127.0.0.1:${PORTS[3]}"
+session_router_endpoint="tcp://127.0.0.1:${PORTS[4]}"
+support_router_endpoint="tcp://127.0.0.1:${PORTS[5]}"
+stream_endpoint="tcp://127.0.0.1:${PORTS[6]}"
 
-wait_log() {
-  local pattern="$1"
-  local file="$2"
-  for _ in $(seq 1 60); do
-    if grep -Eq "${pattern}" "${file}"; then
+log_count() {
+  local evidence="$1"
+  shift
+  { grep -Fh -- "${evidence}" "$@" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'
+}
+
+wait_log_count() {
+  local expected="$1"
+  local evidence="$2"
+  shift 2
+  local count
+  for _ in $(seq 1 300); do
+    count="$(log_count "${evidence}" "$@")"
+    if (( count == expected )); then
       return 0
     fi
-    sleep 0.2
+    if (( count > expected )); then
+      echo "Expected ${expected} '${evidence}', found ${count}." >&2
+      return 1
+    fi
+    sleep 0.1
   done
-  echo "Timed out waiting for '${pattern}' in ${file}" >&2
+  echo "Timed out waiting for ${expected} '${evidence}'." >&2
+  return 1
+}
+
+wait_log_at_least() {
+  local minimum="$1"
+  local evidence="$2"
+  shift 2
+  local count
+  for _ in $(seq 1 300); do
+    count="$(log_count "${evidence}" "$@")"
+    if (( count >= minimum )); then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for at least ${minimum} '${evidence}'." >&2
   return 1
 }
 
@@ -96,6 +126,7 @@ sample.redisEndpoint=${redis_endpoint}
 sample.redisKeyPrefix=${redis_key_prefix}
 sample.logDirectory=${SAMPLE_LOG_DIR}
 sample.apiChannelEndpoint=${api_channel_endpoint}
+sample.apiSpotRouterEndpoint=${api_router_endpoint}
 sample.apiHttpEndpoint=${api_http_endpoint}
 EOF
 cat >"${session_config}" <<EOF
@@ -122,26 +153,30 @@ zlink_sample_gradle_locked ../../gradlew --settings-file standalone.settings.gra
   :Client:installDist >"${BUILD_LOG}" 2>&1
 
 start_role support "${SCRIPT_DIR}/Server/Support/build/install/Support/bin/Support" "${support_config}"
-wait_port support-channel "${support_channel_endpoint}"
-wait_port support-router "${support_router_endpoint}"
-
 start_role api "${SCRIPT_DIR}/Server/Api/build/install/Api/bin/Api" "${api_config}"
-wait_port api-channel "${api_channel_endpoint}"
-
 start_role session "${SCRIPT_DIR}/Server/Session/build/install/Session/bin/Session" "${session_config}"
-wait_port session-router "${session_router_endpoint}"
-wait_port session-stream "${stream_endpoint}"
+
+wait_log_count 1 "supportchat-ready kind=public node=api" "${LOG_DIR}/api.log"
+wait_log_count 1 "supportchat-ready kind=public node=support" "${LOG_DIR}/support.log"
+wait_log_count 1 "supportchat-ready kind=stream node=session" "${LOG_DIR}/session.log"
+wait_log_count 1 "supportchat-ready kind=spot-route node=api mesh=supportchat.support.spots" "${LOG_DIR}/api.log"
+wait_log_count 1 "supportchat-ready kind=spot-route node=session mesh=supportchat.support.spots" "${LOG_DIR}/session.log"
 
 "${SCRIPT_DIR}/Client/build/install/Client/bin/Client" \
   --stream-endpoint "${stream_endpoint}" >"${LOG_DIR}/client.log" 2>&1
 
-grep -q "supportchat=completed" "${LOG_DIR}/client.log"
-grep -q "supportchat-closed-typing-ignore=verified" "${LOG_DIR}/client.log"
-wait_log "support conversation: created" "${LOG_DIR}/support.log"
-wait_log "support conversation: actor joined" "${LOG_DIR}/support.log"
-wait_log "status=WaitingForAgent" "${LOG_DIR}/api.log"
-wait_log "status=Active" "${LOG_DIR}/support.log"
-wait_log "status=WaitingForClose" "${LOG_DIR}/support.log"
-wait_log "status=Closed" "${LOG_DIR}/support.log"
-grep -Eq "zlink flow: event_id=zlink\.message_flow" "${LOG_DIR}"/{api,session,support}.log
-echo "supportchat-server-evidence=completed"
+wait_log_count 1 "supportchat=completed" "${LOG_DIR}/client.log"
+wait_log_count 1 "supportchat-closed-typing-ignore=verified" "${LOG_DIR}/client.log"
+
+server_logs=("${LOG_DIR}/api.log" "${LOG_DIR}/support.log")
+wait_log_at_least 1 "supportchat-conversation created conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation agent-joined conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation status=WaitingForAgent conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation status=Active conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation status=WaitingForClose conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation status=Closed conversation=" "${server_logs[@]}"
+
+cleanup
+trap - EXIT
+rm -rf "${RUN_DIR}"
+echo "supportchat-placement=completed"

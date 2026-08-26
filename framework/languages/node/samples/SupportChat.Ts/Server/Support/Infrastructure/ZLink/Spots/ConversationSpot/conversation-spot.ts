@@ -57,6 +57,9 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
       value.customerDisplayName,
       value.subject
     );
+    const state = this.conversation.snapshot();
+    console.log(`supportchat-conversation created conversation=${state.conversationId}`);
+    this.reportStatus(state);
     return { accepted: true };
   }
 
@@ -89,11 +92,16 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     const participant: ConversationParticipant = { ...intent };
     this.actors.set(actor.actorId, participant);
     if (participant.role === SupportChatRoles.Agent) {
+      const previousStatus = this.requireConversation().snapshot().status;
       const joined = this.requireConversation().join(
         participant.participantId,
         SupportChatRoles.Agent,
         participant.displayName
       );
+      console.log(
+        `supportchat-conversation agent-joined conversation=${joined.state.conversationId} agent=${participant.participantId}`
+      );
+      this.reportStatusTransition(previousStatus, joined.state);
       const customer = this.findParticipant(joined.state.customerActorId);
       await this.notifications.publish(
         joined.event,
@@ -127,13 +135,18 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
 
   join(actorId: string): ConversationState {
     const actor = this.requireActor(actorId);
-    return this.requireConversation().join(actor.participantId, actor.role, actor.displayName).state;
+    const previousStatus = this.requireConversation().snapshot().status;
+    const joined = this.requireConversation().join(actor.participantId, actor.role, actor.displayName);
+    this.reportStatusTransition(previousStatus, joined.state);
+    return joined.state;
   }
 
   async sendChat(actorId: string, text: string): Promise<{ message: ChatMessage; state: ConversationState }> {
     const actor = this.requireActor(actorId);
     this.requireParticipant(actor);
+    const previousStatus = this.requireConversation().snapshot().status;
     const result = this.requireConversation().appendMessage(actor.participantId, text);
+    this.reportStatusTransition(previousStatus, result.state);
     await this.notifications.publish(result.event, this.otherActorRefs(actor.actorId));
     return result;
   }
@@ -149,6 +162,7 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     const actor = this.requireActor(actorId);
     this.requireParticipant(actor);
     const closed = this.requireConversation().close();
+    this.reportStatus(closed.state);
     await this.notifications.publish(closed.event, this.otherActorRefs(actor.actorId));
     return closed.state;
   }
@@ -157,11 +171,13 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     const conversation = this.requireConversation();
     if (conversation.shouldBecomeIdle(now, SampleTimings.idleTimeout)) {
       const idle = conversation.markIdle(now + SampleTimings.closeGraceTimeout);
+      this.reportStatus(idle.state);
       if (idle.event !== undefined) await this.notifications.publish(idle.event, this.actorRefs());
       return undefined;
     }
     if (conversation.shouldCloseAfterIdle(now)) {
       const closed = conversation.close();
+      this.reportStatus(closed.state);
       await this.notifications.publish(closed.event, this.actorRefs());
       //  Keep the Spot alive in the logical Closed state (parity with the
       //  .NET sample). A User Spot with remaining Actor members must not be
@@ -190,6 +206,14 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
 
   private findParticipant(participantId: string): ConversationParticipant | undefined {
     return [...this.actors.values()].find((actor) => actor.participantId === participantId);
+  }
+
+  private reportStatus(state: ConversationState): void {
+    console.log(`supportchat-conversation status=${state.status} conversation=${state.conversationId}`);
+  }
+
+  private reportStatusTransition(previousStatus: string, state: ConversationState): void {
+    if (previousStatus !== state.status) this.reportStatus(state);
   }
 
   private requireActor(actorId: string): ConversationParticipant {

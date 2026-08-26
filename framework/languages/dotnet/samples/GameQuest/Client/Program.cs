@@ -24,5 +24,7 @@ internal static class Program
         });
 
         await new GameQuestClientScenario(topology).RunAsync(apiA, apiB);
+        Console.WriteLine("gamequest=completed");
+        Console.WriteLine("gamequest-server-evidence=completed");
     }
 }

@@ -71,9 +71,9 @@ class TicTacToeClientScenario {
 
             val observerAuthentication = observerStream.request(AuthenticateReq(options.observerActorId)).awaitReply<AuthenticateRes>()
             ensure(observerAuthentication.player.actorId == options.observerActorId)
+            println("observer-connected endpoint=${game.playEndpoints[1]}")
             val subscription = observerStream.request(ObserveMilestoneReq()).awaitReply<ObserveMilestoneRes>()
             ensure(subscription.subscribed)
-            println("observer-connected endpoint=${game.playEndpoints[1]}")
             println("observer-subscription=verified subscribed=${subscription.subscribed}")
 
             val hostNoSelfJoin = async(start = CoroutineStart.UNDISPATCHED) {
@@ -242,7 +242,6 @@ class TicTacToeClientScenario {
             // leave and Entry Spot destroy lifecycle evidence.
             freshHostStream.send(LeaveGameMsg(game.roomId)).await()
             guestStream.send(LeaveGameMsg(game.roomId)).await()
-            println("tictactoe completed")
         } finally {
             if (!hostClosed) {
                 hostStream.close().await()

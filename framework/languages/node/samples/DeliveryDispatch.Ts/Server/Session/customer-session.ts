@@ -52,8 +52,10 @@ class SubscribeDeliverySessionHandler {
     }
     const active = this.directory.require(CustomerId);
     active.subscribe(request.deliveryId);
-    await context.actors.bindOrGet(ensured.actor);
-    console.error(`deliverydispatch session: bound customer actor=${ensured.actor.actorId}`);
+    if (context.actors.find(ensured.actor.actorId) === undefined) {
+      await context.actors.bindOrGet(ensured.actor);
+      console.log(`deliverydispatch-customer bound customer=${CustomerId}`);
+    }
     context.client.reply(new SubscribeDeliveryRes(request.deliveryId)).submit();
   }
 }

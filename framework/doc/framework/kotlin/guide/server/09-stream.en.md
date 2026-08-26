@@ -207,6 +207,11 @@ flow identifiers on outbound frames, removing the observation-only cost
 The correlation used for request/response matching is protocol information and keeps
 working at `off`.
 
+```kotlin
+ZLinkStreamConnectorOptions.createDefault(endpoint)
+    .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
+```
+
 ## 6. Client Send And Request
 
 ```kotlin

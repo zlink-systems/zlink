@@ -9,6 +9,7 @@
 #include "../../Shared/Contracts/messages.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
+#include "../Configuration/sample_readiness.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink/locations/redis.hpp>
@@ -157,6 +158,9 @@ int main (int argc, char **argv)
       .group ("supportchat-api")
       .add<authenticate_user_handler_t> ()
       .add<open_conversation_api_handler_t> ();
-    std::cout << "supportchat api role=ready" << std::endl;
+    app.add_hosted_service (
+      std::make_unique<sample_readiness_service_t> ("public", "api"));
+    app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (
+      sample_names_t::mesh, "api"));
     return app.run (argc, argv);
 }

@@ -36,6 +36,24 @@ public static class DispatchServerHostFactory
         builder.Services.AddSingleton<DispatchWorker>();
         builder.Services.AddHostedService<DispatchQueuePump>();
         builder.Services.AddHostedService<OfferDeadlineSweeper>();
+        builder.Services.AddSingleton(new DeliveryDispatchReadiness(
+            DeliveryDispatchReadyKind.Route,
+            SampleNames.DispatchNode,
+            SampleNames.CourierMeshName,
+            RequiredReadyPeers: 2));
+        builder.Services.AddSingleton(new DeliveryDispatchReadiness(
+            DeliveryDispatchReadyKind.ActorRoute,
+            SampleNames.DispatchNode,
+            SampleNames.CourierMeshName,
+            RequiredReadyPeers: 2,
+            TargetNodeId: SampleNames.CourierNode1));
+        builder.Services.AddSingleton(new DeliveryDispatchReadiness(
+            DeliveryDispatchReadyKind.ActorRoute,
+            SampleNames.DispatchNode,
+            SampleNames.CourierMeshName,
+            RequiredReadyPeers: 2,
+            TargetNodeId: SampleNames.CourierNode2));
+        builder.Services.AddHostedService<DeliveryDispatchReadinessReporter>();
         builder.Services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(new ZLinkRedisLocationStore(redis =>

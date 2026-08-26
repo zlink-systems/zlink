@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import systems.zlink.contracts.core.RoutingId;
 import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -86,7 +87,7 @@ public final class Program {
                 .addHandlerGroup(SampleNames.SupportChannel);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.SupportActorMesh);
             node.listen(support.routerEndpoint())
-                .setRoutingIdPrefix("support-owner");
+                .setRoutingId(SampleNames.SupportNodeRoutingId);
             node.objects()
                 .server()
                 .addEntrySpot(SupportEntrySpot.class)
@@ -101,6 +102,11 @@ public final class Program {
                     ConversationSpot.class,
                     factory -> factory.disableRelocation());
         };
+    }
+
+    @Bean
+    ApplicationRunner supportPublicReadiness() {
+        return arguments -> System.out.println("supportchat-ready kind=public node=support");
     }
 
     @Bean(destroyMethod = "close")

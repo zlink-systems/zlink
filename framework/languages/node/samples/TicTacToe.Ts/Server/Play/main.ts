@@ -19,7 +19,12 @@ async function main(): Promise<void> {
   });
   const config = channelApp.get<TicTacToeSampleConfig>(TICTACTOE_SAMPLE_CONFIG);
   const routeMeshRuntime = channelApp.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME);
-  void logSpotPeerReady(routeMeshRuntime, SampleNames.playSpotNode);
+  void logSpotPeerReady(
+    routeMeshRuntime,
+    SampleNames.playSpotNode,
+    config.instanceName,
+    config.instanceName === 'play-a' ? 'play-b' : 'play-a'
+  );
   process.stdout.write(`${JSON.stringify({
     event: 'ready',
     endpoint: config.playSpotEndpoint,
@@ -30,20 +35,27 @@ async function main(): Promise<void> {
   await closeNestRuntime(channelApp);
 }
 
-async function logSpotPeerReady(runtime: ZLinkRouteMeshRuntime, meshName: string): Promise<void> {
-  const hasReadyPeer = (): boolean => runtime.snapshot(meshName).peers.some(
+async function logSpotPeerReady(
+  runtime: ZLinkRouteMeshRuntime,
+  meshName: string,
+  nodeId: string,
+  peerNodeId: string
+): Promise<void> {
+  const peerRoutingIdPrefix = `tictactoe-play-${peerNodeId}-`;
+  const hasExpectedReadyPeer = (): boolean => runtime.snapshot(meshName).peers.some(
     (peer) => peer.state === ZLinkPeerState.Ready
+      && String(peer.nodeRid).startsWith(peerRoutingIdPrefix)
   );
-  if (hasReadyPeer()) {
-    process.stdout.write(`${JSON.stringify({ event: 'spotPeerReady' })}\n`);
+  if (hasExpectedReadyPeer()) {
+    process.stdout.write(`tictactoe-ready kind=peer-route node=${nodeId} peer=${peerNodeId}\n`);
     return;
   }
 
-  const signal = AbortSignal.timeout(3000);
+  const signal = AbortSignal.timeout(30_000);
   try {
     for await (const _event of runtime.observe(meshName, 64, signal)) {
-      if (!hasReadyPeer()) continue;
-      process.stdout.write(`${JSON.stringify({ event: 'spotPeerReady' })}\n`);
+      if (!hasExpectedReadyPeer()) continue;
+      process.stdout.write(`tictactoe-ready kind=peer-route node=${nodeId} peer=${peerNodeId}\n`);
       return;
     }
   } catch (error: unknown) {

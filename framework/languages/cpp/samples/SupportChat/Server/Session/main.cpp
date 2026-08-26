@@ -2,6 +2,7 @@
 
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
+#include "../Configuration/sample_readiness.hpp"
 #include "../../Shared/Contracts/messages.hpp"
 
 #include <zlink/framework.hpp>
@@ -225,5 +226,9 @@ int main (int argc, char **argv)
     options.add_stream_node ("supportchat-session-stream")
       .bind (topology.session_stream_endpoint)
       .register_session<supportchat_session_t> ();
+    app.add_hosted_service (
+      std::make_unique<sample_readiness_service_t> ("stream", "session"));
+    app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (
+      sample_names_t::mesh, "session"));
     return app.run (argc, argv);
 }

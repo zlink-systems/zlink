@@ -53,10 +53,12 @@ class play_peer_route_readiness_service_t final : public hosted_service_t
   public:
     play_peer_route_readiness_service_t (std::string mesh_name,
                                          std::string node_name,
-                                         std::string expected_peer) :
+                                         std::string expected_peer,
+                                         std::string peer_node_name) :
         _mesh_name (std::move (mesh_name)),
         _node_name (std::move (node_name)),
-        _expected_peer (std::move (expected_peer))
+        _expected_peer (std::move (expected_peer)),
+        _peer_node_name (std::move (peer_node_name))
     {
     }
 
@@ -67,9 +69,11 @@ class play_peer_route_readiness_service_t final : public hosted_service_t
         auto &runtime = services.get_required<route_mesh_runtime_t> ();
         _observation = runtime.observe (
           _mesh_name, 64,
-          [state, node_name = _node_name, expected_peer = _expected_peer] (
+          [state, node_name = _node_name, expected_peer = _expected_peer,
+           peer_node_name = _peer_node_name] (
             const observed_status_t<mesh_node_snapshot_t> &observed) {
-              report_if_ready (state, node_name, expected_peer, observed.status);
+              report_if_ready (
+                state, node_name, expected_peer, peer_node_name, observed.status);
           });
         /* The peer can become ready while the observation registration is
          * being installed. Poll the same public snapshot until the marker is
@@ -77,11 +81,12 @@ class play_peer_route_readiness_service_t final : public hosted_service_t
          * being retained. */
         _worker = std::thread (
           [state, runtime = &runtime, mesh_name = _mesh_name,
-           node_name = _node_name, expected_peer = _expected_peer] () mutable {
+           node_name = _node_name, expected_peer = _expected_peer,
+           peer_node_name = _peer_node_name] () mutable {
               while (!state->stopping.load (std::memory_order_acquire)) {
                   try {
                       report_if_ready (state, node_name, expected_peer,
-                                       runtime->snapshot (mesh_name));
+                                       peer_node_name, runtime->snapshot (mesh_name));
                   }
                   catch (...) {
                   }
@@ -120,6 +125,7 @@ class play_peer_route_readiness_service_t final : public hosted_service_t
     static void report_if_ready (const std::shared_ptr<state_t> &state,
                                  const std::string &node_name,
                                  const std::string &expected_peer,
+                                 const std::string &peer_node_name,
                                  const mesh_node_snapshot_t &snapshot)
     {
         const auto peer_ready = std::any_of (
@@ -131,13 +137,14 @@ class play_peer_route_readiness_service_t final : public hosted_service_t
         if (!peer_ready
             || state->reported.exchange (true, std::memory_order_acq_rel))
             return;
-        std::cout << "bingo play route ready node=" << node_name
-                  << " peer=" << expected_peer << std::endl;
+        std::cout << "bingo-ready kind=peer-route node=" << node_name
+                  << " peer=" << peer_node_name << std::endl;
     }
 
     std::string _mesh_name;
     std::string _node_name;
     std::string _expected_peer;
+    std::string _peer_node_name;
     std::shared_ptr<state_t> _state;
     std::unique_ptr<mesh_runtime_observation_t> _observation;
     std::thread _worker;
@@ -168,7 +175,7 @@ class route_mesh_readiness_service_t final : public hosted_service_t
               if (!snapshot.is_ready
                   || state->reported.exchange (true, std::memory_order_acq_rel))
                   return;
-              std::cout << "bingo route ready node=" << node_name
+              std::cout << "bingo-ready kind=mesh-route node=" << node_name
                         << " mesh=" << label << std::endl;
           });
         co_return;
@@ -198,93 +205,6 @@ class route_mesh_readiness_service_t final : public hosted_service_t
     std::string _label;
     std::shared_ptr<state_t> _state;
     std::unique_ptr<mesh_runtime_observation_t> _observation;
-};
-
-class play_api_channel_readiness_service_t final : public hosted_service_t
-{
-  public:
-    explicit play_api_channel_readiness_service_t (std::string node_name) :
-        _node_name (std::move (node_name))
-    {
-    }
-
-    task_t<void> start (service_provider_t &services) override
-    {
-        auto state = std::make_shared<state_t> ();
-        _state = state;
-        state->client = std::make_shared<channel_client_t> (
-          services.get_required<channel_client_t> ());
-        _worker = std::thread (
-          [state, node_name = _node_name] () mutable {
-              while (!state->stopping.load (std::memory_order_acquire)) {
-                  struct attempt_t
-                  {
-                      std::condition_variable completed;
-                      std::mutex mutex;
-                      bool done = false;
-                      bool accepted = false;
-                  };
-                  auto attempt = std::make_shared<attempt_t> ();
-                  auto request = state->client
-                                   ->request (
-                                     sample_names_t::api_channel,
-                                     authenticate_player_req_t{"player-readiness"})
-                                   .timeout (std::chrono::milliseconds (500))
-                                   .submit<authenticate_player_res_t> ();
-                  observe_task_completion (
-                    request,
-                    [attempt] (
-                      const result_t<authenticate_player_res_t> &result) {
-                        {
-                            std::lock_guard lock (attempt->mutex);
-                            attempt->accepted =
-                              result && result.value ().accepted;
-                            attempt->done = true;
-                        }
-                        attempt->completed.notify_one ();
-                    });
-                  std::unique_lock lock (attempt->mutex);
-                  attempt->completed.wait_for (
-                    lock, std::chrono::milliseconds (500),
-                    [&attempt] { return attempt->done; });
-                  if (!attempt->accepted)
-                      continue;
-                  if (!state->reported.exchange (
-                        true, std::memory_order_acq_rel)) {
-                      std::cout << "bingo play api channel ready node="
-                                << node_name << std::endl;
-                  }
-                  return;
-              }
-          });
-        co_return;
-    }
-
-    void request_stop () noexcept override
-    {
-        if (_state)
-            _state->stopping.store (true, std::memory_order_release);
-    }
-
-    void stop () noexcept override
-    {
-        request_stop ();
-        if (_worker.joinable ())
-            _worker.join ();
-        _state.reset ();
-    }
-
-  private:
-    struct state_t
-    {
-        std::atomic_bool stopping{false};
-        std::atomic_bool reported{false};
-        std::shared_ptr<channel_client_t> client;
-    };
-
-    std::string _node_name;
-    std::shared_ptr<state_t> _state;
-    std::thread _worker;
 };
 
 } // namespace zlink::samples::bingo

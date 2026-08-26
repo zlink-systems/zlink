@@ -20,35 +20,33 @@ function Set-DefaultValue {
     }
 }
 
-function Require-LogCount {
+function Wait-LogCount {
     param(
         [Parameter(Mandatory = $true)][string[]]$Path,
         [Parameter(Mandatory = $true)][string]$Pattern,
-        [Parameter(Mandatory = $true)][int]$Expected
+        [Parameter(Mandatory = $true)][int]$Expected,
+        [int]$Attempts = 300
     )
 
-    $count = @(Select-String -Path $Path -Pattern $Pattern).Count
-    if ($count -ne $Expected) {
-        throw "Expected $Expected matches for '$Pattern' in $Path, found $count."
-    }
-}
-
-function Wait-LogContains {
-    param(
-        [Parameter(Mandatory = $true)][string[]]$Path,
-        [Parameter(Mandatory = $true)][string]$Pattern,
-        [Parameter(Mandatory = $true)][string]$Description,
-        [int]$Attempts = 50
-    )
-
+    $count = 0
     for ($i = 0; $i -lt $Attempts; $i++) {
-        if (Select-String -Path $Path -Pattern $Pattern -Quiet) {
+        $existingPaths = @($Path | Where-Object { Test-Path $_ })
+        $count = if ($existingPaths.Count -eq 0) {
+            0
+        }
+        else {
+            @(Select-String -Path $existingPaths -Pattern $Pattern).Count
+        }
+        if ($count -eq $Expected) {
             return
         }
-        Start-Sleep -Milliseconds 200
+        if ($count -gt $Expected) {
+            break
+        }
+        Start-Sleep -Milliseconds 100
     }
 
-    throw "$Description was not found."
+    throw "Expected $Expected matches for '$Pattern' in $Path, found $count."
 }
 
 try {
@@ -103,6 +101,11 @@ try {
 
     Invoke-SampleDotnetBuild (Join-Path $ScriptDir "Bingo.csproj")
 
+    Start-SampleDotnetAssembly -Name "play-b" -Project (Join-Path $ScriptDir "Server/Play/Bingo.Server.Play.csproj") -LogDirectory $LogDir -Arguments @("--config", $configFiles["play-b"]) | Out-Null
+    Wait-SampleTcpEndpoint "play-b-mesh" $BINGO_PLAY_B_MESH_ENDPOINT
+    Start-SampleDotnetAssembly -Name "play-a" -Project (Join-Path $ScriptDir "Server/Play/Bingo.Server.Play.csproj") -LogDirectory $LogDir -Arguments @("--config", $configFiles["play-a"]) | Out-Null
+    Wait-SampleTcpEndpoint "play-a-mesh" $BINGO_PLAY_A_MESH_ENDPOINT
+
     Start-SampleDotnetAssembly -Name "matchmaking" -Project (Join-Path $ScriptDir "Server/Matchmaking/Bingo.Server.Matchmaking.csproj") -LogDirectory $LogDir -Arguments @("--config", $configFiles["matchmaking"]) | Out-Null
     Wait-SampleTcpEndpoint "matchmaking-mesh" $BINGO_MATCHMAKING_MESH_ENDPOINT
 
@@ -113,17 +116,27 @@ try {
     Wait-SampleTcpEndpoint "api-b-mesh" $BINGO_API_B_MESH_ENDPOINT
     Wait-SampleTcpEndpoint "api-b-matchmaking" $BINGO_API_B_MATCHMAKING_ENDPOINT
 
-    Start-SampleDotnetAssembly -Name "play-a" -Project (Join-Path $ScriptDir "Server/Play/Bingo.Server.Play.csproj") -LogDirectory $LogDir -Arguments @("--config", $configFiles["play-a"]) | Out-Null
-    Wait-SampleTcpEndpoint "play-a-mesh" $BINGO_PLAY_A_MESH_ENDPOINT
-    Start-SampleDotnetAssembly -Name "play-b" -Project (Join-Path $ScriptDir "Server/Play/Bingo.Server.Play.csproj") -LogDirectory $LogDir -Arguments @("--config", $configFiles["play-b"]) | Out-Null
-    Wait-SampleTcpEndpoint "play-b-mesh" $BINGO_PLAY_B_MESH_ENDPOINT
-
     Start-SampleDotnetAssembly -Name "session-a" -Project (Join-Path $ScriptDir "Server/Session/Bingo.Server.Session.csproj") -LogDirectory $LogDir -Arguments @("--config", $configFiles["session-a"]) | Out-Null
     Wait-SampleTcpEndpoint "session-a-mesh" $BINGO_SESSION_A_MESH_ENDPOINT
     Wait-SampleTcpEndpoint "session-a-stream" $BINGO_SESSION_A_STREAM_ENDPOINT
     Start-SampleDotnetAssembly -Name "session-b" -Project (Join-Path $ScriptDir "Server/Session/Bingo.Server.Session.csproj") -LogDirectory $LogDir -Arguments @("--config", $configFiles["session-b"]) | Out-Null
     Wait-SampleTcpEndpoint "session-b-mesh" $BINGO_SESSION_B_MESH_ENDPOINT
     Wait-SampleTcpEndpoint "session-b-stream" $BINGO_SESSION_B_STREAM_ENDPOINT
+
+    $playA = Join-Path $LogDir "play-a.out.log"
+    $playB = Join-Path $LogDir "play-b.out.log"
+    $apiA = Join-Path $LogDir "api-a.out.log"
+    $apiB = Join-Path $LogDir "api-b.out.log"
+    $sessionA = Join-Path $LogDir "session-a.out.log"
+    $sessionB = Join-Path $LogDir "session-b.out.log"
+    Wait-LogCount -Path $playA -Pattern "bingo-ready kind=peer-route node=play-a peer=play-b" -Expected 1
+    Wait-LogCount -Path $playB -Pattern "bingo-ready kind=peer-route node=play-b peer=play-a" -Expected 1
+    Wait-LogCount -Path $apiA -Pattern "bingo-ready kind=mesh-route node=api-a mesh=matchmaking" -Expected 1
+    Wait-LogCount -Path $apiA -Pattern "bingo-ready kind=mesh-route node=api-a mesh=room" -Expected 1
+    Wait-LogCount -Path $apiB -Pattern "bingo-ready kind=mesh-route node=api-b mesh=matchmaking" -Expected 1
+    Wait-LogCount -Path $apiB -Pattern "bingo-ready kind=mesh-route node=api-b mesh=room" -Expected 1
+    Wait-LogCount -Path $sessionA -Pattern "bingo-ready kind=mesh-route node=session-a mesh=room" -Expected 1
+    Wait-LogCount -Path $sessionB -Pattern "bingo-ready kind=mesh-route node=session-b mesh=room" -Expected 1
 
     $clientLog = Join-Path $LogDir "client.log"
     Invoke-SampleDotnetRun -Project (Join-Path $ScriptDir "Client/Bingo.Client.csproj") -Arguments @("--config", $configFiles["client"]) *> $clientLog
@@ -140,23 +153,25 @@ try {
         throw "Bingo client did not write stream-inbound push marker."
     }
 
-    $playA = Join-Path $LogDir "play-a.out.log"
-    $playB = Join-Path $LogDir "play-b.out.log"
     $playLogs = @($playA, $playB)
-    Wait-LogContains $playLogs "bingo room: player record loaded. room=.*actor=player-1, wins=0, losses=0" "player-1 record load evidence"
-    Wait-LogContains $playLogs "bingo room: player record loaded. room=.*actor=player-2, wins=0, losses=0" "player-2 record load evidence"
-    Wait-LogContains $playLogs "bingo room: result reported. room=.*actor=player-1, won=True, wins=1, losses=0" "player-1 result report evidence"
-    Wait-LogContains $playLogs "bingo room: result reported. room=.*actor=player-2, won=False, wins=0, losses=1" "player-2 result report evidence"
-    Wait-LogContains $playLogs "bingo observer room: actor left. observedRoom=.*observer=observer" "Observer room leave evidence"
-    Wait-LogContains $playLogs "bingo room: actor left. room=.*actor=player-1" "player-1 room leave evidence"
-    Wait-LogContains $playLogs "bingo room: actor left. room=.*actor=player-2" "player-2 room leave evidence"
-    Wait-LogContains $playLogs "entry spot: actor destroy completed. actor=player-1" "player-1 destroy evidence"
-    Wait-LogContains $playLogs "entry spot: actor destroy completed. actor=player-2" "player-2 destroy evidence"
-    Require-LogCount -Path $playLogs -Pattern "entry spot: actor destroy completed\. actor=player-1" -Expected 1
-    Require-LogCount -Path $playLogs -Pattern "entry spot: actor destroy completed\. actor=player-2" -Expected 1
-    Require-LogCount -Path $playLogs -Pattern "entry spot: actor destroy completed\. actor=observer" -Expected 0
-    Require-LogCount -Path $playLogs -Pattern "bingo room: player record loaded\." -Expected 2
-    Require-LogCount -Path $playLogs -Pattern "bingo room: result reported\." -Expected 2
+    $sessionLogs = @($sessionA, $sessionB)
+    Wait-LogCount -Path $playLogs -Pattern "bingo-record fetched actor=player-1 wins=0 losses=0" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-record fetched actor=player-2 wins=0 losses=0" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-record reported actor=player-1 wins=1 losses=0" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-record reported actor=player-2 wins=0 losses=1" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-lifecycle room-leave actor=player-1" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-lifecycle room-leave actor=player-2" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-lifecycle room-leave actor=observer" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-lifecycle entry-leave actor=player-1" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-lifecycle entry-leave actor=player-2" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-lifecycle entry-leave actor=observer" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-lifecycle entry-destroy-complete actor=player-1" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-lifecycle entry-destroy-complete actor=player-2" -Expected 1
+    Wait-LogCount -Path $sessionLogs -Pattern "bingo-lifecycle session-disconnect actor=player-1 destroy=false" -Expected 1
+    Wait-LogCount -Path $sessionLogs -Pattern "bingo-lifecycle session-disconnect actor=player-2 destroy=false" -Expected 1
+    Wait-LogCount -Path $playLogs -Pattern "bingo-record reported actor=observer" -Expected 0
+    Wait-LogCount -Path $playLogs -Pattern "bingo-lifecycle entry-destroy-complete actor=observer" -Expected 0
+    Write-Host "bingo-placement=completed"
     $RunSucceeded = $true
 }
 finally {

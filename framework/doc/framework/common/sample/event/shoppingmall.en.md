@@ -836,6 +836,74 @@ into the Client path. The runner calls self-check hooks only to prepare fixtures
 server-side evidence; those calls are outside the Client process code path. Runner observation does
 not substitute for a Client assertion of public responses and state.
 
+### 10.1 Evidence the Runner Confirms
+
+The runner matches the strings in the tables below verbatim. These strings are not a per-language
+choice. All five implementations emit the same string the same number of times; changing the
+wording means changing this table first. Node names are fixed as `api-a`, `api-b`, `workflow-a`,
+and `workflow-b`.
+
+**Evidence must be a string the sample owns.** Lines the framework prints — runtime readiness logs,
+the message-flow tracer, structured-trace projections, process startup boilerplate — are not success
+criteria. They change for framework reasons, and when they do, the sample runner breaks silently.
+
+Readiness is confirmed before the Client scenario runs. These are the two things step 4 of §10
+requires.
+
+| Fact confirmed | Log | Emitting node |
+| --- | --- | --- |
+| The HTTP edge is open | `shoppingmall-ready kind=http node=<NodeId>` | `api-a`, `api-b` |
+| RouteMesh object capability is available | `shoppingmall-ready kind=object-route node=<NodeId> target=<WorkflowNodeId>` | `api-a`, `api-b` (once each for `workflow-a`, `workflow-b`) |
+
+The second row is confirmed **from a passive signal**. The runner does not prove readiness by
+sending a request of its own, such as `/ready?targetRid=`.
+
+Server evidence is confirmed after the Client scenario finishes.
+
+| Fact confirmed | Log | Exact count |
+| --- | --- | --- |
+| A Workflow node started an order | `shoppingmall-order started order=<OrderId> spot=<SpotId>` | at least 1 **in each Workflow node log separately** |
+| CommerceApi left its evidence | `shoppingmall-evidence order=<OrderId> events=<N>` | at least 1 |
+| After a planned relocation, replay kept the generation and resumed at the next step (§9.2-11) | `shoppingmall-order replayed order=<OrderId> generation=<N>` | 1 |
+| An already-completed external effect was not repeated (§9.2-11) | `shoppingmall-order external-effect-repeated order=<OrderId>` | 0 |
+
+**The first row is counted in each node's log separately.** Do not pass both log files to a single
+search so that "a match in either one" passes.
+
+**The last two rows require actually causing a relocation.** §11 requires, as a completion
+criterion, that a planned relocation keeps the same `ObjectGeneration`, resumes from the next step
+after event replay, and does not repeat an already-completed external effect. Wiring up the stores
+does not satisfy that criterion. Without that stage these rows cannot pass — and they should not.
+
+#### The runner-only hook boundary
+
+Restating the boundary §9 sets, in a form the runner can check.
+
+- **The Client calls only CommerceApi's public order API.** It does not call `/self-check/*` hooks
+  from inside the Client process. Fixture preparation and server-evidence checks are made by the
+  runner itself, before the Client starts or after it finishes.
+- **The Client calls over the public transport.** It does not talk to CommerceApi directly over an
+  internal channel or mesh API. Doing so means the public order API surface §9 exists to exercise
+  is never exercised.
+- Identifiers the runner sends to a self-check hook are **values this run actually produced**. Do
+  not send pre-written order IDs — they would keep passing after they stop corresponding to the run.
+
+There are two completion markers.
+
+| Marker | Printed by | Meaning |
+| --- | --- | --- |
+| `shoppingmall=completed` | the Client | the whole §9 client self-check passed |
+| `shoppingmall-placement=completed` | the runner | every row of the §10.1 table passed |
+
+**The runner confirms `shoppingmall=completed` directly.** A client process exit code does not
+stand in for it. Do not use a per-language placement marker such as `PASS ShoppingMall.<Lang>` —
+the runner placement marker step 6 of §10 refers to is `shoppingmall-placement=completed`, and
+nothing else.
+
+Log waits poll every `100 ms` for at most `300` attempts. This budget applies to readiness and to
+evidence alike, and **`.sh` and `.ps1` use the same value.** Reading once without waiting is not
+allowed. All five languages ship both a `.sh` and a `.ps1`.
+
 ## 11. Completion Criteria
 
 - [ ] The document explains ShoppingMall's business problem, start/end scope, and comparison with
@@ -858,5 +926,5 @@ not substitute for a Client assertion of public responses and state.
 - [ ] The Client self-check directly confirms public responses, state, and forbidden results, while
       runner observation separately confirms events and external effects.
 - [ ] The sample code uses only the public Framework API and the default typed JSON codec.
-- [ ] The smoke run confirms readiness with a bounded wait and prints the success marker
-      conditionally.
+- [ ] The smoke run confirms readiness with a bounded wait, prints the success marker
+      conditionally, and passes every row of the §10.1 table down to the string and the count.

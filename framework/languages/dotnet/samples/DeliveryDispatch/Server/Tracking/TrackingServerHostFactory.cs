@@ -26,6 +26,12 @@ public static class TrackingServerHostFactory
         builder.Services.AddSingleton(configuration);
         builder.Services.AddSingleton(topology);
         builder.Services.AddSingleton<EvidenceStore>();
+        builder.Services.AddSingleton(new DeliveryDispatchReadiness(
+            DeliveryDispatchReadyKind.Route,
+            SampleNames.TrackingNode,
+            SampleNames.CustomerMeshName,
+            RequiredReadyPeers: 1));
+        builder.Services.AddHostedService<DeliveryDispatchReadinessReporter>();
         builder.Services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(new ZLinkRedisLocationStore(redis =>

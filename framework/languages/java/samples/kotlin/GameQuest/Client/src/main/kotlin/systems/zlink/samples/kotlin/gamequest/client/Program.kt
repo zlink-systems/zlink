@@ -9,6 +9,7 @@ import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import systems.zlink.httpclient.ZLinkHttpClient
 import systems.zlink.httpclient.kotlin.awaitRaw
 import systems.zlink.httpclient.kotlin.fetch
@@ -169,6 +170,14 @@ class GameQuestClientScenario(private val options: GameQuestClientOptions) {
         val reconciled = apiBStream.request(GetQuestProgressReq("player-alice")).awaitReply<GetQuestProgressRes>()
         ensure(reconciled.activeQuests.any { it.questId == QuestIds.FirstHunt && it.currentCount >= 4 })
 
+        println("gamequest-owner-termination-ready player=player-alice")
+        waitForOwnerTerminationRelease()
+        val unavailable = runCatching {
+            apiAStream.request(KillMonsterReq("player-alice", "wolf", "forest", "kill-after-owner-termination"))
+                .awaitReply<KillMonsterRes>()
+        }.exceptionOrNull()
+        ensure(unavailable != null)
+
         apiAStream.close().await()
         val assertion = waitForServerAssertion()
         check(assertion.passed) {
@@ -205,6 +214,17 @@ class GameQuestClientScenario(private val options: GameQuestClientOptions) {
         error("Projection did not reach $questId=$currentCount")
     }
 
+    private suspend fun waitForOwnerTerminationRelease() {
+        val release = Path.of(options.controlDirectory, "owner-terminated")
+        repeat(SampleTimings.RunnerWaitAttempts) {
+            if (Files.exists(release)) {
+                return
+            }
+            delay(SampleTimings.RunnerWaitMillis)
+        }
+        error("Runner did not release the owner-termination scenario")
+    }
+
     private fun hasProgress(progress: List<QuestProgress>, questId: String, currentCount: Int): Boolean =
         progress.any { it.questId == questId && it.currentCount == currentCount }
 
@@ -231,6 +251,7 @@ data class GameQuestClientOptions(
     val apiBHttpEndpoint: String,
     val missionAHttpEndpoint: String,
     val missionBHttpEndpoint: String,
+    val controlDirectory: String,
 ) {
     companion object {
         fun load(args: Array<String>): GameQuestClientOptions {
@@ -249,6 +270,7 @@ data class GameQuestClientOptions(
                 required("sample.apiBHttpEndpoint"),
                 required("sample.missionAHttpEndpoint"),
                 required("sample.missionBHttpEndpoint"),
+                required("sample.controlDirectory"),
             )
         }
     }

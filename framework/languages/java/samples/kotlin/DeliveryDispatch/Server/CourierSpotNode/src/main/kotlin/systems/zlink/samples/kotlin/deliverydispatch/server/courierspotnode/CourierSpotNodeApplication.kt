@@ -8,12 +8,15 @@ import org.springframework.context.annotation.Bean
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.kotlin.useCoroutineHandlers
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.DeliveryDispatchReadinessReporter
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleTopology
 import systems.zlink.samples.kotlin.deliverydispatch.server.courierspotnode.spots.CourierEntrySpot
+import systems.zlink.contracts.core.RoutingId
 
 @EnableZLinkFramework
 @SpringBootApplication(
@@ -32,8 +35,18 @@ class CourierSpotNodeApplication {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
             val spotNode = options.addRouteMesh(SampleNames.CourierSpotMesh)
+            //  Fixed RID so Dispatch can name this courier node in its actor-route readiness row.
+            //  An auto-assigned RID cannot be named, and peer status carries no endpoint.
             spotNode.listen(selected.spotEndpoint)
-                .setRoutingIdPrefix("delivery-courier")
+                .setRoutingId(
+                    RoutingId.from(
+                        if (SampleTopology.CourierNode == "node2") {
+                            SampleNames.CourierNode2
+                        } else {
+                            SampleNames.CourierNode1
+                        },
+                    ),
+                )
             spotNode.objects().server()
                 .addEntrySpot(CourierEntrySpot::class.java)
                 .addActorFactory(
@@ -52,6 +65,18 @@ class CourierSpotNodeApplication {
 
     @Bean
     fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
+
+    @Bean(destroyMethod = "close")
+    fun readinessReporter(meshes: ZLinkRouteMeshRuntime): DeliveryDispatchReadinessReporter =
+        DeliveryDispatchReadinessReporter.route(
+            if (SampleTopology.CourierNode == "node2") {
+                SampleNames.CourierNode2
+            } else {
+                SampleNames.CourierNode1
+            },
+            SampleNames.CourierSpotMesh,
+            meshes,
+        )
 
     companion object {
         fun run(args: Array<String> = emptyArray()): AutoCloseable {

@@ -37,14 +37,6 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 final class ZLinkSpotLifecycle {
     @FunctionalInterface
-    interface ActivationFactory {
-        CompletionStage<SpotActivationCreateResult> activate(
-            Class<? extends ZLinkSpot<?>> spotType,
-            ZLinkBackendSpot backendSpot,
-            ZLinkMessage request);
-    }
-
-    @FunctionalInterface
     interface ActorOccupancy {
         boolean hasActorsInSpot(String spotId);
     }
@@ -53,7 +45,7 @@ final class ZLinkSpotLifecycle {
     private final String meshName;
     private final Executor backendExecutor;
     private final ZLinkSpotLocationCoordinator locations;
-    private final ActivationFactory activationFactory;
+    private final ZLinkSpotActivationFactory activationFactory;
     private final ActorOccupancy actorOccupancy;
     private final Set<Class<? extends ZLinkSpot<?>>> registeredSpotTypes;
     private final List<EntrySpotActivation> entrySpots;
@@ -67,7 +59,7 @@ final class ZLinkSpotLifecycle {
         Executor backendExecutor,
         ZLinkSpotLocationCoordinator locations,
         Collection<Class<? extends ZLinkSpot<?>>> registeredSpotTypes,
-        ActivationFactory activationFactory,
+        ZLinkSpotActivationFactory activationFactory,
         ActorOccupancy actorOccupancy) {
         this.primaryNode = primaryNode;
         this.meshName = meshName;
@@ -209,6 +201,32 @@ final class ZLinkSpotLifecycle {
                         created)));
     }
 
+    CompletionStage<PreparedUserSpot> prepareRelocationReserved(
+        Class<? extends ZLinkSpot<?>> spotType,
+        String spotId,
+        long objectGeneration) {
+        requireRegistered(spotType);
+        requireSpotId(spotId);
+        if (objectGeneration == 0) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException(
+                    "objectGeneration must be non-zero"));
+        }
+        if (spots.containsKey(spotId)) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                "User Spot relocation target already exists"));
+        }
+        return CompletableFuture.supplyAsync(
+                () -> primaryNode.createSpot(spotId, objectGeneration),
+                backendExecutor)
+            .thenCompose(backendSpot -> activationFactory
+                .activateRelocation(spotType, backendSpot)
+                .thenApply(created -> new PreparedUserSpot(
+                    spotId,
+                    objectGeneration,
+                    created)));
+    }
+
     void publishReserved(PreparedUserSpot prepared) {
         if (prepared.existing()) {
             return;
@@ -250,10 +268,11 @@ final class ZLinkSpotLifecycle {
     CompletionStage<Void> completeRelocationReady(
         PreparedUserSpot prepared) {
         requireNewPrepared(prepared);
-        return prepared.created().activation().context
-            .runRelocationReadyCompletion(
-                systems.zlink.framework.spots
-                    .ZLinkSpotRelocationReadyOutcome.RELOCATED);
+        return activationFactory.initializeRelocation(prepared.created().activation())
+            .thenCompose(ignored -> prepared.created().activation().context
+                .runRelocationReadyCompletion(
+                    systems.zlink.framework.spots
+                        .ZLinkSpotRelocationReadyOutcome.RELOCATED));
     }
 
     Object beginReservedIngressHold(PreparedUserSpot prepared) {

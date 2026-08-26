@@ -313,8 +313,9 @@ session 파일럿 리뷰에서 실제로 지적된 것들이다. 모두 가이�
 | 7샘플 × 3트리 | **완료** — node 7/7, cpp 7/7, dotnet 7/7. dotnet ZoneWorld는 세 조치로 닫았다(§9.5) |
 | ZoneWorld 언어별 통일 | **진행 중** — 브라우저 단계·owner lease·`.sln`·관측 예산은 완료. ready 문자열·재시도 250ms×120·설정 이름은 dotnet·node·java·kotlin 완료, cpp는 hosted service 전환과 함께 진행 |
 | 공통 스펙 §22 Hosted service | **완료** — 지금까지 공통 스펙에 없어 언어별 interface 문서가 따로 정의했고 모델이 갈렸다(G24) |
-| cpp hosted service coroutine 전환 | **진행 중** — `start`를 `task_t<void>` 반환으로. 구현체 10개·호출부 1곳·interface 문서 |
-| 나머지 6샘플 통일 | **계획 수립** — §9.6. Bingo·TicTacToe부터(runner 분량 편차 최대) |
+| cpp hosted service coroutine 전환 | **완료** — `start`를 `task_t<void>` 반환으로. 구현체 10개·호출부 1곳·interface 문서. cpp 게이트 44/44 + 전체 빌드 통과 |
+| 나머지 6샘플 통일 — **스펙** | **완료 (6/6)** — Bingo·TicTacToe·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat 전부 §10.1을 ko/en에 신설. 세 샘플에서는 **갈라짐을 허가하던 조항 자체를 삭제**했다(§9.6.1) |
+| 나머지 6샘플 통일 — **구현** | **진행 중 (3/6 + 1 거의)** — Bingo·TicTacToe·DeliveryDispatch 각 5언어 실행 검증 완료. GameQuest는 dotnet·cpp·java·kotlin 통과, node 진행 중. ShoppingMall 3언어 진행 중, SupportChat 대기. 상세는 [progress.ko.md](progress.ko.md) |
 | 언어별 guide 재생성 | **완료** — `generate_language_guides.py`, 4개 갱신 |
 | 최상위 README | **완료** — `exact` 제거, `archive/` 안내 추가 |
 | `languages/` 트리 정리 | **완료** — 이동 안내 껍데기 18파일 삭제, 옛 평면 경로 835건 치환, anchor 10종 정정 |
@@ -324,8 +325,10 @@ session 파일럿 리뷰에서 실제로 지적된 것들이다. 모두 가이�
 | en 47개 일괄 작성 | ko 확정 후(§5) |
 | 이동 anchor 치환표 | **완료** — [anchor-map.ko.md](anchor-map.ko.md), 생성기 `build-anchor-map.py`. anchor 그대로 2,027건 / 자동 매핑 64건 / 손으로 정할 것 55건 / 1:N 라우팅 3,137건 |
 | 이동 리허설 → 이동 한 커밋 | en 작성 후(§5) |
-| site — guide 재생성·mkdocs 확인 | **완료** — 언어별 guide 4개 재생성, 빌드 경고 중 캠페인이 만든 3건(en→ko 링크) 수정. 나머지 128건은 site 발행 범위 문제로 캠페인 밖(§10) |
+| site — guide 재생성·mkdocs 확인 | **완료** — 언어별 guide 재생성 2회(초기 4개, `09-stream` 탭 수정 뒤 4개). 빌드 경고 중 캠페인이 만든 3건(en→ko 링크) 수정. 나머지 128건은 site 발행 범위 문제로 캠페인 밖(§10) |
 | redirect 표 | **불필요** — 옛 문서를 지우지 않고 `archive/`에 두었고 `mkdocs-redirects`도 설치돼 있지 않다. 옛 URL은 `archive/` 경로로 살아 있다 |
+| `languages/` 트리 어휘·형식 정리 | **완료** — `exact` ko/en 잔여 0건, `정본` 잔여 0건, 내비게이션 ko 21·en 21 문서. 직접 재확인함 |
+| `09-stream` 탭 회귀 | **완료** — `check_doc_tabs.py`가 잡은 4건. Kotlin 탭 누락과 비표준 라벨 `TypeScript`→`Node/TypeScript`를 ko/en 양쪽에서 고치고 언어별 guide를 재생성했다 |
 | `spec/` 트리 재잠금 | **보류** — 사용자 리뷰가 열려 있는 동안 잠그면 그 리뷰 반영을 막는다. 리뷰가 닫힌 뒤 `chmod -R a-w framework/doc/framework/common/spec` |
 
 ## 9. 다음에 할 일
@@ -339,8 +342,8 @@ ko 재작성·4언어 대조·gap 판정(D1~D10)·구현 부채 배치 1~4가 �
 2. **남은 게이트 실패를 전부 닫는다**(§10.1). 현재 node dispatch 오류 telemetry 16건.
 3. **en 동기화를 끝낸다** — [en-sync-debt.md](en-sync-debt.md). 자동 검사는 en이 낡아도
    통과하므로 이 문서가 유일한 기록이다.
-4. **`languages/` 트리의 어휘·형식 정리** — `exact` 191곳, `정본` 5파일, 내비게이션 줄 없는
-   문서. 공통 스펙 7주제에 적용한 규칙을 같은 수준으로 적용한다.
+4. ~~**`languages/` 트리의 어휘·형식 정리**~~ — 완료. `exact` ko 200·en 241, `정본` 5파일 8건을
+   걷어내고 내비게이션 줄을 ko/en 20문서에 넣었다. 잔여 0건을 직접 재확인했다.
 5. 이동 리허설 → 이동 한 커밋(§5) → site·최상위 README 축소 → `spec/` 트리 재잠금(§7).
 
 ### 에이전트를 띄우기 전에
@@ -438,6 +441,33 @@ node 4·cpp 4건이다. 대부분 상수·오류 코드·로그 문자열이고,
 | cpp | `ctest --test-dir framework/languages/cpp/build -L 'framework-(unit|contract)' -LE 'e2e|sample|perf'`. 빌드 직후 exit 86·SIGABRT(134)는 일시 현상이므로 한 번 재실행한다 |
 | node | `npx tsc -b tsconfig.build.json` 먼저(테스트가 `dist/`에서 import한다) |
 | dotnet | UnitTests csproj는 `EnableDefaultCompileItems=false`다. 새 테스트 파일은 `<Compile Include>`에 넣어야 인식된다 |
+
+### 9.6.1 스펙이 갈라짐을 허가하고 있었다
+
+조사에서 드러난 공통 뿌리다. 세 샘플의 §10에 **언어별로 달라도 된다고 명시한 조항**이 있었고,
+그것이 실제 갈라짐의 근거였다. 전부 삭제하고 §10.1을 따르라는 문장으로 바꿨다.
+
+| 샘플 | 삭제한 조항 |
+|---|---|
+| DeliveryDispatch | "evidence marker의 이름은 해당 언어 runner가 실제로 출력하는 값을 사용" |
+| GameQuest | "rehydrate나 scale-out처럼 특정 runner가 별도로 출력하는 marker는 해당 언어 runner의 실제 출력만 사용" |
+| SupportChat | "authentication, assignment, reconnect 같은 self-check 이름을 공통 marker로 중복 선언하지 않는다" |
+
+여섯 샘플 §10.1에 공통으로 넣은 규칙은 넷이다.
+
+1. **evidence는 샘플이 소유한 문자열이어야 한다** — framework가 찍는 줄(`ZLINK_FRAMEWORK_READY`,
+   `message flow`, structured trace 투영, 기동 boilerplate)은 완료 판정 근거가 될 수 없다.
+2. **readiness에 합성 요청을 보내지 않는다** — `/ready?targetRid=` 같은 runner 발신 probe 금지.
+3. 대기는 `100 ms × 300`, **`.sh`와 `.ps1`이 같은 값**.
+4. 전부 통과하면 `<sample>-placement=completed`, 하나라도 실패하면 미출력.
+
+샘플별로 추가한 규칙 중 재사용 가치가 큰 것 둘(SupportChat에서 나왔다).
+
+- **marker는 그 사실이 일어난 자리에서 출력한다.** cpp가 8개 marker를 scenario 끝에서 조건 없이
+  몰아 찍고 있었다. 앞에서 예외가 나면 한 줄도 안 찍히고 러너는 그 전에 종료 코드로 죽으므로,
+  8번의 `grep`이 **"프로세스가 0으로 끝났다"를 여덟 번 확인**하는 것이 되어 있었다.
+- **self-check는 실제 경로를 지나야 한다.** cpp self-check가 actor Spot·Session relay·wire codec을
+  전부 우회하는 in-process 전용 경로로 미리 정해진 `…=verified` 문자열을 돌려주고 있었다.
 
 ## 9.6 샘플 언어별 통일 — 7샘플로 확장
 
@@ -708,7 +738,40 @@ ZLINK_SAMPLE_EVIDENCE_DIR=<디렉터리> bash framework/languages/dotnet/samples
   **실행 시간 차이가 판정 근거다** — 81초 vs 13초면 로직이 아니라 자원 경합이다.
 - **HEAD와 대조해야 회귀인지 알 수 있다.** dotnet ZoneWorld는 단독에서도 실패했지만, dotnet
   소스를 HEAD로 되돌려 돌리니 **더 많이**(9개 시나리오) 실패했다. 이번 작업의 회귀가 아니다.
-- **트리를 동시에 돌리지 않는다.** cpp와 dotnet을 함께 돌린 회차에서만 실패가 나왔다.
+- ~~**트리를 동시에 돌리지 않는다.**~~ **(2026-08-26 정정)** "cpp와 dotnet을 함께 돌린 회차에서만
+  실패가 나왔다"는 관찰은 맞지만 **자원 경합이라는 설명은 확인하지 않고 붙인 것이었다.** 실제로
+  세 트리는 포트가 겹치지 않는다 — cpp `20000-20099`(Redis)·`20100-20999`(앱), dotnet
+  `22100-23999`, node `28000-28099`·`28100-29999`. node는 파일 lease까지 걸어 동시 실행을 막는다.
+  그리고 dotnet ShoppingMall이 죽은 지점은 core `fast_mutex.hpp:76`의 `posix_assert` —
+  `pthread_mutex_lock`이 `EINVAL`을 반환했다. 포트를 뺏겼다면 bind 실패로 죽지 mutex가 EINVAL을
+  내지 않는다. `EINVAL`은 보통 파괴됐거나 초기화되지 않은 mutex를 잠글 때 난다.
+  **따라서 이것은 격리로 숨길 문제가 아니라, 부하가 타이밍을 바꿔 드러낸 종료 경로의 잠재
+  race로 봐야 한다.** 별도 추적 대상이다(재현 조건: 일괄 실행 = 부하).
+
+  **조사 결과(2026-08-26) — 원인 미확정.** 두 조사를 독립적으로 돌렸고 결론이 갈렸다.
+  - 1차 가설(Claude): `stream.cpp:835`가 `pipe_->stream_packet_dispatch_sync()`로 pipe 소유
+    mutex를 잡은 채 애플리케이션 핸들러를 부르고, dispatch 경로가 `retain_lifetime_ref()`를
+    쓰지 않으므로(`stream.cpp` 내 사용 0회, 다른 5개 파일은 모두 사용) 핸들러 중 pipe가
+    파괴되면 락 소멸자가 사라진 저장소를 unlock한다.
+  - **반증(codex sol).** dispatch가 쓰는 pipe는 **session쪽 `pipes[0]`**이고
+    (`session_base_pipe_io.cpp:195`), `xpipe_terminated`·`term_peer_rid`가 건드리는 것은
+    **socket쪽 `pipes[1]`**이다(`stream.cpp:293`, `stream.cpp:347`). 게다가
+    `send_pipe_term`/`send_pipe_term_ack`은 `send_pipe_command(..., false)`로
+    **self-dispatch를 끄고** 보내므로(`object.cpp:337-348`) 항상 큐잉되고, io thread는
+    단일 worker라 dispatch가 반환하기 전에는 그 term-ack이 실행될 수 없다.
+    `send_pipe_command`은 목적지 pipe를 **retain까지 한다**(`object.cpp:534`).
+  - **결정적 지적**: `fast_mutex.hpp:76`은 모든 `scoped_fast_lock_t` 소멸자가 지나가는
+    inline `unlock`이다. **assert 위치만으로는 어느 mutex 인스턴스인지 알 수 없다.**
+    `_stream_packet_sync`라는 전제 자체가 근거 없는 좁히기였다.
+  - 나는 `send_pipe_command`의 `allow_self_dispatch_=false`와 retain을 직접 확인했다. 반증이 맞다.
+
+  **교훈**: 1차 조사가 내놓은 주장들을 검증했지만, **그 가설을 무너뜨릴 코드를 찾아보지 않았다.**
+  주장 검증과 가설 반증은 다른 작업이다. 다음부터 두 번째 조사자에게는 "확인"이 아니라
+  "반증"을 시킬 것.
+
+  **현재 상태**: 원인 미확정. 스택 트레이스나 mutex 주소 없이는 어느 mutex였는지도 모른다.
+  다음 단계는 재현 시 core dump에서 스택을 뜨는 것이다. retain 누락은 **취약점이지 확정된
+  원인은 아니다** — 실행자 소유 규칙이 바뀌면 위험해지므로 별도 hardening 항목으로 남긴다.
 
 ### 게이트 실행 결과 (2026-08-25)
 

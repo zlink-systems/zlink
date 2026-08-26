@@ -8,8 +8,10 @@ import org.springframework.context.annotation.Bean
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.kotlin.useCoroutineHandlers
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.DeliveryDispatchReadinessReporter
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleTopology
@@ -43,6 +45,14 @@ class CourierSessionApplication {
 
     @Bean
     fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
+
+    @Bean(destroyMethod = "close")
+    fun readinessReporter(meshes: ZLinkRouteMeshRuntime): DeliveryDispatchReadinessReporter =
+        DeliveryDispatchReadinessReporter.route(
+            SampleNames.CourierSessionNode,
+            SampleNames.CourierSpotMesh,
+            meshes,
+        )
 
     companion object {
         fun run(args: Array<String> = emptyArray()): AutoCloseable {

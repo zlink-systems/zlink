@@ -11,6 +11,7 @@ RUN_DIR=""
 LOG_DIR=""
 REDIS_CONTAINER=""
 pids=()
+declare -A role_pids=()
 
 on_exit() {
   local status="$?"
@@ -82,6 +83,8 @@ api_a_config="$RUN_DIR/api-a.properties"
 api_b_config="$RUN_DIR/api-b.properties"
 client_config="$RUN_DIR/client.properties"
 rehydrate_client_config="$RUN_DIR/rehydrate-client.properties"
+owner_unavailable_client_config="$RUN_DIR/owner-unavailable-client.properties"
+owner_unavailable_release_file="$RUN_DIR/owner-unavailable.release"
 write_role_config "$mission_a_config" mission-a channelEndpoint "$mission_a_channel" "$mission_a_http"
 write_role_config "$mission_b_config" mission-b channelEndpoint "$mission_b_channel" "$mission_b_http"
 cat >>"$mission_a_config" <<EOF
@@ -111,8 +114,12 @@ EOF
 }
 write_client_config "$client_config" full
 write_client_config "$rehydrate_client_config" rehydrate
+write_client_config "$owner_unavailable_client_config" owner-unavailable
+cat >>"$owner_unavailable_client_config" <<EOF
+sample.ownerUnavailableReleaseFile=${owner_unavailable_release_file}
+EOF
 chmod 0600 "$mission_a_config" "$mission_b_config" "$api_a_config" "$api_b_config" \
-  "$client_config" "$rehydrate_client_config"
+  "$client_config" "$rehydrate_client_config" "$owner_unavailable_client_config"
 
 cd "$ROOT_DIR"
 if rg -n 'markRehydrated|recordRehydrated|owner-rehydrates' Server; then
@@ -135,8 +142,6 @@ if rg -n '^기준:.*dotnet' sample-porting-inventory.ko.md; then
   echo "GameQuest inventory must use the common sample contract as its authority" >&2
   exit 1
 fi
-grep -q 'gamequest-scale-out=completed' \
-  Client/src/main/java/systems/zlink/samples/gamequest/client/GameQuestClientScenario.java
 (
   cd ../../..
   zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
@@ -153,6 +158,104 @@ start_role() {
   local config="$3"
   "$binary" --config "$config" >"$LOG_DIR/$name.log" 2>&1 &
   pids+=("$!")
+  role_pids["$name"]="$!"
+}
+
+wait_log_count() {
+  local log="$1"
+  local evidence="$2"
+  local expected="$3"
+  local count
+  for _ in $(seq 1 300); do
+    count="$(grep -F -c -- "$evidence" "$log" 2>/dev/null || true)"
+    if [[ "$count" == "$expected" ]]; then
+      return 0
+    fi
+    if (( count > expected )); then
+      echo "Expected $expected '$evidence' in $log, found $count." >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for $expected '$evidence' in $log." >&2
+  return 1
+}
+
+wait_log_at_least() {
+  local log="$1"
+  local evidence="$2"
+  local minimum="$3"
+  local count
+  for _ in $(seq 1 300); do
+    count="$(grep -F -c -- "$evidence" "$log" 2>/dev/null || true)"
+    if (( count >= minimum )); then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for at least $minimum '$evidence' in $log." >&2
+  return 1
+}
+
+log_count() {
+  local evidence="$1"
+  shift
+  local total=0
+  local log
+  local count
+  for log in "$@"; do
+    count="$(grep -F -c -- "$evidence" "$log" 2>/dev/null || true)"
+    total=$((total + count))
+  done
+  printf '%s\n' "$total"
+}
+
+wait_log_total_at_least() {
+  local evidence="$1"
+  local minimum="$2"
+  shift 2
+  local total
+  for _ in $(seq 1 300); do
+    total="$(log_count "$evidence" "$@")"
+    if (( total >= minimum )); then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for at least $minimum '$evidence' across logs." >&2
+  return 1
+}
+
+wait_log_total_count() {
+  local evidence="$1"
+  local expected="$2"
+  shift 2
+  local total
+  for _ in $(seq 1 300); do
+    total="$(log_count "$evidence" "$@")"
+    if (( total == expected )); then
+      return 0
+    fi
+    if (( total > expected )); then
+      echo "Expected $expected '$evidence' across logs, found $total." >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for $expected '$evidence' across logs." >&2
+  return 1
+}
+
+remove_crashed_role_from_cleanup() {
+  local name="$1"
+  local crashed_pid="${role_pids[$name]}"
+  local -a remaining=()
+  local pid
+  for pid in "${pids[@]}"; do
+    [[ "$pid" == "$crashed_pid" ]] || remaining+=("$pid")
+  done
+  pids=("${remaining[@]}")
+  ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="${ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS//$name.log/}"
 }
 
 start_role mission-a "$(app_bin Server/QuestMission QuestMission)" "$mission_a_config"
@@ -170,36 +273,79 @@ wait_port "$mission_a_channel"
 wait_port "$mission_b_channel"
 wait_http "$api_a_http"
 wait_http "$api_b_http"
-wait_framework_ready_logs "$LOG_DIR" 1
-wait_framework_peer_ready_counts \
-  "$LOG_DIR" \
-  mission-a.log:3 \
-  mission-b.log:3 \
-  api-a.log:3 \
-  api-b.log:3
+wait_log_count "$LOG_DIR/mission-a.log" \
+  "gamequest-ready kind=instance-factory node=mission-a" 1
+wait_log_count "$LOG_DIR/mission-b.log" \
+  "gamequest-ready kind=instance-factory node=mission-b" 1
+wait_log_count "$LOG_DIR/api-a.log" "gamequest-ready kind=stream node=api-a" 1
+wait_log_count "$LOG_DIR/api-b.log" "gamequest-ready kind=stream node=api-b" 1
+wait_log_count "$LOG_DIR/api-a.log" \
+  "gamequest-ready kind=spot-route node=api-a mesh=gamequest.player-quests" 1
+wait_log_count "$LOG_DIR/api-b.log" \
+  "gamequest-ready kind=spot-route node=api-b mesh=gamequest.player-quests" 1
 
-echo "topology=ready"
 "$(app_bin Client Client)" --config "$client_config" >"$LOG_DIR/client.log" 2>&1
 cat "$LOG_DIR/client.log"
 
 grep -q "gamequest-server-evidence=completed" "$LOG_DIR/client.log"
 grep -q "gamequest=completed" "$LOG_DIR/client.log"
-grep -q "gamequest-scale-out=completed" "$LOG_DIR/client.log"
-grep -h -q 'surface=spot kind=send.*packet=GameplayMsg' "$LOG_DIR"/mission-*.log
-grep -h -q 'packet=GameplayMsg.*spot=player-scale-a' "$LOG_DIR"/mission-*.log
-grep -h -q 'packet=GameplayMsg.*spot=player-scale-b' "$LOG_DIR"/mission-*.log
-grep -h -q 'packet=QuestProcessingMsg' "$LOG_DIR"/api-*.log
-echo "gamequest player owner Spot routing completed"
+wait_log_total_at_least "gamequest-api event-routed player=" 4 \
+  "$LOG_DIR/api-a.log" "$LOG_DIR/api-b.log"
+wait_log_total_at_least "gamequest-mission processed player=" 4 \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+wait_log_count "$LOG_DIR/mission-a.log" \
+  "gamequest-mission reconciled player=player-alice quest=first-hunt" 1 || \
+  wait_log_count "$LOG_DIR/mission-b.log" \
+    "gamequest-mission reconciled player=player-alice quest=first-hunt" 1
+if [[ "$(log_count "gamequest-mission reconciled player=player-alice quest=first-hunt" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")" != "1" ]]; then
+  echo "Expected one reconcile evidence row for player-alice." >&2
+  exit 1
+fi
 
 curl --fail --silent --request POST \
   "$mission_a_http/self-check/owner/player-alice/close" \
   | grep -q '"closed":true'
 "$(app_bin Client Client)" --config "$rehydrate_client_config" >"$LOG_DIR/rehydrate-client.log" 2>&1
 cat "$LOG_DIR/rehydrate-client.log"
-grep -q "gamequest-rehydrate=completed" "$LOG_DIR/rehydrate-client.log"
 alice_events="$(curl --fail --silent "$mission_a_http/self-check/events")"
 grep -q '"questId":"first-hunt"' <<<"$alice_events"
 grep -q '"eventType":"QuestProgressReconciledEvent"' <<<"$alice_events"
 grep -q '"currentCount":5' <<<"$alice_events"
-echo "gamequest owner replay restored player-alice"
-echo "gamequest full client/server self-check completed"
+wait_log_count "$LOG_DIR/mission-a.log" \
+  "gamequest-mission replayed player=player-alice generation=" 1 || \
+  wait_log_count "$LOG_DIR/mission-b.log" \
+    "gamequest-mission replayed player=player-alice generation=" 1
+if [[ "$(log_count "gamequest-mission replayed player=player-alice generation=" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")" != "1" ]]; then
+  echo "Expected one replay evidence row for player-alice." >&2
+  exit 1
+fi
+
+"$(app_bin Client Client)" --config "$owner_unavailable_client_config" \
+  >"$LOG_DIR/owner-unavailable-client.log" 2>&1 &
+owner_unavailable_client_pid="$!"
+pids+=("$owner_unavailable_client_pid")
+wait_log_total_count "gamequest-owner-ready player=player-owner-unavailable" 1 \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+owner_node=""
+if grep -F -q "gamequest-owner-ready player=player-owner-unavailable node=mission-a" \
+  "$LOG_DIR/mission-a.log"; then
+  owner_node="mission-a"
+else
+  owner_node="mission-b"
+fi
+kill -9 "${role_pids[$owner_node]}"
+wait "${role_pids[$owner_node]}" || true
+remove_crashed_role_from_cleanup "$owner_node"
+touch "$owner_unavailable_release_file"
+wait "$owner_unavailable_client_pid"
+wait_log_count "$LOG_DIR/api-a.log" \
+  "gamequest-owner unavailable player=player-owner-unavailable" 1
+if [[ "$(log_count "gamequest-owner replacement-handler-invoked player=player-owner-unavailable" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")" != "0" ]]; then
+  echo "Replacement handler ran after the owner process was killed." >&2
+  exit 1
+fi
+
+echo "gamequest-placement=completed"

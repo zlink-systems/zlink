@@ -210,8 +210,8 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
                 send_to_players (*joined.game_started, actor.actor_id);
                 actor.push (*joined.game_started);
             }
-            std::cout << "bingo player record loaded actor=" << record.actor_id
-                      << " wins=" << record.wins << " losses=" << record.losses << '\n';
+            std::cout << "bingo-record fetched actor=" << record.actor_id
+                      << " wins=" << record.wins << " losses=" << record.losses << std::endl;
         }
         co_return;
     }
@@ -233,13 +233,13 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
                                                     final_state.draw_seq})
                 .yield<report_bingo_result_res_t> ();
             const auto record = co_await report_pending;
-            std::cout << "bingo result reported room=" << final_state.room_id
-                      << " actor=" << record.actor_id << " won=" << (won ? "true" : "false")
-                      << " wins=" << record.wins << " losses=" << record.losses << '\n';
+            std::cout << "bingo-record reported actor=" << record.actor_id
+                      << " wins=" << record.wins << " losses=" << record.losses << std::endl;
         }
         actors.erase (actor.actor_id);
         observers.erase (actor.actor_id);
         _game.leave (actor.actor_id);
+        std::cout << "bingo-lifecycle room-leave actor=" << actor.actor_id << std::endl;
         if (actors.empty () && observers.empty ()) {
             (void) co_await _context->close ();
         }
@@ -267,11 +267,6 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         _is_observer = state.is_observer;
         _observed_room_id = std::move (state.observed_room_id);
         cleanup_started = state.cleanup_started;
-    }
-
-    void record_observer_returned_to_entry_spot (const player_actor_t &actor) const
-    {
-        std::cout << "observer returned to entry spot actor=" << actor.actor_id << '\n';
     }
 
   private:

@@ -13,22 +13,23 @@ $TICTACTOE_LOG_DIR = $SampleLogDir
 $redisContainerId = $null
 $RunSucceeded = $false
 
-function Wait-LogContains {
+function Wait-LogCount {
     param(
-        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Path,
         [Parameter(Mandatory = $true)][string]$Pattern,
-        [Parameter(Mandatory = $true)][string]$Description,
-        [int]$Attempts = 15
+        [Parameter(Mandatory = $true)][int]$Expected,
+        [int]$Attempts = 300
     )
 
     for ($i = 0; $i -lt $Attempts; $i++) {
-        if (Select-String -Path $Path -Pattern $Pattern -Quiet) {
+        $actual = @(Select-String -Path $Path -Pattern $Pattern -SimpleMatch -ErrorAction SilentlyContinue).Count
+        if ($actual -eq $Expected) {
             return
         }
-        Start-Sleep -Milliseconds 200
+        Start-Sleep -Milliseconds 100
     }
 
-    throw "$Description was not found."
+    throw "Expected $Expected '$Pattern' entries in $($Path -join ', '), but the count did not converge."
 }
 
 try {
@@ -132,19 +133,27 @@ try {
     Wait-SampleTcpEndpoint "api-b-mesh" $apiBMeshEndpoint
     Wait-SampleTcpEndpoint "api-b-channel" $apiBChannelEndpoint
 
+    Wait-LogCount (Join-Path $LogDir "play-a.log") "tictactoe-ready kind=peer-route node=play-a peer=play-b" 1
+    Wait-LogCount (Join-Path $LogDir "play-b.log") "tictactoe-ready kind=peer-route node=play-b peer=play-a" 1
+    Wait-LogCount (Join-Path $LogDir "api-a.log") "tictactoe-ready kind=http node=api-a" 1
+    Wait-LogCount (Join-Path $LogDir "api-b.log") "tictactoe-ready kind=http node=api-b" 1
+    Wait-LogCount (Join-Path $LogDir "api-a.log") "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" 1
+    Wait-LogCount (Join-Path $LogDir "api-b.log") "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" 1
+
     $clientLog = Join-Path $LogDir "client.log"
     Invoke-SampleDotnetRun -Project (Join-Path $ScriptDir "Client/TicTacToe.Client.csproj") -Arguments @("--config", $clientConfigFile) *> $clientLog
-    Wait-LogContains $clientLog "stream-inbound sample=TicTacToe" "TicTacToe stream-inbound marker"
-    Wait-LogContains $clientLog "stream-inbound sample=TicTacToe .* seq=[0-9]" "TicTacToe sequenced stream-inbound response marker"
-    Wait-LogContains $clientLog "stream-inbound sample=TicTacToe .* name=.*Notify" "TicTacToe stream-inbound push marker"
-    Wait-LogContains $clientLog "observer-win-milestone=verified" "TicTacToe observer win milestone notification"
-    Wait-LogContains $clientLog "reconnected-game-state=verified actor=player-x room=" "TicTacToe reconnected full game state"
+    Wait-LogCount $clientLog "observer-connected endpoint=$playBEndpoint" 1
+    Wait-LogCount $clientLog "observer-subscription=verified subscribed=true" 1
+    Wait-LogCount $clientLog "observer-win-milestone=verified actor=player-x wins=100" 1
+    Wait-LogCount $clientLog "reconnected-game-state=verified actor=player-x room=" 1
+    Wait-LogCount $clientLog "tictactoe=completed" 1
     $playLogs = Join-Path $LogDir "play-*.log"
-    Wait-LogContains $playLogs "play stream: existing actor exact identity verified.*actor=player-x" "TicTacToe existing actor exact identity"
-    Wait-LogContains $playLogs "actor: LeaveGameMsg completed. actor=player-x" "TicTacToe player-x LeaveGameMsg completion"
-    Wait-LogContains $playLogs "actor: LeaveGameMsg completed. actor=player-o" "TicTacToe player-o LeaveGameMsg completion"
-    Wait-LogContains $playLogs "entry spot: actor destroy completed. actor=player-x" "TicTacToe player-x destroy completion"
-    Wait-LogContains $playLogs "entry spot: actor destroy completed. actor=player-o" "TicTacToe player-o destroy completion"
+    Wait-LogCount $playLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle leave-completed actor=player-x" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle leave-completed actor=player-o" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle actor-destroy-complete actor=player-x" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle actor-destroy-complete actor=player-o" 1
+    Wait-LogCount $playLogs "tictactoe-lifecycle actor-destroy-complete actor=observer" 0
     $dispatchError = Get-ChildItem -Path $LogDir -Filter "*.log" |
         Select-String -Pattern "dispatch-error" -List |
         Select-Object -First 1
@@ -152,6 +161,7 @@ try {
         throw "Unexpected dispatch-error in TicTacToe sample logs."
     }
     $RunSucceeded = $true
+    Write-Host "tictactoe-placement=completed"
 }
 finally {
     Remove-SampleConfigurationFiles -RunDirectory $RunDir

@@ -61,9 +61,9 @@ class DispatchWorker(
     suspend fun reassign(offer: DeliveryOffer) {
         val nextIndex = offer.candidateIndex + 1
         if (nextIndex >= candidates.size) {
-            System.err.println(
-                "deliverydispatch dispatch: delivery=${offer.request.deliveryId} " +
-                    "was rejected by all couriers",
+            println(
+                "deliverydispatch-dispatch failed delivery=${offer.request.deliveryId} " +
+                    "reason=candidates-exhausted",
             )
             publishStatus(offer.request, DeliveryStatus.Failed, candidates.last())
             offers.close(offer.request.deliveryId)

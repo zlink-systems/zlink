@@ -24,8 +24,14 @@ object SampleNames {
     const val TrackingRole: String = "tracking"
     const val CustomerGatewayRole: String = "customergateway"
 
-    const val TopologyReadyMarker: String = "topology=ready"
     const val ReassignmentMarker: String = "deliverydispatch-reassignment=completed"
     const val ServerEvidenceMarker: String = "deliverydispatch-server-evidence=completed"
     const val CompletedMarker: String = "deliverydispatch=completed"
+
+    const val DispatchNode: String = "dispatch"
+    const val TrackingNode: String = "tracking"
+    const val CourierNode1: String = "courier-node-1"
+    const val CourierNode2: String = "courier-node-2"
+    const val CustomerGatewayNode: String = "customer-gateway"
+    const val CourierSessionNode: String = "courier-session"
 }

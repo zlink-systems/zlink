@@ -5184,7 +5184,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId sourceRid,
         ulong? requestSequence,
         IReadOnlyList<Message> parts,
-        byte[] head)
+        byte[] head,
+        Func<ReplyOperation> captureNativeReply)
     {
         if (ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
                 head,
@@ -5293,9 +5294,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (ZLinkServiceWireCodec.TryDecodeRelocationPrepare(
                 head, out var relocationPrepare, out _))
         {
+            if (requestSequence is null)
+            {
+                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                return true;
+            }
             ProcessRelocationPrepare(
                 sourceRid,
-                requestSequence,
+                captureNativeReply(),
                 relocationPrepare);
             return true;
         }
@@ -5442,7 +5448,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var processed = allowed
                 && currentSource
                 && ProcessInfrastructureControl(
-                    sourceRid, received.RequestSeq, received.Parts, head);
+                    sourceRid,
+                    received.RequestSeq,
+                    received.Parts,
+                    head,
+                    received.Reply);
             if (!processed)
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             return false;
@@ -5946,7 +5956,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private void ProcessRelocationPrepare(RoutingId sourceNodeRid,
-        ulong? requestSequence,
+        ReplyOperation nativeReply,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare)
     {
         ICanonicalRelocationTarget? target;
@@ -6005,9 +6015,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             RunInboundOperation(
                 () => ProcessRelocationPrepareAsync(
                     target,
-                    peer,
                     sourceNodeRid,
-                    requestSequence,
+                    nativeReply,
                     prepare,
                     assemblyKey,
                     assembler));
@@ -6087,9 +6096,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private async Task ProcessRelocationPrepareAsync(
         ICanonicalRelocationTarget target,
-        Peer peer,
         RoutingId sourceNodeRid,
-        ulong? requestSequence,
+        ReplyOperation nativeReply,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         PendingRelocationPrepareKey assemblyKey,
         ZLinkRelocationChunkAssembler assembler)
@@ -6115,11 +6123,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             try
             {
                 await SendRelocationPrepareTerminalAsync(
-                        peer,
-                        sourceNodeRid,
-                        requestSequence,
+                        nativeReply,
                         ZLinkServiceWireCodec.EncodeRelocationReady(ready),
-                        _stop?.Token ?? CancellationToken.None)
+                        CancellationToken.None)
                     .ConfigureAwait(false);
             }
             catch (Exception submitFailure)
@@ -6183,9 +6189,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             try
             {
                 await SendRelocationPrepareTerminalAsync(
-                        peer,
-                        sourceNodeRid,
-                        requestSequence,
+                        nativeReply,
                         ZLinkServiceWireCodec.EncodeRelocationFailed(
                             new ZLinkServiceWireCodec.RelocationFailedRecord(
                                 prepare.RelocationId,
@@ -6197,7 +6201,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                 ResolveRelocationFailedWireCode(
                                     exception,
                                     prepare.Object.Kind))),
-                        _stop?.Token ?? CancellationToken.None)
+                        CancellationToken.None)
                     .ConfigureAwait(false);
             }
             catch (Exception replyFailure)
@@ -6213,27 +6217,34 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private ValueTask SendRelocationPrepareTerminalAsync(
-        Peer peer,
-        RoutingId sourceNodeRid,
-        ulong? requestSequence,
+        ReplyOperation nativeReply,
         byte[] terminal,
         CancellationToken cancellationToken)
     {
-        // All four runtimes now send command 40 (relocation Prepare) as a
-        // request, so a one-way command 40 with no native reply token is no
-        // longer a supported wire shape — the legacy command-30/53
-        // notification fallback is removed (audit #10).
-        if (requestSequence is not { } sequence)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ProtocolError,
-                "Canonical relocation Prepare (command 40) arrived without a "
-                + "request sequence.");
-
-        if (!SendInfrastructureReply(sourceNodeRid, sequence, terminal))
+        // Command 40 can arrive on a physical connection different from the
+        // one currently selected for its logical RID. Reconstructing a reply
+        // from RID/request-sequence therefore sent READY outside the native
+        // request window that the source is awaiting. Preserve that window.
+        cancellationToken.ThrowIfCancellationRequested();
+        Message? message = null;
+        try
+        {
+            message = Message.From(terminal);
+            nativeReply.Message(message).Submit();
+            message = null;
+        }
+        catch (ZlinkException exception)
+        {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 "The command 40 relocation terminal could not be submitted on its reply leg.",
-                ZLinkRetryAdvice.RetryAfterBackoff);
+                ZLinkRetryAdvice.RetryAfterBackoff,
+                exception);
+        }
+        finally
+        {
+            message?.Dispose();
+        }
         return ValueTask.CompletedTask;
     }
 

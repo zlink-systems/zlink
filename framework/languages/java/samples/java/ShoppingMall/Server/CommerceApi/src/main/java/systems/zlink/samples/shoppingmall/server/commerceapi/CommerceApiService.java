@@ -123,6 +123,10 @@ public final class CommerceApiService {
         lines.add("paymentFailures=" + evidence.paymentFailureCount());
         lines.add("releasedReservations=" + evidence.releasedReservationCount());
         lines.add("startedIdempotency=" + evidence.startedIdempotencyCount());
+        for (String orderId : orderIds) {
+            System.out.println("shoppingmall-evidence order=" + orderId
+                + " events=" + evidence.eventsByOrder().get(orderId).size());
+        }
         return new Messages.ServerAssertionRes(passed, lines);
     }
 

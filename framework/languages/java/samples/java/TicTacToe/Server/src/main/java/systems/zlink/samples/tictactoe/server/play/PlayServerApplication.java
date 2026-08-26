@@ -18,6 +18,8 @@ import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.samples.tictactoe.server.configuration.SampleLocationStore;
 import systems.zlink.samples.tictactoe.server.configuration.PlaySettings;
+import systems.zlink.samples.tictactoe.server.configuration.TicTacToeReadinessReporter;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.TicTacToeGameCreatedHandler;
 
 
@@ -65,6 +67,14 @@ public final class PlayServerApplication {
     @Bean(destroyMethod = "close")
     ZLinkRedisLocationStore locationStore(PlaySettings settings) {
         return SampleLocationStore.create(settings);
+    }
+
+    @Bean(destroyMethod = "close")
+    TicTacToeReadinessReporter ticTacToeReadinessReporter(
+        PlaySettings settings,
+        ZLinkRouteMeshRuntime meshes) {
+        String peer = settings.nodeId().equals("play-a") ? "play-b" : "play-a";
+        return TicTacToeReadinessReporter.peerRoute(settings.nodeId(), peer, meshes);
     }
 
     @Bean

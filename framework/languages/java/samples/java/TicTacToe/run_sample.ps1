@@ -39,9 +39,8 @@ function Cleanup {
 }
 
 function Wait-Port {
-    param([int]$Port, [int]$TimeoutSeconds = 45)
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    while ([DateTime]::UtcNow -lt $deadline) {
+    param([int]$Port)
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
         $client = [System.Net.Sockets.TcpClient]::new()
         try {
             $connect = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
@@ -58,19 +57,19 @@ function Wait-Port {
     throw "Timed out waiting for port $Port"
 }
 
-function Wait-LogContains {
+function Wait-LogCount {
     param(
         [string]$PathPattern,
         [string]$Text,
-        [int]$TimeoutSeconds = 60)
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        if (Select-String -Path $PathPattern -Pattern $Text -SimpleMatch -Quiet -ErrorAction SilentlyContinue) {
+        [int]$Expected)
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        $count = @(Select-String -Path $PathPattern -Pattern $Text -SimpleMatch -ErrorAction SilentlyContinue).Count
+        if ($count -eq $Expected) {
             return
         }
         Start-Sleep -Milliseconds 100
     }
-    throw "Timed out waiting for '$Text' in $PathPattern"
+    throw "Timed out waiting for $Expected '$Text' in $PathPattern"
 }
 
 function Invoke-GradleRun {
@@ -132,6 +131,7 @@ try {
         param([string]$Name, [int]$HttpPort, [int]$ChannelPort)
         $path = Join-Path $RunDir "$Name.properties"
         @(
+            "sample.nodeId=$Name",
             "sample.apiBindUrl=http://127.0.0.1:$HttpPort",
             "sample.apiChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
             "sample.playChannelEndpoint=tcp://127.0.0.1:$PlayAChannelPort",
@@ -152,6 +152,7 @@ try {
             [int]$PeerPubPort)
         $path = Join-Path $RunDir "$Name.properties"
         @(
+        "sample.nodeId=$Name",
         "sample.apiChannelEndpoints=$ApiChannels",
         "sample.playChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
         "sample.playEndpoint=tcp://127.0.0.1:$StreamPort",
@@ -195,14 +196,48 @@ try {
     Wait-Port $ApiBPort
     Wait-Port $ApiBChannelPort
 
-    Invoke-GradleRun @("--settings-file", "standalone.settings.gradle.kts", ":Client:run", "--quiet", "--args=--api-url http://127.0.0.1:$ApiAPort")
-    $PlayLogs = Join-Path $LogDir "play-*.log"
-    Wait-LogContains $PlayLogs "play stream: existing actor exact identity verified."
-    foreach ($ActorId in @("player-x", "player-o")) {
-        Wait-LogContains $PlayLogs "actor: LeaveGameMsg completed. actor=$ActorId"
-        Wait-LogContains $PlayLogs "tictactoe actor destroy completed actor=$ActorId"
+    Wait-LogCount (Join-Path $LogDir "play-a.log") "tictactoe-ready kind=peer-route node=play-a peer=play-b" 1
+    Wait-LogCount (Join-Path $LogDir "play-b.log") "tictactoe-ready kind=peer-route node=play-b peer=play-a" 1
+    Wait-LogCount (Join-Path $LogDir "api-a.log") "tictactoe-ready kind=http node=api-a" 1
+    Wait-LogCount (Join-Path $LogDir "api-b.log") "tictactoe-ready kind=http node=api-b" 1
+    Wait-LogCount (Join-Path $LogDir "api-a.log") "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" 1
+    Wait-LogCount (Join-Path $LogDir "api-b.log") "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" 1
+
+    foreach ($TargetRid in @("tictactoe-play-a", "tictactoe-play-b")) {
+        $ready = $false
+        for ($attempt = 0; $attempt -lt 300; $attempt++) {
+            try {
+                Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 `
+                    -Uri "http://127.0.0.1:$ApiAPort/ready?targetRid=$TargetRid" | Out-Null
+                $ready = $true
+                break
+            } catch {
+                Start-Sleep -Milliseconds 100
+            }
+        }
+        if (-not $ready) { throw "Timed out waiting for API route peer $TargetRid" }
     }
-    Write-Host "PASS TicTacToe.Java"
+
+    $clientBin = Join-Path $SampleDir "Client/build/install/Client/bin/Client"
+    if ($IsWindows) { $clientBin = "$clientBin.bat" }
+    $clientLog = Join-Path $LogDir "client.log"
+    & $clientBin --api-url "http://127.0.0.1:$ApiAPort" *> $clientLog
+    if ($LASTEXITCODE -ne 0) { throw "Client run failed." }
+    Wait-LogCount $clientLog "observer-connected endpoint=tcp://127.0.0.1:$PlayBStreamPort" 1
+    Wait-LogCount $clientLog "observer-subscription=verified subscribed=true" 1
+    Wait-LogCount $clientLog "observer-win-milestone=verified actor=player-x wins=100" 1
+    if (@(Select-String -Path $clientLog -Pattern "reconnected-game-state=verified actor=player-x room=" -SimpleMatch).Count -ne 1) {
+        throw "Expected one reconnected game state marker."
+    }
+    Wait-LogCount $clientLog "tictactoe=completed" 1
+    $PlayLogs = Join-Path $LogDir "play-*.log"
+    Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
+    foreach ($ActorId in @("player-x", "player-o")) {
+        Wait-LogCount $PlayLogs "tictactoe-lifecycle leave-completed actor=$ActorId" 1
+        Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-destroy-complete actor=$ActorId" 1
+    }
+    Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-destroy-complete actor=observer" 0
+    Write-Host "tictactoe-placement=completed"
     $Status = 0
 } finally {
     Cleanup $Status

@@ -25,7 +25,9 @@ public sealed record GameQuestTopology(
     string MissionAHttpBaseUrl,
     string MissionBHttpBaseUrl,
     string GameApiAStreamEndpoint,
-    string GameApiBStreamEndpoint)
+    string GameApiBStreamEndpoint,
+    string CloseReplayReleaseFile,
+    string OwnerLossReleaseFile)
 {
     public static GameQuestTopology Load(string[] args)
     {

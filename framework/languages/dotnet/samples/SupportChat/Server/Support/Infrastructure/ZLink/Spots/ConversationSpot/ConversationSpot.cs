@@ -45,9 +45,12 @@ internal sealed class ConversationSpot(
                 SampleTimings.CloseGraceTimeout,
                 500));
         logger.LogInformation(
-            "support conversation: created. conversation={ConversationId}, customer={CustomerActorId}",
-            conversationId,
-            create.CustomerActorId);
+            "supportchat-conversation created conversation={ConversationId}",
+            conversationId);
+        logger.LogInformation(
+            "supportchat-conversation status={Status} conversation={ConversationId}",
+            ConversationStatuses.WaitingForAgent,
+            conversationId);
         return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept(
             new ConversationCreateRes(
                 ConversationContracts.ToState(_conversation.Snapshot()))));
@@ -110,6 +113,10 @@ internal sealed class ConversationSpot(
             _actors[actor.ParticipantId] = directory.Get(actor.ParticipantId).Actor;
             if (_pendingJoinChanges.Remove(actor.ActorId, out var change))
                 await PublishChangeAsync(change, cancellationToken);
+            logger.LogInformation(
+                "supportchat-conversation agent-joined conversation={ConversationId} agent={AgentId}",
+                conversation.ConversationId,
+                actor.ParticipantId);
             return;
         }
 
@@ -119,11 +126,6 @@ internal sealed class ConversationSpot(
         // The customer has joined; pick a capacity-available agent and notify its roster.
         await AssignAgentAsync(cancellationToken);
 
-        logger.LogInformation(
-            "support conversation: actor joined. conversation={ConversationId}, participant={ParticipantId}, role={Role}",
-            conversation.ConversationId,
-            actor.ParticipantId,
-            actor.Role);
     }
 
     public ValueTask OnLeaveActorAsync(
@@ -212,10 +214,9 @@ internal sealed class ConversationSpot(
         foreach (var item in change.Events)
         {
             logger.LogInformation(
-                "support conversation: state changed. conversation={ConversationId}, status={Status}, event={EventKind}",
-                item.State.ConversationId,
+                "supportchat-conversation status={Status} conversation={ConversationId}",
                 item.State.Status,
-                item.Kind);
+                item.State.ConversationId);
         }
 
         if (change.Events.Any(static item => item.Kind == ConversationEventKind.Closed))

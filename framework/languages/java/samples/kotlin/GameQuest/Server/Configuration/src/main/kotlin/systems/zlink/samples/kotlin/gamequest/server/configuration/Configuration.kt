@@ -26,6 +26,8 @@ object SampleNames {
 object SampleTimings {
     val RequestTimeout: Duration = Duration.ofSeconds(20)
     val ConnectTimeout: Duration = Duration.ofSeconds(5)
+    const val RunnerWaitAttempts = 300
+    const val RunnerWaitMillis = 100L
 }
 
 @ConfigurationProperties("sample")
@@ -137,9 +139,8 @@ class RedisSampleStore(topology: SampleTopology) : AutoCloseable {
     fun readQuestEvents(): List<StoredQuestEvent> =
         redis.lrange(key("quest-events"), 0, -1).map { json.readValue<StoredQuestEvent>(it) }
 
-    fun recordRehydrated(playerId: String) {
+    fun recordRehydrated(playerId: String): Long =
         redis.hincrby(key("owner-rehydrates"), playerId, 1)
-    }
 
     fun rehydrates(): Map<String, String> = redis.hgetall(key("owner-rehydrates"))
 
