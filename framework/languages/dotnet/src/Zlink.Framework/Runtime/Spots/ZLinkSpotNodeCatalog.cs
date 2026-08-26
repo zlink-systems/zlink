@@ -466,9 +466,9 @@ internal sealed class ZLinkSpotNodeCatalog(
                     : (_creationsDrained ??= new TaskCompletionSource(
                         TaskCreationOptions.RunContinuationsAsynchronously)).Task;
             using (ExecutionContext.SuppressFlow())
-                return _disposeTask = DisposeCoreAsync(
+                return _disposeTask = Task.Run(() => DisposeCoreAsync(
                     creationsDrained,
-                    forceStop: false);
+                    forceStop: false));
         })));
     }
 
@@ -485,9 +485,9 @@ internal sealed class ZLinkSpotNodeCatalog(
                     : (_creationsDrained ??= new TaskCompletionSource(
                         TaskCreationOptions.RunContinuationsAsynchronously)).Task;
             using (ExecutionContext.SuppressFlow())
-                return _disposeTask = DisposeCoreAsync(
+                return _disposeTask = Task.Run(() => DisposeCoreAsync(
                     creationsDrained,
-                    forceStop: true);
+                    forceStop: true));
         })));
     }
 
