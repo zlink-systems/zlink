@@ -13,12 +13,13 @@
 
 | # | 문서 | 무엇을 답하는가 |
 |---|---|---|
-| 1 | **[spec-draft-concurrency-model.ko.md](spec-draft-concurrency-model.ko.md)** | **스펙 초안 본문.** 고정할 규범 R1~R14, 즉시 조치 3건, 미결 5건 |
-| 2 | [executor-layer-survey.ko.md](executor-layer-survey.ko.md) | 4언어 실행기 계층이 어떻게 생겼나 |
-| 3 | [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md) | **메시지 1건이 블로킹 브리지를 몇 번 통과하나** |
-| 4 | [socket-lock-reclassification.ko.md](socket-lock-reclassification.ko.md) | socket lock 371개 중 무엇이 중복인가 |
+| 1 | **[spec-draft-concurrency-model.ko.md](spec-draft-concurrency-model.ko.md)** | **스펙 초안 본문.** 고정할 규범 R1~R14, 즉시 조치 3건, 미결 |
+| 2 | **[executor-naming-contract.ko.md](executor-naming-contract.ko.md)** | **구현 계약서.** 클래스·메서드·필드 이름과 라우팅 규칙 R-N1~R-N14. **구현 세션은 이 문서를 따른다** |
+| 3 | [executor-layer-survey.ko.md](executor-layer-survey.ko.md) | 4언어 실행기 계층이 어떻게 생겼나 |
+| 4 | [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md) | **메시지 1건이 블로킹 브리지를 몇 번 통과하나** |
+| 5 | [socket-lock-reclassification.ko.md](socket-lock-reclassification.ko.md) | socket lock 371개 중 무엇이 중복인가 |
 
-**초안(1)만 읽어도 결론은 다 있다.** 2~4는 그 근거다.
+**구현 세션은 1·2만 읽으면 된다.** 3~5는 그 근거다.
 
 ---
 
@@ -70,7 +71,7 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 | cpp | **신설** — 이름 맵을 조율자로 | 용량·우선순위·공정성 **추가** |
 | node | 조율자 있음 — 큐 맵 보유 여부 확인 필요 | 확인 필요 |
 
-**구현은 별도 세션에서 진행한다.** 이 폴더는 스펙 확정까지만 담는다.
+**구현은 별도 세션에서 진행한다.** 이름·라우팅·검증 항목은 [executor-naming-contract.ko.md](executor-naming-contract.ko.md)에 고정돼 있다.
 
 ---
 
@@ -100,4 +101,4 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
    [[reference-first-porting-policy]]의 ".NET 단일 정본"을 계층별 정본으로 **개정 필요**
 ③ 범위 — Spot·Actor·Session 함께 권고, Channel은 별도
 ④ 호환 경계 회수(dotnet 664 · cpp 456) — §7-1 이후 재측정
-⑤ node의 Actor별·Timer별 큐 존재 여부 확인
+⑤ ~~node의 Actor별·Timer별 큐~~ → **확인 완료: 없다.** 단일 스레드라 Actor 간 병렬이 불가능하므로 결손이 아니라 일관된 설계다(계약서 §7 R-N13)
