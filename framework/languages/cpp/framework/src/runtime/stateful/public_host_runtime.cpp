@@ -873,12 +873,13 @@ zlink::submit_result_t spot_handle_t::publish (const std::string &channel_name,
     local.kind = record_kind_t::node_send;
     local.domain = ready_domain_t::application;
     local.source_node_rid = _host->status ().routing_id ();
-    {
-        std::lock_guard lock (_host->_mutex);
+    _host->_local_dispatch_completion_lane
+      .run ([&] {
         _host->_local_application_dispatches.push_back (
           public_host_runtime_t::local_application_dispatch_t{std::move (owner), std::move (local),
                                                               parts});
-    }
+      })
+      .get ();
     _host->_transport->signal_activity ();
 
     // The public publish boundary owns only local dequeue acceptance. Physical
@@ -1002,10 +1003,13 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
               _options.mesh.application_byte_budget,
               _options.mesh.infrastructure_byte_budget),
     _sessions ([this] (const std::string &actor_id) {
-        std::lock_guard lock (_mutex);
-        const auto found = _actors.find (actor_id);
-        return found == _actors.end () ? std::optional<stateful::object_ref_t>{}
-                                       : std::make_optional (found->second.second);
+        return _spot_actor_index_lane
+          .run ([&] {
+              const auto found = _actors.find (actor_id);
+              return found == _actors.end () ? std::optional<stateful::object_ref_t>{}
+                                             : std::make_optional (found->second.second);
+          })
+          .get ();
     })
 {
     if (_options.session_relocation_seal_timeout <= std::chrono::milliseconds::zero ()) {
@@ -1034,21 +1038,25 @@ void public_host_runtime_t::configure_stateful_dispatch (
 {
     if (!resolver)
         throw std::invalid_argument ("stateful dispatch authority resolver must not be empty");
-    std::lock_guard lock (_mutex);
-    if (_started || _stateful_dispatch)
-        throw std::logic_error ("stateful dispatch must be configured once before host start");
-    _stateful_dispatch = std::make_unique<stateful::raw_stateful_dispatch_t> (_objects, *_transport,
-                                                                              std::move (resolver));
-    /* flow-correlation §4: the ingest path gates flow capture on the host's
-     * provider; the host outlives the dispatch it owns. */
-    _stateful_dispatch->set_flow_capture_provider ([this] { return capture_flow (); });
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started || _stateful_dispatch)
+              throw std::logic_error ("stateful dispatch must be configured once before host start");
+          _stateful_dispatch = std::make_unique<stateful::raw_stateful_dispatch_t> (
+            _objects, *_transport, std::move (resolver));
+          /* flow-correlation §4: the ingest path gates flow capture on the host's
+           * provider; the host outlives the dispatch it owns. */
+          _stateful_dispatch->set_flow_capture_provider ([this] { return capture_flow (); });
+      })
+      .get ();
 }
 
 void public_host_runtime_t::configure_message_follow_handler (
   std::function<void (const protocol::message_follow_notice_t &)> handler)
 {
-    std::lock_guard lock (_mutex);
-    _message_follow_handler = std::move (handler);
+    _lifecycle_configuration_lane
+      .run ([&] { _message_follow_handler = std::move (handler); })
+      .get ();
 }
 
 void public_host_runtime_t::configure_actor_join_relocation (
@@ -1060,14 +1068,17 @@ void public_host_runtime_t::configure_actor_join_relocation (
 {
     if (!prepare_validator || !recovery_consumer || !authority_spot_resolver || !authority_adopter)
         throw std::invalid_argument ("Actor Join relocation callbacks must not be empty");
-    std::lock_guard lock (_mutex);
-    if (_started)
-        throw std::logic_error ("Actor Join relocation must be configured before start");
-    _actor_join_relocation_prepare_validator = std::move (prepare_validator);
-    _actor_join_recovery_consumer = std::move (recovery_consumer);
-    _actor_join_authority_spot_resolver = std::move (authority_spot_resolver);
-    _actor_join_recovery_rollback = std::move (recovery_rollback);
-    _actor_join_committed_authority_adopter = std::move (authority_adopter);
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started)
+              throw std::logic_error ("Actor Join relocation must be configured before start");
+          _actor_join_relocation_prepare_validator = std::move (prepare_validator);
+          _actor_join_recovery_consumer = std::move (recovery_consumer);
+          _actor_join_authority_spot_resolver = std::move (authority_spot_resolver);
+          _actor_join_recovery_rollback = std::move (recovery_rollback);
+          _actor_join_committed_authority_adopter = std::move (authority_adopter);
+      })
+      .get ();
 }
 
 void public_host_runtime_t::configure_bound_session_operations (
@@ -1076,43 +1087,61 @@ void public_host_runtime_t::configure_bound_session_operations (
     if (!operations.bind || !operations.send || !operations.replaced
         || !operations.commit_relocation_route || !operations.prepare_relocation_target_route)
         throw std::invalid_argument ("bound Session operations must all be configured");
-    std::lock_guard lock (_mutex);
-    if (_started)
-        throw std::logic_error ("bound Session operations must be configured before start");
-    _bound_session_operations = std::move (operations);
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started)
+              throw std::logic_error ("bound Session operations must be configured before start");
+          _bound_session_operations = std::move (operations);
+      })
+      .get ();
 }
 
 void public_host_runtime_t::configure_late_session_route_update (
   std::function<void (const protocol::session_relocation_route_t &)> reporter)
 {
-    std::lock_guard lock (_mutex);
-    if (_started)
-        throw std::logic_error ("late Session route reporter must be configured before start");
-    _late_session_route_update_reporter = std::move (reporter);
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started)
+              throw std::logic_error ("late Session route reporter must be configured before start");
+          _late_session_route_update_reporter = std::move (reporter);
+      })
+      .get ();
 }
 
 void public_host_runtime_t::start ()
 {
-    std::lock_guard lock (_mutex);
-    if (_started || _closing) {
-        return;
-    }
-    _transport->start ();
-    _started = true;
-    if (_maintenance_started)
-        _maintenance_started ();
+    std::function<void ()> maintenance_started;
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started || _closing) {
+              return;
+          }
+          _transport->start ();
+          _started = true;
+          maintenance_started = _maintenance_started;
+      })
+      .get ();
+    if (maintenance_started)
+        maintenance_started ();
 }
 
 void public_host_runtime_t::close () noexcept
 {
+    bool closing_started = false;
     std::function<void ()> maintenance_closing;
     {
-        std::lock_guard lock (_mutex);
-        if (!_started || _closing) {
+        _lifecycle_configuration_lane
+          .run ([&] {
+              if (!_started || _closing) {
+                  return;
+              }
+              _closing = true;
+              closing_started = true;
+              maintenance_closing = _maintenance_closing;
+          })
+          .get ();
+        if (!closing_started)
             return;
-        }
-        _closing = true;
-        maintenance_closing = _maintenance_closing;
     }
     if (maintenance_closing) {
         try {
@@ -1122,16 +1151,20 @@ void public_host_runtime_t::close () noexcept
         }
     }
     terminate_local_spot_requests (foundation::operation_terminal_t::shutdown);
+    _lifecycle_configuration_lane.run ([&] { _started = false; }).get ();
     {
         std::lock_guard lock (_mutex);
-        _started = false;
+        _session_seal_terminals.clear ();
+        _session_journal_terminals.clear ();
+    }
+    _local_dispatch_completion_lane
+      .run ([&] {
         _completions.clear ();
         _local_application_dispatches.clear ();
         _local_spot_requests.clear ();
         _local_spot_request_deadlines.clear ();
-        _session_seal_terminals.clear ();
-        _session_journal_terminals.clear ();
-    }
+      })
+      .get ();
     auto retained_outbound = _sessions.take_all_retained_outbound ();
     for (auto &settle : retained_outbound) {
         if (!settle)
@@ -1143,10 +1176,7 @@ void public_host_runtime_t::close () noexcept
         }
     }
     _transport->close ();
-    {
-        std::lock_guard lock (_mutex);
-        _closing = false;
-    }
+    _lifecycle_configuration_lane.run ([&] { _closing = false; }).get ();
 }
 
 bool public_host_runtime_t::connect_peer (const std::string &endpoint,
@@ -1248,7 +1278,7 @@ node_status_t public_host_runtime_t::status () const
 
 std::size_t public_host_runtime_t::pending_operation_count () const noexcept
 {
-    return _completions.size ();
+    return _local_dispatch_completion_lane.run ([&] { return _completions.size (); }).get ();
 }
 
 void public_host_runtime_t::set_channel_weight (const std::string &channel_name,
@@ -1291,15 +1321,19 @@ public_host_runtime_t::destroy_application_actor (std::string_view actor_id,
                                                   std::uint64_t object_generation)
 {
     stateful::object_ref_t object;
-    {
-        std::lock_guard lock (_mutex);
+    const auto generation_stale = _spot_actor_index_lane
+      .run ([&] {
         const auto found = _actors.find (std::string (actor_id));
         if (found != _actors.end ()) {
             if (found->second.second.object_generation != object_generation)
-                return stateful::stateful_error_t::generation_stale;
+                return true;
             object = found->second.second;
         }
-    }
+        return false;
+      })
+      .get ();
+    if (generation_stale)
+        return stateful::stateful_error_t::generation_stale;
     if (object.key.empty ()) {
         const auto local = _objects.find (stateful::object_kind_t::actor, std::string (actor_id));
         if (!local)
@@ -1311,10 +1345,13 @@ public_host_runtime_t::destroy_application_actor (std::string_view actor_id,
     const auto destroyed = _objects.destroy_actor (object);
     if (destroyed != stateful::stateful_error_t::none)
         return destroyed;
-    std::lock_guard lock (_mutex);
-    const auto found = _actors.find (std::string (actor_id));
-    if (found != _actors.end () && found->second.second.object_generation == object_generation)
-        _actors.erase (found);
+    _spot_actor_index_lane
+      .run ([&] {
+          const auto found = _actors.find (std::string (actor_id));
+          if (found != _actors.end () && found->second.second.object_generation == object_generation)
+              _actors.erase (found);
+      })
+      .get ();
     return stateful::stateful_error_t::none;
 }
 
@@ -1335,28 +1372,35 @@ void public_host_runtime_t::configure_user_spot_operations (
     if (!store || !materializer)
         throw std::invalid_argument (
           "User Spot operations require a Location Store and materializer");
-    std::lock_guard lock (_mutex);
-    if (_started)
-        throw std::logic_error ("User Spot operations must be configured before start");
-    _user_spot_store = std::move (store);
-    _user_spot_materializer = std::move (materializer);
-    _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started)
+              throw std::logic_error ("User Spot operations must be configured before start");
+          _user_spot_store = std::move (store);
+          _user_spot_materializer = std::move (materializer);
+          _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
+      })
+      .get ();
 }
 
 void public_host_runtime_t::configure_spot_route_fence_resolver (
   spot_route_fence_resolver_t resolver)
 {
-    std::lock_guard lock (_mutex);
-    if (_started)
-        throw std::logic_error ("Spot route fence resolver must be configured before host start");
-    _spot_route_fence_resolver = std::move (resolver);
-    _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started)
+              throw std::logic_error ("Spot route fence resolver must be configured before host start");
+          _spot_route_fence_resolver = std::move (resolver);
+          _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
+      })
+      .get ();
 }
 
 void public_host_runtime_t::configure_peer_readiness_resolver (peer_readiness_resolver_t resolver)
 {
-    std::lock_guard lock (_mutex);
-    _peer_readiness_resolver = std::move (resolver);
+    _lifecycle_configuration_lane
+      .run ([&] { _peer_readiness_resolver = std::move (resolver); })
+      .get ();
 }
 
 void public_host_runtime_t::configure_actor_create_operations (
@@ -1364,21 +1408,27 @@ void public_host_runtime_t::configure_actor_create_operations (
 {
     if (!target)
         throw std::invalid_argument ("Actor create operation target is required");
-    std::lock_guard lock (_mutex);
-    if (_started || _actor_create_target)
-        throw std::logic_error (
-          "Actor create operations must be configured once before host start");
-    _actor_create_target = std::move (target);
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started || _actor_create_target)
+              throw std::logic_error (
+                "Actor create operations must be configured once before host start");
+          _actor_create_target = std::move (target);
+      })
+      .get ();
 }
 
 void public_host_runtime_t::configure_actor_join_operations (actor_join_operation_target_t target)
 {
     if (!target)
         throw std::invalid_argument ("Actor join operation target is required");
-    std::lock_guard lock (_mutex);
-    if (_started || _actor_join_target)
-        throw std::logic_error ("Actor join operations must be configured once before host start");
-    _actor_join_target = std::move (target);
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started || _actor_join_target)
+              throw std::logic_error ("Actor join operations must be configured once before host start");
+          _actor_join_target = std::move (target);
+      })
+      .get ();
 }
 
 void public_host_runtime_t::configure_instance_spot_operations (
@@ -1391,14 +1441,17 @@ void public_host_runtime_t::configure_instance_spot_operations (
         || !materializer)
         throw std::invalid_argument ("Instance Spot operations require Location and Relocation "
                                      "Stores, an owner lease, and a materializer");
-    std::lock_guard lock (_mutex);
-    if (_started)
-        throw std::logic_error ("Instance Spot operations must be configured before start");
-    _user_spot_store = std::move (store);
-    _session_relocations = relocations;
-    _instance_spot_relocations = std::move (relocations);
-    _instance_spot_owner = std::move (owner);
-    _instance_spot_materializer = std::move (materializer);
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started)
+              throw std::logic_error ("Instance Spot operations must be configured before start");
+          _user_spot_store = std::move (store);
+          _session_relocations = relocations;
+          _instance_spot_relocations = std::move (relocations);
+          _instance_spot_owner = std::move (owner);
+          _instance_spot_materializer = std::move (materializer);
+      })
+      .get ();
 }
 
 std::optional<instance_spot_close_completion_t>
@@ -1413,11 +1466,12 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
 
     std::shared_ptr<zlink::framework::location_repository_t> store;
     location_owner_token_t instance_owner;
-    {
-        std::lock_guard lock (_mutex);
-        store = _user_spot_store;
-        instance_owner = _instance_spot_owner;
-    }
+    _lifecycle_configuration_lane
+      .run ([&] {
+          store = _user_spot_store;
+          instance_owner = _instance_spot_owner;
+      })
+      .get ();
     if (!store || instance_owner.owner_id.empty () || instance_owner.lease_generation <= 0)
         return std::nullopt;
 
@@ -1517,8 +1571,9 @@ void public_host_runtime_t::configure_session_route_owner (
 {
     if (!owner_resolver)
         throw std::invalid_argument ("Session route owner resolver is required");
-    std::lock_guard lock (_mutex);
-    _session_route_owner_resolver = std::move (owner_resolver);
+    _lifecycle_configuration_lane
+      .run ([&] { _session_route_owner_resolver = std::move (owner_resolver); })
+      .get ();
 }
 
 void public_host_runtime_t::configure_session_relocation_store (
@@ -1526,10 +1581,13 @@ void public_host_runtime_t::configure_session_relocation_store (
 {
     if (!relocations)
         throw std::invalid_argument ("Session relocation Store is required");
-    std::lock_guard lock (_mutex);
-    if (_started)
-        throw std::logic_error ("Session relocation Store must be configured before start");
-    _session_relocations = std::move (relocations);
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started)
+              throw std::logic_error ("Session relocation Store must be configured before start");
+          _session_relocations = std::move (relocations);
+      })
+      .get ();
 }
 
 std::pair<bool, std::optional<protocol::session_relocation_sealed_t>>
@@ -1772,10 +1830,9 @@ public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_o
     const auto local = status ();
     if (local.routing_id ().to_bytes () == session_owner_node.to_bytes ()) {
         std::function<std::optional<location_owner_token_t> ()> owner_resolver;
-        {
-            std::lock_guard lock (_mutex);
-            owner_resolver = _session_route_owner_resolver;
-        }
+        _lifecycle_configuration_lane
+          .run ([&] { owner_resolver = _session_route_owner_resolver; })
+          .get ();
         if (local.lifecycle_generation () != seal.session_owner_node_generation || !owner_resolver)
             co_return false;
         const auto owner = owner_resolver ();
@@ -1941,12 +1998,13 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
     std::shared_ptr<zlink::framework::location_repository_t> store;
     std::shared_ptr<stateful::relocation_store_port_t> relocations;
     instance_spot_activation_materializer_t materializer;
-    {
-        std::lock_guard lock (_mutex);
-        store = _user_spot_store;
-        relocations = _instance_spot_relocations;
-        materializer = _instance_spot_materializer;
-    }
+    _lifecycle_configuration_lane
+      .run ([&] {
+          store = _user_spot_store;
+          relocations = _instance_spot_relocations;
+          materializer = _instance_spot_materializer;
+      })
+      .get ();
     if (!store || !relocations || !materializer)
         return 0;
     const auto local = _transport->topology ().local_descriptor ();
@@ -2113,10 +2171,7 @@ public_host_runtime_t::create_actor_remote (const zlink::routing_id_t &target_no
         throw std::invalid_argument ("Actor create completion is required");
     if (target_node == status ().routing_id ()) {
         actor_create_operation_target_t target;
-        {
-            std::lock_guard lock (_mutex);
-            target = _actor_create_target;
-        }
+        _lifecycle_configuration_lane.run ([&] { target = _actor_create_target; }).get ();
         if (!target)
             co_return false;
         auto completed = std::make_shared<std::atomic_bool> (false);
@@ -2221,13 +2276,17 @@ spot_handle_t public_host_runtime_t::entry_spot ()
 spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
 {
     const auto &key = spot_id;
-    {
-        std::lock_guard lock (_mutex);
+    const auto existing = _spot_actor_index_lane
+      .run ([&] () -> std::optional<stateful::object_ref_t> {
         const auto found = _spots.find (key);
         if (found != _spots.end ()) {
-            return spot_handle_t (shared_from_this (), found->second);
+            return found->second;
         }
-    }
+        return std::nullopt;
+      })
+      .get ();
+    if (existing)
+        return spot_handle_t (shared_from_this (), *existing);
     auto created =
       _objects.begin_create (stateful::create_request_t{stateful::object_kind_t::user_spot,
                                                         key,
@@ -2247,45 +2306,53 @@ spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
     if (!object) {
         throw std::runtime_error ("framework Spot authority is unavailable");
     }
-    {
-        std::lock_guard lock (_mutex);
-        _spots.insert_or_assign (key, *object);
-    }
+    _spot_actor_index_lane.run ([&] { _spots.insert_or_assign (key, *object); }).get ();
     return spot_handle_t (shared_from_this (), *object);
 }
 
 spot_handle_t public_host_runtime_t::bind_relocation_spot (stateful::object_ref_t object)
 {
-    std::lock_guard lock (_mutex);
-    const auto [found, _] = _spots.insert_or_assign (object.key, std::move (object));
-    return spot_handle_t (shared_from_this (), found->second);
+    const auto bound = _spot_actor_index_lane
+      .run ([&] {
+          const auto [found, _] = _spots.insert_or_assign (object.key, std::move (object));
+          return found->second;
+      })
+      .get ();
+    return spot_handle_t (shared_from_this (), bound);
 }
 
 stateful::stateful_error_t
 public_host_runtime_t::advance_local_actor_authority (const stateful::object_ref_t &committed)
 {
-    std::lock_guard lock (_mutex);
-    const auto found = _actors.find (committed.key);
-    if (found == _actors.end ()) {
-        return stateful::stateful_error_t::none;
-    }
-    const auto advanced = _objects.advance_local_actor_authority (committed, found->second.first);
-    if (advanced == stateful::stateful_error_t::none)
-        found->second.second = committed;
-    return advanced;
+    return _spot_actor_index_lane
+      .run ([&] {
+          const auto found = _actors.find (committed.key);
+          if (found == _actors.end ()) {
+              return stateful::stateful_error_t::none;
+          }
+          const auto advanced =
+            _objects.advance_local_actor_authority (committed, found->second.first);
+          if (advanced == stateful::stateful_error_t::none)
+              found->second.second = committed;
+          return advanced;
+      })
+      .get ();
 }
 
 actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std::string actor_id)
 {
-    {
-        std::lock_guard lock (_mutex);
+    const auto existing = _spot_actor_index_lane
+      .run ([&] () -> std::optional<std::pair<actor_ref_t, stateful::object_ref_t>> {
         const auto found = _actors.find (actor_id);
         if (found != _actors.end ()) {
-            return actor_handle_t (shared_from_this (),
-                                   framework_actor_ref (found->second.second, found->second.first),
-                                   found->second.second);
+            return std::make_pair (
+              framework_actor_ref (found->second.second, found->second.first), found->second.second);
         }
-    }
+        return std::nullopt;
+      })
+      .get ();
+    if (existing)
+        return actor_handle_t (shared_from_this (), existing->first, existing->second);
     auto created =
       _objects.begin_create (stateful::create_request_t{stateful::object_kind_t::actor,
                                                         actor_id,
@@ -2305,10 +2372,9 @@ actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std:
     if (!object) {
         throw std::runtime_error ("framework Actor authority is unavailable");
     }
-    {
-        std::lock_guard lock (_mutex);
-        _actors.insert_or_assign (actor_id, std::make_pair (actor_type, *object));
-    }
+    _spot_actor_index_lane
+      .run ([&] { _actors.insert_or_assign (actor_id, std::make_pair (actor_type, *object)); })
+      .get ();
     return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
 }
 
@@ -2317,8 +2383,8 @@ actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_t
 {
     if (reserved.kind != stateful::object_kind_t::actor)
         throw std::invalid_argument ("reserved Actor reference has an invalid object kind");
-    {
-        std::lock_guard lock (_mutex);
+    const auto existing = _spot_actor_index_lane
+      .run ([&] () -> std::optional<actor_handle_t> {
         const auto found = _actors.find (reserved.key);
         if (found != _actors.end ()) {
             if (found->second.second.object_generation != reserved.object_generation
@@ -2327,9 +2393,8 @@ actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_t
                 const auto adopted = _objects.adopt_reserved_actor_owner (reserved, actor_type);
                 if (adopted == stateful::stateful_error_t::none) {
                     found->second.second = reserved;
-                    return actor_handle_t (shared_from_this (),
-                                           framework_actor_ref (reserved, found->second.first),
-                                           reserved);
+                    return actor_handle_t (
+                      shared_from_this (), framework_actor_ref (reserved, found->second.first), reserved);
                 }
                 throw std::runtime_error (
                   "reserved Actor generation does not match the local Actor");
@@ -2338,7 +2403,11 @@ actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_t
                                    framework_actor_ref (found->second.second, found->second.first),
                                    found->second.second);
         }
-    }
+        return std::nullopt;
+      })
+      .get ();
+    if (existing)
+        return std::move (*existing);
     auto created = _objects.begin_reserved_object (reserved, actor_type, {});
     if (created.error != stateful::stateful_error_t::none)
         throw std::runtime_error ("reserved framework Actor authority creation failed");
@@ -2348,10 +2417,9 @@ actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_t
     auto object = _objects.find (stateful::object_kind_t::actor, reserved.key);
     if (!object)
         throw std::runtime_error ("reserved framework Actor authority is unavailable");
-    {
-        std::lock_guard lock (_mutex);
-        _actors.insert_or_assign (reserved.key, std::make_pair (actor_type, *object));
-    }
+    _spot_actor_index_lane
+      .run ([&] { _actors.insert_or_assign (reserved.key, std::make_pair (actor_type, *object)); })
+      .get ();
     return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
 }
 
@@ -2362,11 +2430,12 @@ public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &targ
 {
     spot_route_fence_resolver_t resolver;
     std::shared_ptr<zlink::framework::location_repository_t> store;
-    {
-        std::lock_guard lock (_mutex);
-        resolver = _spot_route_fence_resolver;
-        store = _user_spot_store;
-    }
+    _lifecycle_configuration_lane
+      .run ([&] {
+          resolver = _spot_route_fence_resolver;
+          store = _user_spot_store;
+      })
+      .get ();
     if (resolver) {
         try {
             return resolver (target_node_rid, target_spot_id, target_spot_generation);
@@ -2457,10 +2526,9 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
         co_return zlink::submit_result_t::not_connected;
     }
     peer_readiness_resolver_t readiness_resolver;
-    {
-        std::lock_guard lock (_mutex);
-        readiness_resolver = _peer_readiness_resolver;
-    }
+    _lifecycle_configuration_lane
+      .run ([&] { readiness_resolver = _peer_readiness_resolver; })
+      .get ();
     if (readiness_resolver && !readiness_resolver (target_routing_id)) {
         co_return zlink::submit_result_t::not_connected;
     }
@@ -2562,10 +2630,9 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         co_return zlink::submit_result_t::not_connected;
     }
     peer_readiness_resolver_t readiness_resolver;
-    {
-        std::lock_guard lock (_mutex);
-        readiness_resolver = _peer_readiness_resolver;
-    }
+    _lifecycle_configuration_lane
+      .run ([&] { readiness_resolver = _peer_readiness_resolver; })
+      .get ();
     if (readiness_resolver && !readiness_resolver (target_routing_id)) {
         release_completion (operation);
         co_return zlink::submit_result_t::not_connected;
@@ -3261,8 +3328,8 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
         && committed != stateful::stateful_error_t::already_exists)
         return false;
 
-    {
-        std::lock_guard lock (_mutex);
+    const auto actor_indexes_current = _spot_actor_index_lane
+      .run ([&] {
         for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
             const auto &target = attempt.targets[index];
             if (target.kind != stateful::object_kind_t::actor)
@@ -3276,7 +3343,11 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
                 return false;
             _actors.insert_or_assign (target.key, std::make_pair (wire.stable_type, target));
         }
-    }
+        return true;
+      })
+      .get ();
+    if (!actor_indexes_current)
+        return false;
 
     for (const auto &object : attempt.wire_objects)
         (void) _relocation_wire->unregister_target (
@@ -3866,20 +3937,21 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     bound_session_operations_t bound_session_operations;
     std::function<void (const protocol::session_relocation_route_t &)>
       late_session_route_update_reporter;
-    {
-        std::lock_guard lock (_mutex);
-        store = _user_spot_store;
-        materializer = _user_spot_materializer;
-        actor_create_target = _actor_create_target;
-        actor_join_target = _actor_join_target;
-        instance_materializer = _instance_spot_materializer;
-        instance_relocations = _instance_spot_relocations;
-        instance_owner = _instance_spot_owner;
-        session_route_owner_resolver = _session_route_owner_resolver;
-        message_follow_handler = _message_follow_handler;
-        bound_session_operations = _bound_session_operations;
-        late_session_route_update_reporter = _late_session_route_update_reporter;
-    }
+    _lifecycle_configuration_lane
+      .run ([&] {
+          store = _user_spot_store;
+          materializer = _user_spot_materializer;
+          actor_create_target = _actor_create_target;
+          actor_join_target = _actor_join_target;
+          instance_materializer = _instance_spot_materializer;
+          instance_relocations = _instance_spot_relocations;
+          instance_owner = _instance_spot_owner;
+          session_route_owner_resolver = _session_route_owner_resolver;
+          message_follow_handler = _message_follow_handler;
+          bound_session_operations = _bound_session_operations;
+          late_session_route_update_reporter = _late_session_route_update_reporter;
+      })
+      .get ();
     expire_relocation_target_attempts ();
     std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
     {
@@ -5133,10 +5205,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                   protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
                     }
-                    {
-                        std::lock_guard lock (_mutex);
-                        _spots.insert_or_assign (exact_ref.key, exact_ref);
-                    }
+                    _spot_actor_index_lane
+                      .run ([&] { _spots.insert_or_assign (exact_ref.key, exact_ref); })
+                      .get ();
                     terminal (0, 0, protocol::user_spot_create_result_t::created, request.spot_id,
                               exact_ref.object_generation,
                               std::move (materialized.application_reply));
@@ -5346,10 +5417,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       false);
                     continue;
                 }
-                {
-                    std::lock_guard lock (_mutex);
-                    _spots.erase (exact_ref.key);
-                }
+                _spot_actor_index_lane.run ([&] { _spots.erase (exact_ref.key); }).get ();
                 terminal (0, 0, true);
             }
             catch (const protocol::service_wire_error_t &) {
@@ -5392,10 +5460,7 @@ bool public_host_runtime_t::dispatch_bound_session_send (
         || mailbox_record.source_node_generation != record.actor.target_node_generation)
         return false;
     bound_session_operations_t operations;
-    {
-        std::lock_guard lock (_mutex);
-        operations = _bound_session_operations;
-    }
+    _lifecycle_configuration_lane.run ([&] { operations = _bound_session_operations; }).get ();
     if (!operations.capture_send && !operations.send)
         return false;
     const auto application =
@@ -5525,7 +5590,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
     count += co_await dispatch_user_spot_operations ();
     bool application_dispatch_started = false;
 
-    auto completions = _completions.take_completed ();
+    auto completions =
+      _local_dispatch_completion_lane.run ([&] { return _completions.take_completed (); }).get ();
     for (auto &[_, completion] : completions) {
         ready_record_t owner;
         owner.owner_kind = owner_kind_t::node;
@@ -5538,10 +5604,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
         for (;;) {
             std::optional<local_application_dispatch_t> pending;
             bool skip = false;
-            {
-                std::lock_guard lock (_mutex);
+            _local_dispatch_completion_lane
+              .run ([&] {
                 if (_local_application_dispatches.empty ())
-                    break;
+                    return;
                 pending = std::move (_local_application_dispatches.front ());
                 _local_application_dispatches.pop_front ();
                 if (pending->record.kind == record_kind_t::spot_request) {
@@ -5556,11 +5622,12 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                         }
                     }
                 }
-            }
-            if (skip)
-                continue;
+              })
+              .get ();
             if (!pending)
                 break;
+            if (skip)
+                continue;
             dispatch (pending->owner, pending->record, std::move (pending->parts));
             ++count;
             application_dispatch_started = true;
@@ -5781,14 +5848,16 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                         record.source_session_sequence =
                           mailbox_record.bound_session_source->session_sequence;
                     }
-                    std::string actor_type;
-                    {
-                        std::lock_guard lock (_mutex);
+                    const auto actor_type = _spot_actor_index_lane
+                      .run ([&] {
+                        std::string actor_type;
                         const auto found = _actors.find (actor.target.actor_id);
                         if (found != _actors.end ()) {
                             actor_type = found->second.first;
                         }
-                    }
+                        return actor_type;
+                      })
+                      .get ();
                     owner.actor = ::zlink::framework::detail::actor_ref_access_t::make (
                       node_rid_t::from_string (status ().routing_id ().to_string ()),
                       std::move (actor_type), actor.target.actor_id,
@@ -5841,8 +5910,9 @@ bool public_host_runtime_t::wait_for_dispatch_activity (std::chrono::millisecond
         const auto local_deadline = next_local_spot_request_deadline ();
         auto effective_timeout = timeout;
         if (accept_application_receive) {
-            std::lock_guard lock (_mutex);
-            if (!_local_application_dispatches.empty ())
+            if (_local_dispatch_completion_lane
+                  .run ([&] { return !_local_application_dispatches.empty (); })
+                  .get ())
                 return true;
         }
         if (local_deadline) {
@@ -5924,22 +5994,28 @@ bool public_host_runtime_t::reply (const reply_token_t &token,
 std::optional<stateful::object_ref_t>
 public_host_runtime_t::resolve_actor (const actor_ref_t &actor) const
 {
-    std::lock_guard lock (_mutex);
-    const auto found = _actors.find (std::string (actor.actor_id ().value ()));
-    if (found == _actors.end ()
-        || found->second.second.object_generation != actor.object_generation ()) {
-        return std::nullopt;
-    }
-    return found->second.second;
+    return _spot_actor_index_lane
+      .run ([&] () -> std::optional<stateful::object_ref_t> {
+          const auto found = _actors.find (std::string (actor.actor_id ().value ()));
+          if (found == _actors.end ()
+              || found->second.second.object_generation != actor.object_generation ()) {
+              return std::nullopt;
+          }
+          return found->second.second;
+      })
+      .get ();
 }
 
 std::optional<stateful::object_ref_t>
 public_host_runtime_t::resolve_spot (const std::string &spot_id) const
 {
-    std::lock_guard lock (_mutex);
-    const auto found = _spots.find (spot_id);
-    return found == _spots.end () ? std::optional<stateful::object_ref_t>{}
-                                  : std::make_optional (found->second);
+    return _spot_actor_index_lane
+      .run ([&] {
+          const auto found = _spots.find (spot_id);
+          return found == _spots.end () ? std::optional<stateful::object_ref_t>{}
+                                        : std::make_optional (found->second);
+      })
+      .get ();
 }
 
 protocol::application_payload_t
@@ -5971,42 +6047,52 @@ actor_ref_t public_host_runtime_t::framework_actor_ref (const stateful::object_r
 
 call_id_t public_host_runtime_t::next_operation ()
 {
-    std::lock_guard lock (_mutex);
-    if (_next_operation == 0) {
+    const auto low = _next_operation.fetch_add (1, std::memory_order_relaxed);
+    if (low == 0) {
         throw std::overflow_error ("framework public host operation id is exhausted");
     }
-    const auto low = _next_operation;
-    _next_operation = low == std::numeric_limits<std::uint64_t>::max () ? 0 : low + 1;
     return {status ().lifecycle_generation (), low};
 }
 
 bool public_host_runtime_t::try_reserve_completion (call_id_t operation)
 {
-    return _completions.reserve (operation);
+    return _local_dispatch_completion_lane.run ([&] { return _completions.reserve (operation); })
+      .get ();
 }
 
 void public_host_runtime_t::release_completion (call_id_t operation) noexcept
 {
-    (void) _completions.erase (operation);
+    (void) _local_dispatch_completion_lane.run ([&] { (void) _completions.erase (operation); }).get ();
 }
 
 bool public_host_runtime_t::enqueue_completion (call_id_t operation,
                                                 receive_record_t record,
                                                 std::vector<zlink::message_t> parts)
 {
-    std::lock_guard lock (_mutex);
-    if (!_started || _closing) {
-        (void) _completions.erase (operation);
-        return false;
-    }
-    try {
-        return _completions.complete (operation,
-                                      std::make_pair (std::move (record), std::move (parts)));
-    }
-    catch (...) {
-        (void) _completions.erase (operation);
-        return false;
-    }
+    return _lifecycle_configuration_lane
+      .run ([&] {
+          if (!_started || _closing) {
+              (void) _local_dispatch_completion_lane
+                .run ([&] { (void) _completions.erase (operation); })
+                .get ();
+              return false;
+          }
+          try {
+              return _local_dispatch_completion_lane
+                .run ([&] {
+                  return _completions.complete (
+                    operation, std::make_pair (std::move (record), std::move (parts)));
+                })
+                .get ();
+          }
+          catch (...) {
+              (void) _local_dispatch_completion_lane
+                .run ([&] { (void) _completions.erase (operation); })
+                .get ();
+              return false;
+          }
+      })
+      .get ();
 }
 
 zlink::submit_result_t
@@ -6100,11 +6186,12 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
                  && host->complete_local_actor_join (operation, actor_type, membership, result,
                                                      reply);
       };
-    {
-        std::lock_guard lock (_mutex);
+    _local_dispatch_completion_lane
+      .run ([&] {
         _local_application_dispatches.push_back (
           local_application_dispatch_t{std::move (owner), std::move (record), parts});
-    }
+      })
+      .get ();
     _transport->signal_activity ();
     return zlink::submit_result_t::ok;
 }
@@ -6133,12 +6220,13 @@ bool public_host_runtime_t::complete_local_actor_join (call_id_t operation,
             completion.failure_errno = 0;
         } else {
             const auto actor = framework_actor_ref (current, actor_type);
-            {
-                std::lock_guard lock (_mutex);
+            _spot_actor_index_lane
+              .run ([&] {
                 const auto found = _actors.find (current.key);
                 if (found != _actors.end ())
                     found->second.second = current;
-            }
+              })
+              .get ();
             completion.join_completion = actor_join_completion_t{join_admission_t::accepted, actor};
         }
     } else {
@@ -6191,14 +6279,23 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (
               return host && host->complete_local_request (operation, reply);
           };
     }
-    std::lock_guard lock (_mutex);
-    if (!_started || _closing) {
-        return zlink::submit_result_t::terminated;
-    }
-    _local_application_dispatches.push_back (
-      local_application_dispatch_t{std::move (owner), std::move (record), parts});
-    _transport->signal_activity ();
-    return zlink::submit_result_t::ok;
+    const auto submitted = _lifecycle_configuration_lane
+      .run ([&] {
+          if (!_started || _closing) {
+              return zlink::submit_result_t::terminated;
+          }
+          return _local_dispatch_completion_lane
+            .run ([&] {
+              _local_application_dispatches.push_back (
+                local_application_dispatch_t{std::move (owner), std::move (record), parts});
+              return zlink::submit_result_t::ok;
+            })
+            .get ();
+      })
+      .get ();
+    if (submitted == zlink::submit_result_t::ok)
+        _transport->signal_activity ();
+    return submitted;
 }
 
 zlink::submit_result_t
@@ -6225,14 +6322,23 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
     record.source_node_rid = local.routing_id ();
     record.spot_route = target;
 
-    std::lock_guard lock (_mutex);
-    if (!_started || _closing) {
-        return zlink::submit_result_t::terminated;
-    }
-    _local_application_dispatches.push_back (
-      local_application_dispatch_t{std::move (owner), std::move (record), parts});
-    _transport->signal_activity ();
-    return zlink::submit_result_t::ok;
+    const auto submitted = _lifecycle_configuration_lane
+      .run ([&] {
+          if (!_started || _closing) {
+              return zlink::submit_result_t::terminated;
+          }
+          return _local_dispatch_completion_lane
+            .run ([&] {
+              _local_application_dispatches.push_back (
+                local_application_dispatch_t{std::move (owner), std::move (record), parts});
+              return zlink::submit_result_t::ok;
+            })
+            .get ();
+      })
+      .get ();
+    if (submitted == zlink::submit_result_t::ok)
+        _transport->signal_activity ();
+    return submitted;
 }
 
 zlink::submit_result_t
@@ -6277,31 +6383,41 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
     };
 
     const auto deadline = std::chrono::steady_clock::now () + timeout;
-    std::lock_guard lock (_mutex);
-    if (!_started || _closing) {
-        return zlink::submit_result_t::terminated;
-    }
-    auto [found, inserted] = _local_spot_requests.emplace (
-      operation, local_spot_request_state_t{deadline, std::move (completion), {}, true, false});
-    if (!inserted) {
-        return zlink::submit_result_t::internal_error;
-    }
-    bool deadline_indexed = false;
-    try {
-        auto deadline_entry = _local_spot_request_deadlines.emplace (deadline, operation);
-        deadline_indexed = true;
-        found->second.deadline_index = deadline_entry;
-        _local_application_dispatches.push_back (
-          local_application_dispatch_t{std::move (owner), std::move (record), parts});
+    const auto submitted = _lifecycle_configuration_lane
+      .run ([&] {
+          if (!_started || _closing) {
+              return zlink::submit_result_t::terminated;
+          }
+          return _local_dispatch_completion_lane
+            .run ([&] {
+              auto [found, inserted] = _local_spot_requests.emplace (
+                operation,
+                local_spot_request_state_t{deadline, std::move (completion), {}, true, false});
+              if (!inserted) {
+                  return zlink::submit_result_t::internal_error;
+              }
+              bool deadline_indexed = false;
+              try {
+                  auto deadline_entry = _local_spot_request_deadlines.emplace (deadline, operation);
+                  deadline_indexed = true;
+                  found->second.deadline_index = deadline_entry;
+                  _local_application_dispatches.push_back (
+                    local_application_dispatch_t{std::move (owner), std::move (record), parts});
+              }
+              catch (...) {
+                  if (deadline_indexed)
+                      _local_spot_request_deadlines.erase (found->second.deadline_index);
+                  _local_spot_requests.erase (found);
+                  throw;
+              }
+              return zlink::submit_result_t::ok;
+            })
+            .get ();
+      })
+      .get ();
+    if (submitted == zlink::submit_result_t::ok)
         _transport->signal_activity ();
-    }
-    catch (...) {
-        if (deadline_indexed)
-            _local_spot_request_deadlines.erase (found->second.deadline_index);
-        _local_spot_requests.erase (found);
-        throw;
-    }
-    return zlink::submit_result_t::ok;
+    return submitted;
 }
 
 bool public_host_runtime_t::finish_local_spot_request (
@@ -6311,8 +6427,8 @@ bool public_host_runtime_t::finish_local_spot_request (
 {
     local_spot_request_state_t pending{};
     try {
-        {
-            std::lock_guard lock (_mutex);
+        const auto claimed = _local_dispatch_completion_lane
+          .run ([&] {
             const auto found = _local_spot_requests.find (operation);
             if (found == _local_spot_requests.end () || found->second.terminal_claimed) {
                 return false;
@@ -6326,7 +6442,11 @@ bool public_host_runtime_t::finish_local_spot_request (
             if (!found->second.queued) {
                 _local_spot_requests.erase (found);
             }
-        }
+            return true;
+          })
+          .get ();
+        if (!claimed)
+            return false;
 
         if (pending.completion) {
             release_completion (operation);
@@ -6364,14 +6484,16 @@ void public_host_runtime_t::expire_local_spot_requests () noexcept
     try {
         for (;;) {
             std::optional<call_id_t> expired;
-            {
-                std::lock_guard lock (_mutex);
+            expired = _local_dispatch_completion_lane
+              .run ([&] () -> std::optional<call_id_t> {
                 const auto now = std::chrono::steady_clock::now ();
                 if (!_local_spot_request_deadlines.empty ()
                     && _local_spot_request_deadlines.begin ()->first <= now) {
-                    expired = _local_spot_request_deadlines.begin ()->second;
+                    return _local_spot_request_deadlines.begin ()->second;
                 }
-            }
+                return std::nullopt;
+              })
+              .get ();
             if (!expired) {
                 return;
             }
@@ -6391,17 +6513,18 @@ void public_host_runtime_t::terminate_local_spot_requests (
     try {
         for (;;) {
             std::optional<call_id_t> pending_operation;
-            {
-                std::lock_guard lock (_mutex);
+            pending_operation = _local_dispatch_completion_lane
+              .run ([&] () -> std::optional<call_id_t> {
                 for (const auto &[operation, pending] : _local_spot_requests) {
                     if (!pending.terminal_claimed) {
-                        pending_operation = operation;
-                        break;
+                        return operation;
                     }
                 }
-                if (!pending_operation)
-                    return;
-            }
+                return std::nullopt;
+              })
+              .get ();
+            if (!pending_operation)
+                return;
             const auto error_kind = terminal == foundation::operation_terminal_t::shutdown
                                       ? framework_error_kind_t::shutting_down
                                       : framework_error_kind_t::internal_failure;
@@ -6418,10 +6541,13 @@ void public_host_runtime_t::terminate_local_spot_requests (
 std::optional<std::chrono::steady_clock::time_point>
 public_host_runtime_t::next_local_spot_request_deadline () const
 {
-    std::lock_guard lock (_mutex);
-    if (_local_spot_request_deadlines.empty ())
-        return std::nullopt;
-    return _local_spot_request_deadlines.begin ()->first;
+    return _local_dispatch_completion_lane
+      .run ([&] () -> std::optional<std::chrono::steady_clock::time_point> {
+        if (_local_spot_request_deadlines.empty ())
+            return std::nullopt;
+        return _local_spot_request_deadlines.begin ()->first;
+      })
+      .get ();
 }
 
 bool public_host_runtime_t::complete_local_request (call_id_t operation,
@@ -6441,12 +6567,12 @@ void public_host_runtime_t::complete_operation (call_id_t operation,
                                                 std::vector<std::uint8_t> payload)
 {
     try {
-        {
-            std::lock_guard lock (_mutex);
-            if (!_started || _closing) {
-                (void) _completions.erase (operation);
-                return;
-            }
+        const auto stopped = _lifecycle_configuration_lane
+                               .run ([&] { return !_started || _closing; })
+                               .get ();
+        if (stopped) {
+            release_completion (operation);
+            return;
         }
         receive_record_t record;
         record.kind = record_kind_t::completion;
@@ -6516,10 +6642,13 @@ bool actor_transfer_token_t::commit (std::uint64_t membership_epoch)
     const auto [error, current] = host->objects ().commit_membership_move (_membership);
     _terminal = true;
     if (error == stateful::stateful_error_t::none) {
-        std::lock_guard lock (host->_mutex);
-        const auto found = host->_actors.find (_membership.actor.key);
-        if (found != host->_actors.end ())
-            found->second.second = current;
+        host->_spot_actor_index_lane
+          .run ([&] {
+              const auto found = host->_actors.find (_membership.actor.key);
+              if (found != host->_actors.end ())
+                  found->second.second = current;
+          })
+          .get ();
     }
     return error == stateful::stateful_error_t::none;
 }
@@ -6532,10 +6661,13 @@ bool actor_transfer_token_t::activate ()
     const auto [error, current] = host->objects ().commit_membership_move (_membership);
     _terminal = true;
     if (error == stateful::stateful_error_t::none) {
-        std::lock_guard lock (host->_mutex);
-        const auto found = host->_actors.find (_membership.actor.key);
-        if (found != host->_actors.end ())
-            found->second.second = current;
+        host->_spot_actor_index_lane
+          .run ([&] {
+              const auto found = host->_actors.find (_membership.actor.key);
+              if (found != host->_actors.end ())
+                  found->second.second = current;
+          })
+          .get ();
     }
     return error == stateful::stateful_error_t::none;
 }

@@ -1127,6 +1127,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::function<void ()> _maintenance_started;
     std::function<void ()> _maintenance_closing;
     mutable std::mutex _mutex;
+    runtime::offload_executor_t _lifecycle_configuration_lane_executor;
+    mutable runtime::state_lane_t
+      _lifecycle_configuration_lane{_lifecycle_configuration_lane_executor};
+    runtime::offload_executor_t _local_dispatch_completion_lane_executor;
+    mutable runtime::state_lane_t
+      _local_dispatch_completion_lane{_local_dispatch_completion_lane_executor};
     static constexpr std::size_t completion_capacity = 65'536;
     using completion_value_t = std::pair<receive_record_t, std::vector<zlink::message_t>>;
     zlink::framework::runtime::
@@ -1156,10 +1162,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::deque<local_application_dispatch_t> _local_application_dispatches;
     std::map<std::string, stateful::object_ref_t> _spots;
     std::map<std::string, std::pair<std::string, stateful::object_ref_t>> _actors;
+    runtime::offload_executor_t _spot_actor_index_lane_executor;
+    mutable runtime::state_lane_t _spot_actor_index_lane{_spot_actor_index_lane_executor};
     std::map<std::string, std::string> _peer_endpoints;
     runtime::offload_executor_t _peer_endpoint_lane_executor;
     runtime::state_lane_t _peer_endpoint_lane{_peer_endpoint_lane_executor};
-    std::uint64_t _next_operation = 1;
+    std::atomic<std::uint64_t> _next_operation{1};
     bool _started = false;
     bool _closing = false;
 };
