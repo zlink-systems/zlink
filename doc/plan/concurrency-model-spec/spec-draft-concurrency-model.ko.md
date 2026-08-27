@@ -121,8 +121,60 @@
 **R7.** 실행 모드는 **용량 회계 기준으로** 큐 중첩을 결정한다. payload 승인을 소유하는
 큐는 상위 큐로 넘길 때도 유지하고, payload가 없는 경로는 상위 큐로 직행한다.
 
-**R8.** 그 소유 관계를 **한 곳에서 관리한다.** 여러 파일에 흩어 두지 않는다.
-(전용 클래스로 뺄지 런타임 안에 둘지는 §8-① 판단)
+**R8.** 그 소유 관계를 **전용 조율자 하나가 관리한다.** 여러 계층·파일에 흩어 두지 않는다.
+
+### 4.4 확정된 구조 — (A) dotnet 조율 + java primitive (2026-08-28 사용자 확정)
+
+각 언어에서 나은 쪽을 취한다. **조율은 dotnet 형태, primitive 책임은 java 형태.**
+
+**R8-1 조율자 (dotnet 형태를 정본으로)**
+
+Spot마다 전용 조율자를 둔다. 그 조율자가 **세 종류 큐의 수명과 라우팅을 모두 소유**한다.
+
+```
+SpotSerialExecutor
+  ├ Spot 큐          자기 것
+  ├ Actor별 큐 맵     actorId → queue
+  ├ Timer별 큐 맵     timerName → queue
+  └ 실행 모드         SPOT_WIDE | PER_ACTOR
+```
+
+진입점은 계층별로 나눈다 — `executeSpot` / `executeActor(actorId)` / `executeTimer(name)`.
+**어느 큐로 보낼지는 조율자가 정하고 호출자는 모른다.**
+
+*근거*: 소유 관계가 타입으로 드러난다. java는 Actor 큐가 다른 계층(`ZLinkActorDispatchSerials`)에
+있어 관계가 코드에 안 보이고, 실제로 이 조사에서 **"java에는 Actor별 큐가 없다"고 두 번
+오판**했다. 읽는 사람이 틀리는 구조는 스펙이 될 수 없다.
+
+**R8-2 primitive 책임 (java 형태를 정본으로)**
+
+범용 직렬 큐가 **실행뿐 아니라 다음을 계약으로** 갖는다:
+
+| 책임 | 계약 |
+|---|---|
+| backpressure | 메시지 수 상한 · 바이트 상한 (application / lifecycle 별도) |
+| 우선순위 | lifecycle burst limit — lifecycle 작업이 application 뒤에 갇히지 않게 |
+| **공정성** | **owner time budget** — 한 소유자가 오래 점유하면 양보 |
+| 정책 주입 | 위 값을 정책 객체로 받는다. 하드코딩하지 않는다 |
+
+*근거*: backpressure와 공정성이 호출자에 흩어지면 실시간성이 보장되지 않는다.
+dotnet에는 owner time budget 대응물이 **아예 없다**. 고성능 실시간 메시징에서 한 작업이
+큐를 무한정 점유할 수 있다는 뜻이다.
+
+**R8-3 용량 회계 분담**
+
+Actor 큐가 **payload admission을 소유**한다. 상위 Spot 큐로 넘길 때는 **고정 turn 비용만**
+예약한다. 이중 예약하지 않는다. Timer는 payload가 없으므로 `SPOT_WIDE`에서 Timer 큐를
+만들지 않는다(§4.2).
+
+**언어별 작업량**
+
+| 언어 | R8-1 조율자 | R8-2 primitive |
+|---|---|---|
+| dotnet | **이미 있음** (`ZLinkSpotSerialExecutor`) | 용량·우선순위·**공정성 추가 필요** |
+| java | **신설 필요** — Actor 큐를 Spot 조율자로 이관 | **이미 있음** (`ZLinkAsyncSerialQueue`) |
+| cpp | **신설 필요** — 이름 맵을 조율자로 | 용량·우선순위·공정성 **추가 필요** |
+| node | 조율자 있음(`spot-serial-executor` 314줄) — 큐 맵 보유 여부 확인 | 확인 필요 |
 
 ---
 
@@ -248,13 +300,19 @@ option 설정, endpoint operation은 core가 이미 처리한다. 그 위의 loc
 
 ## 8. 미결 — 사용자 판단 대상
 
-① **실행기 계층을 어디까지 고정할 것인가** — (A) dotnet 형태(전용 클래스)를 정본으로 /
-   (C) 소유 관계만 고정하고 클래스 분할은 언어 재량. **§7-1을 먼저 하고 나서 판단해도 된다** —
-   조회 묶기만으로 브리지가 절반 이하로 줄면 재설계 필요성 자체가 달라진다.
+① ~~실행기 계층을 어디까지 고정할 것인가~~ → **확정 (2026-08-28): (A) dotnet 조율 +
+   java primitive.** §4.4 R8-1~R8-3 참조. **구현은 별도 세션에서 진행한다.**
 
-② **정본 언어** — lane primitive는 .NET 정본이 유효하다(4언어 동일).
-   **turn 경계(§5)는 java가 정본이다** — 스냅샷 묶기를 지킨 유일한 구현이다.
-   계층별로 정본을 나누는 것이 정확하다.
+② **정본 언어 — 계층별로 나눈다** (①의 귀결):
+
+   | 계층 | 정본 | 근거 |
+   |---|---|---|
+   | state lane primitive | **.NET** | 4언어 이미 동일 |
+   | 실행기 조율자 | **.NET** | R8-1 |
+   | 직렬 큐 primitive | **java** | R8-2 — 용량·우선순위·공정성 |
+   | turn 경계 (조회 묶기) | **java** | R8-4 = §5 `ActorStateSnapshot` |
+
+   [[reference-first-porting-policy]]의 ".NET 단일 정본"을 **계층별 정본으로 개정**해야 한다.
 
 ③ **범위** — Spot·Actor·Session을 함께 볼 것을 권한다. Channel은 성격이 달라(transport) 별도.
 

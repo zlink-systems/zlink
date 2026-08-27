@@ -50,6 +50,30 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 
 ---
 
+## 확정 사항 (2026-08-28)
+
+**실행기 구조 = (A) dotnet 조율 + java primitive.** 각 언어에서 나은 쪽을 취한다.
+상세는 초안 §4.4 (R8-1 ~ R8-3).
+
+| | 정본 | 내용 |
+|---|---|---|
+| **조율자** | **dotnet** | Spot마다 전용 조율자가 Spot 큐 · Actor별 큐 · Timer별 큐를 **모두 소유**. 진입점이 큐를 고르고 호출자는 모른다 |
+| **큐 primitive** | **java** | 실행뿐 아니라 **backpressure · lifecycle burst · owner time budget · 정책 주입**을 계약으로 |
+| 용량 회계 | — | Actor 큐가 payload admission 소유. 상위 Spot 큐는 고정 turn 비용만 예약 (이중 예약 금지) |
+
+**언어별 작업량**
+
+| 언어 | 조율자 | 큐 primitive |
+|---|---|---|
+| dotnet | 이미 있음 | **공정성(owner time budget) 추가 필요** |
+| java | **신설** — Actor 큐를 Spot 조율자로 이관 | 이미 있음 |
+| cpp | **신설** — 이름 맵을 조율자로 | 용량·우선순위·공정성 **추가** |
+| node | 조율자 있음 — 큐 맵 보유 여부 확인 필요 | 확인 필요 |
+
+**구현은 별도 세션에서 진행한다.** 이 폴더는 스펙 확정까지만 담는다.
+
+---
+
 ## 다음 할 일
 
 **착수 순서는 초안 §7-1부터다.**
@@ -60,15 +84,20 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 | 2 | java binding wrapper 중복 lock 31 제거 | hot path 7 | 아니오 |
 | 3 | `AsyncSerialQueue` 임계 구역 축소 | enqueue마다 `BigInteger` 4할당 제거 | 아니오 |
 
-**1번이 끝난 뒤 미결 ①(실행기 계층 통일 여부)을 판단한다.** 브리지가 절반 이하로 줄면
-재설계 필요성 자체가 달라지므로, 지금 결정할 이유가 없다.
+이 셋은 **실행기 구조 변경과 독립**이다. 재설계 없이 이미 정해진 규칙을 지키는 것이므로
+구조 작업과 병행하거나 먼저 해도 된다.
+
+**node는 성격이 다르다.** JS turn이 원자적이라 turn 경계 문제(§5)도 lock 중복(§6)도 없다.
+대신 **메시지당 `Buffer` 복사**가 후보다(CP3 감사 §6에 상위 10 기록). 다만 방어 복사가
+소유권 계약일 수 있어 **측정이 선행돼야 한다** — cpp·java와 달리 잘못 걷어내면 데이터 손상이다.
 
 ---
 
 ## 미결 (사용자 판단)
 
-① 실행기 계층을 어디까지 고정할 것인가 — §7-1 이후 판단
-② 정본 언어 — lane primitive는 .NET, **turn 경계는 java**로 계층별 분리 권고
+① ~~실행기 계층~~ → **확정: (A) dotnet 조율 + java primitive** (위 확정 사항)
+② 정본 언어 — **계층별로 나눈다**: lane primitive·조율자는 .NET, 큐 primitive·turn 경계는 java.
+   [[reference-first-porting-policy]]의 ".NET 단일 정본"을 계층별 정본으로 **개정 필요**
 ③ 범위 — Spot·Actor·Session 함께 권고, Channel은 별도
 ④ 호환 경계 회수(dotnet 664 · cpp 456) — §7-1 이후 재측정
 ⑤ node의 Actor별·Timer별 큐 존재 여부 확인
