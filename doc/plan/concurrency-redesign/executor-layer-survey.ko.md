@@ -65,6 +65,22 @@ java 것은 capacity·byte budget·lifecycle burst·owner time budget 같은 정
 | cpp | `spot_runtime.cpp` | 취득 34(실행 primitive 31) | 26 |
 | node | — | (JS turn 원자성) | — |
 
+## 3.4 정정 (2026-08-27, 추가 조사)
+
+이 문서 초판의 다음 서술은 **틀렸다**. `runtime/spots/` 아래만 조사한 결과였다.
+
+- ~~"java는 Actor별 큐가 없다"~~ → **있다.** `runtime/actors/ZLinkActorDispatchSerials.java`의
+  `Map<String, ZLinkAsyncSerialQueue> queues`. 맵은 `ZLinkStateLane`이 소유한다.
+- ~~"java는 Spot 큐로 다시 넣지 않는다"~~ → **넣는다.**
+  `ZLinkDefaultSpotContext`가 `sharedSpotGate() ? dispatchQueue.enqueue(...) : ...`로
+  dotnet `_actorLanes → _queue`와 **동일한 2단 구조**를 만든다.
+- Timer 비대칭도 **양 언어 동일**하다. `SPOT_WIDE`면 Timer 큐를 건너뛰고 Spot 큐로 직행한다.
+  이유는 순서가 아니라 **용량 회계**다 — java 주석: *"The Actor queue owns payload admission.
+  The shared Spot gate reserves only its fixed turn cost here."* Timer는 payload가 없다.
+
+**즉 dotnet과 java의 Spot 실행 구조는 거의 같다.** 남는 차이는 ①조율 위치(dotnet 한 곳,
+java 두 계층) ②큐 맵 보호(dotnet `_laneGate` lock, java state lane) ③용량 분담 명시 여부다.
+
 ## 4. 처음 추정이 틀린 지점 (기록)
 
 **추정**: "java는 상위 큐가 소유해서 내부 동기화 0이고, dotnet은 전용 실행기를 만들어
