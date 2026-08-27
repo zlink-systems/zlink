@@ -9,7 +9,7 @@
 > 참고 자료로만 사용한다.
 
 비동기 실행, `Promise`, helper 동기 함수의 공통 의미는
-[비동기 실행과 coroutine 정책](../common/spec/server/05-async-execution-policy.ko.md)을 따른다.
+[비동기 실행과 coroutine 정책](../common/spec/server/01-execution/README.ko.md)을 따른다.
 Node framework 의 서버와 client network API 는 `Promise` 기반 비동기 함수로 투영한다.
 `Async` suffix 는 옮기지 않고, `connect()`, `close()`, `submit()`, `waitFor()`,
 `start()`, `stop()`, `handle()` 처럼 동작 이름과 `Promise<T>` 반환 타입으로 비동기

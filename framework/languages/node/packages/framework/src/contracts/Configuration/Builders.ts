@@ -45,6 +45,8 @@ export interface ZLinkFrameworkOptions {
   setActorTransferTimeout(timeoutMs: number): this;
   /** Sets how long Message Follow relays traffic from the previous owner. */
   setMessageFollowDuration(timeoutMs: number): this;
+  /** Sets the maximum duration for a replaced Session callback before its connection is closed. */
+  setSessionReplacementCallbackTimeout(timeoutMs: number): this;
   configureLocations(): ZLinkLocationOptions;
   configureStreamCompression(): ZLinkStreamCompressionBuilder;
   addRouteMesh(meshName: string): ZLinkMeshNodeBuilder;

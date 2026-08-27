@@ -1,6 +1,8 @@
 package systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.entryspot;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -17,6 +19,8 @@ import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
 public final class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
+    private static final Logger logger = LoggerFactory.getLogger(BingoEntrySpot.class);
+
     private final ZLinkEntrySpotContext context;
     private final ZLinkSpotManager spots;
 
@@ -47,7 +51,9 @@ public final class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
     public CompletionStage<Void> onJoinedActor(
         PlayerActor actor) {
         if (actor.destroyAfterEntrySpotJoin()) {
-            return context.destroyActor(actor);
+            return context.destroyActor(actor)
+                .thenRun(() -> logger.info(
+                    "bingo-lifecycle entry-destroy-complete actor={}", actor.actorId()));
         }
         return CompletableFuture.completedFuture(null);
     }

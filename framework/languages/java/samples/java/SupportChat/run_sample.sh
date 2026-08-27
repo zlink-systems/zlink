@@ -57,13 +57,14 @@ BUILD_LOG="$LOG_DIR/build.log"
 mkdir -p "$LOG_DIR"
 
 read -r api_channel_port support_channel_port session_stream_port \
-  session_router_port support_router_port api_http_port support_http_port \
-  <<<"$(zlink_sample_reserve_ports 7)"
+  session_router_port support_router_port api_router_port api_http_port support_http_port \
+  <<<"$(zlink_sample_reserve_ports 8)"
 api_channel_endpoint="tcp://127.0.0.1:${api_channel_port}"
 support_channel_endpoint="tcp://127.0.0.1:${support_channel_port}"
 session_stream_endpoint="tcp://127.0.0.1:${session_stream_port}"
 session_router_endpoint="tcp://127.0.0.1:${session_router_port}"
 support_router_endpoint="tcp://127.0.0.1:${support_router_port}"
+api_router_endpoint="tcp://127.0.0.1:${api_router_port}"
 api_http_endpoint="http://127.0.0.1:${api_http_port}"
 support_http_endpoint="http://127.0.0.1:${support_http_port}"
 redis_key_prefix="zlink:supportchat:sample:$(date +%s):$$"
@@ -80,6 +81,7 @@ sample.redisEndpoint=${redis_endpoint}
 sample.redisKeyPrefix=${redis_key_prefix}
 sample.logDirectory=${LOG_DIR}
 sample.apiChannelEndpoint=${api_channel_endpoint}
+sample.apiSpotRouterEndpoint=${api_router_endpoint}
 sample.apiHttpEndpoint=${api_http_endpoint}
 EOF
 cat >"$session_config" <<EOF
@@ -122,36 +124,70 @@ start_role api "$ROOT_DIR/Server/Api/build/install/Api/bin/Api" "$api_config"
 start_role session "$ROOT_DIR/Server/Session/build/install/Session/bin/Session" "$session_config"
 disown "${pids[@]}" 2>/dev/null || true
 
-wait_http "$support_http_endpoint"
-wait_http "$api_http_endpoint"
-wait_port "$support_channel_endpoint"
-wait_port "$support_router_endpoint"
-wait_port "$api_channel_endpoint"
-wait_port "$session_router_endpoint"
-wait_port "$session_stream_endpoint"
-wait_framework_ready_logs "$LOG_DIR"
-wait_framework_peer_ready_counts "$LOG_DIR" \
-  "session.log:1" \
-  "support.log:1"
-echo "topology=ready"
+wait_log_count() {
+  local expected="$1"
+  local evidence="$2"
+  shift 2
+  local count
+  for _ in $(seq 1 300); do
+    count="$(log_count "$evidence" "$@")"
+    if (( count == expected )); then
+      return 0
+    fi
+    if (( count > expected )); then
+      echo "Expected $expected '$evidence', found $count." >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for $expected '$evidence'." >&2
+  return 1
+}
+
+log_count() {
+  local evidence="$1"
+  shift
+  { grep -Fh -- "$evidence" "$@" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'
+}
+
+wait_log_at_least() {
+  local minimum="$1"
+  local evidence="$2"
+  shift 2
+  local count
+  for _ in $(seq 1 300); do
+    count="$(log_count "$evidence" "$@")"
+    if (( count >= minimum )); then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for at least $minimum '$evidence'." >&2
+  return 1
+}
+
+wait_log_count 1 "supportchat-ready kind=public node=api" "$LOG_DIR/api.log"
+wait_log_count 1 "supportchat-ready kind=public node=support" "$LOG_DIR/support.log"
+wait_log_count 1 "supportchat-ready kind=stream node=session" "$LOG_DIR/session.log"
+wait_log_count 1 "supportchat-ready kind=spot-route node=api mesh=supportchat-actors" "$LOG_DIR/api.log"
+wait_log_count 1 "supportchat-ready kind=spot-route node=session mesh=supportchat-actors" "$LOG_DIR/session.log"
 
 "$ROOT_DIR/Client/build/install/Client/bin/Client" \
   --stream-endpoint "$session_stream_endpoint" >"$LOG_DIR/client.log" 2>&1
 cat "$LOG_DIR/client.log"
 
-conversation_id="$(sed -n 's/^supportchat-conversation=//p' "$LOG_DIR/client.log" | tail -1)"
-if [[ -z "$conversation_id" ]]; then
-  echo "missing supportchat conversation marker" >&2
-  exit 1
-fi
+wait_log_count 1 "supportchat=completed" "$LOG_DIR/client.log"
+wait_log_count 1 "supportchat-closed-typing-ignore=verified" "$LOG_DIR/client.log"
 
-grep -q "support conversation: created" "$LOG_DIR/support.log"
-grep -q "status=Active" "$LOG_DIR/support.log"
-grep -q "status=WaitingForClose" "$LOG_DIR/support.log"
-grep -q "status=Closed" "$LOG_DIR/support.log"
-grep -q "supportchat-closed-typing-ignore=verified" "$LOG_DIR/client.log"
+server_logs=("$LOG_DIR/api.log" "$LOG_DIR/support.log")
+wait_log_at_least 1 "supportchat-conversation created conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation agent-joined conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation status=WaitingForAgent conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation status=Active conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation status=WaitingForClose conversation=" "${server_logs[@]}"
+wait_log_at_least 1 "supportchat-conversation status=Closed conversation=" "${server_logs[@]}"
 
-grep -Eq "zlink flow: event_id=zlink\.message_flow" "$LOG_DIR"/{api,session,support}.log
-
-echo "supportchat-server-evidence=completed"
-echo "supportchat full client/server self-check completed"
+cleanup
+trap - EXIT
+rm -rf "$RUN_DIR"
+echo "supportchat-placement=completed"

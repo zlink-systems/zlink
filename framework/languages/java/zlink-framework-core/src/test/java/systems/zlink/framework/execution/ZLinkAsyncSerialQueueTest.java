@@ -240,7 +240,7 @@ final class ZLinkAsyncSerialQueueTest {
         throws Exception {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
             null,
-            false,
+            ZLinkExecutionLanePolicy.generic(),
             4,
             10,
             4,
@@ -269,7 +269,7 @@ final class ZLinkAsyncSerialQueueTest {
         throws Exception {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
             null,
-            false,
+            ZLinkExecutionLanePolicy.generic(),
             2,
             10,
             2,
@@ -296,7 +296,7 @@ final class ZLinkAsyncSerialQueueTest {
     void lifecycleOwnerReservationIsSeparateAndStillBounded() {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
             null,
-            false,
+            ZLinkExecutionLanePolicy.generic(),
             4,
             64,
             1,
@@ -320,7 +320,7 @@ final class ZLinkAsyncSerialQueueTest {
     void lifecycleBurstYieldsToApplicationLane() throws Exception {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
             null,
-            false,
+            ZLinkExecutionLanePolicy.generic(),
             16,
             4096,
             16,

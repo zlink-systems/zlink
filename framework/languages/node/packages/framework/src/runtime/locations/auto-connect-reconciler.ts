@@ -14,6 +14,7 @@ import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotatio
 import {
   ZLinkAutoConnectPlanner
 } from './auto-connect-planner';
+import { ZLinkStateLane } from '../execution/state-lane';
 import type {
   IZLinkAutoConnectExecutor,
   IZLinkAutoConnectPeerPublisher,
@@ -37,6 +38,7 @@ export interface ZLinkAutoConnectReconcilerOptions {
 }
 
 export class ZLinkAutoConnectReconciler {
+  private readonly lane = new ZLinkStateLane();
   private readonly local: ZLinkAutoConnectLocal;
   private readonly localRow?: ZLinkPeerLocation;
   private readonly runtime: IZLinkAutoConnectPeerPublisher;
@@ -103,8 +105,10 @@ export class ZLinkAutoConnectReconciler {
     }
 
     if (!this.reconcilePeers) {
-      this.storeFailedValue = false;
-      this.storeFailureStartedAtMs = undefined;
+      await this.lane.run(() => {
+        this.storeFailedValue = false;
+        this.storeFailureStartedAtMs = undefined;
+      });
       return;
     }
 
@@ -126,11 +130,11 @@ export class ZLinkAutoConnectReconciler {
     // only when the authoritative read proves that this local row is absent;
     // existing transport targets remain untouched during the rebuild window.
     if (
-      this.localPublished
+      await this.lane.run(() => this.localPublished)
       && this.localRow !== undefined
       && !rows.some(row => row.nodeRid === this.localRow!.nodeRid)
     ) {
-      this.localPublished = false;
+      await this.lane.run(() => { this.localPublished = false; });
       try {
         const republished = await this.publishLocal(signal);
         if (!republished) {
@@ -143,9 +147,10 @@ export class ZLinkAutoConnectReconciler {
       }
     }
 
-    if (this.storeFailedValue) {
-      this.storeFailedValue = false;
-      this.storeFailureStartedAtMs = undefined;
+    if (await this.lane.run(() => this.storeFailedValue)) {
+      await this.lane.run(() => {
+        this.storeFailedValue = false;
+        this.storeFailureStartedAtMs = undefined;
       // After a store restart, owners may need one full lease interval to
       // reclaim their token and republish a descriptor. Do not interpret the
       // incomplete post-restart scan as a definitive removal.
@@ -153,14 +158,15 @@ export class ZLinkAutoConnectReconciler {
       // owners reclaim their tokens and republish descriptors. This deferral
       // applies only after a Store operation failed; a successful empty scan
       // is authoritative and must remove stale peers promptly.
-      this.recoveryDeferUntilMs = this.monotonicNowMs()
-        + this.options.ownerLeaseTtlMs;
+        this.recoveryDeferUntilMs = this.monotonicNowMs()
+          + this.options.ownerLeaseTtlMs;
+      });
     }
 
-    this.meshMemberRidHexes = new Set(rows
+    await this.lane.run(() => { this.meshMemberRidHexes = new Set(rows
       .map((row) => row.nodeRid)
       .filter((nodeRid): nodeRid is RoutingId => nodeRid !== undefined)
-      .map((nodeRid) => encodeRoutingIdHex(nodeRid)));
+      .map((nodeRid) => encodeRoutingIdHex(nodeRid))); });
     const candidates = ZLinkAutoConnectPlanner.computeCandidates(this.local, rows);
     const nowMs = this.monotonicNowMs();
     this.executor.expectPeers?.([...candidates.values()]);
@@ -170,42 +176,46 @@ export class ZLinkAutoConnectReconciler {
 
     const desired = new Map(ZLinkAutoConnectPlanner.computeDesired(this.local, rows));
     const desiredEndpoints = new Set([...desired.values()].map((target) => target.endpoint));
-    for (const endpoint of this.failedEndpoints) {
+    const failedEndpoints = await this.lane.run(() => [...this.failedEndpoints]);
+    for (const endpoint of failedEndpoints) {
       if (!desiredEndpoints.has(endpoint)) {
-        this.failedEndpoints.delete(endpoint);
+        await this.lane.run(() => { this.failedEndpoints.delete(endpoint); });
       }
     }
     const existingTargets = ZLinkAutoConnectPlanner.computeDesired(this.local, rows, true);
+    const activeKeys = await this.lane.run(() => new Set(this.active.keys()));
     for (const [key, target] of existingTargets) {
-      if (this.active.has(key)) desired.set(key, target);
+      if (activeKeys.has(key)) desired.set(key, target);
     }
-    this.lastDesired = new Map(desired);
+    await this.lane.run(() => { this.lastDesired = new Map(desired); });
     const connectedEndpoints: string[] = [];
     const disconnectedEndpoints: string[] = [];
     for (const [key, target] of desired) {
-      let current = this.active.get(key);
+      let current = await this.lane.run(() => this.active.get(key));
       if (
         current !== undefined
         && current.endpoint === target.endpoint
         && current.ownerId === target.ownerId
         && this.executor.isDisconnected?.(current) === true
       ) {
-        this.active.delete(key);
+        await this.lane.run(() => { this.active.delete(key); });
         current = undefined;
       }
       if (current === undefined) {
-        const disconnecting = this.pendingDisconnects.get(key);
+        const disconnecting = await this.lane.run(() => this.pendingDisconnects.get(key));
         if (disconnecting !== undefined
           && this.executor.isDisconnected !== undefined
           && !this.executor.isDisconnected(disconnecting)) {
           continue;
         }
-        this.pendingDisconnects.delete(key);
+        await this.lane.run(() => { this.pendingDisconnects.delete(key); });
         const connected = await this.executor.connect(target);
         if (connected) {
           connectedEndpoints.push(target.endpoint);
-          this.active.set(key, target);
-          this.failedEndpoints.delete(target.endpoint);
+          await this.lane.run(() => {
+            this.active.set(key, target);
+            this.failedEndpoints.delete(target.endpoint);
+          });
         }
         continue;
       }
@@ -213,23 +223,25 @@ export class ZLinkAutoConnectReconciler {
       if (current.endpoint !== target.endpoint || current.ownerId !== target.ownerId) {
         this.disconnectIfNeeded(current);
         disconnectedEndpoints.push(current.endpoint);
-        this.active.delete(key);
+        await this.lane.run(() => { this.active.delete(key); });
         if (this.executor.isDisconnected !== undefined
           && !this.executor.isDisconnected(current)) {
-          this.pendingDisconnects.set(key, current);
+          await this.lane.run(() => { this.pendingDisconnects.set(key, current!); });
           continue;
         }
-        this.pendingDisconnects.delete(key);
+        await this.lane.run(() => { this.pendingDisconnects.delete(key); });
         const connected = await this.executor.connect(target);
         if (connected) {
           connectedEndpoints.push(target.endpoint);
-          this.active.set(key, target);
-          this.failedEndpoints.delete(target.endpoint);
+          await this.lane.run(() => {
+            this.active.set(key, target);
+            this.failedEndpoints.delete(target.endpoint);
+          });
         }
       }
     }
 
-    if (nowMs < this.recoveryDeferUntilMs) {
+    if (nowMs < await this.lane.run(() => this.recoveryDeferUntilMs)) {
       this.publishDesiredSetChange(connectedEndpoints, disconnectedEndpoints);
       return;
     }
@@ -242,21 +254,23 @@ export class ZLinkAutoConnectReconciler {
       [...candidates.values()]
     );
 
-    for (const [key, target] of [...this.active]) {
+    const activeTargets = await this.lane.run(() => [...this.active]);
+    for (const [key, target] of activeTargets) {
       if (!desired.has(key)) {
         this.disconnectIfNeeded(target);
         disconnectedEndpoints.push(target.endpoint);
-        this.active.delete(key);
+        await this.lane.run(() => { this.active.delete(key); });
         if (this.executor.isDisconnected !== undefined) {
-          this.pendingDisconnects.set(key, target);
+          await this.lane.run(() => { this.pendingDisconnects.set(key, target); });
         }
       }
     }
 
     if (this.executor.isDisconnected !== undefined) {
-      for (const [key, target] of this.pendingDisconnects) {
+      const pendingDisconnects = await this.lane.run(() => [...this.pendingDisconnects]);
+      for (const [key, target] of pendingDisconnects) {
         if (!desired.has(key) && this.executor.isDisconnected(target)) {
-          this.pendingDisconnects.delete(key);
+          await this.lane.run(() => { this.pendingDisconnects.delete(key); });
         }
       }
     }
@@ -278,16 +292,12 @@ export class ZLinkAutoConnectReconciler {
   }
 
   async unpublishLocal(signal?: AbortSignal): Promise<void> {
-    if (this.localPublished && this.localRow !== undefined) {
-      await this.runtime.removePeer({
-        autoConnectType: this.localRow.autoConnectType,
-        meshName: this.localRow.meshName,
-        role: this.localRow.role,
-        nodeRid: this.localRow.nodeRid,
-        endpoint: this.localRow.endpoint
-      }, this.localGeneration, signal);
-      this.localPublished = false;
-    }
+    const published = await this.lane.run(() => this.prepareUnpublishLocalCore());
+    if (published === undefined) return;
+    await this.runtime.removePeer(published.row, published.generation, signal);
+    await this.lane.run(() => {
+      if (this.localGeneration === published.generation) this.localPublished = false;
+    });
   }
 
   private disconnectIfNeeded(target: ZLinkAutoConnectTarget): void {
@@ -296,29 +306,75 @@ export class ZLinkAutoConnectReconciler {
   }
 
   private async publishLocal(signal?: AbortSignal): Promise<boolean> {
-    if (this.localRow === undefined || this.localPublished) {
-      return this.localPublished;
-    }
-
-    const claimed = await this.runtime.writePeer(this.localRow, ZLinkLocationWriteIntent.NewClaim, signal);
+    const prepared = await this.lane.run(() => this.preparePublishLocalCore());
+    if (prepared === undefined) return await this.lane.run(() => this.localPublished);
+    const claimed = await this.runtime.writePeer(prepared.row, ZLinkLocationWriteIntent.NewClaim, signal);
     if (claimed.status === ZLinkLocationWriteStatus.Stored) {
-      this.localGeneration = claimed.generation;
-      this.localPublished = true;
-      return true;
+      return await this.lane.run(() => this.completePublishClaimCore(claimed.generation));
     }
 
-    if (claimed.status === ZLinkLocationWriteStatus.RejectedConflict && this.localGeneration > 0n) {
+    const renewal = await this.lane.run(() => this.preparePublishRenewalCore(prepared.row, claimed.status));
+    if (renewal !== undefined) {
       const renewed = await this.runtime.writePeer({
-        ...this.localRow,
-        generation: this.localGeneration
+        ...prepared.row,
+        generation: renewal
       }, ZLinkLocationWriteIntent.Renew, signal);
-      this.localPublished = renewed.status === ZLinkLocationWriteStatus.Stored;
-      return this.localPublished;
+      return await this.lane.run(() => {
+        this.localPublished = renewed.status === ZLinkLocationWriteStatus.Stored;
+        return this.localPublished;
+      });
     }
     return false;
   }
 
+  private prepareUnpublishLocalCore(): {
+    readonly row: Pick<ZLinkPeerLocation, 'autoConnectType' | 'meshName' | 'role' | 'nodeRid' | 'endpoint'>;
+    readonly generation: bigint;
+  } | undefined {
+    if (!this.localPublished || this.localRow === undefined) return undefined;
+    return {
+      row: {
+        autoConnectType: this.localRow.autoConnectType,
+        meshName: this.localRow.meshName,
+        role: this.localRow.role,
+        nodeRid: this.localRow.nodeRid,
+        endpoint: this.localRow.endpoint
+      },
+      generation: this.localGeneration
+    };
+  }
+
+  private preparePublishLocalCore(): { readonly row: ZLinkPeerLocation } | undefined {
+    if (this.localRow === undefined || this.localPublished) return undefined;
+    return { row: this.localRow };
+  }
+
+  private completePublishClaimCore(generation: bigint): boolean {
+    this.localGeneration = generation;
+    this.localPublished = true;
+    return true;
+  }
+
+  private preparePublishRenewalCore(
+    _row: ZLinkPeerLocation,
+    status: ZLinkLocationWriteStatus
+  ): bigint | undefined {
+    return status === ZLinkLocationWriteStatus.RejectedConflict && this.localGeneration > 0n
+      ? this.localGeneration
+      : undefined;
+  }
+
   private async recordStoreFailure(): Promise<void> {
+    const retryTargets = await this.lane.run(() => this.beginStoreFailureCore());
+    if (retryTargets === undefined) return;
+    for (const [key, target] of retryTargets) {
+      if (await this.executor.connect(target)) {
+        await this.lane.run(() => this.completeStoreFailureConnectCore(key, target));
+      }
+    }
+  }
+
+  private beginStoreFailureCore(): readonly (readonly [string, ZLinkAutoConnectTarget])[] | undefined {
     const nowMs = this.monotonicNowMs();
     this.storeFailureStartedAtMs ??= nowMs;
     this.storeFailedValue = true;
@@ -327,16 +383,15 @@ export class ZLinkAutoConnectReconciler {
       this.options.storeFailureGraceMs <= 0 ||
       nowMs - this.storeFailureStartedAtMs > this.options.storeFailureGraceMs
     ) {
-      return;
+      return undefined;
     }
-    for (const [key, target] of this.lastDesired) {
-      if (
-        !this.active.has(key)
-        && !this.failedEndpoints.has(target.endpoint)
-        && await this.executor.connect(target)
-      ) {
-        this.active.set(key, target);
-      }
+    return [...this.lastDesired]
+      .filter(([key, target]) => !this.active.has(key) && !this.failedEndpoints.has(target.endpoint));
+  }
+
+  private completeStoreFailureConnectCore(key: string, target: ZLinkAutoConnectTarget): void {
+    if (!this.active.has(key) && !this.failedEndpoints.has(target.endpoint)) {
+      this.active.set(key, target);
     }
   }
 

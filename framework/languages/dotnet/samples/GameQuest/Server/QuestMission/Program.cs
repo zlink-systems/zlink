@@ -66,6 +66,10 @@ internal static class Program
         var app = builder.Build();
 
         app.MapGet("/health", () => Results.Ok(new { status = "ok", mission = instance.MissionName }));
+        app.Lifetime.ApplicationStarted.Register(() =>
+            app.Logger.LogInformation(
+                "gamequest-ready kind=instance-factory node={NodeId}",
+                missionName));
         app.MapGet("/self-check/events",
             async (QuestStore store, CancellationToken cancellationToken) =>
             {

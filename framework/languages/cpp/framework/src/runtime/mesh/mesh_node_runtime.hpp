@@ -6,6 +6,7 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/route_handler_registry.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -122,7 +123,8 @@ struct mesh_node_builder_state_t
 {
     explicit mesh_node_builder_state_t (std::string name);
 
-    std::mutex mutex;
+    runtime::offload_executor_t lane_executor;
+    runtime::state_lane_t lane;
     std::string mesh_name;
     std::string listen_endpoint;
     std::optional<std::uint16_t> listen_port;
@@ -238,6 +240,8 @@ class mesh_node_runtime_t
     void
     configure_stateful_dispatch (runtime::stateful::accepted_record_authority_resolver_t resolver);
     void configure_bound_session_operations (host::bound_session_operations_t operations);
+    void configure_late_session_route_update (
+      std::function<void (const runtime::protocol::session_relocation_route_t &)> reporter);
     message_follow_subscription_id_t subscribe_message_follow_invalidation (
       std::function<void (const runtime::protocol::message_follow_notice_t &)> handler);
     void unsubscribe_message_follow_invalidation (
@@ -448,6 +452,9 @@ class mesh_node_runtime_t
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid,
                             std::uint64_t lifecycle_generation) const;
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid) const;
+    std::optional<std::uint64_t> admitted_peer_epoch (
+      const zlink::routing_id_t &peer_rid,
+      std::uint64_t lifecycle_generation) const;
     struct observed_spot_authority_t
     {
         std::uint64_t target_node_generation = 0;
@@ -641,6 +648,8 @@ class mesh_node_runtime_t
       _bound_session_relocation_resolver;
     runtime::stateful::accepted_record_authority_resolver_t _stateful_dispatch_resolver;
     std::optional<host::bound_session_operations_t> _bound_session_operations;
+    std::function<void (const runtime::protocol::session_relocation_route_t &)>
+      _late_session_route_update_reporter;
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)>
       _descriptor_publisher;
     std::shared_ptr<host::public_host_runtime_t> _node;

@@ -1,21 +1,30 @@
 namespace Zlink.Framework.Runtime.Streams;
 
-internal sealed class ZLinkSessionActor(
-    ZLinkSessionContext context,
-    string actorId,
-    RoutingId sessionRid,
-    string bindingToken)
-    : IZLinkSessionActor
+internal sealed class ZLinkSessionActor : IZLinkSessionActor
 {
-    private readonly object _disconnectGate = new();
-    private Task? _disconnectTask;
+    private readonly Lazy<Task> _disconnectTask;
 
-    internal ZLinkSessionContext Context { get; } = context;
+    internal ZLinkSessionContext Context { get; }
 
-    internal RoutingId SessionRid { get; } = sessionRid;
+    internal RoutingId SessionRid { get; }
 
-    internal string BindingToken { get; } = bindingToken;
-    public string ActorId { get; } = actorId;
+    internal string BindingToken { get; }
+    public string ActorId { get; }
+
+    internal ZLinkSessionActor(
+        ZLinkSessionContext context,
+        string actorId,
+        RoutingId sessionRid,
+        string bindingToken)
+    {
+        Context = context;
+        ActorId = actorId;
+        SessionRid = sessionRid;
+        BindingToken = bindingToken;
+        _disconnectTask = new Lazy<Task>(
+            () => Context.NotifyActorRefDisconnectedAsync(this, CancellationToken.None).AsTask(),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+    }
 
     public ActorRef Ref => Route.Ref;
 
@@ -53,14 +62,7 @@ internal sealed class ZLinkSessionActor(
 
     public ValueTask NotifyDisconnectedAsync(CancellationToken cancellationToken = default)
     {
-        Task notification;
-        lock (_disconnectGate)
-        {
-            _disconnectTask ??= Context
-                .NotifyActorRefDisconnectedAsync(this, CancellationToken.None)
-                .AsTask();
-            notification = _disconnectTask;
-        }
+        var notification = _disconnectTask.Value;
 
         return cancellationToken.CanBeCanceled
             ? new ValueTask(notification.WaitAsync(cancellationToken))

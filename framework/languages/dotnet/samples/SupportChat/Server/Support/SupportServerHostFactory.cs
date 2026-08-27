@@ -33,6 +33,10 @@ public static class SupportServerHostFactory
         builder.Services.AddSingleton<AgentAssignmentService>();
         builder.Services.AddSingleton<SupportActorDirectory>();
         builder.Services.AddSingleton<ConversationNotificationPublisher>();
+        builder.Services.AddSingleton(new SupportChatReadiness(
+            SupportChatReadyKind.Public,
+            "support"));
+        builder.Services.AddHostedService<SupportChatReadinessReporter>();
 
         builder.Services.AddZLinkFramework(options =>
         {

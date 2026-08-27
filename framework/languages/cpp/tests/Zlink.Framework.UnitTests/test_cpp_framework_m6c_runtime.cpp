@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/stateful/maintenance_runtime.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
@@ -604,10 +605,9 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
       "readiness without a prepared relocation must complete "
       "continued exactly once on the next Spot serial turn");
 
-    {
-        std::lock_guard lock (state->callback_mutex);
+    state->callback_lane.run ([state] {
         state->relocation_boundary_active = true;
-    }
+    }).get ();
     const auto prepared_deferred = state->run_serial_sync (
       "defer-prepared-relocation", [&] { context.relocation_ready ().defer (); });
     state->complete_relocation_ready (spot_relocation_ready_outcome_t::relocated);
@@ -4836,6 +4836,14 @@ void test_actor_join_wire_gate_records_target_authority (test_context_t &test)
 
 int main ()
 {
+    zlink::framework::runtime::configure_handler_coroutine_executor (4);
+    struct executor_shutdown_t
+    {
+        ~executor_shutdown_t ()
+        {
+            zlink::framework::runtime::shutdown_handler_coroutine_executor ();
+        }
+    } executor_shutdown;
     test_context_t test;
     test_spot_lifecycle_domain_rejects_invalid_kind_combinations (test);
     test_generation_barrier_quiesces_yield_spot_and_timer (test);

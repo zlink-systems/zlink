@@ -35,8 +35,9 @@ public final class OfferDeliveryResultHandler
         ZLinkMessageContext context) {
         Optional<DeliveryOffer> offer = offers.settle(message.deliveryId(), message.attempt());
         if (offer.isEmpty()) {
-            System.out.println("deliverydispatch dispatch: dropped a late decision delivery="
-                + message.deliveryId() + " attempt=" + message.attempt());
+            System.out.println("deliverydispatch-dispatch stale-decision-ignored delivery="
+                + message.deliveryId() + " courier=" + message.courierId()
+                + " attempt=" + message.attempt());
             return CompletableFuture.completedFuture(null);
         }
 

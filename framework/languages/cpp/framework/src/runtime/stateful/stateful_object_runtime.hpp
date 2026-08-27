@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/execution/state_lane.hpp"
+
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
@@ -279,6 +281,7 @@ class stateful_object_runtime_t
       std::size_t infrastructure_capacity = dispatch_limits::control_mailbox_messages,
       std::size_t application_byte_capacity = dispatch_limits::application_mailbox_bytes,
       std::size_t infrastructure_byte_capacity = dispatch_limits::control_mailbox_bytes);
+    ~stateful_object_runtime_t ();
 
     void configure_relocation_state (relocation_state_capture_t capture,
                                      relocation_state_restore_t restore);
@@ -459,13 +462,18 @@ class stateful_object_runtime_t
     static std::size_t retained_bytes (const turn_record_t &record) noexcept;
     void move_held_application_locked (object_record_t &object);
     void release_pending_capacity_locked (const object_record_t &record);
+    void notify_quiescence () noexcept;
+    void wait_for_quiescence_change (std::uint64_t observed);
 
     const std::size_t _application_capacity;
     const std::size_t _infrastructure_capacity;
     const std::size_t _application_byte_capacity;
     const std::size_t _infrastructure_byte_capacity;
-    mutable std::mutex _mutex;
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
+    std::mutex _quiescence_mutex;
     std::condition_variable _quiescence;
+    std::atomic_uint64_t _quiescence_epoch = 0;
     std::vector<placement_candidate_t> _candidates;
     std::map<object_key_t, object_record_t> _objects;
     std::map<object_key_t, std::uint64_t> _last_generation;

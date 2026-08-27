@@ -3,11 +3,14 @@ package systems.zlink.samples.deliverydispatch.server.courierspotnode;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.samples.deliverydispatch.server.configuration.DeliveryDispatchReadinessReporter;
 import systems.zlink.samples.deliverydispatch.server.configuration.SampleLocationStore;
 import systems.zlink.samples.deliverydispatch.server.configuration.SampleApplication;
 import systems.zlink.samples.deliverydispatch.server.configuration.SampleNames;
@@ -37,7 +40,7 @@ public final class CourierSpotNodeApplication {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder spotNode = options.addRouteMesh(SampleNames.CourierSpotDiscovery);
             spotNode.listen(selected.spotEndpoint())
-                .setRoutingIdPrefix("delivery-courier");
+                .setRoutingId(RoutingId.from(selected.nodeName()));
             spotNode.objects()
                 .server()
                 .addEntrySpot(CourierEntrySpot.class)
@@ -63,11 +66,25 @@ public final class CourierSpotNodeApplication {
         return SampleLocationStore.create(topology);
     }
 
-    private record NodeOptions(String spotEndpoint) {
+    @Bean
+    DeliveryDispatchReadinessReporter readinessReporter(
+        SampleTopology topology,
+        ZLinkRouteMeshRuntime routeMeshRuntime) {
+        return new DeliveryDispatchReadinessReporter(
+            routeMeshRuntime,
+            NodeOptions.resolve(topology.courierNode(), topology).nodeName(),
+            SampleNames.CourierSpotDiscovery);
+    }
+
+    private record NodeOptions(String nodeName, String spotEndpoint) {
         static NodeOptions resolve(String node, SampleTopology topology) {
             return switch (node) {
-                case "node2" -> new NodeOptions(topology.courierActorNode2SpotEndpoint());
-                default -> new NodeOptions(topology.courierActorNode1SpotEndpoint());
+                case "node2" -> new NodeOptions(
+                    SampleNames.CourierNode2,
+                    topology.courierActorNode2SpotEndpoint());
+                default -> new NodeOptions(
+                    SampleNames.CourierNode1,
+                    topology.courierActorNode1SpotEndpoint());
             };
         }
     }

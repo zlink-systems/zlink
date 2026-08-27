@@ -28,10 +28,9 @@ internal sealed class DeliveryStatusChangedHandler(
         await actors.SendToActor(request.CustomerId, updated)
             .Async(cancellationToken);
         logger.LogInformation(
-            "deliverydispatch tracking: status delivery={DeliveryId} status={Status} courier={CourierId}",
-            request.DeliveryId,
+            "deliverydispatch-tracking status={Status} delivery={DeliveryId}",
             request.Status,
-            request.CourierId);
+            request.DeliveryId);
         return new DeliveryStatusChangedRes(request.DeliveryId, request.Status);
     }
 }

@@ -105,6 +105,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/foundation/operation_registry.cpp
   framework/src/runtime/dispatch/coroutine_executor.cpp
   framework/src/runtime/dispatch/offload_executor.cpp
+  framework/src/runtime/execution/state_lane.cpp
   framework/src/runtime/messaging/call_facade_runtime.cpp
   framework/src/runtime/messaging/logical_multicast_runtime.cpp
   framework/src/runtime/diagnostics/runtime_observation.cpp
@@ -941,6 +942,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     framework/src/runtime/messaging/envelope_codec.cpp
     framework/src/runtime/codecs/serializer.cpp
     framework/src/runtime/diagnostics/flow_context.cpp
+    framework/src/runtime/dispatch/offload_executor.cpp
+    framework/src/runtime/execution/state_lane.cpp
     framework/src/runtime/mesh/service_topology_registry.cpp)
   target_compile_features(test_cpp_framework_service_wire_codec PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_service_wire_codec PRIVATE
@@ -1454,6 +1457,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
     ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/serial-execution-v1.json"
     ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/runtime-observation-v1.json")
+  add_zlink_framework_test(
+    test_cpp_framework_state_lane
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp
+    "framework-unit;framework-regression;execution")
+  target_link_libraries(test_cpp_framework_state_lane PRIVATE
+    GTest::gtest_main)
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp

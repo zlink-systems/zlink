@@ -89,9 +89,9 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
   readonly actorType: string;
   readonly actorNodeRid: RoutingId;
   readonly actorGeneration: string;
-  readonly actorNodeGeneration: string;
-  readonly expectedAuthorityOwnerGeneration: string;
-  readonly expectedOwnerLeaseGeneration: string;
+  readonly actorNodeGeneration?: string;
+  readonly expectedAuthorityOwnerGeneration?: string;
+  readonly expectedOwnerLeaseGeneration?: string;
   readonly sourceSpotId?: SpotId;
   readonly routerChannelId?: string;
   readonly boundSessionRouterChannelId?: string;
@@ -109,9 +109,6 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
     typeof (payload as { actorType?: unknown }).actorType !== 'string' ||
     typeof (payload as { actorNodeRid?: unknown }).actorNodeRid !== 'string' ||
     typeof (payload as { actorGeneration?: unknown }).actorGeneration !== 'string' ||
-    typeof (payload as { actorNodeGeneration?: unknown }).actorNodeGeneration !== 'string' ||
-    typeof (payload as { expectedAuthorityOwnerGeneration?: unknown }).expectedAuthorityOwnerGeneration !== 'string' ||
-    typeof (payload as { expectedOwnerLeaseGeneration?: unknown }).expectedOwnerLeaseGeneration !== 'string' ||
     typeof (payload as { request?: unknown }).request !== 'string'
   ) {
     throw new Error('Remote actor join payload is invalid.');
@@ -125,11 +122,11 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
       optionalString(payload, 'actorNodeRidHex')
     ),
     actorGeneration: (payload as { actorGeneration: string }).actorGeneration,
-    actorNodeGeneration: (payload as { actorNodeGeneration: string }).actorNodeGeneration,
+    actorNodeGeneration: optionalString(payload, 'actorNodeGeneration'),
     expectedAuthorityOwnerGeneration:
-      (payload as { expectedAuthorityOwnerGeneration: string }).expectedAuthorityOwnerGeneration,
+      optionalString(payload, 'expectedAuthorityOwnerGeneration'),
     expectedOwnerLeaseGeneration:
-      (payload as { expectedOwnerLeaseGeneration: string }).expectedOwnerLeaseGeneration,
+      optionalString(payload, 'expectedOwnerLeaseGeneration'),
     sourceSpotId: optionalSpotId(payload, 'sourceSpotId'),
     routerChannelId: optionalString(payload, 'routerChannelId'),
     boundSessionRouterChannelId: optionalString(payload, 'boundSessionRouterChannelId'),

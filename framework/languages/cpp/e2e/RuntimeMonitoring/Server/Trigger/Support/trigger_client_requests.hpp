@@ -31,7 +31,7 @@ class transient_request_service_t final : public zlink::framework::hosted_servic
     {
     }
 
-    void start (zlink::framework::service_provider_t &services) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
         try {
             auto &channels = services.get_required<zlink::framework::channel_client_t> ();
@@ -51,6 +51,7 @@ class transient_request_service_t final : public zlink::framework::hosted_servic
             _error = ex.what ();
         }
         _app.stop ();
+        co_return;
     }
 
     void stop () noexcept override {}

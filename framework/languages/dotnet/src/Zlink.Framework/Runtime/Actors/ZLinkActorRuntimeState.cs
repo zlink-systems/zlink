@@ -1,5 +1,6 @@
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -20,8 +21,7 @@ internal sealed class ZLinkActorRuntimeState(
     private static readonly AsyncLocal<DispatchOwnership?> AmbientDispatch = new();
     private readonly ZLinkActorDispatchMailbox _dispatchMailbox = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly object _terminalLifecycleGate = new();
-    private readonly object _sessionGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly TimeSpan _sessionBindingTombstoneRetention =
         sessionBindingTombstoneRetention is { } configured
@@ -95,29 +95,42 @@ internal sealed class ZLinkActorRuntimeState(
 
     public IZLinkActor? Actor { get; private set; }
 
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private T RunState<T>(Func<T> operation) =>
+        AwaitStateLane(_lane.RunAsync(operation));
+
+    private void RunState(Action operation) =>
+        AwaitStateLane(_lane.RunAsync(operation));
+
     internal ZLinkScopedHandlerInstanceOwner HandlerInstances
     {
         get
         {
-            lock (_sessionGate)
+            return RunState(() =>
             {
                 if (_handlerActivationClosed)
                     throw new InvalidOperationException(
                         $"Actor '{ActorId}' handler activation is no longer available.");
                 return (_handlerActivation ??= new ZLinkActorHandlerActivation(_services))
                     .Instances;
-            }
+            });
         }
     }
 
     internal ValueTask DisposeHandlerActivationAsync()
     {
         ZLinkActorHandlerActivation? activation;
-        lock (_sessionGate)
+        activation = RunState(() =>
         {
             activation = _handlerActivation;
             _handlerActivation = null;
-        }
+            return activation;
+        });
 
         return activation?.DisposeAsync() ?? ValueTask.CompletedTask;
     }
@@ -127,22 +140,22 @@ internal sealed class ZLinkActorRuntimeState(
         Func<T> terminalTransition)
     {
         ArgumentNullException.ThrowIfNull(terminalTransition);
-        lock (_terminalLifecycleGate)
+        var requiresDispatchRelease = OwnsCurrentDispatch;
+        return RunState(() =>
         {
-            CloseHandlerActivation();
-            var requiresDispatchRelease =
-                AmbientDispatch.Value is { IsActive: true } ownership
-                && ReferenceEquals(ownership.State, this);
+            CloseHandlerActivationCore();
             var barrier =
                 _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier();
-            var completion = CompleteHandlerActivationCoreAsync(
-                barrier,
-                terminalTransition);
+            Task<T> completion;
+            using (ExecutionContext.SuppressFlow())
+                completion = Task.Run(() => CompleteHandlerActivationCoreAsync(
+                    barrier,
+                    terminalTransition));
             _terminalLifecycleCompletion = completion;
             return new ZLinkActorHandlerTerminalCompletion<T>(
                 completion,
                 requiresDispatchRelease);
-        }
+        });
     }
 
     internal ZLinkActorHandlerTerminalCompletion<T>
@@ -150,20 +163,22 @@ internal sealed class ZLinkActorRuntimeState(
         Func<ValueTask<T>> terminalTransition)
     {
         ArgumentNullException.ThrowIfNull(terminalTransition);
-        lock (_terminalLifecycleGate)
+        var requiresDispatchRelease = OwnsCurrentDispatch;
+        return RunState(() =>
         {
-            CloseHandlerActivation();
-            var requiresDispatchRelease = OwnsCurrentDispatch;
+            CloseHandlerActivationCore();
             var barrier =
                 _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier();
-            var completion = CompleteHandlerActivationAsyncCoreAsync(
-                barrier,
-                terminalTransition);
+            Task<T> completion;
+            using (ExecutionContext.SuppressFlow())
+                completion = Task.Run(() => CompleteHandlerActivationAsyncCoreAsync(
+                    barrier,
+                    terminalTransition));
             _terminalLifecycleCompletion = completion;
             return new ZLinkActorHandlerTerminalCompletion<T>(
                 completion,
                 requiresDispatchRelease);
-        }
+        });
     }
 
     internal bool OwnsCurrentDispatch =>
@@ -202,14 +217,17 @@ internal sealed class ZLinkActorRuntimeState(
     {
         Task? terminalCompletion;
         ZLinkActorDispatchMailbox.BarrierReservation? barrier = null;
-        lock (_terminalLifecycleGate)
+        var terminal = RunState(() =>
         {
-            CloseHandlerActivation();
+            CloseHandlerActivationCore();
             terminalCompletion = _terminalLifecycleCompletion;
             if (terminalCompletion is null)
                 barrier = _dispatchMailbox
                     .CloseAdmissionAndReserveLifecycleBarrier();
-        }
+            return (terminalCompletion, barrier);
+        });
+        terminalCompletion = terminal.terminalCompletion;
+        barrier = terminal.barrier;
 
         if (terminalCompletion is not null)
         {
@@ -219,7 +237,7 @@ internal sealed class ZLinkActorRuntimeState(
             // barrier for the same actor.
             await terminalCompletion.ConfigureAwait(false);
             await ExecuteLockedAsync(
-                    InvalidateRuntimeGeneration,
+                    InvalidateRuntimeGenerationCore,
                     CancellationToken.None)
                 .ConfigureAwait(false);
             await DisposeHandlerActivationAsync().ConfigureAwait(false);
@@ -228,16 +246,17 @@ internal sealed class ZLinkActorRuntimeState(
 
         using var turn = await barrier!.ClaimAsync().ConfigureAwait(false);
         await ExecuteLockedAsync(
-                InvalidateRuntimeGeneration,
+                InvalidateRuntimeGenerationCore,
                 CancellationToken.None)
             .ConfigureAwait(false);
         await DisposeHandlerActivationAsync().ConfigureAwait(false);
     }
 
-    private void CloseHandlerActivation()
+    private void CloseHandlerActivation() => RunState(CloseHandlerActivationCore);
+
+    private void CloseHandlerActivationCore()
     {
-        lock (_sessionGate)
-            _handlerActivationClosed = true;
+        _handlerActivationClosed = true;
     }
 
     public bool IsConfigured { get; private set; }
@@ -470,7 +489,7 @@ internal sealed class ZLinkActorRuntimeState(
             acceptedHighWater,
             sessionOwnerId,
             sessionOwnerLeaseGeneration);
-        lock (_sessionGate)
+        return RunState<ZLinkActorBoundSession?>(() =>
         {
             PurgeExpiredSessionBindingTombstones();
             EnsureBindingTokenCanBeUsed(replacement);
@@ -487,7 +506,7 @@ internal sealed class ZLinkActorRuntimeState(
             }
             _boundSession = replacement;
             return null;
-        }
+        });
     }
 
     public ZLinkActorSessionReplacementAttempt BeginSessionReplacement(
@@ -520,7 +539,7 @@ internal sealed class ZLinkActorRuntimeState(
             acceptedHighWater,
             sessionOwnerId,
             sessionOwnerLeaseGeneration);
-        lock (_sessionGate)
+        return RunState(() =>
         {
             PurgeExpiredSessionBindingTombstones();
             EnsureBindingTokenCanBeUsed(replacement);
@@ -563,7 +582,7 @@ internal sealed class ZLinkActorRuntimeState(
                 _boundSession,
                 previousFence);
             return _sessionReplacement.CreateAttempt(ownsExecution: true);
-        }
+        });
     }
 
     public void PublishSessionReplacement(
@@ -571,7 +590,7 @@ internal sealed class ZLinkActorRuntimeState(
     {
         if (!attempt.OwnsExecution)
             throw ReplacementWasInvalidated();
-        lock (_sessionGate)
+        RunState(() =>
         {
             var replacement = GetCurrentReplacement(attempt);
             if (replacement.Phase >= ZLinkActorSessionReplacementPhase.Published)
@@ -580,7 +599,7 @@ internal sealed class ZLinkActorRuntimeState(
                 RememberRetiredSessionBinding(previous);
             _boundSession = replacement.Replacement;
             replacement.Phase = ZLinkActorSessionReplacementPhase.Published;
-        }
+        });
     }
 
     public void CompleteSessionReplacement(
@@ -588,17 +607,17 @@ internal sealed class ZLinkActorRuntimeState(
     {
         if (!attempt.OwnsExecution)
             throw ReplacementWasInvalidated();
-        TaskCompletionSource<Exception?> completion;
-        lock (_sessionGate)
+        var completion = RunState(() =>
         {
             var replacement = GetCurrentReplacement(attempt);
             if (replacement.Phase != ZLinkActorSessionReplacementPhase.Published)
                 throw ReplacementWasInvalidated();
             replacement.Phase = ZLinkActorSessionReplacementPhase.Completed;
             replacement.ExecutionActive = false;
-            completion = replacement.Completion;
+            var completion = replacement.Completion;
             _sessionReplacement = null;
-        }
+            return completion;
+        });
         completion.TrySetResult(null);
     }
 
@@ -608,31 +627,31 @@ internal sealed class ZLinkActorRuntimeState(
     {
         ArgumentNullException.ThrowIfNull(failure);
         if (!attempt.OwnsExecution) return;
-        TaskCompletionSource<Exception?> completion;
-        lock (_sessionGate)
+        var completion = RunState(() =>
         {
             if (!IsCurrentReplacement(attempt.Replacement)
                 || _sessionReplacement is not { ExecutionActive: true } replacement)
-                return;
-            completion = replacement.Completion;
+                return null;
+            var completion = replacement.Completion;
             replacement.ExecutionActive = false;
             // The new binding is the only durable transition. Before it is
             // published, the prepared replacement can be retried safely.
             if (replacement.Phase == ZLinkActorSessionReplacementPhase.Prepared)
                 _sessionReplacement = null;
-        }
-        completion.TrySetResult(failure);
+            return completion;
+        });
+        completion?.TrySetResult(failure);
     }
 
     internal int SessionBindingTombstoneCount
     {
         get
         {
-            lock (_sessionGate)
+            return RunState(() =>
             {
                 PurgeExpiredSessionBindingTombstones();
                 return _sessionBindingTombstones.Count;
-            }
+            });
         }
     }
 
@@ -779,7 +798,7 @@ internal sealed class ZLinkActorRuntimeState(
 
     public void RecordBoundSessionAccepted(string bindingToken)
     {
-        lock (_sessionGate)
+        RunState(() =>
         {
             if (_boundSession is not { } current
                 || !string.Equals(
@@ -791,12 +810,12 @@ internal sealed class ZLinkActorRuntimeState(
             {
                 AcceptedHighWater = checked(current.AcceptedHighWater + 1)
             };
-        }
+        });
     }
 
     public void RecordRelocatedSessionAccepted(RoutingId sessionRid)
     {
-        lock (_sessionGate)
+        RunState(() =>
         {
             if (_pendingSessionRoute is { } pending
                 && pending.Route.SessionRid is { } pendingSessionRid
@@ -820,7 +839,7 @@ internal sealed class ZLinkActorRuntimeState(
             {
                 AcceptedHighWater = checked(current.AcceptedHighWater + 1)
             };
-        }
+        });
     }
 
     // A relayed frame carries the sequence assigned by the Session owner.
@@ -832,7 +851,7 @@ internal sealed class ZLinkActorRuntimeState(
     {
         if (acceptedHighWater == 0) return;
 
-        lock (_sessionGate)
+        RunState(() =>
         {
             if (_pendingSessionRoute is { } pending
                 && pending.Route.SessionRid is { } pendingSessionRid
@@ -859,7 +878,7 @@ internal sealed class ZLinkActorRuntimeState(
             {
                 AcceptedHighWater = acceptedHighWater
             };
-        }
+        });
     }
 
     public void StageRelocationSessionRoute(
@@ -867,7 +886,7 @@ internal sealed class ZLinkActorRuntimeState(
         ZLinkRemoteActorBoundSessionRoute route,
         ZLinkSessionRelocationContext wireContext = default)
     {
-        lock (_sessionGate)
+        RunState(() =>
         {
             if (!route.IsBound)
             {
@@ -888,14 +907,14 @@ internal sealed class ZLinkActorRuntimeState(
                 TargetActor: null,
                 TargetAuthorityOwnerGeneration: 0,
                 WireContext: wireContext);
-        }
+        });
     }
 
     internal void RememberSourceSessionRelocation(
         string handoffId,
         ZLinkSessionRelocationContext context)
     {
-        lock (_sessionGate)
+        RunState(() =>
         {
             if (_sourceSessionRelocation is { } current
                 && (!string.Equals(
@@ -908,14 +927,14 @@ internal sealed class ZLinkActorRuntimeState(
                     $"Actor '{ActorId}' already has another source session relocation.",
                     ZLinkRetryAdvice.DoNotRetry);
             _sourceSessionRelocation = new(handoffId, context);
-        }
+        });
     }
 
     internal bool TryGetSourceSessionRelocation(
         string handoffId,
         out ZLinkSessionRelocationContext context)
     {
-        lock (_sessionGate)
+        var result = RunState(() =>
         {
             if (_sourceSessionRelocation is { } current
                 && string.Equals(
@@ -923,17 +942,17 @@ internal sealed class ZLinkActorRuntimeState(
                     handoffId,
                     StringComparison.Ordinal))
             {
-                context = current.Context;
-                return true;
+                return (true, current.Context);
             }
-        }
-        context = default;
-        return false;
+            return (false, default(ZLinkSessionRelocationContext));
+        });
+        context = result.Item2;
+        return result.Item1;
     }
 
     internal void ForgetSourceSessionRelocation(string handoffId)
     {
-        lock (_sessionGate)
+        RunState(() =>
         {
             if (_sourceSessionRelocation is { } current
                 && string.Equals(
@@ -941,7 +960,7 @@ internal sealed class ZLinkActorRuntimeState(
                     handoffId,
                     StringComparison.Ordinal))
                 _sourceSessionRelocation = null;
-        }
+        });
     }
 
     public void MarkRelocationSessionAuthorityCommitted(
@@ -952,7 +971,7 @@ internal sealed class ZLinkActorRuntimeState(
         ulong targetNodeGeneration,
         ulong targetOwnerLeaseGeneration)
     {
-        lock (_sessionGate)
+        RunState(() =>
         {
             if (_pendingSessionRoute is not { } pending)
                 return;
@@ -975,14 +994,14 @@ internal sealed class ZLinkActorRuntimeState(
                 TargetOwnerLeaseGeneration = targetOwnerLeaseGeneration
             };
             _pendingSessionRoute = committed;
-        }
+        });
     }
 
     public bool TryGetCommittedRelocationSessionRoute(
         string handoffId,
         out ZLinkPendingActorSessionRoute route)
     {
-        lock (_sessionGate)
+        var result = RunState(() =>
         {
             if (_pendingSessionRoute is
                 {
@@ -994,19 +1013,18 @@ internal sealed class ZLinkActorRuntimeState(
                     handoffId,
                     StringComparison.Ordinal))
             {
-                route = pending;
-                return true;
+                return (true, pending);
             }
-        }
-
-        route = default;
-        return false;
+            return (false, default(ZLinkPendingActorSessionRoute));
+        });
+        route = result.Item2;
+        return result.Item1;
     }
 
     internal ZLinkServiceWireCodec.SessionRelocationRouteRecord
         CreateRelocationSessionRoute(string handoffId)
     {
-        lock (_sessionGate)
+        return RunState(() =>
         {
             if (_pendingSessionRoute is not
                 {
@@ -1022,14 +1040,14 @@ internal sealed class ZLinkActorRuntimeState(
                     $"Actor '{ActorId}' has no committed session route for handoff '{handoffId}'.",
                     ZLinkRetryAdvice.DoNotRetry);
             return ZLinkSessionRelocationWire.CreateCommit(ActorId, pending);
-        }
+        });
     }
 
     public bool TryGetStagedRelocationSessionRoute(
         string handoffId,
         out ZLinkRemoteActorBoundSessionRoute route)
     {
-        lock (_sessionGate)
+        var result = RunState(() =>
         {
             if (_pendingSessionRoute is { } pending
                 && string.Equals(
@@ -1037,33 +1055,32 @@ internal sealed class ZLinkActorRuntimeState(
                     handoffId,
                     StringComparison.Ordinal))
             {
-                route = pending.Route;
-                return true;
+                return (true, pending.Route);
             }
-        }
-        route = default;
-        return false;
+            return (false, default(ZLinkRemoteActorBoundSessionRoute));
+        });
+        route = result.Item2;
+        return result.Item1;
     }
 
     internal bool TryGetAnyStagedRelocationSessionRoute(
         out ZLinkRemoteActorBoundSessionRoute route)
     {
-        lock (_sessionGate)
+        var result = RunState(() =>
         {
             if (_pendingSessionRoute is { } pending)
             {
-                route = pending.Route;
-                return route.IsBound;
+                return (pending.Route.IsBound, pending.Route);
             }
-        }
-
-        route = default;
-        return false;
+            return (false, default(ZLinkRemoteActorBoundSessionRoute));
+        });
+        route = result.Item2;
+        return result.Item1;
     }
 
     public void CompleteRelocationSessionRoute(string handoffId)
     {
-        lock (_sessionGate)
+        RunState(() =>
         {
             if (_pendingSessionRoute is not { } pending
                 || !string.Equals(
@@ -1073,12 +1090,12 @@ internal sealed class ZLinkActorRuntimeState(
                 return;
             _boundSession = CreateCommittedRelocationSession(pending);
             _pendingSessionRoute = null;
-        }
+        });
     }
 
     public void AbortRelocationSessionRoute(string handoffId)
     {
-        lock (_sessionGate)
+        RunState(() =>
         {
             if (_pendingSessionRoute is { } pending
                 && string.Equals(
@@ -1086,21 +1103,21 @@ internal sealed class ZLinkActorRuntimeState(
                     handoffId,
                     StringComparison.Ordinal))
                 _pendingSessionRoute = null;
-        }
+        });
     }
 
     public void UnbindSession(string bindingToken)
     {
         if (bindingToken.Length == 0) return;
 
-        TaskCompletionSource<Exception?>? completion = null;
-        lock (_sessionGate)
+        var completion = RunState(() =>
         {
             if (_sessionReplacement is { Replacement.BindingToken: var pending }
                 && string.Equals(pending, bindingToken, StringComparison.Ordinal))
             {
-                completion = _sessionReplacement.Completion;
+                var completion = _sessionReplacement.Completion;
                 _sessionReplacement = null;
+                return completion;
             }
             else if (_boundSession is { BindingToken: var current }
                      && string.Equals(
@@ -1124,7 +1141,8 @@ internal sealed class ZLinkActorRuntimeState(
                 // has already removed.
                 _pendingSessionRoute = null;
             }
-        }
+            return null;
+        });
         completion?.TrySetResult(
             new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
@@ -1134,7 +1152,7 @@ internal sealed class ZLinkActorRuntimeState(
 
     public void TombstoneSession(ZLinkActorBoundSession expected)
     {
-        lock (_sessionGate)
+        RunState(() =>
         {
             PurgeExpiredSessionBindingTombstones();
             if (_sessionBindingTombstones.TryGetValue(
@@ -1153,28 +1171,27 @@ internal sealed class ZLinkActorRuntimeState(
             EnsureExactBindingIdentity(current, expected);
             RememberRetiredSessionBinding(current);
             _boundSession = null;
-        }
+        });
     }
 
     public bool TryGetBoundSession(out ZLinkActorBoundSession session)
     {
-        lock (_sessionGate)
+        var result = RunState(() =>
         {
             if (_boundSession is { } current)
             {
-                session = current;
-                return true;
+                return (true, current);
             }
-        }
-
-        session = default;
-        return false;
+            return (false, default(ZLinkActorBoundSession));
+        });
+        session = result.Item2;
+        return result.Item1;
     }
 
     internal bool TryGetBoundSessionForOutbound(
         out ZLinkActorBoundSession session)
     {
-        lock (_sessionGate)
+        var result = RunState(() =>
         {
             // Once the target authority is committed, a relocation can still
             // retain the source projection in _boundSession until the session
@@ -1187,24 +1204,22 @@ internal sealed class ZLinkActorRuntimeState(
                     TargetAuthorityOwnerGeneration: > 0
                 } pending)
             {
-                session = CreateCommittedRelocationSession(pending);
-                return true;
+                return (true, CreateCommittedRelocationSession(pending));
             }
             if (_boundSession is { } current)
             {
-                session = current;
-                return true;
+                return (true, current);
             }
-        }
-
-        session = default;
-        return false;
+            return (false, default(ZLinkActorBoundSession));
+        });
+        session = result.Item2;
+        return result.Item1;
     }
 
     internal bool TryGetBoundSessionForInbound(
         out ZLinkActorBoundSession session)
     {
-        lock (_sessionGate)
+        var result = RunState(() =>
         {
             // During relocation, the target accepts frames before the staged
             // route is promoted to _boundSession. Use the committed target
@@ -1215,18 +1230,16 @@ internal sealed class ZLinkActorRuntimeState(
                     TargetAuthorityOwnerGeneration: > 0
                 } pending)
             {
-                session = CreateCommittedRelocationSession(pending);
-                return true;
+                return (true, CreateCommittedRelocationSession(pending));
             }
             if (_boundSession is { } current)
             {
-                session = current;
-                return true;
+                return (true, current);
             }
-        }
-
-        session = default;
-        return false;
+            return (false, default(ZLinkActorBoundSession));
+        });
+        session = result.Item2;
+        return result.Item1;
     }
 
     private static ZLinkActorBoundSession CreateCommittedRelocationSession(
@@ -1262,63 +1275,74 @@ internal sealed class ZLinkActorRuntimeState(
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        lock (_sessionGate)
+        return RunState(() =>
         {
             if (_boundSession is not { } current
                 || !string.Equals(current.BindingToken, expectedBindingToken, StringComparison.Ordinal))
                 return true;
 
             return operation(current);
-        }
+        });
     }
 
     public ZLinkActorBoundSession? ClearAfterDestroy()
-    {
-        return TransitionLocalInstance(ZLinkActorTerminalTransition.Destroyed, null);
-    }
+        => RunState(() => TransitionLocalInstanceCore(
+            ZLinkActorTerminalTransition.Destroyed,
+            null));
+
+    internal ZLinkActorBoundSession? ClearAfterDestroyOnLane() =>
+        TransitionLocalInstanceCore(ZLinkActorTerminalTransition.Destroyed, null);
 
     public void InvalidateRuntimeGeneration()
+        => RunState(InvalidateRuntimeGenerationCore);
+
+    private void InvalidateRuntimeGenerationCore()
     {
         var failure = new InvalidOperationException(
             $"Actor '{ActorId}' belongs to a stopped framework runtime generation.");
         var teardownAttempt = _teardownAttempt;
         Handoff.AbortRuntimeGeneration(failure);
-        ClearAfterDestroy();
+        _ = TransitionLocalInstanceCore(ZLinkActorTerminalTransition.Destroyed, null);
         teardownAttempt?.TrySetResult(failure);
     }
 
     public void RetireMigratedActorInstance(ZLinkBackendActorRef sourceActor)
+        => RunState(() => RetireMigratedActorInstanceCore(sourceActor));
+
+    internal void RetireMigratedActorInstanceOnLane(ZLinkBackendActorRef sourceActor) =>
+        RetireMigratedActorInstanceCore(sourceActor);
+
+    private void RetireMigratedActorInstanceCore(ZLinkBackendActorRef sourceActor)
     {
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_state_migrated actor={ActorId} "
             + $"source_generation={sourceActor.Generation} "
             + $"current_generation={NativeActorRef?.Generation.ToString() ?? "<none>"}");
-        _ = TransitionLocalInstance(
+        _ = TransitionLocalInstanceCore(
             ZLinkActorTerminalTransition.Migrated,
             sourceActor);
     }
 
-    private ZLinkActorBoundSession? TransitionLocalInstance(
+    private ZLinkActorBoundSession? TransitionLocalInstanceCore(
         ZLinkActorTerminalTransition transition,
         ZLinkBackendActorRef? retiredLocalActor)
     {
-        CloseHandlerActivation();
+        CloseHandlerActivationCore();
         ZLinkActorBoundSession? releasedBoundSession = null;
         TaskCompletionSource<Exception?>? replacementCompletion = null;
         if (transition is ZLinkActorTerminalTransition.Destroyed
             or ZLinkActorTerminalTransition.Migrated)
-            lock (_sessionGate)
+        {
+            if (transition == ZLinkActorTerminalTransition.Destroyed)
             {
-                if (transition == ZLinkActorTerminalTransition.Destroyed)
-                {
-                    releasedBoundSession = _boundSession;
-                    _boundSession = null;
-                }
-                replacementCompletion = _sessionReplacement?.Completion;
-                _sessionReplacement = null;
-                if (transition == ZLinkActorTerminalTransition.Destroyed)
-                    _sessionBindingTombstones.Clear();
+                releasedBoundSession = _boundSession;
+                _boundSession = null;
             }
+            replacementCompletion = _sessionReplacement?.Completion;
+            _sessionReplacement = null;
+            if (transition == ZLinkActorTerminalTransition.Destroyed)
+                _sessionBindingTombstones.Clear();
+        }
         replacementCompletion?.TrySetResult(
             new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
@@ -1395,7 +1419,13 @@ internal sealed class ZLinkActorRuntimeState(
         public object? GetService(Type serviceType) => null;
     }
 
-    public void PrepareForTransferredActivation()
+    public void PrepareForTransferredActivation() =>
+        RunState(PrepareForTransferredActivationCore);
+
+    internal void PrepareForTransferredActivationOnLane() =>
+        PrepareForTransferredActivationCore();
+
+    private void PrepareForTransferredActivationCore()
     {
         if (Actor is not null || IsConfigured)
             throw new InvalidOperationException(
@@ -1404,17 +1434,13 @@ internal sealed class ZLinkActorRuntimeState(
         Handoff.PrepareForTransferredActivation();
         NativeActorRef = null;
         Interlocked.Exchange(ref _contextInvalidated, 0);
-        lock (_terminalLifecycleGate)
-        {
-            if (_terminalLifecycleCompletion is { IsCompleted: false })
-                throw new InvalidOperationException(
-                    $"Actor '{ActorId}' still has a pending terminal lifecycle completion.");
+        if (_terminalLifecycleCompletion is { IsCompleted: false })
+            throw new InvalidOperationException(
+                $"Actor '{ActorId}' still has a pending terminal lifecycle completion.");
 
-            _dispatchMailbox.ReopenAdmission();
-            _terminalLifecycleCompletion = null;
-            lock (_sessionGate)
-                _handlerActivationClosed = false;
-        }
+        _dispatchMailbox.ReopenAdmission();
+        _terminalLifecycleCompletion = null;
+        _handlerActivationClosed = false;
     }
 
     public void ClearRetiredLocalActorRef(ZLinkBackendActorRef actor)
@@ -1423,8 +1449,13 @@ internal sealed class ZLinkActorRuntimeState(
     }
 
     public void BeginTeardown()
+        => RunState(BeginTeardownCore);
+
+    internal void BeginTeardownOnLane() => BeginTeardownCore();
+
+    private void BeginTeardownCore()
     {
-        CloseHandlerActivation();
+        CloseHandlerActivationCore();
         _teardownPending = true;
         FenceRuntimeGeneration();
     }
@@ -1484,10 +1515,17 @@ internal sealed class ZLinkActorRuntimeState(
     }
 
     public ZLinkActorBoundSession? CompleteTeardownAttempt(ZLinkActorTeardownOperation operation)
+        => RunState(() => CompleteTeardownAttemptCore(operation));
+
+    internal ZLinkActorBoundSession? CompleteTeardownAttemptOnLane(
+        ZLinkActorTeardownOperation operation) => CompleteTeardownAttemptCore(operation);
+
+    private ZLinkActorBoundSession? CompleteTeardownAttemptCore(
+        ZLinkActorTeardownOperation operation)
     {
         EnsureCurrentTeardownAttempt(operation);
         var completion = _teardownAttempt!;
-        var boundSession = ClearAfterDestroy();
+        var boundSession = ClearAfterDestroyOnLane();
         completion.TrySetResult(null);
         return boundSession;
     }
@@ -1581,8 +1619,12 @@ internal sealed class ZLinkActorRuntimeState(
                 {
                     ActorType = actorType;
                     created = true;
-                    _actorCreationTask = createActor();
-                    _ = ClearActorCreationTaskWhenCompletedAsync(_actorCreationTask);
+                    using (ExecutionContext.SuppressFlow())
+                        _actorCreationTask = Task.Run(createActor);
+                    var creationTask = _actorCreationTask!;
+                    using (ExecutionContext.SuppressFlow())
+                        _ = Task.Run(() =>
+                            ClearActorCreationTaskWhenCompletedAsync(creationTask));
                 }
                 else if (failIfExists)
                 {
@@ -1605,7 +1647,7 @@ internal sealed class ZLinkActorRuntimeState(
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            operation();
+            await _lane.RunAsync(operation).ConfigureAwait(false);
         }
         finally
         {
@@ -1620,7 +1662,7 @@ internal sealed class ZLinkActorRuntimeState(
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return operation();
+            return await _lane.RunAsync(operation).ConfigureAwait(false);
         }
         finally
         {

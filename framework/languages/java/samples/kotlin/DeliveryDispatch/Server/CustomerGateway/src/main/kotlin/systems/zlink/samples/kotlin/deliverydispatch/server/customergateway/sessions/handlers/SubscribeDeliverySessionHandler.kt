@@ -37,6 +37,7 @@ class SubscribeDeliverySessionHandler(
                 .let(::requireActor)
         if (context.actors().find(actor.actorId()).isEmpty) {
             context.actors().bind(actor).await()
+            println("deliverydispatch-customer bound customer=$CustomerId")
         }
         customers.subscribe(CustomerId, message.deliveryId)
         context.client()

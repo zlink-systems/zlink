@@ -5,7 +5,7 @@ const SampleNames = {
   workflowB: 'workflow-b',
   orderWorkflowSpotType: 'shoppingmall.order-workflow',
   orderWorkflowSpotMesh: 'shoppingmall.order-workflow.spot',
-  clientTimeout: 15000,
+  clientTimeout: 30_000,
   requestTimeout: 5000,
   pollDelay: 50
 } as const;

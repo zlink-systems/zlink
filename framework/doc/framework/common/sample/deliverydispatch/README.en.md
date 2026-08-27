@@ -180,13 +180,13 @@ Tracking looks up the Customer Actor using CustomerId but does not directly sele
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Find the current object by courier/customer ID. | Actor direct message | Using a global Actor ID lets the Framework resolve the current Ready owner. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
-| Prepare the Actor for the first time and bind it to the same session. | Actor GetOrCreate and bound session | Use the exact ActorRef from the creation result only for that bind operation. [Actor model](../../spec/server/14-actor-model.en.md) · [Session-Actor dispatch](../../spec/server/20-session-actor-dispatch.en.md) |
-| Approve initial Actor membership. | Entry Spot | The creation callback only sets local initial state and returns quickly. [Spot model §4](../../spec/server/11-spot-model.en.md#4-entry-spot) |
-| Independent requests between the worker and Tracking | ClientServer Channel | Doesn't mix object RouteMesh with channel Server membership. [Channel topology](../../spec/server/07-channel-topology.en.md) |
-| Server push to the customer/courier | STREAM bound session | Pushes to the same logical Actor through the current binding FIFO even when the connection is replaced. [STREAM session §8](../../spec/server/03-interaction-model.en.md#8-stream-session) |
-| One-way offer/decision transmission | Actor send | Send admission doesn't guarantee handler execution completion or delivery to the peer. [Send and request §4](../../spec/server/03-interaction-model.en.md#4-send-and-request) |
-| Owner failure boundary | Failure/failover policy | A Ready owner failure doesn't turn into automatic cold activation or selecting a different owner. [Failure policy §4.4](../../spec/server/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
+| Find the current object by courier/customer ID. | Actor direct message | Using a global Actor ID lets the Framework resolve the current Ready owner. [Interaction Model §2](../../spec/server/00-foundation/04-interaction-model.en.md) |
+| Prepare the Actor for the first time and bind it to the same session. | Actor GetOrCreate and bound session | Use the exact ActorRef from the creation result only for that bind operation. [Actor model](../../spec/server/03-spot-actor/04-actor-model.en.md) · [Session-Actor dispatch](../../spec/server/04-session/02-session-actor-binding.en.md) |
+| Approve initial Actor membership. | Entry Spot | The creation callback only sets local initial state and returns quickly. [Spot model §4](../../spec/server/03-spot-actor/01-spot-model.en.md#4-entry-spot) |
+| Independent requests between the worker and Tracking | ClientServer Channel | Doesn't mix object RouteMesh with channel Server membership. [Channel topology](../../spec/server/02-channel-transport/01-channel-topology.en.md) |
+| Server push to the customer/courier | STREAM bound session | Pushes to the same logical Actor through the current binding FIFO even when the connection is replaced. [STREAM session §8](../../spec/server/00-foundation/04-interaction-model.en.md#8-stream-session) |
+| One-way offer/decision transmission | Actor send | Send admission doesn't guarantee handler execution completion or delivery to the peer. [Send and request §4](../../spec/server/00-foundation/04-interaction-model.en.md#4-send-and-request) |
+| Owner failure boundary | Failure/failover policy | A Ready owner failure doesn't turn into automatic cold activation or selecting a different owner. [Failure policy §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
 
 The Courier and Customer Actor factories use `DisableRelocation` within this sample's scope. Even if
 planned relocation is added later, the same Actor identity and binding update must be verified, and
@@ -566,9 +566,87 @@ Fixed sleeps are not used as a substitute for readiness.
 deliverydispatch=completed
 ```
 
-The per-language runner checks server evidence or runner evidence together with the common
-completion marker above. The evidence marker name uses whatever value that language's runner
-actually prints, and no other name is added as a common contract in this document.
+The per-language runner checks every piece of evidence fixed by §10.1 together with the common
+completion marker above.
+
+### 10.1 Evidence the Runner Confirms
+
+The runner matches the strings in the tables below verbatim. These strings are not a per-language
+choice. All five implementations emit the same string the same number of times; changing the
+wording means changing this table first. There are six node names, fixed as `dispatch`,
+`tracking`, `courier-node-1`, `courier-node-2`, `customer-gateway`, and `courier-session`. Today the
+courier node name is spelled four different ways across languages (`courier-actor-node1`,
+`courier-actor-node-1`, `courier-node1`, `courier-spot-node1`) — settle on the name above.
+
+**Evidence must be a string the sample owns.** Lines the framework prints — runtime readiness logs,
+the message-flow tracer, process startup boilerplate — are not success criteria. They change for
+framework reasons, and when they do, the sample runner breaks silently. Reading them for diagnosis
+is fine; deciding completion by them is not.
+
+Readiness is confirmed before the client starts.
+
+| Fact confirmed | Log | Emitting node |
+| --- | --- | --- |
+| The node acquired its route | `deliverydispatch-ready kind=route node=<NodeId>` | all six nodes |
+| Dispatch sees a courier actor node as an admissible target | `deliverydispatch-ready kind=actor-route node=dispatch target=<CourierNodeId>` | `dispatch` (once each for `courier-node-1`, `courier-node-2`) |
+
+The second row is confirmed **from a passive signal**. The runner does not prove readiness by
+sending a request of its own, such as `/ready?targetRid=` — do not send a synthetic request for
+readiness.
+
+Server evidence is confirmed after the client scenario finishes.
+
+| Fact confirmed | Log | Exact count |
+| --- | --- | --- |
+| The courier session bound a courier | `deliverydispatch-courier bound courier=<CourierId>` | `courier-a` 1, `courier-b` 1 |
+| The bind reached the courier actor node | `deliverydispatch-courier bind-relayed courier=<CourierId>` | `courier-a` 1, `courier-b` 1 |
+| The customer gateway bound a customer | `deliverydispatch-customer bound customer=<CustomerId>` | 1 |
+| The customer gateway pushed a status | `deliverydispatch-customer pushed status=Delivered delivery=<DeliveryId>` | 2 |
+| Tracking received a status update | `deliverydispatch-tracking status=Delivered delivery=<DeliveryId>` | 2 |
+| A late decision had no effect (§9-6) | `deliverydispatch-dispatch stale-decision-ignored delivery=<DeliveryId> courier=<CourierId> attempt=<N>` | 1 |
+| A delivery that exhausted its candidates reached `Failed` once (§9-7) | `deliverydispatch-dispatch failed delivery=<DeliveryId> reason=candidates-exhausted` | 1 |
+
+The `bound customer=` row is emitted **only when a binding actually happens**. One customer
+connector subscribes once for each of two deliveries, so printing on every subscription call makes
+it two and breaks the row.
+
+`pushed status=Delivered` and `tracking status=Delivered` are **exactly 2**. Both the success flow
+and the reassignment flow reach `Delivered`. "At least 1" would still pass if an entire flow
+disappeared.
+
+The last two rows **require actually creating those situations**.
+
+- §9-6 holds only if courier A's `CourierDecisionMsg` is sent *after* courier B has accepted. Node
+  currently sends A's decision *before* B's, so it does not exercise this fact.
+- §9-7 is reached by **rejecting every candidate until they are exhausted**. `CreateDeliveryReq` has
+  no field for naming candidates and the candidate list is hard-coded to A and B, so "create a
+  delivery with no candidate" does not work without a new message field. Rejecting A and then B
+  through the existing `CourierDecisionMsg` exercises the same fact with no new contract.
+
+Without those stages these rows cannot pass — and they should not.
+
+Do not use `topology=ready`. That string diverged across implementations into before-bind,
+after-bind, and runner-printed variants, so the same literal meant three different moments.
+Readiness is confirmed by the two rows above and nothing else.
+
+There are three completion markers, all printed by the client.
+
+| Marker | Meaning |
+| --- | --- |
+| `deliverydispatch=completed` | the whole §9 client self-check passed |
+| `deliverydispatch-reassignment=completed` | the reassignment flow passed |
+| `deliverydispatch-server-evidence=completed` | server-evidence verification passed |
+
+**The runner confirms all three directly.** A client process exit code or a browser verdict does
+not stand in for them — if the client stops printing a marker tomorrow, the runner must notice.
+
+Log waits poll every `100 ms` for at most `300` attempts. This budget applies to readiness and to
+evidence alike, and `.sh` and `.ps1` use the same value. Reading once without waiting, or reading
+after a fixed sleep, is not allowed. All five languages ship both a `.sh` and a `.ps1` — today C++,
+Java, and Kotlin have no `.ps1`.
+
+Once every row passes, the runner prints `deliverydispatch-placement=completed` last. If any row
+fails, it does not print this marker.
 
 ## 11. Completion Criteria
 
@@ -583,4 +661,5 @@ actually prints, and no other name is added as a common contract in this documen
 - Only the Framework public API is used, with no private runtime, raw frames, sample-only routing
   helpers, or per-message codec registration added.
 - A Ready owner failure is not shown as crash failover, and that scope is verified as Unavailable.
-- The runner performs build, resource, readiness, self-check, evidence, and cleanup.
+- The runner performs build, resource, readiness, self-check, and cleanup, and passes every row of
+  the §10.1 table down to the string and the count.

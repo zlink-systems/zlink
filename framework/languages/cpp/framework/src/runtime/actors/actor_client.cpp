@@ -5,6 +5,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -92,7 +93,8 @@ class actor_create_call_state_t
     bool request_set = false;
     bool timeout_set = false;
     bool submitted = false;
-    std::mutex mutex;
+    runtime::offload_executor_t lane_executor;
+    runtime::state_lane_t lane{lane_executor};
 };
 } // namespace detail
 
@@ -121,58 +123,62 @@ actor_create_call_t::operator= (actor_create_call_t &&) noexcept = default;
 
 actor_create_call_t &actor_create_call_t::in_mesh (std::string mesh_name)
 {
-    std::lock_guard lock (_state->mutex);
-    require_call_option (_state->mesh_set, "in_mesh");
-    _state->mesh_name = std::move (mesh_name);
+    _state->lane.run ([&] {
+        require_call_option (_state->mesh_set, "in_mesh");
+        _state->mesh_name = std::move (mesh_name);
+    }).get ();
     return *this;
 }
 
 actor_create_call_t &actor_create_call_t::creation_request (message_t request)
 {
-    std::lock_guard lock (_state->mutex);
-    require_call_option (_state->request_set, "creation_request");
-    _state->request = std::move (request);
+    _state->lane.run ([&] {
+        require_call_option (_state->request_set, "creation_request");
+        _state->request = std::move (request);
+    }).get ();
     return *this;
 }
 
 actor_create_call_t &
 actor_create_call_t::timeout (std::chrono::milliseconds timeout)
 {
-    std::lock_guard lock (_state->mutex);
-    require_call_option (_state->timeout_set, "timeout");
-    if (timeout <= std::chrono::milliseconds::zero ())
-        throw framework_exception_t (
-          framework_error_kind_t::invalid_operation,
-          "Actor create timeout must be positive");
-    _state->timeout = timeout;
+    _state->lane.run ([&] {
+        require_call_option (_state->timeout_set, "timeout");
+        if (timeout <= std::chrono::milliseconds::zero ())
+            throw framework_exception_t (
+              framework_error_kind_t::invalid_operation,
+              "Actor create timeout must be positive");
+        _state->timeout = timeout;
+    }).get ();
     return *this;
 }
 
 task_t<actor_create_result_t> actor_create_call_t::submit ()
 {
-    std::lock_guard lock (_state->mutex);
-    if (_state->submitted)
-        return task_t<actor_create_result_t> (
-          result_t<actor_create_result_t>::failure (
-            framework_error_kind_t::invalid_operation,
-            "Actor create call was already submitted"));
-    _state->submitted = true;
-    if (!_state->manager || !_state->manager->create_actor)
-        return task_t<actor_create_result_t> (
-          result_t<actor_create_result_t>::failure (
-            framework_error_kind_t::not_configured,
-            "Actor manager is not bound to an object runtime"));
-    const auto sequence =
-      _state->manager->operation_sequence.fetch_add (1);
-    const creation_operation_id_t operation{
-      static_cast<std::uint64_t> (
-        reinterpret_cast<std::uintptr_t> (
-          _state->manager.get ())),
-      sequence};
-    return _state->manager->create_actor (
-      _state->exclusive, *_state->actor_id, _state->stable_type,
-      _state->mesh_name, _state->request,
-      _state->timeout, operation);
+    return _state->lane.run ([&] {
+        if (_state->submitted)
+            return task_t<actor_create_result_t> (
+              result_t<actor_create_result_t>::failure (
+                framework_error_kind_t::invalid_operation,
+                "Actor create call was already submitted"));
+        _state->submitted = true;
+        if (!_state->manager || !_state->manager->create_actor)
+            return task_t<actor_create_result_t> (
+              result_t<actor_create_result_t>::failure (
+                framework_error_kind_t::not_configured,
+                "Actor manager is not bound to an object runtime"));
+        const auto sequence =
+          _state->manager->operation_sequence.fetch_add (1);
+        const creation_operation_id_t operation{
+          static_cast<std::uint64_t> (
+            reinterpret_cast<std::uintptr_t> (
+              _state->manager.get ())),
+          sequence};
+        return _state->manager->create_actor (
+          _state->exclusive, *_state->actor_id, _state->stable_type,
+          _state->mesh_name, _state->request,
+          _state->timeout, operation);
+    }).get ();
 }
 
 task_t<actor_create_result_t> actor_create_call_t::yield ()

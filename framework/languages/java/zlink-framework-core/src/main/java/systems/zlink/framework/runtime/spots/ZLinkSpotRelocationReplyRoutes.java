@@ -11,7 +11,10 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -24,31 +27,81 @@ final class ZLinkSpotRelocationReplyRoutes {
     private static final Duration RETENTION = Duration.ofHours(24);
 
     private final Map<OperationId, Route> routes = new HashMap<>();
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
 
-    synchronized Registration register(
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
+    private <T> CompletionStage<T> onStateLane(Supplier<T> work) {
+        return stateLane.runAsync(work);
+    }
+
+    Registration register(
         byte[] acceptedRecord,
         ZLinkBackendReceived received,
         String spotId,
         long objectGeneration) {
-        Objects.requireNonNull(received, "received");
         var frozen = ZLinkServiceFrozenRecordCodec.decodeSpot(acceptedRecord);
         OperationId operation = new OperationId(
             frozen.operationHigh(), frozen.operationLow());
         if (frozen.replyRouteId().isEmpty()) {
-            return new Registration(
-                this, operation, received::close, false);
+            return new Registration(this, operation, received::close, false);
         }
+        RegistrationPlan plan = inStateLane(() -> registerOnLane(
+            acceptedRecord, spotId, objectGeneration, received::close));
+        Consumer<List<Message>> reply = received.reply();
+        if (reply == null) {
+            inStateLane(() -> {
+                if (routes.get(plan.operation()) == plan.route()) {
+                    routes.remove(plan.operation());
+                }
+                return null;
+            });
+            throw new IllegalStateException(
+                "accepted request has no source reply capability");
+        }
+        inStateLane(() -> {
+            if (routes.get(plan.operation()) == plan.route()) {
+                plan.route().delivery = parts -> {
+                    List<Message> messages = parts.stream().map(Message::from).toList();
+                    try {
+                        reply.accept(messages);
+                        return CompletableFuture.completedFuture(null);
+                    } catch (RuntimeException failure) {
+                        messages.forEach(Message::close);
+                        return CompletableFuture.failedFuture(failure);
+                    }
+                };
+            }
+            return null;
+        });
+        return plan.registration();
+    }
+
+    private RegistrationPlan registerOnLane(
+        byte[] acceptedRecord, String spotId, long objectGeneration,
+        Runnable relocationRelease) {
+        var frozen = ZLinkServiceFrozenRecordCodec.decodeSpot(acceptedRecord);
+        OperationId operation = new OperationId(
+            frozen.operationHigh(), frozen.operationLow());
         removeExpired(Instant.now());
         if (routes.size() >= MAX_ROUTES) {
             throw new IllegalStateException(
                 "Spot relocation reply-route registry is full");
         }
-        Consumer<List<Message>> reply = received.reply();
-        if (reply == null) {
-            throw new IllegalStateException(
-                "accepted request has no source reply capability");
-        }
-        Route previous = routes.putIfAbsent(operation, new Route(
+        Route route = new Route(
             spotId,
             objectGeneration,
             frozen.sourceOwnerId(),
@@ -56,25 +109,14 @@ final class ZLinkSpotRelocationReplyRoutes {
             frozen.sourceNodeRid(),
             frozen.sourceNodeGeneration(),
             frozen.replyRouteId().orElseThrow(),
-            Instant.now().plus(RETENTION),
-            parts -> {
-                List<Message> messages = parts.stream()
-                    .map(Message::from)
-                    .toList();
-                try {
-                    reply.accept(messages);
-                    return CompletableFuture.completedFuture(null);
-                } catch (RuntimeException failure) {
-                    messages.forEach(Message::close);
-                    return CompletableFuture.failedFuture(failure);
-                }
-            }));
+            Instant.now().plus(RETENTION));
+        Route previous = routes.putIfAbsent(operation, route);
         if (previous != null) {
             throw new IllegalStateException(
                 "duplicate accepted relocation operation identity");
         }
-        return new Registration(
-            this, operation, received::close, true);
+        return new RegistrationPlan(operation, route,
+            new Registration(this, operation, relocationRelease, true));
     }
 
     LazyRegistration registerLazy(
@@ -87,7 +129,17 @@ final class ZLinkSpotRelocationReplyRoutes {
             record -> register(record, received, spotId, objectGeneration));
     }
 
-    synchronized Registration registerActor(
+    Registration registerActor(
+        byte[] acceptedRecord,
+        String actorId,
+        long objectGeneration,
+        Function<List<byte[]>, CompletionStage<Void>> reply,
+        Runnable relocationRelease) {
+        return inStateLane(() -> registerActorOnLane(
+            acceptedRecord, actorId, objectGeneration, reply, relocationRelease));
+    }
+
+    private Registration registerActorOnLane(
         byte[] acceptedRecord,
         String actorId,
         long objectGeneration,
@@ -112,7 +164,7 @@ final class ZLinkSpotRelocationReplyRoutes {
             throw new IllegalStateException(
                 "Actor relocation reply-route registry is full");
         }
-        Route previous = routes.putIfAbsent(operation, new Route(
+        Route route = new Route(
             actorId,
             objectGeneration,
             frozen.sourceOwnerId(),
@@ -120,8 +172,10 @@ final class ZLinkSpotRelocationReplyRoutes {
             frozen.sourceNodeRid(),
             frozen.sourceNodeGeneration(),
             frozen.replyRouteId().orElseThrow(),
-            Instant.now().plus(RETENTION),
-            parts -> reply.apply(parts.stream().map(byte[]::clone).toList())));
+            Instant.now().plus(RETENTION));
+        route.delivery = parts -> reply.apply(
+            parts.stream().map(byte[]::clone).toList());
+        Route previous = routes.putIfAbsent(operation, route);
         if (previous != null) {
             throw new IllegalStateException(
                 "duplicate accepted relocation operation identity");
@@ -142,11 +196,14 @@ final class ZLinkSpotRelocationReplyRoutes {
                 record, actorId, objectGeneration, reply, relocationRelease));
     }
 
-    synchronized void completeLocal(OperationId operation) {
-        routes.remove(operation);
+    void completeLocal(OperationId operation) {
+        inStateLane(() -> {
+            routes.remove(operation);
+            return null;
+        });
     }
 
-    synchronized void bindCommitted(
+    void bindCommitted(
         byte[] acceptedRecord,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
@@ -158,20 +215,35 @@ final class ZLinkSpotRelocationReplyRoutes {
             targetAttemptGeneration);
     }
 
-    synchronized void bindCommitted(
+    void bindCommitted(
         List<byte[]> acceptedRecords,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
         CommittedFence fence) {
-        bindCommitted(
+        inStateLane(() -> {
+            bindCommittedOnLane(
             acceptedRecords,
             targetNodeRid,
             targetNodeGeneration,
             fence.targetAttemptGeneration());
-        attachCanonicalFence(acceptedRecords, false, fence);
+            attachCanonicalFence(acceptedRecords, false, fence);
+            return null;
+        });
     }
 
-    synchronized void bindCommitted(
+    void bindCommitted(
+        List<byte[]> acceptedRecords,
+        RoutingId targetNodeRid,
+        long targetNodeGeneration,
+        long targetAttemptGeneration) {
+        inStateLane(() -> {
+            bindCommittedOnLane(acceptedRecords, targetNodeRid,
+                targetNodeGeneration, targetAttemptGeneration);
+            return null;
+        });
+    }
+
+    private void bindCommittedOnLane(
         List<byte[]> acceptedRecords,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
@@ -221,7 +293,19 @@ final class ZLinkSpotRelocationReplyRoutes {
         }
     }
 
-    synchronized void bindActorCommitted(
+    void bindActorCommitted(
+        List<byte[]> acceptedRecords,
+        RoutingId targetNodeRid,
+        long targetNodeGeneration,
+        long targetAttemptGeneration) {
+        inStateLane(() -> {
+            bindActorCommittedOnLane(acceptedRecords, targetNodeRid,
+                targetNodeGeneration, targetAttemptGeneration);
+            return null;
+        });
+    }
+
+    private void bindActorCommittedOnLane(
         List<byte[]> acceptedRecords,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
@@ -272,17 +356,20 @@ final class ZLinkSpotRelocationReplyRoutes {
         }
     }
 
-    synchronized void bindActorCommitted(
+    void bindActorCommitted(
         List<byte[]> acceptedRecords,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
         CommittedFence fence) {
-        bindActorCommitted(
+        inStateLane(() -> {
+            bindActorCommittedOnLane(
             acceptedRecords,
             targetNodeRid,
             targetNodeGeneration,
             fence.targetAttemptGeneration());
-        attachCanonicalFence(acceptedRecords, true, fence);
+            attachCanonicalFence(acceptedRecords, true, fence);
+            return null;
+        });
     }
 
     private void attachCanonicalFence(
@@ -321,7 +408,13 @@ final class ZLinkSpotRelocationReplyRoutes {
         }
     }
 
-    synchronized CanonicalRoute lookupCanonical(
+    CanonicalRoute lookupCanonical(
+        ZLinkServiceRelocationWireCodec.ReplyRelay relay,
+        RoutingId transportSource) {
+        return inStateLane(() -> lookupCanonicalOnLane(relay, transportSource));
+    }
+
+    private CanonicalRoute lookupCanonicalOnLane(
         ZLinkServiceRelocationWireCodec.ReplyRelay relay,
         RoutingId transportSource) {
         Objects.requireNonNull(relay, "relay");
@@ -359,40 +452,43 @@ final class ZLinkSpotRelocationReplyRoutes {
         List<byte[]> parts) {
         Objects.requireNonNull(selected, "selected");
         Objects.requireNonNull(parts, "parts");
-        Route route;
-        synchronized (this) {
-            route = routes.get(selected.operation());
+        RouteSelection selection = inStateLane(() -> {
+            Route route = routes.get(selected.operation());
             if (route == null || !route.committed
                 || !Objects.equals(
                     route.authorityKey, selected.authorityKey())
                 || route.participantId != selected.participantId()) {
-                return CompletableFuture.completedFuture(Ack.NOT_ACKNOWLEDGED);
+                return RouteSelection.notAcknowledged();
             }
             if (route.delivered) {
-                return CompletableFuture.completedFuture(Ack.ALREADY_TERMINAL);
+                return RouteSelection.alreadyTerminal();
             }
-            if (route.relayInProgress) {
-                return CompletableFuture.completedFuture(Ack.NOT_ACKNOWLEDGED);
+            if (route.relayInProgress || route.delivery == null) {
+                return RouteSelection.notAcknowledged();
             }
             route.relayInProgress = true;
-        }
+            return RouteSelection.delivery(route);
+        });
+        if (selection.ack() != null) return CompletableFuture.completedFuture(selection.ack());
+        Route route = selection.route();
         CompletionStage<Void> delivery;
         try {
             delivery = Objects.requireNonNull(
                 route.delivery.deliver(parts),
                 "relocation reply delivery result");
         } catch (RuntimeException failure) {
-            synchronized (this) { route.relayInProgress = false; }
+            inStateLane(() -> { route.relayInProgress = false; return null; });
             return CompletableFuture.failedFuture(failure);
         }
         return delivery.thenApply(ignored -> {
-            synchronized (this) {
+            inStateLane(() -> {
                 route.relayInProgress = false;
                 route.delivered = true;
-            }
+                return null;
+            });
             return Ack.TERMINAL_RECEIVED;
         }).exceptionallyCompose(failure -> {
-            synchronized (this) { route.relayInProgress = false; }
+            inStateLane(() -> { route.relayInProgress = false; return null; });
             return CompletableFuture.failedFuture(failure);
         });
     }
@@ -402,10 +498,9 @@ final class ZLinkSpotRelocationReplyRoutes {
         RoutingId transportSource) {
         Objects.requireNonNull(relay, "relay");
         Objects.requireNonNull(transportSource, "transportSource");
-        Route route;
-        synchronized (this) {
+        RouteSelection selection = inStateLane(() -> {
             removeExpired(Instant.now());
-            route = routes.get(relay.operation());
+            Route route = routes.get(relay.operation());
             if (route == null
                 || !route.committed
                 || !route.spotId.equals(relay.spotId())
@@ -421,47 +516,46 @@ final class ZLinkSpotRelocationReplyRoutes {
                     != relay.targetAttemptGeneration()
                 || route.replyRouteId != relay.replyRouteId()
                 || relay.hopCount() < 0 || relay.hopCount() > 8) {
-                return CompletableFuture.completedFuture(
-                    Ack.NOT_ACKNOWLEDGED);
+                return RouteSelection.notAcknowledged();
             }
             if (route.delivered) {
-                return CompletableFuture.completedFuture(
-                    Ack.ALREADY_TERMINAL);
+                return RouteSelection.alreadyTerminal();
             }
-            if (route.relayInProgress) {
-                return CompletableFuture.completedFuture(
-                    Ack.NOT_ACKNOWLEDGED);
+            if (route.relayInProgress || route.delivery == null) {
+                return RouteSelection.notAcknowledged();
             }
             route.relayInProgress = true;
-        }
+            return RouteSelection.delivery(route);
+        });
+        if (selection.ack() != null) return CompletableFuture.completedFuture(selection.ack());
+        Route route = selection.route();
         CompletionStage<Void> delivery;
         try {
             delivery = Objects.requireNonNull(
                 route.delivery.deliver(relay.parts()),
                 "relocation reply delivery result");
         } catch (RuntimeException failure) {
-            synchronized (this) {
-                route.relayInProgress = false;
-            }
+            inStateLane(() -> { route.relayInProgress = false; return null; });
             return CompletableFuture.failedFuture(failure);
         }
         return delivery.thenApply(ignored -> {
-            synchronized (this) {
+            inStateLane(() -> {
                 route.relayInProgress = false;
                 route.delivered = true;
-            }
+                return null;
+            });
             return Ack.TERMINAL_RECEIVED;
         }).exceptionallyCompose(failure -> {
-            synchronized (this) {
-                route.relayInProgress = false;
-            }
+            inStateLane(() -> { route.relayInProgress = false; return null; });
             return CompletableFuture.failedFuture(failure);
         });
     }
 
-    synchronized int size() {
-        removeExpired(Instant.now());
-        return routes.size();
+    int size() {
+        return inStateLane(() -> {
+            removeExpired(Instant.now());
+            return routes.size();
+        });
     }
 
     private void removeExpired(Instant now) {
@@ -559,7 +653,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         private final OperationId operation;
         private final Runnable relocationRelease;
         private final boolean request;
-        private boolean released;
+        private final AtomicBoolean released = new AtomicBoolean();
 
         private Registration(
             ZLinkSpotRelocationReplyRoutes owner,
@@ -572,21 +666,15 @@ final class ZLinkSpotRelocationReplyRoutes {
             this.request = request;
         }
 
-        synchronized void completeLocal() {
-            if (released) {
-                return;
-            }
-            released = true;
+        void completeLocal() {
+            if (!released.compareAndSet(false, true)) return;
             if (request) {
                 owner.completeLocal(operation);
             }
         }
 
-        synchronized void releaseForRelocation() {
-            if (released) {
-                return;
-            }
-            released = true;
+        void releaseForRelocation() {
+            if (!released.compareAndSet(false, true)) return;
             // The transport receive can be released after its opaque reply
             // callback has been captured. The callback remains in Route until
             // terminal relay ACK or retention expiry.
@@ -597,6 +685,7 @@ final class ZLinkSpotRelocationReplyRoutes {
     static final class LazyRegistration {
         private final Supplier<byte[]> recordSupplier;
         private final Function<byte[], Registration> registration;
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private byte[] record;
         private Registration delegate;
         private boolean completedLocally;
@@ -610,33 +699,52 @@ final class ZLinkSpotRelocationReplyRoutes {
                 registration, "registration");
         }
 
-        synchronized byte[] record() {
-            if (completedLocally) {
-                throw new IllegalStateException(
+        byte[] record() {
+            byte[] existing = inStateLane(() -> {
+                if (completedLocally) throw new IllegalStateException(
                     "completed dispatch cannot enter relocation");
-            }
-            if (record == null) {
-                record = Objects.requireNonNull(
-                    recordSupplier.get(),
-                    "accepted record supplier returned null");
-                delegate = registration.apply(record);
-            }
-            return record;
+                return record;
+            });
+            if (existing != null) return existing;
+            byte[] supplied = Objects.requireNonNull(recordSupplier.get(),
+                "accepted record supplier returned null");
+            Registration created = registration.apply(supplied);
+            return inStateLane(() -> {
+                if (completedLocally) throw new IllegalStateException(
+                    "completed dispatch cannot enter relocation");
+                if (record == null) {
+                    record = supplied;
+                    delegate = created;
+                }
+                return record;
+            });
         }
 
-        synchronized void completeLocal() {
-            if (delegate != null) {
-                delegate.completeLocal();
-            } else {
-                completedLocally = true;
-            }
+        void completeLocal() {
+            Registration current = inStateLane(() -> {
+                if (delegate == null) completedLocally = true;
+                return delegate;
+            });
+            if (current != null) current.completeLocal();
         }
 
-        synchronized void releaseForRelocation() {
-            if (delegate == null) {
-                record();
+        void releaseForRelocation() {
+            record();
+            Registration current = inStateLane(() -> delegate);
+            current.releaseForRelocation();
+        }
+
+        private <T> T inStateLane(Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) throw error;
+                throw failure;
             }
-            delegate.releaseForRelocation();
         }
     }
 
@@ -649,7 +757,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         private final long sourceNodeGeneration;
         private final long replyRouteId;
         private final Instant expiresAt;
-        private final Delivery delivery;
+        private Delivery delivery;
         private RoutingId targetNodeRid;
         private long targetNodeGeneration;
         private long targetAttemptGeneration;
@@ -667,8 +775,7 @@ final class ZLinkSpotRelocationReplyRoutes {
             RoutingId sourceNodeRid,
             long sourceNodeGeneration,
             long replyRouteId,
-            Instant expiresAt,
-            Delivery delivery) {
+            Instant expiresAt) {
             this.spotId = spotId;
             this.objectGeneration = objectGeneration;
             this.sourceOwnerId = sourceOwnerId;
@@ -677,7 +784,23 @@ final class ZLinkSpotRelocationReplyRoutes {
             this.sourceNodeGeneration = sourceNodeGeneration;
             this.replyRouteId = replyRouteId;
             this.expiresAt = expiresAt;
-            this.delivery = delivery;
+        }
+    }
+
+    private record RegistrationPlan(
+        OperationId operation, Route route, Registration registration) { }
+
+    private record RouteSelection(Route route, Ack ack) {
+        private static RouteSelection delivery(Route route) {
+            return new RouteSelection(route, null);
+        }
+
+        private static RouteSelection notAcknowledged() {
+            return new RouteSelection(null, Ack.NOT_ACKNOWLEDGED);
+        }
+
+        private static RouteSelection alreadyTerminal() {
+            return new RouteSelection(null, Ack.ALREADY_TERMINAL);
         }
     }
 

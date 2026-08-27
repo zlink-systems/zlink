@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Streams;
@@ -22,7 +23,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private readonly long _maxMessageSize;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
     private readonly bool _ownsApplicationJobQueue;
-    private readonly object _receiveStateGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<RoutingId, ZLinkStreamReceiveState> _receiveStates = [];
     private readonly Dictionary<RoutingId, LinkedListNode<RoutingId>>
         _disconnectedRoutingIds = [];
@@ -31,7 +32,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private readonly List<ZLinkStreamReceiveState> _receiveStateSnapshot = [];
     private string? _receiveStateCursor;
     private const int DisconnectedRoutingIdLimit = 4096;
-    private readonly object _disposeGate = new();
     private Task? _disposeTask;
     private Task? _receiveLoop;
     private Task? _livenessLoop;
@@ -100,31 +100,37 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     internal string? AdvertisedEndpoint { get; }
 
-    internal int SessionCount => _sessions.Count;
+    internal int SessionCount => AwaitStateLane(_sessions.GetCountAsync());
 
     internal void RequestStop()
     {
         _stopSource.Cancel();
         _sessionIngress.RequestStop();
         _controlIngress.RequestStop();
-        _sessions.RequestStop();
+        AwaitStateLane(_sessions.RequestStopAsync());
     }
 
     internal ValueTask<bool> DrainSessionsAsync(CancellationToken cancellationToken) =>
         _sessions.DrainSessionsAsync(cancellationToken);
 
     internal void ForceStopSessions() =>
-        _sessions.ForceStopSessions();
+        AwaitStateLane(_sessions.ForceStopSessionsAsync());
 
     public ValueTask DisposeAsync()
     {
-        lock (_disposeGate)
-            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+        var task = AwaitStateLane(_lane.RunAsync(() =>
+        {
+            if (_disposeTask is not null) return _disposeTask;
+            using (ExecutionContext.SuppressFlow())
+                _disposeTask = Task.Run(DisposeCoreAsync);
+            return _disposeTask;
+        }));
+        return new ValueTask(task);
     }
 
     private async Task DisposeCoreAsync()
     {
-        var sessions = _sessions.Stop();
+        var sessions = await _sessions.StopAsync().ConfigureAwait(false);
         var failures = new List<Exception>();
         Capture(RequestStop);
         await CaptureAsync(() => DisposeSessionsAsync(sessions)).ConfigureAwait(false);
@@ -306,7 +312,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     _timeProvider,
                     stop.Token)
                 .ConfigureAwait(false);
-            foreach (var session in _sessions.Snapshot()) session.CheckLiveness();
+            foreach (var session in await _sessions.SnapshotAsync().ConfigureAwait(false))
+                session.CheckLiveness();
         }
     }
 
@@ -488,13 +495,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             var state = GetOrCreateReceiveState(routingId);
             if (state is null)
                 return;
-            lock (state.Gate)
+            state.Run(() =>
             {
                 if (state.Removed)
                     return;
                 state.Buffer.Append(received.Parts, receivedOwner);
                 receivedOwner = null;
-            }
+            });
 
             if (!drain)
                 return;
@@ -537,7 +544,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private async ValueTask FlushReceiveStatesAsync(
         CancellationToken cancellationToken)
     {
-        lock (_receiveStateGate)
+        var snapshot = AwaitStateLane(_lane.RunAsync(() =>
         {
             _receiveStateSnapshot.Clear();
             _receiveStateSnapshot.AddRange(_blockedReceiveStates);
@@ -547,9 +554,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     left.RoutingId.ToHex(),
                     right.RoutingId.ToHex()));
             RotateReceiveStateSnapshot();
-        }
+            return _receiveStateSnapshot.ToArray();
+        }));
 
-        foreach (var state in _receiveStateSnapshot)
+        foreach (var state in snapshot)
         {
             Exception? failure = null;
             var result = ZLinkReceiveStateDrainResult.Empty;
@@ -577,7 +585,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 continue;
             }
 
-            _receiveStateCursor = state.RoutingId.ToHex();
+            AwaitStateLane(_lane.RunAsync(() =>
+                _receiveStateCursor = state.RoutingId.ToHex()));
             if (result != ZLinkReceiveStateDrainResult.Empty)
                 MarkReceiveStateBlocked(state);
         }
@@ -596,20 +605,20 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             while (true)
             {
                 var acquireAdmission = false;
-                lock (state.Gate)
+                var turn = state.Run(() =>
                 {
                     if (state.Removed)
-                        return ZLinkReceiveStateDrainResult.Empty;
+                        return (ZLinkReceiveStateDrainResult.Empty, false);
 
                     if (state.Pending is { } pending)
                     {
                         var pendingBytes = pending.ByteLength;
                         if (!TryAdmitFrame(state.RoutingId, pending))
-                            return ZLinkReceiveStateDrainResult.AdmissionBlocked;
+                            return (ZLinkReceiveStateDrainResult.AdmissionBlocked, false);
                         state.Pending = null;
                         count++;
                         bytes = checked(bytes + pendingBytes);
-                        continue;
+                        return ((ZLinkReceiveStateDrainResult?)null, false);
                     }
 
                     if (!state.Buffer.TryGetCompleteFrameSize(out var frameBytes))
@@ -620,7 +629,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                         // Queue reservation without extending Core HWM charge.
                         suppliedAdmission?.Dispose();
                         suppliedAdmission = null;
-                        return ZLinkReceiveStateDrainResult.Empty;
+                        return (ZLinkReceiveStateDrainResult.Empty, false);
                     }
                     else if (ZLinkReceiveBatchBudget.WouldExceed(
                                  count,
@@ -628,7 +637,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                                  frameBytes,
                                  startedAt))
                     {
-                        return ZLinkReceiveStateDrainResult.BatchExhausted;
+                        return (ZLinkReceiveStateDrainResult.BatchExhausted, false);
                     }
                     else
                     {
@@ -643,7 +652,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             if (!state.Buffer.TryTakeFrame(out var frame))
                             {
                                 suppliedAdmission = frameAdmission;
-                                return ZLinkReceiveStateDrainResult.Empty;
+                                return (ZLinkReceiveStateDrainResult.Empty, false);
                             }
 
                             frame!.ApplicationJobAdmission = frameAdmission;
@@ -651,13 +660,18 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             if (!TryAdmitFrame(state.RoutingId, frame))
                             {
                                 state.Pending = frame;
-                                return ZLinkReceiveStateDrainResult.AdmissionBlocked;
+                                return (ZLinkReceiveStateDrainResult.AdmissionBlocked, false);
                             }
                             count++;
                             bytes = checked(bytes + admittedBytes);
                         }
                     }
-                }
+                    return ((ZLinkReceiveStateDrainResult?)null, acquireAdmission);
+                });
+
+                if (turn.Item1 is { } terminal)
+                    return terminal;
+                acquireAdmission = turn.Item2;
 
                 if (!acquireAdmission)
                     continue;
@@ -665,15 +679,18 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 var acquired = await _applicationJobQueue
                     .AcquireAsync(cancellationToken)
                     .ConfigureAwait(false);
-                lock (state.Gate)
+                var supplied = state.Run(() =>
                 {
                     if (state.Removed)
                     {
                         acquired.Dispose();
-                        return ZLinkReceiveStateDrainResult.Empty;
+                        return false;
                     }
                     suppliedAdmission = acquired;
-                }
+                    return true;
+                });
+                if (!supplied)
+                    return ZLinkReceiveStateDrainResult.Empty;
             }
         }
         finally
@@ -714,7 +731,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         var payload = frame.Payload
             ?? throw new InvalidOperationException("STREAM frame payload ownership was lost.");
 
-        if (_stopSource.IsCancellationRequested || _sessions.IsStopping)
+        if (_stopSource.IsCancellationRequested || AwaitStateLane(_sessions.IsStoppingAsync()))
         {
             frame.Dispose();
             return true;
@@ -760,9 +777,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     {
         applicationJobAdmission?.MarkQueued();
         var payloadOwner = frame.PayloadOwner;
-        if (_sessions.TryGet(routingId, out var existing))
-            {
-                var admission = existing.TryEnqueuePacket(
+        if (AwaitStateLane(_sessions.TryGetAsync(routingId)) is { } existing)
+        {
+            var admission = existing.TryEnqueuePacket(
                     header,
                     payload,
                     applicationJobAdmission,
@@ -773,7 +790,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 }
                 throw new ZLinkStreamPeerAdmissionException(
                     "STREAM peer session queue is closed.");
-            }
+        }
 
             var ingressAdmission = _sessionIngress.EnqueueApplication(
                 async cancellationToken =>
@@ -817,7 +834,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         ZLinkApplicationJobQueueLease? applicationJobAdmission,
         IDisposable? payloadOwner)
     {
-        if (_sessions.TryGet(routingId, out var existing))
+        if (AwaitStateLane(_sessions.TryGetAsync(routingId)) is { } existing)
         {
             var admission = existing.TryEnqueueControlPacket(
                 header,
@@ -876,7 +893,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     private void OnMonitorEvent(ZLinkBackendSocketMonitorEvent monitorEvent)
     {
-        if (_sessions.IsStopping) return;
+        if (AwaitStateLane(_sessions.IsStoppingAsync())) return;
 
         switch (monitorEvent.NativeEvent)
         {
@@ -909,14 +926,14 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     MarkDisconnectedRoutingId(disconnectedRoutingId);
                     RemoveReceiveState(disconnectedRoutingId);
                 }
-                var disconnectedAdmission = _controlIngress.EnqueueControl(_ =>
+                var disconnectedAdmission = _controlIngress.EnqueueControl(async _ =>
                 {
-                    if (_sessions.TryResolveMonitorSession(monitorEvent.RoutingId, out var disconnectedSession))
+                    if (await _sessions.TryResolveMonitorSessionAsync(monitorEvent.RoutingId)
+                            .ConfigureAwait(false) is { } disconnectedSession)
                         disconnectedSession.EnqueueDisconnected(
                             new ZLinkStreamError(
                                 ZLinkStreamSessionError.TransportError,
                                 monitorEvent.NativeEvent.ToString()));
-                    return ValueTask.CompletedTask;
                 });
                 ReportControlAdmission("stream-session-disconnected", disconnectedAdmission);
                 break;
@@ -930,7 +947,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         if (admission == ZLinkSerialPostAdmission.Accepted)
             return;
         if (admission == ZLinkSerialPostAdmission.Closed
-            && (_stopSource.IsCancellationRequested || _sessions.IsStopping))
+            && (_stopSource.IsCancellationRequested || AwaitStateLane(_sessions.IsStoppingAsync())))
             return;
 
         _errorSink.ReportRuntimeTaskException(
@@ -941,8 +958,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     }
 
     private ZLinkStreamReceiveState? GetOrCreateReceiveState(RoutingId routingId)
-    {
-        lock (_receiveStateGate)
+        => AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_disconnectedRoutingIds.ContainsKey(routingId)) return null;
             if (_receiveStates.TryGetValue(routingId, out var existing))
@@ -951,44 +967,43 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             var created = new ZLinkStreamReceiveState(routingId, _maxMessageSize);
             _receiveStates.Add(routingId, created);
             return created;
-        }
-    }
+        }));
 
     private void RemoveReceiveState(RoutingId routingId)
     {
-        ZLinkStreamReceiveState? state;
-        lock (_receiveStateGate)
+        var state = AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (!_receiveStates.Remove(routingId, out state)) return;
-            _blockedReceiveStates.Remove(state);
-        }
+            if (!_receiveStates.Remove(routingId, out var removed))
+                return (ZLinkStreamReceiveState?)null;
+            _blockedReceiveStates.Remove(removed);
+            return removed;
+        }));
 
-        state.Dispose();
+        state?.Dispose();
     }
 
     private void DisposeReceiveStates()
     {
-        ZLinkStreamReceiveState[] states;
-        lock (_receiveStateGate)
+        var states = AwaitStateLane(_lane.RunAsync(() =>
         {
-            states = _receiveStates.Values.ToArray();
+            var snapshot = _receiveStates.Values.ToArray();
             _receiveStates.Clear();
             _blockedReceiveStates.Clear();
             _receiveStateSnapshot.Clear();
-        }
+            return snapshot;
+        }));
 
         foreach (var state in states) state.Dispose();
     }
 
     private void MarkReceiveStateBlocked(ZLinkStreamReceiveState state)
     {
-        lock (_receiveStateGate)
-            _blockedReceiveStates.Add(state);
+        AwaitStateLane(_lane.RunAsync(() => _blockedReceiveStates.Add(state)));
     }
 
     private void MarkDisconnectedRoutingId(RoutingId routingId)
     {
-        lock (_receiveStateGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_disconnectedRoutingIds.ContainsKey(routingId)) return;
             while (_disconnectedRoutingIdOrder.Count >= DisconnectedRoutingIdLimit)
@@ -1001,16 +1016,16 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
             var node = _disconnectedRoutingIdOrder.AddLast(routingId);
             _disconnectedRoutingIds.Add(routingId, node);
-        }
+        }));
     }
 
     private void ClearDisconnectedRoutingId(RoutingId routingId)
     {
-        lock (_receiveStateGate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!_disconnectedRoutingIds.Remove(routingId, out var node)) return;
             _disconnectedRoutingIdOrder.Remove(node);
-        }
+        }));
     }
 
     private sealed class ZLinkStreamPeerAdmissionException(string message)
@@ -1058,4 +1073,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         header.Dispose();
         payload.Dispose();
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }

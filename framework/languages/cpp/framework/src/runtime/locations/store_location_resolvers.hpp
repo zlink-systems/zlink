@@ -3,6 +3,7 @@
 
 #include <runtime/locations/location_repository.hpp>
 
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_key_codec.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
@@ -17,7 +18,6 @@
 #include <chrono>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string_view>
 #include <utility>
 
@@ -29,23 +29,25 @@ class actor_location_observer_t
   public:
     bool accepts (const actor_location_t &row)
     {
-        std::lock_guard lock (_gate);
-        const auto key = location_key_codec_t::encode_actor_key (
-          actor_location_key_t{row.mesh_name, row.actor_id});
-        const auto version = std::pair{
-          row.membership_epoch,
-          row.actor_ref ? row.actor_ref->object_generation () : std::uint64_t{0}};
-        auto &observed = _generations[key];
-        if (version < observed) {
-            return false;
-        }
-        observed = version;
-        return row.actor_ref
-               && !::zlink::framework::detail::actor_ref_access_t::empty (*row.actor_ref);
+        return _lane.run ([&] {
+            const auto key = location_key_codec_t::encode_actor_key (
+              actor_location_key_t{row.mesh_name, row.actor_id});
+            const auto version = std::pair{
+              row.membership_epoch,
+              row.actor_ref ? row.actor_ref->object_generation () : std::uint64_t{0}};
+            auto &observed = _generations[key];
+            if (version < observed) {
+                return false;
+            }
+            observed = version;
+            return row.actor_ref
+                   && !::zlink::framework::detail::actor_ref_access_t::empty (*row.actor_ref);
+        }).get ();
     }
 
   private:
-    std::mutex _gate;
+    offload_executor_t _lane_executor;
+    state_lane_t _lane{_lane_executor};
     std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> _generations;
 };
 
@@ -69,7 +71,9 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void set_actor_mesh_name (std::string mesh_name)
     {
-        _actor_mesh_name = std::move (mesh_name);
+        _lane.run ([&] {
+            _actor_mesh_name = std::move (mesh_name);
+        }).get ();
     }
 
     explicit store_location_resolvers_t (
@@ -149,39 +153,42 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void invalidate_spot_address (std::string_view spot_id) override
     {
-        std::lock_guard lock (_route_cache_gate);
-        _spot_routes.erase (std::string (spot_id));
+        _lane.run ([&] {
+            _spot_routes.erase (std::string (spot_id));
+        }).get ();
     }
 
     bool invalidate_spot_address_if_matches (
       std::string_view spot_id, const spot_address_t &expected) override
     {
-        std::lock_guard lock (_route_cache_gate);
-        const auto found = _spot_routes.find (std::string (spot_id));
-        if (found == _spot_routes.end ())
-            return false;
-        const auto &cached = found->second.address;
-        if (cached.spot_id != spot_id
-            || cached.node_rid != expected.node_rid
-            || cached.node_generation != expected.node_generation
-            || cached.object_generation != expected.object_generation
-            || cached.authority_owner_generation
-                 != expected.authority_owner_generation
-            || (!expected.owner.owner_id.empty ()
-                && cached.owner.owner_id != expected.owner.owner_id)
-            || cached.owner.lease_generation
-                 != expected.owner.lease_generation)
-            return false;
-        _spot_routes.erase (found);
-        return true;
+        return _lane.run ([&] {
+            const auto found = _spot_routes.find (std::string (spot_id));
+            if (found == _spot_routes.end ())
+                return false;
+            const auto &cached = found->second.address;
+            if (cached.spot_id != spot_id
+                || cached.node_rid != expected.node_rid
+                || cached.node_generation != expected.node_generation
+                || cached.object_generation != expected.object_generation
+                || cached.authority_owner_generation
+                     != expected.authority_owner_generation
+                || (!expected.owner.owner_id.empty ()
+                    && cached.owner.owner_id != expected.owner.owner_id)
+                || cached.owner.lease_generation
+                     != expected.owner.lease_generation)
+                return false;
+            _spot_routes.erase (found);
+            return true;
+        }).get ();
     }
 
     void invalidate_all_routes_after_store_recovery () override
     {
-        std::lock_guard lock (_route_cache_gate);
-        _spot_routes.clear ();
-        _actor_routes.clear ();
-        ++_store_recovery_generation;
+        _lane.run ([this] {
+            _spot_routes.clear ();
+            _actor_routes.clear ();
+            ++_store_recovery_generation;
+        }).get ();
     }
 
     task_t<std::optional<spot_address_t>>
@@ -213,30 +220,32 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void invalidate_actor_address (std::string_view actor_id) override
     {
-        std::lock_guard lock (_route_cache_gate);
-        _actor_routes.erase (std::string (actor_id));
+        _lane.run ([&] {
+            _actor_routes.erase (std::string (actor_id));
+        }).get ();
     }
 
     bool invalidate_actor_address_if_matches (
       std::string_view actor_id, const spot_address_t &expected) override
     {
-        std::lock_guard lock (_route_cache_gate);
-        const auto found = _actor_routes.find (std::string (actor_id));
-        if (found == _actor_routes.end ())
-            return false;
-        const auto &cached = found->second.address;
-        if (cached.node_rid != expected.node_rid
-            || cached.node_generation != expected.node_generation
-            || cached.object_generation != expected.object_generation
-            || cached.authority_owner_generation
-                 != expected.authority_owner_generation
-            || (!expected.owner.owner_id.empty ()
-                && cached.owner.owner_id != expected.owner.owner_id)
-            || cached.owner.lease_generation
-                 != expected.owner.lease_generation)
-            return false;
-        _actor_routes.erase (found);
-        return true;
+        return _lane.run ([&] {
+            const auto found = _actor_routes.find (std::string (actor_id));
+            if (found == _actor_routes.end ())
+                return false;
+            const auto &cached = found->second.address;
+            if (cached.node_rid != expected.node_rid
+                || cached.node_generation != expected.node_generation
+                || cached.object_generation != expected.object_generation
+                || cached.authority_owner_generation
+                     != expected.authority_owner_generation
+                || (!expected.owner.owner_id.empty ()
+                    && cached.owner.owner_id != expected.owner.owner_id)
+                || cached.owner.lease_generation
+                     != expected.owner.lease_generation)
+                return false;
+            _actor_routes.erase (found);
+            return true;
+        }).get ();
     }
 
     task_t<bool> is_peer_ready (std::string mesh_name,
@@ -272,17 +281,18 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         if (_options.route_cache_max_age <= std::chrono::milliseconds::zero ()) {
             return std::nullopt;
         }
-        std::lock_guard lock (_route_cache_gate);
-        const auto found = routes.find (std::string (key));
-        if (found == routes.end ()) {
-            return std::nullopt;
-        }
-        if (std::chrono::steady_clock::now () >= found->second.expires_at
-            || found->second.store_recovery_generation != _store_recovery_generation) {
-            routes.erase (found);
-            return std::nullopt;
-        }
-        return found->second.address;
+        return _lane.run ([&] {
+            const auto found = routes.find (std::string (key));
+            if (found == routes.end ()) {
+                return std::optional<spot_address_t>{};
+            }
+            if (std::chrono::steady_clock::now () >= found->second.expires_at
+                || found->second.store_recovery_generation != _store_recovery_generation) {
+                routes.erase (found);
+                return std::optional<spot_address_t>{};
+            }
+            return std::optional<spot_address_t>{found->second.address};
+        }).get ();
     }
 
     void cache_ready_route (std::map<std::string, cached_address_t> &routes,
@@ -309,10 +319,11 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         if (lifetime <= std::chrono::steady_clock::duration::zero ()) {
             return;
         }
-        std::lock_guard lock (_route_cache_gate);
-        routes.insert_or_assign (
-          std::move (key), cached_address_t{address, measured_at + lifetime,
-                                            _store_recovery_generation});
+        _lane.run ([&] {
+            routes.insert_or_assign (
+              std::move (key), cached_address_t{address, measured_at + lifetime,
+                                                _store_recovery_generation});
+        }).get ();
     }
 
     struct authority_projection_t
@@ -433,7 +444,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     location_options_t _options;
     std::shared_ptr<actor_location_observer_t> _actor_locations;
     std::string _actor_mesh_name;
-    std::mutex _route_cache_gate;
+    offload_executor_t _lane_executor;
+    mutable state_lane_t _lane{_lane_executor};
     std::map<std::string, cached_address_t> _spot_routes;
     std::map<std::string, cached_address_t> _actor_routes;
     std::uint64_t _store_recovery_generation = 0;

@@ -430,9 +430,10 @@ internal abstract partial class ZLinkSpotActivation
         await NotifyJoinedActorCoreAsync(actor, cancellationToken).ConfigureAwait(false);
         if (_runtime.LocationLifecycle is { } locations)
         {
-            _ = locations.SpotLocations.TryGetTrackedGeneration(
-                RuntimeSpotId,
-                out var spotGeneration);
+            var spotGeneration = await locations.SpotLocations
+                .GetTrackedGenerationAsync(RuntimeSpotId)
+                .ConfigureAwait(false)
+                ?? 0;
             await locations.ActorOwnership.NotifyActorJoinedSpotAsync(
                     actor.Context.ActorId,
                     SpotId,
@@ -534,9 +535,10 @@ internal abstract partial class ZLinkSpotActivation
                     {
                         if (_runtime.LocationLifecycle is not { } locations)
                             return;
-                        _ = locations.SpotLocations.TryGetTrackedGeneration(
-                            RuntimeSpotId,
-                            out var spotGeneration);
+                        var spotGeneration = await locations.SpotLocations
+                            .GetTrackedGenerationAsync(RuntimeSpotId)
+                            .ConfigureAwait(false)
+                            ?? 0;
                         await locations.ActorOwnership.NotifyActorJoinedSpotAsync(
                                 actor.Context.ActorId,
                                 SpotId,

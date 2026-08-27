@@ -7,6 +7,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -53,9 +54,9 @@ final class DefaultInstanceSpotContext
         this.nodeRid = Objects.requireNonNull(nodeRid, "nodeRid");
         this.backendSpot = Objects.requireNonNull(backendSpot, "backendSpot");
         this.dispatchQueue = new ZLinkAsyncSerialQueue(
-            host.serialExecutor(), false);
+            host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
         this.infrastructureQueue = new ZLinkAsyncSerialQueue(
-            host.infrastructureExecutor(), false);
+            host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
         this.handlerInstances = host.createHandlerInstances();
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);
         this.timers = host.createTimerRegistry(

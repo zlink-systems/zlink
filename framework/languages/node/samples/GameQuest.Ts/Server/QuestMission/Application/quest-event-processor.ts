@@ -12,6 +12,7 @@ import type {
   SyncQuestProgressReq,
   SyncQuestProgressRes
 } from '../../../Shared/Contracts/messages';
+import { QuestIds } from '../../../Shared/Contracts/messages';
 
 type QuestProcessingResult = {
   aggregate: PlayerQuestAggregate;
@@ -31,7 +32,11 @@ class QuestEventProcessor {
 
   process(event: GameplayEventEnvelope, aggregate: PlayerQuestAggregate): QuestProcessingResult {
     const decision = QuestDomain.decide(event, aggregate);
-    return this.commit(event.playerId, decision.events, decision.changedQuestIds, decision.completedQuestIds);
+    const result = this.commit(event.playerId, decision.events, decision.changedQuestIds, decision.completedQuestIds);
+    for (const questId of decision.changedQuestIds) {
+      console.error(`gamequest-mission processed player=${event.playerId} quest=${questId}`);
+    }
+    return result;
   }
 
   rehydrate(playerId: string): PlayerQuestAggregate {
@@ -50,7 +55,14 @@ class QuestEventProcessor {
     const firstHunt = snapshot.killCounts.find((entry) => entry.monsterId === 'wolf' && entry.areaId === 'forest')?.count ?? 0;
     const decision = QuestDomain.reconcileFirstHunt(request.playerId, firstHunt, aggregate);
     const result = this.commit(request.playerId, decision.events, decision.changedQuestIds, decision.completedQuestIds);
+    if (decision.events.some((event) => event.type === 'QuestReconciled')) {
+      console.error(`gamequest-mission reconciled player=${request.playerId} quest=${QuestIds.FirstHunt}`);
+    }
     return { ...result, updatedQuests: result.projection };
+  }
+
+  consumeReplayAfterClose(playerId: string): boolean {
+    return this.events.consumeReplayAfterClose(playerId);
   }
 
   private commit(

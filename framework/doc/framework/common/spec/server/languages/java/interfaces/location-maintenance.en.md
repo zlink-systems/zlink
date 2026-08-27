@@ -1,7 +1,7 @@
 # Java Location/Relocation Public Interface
 
-[Java exact interface list](README.en.md) · [Common Location Runtime](../../../21-location-runtime.en.md) ·
-[Common Redis Provider](../../../22-location-store-redis.en.md)
+[Java per-language interface list](README.en.md) · [Common Location Runtime](../../../05-location-relocation/01-location-runtime.en.md) ·
+[Common Redis Provider](../../../05-location-relocation/02-location-store-redis.en.md)
 
 This document only defines the Java public contract an application and
 provider plugin author need to know. Authority, owner lease,
@@ -37,93 +37,93 @@ public record ZLinkStoreVersion(String value) {}
 public record ZLinkStoreScanCursor(String value) {}
 
 public record ZLinkStoreValue(
-    byte[] bytes,
-    ZLinkStoreVersion version,
-    Instant expiresAt,
-    Instant storeNow) {}
+ byte[] bytes,
+ ZLinkStoreVersion version,
+ Instant expiresAt,
+ Instant storeNow) {}
 
 public sealed interface ZLinkStoreReadResult
-    permits ZLinkStoreReadMissing, ZLinkStoreReadFound {}
+ permits ZLinkStoreReadMissing, ZLinkStoreReadFound {}
 
 public record ZLinkStoreReadMissing(Instant storeNow)
-    implements ZLinkStoreReadResult {}
+ implements ZLinkStoreReadResult {}
 
 public record ZLinkStoreReadFound(ZLinkStoreValue value)
-    implements ZLinkStoreReadResult {}
+ implements ZLinkStoreReadResult {}
 
 public sealed interface ZLinkStoreCondition
-    permits ZLinkStoreMissingCondition, ZLinkStoreVersionCondition {}
+ permits ZLinkStoreMissingCondition, ZLinkStoreVersionCondition {}
 
 public record ZLinkStoreMissingCondition(ZLinkStoreKey key)
-    implements ZLinkStoreCondition {}
+ implements ZLinkStoreCondition {}
 
 public record ZLinkStoreVersionCondition(
-    ZLinkStoreKey key,
-    ZLinkStoreVersion expected)
-    implements ZLinkStoreCondition {}
+ ZLinkStoreKey key,
+ ZLinkStoreVersion expected)
+ implements ZLinkStoreCondition {}
 
 public sealed interface ZLinkStoreMutation
-    permits ZLinkStorePut, ZLinkStoreDelete {}
+ permits ZLinkStorePut, ZLinkStoreDelete {}
 
 public record ZLinkStorePut(
-    ZLinkStoreKey key,
-    byte[] bytes,
-    Duration retention)
-    implements ZLinkStoreMutation {}
+ ZLinkStoreKey key,
+ byte[] bytes,
+ Duration retention)
+ implements ZLinkStoreMutation {}
 
 public record ZLinkStoreDelete(ZLinkStoreKey key)
-    implements ZLinkStoreMutation {}
+ implements ZLinkStoreMutation {}
 
 public record ZLinkStoreWriteRequest(
-    List<ZLinkStoreCondition> conditions,
-    List<ZLinkStoreMutation> mutations) {}
+ List<ZLinkStoreCondition> conditions,
+ List<ZLinkStoreMutation> mutations) {}
 
 public sealed interface ZLinkStoreWriteResult
-    permits ZLinkStoreWriteApplied, ZLinkStoreWriteConflict {}
+ permits ZLinkStoreWriteApplied, ZLinkStoreWriteConflict {}
 
 public record ZLinkStoreWriteApplied(
-    Map<ZLinkStoreKey, ZLinkStoreVersion> putVersions,
-    Instant storeNow)
-    implements ZLinkStoreWriteResult {}
+ Map<ZLinkStoreKey, ZLinkStoreVersion> putVersions,
+ Instant storeNow)
+ implements ZLinkStoreWriteResult {}
 
 public record ZLinkStoreWriteConflict(Instant storeNow)
-    implements ZLinkStoreWriteResult {}
+ implements ZLinkStoreWriteResult {}
 
 public record ZLinkStoreScanRequest(
-    String prefix,
-    ZLinkStoreScanCursor cursor,
-    int limit) {}
+ String prefix,
+ ZLinkStoreScanCursor cursor,
+ int limit) {}
 
 public record ZLinkStoreScanItem(
-    ZLinkStoreKey key,
-    ZLinkStoreValue value) {}
+ ZLinkStoreKey key,
+ ZLinkStoreValue value) {}
 
 public record ZLinkStoreScanPage(
-    List<ZLinkStoreScanItem> items,
-    ZLinkStoreScanCursor nextCursor,
-    Instant storeNow) {}
+ List<ZLinkStoreScanItem> items,
+ ZLinkStoreScanCursor nextCursor,
+ Instant storeNow) {}
 
 public sealed interface ZLinkStoreScanResult
-    permits ZLinkStoreScanPageResult, ZLinkStoreScanExpired {}
+ permits ZLinkStoreScanPageResult, ZLinkStoreScanExpired {}
 
 public record ZLinkStoreScanPageResult(ZLinkStoreScanPage value)
-    implements ZLinkStoreScanResult {}
+ implements ZLinkStoreScanResult {}
 
 public record ZLinkStoreScanExpired()
-    implements ZLinkStoreScanResult {}
+ implements ZLinkStoreScanResult {}
 
 public interface ZLinkLocationStore {
-    CompletionStage<ZLinkStoreReadResult> read(
-        ZLinkStoreKey key,
-        ZLinkStoreCancellation cancellation);
+ CompletionStage<ZLinkStoreReadResult> read(
+ ZLinkStoreKey key,
+ ZLinkStoreCancellation cancellation);
 
-    CompletionStage<ZLinkStoreWriteResult> write(
-        ZLinkStoreWriteRequest request,
-        ZLinkStoreCancellation cancellation);
+ CompletionStage<ZLinkStoreWriteResult> write(
+ ZLinkStoreWriteRequest request,
+ ZLinkStoreCancellation cancellation);
 
-    CompletionStage<ZLinkStoreScanResult> scan(
-        ZLinkStoreScanRequest request,
-        ZLinkStoreCancellation cancellation);
+ CompletionStage<ZLinkStoreScanResult> scan(
+ ZLinkStoreScanRequest request,
+ ZLinkStoreCancellation cancellation);
 }
 ```
 
@@ -136,15 +136,15 @@ and isn't reused as a different result's buffer.
 ### Values And Time
 
 - Key is opaque UTF-8 `1..1024` bytes the framework issues, compared as
-  case-sensitive exact match.
+ case-sensitive comparison.
 - Version is provider-issued opaque UTF-8 `1..4096` bytes. The
-  framework and provider don't interpret its internal structure or
-  numeric magnitude.
+ framework and provider don't interpret its internal structure or
+ numeric magnitude.
 - Value is at most 1 MiB. Expiry time is judged based on the provider
-  clock.
+ clock.
 - `storeNow` is the provider clock value obtained from the same read,
-  commit, or scan page. The framework's local clock isn't used for TTL
-  correctness.
+ commit, or scan page. The framework's local clock isn't used for TTL
+ correctness.
 
 ### Atomic Write
 
@@ -154,33 +154,33 @@ it apply every mutation as one commit. If even one is false, it's
 different caller can't observe an intermediate state of the commit.
 
 - A missing condition is only true when the key doesn't exist or has
-  expired.
-- A version condition is only true when the current version is an exact
-  match.
+ expired.
+- A version condition is only true when the current version is an
+ match.
 - The sum of unique keys across conditions and mutations is at most
-  2,048.
+ 2,048.
 - The request's encoded size is at most 4 MiB.
 - A duplicate condition or duplicate mutation on the same key isn't
-  allowed.
+ allowed.
 - The applied result returns the new version the provider issued for
-  each put.
+ each put.
 - The conflict result doesn't disclose the failed condition or current
-  value. The framework re-confirms the needed key with an exact read.
+ value. The framework re-confirms the needed key with a direct read.
 
 ### Snapshot Scan
 
 `scan(...)` is the required operation recovery and maintenance use to
 find a bounded key set.
 
-- Prefix is UTF-8 `0..1024` bytes, using the same exact comparison as
-  key.
+- Prefix is UTF-8 `0..1024` bytes, using the same comparison as
+ key.
 - A subsequent cursor page also uses the snapshot the first page fixed.
 - Limit is `1..1000`. If the encoded page reaches 4 MiB first, fewer
-  items can be returned.
+ items can be returned.
 - Cursor is opaque UTF-8 `1..4096` bytes.
 - If the provider can't keep the snapshot any longer, it returns
-  `ZLinkStoreScanExpired`. The framework discards the partial result and
-  reads from the first page again.
+ `ZLinkStoreScanExpired`. The framework discards the partial result and
+ reads from the first page again.
 
 ## Relocation Store
 
@@ -188,68 +188,68 @@ find a bounded key set.
 public record ZLinkBlobReference(String value) {}
 
 public sealed interface ZLinkBlobPutResult
-    permits ZLinkBlobStored, ZLinkBlobAlreadyStored, ZLinkBlobConflict {}
+ permits ZLinkBlobStored, ZLinkBlobAlreadyStored, ZLinkBlobConflict {}
 
 public record ZLinkBlobStored(
-    Instant expiresAt,
-    Instant storeNow)
-    implements ZLinkBlobPutResult {}
+ Instant expiresAt,
+ Instant storeNow)
+ implements ZLinkBlobPutResult {}
 
 public record ZLinkBlobAlreadyStored(
-    Instant expiresAt,
-    Instant storeNow)
-    implements ZLinkBlobPutResult {}
+ Instant expiresAt,
+ Instant storeNow)
+ implements ZLinkBlobPutResult {}
 
 public record ZLinkBlobConflict(Instant storeNow)
-    implements ZLinkBlobPutResult {}
+ implements ZLinkBlobPutResult {}
 
 public sealed interface ZLinkBlobReadResult
-    permits ZLinkBlobMissing, ZLinkBlobFound {}
+ permits ZLinkBlobMissing, ZLinkBlobFound {}
 
 public record ZLinkBlobMissing(Instant storeNow)
-    implements ZLinkBlobReadResult {}
+ implements ZLinkBlobReadResult {}
 
 public record ZLinkBlobFound(
-    byte[] bytes,
-    Instant expiresAt,
-    Instant storeNow)
-    implements ZLinkBlobReadResult {}
+ byte[] bytes,
+ Instant expiresAt,
+ Instant storeNow)
+ implements ZLinkBlobReadResult {}
 
 public sealed interface ZLinkBlobRenewResult
-    permits ZLinkBlobRenewMissing, ZLinkBlobRenewed {}
+ permits ZLinkBlobRenewMissing, ZLinkBlobRenewed {}
 
 public record ZLinkBlobRenewMissing(Instant storeNow)
-    implements ZLinkBlobRenewResult {}
+ implements ZLinkBlobRenewResult {}
 
 public record ZLinkBlobRenewed(
-    Instant expiresAt,
-    Instant storeNow)
-    implements ZLinkBlobRenewResult {}
+ Instant expiresAt,
+ Instant storeNow)
+ implements ZLinkBlobRenewResult {}
 
 public interface ZLinkRelocationStore {
-    CompletionStage<ZLinkBlobPutResult> put(
-        ZLinkBlobReference reference,
-        byte[] payload,
-        Duration retention,
-        ZLinkStoreCancellation cancellation);
+ CompletionStage<ZLinkBlobPutResult> put(
+ ZLinkBlobReference reference,
+ byte[] payload,
+ Duration retention,
+ ZLinkStoreCancellation cancellation);
 
-    CompletionStage<ZLinkBlobReadResult> read(
-        ZLinkBlobReference reference,
-        ZLinkStoreCancellation cancellation);
+ CompletionStage<ZLinkBlobReadResult> read(
+ ZLinkBlobReference reference,
+ ZLinkStoreCancellation cancellation);
 
-    CompletionStage<ZLinkBlobRenewResult> renew(
-        ZLinkBlobReference reference,
-        Duration retention,
-        ZLinkStoreCancellation cancellation);
+ CompletionStage<ZLinkBlobRenewResult> renew(
+ ZLinkBlobReference reference,
+ Duration retention,
+ ZLinkStoreCancellation cancellation);
 
-    CompletionStage<Void> delete(
-        ZLinkBlobReference reference,
-        ZLinkStoreCancellation cancellation);
+ CompletionStage<Void> delete(
+ ZLinkBlobReference reference,
+ ZLinkStoreCancellation cancellation);
 }
 ```
 
 Reference is opaque UTF-8 `1..4096` bytes the framework issues before
-put, compared as case-sensitive exact match. Re-putting the same
+put, compared as case-sensitive comparison. Re-putting the same
 reference with the same bytes returns `ZLinkBlobAlreadyStored`; with
 different bytes, `ZLinkBlobConflict`. A deleted or expired reference also
 isn't reused for different content.
@@ -281,7 +281,7 @@ timeout or lost result by reading the same reference exactly.
 operation. If cancellation is requested before the call, the provider
 doesn't start I/O or commit. If cancellation, timeout, or a transport
 error occurs after the call has started, whether the commit was applied
-may be uncertain, and the framework reconciles the result with an exact
+may be uncertain, and the framework reconciles the result with an
 read and version, or a caller-issued blob reference.
 
 An input range violation and a duplicate on the same key are
@@ -293,27 +293,27 @@ exception is classified by the framework as a provider failure.
 
 ```java
 public interface ZLinkLocationRuntimeQuery {
-    CompletionStage<ZLinkLocationRuntimeStatus> getStatus();
-    CompletionStage<ZLinkLocationPage<ZLinkLocationTopologyEntry>> listTopology(
-        ZLinkLocationTopologyFilter filter,
-        ZLinkPageRequest page);
-    CompletionStage<ZLinkLocationPage<ZLinkLocationServiceSummary>> listServiceSummaries(
-        ZLinkLocationServiceSummaryFilter filter,
-        ZLinkPageRequest page);
-    CompletionStage<java.util.Optional<ZLinkLocationObjectEntry>> findActorLocation(
-        String actorId);
-    CompletionStage<java.util.Optional<ZLinkLocationObjectEntry>> findSpotLocation(
-        String spotId);
-    CompletionStage<ZLinkLocationPage<ZLinkLocationObjectEntry>> listObjectLocations(
-        ZLinkLocationObjectFilter filter,
-        ZLinkPageRequest page);
+ CompletionStage<ZLinkLocationRuntimeStatus> getStatus();
+ CompletionStage<ZLinkLocationPage<ZLinkLocationTopologyEntry>> listTopology(
+ ZLinkLocationTopologyFilter filter,
+ ZLinkPageRequest page);
+ CompletionStage<ZLinkLocationPage<ZLinkLocationServiceSummary>> listServiceSummaries(
+ ZLinkLocationServiceSummaryFilter filter,
+ ZLinkPageRequest page);
+ CompletionStage<java.util.Optional<ZLinkLocationObjectEntry>> findActorLocation(
+ String actorId);
+ CompletionStage<java.util.Optional<ZLinkLocationObjectEntry>> findSpotLocation(
+ String spotId);
+ CompletionStage<ZLinkLocationPage<ZLinkLocationObjectEntry>> listObjectLocations(
+ ZLinkLocationObjectFilter filter,
+ ZLinkPageRequest page);
 }
 
 public interface ZLinkLocationReadiness {
-    CompletionStage<Boolean> isPeerReady(
-        String meshName,
-        ZLinkLocationRole role,
-        RoutingId nodeRid);
+ CompletionStage<Boolean> isPeerReady(
+ String meshName,
+ ZLinkLocationRole role,
+ RoutingId nodeRid);
 }
 ```
 
@@ -332,31 +332,31 @@ are not part of the application query contract.
 
 ```java
 public final class ZLinkRedisLocationStore
-    implements ZLinkLocationStore, AutoCloseable {
-    public ZLinkRedisLocationStore(ZLinkRedisLocationOptions options);
+ implements ZLinkLocationStore, AutoCloseable {
+ public ZLinkRedisLocationStore(ZLinkRedisLocationOptions options);
 }
 
 public final class ZLinkRedisRelocationStore
-    implements ZLinkRelocationStore, AutoCloseable {
-    public ZLinkRedisRelocationStore(ZLinkRedisRelocationOptions options);
+ implements ZLinkRelocationStore, AutoCloseable {
+ public ZLinkRedisRelocationStore(ZLinkRedisRelocationOptions options);
 }
 
 public final class ZLinkRedisLocationOptions {
-    public String connectionString();
-    public ZLinkRedisLocationOptions setConnectionString(String value);
-    public String keyPrefix();
-    public ZLinkRedisLocationOptions setKeyPrefix(String value);
-    public Duration operationTimeout();
-    public ZLinkRedisLocationOptions setOperationTimeout(Duration value);
+ public String connectionString();
+ public ZLinkRedisLocationOptions setConnectionString(String value);
+ public String keyPrefix();
+ public ZLinkRedisLocationOptions setKeyPrefix(String value);
+ public Duration operationTimeout();
+ public ZLinkRedisLocationOptions setOperationTimeout(Duration value);
 }
 
 public final class ZLinkRedisRelocationOptions {
-    public String connectionString();
-    public ZLinkRedisRelocationOptions setConnectionString(String value);
-    public String keyPrefix();
-    public ZLinkRedisRelocationOptions setKeyPrefix(String value);
-    public Duration operationTimeout();
-    public ZLinkRedisRelocationOptions setOperationTimeout(Duration value);
+ public String connectionString();
+ public ZLinkRedisRelocationOptions setConnectionString(String value);
+ public String keyPrefix();
+ public ZLinkRedisRelocationOptions setKeyPrefix(String value);
+ public Duration operationTimeout();
+ public ZLinkRedisRelocationOptions setOperationTimeout(Duration value);
 }
 ```
 
@@ -371,12 +371,12 @@ The following items aren't an interface a provider or application
 implements or calls.
 
 - Store capability per Authority, owner lease, reservation, capacity, and
-  aggregate
+ aggregate
 - Runtime publisher, resolver, cache, retry coordinator, and recovery
-  state machine
+ state machine
 - Redis script client, key codec, row serializer, and connection lease
 - Watch publisher, change-stamp event, and raw peer/Spot/Actor/route
-  Store
+ Store
 - Routing-ID slot, allocation group, and allocated-RID provider
 
 The provider's public declarations must not show Authority, Reservation,

@@ -89,9 +89,9 @@ each process a request sent to the other's ChannelName once?
   other role's marker. Each handler processes its own request once,
   and the other role's handler doesn't record the same operation ID.
 - Detailed behavior: verifies
-  [Channel Topology §4.2](../spec/server/07-channel-topology.en.md#42-a-channel-call-can-start-without-a-local-server-role)
+  [Channel Topology §4.2](../spec/server/02-channel-transport/01-channel-topology.en.md#4-when-a-call-can-start-without-a-local-server)
   and
-  [Channel Messaging §3.2](../spec/server/08-channel-messaging.en.md#32-channelname-select-one).
+  [Channel Messaging §3.2](../spec/server/02-channel-transport/02-channel-messaging.en.md).
 
 #### CH-E2E-02 A Handler Calls A Channel Of A Different Topology
 
@@ -115,7 +115,7 @@ Channels, is each reply linked to the original operation exactly once?
   and doesn't receive a separate unsolicited message.
 - Detailed behavior: verifies the distinction between nested request
   and reply from
-  [ClientServer Channel §6.2](../spec/server/09-client-server-channel.en.md#62-when-a-handler-calls-a-different-target).
+  [ClientServer Channel §6.2](../spec/server/02-channel-transport/03-client-server-channel.en.md#52-when-a-handler-calls-another-target).
 
 #### CH-E2E-03 Send A ClientServer Request From A Spot Callback And Timer
 
@@ -141,9 +141,9 @@ state order?
   timer-end`, and the sequence increases once per step. The timer
   result isn't estimated with a fixed sleep.
 - Detailed behavior: verifies
-  [Async Execution Policy §2](../spec/server/05-async-execution-policy.en.md#2-request-completion)
+  [Async Execution Policy §2](../spec/server/01-execution/README.en.md)
   and
-  [ClientServer Channel §6.2](../spec/server/09-client-server-channel.en.md#62-when-a-handler-calls-a-different-target).
+  [ClientServer Channel §6.2](../spec/server/02-channel-transport/03-client-server-channel.en.md#52-when-a-handler-calls-another-target).
 
 #### CH-E2E-06 Fails To Start If The Same ChannelName Is Registered Under Multiple Send Paths
 
@@ -166,7 +166,7 @@ registration shut down with a configuration error?
   a public configuration error. The normal host has both Channels
   ready and can call each once.
 - Detailed behavior: verifies
-  [Channel Topology §4.4](../spec/server/07-channel-topology.en.md#44-in-one-process-a-channelname-points-to-only-one-send-path).
+  [Channel Topology §4.4](../spec/server/02-channel-transport/01-channel-topology.en.md#6-in-one-process-a-channelname-has-only-one-send-path).
 
 #### CH-E2E-07A An Unregistered ChannelName Is NotFound
 
@@ -185,7 +185,7 @@ ChannelName end in `NotFound`?
 - Verification: The public error kind is `NotFound`, and no role
   handler's evidence has the operation ID.
 - Detailed behavior: verifies
-  [Channel Messaging §3.3](../spec/server/08-channel-messaging.en.md#33-an-unregistered-channelname).
+  [Channel Messaging §3.3](../spec/server/02-channel-transport/02-channel-messaging.en.md#4-an-unregistered-channelname).
 
 #### CH-E2E-07B Calls A Remote Member Even With Only A Local Server Role
 
@@ -208,7 +208,7 @@ different, ready API server of the same ChannelName?
   one is processed by a different process's handler. The sum of
   handler counts is 20, with no duplicate operation ID.
 - Detailed behavior: verifies
-  [Channel Topology §4.2](../spec/server/07-channel-topology.en.md#42-a-channel-call-can-start-without-a-local-server-role).
+  [Channel Topology §4.2](../spec/server/02-channel-transport/01-channel-topology.en.md#4-when-a-call-can-start-without-a-local-server).
 
 #### CH-E2E-07C Unavailable When A Known Target Is Unreachable
 
@@ -230,9 +230,9 @@ known target's connection isn't ready?
   with no handler recording the operation ID. It's a failure if a
   different RouteMesh or ClientServer processes it.
 - Detailed behavior: verifies
-  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure)
+  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure)
   and
-  [§5](../spec/server/32-framework-error-model.en.md#5-request-completion-and-failure).
+  [§5](../spec/server/00-foundation/07-framework-error-model.en.md#5-request-completion-and-failure).
 
 #### CH-E2E-11 Call A Different MeshNode's Server Using Only ChannelName
 
@@ -254,7 +254,7 @@ handler's reply and send processing by specifying only the name
   handler. The caller endpoint doesn't take MeshName, RID, or endpoint
   as input.
 - Detailed behavior: verifies ChannelName select-one from
-  [Channel Messaging §3.2](../spec/server/08-channel-messaging.en.md#32-channelname-select-one).
+  [Channel Messaging §3.2](../spec/server/02-channel-transport/02-channel-messaging.en.md).
 
 ### Track B — Select A ClientServer Target And Handle Lifecycle
 
@@ -277,7 +277,7 @@ they selected at roughly a `1:3` ratio over enough requests?
   handler counts is 800. The weight-300 server's processing ratio is
   65–85%.
 - Detailed behavior: verifies
-  [ClientServer Channel §5](../spec/server/09-client-server-channel.en.md#5-weight-and-target-selection).
+  [ClientServer Channel §5](../spec/server/02-channel-transport/03-client-server-channel.en.md#4-weight-and-target-selection).
 
 #### CH-E2E-04B A Draining Server Is Excluded From New Requests
 
@@ -300,7 +300,7 @@ different server?
 - Verification: The first request completes once with A's reply. All
   50 new ones are processed by B, with no additional marker on A.
 - Detailed behavior: verifies
-  [ClientServer Channel §7](../spec/server/09-client-server-channel.en.md#7-drain-blocking-new-requests-and-finishing-already-received-ones).
+  [ClientServer Channel §7](../spec/server/02-channel-transport/03-client-server-channel.en.md).
 
 #### CH-E2E-04C Process New Requests After A Server Restart
 
@@ -322,7 +322,7 @@ first new request succeed with no application retry or fixed settle?
   the restarted server's lifecycle marker. The previous process's
   marker doesn't appear in the new request's evidence.
 - Detailed behavior: verifies
-  [ClientServer Channel §8](../spec/server/09-client-server-channel.en.md#8-server-restart).
+  [ClientServer Channel §8](../spec/server/02-channel-transport/03-client-server-channel.en.md#7-server-restart).
 
 #### CH-E2E-05 A Process Without A Client Role Can't Start A ClientServer Request
 
@@ -344,7 +344,7 @@ registered with only a Server role end in `NotConfigured`?
   handler doesn't run. The normal caller's request is processed once
   by the Workflow handler.
 - Detailed behavior: verifies role responsibility from
-  [ClientServer Channel §3](../spec/server/09-client-server-channel.en.md#3-client-and-server-roles).
+  [ClientServer Channel §3](../spec/server/02-channel-transport/03-client-server-channel.en.md#2-client-and-server-role-registration).
 
 #### CH-E2E-10 ClientServer One-Way Send Doesn't Produce A Reply
 
@@ -363,7 +363,7 @@ exactly one handler, without producing a client reply?
   recorded once at exactly one server's handler. The client has
   neither a request completion nor an unsolicited payload.
 - Detailed behavior: verifies
-  [ClientServer Channel §6](../spec/server/09-client-server-channel.en.md#6-send-request-and-reply).
+  [ClientServer Channel §6](../spec/server/02-channel-transport/03-client-server-channel.en.md#5-send-request-and-reply).
 
 #### CH-E2E-12 A Client And Server In The Same Process Are Also Selected As Normal Candidates
 
@@ -386,7 +386,7 @@ weight, are both selected over enough requests?
   400, and the local call gets the same application result as the
   remote one.
 - Detailed behavior: verifies
-  [ClientServer Channel §5.1](../spec/server/09-client-server-channel.en.md#51-a-server-in-the-same-process-is-also-a-selection-candidate).
+  [ClientServer Channel §5.1](../spec/server/02-channel-transport/03-client-server-channel.en.md#41-a-server-in-the-same-process-is-also-a-selection-candidate).
 
 ### Track C — A Channel Handler Calls A Different Public Target
 
@@ -413,9 +413,9 @@ once with both results?
   operation ID once. The Workflow caller receives exactly one reply
   containing both results, and no separate payload.
 - Detailed behavior: verifies
-  [ClientServer Channel §6.2](../spec/server/09-client-server-channel.en.md#62-when-a-handler-calls-a-different-target)
+  [ClientServer Channel §6.2](../spec/server/02-channel-transport/03-client-server-channel.en.md#52-when-a-handler-calls-another-target)
   and
-  [Spot Messaging](../spec/server/12-spot-messaging.en.md).
+  [Spot Messaging](../spec/server/03-spot-actor/02-spot-messaging.en.md).
 
 ### Track D — Fix The Remote Listener Address
 
@@ -443,9 +443,9 @@ remote client?
   client receives the corresponding handler or subscriber result, and
   doesn't connect to a different topology's endpoint.
 - Detailed behavior: verifies
-  [Network Listener Identity §4](../spec/server/10-network-listener-identity.en.md#4-how-to-confirm-the-port)
+  [Network Listener Identity §4](../spec/server/02-channel-transport/04-network-listener-identity.en.md)
   and
-  [§5](../spec/server/10-network-listener-identity.en.md#5-records-per-listener-kind).
+  [§5](../spec/server/02-channel-transport/04-network-listener-identity.en.md#4-record-per-listener-kind).
 
 ## 5. Completion Criteria
 

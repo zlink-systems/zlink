@@ -1698,7 +1698,8 @@ int main ()
       zlink::framework::detail::stream_runtime_t::from (mutual_tls_zlink).snapshots (),
       {{"mutual-tls-listener-session",
         [&mutual_tls_session] (zlink::framework::service_provider_t &)
-          -> zlink::framework::packet_stream_session_t & { return mutual_tls_session; }}});
+          -> zlink::framework::packet_stream_session_t & { return mutual_tls_session; }}},
+      std::chrono::milliseconds{30'000});
     mutual_tls_host.start (mutual_tls_provider);
     boost::asio::io_context mutual_tls_io;
     boost::asio::ssl::context mutual_tls_client_context (
@@ -1856,7 +1857,8 @@ int main ()
       zlink::framework::detail::stream_runtime_t::from (transport_zlink).snapshots (),
       {{"transport-session",
         [&transport_session] (zlink::framework::service_provider_t &)
-          -> zlink::framework::packet_stream_session_t & { return transport_session; }}});
+          -> zlink::framework::packet_stream_session_t & { return transport_session; }}},
+      std::chrono::milliseconds{30'000});
     transport_host.start (transport_provider);
 
     const int graceful_client = connect_loopback (transport_port);
@@ -2026,7 +2028,8 @@ int main ()
       limited_runtime, limited_snapshots,
       {{"limited-session",
         [&limited_session] (zlink::framework::service_provider_t &)
-          -> zlink::framework::packet_stream_session_t & { return limited_session; }}});
+          -> zlink::framework::packet_stream_session_t & { return limited_session; }}},
+      std::chrono::milliseconds{30'000});
     limited_host.start (transport_provider);
     const int limited_client = connect_loopback (limited_port);
     if (limited_client < 0 || !limited_session.wait_connected (1)) {
@@ -2069,7 +2072,8 @@ int main ()
       zlink::framework::detail::stream_runtime_t::from (rejected_zlink).snapshots (),
       {{"rejected-session",
         [&rejected_session] (zlink::framework::service_provider_t &)
-          -> zlink::framework::packet_stream_session_t & { return rejected_session; }}});
+          -> zlink::framework::packet_stream_session_t & { return rejected_session; }}},
+      std::chrono::milliseconds{30'000});
     rejected_host.start (transport_provider);
     const int rejected_client = connect_loopback (rejected_port);
     if (rejected_client < 0 || !rejected_session.wait_until_actor_manager_is_detached ()) {
@@ -2146,6 +2150,7 @@ int main ()
           -> zlink::framework::packet_stream_session_t & {
             return provider.get_required<shutdown_failure_session_t> ();
         }}},
+      std::chrono::milliseconds{30'000},
       core_mesh);
     core_host.start (core_provider);
 
@@ -2299,6 +2304,7 @@ int main ()
           -> zlink::framework::packet_stream_session_t & {
             return provider.get_required<core_error_close_session_t> ();
         }}},
+      std::chrono::milliseconds{30'000},
       error_close_mesh);
     error_close_host.start (error_close_provider);
 

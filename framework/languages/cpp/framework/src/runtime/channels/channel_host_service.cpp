@@ -591,7 +591,7 @@ channel_host_service_t::channel_host_service_t (message_bus_t bus,
 
 channel_host_service_t::~channel_host_service_t () = default;
 
-void channel_host_service_t::start (service_provider_t &services)
+task_t<void> channel_host_service_t::start (service_provider_t &services)
 {
     _services = &services;
     auto manager = detail::channel_runtime_manager_t::from (_bus);
@@ -626,6 +626,7 @@ void channel_host_service_t::start (service_provider_t &services)
         _subscriber_loops.push_back (std::move (loop));
         _threads.emplace_back ([raw] { raw->run (); });
     }
+    return task_t<void> (result_t<void>::success ());
 }
 
 void channel_host_service_t::request_stop () noexcept

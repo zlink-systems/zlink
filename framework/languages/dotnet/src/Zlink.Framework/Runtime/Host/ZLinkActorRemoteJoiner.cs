@@ -1191,8 +1191,8 @@ internal sealed class ZLinkActorRemoteJoiner(
         CancellationToken cancellationToken)
     {
         if (ZLinkBoundSessionDispatchScope.TryDefer(
-                actorState.ActorId,
-                ct => ReconcileCommittedSourceHandoffCoreAsync(
+            actorState.ActorId,
+            ct => ReconcileCommittedSourceHandoffCoreAsync(
                     actorState,
                     sourceActorRef,
                     targetActorRef,

@@ -20,10 +20,10 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.StandardEnvironment;
 import systems.zlink.framework.channels.ZLinkRouteClient;
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.samples.gamequest.server.configuration.SampleLocationStore;
@@ -47,6 +47,7 @@ public class Program {
         ConfigurableApplicationContext app = run(SampleTopology.configPath(args));
         GameQuestStore store = app.getBean(GameQuestStore.class);
         SampleTopology topology = app.getBean(SampleTopology.class);
+        System.out.printf("gamequest-ready kind=stream node=%s%n", topology.gameApi().instanceName());
         HttpServer http = startHttp(store, topology);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             http.stop(0);
@@ -81,8 +82,6 @@ public class Program {
                     .setConnectionString(topology.location().redisEndpoint())
                     .setKeyPrefix(topology.location().redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(Program.class);
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addRouteMesh(SampleNames.PlayerQuestSpotDiscovery)
                 .setRoutingIdPrefix("gamequest-api")
                 .listen(api.spotRouterEndpoint())
@@ -113,6 +112,13 @@ public class Program {
         ApplicationContextHolder.store = store;
         ApplicationContextHolder.channels = channels;
         return new GameQuestApiServices();
+    }
+
+    @Bean(destroyMethod = "close")
+    GameQuestReadinessReporter gameQuestSpotRouteReadiness(
+        SampleTopology topology,
+        ZLinkRouteMeshRuntime meshes) {
+        return new GameQuestReadinessReporter(topology.gameApi().instanceName(), meshes);
     }
 
     private static HttpServer startHttp(GameQuestStore store, SampleTopology topology) throws IOException {

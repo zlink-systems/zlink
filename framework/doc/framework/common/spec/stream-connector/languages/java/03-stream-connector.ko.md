@@ -124,12 +124,12 @@ Java API에서 `submit(...)`은 비동기 작업을 시작한다. **one-way send
 `CompletionStage<Void>`를 반환한다.** 이 stage는 완료와 실패만 전달하며 전송 결과나 admission
 status를 포함하지 않는다. request·wait·lifecycle의 `submit()`은 각 작업의 결과를 담은
 `CompletionStage`를 반환한다
-([04 §1](../../../server/05-async-execution-policy.ko.md)).
+([04 §1](../../../server/01-execution/README.ko.md)).
 Java connector는 같은 작업을 현재 thread에서 기다리는 별도 blocking terminator를 제공하지 않는다.
 lifecycle도 `connect().submit()`, `dispatch().submit()`처럼 같은 call builder 규칙을 따른다.
 Kotlin wrapper는 `submit()`으로 얻은
 `CompletionStage`를 coroutine suspension으로 기다린다. 이 실행 의미는
-[framework 공통 정책](../../../server/05-async-execution-policy.ko.md)을 따른다.
+[framework 공통 정책](../../../server/01-execution/README.ko.md)을 따른다.
 
 ## 4. Options
 
@@ -186,7 +186,7 @@ public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLe
 무관하게 유지된다.
 
 **실행 중 변경.** [공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level)이 요구하는
-[서버 스펙 26 §4.1](../../../server/26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경) 규칙에
+[서버 스펙 26 §4.1](../../../server/06-observability/03-message-flow-tracing.ko.md#5-실행-중-기록-수준-변경과-비용-규칙) 규칙에
 따라, `ZLinkStreamConnectorOptions.diagnosticsLevel()`은 생성 시점 초기값일 뿐이고 connector
 자신이 실행 중 read/write API를 갖는다.
 
@@ -260,7 +260,7 @@ typed object의 packet identity는 payload type의 `@ZLinkStreamPacketName`을 �
 
 metadata는 작은 key-value만 담는다. 큰 업무 데이터는 payload로 보낸다.
 STREAM wire header는 runtime 내부 타입이다. connector 사용자와 server session은 header
-객체를 만들거나 전달하지 않고, [packet name](../../../server/01-glossary.ko.md#packet-name)과 metadata snapshot만 공개 모델에서 다룬다.
+객체를 만들거나 전달하지 않고, [packet name](../../../server/00-foundation/02-glossary.ko.md#packet-name)과 metadata snapshot만 공개 모델에서 다룬다.
 
 ## 7. Send와 Request
 
@@ -327,7 +327,7 @@ Connector가 시작한 outbound operation은 UUIDv7 `flow_id`를 한 번 생성�
 Connector instance의 mutable 필드나 thread ID로 current flow를 추정하지 않는다. wire 형식과 비동기
 문맥 경계는
 [Stream Connector §4.2](../../32-stream-connector.ko.md#42-header)와
-[Flow Correlation §6](../../../server/27-flow-correlation.ko.md#6-async-작업과-execution-context)이 소유한다.
+[Flow Correlation §6](../../../server/06-observability/04-flow-correlation.ko.md#6-async-작업과-execution-context)이 소유한다.
 
 ### 7.2 테스트 대기 표면
 
@@ -564,7 +564,7 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 Kotlin wrapper는 Java connector와 다른 상태 전이나 buffering 정책을 만들면 안 된다. options를
 복사하는 extension은 **수신 메시지 한도를 포함해 모든 option 값을 보존해야 한다.**
 `messages(...)`와 `errors()`는 Java connector의 `on(...)`, `onErrorReceived(...)`
-handler를 `callbackFlow`로 감싼다. 따라서 manual [dispatch mode](../../../server/01-glossary.ko.md#dispatch-mode)에서는 Java와 마찬가지로
+handler를 `callbackFlow`로 감싼다. 따라서 manual [dispatch mode](../../../server/00-foundation/02-glossary.ko.md#dispatch-mode)에서는 Java와 마찬가지로
 Kotlin wrapper의 `dispatch().await()`가 호출되어야 collector가 메시지나 error event를 받는다.
 
 ## 14. 검증 기준

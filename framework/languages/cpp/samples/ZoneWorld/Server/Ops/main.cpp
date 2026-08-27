@@ -275,7 +275,7 @@ class report_spot_event_handler_t
 class ops_monitor_service_t final : public fw::hosted_service_t
 {
   public:
-    void start (fw::service_provider_t &services) override
+    fw::task_t<void> start (fw::service_provider_t &services) override
     {
         _state = &services.get_required<ops_state_t> ();
         _notifications = &services.get_required<ops_notification_queue_t> ();
@@ -302,6 +302,7 @@ class ops_monitor_service_t final : public fw::hosted_service_t
                 }
             }
         });
+        co_return;
     }
 
     void request_stop () noexcept override

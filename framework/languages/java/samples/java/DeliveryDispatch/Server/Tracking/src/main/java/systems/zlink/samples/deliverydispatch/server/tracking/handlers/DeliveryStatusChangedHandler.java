@@ -31,6 +31,10 @@ public final class DeliveryStatusChangedHandler
         Messages.DeliveryStatusChangedReq request,
         ZLinkMessageContext context) {
         evidenceStore.append(request);
+        if (request.status() == Messages.DeliveryStatus.Delivered) {
+            System.out.println("deliverydispatch-tracking status=Delivered delivery="
+                + request.deliveryId());
+        }
         return actorRefs.find(SAMPLE_CUSTOMER_ID).thenCompose(found -> {
             var actor = found.orElseThrow(() -> new IllegalStateException(
                 "customer actor not found: " + SAMPLE_CUSTOMER_ID));

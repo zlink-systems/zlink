@@ -4,7 +4,6 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <map>
-#include <mutex>
 #include <tuple>
 
 namespace zlink::framework::detail
@@ -54,13 +53,11 @@ class message_follow_suppression_registry_t
   public:
     void retain (message_follow_suppression_key_t key)
     {
-        std::lock_guard lock (_mutex);
         _states.try_emplace (std::move (key), state_t::idle);
     }
 
     bool try_begin (const message_follow_suppression_key_t &key)
     {
-        std::lock_guard lock (_mutex);
         const auto found = _states.find (key);
         if (found == _states.end () || found->second != state_t::idle)
             return false;
@@ -70,7 +67,6 @@ class message_follow_suppression_registry_t
 
     bool mark_sent (const message_follow_suppression_key_t &key)
     {
-        std::lock_guard lock (_mutex);
         const auto found = _states.find (key);
         if (found == _states.end () || found->second != state_t::in_flight)
             return false;
@@ -80,7 +76,6 @@ class message_follow_suppression_registry_t
 
     bool abort (const message_follow_suppression_key_t &key)
     {
-        std::lock_guard lock (_mutex);
         const auto found = _states.find (key);
         if (found == _states.end () || found->second != state_t::in_flight)
             return false;
@@ -90,13 +85,11 @@ class message_follow_suppression_registry_t
 
     void erase (const message_follow_suppression_key_t &key) noexcept
     {
-        std::lock_guard lock (_mutex);
         _states.erase (key);
     }
 
     std::size_t size () const noexcept
     {
-        std::lock_guard lock (_mutex);
         return _states.size ();
     }
 
@@ -108,7 +101,6 @@ class message_follow_suppression_registry_t
         sent_until_expiry
     };
 
-    mutable std::mutex _mutex;
     std::map<message_follow_suppression_key_t, state_t> _states;
 };
 

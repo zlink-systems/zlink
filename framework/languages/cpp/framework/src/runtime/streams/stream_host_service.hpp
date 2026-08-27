@@ -47,13 +47,14 @@ class stream_host_service_t final : public hosted_service_t,
       detail::stream_runtime_t runtime,
       std::vector<stream_snapshot_t> streams,
       std::map<std::string, detail::stream_session_factory_t> session_factories,
+      std::chrono::milliseconds session_replacement_callback_timeout,
       std::shared_ptr<detail::mesh_node_runtime_t> mesh_node = nullptr,
       std::map<std::string, std::optional<std::string>> advertise_hosts = {},
       std::shared_ptr<listener_status_registry_t> listener_statuses = {},
       std::shared_ptr<application_job_queue_t> application_jobs = {});
     ~stream_host_service_t () override;
 
-    void start (service_provider_t &services) override;
+    task_t<void> start (service_provider_t &services) override;
     void request_stop () noexcept override;
     void stop () noexcept override;
     int shutdown_request_priority () const noexcept override { return 100; }
@@ -101,6 +102,7 @@ class stream_host_service_t final : public hosted_service_t,
     detail::stream_runtime_t _runtime;
     std::vector<stream_snapshot_t> _streams;
     std::map<std::string, detail::stream_session_factory_t> _session_factories;
+    std::chrono::milliseconds _session_replacement_callback_timeout;
     std::map<std::string, std::optional<std::string>> _advertise_hosts;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;

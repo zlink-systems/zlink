@@ -6827,12 +6827,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     }
                 }
             } else {
+                boolean wasReady = liveness.isReady(
+                    inbound.source(), peer.connectionId());
                 boolean acknowledged = liveness.acknowledge(
                     inbound.source(),
                     peer.connectionId(),
                     probeId,
                     System.nanoTime());
-                if (acknowledged) {
+                if (acknowledged && !wasReady) {
                     LOGGER.info("ZLINK_FRAMEWORK_PEER_READY mesh=" + meshName
                         + " peer=" + inbound.source());
                 }
@@ -7340,9 +7342,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             transportPairs.put(generated, pair);
             return generated;
         }
+        // A lane without pair identity can represent only one physical route
+        // for this peer. HELLO and ADMIT still infer opposite directions from
+        // their commands, so direction cannot distinguish a retransmission
+        // from the already-admitted connection. Reuse its logical identity;
+        // otherwise a delayed ADMIT replaces the peer and resets liveness to
+        // not-ready while the physical connection remains healthy.
         return topology.peer(peer)
-            .filter(current ->
-                current.connection().direction() == direction)
             .map(ZLinkServiceTopologyRegistry.Peer::connectionId)
             .orElseGet(() -> UUID.randomUUID().toString());
     }

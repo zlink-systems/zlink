@@ -29,11 +29,18 @@ async function bootstrapGameQuest(role: GameQuestRole): Promise<void> {
     app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME),
     SampleNames.playerQuestSpotMesh
   );
+  if (isApi) {
+    process.stdout.write(
+      `gamequest-ready kind=spot-route node=${role} mesh=${SampleNames.playerQuestSpotMesh}\n`
+    );
+  }
   const httpServer = isApi
     ? await startGameApiServer(app, config, role)
     : await startMissionSelfCheckServer(config, role, app.get(PlayerQuestSpotProvisioner));
 
-  process.stdout.write(`${JSON.stringify({ event: 'ready', role })}\n`);
+  process.stdout.write(
+    `gamequest-ready kind=${isApi ? 'stream' : 'instance-factory'} node=${role}\n`
+  );
   try {
     await waitForShutdown();
   } finally {
@@ -83,8 +90,7 @@ function startMissionSelfCheckServer(
     if (request.method === 'POST' && ownerMatch !== undefined && ownerMatch !== null) {
       const playerId = decodeURIComponent(ownerMatch[1]);
       const closed = await playerQuests.deactivate(playerId);
-      if (closed) store.closeOwner(playerId, role);
-      sendJson(response, 200, { closed });
+      sendJson(response, 202, { accepted: closed });
       return;
     }
     sendJson(response, 404, { error: 'not-found' });

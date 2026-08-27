@@ -19,5 +19,5 @@ class PrepareInventoryReservedHandler(
         request: PrepareInventoryReservedApiReq,
         context: ZLinkMessageContext,
     ): PrepareInventoryReservedApiRes =
-        PrepareInventoryReservedApiRes(useCase.prepareInventoryReserved(request.request))
+        useCase.prepareInventoryReserved(request.request)
 }

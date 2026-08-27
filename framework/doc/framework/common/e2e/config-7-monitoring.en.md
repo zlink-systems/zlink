@@ -92,7 +92,7 @@ provide a complete current state with their own source and sequence?
   source. The initially-kept status value doesn't change from a
   subsequent change.
 - Detailed behavior: verifies
-  [Runtime Monitoring §2](../spec/server/24-runtime-monitoring.en.md#2-state-the-application-reads-at-once).
+  [Runtime Monitoring §2](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 #### MON-A2 Observe The Result Of A Peer Added And Removed
 
@@ -115,9 +115,9 @@ observer and the latest query show the current peer exactly?
   is ready and the previous RID isn't in the ready list. The observed
   sequence monotonically increases within the same Mesh source.
 - Detailed behavior: verifies
-  [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md#22-topology-state)
+  [Runtime Monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.en.md)
   and
-  [§3](../spec/server/24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+  [§3](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 #### MON-A3 Cross-Check Channel Readiness Against The Actual Request Result
 
@@ -141,9 +141,9 @@ the actual request success before and after a weight change?
   target, and the request ends in the terminal result of the formal
   error model.
 - Detailed behavior: verifies
-  [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md#22-topology-state)
+  [Runtime Monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.en.md)
   and
-  [Channel Topology §7](../spec/server/07-channel-topology.en.md#7-ready-state-and-channel-target-selection).
+  [Channel Topology §7](../spec/server/02-channel-transport/01-channel-topology.en.md#10-ready-state-and-channel-target-selection).
 
 #### MON-A4A Restore Readiness After A Normal Replacement
 
@@ -166,7 +166,7 @@ ready?
   target, and the request is processed once by the new process's
   handler. No application retry or extra settle sleep is used.
 - Detailed behavior: verifies
-  [Runtime Monitoring §3](../spec/server/24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+  [Runtime Monitoring §3](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 #### MON-A4B Recover By Excluding A Stale Peer After A Crash
 
@@ -188,7 +188,7 @@ list after its lease expires, and does a replacement request succeed?
   ready, and the new RID is ready. The request right after ready is
   processed once by the new handler.
 - Detailed behavior: verifies
-  [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md#22-topology-state).
+  [Runtime Monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 #### MON-A5 Observe Store Failure And Recovery State
 
@@ -212,9 +212,9 @@ RouteMesh's current status?
   ready targets and actual request success are both restored. The
   grace boundary isn't estimated with a fixed sleep.
 - Detailed behavior: verifies
-  [Location Runtime §8](../spec/server/21-location-runtime.en.md#8-when-a-store-response-isnt-received)
+  [Location Runtime §8](../spec/server/05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received)
   and
-  [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md#22-topology-state).
+  [Runtime Monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 #### MON-A6 Cross-Check Placement Count Against The Capacity Result
 
@@ -239,9 +239,9 @@ result?
   the object is removed, it returns to available and a new create
   succeeds.
 - Detailed behavior: verifies
-  [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md#22-topology-state)
+  [Runtime Monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.en.md)
   and
-  [MeshNode §5](../spec/server/13-mesh-node.en.md#5-object-placement-capability).
+  [MeshNode §5](../spec/server/03-spot-actor/03-mesh-node.en.md#5-object-placement-capability).
 
 #### MON-A7 Reset Core HWM And Application Job Queue Snapshot
 
@@ -285,9 +285,9 @@ state?
   processes the marker once. If network and peer state haven't
   changed, ready peer and Channel status also stay the same.
 - Detailed behavior: verifies
-  [Spot Messaging §4](../spec/server/12-spot-messaging.en.md#4-channel-scoped-logical-multicast)
+  [Spot Messaging §4](../spec/server/03-spot-actor/02-spot-messaging.en.md#4-channel-scoped-logical-multicast)
   and
-  [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md#22-topology-state).
+  [Runtime Monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 #### MON-B2 One Local Target's Handler Wait Doesn't Block Another Target's Delivery
 
@@ -311,7 +311,7 @@ waiting, does another matching target process the message first?
   afterward. Publish doesn't return a per-target result payload, and
   RouteMesh's peer/Channel status doesn't change.
 - Detailed behavior: verifies
-  [Spot Messaging §4](../spec/server/12-spot-messaging.en.md#4-channel-scoped-logical-multicast).
+  [Spot Messaging §4](../spec/server/03-spot-actor/02-spot-messaging.en.md#4-channel-scoped-logical-multicast).
 
 ### Track C — Isolate Observer From Business Processing
 
@@ -340,7 +340,7 @@ completing while a slow observer is blocked?
   the latest state. The slow observer terminating doesn't terminate
   the normal observer.
 - Detailed behavior: verifies observer isolation from
-  [Runtime Monitoring §3](../spec/server/24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+  [Runtime Monitoring §3](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 ### Track D — Handle Invalid Queries And Repeated Failure
 
@@ -361,7 +361,7 @@ unregistered MeshName end in a public validation error?
   the per-language interface defines, without affecting `game`'s
   status or observer.
 - Detailed behavior: verifies
-  [Runtime Monitoring §6](../spec/server/24-runtime-monitoring.en.md#6-startup-and-failure).
+  [Runtime Monitoring §6](../spec/server/06-observability/01-runtime-monitoring.en.md#10-startup-and-failure).
 
 #### MON-D1B Keep Observing Status Even After Repeated Crash And Restart
 
@@ -382,7 +382,7 @@ state?
   increases, and the last `GetStatus` matches the observer's latest
   value.
 - Detailed behavior: verifies
-  [Runtime Monitoring §3](../spec/server/24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+  [Runtime Monitoring §3](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 ## 5. Completion Criteria
 

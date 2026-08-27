@@ -79,7 +79,7 @@ class mesh_node_host_service_t final : public hosted_service_t,
       std::shared_ptr<application_job_queue_t> application_jobs = {});
     ~mesh_node_host_service_t () override;
 
-    void start (service_provider_t &services) override;
+    task_t<void> start (service_provider_t &services) override;
     void request_stop () noexcept override;
     void stop () noexcept override;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes () const;

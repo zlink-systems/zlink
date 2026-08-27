@@ -10,7 +10,7 @@
 > interpretation.
 
 The common meaning of async execution, `Promise`, and helper synchronous functions
-follows the [Async Execution And Coroutine Policy](../common/spec/server/05-async-execution-policy.en.md).
+follows the [Async Execution And Coroutine Policy](../common/spec/server/01-execution/README.en.md).
 The Node framework's server and client network APIs are projected as `Promise`-based
 async functions. The `Async` suffix isn't carried over -- the async contract is expressed
 through the action name and a `Promise<T>` return type, as in `connect()`, `close()`,

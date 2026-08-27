@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
@@ -7,8 +9,7 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
 {
     private readonly ZLinkLocationRuntime _runtime;
-    private readonly object _backgroundGate = new();
-    private readonly object _disposeStartGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly SemaphoreSlim _backgroundDrainGate = new(1, 1);
     private readonly HashSet<Task> _backgroundTasks = [];
     private CancellationTokenSource _backgroundStop = new();
@@ -87,14 +88,20 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        lock (_disposeStartGate)
-            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+        return new ValueTask(AwaitStateLane(_lane.RunAsync(() =>
+        {
+            if (_disposeTask is not null)
+                return _disposeTask;
+
+            Interlocked.Exchange(ref _disposed, 1);
+            _runtime.OwnershipLost -= OnOwnershipLost;
+            _disposeTask = StartDetached(DisposeCoreAsync);
+            return _disposeTask;
+        })));
     }
 
     private async Task DisposeCoreAsync()
     {
-        Interlocked.Exchange(ref _disposed, 1);
-        _runtime.OwnershipLost -= OnOwnershipLost;
         await PauseBackgroundWorkCoreAsync(pauseActorOwnership: false).ConfigureAwait(false);
         await ActorOwnership.DisposeAsync().ConfigureAwait(false);
         _backgroundStop.Dispose();
@@ -106,25 +113,27 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
 
     internal void ResumeBackgroundWork()
     {
-        CancellationTokenSource? stopped = null;
-        lock (_backgroundGate)
+        var stopped = AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (_disposed != 0 || !_backgroundStopping) return;
+            if (_disposed != 0 || !_backgroundStopping) return null;
             if (_backgroundStop.IsCancellationRequested)
             {
-                stopped = _backgroundStop;
+                var cancelled = _backgroundStop;
                 _backgroundStop = new CancellationTokenSource();
+                _backgroundStopping = false;
+                return cancelled;
             }
             _backgroundStopping = false;
-        }
+            return null;
+        }));
         stopped?.Dispose();
-        ActorOwnership.ResumeBackgroundWork();
+        AwaitStateLane(ActorOwnership.ResumeBackgroundWorkAsync());
     }
 
     internal void ResetGeneration()
     {
-        SpotLocations.ResetGeneration();
-        ActorOwnership.ResetGeneration();
+        AwaitStateLane(SpotLocations.ResetGenerationAsync());
+        AwaitStateLane(ActorOwnership.ResetGenerationAsync());
     }
 
     private void OnOwnershipLost(ZLinkLocationKind kind, string canonicalKey)
@@ -132,41 +141,47 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
         Func<CancellationToken, ValueTask>? deactivate = null;
         if (kind == ZLinkLocationKind.Actor)
         {
-            deactivate = ActorOwnership.TakeOwnershipLostDeactivation(canonicalKey);
+            deactivate = AwaitStateLane(
+                ActorOwnership.TakeOwnershipLostDeactivationAsync(canonicalKey));
         }
         else if (kind == ZLinkLocationKind.Spot)
         {
-            deactivate = SpotLocations.TakeOwnershipLostDeactivation(canonicalKey);
+            deactivate = AwaitStateLane(
+                SpotLocations.TakeOwnershipLostDeactivationAsync(canonicalKey));
         }
 
         if (deactivate is not null)
             TryRunBackground(deactivate);
     }
 
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
     private async ValueTask PauseBackgroundWorkCoreAsync(bool pauseActorOwnership)
     {
         await _backgroundDrainGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            Task[] tasks;
-            CancellationTokenSource stop;
-            lock (_backgroundGate)
+            var tasks = await _lane.RunAsync(() =>
             {
                 _backgroundStopping = true;
-                stop = _backgroundStop;
-                stop.Cancel();
-                tasks = _backgroundTasks.ToArray();
-            }
+                var currentStop = _backgroundStop;
+                currentStop.Cancel();
+                return _backgroundTasks.ToArray();
+            }).ConfigureAwait(false);
 
             if (tasks.Length != 0) await Task.WhenAll(tasks).ConfigureAwait(false);
             if (pauseActorOwnership)
                 await ActorOwnership.PauseBackgroundWorkAsync().ConfigureAwait(false);
 
-            lock (_backgroundGate)
+            await _lane.RunAsync(() =>
             {
                 _backgroundTasks.RemoveWhere(static task => task.IsCompleted);
                 _backgroundStopping = true;
-            }
+            }).ConfigureAwait(false);
         }
         finally
         {
@@ -176,26 +191,53 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
 
     private void RemoveCompletedTasks()
     {
-        lock (_backgroundGate)
-            _backgroundTasks.RemoveWhere(static task => task.IsCompleted);
+        AwaitStateLane(_lane.RunAsync(
+            () => _backgroundTasks.RemoveWhere(static task => task.IsCompleted)));
     }
 
     private bool TryRunBackground(Func<CancellationToken, ValueTask> operation)
     {
-        lock (_backgroundGate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_disposed != 0 || _backgroundStopping) return false;
             var stopToken = _backgroundStop.Token;
-            var task = RunGuardedAsync(() => operation(stopToken), stopToken);
+            var task = StartDetached(() => RunGuardedAsync(
+                () => operation(stopToken),
+                stopToken));
             _backgroundTasks.Add(task);
+            StartDetachedContinuation(task);
+            return true;
+        }));
+    }
+
+    private Task StartDetached(Func<Task> operation)
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+            return Task.Run(operation);
+        using (ExecutionContext.SuppressFlow())
+            return Task.Run(operation);
+    }
+
+    private void StartDetachedContinuation(Task task)
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+        {
             _ = task.ContinueWith(
                 static (_, state) => ((ZLinkLocationLifecycle)state!).RemoveCompletedTasks(),
                 this,
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
-            return true;
+            return;
         }
+
+        using (ExecutionContext.SuppressFlow())
+            _ = task.ContinueWith(
+                static (_, state) => ((ZLinkLocationLifecycle)state!).RemoveCompletedTasks(),
+                this,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
     }
 
     private static async Task RunGuardedAsync(

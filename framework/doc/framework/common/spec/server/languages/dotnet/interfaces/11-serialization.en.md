@@ -1,7 +1,7 @@
 # .NET Codec Extension Public Interface
 
-[.NET exact interface table of contents](README.en.md) · [Common Message Contract](../../../04-message-model.en.md) ·
-[Common Framework API](../../../06-framework-api.en.md#9-codec)
+[.NET per-language interface table of contents](README.en.md) · [Common Message Contract](../../../00-foundation/05-message-model.en.md) ·
+[Common Framework API](../../../00-foundation/06-framework-api.en.md#12-codec)
 
 ## 1. Scope
 
@@ -49,54 +49,54 @@ The registry doesn't change after startup. Send-selection results are stored for
 seen afterward is re-evaluated against the registration list on every send, and its result
 isn't stored.
 
-The receive path performs an exact serializer lookup using the canonical content type from
+The receive path performs an serializer lookup using the canonical content type from
 the wire. An unregistered or noncanonical value isn't reinterpreted as JSON and completes
 with `ZLinkFrameworkErrorKind.ProtocolError`.
 
 ```csharp
 public interface IZLinkCodecExtension
 {
-    void Register(IZLinkCodecRegistrar codecs);
+ void Register(IZLinkCodecRegistrar codecs);
 }
 
 public interface IZLinkCodecRegistryBuilder
 {
-    void Use(IZLinkCodecExtension extension);
+ void Use(IZLinkCodecExtension extension);
 }
 
 public interface IZLinkCodecRegistrar
 {
-    void AddSerializer(
-        string contentType,
-        IZLinkMessageSerializer serializer);
-    void AddSerializer(
-        string contentType,
-        IZLinkMessageSerializer serializer,
-        Func<Type, bool> canSerialize);
+ void AddSerializer(
+ string contentType,
+ IZLinkMessageSerializer serializer);
+ void AddSerializer(
+ string contentType,
+ IZLinkMessageSerializer serializer,
+ Func<Type, bool> canSerialize);
 }
 
 public interface IZLinkMessageSerializer
 {
-    ZLinkEncodedPayload Serialize(object value, Type type);
-    object? Deserialize(ZLinkEncodedPayload payload, Type type);
+ ZLinkEncodedPayload Serialize(object value, Type type);
+ object? Deserialize(ZLinkEncodedPayload payload, Type type);
 }
 
 public readonly struct ZLinkEncodedPayload : IEquatable<ZLinkEncodedPayload>
 {
-    public ReadOnlyMemory<byte> Bytes { get; }
-    public static ZLinkEncodedPayload From(byte[] bytes);
-    public static ZLinkEncodedPayload From(ReadOnlyMemory<byte> bytes);
-    public static ZLinkEncodedPayload From(ReadOnlySpan<byte> bytes);
-    public byte[] ToArray();
-    public bool Equals(ZLinkEncodedPayload other);
-    public override bool Equals(object? obj);
-    public override int GetHashCode();
-    public static bool operator ==(
-        ZLinkEncodedPayload left,
-        ZLinkEncodedPayload right);
-    public static bool operator !=(
-        ZLinkEncodedPayload left,
-        ZLinkEncodedPayload right);
+ public ReadOnlyMemory<byte> Bytes { get; }
+ public static ZLinkEncodedPayload From(byte[] bytes);
+ public static ZLinkEncodedPayload From(ReadOnlyMemory<byte> bytes);
+ public static ZLinkEncodedPayload From(ReadOnlySpan<byte> bytes);
+ public byte[] ToArray();
+ public bool Equals(ZLinkEncodedPayload other);
+ public override bool Equals(object? obj);
+ public override int GetHashCode();
+ public static bool operator ==(
+ ZLinkEncodedPayload left,
+ ZLinkEncodedPayload right);
+ public static bool operator !=(
+ ZLinkEncodedPayload left,
+ ZLinkEncodedPayload right);
 }
 ```
 
@@ -106,26 +106,26 @@ server's codec extension and the Stream Connector's typed payload codec.
 
 ```csharp
 public sealed class ZLinkMessagePackCodec :
-    IZLinkCodecExtension,
-    IZlinkStreamPayloadCodec,
-    IZlinkStreamCodecRegistration
+ IZLinkCodecExtension,
+ IZlinkStreamPayloadCodec,
+ IZlinkStreamCodecRegistration
 {
-    public static ZLinkMessagePackCodec Default { get; }
+ public static ZLinkMessagePackCodec Default { get; }
 
-    public void Register(IZLinkCodecRegistrar codecs);
-    public ZlinkStreamEncodedPayload Encode<TPayload>(TPayload payload);
-    public TPayload Decode<TPayload>(ZlinkStreamEncodedPayload payload);
+ public void Register(IZLinkCodecRegistrar codecs);
+ public ZlinkStreamEncodedPayload Encode<TPayload>(TPayload payload);
+ public TPayload Decode<TPayload>(ZlinkStreamEncodedPayload payload);
 }
 
 public sealed class ZLinkProtobufCodec :
-    IZLinkCodecExtension,
-    IZlinkStreamPayloadCodec,
-    IZlinkStreamCodecRegistration
+ IZLinkCodecExtension,
+ IZlinkStreamPayloadCodec,
+ IZlinkStreamCodecRegistration
 {
-    public static ZLinkProtobufCodec Default { get; }
+ public static ZLinkProtobufCodec Default { get; }
 
-    public void Register(IZLinkCodecRegistrar codecs);
-    public ZlinkStreamEncodedPayload Encode<TPayload>(TPayload payload);
-    public TPayload Decode<TPayload>(ZlinkStreamEncodedPayload payload);
+ public void Register(IZLinkCodecRegistrar codecs);
+ public ZlinkStreamEncodedPayload Encode<TPayload>(TPayload payload);
+ public TPayload Decode<TPayload>(ZlinkStreamEncodedPayload payload);
 }
 ```

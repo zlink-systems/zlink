@@ -17,12 +17,15 @@ public final class Program {
         GameQuestClientOptions options = GameQuestClientOptions.load(args);
         ZLinkStreamConnector apiA = createClient(options.apiAStreamEndpoint());
         ZLinkStreamConnector apiB = createClient(options.apiBStreamEndpoint());
+        boolean fullScenario = "full".equals(options.scenario());
         try {
             GameQuestClientScenario scenario = new GameQuestClientScenario(options, Program::createClient);
             if ("full".equals(options.scenario())) {
                 scenario.run(apiA, apiB);
             } else if ("rehydrate".equals(options.scenario())) {
                 scenario.verifyRehydrated(apiA);
+            } else if ("owner-unavailable".equals(options.scenario())) {
+                scenario.verifyOwnerUnavailable(apiA);
             } else {
                 throw new IllegalArgumentException("Unknown sample.scenario: " + options.scenario());
             }
@@ -30,7 +33,9 @@ public final class Program {
             apiA.close().submit().toCompletableFuture().join();
             apiB.close().submit().toCompletableFuture().join();
         }
-        System.out.println(SampleNames.CompletedMarker);
+        if (fullScenario) {
+            System.out.println(SampleNames.CompletedMarker);
+        }
     }
 
     private static ZLinkStreamConnector createClient(String endpoint) {

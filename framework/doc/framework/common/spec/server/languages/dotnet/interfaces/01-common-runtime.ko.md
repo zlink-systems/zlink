@@ -1,6 +1,6 @@
 # .NET common runtime 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md)
+[.NET 언어별 interface 목차](README.ko.md)
 
 ## 1. 공통 metadata와 call
 
@@ -93,9 +93,9 @@ Logical Multicast의 `IZLinkPublishCall`은 source-local 실행 용량을 send t
 정상 완료한다.
 
 `CancellationToken`이 admission보다 먼저 확정되면 cancelled `ValueTask`로 한 번만 완료한다.
-Pre-cancellation은 runtime admission을 시작하지 않는다. Admission·timeout·[shutdown](../../../01-glossary.ko.md#shutdown)과
+Pre-cancellation은 runtime admission을 시작하지 않는다. Admission·timeout·[shutdown](../../../00-foundation/02-glossary.ko.md#shutdown)과
 cancellation이 경쟁하면 원자 terminal winner 하나만 완료하고 timeout이나 cancellation 뒤에 late admission을
-만들지 않는다. [Logical Multicast](../../../01-glossary.ko.md#logical-multicast)는 publish가 시작되기 전 cancellation만 operation 시작을 막는다.
+만들지 않는다. [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast)는 publish가 시작되기 전 cancellation만 operation 시작을 막는다.
 Publish가 시작된 뒤에는 선택한 target 집합에 대한 제출을 끝까지 진행한다.
 
 잘못된 인자·handle·상태, 중복 terminal과 이미 사용한 reply token은 .NET exceptional completion으로
@@ -105,7 +105,7 @@ Publish가 시작된 뒤에는 선택한 target 집합에 대한 제출을 끝�
 마지막 값이 전송된다. Reply는 request metadata를 자동 복사하지 않는다.
 
 Worker call의 `Submit`, `Async`와 `Yield`는
-[비동기 실행 정책 §1.2](../../../05-async-execution-policy.ko.md#12-worker-offload)의 완료 의미를 따른다.
+[비동기 실행 정책 §1.2](../../../01-execution/02-handler-turn-and-execution-gate.ko.md)의 완료 의미를 따른다.
 Worker option은 host가 시작되기 전에만 설정할 수 있다.
 
 `Yield` terminal은 `RequestToChannel`, `RequestToSpot`, `RequestToActor`, `RunIoWorker`, `RunCpuWorker`와

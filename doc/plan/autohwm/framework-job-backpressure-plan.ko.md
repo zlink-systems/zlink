@@ -75,7 +75,7 @@ Core 완료 보고에 하나라도 빠졌으면 Framework helper나 raw frame으
 | Framework 문서 규칙 | `framework/doc/AGENTS.md`, `doc/AGENTS.md` | Spec·guide·internal 문서 위치와 승인 |
 | 문서 작성 원칙 | `doc/principal/documentation/documentation-principles.ko.md`, `spec-writing-guide.ko.md` | 현재 계약, exact interface와 test |
 | Core·binding package | `scripts/local-package/README.ko.md` | Core release 검증, local binding package 생성과 provenance |
-| Public governance | `framework/doc/framework/common/spec/server/00-public-contract-governance.ko.md` | 공통 계약과 언어별 표현 |
+| Public governance | `framework/doc/framework/common/spec/server/00-foundation/01-public-contract-governance.ko.md` | 공통 계약과 언어별 표현 |
 | 용어 | `01-glossary.ko.md` | Pressure, generation과 token 비교 규칙 |
 | Async 결과 | `05-async-execution-policy.ko.md`, `32-framework-error-model.ko.md` | Admission, timeout, cancellation과 오류 owner |
 | Framework API | `06-framework-api.ko.md` | 설정 owner, startup validation과 public surface |

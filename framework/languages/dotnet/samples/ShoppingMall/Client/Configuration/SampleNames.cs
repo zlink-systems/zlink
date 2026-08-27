@@ -13,7 +13,7 @@ public static class OrderStatuses
 
 public static class SampleTimings
 {
-    public static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(20);
     public static readonly TimeSpan WorkflowTimeout = TimeSpan.FromSeconds(8);
 }
 

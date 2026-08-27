@@ -332,6 +332,57 @@ TEST (ZLinkFrameworkApplicationJobQueue,
       applied.back ());
 }
 
+// §6: host pressure is a single absolute receive-flow state.  A permit
+// acquired through one socket must therefore pause and resume every supported
+// socket in the host snapshot, not just the socket that acquired the permit.
+TEST (ZLinkFrameworkApplicationJobQueue,
+      PressureTransitionAppliesToEveryRegisteredReceiveFlowSocket)
+{
+    queue_t queue (pressure_configuration (2, 100, 50));
+    std::vector<zlink::framework::application_job_queue_pressure_state_t>
+      first_socket_states;
+    std::vector<zlink::framework::application_job_queue_pressure_state_t>
+      second_socket_states;
+    auto first_socket = queue.register_receive_flow_socket (
+      [&] (auto state) {
+          first_socket_states.push_back (state);
+          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+      });
+    auto second_socket = queue.register_receive_flow_socket (
+      [&] (auto state) {
+          second_socket_states.push_back (state);
+          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+      });
+
+    ASSERT_EQ (1u, first_socket_states.size ());
+    ASSERT_EQ (1u, second_socket_states.size ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               first_socket_states.back ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               second_socket_states.back ());
+
+    auto first_permit = queue.try_reserve_supply ();
+    auto second_permit = queue.try_reserve_supply ();
+    ASSERT_TRUE (first_permit);
+    ASSERT_TRUE (second_permit);
+
+    ASSERT_EQ (2u, first_socket_states.size ());
+    ASSERT_EQ (2u, second_socket_states.size ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused,
+               first_socket_states.back ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused,
+               second_socket_states.back ());
+
+    first_permit->release_without_handler ();
+
+    ASSERT_EQ (3u, first_socket_states.size ());
+    ASSERT_EQ (3u, second_socket_states.size ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               first_socket_states.back ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               second_socket_states.back ());
+}
+
 TEST (ZLinkFrameworkApplicationJobQueue,
       CapacityWaiterAndPermitHandoffDoNotIncreasePressureCount)
 {

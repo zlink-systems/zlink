@@ -1,5 +1,8 @@
 # ZLink Framework C++ 공개 계약
 
+<!-- framework-adapter-nav:start -->
+[언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)
+<!-- framework-adapter-nav:end -->
 이 디렉토리는 C++ framework가 제공해야 하는 **정식 public contract**를 소유한다. public header와
 contract test는 이 계약을 따라야 한다.
 
@@ -11,8 +14,8 @@ C++의 HTTP 공개 계약은 이 디렉토리에서 별도 문서로 정의한�
 | 번호 | 문서 | 범위 |
 |---|------|------|
 | `01` | [시스템 구조](01-system-structure.ko.md) | 패키지·빌드 타깃, application host, **DI 컨테이너**, **configuration**, **logging**, lifecycle, 등록 표면 |
-| `02` | [기능별 exact interface](interfaces/README.ko.md) | Server package의 기능별 C++ public type과 member |
-| `03` | [Location·Relocation Store·Redis 이동 안내](03-location-store.ko.md) | 기능별 exact interface의 Store·Redis 문서로 연결 |
+| `02` | [기능별 interface](interfaces/README.ko.md) | Server package의 기능별 C++ public type과 member |
+| `03` | [Location·Relocation Store·Redis 이동 안내](interfaces/07-location-store.ko.md) | 기능별 interface의 Store·Redis 문서로 연결 |
 | `60` | [HTTP hosting](60-http-hosting.ko.md) | HTTP 호스팅 계약 |
 | `61` | [내장 HTTP 서버](61-embedded-http-server.ko.md) | 내장 서버 |
 
@@ -30,3 +33,8 @@ client connector는 [C++ Stream Connector 가이드](../../../../../cpp/guide/st
 C++ public interface에는 **`.NET` 모양을 옮긴 custom cancellation token을 기본 callback 인자로
 두지 않는다.** 중단 가능한 장기 작업에 명시적 중단 전달이 필요하면 **C++ 표준 수명과 중단
 관례**를 사용한다. timeout, host shutdown, RAII cleanup과 coroutine 수명은 각 기능 계약을 따른다.
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)
+<!-- framework-adapter-nav:bottom:end -->

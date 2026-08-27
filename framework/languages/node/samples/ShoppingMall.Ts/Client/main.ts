@@ -11,6 +11,7 @@ async function main(): Promise<void> {
     await new ShoppingMallClientScenario().run(
       apiA,
       apiB,
+      config,
       AbortSignal.timeout(SampleNames.clientTimeout)
     );
   } finally {
@@ -20,7 +21,6 @@ async function main(): Promise<void> {
     ]);
   }
   console.log('shoppingmall=completed');
-  console.log('PASS ShoppingMall.Ts');
 }
 
 main().catch((error: unknown) => {

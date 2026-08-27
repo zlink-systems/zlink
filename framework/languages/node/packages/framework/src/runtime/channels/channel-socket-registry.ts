@@ -626,7 +626,7 @@ export class ZLinkChannelSocketRegistry {
 
   /**
    * Resolves a ClientServer send target, waiting when the ready candidate set is still empty, as
-   * `framework/doc/framework/common/spec/server/08-channel-messaging.ko.md` §3.2 requires: the call waits
+   * `framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md` §3.2 requires: the call waits
    * at call time for a bounded period and then fails with no-target. The bound is the shorter of
    * this Channel's request timeout and five seconds, mirroring the .NET reference
    * `ZLinkClientServerClientRuntime.WaitForReadyAsync`. The wait lives here because this registry

@@ -51,7 +51,7 @@ Entry Spot은 Host가 시작할 때 준비되는 application 진입점이다. Jo
 - 시작 조건: Play node의 public startup evidence에서 Entry Spot ID를 얻고 Entry Spot이 ready다.
 - 절차: Caller가 Entry Spot에 Join request를 보내고 reply의 SpotId로 state request를 한 번 보낸다.
 - 검증: Reply의 SpotId를 public manager `Find`가 Ready ref로 반환하고 state handler가 한 번 실행된다.
-- 세부 동작: [Spot actor §2](../spec/server/15-spot-actor.ko.md)을 검증한다.
+- 세부 동작: [Spot actor §2](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)을 검증한다.
 
 #### SM-A2 User Spot state를 serial하게 변경한다
 
@@ -64,8 +64,8 @@ Entry Spot은 Host가 시작할 때 준비되는 application 진입점이다. Jo
 - 시작 조건: Counter 0인 User Spot이 ready다.
 - 절차: 고유 operation ID의 increment requests N개를 bounded concurrency로 보낸다.
 - 검증: 모든 requests가 reply 하나를 받고 final state는 N이다. Handler active count는 1을 넘지 않는다.
-- 세부 동작: [Spot application queue에 들어가는 작업](../spec/server/12-spot-messaging.ko.md#53-spot-application-queue에-들어가는-작업)과
-  [Spot turn과 callback 순서](../spec/server/12-spot-messaging.ko.md#54-spot-turn과-callback-순서)를 검증한다.
+- 세부 동작: [Spot application queue에 들어가는 작업](../spec/server/03-spot-actor/02-spot-messaging.ko.md#53-spot-application-queue에-들어가는-작업)과
+  [Spot turn과 callback 순서](../spec/server/03-spot-actor/02-spot-messaging.ko.md#54-spot-turn과-callback-순서)를 검증한다.
 
 #### SM-A3 Global SpotId가 정확한 Spot에 도달한다
 
@@ -79,7 +79,7 @@ Entry Spot은 Host가 시작할 때 준비되는 application 진입점이다. Jo
 - 시작 조건: 서로 다른 nodes에 Spot A와 B가 ready다.
 - 절차: Spot A ID로 marker request를 한 번 보낸다.
 - 검증: A evidence에 marker가 한 번 있고 B evidence에는 없다.
-- 세부 동작: [Spot messaging §3](../spec/server/12-spot-messaging.ko.md)을 검증한다.
+- 세부 동작: [Spot messaging §3](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을 검증한다.
 
 #### SM-A4 Owner를 입력하지 않고 current Spot을 호출한다
 
@@ -92,7 +92,7 @@ Application은 domain key에서 SpotId만 정하고 current owner는 Framework�
 - 시작 조건: Spot이 play-a에 ready이고 caller endpoint는 SpotId만 입력받는다.
 - 절차: Request를 한 번 보내고 Host Relocate로 Spot owner를 play-b로 바꾼 뒤 같은 ID로 다시 요청한다.
 - 검증: 첫 marker는 A, 두 번째 marker는 B가 처리한다. Caller 입력에는 MeshName, RID와 endpoint가 없다.
-- 세부 동작: [Spot messaging §3](../spec/server/12-spot-messaging.ko.md)을 검증한다.
+- 세부 동작: [Spot messaging §3](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을 검증한다.
 
 #### SM-A5 Application Stage wrapper가 Spot 계약을 바꾸지 않는다
 
@@ -106,7 +106,7 @@ Stage는 Application이 Spot·Actor·timer API를 묶어 쓰는 wrapper이며 �
 - 절차: Spot request, member Actor request와 timer를 application wrapper를 통해 실행한다.
 - 검증: SpotWide는 shared gate 순서를, PerActor는 Actor별·timer별 lane 순서를 유지한다. Public replies와
   state는 wrapper를 쓰지 않은 대조 flow와 같다.
-- 세부 동작: [비동기 실행 정책](../spec/server/05-async-execution-policy.ko.md)을 검증한다.
+- 세부 동작: [비동기 실행 정책](../spec/server/01-execution/README.ko.md)을 검증한다.
 
 #### SM-A6 User Spot initialize와 close lifecycle을 실행한다
 
@@ -121,8 +121,8 @@ Member Actor가 있는 User Spot은 임의로 닫지 않으며, member가 모두
 - 절차: Current SpotRef로 close하고, Actor를 leave한 뒤 같은 current ref로 다시 close한다.
 - 검증: First close는 false이고 callback·membership이 유지된다. Second는 true이며 closing callback이 한
   번 실행된다.
-- 세부 동작: [Actor membership](../spec/server/15-spot-actor.ko.md#3-entry-spot과-user-spot의-actor-membership)과
-  [Spot 종료](../spec/server/12-spot-messaging.ko.md#62-spot-종료)를 검증한다.
+- 세부 동작: [Actor membership](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md#3-entry-spot과-user-spot의-actor-membership)과
+  [Spot 종료](../spec/server/03-spot-actor/02-spot-messaging.ko.md#62-spot-종료)를 검증한다.
 
 #### SM-A7 같은 SpotId의 stable type 충돌을 거부한다
 
@@ -135,7 +135,7 @@ Global SpotId 하나는 current incarnation에서 한 object kind와 stable type
 - 시작 조건: Stable type A의 Spot이 ready이고 state marker를 가진다.
 - 절차: 같은 ID에 stable type B의 `GetOrCreate`를 호출한다.
 - 검증: Call은 `TypeMismatch`이고 original Spot state와 handler availability가 유지된다.
-- 세부 동작: [Spot actor §2](../spec/server/15-spot-actor.ko.md)을 검증한다.
+- 세부 동작: [Spot actor §2](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)을 검증한다.
 
 #### SM-A8 CPU worker 결과를 Spot state에 반영한다
 
@@ -148,8 +148,8 @@ CPU 계산은 bounded worker pool에서 실행하고 continuation은 Spot execut
 - 시작 조건: Worker completion을 application signal로 보류할 수 있는 Spot이 ready다.
 - 절차: CPU worker call을 Yield로 기다리고 같은 Spot에 probe request를 보낸 뒤 worker를 해제한다.
 - 검증: Probe가 continuation 전에 완료되고 final state는 worker result를 정확히 한 번 반영한다.
-- 세부 동작: [Worker offload](../spec/server/05-async-execution-policy.ko.md#12-worker-offload)와
-  [Handler turn과 claim](../spec/server/05-async-execution-policy.ko.md#3-handler-turn과-claim)을 검증한다.
+- 세부 동작: [Worker offload](../spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md)와
+  [Handler turn과 claim](../spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md)을 검증한다.
 
 #### SM-A9 User Spot은 initialize 완료 뒤 Ready로 공개한다
 
@@ -165,7 +165,7 @@ Factory가 instance를 만들고 initialize하는 중에는 remote caller가 inc
   해제한 뒤 다시 호출한다.
 - 검증: Held 구간에 Find는 Ready ref를 반환하지 않고 handler evidence가 없다. Create success 뒤 Find와
   request가 같은 current ref로 성공한다.
-- 세부 동작: [Spot actor §2](../spec/server/15-spot-actor.ko.md)의 publication boundary를
+- 세부 동작: [Spot actor §2](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)의 publication boundary를
   검증한다.
 
 #### SM-A10 Entry Spot ID는 MeshNode RID와 독립된 lifecycle identity다
@@ -182,7 +182,7 @@ Entry Spot ID를 Node RID에서 문자열 조합으로 계산하면 restart와 i
   replacement lifecycle로 재시작해 두 IDs를 다시 읽는다.
 - 검증: 두 IDs는 서로 다른 valid identities이고 same lifecycle에서 안정적이다. Replacement에서는 old
   Entry ID가 current로 남지 않고 새 Entry request가 성공한다.
-- 세부 동작: [Network listener identity §7.3](../spec/server/10-network-listener-identity.ko.md)를
+- 세부 동작: [Network listener identity §7.3](../spec/server/02-channel-transport/04-network-listener-identity.ko.md)를
   검증한다.
 
 #### SM-A11 Entry Spot 예약 형식을 User·Instance ID로 거부한다
@@ -197,7 +197,7 @@ Framework가 발급하는 Entry Spot namespace를 Application object ID로 사�
 - 시작 조건: 유효한 reserved-format string을 준비한다.
 - 절차: 같은 ID로 User Spot GetOrCreate와 Instance Spot request를 각각 시도한다.
 - 검증: 두 calls는 `InvalidOperation`이고 factory callback과 application handler evidence가 없다.
-- 세부 동작: [Glossary의 Entry Spot](../spec/server/01-glossary.ko.md)을 검증한다.
+- 세부 동작: [Glossary의 Entry Spot](../spec/server/00-foundation/02-glossary.ko.md)을 검증한다.
 
 #### SM-A12 Automatic User Spot IDs가 concurrent creates에서 서로 다르다
 
@@ -211,7 +211,7 @@ UUID generator 충돌 주입은 public E2E가 아니라 contract test 책임이�
 - 시작 조건: 같은 stable type factory와 충분한 capacity가 ready다.
 - 절차: 서로 다른 callers가 automatic Create 200개를 동시에 실행한다.
 - 검증: Successful refs의 SpotIds는 모두 다르고 각 ID의 marker request가 자기 Spot에서 한 번 처리된다.
-- 세부 동작: [Spot actor §2](../spec/server/15-spot-actor.ko.md)을 검증한다.
+- 세부 동작: [Spot actor §2](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)을 검증한다.
 
 #### SM-A13 SpotId UTF-8 길이와 exact equality를 지킨다
 
@@ -226,7 +226,7 @@ SpotId는 1~255 UTF-8 bytes의 case-sensitive exact string이다. Public E2E는 
 - 절차: 각 valid ID를 create·find·request하고 256-byte ID create를 시도한다.
 - 검증: Valid IDs는 exact values로 서로 다른 objects를 가리킨다. 256-byte call은 local validation error이고
   factory evidence가 없다.
-- 세부 동작: [Actor model §2.1](../spec/server/14-actor-model.ko.md)의 동일 global ID
+- 세부 동작: [Actor model §2.1](../spec/server/03-spot-actor/04-actor-model.ko.md)의 동일 global ID
   규칙과 Spot ID 계약을 검증한다.
 
 ### Track B — Actor 생성과 Spot membership 변경
@@ -243,7 +243,7 @@ Find는 Missing Actor를 만들지 않고 Create·GetOrCreate만 factory를 실�
 - 절차: Missing ID를 Find한 뒤 같은 ID·type의 Create와 GetOrCreate를 동시에 호출하고 다시 Find한다.
 - 검증: First Find는 empty이며 factory evidence가 없다. Creation results는 current Actor 하나를 가리키고
   final Find가 같은 generation ref를 반환한다.
-- 세부 동작: [Actor model §3](../spec/server/14-actor-model.ko.md)을 검증한다.
+- 세부 동작: [Actor model §3](../spec/server/03-spot-actor/04-actor-model.ko.md)을 검증한다.
 
 #### SM-B0A Actor creation accept와 reject를 operation별로 반환한다
 
@@ -258,7 +258,7 @@ Creation callback이 reject한 operation의 reply를 다음 caller와 공유해�
   호출한다.
 - 검증: First는 typed Rejected와 자기 payload를, second는 Created와 current ActorRef를 받는다. Final Find는
   accepted Actor만 반환하고 rejected operation의 handler·destroy evidence는 없다.
-- 세부 동작: [Actor model §3](../spec/server/14-actor-model.ko.md)을 검증한다.
+- 세부 동작: [Actor model §3](../spec/server/03-spot-actor/04-actor-model.ko.md)을 검증한다.
 
 #### SM-B1 같은 node의 User Spot으로 Join한다
 
@@ -272,7 +272,7 @@ Same-node Join은 Actor state relocation 없이 membership callbacks로 current 
 - 절차: Actor handler에서 target SpotId로 Join을 시작하고 completion을 기다린 뒤 request를 보낸다.
 - 검증: Target `OnActorJoin`, `OnJoinedActor`, source `OnLeaveActor`가 한 번씩 실행되고 current Spot은 target이다.
   Follow-up Actor request도 play-a에서 한 번 처리된다.
-- 세부 동작: [Spot actor §4](../spec/server/15-spot-actor.ko.md)를 검증한다.
+- 세부 동작: [Spot actor §4](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)를 검증한다.
 
 #### SM-B2 다른 node의 User Spot으로 Join한다
 
@@ -286,7 +286,7 @@ Cross-node Join은 같은 ActorId·ObjectGeneration과 application state를 targ
 - 절차: Counter state를 변경한 뒤 target SpotId로 Join하고 completion 후 current ref와 state를 조회한다.
 - 검증: Join is Accepted, current location은 play-b, generation과 counter는 이전과 같다. Public lifecycle·adapter
   callbacks가 정식 순서로 한 번씩 실행되고 follow-up request는 target에서 처리된다.
-- 세부 동작: [Spot actor §5](../spec/server/15-spot-actor.ko.md)을 검증한다.
+- 세부 동작: [Spot actor §5](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)을 검증한다.
 
 #### SM-B3 Typed Actor request payload를 보존한다
 
@@ -300,7 +300,7 @@ Nested object, collection과 nullable field가 있는 typed payload는 process �
 - 시작 조건: Actor handler가 받은 DTO를 reply와 evidence에 그대로 반영한다.
 - 절차: Nested object, ordered tags와 nullable values가 있는 request를 remote Actor에 보낸다.
 - 검증: Handler evidence와 reply의 field values·collection order가 입력과 같다.
-- 세부 동작: [Message model](../spec/server/04-message-model.ko.md)을 검증한다.
+- 세부 동작: [Message model](../spec/server/00-foundation/05-message-model.ko.md)을 검증한다.
 
 #### SM-B4 Remote Actor request를 current owner로 보낸다
 
@@ -313,7 +313,7 @@ Caller와 Actor owner가 다른 process여도 global ActorId request는 target m
 - 시작 조건: Actor는 play-b, caller server는 play-a에 ready다.
 - 절차: Caller가 ActorId만 사용하여 request를 한 번 보낸다.
 - 검증: Play-b handler만 marker를 한 번 기록하고 caller가 matching reply를 받는다.
-- 세부 동작: [Actor model §5](../spec/server/14-actor-model.ko.md)을 검증한다.
+- 세부 동작: [Actor model §5](../spec/server/03-spot-actor/04-actor-model.ko.md)을 검증한다.
 
 #### SM-B6 Explicit leave와 Session disconnect callback을 구분한다
 
@@ -327,7 +327,7 @@ Spot membership leave와 physical Session disconnect는 다른 lifecycle 사건�
 - 절차: Variant A는 public leave를 호출하고 B는 Stream connection을 비정상 종료한다.
 - 검증: A는 `OnLeaveActor`만 한 번 실행하고 membership이 바뀐다. B는 `OnDisconnectActor`만 current binding에
   한 번 실행하며 Actor와 Spot membership은 유지된다.
-- 세부 동작: [Session Actor dispatch §6](../spec/server/20-session-actor-dispatch.ko.md)를
+- 세부 동작: [Session Actor dispatch §6](../spec/server/04-session/02-session-actor-binding.ko.md)를
   검증한다.
 
 #### SM-B7 Membership callback 뒤 Actor packet을 dispatch한다
@@ -342,7 +342,7 @@ Actor가 Ready이거나 Join commit이 끝나기 전에 packet handler가 시작
 - 절차: Join completion callback 뒤 sequence 1~20 requests를 보낸다.
 - 검증: Public callback evidence가 Join terminal 전에 끝나고 target handler sequence는 1~20이며 active
   count는 1이다.
-- 세부 동작: [Spot actor §4](../spec/server/15-spot-actor.ko.md)를 검증한다.
+- 세부 동작: [Spot actor §4](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)를 검증한다.
 
 #### SM-B8 Exact ActorRef로 current incarnation을 destroy한다
 
@@ -355,7 +355,7 @@ Destroy는 exact ActorRef의 incarnation만 종료한다.
 - 시작 조건: Current ActorRef를 저장한다.
 - 절차: Same ref로 destroy를 두 번 호출하고 같은 ActorId를 recreate한 뒤 old ref로 다시 destroy한다.
 - 검증: Results는 true, false, `InvalidOperation` 순서이며 recreated Actor는 request를 처리한다.
-- 세부 동작: [Failover policy §4.1](../spec/server/31-failure-failover-policy.ko.md)을
+- 세부 동작: [Failover policy §4.1](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을
   검증한다.
 
 #### SM-B9 Target Spot의 Join accept와 reject를 구분한다
@@ -371,7 +371,7 @@ Target `OnActorJoin`은 existing Actor의 membership proposal을 승인하거나
 - 절차: Fresh Actors로 local·remote accept와 reject variants를 실행한다.
 - 검증: Accept는 completion Accepted와 target current Spot을 반환한다. Reject는 typed Rejected이며 target
   joined·source leave callbacks가 없고 source follow-up request가 성공한다.
-- 세부 동작: [Spot actor §4](../spec/server/15-spot-actor.ko.md)를 검증한다.
+- 세부 동작: [Spot actor §4](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)를 검증한다.
 
 #### SM-B10 Object role과 Location Store prerequisite를 검증한다
 
@@ -387,7 +387,7 @@ Object Client·Server와 Actor dispatch에는 Location Store가 필요하다. Ro
 - 절차: Negative hosts와 manual host를 시작하고 manual Node·Channel request를 보낸다.
 - 검증: Negative hosts는 listener ready 전에 configuration error다. Manual request는 성공하고 object
   managers·factory operation은 제공되지 않는다.
-- 세부 동작: [MeshNode §4](../spec/server/13-mesh-node.ko.md)을 검증한다.
+- 세부 동작: [MeshNode §4](../spec/server/03-spot-actor/03-mesh-node.ko.md)을 검증한다.
 
 #### SM-B11 Actor는 initial membership 완료 뒤 Ready로 공개한다
 
@@ -402,7 +402,7 @@ Factory와 initial Entry membership 중인 Actor를 remote caller가 existing Ac
   뒤 다시 호출한다.
 - 검증: Held 구간에는 Ready ref와 handler evidence가 없다. Create completion 뒤 Find와 request가 current
   Actor로 성공한다.
-- 세부 동작: [Actor model §3](../spec/server/14-actor-model.ko.md)을 검증한다.
+- 세부 동작: [Actor model §3](../spec/server/03-spot-actor/04-actor-model.ko.md)을 검증한다.
 
 ### Track C — Channel과 Spot 사이 message 방향을 확인
 
@@ -418,7 +418,7 @@ reply에 포함할 수 있다.
 - 시작 조건: Channel handler와 target Spot이 ready다.
 - 절차: Caller가 operation ID를 Channel request로 보내고 handler가 같은 ID로 Spot request를 실행한다.
 - 검증: Spot handler가 한 번 실행되고 caller는 Spot 결과가 포함된 reply 하나를 받는다.
-- 세부 동작: [Spot messaging §3](../spec/server/12-spot-messaging.ko.md)을 검증한다.
+- 세부 동작: [Spot messaging §3](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을 검증한다.
 
 #### SM-C2 Spot handler에서 Channel request를 보낸다
 
@@ -432,7 +432,7 @@ Spot은 자기 callback에서 ChannelName request를 기다리고 결과를 Spot
 - 절차: Spot request가 Channel request를 Async 또는 allowed Yield로 기다린다.
 - 검증: Channel handler와 Spot handler가 operation ID를 한 번씩 기록하고 final reply·state가 downstream
   result와 일치한다.
-- 세부 동작: [Channel messaging §3.2](../spec/server/08-channel-messaging.ko.md)을
+- 세부 동작: [Channel messaging §3.2](../spec/server/02-channel-transport/02-channel-messaging.ko.md)을
   검증한다.
 
 #### SM-C3 Spot에서 다른 Spot으로 request를 보낸다
@@ -446,7 +446,7 @@ Source Spot은 target SpotId만 사용하여 remote stateful service를 호출�
 - 시작 조건: Source와 target User Spots가 서로 다른 nodes에 ready다.
 - 절차: Source handler가 target SpotId로 request를 한 번 보낸다.
 - 검증: Target marker와 source final state가 matching operation ID를 가지며 caller reply가 한 번 도착한다.
-- 세부 동작: [Spot messaging §3](../spec/server/12-spot-messaging.ko.md)을 검증한다.
+- 세부 동작: [Spot messaging §3](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을 검증한다.
 
 #### SM-C4 Local Spot이 없는 MeshNode가 Logical Multicast를 publish한다
 
@@ -460,7 +460,7 @@ remote subscription에 publish할 수 있다.
 - 시작 조건: Origin node에는 local Spot이 없고 two remote nodes에 matching·nonmatching subscriptions가 있다.
 - 절차: Origin application endpoint가 Logical Multicast를 한 번 publish한다.
 - 검증: Matching Spots가 marker를 한 번씩 받고 nonmatching Spot은 받지 않는다.
-- 세부 동작: [Spot messaging §4](../spec/server/12-spot-messaging.ko.md)을
+- 세부 동작: [Spot messaging §4](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을
   검증한다.
 
 #### SM-C5 Logical Multicast remote delivery를 subscriber evidence로 판정한다
@@ -475,7 +475,7 @@ Publish terminal은 remote 수신 확인이 아니다. E2E는 target handler evi
 - 절차: Source Spot이 unique marker를 publish한다.
 - 검증: Positive nodes의 Spots가 한 번씩 받고 weight 0 node는 신규 target에서 제외된다. Publish terminal만으로
   통과하지 않는다.
-- 세부 동작: [Spot messaging §4](../spec/server/12-spot-messaging.ko.md)을
+- 세부 동작: [Spot messaging §4](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을
   검증한다.
 
 #### SM-C6 Logical Multicast partial backpressure를 다른 target과 격리한다
@@ -492,7 +492,7 @@ Publish terminal은 remote 수신 확인이 아니다. E2E는 target handler evi
 - 절차: Marker를 한 번 publish한다.
 - 검증: Public terminal은 target별 result 없이 정식 의미로 끝나고 ready target은 marker를 한 번 처리한다.
   Private snapshot·attempt count는 읽지 않는다.
-- 세부 동작: [Spot messaging §4](../spec/server/12-spot-messaging.ko.md)을
+- 세부 동작: [Spot messaging §4](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을
   검증한다.
 
 ### Track D — Session binding, relay와 Stream lifecycle을 확인
@@ -512,7 +512,7 @@ Session gateway와 Actor owner의 배치가 같거나 달라도 binding route는
 - 절차: Client가 Actor ID metadata로 request를 보내고 Actor가 push를 한 번 보낸다.
 - 검증: 각 variant의 Actor handler가 request를 한 번 처리하고 client는 matching reply와 push를 한 번씩
   받는다. Remote variant의 caller는 RID와 endpoint를 제공하지 않는다.
-- 세부 동작: [Session Actor dispatch §5](../spec/server/20-session-actor-dispatch.ko.md)를
+- 세부 동작: [Session Actor dispatch §5](../spec/server/04-session/02-session-actor-binding.ko.md)를
   검증한다.
 
 #### SM-D3 Entry·User Spot Actor binding 의미가 같다
@@ -526,7 +526,7 @@ Session binding은 Actor의 current Spot kind와 독립적이다.
 - 시작 조건: Fresh Actors를 Entry와 User Spot에 각각 준비한다.
 - 절차: Separate Sessions에 bind하고 request·push를 한 번씩 실행한다.
 - 검증: 두 variants 모두 matching reply·push를 한 번씩 제공하고 membership은 바뀌지 않는다.
-- 세부 동작: [Actor model §2.3](../spec/server/14-actor-model.ko.md)을
+- 세부 동작: [Actor model §2.3](../spec/server/03-spot-actor/04-actor-model.ko.md)을
   검증한다.
 
 #### SM-D4 한 Session에 여러 Actors를 bind한다
@@ -542,7 +542,7 @@ Session 하나는 여러 Actor bindings를 가질 수 있고 Application은 inbo
 - 절차: X·Y metadata requests와 Actor별 pushes를 보낸다. Missing metadata request도 한 번 보낸다.
 - 검증: 각 Actor가 자기 marker만 처리하고 client가 구분된 replies·pushes를 받는다. Missing target은 public
   dispatch error이며 어느 Actor도 처리하지 않는다.
-- 세부 동작: [Session Actor dispatch §3](../spec/server/20-session-actor-dispatch.ko.md)를
+- 세부 동작: [Session Actor dispatch §3](../spec/server/04-session/02-session-actor-binding.ko.md)를
   검증한다.
 
 #### SM-D4A Rebind 뒤 stale Session을 격리한다
@@ -562,7 +562,7 @@ A→B→A로 바뀌어도 이 identity 경계는 같아야 한다.
 - 검증: 두 fixture 모두 old binding의 disconnect callback은 최대 한 번 실행되고 terminal tombstone 뒤에는
   반복되지 않는다. Failure fixture도 old binding을 복원하거나 B binding을 제거하지 않는다. 늦은 old
   operations는 stale result이고 handler evidence가 없다. B relay·push는 한 번씩 성공하며 current binding은 B다.
-- 세부 동작: [Session Actor dispatch §4](../spec/server/20-session-actor-dispatch.ko.md)를
+- 세부 동작: [Session Actor dispatch §4](../spec/server/04-session/02-session-actor-binding.ko.md)를
   검증한다.
 
 #### SM-D4B Relocation 뒤 stored binding route의 Message Follow를 사용한다
@@ -580,7 +580,7 @@ relay를 current owner로 한 번 전달하고, mapping이 없으면 `Unavailabl
 - 검증: Active marker는 target Actor에서 한 번 처리된다. Expired request는 `Unavailable`이고 handler
   evidence가 없다. 두 variant 모두 disconnect callback은 `0`건이며 binding identity와 ObjectGeneration은
   유지된다.
-- 세부 동작: [Session Actor dispatch §5](../spec/server/20-session-actor-dispatch.ko.md)를
+- 세부 동작: [Session Actor dispatch §5](../spec/server/04-session/02-session-actor-binding.ko.md)를
   검증한다.
 
 #### SM-D5 Physical disconnect를 current bindings 전체에 통지한다
@@ -596,7 +596,7 @@ Stream connection이 끊기면 Framework가 current binding snapshot의 각 Acto
 - 절차: Stream connection을 비정상 종료한다. 한 Actor callback은 application error를 반환한다.
 - 검증: 모든 current Actors의 callbacks가 각각 한 번 시도되고 한 failure가 나머지를 막지 않는다. Public
   current Spot과 ObjectGeneration은 유지된다.
-- 세부 동작: [Session Actor dispatch §6](../spec/server/20-session-actor-dispatch.ko.md)를
+- 세부 동작: [Session Actor dispatch §6](../spec/server/04-session/02-session-actor-binding.ko.md)를
   검증한다.
 
 #### SM-D5A 선택한 Actor에 logical disconnect를 통지한다
@@ -611,7 +611,7 @@ Application logical disconnect는 physical connection 전체가 아니라 선택
 - 시작 조건: Actor X와 Y가 같은 active Session에 bind되어 있다.
 - 절차: Public logical disconnect operation을 X에 호출하고 Y relay를 보낸다.
 - 검증: X callback만 한 번 실행되고 Y relay는 성공한다. Connection과 두 Actors의 membership은 유지된다.
-- 세부 동작: [Session Actor dispatch §6](../spec/server/20-session-actor-dispatch.ko.md)를
+- 세부 동작: [Session Actor dispatch §6](../spec/server/04-session/02-session-actor-binding.ko.md)를
   검증한다.
 
 #### SM-D6 Push는 current bound Session만 받는다
@@ -625,7 +625,7 @@ Actor push는 current binding 하나를 target으로 하며 unbound clients에 b
 - 시작 조건: Client A가 Actor에 bind되어 있고 B는 연결만 되어 있다.
 - 절차: Backend request로 Actor state를 바꾸어 push를 발생시킨다.
 - 검증: A가 marker를 한 번 받고 B는 받지 않는다.
-- 세부 동작: [Session Actor dispatch §5](../spec/server/20-session-actor-dispatch.ko.md)를
+- 세부 동작: [Session Actor dispatch §5](../spec/server/04-session/02-session-actor-binding.ko.md)를
   검증한다.
 
 #### SM-D7 Application session callback이 auth 전 request를 거부한다
@@ -641,7 +641,7 @@ Framework는 STREAM application 인증 정책을 소유하지 않는다. Applica
 - 절차: Separate connectors가 credential packet과 같은 업무 packet을 보낸다.
 - 검증: Application callback이 valid credential을 승인한 connector만 reply를 받고 handler evidence가 있다.
   Invalid connector는 application이 정한 error 또는 close reason을 받고 업무 handler가 실행되지 않는다.
-- 세부 동작: [Stream session §3](../spec/server/19-stream-session.ko.md)을 검증한다.
+- 세부 동작: [Stream session §3](../spec/server/04-session/01-stream-session.ko.md)을 검증한다.
 
 #### SM-D8 Stream reconnect는 새 auth·bind를 요구한다
 
@@ -654,7 +654,7 @@ Reconnect는 새 physical Session이므로 이전 pending request와 binding을 
 - 시작 조건: Authenticated bound Session과 slow pending request가 있다.
 - 절차: Connection을 끊고 pending terminal을 확인한다. Reconnect하여 auth·rebind하고 새 request를 보낸다.
 - 검증: Old request는 disconnected failure이며 replay되지 않는다. New request만 Actor에서 한 번 처리된다.
-- 세부 동작: [Failover policy §6](../spec/server/31-failure-failover-policy.ko.md)을 검증한다.
+- 세부 동작: [Failover policy §6](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을 검증한다.
 
 #### SM-D9 Logger provider가 STREAM message-flow 결과를 기록한다
 
@@ -668,8 +668,8 @@ wire 내부 sequence를 성공 조건으로 복제하지 않는다.
 - 시작 조건: Application logger provider와 handler가 등록되어 있다.
 - 절차: Request와 one-way packet을 각각 한 번 보낸다.
 - 검증: Logger provider가 두 message의 정식 fields를 한 번씩 기록하고 handler results와 일치한다.
-- 세부 동작: [Message flow tracing — 공통 attribute](../spec/server/26-message-flow-tracing.ko.md#3-공통-attribute)와
-  [Flow correlation — 전파 규칙](../spec/server/27-flow-correlation.ko.md#5-전파-규칙)을 검증한다.
+- 세부 동작: [Message flow tracing — 공통 attribute](../spec/server/06-observability/03-message-flow-tracing.ko.md#3-공통-attribute)와
+  [Flow correlation — 전파 규칙](../spec/server/06-observability/04-flow-correlation.ko.md#5-전파-규칙)을 검증한다.
 
 #### SM-D10 Stream backpressure를 Session별로 격리한다
 
@@ -686,8 +686,8 @@ wire 내부 sequence를 성공 조건으로 복제하지 않는다.
   해제한다.
 - 검증: B results는 A gate 해제 전에 완료한다. A operations는 success 또는 deadline terminal 하나씩을
   가지며 Session state가 손상되지 않는다.
-- 세부 동작: [STREAM recv loop와 application 표면](../spec/server/19-stream-session.ko.md#4-framework-내부-recv-loop와-application-표면)과
-  [Admission deadline](../spec/server/05-async-execution-policy.ko.md#14-admission-deadline)을 검증한다.
+- 세부 동작: [STREAM recv loop와 application 표면](../spec/server/04-session/01-stream-session.ko.md)과
+  [Admission deadline](../spec/server/01-execution/01-submit-and-completion.ko.md)을 검증한다.
 
 #### SM-D11 Stream과 Channel requests를 같은 client에서 분리한다
 
@@ -700,7 +700,7 @@ wire 내부 sequence를 성공 조건으로 복제하지 않는다.
 - 시작 조건: Stream Session과 Channel target이 ready다.
 - 절차: 서로 다른 markers의 requests를 각 surface에서 50개씩 interleave한다.
 - 검증: 100 replies가 operation ID와 input surface에 정확히 대응하며 cross-delivery가 없다.
-- 세부 동작: [Interaction model](../spec/server/03-interaction-model.ko.md)을 검증한다.
+- 세부 동작: [Interaction model](../spec/server/00-foundation/04-interaction-model.ko.md)을 검증한다.
 
 #### SM-D12 다른 gateway reconnect 뒤 Actor state를 rebind한다
 
@@ -714,7 +714,7 @@ Session owner process와 Actor owner는 분리되어 있으므로 gateway를 바
 - 시작 조건: Session-a에 Actor가 bind되어 state counter가 10이다.
 - 절차: Connection을 끊고 session-b에 reconnect·auth한 뒤 current ActorRef로 bind하고 state request를 보낸다.
 - 검증: Counter는 10에서 계속 증가하고 reply·push는 session-b에 도착한다. Old binding은 재사용하지 않는다.
-- 세부 동작: [Failover policy §6](../spec/server/31-failure-failover-policy.ko.md)을 검증한다.
+- 세부 동작: [Failover policy §6](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을 검증한다.
 
 #### SM-D13 Stream heartbeat loss를 disconnect로 처리한다
 
@@ -728,8 +728,8 @@ Heartbeat가 정상인 connection은 유지하고 heartbeat가 중단된 Session
 - 시작 조건: Bound Session이 heartbeat를 정상 교환하고 있다.
 - 절차: Runner가 heartbeat direction을 차단하고 public deadline·tolerance로 disconnect를 기다린다.
 - 검증: Connector는 Disconnected이고 current bound Actors가 disconnect callback을 최대 한 번씩 받는다.
-- 세부 동작: [Connection loss와 reconnect](../spec/server/29-transport-liveness.ko.md#6-connection-loss와-reconnect)와
-  [STREAM 오류 경계](../spec/server/19-stream-session.ko.md#6-오류-경계)를 검증한다.
+- 세부 동작: [Connection loss와 reconnect](../spec/server/02-channel-transport/05-transport-liveness.ko.md#6-connection-loss와-reconnect)와
+  [STREAM 오류 경계](../spec/server/04-session/01-stream-session.ko.md#7-오류-경계)를 검증한다.
 
 #### SM-D14 TLS Stream에서 auth·relay·push를 수행한다
 
@@ -743,8 +743,8 @@ TLS는 transport security를 바꾸지만 Session·binding의 application 의미
 - 절차: TLS connectors로 두 endpoints에 연결한다.
 - 검증: Valid connection은 auth·bind·relay·push를 완료하고 invalid connection은 public TLS error로 끝나며
   Session handler가 실행되지 않는다.
-- 세부 동작: [STREAM TLS](../spec/server/19-stream-session.ko.md#71-tls)와
-  [Session에서 actor로](../spec/server/19-stream-session.ko.md#8-session에서-actor로)를 검증한다.
+- 세부 동작: [STREAM TLS](../spec/server/04-session/01-stream-session.ko.md#31-tls)와
+  [Session에서 actor로](../spec/server/04-session/01-stream-session.ko.md#8-session에서-actor로)를 검증한다.
 
 #### SM-D15 Channel→Actor→bound Session push 사슬을 완료한다
 
@@ -758,7 +758,7 @@ TLS는 transport security를 바꾸지만 Session·binding의 application 의미
 - 시작 조건: Backend Channel, bound Actor와 Stream client가 ready다.
 - 절차: Backend request가 Actor send를 시작하고 Actor handler가 bound push를 보낸다.
 - 검증: Client가 marker push를 한 번 받는다. Public flow trace가 각 hop을 같은 flow로 연결한다.
-- 세부 동작: [Flow correlation §5](../spec/server/27-flow-correlation.ko.md)을 검증한다.
+- 세부 동작: [Flow correlation §5](../spec/server/06-observability/04-flow-correlation.ko.md)을 검증한다.
 
 ### Track E — Negative dispatch와 timer를 확인
 
@@ -777,7 +777,7 @@ application logger provider가 확인할 수 있어야 한다.
 - 검증: 두 missing request는 정식 error terminal 하나와 자기 `surface`, `reason=no_handler`,
   `action=reply_error`인 `zlink.dispatch_error` logger evidence를 한 번 남긴다. 두 normal request는
   각각 정상 reply를 한 번 반환한다.
-- 세부 동작: [Message flow tracing §2.2](../spec/server/26-message-flow-tracing.ko.md)을
+- 세부 동작: [Message flow tracing §2.2](../spec/server/06-observability/03-message-flow-tracing.ko.md)을
   검증한다.
 
 #### SM-E2 Spot one-shot timer가 state를 변경한다
@@ -791,7 +791,7 @@ Timer callback은 Spot execution lane에서 application state를 바꾸고 publi
 - 시작 조건: Counter 0인 Spot과 bound notification target이 있다.
 - 절차: Public Spot context로 one-shot timer를 등록하고 callback evidence를 bounded polling한다.
 - 검증: Callback count와 counter delta는 1이고 client push도 한 번이다.
-- 세부 동작: [Async execution policy — Spot timer](../spec/server/05-async-execution-policy.ko.md#5-spot-timer)을 검증한다.
+- 세부 동작: [Async execution policy — Spot timer](../spec/server/03-spot-actor/10-spot-timer.ko.md)을 검증한다.
 
 #### SM-E3 Idle timer가 explicit close를 시작한다
 
@@ -806,8 +806,8 @@ Framework가 inactivity를 추측해 자동 close하지 않는다. Application t
 - 절차: Timer callbacks가 각 상태를 확인하도록 하고 public Find·closing evidence를 수집한다.
 - 검증: Idle empty Spot만 close되고 callback reason은 ExplicitClose다. 다른 two Spots는 request를 계속
   처리한다.
-- 세부 동작: [Spot timer](../spec/server/05-async-execution-policy.ko.md#5-spot-timer)와
-  [Spot 종료](../spec/server/12-spot-messaging.ko.md#62-spot-종료)를 검증한다.
+- 세부 동작: [Spot timer](../spec/server/03-spot-actor/10-spot-timer.ko.md)와
+  [Spot 종료](../spec/server/03-spot-actor/02-spot-messaging.ko.md#62-spot-종료)를 검증한다.
 
 #### SM-E4 Timer overrun policy별 observable sequence를 확인한다
 
@@ -825,7 +825,7 @@ sequence를 만든다.
   `SkippedTicks`로 보고하고, `CatchUpBounded`는 `MaxCatchUpTicks` 이내에서만 연속 delivery하며,
   `DelayNextTick`은 다음 schedule을 callback 완료 뒤로 미룬다. Exact scheduler nanosecond와 thread timing은
   비교하지 않는다.
-- 세부 동작: [Spot timer overrun policy와 tick field](../spec/server/05-async-execution-policy.ko.md#5-spot-timer)를 검증한다.
+- 세부 동작: [Spot timer overrun policy와 tick field](../spec/server/03-spot-actor/10-spot-timer.ko.md)를 검증한다.
 
 ### Track F — Channel·Node·Spot routes가 같은 MeshNode transport에서 공존
 
@@ -840,7 +840,7 @@ Same-process optimization이 public reply·send 의미를 바꾸면 안 된다.
 - 시작 조건: Caller와 target Spot이 같은 MeshNode process에 있다.
 - 절차: SpotId request와 send를 각각 한 번 시작한다.
 - 검증: Request reply와 send handler evidence가 input markers와 일치한다.
-- 세부 동작: [Spot messaging §3](../spec/server/12-spot-messaging.ko.md)을 검증한다.
+- 세부 동작: [Spot messaging §3](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을 검증한다.
 
 #### SM-F2 다른 MeshNode의 Spot을 SpotId로 호출한다
 
@@ -853,7 +853,7 @@ Remote Spot direct caller도 target owner details를 입력하지 않는다.
 - 시작 조건: Source와 target MeshNodes가 ready이고 User Spot은 target에 있다.
 - 절차: Source endpoint가 SpotId만 사용해 request와 send를 보낸다.
 - 검증: Target evidence만 증가하고 request reply가 source로 돌아온다.
-- 세부 동작: [Spot messaging §3](../spec/server/12-spot-messaging.ko.md)을 검증한다.
+- 세부 동작: [Spot messaging §3](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을 검증한다.
 
 #### SM-F3 ChannelName·Node direct·Spot direct namespace를 분리한다
 
@@ -866,7 +866,7 @@ Remote Spot direct caller도 target owner details를 입력하지 않는다.
 - 시작 조건: Same MeshNode에 세 handlers가 같은 packet name으로 ready다.
 - 절차: 각 public target API로 unique marker request를 보낸다.
 - 검증: 각 handler가 자기 marker만 처리하고 caller가 matching replies를 받는다.
-- 세부 동작: [Interaction model §3](../spec/server/03-interaction-model.ko.md)을
+- 세부 동작: [Interaction model §3](../spec/server/00-foundation/04-interaction-model.ko.md)을
   검증한다.
 
 #### SM-F4 Missing Spot과 stale SpotRef를 구분한다
@@ -880,7 +880,7 @@ SpotId message는 current logical object를 찾고 exact SpotRef close는 특정
 - 시작 조건: Missing ID와 close·recreate한 same ID의 old SpotRef를 준비한다.
 - 절차: Missing request·send와 old ref close를 실행한다.
 - 검증: Direct calls는 `NotFound`, old ref close는 `InvalidOperation`이고 recreated Spot은 request를 처리한다.
-- 세부 동작: [Failover policy §4.1](../spec/server/31-failure-failover-policy.ko.md)을
+- 세부 동작: [Failover policy §4.1](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을
   검증한다.
 
 #### SM-F5 Spot close가 MeshNode Channel을 종료하지 않는다
@@ -894,7 +894,7 @@ User Spot lifecycle은 containing MeshNode와 Channel handler lifecycle과 별�
 - 시작 조건: User Spot과 Channel handler가 같은 MeshNode에 ready다.
 - 절차: Both requests를 확인한 뒤 Spot을 close하고 다시 둘을 호출한다.
 - 검증: Spot request는 NotFound이고 Channel request는 normal reply를 받는다. MeshNode status는 ready다.
-- 세부 동작: [MeshNode §4](../spec/server/13-mesh-node.ko.md)을 검증한다.
+- 세부 동작: [MeshNode §4](../spec/server/03-spot-actor/03-mesh-node.ko.md)을 검증한다.
 
 #### SM-F6 Cross-node Spot call과 Actor Join을 같은 RouteMesh에서 처리한다
 
@@ -909,7 +909,7 @@ Spot direct와 cross-node Actor Join은 같은 MeshNode transport를 사용하�
 - 절차: Source가 target Spot request·send를 실행하고 Actor가 같은 target으로 Join한다.
 - 검증: Spot handlers와 Join callbacks가 target에서 정식 횟수로 실행된다. Actor generation·state가 유지되고
   follow-up request도 target에서 처리된다.
-- 세부 동작: [Spot actor §5](../spec/server/15-spot-actor.ko.md)을 검증한다.
+- 세부 동작: [Spot actor §5](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)을 검증한다.
 
 ### Track G — Node crash, scale-out과 placement를 처리
 
@@ -927,8 +927,8 @@ invalid된 뒤 같은 ActorId를 새 incarnation으로 만들고 Session을 다�
   replacement 또는 play-b에 GetOrCreate하고 current ref로 rebind한다.
 - 검증: Old operations는 bounded error이고 auto retry되지 않는다. New incarnation은 different generation으로
   request·push를 처리하며 old ref bind는 `InvalidOperation`이다. Independent play-b Actor는 영향받지 않는다.
-- 세부 동작: [Failover policy §5](../spec/server/31-failure-failover-policy.ko.md)와
-  [§6](../spec/server/31-failure-failover-policy.ko.md)을 검증한다.
+- 세부 동작: [Failover policy §5](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)와
+  [§6](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을 검증한다.
 
 #### SM-G2 Scale-out은 기존 owners를 유지하고 신규 objects만 배치한다
 
@@ -943,7 +943,7 @@ weight를 사용한다.
 - 절차: B를 추가해 ready를 확인하고 old requests를 보낸다. A placement weight를 0으로 바꾼 뒤 new Actor와
   Spot을 create한다.
 - 검증: Old evidence는 A, new evidence는 B에만 기록된다. Scale-out 자체가 old owners를 바꾸지 않는다.
-- 세부 동작: [MeshNode §5](../spec/server/13-mesh-node.ko.md)을 검증한다.
+- 세부 동작: [MeshNode §5](../spec/server/03-spot-actor/03-mesh-node.ko.md)을 검증한다.
 
 #### SM-G3 Concurrent Join·Leave requests가 membership terminal을 하나씩 만든다
 
@@ -959,7 +959,7 @@ Lifecycle requests가 동시에 들어와도 Actor별 current membership과 call
 - 절차: Actor별 operation plan을 고정하고 concurrent Join 또는 Leave와 state request를 실행한다.
 - 검증: Each operation은 Accepted, Rejected 또는 정식 conflict result 하나를 가진다. Accepted final
   memberships와 public callback counts가 일치하고 Actor handler overlap은 없다.
-- 세부 동작: [Spot actor §4](../spec/server/15-spot-actor.ko.md)를 검증한다.
+- 세부 동작: [Spot actor §4](../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)를 검증한다.
 
 #### SM-G4 많은 bound Session pushes를 target별로 격리한다
 
@@ -973,7 +973,7 @@ Lifecycle requests가 동시에 들어와도 Actor별 current membership과 call
 - 절차: 각 Actor가 unique marker pushes를 bounded concurrency로 시작한다.
 - 검증: Successful push marker는 정확한 client에서 한 번 관찰되고 다른 clients에는 없다. Failed terminal은
   delivery success로 세지 않는다.
-- 세부 동작: [Session Actor dispatch §5](../spec/server/20-session-actor-dispatch.ko.md)를
+- 세부 동작: [Session Actor dispatch §5](../spec/server/04-session/02-session-actor-binding.ko.md)를
   검증한다.
 
 #### SM-G5A Placement weight 100:300 비율을 충분한 표본으로 확인한다
@@ -988,7 +988,7 @@ Placement weight는 신규 object target의 상대 선택 비율이며 exact alt
 - 절차: Unique IDs의 Actors 또는 User Spots 800개를 create한다.
 - 검증: 모든 creates가 성공하고 owner count 합계는 800이다. B 비율은 65~85%이며 existing owner는 바뀌지
   않는다.
-- 세부 동작: [MeshNode §5](../spec/server/13-mesh-node.ko.md)을 검증한다.
+- 세부 동작: [MeshNode §5](../spec/server/03-spot-actor/03-mesh-node.ko.md)을 검증한다.
 
 #### SM-G5B Capacity가 없는 high-weight node를 신규 placement에서 제외한다
 
@@ -1002,7 +1002,7 @@ Weight 계산 전에 stable type과 total capacity를 만족하는 candidates만
 - 절차: New global ID create를 한 번 실행한다. 별도 startup variants에서 weight -1과 10001을 적용한다.
 - 검증: Create owner는 A이고 factory는 한 번 실행된다. Invalid weights는 listener ready 전에 configuration
   error다.
-- 세부 동작: [MeshNode §5](../spec/server/13-mesh-node.ko.md)을 검증한다.
+- 세부 동작: [MeshNode §5](../spec/server/03-spot-actor/03-mesh-node.ko.md)을 검증한다.
 
 ## 4. 완료 기준
 

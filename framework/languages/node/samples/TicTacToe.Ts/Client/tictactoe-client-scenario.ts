@@ -80,6 +80,7 @@ class TicTacToeClientScenario {
       connector.zlinkStreamAssert.ensure(client2Auth.player.wins >= 0, 'Sample scenario assertion failed.');
 
       await observer.connect(signal);
+      console.log(`observer-connected endpoint=${observerPlayEndpoint}`);
       const observerAuth = await observer.request(authenticateReq('observer')).submit<AuthenticateRes>(signal);
       connector.zlinkStreamAssert.ensure(observerAuth.player.actorId === 'observer', 'Sample scenario assertion failed.');
       connector.zlinkStreamAssert.ensure(observerAuth.player.displayName.length > 0, 'Sample scenario assertion failed.');
@@ -89,7 +90,7 @@ class TicTacToeClientScenario {
         .request(new ObserveMilestoneReq())
         .submit<ObserveMilestoneRes>(signal);
       connector.zlinkStreamAssert.ensure(observerSubscription.subscribed, 'Sample scenario assertion failed.');
-      console.log('observer-subscription=verified');
+      console.log(`observer-subscription=verified subscribed=${observerSubscription.subscribed}`);
 
       // 3. Host joins by explicit RoomId
       const client1JoinedState = client1

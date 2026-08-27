@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkFanoutPublisherIdentity(
@@ -6,7 +8,7 @@ internal sealed class ZLinkFanoutPublisherIdentity(
     ulong lifecycleGeneration,
     string endpoint)
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private ulong _descriptorRevision = 1;
     private ZLinkFrameworkRuntimeState _state =
         ZLinkFrameworkRuntimeState.Serving;
@@ -16,30 +18,36 @@ internal sealed class ZLinkFanoutPublisherIdentity(
     internal ulong LifecycleGeneration { get; } = lifecycleGeneration;
     internal string Endpoint { get; } = endpoint;
 
-    internal Snapshot Read()
-    {
-        lock (_gate)
-            return new Snapshot(_descriptorRevision, _state);
-    }
+    internal ValueTask<Snapshot> ReadAsync() =>
+        _lane.RunAsync(() => new Snapshot(_descriptorRevision, _state));
 
-    internal Snapshot MarkDraining()
-        => SetState(ZLinkFrameworkRuntimeState.Draining);
+    internal ValueTask<Snapshot> MarkDrainingAsync() =>
+        SetStateAsync(ZLinkFrameworkRuntimeState.Draining);
 
-    internal Snapshot MarkRetiring()
-        => SetState(ZLinkFrameworkRuntimeState.Relocating);
+    internal ValueTask<Snapshot> MarkRetiringAsync() =>
+        SetStateAsync(ZLinkFrameworkRuntimeState.Relocating);
 
-    internal Snapshot MarkServing()
-        => SetState(ZLinkFrameworkRuntimeState.Serving);
+    internal ValueTask<Snapshot> MarkServingAsync() =>
+        SetStateAsync(ZLinkFrameworkRuntimeState.Serving);
 
-    private Snapshot SetState(ZLinkFrameworkRuntimeState state)
-    {
-        lock (_gate)
+    private ValueTask<Snapshot> SetStateAsync(ZLinkFrameworkRuntimeState state) =>
+        _lane.RunAsync(() =>
         {
             _descriptorRevision++;
             _state = state;
             return new Snapshot(_descriptorRevision, _state);
-        }
-    }
+        });
+
+    internal Snapshot Read() => AwaitStateLane(ReadAsync());
+
+    internal Snapshot MarkDraining() => AwaitStateLane(MarkDrainingAsync());
+
+    internal Snapshot MarkRetiring() => AwaitStateLane(MarkRetiringAsync());
+
+    internal Snapshot MarkServing() => AwaitStateLane(MarkServingAsync());
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
     internal readonly record struct Snapshot(
         ulong DescriptorRevision,

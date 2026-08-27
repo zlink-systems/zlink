@@ -10,7 +10,6 @@ async function main(): Promise<void> {
   const apiA = BrowserHttpClientFactory.create(config.apiAHttpUrl).timeout(SampleNames.clientTimeout).build();
   const apiB = BrowserHttpClientFactory.create(config.apiBHttpUrl).timeout(SampleNames.clientTimeout).build();
   const missionA = BrowserHttpClientFactory.create(config.missionAHttpUrl).timeout(SampleNames.clientTimeout).build();
-  const missionB = BrowserHttpClientFactory.create(config.missionBHttpUrl).timeout(SampleNames.clientTimeout).build();
   const apiAStream = createClient(config.apiAStreamEndpoint, 'api-a');
   const apiBStream = createClient(config.apiBStreamEndpoint, 'api-b');
   const apiBReconnectStream = createClient(config.apiBStreamEndpoint, 'api-b-reconnect');
@@ -19,10 +18,10 @@ async function main(): Promise<void> {
       apiA,
       apiB,
       missionA,
-      missionB,
       apiAStream,
       apiBStream,
-      apiBReconnectStream
+      apiBReconnectStream,
+      config.lifecycleCompletionPath
     );
   } finally {
     await Promise.allSettled([
@@ -31,8 +30,7 @@ async function main(): Promise<void> {
       apiBReconnectStream.close(),
       apiA.close(),
       apiB.close(),
-      missionA.close(),
-      missionB.close()
+      missionA.close()
     ]);
   }
   console.log('gamequest=completed');

@@ -1060,7 +1060,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     .get(2, TimeUnit.SECONDS);
             }
             assertEquals("remote-send", sent.get(2, TimeUnit.SECONDS));
-            awaitOutstandingApplicationLease(context, 2L);
+            awaitOutstandingApplicationLease(context, 0L);
             retainedRoute.getAndSet(null).close();
             awaitOutstandingApplicationLease(context, 0L);
 
@@ -1320,7 +1320,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 firstDispatch.get(2, TimeUnit.SECONDS);
             assertEquals(1, retained.size());
             var first = retained.getFirst();
-            awaitOutstandingApplicationLease(context, 2L);
+            awaitOutstandingApplicationLease(context, 0L);
             first.close();
             awaitOutstandingApplicationLease(context, 0L);
             try (Message response = Message.from("remote-actor-reply")) {

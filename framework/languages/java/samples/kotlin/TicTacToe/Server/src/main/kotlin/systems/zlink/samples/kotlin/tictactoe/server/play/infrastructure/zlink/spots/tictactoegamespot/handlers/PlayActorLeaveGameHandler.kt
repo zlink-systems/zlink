@@ -25,9 +25,8 @@ class PlayActorLeaveGameHandler {
         )
         spot.leaveGame(actor, message.roomId)
         logger.info(
-            "actor: LeaveGameMsg completed. actor={}, roomId={}",
+            "tictactoe-lifecycle leave-completed actor={}",
             actor.actorId,
-            message.roomId,
         )
     }
 

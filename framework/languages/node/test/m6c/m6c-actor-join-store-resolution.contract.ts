@@ -5,7 +5,6 @@ import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
-import { ZLinkConfigurationException } from '../../packages/framework/src/contracts/Configuration/ConfigurationException';
 import { ZLinkRemoteActorJoinReceiver } from '../../packages/framework/src/runtime/host/remote-actor-join-receiver';
 import {
   decodeActorJoin28,
@@ -163,17 +162,20 @@ test('remote Actor Join reports an unreadable Authority row as Unavailable', asy
   );
 });
 
-test('remote Actor Join rejects an Authority stable type without a local factory', async () => {
+test('remote Actor Join reports an Authority stable type without a local factory as NotFound', async () => {
   const receiver = receiverFor({
     readAuthority: async () => authoritySnapshot(),
     getOrCreateActor: async () => {
-      throw new ZLinkConfigurationException("Actor factory 'StoreActor' is not registered.");
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.NotFound,
+        "Actor factory 'StoreActor' is not registered."
+      );
     }
   });
 
   await assert.rejects(
     receiver.receive(joinPayload(), routeContext()),
-    errorKind(ZLinkFrameworkErrorKind.Rejected)
+    errorKind(ZLinkFrameworkErrorKind.NotFound)
   );
 });
 

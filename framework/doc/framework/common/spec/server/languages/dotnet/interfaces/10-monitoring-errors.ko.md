@@ -1,8 +1,8 @@
 # .NET Framework 오류 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md) ·
-[공통 Framework API](../../../06-framework-api.ko.md) ·
-[Message flow](../../../26-message-flow-tracing.ko.md)
+[.NET 언어별 interface 목차](README.ko.md) ·
+[공통 Framework API](../../../00-foundation/06-framework-api.ko.md) ·
+[Message flow](../../../06-observability/03-message-flow-tracing.ko.md)
 
 ## 1. 범위
 
@@ -91,8 +91,8 @@ file과 원격 backend는 application이 구성한다.
 
 Public callback 기반 message-flow observer, runtime error sink와 raw socket event DTO는 제공하지 않는다.
 Trace·metric·log에 포함되는 안정된 operation 이름과 attribute는 공통
-[Message flow](../../../26-message-flow-tracing.ko.md)와
-[Runtime metrics](../../../25-runtime-metrics.ko.md)가 정의한다.
+[Message flow](../../../06-observability/03-message-flow-tracing.ko.md)와
+[Runtime metrics](../../../06-observability/02-runtime-metrics.ko.md)가 정의한다.
 
 Timer handler 실패는 해당 Spot ID와 timer 이름을 포함한 structured log와 trace error로 기록한다.
 Scheduler delivery index, handler runtime type, exception type과 stack trace를 public DTO로 제공하지 않는다.

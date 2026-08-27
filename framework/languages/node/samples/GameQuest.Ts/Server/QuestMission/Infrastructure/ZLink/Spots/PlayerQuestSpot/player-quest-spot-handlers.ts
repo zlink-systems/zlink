@@ -1,13 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { zlinkSpotPacketHandler } from '@zlink-systems/nestjs';
-import {
-  ClosePlayerQuestReq,
-  type ClosePlayerQuestRes
-} from '../../../../../../Shared/Contracts/messages';
+import { ClosePlayerQuestMsg } from '../../../../../../Shared/Contracts/messages';
 import { QuestEventStore, QuestReadModelStore } from '../../../../../Shared/Store/quest-progress-store';
 import { QuestEventProcessor } from '../../../../Application/quest-event-processor';
 import { PlayerQuestNotifier } from '../../player-quest-notifier';
 import { PlayerQuestSpot } from './player-quest-spot';
+import { GAMEQUEST_INSTANCE_ID } from '../../../../../Configuration/tokens';
 import type { ZLinkSpotPacketHandler, ZLinkSpotRequestHandler } from '@zlink-systems/framework';
 import type {
   GameplayMsg,
@@ -27,7 +25,8 @@ class ApplyGameplayEventSpotHandler
   implements ZLinkSpotPacketHandler<PlayerQuestSpot, GameplayMsg> {
   constructor(
     private readonly processor: QuestEventProcessor,
-    private readonly notifier: PlayerQuestNotifier
+    private readonly notifier: PlayerQuestNotifier,
+    @Inject(GAMEQUEST_INSTANCE_ID) private readonly missionName: string
   ) {}
 
   async handle(spot: PlayerQuestSpot, message: GameplayMsg): Promise<void> {
@@ -41,6 +40,9 @@ class ApplyGameplayEventSpotHandler
       occurredAtUnixMs: message.occurredAtUnixMs
     }, aggregate);
     spot.replaceAggregate(result.aggregate);
+    if (message.payload.idempotencyKey === 'owner-ready-intent') {
+      console.error(`gamequest-owner ready player=${message.playerId} node=${this.missionName}`);
+    }
     await this.notifier.notify(message.playerId, result.changedProgress, result.completedQuestIds);
   }
 }
@@ -71,6 +73,11 @@ class SyncQuestProgressSpotHandler
   async handle(spot: PlayerQuestSpot, request: SyncQuestProgressReq): Promise<SyncQuestProgressRes> {
     requirePlayer(spot, request.playerId);
     const aggregate = spot.ensureAggregate(() => this.processor.rehydrate(request.playerId));
+    if (this.processor.consumeReplayAfterClose(request.playerId)) {
+      console.error(
+        `gamequest-mission replayed player=${request.playerId} generation=${spot.context.objectGeneration}`
+      );
+    }
     const result = this.processor.syncProgress(request, aggregate);
     spot.replaceAggregate(result.aggregate);
     await this.notifier.notify(request.playerId, result.changedProgress, result.completedQuestIds);
@@ -108,11 +115,17 @@ class RebuildQuestProjectionSpotHandler
 }
 
 @Injectable()
-@zlinkSpotPacketHandler({ spot: () => PlayerQuestSpot, packetName: 'ClosePlayerQuestReq' })
+@zlinkSpotPacketHandler({ spot: () => PlayerQuestSpot, packetName: 'ClosePlayerQuestMsg' })
 class ClosePlayerQuestSpotHandler
-  implements ZLinkSpotRequestHandler<PlayerQuestSpot, ClosePlayerQuestReq, ClosePlayerQuestRes> {
-  async handle(spot: PlayerQuestSpot, _request: ClosePlayerQuestReq): Promise<ClosePlayerQuestRes> {
-    return { closed: await spot.context.close() };
+  implements ZLinkSpotPacketHandler<PlayerQuestSpot, ClosePlayerQuestMsg> {
+  constructor(
+    @Inject(QuestEventStore) private readonly events: QuestEventStore,
+    @Inject(GAMEQUEST_INSTANCE_ID) private readonly missionName: string
+  ) {}
+
+  async handle(spot: PlayerQuestSpot, _message: ClosePlayerQuestMsg): Promise<void> {
+    this.events.closeOwner(spot.playerId, this.missionName);
+    await spot.context.close();
   }
 }
 

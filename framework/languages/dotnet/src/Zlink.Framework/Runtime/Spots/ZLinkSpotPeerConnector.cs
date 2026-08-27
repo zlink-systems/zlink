@@ -1,5 +1,6 @@
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -8,7 +9,7 @@ internal sealed class ZLinkSpotPeerConnector(
     IZLinkBackendSpotNode node,
     ZLinkSpotPeerConnectionSet connections)
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
 
     // Manual entry points accept an endpoint straight from the caller (an
     // external boundary per the endpoint notation policy); normalize once
@@ -19,13 +20,8 @@ internal sealed class ZLinkSpotPeerConnector(
     {
         cancellationToken.ThrowIfCancellationRequested();
         endpoint = ZLinkEndpointNotation.Normalize(endpoint);
-        lock (_gate)
-        {
-            if (!connections.TryAddPeerManual(endpoint)) return ValueTask.FromResult(false);
-            try { ConnectPeer(endpoint); }
-            catch { connections.RollbackPeerManual(endpoint); throw; }
-            return ValueTask.FromResult(true);
-        }
+        return ValueTask.FromResult(
+            AwaitStateLane(_lane.RunAsync(() => ConnectPeerManual(endpoint))));
     }
 
     public ValueTask<bool> ConnectPeerAsync(
@@ -35,13 +31,8 @@ internal sealed class ZLinkSpotPeerConnector(
     {
         cancellationToken.ThrowIfCancellationRequested();
         endpoint = ZLinkEndpointNotation.Normalize(endpoint);
-        lock (_gate)
-        {
-            if (!connections.TryAddPeerManual(endpoint)) return ValueTask.FromResult(false);
-            try { ConnectPeer(peerRid, endpoint, ZLinkServiceSecurityIdentity.Plaintext); }
-            catch { connections.RollbackPeerManual(endpoint); throw; }
-            return ValueTask.FromResult(true);
-        }
+        return ValueTask.FromResult(
+            AwaitStateLane(_lane.RunAsync(() => ConnectPeerManual(peerRid, endpoint))));
     }
 
     public void Disconnect(string endpoint)
@@ -52,12 +43,7 @@ internal sealed class ZLinkSpotPeerConnector(
     public void DisconnectPeerManual(string endpoint)
     {
         endpoint = ZLinkEndpointNotation.Normalize(endpoint);
-        lock (_gate)
-        {
-            if (!connections.RemovePeerManual(endpoint)) return;
-            try { node.DisconnectPeer(endpoint); }
-            catch { _ = connections.TryAddPeerManual(endpoint); throw; }
-        }
+        AwaitStateLane(_lane.RunAsync(() => DisconnectPeerManualCore(endpoint)));
     }
 
     public bool ConnectPeerAuto(
@@ -65,7 +51,7 @@ internal sealed class ZLinkSpotPeerConnector(
         string endpoint,
         string expectedSecurityIdentity)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             var claim = connections.AcquirePeerAuto(peerRid, endpoint);
             ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -97,7 +83,7 @@ internal sealed class ZLinkSpotPeerConnector(
                 connections.RollbackPeerAuto(endpoint);
                 return false;
             }
-        }
+        }));
     }
 
     public bool DisconnectPeerAuto(string endpoint) =>
@@ -105,7 +91,7 @@ internal sealed class ZLinkSpotPeerConnector(
 
     public bool DisconnectPeerAuto(RoutingId? peerRid, string endpoint)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             var result = DisconnectAuto(
                 peerRid,
@@ -115,7 +101,7 @@ internal sealed class ZLinkSpotPeerConnector(
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"spot_peer_release peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} result={result}");
             return result;
-        }
+        }));
     }
 
     public bool DisconnectPeerBeforeAdmission(
@@ -123,7 +109,7 @@ internal sealed class ZLinkSpotPeerConnector(
         string endpoint,
         ulong lifecycleGeneration)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             try
             {
@@ -136,7 +122,30 @@ internal sealed class ZLinkSpotPeerConnector(
             {
                 return false;
             }
-        }
+        }));
+    }
+
+    private bool ConnectPeerManual(string endpoint)
+    {
+        if (!connections.TryAddPeerManual(endpoint)) return false;
+        try { ConnectPeer(endpoint); }
+        catch { connections.RollbackPeerManual(endpoint); throw; }
+        return true;
+    }
+
+    private bool ConnectPeerManual(RoutingId peerRid, string endpoint)
+    {
+        if (!connections.TryAddPeerManual(endpoint)) return false;
+        try { ConnectPeer(peerRid, endpoint, ZLinkServiceSecurityIdentity.Plaintext); }
+        catch { connections.RollbackPeerManual(endpoint); throw; }
+        return true;
+    }
+
+    private void DisconnectPeerManualCore(string endpoint)
+    {
+        if (!connections.RemovePeerManual(endpoint)) return;
+        try { node.DisconnectPeer(endpoint); }
+        catch { _ = connections.TryAddPeerManual(endpoint); throw; }
     }
 
     private bool DisconnectAuto(
@@ -204,4 +213,10 @@ internal sealed class ZLinkSpotPeerConnector(
     {
         node.ConnectPeer(peerRid, endpoint, expectedSecurityIdentity);
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }

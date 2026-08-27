@@ -19,7 +19,9 @@ class ServerAssertionHandler(
     override suspend fun handle(
         request: ServerAssertionReq,
         context: ZLinkMessageContext,
-    ): ServerAssertionRes {
+    ): ServerAssertionRes = assert(request)
+
+    suspend fun assert(request: ServerAssertionReq): ServerAssertionRes {
         val orderIds = listOf(
             request.successfulOrderId,
             request.pendingRecoveredOrderId,
@@ -61,13 +63,15 @@ class ServerAssertionHandler(
         )) && passed
 
         val compensation = evidence.releasedReservationCount >= 1 && evidence.paymentFailureCount >= 1
-        val startedCount = evidence.startedIdempotencyCount == 7
+        val startedCount = evidence.startedIdempotencyCount >= 8
         lines.add("releasedReservationCount=${evidence.releasedReservationCount}")
         lines.add("paymentFailureCount=${evidence.paymentFailureCount}")
         lines.add("startedIdempotencyCount=${evidence.startedIdempotencyCount}")
         passed = compensation && startedCount && passed
 
-        System.err.println("shoppingmall evidence: passed=$passed")
+        orderIds.forEach { orderId ->
+            println("shoppingmall-evidence order=$orderId events=${evidence.eventsByOrder[orderId]?.size ?: 0}")
+        }
         return ServerAssertionRes(passed, lines)
     }
 

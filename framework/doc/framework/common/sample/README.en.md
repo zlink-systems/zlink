@@ -208,7 +208,7 @@ source blocks new work until the one-way CUTOVER submit attempt reaches a succes
 terminal at the source. A target-admission ACK isn't the endpoint of this window. A
 single Actor, a single Instance Spot, and a single SpotWide User Spot aggregate each target a
 default of within 1 second. Exceeding 1 second doesn't cancel or roll back the relocation. The
-detailed standard follows [Graceful Drain And Handoff §7.1](../spec/server/30-host-relocation-flow.en.md#71-service-interruption-time-target-per-relocation-unit).
+detailed standard follows [Graceful Drain And Handoff §7.1](../spec/server/05-location-relocation/05-host-relocation-flow.en.md).
 
 A SpotWide User Spot moves Spot state and member Actor state as a single relocation unit. Multiple
 Actor payloads don't pass through the Relocation Store — they're transferred directly from source
@@ -226,7 +226,7 @@ readiness-completed callback regardless of whether relocation actually occurs. T
 starts the next round only after this callback finishes. No example defers readiness under the
 default any-turn boundary. Each language's exact interface owns the exact API names.
 
-[Message Follow](../spec/server/21-location-runtime.en.md#63-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner)
+[Message Follow](../spec/server/05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner)
 is a feature that delivers an Actor/Spot message arriving at the previous node right after an owner
 change to the current owner. The sample's verification confirms each of the following cases.
 
@@ -299,7 +299,7 @@ add a separate application `Res` DTO for it.
 ## The Spot Execution Turn And Terminator Sample Standard
 
 **Every sample picks its three terminators by the same standard**
-([04 §1.1](../spec/server/05-async-execution-policy.en.md)).
+([04 §1.1](../spec/server/01-execution/README.en.md)).
 
 | Terminator | Execution Line | When |
 |---|---|---|
@@ -324,7 +324,7 @@ The samples' standard usage sites are as follows.
 | [DeliveryDispatch](deliverydispatch/README.en.md) §6.1 | The Entry Spot initializes the application state of a newly delivered Actor | `async` |
 | TicTacToe | Game join leads directly into the game-state flow | `async` |
 
-**Workers and the HTTP client are the same axis** ([04 §1.2](../spec/server/05-async-execution-policy.en.md),
+**Workers and the HTTP client are the same axis** ([04 §1.2](../spec/server/01-execution/README.en.md),
 [12 §3](../spec/http-client/12-http-client.en.md)). An external HTTP/legacy API uses the HTTP
 client's terminator directly, and an asynchronous wait with no terminator of its own, like a DB
 driver or an external SDK, is wrapped with `RunIoWorker(...)`. CPU work is handed off to
@@ -374,7 +374,7 @@ standard below.
 - **Managed languages use automatic handler registration in every sample except TicTacToe.** The
   Framework scans annotation, attribute, or decorator metadata and registers the handlers, so the
   sample configuration doesn't repeat the same list
-  ([Handler Registration And Dispatch §8](../spec/server/06-framework-api.en.md#8-handler-registration-and-dispatch)).
+  ([Handler Registration And Dispatch §8](../spec/server/00-foundation/06-framework-api.en.md#9-handler-registration-and-dispatch)).
 - **Only TicTacToe uses both manual connections and manual handler registration in every
   language.** Each public builder or handler registry registers the handlers explicitly. This lets
   the sample contrast its configuration with Bingo, which uses automatic connections and automatic
@@ -402,7 +402,7 @@ Log output doesn't build a new logging system — it follows the logger each sam
 sample that already writes a file log directly records to that file logger, and a sample whose run
 script saves stdout/stderr to `logs/*.log` records to that sample's console logger. The trace
 attributes follow the exact snake_case names and inclusion conditions of
-[Message Flow Tracing](../spec/server/26-message-flow-tracing.en.md). `surface`, `message_kind`, `outcome`
+[Message Flow Tracing](../spec/server/06-observability/03-message-flow-tracing.en.md). `surface`, `message_kind`, `outcome`
 are included in the message-flow record, and `reason` is included when there's a cause, and
 `action` for a dispatch error. `packet_name` is recorded only when a typed packet name exists, and
 `correlation_id` only when connecting a request and its terminal reply. For the Channel path, only

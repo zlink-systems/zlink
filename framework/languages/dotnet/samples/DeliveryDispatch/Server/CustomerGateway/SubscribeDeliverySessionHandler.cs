@@ -24,13 +24,16 @@ internal sealed class SubscribeDeliverySessionHandler(
         var actor = await actors.FindAsync(CustomerId, cancellationToken)
                     ?? await actors.EnsureAsync(CustomerId, cancellationToken);
 
-        var boundActor = await context.Actors.BindOrGetAsync(
+        var alreadyBound = context.Actors.Find(CustomerId) is not null;
+        _ = await context.Actors.BindOrGetAsync(
             actor,
             cancellationToken);
-        logger.LogInformation(
-            "deliverydispatch customer-session: bound customer actor={ActorId} session={SessionId}",
-            actor.ActorId,
-            context.SessionId);
+        if (!alreadyBound)
+        {
+            logger.LogInformation(
+                "deliverydispatch-customer bound customer={CustomerId}",
+                CustomerId);
+        }
 
         directory.Subscribe(CustomerId, request.DeliveryId);
         logger.LogInformation(

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Host;
 
 /// <summary>
@@ -5,7 +7,7 @@ namespace Zlink.Framework.Runtime.Host;
 /// </summary>
 internal sealed class ZLinkAutoConnectLifecycleCoordinator
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Func<ZLinkFrameworkComponentState, CancellationToken, ValueTask>? _start;
     private readonly Func<CancellationToken, ValueTask>? _stop;
     private ZLinkFrameworkComponentState? _state;
@@ -32,21 +34,44 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
         ZLinkFrameworkComponentState state,
         CancellationToken cancellationToken)
     {
-        lock (_gate)
+        var start = AwaitStateLane(_lane.RunAsync(() =>
         {
             _state = state;
-            return TryStartUnderLock(cancellationToken) ?? Task.CompletedTask;
+            return PrepareStart(cancellationToken);
+        }));
+        if (start is null)
+            return AwaitStateLane(_lane.RunAsync(
+                () => _startTask ?? Task.CompletedTask));
+
+        try
+        {
+            CompleteTask(start.Completion, _start!(start.State, cancellationToken).AsTask());
         }
+        catch (Exception exception)
+        {
+            AwaitStateLane(_lane.RunAsync(() => _startTask = null));
+            start.Completion.TrySetException(exception);
+            throw;
+        }
+        return start.Completion.Task;
     }
 
     internal ValueTask StopAsync(CancellationToken cancellationToken)
     {
-        lock (_gate)
-            return new ValueTask(
-                _stopTask ??= StopCoreAsync(_startTask, cancellationToken));
+        var stop = AwaitStateLane(_lane.RunAsync(() => PrepareStop()));
+        if (stop.Existing is not null)
+            return new ValueTask(stop.Existing);
+
+        CompleteTask(
+            stop.Completion!,
+            StopCoreAsync(stop.StartTask, _stop, cancellationToken));
+        return new ValueTask(stop.Completion!.Task);
     }
 
-    private async Task StopCoreAsync(Task? startTask, CancellationToken cancellationToken)
+    private static async Task StopCoreAsync(
+        Task? startTask,
+        Func<CancellationToken, ValueTask>? stop,
+        CancellationToken cancellationToken)
     {
         Exception? startFailure = null;
         if (startTask is not null)
@@ -60,7 +85,7 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
             }
 
         Exception? stopFailure = null;
-        if (startTask is not null && _stop is { } stop)
+        if (startTask is not null && stop is not null)
             try
             {
                 await stop(cancellationToken).ConfigureAwait(false);
@@ -78,15 +103,57 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(stopFailure).Throw();
     }
 
-    private Task? TryStartUnderLock(CancellationToken cancellationToken)
+    private StartPreparation? PrepareStart(CancellationToken cancellationToken)
     {
         if (_startTask is not null
             || _stopTask is not null
             || _start is null
             || _state is null)
-            return _startTask;
+            return null;
 
-        _startTask = _start(_state, cancellationToken).AsTask();
-        return _startTask;
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _startTask = completion.Task;
+        return new StartPreparation(_state, completion);
     }
+
+    private StopPreparation PrepareStop()
+    {
+        if (_stopTask is not null)
+            return new StopPreparation(_stopTask, null, null);
+
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _stopTask = completion.Task;
+        return new StopPreparation(null, _startTask, completion);
+    }
+
+    private static async void CompleteTask(TaskCompletionSource completion, Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+            completion.TrySetResult();
+        }
+        catch (OperationCanceledException) when (task.IsCanceled)
+        {
+            completion.TrySetCanceled();
+        }
+        catch (Exception exception)
+        {
+            completion.TrySetException(exception);
+        }
+    }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private sealed record StartPreparation(
+        ZLinkFrameworkComponentState State,
+        TaskCompletionSource Completion);
+
+    private sealed record StopPreparation(
+        Task? Existing,
+        Task? StartTask,
+        TaskCompletionSource? Completion);
 }

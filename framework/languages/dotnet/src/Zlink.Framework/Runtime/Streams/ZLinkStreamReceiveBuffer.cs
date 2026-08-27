@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -117,7 +118,7 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
 
         var messageSize = checked((long)headerSize + payloadSize);
         if (_maxMessageSize > 0 && messageSize > _maxMessageSize)
-            throw new InvalidDataException("STREAM frame exceeds MaxMessageSize.");
+            throw new InvalidDataException("EMSGSIZE: STREAM frame exceeds MaxMessageSize.");
         var totalBytes = checked((long)ZLinkStreamFrameCodec.PrefixSize + messageSize);
         if (totalBytes > int.MaxValue)
             throw new InvalidDataException("STREAM frame exceeds the supported size.");
@@ -166,7 +167,7 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
 
         var messageSize = checked((long)headerSize + payloadSize);
         if (_maxMessageSize > 0 && messageSize > _maxMessageSize)
-            throw new InvalidDataException("STREAM frame exceeds MaxMessageSize.");
+            throw new InvalidDataException("EMSGSIZE: STREAM frame exceeds MaxMessageSize.");
         var totalBytes = checked((long)ZLinkStreamFrameCodec.PrefixSize + messageSize);
         if (totalBytes > int.MaxValue)
             throw new InvalidDataException("STREAM frame exceeds the supported size.");
@@ -373,22 +374,28 @@ internal sealed class ZLinkStreamInboundFrame(
 internal sealed class ZLinkStreamReceiveState(RoutingId routingId, long maxMessageSize)
     : IDisposable
 {
-    internal readonly object Gate = new();
+    private readonly ZLinkStateLane _lane = new();
     internal readonly RoutingId RoutingId = routingId;
     internal readonly ZLinkStreamReceiveBuffer Buffer =
         new(maxMessageSize);
     internal ZLinkStreamInboundFrame? Pending;
     internal bool Removed;
 
+    internal void Run(Action work) =>
+        _lane.RunAsync(work).GetAwaiter().GetResult();
+
+    internal T Run<T>(Func<T> work) =>
+        _lane.RunAsync(work).GetAwaiter().GetResult();
+
     public void Dispose()
     {
-        lock (Gate)
+        Run(() =>
         {
             if (Removed) return;
             Removed = true;
             Pending?.Dispose();
             Pending = null;
             Buffer.Dispose();
-        }
+        });
     }
 }

@@ -327,11 +327,11 @@ public sealed partial class RegressionTests
         Assert.Contains("stream-inbound sample=TicTacToe", shellRunner, StringComparison.Ordinal);
         Assert.Contains("stream-inbound sample=TicTacToe .* seq=[0-9]", shellRunner, StringComparison.Ordinal);
         Assert.Contains("stream-inbound sample=TicTacToe .* name=.*Notify", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("observer-win-milestone=verified", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("actor: LeaveGameMsg completed. actor=player-x", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("actor: LeaveGameMsg completed. actor=player-o", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("entry spot: actor destroy completed. actor=player-x", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("entry spot: actor destroy completed. actor=player-o", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("tictactoe-lifecycle actor-bound actor=player-x", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("tictactoe-lifecycle leave-completed actor=player-x", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("tictactoe-lifecycle leave-completed actor=player-o", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("tictactoe-lifecycle actor-destroy-complete actor=player-x", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("tictactoe-lifecycle actor-destroy-complete actor=player-o", shellRunner, StringComparison.Ordinal);
         Assert.Contains("grep -R -q \"dispatch-error\"", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", shellRunner, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("LeaveGameMsg", shellRunner, StringComparison.Ordinal);
@@ -341,14 +341,14 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("stream-inbound sample=TicTacToe .* name=.*Notify", powershellRunner,
             StringComparison.Ordinal);
-        Assert.Contains("observer-win-milestone=verified", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("actor: LeaveGameMsg completed. actor=player-x", powershellRunner,
+        Assert.Contains("tictactoe-lifecycle actor-bound actor=player-x", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("tictactoe-lifecycle leave-completed actor=player-x", powershellRunner,
             StringComparison.Ordinal);
-        Assert.Contains("actor: LeaveGameMsg completed. actor=player-o", powershellRunner,
+        Assert.Contains("tictactoe-lifecycle leave-completed actor=player-o", powershellRunner,
             StringComparison.Ordinal);
-        Assert.Contains("entry spot: actor destroy completed. actor=player-x", powershellRunner,
+        Assert.Contains("tictactoe-lifecycle actor-destroy-complete actor=player-x", powershellRunner,
             StringComparison.Ordinal);
-        Assert.Contains("entry spot: actor destroy completed. actor=player-o", powershellRunner,
+        Assert.Contains("tictactoe-lifecycle actor-destroy-complete actor=player-o", powershellRunner,
             StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Select-String -Pattern \"dispatch-error\" -List", powershellRunner, StringComparison.Ordinal);

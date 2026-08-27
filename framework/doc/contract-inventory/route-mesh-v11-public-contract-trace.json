@@ -99,8 +99,8 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ]
     },
     {
@@ -146,10 +146,10 @@
         "V11-RACE-26"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md"
       ]
     },
     {
@@ -179,9 +179,9 @@
         "V11-RACE-27"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md"
       ]
     },
     {
@@ -225,10 +225,10 @@
         "V11-RACE-35"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md"
       ]
     },
     {
@@ -310,10 +310,10 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ]
     },
     {
@@ -334,8 +334,8 @@
         "V11-RACE-10"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md"
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md"
       ]
     },
     {
@@ -395,10 +395,10 @@
         "V11-RACE-31"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ]
     },
     {
@@ -421,11 +421,11 @@
         "V11-RACE-09"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ]
     }
   ],
@@ -1622,15 +1622,15 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-NODE",
@@ -1692,8 +1692,8 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6C-DN"
@@ -1730,8 +1730,8 @@
         "V11-RACE-10"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md"
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-DN"
@@ -1777,9 +1777,9 @@
         "V11-RACE-27"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-DN",
@@ -1840,8 +1840,8 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6C-NODE"
@@ -1969,13 +1969,13 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-JVM",
@@ -2075,10 +2075,10 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-DN",
@@ -2207,13 +2207,13 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-DN",
@@ -2316,11 +2316,11 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-DN",
@@ -2381,8 +2381,8 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6C-JVM"
@@ -2503,13 +2503,13 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-CPP",
@@ -2549,11 +2549,11 @@
         "V11-RACE-09"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6C-JVM"
@@ -2664,20 +2664,20 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-CPP",
@@ -2739,8 +2739,8 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6C-JVM"
@@ -2779,11 +2779,11 @@
         "V11-RACE-09"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6C-CPP"
@@ -2994,29 +2994,29 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-CPP",
@@ -3130,20 +3130,20 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-DN",
@@ -3184,11 +3184,11 @@
         "V11-RACE-09"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6C-DN"
@@ -3225,8 +3225,8 @@
         "V11-RACE-10"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md"
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-JVM"
@@ -3302,10 +3302,10 @@
         "V11-RACE-31"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-DN",
@@ -3382,10 +3382,10 @@
         "V11-RACE-31"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-CPP",
@@ -3495,18 +3495,18 @@
         "V11-RACE-31"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-NODE",
@@ -3622,22 +3622,22 @@
         "V11-RACE-35"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-JVM",
@@ -3809,19 +3809,19 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-CPP",
@@ -3860,8 +3860,8 @@
         "V11-RACE-10"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md"
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-CPP"
@@ -4072,29 +4072,29 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-DN",
@@ -4213,22 +4213,22 @@
         "V11-RACE-35"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-NODE",
@@ -4381,15 +4381,15 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-JVM",
@@ -4518,13 +4518,13 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-JVM",
@@ -4624,10 +4624,10 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-JVM",
@@ -4687,8 +4687,8 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6C-CPP"
@@ -4786,13 +4786,13 @@
         "V11-RACE-31"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-NODE",
@@ -5004,29 +5004,29 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-JVM",
@@ -5198,19 +5198,19 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-JVM",
@@ -5361,22 +5361,22 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-DN",
@@ -5494,22 +5494,22 @@
         "V11-RACE-35"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-JVM",
@@ -5588,11 +5588,11 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-CPP",
@@ -5656,10 +5656,10 @@
         "V11-RACE-26"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-DN"
@@ -5851,27 +5851,27 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-JVM",
@@ -6085,29 +6085,29 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-JVM",
@@ -6302,27 +6302,27 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-JVM",
@@ -6494,19 +6494,19 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-JVM",
@@ -6545,8 +6545,8 @@
         "V11-RACE-10"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md"
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-JVM"
@@ -6657,20 +6657,20 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-JVM",
@@ -6710,8 +6710,8 @@
         "V11-RACE-10"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md"
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-NODE"
@@ -6809,10 +6809,10 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-CPP",
@@ -6924,20 +6924,20 @@
         "V11-RACE-37"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-JVM",
@@ -7068,13 +7068,13 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-NODE",
@@ -7115,11 +7115,11 @@
         "V11-RACE-09"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6C-JVM"
@@ -7241,13 +7241,13 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-NODE",
@@ -7347,10 +7347,10 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-NODE",
@@ -7520,19 +7520,19 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-DN",
@@ -7649,22 +7649,22 @@
         "V11-RACE-35"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-DN",
@@ -7765,13 +7765,13 @@
         "V11-RACE-31"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-DN",
@@ -7870,10 +7870,10 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-JVM",
@@ -7995,13 +7995,13 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-DN",
@@ -8213,29 +8213,29 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-NODE",
@@ -8311,15 +8311,15 @@
         "V11-RACE-26"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-DN",
@@ -8441,13 +8441,13 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-JVM",
@@ -8640,27 +8640,27 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/01-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-NODE",
@@ -8832,19 +8832,19 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-NODE",
@@ -8967,13 +8967,13 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6B-JVM",
@@ -9089,22 +9089,22 @@
         "V11-RACE-35"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/02-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/06-observability/04-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-CPP",
@@ -9205,13 +9205,13 @@
         "V11-RACE-31"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/04-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/03-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M6A-JVM",
@@ -9346,16 +9346,16 @@
         "V11-RACE-38"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md",
-        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md",
+        "framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.ko.md",
+        "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md",
+        "framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md"
       ],
       "implementationLedgerIds": [
         "V11-M5-FOUND-NODE",

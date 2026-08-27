@@ -38,13 +38,13 @@ Server public contract의 단일 규범 원천은 `framework/doc/framework/commo
 같은 개념을 언어별로 임의 변경하지 말고, 아래 문서에서 계약을 먼저 확인한다. (`.ko.md`가 기준,
 `.en.md`는 미러.)
 
-- **용어·값 형태**: [`01-glossary`](./doc/framework/common/spec/server/01-glossary.ko.md) —
+- **용어·값 형태**: [`01-glossary`](./doc/framework/common/spec/server/00-foundation/02-glossary.ko.md) —
   특히 generation·token 계열의 **형태와 비교 규칙**(아래 "교차언어 불변식" 참고).
 - **메시징·실행**: `04-message-model`, `05-async-execution-policy`, `08-channel-messaging`,
   `12-spot-messaging`, `14-actor-model`, `20-session-actor-dispatch`.
 - **토폴로지·라우팅**: `13-mesh-node`, `21-location-runtime`, `45-internal-routing-and-cache`,
   `46-internal-dispatch-loop`, `50-internal-message-ownership`.
-- **wire 프로토콜(규범)**: [`51-internal-service-wire-protocol`](./doc/framework/common/spec/server/51-internal-service-wire-protocol.ko.md)
+- **wire 프로토콜(규범)**: [`51-internal-service-wire-protocol`](./doc/framework/common/spec/server/02-channel-transport/06-wire-protocol.ko.md)
   + [`service-wire-v1.schema.json`](./runtime/protocol/service-wire-v1.schema.json). **스키마가 유일
   규범 wire source**다. command ID·frame·body는 스키마의 닫힌 정의를 따르며, 생성기
   (`runtime/protocol/generate-service-wire-assets.mjs`)와 검증기(`validate-service-wire-schema.mjs`)를 통과해야 한다.
@@ -53,7 +53,7 @@ Server public contract의 단일 규범 원천은 `framework/doc/framework/commo
 - **liveness·admission**: `29-transport-liveness`, `49-internal-liveness-and-state`,
   `48-internal-session-binding`.
 - **관찰·트레이싱·메트릭**: `24-runtime-monitoring`, `25-runtime-metrics`,
-  [`26-message-flow-tracing`](./doc/framework/common/spec/server/26-message-flow-tracing.ko.md),
+  [`26-message-flow-tracing`](./doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md),
   `27-flow-correlation` (디버깅 시 먼저 켜는 대상).
 - **언어별 exact interface**: `doc/framework/common/spec/server/languages/<lang>/`.
 - **e2e 계약**: `doc/framework/common/e2e/config-*.md` (기대치를 구현 편의로 낮추지 않는다).
@@ -64,7 +64,7 @@ Server public contract의 단일 규범 원천은 `framework/doc/framework/commo
 
 전체 규율은 루트 [`AGENTS.md` §4.1](../AGENTS.md)과
 [`spec/server/README.ko.md` "디버깅 원칙"](./doc/framework/common/spec/server/README.ko.md) +
-[`26-message-flow-tracing`](./doc/framework/common/spec/server/26-message-flow-tracing.ko.md)를 따른다.
+[`26-message-flow-tracing`](./doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md)를 따른다.
 요지:
 
 - **먼저 이미 있는 message-flow 트레이싱과 파일 로그를 켜서 읽는다.** 임시 콘솔 로깅을 추가하고

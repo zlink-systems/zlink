@@ -17,7 +17,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.StandardEnvironment;
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
@@ -43,6 +42,8 @@ public class Program {
         QuestStore store = app.getBean(QuestStore.class);
         ZLinkRouteClient routes = app.getBean(ZLinkRouteClient.class);
         SampleTopology topology = app.getBean(SampleTopology.class);
+        System.out.printf("gamequest-ready kind=instance-factory node=%s%n",
+            topology.questMission().instanceName());
         HttpServer http = startHttp(store, routes, topology);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             http.stop(0);
@@ -77,8 +78,6 @@ public class Program {
                     .setConnectionString(topology.location().redisEndpoint())
                     .setKeyPrefix(topology.location().redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(Program.class);
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.PlayerQuestSpotDiscovery);
             node.listen(mission.spotRouterEndpoint())
                 .setRoutingIdPrefix("gamequest-mission-owner");

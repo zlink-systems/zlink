@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/execution/state_lane.hpp"
+
 #include <zlink/framework/contracts/actors/actor.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
 
@@ -265,7 +267,7 @@ class actor_transfer_coordinator_t
                                 const runtime::protocol::actor_route_fence_t &source_fence);
     void release_message_follow (const std::string &actor_key,
                                  const runtime::protocol::actor_route_fence_t &source_fence,
-                                 std::size_t payload_bytes) noexcept;
+                                 std::size_t payload_bytes);
     bool try_begin_message_follow_notification (
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence,
@@ -363,7 +365,8 @@ class actor_transfer_coordinator_t
         message_follow_suppression_key_t suppression_key;
     };
 
-    mutable std::mutex _mutex;
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
     std::map<std::string, move_state_t> _moves;
     std::map<std::string, pending_actor_admission_t> _admissions;
     std::map<std::string, pending_actor_admission_t> _completed_admissions;

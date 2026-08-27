@@ -21,8 +21,7 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
     private readonly ZLinkOwnerLeaseTracker? _leaseTracker;
     private readonly TimeProvider _time;
     private readonly SemaphoreSlim _wake = new(0, 1);
-    private readonly object _disposeGate = new();
-    private Task? _disposeTask;
+    private readonly Lazy<Task> _disposeTask;
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private Task? _watch;
@@ -45,16 +44,22 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         _watchStore = watchStore;
         _leaseTracker = leaseTracker;
         _time = timeProvider ?? TimeProvider.System;
+        _disposeTask = new Lazy<Task>(
+            DisposeCoreAsync,
+            LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     internal async ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         await TickAsync(cancellationToken).ConfigureAwait(false);
         _cts = new CancellationTokenSource();
-        _loop = Task.Run(() => LoopAsync(_cts.Token), CancellationToken.None);
-        if (_watchStore is not null)
+        using (ExecutionContext.SuppressFlow())
         {
-            _watch = Task.Run(() => WatchAsync(_cts.Token), CancellationToken.None);
+            _loop = Task.Run(() => LoopAsync(_cts.Token), CancellationToken.None);
+            if (_watchStore is not null)
+            {
+                _watch = Task.Run(() => WatchAsync(_cts.Token), CancellationToken.None);
+            }
         }
     }
 
@@ -110,11 +115,7 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         }
     }
 
-    public ValueTask DisposeAsync()
-    {
-        lock (_disposeGate)
-            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
-    }
+    public ValueTask DisposeAsync() => new(_disposeTask.Value);
 
     private async Task DisposeCoreAsync()
     {

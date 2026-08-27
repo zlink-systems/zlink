@@ -17,8 +17,8 @@ title: "6. Spot · C++"
 
 # 6. Spot
 
-> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/11-spot-model.ko.md)과
-> [SPOT 메시징](../../../common/spec/server/12-spot-messaging.ko.md)이 동작을,
+> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
+> [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
 > [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
 > 시그니처를 소유한다. Actor와 Spot membership은
 > [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
@@ -654,7 +654,7 @@ timer handler가 받는 tick 값은 예정 대비 지연과 건너뛴 tick 수�
 | `ScheduledAt` · `started_at` | 예정 시각 · 실제 실행 시작 시각 |
 | `ScheduledElapsed` · `StartedElapsed` | 타이머 시작 이후 경과(예정 기준 · 실제 기준) |
 | `Delay` | `StartedElapsed - ScheduledElapsed` — 이 tick의 예정 대비 지연 |
-| `SkippedTicks` | 이번 tick 직전에 건너뛴 tick 수 |
+| `skipped_ticks` | 이번 tick 직전에 건너뛴 tick 수 |
 | `Period` | 등록한 주기 |
 
 ```cpp

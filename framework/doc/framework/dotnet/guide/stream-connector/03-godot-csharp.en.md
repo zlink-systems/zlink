@@ -110,4 +110,4 @@ is left behind.
 
 The code in this document is Godot usage, not a connector contract. The connector itself doesn't
 depend on Godot types. The common meaning of asynchronous execution follows the
-[Common Framework Policy](../../../common/spec/server/05-async-execution-policy.en.md).
+[Common Framework Policy](../../../common/spec/server/01-execution/README.en.md).

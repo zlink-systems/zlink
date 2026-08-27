@@ -46,6 +46,10 @@ internal static class Program
         builder.Services.AddScoped<GameQuestSession>();
         builder.Services.AddScoped<GetQuestProgressHandler>();
         builder.Services.AddScoped<SyncQuestProgressHandler>();
+        builder.Services.AddSingleton(new GameQuestSpotRouteReadiness(
+            apiName,
+            SampleNames.MeshName));
+        builder.Services.AddHostedService<GameQuestSpotRouteReadinessReporter>();
         builder.Services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
@@ -77,6 +81,10 @@ internal static class Program
         var app = builder.Build();
 
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+        app.Lifetime.ApplicationStarted.Register(() =>
+            app.Logger.LogInformation(
+                "gamequest-ready kind=stream node={NodeId}",
+                apiName));
 
         app.MapGet("/quest/progress/{playerId}", async (
             string playerId,

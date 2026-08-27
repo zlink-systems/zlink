@@ -141,12 +141,39 @@ wait_log_contains() {
   local pattern="$2"
   shift 2
   for _ in $(seq 1 300); do
-    if grep -q "$pattern" "$@" 2>/dev/null; then
+    if grep -Fq "$pattern" "$@" 2>/dev/null; then
       return 0
     fi
     sleep 0.1
   done
   echo "Timed out waiting for ${description}." >&2
+  return 1
+}
+
+log_line_count() {
+  local expected_line="$1"
+  shift
+  awk -v expected="$expected_line" 'index($0, expected) { ++count } END { print count + 0 }' \
+    "$@" 2>/dev/null
+}
+
+wait_log_count() {
+  local description="$1"
+  local expected_count="$2"
+  local expected_line="$3"
+  shift 3
+  local actual_count
+  for _ in $(seq 1 300); do
+    actual_count="$(log_line_count "$expected_line" "$@")"
+    if [[ "$actual_count" -eq "$expected_count" ]]; then
+      return 0
+    fi
+    if [[ "$actual_count" -gt "$expected_count" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  echo "Expected ${description} exactly ${expected_count} time(s), found ${actual_count}." >&2
   return 1
 }
 
@@ -353,29 +380,25 @@ wait_port session-a-play-route "$SESSION_A_PLAY_ROUTE_ENDPOINT"
 wait_port session-b-stream "$SESSION_B_STREAM_ENDPOINT"
 wait_port session-b-play-route "$SESSION_B_PLAY_ROUTE_ENDPOINT"
 
-wait_log_contains "play-a API channel readiness" \
-  "bingo play api channel ready node=a" "$LOG_DIR/play-a.stdout.log"
-wait_log_contains "play-b API channel readiness" \
-  "bingo play api channel ready node=b" "$LOG_DIR/play-b.stdout.log"
 # A remote observer User Spot creation may select the other Play node; do not
 # start the client until the Play-to-Play peer connection is admitted on both
 # sides (spec 07 §7 — a peer is usable only after handshake and admission).
 wait_log_contains "play-a peer route readiness" \
-  "bingo play route ready node=a peer=bingo-play-b" "$LOG_DIR/play-a.stdout.log"
+  "bingo-ready kind=peer-route node=play-a peer=play-b" "$LOG_DIR/play-a.stdout.log"
 wait_log_contains "play-b peer route readiness" \
-  "bingo play route ready node=b peer=bingo-play-a" "$LOG_DIR/play-b.stdout.log"
+  "bingo-ready kind=peer-route node=play-b peer=play-a" "$LOG_DIR/play-b.stdout.log"
 wait_log_contains "api-a matchmaking route readiness" \
-  "bingo route ready node=api-a mesh=matchmaking" "$LOG_DIR/api-a.stdout.log"
+  "bingo-ready kind=mesh-route node=api-a mesh=matchmaking" "$LOG_DIR/api-a.stdout.log"
 wait_log_contains "api-a room route readiness" \
-  "bingo route ready node=api-a mesh=room" "$LOG_DIR/api-a.stdout.log"
+  "bingo-ready kind=mesh-route node=api-a mesh=room" "$LOG_DIR/api-a.stdout.log"
 wait_log_contains "api-b matchmaking route readiness" \
-  "bingo route ready node=api-b mesh=matchmaking" "$LOG_DIR/api-b.stdout.log"
+  "bingo-ready kind=mesh-route node=api-b mesh=matchmaking" "$LOG_DIR/api-b.stdout.log"
 wait_log_contains "api-b room route readiness" \
-  "bingo route ready node=api-b mesh=room" "$LOG_DIR/api-b.stdout.log"
+  "bingo-ready kind=mesh-route node=api-b mesh=room" "$LOG_DIR/api-b.stdout.log"
 wait_log_contains "session-a room route readiness" \
-  "bingo route ready node=session-a mesh=room" "$LOG_DIR/session-a.stdout.log"
+  "bingo-ready kind=mesh-route node=session-a mesh=room" "$LOG_DIR/session-a.stdout.log"
 wait_log_contains "session-b room route readiness" \
-  "bingo route ready node=session-b mesh=room" "$LOG_DIR/session-b.stdout.log"
+  "bingo-ready kind=mesh-route node=session-b mesh=room" "$LOG_DIR/session-b.stdout.log"
 
 "$CLIENT_BIN" \
   --session-a-stream-endpoint "$SESSION_A_STREAM_ENDPOINT" \
@@ -392,16 +415,35 @@ grep -q "bingo=completed" "$LOG_DIR/client.stdout.log"
 grep -q "stream-inbound sample=Bingo" "$LOG_DIR/client.stdout.log"
 grep -Eq "stream-inbound sample=Bingo .* seq=[0-9]" "$LOG_DIR/client.stdout.log"
 grep -Eq "stream-inbound sample=Bingo .* name=.*Notify" "$LOG_DIR/client.stdout.log"
-wait_log_contains "player-1 actor destroy completion" \
-  "entry spot: actor destroy completed. actor=player-1" "$LOG_DIR"/play-*.stdout.log
-wait_log_contains "player-2 actor destroy completion" \
-  "entry spot: actor destroy completed. actor=player-2" "$LOG_DIR"/play-*.stdout.log
-wait_log_contains "observer return to Entry Spot" \
-  "observer returned to entry spot" "$LOG_DIR"/play-*.stdout.log
-if grep -Rq "entry spot: actor destroy completed. actor=observer" "$LOG_DIR"/play-*.stdout.log; then
-  echo "Observer actor must not be destroyed during Bingo player cleanup." >&2
-  exit 1
-fi
+PLAY_LOGS=("$LOG_DIR/play-a.stdout.log" "$LOG_DIR/play-b.stdout.log")
+SESSION_LOGS=("$LOG_DIR/session-a.stdout.log" "$LOG_DIR/session-b.stdout.log")
+
+wait_log_count "player-1 record fetch" 1 \
+  "bingo-record fetched actor=player-1 wins=0 losses=0" "${PLAY_LOGS[@]}"
+wait_log_count "player-2 record fetch" 1 \
+  "bingo-record fetched actor=player-2 wins=0 losses=0" "${PLAY_LOGS[@]}"
+wait_log_count "player-1 record report" 1 \
+  "bingo-record reported actor=player-1 wins=1 losses=0" "${PLAY_LOGS[@]}"
+wait_log_count "player-2 record report" 1 \
+  "bingo-record reported actor=player-2 wins=0 losses=1" "${PLAY_LOGS[@]}"
+for actor in player-1 player-2 observer; do
+  wait_log_count "${actor} room leave" 1 \
+    "bingo-lifecycle room-leave actor=${actor}" "${PLAY_LOGS[@]}"
+  wait_log_count "${actor} Entry Spot leave" 1 \
+    "bingo-lifecycle entry-leave actor=${actor}" "${PLAY_LOGS[@]}"
+done
+wait_log_count "player-1 Entry Spot destroy completion" 1 \
+  "bingo-lifecycle entry-destroy-complete actor=player-1" "${PLAY_LOGS[@]}"
+wait_log_count "player-2 Entry Spot destroy completion" 1 \
+  "bingo-lifecycle entry-destroy-complete actor=player-2" "${PLAY_LOGS[@]}"
+wait_log_count "player-1 session disconnect" 1 \
+  "bingo-lifecycle session-disconnect actor=player-1 destroy=false" "${SESSION_LOGS[@]}"
+wait_log_count "player-2 session disconnect" 1 \
+  "bingo-lifecycle session-disconnect actor=player-2 destroy=false" "${SESSION_LOGS[@]}"
+wait_log_count "observer record report" 0 \
+  "bingo-record reported actor=observer" "${PLAY_LOGS[@]}"
+wait_log_count "observer Entry Spot destroy completion" 0 \
+  "bingo-lifecycle entry-destroy-complete actor=observer" "${PLAY_LOGS[@]}"
 grep -Rq "message flow" "$FLOW_LOG_DIR"
 # Bingo §17.2 — the ambient runtime metrics reach the sample's metric log:
 # Session sees the STREAM CCU counters, Play sees the room queue instruments.
@@ -412,3 +454,4 @@ cleanup
 trap - EXIT
 
 echo "bingo full client/server self-check completed"
+echo "bingo-placement=completed"

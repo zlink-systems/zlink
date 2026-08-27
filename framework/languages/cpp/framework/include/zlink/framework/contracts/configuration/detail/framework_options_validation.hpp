@@ -88,6 +88,11 @@ inline void validate_framework_options (const framework_options_state_t &options
 {
     validate_dispatch_options (options.dispatch);
     validate_location_options (options.locations);
+    if (options.session_replacement_callback_timeout <= std::chrono::milliseconds::zero ()) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "Session replacement callback timeout must be a positive whole-millisecond duration");
+    }
     switch (options.core_hwm_profile) {
         case core_hwm_profile_t::compact:
         case core_hwm_profile_t::low_latency:

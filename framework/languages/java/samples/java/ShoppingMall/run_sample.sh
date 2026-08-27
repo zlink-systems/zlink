@@ -106,6 +106,58 @@ start_role() {
   "$binary" --config "$config" >"$LOG_DIR/$name.log" 2>&1 &
   pids+=("$!")
 }
+json_field() {
+  local name="$1"
+  sed -nE "s/.*\"${name}\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\1/p" | head -n 1
+}
+json_number() {
+  local name="$1"
+  sed -nE "s/.*\"${name}\"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p" | head -n 1
+}
+post_json() {
+  local url="$1" body="$2"
+  curl --fail --silent --show-error --max-time 40 \
+    -H 'content-type: application/json' --data "$body" "$url"
+}
+log_count() {
+  local pattern="$1" file="$2"
+  local count
+  count="$(rg -c -- "$pattern" "$file" 2>/dev/null || true)"
+  printf '%s\n' "${count:-0}"
+}
+wait_log_count() {
+  local expected="$1" pattern="$2" file="$3"
+  for _ in $(seq 1 300); do
+    [[ "$(log_count "$pattern" "$file")" == "$expected" ]] && return 0
+    sleep 0.1
+  done
+  echo "Timed out waiting for ${expected} '${pattern}' in ${file}" >&2
+  return 1
+}
+wait_log_at_least() {
+  local expected="$1" pattern="$2" file="$3"
+  for _ in $(seq 1 300); do
+    (( $(log_count "$pattern" "$file") >= expected )) && return 0
+    sleep 0.1
+  done
+  echo "Timed out waiting for ${expected}+ '${pattern}' in ${file}" >&2
+  return 1
+}
+wait_replay_exactly_once() {
+  local pattern="$1"
+  for _ in $(seq 1 300); do
+    local total=$(( $(log_count "$pattern" "$LOG_DIR/workflow-a.log") + $(log_count "$pattern" "$LOG_DIR/workflow-b.log") ))
+    [[ "$total" == '1' ]] && return 0
+    sleep 0.1
+  done
+  echo "Timed out waiting for one '${pattern}' across workflow logs" >&2
+  return 1
+}
+client_order() {
+  local name="$1"
+  sed -nE "s/^shoppingmall-client-order name=${name} order=([^[:space:]]+)$/\1/p" \
+    "$LOG_DIR/client.log" | head -n 1
+}
 start_role workflow-a "$(app_bin Server/OrderWorkflow OrderWorkflow)" "$workflow_a_config"
 start_role workflow-b "$(app_bin Server/OrderWorkflow OrderWorkflow)" "$workflow_b_config"
 wait_port "$workflow_a_router"
@@ -117,11 +169,83 @@ start_role api-a "$(app_bin Server/CommerceApi CommerceApi)" "$api_a_config"
 start_role api-b "$(app_bin Server/CommerceApi CommerceApi)" "$api_b_config"
 wait_http "$api_a_http"
 wait_http "$api_b_http"
-wait_framework_ready_logs "$LOG_DIR" 1
-echo "topology=ready"
+wait_log_count 1 'shoppingmall-ready kind=http node=api-a' "$LOG_DIR/api-a.log"
+wait_log_count 1 'shoppingmall-ready kind=http node=api-b' "$LOG_DIR/api-b.log"
+wait_log_count 1 'shoppingmall-ready kind=object-route node=api-a target=workflow-a' "$LOG_DIR/api-a.log"
+wait_log_count 1 'shoppingmall-ready kind=object-route node=api-a target=workflow-b' "$LOG_DIR/api-a.log"
+wait_log_count 1 'shoppingmall-ready kind=object-route node=api-b target=workflow-a' "$LOG_DIR/api-b.log"
+wait_log_count 1 'shoppingmall-ready kind=object-route node=api-b target=workflow-b' "$LOG_DIR/api-b.log"
 "$(app_bin Client Client)" --config "$client_config" >"$LOG_DIR/client.log" 2>&1
 cat "$LOG_DIR/client.log"
-grep -q "shoppingmall-server-evidence=completed" "$LOG_DIR/client.log"
-grep -q "shoppingmall=completed" "$LOG_DIR/client.log"
-grep -Eq "zlink flow: event_id=zlink\.message_flow" "$LOG_DIR"/{api,workflow}-*.log
-echo "shoppingmall full client/server self-check completed"
+grep -Fxq 'shoppingmall=completed' "$LOG_DIR/client.log"
+
+success_order="$(client_order success)"
+concurrent_order="$(client_order concurrent)"
+inventory_failure_order="$(client_order inventory-failure)"
+payment_failure_order="$(client_order payment-failure)"
+scale_out_order="$(client_order scale-out)"
+for order in "$success_order" "$concurrent_order" "$inventory_failure_order" \
+  "$payment_failure_order" "$scale_out_order"; do
+  [[ -n "$order" ]] || { echo 'Client did not report its produced order ID.' >&2; exit 1; }
+done
+
+runner_pending_key="${redis_key_prefix}runner-pending"
+runner_relocation_key="${redis_key_prefix}runner-relocation"
+pending_json="$(post_json "$api_a_http/self-check/idempotency/pending" \
+  "{\"cartId\":\"cart-success\",\"shippingAddressId\":\"addr-home\",\"paymentMethodId\":\"pm-ok\",\"idempotencyKey\":\"${runner_pending_key}\"}")"
+pending_order="$(printf '%s' "$pending_json" | json_field orderId)"
+[[ -n "$pending_order" ]] || { echo 'Runner pending fixture did not produce an order ID.' >&2; exit 1; }
+
+for attempt in $(seq 1 20); do
+  (( $(log_count 'shoppingmall-order started order=' "$LOG_DIR/workflow-a.log") >= 1 )) \
+    && (( $(log_count 'shoppingmall-order started order=' "$LOG_DIR/workflow-b.log") >= 1 )) && break
+  post_json "$api_a_http/orders/start" \
+    "{\"cartId\":\"cart-success\",\"shippingAddressId\":\"addr-home\",\"paymentMethodId\":\"pm-ok\",\"idempotencyKey\":\"${redis_key_prefix}runner-witness-${attempt}\"}" >/dev/null
+  sleep 0.1
+done
+wait_log_at_least 1 'shoppingmall-order started order=' "$LOG_DIR/workflow-a.log"
+wait_log_at_least 1 'shoppingmall-order started order=' "$LOG_DIR/workflow-b.log"
+
+checkpoint_json="$(post_json "$api_a_http/self-check/workflow/inventory-reserved" \
+  "{\"cartId\":\"cart-success\",\"shippingAddressId\":\"addr-office\",\"paymentMethodId\":\"pm-ok\",\"idempotencyKey\":\"${runner_relocation_key}\"}")"
+checkpoint_order="$(printf '%s' "$checkpoint_json" | json_field orderId)"
+checkpoint_generation="$(printf '%s' "$checkpoint_json" | json_number objectGeneration)"
+[[ -n "$checkpoint_order" ]] || { echo 'Runner relocation fixture did not produce an order ID.' >&2; exit 1; }
+[[ -n "$checkpoint_generation" ]] || { echo 'Runner relocation fixture did not report ObjectGeneration.' >&2; exit 1; }
+
+relocation_source=""
+for _ in $(seq 1 300); do
+  if (( $(log_count "shoppingmall-order started order=${checkpoint_order} " "$LOG_DIR/workflow-a.log") >= 1 )); then
+    relocation_source=workflow-a
+    relocation_http="$workflow_a_http"
+    break
+  fi
+  if (( $(log_count "shoppingmall-order started order=${checkpoint_order} " "$LOG_DIR/workflow-b.log") >= 1 )); then
+    relocation_source=workflow-b
+    relocation_http="$workflow_b_http"
+    break
+  fi
+  sleep 0.1
+done
+[[ -n "$relocation_source" ]] || { echo 'Runner could not locate the relocation source workflow.' >&2; exit 1; }
+relocation_json="$(post_json "$relocation_http/self-check/relocate" '{}')"
+grep -Fq '"outcome":"RELOCATED"' <<<"$relocation_json"
+
+resume_json="$(post_json "$api_b_http/self-check/workflow/${checkpoint_order}/continue" '{}')"
+grep -Fq '"status":"Confirmed"' <<<"$resume_json"
+
+post_json "$api_a_http/self-check/projection/${success_order}/delete" '{}' >/dev/null
+post_json "$api_b_http/self-check/projection/${success_order}/rebuild" '{}' | grep -Fq '"status":"Confirmed"'
+assertion_json="$(post_json "$api_a_http/self-check/assert" "{\"successfulOrderId\":\"${success_order}\",\"pendingRecoveredOrderId\":\"${pending_order}\",\"concurrentOrderId\":\"${concurrent_order}\",\"resumedOrderId\":\"${checkpoint_order}\",\"inventoryFailureOrderId\":\"${inventory_failure_order}\",\"paymentFailureOrderId\":\"${payment_failure_order}\",\"scaleOutOrderId\":\"${scale_out_order}\"}")"
+grep -Fq '"passed":true' <<<"$assertion_json"
+wait_log_at_least 1 "shoppingmall-evidence order=${checkpoint_order} events=" "$LOG_DIR/api-a.log"
+wait_replay_exactly_once "shoppingmall-order replayed order=${checkpoint_order} generation=${checkpoint_generation}"
+wait_log_count 0 "shoppingmall-order external-effect-repeated order=${checkpoint_order}" "$LOG_DIR/workflow-a.log"
+wait_log_count 0 "shoppingmall-order external-effect-repeated order=${checkpoint_order}" "$LOG_DIR/workflow-b.log"
+
+trap - EXIT
+true
+cleanup
+rm -rf "$RUN_DIR"
+RUN_DIR=""
+echo 'shoppingmall-placement=completed'

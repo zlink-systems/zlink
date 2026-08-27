@@ -124,7 +124,9 @@ public sealed class MessageFlowTracerTests
 
         Assert.StartsWith("zlink flow: ", logger.Message);
         Assert.Equal(
-            ["event_id", "phase", "surface", "kind", "mesh", "channel", "channel_route",
+            //  본문 key는 관찰 스펙의 "Structured log 대체 표기"가 고정한다. 첫 key는
+            //  `event`이며 telemetry attribute 이름 `event_id`와 다른 집합이다.
+            ["event", "phase", "surface", "kind", "mesh", "channel", "channel_route",
                 "source_rid", "target_rid", "packet", "outcome"],
             logger.Fields.Select(field => field.Key));
     }

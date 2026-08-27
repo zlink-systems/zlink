@@ -359,7 +359,7 @@ A connector is created with `zlinkStreamConnectorFactory.create(options)`.
 
 - **Cancellation is delivered through an optional `AbortSignal`.** It
   doesn't replicate another language's cancellation token shape
-  ([Async Execution And Coroutine Policy](../../../server/05-async-execution-policy.en.md)).
+  ([Async Execution And Coroutine Policy](../../../server/01-execution/README.en.md)).
 - **An event subscription returns a `Disposable`.** Dispose it with
   that `Disposable`.
 - `send`/`request`/`waitFor` don't execute immediately — they
@@ -373,7 +373,7 @@ A connector is created with `zlinkStreamConnectorFactory.create(options)`.
   `flowOrigin` as a pair. An outbound that doesn't call it starts a new
   flow with `origin=application`. For the detailed async-context
   boundary, follow
-  [Flow Correlation §6](../../../server/27-flow-correlation.en.md#6-async-work-and-execution-context).
+  [Flow Correlation §6](../../../server/06-observability/04-flow-correlation.en.md#6-async-work-and-execution-context).
 
 The default value of an option is owned by
 [Common Spec §6.1](../../32-stream-connector.en.md). TypeScript

@@ -76,7 +76,7 @@ public sealed class BoundSessionReplacementLifecycleTests
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
             ReplacementCallbackBehavior.WaitForDeadline,
-            callbackDeadline: TimeSpan.FromMilliseconds(40));
+            sessionReplacementCallbackTimeout: TimeSpan.FromMilliseconds(40));
         fixture.BindRetiredSessionActor("actor-a");
 
         Assert.True(fixture.NotifyReplacement("actor-a"));
@@ -284,7 +284,7 @@ public sealed class BoundSessionReplacementLifecycleTests
             fixture.SessionRid,
             bindingToken);
         var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
-        _ = table.Bind(
+        _ = await table.BindAsync(
             actorKey,
             fixture.Lifetime.Context,
             bindingToken,
@@ -301,48 +301,48 @@ public sealed class BoundSessionReplacementLifecycleTests
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration);
 
-        AssertExact(true, actorId, ReplacementFixture.SessionOwnerNodeRid,
+        await AssertExactAsync(true, actorId, ReplacementFixture.SessionOwnerNodeRid,
             fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
             ReplacementFixture.BindingGeneration);
-        AssertExact(false, "other-actor", ReplacementFixture.SessionOwnerNodeRid,
+        await AssertExactAsync(false, "other-actor", ReplacementFixture.SessionOwnerNodeRid,
             fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
             ReplacementFixture.BindingGeneration);
-        AssertExact(false, actorId, RoutingId.From("other-owner-node"),
+        await AssertExactAsync(false, actorId, RoutingId.From("other-owner-node"),
             fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
             ReplacementFixture.BindingGeneration);
-        AssertExact(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
+        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
             RoutingId.From("other-session"), ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
             ReplacementFixture.BindingGeneration);
-        AssertExact(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
+        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
             fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration + 1,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
             ReplacementFixture.BindingGeneration);
-        AssertExact(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
+        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
             fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
             "other-owner", ReplacementFixture.SessionOwnerLeaseGeneration,
             ReplacementFixture.BindingGeneration);
-        AssertExact(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
+        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
             fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration + 1,
             ReplacementFixture.BindingGeneration);
-        AssertExact(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
+        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
             fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
             ReplacementFixture.BindingGeneration + 1);
         return;
 
-        void AssertExact(
+        async Task AssertExactAsync(
             bool expected,
             string candidateActorId,
             RoutingId ownerNodeRid,
@@ -354,15 +354,14 @@ public sealed class BoundSessionReplacementLifecycleTests
         {
             Assert.Equal(
                 expected,
-                table.TryGetExactRetiredBinding(
+                await table.GetExactRetiredBindingAsync(
                     candidateActorId,
                     ownerNodeRid,
                     sessionRid,
                     ownerNodeGeneration,
                     ownerId,
                     ownerLeaseGeneration,
-                    bindingGeneration,
-                    out _));
+                    bindingGeneration) is not null);
         }
     }
 
@@ -557,11 +556,13 @@ public sealed class BoundSessionReplacementLifecycleTests
 
         internal static async Task<ReplacementFixture> CreateAsync(
             ReplacementCallbackBehavior behavior,
-            TimeSpan? callbackDeadline = null)
+            TimeSpan? sessionReplacementCallbackTimeout = null)
         {
             var registration = new ZLinkFrameworkRegistration
             {
-                DefaultRequestTimeout = callbackDeadline ?? TimeSpan.FromSeconds(5)
+                DefaultRequestTimeout = TimeSpan.FromSeconds(5),
+                SessionReplacementCallbackTimeout =
+                    sessionReplacementCallbackTimeout ?? TimeSpan.FromSeconds(5)
             };
             var lifetime = new ReplacementLifetime(behavior);
             ZLinkFrameworkRuntime runtime = null!;
@@ -816,8 +817,6 @@ public sealed class BoundSessionReplacementLifecycleTests
 
         public void Bind(string endpoint) { }
         public void SetTlsServer(string certPath, string keyPath, bool requireClientCert) { }
-        public void OnSendReady(Action handler) { }
-
         public IZLinkBackendSocketPoller CreateReceivePoller() =>
             throw new NotSupportedException();
 

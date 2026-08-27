@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/actors/actor.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include <zlink/framework/contracts/channels/channel.hpp>
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 
@@ -17,6 +18,7 @@
 #include <string_view>
 #include <set>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace zlink::framework::runtime::protocol
@@ -179,7 +181,13 @@ inline constexpr std::size_t relayed_frame_capacity = 1024;
 class actor_gateway_state_t
 {
   public:
-    mutable std::recursive_mutex mutex;
+    template<typename Work>
+    decltype(auto) sync (Work &&work) const
+    {
+        return lane.run ([work = std::forward<Work> (work)] () mutable
+                         -> decltype(auto) { return std::invoke (work); }).get ();
+    }
+
     using create_dispatcher_t = std::function<result_t<actor_ref_t> (
       std::string, std::string, const std::optional<zlink::message_t> &)>;
     using join_spot_dispatcher_t =
@@ -218,6 +226,8 @@ class actor_gateway_state_t
         std::shared_ptr<bound_session_delivery_fence_t> completion_fence;
     };
 
+    runtime::offload_executor_t lane_executor;
+    mutable runtime::state_lane_t lane{lane_executor};
     std::map<std::string, actor_record_t> actors_by_id;
     std::map<std::string, std::shared_ptr<bound_session_sink_t>> bound_session_sinks;
     std::map<std::string, std::vector<std::shared_ptr<bound_session_replacement_handler_t>>>
@@ -235,6 +245,7 @@ class actor_gateway_state_t
     join_spot_dispatcher_t join_spot_dispatcher;
     join_entry_spot_dispatcher_t join_entry_spot_dispatcher;
     relay_dispatcher_t relay_dispatcher;
+    bool offload_session_relay = false;
     disconnect_dispatcher_t disconnect_dispatcher;
     bound_session_registrar_t bound_session_registrar;
     bound_session_sender_t bound_session_sender;
@@ -374,6 +385,7 @@ class actor_gateway_runtime_t
     void on_create (actor_gateway_state_t::create_dispatcher_t dispatcher);
     void on_join_entry_spot (actor_gateway_state_t::join_entry_spot_dispatcher_t dispatcher);
     void on_relay (actor_gateway_state_t::relay_dispatcher_t dispatcher);
+    void offload_session_relay (bool enabled = true);
     void on_membership (actor_gateway_state_t::membership_query_t query);
     void on_join_barrier (actor_gateway_state_t::join_barrier_reserver_t reserver);
     void on_disconnect (actor_gateway_state_t::disconnect_dispatcher_t dispatcher);

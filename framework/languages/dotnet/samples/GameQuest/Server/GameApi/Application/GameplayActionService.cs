@@ -1,5 +1,6 @@
 using GameQuest.GameApi.Domain;
 using GameQuest.Server.Configuration;
+using Zlink.Framework.Contracts.Errors;
 
 namespace GameQuest.GameApi.Application;
 
@@ -54,10 +55,21 @@ internal sealed class GameplayActionService(
         CancellationToken cancellationToken)
     {
         var stored = await store.GetOrAddGameplayEventAsync(candidate, cancellationToken);
-        var routedTo = await ownerDispatcher.DispatchAsync(stored, cancellationToken);
+        string routedTo;
+        try
+        {
+            routedTo = await ownerDispatcher.DispatchAsync(stored, cancellationToken);
+        }
+        catch (ZLinkFrameworkException exception)
+            when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
+        {
+            logger.LogInformation(
+                "gamequest-owner unavailable player={PlayerId}",
+                stored.PlayerId);
+            throw;
+        }
         logger.LogInformation(
-            "gamequest api event routed api={Api} player={PlayerId} event={EventId} type={EventType} owner={Owner}",
-            _apiName,
+            "gamequest-api event-routed player={PlayerId} event={EventId} type={EventType} owner={Owner}",
             stored.PlayerId,
             stored.EventId,
             stored.EventType,

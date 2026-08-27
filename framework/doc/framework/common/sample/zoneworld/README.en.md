@@ -137,6 +137,27 @@ flowchart LR
   precondition) deterministically exist — a diagonal split ({nw,se}/{ne,sw}) has no same-owner
   adjacent pair and would make E4 unsatisfiable, so it is excluded. The preference is only the
   claim-attempt ORDER, not owner computation; placement remains owned by Framework capacity.
+- **The readiness line is fixed.** When a ZoneNode finishes preparing it writes exactly one line
+  to standard output: `topology=ready node=<NodeId> zones=<comma-joined ZoneIds>`. With no zone,
+  nothing follows `zones=`. The runner waits on this line before moving to the next step, so a
+  per-language string makes a shared runner procedure impossible. No extra field is appended.
+- **Bootstrap announces readiness only after it holds two zones.** A ZoneNode claims at startup
+  and repeats until its own census holds two zones. Announcing readiness before that lets
+  `ZW-C1` — "the console observes both ZoneNodes as Registered and Connected" — pass a node that
+  holds no zone, which changes what the assertion means. Registering only the factory and
+  creating the Zone Spot on the first request does not satisfy this.
+- **Claim retry is `250 ms` apart, at most `120` attempts.** The other ZoneNode may not be up
+  yet, leaving capacity free, so a node retries instead of failing immediately. A node that
+  exhausts all 120 attempts without holding two zones fails startup — it never quietly announces
+  readiness with no zone. The values are fixed because a per-language interval or count makes the
+  same scenario fail at a different moment in each language, which splits the verdict.
+- **A crash-replacement process announces readiness without claiming a zone.** §7.5 defines a
+  crash replacement as "becoming able to accept new objects" and forbids restoring the previous
+  owner's objects. Only in this case is readiness announced with zero zones, and the runner turns
+  that intent on explicitly. The setting is named `allowEmptyZoneSet`, spelled to each language's
+  naming rule (`allow_empty_zone_set`, `allowsEmptyZoneSet`). On this path a node stops retrying
+  and announces readiness once `attempt` reaches `8` with an empty census. A normal startup never
+  takes this path.
 - `zoneworld.mesh` carries the ChannelName, Spot/Actor direct messages, and Logical Multicast.
 - `zoneworld.broadcast` is a classic fanout publisher/subscriber connection independent of the mesh.
 - Location Store placement selects the owner of objects such as Zone Spots and Player Actors.
@@ -172,15 +193,15 @@ auto-issued by the Framework as a prefix plus a UUID; no fixed RID is configured
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Find the current zone owner by ZoneId. | Global Spot message | The Framework resolves the global SpotId authority. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
-| Find an actor by PlayerId. | Global Actor message | Doesn't expose the Actor location or current owner as an application route. [Actor model](../../spec/server/14-actor-model.en.md) |
-| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. The single authority for the full relocation order (owner transition, relay, target queue, CAS) is [Relocation flow](../../spec/server/28-relocation-flow.en.md); target admission, membership, and lifecycle are owned by [Spot and Actor membership §4.2](../../spec/server/15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) |
-| Deliver a message to the previous owner during a move. | Message Follow | Uses the committed target route and doesn't automatically resubmit a failed operation to a different owner. [Object routing §2.4](../../spec/server/18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route) |
-| Deliver a snapshot to an adjacent zone. | Logical Multicast | Expresses the boundary via topic and target subscription. [Interaction Model §5](../../spec/server/03-interaction-model.en.md#5-spot-logical-multicast) |
-| Send all-node announcements/maintenance. | Classic fanout | The publisher doesn't manage the node list. [Interaction Model §6](../../spec/server/03-interaction-model.en.md#6-classic-fanout) |
-| Observe node status. | Runtime monitoring event | Ops collects status changes and local reports. [Runtime monitoring](../../spec/server/24-runtime-monitoring.en.md) |
-| Keep the actor connection alive. | Bound STREAM session | Keeps the same connection during relocation, only updating the binding location. [Failure policy §6](../../spec/server/31-failure-failover-policy.en.md#6-session-and-binding) |
-| Avoid RID collisions. | `SetRoutingIdPrefix` zn | Separates the application NodeId/ZoneId from transport identity. [MeshNode spec](../../spec/server/13-mesh-node.en.md) |
+| Find the current zone owner by ZoneId. | Global Spot message | The Framework resolves the global SpotId authority. [Interaction Model §2](../../spec/server/00-foundation/04-interaction-model.en.md) |
+| Find an actor by PlayerId. | Global Actor message | Doesn't expose the Actor location or current owner as an application route. [Actor model](../../spec/server/03-spot-actor/04-actor-model.en.md) |
+| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. The single authority for the full relocation order (owner transition, relay, target queue, CAS) is [Relocation flow](../../spec/server/05-location-relocation/04-relocation-flow.en.md); target admission, membership, and lifecycle are owned by [Spot and Actor membership §4.2](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) |
+| Deliver a message to the previous owner during a move. | Message Follow | Uses the committed target route and doesn't automatically resubmit a failed operation to a different owner. [Object routing §2.4](../../spec/server/03-spot-actor/08-routing.en.md#25-a-message-arriving-at-a-previous-owner-route) |
+| Deliver a snapshot to an adjacent zone. | Logical Multicast | Expresses the boundary via topic and target subscription. [Interaction Model §5](../../spec/server/00-foundation/04-interaction-model.en.md#5-spot-logical-multicast) |
+| Send all-node announcements/maintenance. | Classic fanout | The publisher doesn't manage the node list. [Interaction Model §6](../../spec/server/00-foundation/04-interaction-model.en.md#6-classic-fanout) |
+| Observe node status. | Runtime monitoring event | Ops collects status changes and local reports. [Runtime monitoring](../../spec/server/06-observability/01-runtime-monitoring.en.md) |
+| Keep the actor connection alive. | Bound STREAM session | Keeps the same connection during relocation, only updating the binding location. [Failure policy §6](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#6-session-and-binding) |
+| Avoid RID collisions. | `SetRoutingIdPrefix` zn | Separates the application NodeId/ZoneId from transport identity. [MeshNode spec](../../spec/server/03-spot-actor/03-mesh-node.en.md) |
 
 The Player Actor factory registers a `PreserveStateWith` relocation adapter. Its Capture/Restore
 payload preserves only Application-owned state such as coordinates, ZoneId, bot direction, and the
@@ -206,7 +227,7 @@ that would expose per-language exception text):
 |---|---|
 | Move rejection (OutOfRange/TooFar/DiagonalCrossing/ZoneMaintenance) | the matching code in `MoveRejectedNotify.reason` |
 | JoinWorld zone-admission rejection (maintenance etc.) | a typed code in `JoinWorldRes.error` (e.g. `ZoneMaintenance`) |
-| Any other Framework Join/request failure | the public failure kind name from [Spot and Actor membership §4](../../spec/server/15-spot-actor.en.md#4-joining-an-actor-to-a-spot) **verbatim** in the `error` field (e.g. `NotFound`, `CapacityExceeded`, `InternalFailure`, `DataLost`, `InvalidOperation`, `ShuttingDown`) — no strings outside this closed set |
+| Any other Framework Join/request failure | the public failure kind name from [Spot and Actor membership §4](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md) **verbatim** in the `error` field (e.g. `NotFound`, `CapacityExceeded`, `InternalFailure`, `DataLost`, `InvalidOperation`, `ShuttingDown`) — no strings outside this closed set |
 | Operation ended by target owner crash | `JoinWorldRes.error` / the request's `error` = `Unavailable` |
 | Request deadline exceeded | the request's `error` = `DeadlineExceeded` |
 | Session route-update timeout | WebSocket close (no message; §7.5) |
@@ -440,7 +461,7 @@ Zone Spot to update the copy.
 
 A zone join is a Framework Actor Join, so it does not complete synchronously inside a handler.
 The Actor registers the join with `Defer()`, ends the current handler normally, and the join
-result arrives in a completion callback ([Spot and Actor membership §3](../../spec/server/15-spot-actor.en.md#3-membership)).
+result arrives in a completion callback ([Spot and Actor membership §3](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md)).
 `JoinWorldRes` is therefore sent from the join completion callback — **a successful JoinWorldRes
 means target zone admission has completed** is the normative meaning in this scenario, and an
 implementation that produces the JoinWorldRes terminal from pre-admission state (such as a
@@ -529,7 +550,7 @@ rejected, the direction reverses. The initial coordinates and directions are fix
 
 Ops converts runtime events and explicit reports from ZoneNode into `NodeStatusNotify` and
 `NodeAlertNotify`. Here, a runtime event means the current-status query and change-observation
-surface of [Runtime monitoring](../../spec/server/24-runtime-monitoring.en.md), where each item is
+surface of [Runtime monitoring](../../spec/server/06-observability/01-runtime-monitoring.en.md), where each item is
 a complete status, not a partial event. `WatchNodesRes`'s Registered and Connected are different
 observations: Connected comes from the peer state of the runtime status observation, and
 Registered comes from ZoneNode's explicit report, since the Framework topology status doesn't
@@ -564,7 +585,7 @@ a terminal. Ops records desired state to the maintenance store, so the maintenan
 same NodeId is restored after a ZoneNode restart.
 
 This maintenance is application admission desired state and does not invoke
-[Host relocation flow](../../spec/server/30-host-relocation-flow.en.md)'s
+[Host relocation flow](../../spec/server/05-location-relocation/05-host-relocation-flow.en.md)'s
 `Relocate(PlannedMaintenance)` — ZW-E is not a verification target for Spec 30 host relocation
 (that coverage is owned by a separate harness).
 
@@ -834,3 +855,26 @@ to the Gateway".
 A per-language runner may implement some IDs runner-driven (e.g. the C4 fault injection), but it
 must not change an ID's precondition/action/assertion semantics. A new ID is added to this
 document first before any runner introduces it.
+
+#### Fixed values for the scenarios that stop and restart a ZoneNode
+
+Several scenarios stop a ZoneNode. **How it is stopped, and which zone set it comes back with, is
+not a per-language choice.** Leaving these values unstated is why four implementations used
+different signals, so the same ID tested something different in each language.
+
+| ID | Stop | Why |
+| --- | --- | --- |
+| ZW-B4 | abrupt | publishing has to cut out at once for the 3-tick expiry to be observable |
+| ZW-C2 | graceful | the row's precondition is a normal shutdown; it observes the drain path's disconnect event |
+| ZW-C3 | abrupt | §2.2 — "a crashed node cannot send a false report, so this TTL is the only false transition rule" |
+| ZW-E5 | abrupt | shows the maintenance desired state lives in a store outside the process |
+| ZW-G3 | graceful | the row's precondition is a normal replacement (stop→start) |
+| ZW-G4 | abrupt | the row's precondition is a crash replacement (kill→start) |
+
+**A restarted ZoneNode does not take its zones back.** §2.2 fixes that a Ready owner failure is
+never an automatic replacement, so the restarted process comes up with the **replacement
+configuration that reaches ready with zero zones** — the same whether the stop was graceful or
+abrupt. Only the initial cold start claims zones.
+
+Leaving this unstated makes a restarted node demand two zones and retry the claim until its budget
+runs out, which is exactly the state the cpp implementation was in.

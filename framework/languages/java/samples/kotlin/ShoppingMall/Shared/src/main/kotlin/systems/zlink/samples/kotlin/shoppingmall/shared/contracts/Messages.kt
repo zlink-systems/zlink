@@ -54,12 +54,12 @@ data class RebuildProjectionApiRes(val state: OrderState)
 @ZLinkPacket("PrepareInventoryReservedApiReq")
 data class PrepareInventoryReservedApiReq(val request: StartOrderReq)
 
-data class PrepareInventoryReservedApiRes(val state: OrderState)
+data class PrepareInventoryReservedApiRes(val state: OrderState, val objectGeneration: Long)
 
 @ZLinkPacket("PrepareInventoryReservedReq")
 data class PrepareInventoryReservedReq(val command: StartOrderWorkflowReq)
 
-data class PrepareInventoryReservedRes(val state: OrderState)
+data class PrepareInventoryReservedRes(val state: OrderState, val objectGeneration: Long)
 
 @ZLinkPacket("CreatePendingMappingReq")
 data class CreatePendingMappingReq(
@@ -102,7 +102,7 @@ data class StartOrderWorkflowRes(val state: OrderState)
 @ZLinkPacket("ContinueOrderWorkflowReq")
 data class ContinueOrderWorkflowReq(val orderId: String)
 
-data class ContinueOrderWorkflowRes(val state: OrderState)
+data class ContinueOrderWorkflowRes(val state: OrderState, val objectGeneration: Long? = null)
 
 @ZLinkPacket("RebuildOrderProjectionReq")
 data class RebuildOrderProjectionReq(val orderId: String)

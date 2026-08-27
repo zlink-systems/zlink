@@ -120,21 +120,21 @@ domain model don't need to change even if the number of servers changes.
 
 | Behavior Needed | Framework Element | Reason And Contract Basis |
 |---|---|---|
-| Handle requests and pushes over one client connection | STREAM session | The Framework owns dispatch and reply correlation. [STREAM server session §3](../../spec/server/19-stream-session.en.md#3-dispatch-model) |
-| Deliver a session request to the current player | Session Actor binding | Relays via the exact route stored at bind time. [Spot/Actor routing §3](../../spec/server/18-object-routing.en.md#3-how-to-relay-to-an-actor-bound-to-a-session) |
-| Keep per-player identity and lifecycle | Actor and Entry Spot | The Framework manages Actor creation and the initial entry point. [Spot model §4](../../spec/server/11-spot-model.en.md#4-entry-spot) |
-| Change per-room shared state in order | `SpotWide` User Spot | Handles room join, card, timer, and winner decisions in one shared turn. [Spot model §5.1](../../spec/server/11-spot-model.en.md#51-spotwide-relocation-boundary) |
-| Create a per-level-bucket matchmaker only when needed | Instance Spot | The first request in the `Missing` state starts cold activation. [SPOT messaging §3.2](../../spec/server/12-spot-messaging.en.md#32-newly-preparing-when-theres-no-instance-spot) |
-| Return the room turn during an external record call | `Yield` terminator | Once the result is decided, the continuation runs in a new Spot turn. [SPOT messaging §3.6](../../spec/server/12-spot-messaging.en.md#36-resuming-channel-request-execution) |
-| Deliver a reward to multiple Play nodes' local observer rooms | Logical Multicast | Scopes local subscription by Channel and topic. [SPOT messaging §4](../../spec/server/12-spot-messaging.en.md#4-channel-scoped-logical-multicast) |
-| Push to the current client even if the Actor moves | Bound session send | Uses the binding identity and route kept by the session owner. [Spot and Actor membership §9](../../spec/server/15-spot-actor.en.md#9-bound-session) |
-| Move the room and Actor on a planned node shutdown | Host Relocate | Moves the Spot and member Actors as the same relocation unit. [Host Relocate §8.5](../../spec/server/30-host-relocation-flow.en.md#85-spotwide-user-spot) |
+| Handle requests and pushes over one client connection | STREAM session | The Framework owns dispatch and reply correlation. [STREAM server session §3](../../spec/server/04-session/01-stream-session.en.md) |
+| Deliver a session request to the current player | Session Actor binding | Relays via the exact route stored at bind time. [Spot/Actor routing §3](../../spec/server/03-spot-actor/08-routing.en.md#3-how-to-relay-to-an-actor-bound-to-a-session) |
+| Keep per-player identity and lifecycle | Actor and Entry Spot | The Framework manages Actor creation and the initial entry point. [Spot model §4](../../spec/server/03-spot-actor/01-spot-model.en.md#4-entry-spot) |
+| Change per-room shared state in order | `SpotWide` User Spot | Handles room join, card, timer, and winner decisions in one shared turn. [Spot model §5.1](../../spec/server/03-spot-actor/01-spot-model.en.md#51-spotwide-relocation-boundary) |
+| Create a per-level-bucket matchmaker only when needed | Instance Spot | The first request in the `Missing` state starts cold activation. [SPOT messaging §3.2](../../spec/server/03-spot-actor/02-spot-messaging.en.md#32-newly-preparing-when-there-is-no-instance-spot) |
+| Return the room turn during an external record call | `Yield` terminator | Once the result is decided, the continuation runs in a new Spot turn. [SPOT messaging §3.6](../../spec/server/03-spot-actor/02-spot-messaging.en.md#36-resuming-channel-request-execution) |
+| Deliver a reward to multiple Play nodes' local observer rooms | Logical Multicast | Scopes local subscription by Channel and topic. [SPOT messaging §4](../../spec/server/03-spot-actor/02-spot-messaging.en.md#4-channel-scoped-logical-multicast) |
+| Push to the current client even if the Actor moves | Bound session send | Uses the binding identity and route kept by the session owner. [Spot and Actor membership §9](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md#10-bound-session) |
+| Move the room and Actor on a planned node shutdown | Host Relocate | Moves the Spot and member Actors as the same relocation unit. [Host Relocate §8.5](../../spec/server/05-location-relocation/05-host-relocation-flow.en.md#103-spotwide-user-spot) |
 
 Handlers are auto-registered via the typed handler contract and declarative metadata. .NET
 attributes, Java/Kotlin annotations, and Node decorators serve the same role. C++ explicitly
 declares the same handler set using compile-time types and a builder instead of a runtime scan.
 Only the registration method differs — the message and processing responsibility are the same. The
-contract follows [Framework API §8](../../spec/server/06-framework-api.en.md#8-handler-registration-and-dispatch).
+contract follows [Framework API §8](../../spec/server/00-foundation/06-framework-api.en.md#9-handler-registration-and-dispatch).
 
 ### 5.1 Instance Spot Lifetime And The Failure Boundary
 
@@ -151,7 +151,7 @@ This behavior must not be interpreted as crash failover. If the Ready owner proc
 abnormally or the lease becomes invalid, the Framework doesn't automatically release authority or
 create a new incarnation on another node. That operation ends as `Unavailable`. A planned
 `Relocate` is a separate lifecycle that moves the same generation to a target. See
-[Failure handling §4.4](../../spec/server/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure)
+[Failure handling §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure)
 for the detailed distinction.
 
 ## 6. Message Contract
@@ -600,7 +600,7 @@ When the STREAM connection drops, the Framework automatically submits disconnect
 identity in the current binding snapshot. The current Spot's disconnect callback only reflects
 domain state that push can't reach. The Session callback doesn't iterate Actors or directly remove
 a binding. Disconnect doesn't destroy the Actor or change room membership. This boundary follows
-[Session Actor dispatch §4.1](../../spec/server/20-session-actor-dispatch.en.md#41-how-a-connection-disconnect-is-told-to-an-actor).
+[Session Actor dispatch §4.1](../../spec/server/04-session/02-session-actor-binding.en.md).
 
 Player Actor cleanup after the game ends runs in a separate order.
 
@@ -810,6 +810,57 @@ If Docker isn't available or Redis isn't ready, abort with a clear error. An alr
 Redis isn't used as a substitute. Running the client before readiness, or after a fixed sleep, isn't
 allowed.
 
+### 10.1 Server-Side Evidence the Runner Confirms
+
+The runner matches the strings in the tables below verbatim. These strings are not a per-language
+choice. All five implementations emit the same string the same number of times; changing the
+wording means changing this table first.
+
+Readiness is confirmed before the client starts. Node names are fixed as `api-a`, `api-b`,
+`matchmaking`, `play-a`, `play-b`, `session-a`, and `session-b`.
+
+| Fact confirmed | Log | Emitting node |
+| --- | --- | --- |
+| The Play node admitted the other Play node as a peer | `bingo-ready kind=peer-route node=<NodeId> peer=<PeerNodeId>` | `play-a`, `play-b` |
+| The node acquired a mesh route | `bingo-ready kind=mesh-route node=<NodeId> mesh=<MeshName>` | `api-a`, `api-b` (`matchmaking`, `room`); `session-a`, `session-b` (`room`) |
+
+The Play node's reachability to the API channel gets no readiness row of its own — the
+`bingo-record fetched`/`reported` rows below are emitted only after a real request round trip from
+the Play node to the API succeeds, so those two rows prove the same fact with business traffic. Do
+not send a synthetic request for readiness.
+
+Business evidence is confirmed after the client scenario finishes. `<N>` is decimal and is not
+zero-padded.
+
+| Fact confirmed | Log | Exact count |
+| --- | --- | --- |
+| The player record was read | `bingo-record fetched actor=player-1 wins=0 losses=0` | 1 |
+| The player record was read | `bingo-record fetched actor=player-2 wins=0 losses=0` | 1 |
+| The winner record was written | `bingo-record reported actor=player-1 wins=1 losses=0` | 1 |
+| The loser record was written | `bingo-record reported actor=player-2 wins=0 losses=1` | 1 |
+| The observer writes no record | `bingo-record reported actor=observer` | 0 |
+| The actor left the room | `bingo-lifecycle room-leave actor=<ActorId>` | `player-1` 1, `player-2` 1, `observer` 1 |
+| The actor left the Entry Spot | `bingo-lifecycle entry-leave actor=<ActorId>` | `player-1` 1, `player-2` 1, `observer` 1 |
+| Destroy completed after the Entry Spot return | `bingo-lifecycle entry-destroy-complete actor=<ActorId>` | `player-1` 1, `player-2` 1 |
+| The observer is not destroyed | `bingo-lifecycle entry-destroy-complete actor=observer` | 0 |
+| Disconnect did not destroy the actor | `bingo-lifecycle session-disconnect actor=<ActorId> destroy=false` | `player-1` 1, `player-2` 1 |
+
+`bingo-record` and `bingo-lifecycle` rows are counted across both Play node logs.
+`bingo-lifecycle session-disconnect` rows are counted across both Session node logs.
+Which player lands on which node is not a confirmed fact — the placement independence in §9 keeps
+it unpinned.
+
+Log waits poll every `100 ms` for at most `300` attempts. This budget applies to readiness and to
+business evidence alike. Reading once without waiting, or reading after a fixed sleep, is not
+allowed.
+
+Once every row passes, the runner prints `bingo-placement=completed` last. If any row fails, it
+does not print this marker.
+
+The base smoke runs only the eight steps in §10. Drain, node replacement, and rolling relocation
+are not success conditions of the base sample — the relocation contract in §7.6 is verified by
+[Config 11 observability and operations E2E](../../e2e/config-11-observability-ops.en.md).
+
 ## 11. Completion Criteria
 
 That language's Bingo sample is considered complete once all of the following conditions are met.
@@ -831,15 +882,15 @@ That language's Bingo sample is considered complete once all of the following co
 - After the game ends, the result report, Entry Spot return, and Actor destroy complete in the
   defined order.
 - Every payload and ordering assertion in the client self-check passes.
-- The runner confirms readiness, Redis lifecycle, server-side evidence, and both completion
-  markers.
+- The runner confirms readiness, Redis lifecycle, and both completion markers, and passes every
+  row of the §10.1 table down to the string and the count.
 - Domain has no Framework or Redis types, and no sample-only route/codec/polling helper.
 - The .NET, Java, Kotlin, Node, and C++ implementations keep the same message schema, business
   order, and final result.
 
 An implementation that turns on observability features uses the per-language exact interface of
-[flow correlation](../../spec/server/27-flow-correlation.en.md),
-[runtime metrics](../../spec/server/25-runtime-metrics.en.md), and
-[Graceful Drain](../../spec/server/30-host-relocation-flow.en.md). Observability configuration and a
+[flow correlation](../../spec/server/06-observability/04-flow-correlation.en.md),
+[runtime metrics](../../spec/server/06-observability/02-runtime-metrics.en.md), and
+[Graceful Drain](../../spec/server/05-location-relocation/05-host-relocation-flow.en.md). Observability configuration and a
 100-Actor relocation workload aren't success criteria for this base sample — they're verified by
 [Config 11 Observability/Ops E2E](../../e2e/config-11-observability-ops.en.md).

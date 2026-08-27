@@ -1,4 +1,4 @@
-// SF-F11: Waiter 종료와 response loss 뒤 payload 값을 보존한다 시나리오를 검증한다.
+// SF-F11: Waiter 종료와 전송 실패 뒤 payload 값을 보존한다 시나리오를 검증한다.
 import { postJson } from '../../../http-client';
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';

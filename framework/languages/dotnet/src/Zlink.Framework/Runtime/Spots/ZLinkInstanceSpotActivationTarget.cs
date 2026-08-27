@@ -645,11 +645,12 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 $"Instance Spot '{authority.SpotId}' activation recovery payload is invalid.");
 
-        if (!catalog.TryGetInstanceActivation(
+        var activation = await catalog.TryGetInstanceActivationAsync(
                 authority.SpotId,
                 authority.StableType,
-                snapshot.ObjectGeneration,
-                out var activation))
+                snapshot.ObjectGeneration)
+            .ConfigureAwait(false);
+        if (activation is null)
         {
             var prepared = await catalog.PrepareInstanceReservedAsync(
                     authority.StableType,
@@ -859,11 +860,11 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     StringComparison.Ordinal);
             if (authority.State == ZLinkInstanceSpotAuthorityState.Ready
                 && !anotherOperationIsAccepted
-                && catalog.TryGetInstanceActivation(
-                    authority.SpotId,
-                    authority.StableType,
-                    current.ObjectGeneration,
-                    out var activation))
+                && (await catalog.TryGetInstanceActivationAsync(
+                        authority.SpotId,
+                        authority.StableType,
+                        current.ObjectGeneration)
+                    .ConfigureAwait(false)) is { } activation)
             {
                 var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(
                     operation.Target.TargetSpotId);

@@ -25,8 +25,8 @@ class OrderWorkflowRouter(private val routes: ZLinkRouteClient) {
     suspend fun startWorkflow(command: StartOrderWorkflowReq): OrderState =
         request(command.orderId, command, StartOrderWorkflowRes::class.java).state
 
-    suspend fun prepareInventoryReserved(command: StartOrderWorkflowReq): OrderState =
-        request(command.orderId, PrepareInventoryReservedReq(command), PrepareInventoryReservedRes::class.java).state
+    suspend fun prepareInventoryReserved(command: StartOrderWorkflowReq): PrepareInventoryReservedRes =
+        request(command.orderId, PrepareInventoryReservedReq(command), PrepareInventoryReservedRes::class.java)
 
     suspend fun continueWorkflow(orderId: String): OrderState =
         request(orderId, ContinueOrderWorkflowReq(orderId), ContinueOrderWorkflowRes::class.java).state

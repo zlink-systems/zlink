@@ -8,6 +8,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -15,12 +16,15 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.StandardEnvironment;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.samples.supportchat.server.configuration.SampleLocationStore;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.server.configuration.SampleTopology;
+import systems.zlink.samples.supportchat.server.configuration.SupportChatReadinessReporter;
 
 @EnableZLinkFramework
 @EnableConfigurationProperties(SampleTopology.class)
@@ -52,6 +56,7 @@ public final class Program {
         SampleTopology.Api api = topology.api();
         URI channelEndpoint = URI.create(api.channelEndpoint());
         return options -> {
+            options.configureLocations();
             options.addHandlersFromPackageOf(Program.class);
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
@@ -63,7 +68,21 @@ public final class Program {
                 .addHandlerGroup(SampleNames.ApiChannel);
             options.addClientServerChannel(SampleNames.SupportChannel)
                 .client();
+            ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.SupportActorMesh);
+            node.listen(api.spotRouterEndpoint())
+                .setRoutingIdPrefix("support-api");
+            node.objects().client();
         };
+    }
+
+    @Bean
+    ApplicationRunner apiPublicReadiness() {
+        return arguments -> System.out.println("supportchat-ready kind=public node=api");
+    }
+
+    @Bean(destroyMethod = "close")
+    SupportChatReadinessReporter apiSpotRouteReadiness(ZLinkRouteMeshRuntime meshes) {
+        return new SupportChatReadinessReporter("api", meshes);
     }
 
     @Bean(destroyMethod = "close")

@@ -75,7 +75,8 @@ class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
         }
         std::cout << "entry spot: actor destroy requested. actor=" << actor.actor_id << std::endl;
         co_await _context.destroy_actor (actor);
-        std::cout << "entry spot: actor destroy completed. actor=" << actor.actor_id << std::endl;
+        std::cout << "tictactoe-lifecycle actor-destroy-complete actor=" << actor.actor_id
+                  << std::endl;
     }
 
     task_t<void> on_leave_actor (player_actor_t &actor) override

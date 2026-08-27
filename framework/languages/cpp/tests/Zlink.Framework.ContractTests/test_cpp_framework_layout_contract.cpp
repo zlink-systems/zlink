@@ -325,7 +325,7 @@ bool non_empty_directories_do_not_keep_gitkeep (const std::filesystem::path &roo
 bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path &root)
 {
     const auto path =
-      root.parent_path ().parent_path () / "doc/framework/common/spec/server/14-actor-model.ko.md";
+      root.parent_path ().parent_path () / "doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md";
     std::ifstream input (path);
     std::ostringstream buffer;
     buffer << input.rdbuf ();
@@ -339,7 +339,7 @@ bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path 
       "Actor 종료는 새로운 payload admission을 닫고 session binding과 location ownership을",
       "Bound session의 연결이 종료되었다는 이유만으로 Actor를 자동 종료하거나",
       "현재 Spot에서 자동 leave하지 않는다.",
-      "Actor destroy는 exact `ActorRef`를 받는다. Actor가 user Spot에 있으면 먼저 leave",
+      "Actor destroy는 `ActorRef`를 받는다. Actor가 user Spot에 있으면 먼저 leave",
       "또는 Entry Spot join을 완료해야 한다.",
       "Destroy는 membership 이동이 아니다.",
       "성공 과정에서 `OnLeaveActor`를 다시",
@@ -360,7 +360,7 @@ bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path 
 bool framework_api_documents_actor_destroy_lifecycle (const std::filesystem::path &root)
 {
     const auto path =
-      root.parent_path ().parent_path () / "doc/framework/common/spec/server/06-framework-api.ko.md";
+      root.parent_path ().parent_path () / "doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md";
     std::ifstream input (path);
     std::ostringstream buffer;
     buffer << input.rdbuf ();
@@ -378,7 +378,7 @@ bool framework_api_documents_actor_destroy_lifecycle (const std::filesystem::pat
       "Object Server의 Entry Spot, user Spot, typed Actor와 actor-free Instance Spot factory",
       "`PreserveStateWith`는 Actor factory에",
       "`ActorRelocationAdapter`, User·Instance Spot factory에 `SpotRelocationAdapter`를 지정한다.",
-      "| exact ActorRef destroy | idempotent `false` | `Unavailable` | "
+      "| ActorRef로 직접 지정한 destroy | idempotent `false` | `Unavailable` | "
       "`InvalidOperation` | `Unavailable` |"};
     for (const auto &needle : required) {
         if (text.find (needle) == std::string::npos) {
@@ -395,7 +395,7 @@ bool session_actor_dispatch_documents_disconnect_destroy_boundary (
 {
     const auto path =
       root.parent_path ().parent_path ()
-      / "doc/framework/common/spec/server/20-session-actor-dispatch.ko.md";
+      / "doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md";
     std::ifstream input (path);
     std::ostringstream buffer;
     buffer << input.rdbuf ();

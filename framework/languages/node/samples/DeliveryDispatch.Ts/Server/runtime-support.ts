@@ -1,4 +1,4 @@
-import type { ZLinkRouteMeshRuntime, ZLinkRouteMeshStatus } from '@zlink-systems/framework';
+import { ZLinkPeerState, type ZLinkRouteMeshRuntime, type ZLinkRouteMeshStatus } from '@zlink-systems/framework';
 
 function waitForShutdown(): Promise<void> {
   return new Promise((resolve) => {
@@ -15,19 +15,28 @@ function waitForShutdown(): Promise<void> {
 function observeDeliveryRouteReadiness(
   runtime: ZLinkRouteMeshRuntime,
   meshName: string,
-  role: string
+  nodeId: string,
+  actorRouteTargets: readonly string[] = []
 ): void {
-  let reported = false;
+  let routeReported = false;
+  const reportedActorRoutes = new Set<string>();
   const report = (status: ZLinkRouteMeshStatus): void => {
-    if (reported || !status.isReady) return;
-    reported = true;
-    console.log(`deliverydispatch-route-ready role=${role} mesh=${meshName}`);
+    if (status.isReady && !routeReported) {
+      routeReported = true;
+      console.log(`deliverydispatch-ready kind=route node=${nodeId}`);
+    }
+    for (const target of actorRouteTargets) {
+      if (reportedActorRoutes.has(target)) continue;
+      if (!status.peers.some((peer) => peer.nodeRid === target && peer.state === ZLinkPeerState.Ready)) continue;
+      reportedActorRoutes.add(target);
+      console.log(`deliverydispatch-ready kind=actor-route node=${nodeId} target=${target}`);
+    }
   };
   void (async () => {
     report(runtime.snapshot(meshName));
     for await (const observed of runtime.observe(meshName, 64)) report(observed.status);
   })().catch((error: unknown) => {
-    console.error(`deliverydispatch readiness observer failed role=${role} mesh=${meshName}`, error);
+    console.error(`deliverydispatch readiness observer failed node=${nodeId} mesh=${meshName}`, error);
   });
 }
 

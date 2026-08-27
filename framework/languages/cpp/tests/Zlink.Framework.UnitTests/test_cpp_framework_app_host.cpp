@@ -71,11 +71,12 @@ struct failure_trace_t
 class blocking_stop_service_t final : public zlink::framework::hosted_service_t
 {
   public:
-    void start (zlink::framework::service_provider_t &) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
     {
         std::lock_guard lock (_mutex);
         _started = true;
         _changed.notify_all ();
+        co_return;
     }
 
     void stop () noexcept override
@@ -379,7 +380,11 @@ struct nested_app_http_handler_t
           public:
             explicit stop_service_t (zlink::framework::app_t &app) : _app (app) {}
 
-            void start (zlink::framework::service_provider_t &) override { _app.stop (); }
+            zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
+            {
+                _app.stop ();
+                co_return;
+            }
 
             void stop () noexcept override {}
 

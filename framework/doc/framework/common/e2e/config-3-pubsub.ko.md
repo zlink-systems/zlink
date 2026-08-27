@@ -65,7 +65,7 @@ fanout은 subscriber 간 동일한 순서나 lossless delivery를 보장하지 �
   evidence를 bounded wait로 확인한다.
 - 검증: 세 subscriber가 `fanout-ready` marker를 각각 기록한다. Publish terminal만으로 delivery를 판정하지
   않으며 subscriber 간 수신 순서와 누락되지 않은 전체 sequence는 요구하지 않는다.
-- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)의 fanout delivery를
+- 세부 동작: [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)의 fanout delivery를
   검증한다.
 
 #### PS-A2 Packet name으로 typed handler를 선택한다
@@ -81,7 +81,7 @@ fanout은 subscriber 간 동일한 순서나 lossless delivery를 보장하지 �
 - 절차: 두 event를 서로 다른 marker로 한 번씩 publish한다.
 - 검증: 각 marker는 대응 handler evidence에만 한 번 기록되고 typed payload 값이 입력과 일치한다. Topic
   또는 payload field로 handler를 다시 선택하지 않는다.
-- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)의 handler namespace를
+- 세부 동작: [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)의 handler namespace를
   검증한다.
 
 #### PS-A3 Late subscriber는 ready 이후 event부터 받는다
@@ -98,7 +98,7 @@ Classic fanout은 과거 event를 보관하지 않는다. 늦게 시작한 subsc
   `after-ready`를 publish한다.
 - 검증: Late subscriber는 `after-ready`를 한 번 받고 `before-ready`는 받지 않는다. 기존 subscriber는
   두 event를 모두 받는다.
-- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)의 non-replay delivery를
+- 세부 동작: [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)의 non-replay delivery를
   검증한다.
 
 #### PS-A4 Subscriber reconnect 뒤 새 event를 받는다
@@ -117,7 +117,7 @@ replay되지 않는다.
   `after-reconnect`를 publish한다.
 - 검증: B는 두 event를 모두 받고 A는 `after-reconnect`만 받는다. A process와 handler registration은
   전체 구간 유지된다.
-- 세부 동작: [Transport liveness §6](../spec/server/29-transport-liveness.ko.md)의
+- 세부 동작: [Transport liveness §6](../spec/server/02-channel-transport/05-transport-liveness.ko.md)의
   fanout reconnect를 검증한다.
 
 ### Track B — Subscriber 간 처리를 격리
@@ -142,8 +142,8 @@ subscriber가 marker를 독립적으로 처리하는가.
   subscriber 모두 `fanout-start`를 기록하고 한 subscriber의 지연이 다른 subscriber의 public ready 상태나
   marker 처리를 막지 않는다. Subscriber 간 순서, lossless delivery, catch-up·drop 수와 load-event
   sequence 완전성은 판정하지 않는다.
-- 세부 동작: [Channel topology](../spec/server/07-channel-topology.ko.md)의 subscriber process 격리와
-  [Framework API §11](../spec/server/06-framework-api.ko.md)의 fanout dispatch 격리를 검증한다.
+- 세부 동작: [Channel topology](../spec/server/02-channel-transport/01-channel-topology.ko.md)의 subscriber process 격리와
+  [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)의 fanout dispatch 격리를 검증한다.
 
 #### PS-B2 Publisher 재시작 뒤 기존 subscriber가 새 event를 받는다
 
@@ -160,7 +160,7 @@ Application handler를 다시 등록하거나 과거 event를 replay하지 않�
   publisher를 다시 시작하여 ready가 되면 새 marker를 publish한다.
 - 검증: 기존 subscriber process가 새 marker를 한 번 받는다. Handler registration을 다시 호출하지 않고
   종료 중의 marker가 나중에 나타나지 않는다.
-- 세부 동작: [Transport liveness §6](../spec/server/29-transport-liveness.ko.md)를
+- 세부 동작: [Transport liveness §6](../spec/server/02-channel-transport/05-transport-liveness.ko.md)를
   검증한다.
 
 ### Track C — Automatic discovery와 publisher lifecycle을 처리
@@ -180,7 +180,7 @@ ChannelName의 live descriptor를 발견하여 연결한다.
   기다린 뒤 marker를 publish한다.
 - 검증: Ready publisher count는 1이고 subscriber handler가 marker를 한 번 받는다. Subscriber application
   입력에는 transport endpoint가 없다.
-- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)의 automatic discovery를
+- 세부 동작: [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)의 automatic discovery를
   검증한다.
 
 #### PS-D2 같은 ChannelName의 live fanout publisher만 선택한다
@@ -197,7 +197,7 @@ descriptor 종류와 ChannelName이 모두 맞고 신규 작업을 받을 수 �
 - 절차: `events`와 `audit`에서 서로 다른 marker를 publish한다.
 - 검증: `events` subscriber status와 handler evidence에는 live `events` publisher와 marker만 나타난다.
   `audit` event와 다른 topology 역할은 포함되지 않는다.
-- 세부 동작: [Runtime monitoring §2.2](../spec/server/24-runtime-monitoring.ko.md)의 fanout status를
+- 세부 동작: [Runtime monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.ko.md)의 fanout status를
   검증한다.
 
 #### PS-D3 Publisher 추가와 정상 제거에 수렴한다
@@ -214,7 +214,7 @@ descriptor 종류와 ChannelName이 모두 맞고 신규 작업을 받을 수 �
   종료하여 status에서 제거된 뒤 B에서 새 marker를 보낸다.
 - 검증: 두 publisher가 ready일 때 두 marker를 모두 받고, A 제거 뒤 status에는 B만 ready로 남으며 B의
   새 marker를 계속 받는다.
-- 세부 동작: [Transport liveness §5](../spec/server/29-transport-liveness.ko.md)을 검증한다.
+- 세부 동작: [Transport liveness §5](../spec/server/02-channel-transport/05-transport-liveness.ko.md)을 검증한다.
 
 #### PS-D4 Crash한 publisher를 replacement로 바꾼다
 
@@ -230,8 +230,8 @@ Replacement가 ready가 되면 새 event부터 받는다.
   확인하고 replacement를 시작한다. Replacement가 ready가 되면 새 marker를 publish한다.
 - 검증: Status에는 replacement만 ready이며 subscriber는 새 marker를 한 번 받는다. Crash 구간 event는
   replay되지 않는다.
-- 세부 동작: [Transport liveness §5](../spec/server/29-transport-liveness.ko.md)와
-  [§7](../spec/server/29-transport-liveness.ko.md)을 검증한다.
+- 세부 동작: [Transport liveness §5](../spec/server/02-channel-transport/05-transport-liveness.ko.md)와
+  [§7](../spec/server/02-channel-transport/05-transport-liveness.ko.md)을 검증한다.
 
 #### PS-D5 Store 장애 중 기존 connection을 유지하고 복구한다
 
@@ -248,7 +248,7 @@ publisher가 계속 정상 record를 보내면 subscriber는 event를 계속 받
   복구하고 public fanout status가 current 상태로 수렴할 때 새 marker를 보낸다.
 - 검증: 장애 중과 복구 뒤 marker를 모두 한 번 받는다. Store 장애만으로 기존 publisher를 즉시
   not-ready로 바꾸지 않는다.
-- 세부 동작: [Transport liveness §7](../spec/server/29-transport-liveness.ko.md)을
+- 세부 동작: [Transport liveness §7](../spec/server/02-channel-transport/05-transport-liveness.ko.md)을
   검증한다.
 
 #### PS-D6 Port 0 재시작으로 endpoint가 바뀌어도 다시 연결한다
@@ -265,7 +265,7 @@ Port 0 publisher는 재시작할 때 실제 port가 달라질 수 있다. Automa
   0으로 재시작하여 다른 actual port와 subscriber ready를 확인한 뒤 marker를 publish한다.
 - 검증: 두 actual port는 0이 아니고 서로 다르다. Subscriber application 설정은 바뀌지 않으며 새 marker를
   한 번 받는다.
-- 세부 동작: [Network listener identity §4](../spec/server/10-network-listener-identity.ko.md)를
+- 세부 동작: [Network listener identity §4](../spec/server/02-channel-transport/04-network-listener-identity.ko.md)를
   검증한다.
 
 #### PS-D7A 느린 fanout status observer를 격리한다
@@ -285,7 +285,7 @@ Port 0 publisher는 재시작할 때 실제 port가 달라질 수 있다. Automa
 - 검증: 정상 observer는 latest status를 제공하고 handler는 event를 한 번 처리한다. 느린 observer의
   sequence에 gap이 있으면 `GetStatus`로 current 상태를 복원할 수 있으며 취소가 다른 observer를 끝내지
   않는다.
-- 세부 동작: [Runtime monitoring §3](../spec/server/24-runtime-monitoring.ko.md)을
+- 세부 동작: [Runtime monitoring §3](../spec/server/06-observability/01-runtime-monitoring.ko.md)을
   검증한다.
 
 #### PS-D7B Manual endpoint 변경은 automatic status를 바꾸지 않는다
@@ -302,7 +302,7 @@ Channel의 publisher set에 반영되어서는 안 된다.
   publisher에서 marker를 보낸다.
 - 검증: Automatic subscriber의 ready publisher identity는 유지되고 두 marker를 모두 받는다. Manual
   변경만으로 automatic status sequence가 바뀌었다고 요구하지 않는다.
-- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)의 mode 분리를 검증한다.
+- 세부 동작: [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)의 mode 분리를 검증한다.
 
 ### Track D — Manual mode와 startup validation을 확인
 
@@ -319,7 +319,7 @@ Manual subscriber는 Application이 지정한 endpoint에만 연결하며 Locati
   non-replay를 실행한다.
 - 검증: Ready 이후 marker를 받고 ready 이전 marker는 replay하지 않는다. Store process와 descriptor를
   사용하지 않는다.
-- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)의 manual mode를 검증한다.
+- 세부 동작: [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)의 manual mode를 검증한다.
 
 #### PS-E2A Automatic subscriber의 Store 누락을 startup에서 거부한다
 
@@ -332,7 +332,7 @@ Endpoint가 없는 automatic subscriber는 publisher discovery에 Location Store
 - 시작 조건: Negative host가 endpoint 없는 subscriber만 등록하고 Location Store를 등록하지 않는다.
 - 절차: Runner가 host를 시작하여 process terminal과 health를 확인한다.
 - 검증: Host는 listener와 ready status를 공개하지 않고 public configuration error로 종료된다.
-- 세부 동작: [Framework API의 Classic fanout](../spec/server/06-framework-api.ko.md#11-classic-fanout)의 automatic Store prerequisite를
+- 세부 동작: [Framework API의 Classic fanout](../spec/server/00-foundation/06-framework-api.ko.md#14-classic-fanout-등록)의 automatic Store prerequisite를
   검증한다.
 
 #### PS-E2B Automatic과 manual mode를 한 registration에 섞으면 거부한다
@@ -348,7 +348,7 @@ Endpoint가 없는 automatic subscriber는 publisher discovery에 Location Store
   지정한다.
 - 절차: Runner가 host를 시작한다.
 - 검증: Host는 background connection을 시작하기 전에 configuration error로 종료된다.
-- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)의 mode validation을
+- 세부 동작: [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)의 mode validation을
   검증한다.
 
 #### PS-E2C Automatic publisher identity 누락과 중복을 거부한다
@@ -362,7 +362,7 @@ Automatic publisher는 고정 RID 또는 automatic allocation 중 정확히 하�
 - 시작 조건: 두 negative host를 만들고 하나는 RID 방식을 모두 생략하며 다른 하나는 둘 다 설정한다.
 - 절차: Runner가 두 host를 각각 시작한다.
 - 검증: 두 host 모두 listener bind 전에 원인에 맞는 public configuration error로 종료된다.
-- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)의 Publisher identity를
+- 세부 동작: [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)의 Publisher identity를
   검증한다.
 
 ### Track E — Publisher별 liveness를 확인
@@ -382,8 +382,8 @@ Ready는 첫 정상 application record 또는 liveness beacon까지 반영한다
   publish한다.
 - 검증: 두 subscriber가 자기 publisher marker를 한 번씩 받는다. 연결 전에는 ready target으로 사용하지
   않는다. 모든 짧은 중간 state를 observer에서 보았다고 요구하지 않는다.
-- 세부 동작: [Transport liveness §4](../spec/server/29-transport-liveness.ko.md)와
-  [§5](../spec/server/29-transport-liveness.ko.md)을 검증한다.
+- 세부 동작: [Transport liveness §4](../spec/server/02-channel-transport/05-transport-liveness.ko.md)와
+  [§5](../spec/server/02-channel-transport/05-transport-liveness.ko.md)을 검증한다.
 
 #### PS-F2 Publisher 하나의 수신 단절을 다른 publisher와 분리한다
 
@@ -399,7 +399,7 @@ Subscriber는 publisher마다 connection과 liveness deadline을 구분한다. �
   status에서 not-ready가 될 때까지 기다린 뒤 차단을 해제한다.
 - 검증: B만 ready 목록에서 제외되는 동안 A marker는 계속 처리된다. Host 전체는 Error가 되지 않는다.
   B는 reconnect 뒤 다시 ready가 되고 새 marker를 전달한다.
-- 세부 동작: [Transport liveness §4](../spec/server/29-transport-liveness.ko.md)의 publisher별
+- 세부 동작: [Transport liveness §4](../spec/server/02-channel-transport/05-transport-liveness.ko.md)의 publisher별
   liveness를 검증한다.
 
 #### PS-F3 Reserved liveness topic을 Application publish에서 거부한다
@@ -416,7 +416,7 @@ Framework는 fanout liveness에 사용하는 exact topic을 Application event와
   topic으로 정상 event를 publish한다.
 - 검증: 첫 호출은 transport admission 전에 public argument error로 끝나고 handler가 실행되지 않는다.
   두 번째 event는 handler에서 한 번 처리된다. Private beacon frame을 E2E에서 직접 만들지 않는다.
-- 세부 동작: [Transport liveness §4](../spec/server/29-transport-liveness.ko.md)의 reserved topic을
+- 세부 동작: [Transport liveness §4](../spec/server/02-channel-transport/05-transport-liveness.ko.md)의 reserved topic을
   검증한다.
 
 #### PS-F4 Orderly disconnect를 peer deadline 전에 반영한다
@@ -433,7 +433,7 @@ Framework는 fanout liveness에 사용하는 exact topic을 Application event와
   publish한다.
 - 검증: A는 고정 15초 deadline보다 먼저 ready 목록에서 빠지고 B는 ready를 유지하며 marker를 한 번
   전달한다.
-- 세부 동작: [Transport liveness §5](../spec/server/29-transport-liveness.ko.md)을 검증한다.
+- 세부 동작: [Transport liveness §5](../spec/server/02-channel-transport/05-transport-liveness.ko.md)을 검증한다.
 
 #### PS-F5 구독하지 않은 traffic 중에도 liveness를 유지한다
 
@@ -450,8 +450,8 @@ Subscriber가 특정 topic의 Application event를 처리하지 않아도 Framew
   구간은 fixed 15초 deadline에 runner tolerance를 더한 값으로 계산한다.
 - 검증: `events.a` handler evidence는 없지만 publisher status는 ready를 유지한다. 이후 `events.b` marker를
   보내면 한 번 처리된다.
-- 세부 동작: [Transport liveness §2](../spec/server/29-transport-liveness.ko.md)와
-  [§4](../spec/server/29-transport-liveness.ko.md)를 검증한다.
+- 세부 동작: [Transport liveness §2](../spec/server/02-channel-transport/05-transport-liveness.ko.md)와
+  [§4](../spec/server/02-channel-transport/05-transport-liveness.ko.md)를 검증한다.
 
 ### Track F — Handler가 없는 event를 처리
 
@@ -473,8 +473,8 @@ dispatch는 계속되어야 한다.
   `zlink.dispatch_error`를 한 번 제공한다. Record에는 `channel_route_kind`가 없으며 publisher delivery
   result가 아니라 subscriber-local dispatch 결과다. Normal
   event는 handler에서 한 번 처리된다.
-- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)과
-  [Message flow tracing §2.2](../spec/server/26-message-flow-tracing.ko.md)을 검증한다.
+- 세부 동작: [Framework API §11](../spec/server/00-foundation/06-framework-api.ko.md)과
+  [Message flow tracing §2.2](../spec/server/06-observability/03-message-flow-tracing.ko.md)을 검증한다.
 
 ## 5. 완료 기준
 

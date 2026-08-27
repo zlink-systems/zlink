@@ -69,24 +69,39 @@ final class ZLinkRedisLocationConnection<V> {
             .thenApply(StatefulRedisConnection::async);
     }
 
-    synchronized CompletionStage<Void> closeAsync() {
-        if (closeStage != null) {
-            return closeStage;
+    CompletionStage<Void> closeAsync() {
+        CompletableFuture<StatefulRedisConnection<String, V>> current;
+        CompletableFuture<Void> close;
+        synchronized (this) {
+            if (closeStage != null) {
+                return closeStage;
+            }
+            closed = true;
+            current = connection;
+            connection = null;
+            schemaReady = null;
+            close = new CompletableFuture<>();
+            closeStage = close;
         }
-        closed = true;
-        CompletableFuture<StatefulRedisConnection<String, V>> current = connection;
-        connection = null;
-        schemaReady = null;
         CompletionStage<Void> connectionClosed = current == null
             ? CompletableFuture.completedFuture(null)
             : current.handle((connected, failure) -> connected)
                 .thenCompose(connected -> connected == null
                     ? CompletableFuture.completedFuture(null)
                     : connected.closeAsync());
-        closeStage = connectionClosed
+        //  closeStage is installed before an already-completed connection
+        //  can invoke the close chain inline and reenter closeAsync.
+        connectionClosed
             .thenCompose(ignored -> client.shutdownAsync())
-            .thenApply(ignored -> null);
-        return closeStage;
+            .thenApply(ignored -> null)
+            .whenComplete((ignored, failure) -> {
+                if (failure == null) {
+                    close.complete(null);
+                } else {
+                    close.completeExceptionally(failure);
+                }
+            });
+        return close;
     }
 
     private synchronized CompletionStage<StatefulRedisConnection<String, V>>

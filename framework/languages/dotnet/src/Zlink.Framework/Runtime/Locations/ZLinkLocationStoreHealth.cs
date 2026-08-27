@@ -11,7 +11,7 @@ internal sealed class ZLinkLocationStoreHealth
     //  which comes from the runtime's injected clock. Reading the system clock
     //  here would put the two on different timelines.
     private readonly TimeProvider _time;
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<string, string> _failures = new(StringComparer.Ordinal);
     private DateTimeOffset? _lastSuccessAt;
     private DateTimeOffset? _lastFailureAt;
@@ -33,28 +33,28 @@ internal sealed class ZLinkLocationStoreHealth
 
     internal void ReportSuccess(string source)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_failures.Remove(source))
                 _recoveryGeneration++;
             _lastSuccessAt = _time.GetUtcNow();
-        }
+        }));
         Changed?.Invoke();
     }
 
     internal void ReportFailure(string source, Exception error)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             _failures[source] = error.Message;
             _lastFailureAt = _time.GetUtcNow();
-        }
+        }));
         Changed?.Invoke();
     }
 
     internal Snapshot GetSnapshot()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             return new Snapshot(
                 _failures.Count == 0,
@@ -64,16 +64,12 @@ internal sealed class ZLinkLocationStoreHealth
                     ? null
                     : string.Join("; ", _failures.OrderBy(static pair => pair.Key)
                         .Select(static pair => $"{pair.Key}: {pair.Value}")));
-        }
+        }));
     }
 
     internal long RecoveryGeneration
     {
-        get
-        {
-            lock (_gate)
-                return _recoveryGeneration;
-        }
+        get => AwaitStateLane(_lane.RunAsync(() => _recoveryGeneration));
     }
 
     internal readonly record struct Snapshot(
@@ -81,6 +77,12 @@ internal sealed class ZLinkLocationStoreHealth
         DateTimeOffset? LastSuccessAt,
         DateTimeOffset? LastFailureAt,
         string? LastError);
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }
 
 internal static class ZLinkLocationStoreRead

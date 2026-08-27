@@ -43,6 +43,7 @@ public final class DeliveryDispatchClientScenario {
             })
             .thenCompose(ignored -> runSuccessfulDelivery(customer, courierA, courierB))
             .thenCompose(ignored -> runReassignedDelivery(customer, courierA, courierB))
+            .thenCompose(ignored -> runExhaustedDelivery(customer, courierA, courierB))
             .thenCompose(ignored -> assertServerEvidence());
     }
 
@@ -156,7 +157,7 @@ public final class DeliveryDispatchClientScenario {
                     acceptedOffer.deliveryId(), acceptedOffer.courierId(), true, null)).submit();
             })
             .thenCompose(ignored -> statuses)
-            .thenAccept(notifications -> {
+            .thenCompose(notifications -> {
                 ZLinkStreamAssert.ensure(
                     notifications.get(0).payload().courierId().equals("courier-a"),
                     "initial courier mismatch");
@@ -164,7 +165,75 @@ public final class DeliveryDispatchClientScenario {
                     notifications.subList(1, notifications.size()).stream()
                         .allMatch(message -> message.payload().courierId().equals("courier-b")),
                     "reassigned courier mismatch");
+                return courierA.send(new Messages.CourierDecisionMsg(
+                    deliveryId, "courier-a", false, "late decision")).submit();
+            })
+            .thenRun(() -> {
                 System.out.println(SampleNames.ReassignmentMarker);
+            });
+    }
+
+    private CompletionStage<Void> runExhaustedDelivery(
+        ZLinkStreamConnector customer,
+        ZLinkStreamConnector courierA,
+        ZLinkStreamConnector courierB) {
+        String deliveryId = "delivery-exhausted";
+        CompletionStage<ZLinkStreamMessage<Messages.OfferDeliveryNotify>> firstOffer =
+            courierA.waitFor(Messages.OfferDeliveryNotify.class)
+                .where(Messages.OfferDeliveryNotify.class, message ->
+                    message.payload().deliveryId().equals(deliveryId)
+                        && message.payload().courierId().equals("courier-a"))
+                .submit(Messages.OfferDeliveryNotify.class);
+        CompletionStage<ZLinkStreamMessage<Messages.OfferDeliveryNotify>> secondOffer =
+            courierB.waitFor(Messages.OfferDeliveryNotify.class)
+                .where(Messages.OfferDeliveryNotify.class, message ->
+                    message.payload().deliveryId().equals(deliveryId)
+                        && message.payload().courierId().equals("courier-b"))
+                .submit(Messages.OfferDeliveryNotify.class);
+        CompletionStage<List<ZLinkStreamMessage<Messages.DeliveryStatusNotify>>> statuses =
+            customer.waitForSequence(Messages.DeliveryStatusNotify.class)
+                .expect(Messages.DeliveryStatusNotify.class, message ->
+                    matchesStatus(message, deliveryId, Messages.DeliveryStatus.Assigned))
+                .expect(Messages.DeliveryStatusNotify.class, message ->
+                    matchesStatus(message, deliveryId, Messages.DeliveryStatus.Reassigned))
+                .expect(Messages.DeliveryStatusNotify.class, message ->
+                    matchesStatus(message, deliveryId, Messages.DeliveryStatus.Failed))
+                .submit(Messages.DeliveryStatusNotify.class);
+
+        return customer.request(new Messages.SubscribeDeliveryReq(deliveryId))
+            .submit(Messages.SubscribeDeliveryRes.class)
+            .thenCompose(subscribed -> {
+                ZLinkStreamAssert.ensure(
+                    subscribed.deliveryId().equals(deliveryId),
+                    "exhaustion subscription id mismatch");
+                return post("/deliveries", new Messages.CreateDeliveryReq(
+                    deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"),
+                    Messages.CreateDeliveryRes.class);
+            })
+            .thenCompose(created -> {
+                ZLinkStreamAssert.ensure(
+                    created.deliveryId().equals(deliveryId),
+                    "created exhausted delivery id mismatch");
+                return firstOffer;
+            })
+            .thenCompose(message -> courierA.send(new Messages.CourierDecisionMsg(
+                message.payload().deliveryId(), message.payload().courierId(), false, "declined"))
+                .submit())
+            .thenCompose(ignored -> secondOffer)
+            .thenCompose(message -> courierB.send(new Messages.CourierDecisionMsg(
+                message.payload().deliveryId(), message.payload().courierId(), false, "declined"))
+                .submit())
+            .thenCompose(ignored -> statuses)
+            .thenAccept(notifications -> {
+                ZLinkStreamAssert.ensure(
+                    notifications.get(0).payload().courierId().equals("courier-a"),
+                    "exhaustion initial courier mismatch");
+                ZLinkStreamAssert.ensure(
+                    notifications.get(1).payload().courierId().equals("courier-b"),
+                    "exhaustion reassigned courier mismatch");
+                ZLinkStreamAssert.ensure(
+                    notifications.get(2).payload().courierId().equals("courier-b"),
+                    "exhaustion failed courier mismatch");
             });
     }
 

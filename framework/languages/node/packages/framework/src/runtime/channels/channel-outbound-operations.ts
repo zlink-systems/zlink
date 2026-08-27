@@ -247,7 +247,12 @@ export class ZLinkChannelOutboundOperations {
       traceTerminal('succeeded');
       return reply;
     } catch (error) {
-      traceTerminal(requestTerminalResult(error, signal));
+      // A framework peer has already made the terminal dispatch error record
+      // before it sends an Error reply.  Do not turn that same remote dispatch
+      // failure into a second local `reply_received` terminal at Errors level.
+      if (!isRemoteChannelErrorReply(error)) {
+        traceTerminal(requestTerminalResult(error, signal));
+      }
       throw error;
     }
   }
@@ -506,7 +511,11 @@ export class ZLinkChannelOutboundOperations {
       traceTerminal('succeeded');
       return reply;
     } catch (error) {
-      traceTerminal(requestTerminalResult(error, signal));
+      // See the ClientServer request path: the remote dispatch error owns this
+      // terminal record when the reply itself is an Error envelope.
+      if (!isRemoteChannelErrorReply(error)) {
+        traceTerminal(requestTerminalResult(error, signal));
+      }
       if (
         this.sockets.routeMemberStatus(routerChannelId, targetNodeRid) === 'disconnected'
         && (isSubmitDeadline(error) || error instanceof ZLinkRouteDisconnectedError)
@@ -563,4 +572,10 @@ function requestTerminalResult(
     if (error.kind === ZLinkFrameworkErrorKind.CapacityExceeded) return 'backpressured';
   }
   return 'failed';
+}
+
+function isRemoteChannelErrorReply(error: unknown): boolean {
+  return error instanceof ZLinkFrameworkException
+    && 'origin' in error
+    && (error as { readonly origin?: unknown }).origin !== undefined;
 }

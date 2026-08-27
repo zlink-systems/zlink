@@ -192,7 +192,7 @@ internal sealed class DispatchWorker(
                 cancellationToken);
             offers.Close(offer.Request.DeliveryId);
             logger.LogWarning(
-                "deliverydispatch dispatch: delivery={DeliveryId} was rejected by all couriers",
+                "deliverydispatch-dispatch failed delivery={DeliveryId} reason=candidates-exhausted",
                 offer.Request.DeliveryId);
             return;
         }

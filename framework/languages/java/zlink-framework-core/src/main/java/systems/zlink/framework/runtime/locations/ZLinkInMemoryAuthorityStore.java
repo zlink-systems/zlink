@@ -19,14 +19,17 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.Arrays;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CompletionException;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 final class ZLinkInMemoryAuthorityStore {
-    private final Object gate;
+    private final ZLinkStateLane stateLane;
     private final Clock clock;
     private final Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive;
     private final DescriptorLookup descriptorLookup;
@@ -52,7 +55,7 @@ final class ZLinkInMemoryAuthorityStore {
         Clock clock,
         Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive) {
         this(
-            new Object(),
+            new ZLinkStateLane(),
             clock,
             ownerLeaseIsLive,
             (key, generation, owner) -> null,
@@ -64,7 +67,7 @@ final class ZLinkInMemoryAuthorityStore {
         Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive,
         DescriptorLookup descriptorLookup) {
         this(
-            new Object(),
+            new ZLinkStateLane(),
             clock,
             ownerLeaseIsLive,
             descriptorLookup,
@@ -72,12 +75,12 @@ final class ZLinkInMemoryAuthorityStore {
     }
 
     ZLinkInMemoryAuthorityStore(
-        Object gate,
+        ZLinkStateLane stateLane,
         Clock clock,
         Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive,
         DescriptorLookup descriptorLookup,
         Predicate<String> spotIdentityClaimed) {
-        this.gate = gate;
+        this.stateLane = stateLane;
         this.clock = clock;
         this.ownerLeaseIsLive = ownerLeaseIsLive;
         this.descriptorLookup = descriptorLookup;
@@ -85,21 +88,23 @@ final class ZLinkInMemoryAuthorityStore {
     }
 
     boolean containsAuthority(String key) {
-        synchronized (gate) {
-            return rows.containsKey(key);
-        }
+        return inStateLane(() -> containsAuthorityOnLane(key));
+    }
+
+    boolean containsAuthorityOnLane(String key) {
+        return rows.containsKey(key);
     }
 
     public CompletionStage<ZLinkAuthorityReadResult> read(
         String key,
         ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             Row row = rows.get(key);
             return completed(row == null
                 ? new ZLinkAuthorityMissing(now)
                 : snapshot(row, now));
-        }
+        });
     }
 
     public CompletionStage<ZLinkAuthorityWriteResult> compareExchange(
@@ -107,7 +112,7 @@ final class ZLinkInMemoryAuthorityStore {
         ZLinkAuthorityExpectation expectation,
         ZLinkAuthorityMutation mutation,
         ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             Row current = rows.get(key);
             if (!matches(current, expectation)) {
@@ -183,7 +188,7 @@ final class ZLinkInMemoryAuthorityStore {
                 current.allocation);
             rows.put(key, stored);
             return completed(stored(stored, now));
-        }
+        });
     }
 
     public CompletionStage<ZLinkAuthorityScanResult> list(
@@ -191,7 +196,7 @@ final class ZLinkInMemoryAuthorityStore {
         Optional<ZLinkAuthorityScanCursor> cursor,
         int limit,
         ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             if (limit <= 0) {
                 throw new IllegalArgumentException(
                     "authority scan limit must be positive");
@@ -219,13 +224,13 @@ final class ZLinkInMemoryAuthorityStore {
                     ? Optional.of(new ZLinkAuthorityScanCursor(
                         Integer.toString(next)))
                     : Optional.empty()));
-        }
+        });
     }
 
     public CompletionStage<ZLinkObjectReserveResult> reserve(
         ZLinkObjectReservationRequest request,
         ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             if (request.objectKind()
                     != ZLinkPlacementObjectKind.ACTOR
                 && spotIdentityClaimed.test(
@@ -338,16 +343,16 @@ final class ZLinkInMemoryAuthorityStore {
                     request,
                     State.PREPARED));
             return completed(new ZLinkObjectReserved(reservation));
-        }
+        });
     }
 
     public CompletionStage<ZLinkObjectCommitResult> commit(
         ZLinkObjectReservation reservation,
         byte[] readyPayload,
         ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             return completed(commitLocked(reservation, readyPayload, null));
-        }
+        });
     }
 
     public CompletionStage<ZLinkObjectCommitResult> commit(
@@ -359,9 +364,9 @@ final class ZLinkInMemoryAuthorityStore {
             reservation,
             terminal,
             ZLinkCreationTerminalState.CREATED);
-        synchronized (gate) {
+        return inStateLane(() -> {
             return completed(commitLocked(reservation, readyPayload, terminal));
-        }
+        });
     }
 
     private ZLinkObjectCommitResult commitLocked(
@@ -431,7 +436,7 @@ final class ZLinkInMemoryAuthorityStore {
             reservation,
             terminal,
             ZLinkCreationTerminalState.REJECTED);
-        synchronized (gate) {
+        return inStateLane(() -> {
             if (activeTerminal(terminal.operation()) != null) {
                 return completed(terminalMatches(terminal)
                     ? ZLinkObjectRejectResult.ALREADY_REJECTED
@@ -464,13 +469,13 @@ final class ZLinkInMemoryAuthorityStore {
             revision++;
             creationTerminals.put(terminal.operation(), terminal);
             return completed(ZLinkObjectRejectResult.REJECTED);
-        }
+        });
     }
 
     public CompletionStage<ZLinkObjectAbortResult> abort(
         ZLinkObjectReservation reservation,
         ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             ReservationState state = reservations.get(
                 reservation.authorityKey());
             if (!sameReservation(state, reservation)) {
@@ -493,7 +498,7 @@ final class ZLinkInMemoryAuthorityStore {
                 -1);
             state.state = State.ABORTED;
             return completed(ZLinkObjectAbortResult.ABORTED);
-        }
+        });
     }
 
     public CompletionStage<ZLinkObjectAbortResult> abort(
@@ -504,7 +509,7 @@ final class ZLinkInMemoryAuthorityStore {
             reservation,
             terminal,
             ZLinkCreationTerminalState.FAILED);
-        synchronized (gate) {
+        return inStateLane(() -> {
             if (activeTerminal(terminal.operation()) != null) {
                 return completed(terminalMatches(terminal)
                     ? ZLinkObjectAbortResult.ALREADY_ABORTED
@@ -535,21 +540,21 @@ final class ZLinkInMemoryAuthorityStore {
             state.state = State.ABORTED;
             creationTerminals.put(terminal.operation(), terminal);
             return completed(ZLinkObjectAbortResult.ABORTED);
-        }
+        });
     }
 
     public CompletionStage<ZLinkCreationTerminalReadResult>
         readCreationTerminal(
             ZLinkCreationOperationIdentity operation,
             ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             ZLinkCreationOperationTerminal terminal =
                 activeTerminal(operation);
             if (terminal == null) {
                 return completed(new ZLinkCreationTerminalMissing());
             }
             return completed(new ZLinkCreationTerminalFound(terminal));
-        }
+        });
     }
 
     private boolean terminalMatches(
@@ -618,7 +623,7 @@ final class ZLinkInMemoryAuthorityStore {
     public CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
         ZLinkAggregatePrepareRequest request,
         ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             AggregateState existing = aggregates.get(request.aggregateId());
             ZLinkAggregateFence fence = new ZLinkAggregateFence(
                 request.aggregateId(),
@@ -705,7 +710,7 @@ final class ZLinkInMemoryAuthorityStore {
                 request.aggregateId(),
                 new AggregateState(request, State.PREPARED));
             return completed(new ZLinkAggregatePrepared(fence));
-        }
+        });
     }
 
     private boolean participantIsPrepared(String authorityKey) {
@@ -719,7 +724,7 @@ final class ZLinkInMemoryAuthorityStore {
     public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
         ZLinkAggregateFence fence,
         ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             AggregateState state = aggregates.get(fence.aggregateId());
             if (!sameAggregate(state, fence)) {
                 return completed(ZLinkAggregateCommitResult.STALE);
@@ -797,13 +802,13 @@ final class ZLinkInMemoryAuthorityStore {
             state.state = State.COMMITTED;
             state.storeVersion = nextVersion();
             return completed(ZLinkAggregateCommitResult.COMMITTED);
-        }
+        });
     }
 
     public CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
         ZLinkAggregateFence fence,
         ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             AggregateState state = aggregates.get(fence.aggregateId());
             if (!sameAggregate(state, fence)) {
                 return completed(ZLinkAggregateAbortResult.STALE);
@@ -821,21 +826,21 @@ final class ZLinkInMemoryAuthorityStore {
                 state.request.capacityBundle(),
                 -1);
             return completed(ZLinkAggregateAbortResult.ABORTED);
-        }
+        });
     }
 
     public CompletionStage<Optional<ZLinkAggregateProgressSnapshot>>
         readAggregateProgress(
             ZLinkAggregateFence fence,
             ZLinkStoreCancellation cancellation) {
-        synchronized (gate) {
+        return inStateLane(() -> {
             AggregateState state = aggregates.get(fence.aggregateId());
             if (!sameAggregate(state, fence)
                 || state.state != State.COMMITTED) {
                 return completed(Optional.empty());
             }
             return completed(Optional.of(progressSnapshot(state, fence)));
-        }
+        });
     }
 
     public CompletionStage<Boolean> removeAggregateProgress(
@@ -843,7 +848,7 @@ final class ZLinkInMemoryAuthorityStore {
         String expectedStoreVersion,
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(expectedStoreVersion, "expectedStoreVersion");
-        synchronized (gate) {
+        return inStateLane(() -> {
             AggregateState state = aggregates.get(fence.aggregateId());
             if (!sameAggregate(state, fence)
                 || state.state != State.COMMITTED
@@ -853,7 +858,7 @@ final class ZLinkInMemoryAuthorityStore {
             }
             aggregates.remove(fence.aggregateId());
             return completed(true);
-        }
+        });
     }
 
     private static ZLinkAggregateProgressSnapshot progressSnapshot(
@@ -1301,46 +1306,62 @@ final class ZLinkInMemoryAuthorityStore {
     long activeCapacity(
         ZLinkMeshNodeDescriptorKey descriptor,
         long lifecycleGeneration) {
-        synchronized (gate) {
-            AllocationCounterKey key = new AllocationCounterKey(
-                descriptor,
-                lifecycleGeneration);
-            CapacityCounter actors = actorAllocationCounters.get(key);
-            CapacityCounter spots = spotAllocationCounters.get(key);
-            return (actors == null ? 0 : actors.active)
-                + (spots == null ? 0 : spots.active);
-        }
+        return inStateLane(() -> activeCapacityOnLane(
+            descriptor, lifecycleGeneration));
+    }
+
+    private long activeCapacityOnLane(
+        ZLinkMeshNodeDescriptorKey descriptor,
+        long lifecycleGeneration) {
+        AllocationCounterKey key = new AllocationCounterKey(
+            descriptor,
+            lifecycleGeneration);
+        CapacityCounter actors = actorAllocationCounters.get(key);
+        CapacityCounter spots = spotAllocationCounters.get(key);
+        return (actors == null ? 0 : actors.active)
+            + (spots == null ? 0 : spots.active);
     }
 
     long pendingCapacity(
         ZLinkMeshNodeDescriptorKey descriptor,
         long lifecycleGeneration) {
-        synchronized (gate) {
-            AllocationCounterKey key = new AllocationCounterKey(
-                descriptor,
-                lifecycleGeneration);
-            CapacityCounter actors = actorAllocationCounters.get(key);
-            CapacityCounter spots = spotAllocationCounters.get(key);
-            return (actors == null ? 0 : actors.pending)
-                + (spots == null ? 0 : spots.pending);
-        }
+        return inStateLane(() -> pendingCapacityOnLane(
+            descriptor, lifecycleGeneration));
+    }
+
+    private long pendingCapacityOnLane(
+        ZLinkMeshNodeDescriptorKey descriptor,
+        long lifecycleGeneration) {
+        AllocationCounterKey key = new AllocationCounterKey(
+            descriptor,
+            lifecycleGeneration);
+        CapacityCounter actors = actorAllocationCounters.get(key);
+        CapacityCounter spots = spotAllocationCounters.get(key);
+        return (actors == null ? 0 : actors.pending)
+            + (spots == null ? 0 : spots.pending);
     }
 
     long[] kindCapacity(
         ZLinkMeshNodeDescriptorKey descriptor,
         long lifecycleGeneration,
         boolean actors) {
-        synchronized (gate) {
-            CapacityCounter counter = (actors
-                ? actorAllocationCounters
-                : spotAllocationCounters).get(
-                    new AllocationCounterKey(
-                        descriptor,
-                        lifecycleGeneration));
-            return counter == null
-                ? new long[] {0, 0}
-                : new long[] {counter.active, counter.pending};
-        }
+        return inStateLane(() -> kindCapacityOnLane(
+            descriptor, lifecycleGeneration, actors));
+    }
+
+    long[] kindCapacityOnLane(
+        ZLinkMeshNodeDescriptorKey descriptor,
+        long lifecycleGeneration,
+        boolean actors) {
+        CapacityCounter counter = (actors
+            ? actorAllocationCounters
+            : spotAllocationCounters).get(
+                new AllocationCounterKey(
+                    descriptor,
+                    lifecycleGeneration));
+        return counter == null
+            ? new long[] {0, 0}
+            : new long[] {counter.active, counter.pending};
     }
 
     long[] typeCapacity(
@@ -1348,24 +1369,33 @@ final class ZLinkInMemoryAuthorityStore {
         long lifecycleGeneration,
         ZLinkPlacementObjectKind kind,
         String stableType) {
-        synchronized (gate) {
-            CapacityCounter counter = typeAllocationCounters.get(
-                new TypeAllocationCounterKey(
-                    descriptor,
-                    lifecycleGeneration,
-                    kind,
-                    stableType));
-            return counter == null
-                ? new long[] {0, 0}
-                : new long[] {counter.active, counter.pending};
-        }
+        return inStateLane(() -> typeCapacityOnLane(
+            descriptor, lifecycleGeneration, kind, stableType));
+    }
+
+    long[] typeCapacityOnLane(
+        ZLinkMeshNodeDescriptorKey descriptor,
+        long lifecycleGeneration,
+        ZLinkPlacementObjectKind kind,
+        String stableType) {
+        CapacityCounter counter = typeAllocationCounters.get(
+            new TypeAllocationCounterKey(
+                descriptor,
+                lifecycleGeneration,
+                kind,
+                stableType));
+        return counter == null
+            ? new long[] {0, 0}
+            : new long[] {counter.active, counter.pending};
     }
 
     byte[] membershipMutation(String authorityKey) {
-        synchronized (gate) {
-            byte[] value = membershipMutations.get(authorityKey);
-            return value == null ? null : value.clone();
-        }
+        return inStateLane(() -> membershipMutationOnLane(authorityKey));
+    }
+
+    private byte[] membershipMutationOnLane(String authorityKey) {
+        byte[] value = membershipMutations.get(authorityKey);
+        return value == null ? null : value.clone();
     }
 
     private static boolean exactAggregateRequest(
@@ -1527,6 +1557,24 @@ final class ZLinkInMemoryAuthorityStore {
 
     private static <T> CompletionStage<T> completed(T value) {
         return CompletableFuture.completedFuture(value);
+    }
+
+    private <T> T inStateLane(Supplier<T> work) {
+        if (stateLane.isOnLane()) {
+            return work.get();
+        }
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
 
     private record Row(

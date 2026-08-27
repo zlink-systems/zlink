@@ -1,13 +1,16 @@
 # ZLink Framework .NET Public Contract
 
-This directory owns the exact .NET public interface of the server
+<!-- framework-adapter-nav:start -->
+[Language interface table of contents](../README.en.md) | [Spec table of contents](../../README.en.md)
+<!-- framework-adapter-nav:end -->
+This directory owns the .NET public interface of the server
 framework. The language-neutral meaning of a feature is defined by the
 [common spec](../../README.en.md), and this directory fixes the C#
 types, methods, generic constraints, nullable, and async return types.
 
 | Document | Contract owned |
 |---|---|
-| [Exact interface table of contents](interfaces/README.en.md) | Defines the C# public type, member, nullable annotation, generic constraint, and default per feature. |
+| [ interface table of contents](interfaces/README.en.md) | Defines the C# public type, member, nullable annotation, generic constraint, and default per feature. |
 | [Configuration and host](interfaces/02-configuration-host.en.md) | Defines the ASP.NET Core registration method, package boundary, DI, and startup contract. |
 | [Topology configuration](interfaces/03-configuration-topology.en.md) | Defines RouteMesh, ClientServer, and fanout builder and runtime options. |
 | [Location configuration and operations](interfaces/08-location-maintenance.en.md) | Defines application-facing Location options, readiness, and operational queries. |
@@ -16,45 +19,45 @@ types, methods, generic constraints, nullable, and async return types.
 
 The Stream connector client is a separate package, and the
 [.NET Stream Connector Contract](../../../stream-connector/languages/dotnet/03-stream-connector.en.md)
-owns its exact interface.
+owns its per-language interface.
 
 ## Contract Application Rules
 
-- [RouteMesh](../../01-glossary.en.md#routemesh) registration starts
-  with `AddRouteMesh(meshName)` and fixes the role with
-  `Channel(channelName).Client()` or `.Server()`. A MeshNode with no
-  Server membership is also allowed.
+- [RouteMesh](../../00-foundation/02-glossary.en.md#routemesh) registration starts
+ with `AddRouteMesh(meshName)` and fixes the role with
+ `Channel(channelName).Client()` or `.Server()`. A MeshNode with no
+ Server membership is also allowed.
 - Channel send/request only takes a ChannelName and picks the
-  process-local RouteMesh or ClientServer send path.
+ process-local RouteMesh or ClientServer send path.
 - The Node direct handler and the
-  [ChannelName](../../01-glossary.en.md#channelname) handler use
-  different interface families.
+ [ChannelName](../../00-foundation/02-glossary.en.md#channelname) handler use
+ different interface families.
 - A typed payload is serialized as JSON by default. A codec doesn't need
-  to be registered per message type to use JSON.
+ to be registered per message type to use JSON.
 - Metadata is delivered to the handler as an immutable
-  `ZLinkMessageMetadata`
-  [snapshot](../../01-glossary.en.md#snapshot).
+ `ZLinkMessageMetadata`
+ [snapshot](../../00-foundation/02-glossary.en.md#snapshot).
 - Object role is one of `None`, `Client`, `Server` per
-  [MeshNode](../../01-glossary.en.md#meshnode), and Client and Server
-  explicitly register an `IZLinkLocationStore` implementation. The
-  official Redis package the framework provides is one of this
-  interface's providers — using Redis itself isn't a required condition
-  for Object role.
+ [MeshNode](../../00-foundation/02-glossary.en.md#meshnode), and Client and Server
+ explicitly register an `IZLinkLocationStore` implementation. The
+ official Redis package the framework provides is one of this
+ interface's providers — using Redis itself isn't a required condition
+ for Object role.
 - A regular message to an Actor/User Spot/Instance
-  [Spot](../../01-glossary.en.md#spot) only takes a global ID. The
-  manager create for Actor and User Spot takes stable type and an
-  optional Mesh/placement, performs remote placement, and the exact
-  mutation takes an `ActorRef` or `SpotRef`. A Missing
-  [Instance Spot](../../01-glossary.en.md#entry-user-instance-spot)
-  specifies activation on the Spot-dedicated fluent call.
+ [Spot](../../00-foundation/02-glossary.en.md#spot) only takes a global ID. The
+ manager create for Actor and User Spot takes stable type and an
+ optional Mesh/placement, performs remote placement, and the
+ mutation takes an `ActorRef` or `SpotRef`. A Missing
+ [Instance Spot](../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
+ specifies activation on the Spot-dedicated fluent call.
 - Host lifecycle is owned by `IZLinkFrameworkRuntime`'s
-  `RelocateAsync(...)` and `ShutdownAsync(...)`.
+ `RelocateAsync(...)` and `ShutdownAsync(...)`.
 - The Framework service runtime only uses the bindings' public raw
-  socket API, and doesn't use the Core service C API, private SPI,
-  reflection, or a direct native symbol call.
+ socket API, and doesn't use the Core service C API, private SPI,
+ reflection, or a direct native symbol call.
 - The per-target ROUTER submit for Logical Multicast and the meaning of
-  manual peer's expected RID are owned by
-  [Topology Configuration](interfaces/03-configuration-topology.en.md).
+ manual peer's expected RID are owned by
+ [Topology Configuration](interfaces/03-configuration-topology.en.md).
 
 ## Cancellation
 
@@ -62,7 +65,7 @@ A .NET async operation only receives explicit cancellation when its
 signature has a `CancellationToken`. A method with no token isn't
 interpreted as having a cancellation argument. The terminal result after
 cancellation follows the
-[Async Execution Policy](../../05-async-execution-policy.en.md).
+[Async Execution Policy](../../01-execution/README.en.md).
 
 ## Verification
 
@@ -77,3 +80,8 @@ of the contract.
 |---|---|
 | `ContractSurfaceCoverage.Fixed_spec_snapshot_matches_every_exported_contract_signature` | Confirms the formal spec snapshot matches the public signatures of the source and package. |
 | `RegressionTests.DotNetContractRegressionTestReferences_Resolve_ToActiveTestMethods` | Confirms the regression tests and E2E scenarios the document points to exist in the current test tree. |
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[Language interface table of contents](../README.en.md) | [Spec table of contents](../../README.en.md)
+<!-- framework-adapter-nav:bottom:end -->

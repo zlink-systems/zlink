@@ -1573,6 +1573,7 @@ export class DefaultZLinkSpotManager {
         const context = {
           channelName: envelope.header.channelName,
           contentType: envelope.header.contentType,
+          awaitFirstHandlerTurn: record.kind === ReceiveKind.InstanceSpotActivation,
           workOptions: zlinkSerialWorkOptions(
             envelope.payload.byteLength,
             record.applicationMetadata?.byteLength ?? zlinkMetadataByteLength(envelope.header.metadata)

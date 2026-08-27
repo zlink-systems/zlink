@@ -1,6 +1,6 @@
-# C++ Monitoring Exact Interface
+# C++ Monitoring Per-Language Interface
 
-[C++ exact interface table of contents](README.en.md)
+[C++ per-language interface table of contents](README.en.md)
 
 Endpoint, lifecycle generation, and descriptor source are only used by
 the Framework to judge stale registration information and connection.
@@ -246,7 +246,7 @@ The unit `observe(...)` delivers is `observed_status_t<TStatus>`.
 `loss` is the loss tally belonging only to this one observation. The
 reason the tally isn't put in status, and the meaning of the two
 counters, is owned by
-[Runtime Monitoring §3](../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+[Runtime Monitoring §3](../../../06-observability/01-runtime-monitoring.en.md#6-observing-state-changes--sequence-and-the-complete-status).
 
 `observation_loss_t::coalesced_count` is the count of intermediate
 status this observer didn't see due to per-source latest-slot merging,
@@ -329,8 +329,8 @@ provider sink. A message-flow observer callback, runtime error sink, and raw eve
 contract. A provider call failure does not change the original message
 operation's terminal result and is isolated as separate diagnostics. The
 remaining meaning is owned by
-[Message Flow Tracing](../../../26-message-flow-tracing.en.md) and
-[Flow Correlation](../../../27-flow-correlation.en.md).
+[Message Flow Tracing](../../../06-observability/03-message-flow-tracing.en.md) and
+[Flow Correlation](../../../06-observability/04-flow-correlation.en.md).
 
 ## 3. Health
 
@@ -422,4 +422,4 @@ Peer and Channel's current status is checked through
 checked through `app_t::runtime_state()`, `is_ready()`,
 `relocate(...)`, and `shutdown(...)` results. Metric name, kind, unit,
 and label are owned by
-[Runtime Metric And Aggregation Rule](../../../25-runtime-metrics.en.md).
+[Runtime Metric And Aggregation Rule](../../../06-observability/02-runtime-metrics.en.md).

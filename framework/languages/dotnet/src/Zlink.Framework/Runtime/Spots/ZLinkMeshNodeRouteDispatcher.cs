@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Streams;
 
@@ -43,7 +44,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private readonly ZLinkDispatchErrorReporter _dispatchErrors;
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
-    private readonly object _orderedActorRelayGate = new();
+    private readonly ZLinkStateLane _orderedActorRelayLane = new();
     private readonly Dictionary<ZLinkActorId, TaskCompletionSource> _orderedActorRelayTails = [];
 
     private ZLinkMeshNodeRouteDispatcher(
@@ -270,16 +271,16 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header)
     {
-        Task prior;
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (_orderedActorRelayGate)
+        var prior = AwaitStateLane(_orderedActorRelayLane.RunAsync(() =>
         {
-            prior = _orderedActorRelayTails.TryGetValue(actorId, out var tail)
+            var prior = _orderedActorRelayTails.TryGetValue(actorId, out var tail)
                 ? tail.Task
                 : Task.CompletedTask;
             _orderedActorRelayTails[actorId] = completion;
-        }
+            return prior;
+        }));
 
         if (_taskRunner.TryRunDetached(
                 "mesh-node-actor-relay-dispatch",
@@ -320,11 +321,19 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         TaskCompletionSource completion)
     {
         completion.TrySetResult();
-        lock (_orderedActorRelayGate)
+        AwaitStateLane(_orderedActorRelayLane.RunAsync(() =>
+        {
             if (_orderedActorRelayTails.TryGetValue(actorId, out var current)
                 && ReferenceEquals(current, completion))
                 _orderedActorRelayTails.Remove(actorId);
+        }));
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     private async ValueTask DispatchAsync(
         ZLinkBackendRouteReceived received,
@@ -332,8 +341,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         CancellationToken cancellationToken)
     {
         using var applicationAdmission =
-            received.ApplicationJobAdmission is { } admission
-                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+            received.ApplicationJobAdmission is { } queuedAdmission
+                ? ZLinkApplicationJobQueueInvocation.Enter(queuedAdmission)
                 : null;
         using (received)
         {
@@ -365,18 +374,17 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 ZLinkFlowOrigin.Inbound);
 
             var infrastructure = IsInfrastructureRelay(received, header);
-            ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease operation;
-            if (infrastructure)
-            {
-                operation = new ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease();
-            }
+            var admission = infrastructure
+                ? new ZLinkInboundOperationAdmission(
+                    true,
+                    ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease.None)
             //  This dispatcher only invokes registered channel and node
             //  route handlers. Neither is object work, so an expired owner
             //  lease must not turn them away (spec 21 §4).
-            else if (!_runtime.TryEnterInboundOperation(
-                         header.Kind == ZLinkMessageKind.Request,
-                         out operation,
-                         ownsObjectWork: false))
+                : _runtime.TryEnterInboundOperation(
+                    header.Kind == ZLinkMessageKind.Request,
+                    ownsObjectWork: false);
+            if (!admission.Accepted)
             {
                 //  With ownsObjectWork false the only refusal here is the drain
                 //  seal, which spec 06 §13.1 classifies as `ShuttingDown` -
@@ -398,7 +406,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 return;
             }
 
-            using (operation)
+            using (admission.Lease)
             {
                 if (received.ChannelName is { } channelName)
                     await DispatchChannelAsync(received, channelName, header, cancellationToken)

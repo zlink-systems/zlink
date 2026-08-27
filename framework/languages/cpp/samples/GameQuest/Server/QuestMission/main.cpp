@@ -2,6 +2,7 @@
 
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
+#include "../Configuration/sample_readiness.hpp"
 #include "../../Shared/Contracts/messages.hpp"
 
 #include <zlink/framework.hpp>
@@ -57,6 +58,7 @@ class quest_event_store_t
     {
         std::vector<quest_progress_t> projection;
         std::string completed_quest_id;
+        std::string reconciled_quest_id;
         bool reward_granted = false;
     };
 
@@ -71,12 +73,12 @@ class quest_event_store_t
         if (already_applied) {
             /* reward 멱등: 이미 반영한 gameplay event는 stream을 늘리지 않고 현재 projection만
              * 돌려준다. */
-            return {projection_unlocked (event.player_id), {}, false};
+            return {projection_unlocked (event.player_id), {}, {}, false};
         }
 
         const auto rule = quest_rule_for (event);
         if (!rule) {
-            return {projection_unlocked (event.player_id), {}, false};
+            return {projection_unlocked (event.player_id), {}, {}, false};
         }
 
         auto projection = replay_unlocked (event.player_id);
@@ -86,14 +88,14 @@ class quest_event_store_t
           current ? current->status : std::string (quest_status_t::active);
         const auto reconciliation = event.type == "SnapshotKillCount";
         if (!reconciliation && previous_status == quest_status_t::reward_granted) {
-            return {projection, {}, false};
+            return {projection, {}, {}, false};
         }
 
         const auto next_count = reconciliation
                                   ? std::max (previous_count, event.count)
                                   : std::min (previous_count + rule->delta, rule->required_count);
         if (next_count == previous_count) {
-            return {projection_unlocked (event.player_id), {}, false};
+            return {projection_unlocked (event.player_id), {}, {}, false};
         }
         append_unlocked (stream,
                          reconciliation ? stored_quest_event_t::reconciled
@@ -110,12 +112,12 @@ class quest_event_store_t
             reward_granted = true;
         }
 
-        std::cerr << "gamequest mission processed player=" << event.player_id
-                  << " type=" << event.type << " value=" << event.value
-                  << " completed=" << completed_quest_id << "\n";
+        std::cerr << "gamequest-mission processed player=" << event.player_id
+                  << " quest=" << rule->quest_id << "\n";
         auto updated = replay_unlocked (event.player_id);
         _projections[event.player_id] = updated;
-        return {std::move (updated), completed_quest_id, reward_granted};
+        return {std::move (updated), completed_quest_id,
+                reconciliation ? rule->quest_id : std::string{}, reward_granted};
     }
 
     std::vector<quest_progress_t> projection (const std::string &player_id) const
@@ -142,13 +144,12 @@ class quest_event_store_t
         return rebuilt;
     }
 
-    void rehydrate_owner (const std::string &player_id)
+    int rehydrate_owner (const std::string &player_id)
     {
         const std::lock_guard lock (_mutex);
         _projections[player_id] = replay_unlocked (player_id);
         ++_rehydrate_count[player_id];
-        std::cerr << "gamequest owner rehydrated player=" << player_id
-                  << " count=" << _rehydrate_count[player_id] << "\n";
+        return _rehydrate_count[player_id];
     }
 
     int rehydrate_count (const std::string &player_id) const
@@ -266,8 +267,10 @@ class player_quest_spot_t : public instance_spot_t
     player_quest_spot_t (instance_spot_context_t context,
                          quest_event_store_t &store,
                          actor_directory_t &directory,
-                         actor_client_t &actors) :
-        _store (store), _directory (directory), _actors (actors), _context (std::move (context))
+                         actor_client_t &actors,
+                         sample_topology_t &topology) :
+        _store (store), _directory (directory), _actors (actors), _topology (topology),
+        _context (std::move (context))
     {
     }
 
@@ -289,9 +292,14 @@ class player_quest_spot_t : public instance_spot_t
         const auto spot_id = _context.spot_id ();
         constexpr std::string_view prefix = "player:";
         _player_id = spot_id.starts_with (prefix) ? spot_id.substr (prefix.size ()) : spot_id;
-        _store.rehydrate_owner (_player_id);
-        std::cerr << "gamequest player quest spot ready player=" << _player_id
-                  << " spot=" << _player_id << "\n";
+        const auto generation = _store.rehydrate_owner (_player_id);
+        const auto projection = _store.projection (_player_id);
+        std::cerr << "gamequest-owner ready player=" << _player_id
+                  << " node=" << _topology.mission_name << "\n";
+        if (!projection.empty ()) {
+            std::cerr << "gamequest-mission replayed player=" << _player_id
+                      << " generation=" << generation << "\n";
+        }
         co_return;
     }
 
@@ -324,7 +332,12 @@ class player_quest_spot_t : public instance_spot_t
                                           request.player_id, "SnapshotKillCount",
                                           gameplay_payload ("kills", request.snapshot_kill_count),
                                           static_cast<long long> (std::time (nullptr)) * 1000LL};
-            return {_store.apply (decode_gameplay (snapshot)).projection};
+            auto result = _store.apply (decode_gameplay (snapshot));
+            if (!result.reconciled_quest_id.empty ()) {
+                std::cerr << "gamequest-mission reconciled player=" << request.player_id
+                          << " quest=" << result.reconciled_quest_id << "\n";
+            }
+            return {std::move (result.projection)};
         }
         return {_store.projection (request.player_id)};
     }
@@ -361,6 +374,7 @@ class player_quest_spot_t : public instance_spot_t
     quest_event_store_t &_store;
     actor_directory_t &_directory;
     actor_client_t &_actors;
+    sample_topology_t &_topology;
     std::string _player_id;
     instance_spot_context_t _context;
 };
@@ -400,7 +414,9 @@ int main (int argc, char **argv)
     gamequest.objects ()
       .server ()
       .add_instance_spot_factory<player_quest_spot_t, quest_event_store_t, actor_directory_t,
-                                 actor_client_t> (sample_names_t::player_quest_spot)
+                                 actor_client_t, sample_topology_t> (sample_names_t::player_quest_spot)
       .disable_relocation ();
+    app.add_hosted_service (std::make_unique<sample_readiness_service_t> (
+      "instance-factory", topology.mission_name));
     return app.run (argc, argv);
 }

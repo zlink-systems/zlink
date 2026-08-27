@@ -176,6 +176,10 @@ import { ServiceWireFrameworkErrorCode } from '../foundation/service-wire-consta
 import { BoundedReplayMap } from './bounded-replay-map';
 import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
 import {
+  ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE,
+  type ZLinkInternalRelocationIntegrityFaultGate
+} from './relocation-integrity-fault-gate';
+import {
   decodeRemoteActorSourceLeaveTerminal,
   ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL
 } from '../actors/actor-remote-wire';
@@ -936,7 +940,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       console.warn('[zlink.runtime.relocation.stale_state_chunk]', operationKey);
       return;
     }
-    pending.assembly.accept(request.chunkOrdinal, request.chunkData);
+    let chunkData = request.chunkData;
+    if (this.relocationIntegrityFaultGate()?.consumeChecksumMismatch() === true) {
+      // Preserve the exact command identity and manifest while changing only
+      // one delivered payload byte.
+      chunkData = Buffer.from(chunkData);
+      if (chunkData.byteLength > 0) chunkData[0] ^= 0x01;
+    }
+    pending.assembly.accept(request.chunkOrdinal, chunkData);
   }
 
   private registerTargetAssembly(
@@ -967,7 +978,26 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       )
     };
     this.targetAssemblies.set(operationKey, pending);
+    if (this.relocationIntegrityFaultGate()?.consumeIdentityConflict() === true) {
+      // Route a same-identity, different-manifest delivery through the normal
+      // conflict branch so existing staging is neither reused nor overwritten.
+      return this.registerTargetAssembly(operationKey, {
+        ...request,
+        payloadChecksumCrc32c: request.payloadChecksumCrc32c ^ 1
+      }, authenticatedSourceNodeRid);
+    }
     return pending;
+  }
+
+  private relocationIntegrityFaultGate(): ZLinkInternalRelocationIntegrityFaultGate | undefined {
+    try {
+      return this.options.providerResolver?.get?.(
+        ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE as unknown as
+          Type<ZLinkInternalRelocationIntegrityFaultGate>
+      );
+    } catch {
+      return undefined;
+    }
   }
 
   requestSessionRelocationSeal(
@@ -4015,7 +4045,18 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const node = this.requireMeshNode(meshName);
     const send = node.sendInfrastructureControl;
     if (send === undefined) {
-      throw new Error('RouteMesh backend cannot submit bare infrastructure controls.');
+      // Compatibility backends may expose raw RouteMesh delivery through the
+      // ordinary node-send port. Production Node backends provide the
+      // dedicated service-control API above, so this branch neither changes
+      // their framing nor turns a missing send into an immediate terminal:
+      // command 42 still owns its configured deadline while admission waits.
+      if (Array.isArray(record)) {
+        return await node.sendToNode(
+          targetNodeRid,
+          record.map(frame => Buffer.from(frame))
+        );
+      }
+      return await node.sendToNode(targetNodeRid, Buffer.from(record as Uint8Array));
     }
     if (Array.isArray(record)) {
       const sendFrames = node.sendInfrastructureControlFrames;

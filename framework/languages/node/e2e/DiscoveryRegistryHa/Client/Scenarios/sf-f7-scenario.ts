@@ -1,4 +1,4 @@
-// SF-F7: Large state relocation은 public size limit 안에서 복원한다 시나리오를 검증한다.
+// SF-F7: Large state relocation은 chunk 경계를 넘어도 복원한다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson, postJsonWithin } from '../../../http-client';
 import { ensure } from '../Support/scenario-assert';

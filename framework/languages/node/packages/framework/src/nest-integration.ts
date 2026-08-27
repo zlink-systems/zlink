@@ -13,7 +13,8 @@ export {
   registerEntrySpot,
   registerSpotFactory,
   validateActorTransferTimeout,
-  validateMessageFollowDuration
+  validateMessageFollowDuration,
+  validateSessionReplacementCallbackTimeout
 } from './contracts/Configuration/RegistrationBuilderPolicy';
 
 import type {

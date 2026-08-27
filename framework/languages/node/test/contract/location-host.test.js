@@ -555,7 +555,6 @@ function fakeBackendAdapterFactory(calls, nodeRid) {
             nativeInstance: {},
             setChannelName(channelName) { this.channelName = channelName; },
             bind(endpoint) { calls.push(`publisher:${this.channelName ?? ''}:bind:${endpoint}`); },
-            onSendReady() {},
             publish() { return true; },
             async dispose() {}
           };
@@ -674,6 +673,7 @@ function fakeConnectableSocket(calls, kind) {
     sendHighWaterMark: 0,
     receiveHighWaterMark: 0,
     sendTimeoutMs: 0,
+    setReceiveFlowState() {},
     setChannelName(channelName) {
       this.channelName = channelName;
     },
@@ -688,7 +688,6 @@ function fakeConnectableSocket(calls, kind) {
       calls.push(`${kind}:${this.channelName}:disconnect:${endpoint}`);
     },
     attachDiscovery() {},
-    onSendReady() {},
     send() { return true; },
     request() { return true; },
     recv() { return null; },

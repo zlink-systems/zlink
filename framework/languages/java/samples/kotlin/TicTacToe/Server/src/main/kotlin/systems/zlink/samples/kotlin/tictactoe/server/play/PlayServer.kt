@@ -1,6 +1,7 @@
 package systems.zlink.samples.kotlin.tictactoe.server.play
 
 import kotlinx.coroutines.Dispatchers
+import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
@@ -31,11 +32,15 @@ object PlayServer {
             }
             val node = options.addRouteMesh(SampleNames.SpotMesh)
             val routeEndpoint = settings.routeEndpoint.ifBlank { settings.spotEndpoint }
+            val peerNodeId = if (settings.nodeId == "play-a") "play-b" else "play-a"
 
-            node.listen(routeEndpoint)
-                .setRoutingIdPrefix("tictactoe-play")
-        node.channelName(SampleNames.PlayNode).server()
-            node.peerConnections().connect(settings.peerSpotEndpoint)
+            node.setRoutingId(RoutingId.from("tictactoe-play-${settings.nodeId}"))
+                .listen(routeEndpoint)
+            node.channelName(SampleNames.PlayNode).server()
+            node.peerConnections().connect(
+                RoutingId.from("tictactoe-play-$peerNodeId"),
+                settings.peerSpotEndpoint,
+            )
             node.objects().server()
                 .addEntrySpot(PlayEntrySpot::class.java)
                 .addSpotFactory(

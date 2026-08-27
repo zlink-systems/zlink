@@ -19,7 +19,7 @@ internal sealed partial class ZLinkActorSessionManager
                 $"Actor '{actorId}' handoff rollback cannot complete without its native actor ref.");
 
         await state.ExecuteLockedAsync(
-            state.BeginTeardown,
+            state.BeginTeardownOnLane,
             CancellationToken.None).ConfigureAwait(false);
 
         try
@@ -53,7 +53,7 @@ internal sealed partial class ZLinkActorSessionManager
         var terminal = state.BeginHandlerActivationCompletion(
                 () =>
                 {
-                    state.RetireMigratedActorInstance(sourceActor);
+                    state.RetireMigratedActorInstanceOnLane(sourceActor);
                     return true;
                 });
         if (terminal.RequiresDispatchRelease)
@@ -97,7 +97,7 @@ internal sealed partial class ZLinkActorSessionManager
         }
 
         await state.ExecuteLockedAsync(
-                state.PrepareForTransferredActivation,
+                state.PrepareForTransferredActivationOnLane,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -129,7 +129,7 @@ internal sealed partial class ZLinkActorSessionManager
                     return null;
                 var nativeRef = state.NativeActorRef;
                 if (nativeRef is not null)
-                    state.BeginTeardown();
+                    state.BeginTeardownOnLane();
                 return nativeRef;
             },
             cancellationToken).ConfigureAwait(false);
@@ -220,7 +220,7 @@ internal sealed partial class ZLinkActorSessionManager
             var terminal = state.BeginHandlerActivationCompletion(
                     () =>
                     {
-                        var result = state.CompleteTeardownAttempt(transaction);
+                        var result = state.CompleteTeardownAttemptOnLane(transaction);
                         terminalStateCommitted = true;
                         return result;
                     });
@@ -300,7 +300,7 @@ internal sealed partial class ZLinkActorSessionManager
             return await state.ExecuteLockedAsync(
                     () =>
                     {
-                        var result = state.CompleteTeardownAttempt(transaction);
+                        var result = state.CompleteTeardownAttemptOnLane(transaction);
                         terminalStateCommitted = true;
                         return result;
                     },

@@ -1,7 +1,7 @@
 # Java Monitoring Public Interface
 
 [Interface table of contents](README.en.md) ·
-[Runtime Monitoring](../../../24-runtime-monitoring.en.md)
+[Runtime Monitoring](../../../06-observability/01-runtime-monitoring.en.md)
 
 ## 1. Scope
 
@@ -26,77 +26,77 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult;
 
 public record ZLinkObservationLoss(
-    long coalescedCount,
-    long discardedTerminalCount) {}
+ long coalescedCount,
+ long discardedTerminalCount) {}
 
 public record ZLinkObservedStatus<T>(
-    T status,
-    ZLinkObservationLoss loss) {}
+ T status,
+ ZLinkObservationLoss loss) {}
 
 public record ZLinkCoreHwmStatus(
-    Optional<Long> configuredMemoryLimitBytes,
-    Optional<Long> configuredBudgetBytes,
-    ZLinkCoreHwmProfile configuredProfile,
-    long effectiveBudgetBytes,
-    long totalAppliedHwmBytes,
-    long coreQueueAccountedBytes,
-    long applicationAccountedBytes,
-    long currentAccountedBytes,
-    long provisionalAccountedBytes,
-    long peakAccountedBytes,
-    long completionCurrentAccountedBytes,
-    long completionPeakAccountedBytes,
-    long completionPendingMessageCount,
-    long totalMessagingAccountedBytes,
-    long monitorQueueAppliedHwmBytes,
-    long monitorQueueAccountedBytes,
-    long totalInstanceAppliedHwmBytes,
-    long totalInstanceAccountedBytes,
-    long blockedRatioPpm,
-    long activeDirectionalQueueCount,
-    long activeCompletionDirectionalQueueCount,
-    long activeSendQueueCount,
-    long activeReceiveQueueCount,
-    long outstandingApplicationLeaseCount,
-    long retiredQueueCount,
-    long deferredOriginCreditBytes) {}
+ Optional<Long> configuredMemoryLimitBytes,
+ Optional<Long> configuredBudgetBytes,
+ ZLinkCoreHwmProfile configuredProfile,
+ long effectiveBudgetBytes,
+ long totalAppliedHwmBytes,
+ long coreQueueAccountedBytes,
+ long applicationAccountedBytes,
+ long currentAccountedBytes,
+ long provisionalAccountedBytes,
+ long peakAccountedBytes,
+ long completionCurrentAccountedBytes,
+ long completionPeakAccountedBytes,
+ long completionPendingMessageCount,
+ long totalMessagingAccountedBytes,
+ long monitorQueueAppliedHwmBytes,
+ long monitorQueueAccountedBytes,
+ long totalInstanceAppliedHwmBytes,
+ long totalInstanceAccountedBytes,
+ long blockedRatioPpm,
+ long activeDirectionalQueueCount,
+ long activeCompletionDirectionalQueueCount,
+ long activeSendQueueCount,
+ long activeReceiveQueueCount,
+ long outstandingApplicationLeaseCount,
+ long retiredQueueCount,
+ long deferredOriginCreditBytes) {}
 
 public enum ZLinkApplicationJobQueuePressureState { RUNNING, PAUSED }
 
 public record ZLinkApplicationJobQueueStatus(
-    ZLinkApplicationJobQueueProfile configuredProfile,
-    Optional<Long> configuredManualMax,
-    int configuredPauseThresholdPercent,
-    int configuredResumeThresholdPercent,
-    long effectiveProcessorCount,
-    long effectiveMaxQueuedApplicationJobs,
-    long pausePermitCount,
-    long resumePermitCount,
-    long reservedSupplyPermits,
-    long queuedApplicationJobs,
-    long permitsInUse,
-    long peakPermitsInUse,
-    ZLinkApplicationJobQueuePressureState pressureState,
-    Duration currentPauseDuration,
-    long capacityWaiters,
-    long capacityWaitCount,
-    Duration capacityWaitDuration) {}
+ ZLinkApplicationJobQueueProfile configuredProfile,
+ Optional<Long> configuredManualMax,
+ int configuredPauseThresholdPercent,
+ int configuredResumeThresholdPercent,
+ long effectiveProcessorCount,
+ long effectiveMaxQueuedApplicationJobs,
+ long pausePermitCount,
+ long resumePermitCount,
+ long reservedSupplyPermits,
+ long queuedApplicationJobs,
+ long permitsInUse,
+ long peakPermitsInUse,
+ ZLinkApplicationJobQueuePressureState pressureState,
+ Duration currentPauseDuration,
+ long capacityWaiters,
+ long capacityWaitCount,
+ Duration capacityWaitDuration) {}
 
 public record ZLinkHostCapacityStatus(
-    long measurementEpoch,
-    ZLinkCoreHwmStatus coreHwm,
-    ZLinkApplicationJobQueueStatus applicationJobQueue) {}
+ long measurementEpoch,
+ ZLinkCoreHwmStatus coreHwm,
+ ZLinkApplicationJobQueueStatus applicationJobQueue) {}
 
 public record ZLinkFrameworkRuntimeStatus(
-    ZLinkFrameworkRuntimeState state,
-    boolean isReady,
-    boolean acceptingWork,
-    Optional<Instant> deadline,
-    Optional<ZLinkFrameworkRelocationResult> relocationResult,
-    Optional<ZLinkFrameworkTerminationResult> terminationResult,
-    ZLinkHostCapacityStatus capacity,
-    long sequence,
-    Instant observedAt) {}
+ ZLinkFrameworkRuntimeState state,
+ boolean isReady,
+ boolean acceptingWork,
+ Optional<Instant> deadline,
+ Optional<ZLinkFrameworkRelocationResult> relocationResult,
+ Optional<ZLinkFrameworkTerminationResult> terminationResult,
+ ZLinkHostCapacityStatus capacity,
+ long sequence,
+ Instant observedAt) {}
 ```
 
 In `ZLinkCoreHwmStatus`, `applicationAccountedBytes`, `outstandingApplicationLeaseCount`,
@@ -106,7 +106,7 @@ as Application Job Queue pressure.
 
 The interface that starts relocation and shutdown is determined by the
 host lifecycle contract. Monitoring doesn't provide separate drain
-control or a per-component termination result. The exact runtime method
+control or a per-component termination result. The runtime method
 `public void resetCapacityMetrics()` preserves current/configuration, advances the epoch,
 rebases peak to current, and clears count/duration.
 
@@ -122,67 +122,67 @@ import java.util.concurrent.Flow;
 import systems.zlink.contracts.core.RoutingId;
 
 public enum ZLinkTopologyState {
-    STARTING,
-    READY,
-    DEGRADED,
-    STOPPING,
-    STOPPED,
-    FAILED
+ STARTING,
+ READY,
+ DEGRADED,
+ STOPPING,
+ STOPPED,
+ FAILED
 }
 
 public enum ZLinkTopologyReason {
-    RUNTIME_NOT_READY,
-    NO_READY_PEER,
-    NO_READY_TARGET,
-    LOCATION_UNAVAILABLE,
-    CAPACITY_EXCEEDED,
-    DRAINING,
-    INTERNAL_FAILURE
+ RUNTIME_NOT_READY,
+ NO_READY_PEER,
+ NO_READY_TARGET,
+ LOCATION_UNAVAILABLE,
+ CAPACITY_EXCEEDED,
+ DRAINING,
+ INTERNAL_FAILURE
 }
 
 public enum ZLinkPeerState {
-    CONNECTING,
-    READY,
-    DRAINING,
-    NOT_CONNECTED,
-    NOT_REQUIRED
+ CONNECTING,
+ READY,
+ DRAINING,
+ NOT_CONNECTED,
+ NOT_REQUIRED
 }
 
 public record ZLinkMeshPeerSnapshot(
-    RoutingId nodeRid,
-    ZLinkPeerState state,
-    Optional<ZLinkTopologyReason> unavailableReason) {}
+ RoutingId nodeRid,
+ ZLinkPeerState state,
+ Optional<ZLinkTopologyReason> unavailableReason) {}
 
 public record ZLinkMeshChannelSnapshot(
-    String channelName,
-    boolean isReady,
-    int readyTargetCount) {}
+ String channelName,
+ boolean isReady,
+ int readyTargetCount) {}
 
 public record ZLinkPlacementSnapshot(
-    boolean isAvailable,
-    int activeActorCount,
-    int activeSpotCount,
-    Optional<ZLinkTopologyReason> unavailableReason) {}
+ boolean isAvailable,
+ int activeActorCount,
+ int activeSpotCount,
+ Optional<ZLinkTopologyReason> unavailableReason) {}
 
 public record ZLinkMeshNodeSnapshot(
-    String meshName,
-    ZLinkTopologyState state,
-    boolean isReady,
-    int readyPeerCount,
-    List<ZLinkMeshChannelSnapshot> channels,
-    List<ZLinkMeshPeerSnapshot> peers,
-    ZLinkPlacementSnapshot placement,
-    long sequence,
-    Instant observedAt) {}
+ String meshName,
+ ZLinkTopologyState state,
+ boolean isReady,
+ int readyPeerCount,
+ List<ZLinkMeshChannelSnapshot> channels,
+ List<ZLinkMeshPeerSnapshot> peers,
+ ZLinkPlacementSnapshot placement,
+ long sequence,
+ Instant observedAt) {}
 
 public interface ZLinkRouteMeshRuntime {
-    ZLinkMeshNodeSnapshot snapshot(String meshName);
+ ZLinkMeshNodeSnapshot snapshot(String meshName);
 
-    Flow.Publisher<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> observe(
-        String meshName,
-        int capacity);
+ Flow.Publisher<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> observe(
+ String meshName,
+ int capacity);
 
-    boolean isReady(String meshName);
+ boolean isReady(String meshName);
 }
 ```
 
@@ -195,7 +195,7 @@ which case the latest state of a kept source isn't omitted. A terminal
 state isn't overwritten by an intermediate state, but if the retention
 cap is exceeded, the oldest terminal is discarded first and the count is
 reported to the observer
-([Runtime Status Query And Operational Diagnostics](../../../24-runtime-monitoring.en.md)).
+([Runtime Status Query And Operational Diagnostics](../../../06-observability/01-runtime-monitoring.en.md)).
 
 `ZLinkObservationLoss.coalescedCount` is the number of intermediate
 states this subscriber didn't see because of per-source latest-slot
@@ -208,7 +208,7 @@ are pinned at `Long.MAX_VALUE` (`2^63 - 1`) once exceeded. This cap is
 the same across all four languages. The framework doesn't complete or
 error-terminate the `Flow.Publisher` just because the subscriber's queue
 is full. The definition of the delivery unit is owned by
-[Runtime Monitoring §3](../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+[Runtime Monitoring §3](../../../06-observability/01-runtime-monitoring.en.md#6-observing-state-changes--sequence-and-the-complete-status).
 
 Placement's `isAvailable` is only `true` when the host is `SERVING` and
 Object Server, node-wide placement weight is positive, and both Actor
@@ -233,35 +233,35 @@ import java.util.concurrent.Flow;
 import systems.zlink.contracts.core.RoutingId;
 
 public enum ZLinkClientServerRole {
-    CLIENT,
-    SERVER,
-    CLIENT_AND_SERVER
+ CLIENT,
+ SERVER,
+ CLIENT_AND_SERVER
 }
 
 public record ZLinkClientServerTargetStatus(
-    RoutingId nodeRid,
-    int weight,
-    ZLinkPeerState state,
-    Optional<ZLinkTopologyReason> unavailableReason) {}
+ RoutingId nodeRid,
+ int weight,
+ ZLinkPeerState state,
+ Optional<ZLinkTopologyReason> unavailableReason) {}
 
 public record ZLinkClientServerStatus(
-    String channelName,
-    ZLinkClientServerRole localRole,
-    ZLinkTopologyState state,
-    boolean isReady,
-    int readyTargetCount,
-    List<ZLinkClientServerTargetStatus> targets,
-    long sequence,
-    Instant observedAt) {}
+ String channelName,
+ ZLinkClientServerRole localRole,
+ ZLinkTopologyState state,
+ boolean isReady,
+ int readyTargetCount,
+ List<ZLinkClientServerTargetStatus> targets,
+ long sequence,
+ Instant observedAt) {}
 
 public interface ZLinkClientServerRuntime {
-    ZLinkClientServerStatus snapshot(String channelName);
+ ZLinkClientServerStatus snapshot(String channelName);
 
-    Flow.Publisher<ZLinkObservedStatus<ZLinkClientServerStatus>> observe(
-        String channelName,
-        int capacity);
+ Flow.Publisher<ZLinkObservedStatus<ZLinkClientServerStatus>> observe(
+ String channelName,
+ int capacity);
 
-    boolean isReady(String channelName);
+ boolean isReady(String channelName);
 }
 ```
 
@@ -279,20 +279,20 @@ import java.util.List;
 import java.util.concurrent.Flow;
 
 public record ZLinkFanoutStatus(
-    String channelName,
-    ZLinkTopologyState state,
-    boolean isReady,
-    int readyPublisherCount,
-    List<ZLinkMeshPeerSnapshot> publishers,
-    long sequence,
-    Instant observedAt) {}
+ String channelName,
+ ZLinkTopologyState state,
+ boolean isReady,
+ int readyPublisherCount,
+ List<ZLinkMeshPeerSnapshot> publishers,
+ long sequence,
+ Instant observedAt) {}
 
 public interface ZLinkFanoutRuntime {
-    ZLinkFanoutStatus snapshot(String channelName);
+ ZLinkFanoutStatus snapshot(String channelName);
 
-    Flow.Publisher<ZLinkObservedStatus<ZLinkFanoutStatus>> observe(
-        String channelName,
-        int capacity);
+ Flow.Publisher<ZLinkObservedStatus<ZLinkFanoutStatus>> observe(
+ String channelName,
+ int capacity);
 }
 ```
 

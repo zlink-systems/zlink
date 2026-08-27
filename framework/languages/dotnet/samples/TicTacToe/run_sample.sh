@@ -177,7 +177,7 @@ wait_port() {
   local port
   host="$(endpoint_host "${endpoint}")"
   port="$(endpoint_port "${endpoint}")"
-  for _ in $(seq 1 600); do
+  for _ in $(seq 1 300); do
     if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
       return 0
     fi
@@ -187,17 +187,22 @@ wait_port() {
   return 1
 }
 
-wait_log_contains() {
-  local description="$1"
-  local pattern="$2"
+log_count() {
+  local evidence="$1"
+  shift
+  { grep -Fh -- "${evidence}" "$@" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'
+}
+
+wait_log_count() {
+  local expected="$1" evidence="$2"
   shift 2
-  for _ in $(seq 1 600); do
-    if grep -Eq "${pattern}" "$@" 2>/dev/null; then
+  for _ in $(seq 1 300); do
+    if [[ "$(log_count "${evidence}" "$@")" == "${expected}" ]]; then
       return 0
     fi
     sleep 0.1
   done
-  echo "Timed out waiting for log marker: ${description}" >&2
+  echo "Timed out waiting for ${expected} '${evidence}'" >&2
   return 1
 }
 
@@ -231,21 +236,30 @@ wait_port api-b-http "${API_B_BIND_URL}"
 wait_port api-b-mesh "${API_B_MESH_ENDPOINT}"
 wait_port api-b-channel "${API_B_CHANNEL_ENDPOINT}"
 
+wait_log_count 1 "tictactoe-ready kind=peer-route node=play-a peer=play-b" "${LOG_DIR}/play-a.log"
+wait_log_count 1 "tictactoe-ready kind=peer-route node=play-b peer=play-a" "${LOG_DIR}/play-b.log"
+wait_log_count 1 "tictactoe-ready kind=http node=api-a" "${LOG_DIR}/api-a.log"
+wait_log_count 1 "tictactoe-ready kind=http node=api-b" "${LOG_DIR}/api-b.log"
+wait_log_count 1 "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" "${LOG_DIR}/api-a.log"
+wait_log_count 1 "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" "${LOG_DIR}/api-b.log"
+
 dotnet run --no-build --project "${SCRIPT_DIR}/Client/TicTacToe.Client.csproj" -- \
   --config "${CLIENT_CONFIG_FILE}" >"${LOG_DIR}/client.log" 2>&1
-wait_log_contains "stream inbound evidence" "stream-inbound sample=TicTacToe" "${LOG_DIR}/client.log"
-wait_log_contains "stream inbound sequenced packet" "stream-inbound sample=TicTacToe .* seq=[0-9]" "${LOG_DIR}/client.log"
-wait_log_contains "stream inbound notify packet" "stream-inbound sample=TicTacToe .* name=.*Notify" "${LOG_DIR}/client.log"
-wait_log_contains "observer milestone verification" "observer-win-milestone=verified" "${LOG_DIR}/client.log"
-wait_log_contains "reconnected full game state verification" "reconnected-game-state=verified actor=player-x room=" "${LOG_DIR}/client.log"
-wait_log_contains "existing actor exact identity verification" "play stream: existing actor exact identity verified.*actor=player-x" "${LOG_DIR}"/play-*.log
-wait_log_contains "player-x leave completion" "actor: LeaveGameMsg completed. actor=player-x" "${LOG_DIR}"/play-*.log
-wait_log_contains "player-o leave completion" "actor: LeaveGameMsg completed. actor=player-o" "${LOG_DIR}"/play-*.log
-wait_log_contains "player-x actor destroy completion" "entry spot: actor destroy completed. actor=player-x" "${LOG_DIR}"/play-*.log
-wait_log_contains "player-o actor destroy completion" "entry spot: actor destroy completed. actor=player-o" "${LOG_DIR}"/play-*.log
+wait_log_count 1 "observer-connected endpoint=${PLAY_B_ENDPOINT}" "${LOG_DIR}/client.log"
+wait_log_count 1 "observer-subscription=verified subscribed=true" "${LOG_DIR}/client.log"
+wait_log_count 1 "observer-win-milestone=verified actor=player-x wins=100" "${LOG_DIR}/client.log"
+wait_log_count 1 "reconnected-game-state=verified actor=player-x room=" "${LOG_DIR}/client.log"
+wait_log_count 1 "tictactoe=completed" "${LOG_DIR}/client.log"
+wait_log_count 1 "tictactoe-lifecycle actor-bound actor=player-x" "${LOG_DIR}"/play-*.log
+wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-x" "${LOG_DIR}"/play-*.log
+wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-o" "${LOG_DIR}"/play-*.log
+wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-x" "${LOG_DIR}"/play-*.log
+wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-o" "${LOG_DIR}"/play-*.log
+wait_log_count 0 "tictactoe-lifecycle actor-destroy-complete actor=observer" "${LOG_DIR}"/play-*.log
 if grep -R -q "dispatch-error" "${LOG_DIR}"; then
   echo "Unexpected dispatch-error in TicTacToe sample logs." >&2
   grep -R -n "dispatch-error" "${LOG_DIR}" >&2 || true
   exit 1
 fi
 RUN_SUCCEEDED=1
+echo "tictactoe-placement=completed"

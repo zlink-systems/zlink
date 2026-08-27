@@ -17,8 +17,8 @@ title: "5. Channel Messaging — request · send · pub/sub · C#/.NET"
 
 # 5. Channel Messaging — request · send · pub/sub
 
-> **이 장의 계약 소유 문서** — [Channel 메시징](../../../common/spec/server/08-channel-messaging.ko.md)과
-> [ClientServer Channel](../../../common/spec/server/09-client-server-channel.ko.md)이 동작을,
+> **이 장의 계약 소유 문서** — [Channel 메시징](../../../common/spec/server/02-channel-transport/02-channel-messaging.ko.md)과
+> [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)이 동작을,
 > [언어별 channel messaging 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 표면을 소유한다. 이 챕터는 그 표면을 실제로 어떻게 등록하고 호출하는지 사용법 중심으로
 > 다룬다.
@@ -842,7 +842,7 @@ options.Codecs.Use(new AvroCodecExtension()); // extension 내부에서 Avro ser
 ```
 
 등록 후 high-level 호출은 그대로 업무 객체를 주고받고 직렬화는 Avro로 처리된다.
-다른 언어의 등록 표면은 [framework-api §9](../../../common/spec/server/06-framework-api.ko.md#9-codec) 표를 본다.
+다른 언어의 등록 표면은 [framework-api §9](../../../common/spec/server/00-foundation/06-framework-api.ko.md#12-codec) 표를 본다.
 
 ## 8. ChannelName 수평 확장
 

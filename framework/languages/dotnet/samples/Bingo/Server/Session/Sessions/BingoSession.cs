@@ -1,10 +1,12 @@
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Streams;
 
 namespace Bingo.Server.Session.Sessions;
 
 internal sealed class BingoSession(
-    IZLinkSessionContext context) : IZLinkSession
+    IZLinkSessionContext context,
+    ILogger<BingoSession> logger) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -15,7 +17,13 @@ internal sealed class BingoSession(
 
     public async ValueTask OnDisconnectedAsync(CancellationToken cancellationToken)
     {
-        foreach (var actor in Context.Actors.Bound) await actor.NotifyDisconnectedAsync(cancellationToken);
+        foreach (var actor in Context.Actors.Bound)
+        {
+            await actor.NotifyDisconnectedAsync(cancellationToken);
+            logger.LogInformation(
+                "bingo-lifecycle session-disconnect actor={ActorId} destroy=false",
+                actor.ActorId);
+        }
     }
 
     public ValueTask OnErrorAsync(

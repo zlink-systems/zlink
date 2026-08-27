@@ -172,13 +172,13 @@ Dispatch는 고객과 배송원의 session을 직접 보관하지 않는다. Cou
 
 | 필요한 동작 | 선택한 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| 배송원·고객 ID로 현재 object를 찾는다. | Actor direct message | Global Actor ID를 사용하면 Framework가 current Ready owner를 resolve한다. [상호작용 모델 §2](../../spec/server/03-interaction-model.ko.md#2-공통-모델) |
-| Actor를 처음 준비하고 같은 session에 bind한다. | Actor GetOrCreate와 bound session | 생성 결과의 exact ActorRef를 해당 bind operation에만 사용한다. [Actor model](../../spec/server/14-actor-model.ko.md) · [Session–Actor dispatch](../../spec/server/20-session-actor-dispatch.ko.md) |
-| 최초 Actor membership을 승인한다. | Entry Spot | 생성 callback은 local initial state만 설정하고 짧게 끝낸다. [Spot model §4](../../spec/server/11-spot-model.ko.md#4-entry-spot) |
-| worker와 Tracking 사이의 독립 요청 | ClientServer Channel | object RouteMesh와 channel Server membership을 섞지 않는다. [Channel topology](../../spec/server/07-channel-topology.ko.md) |
-| 고객·배송원에게 server push | STREAM bound session | current binding FIFO를 통해 연결을 교체해도 같은 logical Actor로 push한다. [STREAM session §8](../../spec/server/03-interaction-model.ko.md#8-stream-session) |
-| one-way 제안·결정 전송 | Actor send | send admission은 handler 실행 완료나 상대 수신을 보장하지 않는다. [Send와 request §4](../../spec/server/03-interaction-model.ko.md#4-send와-request) |
-| owner 장애 경계 | failure/failover policy | Ready owner 장애는 자동 cold activation이나 다른 owner 선택으로 바뀌지 않는다. [Failure policy §4.4](../../spec/server/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
+| 배송원·고객 ID로 현재 object를 찾는다. | Actor direct message | Global Actor ID를 사용하면 Framework가 current Ready owner를 resolve한다. [상호작용 모델 §2](../../spec/server/00-foundation/04-interaction-model.ko.md) |
+| Actor를 처음 준비하고 같은 session에 bind한다. | Actor GetOrCreate와 bound session | 생성 결과의 exact ActorRef를 해당 bind operation에만 사용한다. [Actor model](../../spec/server/03-spot-actor/04-actor-model.ko.md) · [Session–Actor dispatch](../../spec/server/04-session/02-session-actor-binding.ko.md) |
+| 최초 Actor membership을 승인한다. | Entry Spot | 생성 callback은 local initial state만 설정하고 짧게 끝낸다. [Spot model §4](../../spec/server/03-spot-actor/01-spot-model.ko.md#4-entry-spot) |
+| worker와 Tracking 사이의 독립 요청 | ClientServer Channel | object RouteMesh와 channel Server membership을 섞지 않는다. [Channel topology](../../spec/server/02-channel-transport/01-channel-topology.ko.md) |
+| 고객·배송원에게 server push | STREAM bound session | current binding FIFO를 통해 연결을 교체해도 같은 logical Actor로 push한다. [STREAM session §8](../../spec/server/00-foundation/04-interaction-model.ko.md#8-stream-session) |
+| one-way 제안·결정 전송 | Actor send | send admission은 handler 실행 완료나 상대 수신을 보장하지 않는다. [Send와 request §4](../../spec/server/00-foundation/04-interaction-model.ko.md#4-send와-request) |
+| owner 장애 경계 | failure/failover policy | Ready owner 장애는 자동 cold activation이나 다른 owner 선택으로 바뀌지 않는다. [Failure policy §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
 
 Courier와 Customer Actor factory는 sample 범위에서 `DisableRelocation`을 사용한다. planned
 relocation을 추가하더라도 같은 Actor identity와 binding 갱신을 검증해야 하며, Ready owner
@@ -551,9 +551,81 @@ Client self-check는 response와 push payload를 직접 assert한다.
 deliverydispatch=completed
 ```
 
-언어별 runner는 위 공통 completion marker와 함께 server evidence 또는 runner evidence를
-검사한다. evidence marker의 이름은 해당 언어 runner가 실제로 출력하는 값을 사용하며, 다른
-이름을 문서의 공통 계약으로 추가하지 않는다.
+언어별 runner는 위 공통 completion marker와 함께 §10.1이 정한 evidence를 모두 검사한다.
+
+### 10.1 Runner가 확인하는 evidence
+
+Runner는 아래 표의 문자열을 그대로 찾는다. 문자열은 언어별 재량이 아니다. 다섯 구현이 같은
+문자열을 같은 횟수로 출력해야 하며, 문구를 바꾸려면 이 표를 먼저 바꾼다. Node 이름은 여섯 개이며 `dispatch`, `tracking`, `courier-node-1`, `courier-node-2`,
+`customer-gateway`, `courier-session`으로 고정한다. 지금은 courier node 이름이 언어마다
+네 가지(`courier-actor-node1`, `courier-actor-node-1`, `courier-node1`, `courier-spot-node1`)로
+갈려 있다 — 위 이름 하나로 맞춘다.
+
+**Evidence는 샘플이 소유한 문자열이어야 한다.** Framework가 찍는 줄(runtime readiness 로그,
+message flow tracer, process 기동 boilerplate)을 성공 기준으로 삼지 않는다. 그 줄들은 framework
+사정으로 바뀌고, 바뀌면 샘플 runner가 조용히 깨진다. 진단 목적으로 읽는 것은 무방하나 완료
+판정의 근거가 될 수 없다.
+
+Readiness는 client를 시작하기 전에 확인한다.
+
+| 확인하는 사실 | 로그 | 출력 node |
+| --- | --- | --- |
+| Node가 자기 route를 확보했다 | `deliverydispatch-ready kind=route node=<NodeId>` | 여섯 node 전부 |
+| Dispatch가 courier actor node를 수용 가능한 대상으로 본다 | `deliverydispatch-ready kind=actor-route node=dispatch target=<CourierNodeId>` | `dispatch` (`courier-node-1`, `courier-node-2` 각각) |
+
+두 번째 행은 **수동 신호로 확인한다.** Runner가 `/ready?targetRid=` 같은 요청을 만들어 보내
+readiness를 증명하지 않는다 — readiness를 위해 합성 요청을 보내지 않는다.
+
+Server evidence는 client scenario가 끝난 뒤 확인한다.
+
+| 확인하는 사실 | 로그 | 정확한 횟수 |
+| --- | --- | --- |
+| Courier session이 courier를 bind했다 | `deliverydispatch-courier bound courier=<CourierId>` | `courier-a` 1, `courier-b` 1 |
+| Bind가 courier actor node까지 전달됐다 | `deliverydispatch-courier bind-relayed courier=<CourierId>` | `courier-a` 1, `courier-b` 1 |
+| Customer gateway가 customer를 bind했다 | `deliverydispatch-customer bound customer=<CustomerId>` | 1 |
+| Customer gateway가 상태를 push했다 | `deliverydispatch-customer pushed status=Delivered delivery=<DeliveryId>` | 2 |
+| Tracking이 상태 갱신을 받았다 | `deliverydispatch-tracking status=Delivered delivery=<DeliveryId>` | 2 |
+| 늦게 도착한 결정이 무시됐다(§9-6) | `deliverydispatch-dispatch stale-decision-ignored delivery=<DeliveryId> courier=<CourierId> attempt=<N>` | 1 |
+| 후보를 모두 소진한 delivery가 `Failed`에 한 번 도달했다(§9-7) | `deliverydispatch-dispatch failed delivery=<DeliveryId> reason=candidates-exhausted` | 1 |
+
+`bound customer=` 행은 **실제 binding이 일어날 때만** 출력한다. 한 customer connector가 두
+delivery를 각각 구독하므로, 구독 호출마다 찍으면 두 번이 되어 이 행이 무너진다.
+
+`pushed status=Delivered`와 `tracking status=Delivered`는 **정확히 2회**다. 성공 흐름과 재배정
+흐름 두 delivery가 모두 `Delivered`에 도달한다. "1회 이상"으로 두면 한 흐름이 통째로 사라져도
+통과한다.
+
+마지막 두 행은 **그 상황을 실제로 만들어야 한다.**
+
+- §9-6은 courier B가 수락한 *뒤에* courier A의 `CourierDecisionMsg`를 보내야 성립한다. 지금 node는
+  B보다 *먼저* 보내고 있어 이 사실을 시험하지 못한다.
+- §9-7은 **후보를 모두 거절해 소진시켜** `Failed`에 이르게 한다. `CreateDeliveryReq`에는 후보를
+  지정하는 field가 없고 후보 목록은 A·B로 고정돼 있으므로, "후보가 없는 delivery를 만든다"는
+  방식은 새 message field 없이는 성립하지 않는다. 기존 `CourierDecisionMsg`로 A와 B를 차례로
+  거절하면 같은 사실을 새 계약 없이 시험할 수 있다.
+
+그 단계를 실행하지 않으면 이 행들은 통과할 수 없으며, 통과하지 못하는 것이 맞다.
+
+`topology=ready`는 쓰지 않는다. 이 문자열은 구현마다 bind 전·후·runner 자체 출력으로 갈려
+같은 리터럴이 서로 다른 순간을 뜻했다. Readiness는 위 표의 두 행으로만 확인한다.
+
+완료 marker는 셋이며 client가 출력한다.
+
+| marker | 뜻 |
+| --- | --- |
+| `deliverydispatch=completed` | §9 client self-check 전체 통과 |
+| `deliverydispatch-reassignment=completed` | 재배정 흐름 통과 |
+| `deliverydispatch-server-evidence=completed` | server evidence 검증 통과 |
+
+**세 marker를 모두 runner가 직접 확인한다.** Client 프로세스의 종료 코드나 browser 판정으로
+대신하지 않는다 — 내일 client가 marker를 안 찍어도 runner가 알아채야 한다.
+
+Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
+적용하며 `.sh`와 `.ps1`이 같은 값을 쓴다. 대기 없이 한 번만 읽거나 고정 sleep 뒤 읽지 않는다.
+다섯 언어 모두 `.sh`와 `.ps1`을 함께 제공한다 — 지금 C++·Java·Kotlin에는 `.ps1`이 없다.
+
+모든 행이 통과하면 runner가 마지막에 `deliverydispatch-placement=completed`를 출력한다. 한
+행이라도 실패하면 이 marker를 출력하지 않는다.
 
 ## 11. 완료 기준
 
@@ -566,4 +638,5 @@ deliverydispatch=completed
 - Framework public API만 사용하고 private runtime, raw frame, sample 전용 routing helper와
   message별 codec 등록을 추가하지 않는다.
 - Ready owner 장애를 crash failover로 표시하지 않으며, 해당 범위는 Unavailable로 검증한다.
-- runner가 build, resource, readiness, self-check, evidence와 cleanup을 수행한다.
+- runner가 build, resource, readiness, self-check, cleanup을 수행하고 §10.1 표의 모든 행을
+  문자열과 횟수까지 통과시킨다.

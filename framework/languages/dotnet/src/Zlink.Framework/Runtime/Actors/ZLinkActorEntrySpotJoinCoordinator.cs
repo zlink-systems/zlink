@@ -31,7 +31,7 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         // for targets that are genuinely outside this process; otherwise a
         // local operation can wait for a route callback that this process does
         // not produce.
-        if (getState().TryGetSpotNodeByRoutingId(spotNodeRid, out var localTarget))
+        if (getState().FindSpotNodeByRoutingId(spotNodeRid) is { } localTarget)
         {
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"entry_join_local_managed actor={actor.Context.ActorId} "
@@ -153,7 +153,7 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         ZLinkMessage joinRequest,
         CancellationToken cancellationToken)
     {
-        if (state.TryGetSpotNodeByRoutingId(spotNodeRid, out var targetNode))
+        if (state.FindSpotNodeByRoutingId(spotNodeRid) is { } targetNode)
             return await JoinLocalEntrySpotAsync(
                     targetNode,
                     actor,

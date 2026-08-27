@@ -199,11 +199,10 @@ class runtime_cleanup_t
 };
 
 TEST (ChannelHostReplyAdmission,
-      MissingRouteTerminatesOnceAndReleasesRetainedCredit)
+      MissingRouteTerminatesOnceWithOrdinaryEnvelopeOwnership)
 {
     auto context = std::make_shared<zlink::context_t> ();
     context->options ().auto_hwm_enabled (false);
-    context->reset_core_hwm_budget_metrics ();
 
     const std::string endpoint = unique_inproc_endpoint ();
     const auto server_rid = zlink::routing_id_t::from (
@@ -284,17 +283,9 @@ TEST (ChannelHostReplyAdmission,
                              .async ();
 
     ASSERT_TRUE (handler.wait_until_entered (2s));
-    ASSERT_TRUE (wait_until (
-      [&] {
-          return context->core_hwm_budget_snapshot ()
-                   .outstanding_application_lease_count ()
-                 != 0u;
-      },
-      2s));
-    const auto retained_lease_count =
-      context->core_hwm_budget_snapshot ()
-        .outstanding_application_lease_count ();
-    EXPECT_GT (retained_lease_count, 0u);
+    EXPECT_EQ (0u,
+               context->core_hwm_budget_snapshot ()
+                 .outstanding_application_lease_count ());
 
     source.disconnect (endpoint);
     ASSERT_TRUE (wait_until (
@@ -307,17 +298,6 @@ TEST (ChannelHostReplyAdmission,
     handler.release ();
     ASSERT_TRUE (handler.wait_until_returned (2s));
 
-    const auto terminal_started = std::chrono::steady_clock::now ();
-    EXPECT_TRUE (wait_until (
-      [&] {
-          return context->core_hwm_budget_snapshot ()
-                   .outstanding_application_lease_count ()
-                 == 0u;
-      },
-      250ms));
-    EXPECT_LT (std::chrono::steady_clock::now () - terminal_started,
-               250ms);
-    std::this_thread::sleep_for (100ms);
     EXPECT_EQ (0u,
                context->core_hwm_budget_snapshot ()
                  .outstanding_application_lease_count ());

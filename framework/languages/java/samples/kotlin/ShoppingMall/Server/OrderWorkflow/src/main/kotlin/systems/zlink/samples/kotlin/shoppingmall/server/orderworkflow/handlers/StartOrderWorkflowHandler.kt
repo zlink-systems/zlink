@@ -19,7 +19,7 @@ class StartOrderWorkflowHandler(
     ): CompletionStage<StartOrderWorkflowRes> {
         spot.requireOrder(request.orderId)
         val state = workflow.start(request)
-        System.err.println("shoppingmall order: started order=${request.orderId} status=${state.status}")
+        println("shoppingmall-order started order=${request.orderId} spot=${spot.context().spotId()}")
         continuations.enqueue(request.orderId)
         return CompletableFuture.completedFuture(StartOrderWorkflowRes(state))
     }

@@ -19,6 +19,15 @@ export function validateActorTransferTimeout(timeoutMs: number): number {
   return timeoutMs;
 }
 
+export function validateSessionReplacementCallbackTimeout(timeoutMs: number): number {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new ZLinkConfigurationException(
+      'SessionReplacementCallbackTimeout must be a positive safe integer.'
+    );
+  }
+  return timeoutMs;
+}
+
 export function registerEntrySpot(
   options: { entrySpotType?: Type<ZLinkEntrySpot> },
   entrySpotType: Type<ZLinkEntrySpot>

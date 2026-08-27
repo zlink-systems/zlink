@@ -21,7 +21,7 @@
 
 ## 계약 변경
 
-- 공통 동작과 언어별 표현은 `framework/common/spec/server/00-public-contract-governance.ko.md`를 따른다.
+- 공통 동작과 언어별 표현은 `framework/common/spec/server/00-foundation/01-public-contract-governance.ko.md`를 따른다.
 - 공통 목표 계약과 exact language interface를 함께 갱신한다. 현재 구현이 다르면 formal spec에
   진행 상태를 추가하지 말고 구현과 기능 test를 계약에 맞춰 수렴한다.
 - 다른 언어 구현이나 E2E만 보고 계약을 추가하지 않는다.

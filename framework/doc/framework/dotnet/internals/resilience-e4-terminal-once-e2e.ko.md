@@ -4,7 +4,7 @@
 경쟁하는 상황에서 공통 RL-E4 계약을 어떻게 확인하는지 설명한다. 공개 Framework
 계약을 추가하지 않으며, 공통 시나리오
 [`RL-E4`](../../common/e2e/config-5-resilience-lifecycle.ko.md)와
-[Transport 연결 상태 확인](../../common/spec/server/29-transport-liveness.ko.md)의
+[Transport 연결 상태 확인](../../common/spec/server/02-channel-transport/05-transport-liveness.ko.md)의
 검증 조건을 .NET fixture에 연결한다.
 
 ## 검증 범위

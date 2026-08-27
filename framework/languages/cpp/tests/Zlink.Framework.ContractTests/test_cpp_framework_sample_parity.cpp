@@ -214,9 +214,9 @@ TEST (CppFrameworkSampleParity, BingoClientChecksEveryDocumentedScenarioState)
     EXPECT_NE (scenario.find ("same_bingo_player_list (client1_ended.state.players"),
                std::string::npos)
       << "SMP-CP-34 step 9 must compare the final player lists from both pushes";
-    EXPECT_NE (room.find ("observer returned to entry spot"), std::string::npos)
+    EXPECT_NE (room.find ("bingo-lifecycle room-leave actor="), std::string::npos)
       << "SMP-CP-34 step 11 must leave server evidence after the observer room leave";
-    EXPECT_NE (runner.find ("observer returned to entry spot"), std::string::npos)
+    EXPECT_NE (runner.find ("bingo-lifecycle room-leave actor="), std::string::npos)
       << "SMP-CP-34 runner must require the observer leave evidence";
 }
 
@@ -698,14 +698,21 @@ TEST (CppFrameworkSampleParity, ShoppingMallStartsAfterWorkflowPeerReadiness)
       read_file (cpp_language_root () / "samples/ShoppingMall/Server/CommerceApi/main.cpp");
     const auto runner = read_file (cpp_language_root () / "samples/ShoppingMall/run_sample.sh");
 
-    EXPECT_NE (api.find ("map_get<route_ready_http_handler_t> (\"/ready\")"), std::string::npos)
-      << "ShoppingMall CommerceApi must expose a bounded RouteMesh readiness check";
-    EXPECT_NE (runner.find ("wait_route_ready"), std::string::npos)
-      << "ShoppingMall runner must wait for workflow peer admission";
-    EXPECT_NE (runner.find ("shoppingmall-workflow-a-workflow"), std::string::npos)
-      << "ShoppingMall runner must check workflow-a readiness";
-    EXPECT_NE (runner.find ("shoppingmall-workflow-b-workflow"), std::string::npos)
-      << "ShoppingMall runner must check workflow-b readiness";
+    //  Sample spec section 10.1 forbids proving readiness with a runner-sent request: the old
+    //  /ready?targetRid= probe and its wait_route_ready helper were removed. Readiness is now a
+    //  passive, sample-owned row the CommerceApi emits once it can route to a workflow node.
+    EXPECT_EQ (api.find ("route_ready_http_handler_t"), std::string::npos)
+      << "ShoppingMall CommerceApi must not expose a synthetic readiness probe endpoint";
+    const auto readiness =
+      read_file (cpp_language_root () / "samples/ShoppingMall/Server/Configuration/sample_readiness.hpp");
+    EXPECT_NE (readiness.find ("shoppingmall-ready kind=object-route"), std::string::npos)
+      << "ShoppingMall must emit the object-route readiness row from a passive observation";
+    EXPECT_NE (runner.find ("shoppingmall-ready kind=object-route node=api-a target=workflow-a"),
+               std::string::npos)
+      << "ShoppingMall runner must wait for the api-a -> workflow-a object route";
+    EXPECT_NE (runner.find ("shoppingmall-ready kind=object-route node=api-a target=workflow-b"),
+               std::string::npos)
+      << "ShoppingMall runner must wait for the api-a -> workflow-b object route";
 }
 
 TEST (CppFrameworkSampleParity, TicTacToeDisconnectRemovesMilestoneObserver)

@@ -29,6 +29,19 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Fact]
+    public void Missing_actor_factory_is_not_found_and_is_not_retryable()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        registration.ActorCatalog.Build([]);
+
+        var error = Assert.Throws<ZLinkFrameworkException>(
+            () => registration.ActorCatalog.ResolveFactory("unregistered"));
+
+        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+        Assert.Equal(ZLinkRetryAdvice.DoNotRetry, error.RetryAdvice);
+    }
+
+    [Fact]
     public async Task BoundSessionAsyncSend_UsesCommittedRelocationRouteBeforeAck()
     {
         var localNode = new CapturingSpotNode();
@@ -677,7 +690,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     cancellationToken);
                 await lifecycle.ReleaseActorAsync(actorState.RuntimeActorId, cancellationToken);
                 await actorState.ExecuteLockedAsync(
-                    () => actorState.ClearAfterDestroy(),
+                    () => actorState.ClearAfterDestroyOnLane(),
                     CancellationToken.None);
             });
 
@@ -3086,6 +3099,35 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task EnterOperation_Nested_Lease_Does_Not_Allocate()
+    {
+        var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        try
+        {
+            var allocated = await Task.Run(() =>
+            {
+                using var outer = runtime.EnterOperation();
+                using (runtime.EnterOperation())
+                {
+                }
+
+                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                for (var index = 0; index < 100_000; index++)
+                {
+                    using var nested = runtime.EnterOperation();
+                }
+                return GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+            });
+
+            Assert.Equal(0, allocated);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task RuntimeStop_RejectsOwnedStopBeforeWaitingForAnExternalStopGate()
     {
         var node = new CapturingSpotNode();
@@ -5168,7 +5210,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionOwnerNodeGeneration: 1);
 
             node.BoundSessionSendAccepted = true;
-            node.SignalSendReady();
+            node.CompleteBoundSessionAdmission();
 
             await pending;
 
@@ -6024,7 +6066,8 @@ public sealed partial class EntrySpotActorDispatchTests
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(node);
         object? targetAttemptLease = null;
-        SemaphoreSlim? targetAttemptGate = null;
+        Task? targetAttemptRun = null;
+        TaskCompletionSource? releaseTargetAttempt = null;
         try
         {
             var owner = runtime.StandaloneActorRelocationRuntime;
@@ -6062,13 +6105,30 @@ public sealed partial class EntrySpotActorDispatchTests
                            .GetValue(targetAttemptLease)
                        ?? throw new InvalidOperationException(
                            "Target attempt slot was not found.");
-            targetAttemptGate = Assert.IsType<SemaphoreSlim>(
-                slot.GetType()
-                    .GetProperty(
-                        "Gate",
-                        BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(slot));
-            Assert.True(await targetAttemptGate.WaitAsync(0));
+            var runAsync = slot.GetType().GetMethod(
+                               "RunAsync",
+                               BindingFlags.Instance | BindingFlags.NonPublic,
+                               binder: null,
+                               types: [typeof(Func<ValueTask>)],
+                               modifiers: null)
+                           ?? throw new InvalidOperationException(
+                               "Target attempt state-lane runner was not found.");
+            var targetAttemptStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            releaseTargetAttempt = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Func<ValueTask> holdTargetAttempt = () =>
+            {
+                targetAttemptStarted.TrySetResult();
+                return new ValueTask(releaseTargetAttempt.Task);
+            };
+            targetAttemptRun = ((ValueTask)(runAsync.Invoke(
+                slot,
+                [holdTargetAttempt])
+                ?? throw new InvalidOperationException(
+                    "Target attempt state-lane work was not scheduled."))).AsTask();
+            await targetAttemptStarted.Task.WaitAsync(
+                TimeSpan.FromSeconds(1));
 
             using var deadline = new CancellationTokenSource(
                 TimeSpan.FromMilliseconds(100));
@@ -6080,7 +6140,9 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         finally
         {
-            targetAttemptGate?.Release();
+            releaseTargetAttempt?.TrySetResult();
+            if (targetAttemptRun is not null)
+                await targetAttemptRun;
             (targetAttemptLease as IDisposable)?.Dispose();
             await runtime.StopAsync(CancellationToken.None);
         }
@@ -9157,8 +9219,6 @@ public sealed partial class EntrySpotActorDispatchTests
             (_dispatchHandler ?? throw new InvalidOperationException("Dispatch handler was not attached.")).Invoke(info);
         }
 
-        public void OnSendReady(Action handler) { }
-
         public bool RequestToChannel(
             string channelName,
             Message message,
@@ -9377,8 +9437,6 @@ public sealed partial class EntrySpotActorDispatchTests
             string keyPath,
             bool requireClientCert) { }
 
-        public void OnSendReady(Action handler) { }
-
         public bool RecvPart(
             out RoutingId? sourceRoutingId,
             out Message? part,
@@ -9444,8 +9502,6 @@ public sealed partial class EntrySpotActorDispatchTests
             string certPath,
             string keyPath,
             bool requireClientCert) { }
-
-        public void OnSendReady(Action handler) { }
 
         public bool RecvPart(
             out RoutingId? sourceRoutingId,
@@ -9602,11 +9658,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
         private TaskCompletionSource? BoundSessionAdmission { get; set; }
 
-        private Action? SendReadyHandler { get; set; }
-
-        public void SignalSendReady()
+        public void CompleteBoundSessionAdmission()
         {
-            SendReadyHandler?.Invoke();
             if (BoundSessionSendAccepted)
                 BoundSessionAdmission?.TrySetResult();
         }
@@ -9819,8 +9872,6 @@ public sealed partial class EntrySpotActorDispatchTests
             PublisherConfig = publisher;
             SubscriberConfig = subscriber;
         }
-
-        public void OnSendReady(Action handler) => SendReadyHandler = handler;
 
         public void ConnectPeer(string endpoint) { }
 

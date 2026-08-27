@@ -6,6 +6,9 @@ import { StartOrderWorkflowReq } from '../../../Shared/Contracts/messages';
 @ZLinkPacket('PrepareInventoryReservedReq')
 class PrepareInventoryReservedReq extends StartOrderWorkflowReq {}
 
+@ZLinkPacket('PrepareRelocationCheckpointReq')
+class PrepareRelocationCheckpointReq extends StartOrderWorkflowReq {}
+
 @ZLinkPacket('PrepareInventoryEffectReq')
 class PrepareInventoryEffectReq extends StartOrderWorkflowReq {}
 
@@ -22,5 +25,10 @@ interface VerifyExpectedVersionFenceRes {
   ownerInstanceId?: string;
 }
 
-export { PrepareInventoryEffectReq, PrepareInventoryReservedReq, VerifyExpectedVersionFenceReq };
+export {
+  PrepareInventoryEffectReq,
+  PrepareInventoryReservedReq,
+  PrepareRelocationCheckpointReq,
+  VerifyExpectedVersionFenceReq
+};
 export type { VerifyExpectedVersionFenceRes };

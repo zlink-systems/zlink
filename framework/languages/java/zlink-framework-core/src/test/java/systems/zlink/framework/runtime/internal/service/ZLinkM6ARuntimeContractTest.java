@@ -397,6 +397,34 @@ final class ZLinkM6ARuntimeContractTest {
     }
 
     @Test
+    void livenessAcceptsPeriodicAckWithoutAnotherReadyTransition() {
+        var liveness = new ZLinkServiceLivenessRegistry(
+            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        RoutingId peer = RoutingId.from("peer-periodic-ack");
+        long now = 100;
+
+        liveness.admit(peer, "pipe", now);
+        assertTrue(liveness.requestProbe(peer, "pipe", now));
+        var first = liveness.tick(now).probes().getFirst();
+        assertFalse(liveness.isReady(peer, "pipe"));
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", first.probeId(), now + 1));
+        assertTrue(liveness.isReady(peer, "pipe"));
+
+        var periodic = liveness.tick(
+            now + 1 + Duration.ofSeconds(5).toNanos())
+            .probes()
+            .getFirst();
+        assertTrue(liveness.isReady(peer, "pipe"));
+        assertTrue(liveness.acknowledge(
+            peer,
+            "pipe",
+            periodic.probeId(),
+            now + 2 + Duration.ofSeconds(5).toNanos()));
+        assertTrue(liveness.isReady(peer, "pipe"));
+    }
+
+    @Test
     void oldConnectionAckCannotReadyOrRenewAReplacementConnection() {
         var liveness = new ZLinkServiceLivenessRegistry(
             Duration.ofSeconds(5), Duration.ofSeconds(15));
@@ -446,6 +474,28 @@ final class ZLinkM6ARuntimeContractTest {
                 .nodeRoutingId());
         assertFalse(topology.hasSelectableChannel(
             "orders", ignored -> false));
+    }
+
+    @Test
+    void topologyReadinessPredicateCanReenterTheRegistry() {
+        var topology = new ZLinkServiceTopologyRegistry(
+            descriptor("mesh", "local", 1, 1, List.of(), 100));
+        var peer = descriptor(
+            "mesh",
+            "peer-a",
+            1,
+            1,
+            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+            100);
+        topology.admit(peer, "pipe-a");
+
+        assertEquals(
+            peer.nodeRoutingId(),
+            topology.selectChannel("orders", candidate ->
+                topology.peer(candidate.descriptor().nodeRoutingId()).isPresent())
+                .orElseThrow()
+                .descriptor()
+                .nodeRoutingId());
     }
 
     @Test

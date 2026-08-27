@@ -28,8 +28,7 @@ public final class PlayActorLeaveGameHandler {
             message.roomId());
         return spot.leaveGame(actor, message.roomId())
             .thenRun(() -> LOGGER.info(
-                "actor: LeaveGameMsg completed. actor={}, roomId={}",
-                actor.actorId(),
-                message.roomId()));
+                "tictactoe-lifecycle leave-completed actor={}",
+                actor.actorId()));
     }
 }

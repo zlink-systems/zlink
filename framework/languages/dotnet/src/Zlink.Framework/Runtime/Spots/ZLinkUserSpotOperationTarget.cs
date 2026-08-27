@@ -45,7 +45,8 @@ internal sealed class ZLinkUserSpotOperationTarget(
         {
             if (authority.State != ZLinkUserSpotAuthorityState.Ready)
                 throw Moving(operation.SpotId);
-            if (catalog.CloseReadiness(operation.SpotId)
+            if (await catalog.CloseReadinessAsync(operation.SpotId)
+                    .ConfigureAwait(false)
                 == ReservedSpotCloseReadiness.LocalMissing)
                 throw Moving(operation.SpotId);
             return SuccessCreate(
@@ -216,7 +217,8 @@ internal sealed class ZLinkUserSpotOperationTarget(
             throw Moving(
                 operation.Target.SpotId,
                 "the authority is not an active Ready User Spot");
-        var readiness = catalog.CloseReadiness(operation.Target.SpotId);
+        var readiness = await catalog.CloseReadinessAsync(operation.Target.SpotId)
+            .ConfigureAwait(false);
         if (readiness == ReservedSpotCloseReadiness.HasActors)
             return new UserSpotOperationTerminal(
                 RequestResult.Ok,

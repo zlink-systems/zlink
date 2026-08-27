@@ -100,4 +100,47 @@ public sealed class EndpointConnectionsTests
         Assert.False(connections is IList<string>);
         Assert.True(connections is IReadOnlyCollection<string>);
     }
+
+    [Fact]
+    public void Endpoint_Callback_Can_Read_The_Public_Surface()
+    {
+        var connections = new ZLinkEndpointConnections();
+        connections.Attach(
+            endpoint => { _ = connections.ListConnections(); },
+            endpoint => { _ = connections.Count; });
+
+        connections.Connect("tcp://127.0.0.1:7401");
+        connections.Disconnect("tcp://127.0.0.1:7401");
+
+        Assert.Empty(connections.ListConnections());
+    }
+
+    [Fact]
+    public void Failed_Connect_Callback_Does_Not_Retain_Endpoint()
+    {
+        var connections = new ZLinkEndpointConnections();
+        connections.Attach(
+            _ => throw new InvalidOperationException("connect failed"),
+            _ => { });
+
+        Assert.Throws<InvalidOperationException>(
+            () => connections.Connect("tcp://127.0.0.1:7501"));
+
+        Assert.Empty(connections.ListConnections());
+    }
+
+    [Fact]
+    public void Failed_Disconnect_Callback_Does_Not_Remove_Endpoint()
+    {
+        var connections = new ZLinkEndpointConnections();
+        connections.Connect("tcp://127.0.0.1:7601");
+        connections.Attach(
+            _ => { },
+            _ => throw new InvalidOperationException("disconnect failed"));
+
+        Assert.Throws<InvalidOperationException>(
+            () => connections.Disconnect("tcp://127.0.0.1:7601"));
+
+        Assert.Equal(["tcp://127.0.0.1:7601"], connections.ListConnections());
+    }
 }

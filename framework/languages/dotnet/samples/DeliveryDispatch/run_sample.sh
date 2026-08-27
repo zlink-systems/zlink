@@ -115,21 +115,8 @@ wait_port() {
   local port
   host="$(endpoint_host "${endpoint}")"
   port="$(endpoint_port "${endpoint}")"
-  for _ in $(seq 1 600); do
+  for _ in $(seq 1 300); do
     if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.1
-  done
-  echo "Timed out waiting for ${name} at ${endpoint}" >&2
-  return 1
-}
-
-wait_http() {
-  local name="$1"
-  local endpoint="$2"
-  for _ in $(seq 1 120); do
-    if curl -fsS "${endpoint}/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.1
@@ -152,16 +139,22 @@ start_server() {
   PIDS+=("$!")
 }
 
-wait_log() {
-  local pattern="$1"
-  local file="$2"
-  for _ in $(seq 1 80); do
-    if grep -Eq "${pattern}" "${file}"; then
+wait_log_count() {
+  local description="$1"
+  local line="$2"
+  local file="$3"
+  local expected="$4"
+  for _ in $(seq 1 300); do
+    local actual=0
+    if [[ -f "${file}" ]]; then
+      actual="$(grep -F -c -- "${line}" "${file}" || true)"
+    fi
+    if [[ "${actual}" -eq "${expected}" ]]; then
       return 0
     fi
-    sleep 0.2
+    sleep 0.1
   done
-  echo "Timed out waiting for '${pattern}' in ${file}" >&2
+  echo "Timed out waiting for ${description}: expected ${expected} occurrence(s) of '${line}' in ${file}" >&2
   return 1
 }
 
@@ -180,8 +173,8 @@ write_role_config() {
     tracking) mesh_endpoint="${TRACKING_MESH}" ;;
     customer-gateway) mesh_endpoint="${CUSTOMER_MESH}" ;;
     courier-session) mesh_endpoint="${COURIER_SESSION_MESH}" ;;
-    courier-actor-node1) mesh_endpoint="${COURIER_NODE1_MESH}" ;;
-    courier-actor-node2) mesh_endpoint="${COURIER_NODE2_MESH}" ;;
+    courier-node-1) mesh_endpoint="${COURIER_NODE1_MESH}" ;;
+    courier-node-2) mesh_endpoint="${COURIER_NODE2_MESH}" ;;
     client) mesh_endpoint="unused" ;;
   esac
   python3 "${SCRIPT_DIR}/write_role_config.py" \
@@ -201,43 +194,42 @@ write_role_config tracking
 write_role_config customer-gateway
 write_role_config courier-session
 write_role_config dispatch
-write_role_config courier-actor-node1
-write_role_config courier-actor-node2
+write_role_config courier-node-1
+write_role_config courier-node-2
 write_role_config client
 
 dotnet build "${SCRIPT_DIR}/DeliveryDispatch.sln" --maxcpucount:1
 
 start_server tracking "${SCRIPT_DIR}/Server/Tracking/DeliveryDispatch.Server.Tracking.csproj" --config "${CONFIG_DIR}/tracking.json"
-wait_port tracking-mesh "${TRACKING_MESH}"
-
 start_server customer-gateway "${SCRIPT_DIR}/Server/CustomerGateway/DeliveryDispatch.Server.CustomerGateway.csproj" --config "${CONFIG_DIR}/customer-gateway.json"
-wait_port customer-stream "${CUSTOMER_STREAM}"
-wait_port customer-mesh "${CUSTOMER_MESH}"
-
-start_server courier-actor-node1 "${SCRIPT_DIR}/Server/CourierActorNode/DeliveryDispatch.Server.CourierActorNode.csproj" --config "${CONFIG_DIR}/courier-actor-node1.json"
-wait_port courier-actor-node1-mesh "${COURIER_NODE1_MESH}"
-
-start_server courier-actor-node2 "${SCRIPT_DIR}/Server/CourierActorNode/DeliveryDispatch.Server.CourierActorNode.csproj" --config "${CONFIG_DIR}/courier-actor-node2.json"
-wait_port courier-actor-node2-mesh "${COURIER_NODE2_MESH}"
-
+start_server courier-node-1 "${SCRIPT_DIR}/Server/CourierActorNode/DeliveryDispatch.Server.CourierActorNode.csproj" --config "${CONFIG_DIR}/courier-node-1.json"
+start_server courier-node-2 "${SCRIPT_DIR}/Server/CourierActorNode/DeliveryDispatch.Server.CourierActorNode.csproj" --config "${CONFIG_DIR}/courier-node-2.json"
 start_server courier-session "${SCRIPT_DIR}/Server/CourierSession/DeliveryDispatch.Server.CourierSession.csproj" --config "${CONFIG_DIR}/courier-session.json"
-wait_port courier-session-mesh "${COURIER_SESSION_MESH}"
-wait_port courier-session-stream "${COURIER_STREAM}"
-
 start_server dispatch "${SCRIPT_DIR}/Server/Dispatch/DeliveryDispatch.Server.Dispatch.csproj" --config "${CONFIG_DIR}/dispatch.json"
-wait_port dispatch-mesh "${DISPATCH_MESH}"
-wait_http dispatch "${DISPATCH_HTTP}"
+
+wait_log_count "tracking route readiness" "deliverydispatch-ready kind=route node=tracking" "${LOG_DIR}/tracking.log" 1
+wait_log_count "customer gateway route readiness" "deliverydispatch-ready kind=route node=customer-gateway" "${LOG_DIR}/customer-gateway.log" 1
+wait_log_count "courier session route readiness" "deliverydispatch-ready kind=route node=courier-session" "${LOG_DIR}/courier-session.log" 1
+wait_log_count "courier node 1 route readiness" "deliverydispatch-ready kind=route node=courier-node-1" "${LOG_DIR}/courier-node-1.log" 1
+wait_log_count "courier node 2 route readiness" "deliverydispatch-ready kind=route node=courier-node-2" "${LOG_DIR}/courier-node-2.log" 1
+wait_log_count "dispatch route readiness" "deliverydispatch-ready kind=route node=dispatch" "${LOG_DIR}/dispatch.log" 1
+wait_log_count "dispatch courier node 1 readiness" "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-1" "${LOG_DIR}/dispatch.log" 1
+wait_log_count "dispatch courier node 2 readiness" "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2" "${LOG_DIR}/dispatch.log" 1
 
 dotnet run --no-build --project "${SCRIPT_DIR}/Client/DeliveryDispatch.Client.csproj" -- \
   --config "${CONFIG_DIR}/client.json" >"${LOG_DIR}/client.log" 2>&1
 
-grep -q "deliverydispatch=completed" "${LOG_DIR}/client.log"
-grep -q "topology=ready" "${LOG_DIR}/client.log"
-grep -q "deliverydispatch-reassignment=completed" "${LOG_DIR}/client.log"
-wait_log "deliverydispatch tracking: status" "${LOG_DIR}/tracking.log"
-wait_log "deliverydispatch customer-session: bound customer" "${LOG_DIR}/customer-gateway.log"
-wait_log "deliverydispatch customer-entry: pushed status" "${LOG_DIR}/customer-gateway.log"
-wait_log "deliverydispatch courier-session: bound courier=courier-a" "${LOG_DIR}/courier-session.log"
-wait_log "deliverydispatch courier-session: bound courier=courier-b" "${LOG_DIR}/courier-session.log"
-echo "deliverydispatch-runner-evidence=completed"
+wait_log_count "client completion" "deliverydispatch=completed" "${LOG_DIR}/client.log" 1
+wait_log_count "client reassignment completion" "deliverydispatch-reassignment=completed" "${LOG_DIR}/client.log" 1
+wait_log_count "client server-evidence completion" "deliverydispatch-server-evidence=completed" "${LOG_DIR}/client.log" 1
+wait_log_count "courier a bound" "deliverydispatch-courier bound courier=courier-a" "${LOG_DIR}/courier-session.log" 1
+wait_log_count "courier b bound" "deliverydispatch-courier bound courier=courier-b" "${LOG_DIR}/courier-session.log" 1
+wait_log_count "courier a bind relayed" "deliverydispatch-courier bind-relayed courier=courier-a" "${LOG_DIR}/courier-session.log" 1
+wait_log_count "courier b bind relayed" "deliverydispatch-courier bind-relayed courier=courier-b" "${LOG_DIR}/courier-session.log" 1
+wait_log_count "customer bound" "deliverydispatch-customer bound customer=customer-1" "${LOG_DIR}/customer-gateway.log" 1
+wait_log_count "customer delivered pushes" "deliverydispatch-customer pushed status=Delivered" "${LOG_DIR}/customer-gateway.log" 2
+wait_log_count "tracking delivered statuses" "deliverydispatch-tracking status=Delivered" "${LOG_DIR}/tracking.log" 2
+wait_log_count "stale courier decision" "deliverydispatch-dispatch stale-decision-ignored delivery=delivery-reassign courier=courier-a attempt=1" "${LOG_DIR}/dispatch.log" 1
+wait_log_count "candidates exhausted" "deliverydispatch-dispatch failed delivery=delivery-exhausted reason=candidates-exhausted" "${LOG_DIR}/dispatch.log" 1
+echo "deliverydispatch-placement=completed"
 RUN_SUCCEEDED=1

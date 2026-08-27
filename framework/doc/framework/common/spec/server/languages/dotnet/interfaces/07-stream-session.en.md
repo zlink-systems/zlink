@@ -1,6 +1,6 @@
 # .NET STREAM Server Session Public Interface
 
-[.NET exact interface table of contents](README.en.md)
+[.NET per-language interface table of contents](README.en.md)
 
 ## 1. STREAM Server Session
 
@@ -12,124 +12,124 @@ admission isn't bypassed by a transport callback.
 ```csharp
 public interface IZLinkSession
 {
-    IZLinkSessionContext Context { get; }
-    void Configure() { }
-    ValueTask OnConnectedAsync(CancellationToken cancellationToken);
-    ValueTask OnDisconnectedAsync(CancellationToken cancellationToken);
-    ValueTask OnActorBindingReplacedAsync(
-        string actorId,
-        CancellationToken cancellationToken)
-    {
-        return ValueTask.CompletedTask;
-    }
-    ValueTask OnErrorAsync(
-        ZLinkStreamError error,
-        CancellationToken cancellationToken);
-    ValueTask OnDispatchAsync(
-        ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload,
-        CancellationToken cancellationToken)
-    {
-        return ValueTask.CompletedTask;
-    }
+ IZLinkSessionContext Context { get; }
+ void Configure() { }
+ ValueTask OnConnectedAsync(CancellationToken cancellationToken);
+ ValueTask OnDisconnectedAsync(CancellationToken cancellationToken);
+ ValueTask OnActorBindingReplacedAsync(
+ string actorId,
+ CancellationToken cancellationToken)
+ {
+ return ValueTask.CompletedTask;
+ }
+ ValueTask OnErrorAsync(
+ ZLinkStreamError error,
+ CancellationToken cancellationToken);
+ ValueTask OnDispatchAsync(
+ ZLinkSessionDispatchContext dispatch,
+ ZLinkMessage payload,
+ CancellationToken cancellationToken)
+ {
+ return ValueTask.CompletedTask;
+ }
 }
 
 public interface IZLinkSessionContext
 {
-    string SessionId { get; }
-    RoutingId? RoutingId { get; }
-    string? LocalAddr { get; }
-    string? RemoteAddr { get; }
-    IZLinkSessionClient Client { get; }
-    IZLinkSessionActors Actors { get; }
-    IZLinkSessionHandlerRegistry Handlers { get; }
-    ValueTask CloseAsync();
+ string SessionId { get; }
+ RoutingId? RoutingId { get; }
+ string? LocalAddr { get; }
+ string? RemoteAddr { get; }
+ IZLinkSessionClient Client { get; }
+ IZLinkSessionActors Actors { get; }
+ IZLinkSessionHandlerRegistry Handlers { get; }
+ ValueTask CloseAsync();
 }
 
 public interface IZLinkSessionHandlerRegistry
 {
-    void AddHandler<THandler>() where THandler : class;
-    void AddHandler<THandler>(string packetName) where THandler : class;
-    ValueTask<bool> TryHandleAsync(
-        ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload,
-        CancellationToken cancellationToken = default);
+ void AddHandler<THandler>() where THandler : class;
+ void AddHandler<THandler>(string packetName) where THandler : class;
+ ValueTask<bool> TryHandleAsync(
+ ZLinkSessionDispatchContext dispatch,
+ ZLinkMessage payload,
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSessionPacketHandler<in TSessionContext, TMessage>
 {
-    ValueTask HandleAsync(
-        TSessionContext context,
-        ZLinkSessionDispatchContext dispatch,
-        TMessage message,
-        CancellationToken cancellationToken);
+ ValueTask HandleAsync(
+ TSessionContext context,
+ ZLinkSessionDispatchContext dispatch,
+ TMessage message,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkSessionClient
 {
-    IZLinkSessionSendCall Send<TMessage>(TMessage message);
-    IZLinkSessionReplyCall Reply<TMessage>(TMessage message);
+ IZLinkSessionSendCall Send<TMessage>(TMessage message);
+ IZLinkSessionReplyCall Reply<TMessage>(TMessage message);
 }
 
 public interface IZLinkSessionSendCall
-    : IZLinkMetadataCall<IZLinkSessionSendCall>
+ : IZLinkMetadataCall<IZLinkSessionSendCall>
 {
-    IZLinkSessionSendCall Compress();
-    IZLinkSessionSendCall Timeout(TimeSpan timeout);
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+ IZLinkSessionSendCall Compress();
+ IZLinkSessionSendCall Timeout(TimeSpan timeout);
+ ValueTask Async(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSessionReplyCall
 {
-    IZLinkSessionReplyCall Compress();
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+ IZLinkSessionReplyCall Compress();
+ ValueTask Async(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSessionActors
 {
-    IReadOnlyCollection<IZLinkSessionActor> Bound { get; }
-    ValueTask<IZLinkSessionActor> BindAsync(
-        ActorRef actor,
-        CancellationToken cancellationToken = default);
-    ValueTask<IZLinkSessionActor> BindOrGetAsync(
-        ActorRef actor,
-        CancellationToken cancellationToken = default);
-    IZLinkSessionActor? Find(string actorId);
+ IReadOnlyCollection<IZLinkSessionActor> Bound { get; }
+ ValueTask<IZLinkSessionActor> BindAsync(
+ ActorRef actor,
+ CancellationToken cancellationToken = default);
+ ValueTask<IZLinkSessionActor> BindOrGetAsync(
+ ActorRef actor,
+ CancellationToken cancellationToken = default);
+ IZLinkSessionActor? Find(string actorId);
 }
 
 public interface IZLinkSessionActor
 {
-    string ActorId => Ref.ActorId;
-    ActorRef Ref { get; }
-    ValueTask RelayAsync(
-        ZLinkMessage payload,
-        CancellationToken cancellationToken = default);
-    ValueTask NotifyDisconnectedAsync(
-        CancellationToken cancellationToken = default);
+ string ActorId => Ref.ActorId;
+ ActorRef Ref { get; }
+ ValueTask RelayAsync(
+ ZLinkMessage payload,
+ CancellationToken cancellationToken = default);
+ ValueTask NotifyDisconnectedAsync(
+ CancellationToken cancellationToken = default);
 }
 
 public enum ZLinkStreamSessionError
 {
-    Internal = 0,
-    TransportError = 1,
-    HandshakeFailed = 2
+ Internal = 0,
+ TransportError = 1,
+ HandshakeFailed = 2
 }
 
 public readonly record struct ZLinkStreamError(
-    ZLinkStreamSessionError Error,
-    string? Message);
+ ZLinkStreamSessionError Error,
+ string? Message);
 
 public sealed class ZLinkSessionDispatchContext
 {
-    public ZLinkSessionDispatchContext(
-        string packetName,
-        ZLinkMessageMetadata? metadata = null,
-        bool canReply = false) { }
-    public string PacketName { get; }
-    public ZLinkMessageMetadata Metadata { get; }
-    public bool CanReply { get; }
+ public ZLinkSessionDispatchContext(
+ string packetName,
+ ZLinkMessageMetadata? metadata = null,
+ bool canReply = false) { }
+ public string PacketName { get; }
+ public ZLinkMessageMetadata Metadata { get; }
+ public bool CanReply { get; }
 }
 ```
 
@@ -144,7 +144,7 @@ timeout, `DeadlineExceeded`, or cancellation, the token can't be used
 again. A valid reply only uses the STREAM socket send timeout as the
 admission deadline. Since the caller request timeout isn't delivered over
 the wire, it isn't used as the reply
-[deadline](../../../01-glossary.en.md#deadline), and no late reply is
+[deadline](../../../00-foundation/02-glossary.en.md#deadline), and no late reply is
 sent after a timeout or cancellation.
 
 `IZLinkSessionSendCall.Timeout(...)` only shortens this send's admission
@@ -167,14 +167,14 @@ The new bind does not wait for this callback or close.
 
 After bind, `RelayAsync(...)` and `NotifyDisconnectedAsync(...)` use the
 per-Actor binding. A physical disconnect is notified by the framework to
-every current binding, running the Spot callback at most once per exact
+every current binding, running the Spot callback at most once per
 binding identity. `NotifyDisconnectedAsync(...)` is a logical
 notification while the connection is kept, and waits for the callback
-terminal. The exact binding callback runs at most once, and after terminal
+terminal. The binding callback runs at most once, and after terminal
 the binding is committed as a tombstone and removed. The physical STREAM
 connection and Actor/Spot membership are kept. No new public Unbind API is
 provided. Rebind completes as soon as the new identity becomes current and
-does not wait for the previous session. The previous exact session may notify
+does not wait for the previous session. The previous session may notify
 the client in `OnActorBindingReplacedAsync(...)`. The framework closes the connection `100 ms`
 after the callback reaches a successful or failed terminal. Callback or close
 failure doesn't remove the new binding or restore the old one. Relocation
@@ -191,7 +191,7 @@ Packet and lifecycle callbacks of the same session run serially.
 Handshake and node-scope errors are reported through runtime monitoring
 and aren't delivered to `OnErrorAsync(...)`.
 
-Session binding fixes the exact incarnation of `ActorRef.ActorId +
+Session binding fixes the specified incarnation of `ActorRef.ActorId +
 ObjectGeneration` once. The MeshName/NodeRid of the Ref submitted at bind
 is used as the initial control route snapshot. If there's no mapping,
 `NotFound`; if the current generation differs, `InvalidOperation`; if in
@@ -208,19 +208,19 @@ relocation. An overload taking a local `IZLinkActor` isn't provided.
 ```csharp
 public interface IZLinkStream
 {
-    string SessionId { get; }
-    RoutingId? RoutingId { get; }
-    string? LocalAddr { get; }
-    string? RemoteAddr { get; }
-    bool Write(
-        ZLinkMessage payload,
-        SendFlags flags = SendFlags.None);
-    ValueTask CloseAsync();
+ string SessionId { get; }
+ RoutingId? RoutingId { get; }
+ string? LocalAddr { get; }
+ string? RemoteAddr { get; }
+ bool Write(
+ ZLinkMessage payload,
+ SendFlags flags = SendFlags.None);
+ ValueTask CloseAsync();
 }
 
 public interface IZLinkMessageMetadataPolicy
 {
-    bool CanForward(string key);
+ bool CanForward(string key);
 }
 ```
 

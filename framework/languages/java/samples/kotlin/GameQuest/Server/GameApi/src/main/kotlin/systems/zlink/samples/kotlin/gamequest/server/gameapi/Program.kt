@@ -36,13 +36,16 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.messaging.ZLinkMessage
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.samples.kotlin.gamequest.server.configuration.RedisSampleStore
+import systems.zlink.samples.kotlin.gamequest.server.configuration.GameQuestReadinessReporter
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleTimings
@@ -82,7 +85,9 @@ import systems.zlink.samples.kotlin.gamequest.shared.contracts.UnlockFeatureRes
 
 fun main(args: Array<String>) {
     val app = Program.run(SampleTopology.configPath(args))
-    val http = startHttp(Program.store, app.getBean(SampleTopology::class.java))
+    val topology = app.getBean(SampleTopology::class.java)
+    println("gamequest-ready kind=stream node=${topology.gameApi().instanceName}")
+    val http = startHttp(Program.store, topology)
     Runtime.getRuntime().addShutdownHook(Thread {
         http.stop(0)
         app.close()
@@ -118,7 +123,7 @@ class Program {
 
 
             options.addRouteMesh(SampleNames.PlayerQuestMesh)
-                .setRoutingIdPrefix("gamequest-api")
+                .setRoutingId(RoutingId.from("gamequest-api-${api.instanceName}"))
                 .listen()
                 .objects().server()
                 .addEntrySpot(GameQuestEntrySpot::class.java)
@@ -144,6 +149,13 @@ class Program {
         Companion.routes = routes
         return GameQuestApiServices()
     }
+
+    @Bean(destroyMethod = "close")
+    fun gameQuestReadinessReporter(
+        topology: SampleTopology,
+        meshes: ZLinkRouteMeshRuntime,
+    ): GameQuestReadinessReporter =
+        GameQuestReadinessReporter.api(topology.gameApi().instanceName, meshes)
 
     class GameQuestApiServices
 
@@ -238,8 +250,13 @@ class GameQuestSession(
     }
 
     private suspend fun handleKill(request: KillMonsterReq) {
-        val processed = process(event(request.playerId, request.idempotencyKey, "kill", request.monsterId, 1, true))
-        context.client().reply(KillMonsterRes(processed.eventId)).submit()
+        try {
+            val processed = process(event(request.playerId, request.idempotencyKey, "kill", request.monsterId, 1, true))
+            context.client().reply(KillMonsterRes(processed.eventId)).submit()
+        } catch (failure: Exception) {
+            println("gamequest-owner unavailable player=${request.playerId}")
+            throw failure
+        }
     }
 
     private suspend fun handleCollect(message: CollectItemMsg) {
@@ -268,6 +285,7 @@ class GameQuestSession(
             .inMesh(SampleNames.PlayerQuestMesh)
             .submit()
             .await()
+        println("gamequest-api event-routed player=${event.playerId}")
         return event
     }
 

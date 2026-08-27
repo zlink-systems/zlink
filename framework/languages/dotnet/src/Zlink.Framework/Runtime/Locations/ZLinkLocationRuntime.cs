@@ -1,4 +1,5 @@
 using Zlink.Framework.Internal.Locations;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -26,7 +27,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
     private readonly TimeProvider _time;
     private readonly IReadOnlyList<KeyValuePair<string, string>> _metricScopes;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
-    private readonly object _disposeStartGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private ZLinkLocationRuntimeHealth _health = new(false, null, null, null);
     private CancellationTokenSource? _heartbeatCts;
     private Task? _heartbeatLoop;
@@ -56,17 +57,20 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
     /// <summary>Stable owner id for the current runtime generation. Each
     /// successful restart attempt uses a fresh id so rows left by an older
     /// generation cannot become live again.</summary>
-    internal string OwnerId => _ownerId;
+    internal string OwnerId => AwaitStateLane(_lane.RunAsync(() => _ownerId));
 
     internal ZLinkLocationOwnerToken OwnerToken
-        => RequireOwnerToken();
+        => AwaitStateLane(_lane.RunAsync(RequireOwnerTokenOnLane));
 
     internal ZLinkLocationOwnerToken AdmissionOwnerToken
     {
         get
         {
-            EnsureOwnerAdmissionOpen();
-            return RequireOwnerToken();
+            return AwaitStateLane(_lane.RunAsync(() =>
+            {
+                EnsureOwnerAdmissionOpenOnLane();
+                return RequireOwnerTokenOnLane();
+            }));
         }
     }
 
@@ -74,18 +78,13 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
     {
         get
         {
-            var deadline = Volatile.Read(ref _ownerAdmissionDeadline);
-            return deadline is not null
-                   && _time.GetElapsedTime(deadline.LeaseOperationStartedAt)
-                   < deadline.Lifetime;
+            return AwaitStateLane(_lane.RunAsync(IsOwnerAdmissionOpenOnLane));
         }
     }
 
     internal void EnsureOwnerAdmissionOpen()
     {
-        if (!IsOwnerAdmissionOpen)
-            throw new InvalidOperationException(
-                "The owner lease admission deadline has expired.");
+        AwaitStateLane(_lane.RunAsync(EnsureOwnerAdmissionOpenOnLane));
     }
 
     internal IZLinkLocationRepository Store => _store;
@@ -117,14 +116,19 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposingOrDisposed();
-            if (_started) return;
+            var start = await _lane.RunAsync(() =>
+            {
+                ThrowIfDisposingOrDisposed();
+                if (_started) return false;
 
-            _nodeRid = nodeRid;
-            _ownerId = Guid.NewGuid().ToString("n");
-            _ownerToken = null;
-            Volatile.Write(ref _ownerAdmissionDeadline, null);
-            _ownerCleanedForDrain = false;
+                _nodeRid = nodeRid;
+                _ownerId = Guid.NewGuid().ToString("n");
+                _ownerToken = null;
+                _ownerAdmissionDeadline = null;
+                _ownerCleanedForDrain = false;
+                return true;
+            }).ConfigureAwait(false);
+            if (!start) return;
 
             // Register liveness before any row write so readers joining rows
             // against the lease never see this owner's rows as stale on start.
@@ -132,12 +136,12 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 throw new InvalidOperationException(
                     $"The location runtime could not establish its owner lease: {LastError ?? "unknown store failure"}");
 
-            var heartbeat = new CancellationTokenSource();
-            _heartbeatCts = heartbeat;
-            _heartbeatLoop = Task.Run(
-                () => HeartbeatLoopAsync(heartbeat.Token),
-                CancellationToken.None);
-            _started = true;
+            var heartbeatStarted = await _lane.RunAsync(() =>
+            {
+                _started = true;
+                return StartHeartbeatOnLane();
+            }).ConfigureAwait(false);
+            heartbeatStarted.TrySetResult();
         }
         finally
         {
@@ -150,13 +154,24 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!_started) return;
+            var stop = await _lane.RunAsync(() =>
+            {
+                if (!_started) return (StopState?)null;
 
-            _started = false;
-            var heartbeat = _heartbeatCts;
-            var heartbeatLoop = _heartbeatLoop;
-            _heartbeatCts = null;
-            _heartbeatLoop = null;
+                _started = false;
+                var heartbeat = _heartbeatCts;
+                var heartbeatLoop = _heartbeatLoop;
+                _heartbeatCts = null;
+                _heartbeatLoop = null;
+                return new StopState(
+                    heartbeat,
+                    heartbeatLoop,
+                    _ownerToken,
+                    _ownerCleanedForDrain);
+            }).ConfigureAwait(false);
+            if (stop is null) return;
+            var heartbeat = stop.Value.Heartbeat;
+            var heartbeatLoop = stop.Value.HeartbeatLoop;
             if (heartbeat is not null)
                 await heartbeat.CancelAsync().ConfigureAwait(false);
 
@@ -180,9 +195,9 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             // location row can still be observed.
             try
             {
-                if (!_ownerCleanedForDrain)
+                if (!stop.Value.OwnerCleanedForDrain)
                 {
-                    if (_ownerToken is { } token)
+                    if (stop.Value.OwnerToken is { } token)
                     {
                         await _store.RemoveAllByOwnerAsync(
                                 token,
@@ -193,8 +208,11 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
-                    _ownerToken = null;
-                    Volatile.Write(ref _ownerAdmissionDeadline, null);
+                    await _lane.RunAsync(() =>
+                    {
+                        _ownerToken = null;
+                        _ownerAdmissionDeadline = null;
+                    }).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -220,20 +238,32 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!_started || _ownerCleanedForDrain) return;
+            var cleanup = await _lane.RunAsync(() =>
+            {
+                if (!_started || _ownerCleanedForDrain)
+                    return (ZLinkLocationOwnerToken?)null;
+                return RequireOwnerTokenOnLane();
+            }).ConfigureAwait(false);
+            if (cleanup is null) return;
 
             // Keep the owner lease valid while rows are removed. If row
             // cleanup fails, the heartbeat continues and the next retry sees
             // the same live owner rather than stale state.
             await _store.RemoveAllByOwnerAsync(
-                    RequireOwnerToken(),
+                    cleanup.Value,
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            var heartbeat = _heartbeatCts;
-            var heartbeatLoop = _heartbeatLoop;
-            _heartbeatCts = null;
-            _heartbeatLoop = null;
+            var heartbeatState = await _lane.RunAsync(() =>
+            {
+                var heartbeat = _heartbeatCts;
+                var heartbeatLoop = _heartbeatLoop;
+                _heartbeatCts = null;
+                _heartbeatLoop = null;
+                return (heartbeat, heartbeatLoop);
+            }).ConfigureAwait(false);
+            var heartbeat = heartbeatState.heartbeat;
+            var heartbeatLoop = heartbeatState.heartbeatLoop;
             if (heartbeat is not null)
                 await heartbeat.CancelAsync().ConfigureAwait(false);
             if (heartbeatLoop is not null)
@@ -248,13 +278,16 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
 
             try
             {
-                if (_ownerToken is { } token)
+                if (cleanup.Value is { } token)
                     _ = await _store.ReleaseOwnerLeaseAsync(
                             token,
                             cancellationToken)
                         .ConfigureAwait(false);
-                _ownerToken = null;
-                Volatile.Write(ref _ownerAdmissionDeadline, null);
+                await _lane.RunAsync(() =>
+                {
+                    _ownerToken = null;
+                    _ownerAdmissionDeadline = null;
+                }).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -262,7 +295,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 StartHeartbeatAfterCleanupFailure();
                 throw;
             }
-            _ownerCleanedForDrain = true;
+            await _lane.RunAsync(() => _ownerCleanedForDrain = true).ConfigureAwait(false);
             UpdateHealth(static health => health with { Healthy = false });
         }
         finally
@@ -277,10 +310,15 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!_started || _ownerCleanedForDrain || _ownerToken is not { } token)
+            var token = await _lane.RunAsync(() =>
+            {
+                if (!_started || _ownerCleanedForDrain) return null;
+                return _ownerToken;
+            }).ConfigureAwait(false);
+            if (token is null)
                 return;
             _ = await _store.RemoveAllByOwnerAsync(
-                    token,
+                    token.Value,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -290,29 +328,40 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         }
     }
 
-    private ZLinkLocationOwnerToken RequireOwnerToken() =>
+    private ZLinkLocationOwnerToken RequireOwnerTokenOnLane() =>
         _ownerToken
         ?? throw new InvalidOperationException(
             "The location runtime has not claimed its owner lease.");
 
     private void StartHeartbeatAfterCleanupFailure()
     {
-        if (!_started || _heartbeatCts is not null) return;
-        var heartbeat = new CancellationTokenSource();
-        _heartbeatCts = heartbeat;
-        _heartbeatLoop = Task.Run(
-            () => HeartbeatLoopAsync(heartbeat.Token),
-            CancellationToken.None);
+        var heartbeatStarted = AwaitStateLane(_lane.RunAsync(() =>
+        {
+            if (!_started || _heartbeatCts is not null)
+                return (TaskCompletionSource?)null;
+            return StartHeartbeatOnLane();
+        }));
+        heartbeatStarted?.TrySetResult();
     }
 
     public ValueTask DisposeAsync()
     {
-        lock (_disposeStartGate)
+        return new ValueTask(AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (_disposeTask is not null) return new ValueTask(_disposeTask);
+            if (_disposeTask is not null) return _disposeTask;
             Volatile.Write(ref _disposeState, 1);
-            return new ValueTask(_disposeTask = DisposeCoreAsync());
-        }
+            _disposeTask = StartDisposeCore();
+            return _disposeTask;
+        })));
+    }
+
+    private Task StartDisposeCore()
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+            return Task.Run(DisposeCoreAsync, CancellationToken.None);
+
+        using (ExecutionContext.SuppressFlow())
+            return Task.Run(DisposeCoreAsync, CancellationToken.None);
     }
 
     private async Task DisposeCoreAsync()
@@ -384,14 +433,19 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             // releases the owner lease. Auto-connect teardown still needs to
             // disconnect sockets, but its per-descriptor delete is then
             // already complete and must not require the released lease again.
-            if (_ownerCleanedForDrain)
+            var token = await _lane.RunAsync(() =>
+            {
+                if (_ownerCleanedForDrain)
+                    return (ZLinkLocationOwnerToken?)null;
+                return RequireOwnerTokenOnLane();
+            }).ConfigureAwait(false);
+            if (token is null)
                 return;
 
-            var token = RequireOwnerToken();
             _ = await ExecuteRemoveAsync(
                     () => _store.RemoveMeshNodeAsync(
                         key,
-                        token,
+                        token.Value,
                         cancellationToken),
                     ZLinkLocationKind.MeshNode,
                     ZLinkLocationKeyCodec.EncodeMeshNodeKey(key))
@@ -414,10 +468,12 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 cancellationToken,
                 deadline.Token);
             ZLinkOwnerLeaseRenewResult.Renewed result;
-            if (_ownerToken is null)
+            var owner = await _lane.RunAsync(
+                () => new OwnerLeaseState(_ownerId, _ownerToken)).ConfigureAwait(false);
+            if (owner.Token is null)
             {
                 var claim = await _store.ClaimOwnerLeaseAsync(
-                        OwnerId,
+                        owner.Id,
                         _options.OwnerLeaseTtl,
                         operation.Token)
                     .AsTask()
@@ -426,7 +482,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 if (claim is not ZLinkOwnerLeaseClaimResult.Claimed claimed)
                     throw new InvalidOperationException(
                         $"Owner lease claim failed with '{claim.GetType().Name}'.");
-                _ownerToken = claimed.Token;
+                await _lane.RunAsync(() => _ownerToken = claimed.Token).ConfigureAwait(false);
                 result = new ZLinkOwnerLeaseRenewResult.Renewed(
                     claimed.LeaseExpiresAt,
                     claimed.StoreNow);
@@ -434,7 +490,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             else
             {
                 var renewal = await _store.RenewOwnerLeaseAsync(
-                        _ownerToken.Value,
+                        owner.Token.Value,
                         _options.OwnerLeaseTtl,
                         operation.Token)
                     .AsTask()
@@ -451,11 +507,10 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             if (admissionLifetime <= TimeSpan.Zero)
                 throw new InvalidOperationException(
                     "The owner lease does not leave a positive admission lifetime.");
-            Volatile.Write(
-                ref _ownerAdmissionDeadline,
-                new ZLinkOwnerAdmissionDeadline(
+            await _lane.RunAsync(() =>
+                _ownerAdmissionDeadline = new ZLinkOwnerAdmissionDeadline(
                     leaseOperationStartedAt,
-                    admissionLifetime));
+                    admissionLifetime)).ConfigureAwait(false);
             UpdateHealth(
                 health => health with
                 {
@@ -525,6 +580,68 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             scheduledRenew += intervalTicks;
         }
     }
+
+    private TaskCompletionSource StartHeartbeatOnLane()
+    {
+        var heartbeat = new CancellationTokenSource();
+        var started = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _heartbeatCts = heartbeat;
+        _heartbeatLoop = StartHeartbeatLoop(heartbeat.Token, started.Task);
+        return started;
+    }
+
+    private Task StartHeartbeatLoop(CancellationToken cancellationToken, Task started)
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+            return Task.Run(
+                async () =>
+                {
+                    await started.ConfigureAwait(false);
+                    await HeartbeatLoopAsync(cancellationToken).ConfigureAwait(false);
+                },
+                CancellationToken.None);
+
+        using (ExecutionContext.SuppressFlow())
+            return Task.Run(
+                async () =>
+                {
+                    await started.ConfigureAwait(false);
+                    await HeartbeatLoopAsync(cancellationToken).ConfigureAwait(false);
+                },
+                CancellationToken.None);
+    }
+
+    private bool IsOwnerAdmissionOpenOnLane()
+    {
+        var deadline = _ownerAdmissionDeadline;
+        return deadline is not null
+               && _time.GetElapsedTime(deadline.LeaseOperationStartedAt)
+               < deadline.Lifetime;
+    }
+
+    private void EnsureOwnerAdmissionOpenOnLane()
+    {
+        if (!IsOwnerAdmissionOpenOnLane())
+            throw new InvalidOperationException(
+                "The owner lease admission deadline has expired.");
+    }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private readonly record struct StopState(
+        CancellationTokenSource? Heartbeat,
+        Task? HeartbeatLoop,
+        ZLinkLocationOwnerToken? OwnerToken,
+        bool OwnerCleanedForDrain);
+
+    private readonly record struct OwnerLeaseState(
+        string Id,
+        ZLinkLocationOwnerToken? Token);
 
     private async ValueTask<ZLinkLocationWriteResult> GuardStoreWriteAsync(
         Func<ValueTask<ZLinkLocationWriteResult>> write)

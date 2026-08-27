@@ -12,6 +12,8 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $Gradle = if ($IsWindows) { Join-Path $SampleDir "../../gradlew.bat" } else { Join-Path $SampleDir "../../gradlew" }
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 $RedisContainerId = $null
+$WaitAttempts = 300
+$WaitMilliseconds = 100
 
 function Print-Logs {
     param([int]$Status)
@@ -111,6 +113,75 @@ function Start-Role {
         if ($EventArgs.Data) { Add-Content -Path $Event.MessageData.Err -Value $EventArgs.Data }
     } -MessageData @{ Err = $errorLogPath } | Out-Null
     $Processes.Add($process)
+    return $process
+}
+
+function Test-LogLine {
+    param([string]$Path, [string]$Line)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    return [bool](Select-String -Path $Path -Pattern $Line -SimpleMatch -Quiet)
+}
+
+function Wait-LogLine {
+    param([string]$Path, [string]$Line)
+    for ($attempt = 1; $attempt -le $WaitAttempts; $attempt++) {
+        if (Test-LogLine $Path $Line) { return }
+        Start-Sleep -Milliseconds $WaitMilliseconds
+    }
+    throw "Timed out waiting for sample evidence '$Line' in $Path"
+}
+
+function Get-LogLineCount {
+    param([string]$Path, [string]$Line)
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+    return @((Select-String -Path $Path -Pattern $Line -SimpleMatch)).Count
+}
+
+function Wait-MinLogLineCount {
+    param([string]$Path, [string]$Line, [int]$Minimum)
+    for ($attempt = 1; $attempt -le $WaitAttempts; $attempt++) {
+        if ((Get-LogLineCount $Path $Line) -ge $Minimum) { return }
+        Start-Sleep -Milliseconds $WaitMilliseconds
+    }
+    throw "Timed out waiting for $Minimum sample evidence rows '$Line' in $Path"
+}
+
+function Wait-MinLogLineTotal {
+    param([int]$Minimum, [string]$Line, [string[]]$Paths)
+    for ($attempt = 1; $attempt -le $WaitAttempts; $attempt++) {
+        $count = 0
+        foreach ($path in $Paths) {
+            $count += Get-LogLineCount $path $Line
+        }
+        if ($count -ge $Minimum) { return }
+        Start-Sleep -Milliseconds $WaitMilliseconds
+    }
+    throw "Timed out waiting for at least $Minimum sample evidence rows '$Line'"
+}
+
+function Wait-ExactLogLineTotal {
+    param([int]$Expected, [string]$Line, [string[]]$Paths)
+    for ($attempt = 1; $attempt -le $WaitAttempts; $attempt++) {
+        $count = 0
+        foreach ($path in $Paths) {
+            $count += Get-LogLineCount $path $Line
+        }
+        if ($count -eq $Expected) { return }
+        if ($count -gt $Expected) { throw "Found $count sample evidence rows '$Line'; expected $Expected" }
+        Start-Sleep -Milliseconds $WaitMilliseconds
+    }
+    throw "Timed out waiting for exactly $Expected sample evidence rows '$Line'"
+}
+
+function Wait-ReplayedOwner {
+    param([string]$MissionALog, [string]$MissionBLog)
+    $line = "gamequest-mission replayed player=player-alice generation="
+    for ($attempt = 1; $attempt -le $WaitAttempts; $attempt++) {
+        if (Test-LogLine $MissionALog $line) { return "mission-a" }
+        if (Test-LogLine $MissionBLog $line) { return "mission-b" }
+        Start-Sleep -Milliseconds $WaitMilliseconds
+    }
+    throw "Timed out waiting for the replayed player-alice owner"
 }
 
 function Protect-ConfigFile {
@@ -157,11 +228,13 @@ try {
     $apiAConfig = Join-Path $RunDir "api-a.properties"
     $apiBConfig = Join-Path $RunDir "api-b.properties"
     $clientConfig = Join-Path $RunDir "client.properties"
+    $controlDir = Join-Path $RunDir "control"
+    New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
     @("sample.instanceName=mission-a", "sample.logDirectory=$LogDir", "sample.channelEndpoint=$missionAChannelEndpoint", "sample.httpEndpoint=$missionAHttpEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix") | Set-Content $missionAConfig -Encoding UTF8
     @("sample.instanceName=mission-b", "sample.logDirectory=$LogDir", "sample.channelEndpoint=$missionBChannelEndpoint", "sample.httpEndpoint=$missionBHttpEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix") | Set-Content $missionBConfig -Encoding UTF8
     @("sample.instanceName=api-a", "sample.logDirectory=$LogDir", "sample.streamEndpoint=$apiAStreamEndpoint", "sample.httpEndpoint=$apiAHttpEndpoint", "sample.missionAChannelEndpoint=$missionAChannelEndpoint", "sample.missionBChannelEndpoint=$missionBChannelEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix") | Set-Content $apiAConfig -Encoding UTF8
     @("sample.instanceName=api-b", "sample.logDirectory=$LogDir", "sample.streamEndpoint=$apiBStreamEndpoint", "sample.httpEndpoint=$apiBHttpEndpoint", "sample.missionAChannelEndpoint=$missionAChannelEndpoint", "sample.missionBChannelEndpoint=$missionBChannelEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix") | Set-Content $apiBConfig -Encoding UTF8
-    @("sample.apiAStreamEndpoint=$apiAStreamEndpoint", "sample.apiBStreamEndpoint=$apiBStreamEndpoint", "sample.apiAHttpEndpoint=$apiAHttpEndpoint", "sample.apiBHttpEndpoint=$apiBHttpEndpoint", "sample.missionAHttpEndpoint=$missionAHttpEndpoint", "sample.missionBHttpEndpoint=$missionBHttpEndpoint") | Set-Content $clientConfig -Encoding UTF8
+    @("sample.apiAStreamEndpoint=$apiAStreamEndpoint", "sample.apiBStreamEndpoint=$apiBStreamEndpoint", "sample.apiAHttpEndpoint=$apiAHttpEndpoint", "sample.apiBHttpEndpoint=$apiBHttpEndpoint", "sample.missionAHttpEndpoint=$missionAHttpEndpoint", "sample.missionBHttpEndpoint=$missionBHttpEndpoint", "sample.controlDirectory=$controlDir") | Set-Content $clientConfig -Encoding UTF8
     @($missionAConfig, $missionBConfig, $apiAConfig, $apiBConfig, $clientConfig) | ForEach-Object { Protect-ConfigFile $_ }
 
     Push-Location "../../.."
@@ -182,32 +255,56 @@ try {
 
     Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", "--no-daemon", ":Server:GameApi:installDist", ":Server:QuestMission:installDist", ":Client:installDist", "--quiet")
 
-    Start-Role -Project "Server/QuestMission" -ScriptName "QuestMission" -LogName "mission-a.log" -ConfigPath $missionAConfig
-    Start-Role -Project "Server/QuestMission" -ScriptName "QuestMission" -LogName "mission-b.log" -ConfigPath $missionBConfig
+    $missionAProcess = Start-Role -Project "Server/QuestMission" -ScriptName "QuestMission" -LogName "mission-a.log" -ConfigPath $missionAConfig
+    $missionBProcess = Start-Role -Project "Server/QuestMission" -ScriptName "QuestMission" -LogName "mission-b.log" -ConfigPath $missionBConfig
     Wait-Port $missionARoute.Host $missionARoute.Port
     Wait-Port $missionBRoute.Host $missionBRoute.Port
     Wait-HttpHealth "http://$($missionAHttp.Host):$($missionAHttp.Port)"
     Wait-HttpHealth "http://$($missionBHttp.Host):$($missionBHttp.Port)"
 
-    Start-Role -Project "Server/GameApi" -ScriptName "GameApi" -LogName "api-a.log" -ConfigPath $apiAConfig
-    Start-Role -Project "Server/GameApi" -ScriptName "GameApi" -LogName "api-b.log" -ConfigPath $apiBConfig
+    Start-Role -Project "Server/GameApi" -ScriptName "GameApi" -LogName "api-a.log" -ConfigPath $apiAConfig | Out-Null
+    Start-Role -Project "Server/GameApi" -ScriptName "GameApi" -LogName "api-b.log" -ConfigPath $apiBConfig | Out-Null
     Wait-Port $apiAStream.Host $apiAStream.Port
     Wait-Port $apiBStream.Host $apiBStream.Port
     Wait-HttpHealth "http://$($apiAHttp.Host):$($apiAHttp.Port)"
     Wait-HttpHealth "http://$($apiBHttp.Host):$($apiBHttp.Port)"
 
-    Write-Host "topology=ready"
-    $clientBin = Join-Path $SampleDir "Client/build/install/Client/bin/Client"
-    if ($IsWindows) {
-        $clientBin = "$clientBin.bat"
-    }
-    & $clientBin --config $clientConfig | Tee-Object -FilePath (Join-Path $LogDir "client.log")
-    if ($LASTEXITCODE -ne 0) { throw "Client failed" }
+    $missionALog = Join-Path $LogDir "mission-a.log"
+    $missionBLog = Join-Path $LogDir "mission-b.log"
+    $apiALog = Join-Path $LogDir "api-a.log"
+    $apiBLog = Join-Path $LogDir "api-b.log"
+    Wait-LogLine $missionALog "gamequest-ready kind=instance-factory node=mission-a"
+    Wait-LogLine $missionBLog "gamequest-ready kind=instance-factory node=mission-b"
+    Wait-LogLine $apiALog "gamequest-ready kind=stream node=api-a"
+    Wait-LogLine $apiBLog "gamequest-ready kind=stream node=api-b"
+    Wait-LogLine $apiALog "gamequest-ready kind=spot-route node=api-a mesh=gamequest.player-quests"
+    Wait-LogLine $apiBLog "gamequest-ready kind=spot-route node=api-b mesh=gamequest.player-quests"
 
-    Select-String -Path (Join-Path $LogDir "client.log") -Pattern "gamequest-server-evidence=completed" | Out-Null
-    Select-String -Path (Join-Path $LogDir "client.log") -Pattern "gamequest=completed" | Out-Null
-    Write-Host "gamequest kotlin full client/server self-check completed"
+    Write-Host "topology=ready"
+    $clientProcess = Start-Role -Project "Client" -ScriptName "Client" -LogName "client.log" -ConfigPath $clientConfig
+    $clientLog = Join-Path $LogDir "client.log"
+    Wait-LogLine $clientLog "gamequest-owner-termination-ready player=player-alice"
+    $ownerRole = Wait-ReplayedOwner $missionALog $missionBLog
+    if ($ownerRole -eq "mission-a") {
+        Stop-Process -Id $missionAProcess.Id -Force
+    } else {
+        Stop-Process -Id $missionBProcess.Id -Force
+    }
+    [System.IO.File]::WriteAllText((Join-Path $controlDir "owner-terminated"), "released")
+    $clientProcess.WaitForExit()
+    if ($clientProcess.ExitCode -ne 0) { throw "Client failed" }
+
+    Get-Content -Path $clientLog
+    Wait-LogLine $clientLog "gamequest=completed"
+    Wait-LogLine $clientLog "gamequest-server-evidence=completed"
+    Wait-MinLogLineTotal 4 "gamequest-api event-routed player=" @($apiALog, $apiBLog)
+    Wait-MinLogLineTotal 4 "gamequest-mission processed player=" @($missionALog, $missionBLog)
+    Wait-ExactLogLineTotal 1 "gamequest-mission reconciled player=player-alice quest=first-hunt" @($missionALog, $missionBLog)
+    Wait-ExactLogLineTotal 1 "gamequest-mission replayed player=player-alice generation=" @($missionALog, $missionBLog)
+    Wait-ExactLogLineTotal 1 "gamequest-owner unavailable player=player-alice" @($apiALog, $apiBLog)
+    Wait-ExactLogLineTotal 0 "gamequest-owner replacement-handler-invoked player=player-alice" @($missionALog, $missionBLog)
     $Status = 0
+    Write-Host "gamequest-placement=completed"
 } finally {
     Cleanup $Status
 }

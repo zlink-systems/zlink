@@ -1,6 +1,6 @@
-# C++ Common Runtime Exact Interface
+# C++ Common Runtime Per-Language Interface
 
-[C++ exact interface table of contents](README.en.md)
+[C++ per-language interface table of contents](README.en.md)
 
 <!-- framework-adapter-nav:start -->
 [Spec table of contents](README.en.md) | [Previous: C++ System Structure](../01-system-structure.en.md) | [Next: C++ HTTP Hosting](../60-http-hosting.en.md)
@@ -97,7 +97,7 @@ to know that state's data structure or processing order.
 
 The public `route_client_t` and `route_send_call_t` provide a typed
 call targeting a node and global Spot ID.
-[User Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
+[User Spot](../../../00-foundation/02-glossary.en.md#entry-spot-user-spot-and-instance-spot)
 and Instance Spot use the same ID-only call surface, and don't provide
 a separate handle/resolver/logical address type. The request family
 returns `channel_request_call_t`. The user doesn't pass a target
@@ -140,15 +140,15 @@ following rules apply.
 - A template header only has type check and public facade forwarding.
 - A public class's state only uses a public contract type.
 - An optional dependency type, such as JSON, MessagePack, or Protobuf,
-  can appear only in that codec extension's public contract.
+ can appear only in that codec extension's public contract.
 - A contract test only includes an installed public header.
 - A public inline function doesn't manipulate transport state beyond
-  public validation and forwarding.
+ public validation and forwarding.
 
 Every framework type is placed under the `zlink::framework` namespace.
 Each type's declaration is owned by exactly one category document
 specified in the
-[exact interface table of contents](README.en.md).
+[per-language interface table of contents](README.en.md).
 
 ## 4. Common Result, Coroutine, And Message
 
@@ -158,93 +158,93 @@ namespace zlink::framework {
 template <typename T>
 class result_t {
 public:
-    static result_t success(T value);
-    static result_t failure(
-      framework_error_kind_t kind,
-      std::string message);
-    bool has_value() const noexcept;
-    explicit operator bool() const noexcept;
-    const T &value() const;
-    T &value();
-    const framework_exception_t *error() const noexcept;
-    framework_error_kind_t error_kind() const;
+ static result_t success(T value);
+ static result_t failure(
+ framework_error_kind_t kind,
+ std::string message);
+ bool has_value() const noexcept;
+ explicit operator bool() const noexcept;
+ const T &value() const;
+ T &value();
+ const framework_exception_t *error() const noexcept;
+ framework_error_kind_t error_kind() const;
 };
 
 template <>
 class result_t<void> {
 public:
-    static result_t success();
-    static result_t failure(
-      framework_error_kind_t kind,
-      std::string message);
-    bool has_value() const noexcept;
-    explicit operator bool() const noexcept;
-    void value() const;
-    const framework_exception_t *error() const noexcept;
-    framework_error_kind_t error_kind() const;
+ static result_t success();
+ static result_t failure(
+ framework_error_kind_t kind,
+ std::string message);
+ bool has_value() const noexcept;
+ explicit operator bool() const noexcept;
+ void value() const;
+ const framework_exception_t *error() const noexcept;
+ framework_error_kind_t error_kind() const;
 };
 
 template <typename T>
 class task_t {
 public:
-    struct promise_type {
-        task_t get_return_object();
-        std::suspend_never initial_suspend() noexcept;
-        std::suspend_never final_suspend() noexcept;
-        void unhandled_exception();
-        void return_value(result_t<T> result);
+ struct promise_type {
+ task_t get_return_object();
+ std::suspend_never initial_suspend() noexcept;
+ std::suspend_never final_suspend() noexcept;
+ void unhandled_exception();
+ void return_value(result_t<T> result);
 
-        template <typename U>
-        void return_value(U &&value);
-    };
+ template <typename U>
+ void return_value(U &&value);
+ };
 
-    explicit task_t(result_t<T> result);
-    task_t(task_t &&) noexcept = default;
-    task_t &operator=(task_t &&) noexcept = default;
-    task_t(const task_t &) = delete;
-    task_t &operator=(const task_t &) = delete;
-    ~task_t() = default;
-    bool await_ready() const noexcept;
-    void await_suspend(std::coroutine_handle<> continuation);
-    T await_resume();
-    const result_t<T> &result() const;
+ explicit task_t(result_t<T> result);
+ task_t(task_t &&) noexcept = default;
+ task_t &operator=(task_t &&) noexcept = default;
+ task_t(const task_t &) = delete;
+ task_t &operator=(const task_t &) = delete;
+ ~task_t() = default;
+ bool await_ready() const noexcept;
+ void await_suspend(std::coroutine_handle<> continuation);
+ T await_resume();
+ const result_t<T> &result() const;
 };
 
 template <>
 class task_t<void> {
 public:
-    struct promise_type {
-        task_t get_return_object();
-        std::suspend_never initial_suspend() noexcept;
-        std::suspend_never final_suspend() noexcept;
-        void unhandled_exception();
-        void return_void() noexcept;
-    };
+ struct promise_type {
+ task_t get_return_object();
+ std::suspend_never initial_suspend() noexcept;
+ std::suspend_never final_suspend() noexcept;
+ void unhandled_exception();
+ void return_void() noexcept;
+ };
 
-    explicit task_t(result_t<void> result);
-    task_t(task_t &&) noexcept = default;
-    task_t &operator=(task_t &&) noexcept = default;
-    task_t(const task_t &) = delete;
-    task_t &operator=(const task_t &) = delete;
-    ~task_t() = default;
-    bool await_ready() const noexcept;
-    void await_suspend(std::coroutine_handle<> continuation);
-    void await_resume();
-    const result_t<void> &result() const;
+ explicit task_t(result_t<void> result);
+ task_t(task_t &&) noexcept = default;
+ task_t &operator=(task_t &&) noexcept = default;
+ task_t(const task_t &) = delete;
+ task_t &operator=(const task_t &) = delete;
+ ~task_t() = default;
+ bool await_ready() const noexcept;
+ void await_suspend(std::coroutine_handle<> continuation);
+ void await_resume();
+ const result_t<void> &result() const;
 };
 
 class message_t {
 public:
-    message_t() = default;
+ message_t() = default;
 
-    template <typename TValue>
-    static message_t from(TValue value);
+ template <typename TValue>
+ static message_t from(TValue value);
 
-    template <typename TValue>
-    TValue decode() const;
+ template <typename TValue>
+ TValue decode() const;
 
-    bool encoded() const noexcept;
-    bool empty() const noexcept;
+ bool encoded() const noexcept;
+ bool empty() const noexcept;
 };
 
 } // namespace zlink::framework
@@ -294,17 +294,17 @@ SPOT and STREAM backpressure is only observed through the public
 **call object, timeout, and result error kind**.
 
 - **An application handler isn't given an API that directly controls
-  the framework queue.**
+ the framework queue.**
 - **The default policy isn't an unlimited queue.** Queue bound, submit
-  timeout, and overflow policy are closed by framework runtime
-  configuration, and **exceeding the bound returns a failed result.**
+ timeout, and overflow policy are closed by framework runtime
+ configuration, and **exceeding the bound returns a failed result.**
 - The error kind of an exceeded bound differs by operation family and
-  queue location. It follows the §error mapping table above and
-  [Spot Messaging §5.3](../../../12-spot-messaging.en.md) — it
-  isn't uniformly `capacity_exceeded`. Source-local saturation of
-  one-way/send is `deadline_exceeded`, a request's local queue
-  saturation is `capacity_exceeded`, and a remote queue saturation is
-  `unavailable`.
+ queue location. It follows the §error mapping table above and
+ [Spot Messaging §5.3](../../../03-spot-actor/02-spot-messaging.en.md) — it
+ isn't uniformly `capacity_exceeded`. Source-local saturation of
+ one-way/send is `deadline_exceeded`, a request's local queue
+ saturation is `capacity_exceeded`, and a remote queue saturation is
+ `unavailable`.
 
 This rule applies to ordinary SPOT and STREAM execution queues. Payloads
 temporarily retained by Message Follow relay do not have a separate
@@ -324,7 +324,7 @@ Classic Fanout. A request completes as `rejected`. `next()` can be
 called only once, and a second call is an `invalid_operation` error.
 
 The filter's registration order, `next` meaning, and scope are owned by
-[Framework API §8.1](../../../06-framework-api.en.md#81-handler-filter).
+[Framework API §8.1](../../../00-foundation/06-framework-api.en.md#10-handler-filter).
 
 ### 6.3 Public Surface Boundary
 
@@ -369,12 +369,12 @@ A dispatch failure isn't expressed as a public event type. The Framework
 writes structured log/trace/metric records to standard providers the
 application configured, and doesn't expose a callback observer, error
 sink, or raw event DTO. A provider failure doesn't change the original
-dispatch result. The exact declaration of diagnostic levels is owned by
+dispatch result. The declaration of diagnostic levels is owned by
 [Monitoring §2](08-monitoring.en.md#2-message-flow-diagnostics).
 
 ### 7.2 Dispatch Execution Policy
 
-`handler_execution_t` distinguishes how a handler executes. The exact
+`handler_execution_t` distinguishes how a handler executes. The
 declaration of dispatch and message-flow diagnostic levels is owned by
 the [Monitoring interface](08-monitoring.en.md).
 
@@ -384,33 +384,33 @@ the [Monitoring interface](08-monitoring.en.md).
 template <typename TResult> class worker_call_t
 {
 public:
-    using executor_t = std::function<task_t<TResult>(
-      std::stop_token)>;
+ using executor_t = std::function<task_t<TResult>(
+ std::stop_token)>;
 
-    worker_call_t() = default;
-    explicit worker_call_t(executor_t executor);
-    worker_call_t &timeout (std::chrono::milliseconds value);
-    task_t<TResult> submit ();
-    task_t<TResult> yield ();
+ worker_call_t() = default;
+ explicit worker_call_t(executor_t executor);
+ worker_call_t &timeout (std::chrono::milliseconds value);
+ task_t<TResult> submit ();
+ task_t<TResult> yield ();
 };
 
 class worker_options_t {
 public:
-    std::size_t min_threads() const noexcept;
-    worker_options_t &min_threads(std::size_t value);
-    std::size_t max_threads() const noexcept;
-    worker_options_t &max_threads(std::size_t value);
-    std::chrono::milliseconds idle_timeout() const noexcept;
-    worker_options_t &idle_timeout(std::chrono::milliseconds value);
-    std::size_t max_queue_length() const noexcept;
-    worker_options_t &max_queue_length(std::size_t value);
+ std::size_t min_threads() const noexcept;
+ worker_options_t &min_threads(std::size_t value);
+ std::size_t max_threads() const noexcept;
+ worker_options_t &max_threads(std::size_t value);
+ std::chrono::milliseconds idle_timeout() const noexcept;
+ worker_options_t &idle_timeout(std::chrono::milliseconds value);
+ std::size_t max_queue_length() const noexcept;
+ worker_options_t &max_queue_length(std::size_t value);
 };
 ```
 
 **A worker is work that runs outside a spot/session execution
 context.** The rule for resuming completion in the original execution
 context is owned by
-[Async Execution Policy](../../../05-async-execution-policy.en.md).
+[Async Execution Policy](../../../01-execution/README.en.md).
 The worker function is passed a `std::stop_token` combining timeout,
 host shutdown, and caller cancellation. `submit()` is a terminal that
 doesn't wait for a result, and `submit()` keeps the current turn and
@@ -434,8 +434,8 @@ or transport, but doesn't replace the common error classification.
 
 The same Spot's dispatch serialization and `yield()`'s allowed scope
 are owned by
-[Stage Wrapper §3](../../../17-stage-wrapper-on-spot.en.md) and
-[Async Execution Policy](../../../05-async-execution-policy.en.md).
+[Stage Wrapper §3](../../../03-spot-actor/07-stage-wrapper-on-spot.en.md) and
+[Async Execution Policy](../../../01-execution/README.en.md).
 
 ---
 <!-- framework-adapter-nav:bottom:start -->

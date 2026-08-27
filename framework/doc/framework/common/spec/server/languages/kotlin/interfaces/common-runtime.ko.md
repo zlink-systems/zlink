@@ -49,7 +49,7 @@ target 후보로 사용한다. `ROLLING_UPDATE(1)`는 source보다 큰 target ve
 정확히 같은 version만 후보로 사용한다. Framework는 version, source가 아닌 `SERVING` Object Server,
 stable type·factory·adapter capability, capacity와 다른 maintenance wave, RID·lifecycle generation이
 일치하는 `ADMITTED` Core peer, placement weight 순서로 target을 선택한다. 다른 version으로 fallback하지
-않는다. Version·wave·capacity 또는 등록 factory/type·relocation adapter eligibility를 만족하는 exact-ready
+않는다. Version·wave·capacity 또는 등록 factory/type·relocation adapter eligibility를 만족하는 -ready
 target이 없으면 deadline까지 다시 확인한 뒤 `BLOCKED/TARGET_UNAVAILABLE`이다. Target 선택 뒤 전달한 state
 schema/type adapter가 호환되지 않으면 `BLOCKED/STATE_INCOMPATIBLE`, Store 조회 실패는
 `BLOCKED/STORE_UNAVAILABLE`이다.
@@ -67,11 +67,11 @@ unit만 끝내고 relocation waiter는 `Blocked/ShutdownRequested`를 받는다.
 
 ```kotlin
 val relocation = frameworkRuntime.relocate(
-    ZLinkFrameworkRelocationOptions(
-        ZLinkFrameworkRelocationMode.ROLLING_UPDATE,
-        12L, // 이 version과 정확히 일치하는 Ready node만 선택한다.
-        Duration.ofSeconds(30)
-    )
+ ZLinkFrameworkRelocationOptions(
+ ZLinkFrameworkRelocationMode.ROLLING_UPDATE,
+ 12L, // 이 version과 정확히 일치하는 Ready node만 선택한다.
+ Duration.ofSeconds(30)
+ )
 ).await()
 val stopped = frameworkRuntime.shutdown().await()
 ```
@@ -79,12 +79,12 @@ val stopped = frameworkRuntime.shutdown().await()
 별도 `relocateAsync`, `shutdownAsync`, `drain` 또는 `awaitStopped` extension은 없다. Relocation 결과는
 `ZLinkFrameworkRelocationResult`, host 종료 결과는 `ZLinkFrameworkTerminationResult`이며 `CompletionStage.await()`로 기다린다.
 
-## Exact generated JVM signature
+## generated JVM signature
 
 아래 JVM signature는 Kotlin source contract의 generated form이다.
 
 ```java
 public final class systems.zlink.framework.kotlin.ZLinkCoroutineTurnAwaitKt {
-  public static final <T> java.lang.Object await(java.util.concurrent.CompletionStage<T>, kotlin.coroutines.Continuation<? super T>);
+ public static final <T> java.lang.Object await(java.util.concurrent.CompletionStage<T>, kotlin.coroutines.Continuation<? super T>);
 }
 ```

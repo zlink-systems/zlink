@@ -64,7 +64,7 @@ public final class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
         if (actor.destroyAfterEntrySpotJoin()) {
             return context.destroyActor(actor)
                 .thenRun(() -> LOGGER.info(
-                    "tictactoe actor destroy completed actor={}", actor.actorId()));
+                    "tictactoe-lifecycle actor-destroy-complete actor={}", actor.actorId()));
         }
         return CompletableFuture.completedFuture(null);
     }

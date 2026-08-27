@@ -1,12 +1,15 @@
 package systems.zlink.samples.shoppingmall.server.orderworkflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
+import systems.zlink.contracts.core.RoutingId;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -21,6 +24,9 @@ import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleLocationStore;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleNames;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleTopology;
@@ -38,7 +44,9 @@ public final class Program {
 
     public static void main(String[] args) throws Exception {
         ConfigurableApplicationContext app = run(SampleTopology.configPath(args));
-        HttpServer http = startHttp(app.getBean(SampleTopology.class));
+        HttpServer http = startHttp(
+            app.getBean(SampleTopology.class),
+            app.getBean(ZLinkFrameworkRuntime.class));
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             http.stop(0);
             try {
@@ -75,7 +83,7 @@ public final class Program {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.OrderSpotDiscovery);
             node.listen(workflow.spotRouterEndpoint())
-                .setRoutingIdPrefix("shoppingmall-workflow");
+                .setRoutingId(RoutingId.from(workflow.instanceName()));
             node.objects()
                 .server()
                 .addInstanceSpotFactory(
@@ -97,7 +105,7 @@ public final class Program {
         return new OrderWorkflowService(store);
     }
 
-    private static HttpServer startHttp(SampleTopology topology) throws IOException {
+    private static HttpServer startHttp(SampleTopology topology, ZLinkFrameworkRuntime runtime) throws IOException {
         ObjectMapper json = new ObjectMapper();
         URI uri = URI.create(topology.workflow().httpUrl());
         HttpServer server = HttpServer.create(new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
@@ -108,10 +116,45 @@ public final class Program {
             exchange.getResponseBody().write(bytes);
             exchange.close();
         });
+        server.createContext("/self-check/relocate", exchange -> {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                writeJson(exchange, json, 405, new ErrorBody("method not allowed"));
+                return;
+            }
+            runtime.relocate(new ZLinkFrameworkRelocationOptions(
+                    ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
+                    null,
+                    Duration.ofSeconds(30)))
+                .whenComplete((result, failure) -> {
+                    try {
+                        if (failure == null) {
+                            writeJson(exchange, json, 200, new RelocationResult(result.outcome().name()));
+                        } else {
+                            writeJson(exchange, json, 500, new ErrorBody(failure.getMessage()));
+                        }
+                    } catch (IOException ignored) {
+                        exchange.close();
+                    }
+                });
+        });
         server.start();
         return server;
     }
 
     private record Health(String status) {
+    }
+
+    private record RelocationResult(String outcome) {
+    }
+
+    private record ErrorBody(String error) {
+    }
+
+    private static void writeJson(HttpExchange exchange, ObjectMapper json, int status, Object body) throws IOException {
+        byte[] bytes = json.writeValueAsString(body).getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("content-type", "application/json");
+        exchange.sendResponseHeaders(status, bytes.length);
+        exchange.getResponseBody().write(bytes);
+        exchange.close();
     }
 }

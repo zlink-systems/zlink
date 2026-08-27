@@ -13,8 +13,11 @@ internal sealed class QuestEventProcessor(
     QuestProcessorIdentity identity,
     ILogger<QuestEventProcessor> logger)
 {
+    public string MissionName => identity.MissionName;
+
     public async ValueTask ProcessAsync(
         GameplayFact gameplayFact,
+        int? replayGeneration,
         CancellationToken cancellationToken)
     {
         var definition = gameplayFact.EventType == "SnapshotKillCount"
@@ -27,6 +30,11 @@ internal sealed class QuestEventProcessor(
             definition.QuestId,
             cancellationToken);
         var aggregate = QuestProgressAggregate.Rehydrate(definition, stream);
+        if (replayGeneration is { } generation)
+            logger.LogInformation(
+                "gamequest-mission replayed player={PlayerId} generation={Generation}",
+                gameplayFact.PlayerId,
+                generation);
         var decision = aggregate.Decide(gameplayFact);
         if (decision is null) return;
         if (!await store.AppendAndProjectAsync(
@@ -45,17 +53,22 @@ internal sealed class QuestEventProcessor(
             cancellationToken);
 
         logger.LogInformation(
-            "gamequest mission processed mission={Mission} player={PlayerId} quest={QuestId} source={SourceEventId} events={EventCount} notified={Notified}",
-            identity.MissionName,
+            "gamequest-mission processed player={PlayerId} quest={QuestId} source={SourceEventId} events={EventCount} notified={Notified}",
             gameplayFact.PlayerId,
             definition.QuestId,
             gameplayFact.EventId,
             decision.Events.Count,
             notified);
+        if (decision.Events.OfType<QuestProgressReconciled>().Any())
+            logger.LogInformation(
+                "gamequest-mission reconciled player={PlayerId} quest={QuestId}",
+                gameplayFact.PlayerId,
+                definition.QuestId);
     }
 
     public async ValueTask<QuestProgressState[]> SyncAsync(
         string playerId,
+        int? replayGeneration,
         CancellationToken cancellationToken)
     {
         var snapshot = await snapshots.ReadSnapshotAsync(playerId, cancellationToken);
@@ -69,6 +82,7 @@ internal sealed class QuestEventProcessor(
                     snapshot.KillCount,
                     "api-a",
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
+                replayGeneration,
                 cancellationToken);
 
         return await store.ReadProjectionAsync(playerId, cancellationToken);

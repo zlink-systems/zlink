@@ -1,7 +1,7 @@
 # .NET RouteMesh·MeshNode 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md) · [공통 topology](../../../07-channel-topology.ko.md) ·
-[MeshNode](../../../13-mesh-node.ko.md) · [메시지 모델](../../../04-message-model.ko.md)
+[.NET 언어별 interface 목차](README.ko.md) · [공통 topology](../../../02-channel-transport/01-channel-topology.ko.md) ·
+[MeshNode](../../../03-spot-actor/03-mesh-node.ko.md) · [메시지 모델](../../../00-foundation/05-message-model.ko.md)
 
 ## 1. 범위
 
@@ -295,12 +295,12 @@ raw client는 별도 wire error code가 아니라 연결 종료를 관찰한다.
 `IZLinkCodecRegistryBuilder`와 codec extension의 정확한 선언은
 [Serialization](11-serialization.ko.md)이 소유한다.
 
-`AddRouteMesh(meshName)`은 process-local [MeshNode](../../../01-glossary.ko.md#meshnode) 하나를 등록한다. 같은 process에서 같은 `meshName`을
+`AddRouteMesh(meshName)`은 process-local [MeshNode](../../../00-foundation/02-glossary.ko.md#meshnode) 하나를 등록한다. 같은 process에서 같은 `meshName`을
 두 번 등록하면 host startup이 `ZLinkConfigurationException`으로 실패한다. `Channel(channelName)` 뒤에는
 `Client()` 또는 `Server()`를 정확히 한 번 호출한다. `Client()`는 송신 경로만 만들고, `Server()`만
-[weight](../../../01-glossary.ko.md#weight)와 handler 등록을 제공한다. Server [membership](../../../01-glossary.ko.md#membership)이 없는 MeshNode도 시작할 수 있다.
+[weight](../../../00-foundation/02-glossary.ko.md#weight)와 handler 등록을 제공한다. Server [membership](../../../00-foundation/02-glossary.ko.md#membership)이 없는 MeshNode도 시작할 수 있다.
 
-Automatic [RouteMesh](../../../01-glossary.ko.md#routemesh)는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
+Automatic [RouteMesh](../../../00-foundation/02-glossary.ko.md#routemesh)는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
 connect한다. Local과 remote의 object role이 모두 `Client`이고 양쪽 모두 RouteMesh Channel Server
 membership이 없을 때만 connection intent를 만들지 않는다. Channel Client membership만으로는 연결하지
 않는다. 어느 한쪽에라도 Channel Server membership이 있으면 weight가 `0`이어도 connection이 필요하다.
@@ -321,24 +321,24 @@ host·port 조합 overload도 같은 listener 설정을 표현한다.
 역할은 최대 한 번만 등록한다. Registration key는 `(ChannelName, Role)`이며 Client와 Server는 별도
 registration으로 하나의 ClientServer topology를 공유한다. 같은 역할을 두 번 등록하면 startup이 실패한다.
 RouteMesh ChannelName 충돌 규칙은 그대로
-유지한다. Client는 등록한 manual endpoint와 location store에서 자동 발견한 같은 [ChannelName](../../../01-glossary.ko.md#channelname)의 server
+유지한다. Client는 등록한 manual endpoint와 location store에서 자동 발견한 같은 [ChannelName](../../../00-foundation/02-glossary.ko.md#channelname)의 server
 endpoint를 모두 연결 대상으로 사용할 수 있다.
-두 source가 같은 Server RID와 [lifecycle generation](../../../01-glossary.ko.md#lifecycle-generation)을 가리키면 connection intent와 ready target을 하나로
+두 source가 같은 Server RID와 [lifecycle generation](../../../00-foundation/02-glossary.ko.md#lifecycle-generation)을 가리키면 connection intent와 ready target을 하나로
 합친다. Automatic과 manual 모두 Client만 server로 connect하며 Server는 client endpoint를 찾거나 outbound
 connect를 시작하지 않는다. Server는 받은 send/request handler와 request reply만 제공하며 연결된 client로
 새 업무 호출을 시작하지 않는다.
 
 같은 process에 Server 역할도 등록되어 있으면 listener와 service admission을 마친 local Server를 remote
-Server와 같은 candidate 집합에 넣는다. [Ready](../../../01-glossary.ko.md#ready), positive weight, non-draining 조건을 동일하게 적용하고
+Server와 같은 candidate 집합에 넣는다. [Ready](../../../00-foundation/02-glossary.ko.md#ready), positive weight, non-draining 조건을 동일하게 적용하고
 local 우선순위나 remote 제외 규칙을 두지 않는다. 선택 뒤에는 Client DEALER에서 Server ROUTER로 실제
 transport message를 전달하며 handler를 직접 호출하지 않는다.
 
-`ConfigureNetwork()`의 기본 BindHost는 `127.0.0.1`이고 AdvertiseHost를 생략하면 non-wildcard [BindHost](../../../01-glossary.ko.md#bindhost)를
-사용한다. [Automatic discovery](../../../01-glossary.ko.md#automatic-discovery) listener는 `Listen()`·`Bind()`·`EnablePublisher()`의 port를 생략하거나
+`ConfigureNetwork()`의 기본 BindHost는 `127.0.0.1`이고 AdvertiseHost를 생략하면 non-wildcard [BindHost](../../../00-foundation/02-glossary.ko.md#bindhost)를
+사용한다. [Automatic discovery](../../../00-foundation/02-glossary.ko.md#automatic-discovery) listener는 `Listen()`·`Bind()`·`EnablePublisher()`의 port를 생략하거나
 listener 호출 자체를 생략하면 port `0`으로 bind한다. Manual mode에서 endpoint를 다른 discovery source로
 얻지 못하면 listen port와 remote endpoint를 명시한다. Listener별 host 설정은 root 기본값보다 우선한다.
 
-[Location store](../../../01-glossary.ko.md#location-store)를 등록한 fanout publisher는 Framework가 lifecycle별 RID를 만들고 전용 descriptor를 게시한다.
+[Location store](../../../00-foundation/02-glossary.ko.md#location-store)를 등록한 fanout publisher는 Framework가 lifecycle별 RID를 만들고 전용 descriptor를 게시한다.
 Store가 없는 publisher는 fixed RID와 listener endpoint를 수동으로 전달하는 대상으로 계속 사용할 수 있다.
 Endpoint를
 받지 않는 `EnableSubscriber()`는 location store에서 같은 ChannelName의 유효한 publisher를 모두 발견한다.
@@ -346,23 +346,22 @@ Endpoint를
 channel에서 automatic subscriber와 manual subscriber를 함께 설정하면 startup이 실패한다. Automatic
 subscriber는 location store가 필요하지만 manual publisher와 manual subscriber만 사용하는 host에는
 필요하지 않다.
-Publisher는 [descriptor](../../../01-glossary.ko.md#descriptor)만 게시하고 subscriber endpoint로 outbound connect를 시작하지 않는다. Subscriber만
+Publisher는 [descriptor](../../../00-foundation/02-glossary.ko.md#descriptor)만 게시하고 subscriber endpoint로 outbound connect를 시작하지 않는다. Subscriber만
 publisher endpoint로 connect하며 automatic subscriber는 Publisher RID와 lifecycle generation마다 connection
 intent 하나를 만든다.
 
 Automatic RID는 `prefix-<lowercase-canonical-uuid-v4>` 형식이다. UUID v4는 `8-4-4-4-12` 자리의
 lowercase canonical 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 1..64자이고 full RID는 UTF-8
 255 bytes 이하다. Active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `RoutingIdConflict`로
-실패한다. Fixed `SetRoutingId(...)`는 object role과 Store descriptor가 없는 manual topology에서만
-허용한다. Slot count, allocation group과 public allocation provider는 제공하지 않는다.
+실패한다. Fixed RID는 automatic discovery topology에서도, object role이 있는 MeshNode에서도 허용한다. 구현·시험 시나리오가 peer를 이름으로 지목해야 할 때가 있고, 자동 UUID로는 그럴 수 없기 때문이다. Fixed RID를 쓴 node가 재시작해 이전 active owner claim과 충돌하면 자동 RID와 같은 규칙으로 처리한다 — 새 값을 만들어 재시도하지 않고 즉시 conflict로 실패하며, 이전 owner lease가 만료된 뒤 재시작이 성공한다. Slot count, allocation group과 public allocation provider는 제공하지 않는다.
 
 Object Server의 Entry Spot ID에도 같은 prefix를 사용하지만 MeshNode RID와 별도로 생성한 UUID v4를
 붙인다. 형식은 `<prefix>-entry-<lowercase-canonical-uuid-v4>`이며 caller가 fixed Entry Spot ID를 지정하지
 않는다. 이 ID의 전역 충돌과 caller가 지정한 Spot ID의 예약 형식 검증은
-[Spot model](../../../11-spot-model.ko.md)이 정의한다. Prefix와 생성된 RID·Spot ID를 placement, shard 또는
+[Spot model](../../../03-spot-actor/01-spot-model.ko.md)이 정의한다. Prefix와 생성된 RID·Spot ID를 placement, shard 또는
 stable application identity로 해석하지 않는다.
 
-등록한 MeshNode descriptor는 1 MiB 이하여야 한다. [Spot](../../../01-glossary.ko.md#spot) type과 stateful object capability collection은 각각
+등록한 MeshNode descriptor는 1 MiB 이하여야 한다. [Spot](../../../00-foundation/02-glossary.ko.md#spot) type과 stateful object capability collection은 각각
 최대 1024개다. Bound를 넘으면 startup을 실패시키며 일부 registration만 적용하지 않는다.
 
 `SubscriberConnections`는 manual subscriber endpoint 집합의 runtime handle이다. Builder에서 등록한
@@ -403,8 +402,8 @@ RouteMesh Channel Server membership이 있으면 연결을 유지한다. ClientS
 topology이므로 이 판정에 포함하지 않는다. Object Client와 Object Server, Object Server끼리의 connection은
 유지한다.
 
-Actor·User Spot·Instance Spot [factory](../../../01-glossary.ko.md#factory)는 stable type, object 종류별 factory option과 explicit relocation
-policy를 같은 registration에서 고정한다. Policy를 생략하는 overload는 없다. [Stable type](../../../01-glossary.ko.md#stable-type)은 UTF-8
+Actor·User Spot·Instance Spot [factory](../../../00-foundation/02-glossary.ko.md#factory)는 stable type, object 종류별 factory option과 explicit relocation
+policy를 같은 registration에서 고정한다. Policy를 생략하는 overload는 없다. [Stable type](../../../00-foundation/02-glossary.ko.md#stable-type)은 UTF-8
 1..255 bytes이고 중복 type은 startup 오류다. Entry Spot ID는 Framework가 발급한다.
 
 Node placement weight는 0..10000이고 기본값은 100이다. 범위 밖 값은 startup 설정과 runtime 변경에서
@@ -419,7 +418,7 @@ Type별 limit은 `null`이면 node limit을 공유하고 값이 있으면 1..`in
 시작 전에 고정하고 실행 중 setter를 제공하지 않는다. `ZLinkWorkerOptions.IdleTimeout`과는 별개의 설정이며
 서로 값을 상속하지 않는다. 정리 대상은 Instance Spot뿐이고 Entry Spot과 User Spot은 이 설정의 영향을
 받지 않는다. 유휴 판정 조건, `ZLinkSpotCloseReason.IdleEvicted` 전달과 정리 뒤 cold activation 규칙은
-[Spot 모델 §6.2](../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-쓰지-않고-남아-있는-instance-spot-정리)가 소유한다.
 
 ## 3. Manual peer
 
@@ -513,7 +512,7 @@ no-op 구현을 사용하므로 application override는 필수가 아니다.
 
 expected RID를 생략하면 admission handshake가 remote identity를 결정한다. expected RID를 지정한 경우
 handshake identity가 다르면 연결을 admission하지 않는다. Manual 연결도 자동 discovery 연결과 같은
-[MeshName](../../../01-glossary.ko.md#meshname)·RID·ChannelName·security 검증을 사용한다.
+[MeshName](../../../00-foundation/02-glossary.ko.md#meshname)·RID·ChannelName·security 검증을 사용한다.
 
 ## 4. Handler와 filter의 dispatch scope
 
@@ -636,18 +635,18 @@ ClientServer application listener의 `MaxMessageSize` 기본값은 `16 MiB`다. 
 single-message 상한을 두지 않는다는 뜻이며 Core HWM budget이나 Application job queue 설정과 결합 검증하지
 않는다. 이 설정은 RouteMesh ServerServer에 적용하지 않는다.
 
-`ConfigureSpotPublisher()`는 publish 전용 전달 정책 option을 제공하지 않는다. [Logical Multicast](../../../01-glossary.ko.md#logical-multicast)는
+`ConfigureSpotPublisher()`는 publish 전용 전달 정책 option을 제공하지 않는다. [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast)는
 source-local 실행 용량을 send timeout 안에 확보하면 시작하고 결과값 없이 정상 완료한다. Target별
 수락·실패 결과를 기다리거나 public monitoring에 집계하지 않으며 일부 target 실패 때문에 전체 publish를
 자동 재시도하지 않는다. Target이 없어도 정상 완료한다.
 
 `IZLinkRouteMeshRuntimeOptions`는 public DI singleton이다. 등록되지 않은 membership을 조회하면
-`ZLinkConfigurationException`이다. `MailboxMessageBudget`와 `MailboxByteBudget`은 [owner](../../../01-glossary.ko.md#owner)별 application
+`ZLinkConfigurationException`이다. `MailboxMessageBudget`와 `MailboxByteBudget`은 [owner](../../../00-foundation/02-glossary.ko.md#owner)별 application
 mailbox의 메시지 수와 byte 합계 상한이다. Byte 회계는 payload 크기만 세지 않는다 —
 `payload 크기 + metadata 크기 + 작업당 고정 비용`을 더한다. Payload가 비어 있어도 작업 하나는 0 byte가
 아니며, 큰 payload에서도 고정 비용은 그대로 더한다. 합이 `ulong` 표현 범위를 넘으면 `ulong.MaxValue`로
 고정하고 그 제출을 거절한다. 회계 규칙은
-[Framework API §8.2](../../../06-framework-api.ko.md#82-handler-실행-객체와-dependency-수명)가 소유한다.
+[Framework API §8.2](../../../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)가 소유한다.
 0은 Framework profile의 유한 기본값을 사용한다. 두 값은
 `ConfigureRouterSocket()`에서 startup 전에 설정하며, Logical Multicast의 local target drop도 이 공개
 용량 설정을 따른다.

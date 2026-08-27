@@ -71,10 +71,8 @@ class play_server_host_factory_t
           .bind (topology.selected_stream_endpoint ())
           .register_session<play_session_t> ();
         app.add_hosted_service (std::make_unique<play_route_readiness_service_t> (
-          sample_names_t::game_spot_node, topology.play_node,
+          sample_names_t::game_spot_node, "play-" + topology.play_node,
           "tictactoe-play-" + (topology.play_node == "a" ? std::string ("b") : std::string ("a"))));
-        app.add_hosted_service (
-          std::make_unique<play_api_channel_readiness_service_t> (topology.play_node));
         return app;
     }
 };

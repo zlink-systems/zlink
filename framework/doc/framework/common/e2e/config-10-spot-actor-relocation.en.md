@@ -71,7 +71,7 @@ target Spot's membership?
 - Verification: `OnActorJoin`, source `OnLeaveActor`, and target `OnJoinedActor` each run exactly
   once. The follow-up handler sees the target membership, and the Actor identity and state are
   preserved.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-A2 Local Join Reject
 
@@ -87,7 +87,7 @@ source?
 - Procedure: The Join result is received, then a state request is sent to the same Actor ID.
 - Verification: Join returns a Rejected result and reply. The Leave/Joined callbacks do not run, and
   the state request is processed under the source membership.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-A3 Local Join Callback Boundary
 
@@ -103,7 +103,7 @@ duplicate-processed under both memberships?
   sent, then the gate is opened.
 - Verification: The operation ID's handler execution happens exactly once, on either source or
   target, and Join and the request each end in exactly one terminal.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 ### Track B — Moving An Actor To A Different Node
 
@@ -123,7 +123,7 @@ state version, restored through chunk transfer and checksum verification?
 - Verification: The target factory/restore/`OnJoinedActor` and source `OnLeaveActor` each run once.
   The reply's state version and Actor identity are the same as before the move. Restoration is
   judged by the public reply — chunks and checksum values are not read directly.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-B2 Moving Message Ordering
 
@@ -143,7 +143,7 @@ move processed exactly once, in order, at the target?
 - Verification: The successfully processed IDs keep the order `before`, `during-1`, `during-2`,
   `after`, and each ID is processed exactly once. The same ID does not appear twice, across source
   and target.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md), [Spot Messaging](../spec/server/12-spot-messaging.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md), [Spot Messaging](../spec/server/03-spot-actor/02-spot-messaging.en.md)
 
 #### ST-B3 RecreateOnRelocation
 
@@ -160,7 +160,7 @@ after a remote Join?
   are confirmed.
 - Verification: Join succeeds, and the target factory runs exactly once. There is no Capture/Restore
   application callback, and a follow-up specifying the Actor ID is processed at the target.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-B4 Empty Relocation State
 
@@ -176,7 +176,7 @@ normally?
 - Procedure: After the remote Join, a domain state request is sent.
 - Verification: Join succeeds, and the restore callback runs exactly once with empty input. The reply
   returns the expected value from external state.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 ### Track C — Relocation Failure
 
@@ -195,7 +195,7 @@ Actor message processed by only one owner?
   request is sent.
 - Verification: Join ends in success or exactly one Store-related failure. The follow-up handler runs
   exactly once, on the same node as the public current location.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### ST-C2 Target Connection Failure
 
@@ -211,7 +211,7 @@ with its existing state?
 - Procedure: It Joins B, and after the failure, an Actor state request is sent.
 - Verification: Join ends in exactly one connection-related failure. There is no Leave/target-Joined
   callback, and the state request returns the existing state at A.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### ST-C3 Application Callback Failure
 
@@ -229,7 +229,7 @@ without duplicating the Actor?
   sent.
 - Verification: Reject returns a Rejected result, and exception and timeout return the contracted
   failure. Each Actor request is processed at most once, on one owner.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### ST-C4 Direct-Transfer Integrity Failure
 
@@ -253,8 +253,8 @@ terminal failure, with the source Actor continuing to process requests with its 
 - Verification: Each Join ends in exactly one explicit failure, with no automatic retry or resend to
   a different target. The target has no restore/`OnJoinedActor` evidence, and the source request
   returns the existing state. No node has evidence of restoration from a partial payload.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md) and
-  [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md) and
+  [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 ### Track D — Current Location And Stale Route
 
@@ -272,7 +272,7 @@ target with no separate wait?
 - Procedure: A state request is started right in the Join completion callback.
 - Verification: Completion is called exactly once, and the request is processed exactly once at B.
   The caller does not recompute the owner RID or rebind.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-D2 Stale Source Message Fencing
 
@@ -288,7 +288,7 @@ every handler?
 - Procedure: Join is completed while the message is delayed, then the proxy is restored.
 - Verification: The caller receives a result matching the public contract, and the operation ID's
   handler count across all nodes is at most one. Source state is unchanged.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 ### Track E — Session Binding
 
@@ -306,7 +306,7 @@ target Actor's push?
 - Procedure: The Actor Joins B, and after completion, push sequence 2 is sent.
 - Verification: The same client receives sequence 2 exactly once, with no rebind. The push evidence's
   sender node is B.
-- Contract basis: [Session Actor Dispatch](../spec/server/20-session-actor-dispatch.en.md)
+- Contract basis: [Session Actor Dispatch](../spec/server/04-session/02-session-actor-binding.en.md)
 
 #### ST-E1B Binding Route Per Relocation Mode
 
@@ -323,7 +323,7 @@ binding?
   target.
 - Verification: Each client receives its sequence exactly once with no rebind, and the previous node
   does not send the same sequence.
-- Contract basis: [Session Actor Dispatch](../spec/server/20-session-actor-dispatch.en.md)
+- Contract basis: [Session Actor Dispatch](../spec/server/04-session/02-session-actor-binding.en.md)
 
 #### ST-E1C Session Route Update And Seal Timeout
 
@@ -356,7 +356,7 @@ blocked path lets relocation finish and requires explicit reconnect and rebind a
   only a Warning. Only the push after explicit reconnect and rebind is delivered exactly once. Pass
   evidence uses only public Join results, connector lifecycle, bind results, and client pushes; it
   does not inspect a route-update packet, held state, or internal retry count or timing.
-- Contract basis: [Session Actor Dispatch](../spec/server/20-session-actor-dispatch.en.md)
+- Contract basis: [Session Actor Dispatch](../spec/server/04-session/02-session-actor-binding.en.md)
 
 #### ST-E1A A New Actor Incarnation Requires A Bind
 
@@ -373,7 +373,7 @@ before an explicit bind?
   explicitly bound, and another push is sent.
 - Verification: The first push is not delivered to the previous binding, and only the second push,
   after a successful bind, is delivered.
-- Contract basis: [Session Actor Dispatch](../spec/server/20-session-actor-dispatch.en.md)
+- Contract basis: [Session Actor Dispatch](../spec/server/04-session/02-session-actor-binding.en.md)
 
 #### ST-E2 A Failed Relocation Keeps The Binding
 
@@ -388,7 +388,7 @@ bound client?
 - Procedure: A Join failure to B is confirmed, then a push is sent from A.
 - Verification: The client receives the push exactly once with no rebind, and the sender evidence is
   A.
-- Contract basis: [Session Actor Dispatch](../spec/server/20-session-actor-dispatch.en.md)
+- Contract basis: [Session Actor Dispatch](../spec/server/04-session/02-session-actor-binding.en.md)
 
 ### Track F — Messages During A Move And The Previous Route
 
@@ -408,7 +408,7 @@ to the target?
   sent.
 - Verification: The successful-handler order is `old-1`, `old-2`, `moving-1`, `moving-2`, `new-1`,
   and each ID appears exactly once.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-F2 A Direct Message Cannot Overtake
 
@@ -425,7 +425,7 @@ moving messages?
   from the completion callback.
 - Verification: In target handler evidence, the moving IDs precede the direct ID, with no
   duplicates.
-- Contract basis: [Spot Messaging](../spec/server/12-spot-messaging.en.md)
+- Contract basis: [Spot Messaging](../spec/server/03-spot-actor/02-spot-messaging.en.md)
 
 #### ST-F3 Bound Session Cross-Move Order
 
@@ -441,7 +441,7 @@ with no duplication?
 - Procedure: Session relay and direct messages are submitted in a set order during Join.
 - Verification: Every successful sequence appears exactly once in Actor handler evidence, and the
   concurrently running handler count is 1.
-- Contract basis: [Session Actor Dispatch](../spec/server/20-session-actor-dispatch.en.md)
+- Contract basis: [Session Actor Dispatch](../spec/server/04-session/02-session-actor-binding.en.md)
 
 #### ST-F3A Late Session Route Update
 
@@ -462,7 +462,7 @@ update for B?
   snapshot points to C, the B-direction delay is released, and a push is sent from C.
 - Verification: The client receives the C push exactly once and does not receive the same sequence
   from B.
-- Contract basis: [Session Actor Dispatch](../spec/server/20-session-actor-dispatch.en.md)
+- Contract basis: [Session Actor Dispatch](../spec/server/04-session/02-session-actor-binding.en.md)
 
 #### ST-F4 Message Follow Before And After Expiry
 
@@ -480,7 +480,7 @@ message after expiry does not reach the target handler?
   second message is delivered after the duration plus the scheduler tolerance has passed.
 - Verification: The first operation ID is processed at most once at the target. The second ID is not
   processed, and the caller receives `Unavailable`.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-F5 Message Follow Route Cleanup
 
@@ -498,7 +498,7 @@ succeed?
   global Actor ID route.
 - Verification: The old-route operation is absent from the target handler, and the global-ID
   operation is processed exactly once at the target.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-F6 Request Terminal Across Relocation
 
@@ -516,7 +516,7 @@ their own correlation?
 - Verification: The short request receives either a timeout or exactly one reply, and the long
   request receives the expected reply. Reply operation IDs are not swapped, and the handler count for
   each ID is at most one.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 ### Track G — Spot Relocation And The Execution Turn
 
@@ -534,7 +534,7 @@ relocation, observed serially?
 - Procedure: Relocation and a follow-up request are started after Yield evidence.
 - Verification: The final state includes both defined changes and the follow-up, and the handler
   active count across all nodes is 1.
-- Contract basis: [Async Execution Policy](../spec/server/05-async-execution-policy.en.md)
+- Contract basis: [Async Execution Policy](../spec/server/01-execution/README.en.md)
 
 #### ST-G2 SpotWide Durable Backlog And Lazy Job Admission
 
@@ -571,8 +571,8 @@ lazy permits?
   `Blocked/StateIncompatible`. Both keep owner, state, and generations at source. No variant sets
   or expects a relocation-specific numeric cap, and none inspects the Relocation Store or a
   temporary queue directly.
-- Contract basis: [Framework API](../spec/server/06-framework-api.en.md) and
-  [Host Relocation Flow](../spec/server/30-host-relocation-flow.en.md)
+- Contract basis: [Framework API](../spec/server/00-foundation/06-framework-api.en.md) and
+  [Host Relocation Flow](../spec/server/05-location-relocation/05-host-relocation-flow.en.md)
 
 #### ST-G3 Host Relocation With A PerActor Spot
 
@@ -589,7 +589,7 @@ explicit membership?
 - Procedure: Run public host relocation, letting the Framework select the target, then request A and B.
 - Verification: Each request is processed on exactly one current route, preserving identity, state,
   and membership. No Actor-scoped Relocate or caller-specified target is used.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-G4 A ToActor Message During A Spot Move
 
@@ -605,8 +605,8 @@ during a Spot move?
   Relocate call, which has no target argument.
 - Verification: The successful sequence order is preserved per Actor, and the same operation ID does
   not duplicate across source and target.
-- Contract basis: [SpotWide User Spot Handoff](../spec/server/30-host-relocation-flow.en.md#85-spotwide-user-spot)
-  and [Moving Pending Messages](../spec/server/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)
+- Contract basis: [SpotWide User Spot Handoff](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#103-spotwide-user-spot)
+  and [Moving Pending Messages](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions)
 
 #### ST-G5 Relocation Interruption Measurement
 
@@ -623,7 +623,7 @@ workload with no message loss or duplication?
   latency on a monotonic clock.
 - Verification: Every accepted operation has exactly one terminal and at most one handler run. P50,
   P95, and P99 are reported as results, used for pass/fail only when a spec-defined SLO exists.
-- Contract basis: [Runtime Metrics](../spec/server/25-runtime-metrics.en.md)
+- Contract basis: [Runtime Metrics](../spec/server/06-observability/02-runtime-metrics.en.md)
 
 #### ST-G6 SpotWide Application Boundary
 
@@ -640,7 +640,7 @@ and target?
   gate is opened.
 - Verification: The existing handler finishes at the source, and the follow-up runs exactly once at
   the target. The combined active count never exceeds 1.
-- Contract basis: [SpotWide User Spot Handoff](../spec/server/30-host-relocation-flow.en.md#85-spotwide-user-spot)
+- Contract basis: [SpotWide User Spot Handoff](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#103-spotwide-user-spot)
 
 ### Track H — Deferred Join And Handler Context
 
@@ -658,7 +658,7 @@ completion.
 - Procedure: The handler registers a defer and leaves completion evidence.
 - Verification: The evidence order is `defer called`, `handler returned`, `OnActorJoin`. The Join
   request payload matches the value at call time.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-H2 Completion Outcome
 
@@ -674,7 +674,7 @@ exactly once?
 - Procedure: A deferred Join is called with a unique operation ID.
 - Verification: Each completion is called exactly once, and the ID and result match that Join. A
   follow-up request is processed at the target after accept, or at the source after reject.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-H3 Context Identity
 
@@ -693,7 +693,7 @@ values or require an internal owner token.
 - Verification: The Actor ID and request in admission evidence match the input. The operation ID,
   result, and Accepted ActorRef in completion evidence match that Join. The target Spot is confirmed
   through public Actor context or ref lookup, not forced from a value the callback doesn't have.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-H4 Invalid Context And Duplicate Registration
 
@@ -709,7 +709,7 @@ must clearly surface as a startup or operation failure.
 - Procedure: Each case is run once.
 - Verification: The public call or host startup ends in exactly one configuration/operation failure,
   and the target Join callback does not run.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### ST-H4A Completion And Timeout Race
 
@@ -728,8 +728,8 @@ Accepted, Rejected, or failure?
 - Verification: Every operation ends in exactly one Accepted, Rejected, or failure. The completion
   count is 1 per operation, and no new target callback runs once a timeout is confirmed. The moment a
   callback started before the timeout finishes is not used as a separate success condition.
-- Contract basis: [Async Execution Policy](../spec/server/05-async-execution-policy.en.md) and
-  [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Async Execution Policy](../spec/server/01-execution/README.en.md) and
+  [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-H4B Yield And Reply Terminal
 
@@ -746,7 +746,7 @@ each exactly once?
 - Verification: The caller reply and Join completion each happen exactly once, and the two IDs
   correspond exactly. The concurrent active count of the handler and callback does not exceed the
   contracted execution lane.
-- Contract basis: [Async Execution Policy](../spec/server/05-async-execution-policy.en.md)
+- Contract basis: [Async Execution Policy](../spec/server/01-execution/README.en.md)
 
 #### ST-H5 MessageContext Parity
 
@@ -763,7 +763,7 @@ values?
 - Procedure: Send, request, and deferred Join are run across each language combination.
 - Verification: The Actor ID, operation ID, request correlation, and deadline presence carry the same
   meaning. No reflection or private adapter is used.
-- Contract basis: [Public Contract Governance](../spec/server/00-public-contract-governance.en.md)
+- Contract basis: [Public Contract Governance](../spec/server/00-foundation/01-public-contract-governance.en.md)
 
 ### Track I — Load And Multi-Hop
 
@@ -783,7 +783,7 @@ with no loss or duplication?
 - Procedure: Remote Join is repeated with the same Actor count and message count in each range.
 - Verification: The state checksum and handler operation ID match the input, and each ID appears
   exactly once. Latency and memory are recorded separately as measurement results.
-- Contract basis: [Runtime Metrics](../spec/server/25-runtime-metrics.en.md)
+- Contract basis: [Runtime Metrics](../spec/server/06-observability/02-runtime-metrics.en.md)
 
 #### ST-I2 Many Actor Relocations
 
@@ -800,7 +800,7 @@ must keep being processed.
   steady rate.
 - Verification: Both relocation and control operations each have exactly one terminal, and
   successful operation IDs are processed exactly once. Latency distribution is reported.
-- Contract basis: [Runtime Metrics](../spec/server/25-runtime-metrics.en.md)
+- Contract basis: [Runtime Metrics](../spec/server/06-observability/02-runtime-metrics.en.md)
 
 #### ST-I3 Many Spot Relocations
 
@@ -814,7 +814,7 @@ Multiple SpotWide moves must also not interrupt the execution of a Spot that isn
 - Procedure: Relocations and control requests are run together with bounded concurrency.
 - Verification: There is no control-request loss or duplication, and each Spot's Actor state checksum
   is preserved after relocation.
-- Contract basis: [Runtime Metrics](../spec/server/25-runtime-metrics.en.md)
+- Contract basis: [Runtime Metrics](../spec/server/06-observability/02-runtime-metrics.en.md)
 
 #### ST-I4 Message Follow Authority Boundaries
 
@@ -831,7 +831,7 @@ current-route message always reaches the target?
 - Procedure: Each message is delivered at its boundary, together with a global Actor ID request.
 - Verification: The old-route operation is processed at most once, only within the contracted period.
   The global-route operation is processed exactly once at the target.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 #### ST-I5 Message Follow Error Bounds
 
@@ -848,7 +848,7 @@ duplicate handler run?
 - Procedure: Each input is delivered as a separate operation.
 - Verification: Each caller receives exactly one terminal, and the operation ID's handler count is at
   most one. A current-route follow-up succeeds normally.
-- Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+- Contract basis: [Framework Error Model](../spec/server/00-foundation/07-framework-error-model.en.md)
 
 #### ST-I6 Multi-Hop Relocation
 
@@ -865,7 +865,7 @@ duplicated, and is the global request processed at C?
   request are sent.
 - Verification: The global request is processed exactly once at C. Each old-route operation is
   processed at most once, and not at all after Follow expires.
-- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
+- Contract basis: [Spot Actor](../spec/server/03-spot-actor/05-spot-actor-membership.en.md)
 
 ## 4. Completion Criteria
 

@@ -10,6 +10,7 @@ async function main(): Promise<void> {
     config.lifecycleCompletionPath
   );
 
+  console.log('tictactoe=completed');
   console.log('PASS TicTacToe.Ts');
 }
 

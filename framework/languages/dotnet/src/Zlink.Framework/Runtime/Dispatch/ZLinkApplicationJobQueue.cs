@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Dispatch;
 
 internal readonly record struct ZLinkApplicationJobQueueCapacity(
@@ -133,7 +135,7 @@ internal readonly record struct ZLinkApplicationJobQueuePressureMetrics(
 /// </summary>
 internal sealed class ZLinkApplicationJobQueue : IDisposable
 {
-    private readonly object _gate;
+    private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _timeProvider;
     private readonly LinkedList<Waiter> _waiters = new();
     private readonly ZLinkApplicationJobQueueCapacity _capacity;
@@ -156,7 +158,6 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal ZLinkApplicationJobQueue(
         ZLinkApplicationJobQueueCapacity capacity,
-        object? capacityGate = null,
         TimeProvider? timeProvider = null,
         Action<Exception>? receiveFlowFailureReporter = null)
     {
@@ -166,14 +167,10 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             capacity.ConfiguredPauseThresholdPercent,
             capacity.ConfiguredResumeThresholdPercent);
         _capacity = capacity;
-        _gate = capacityGate ?? new object();
         _timeProvider = timeProvider ?? TimeProvider.System;
         _receiveFlowController = new ZLinkReceiveFlowController(
-            _gate,
             receiveFlowFailureReporter);
     }
-
-    internal object SyncRoot => _gate;
 
     internal ValueTask<ZLinkApplicationJobQueueLease> AcquireAsync(
         CancellationToken cancellationToken)
@@ -182,10 +179,7 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             return ValueTask.FromCanceled<ZLinkApplicationJobQueueLease>(
                 cancellationToken);
 
-        Waiter? waiter = null;
-        ZLinkApplicationJobQueueLease? immediateLease = null;
-        var pressureChanged = false;
-        lock (_gate)
+        var acquired = AwaitStateLane(_lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_waiters.Count == 0
@@ -194,24 +188,24 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             {
                 _reservedSupplyPermits = checked(_reservedSupplyPermits + 1);
                 ObservePeakUnderLock();
-                immediateLease = new ZLinkApplicationJobQueueLease(this);
-                pressureChanged = UpdatePressureStateUnderLock();
+                var immediateLease = new ZLinkApplicationJobQueueLease(this);
+                return new AcquireResult(null, immediateLease, UpdatePressureStateOnLane());
             }
-            else
-            {
-                waiter = new Waiter(
-                    cancellationToken,
-                    _timeProvider.GetTimestamp(),
-                    _measurementEpoch);
-                waiter.Node = _waiters.AddLast(waiter);
-                _capacityWaiters = checked(_capacityWaiters + 1);
-            }
-        }
+            var waiter = new Waiter(
+                cancellationToken,
+                _timeProvider.GetTimestamp(),
+                _measurementEpoch);
+            waiter.Node = _waiters.AddLast(waiter);
+            _capacityWaiters = checked(_capacityWaiters + 1);
+            return new AcquireResult(waiter, null, false);
+        }));
 
-        if (pressureChanged)
+        if (acquired.PressureChanged)
             _receiveFlowController.ApplyPending();
-        if (immediateLease is not null)
-            return ValueTask.FromResult(immediateLease);
+        if (acquired.ImmediateLease is not null)
+            return ValueTask.FromResult(acquired.ImmediateLease);
+
+        var waiter = acquired.Waiter!;
 
         if (cancellationToken.CanBeCanceled)
         {
@@ -223,28 +217,46 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
                         registrationState.Waiter);
                 },
                 new CancellationRegistrationState(this, waiter!));
-            lock (_gate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
-                waiter!.CancellationRegistration = registration;
+                waiter.CancellationRegistration = registration;
                 if (waiter.State != WaiterState.Waiting)
                     registration.Dispose();
-            }
+            }));
         }
 
-        return new ValueTask<ZLinkApplicationJobQueueLease>(waiter!.Completion.Task);
+        return new ValueTask<ZLinkApplicationJobQueueLease>(waiter.Completion.Task);
+    }
+
+    internal bool TryAcquire(out ZLinkApplicationJobQueueLease? lease)
+    {
+        var acquired = AwaitStateLane(_lane.RunAsync(() =>
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_waiters.Count != 0
+                || PermitsInUseUnderLock()
+                   >= _capacity.EffectiveMaxQueuedApplicationJobs)
+                return new TryAcquireResult(null, false);
+
+            _reservedSupplyPermits = checked(_reservedSupplyPermits + 1);
+            ObservePeakUnderLock();
+            return new TryAcquireResult(
+                new ZLinkApplicationJobQueueLease(this),
+                UpdatePressureStateOnLane());
+        }));
+        if (acquired.PressureChanged)
+            _receiveFlowController.ApplyPending();
+        lease = acquired.Lease;
+        return lease is not null;
     }
 
     internal ZLinkApplicationJobQueueStatus GetStatus()
     {
-        lock (_gate)
-            return GetStatusUnderLock();
+        return AwaitStateLane(_lane.RunAsync(GetStatusOnLane));
     }
 
-    internal ZLinkApplicationJobQueueStatus GetStatusUnderLock()
+    private ZLinkApplicationJobQueueStatus GetStatusOnLane()
     {
-        if (!Monitor.IsEntered(_gate))
-            throw new SynchronizationLockException(
-                "The host-capacity gate must be held while reading queue status.");
         return new ZLinkApplicationJobQueueStatus(
             _capacity.ConfiguredProfile,
             _capacity.ConfiguredManualMax,
@@ -267,27 +279,25 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal ZLinkApplicationJobQueuePressureMetrics GetPressureMetrics()
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
+        {
             return new ZLinkApplicationJobQueuePressureMetrics(
                 _pressureState,
                 _pausedTransitionCount,
                 _runningTransitionCount,
                 CurrentPauseDurationUnderLock(),
                 CumulativePauseDurationUnderLock(),
-                _receiveFlowController.FlowStateConfigFailuresUnderLock);
+                _receiveFlowController.FlowStateConfigFailures);
+        }));
     }
 
     internal void ResetMetrics()
     {
-        lock (_gate)
-            ResetMetricsUnderLock();
+        AwaitStateLane(_lane.RunAsync(ResetMetricsOnLane));
     }
 
-    internal void ResetMetricsUnderLock()
+    private void ResetMetricsOnLane()
     {
-        if (!Monitor.IsEntered(_gate))
-            throw new SynchronizationLockException(
-                "The host-capacity gate must be held while resetting queue metrics.");
         _peakPermitsInUse = PermitsInUseUnderLock();
         _measurementEpoch = unchecked(_measurementEpoch + 1);
         _capacityWaitCount = 0;
@@ -295,32 +305,29 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         _pausedTransitionCount = 0;
         _runningTransitionCount = 0;
         _cumulativePauseDuration = TimeSpan.Zero;
-        _receiveFlowController.ResetMetricsUnderLock();
+        _receiveFlowController.ResetMetrics();
         if (_pressureState == ZLinkApplicationJobQueuePressureState.Paused)
             _cumulativePauseStartedTimestamp = _timeProvider.GetTimestamp();
     }
 
     internal void MarkQueued(ZLinkApplicationJobQueueLease lease)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!lease.TryMarkQueued())
                 return;
             _reservedSupplyPermits = checked(_reservedSupplyPermits - 1);
             _queuedApplicationJobs = checked(_queuedApplicationJobs + 1);
-        }
+        }));
     }
 
     internal void Release(ZLinkApplicationJobQueueLease lease)
     {
-        Waiter? admittedWaiter = null;
-        ZLinkApplicationJobQueueLease? admittedLease = null;
-        var pressureChanged = false;
-        lock (_gate)
+        var released = AwaitStateLane(_lane.RunAsync(() =>
         {
             var previous = lease.TryRelease();
             if (previous == ZLinkApplicationJobQueueLease.LeaseState.Released)
-                return;
+                return default(ReleaseResult);
             if (previous == ZLinkApplicationJobQueueLease.LeaseState.Reserved)
                 _reservedSupplyPermits = checked(_reservedSupplyPermits - 1);
             else
@@ -338,28 +345,29 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
                 RecordCompletedWaitUnderLock(candidate);
                 _reservedSupplyPermits = checked(_reservedSupplyPermits + 1);
                 ObservePeakUnderLock();
-                admittedWaiter = candidate;
-                admittedLease = new ZLinkApplicationJobQueueLease(this);
-                break;
+                return new ReleaseResult(
+                    candidate,
+                    new ZLinkApplicationJobQueueLease(this),
+                    UpdatePressureStateOnLane());
             }
-            pressureChanged = UpdatePressureStateUnderLock();
-        }
+            return new ReleaseResult(null, null, UpdatePressureStateOnLane());
+        }));
 
-        if (pressureChanged)
+        if (released.PressureChanged)
             _receiveFlowController.ApplyPending();
-        if (admittedWaiter is not null)
+        if (released.AdmittedWaiter is not null)
         {
-            admittedWaiter.CancellationRegistration.Dispose();
-            admittedWaiter.Completion.TrySetResult(admittedLease!);
+            released.AdmittedWaiter.CancellationRegistration.Dispose();
+            released.AdmittedWaiter.Completion.TrySetResult(released.AdmittedLease!);
         }
     }
 
     private void CancelWaiter(Waiter waiter)
     {
-        lock (_gate)
+        var cancelled = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (waiter.State != WaiterState.Waiting)
-                return;
+                return false;
             waiter.State = WaiterState.Cancelled;
             if (waiter.Node is { } node)
             {
@@ -368,8 +376,10 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             }
             _capacityWaiters = checked(_capacityWaiters - 1);
             RecordCompletedWaitUnderLock(waiter);
-        }
-        waiter.Completion.TrySetCanceled(waiter.CancellationToken);
+            return true;
+        }));
+        if (cancelled)
+            waiter.Completion.TrySetCanceled(waiter.CancellationToken);
     }
 
     private void RecordCompletedWaitUnderLock(Waiter waiter)
@@ -414,10 +424,12 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(apply);
-        return _receiveFlowController.Register(identity, apply);
+        var registration = AwaitStateLane(_lane.RunAsync(
+            () => _receiveFlowController.Register(identity, apply)));
+        return _receiveFlowController.ApplyRegistration(identity, registration);
     }
 
-    private bool UpdatePressureStateUnderLock()
+    private bool UpdatePressureStateOnLane()
     {
         var permits = PermitsInUseUnderLock();
         var next = _pressureState;
@@ -446,7 +458,7 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             _pauseStartedTimestamp = 0;
             _cumulativePauseStartedTimestamp = 0;
         }
-        _receiveFlowController.TransitionUnderLock(
+        _receiveFlowController.Transition(
             next,
             _pressureTransitionSequence);
         return true;
@@ -496,16 +508,15 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     public void Dispose()
     {
-        Waiter[] waiters;
-        lock (_gate)
+        var waiters = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_disposed)
-                return;
+                return Array.Empty<Waiter>();
             _disposed = true;
-            _receiveFlowController.BeginCloseUnderLock();
-            waiters = _waiters.ToArray();
+            _receiveFlowController.BeginClose();
+            var waiting = _waiters.ToArray();
             _waiters.Clear();
-            foreach (var waiter in waiters)
+            foreach (var waiter in waiting)
             {
                 waiter.Node = null;
                 if (waiter.State != WaiterState.Waiting)
@@ -514,7 +525,8 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
                 _capacityWaiters = checked(_capacityWaiters - 1);
                 RecordCompletedWaitUnderLock(waiter);
             }
-        }
+            return waiting;
+        }));
         foreach (var waiter in waiters)
         {
             waiter.CancellationRegistration.Dispose();
@@ -548,6 +560,26 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         Admitted = 1,
         Cancelled = 2
     }
+
+    private readonly record struct AcquireResult(
+        Waiter? Waiter,
+        ZLinkApplicationJobQueueLease? ImmediateLease,
+        bool PressureChanged);
+
+    private readonly record struct TryAcquireResult(
+        ZLinkApplicationJobQueueLease? Lease,
+        bool PressureChanged);
+
+    private readonly record struct ReleaseResult(
+        Waiter? AdmittedWaiter,
+        ZLinkApplicationJobQueueLease? AdmittedLease,
+        bool PressureChanged);
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }
 
 /// <summary>
@@ -558,7 +590,8 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 /// </summary>
 internal sealed class ZLinkReceiveFlowController
 {
-    private readonly object _gate;
+    private static readonly AsyncLocal<Entry?> CurrentApplyingEntry = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Action<Exception>? _failureReporter;
     private readonly Dictionary<object, Entry> _entries =
         new(ReferenceEqualityComparer.Instance);
@@ -567,21 +600,14 @@ internal sealed class ZLinkReceiveFlowController
     private ulong _flowStateConfigFailures;
     private bool _closed;
 
-    internal ZLinkReceiveFlowController(
-        object gate,
-        Action<Exception>? failureReporter)
+    internal ZLinkReceiveFlowController(Action<Exception>? failureReporter)
     {
-        _gate = gate;
         _failureReporter = failureReporter;
     }
 
-    internal ulong FlowStateConfigFailuresUnderLock
+    internal ulong FlowStateConfigFailures
     {
-        get
-        {
-            RequireGate();
-            return _flowStateConfigFailures;
-        }
+        get => AwaitStateLane(_lane.RunAsync(() => _flowStateConfigFailures));
     }
 
     internal IDisposable Register(
@@ -589,7 +615,7 @@ internal sealed class ZLinkReceiveFlowController
         Action<ReceiveFlowState> apply)
     {
         Entry entry;
-        lock (_gate)
+        entry = AwaitStateLane(_lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(
                 _closed,
@@ -604,13 +630,22 @@ internal sealed class ZLinkReceiveFlowController
                 entry.Pending.Enqueue(new FlowUpdate(_sequence, _state));
                 _entries.Add(identity, entry);
             }
-        }
+            return entry;
+        }));
 
-        var registration = new Registration(this, entry);
+        return new Registration(this, entry);
+    }
+
+    internal IDisposable ApplyRegistration(
+        object identity,
+        IDisposable registration)
+    {
+        var typedRegistration = (Registration)registration;
+        var entry = typedRegistration.Entry;
         try
         {
             Apply(entry, rethrowUnexpected: true);
-            lock (_gate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
                 ObjectDisposedException.ThrowIf(
                     _closed
@@ -618,8 +653,8 @@ internal sealed class ZLinkReceiveFlowController
                     || !_entries.TryGetValue(identity, out var current)
                     || !ReferenceEquals(current, entry),
                     this);
-            }
-            return registration;
+            }));
+            return typedRegistration;
         }
         catch
         {
@@ -628,140 +663,146 @@ internal sealed class ZLinkReceiveFlowController
         }
     }
 
-    internal void TransitionUnderLock(
+    internal void Transition(
         ZLinkApplicationJobQueuePressureState state,
         ulong sequence)
     {
-        RequireGate();
-        if (_closed)
-            return;
-        if (sequence <= _sequence)
-            throw new InvalidOperationException(
-                "Receive-flow transition sequences must increase monotonically.");
-        _state = state;
-        _sequence = sequence;
-        foreach (var entry in _entries.Values)
-            if (!entry.Removed)
-                entry.Pending.Enqueue(new FlowUpdate(sequence, state));
+        AwaitStateLane(_lane.RunAsync(() =>
+        {
+            if (_closed)
+                return;
+            if (sequence <= _sequence)
+                throw new InvalidOperationException(
+                    "Receive-flow transition sequences must increase monotonically.");
+            _state = state;
+            _sequence = sequence;
+            foreach (var entry in _entries.Values)
+                if (!entry.Removed)
+                    entry.Pending.Enqueue(new FlowUpdate(sequence, state));
+        }));
     }
 
     internal void ApplyPending()
     {
-        Entry[] entries;
-        lock (_gate)
+        var entries = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_closed)
-                return;
-            entries = _entries.Values.ToArray();
-        }
+                return Array.Empty<Entry>();
+            return _entries.Values.ToArray();
+        }));
         foreach (var entry in entries)
             Apply(entry, rethrowUnexpected: false);
     }
 
-    internal void BeginCloseUnderLock()
+    internal void BeginClose()
     {
-        RequireGate();
-        if (_closed)
-            return;
-        _closed = true;
-        foreach (var entry in _entries.Values)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
-            entry.Removed = true;
-            entry.Pending.Clear();
-        }
-        _entries.Clear();
+            if (_closed)
+                return;
+            _closed = true;
+            foreach (var entry in _entries.Values)
+            {
+                entry.Removed = true;
+                entry.Pending.Clear();
+            }
+            _entries.Clear();
+        }));
     }
 
-    internal void ResetMetricsUnderLock()
+    internal void ResetMetrics()
     {
-        RequireGate();
-        _flowStateConfigFailures = 0;
+        AwaitStateLane(_lane.RunAsync(() => _flowStateConfigFailures = 0));
     }
 
     private void Apply(Entry entry, bool rethrowUnexpected)
     {
-        lock (entry.ApplyGate)
+        while (true)
         {
-            while (true)
+            var preparation = AwaitStateLane(_lane.RunAsync(() => PrepareApply(entry)));
+            if (!preparation.ShouldApply)
+                return;
+
+            Exception? failure = null;
+            var previous = CurrentApplyingEntry.Value;
+            CurrentApplyingEntry.Value = entry;
+            try
             {
-                FlowUpdate update;
-                lock (_gate)
-                {
-                    if (entry.Removed || entry.Pending.Count == 0)
-                        return;
-                    update = entry.Pending.Peek();
-                }
-
-                Exception? failure = null;
-                try
-                {
-                    entry.Apply(ToBindingState(update.State));
-                }
-                catch (Exception error)
-                {
-                    failure = error;
-                }
-
-                var expectedCloseRace = false;
-                lock (_gate)
-                {
-                    if (entry.Pending.Count > 0
-                        && entry.Pending.Peek() == update)
-                        entry.Pending.Dequeue();
-                    expectedCloseRace = (entry.Removed || _closed)
-                        && failure is ZlinkConfigException
-                        {
-                            Result: ZlinkConfigException.ErrorCode.InvalidState
-                        };
-                    if (failure is not null && !expectedCloseRace)
-                        _flowStateConfigFailures = checked(
-                            _flowStateConfigFailures + 1);
-                }
-
-                if (failure is null || expectedCloseRace)
-                    continue;
-                try
-                {
-                    _failureReporter?.Invoke(failure);
-                }
-                catch
-                {
-                }
-                if (rethrowUnexpected)
-                    System.Runtime.ExceptionServices.ExceptionDispatchInfo
-                        .Capture(failure)
-                        .Throw();
+                entry.Apply(ToBindingState(preparation.Update.State));
             }
+            catch (Exception error)
+            {
+                failure = error;
+            }
+            finally
+            {
+                CurrentApplyingEntry.Value = previous;
+            }
+
+            var expectedCloseRace = AwaitStateLane(_lane.RunAsync(() =>
+                CompleteApply(entry, preparation.Update, failure)));
+
+            if (failure is null || expectedCloseRace)
+                continue;
+            try
+            {
+                _failureReporter?.Invoke(failure);
+            }
+            catch
+            {
+            }
+            if (rethrowUnexpected)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(failure)
+                    .Throw();
         }
     }
 
     private void Unregister(Entry entry)
     {
-        lock (_gate)
+        var applying = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!entry.Removed)
             {
                 entry.ReferenceCount--;
                 if (entry.ReferenceCount > 0)
-                    return;
+                    return entry.ApplyCompleted?.Task;
                 entry.Removed = true;
                 entry.Pending.Clear();
                 _entries.Remove(entry.Identity);
             }
-        }
+            return entry.ApplyCompleted?.Task;
+        }));
 
         // Wait for an already-started binding call before the socket owner
         // closes the native handle.
-        lock (entry.ApplyGate)
-        {
-        }
+        if (applying is not null && !ReferenceEquals(CurrentApplyingEntry.Value, entry))
+            applying.GetAwaiter().GetResult();
     }
 
-    private void RequireGate()
+    private ApplyPreparation PrepareApply(Entry entry)
     {
-        if (!Monitor.IsEntered(_gate))
-            throw new SynchronizationLockException(
-                "The host-capacity gate must be held while updating receive flow state.");
+        if (entry.Removed || entry.Pending.Count == 0 || entry.ApplyCompleted is not null)
+            return default;
+        entry.ApplyCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        return new ApplyPreparation(true, entry.Pending.Peek());
+    }
+
+    private bool CompleteApply(Entry entry, FlowUpdate update, Exception? failure)
+    {
+        if (entry.Pending.Count > 0 && entry.Pending.Peek() == update)
+            entry.Pending.Dequeue();
+        var expectedCloseRace = (entry.Removed || _closed)
+            && failure is ZlinkConfigException
+            {
+                Result: ZlinkConfigException.ErrorCode.InvalidState
+            };
+        if (failure is not null && !expectedCloseRace)
+            _flowStateConfigFailures = checked(_flowStateConfigFailures + 1);
+        entry.ApplyCompleted!.TrySetResult();
+        entry.ApplyCompleted = null;
+        return expectedCloseRace;
     }
 
     private static ReceiveFlowState ToBindingState(
@@ -781,24 +822,41 @@ internal sealed class ZLinkReceiveFlowController
     {
         internal object Identity { get; } = identity;
         internal Action<ReceiveFlowState> Apply { get; } = apply;
-        internal object ApplyGate { get; } = new();
         internal Queue<FlowUpdate> Pending { get; } = new();
         internal int ReferenceCount { get; set; } = 1;
         internal bool Removed { get; set; }
+        internal TaskCompletionSource? ApplyCompleted { get; set; }
     }
 
     private readonly record struct FlowUpdate(
         ulong Sequence,
         ZLinkApplicationJobQueuePressureState State);
 
-    private sealed class Registration(
-        ZLinkReceiveFlowController owner,
-        Entry entry) : IDisposable
+    private readonly record struct ApplyPreparation(
+        bool ShouldApply,
+        FlowUpdate Update);
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private sealed class Registration : IDisposable
     {
-        private ZLinkReceiveFlowController? _owner = owner;
+        private readonly Entry _entry;
+        private ZLinkReceiveFlowController? _owner;
+
+        internal Registration(ZLinkReceiveFlowController owner, Entry entry)
+        {
+            _owner = owner;
+            _entry = entry;
+        }
+
+        internal Entry Entry => _entry;
 
         public void Dispose() =>
-            Interlocked.Exchange(ref _owner, null)?.Unregister(entry);
+            Interlocked.Exchange(ref _owner, null)?.Unregister(_entry);
     }
 }
 

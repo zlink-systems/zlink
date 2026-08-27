@@ -2399,8 +2399,8 @@ public sealed class StatefulServiceRuntimeTests
                     CancellationToken.None);
             }
 
-            var first = catalog.SnapshotIdleEvictionCandidates();
-            var second = catalog.SnapshotIdleEvictionCandidates();
+            var first = await catalog.SnapshotIdleEvictionCandidatesAsync();
+            var second = await catalog.SnapshotIdleEvictionCandidatesAsync();
             var distinct = first
                 .Concat(second)
                 .Select(static activation => activation.SpotId)
@@ -2433,8 +2433,8 @@ public sealed class StatefulServiceRuntimeTests
                 authorityOwnerGeneration: 1,
                 CancellationToken.None);
 
-            var singleFirst = singleCatalog.SnapshotIdleEvictionCandidates();
-            var singleSecond = singleCatalog.SnapshotIdleEvictionCandidates();
+            var singleFirst = await singleCatalog.SnapshotIdleEvictionCandidatesAsync();
+            var singleSecond = await singleCatalog.SnapshotIdleEvictionCandidatesAsync();
             Assert.Single(singleFirst);
             Assert.Single(singleSecond);
             Assert.Equal(singleFirst[0].SpotId, singleSecond[0].SpotId);

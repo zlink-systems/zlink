@@ -1,6 +1,6 @@
 # .NET Location 설정과 운영 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md) · [Location runtime](../../../21-location-runtime.ko.md) ·
+[.NET 언어별 interface 목차](README.ko.md) · [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md) ·
 [Provider SPI](08-authority-relocation.ko.md) · [Host monitoring](10-topology-monitoring.ko.md)
 
 ## 1. 범위
@@ -16,32 +16,32 @@ reference는 Framework 내부 정보이므로 이 application contract에 선언
 ```csharp
 public sealed class ZLinkLocationOptions
 {
-    public TimeSpan OwnerLeaseRenewInterval { get; set; }
-        = TimeSpan.FromSeconds(5);
-    public TimeSpan OwnerLeaseTtl { get; set; }
-        = TimeSpan.FromSeconds(15);
-    public TimeSpan PollingInterval { get; set; }
-        = TimeSpan.FromSeconds(1);
-    public TimeSpan StoreFailureGrace { get; set; }
-        = TimeSpan.FromSeconds(30);
-    public TimeSpan OwnerLeaseFencingMargin { get; set; }
-        = TimeSpan.FromSeconds(5);
-    public TimeSpan OwnerLeaseRenewTimeout { get; set; }
-        = TimeSpan.FromSeconds(3);
-    public TimeSpan RouteCacheMaxAge { get; set; }
-        = TimeSpan.FromSeconds(15);
-    public TimeSpan MessageFollowDuration { get; set; }
-        = TimeSpan.FromSeconds(30);
-    public TimeSpan SessionRelocationSealTimeout { get; set; }
-        = TimeSpan.FromSeconds(3);
-    public long RelocationPayloadChunkLimit { get; set; }
-        = 256 * 1024;
-    public long RelocationInFlightPayloadBudget { get; set; }
-        = 16 * 1024 * 1024;
-    public long RelocationNodeInFlightPayloadBudget { get; set; }
-        = 0;
-    public TimeSpan RelocationCutoverWaitTimeout { get; set; }
-        = TimeSpan.FromSeconds(1);
+ public TimeSpan OwnerLeaseRenewInterval { get; set; }
+ = TimeSpan.FromSeconds(5);
+ public TimeSpan OwnerLeaseTtl { get; set; }
+ = TimeSpan.FromSeconds(15);
+ public TimeSpan PollingInterval { get; set; }
+ = TimeSpan.FromSeconds(1);
+ public TimeSpan StoreFailureGrace { get; set; }
+ = TimeSpan.FromSeconds(30);
+ public TimeSpan OwnerLeaseFencingMargin { get; set; }
+ = TimeSpan.FromSeconds(5);
+ public TimeSpan OwnerLeaseRenewTimeout { get; set; }
+ = TimeSpan.FromSeconds(3);
+ public TimeSpan RouteCacheMaxAge { get; set; }
+ = TimeSpan.FromSeconds(15);
+ public TimeSpan MessageFollowDuration { get; set; }
+ = TimeSpan.FromSeconds(30);
+ public TimeSpan SessionRelocationSealTimeout { get; set; }
+ = TimeSpan.FromSeconds(3);
+ public long RelocationPayloadChunkLimit { get; set; }
+ = 256 * 1024;
+ public long RelocationInFlightPayloadBudget { get; set; }
+ = 16 * 1024 * 1024;
+ public long RelocationNodeInFlightPayloadBudget { get; set; }
+ = 0;
+ public TimeSpan RelocationCutoverWaitTimeout { get; set; }
+ = TimeSpan.FromSeconds(1);
 }
 ```
 
@@ -54,7 +54,7 @@ Lease와 polling option은 0보다 커야 한다. 모든 Location host는 다음
 
 ```text
 OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout
-    < OwnerLeaseTtl - OwnerLeaseFencingMargin
+ < OwnerLeaseTtl - OwnerLeaseFencingMargin
 ```
 
 `RouteCacheMaxAge`와 `MessageFollowDuration`은 0 이상이다. 둘 다 양수이면 cache age가 Message Follow
@@ -76,128 +76,128 @@ bind 전에 configuration error다.
 
 ```csharp
 public sealed record ZLinkLocationRuntimeStatus(
-    bool StoreHealthy,
-    bool OwnerLeaseHealthy,
-    DateTimeOffset? LastRefreshAt,
-    DateTimeOffset? OwnerLeaseRenewedAt);
+ bool StoreHealthy,
+ bool OwnerLeaseHealthy,
+ DateTimeOffset? LastRefreshAt,
+ DateTimeOffset? OwnerLeaseRenewedAt);
 
 public enum ZLinkLocationTopologyState
 {
-    Discovered = 1,
-    Connecting = 2,
-    Ready = 3,
-    Lost = 4,
-    Error = 5,
-    Stopped = 6
+ Discovered = 1,
+ Connecting = 2,
+ Ready = 3,
+ Lost = 4,
+ Error = 5,
+ Stopped = 6
 }
 
 public sealed record ZLinkLocationTopologyFilter(
-    string? MeshName = null,
-    RoutingId? NodeRid = null,
-    ZLinkLocationTopologyState? State = null);
+ string? MeshName = null,
+ RoutingId? NodeRid = null,
+ ZLinkLocationTopologyState? State = null);
 
 public sealed record ZLinkLocationTopologyEntry(
-    string MeshName,
-    RoutingId NodeRid,
-    string Endpoint,
-    bool Draining,
-    ZLinkLocationTopologyState State,
-    DateTimeOffset UpdatedAt);
+ string MeshName,
+ RoutingId NodeRid,
+ string Endpoint,
+ bool Draining,
+ ZLinkLocationTopologyState State,
+ DateTimeOffset UpdatedAt);
 
 public sealed record ZLinkLocationServiceSummaryFilter(
-    string? MeshName = null);
+ string? MeshName = null);
 
 public sealed record ZLinkLocationServiceSummary(
-    string MeshName,
-    uint TotalCount,
-    uint ReadyCount,
-    uint ErrorCount,
-    uint StoppedCount,
-    DateTimeOffset LastUpdatedAt);
+ string MeshName,
+ uint TotalCount,
+ uint ReadyCount,
+ uint ErrorCount,
+ uint StoppedCount,
+ DateTimeOffset LastUpdatedAt);
 
 public enum ZLinkLocationObjectKind
 {
-    Actor = 0,
-    UserSpot = 1,
-    InstanceSpot = 2
+ Actor = 0,
+ UserSpot = 1,
+ InstanceSpot = 2
 }
 
 public enum ZLinkLocationObjectState
 {
-    Creating = 0,
-    Ready = 1,
-    Unavailable = 2
+ Creating = 0,
+ Ready = 1,
+ Unavailable = 2
 }
 
 public sealed record ZLinkLocationObjectEntry(
-    string GlobalId,
-    ulong ObjectGeneration,
-    string MeshName,
-    RoutingId NodeRid,
-    ZLinkLocationObjectState State,
-    string StableType);
+ string GlobalId,
+ ulong ObjectGeneration,
+ string MeshName,
+ RoutingId NodeRid,
+ ZLinkLocationObjectState State,
+ string StableType);
 
 public sealed record ZLinkLocationObjectFilter(
-    ZLinkLocationObjectKind ObjectKind,
-    string? StableType = null,
-    string? MeshName = null);
+ ZLinkLocationObjectKind ObjectKind,
+ string? StableType = null,
+ string? MeshName = null);
 
 public readonly record struct ZLinkPageRequest(
-    int PageSize = 100,
-    string? ContinuationToken = null);
+ int PageSize = 100,
+ string? ContinuationToken = null);
 
 public sealed record ZLinkLocationPage<T>(
-    IReadOnlyList<T> Items,
-    string? ContinuationToken);
+ IReadOnlyList<T> Items,
+ string? ContinuationToken);
 
 public interface IZLinkLocationReadiness
 {
-    ValueTask<bool> IsPeerReadyAsync(
-        string meshName,
-        ZLinkLocationRole role,
-        RoutingId? nodeRid = null,
-        CancellationToken cancellationToken = default);
+ ValueTask<bool> IsPeerReadyAsync(
+ string meshName,
+ ZLinkLocationRole role,
+ RoutingId? nodeRid = null,
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkLocationRuntimeQuery
 {
-    ValueTask<ZLinkLocationRuntimeStatus> GetStatusAsync(
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkLocationRuntimeStatus> GetStatusAsync(
+ CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkLocationPage<ZLinkLocationTopologyEntry>> ListTopologyAsync(
-        ZLinkLocationTopologyFilter filter,
-        ZLinkPageRequest page = default,
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkLocationPage<ZLinkLocationTopologyEntry>> ListTopologyAsync(
+ ZLinkLocationTopologyFilter filter,
+ ZLinkPageRequest page = default,
+ CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkLocationPage<ZLinkLocationServiceSummary>>
-        ListServiceSummariesAsync(
-            ZLinkLocationServiceSummaryFilter filter,
-            ZLinkPageRequest page = default,
-            CancellationToken cancellationToken = default);
+ ValueTask<ZLinkLocationPage<ZLinkLocationServiceSummary>>
+ ListServiceSummariesAsync(
+ ZLinkLocationServiceSummaryFilter filter,
+ ZLinkPageRequest page = default,
+ CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkLocationObjectEntry?> FindActorLocationAsync(
-        string actorId,
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkLocationObjectEntry?> FindActorLocationAsync(
+ string actorId,
+ CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkLocationObjectEntry?> FindSpotLocationAsync(
-        string spotId,
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkLocationObjectEntry?> FindSpotLocationAsync(
+ string spotId,
+ CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>>
-        ListObjectLocationsAsync(
-            ZLinkLocationObjectFilter filter,
-            ZLinkPageRequest page = default,
-            CancellationToken cancellationToken = default);
+ ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>>
+ ListObjectLocationsAsync(
+ ZLinkLocationObjectFilter filter,
+ ZLinkPageRequest page = default,
+ CancellationToken cancellationToken = default);
 }
 
 public enum ZLinkLocationRole : ushort
 {
-    Invalid = 0,
-    Spot = 2,
-    Router = 3,
-    Dealer = 4,
-    Pub = 5,
-    Sub = 6
+ Invalid = 0,
+ Spot = 2,
+ Router = 3,
+ Dealer = 4,
+ Pub = 5,
+ Sub = 6
 }
 ```
 
@@ -208,9 +208,9 @@ routing identity이므로 public `RoutingId`로 유지한다.
 Page size는 `1..1000`이고 continuation token은 해당 query가 발급한 opaque value다. Application은 token을
 해석하거나 다른 query에 사용하지 않는다.
 
-Actor ID와 Spot ID의 exact lookup은 각각 현재 object location 하나를 조회한다. Missing이면 `null`,
+Actor ID와 Spot ID의 직접 lookup은 각각 현재 object location 하나를 조회한다. Missing이면 `null`,
 Creating이면 `Creating`, Ready이면 `Ready`, commit 뒤 current owner를 사용할 수 없으면 `Unavailable`
-entry를 반환한다. Spot exact lookup은 User Spot과 Instance Spot을 같은 Spot ID 조회 계약으로 다룬다.
+entry를 반환한다. Spot 직접 lookup은 User Spot과 Instance Spot을 같은 Spot ID 조회 계약으로 다룬다.
 List query의 `ObjectKind`는 필수이며 `StableType`과 `MeshName`은 선택 filter다. Encoded page는 최대
 4 MiB다. Store 조회 실패는 `ZLinkFrameworkErrorKind.Unavailable`이며 page 일부를 반환하지 않는다.
 

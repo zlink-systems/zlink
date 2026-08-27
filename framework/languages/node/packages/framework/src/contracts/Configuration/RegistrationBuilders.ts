@@ -96,7 +96,8 @@ import {
   registerEntrySpot,
   registerSpotFactory,
   validateActorTransferTimeout,
-  validateMessageFollowDuration
+  validateMessageFollowDuration,
+  validateSessionReplacementCallbackTimeout
 } from './RegistrationBuilderPolicy';
 import { requireMessageFlowLogMode, requireTraceSampleRate } from './DiagnosticsValidation';
 
@@ -173,6 +174,11 @@ class ZLinkFrameworkOptionsBuilder implements ZLinkFrameworkOptions {
     return this;
   }
 
+  setSessionReplacementCallbackTimeout(timeoutMs: number): this {
+    this.options.sessionReplacementCallbackTimeoutMs = validateSessionReplacementCallbackTimeout(timeoutMs);
+    return this;
+  }
+
   configureLocations(): ZLinkLocationOptions {
     this.options.locations ??= { options: {} };
     this.options.locations.options ??= {};
@@ -234,6 +240,7 @@ class ZLinkFrameworkOptionsBuilder implements ZLinkFrameworkOptions {
       spotFactories: this.options.spotFactories,
       actorTransferTimeoutMs: this.options.actorTransferTimeoutMs,
       messageFollowDurationMs: this.options.messageFollowDurationMs,
+      sessionReplacementCallbackTimeoutMs: this.options.sessionReplacementCallbackTimeoutMs,
       dispatch: this.options.dispatch,
       worker: this.options.worker,
       coreHwm: this.options.coreHwm,
@@ -1491,6 +1498,7 @@ interface MutableFrameworkRegistrationOptions {
   maintenanceWave?: string;
   actorTransferTimeoutMs?: number;
   messageFollowDurationMs?: number;
+  sessionReplacementCallbackTimeoutMs?: number;
   codecs?: MutableCodecRegistryOptions;
   channels: Record<string, MutableChannelOptions>;
   streamNodes: Record<string, MutableStreamNodeOptions>;

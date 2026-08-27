@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/execution/state_lane.hpp"
+
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <algorithm>
@@ -26,7 +28,7 @@ class in_memory_location_store_t final : public location_store_t
     task_t<store_read_result_t> read (store_key_t key) override
     {
         validate_key (key.value);
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = std::chrono::system_clock::now ();
         expire (key.value, now);
         const auto found = _values.find (key.value);
@@ -36,13 +38,14 @@ class in_memory_location_store_t final : public location_store_t
         found->second.store_now = now;
         return completed<store_read_result_t> (
           store_found_t{found->second});
+        }).get ();
     }
 
     task_t<store_write_result_t> write (
       store_write_request_t request) override
     {
         validate_write (request);
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = std::chrono::system_clock::now ();
         for (const auto &condition : request.conditions)
             std::visit (
@@ -103,6 +106,7 @@ class in_memory_location_store_t final : public location_store_t
         }
         return completed<store_write_result_t> (
           std::move (applied));
+        }).get ();
     }
 
     task_t<store_scan_result_t> scan (
@@ -113,7 +117,7 @@ class in_memory_location_store_t final : public location_store_t
             throw std::invalid_argument (
               "location scan limit must be 1..1000");
 
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = std::chrono::system_clock::now ();
         std::uint64_t snapshot_id = 0;
         std::size_t offset = 0;
@@ -204,6 +208,7 @@ class in_memory_location_store_t final : public location_store_t
         else
             _snapshots.erase (snapshot);
         return completed<store_scan_result_t> (std::move (page));
+        }).get ();
     }
 
   private:
@@ -330,7 +335,8 @@ class in_memory_location_store_t final : public location_store_t
                ^ static_cast<std::uint64_t> (source ());
     }
 
-    std::mutex _gate;
+    offload_executor_t _lane_executor;
+    state_lane_t _lane{_lane_executor};
     std::map<std::string, store_value_t> _values;
     std::map<std::uint64_t, std::vector<store_scan_item_t>>
       _snapshots;
@@ -358,7 +364,7 @@ class in_memory_relocation_store_t final :
         if (retention <= std::chrono::milliseconds::zero ())
             throw std::invalid_argument (
               "relocation retention must be positive");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = std::chrono::system_clock::now ();
         expire (reference.value, now);
         const auto found = _values.find (reference.value);
@@ -380,13 +386,14 @@ class in_memory_relocation_store_t final :
                   expires_at});
         return completed<blob_put_result_t> (
           blob_stored_t{expires_at, now});
+        }).get ();
     }
 
     task_t<blob_read_result_t> read (
       blob_reference_t reference) override
     {
         validate_reference (reference);
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = std::chrono::system_clock::now ();
         expire (reference.value, now);
         const auto found = _values.find (reference.value);
@@ -397,6 +404,7 @@ class in_memory_relocation_store_t final :
           blob_found_t{found->second.bytes,
                        found->second.expires_at,
                        now});
+        }).get ();
     }
 
     task_t<blob_renew_result_t> renew (
@@ -407,7 +415,7 @@ class in_memory_relocation_store_t final :
         if (retention <= std::chrono::milliseconds::zero ())
             throw std::invalid_argument (
               "relocation retention must be positive");
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         const auto now = std::chrono::system_clock::now ();
         expire (reference.value, now);
         const auto found = _values.find (reference.value);
@@ -417,14 +425,16 @@ class in_memory_relocation_store_t final :
         found->second.expires_at = now + retention;
         return completed<blob_renew_result_t> (
           blob_renewed_t{found->second.expires_at, now});
+        }).get ();
     }
 
     task_t<void> erase (blob_reference_t reference) override
     {
         validate_reference (reference);
-        std::lock_guard lock (_gate);
+        return _lane.run ([&] {
         _values.erase (reference.value);
         return task_t<void> (result_t<void>::success ());
+        }).get ();
     }
 
   private:
@@ -459,7 +469,8 @@ class in_memory_relocation_store_t final :
             _values.erase (found);
     }
 
-    std::mutex _gate;
+    offload_executor_t _lane_executor;
+    state_lane_t _lane{_lane_executor};
     std::map<std::string, entry_t> _values;
 };
 

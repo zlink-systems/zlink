@@ -100,6 +100,8 @@ function requiredMode(
   outcome: ZLinkMessageFlowOutcome,
   result?: ZLinkRuntimeMessageFlowResult
 ): ZLinkMessageFlowLogMode {
+  //  succeeded가 아닌 terminal은 Errors level에서도 보여야 한다 — 기록 범위 설정
+  //  절의 level 규칙.
   return outcome === ZLinkMessageFlowOutcome.Dropped
     || outcome === ZLinkMessageFlowOutcome.Backpressured
     || outcome === ZLinkMessageFlowOutcome.Error
@@ -382,8 +384,47 @@ function traceAttributes(record: ZLinkTelemetryRecord): Attributes {
 }
 
 function structuredLogAttributes(record: ZLinkTelemetryRecord): Attributes {
+  //  기록의 attribute 이름은 Message flow tracing 3.2가 고정한다. 로그 본문의
+  //  `zlink flow:` 축약 key(`kind`, `mesh` …)와 다른 집합이다 —
+  //  structuredLogBodyAttributes를 참고.
   return compactAttributes({
     event_id: record.eventId,
+    timestamp: record.timestamp.toISOString(),
+    phase: record.phase,
+    surface: record.surface,
+    message_kind: record.messageKind,
+    mesh_name: record.meshName,
+    channel_name: record.channelName,
+    channel_route_kind: record.channelRouteKind,
+    source_rid: record.sourceRid,
+    target_rid: record.targetRid,
+    server_rid: record.serverRid,
+    packet_name: record.packetName,
+    topic: record.topic,
+    spot_id: record.spotId,
+    instance_spot_type: record.instanceSpotType,
+    activation_state: record.activationState,
+    actor_id: record.actorId,
+    correlation_id: record.correlationId,
+    flow_id: record.flowId,
+    flow_origin: record.flowOrigin,
+    outcome: record.outcome,
+    reason: record.reason,
+    action: record.action,
+    command_id: record.commandId,
+    error_type: record.errorType,
+    error_message: record.errorMessage,
+    error_cause_type: record.errorCauseType,
+    error_cause_message: record.errorCauseMessage,
+    message_size_bytes: record.messageSizeBytes,
+    duration_seconds: record.durationSeconds
+  });
+}
+
+function structuredLogBodyAttributes(record: ZLinkTelemetryRecord): Attributes {
+  //  `zlink flow:` 본문 전용 축약 key — Message flow tracing "Structured log 대체 표기".
+  return compactAttributes({
+    event: record.eventId,
     phase: record.phase,
     surface: record.surface,
     kind: record.messageKind,
@@ -404,20 +445,16 @@ function structuredLogAttributes(record: ZLinkTelemetryRecord): Attributes {
     origin: record.flowOrigin,
     outcome: record.outcome,
     reason: record.reason,
-    command: record.commandId,
-    error_type: record.errorType,
-    error_message: record.errorMessage,
-    error_cause_type: record.errorCauseType,
-    error_cause_message: record.errorCauseMessage,
     size: record.messageSizeBytes
   });
 }
 
 function structuredLogBody(record: ZLinkTelemetryRecord): string {
-  return `zlink flow: ${Object.entries(structuredLogAttributes(record))
+  return `zlink flow: ${Object.entries(structuredLogBodyAttributes(record))
     .map(([key, value]) => `${key}=${String(value)}`)
     .join(' ')}`;
 }
+
 
 function compactAttributes(values: Record<string, string | number | undefined>): Attributes {
   const attributes: Attributes = {};

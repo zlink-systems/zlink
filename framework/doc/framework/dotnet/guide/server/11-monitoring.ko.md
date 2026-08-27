@@ -141,8 +141,8 @@ public sealed class DiagnosticsSwitch(IZLinkDiagnosticsRuntime diagnostics)
 trace나 count를 만들지 않는다.
 
 정확한 attribute와 전파 규칙은
-[메시지 흐름 추적](../../../common/spec/server/26-message-flow-tracing.ko.md)과
-[Flow 상관관계](../../../common/spec/server/27-flow-correlation.ko.md)를 참고한다.
+[메시지 흐름 추적](../../../common/spec/server/06-observability/03-message-flow-tracing.ko.md)과
+[Flow 상관관계](../../../common/spec/server/06-observability/04-flow-correlation.ko.md)를 참고한다.
 
 ## 4. 자주 발생하는 문제
 
@@ -168,7 +168,7 @@ trace나 count를 만들지 않는다.
 ## 5. 관련 문서
 
 - 이 챕터 계약의 실행 검증 예문: [13-interface-catalog](13-interface-catalog.ko.md) §7 — 검증 클래스 `EventingContracts`
-- 정식 계약: [spec/aspnet-core-monitoring](../../../common/spec/server/languages/dotnet/01-system-structure.ko.md)
+- 정식 계약: [spec/aspnet-core-monitoring](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md)
 - location 운영 조회: [10-location](10-location.ko.md)
 - 런타임 메트릭·mesh 상태·drain 관측: [12-operations](12-operations.ko.md)
 

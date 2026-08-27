@@ -70,8 +70,8 @@ processed by either?
 - Procedure: The consumer's public RouteMesh status is read, and 20 distinct requests are sent.
 - Verification: Status reports a ready-target count of 2, and each of the 20 requests receives one
   reply. The combined handler count is 20.
-- Detailed behavior: verifies [Normal Processing Order](../spec/server/21-location-runtime.en.md#14-normal-processing-order)
-  and [Read And CAS](../spec/server/21-location-runtime.en.md#51-read-and-cas).
+- Detailed behavior: verifies [Normal Processing Order](../spec/server/05-location-relocation/01-location-runtime.en.md)
+  and [Read And CAS](../spec/server/05-location-relocation/01-location-runtime.en.md#61-read-and-cas).
 
 #### SF-A2 Reflect Provider Changes Through Polling Without A Watch
 
@@ -88,7 +88,7 @@ request targets within the configured polling interval?
   normally, and the decrease in targets is awaited.
 - Verification: After B is added, both providers can process requests; after removal, only A does.
   All waits are computed from the polling interval plus common tolerance.
-- Detailed behavior: verifies [Location Runtime §3](../spec/server/21-location-runtime.en.md#3-finding-running-nodes-and-their-capabilities).
+- Detailed behavior: verifies [Location Runtime §3](../spec/server/05-location-relocation/01-location-runtime.en.md#4-finding-running-nodes-and-their-capabilities).
 
 ### Track B — Verify The Fail-Static Boundary During A Location Store Outage
 
@@ -108,7 +108,7 @@ Store is down?
 - Verification: Requests over the existing connection keep receiving replies. Status may provide a
   formal degraded reason, but it does not immediately remove a ready transport for a Store error
   alone.
-- Detailed behavior: verifies the fail-static boundary in [Location Runtime §4](../spec/server/21-location-runtime.en.md#4-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
+- Detailed behavior: verifies the fail-static boundary in [Location Runtime §4](../spec/server/05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
 
 #### SF-B2 Distinguish Existing Connections From New Discovery Past The Failure Grace
 
@@ -126,7 +126,7 @@ new provider is not added to targets?
   going to A.
 - Verification: A's requests succeed, and B is not added as a ready target in public status. B enters
   the current target set only after the Store recovers.
-- Detailed behavior: verifies [Location Runtime §4](../spec/server/21-location-runtime.en.md#4-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
+- Detailed behavior: verifies [Location Runtime §4](../spec/server/05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
 
 #### SF-B3 The Discovery Grace Does Not Extend A Stateful Owner's Lease
 
@@ -145,8 +145,8 @@ while the transport is kept?
 - Verification: The RouteMesh peer can have normal transport liveness, but the new stateful request
   ends in a formal unavailable result. The timer callback evidence also does not increase past the
   lease deadline.
-- Detailed behavior: verifies [Object Routing And Creation Recovery](../spec/server/31-failure-failover-policy.en.md#4-object-routing-and-creation-recovery)
-  and [Store Failure](../spec/server/31-failure-failover-policy.en.md#7-store-failure).
+- Detailed behavior: verifies [Object Routing And Creation Recovery](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#4-object-routing-and-creation-recovery)
+  and [Store Failure](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#7-store-failure).
 
 ### Track C — Distinguish A Stale Provider From Its Lifecycle
 
@@ -165,7 +165,7 @@ follow-up requests handled only by A?
   public status to converge on the current target set. 20 follow-up requests are sent.
 - Verification: B does not appear in status's ready peers/targets, and A processes all 20. Repeated
   timeouts against B's endpoint are not treated as success.
-- Detailed behavior: verifies [Finding Running Nodes And Their Capabilities](../spec/server/21-location-runtime.en.md#3-finding-running-nodes-and-their-capabilities).
+- Detailed behavior: verifies [Finding Running Nodes And Their Capabilities](../spec/server/05-location-relocation/01-location-runtime.en.md#4-finding-running-nodes-and-their-capabilities).
 
 #### SF-C2 An Orderly Shutdown Does Not Wait For Lease Expiry
 
@@ -182,7 +182,7 @@ continuing to serve?
   polled immediately, and follow-up requests are sent.
 - Verification: B drops out of new targets and only finishes already-accepted work within a bounded
   time. After the shutdown terminal, A processes every follow-up request.
-- Detailed behavior: verifies [Host Maintenance §10](../spec/server/30-host-relocation-flow.en.md#10-relocate-completion-and-failure).
+- Detailed behavior: verifies [Host Maintenance §10](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#13-relocate-completion-and-failure).
 
 #### SF-C3 A Previous Owner's Lifecycle Cannot Change The Replacement
 
@@ -200,7 +200,7 @@ the paused old process resumes?
   being sent.
 - Verification: Public status keeps A2 as the current ready peer, and requests are each processed
   once by A2. Old A's handler evidence does not increase.
-- Detailed behavior: verifies [Failover Policy §3](../spec/server/31-failure-failover-policy.en.md#3-channel-target-and-connection-failure).
+- Detailed behavior: verifies [Failover Policy §3](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#3-channel-target-and-connection-failure).
 
 #### SF-C4 Resolve A Host With Multiple Service Roles Under One Lifecycle
 
@@ -218,7 +218,7 @@ process, with the old roles not selected?
   ready, one marker per role is sent.
 - Verification: The replacement handler processes every marker exactly once, and old-process evidence
   does not increase.
-- Detailed behavior: verifies [Transport Liveness §6](../spec/server/29-transport-liveness.en.md#6-connection-loss-and-reconnect).
+- Detailed behavior: verifies [Transport Liveness §6](../spec/server/02-channel-transport/05-transport-liveness.en.md#6-connection-loss-and-reconnect).
 
 #### SF-C5 Read A Public Operational Query In Bounded Pages
 
@@ -235,7 +235,7 @@ no duplicates or gaps?
   continuation ends.
 - Verification: Each page's item count never exceeds the requested cap, and the total logical IDs are
   exactly 1,001. The continuation token is not interpreted or modified by the client.
-- Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/server/21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
+- Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/server/05-location-relocation/01-location-runtime.en.md#74-querying-the-current-location-from-operational-tools).
 
 #### SF-C5A Distinguish Object States In ID And Page Queries
 
@@ -255,7 +255,7 @@ with Store failure returning a whole-page error?
 - Verification: The missing exact lookup is empty and no page item exists for its ID. `Creating`,
   `Ready`, and `Unavailable` objects return matching state entries in ID and page queries. The
   Store-failure variant is a whole-page error with no items or continuation token.
-- Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/server/21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
+- Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/server/05-location-relocation/01-location-runtime.en.md#74-querying-the-current-location-from-operational-tools).
 
 ### Track D — Converge On Current Topology After Store Recovery
 
@@ -274,7 +274,7 @@ outage?
   kept running until status recovers to ready.
 - Verification: Every request receives one terminal result each, and the current provider set stays
   A and B. There is no unnecessary re-registration call in application evidence.
-- Detailed behavior: verifies [Blocking A Previous Owner's New Work When The Store Connection Drops](../spec/server/21-location-runtime.en.md#4-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
+- Detailed behavior: verifies [Blocking A Previous Owner's New Work When The Store Connection Drops](../spec/server/05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
 
 #### SF-D2 Keep Only The Re-Registered Provider After A Long Outage
 
@@ -292,8 +292,8 @@ crashed B is excluded?
   time. The Store is restarted, and A's requests are sent until consumer status converges.
 - Verification: A's requests keep succeeding in the periods it can, and after recovery there is one
   ready target, A. B is not auto-created as a replacement or sent to along the old route.
-- Detailed behavior: verifies [The Store-Connection Fence](../spec/server/21-location-runtime.en.md#4-blocking-a-previous-owners-new-work-when-the-store-connection-drops)
-  and [Normal Processing Order](../spec/server/21-location-runtime.en.md#14-normal-processing-order).
+- Detailed behavior: verifies [The Store-Connection Fence](../spec/server/05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops)
+  and [Normal Processing Order](../spec/server/05-location-relocation/01-location-runtime.en.md).
 
 #### SF-D3 Public Status Converges As Ready → Degraded → Ready
 
@@ -310,7 +310,7 @@ normal states in order?
 - Verification: The sequence observed from the same source increases, and each stage's final
   `GetStatus` matches the actual Store/target state. The presence of every intermediate event is not
   required.
-- Detailed behavior: verifies [Runtime Monitoring §3](../spec/server/24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+- Detailed behavior: verifies [Runtime Monitoring §3](../spec/server/06-observability/01-runtime-monitoring.en.md).
 
 ### Track E — Isolate A Slow Store Response From Application Dispatch
 
@@ -331,7 +331,7 @@ is waiting on the response gate?
   released.
 - Verification: The Channel requests each receive a reply before the Store gate is released. The
   Store operation also returns a formal terminal once released.
-- Detailed behavior: verifies I/O-wait isolation in [Worker Offload](../spec/server/05-async-execution-policy.en.md#12-worker-offload).
+- Detailed behavior: verifies I/O-wait isolation in [Worker Offload](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 ### Track F — Verify Public Results Of Relocation And Owner Recovery
 
@@ -352,7 +352,7 @@ obtained after create/request/relocation?
   requested again.
 - Verification: The public ID and ObjectGeneration are preserved, and the payload/reply and state
   values match in every direction.
-- Detailed behavior: verifies interop in [Public Contract Governance](../spec/server/00-public-contract-governance.en.md).
+- Detailed behavior: verifies interop in [Public Contract Governance](../spec/server/00-foundation/01-public-contract-governance.en.md).
 
 #### SF-F2 A Long-Running Relocation Completes Within The Operation Deadline, And A New Call Is Allowed After A Failure
 
@@ -371,7 +371,7 @@ succeed after a failed variant?
   through an explicit target failure before the relay-ready reply, and a new call is started.
 - Verification: The first operation succeeds, preserving state. The failed operation keeps its source
   location and state, and only the new operation ID's call completes at the target.
-- Detailed behavior: verifies [The Complete Actor And Spot Relocation Flow](../spec/server/28-relocation-flow.en.md).
+- Detailed behavior: verifies [The Complete Actor And Spot Relocation Flow](../spec/server/05-location-relocation/04-relocation-flow.en.md).
 
 #### SF-F3 Distinguish What A Relocation Store Failure Blocks And Does Not Block
 
@@ -398,7 +398,7 @@ pending-request terminal record — reconstructed after recovery?
   receives exactly one terminal, and result reconstruction that depends on the store record holds
   only after Store recovery. Neither variant auto-resumes an operation or produces a duplicate
   terminal.
-- Detailed behavior: verifies [Relocation Store Cancellation, Errors, And Result Reconstruction](../spec/server/23-relocation-store-redis.en.md#5-cancellation-errors-and-result-reconstruction).
+- Detailed behavior: verifies [Relocation Store Cancellation, Errors, And Result Reconstruction](../spec/server/05-location-relocation/03-relocation-store-redis.en.md#5-cancellation-errors-and-result-reconstruction).
 
 #### SF-F4 Distinguish ObjectGeneration And Owner Replacement Through The Public Ref
 
@@ -416,7 +416,7 @@ new, higher value?
 - Verification: After relocation, generation is the same as the initial one, with only the location
   changed to target. The recreate ref has a different, nonzero generation, and the previous exact
   ref's lifecycle call does not change the current object.
-- Detailed behavior: verifies [Failover Policy §4.1](../spec/server/31-failure-failover-policy.en.md#41-logical-id-messaging-and-objectgeneration).
+- Detailed behavior: verifies [Failover Policy §4.1](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#41-logical-id-messaging-and-objectgeneration).
 
 #### SF-F5 A Public Request Gets A Bounded Recovery Result After The Creating Owner Crashes
 
@@ -436,8 +436,8 @@ follow-up request end in exactly one terminal?
   recovery continues the same generation, the follow-up request joins that result; if it is canceled
   and public resolve does not return a Ready object, the next call starts a new activation. In either
   case, old-owner evidence does not increase.
-- Detailed behavior: verifies [Location Runtime §6.1](../spec/server/21-location-runtime.en.md#61-first-creating-an-instance-spot-on-the-node-that-received-the-message)
-  and [Failure And Failover §4.4](../spec/server/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+- Detailed behavior: verifies [Location Runtime §6.1](../spec/server/05-location-relocation/01-location-runtime.en.md#71-first-creating-an-instance-spot-on-the-node-that-received-the-message)
+  and [Failure And Failover §4.4](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
 
 #### SF-F6 Reflect Concurrent Changes During An Operational Query On The Next Page Cycle
 
@@ -454,7 +454,7 @@ pages and unique IDs?
   read to the end. A new scan is then started.
 - Verification: IDs within a single scan have no duplicates and respect the page cap. The second scan
   reflects the mutations completed by that point. The client does not modify the continuation token.
-- Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/server/21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
+- Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/server/05-location-relocation/01-location-runtime.en.md#74-querying-the-current-location-from-operational-tools).
 
 #### SF-F7 Large-State Relocation Restores Across The Chunk Boundary
 
@@ -477,7 +477,7 @@ the in-flight budget all preserved and restored?
   requests. The one-byte-larger state and the larger-than-budget state do not end in
   `Blocked/StateIncompatible` because of a size cap.
 - Detailed behavior: verifies the chunk split and in-flight budget boundary in
-  [The Complete Actor And Spot Relocation Flow](../spec/server/28-relocation-flow.en.md).
+  [The Complete Actor And Spot Relocation Flow](../spec/server/05-location-relocation/04-relocation-flow.en.md).
 
 #### SF-F8 The Source Is Kept If The Target Owner's Lease Expires
 
@@ -494,7 +494,7 @@ the source handler keeps running?
   deadline. The process is resumed, and the gate is released.
 - Verification: Relocate ends in a target-unavailable result, and the public current location is the
   source. The source's follow-up request succeeds, and the target handler receives no new workload.
-- Detailed behavior: verifies [Failover Policy §5](../spec/server/31-failure-failover-policy.en.md#5-host-relocation-failure).
+- Detailed behavior: verifies [Failover Policy §5](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#5-host-relocation-failure).
 
 #### SF-F9 Old-Lifecycle Cleanup Does Not Remove Replacement Service Roles
 
@@ -514,7 +514,7 @@ resumes?
 - Verification: Public status keeps the replacement provider as the current ready target, and every
   follow-up marker is processed exactly once by the replacement. This scenario does not judge Actor/
   Spot object location.
-- Detailed behavior: verifies [Failover Policy §3](../spec/server/31-failure-failover-policy.en.md#3-channel-target-and-connection-failure).
+- Detailed behavior: verifies [Failover Policy §3](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#3-channel-target-and-connection-failure).
 
 #### SF-F10 Handle Many Accepted Requests Together With Relocation Completion
 
@@ -532,7 +532,7 @@ operation get exactly one terminal?
   are released. After completion, a follow-up request is sent.
 - Verification: Each accepted request ends exactly once, in reply, timeout, or relocation failure.
   The Relocate terminal is also single, and the follow-up is processed once at the current target.
-- Detailed behavior: verifies [Host Maintenance §7](../spec/server/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits).
+- Detailed behavior: verifies [Host Maintenance §7](../spec/server/05-location-relocation/05-host-relocation-flow.en.md).
 
 #### SF-F11 Preserve Payload Values After Waiter Termination And Transfer Failure
 
@@ -552,7 +552,7 @@ a new relocation restore only its own payload checksum at the target?
   restored from source memory. B's target-state checksum exactly matches B, with no mixing of A's
   bytes. Each operation has exactly one terminal.
 - Detailed behavior: verifies the payload identity binding and failure rules in
-  [The Complete Actor And Spot Relocation Flow](../spec/server/28-relocation-flow.en.md).
+  [The Complete Actor And Spot Relocation Flow](../spec/server/05-location-relocation/04-relocation-flow.en.md).
 
 ### Track G — Verify Capacity Results Through Public Create/Relocation
 
@@ -573,7 +573,7 @@ limit, and does capacity recover after a failed create?
 - Verification: The successful active counts never exceed any limit. Calls with no capacity are
   `CapacityExceeded`, and factory-failed calls do not remain in the active count. After cleanup, a new
   create can use the available slot.
-- Detailed behavior: verifies [MeshNode §5](../spec/server/13-mesh-node.en.md#5-object-placement-capability).
+- Detailed behavior: verifies [MeshNode §5](../spec/server/03-spot-actor/03-mesh-node.en.md#5-object-placement-capability).
 
 #### SF-G2 Distinguish Unlimited Population From Activation Concurrency
 
@@ -591,7 +591,7 @@ concurrency respects the configured limit?
 - Verification: The factory's active count never exceeds the concurrency limit, but every valid
   create eventually succeeds. The Entry Spot is not counted in Spot population, and member Actors are
   counted in the Actor count.
-- Detailed behavior: verifies [MeshNode §5](../spec/server/13-mesh-node.en.md#5-object-placement-capability).
+- Detailed behavior: verifies [MeshNode §5](../spec/server/03-spot-actor/03-mesh-node.en.md#5-object-placement-capability).
 
 ## 5. Completion Criteria
 

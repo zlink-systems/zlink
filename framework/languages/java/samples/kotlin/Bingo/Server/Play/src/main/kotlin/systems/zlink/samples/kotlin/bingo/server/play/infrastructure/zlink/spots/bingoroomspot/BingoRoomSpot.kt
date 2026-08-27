@@ -2,6 +2,7 @@ package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spot
 
 import java.time.Duration
 import kotlinx.coroutines.future.await
+import org.slf4j.LoggerFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.yieldReply
 import systems.zlink.framework.messaging.ZLinkMessage
@@ -46,6 +47,8 @@ class BingoRoomSpot(
     override val context: ZLinkSpotContext,
     private val settingsInitializer: BingoRoomSettingsInitializer,
 ) : ZLinkSuspendingSpot<PlayerActor>() {
+    private val logger = LoggerFactory.getLogger(BingoRoomSpot::class.java)
+
     private val actors = mutableMapOf<String, PlayerActor>()
     private val observers = mutableMapOf<String, PlayerActor>()
     private val pendingJoins = mutableMapOf<String, BingoRoomJoinReq>()
@@ -94,6 +97,12 @@ class BingoRoomSpot(
             .requestToChannel(SampleNames.ApiChannel, GetPlayerRecordReq(actor.actorId()))
             .timeout(SampleTimings.RequestTimeout)
             .yieldReply<GetPlayerRecordRes>()
+        logger.info(
+            "bingo-record fetched actor={} wins={} losses={}",
+            actor.actorId(),
+            record.wins,
+            record.losses,
+        )
         if (pendingJoins[actor.actorId()] === request) {
             pendingJoins.remove(actor.actorId())
             join(actor, request, record.wins, record.losses)
@@ -103,10 +112,11 @@ class BingoRoomSpot(
     override suspend fun onLeaveActorSuspending(actor: PlayerActor) {
         if (!actors.containsKey(actor.actorId()) || game == null) {
             observers.remove(actor.actorId())
+            logger.info("bingo-lifecycle room-leave actor={}", actor.actorId())
             return
         }
         val state = requireGame().snapshot()
-        context.outbound()
+        val record = context.outbound()
             .requestToChannel(
                 SampleNames.ApiChannel,
                 ReportBingoResultReq(
@@ -118,7 +128,14 @@ class BingoRoomSpot(
             )
             .timeout(SampleTimings.RequestTimeout)
             .yieldReply<ReportBingoResultRes>()
+        logger.info(
+            "bingo-record reported actor={} wins={} losses={}",
+            actor.actorId(),
+            record.wins,
+            record.losses,
+        )
         actors.remove(actor.actorId())
+        logger.info("bingo-lifecycle room-leave actor={}", actor.actorId())
     }
 
     override suspend fun onDisconnectActorSuspending(actor: PlayerActor) {

@@ -25,7 +25,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                 DispatchClientServerAsync,
                 RejectClientServerDispatch);
         var receiveStoragePool = new ZLinkReceivedStoragePool();
-        identity.AttachRouter(router);
+        await identity.AttachRouterAsync(router).ConfigureAwait(false);
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -59,11 +59,14 @@ internal sealed class ZLinkChannelReceiveLoop(
                             .ConfigureAwait(false);
                         continue;
                     }
-                    if (received.RoutingId is not { } applicationSource
-                        || !identity.TryGetAdmittedMaximumMessageBytes(
-                            applicationSource,
-                            out var admittedMaximumMessageBytes))
+                    if (received.RoutingId is not { } applicationSource)
                         continue;
+                    var admitted = await identity
+                        .GetAdmittedMaximumMessageBytesAsync(applicationSource)
+                        .ConfigureAwait(false);
+                    if (!admitted.Found)
+                        continue;
+                    var admittedMaximumMessageBytes = admitted.MaximumMessageBytes;
                     if (!ZLinkClientServerMessageBound.Fits(
                             received.Parts,
                             admittedMaximumMessageBytes))
@@ -123,7 +126,7 @@ internal sealed class ZLinkChannelReceiveLoop(
         }
         finally
         {
-            identity.DetachRouter(router);
+            await identity.DetachRouterAsync(router).ConfigureAwait(false);
         }
     }
 
@@ -175,7 +178,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                 received.Parts,
                 out var ackId))
         {
-            identity.AcceptLivenessAck(sourceRid, ackId);
+            await identity.AcceptLivenessAckAsync(sourceRid, ackId).ConfigureAwait(false);
             return;
         }
         if (ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
@@ -196,7 +199,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     .ConfigureAwait(false);
             return;
         }
-        var snapshot = identity.Read();
+        var snapshot = await identity.ReadAsync().ConfigureAwait(false);
         var valid = ZLinkClientServerControlProtocol.TryDecodeHello(
             received.Parts,
             out var hello);
@@ -222,7 +225,8 @@ internal sealed class ZLinkChannelReceiveLoop(
             : ZLinkClientServerControlProtocol.EncodeReject(reason: 1);
         if (ReplyOwned(router, sourceRid, received.RequestSeq, reply)
             && accepted)
-            identity.AdmitPeer(sourceRid, negotiatedMaximumMessageBytes);
+            await identity.AdmitPeerAsync(sourceRid, negotiatedMaximumMessageBytes)
+                .ConfigureAwait(false);
     }
 
     private static bool ReplyOwned(

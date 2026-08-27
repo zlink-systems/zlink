@@ -11,7 +11,7 @@ async function main(): Promise<void> {
     logger: false,
     abortOnError: false
   });
-  process.stdout.write(`${JSON.stringify({ event: 'ready', role: 'support' })}\n`);
+  process.stdout.write('supportchat-ready kind=public node=support\n');
   await waitForShutdown();
   await app.close();
 }

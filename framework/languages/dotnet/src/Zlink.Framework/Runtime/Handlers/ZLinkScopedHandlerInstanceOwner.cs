@@ -1,11 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Handlers;
 
 internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services) : IAsyncDisposable
 {
     private readonly Dictionary<Type, object> _fallbackInstances = new();
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private bool _disposed;
     private Task? _disposeTask;
 
@@ -21,7 +22,7 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
     {
         ArgumentNullException.ThrowIfNull(handlerType);
 
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -30,28 +31,32 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
             var created = ActivatorUtilities.CreateInstance(Services, handlerType);
             _fallbackInstances.Add(handlerType, created);
             return created;
-        }
+        }));
     }
 
     public ValueTask DisposeAsync()
     {
-        Task task;
-        TaskCompletionSource? start = null;
-        lock (_gate)
+        var result = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_disposeTask is null)
             {
                 _disposed = true;
                 var instances = _fallbackInstances.Values.Reverse().ToArray();
                 _fallbackInstances.Clear();
-                start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _disposeTask = DisposeCoreAsync(start.Task, instances);
+                var start = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                using (ExecutionContext.SuppressFlow())
+                    _disposeTask = DisposeCoreAsync(start.Task, instances);
+                return (Task: _disposeTask, Start: start);
             }
-            task = _disposeTask;
-        }
-        start?.TrySetResult();
-        return new ValueTask(task);
+            return (Task: _disposeTask, Start: (TaskCompletionSource?)null);
+        }));
+        result.Start?.TrySetResult();
+        return new ValueTask(result.Task);
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
     private static async Task DisposeCoreAsync(Task started, object[] instances)
     {

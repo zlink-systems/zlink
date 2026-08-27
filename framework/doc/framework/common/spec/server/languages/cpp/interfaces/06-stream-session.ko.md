@@ -1,6 +1,6 @@
-# C++ STREAM session exact interface
+# C++ STREAM session 언어별 interface
 
-[C++ exact interface 목차](README.ko.md) · [Session Actor dispatch](../../../20-session-actor-dispatch.ko.md)
+[C++ 언어별 interface 목차](README.ko.md) · [Session Actor dispatch](../../../04-session/02-session-actor-binding.ko.md)
 
 ## 1. Public session surface
 
@@ -179,7 +179,7 @@ close를 기다리지 않는다.
 
 Bind 뒤 relay·request relay와 `notify_disconnected()`는 Actor별 저장 route를 사용하며 message마다 Location
 Store를 조회하지 않는다. Physical disconnect는 Framework가 current binding 전체에 automatic all-settled
-통지를 수행하고 exact binding identity마다 Spot callback을 최대 한 번 실행한다.
+통지를 수행하고 binding identity마다 Spot callback을 최대 한 번 실행한다.
 `notify_disconnected()`는 connection이 유지된 상태의 logical notification이며 callback terminal까지
 기다린다. Relocation route update는 같은 ObjectGeneration에만 허용한다. Target Actor가
 복원되어 message 처리를 시작한 뒤 target runtime이 `sessionActorLocationUpdateReqMsg`를
@@ -191,7 +191,7 @@ Actor 처리를 멈추지 않는다.
 같은 Session에서 relocation 대상에 포함되지 않은 다른 Actor의 route와 physical STREAM connection은 유지한다.
 Application은 relocation을 알기 위해 `bind()`를 다시 호출하지 않는다.
 
-`bound_session_t`, `session_actor_t`와 `session_actor_manager_t`의 exact Actor 연동 member는
+`bound_session_t`, `session_actor_t`와 `session_actor_manager_t`의 Actor 연동 member는
 [Actor interface](05-actors.ko.md)가 소유한다. `stream_send_call_t`와 `stream_write_call_t`의
 metadata·compression·`submit()` member는 [Channel messaging](03-channel-messaging.ko.md)의 call family와
 같은 admission 계약을 유지한다.
@@ -204,7 +204,7 @@ Framework 내부 recv loop가 raw part를 읽고 queue admission을 완료한 �
 `stream_t`의 optional routing ID와 local·remote address는 handshake가 확인한 session identity snapshot이며 packet
 dispatch까지 보존한다.
 Session callback은 받은 `stream_t`의 `actors()`로 해당 session의 Actor binding manager에 접근한다.
-Actor dispatch는 global ActorId lookup과 exact `actor_ref_t` bind를 사용하므로 target MeshName 또는 local Actor
+Actor dispatch는 global ActorId lookup과 `actor_ref_t` bind를 사용하므로 target MeshName 또는 local Actor
 overload를 등록하지 않는다. Object role `client`·`server`와 Location Store가 없으면 startup이
 `not_configured`로 실패한다.
 Handshake failure는 session이 만들어지기 전 runtime monitoring에만 기록되며 `on_error(...)`에

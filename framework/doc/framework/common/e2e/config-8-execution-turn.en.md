@@ -70,7 +70,7 @@ start?
   A probe request is sent to the same Spot, and the delay reply is released.
 - Verification: The evidence order is `async-held, async-resumed, async-completed, probe-started,
   probe-completed`. The active callback count never exceeds 1.
-- Detailed behavior: verifies [Async Execution Policy §1.1](../spec/server/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Async Execution Policy §1.1](../spec/server/01-execution/README.en.md).
 
 #### TD-A3 Read-Modify-Write Across An Async Window Is Preserved
 
@@ -87,7 +87,7 @@ increase the counter by exactly N?
   waits on the Async request. All delay replies are released.
 - Verification: Every request receives one reply, and the final counter is N. The handler active
   count is always 1.
-- Detailed behavior: verifies serial turn in [Async Execution Policy §2](../spec/server/05-async-execution-policy.en.md).
+- Detailed behavior: verifies serial turn in [Async Execution Policy §2](../spec/server/01-execution/README.en.md).
 
 #### TD-A4 An Async Turn And A Remote Completion Do Not Block Each Other
 
@@ -105,7 +105,7 @@ normally?
   reply signal is sent.
 - Verification: The handler resumes on the reply and finishes normally before the deadline. The same
   Spot's next callback runs after that.
-- Detailed behavior: verifies [Async Execution Policy §3](../spec/server/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Async Execution Policy §3](../spec/server/01-execution/README.en.md).
 
 #### TD-A5 A Due Timer While Async Is Waiting Runs After The Handler
 
@@ -124,7 +124,7 @@ run after the handler finishes?
   released.
 - Verification: The evidence order is `async-held, async-completed, timer-started, timer-completed`,
   and the callback active count never exceeds 1.
-- Detailed behavior: verifies [Async Execution Policy §5](../spec/server/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Async Execution Policy §5](../spec/server/01-execution/README.en.md).
 
 ### Track B — Yield And Giving Back The Shared Spot Gate
 
@@ -147,8 +147,8 @@ while a Yield request is waiting?
   yield-resumed, yield-completed`. The timer variant order is `yield-released, timer-started,
   timer-completed, yield-resumed`; it does not infer timer completion from a fixed sleep.
 - Detailed behavior: verifies shared Spot gate release in
-  [Async Execution Policy §1.1](../spec/server/05-async-execution-policy.en.md) and the timer application turn
-  in [§5](../spec/server/05-async-execution-policy.en.md).
+  [Async Execution Policy §1.1](../spec/server/01-execution/README.en.md) and the timer application turn
+  in [§5](../spec/server/01-execution/README.en.md).
 
 #### TD-B2 A Yield Continuation Follows The Existing Queue Order
 
@@ -166,7 +166,7 @@ continuation?
   reply is released, making the Yield continuation ready. Finally, Probe 1 is released.
 - Verification: The evidence order is `probe-1-started, probe-1-completed, probe-2-completed,
   yield-resumed`. The continuation's and the probe's active callback counts do not overlap.
-- Detailed behavior: verifies [Async Execution Policy §3](../spec/server/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Async Execution Policy §3](../spec/server/01-execution/README.en.md).
 
 #### TD-B3 Shared State Is Re-Read After Yield
 
@@ -185,8 +185,8 @@ the first handler was Yielding?
   delay reply is released, resuming the first continuation.
 - Verification: The first continuation re-reads the current value, 20, and processes based on that
   value. It does not go on using the 10 it read before the Yield.
-- Detailed behavior: verifies [Handler Turn And Claim](../spec/server/05-async-execution-policy.en.md#3-handler-turn-and-claim)
-  and [Gate And Claim On `Yield`](../spec/server/05-async-execution-policy.en.md#gate-and-claim-on-yield).
+- Detailed behavior: verifies [Handler Turn And Claim](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md)
+  and [Gate And Claim On `Yield`](../spec/server/01-execution/README.en.md).
 
 ### Track C — Separate Worker Kind From Spot Turn
 
@@ -206,7 +206,7 @@ after them, while waiting on the External API?
   call with Yield. Probe and timer completion are confirmed, then the HTTP reply is released.
 - Verification: The probe and timer finish before the I/O continuation, and the HTTP result is
   included in the original handler's reply.
-- Detailed behavior: verifies the I/O worker in [Worker Offload](../spec/server/05-async-execution-policy.en.md#12-worker-offload).
+- Detailed behavior: verifies the I/O worker in [Worker Offload](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 #### TD-C2 Waiting On An I/O Worker With Async Keeps The Turn
 
@@ -223,7 +223,7 @@ Async?
   Spot. The HTTP reply is released.
 - Verification: The probe starts only after the I/O handler finishes. It is the worker call's
   terminator, not the External API request itself, that decides the turn.
-- Detailed behavior: verifies [Worker Offload](../spec/server/05-async-execution-policy.en.md#12-worker-offload).
+- Detailed behavior: verifies [Worker Offload](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 #### TD-C3 Waiting On I/O Does Not Use CPU Worker Capacity
 
@@ -241,7 +241,7 @@ would produce unnecessary capacity errors.
   reached the remote API, the replies are released.
 - Verification: Every operation receives a normal reply, and there is no `CapacityExceeded`. Another
   Spot's probe also completes during the wait.
-- Detailed behavior: verifies CPU execution-slot and I/O-wait separation in [Worker Offload](../spec/server/05-async-execution-policy.en.md#12-worker-offload).
+- Detailed behavior: verifies CPU execution-slot and I/O-wait separation in [Worker Offload](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 #### TD-C4 The CPU Worker And The Terminator Role Stay Separate
 
@@ -259,7 +259,7 @@ worker result the same, with only the Spot callback order differing?
 - Verification: The computation result is the same in both variants. In Async, the probe runs after
   the worker handler; in Yield, the probe finishes before the worker continuation. A separate batch
   exceeding the pool limit ends in a bounded, public `CapacityExceeded`.
-- Detailed behavior: verifies [Worker Offload](../spec/server/05-async-execution-policy.en.md#12-worker-offload).
+- Detailed behavior: verifies [Worker Offload](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 #### TD-C5 CPU Worker Saturation Does Not Block An I/O Worker
 
@@ -276,7 +276,7 @@ pool capacity?
   an I/O worker. The I/O reply is confirmed, then the CPU gate is released.
 - Verification: The I/O operation finishes normally before the CPU gate is released. The CPU
   operations, once the gate is released, each return exactly one terminal.
-- Detailed behavior: verifies execution-resource separation in [Worker Offload](../spec/server/05-async-execution-policy.en.md#12-worker-offload).
+- Detailed behavior: verifies execution-resource separation in [Worker Offload](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 ### Track D — Distinguish SpotWide From PerActor Lanes
 
@@ -296,7 +296,7 @@ Yield-held?
   Once all finish, A's reply is released.
 - Verification: The B, Spot, and timer evidence all appear before A's continuation, and the callback
   active count within the shared gate never exceeds 1.
-- Detailed behavior: verifies [Handler Turn And Claim](../spec/server/05-async-execution-policy.en.md#3-handler-turn-and-claim).
+- Detailed behavior: verifies [Handler Turn And Claim](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 #### TD-D2 The Same Actor's Next Record Runs After The Yield Continuation
 
@@ -312,7 +312,7 @@ continuation and handler finish?
 - Procedure: A second request is sent to the same Actor, then the first delay reply is released.
 - Verification: The evidence order is `job1-start, job1-yield, job1-resume, job1-end, job2-start`, and
   the Actor handler's active count never exceeds 1.
-- Detailed behavior: verifies [Handler Turn And Claim](../spec/server/05-async-execution-policy.en.md#3-handler-turn-and-claim).
+- Detailed behavior: verifies [Handler Turn And Claim](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 #### TD-D3 Callbacks Do Not Overlap During A Timer Overrun
 
@@ -336,7 +336,7 @@ due not run the same timer callback concurrently, and does it follow the configu
   delivery/scheduled indices follow the chosen overrun policy's skip, bounded catch-up, or
   delayed-next rule. After the timer is re-registered or canceled, no callback from the previous
   generation runs.
-- Detailed behavior: verifies [Async Execution Policy §5](../spec/server/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Async Execution Policy §5](../spec/server/01-execution/README.en.md).
 
 #### TD-D4 A PerActor Async Blocks Only The Same Actor Lane
 
@@ -354,7 +354,7 @@ next request waiting?
   B and timer evidence are confirmed, then A's reply is released.
 - Verification: B and the timers finish before A, and A's second request starts only after the first
   A handler. The active count of the same lane never exceeds 1.
-- Detailed behavior: verifies [Handler Turn And Claim](../spec/server/05-async-execution-policy.en.md#3-handler-turn-and-claim).
+- Detailed behavior: verifies [Handler Turn And Claim](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 #### TD-D5 Reject Yield In An Unsupported Context Before The Operation Is Submitted
 
@@ -371,7 +371,7 @@ Yield is meaningful only in a `SpotWide` User Spot or Instance Spot, which can g
   handler, and a caller outside an owner turn. The Async variant of the same call is also run.
 - Verification: The Yield variants each end once with `InvalidOperation`, with no remote handler
   evidence. The Async variants run to the normal contract.
-- Detailed behavior: verifies context validation in [Framework API §12](../spec/server/06-framework-api.en.md).
+- Detailed behavior: verifies context validation in [Framework API §12](../spec/server/00-foundation/06-framework-api.en.md).
 
 #### TD-D6 Reject An Awaited Request That Needs The Same Claim
 
@@ -389,7 +389,7 @@ structurally complete. The Framework rejects it before submission, without waiti
   variant, are run. For contrast, a self one-way send is also run.
 - Verification: The awaited requests are `InvalidOperation`, with no target handler evidence. The
   one-way send is accepted into the FIFO and processed exactly once, after the current handler.
-- Detailed behavior: verifies [Waiting Within The Same Turn](../spec/server/05-async-execution-policy.en.md#waiting-within-the-same-turn).
+- Detailed behavior: verifies [Waiting Within The Same Turn](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 ### Track E — Start An Actor Join Registered By A Handler Only After The Terminal
 
@@ -410,7 +410,7 @@ target User Spot after it?
 - Verification: Before the handler terminal, there is no Join callback, and the current Spot is
   Entry. After it, the target `OnActorJoin`, `OnJoinedActor`, source `OnLeaveActor`, and the Actor's
   completion callback each run exactly once, and the current Spot is the target.
-- Detailed behavior: verifies [Spot Actor §4](../spec/server/15-spot-actor.en.md#4-actor-join-and-commit-order).
+- Detailed behavior: verifies [Spot Actor §4](../spec/server/03-spot-actor/05-spot-actor-membership.en.md#4-actor-join-and-commit-order).
 
 #### TD-E2 PerActor And SpotWide Use The Same Deferred-Join Meaning
 
@@ -430,7 +430,7 @@ terminal?
   terminal, then both handlers are released.
 - Verification: Before the terminal, both Actors are in the source. After it, each Actor's target
   callback and completion callback run once, and it switches to the target's current Spot.
-- Detailed behavior: verifies [Spot Actor §4](../spec/server/15-spot-actor.en.md#4-actor-join-and-commit-order).
+- Detailed behavior: verifies [Spot Actor §4](../spec/server/03-spot-actor/05-spot-actor-membership.en.md#4-actor-join-and-commit-order).
 
 #### TD-E2A A Registered Join Is Discarded On Handler Failure
 
@@ -451,7 +451,7 @@ existing membership?
 - Verification: There is no target/source Join lifecycle callback and no Actor completion callback.
   The public current Spot for both Actors is the source, and follow-up requests are processed
   normally.
-- Detailed behavior: verifies the handler terminal in [Actor Join's Deferred Terminal](../spec/server/05-async-execution-policy.en.md#31-actor-joins-deferred-terminal).
+- Detailed behavior: verifies the handler terminal in [Actor Join's Deferred Terminal](../spec/server/01-execution/README.en.md).
 
 #### TD-E3 Two Opposite-Direction Local Joins Progress Together
 
@@ -469,7 +469,7 @@ within the deadline?
   registered, the barrier is released.
 - Verification: Both completion callbacks are Accepted, and the public current Spots swap. Each
   Actor's callback runs exactly once, with no timeout.
-- Detailed behavior: verifies per-Actor independence in [Spot Actor §4](../spec/server/15-spot-actor.en.md#4-actor-join-and-commit-order).
+- Detailed behavior: verifies per-Actor independence in [Spot Actor §4](../spec/server/03-spot-actor/05-spot-actor-membership.en.md#4-actor-join-and-commit-order).
 
 ### Track F — Keep The Same Meaning Even Over Remote Paths And Terminal Failures
 
@@ -489,7 +489,7 @@ variant let the probe progress?
   request.
 - Verification: The Async evidence has the probe starting after the source handler, and the Yield
   evidence has the continuation resuming after the probe. Both remote requests return one reply.
-- Detailed behavior: verifies [Async Execution Policy §2](../spec/server/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Async Execution Policy §2](../spec/server/01-execution/README.en.md).
 
 #### TD-F2 The Same Meaning Applies Even Starting From A Channel Handler
 
@@ -505,7 +505,7 @@ context validation and order match the contract?
 - Procedure: The Async and Yield variants of the same Spot request are each run from the handler.
 - Verification: A context that does not support Yield, like a Channel handler, is `InvalidOperation`
   with no remote Spot handler run. The Async variant returns a normal reply.
-- Detailed behavior: verifies [Framework API §12](../spec/server/06-framework-api.en.md).
+- Detailed behavior: verifies [Framework API §12](../spec/server/00-foundation/06-framework-api.en.md).
 
 #### TD-F3 The Same Meaning Applies Even For An Actor Handler Started Through Session Relay
 
@@ -522,8 +522,8 @@ by a bound Session?
   packet and an Actor B packet on the same Session. The delay reply is released.
 - Verification: The B packet is processed during the Yield window, and A's next packet is processed
   after the first A handler finishes.
-- Detailed behavior: verifies [Session Actor Execution And Lifecycle](../spec/server/20-session-actor-dispatch.en.md#7-execution-and-lifecycle)
-  and [Handler Turn And Claim](../spec/server/05-async-execution-policy.en.md#3-handler-turn-and-claim).
+- Detailed behavior: verifies [Session Actor Execution And Lifecycle](../spec/server/04-session/02-session-actor-binding.en.md#10-execution-and-lifetime)
+  and [Handler Turn And Claim](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 #### TD-F4 The Spot Turn Is Returned After A Timeout
 
@@ -539,7 +539,7 @@ Even if an awaited request times out, the current turn or shared gate must not r
   terminal is awaited. A probe request follows.
 - Verification: Both variants end in exactly one `DeadlineExceeded` terminal, and the probe receives
   a normal reply.
-- Detailed behavior: verifies [Error Model §5](../spec/server/32-framework-error-model.en.md).
+- Detailed behavior: verifies [Error Model §5](../spec/server/00-foundation/07-framework-error-model.en.md).
 
 #### TD-F5 The Owner Keeps Being Usable After Waiter Termination
 
@@ -557,7 +557,7 @@ cancellation?
   to the same owner. The remote reply is released last.
 - Verification: The first awaitable returns exactly one variant terminal. The follow-up
   request receives a normal reply, and the late reply does not complete a new operation.
-- Detailed behavior: verifies [Cancellation And Shutdown](../spec/server/05-async-execution-policy.en.md#4-cancellation-and-shutdown).
+- Detailed behavior: verifies [Cancellation And Shutdown](../spec/server/01-execution/03-cancellation-and-shutdown.en.md).
 
 #### TD-F5A Start A Host Shutdown While Awaiting
 
@@ -574,8 +574,8 @@ await end in exactly one terminal?
   accepting new work, a new request is sent to the same owner, and the delay reply is released.
 - Verification: The new request is `ShuttingDown`. The existing await ends exactly once, in either a
   reply or a shutdown-deadline result, and the host reaches a bounded terminal state.
-- Detailed behavior: verifies [Cancellation And Shutdown](../spec/server/05-async-execution-policy.en.md#4-cancellation-and-shutdown)
-  and [The Race Between Shutdown And Relocate](../spec/server/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
+- Detailed behavior: verifies [Cancellation And Shutdown](../spec/server/01-execution/03-cancellation-and-shutdown.en.md)
+  and [The Race Between Shutdown And Relocate](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
 
 #### TD-F6 Reject A Wait-For Cycle Before The Timeout
 
@@ -592,7 +592,7 @@ request succeeding?
   A.
 - Verification: The self-request is `InvalidOperation`, with no nested target handler evidence. The
   probe receives a normal reply.
-- Detailed behavior: verifies [Waiting Within The Same Turn](../spec/server/05-async-execution-policy.en.md#waiting-within-the-same-turn).
+- Detailed behavior: verifies [Waiting Within The Same Turn](../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md).
 
 ### Track G — Confirm The Same Execution Meaning Across Languages
 
@@ -612,7 +612,7 @@ combinations of different Framework languages?
 - Verification: In Async, the probe runs after the source handler; in Yield, the continuation resumes
   after the probe. Payload and terminal-error meaning are also the same across language
   combinations.
-- Detailed behavior: verifies language parity in [Public Contract Governance](../spec/server/00-public-contract-governance.en.md).
+- Detailed behavior: verifies language parity in [Public Contract Governance](../spec/server/00-foundation/01-public-contract-governance.en.md).
 
 ## 5. Completion Criteria
 

@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 import java.util.Map;
 import java.util.function.Function;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 
@@ -70,7 +71,7 @@ final class ZLinkSpotActivationFactory {
             host.primaryNode().routingId(),
             backendSpot,
             new ZLinkAsyncSerialQueue(
-                host.serialExecutor(), false),
+                host.serialExecutor(), ZLinkExecutionLanePolicy.spot()),
             executionModes.getOrDefault(
                 spotType,
                 ZLinkUserSpotExecutionMode.SPOT_WIDE),
@@ -121,6 +122,61 @@ final class ZLinkSpotActivationFactory {
                 backendSpot.close();
                 throw new CompletionException(error);
             });
+    }
+
+    CompletionStage<SpotActivationCreateResult> activateRelocation(
+        Class<? extends ZLinkSpot<?>> spotType,
+        ZLinkBackendSpot backendSpot) {
+        DefaultSpotContext context = new DefaultSpotContext(
+            host,
+            workerPool,
+            handlerLoader,
+            host.primaryNode().routingId(),
+            backendSpot,
+            new ZLinkAsyncSerialQueue(
+                host.serialExecutor(), ZLinkExecutionLanePolicy.spot()),
+            executionModes.getOrDefault(
+                spotType,
+                ZLinkUserSpotExecutionMode.SPOT_WIDE),
+            ZLinkInstanceSpot.class.isAssignableFrom(spotType),
+            null,
+            relocationCoordinationModes.getOrDefault(
+                spotType,
+                ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED));
+        ZLinkSpot<?> spot;
+        try {
+            spot = createSpot(spotType, context);
+            if (spot == null) {
+                throw new ZLinkConfigurationException(
+                    "relocation target Spot factory returned no instance: "
+                        + spotType.getName());
+            }
+            context.setSpot(spot);
+            spot.configure();
+            context.closeRegistration();
+            context.bindSubscriptions(backendSpot);
+        } catch (RuntimeException failure) {
+            context.closeTimers();
+            context.closeHandlerInstances();
+            backendSpot.close();
+            throw failure;
+        }
+
+        // Relocation has no creation request. The old activate() reuse ran
+        // onCreate/onInitialize before the target ingress seal was acquired.
+        return CompletableFuture.completedFuture(new SpotActivationCreateResult(
+            new SpotActivation(host, handlerInvoker, spot, backendSpot, context),
+            ZLinkSpotCreateResponse.accept()));
+    }
+
+    CompletionStage<Void> initializeRelocation(SpotActivation activation) {
+        return activation.context.runLifecycleExecution(() ->
+                host.runWithOutbound(activation.context.dispatchOutbound(), () ->
+                    ZLinkHandlerStages.fromStageSupplier(
+                        activation.spot()::onInitialize)))
+            .thenRun(() -> registerDispatchHandler(
+                activation.backendSpot,
+                activation::handleDispatchEvent));
     }
 
     EntrySpotActivation activateEntry(

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -25,7 +26,7 @@ internal sealed record ZLinkOwnerLease(
 internal partial class ZLinkInMemoryLocationStore :
     IZLinkLocationRepository
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _time;
     private readonly Dictionary<string, ZLinkOwnerLease> _leases = [];
     private long _ownerLeaseGeneration;
@@ -50,15 +51,15 @@ internal partial class ZLinkInMemoryLocationStore :
         ValidateMeshNodeDescriptor(descriptor);
         descriptor = CanonicalizeMeshNodeDescriptor(descriptor);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkLocationWriteResult>(() =>
         {
             var now = _time.GetUtcNow();
             var owner = new ZLinkLocationOwnerToken(
                 descriptor.OwnerId,
                 descriptor.LeaseGeneration);
             if (!MatchesLiveOwnerLease(owner, now))
-                return ValueTask.FromResult(
-                    ZLinkLocationWriteResult.IgnoredStale);
+                return
+                    ZLinkLocationWriteResult.IgnoredStale;
 
             var key = ZLinkLocationKeyCodec.EncodeMeshNodeKey(
                 new ZLinkMeshNodeDescriptorKey(
@@ -72,11 +73,11 @@ internal partial class ZLinkInMemoryLocationStore :
                                            current.LeaseGeneration),
                                        now);
             if (intent == ZLinkLocationWriteIntent.NewClaim && currentOwnerLive)
-                return ValueTask.FromResult(
-                    ZLinkLocationWriteResult.RejectedConflict);
+                return
+                    ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && currentOwnerLive)
-                return ValueTask.FromResult(
-                    ZLinkLocationWriteResult.IgnoredStale);
+                return
+                    ZLinkLocationWriteResult.IgnoredStale;
             if (intent == ZLinkLocationWriteIntent.Renew)
             {
                 if (!exists
@@ -87,12 +88,12 @@ internal partial class ZLinkInMemoryLocationStore :
                     || !MeshNodeImmutableFieldsEqual(current, descriptor)
                     || descriptor.DescriptorRevision
                     <= current.DescriptorRevision)
-                    return ValueTask.FromResult(
-                        ZLinkLocationWriteResult.IgnoredStale);
+                    return
+                        ZLinkLocationWriteResult.IgnoredStale;
             }
             if (!CanPublishEntrySpotIdNoLock(descriptor, key, now))
-                return ValueTask.FromResult(
-                    ZLinkLocationWriteResult.RejectedConflict);
+                return
+                    ZLinkLocationWriteResult.RejectedConflict;
 
             _meshNodes.Generations.TryGetValue(key, out var last);
             var generation = intent == ZLinkLocationWriteIntent.Renew
@@ -103,9 +104,9 @@ internal partial class ZLinkInMemoryLocationStore :
                 descriptor with { UpdatedAt = now });
             PublishEntrySpotIdNoLock(current, descriptor, key);
             BumpMeshNodeStamp(descriptor.MeshName);
-            return ValueTask.FromResult(
-                ZLinkLocationWriteResult.Stored(generation, now));
-        }
+            return
+                ZLinkLocationWriteResult.Stored(generation, now);
+        });
     }
 
     public ValueTask<ZLinkLocationWriteStatus> RemoveMeshNodeAsync(
@@ -115,19 +116,19 @@ internal partial class ZLinkInMemoryLocationStore :
     {
         cancellationToken.ThrowIfCancellationRequested();
         var canonicalKey = ZLinkLocationKeyCodec.EncodeMeshNodeKey(key);
-        lock (_gate)
+        return _lane.RunAsync<ZLinkLocationWriteStatus>(() =>
         {
             if (!_meshNodes.Rows.TryGetValue(canonicalKey, out var row)
                 || row.OwnerId != owner.OwnerId
                 || row.LeaseGeneration != owner.LeaseGeneration)
-                return ValueTask.FromResult(
-                    ZLinkLocationWriteStatus.IgnoredStale);
+                return
+                    ZLinkLocationWriteStatus.IgnoredStale;
 
             _meshNodes.Rows.Remove(canonicalKey);
             RemoveEntrySpotIdClaimNoLock(row, canonicalKey);
             BumpMeshNodeStamp(key.MeshName);
-            return ValueTask.FromResult(ZLinkLocationWriteStatus.Stored);
-        }
+            return ZLinkLocationWriteStatus.Stored;
+        });
     }
 
     public ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> ListMeshNodesAsync(
@@ -147,7 +148,7 @@ internal partial class ZLinkInMemoryLocationStore :
                         "The MeshNode continuation token is invalid.",
                         nameof(page));
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>(() =>
         {
             var rows = _meshNodes.Rows.Values
                 .Where(row => string.Equals(row.MeshName, meshName, StringComparison.Ordinal))
@@ -156,13 +157,13 @@ internal partial class ZLinkInMemoryLocationStore :
                 .ToArray();
             var items = rows.Skip(offset).Take(pageSize).ToArray();
             var nextOffset = offset + items.Length;
-            return ValueTask.FromResult(
+            return
                 new ZLinkLocationPage<ZLinkMeshNodeDescriptor>(
                     items,
                     nextOffset < rows.Length
                         ? nextOffset.ToString(CultureInfo.InvariantCulture)
-                        : null));
-        }
+                        : null);
+        });
     }
 
     public ValueTask<ZLinkLocationWriteResult> UpdateClientServerAsync(
@@ -179,14 +180,14 @@ internal partial class ZLinkInMemoryLocationStore :
             || descriptor.Weight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight)
             throw new ArgumentOutOfRangeException(nameof(descriptor));
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkLocationWriteResult>(() =>
         {
             var now = _time.GetUtcNow();
             var owner = new ZLinkLocationOwnerToken(
                 descriptor.OwnerId,
                 descriptor.LeaseGeneration);
             if (!MatchesLiveOwnerLease(owner, now))
-                return ValueTask.FromResult(ZLinkLocationWriteResult.IgnoredStale);
+                return ZLinkLocationWriteResult.IgnoredStale;
 
             var key = ClientServerKey(descriptor.ChannelName, descriptor.ServerRid);
             var exists = _clientServers.Rows.TryGetValue(key, out var current);
@@ -197,9 +198,9 @@ internal partial class ZLinkInMemoryLocationStore :
                                            current.LeaseGeneration),
                                        now);
             if (intent == ZLinkLocationWriteIntent.NewClaim && currentOwnerLive)
-                return ValueTask.FromResult(ZLinkLocationWriteResult.RejectedConflict);
+                return ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && currentOwnerLive)
-                return ValueTask.FromResult(ZLinkLocationWriteResult.IgnoredStale);
+                return ZLinkLocationWriteResult.IgnoredStale;
             if (intent == ZLinkLocationWriteIntent.Renew
                 && (!exists
                     || current!.OwnerId != descriptor.OwnerId
@@ -208,7 +209,7 @@ internal partial class ZLinkInMemoryLocationStore :
                     || current.Endpoint != descriptor.Endpoint
                     || current.SecurityIdentity != descriptor.SecurityIdentity
                     || descriptor.DescriptorRevision <= current.DescriptorRevision))
-                return ValueTask.FromResult(ZLinkLocationWriteResult.IgnoredStale);
+                return ZLinkLocationWriteResult.IgnoredStale;
 
             _clientServers.Generations.TryGetValue(key, out var last);
             var generation = intent == ZLinkLocationWriteIntent.Renew
@@ -216,8 +217,8 @@ internal partial class ZLinkInMemoryLocationStore :
                 : checked(last + 1);
             _clientServers.Generations[key] = generation;
             _clientServers.Rows[key] = descriptor with { UpdatedAt = now };
-            return ValueTask.FromResult(ZLinkLocationWriteResult.Stored(generation, now));
-        }
+            return ZLinkLocationWriteResult.Stored(generation, now);
+        });
     }
 
     public ValueTask<ZLinkLocationWriteStatus> RemoveClientServerAsync(
@@ -226,16 +227,16 @@ internal partial class ZLinkInMemoryLocationStore :
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkLocationWriteStatus>(() =>
         {
             var encoded = ClientServerKey(key.ChannelName, key.ServerRid);
             if (!_clientServers.Rows.TryGetValue(encoded, out var current)
                 || current.OwnerId != owner.OwnerId
                 || current.LeaseGeneration != owner.LeaseGeneration)
-                return ValueTask.FromResult(ZLinkLocationWriteStatus.IgnoredStale);
+                return ZLinkLocationWriteStatus.IgnoredStale;
             _clientServers.Rows.Remove(encoded);
-            return ValueTask.FromResult(ZLinkLocationWriteStatus.Stored);
-        }
+            return ZLinkLocationWriteStatus.Stored;
+        });
     }
 
     public ValueTask<ZLinkLocationPage<ZLinkClientServerServerDescriptor>>
@@ -245,7 +246,7 @@ internal partial class ZLinkInMemoryLocationStore :
             CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkLocationPage<ZLinkClientServerServerDescriptor>>(() =>
         {
             var pageSize = ZLinkPageRequestPolicy.Normalize(page).PageSize;
             var offset = page.ContinuationToken is { } token
@@ -262,11 +263,11 @@ internal partial class ZLinkInMemoryLocationStore :
             var next = offset + items.Length < rows.Length
                 ? (offset + items.Length).ToString(CultureInfo.InvariantCulture)
                 : null;
-            return ValueTask.FromResult(
+            return
                 new ZLinkLocationPage<ZLinkClientServerServerDescriptor>(
                     items,
-                    next));
-        }
+                    next);
+        });
     }
 
     private static string ClientServerKey(string channelName, RoutingId rid) =>
@@ -285,14 +286,14 @@ internal partial class ZLinkInMemoryLocationStore :
             || descriptor.DescriptorRevision == 0)
             throw new ArgumentOutOfRangeException(nameof(descriptor));
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkLocationWriteResult>(() =>
         {
             var now = _time.GetUtcNow();
             var owner = new ZLinkLocationOwnerToken(
                 descriptor.OwnerId,
                 descriptor.LeaseGeneration);
             if (!MatchesLiveOwnerLease(owner, now))
-                return ValueTask.FromResult(ZLinkLocationWriteResult.IgnoredStale);
+                return ZLinkLocationWriteResult.IgnoredStale;
 
             var key = FanoutKey(descriptor.ChannelName, descriptor.PublisherRid);
             var exists = _fanoutPublishers.Rows.TryGetValue(key, out var current);
@@ -303,9 +304,9 @@ internal partial class ZLinkInMemoryLocationStore :
                                            current.LeaseGeneration),
                                        now);
             if (intent == ZLinkLocationWriteIntent.NewClaim && currentOwnerLive)
-                return ValueTask.FromResult(ZLinkLocationWriteResult.RejectedConflict);
+                return ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && currentOwnerLive)
-                return ValueTask.FromResult(ZLinkLocationWriteResult.IgnoredStale);
+                return ZLinkLocationWriteResult.IgnoredStale;
             if (intent == ZLinkLocationWriteIntent.Renew
                 && (!exists
                     || current!.OwnerId != descriptor.OwnerId
@@ -314,7 +315,7 @@ internal partial class ZLinkInMemoryLocationStore :
                     || current.Endpoint != descriptor.Endpoint
                     || current.SecurityIdentity != descriptor.SecurityIdentity
                     || descriptor.DescriptorRevision <= current.DescriptorRevision))
-                return ValueTask.FromResult(ZLinkLocationWriteResult.IgnoredStale);
+                return ZLinkLocationWriteResult.IgnoredStale;
 
             _fanoutPublishers.Generations.TryGetValue(key, out var last);
             var generation = intent == ZLinkLocationWriteIntent.Renew
@@ -322,8 +323,8 @@ internal partial class ZLinkInMemoryLocationStore :
                 : checked(last + 1);
             _fanoutPublishers.Generations[key] = generation;
             _fanoutPublishers.Rows[key] = descriptor with { UpdatedAt = now };
-            return ValueTask.FromResult(ZLinkLocationWriteResult.Stored(generation, now));
-        }
+            return ZLinkLocationWriteResult.Stored(generation, now);
+        });
     }
 
     public ValueTask<ZLinkLocationWriteStatus> RemoveFanoutPublisherAsync(
@@ -332,16 +333,16 @@ internal partial class ZLinkInMemoryLocationStore :
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkLocationWriteStatus>(() =>
         {
             var encoded = FanoutKey(key.ChannelName, key.PublisherRid);
             if (!_fanoutPublishers.Rows.TryGetValue(encoded, out var current)
                 || current.OwnerId != owner.OwnerId
                 || current.LeaseGeneration != owner.LeaseGeneration)
-                return ValueTask.FromResult(ZLinkLocationWriteStatus.IgnoredStale);
+                return ZLinkLocationWriteStatus.IgnoredStale;
             _fanoutPublishers.Rows.Remove(encoded);
-            return ValueTask.FromResult(ZLinkLocationWriteStatus.Stored);
-        }
+            return ZLinkLocationWriteStatus.Stored;
+        });
     }
 
     public ValueTask<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
@@ -351,7 +352,7 @@ internal partial class ZLinkInMemoryLocationStore :
             CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>(() =>
         {
             var pageSize = ZLinkPageRequestPolicy.Normalize(page).PageSize;
             var offset = page.ContinuationToken is { } token
@@ -368,11 +369,11 @@ internal partial class ZLinkInMemoryLocationStore :
             var next = offset + items.Length < rows.Length
                 ? (offset + items.Length).ToString(CultureInfo.InvariantCulture)
                 : null;
-            return ValueTask.FromResult(
+            return
                 new ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>(
                     items,
-                    next));
-        }
+                    next);
+        });
     }
 
     private static string FanoutKey(string channelName, RoutingId rid) =>
@@ -730,16 +731,16 @@ internal partial class ZLinkInMemoryLocationStore :
     {
         ValidateOwnerLeaseArguments(ownerId, leaseTtl);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkOwnerLeaseClaimResult>(() =>
         {
             var now = _time.GetUtcNow();
             if (_leases.TryGetValue(ownerId, out var current)
                 && current.LeaseExpiresAt > now)
-                return ValueTask.FromResult<ZLinkOwnerLeaseClaimResult>(
-                    new ZLinkOwnerLeaseClaimResult.Conflict());
+                return
+                    new ZLinkOwnerLeaseClaimResult.Conflict();
             if (_ownerLeaseGeneration == long.MaxValue)
-                return ValueTask.FromResult<ZLinkOwnerLeaseClaimResult>(
-                    new ZLinkOwnerLeaseClaimResult.GenerationExhausted());
+                return
+                    new ZLinkOwnerLeaseClaimResult.GenerationExhausted();
 
             var token = new ZLinkLocationOwnerToken(
                 ownerId,
@@ -753,12 +754,12 @@ internal partial class ZLinkInMemoryLocationStore :
             {
                 LeaseGeneration = token.LeaseGeneration
             };
-            return ValueTask.FromResult<ZLinkOwnerLeaseClaimResult>(
+            return
                 new ZLinkOwnerLeaseClaimResult.Claimed(
                     token,
                     expiresAt,
-                    now));
-        }
+                    now);
+        });
     }
 
     public ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
@@ -767,21 +768,21 @@ internal partial class ZLinkInMemoryLocationStore :
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerId);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkOwnerLeaseReadResult>(() =>
         {
             var now = _time.GetUtcNow();
             if (!_leases.TryGetValue(ownerId, out var lease)
                 || lease.LeaseExpiresAt <= now)
-                return ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
-                    new ZLinkOwnerLeaseReadResult.Missing());
-            return ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
+                return
+                    new ZLinkOwnerLeaseReadResult.Missing();
+            return
                 new ZLinkOwnerLeaseReadResult.Found(
                     new ZLinkLocationOwnerToken(
                         ownerId,
                         lease.LeaseGeneration),
                     lease.LeaseExpiresAt,
-                    now));
-        }
+                    now);
+        });
     }
 
     public ValueTask<ZLinkOwnerLeaseRenewResult> RenewOwnerLeaseAsync(
@@ -791,12 +792,12 @@ internal partial class ZLinkInMemoryLocationStore :
     {
         ValidateOwnerLeaseArguments(token.OwnerId, leaseTtl);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkOwnerLeaseRenewResult>(() =>
         {
             var now = _time.GetUtcNow();
             if (!MatchesLiveOwnerLease(token, now))
-                return ValueTask.FromResult<ZLinkOwnerLeaseRenewResult>(
-                    new ZLinkOwnerLeaseRenewResult.Stale());
+                return
+                    new ZLinkOwnerLeaseRenewResult.Stale();
             var current = _leases[token.OwnerId];
             var expiresAt = now + leaseTtl;
             _leases[token.OwnerId] = current with
@@ -804,9 +805,9 @@ internal partial class ZLinkInMemoryLocationStore :
                 LeaseExpiresAt = expiresAt,
                 UpdatedAt = now
             };
-            return ValueTask.FromResult<ZLinkOwnerLeaseRenewResult>(
-                new ZLinkOwnerLeaseRenewResult.Renewed(expiresAt, now));
-        }
+            return
+                new ZLinkOwnerLeaseRenewResult.Renewed(expiresAt, now);
+        });
     }
 
     public ValueTask<ZLinkOwnerLeaseReleaseResult> ReleaseOwnerLeaseAsync(
@@ -815,13 +816,13 @@ internal partial class ZLinkInMemoryLocationStore :
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token.OwnerId);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkOwnerLeaseReleaseResult>(() =>
         {
             if (!MatchesLiveOwnerLease(token, _time.GetUtcNow()))
-                return ValueTask.FromResult(ZLinkOwnerLeaseReleaseResult.Stale);
+                return ZLinkOwnerLeaseReleaseResult.Stale;
             _leases.Remove(token.OwnerId);
-            return ValueTask.FromResult(ZLinkOwnerLeaseReleaseResult.Released);
-        }
+            return ZLinkOwnerLeaseReleaseResult.Released;
+        });
     }
 
     public ValueTask<long> RemoveAllByOwnerAsync(
@@ -832,10 +833,10 @@ internal partial class ZLinkInMemoryLocationStore :
         if (owner.LeaseGeneration <= 0)
             throw new ArgumentOutOfRangeException(nameof(owner));
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<long>(() =>
         {
             if (!MatchesLiveOwnerLease(owner, _time.GetUtcNow()))
-                return ValueTask.FromResult(0L);
+                return 0L;
             var removed = 0L;
             var ownedDescriptors = _meshNodes.Rows
                 .Where(pair => pair.Value.OwnerId == owner.OwnerId)
@@ -868,8 +869,8 @@ internal partial class ZLinkInMemoryLocationStore :
                 _fanoutPublishers.Rows.Remove(key);
                 removed++;
             }
-            return ValueTask.FromResult(removed);
-        }
+            return removed;
+        });
     }
 
     public ValueTask<ulong?> GetMeshNodeChangeStampAsync(
@@ -878,11 +879,11 @@ internal partial class ZLinkInMemoryLocationStore :
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ulong?>(() =>
         {
             _meshNodeStamps.TryGetValue(meshName, out var stamp);
-            return ValueTask.FromResult<ulong?>(stamp);
-        }
+            return stamp;
+        });
     }
 
     private bool MatchesLiveOwnerLease(

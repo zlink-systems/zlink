@@ -1,9 +1,10 @@
+using System.Collections.Concurrent;
+
 namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbind)
 {
-    private readonly Dictionary<RoutingId, List<Entry>> _entries = [];
-    private readonly object _gate = new();
+    private readonly ConcurrentDictionary<RoutingId, Entry[]> _entries = new();
 
     public void Register(
         string actorId,
@@ -12,16 +13,22 @@ internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbi
     {
         if (!ZLinkActorBoundSessionBindingToken.IsNative(bindingToken)) return;
 
-        lock (_gate)
+        while (true)
         {
             if (!_entries.TryGetValue(sessionRid, out var entries))
             {
-                entries = [];
-                _entries[sessionRid] = entries;
+                if (_entries.TryAdd(sessionRid, [new Entry(actorId, bindingToken)]))
+                    return;
+
+                continue;
             }
 
-            entries.RemoveAll(entry => entry.Matches(actorId, bindingToken));
-            entries.Add(new Entry(actorId, bindingToken));
+            var updated = entries
+                .Where(entry => !entry.Matches(actorId, bindingToken))
+                .Append(new Entry(actorId, bindingToken))
+                .ToArray();
+            if (_entries.TryUpdate(sessionRid, updated, entries))
+                return;
         }
     }
 
@@ -31,26 +38,33 @@ internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbi
     {
         if (!ZLinkActorBoundSessionBindingToken.IsNative(bindingToken)) return;
 
-        lock (_gate)
+        foreach (var (sessionRid, _) in _entries)
         {
-            foreach (var key in _entries.Keys.ToArray())
+            while (_entries.TryGetValue(sessionRid, out var entries))
             {
-                var entries = _entries[key];
-                entries.RemoveAll(entry => entry.Matches(actorId, bindingToken));
-                if (entries.Count == 0) _entries.Remove(key);
+                var updated = entries
+                    .Where(entry => !entry.Matches(actorId, bindingToken))
+                    .ToArray();
+                if (updated.Length == entries.Length)
+                    break;
+
+                if (updated.Length == 0)
+                {
+                    if (TryRemove(sessionRid, entries))
+                        break;
+
+                    continue;
+                }
+
+                if (_entries.TryUpdate(sessionRid, updated, entries))
+                    break;
             }
         }
     }
 
     public void Cleanup(RoutingId sessionRid)
     {
-        Entry[] entries;
-        lock (_gate)
-        {
-            if (!_entries.Remove(sessionRid, out var registered)) return;
-
-            entries = registered.ToArray();
-        }
+        if (!_entries.TryRemove(sessionRid, out var entries)) return;
 
         foreach (var entry in entries)
             unbind(entry.ActorId, entry.BindingToken);
@@ -58,10 +72,13 @@ internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbi
 
     public void Clear()
     {
-        lock (_gate)
-        {
-            _entries.Clear();
-        }
+        _entries.Clear();
+    }
+
+    private bool TryRemove(RoutingId sessionRid, Entry[] entries)
+    {
+        return ((ICollection<KeyValuePair<RoutingId, Entry[]>>)_entries).Remove(
+            new KeyValuePair<RoutingId, Entry[]>(sessionRid, entries));
     }
 
     private sealed record Entry(

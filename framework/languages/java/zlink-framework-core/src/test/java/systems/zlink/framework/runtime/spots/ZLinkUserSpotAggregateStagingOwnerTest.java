@@ -30,7 +30,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         assertTrue(backend.live.isEmpty());
         assertEquals(
             List.of("prepare:spot", "restore:spot", "prepare:actor-a",
-                "prepare:actor-b"),
+                "prepare:actor-b", "ingress-sealed"),
             backend.operations);
 
         owner.publishAndReplay(staged, (lane, record) -> {
@@ -50,6 +50,8 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                 .count());
         assertTrue(backend.operations.indexOf("relocation-ready")
             < backend.operations.indexOf("publish:spot"));
+        assertTrue(backend.operations.indexOf("ingress-sealed")
+            < backend.operations.indexOf("relocation-ready"));
         assertTrue(backend.operations.indexOf("timers:publish")
             < backend.operations.indexOf("replay:spot:1"));
     }
@@ -278,6 +280,12 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
             Object preparedSpot) {
             operations.add("relocation-ready");
             return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public Object beginIngressHold(Object preparedSpot) {
+            operations.add("ingress-sealed");
+            return "ingress-hold";
         }
 
         @Override

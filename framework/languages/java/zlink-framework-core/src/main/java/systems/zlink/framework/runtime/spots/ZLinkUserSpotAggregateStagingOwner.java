@@ -19,7 +19,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
-import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.relocation
@@ -888,11 +887,10 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
         @Override
         public CompletionStage<Object> prepareSpot(Request request) {
-            return spots.prepareReserved(
+            return spots.prepareRelocationReserved(
                     request.spotType(),
                     request.spotId(),
-                    request.objectGeneration(),
-                    ZLinkMessage.empty())
+                    request.objectGeneration())
                 .thenApply(value -> value);
         }
 

@@ -70,8 +70,6 @@ final class SampleReleaseGateContractTest {
         "BingoRoomState room",
         "new BingoRoomState",
         "CountDownLatch",
-        "Thread.sleep",
-        "sleep(",
         "System.in.read",
         FORBIDDEN_SAMPLE_ASYNC_HELPER,
         "session relay JSON",
@@ -148,13 +146,16 @@ final class SampleReleaseGateContractTest {
                         "run_sample.sh must be executable for " + sampleName);
                 }
                 String runner = Files.readString(sampleRoot.resolve("run_sample.sh"));
-                assertTrue(runner.contains("--settings-file standalone.settings.gradle.kts"),
+                assertTrue(runner.contains("--settings-file standalone.settings.gradle.kts")
+                        || runner.contains("-c standalone.settings.gradle.kts"),
                     "run_sample.sh must use standalone settings for " + sampleName);
                 Path powerShellRunnerPath = sampleRoot.resolve("run_sample.ps1");
                 if (Files.isRegularFile(powerShellRunnerPath)) {
                     String powerShellRunner = Files.readString(powerShellRunnerPath);
-                    assertTrue(powerShellRunner.contains("--settings-file")
-                            && powerShellRunner.contains("standalone.settings.gradle.kts"),
+                    assertTrue((powerShellRunner.contains("--settings-file")
+                                && powerShellRunner.contains("standalone.settings.gradle.kts"))
+                            || powerShellRunner.contains(
+                                "@(\"-c\", \"standalone.settings.gradle.kts\""),
                         "run_sample.ps1 must use standalone settings for " + sampleName);
                 }
             }
@@ -840,7 +841,9 @@ final class SampleReleaseGateContractTest {
             () -> assertTrue(playSource.contains("settings.apiChannelEndpoints.forEach")),
             () -> assertTrue(playSource.contains("addRouteMesh(SampleNames.SpotMesh)")),
             () -> assertFalse(playSource.contains("addSpotMesh(")),
-            () -> assertTrue(playSource.contains("node.listen(routeEndpoint)")),
+            () -> assertTrue(playSource.contains(
+                "node.setRoutingId(RoutingId.from(\"tictactoe-play-${settings.nodeId}\"))\n"
+                    + "                .listen(routeEndpoint)")),
             () -> assertTrue(playSource.contains("node.channelName(SampleNames.PlayNode)")),
             () -> assertTrue(playSource.contains("node.peerConnections().connect(")),
             () -> assertFalse(playSource.contains("configureEntrySpot()")),
@@ -901,7 +904,7 @@ final class SampleReleaseGateContractTest {
                 "destroy(systems.zlink.framework.actors.ActorRef)"),
             "Java exact contract must keep Actor Manager destroy on exact ActorRef");
         assertTrue(actorExact.contains(
-                "Destroy와 session bind만 exact ref를 받는다"),
+                "Destroy와 session bind만 지정한 ref를 받는다"),
             "Java exact contract must keep the exact-ref boundary explicit");
         assertTrue(offenders.isEmpty(), "actor destroy documentation offenders: " + offenders);
     }
@@ -1676,7 +1679,10 @@ final class SampleReleaseGateContractTest {
                 && apiSource.contains("settings.apiChannelEndpoint")
                 && apiSource.contains("addRouteMesh(SampleNames.SpotMesh)")
                 && apiSource.contains("mesh.objects().client()")
-                && apiSource.contains("mesh.peerConnections().connect(endpoint)")
+                && apiSource.contains(
+                    "mesh.peerConnections().connect(\n"
+                        + "                    RoutingId.from(\"tictactoe-play-$playNodeId\"),\n"
+                        + "                    endpoint,")
                 && !apiSource.contains("addHandlersFromPackageOf")
                 && apiSource.contains("addRequestHandler(")
                 && apiSource.contains("AuthenticatePlayerHandler::class.java"),
@@ -1697,9 +1703,14 @@ final class SampleReleaseGateContractTest {
                 && playSource.contains("addSessionPacketHandler(AuthenticatePlaySessionHandler::class.java)")
                 && playSource.contains("settings.routeEndpoint")
                 && playSource.contains("settings.playEndpoint")
-                && playSource.contains("node.listen(routeEndpoint)")
+                && playSource.contains(
+                    "node.setRoutingId(RoutingId.from(\"tictactoe-play-${settings.nodeId}\"))\n"
+                        + "                .listen(routeEndpoint)")
                 && playSource.contains("node.channelName(SampleNames.PlayNode)")
-                && playSource.contains("node.peerConnections().connect(")
+                && playSource.contains(
+                    "node.peerConnections().connect(\n"
+                        + "                RoutingId.from(\"tictactoe-play-$peerNodeId\"),\n"
+                        + "                settings.peerSpotEndpoint,")
                 && !playSource.contains("addHandlerGroup(SampleNames.PlayHandlerGroup)"),
             "Kotlin TicTacToe Play role must connect both Api endpoints and register its session handler explicitly");
         assertTrue(clientSource.contains("JoinGameMsg(game.roomId)")

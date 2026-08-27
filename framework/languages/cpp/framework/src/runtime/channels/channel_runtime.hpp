@@ -12,6 +12,7 @@
 #include "runtime/channels/route_channel_registration.hpp"
 #include "runtime/channels/route_channel_runtime.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/streams/stream_runtime.hpp"
@@ -20,7 +21,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -201,7 +201,8 @@ class channel_runtime_state_t
     };
 
     std::map<std::string, channel_snapshot_t> channels;
-    mutable std::mutex mutex;
+    runtime::offload_executor_t lane_executor{1, 0, "zlink-channel-state"};
+    mutable runtime::state_lane_t lane{lane_executor};
     std::size_t max_pending = 1024;
     std::chrono::milliseconds default_request_timeout{std::chrono::seconds (30)};
     std::size_t pending = 0;

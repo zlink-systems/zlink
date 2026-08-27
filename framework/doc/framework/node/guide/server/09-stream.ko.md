@@ -17,7 +17,7 @@ title: "9. STREAM · Node/TypeScript"
 
 # 9. STREAM
 
-> **이 장의 계약 소유 문서** — [STREAM 서버 session](../../../common/spec/server/19-stream-session.ko.md)이
+> **이 장의 계약 소유 문서** — [STREAM 서버 session](../../../common/spec/server/04-session/01-stream-session.ko.md)이
 > 동작을, [언어별 STREAM session 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 서버의 정확한 시그니처를 소유한다. Client package는 Stream Connector 가이드와
 > [언어별 공개 계약](../../../common/spec/stream-connector/README.ko.md)을 따른다.
@@ -194,6 +194,13 @@ level 옵션을 받는다. 기본값은 `errors`로 기존 동작과 같고, `of
 outbound frame에 flow 식별자를 만들거나 부착하지 않아 관측 전용 비용이 사라진다
 ([Stream Connector 공통 스펙 §13](../../../common/spec/stream-connector/32-stream-connector.ko.md#13-diagnostics-level)).
 Request/response 매칭에 쓰는 correlation은 protocol 정보라 `off`에서도 그대로 동작한다.
+
+```typescript
+const options = {
+    endpoint: 'ws://game.example.com:9100',
+    diagnosticsLevel: ZlinkStreamDiagnosticsLevel.Off,
+};
+```
 
 ## 6. Client send와 request
 

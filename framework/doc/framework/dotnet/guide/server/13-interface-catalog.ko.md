@@ -303,7 +303,7 @@ relocation staging과 mailbox 내부 상태는 log·trace 또는 Framework 내�
 
 ## 8. 관련 문서
 
-- [공개 계약 관리 원칙](../../../common/spec/server/00-public-contract-governance.ko.md)
+- [공개 계약 관리 원칙](../../../common/spec/server/00-foundation/01-public-contract-governance.ko.md)
 - [.NET exact interface 목차](../../../common/spec/server/languages/dotnet/interfaces/README.ko.md)
 
 ---

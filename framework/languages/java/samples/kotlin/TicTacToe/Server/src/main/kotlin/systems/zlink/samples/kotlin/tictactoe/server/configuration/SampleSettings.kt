@@ -5,6 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 
 @ConfigurationProperties("sample")
 data class SampleSettings(
+    val nodeId: String,
     val apiBindUrl: String,
     val apiPublicUrl: String,
     val apiChannelEndpoint: String,
@@ -23,6 +24,7 @@ data class SampleSettings(
     val logDirectory: String,
 ) {
     init {
+        require(nodeId.isNotBlank()) { "sample.nodeId is required" }
         require(apiBindUrl.isNotBlank()) { "sample.apiBindUrl is required" }
         require(apiPublicUrl.isNotBlank()) { "sample.apiPublicUrl is required" }
         require(apiChannelEndpoint.isNotBlank()) { "sample.apiChannelEndpoint is required" }

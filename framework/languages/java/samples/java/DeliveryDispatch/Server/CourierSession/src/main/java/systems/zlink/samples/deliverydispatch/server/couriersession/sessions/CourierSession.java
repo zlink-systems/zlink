@@ -78,14 +78,19 @@ public final class CourierSession implements ZLinkSession {
         Messages.BindCourierSessionReq request = payload.decode(Messages.BindCourierSessionReq.class);
         return findOrEnsureActor(request.courierId()).thenCompose(actorRef -> {
             ZLinkSessionActor bound = context.actors().find(actorRef.actorId()).orElse(null);
+            boolean requiresBinding = bound == null;
             CompletionStage<ZLinkSessionActor> actorStage = bound == null
                 ? context.actors().bind(actorRef)
                 : CompletableFuture.completedFuture(bound);
             ActorRefSnapshot snapshot = ActorRefSnapshot.from(actorRef);
             Messages.BindCourierSessionReq relayed = new Messages.BindCourierSessionReq(
                 request.courierId(), snapshot, context.sessionId());
-            return actorStage.thenCompose(actor ->
-                actor.relay(dispatch, ZLinkMessage.of(relayed)).thenApply(ignored -> null));
+            return actorStage.thenCompose(actor -> {
+                if (requiresBinding) {
+                    System.out.println("deliverydispatch-courier bound courier=" + request.courierId());
+                }
+                return actor.relay(dispatch, ZLinkMessage.of(relayed)).thenApply(ignored -> null);
+            });
         });
     }
 

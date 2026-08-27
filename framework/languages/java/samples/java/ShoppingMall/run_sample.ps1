@@ -15,6 +15,8 @@ Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $FlowLogDir "*.log")
 $Gradle = if ($IsWindows) { Join-Path $SampleDir "../../gradlew.bat" } else { Join-Path $SampleDir "../../gradlew" }
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 $RedisContainer = $null
+$WaitAttempts = 300
+$WaitIntervalMilliseconds = 100
 
 function Print-Logs {
     param([int]$Status)
@@ -125,6 +127,53 @@ function Start-Role {
     $Processes.Add($process)
 }
 
+function Get-LogCount {
+    param([string]$Path, [string]$Pattern)
+    if (-not (Test-Path $Path)) { return 0 }
+    return @((Select-String -Path $Path -Pattern $Pattern -SimpleMatch -ErrorAction SilentlyContinue)).Count
+}
+
+function Wait-LogCount {
+    param([string]$Path, [string]$Pattern, [int]$Expected)
+    for ($attempt = 0; $attempt -lt $WaitAttempts; $attempt++) {
+        if ((Get-LogCount $Path $Pattern) -eq $Expected) { return }
+        Start-Sleep -Milliseconds $WaitIntervalMilliseconds
+    }
+    throw "Timed out waiting for $Expected '$Pattern' in $Path"
+}
+
+function Wait-LogAtLeast {
+    param([string]$Path, [string]$Pattern, [int]$Expected)
+    for ($attempt = 0; $attempt -lt $WaitAttempts; $attempt++) {
+        if ((Get-LogCount $Path $Pattern) -ge $Expected) { return }
+        Start-Sleep -Milliseconds $WaitIntervalMilliseconds
+    }
+    throw "Timed out waiting for $Expected+ '$Pattern' in $Path"
+}
+
+function Wait-ReplayExactlyOnce {
+    param([string]$Pattern)
+    $workflowA = Join-Path $LogDir "workflow-a.log"
+    $workflowB = Join-Path $LogDir "workflow-b.log"
+    for ($attempt = 0; $attempt -lt $WaitAttempts; $attempt++) {
+        if (((Get-LogCount $workflowA $Pattern) + (Get-LogCount $workflowB $Pattern)) -eq 1) { return }
+        Start-Sleep -Milliseconds $WaitIntervalMilliseconds
+    }
+    throw "Timed out waiting for one '$Pattern' across workflow logs"
+}
+
+function Invoke-JsonPost {
+    param([string]$Url, [string]$Body)
+    return Invoke-RestMethod -Method Post -Uri $Url -ContentType "application/json" -Body $Body
+}
+
+function Get-ClientOrder {
+    param([string]$Path, [string]$Name)
+    $match = Select-String -Path $Path -Pattern ("^shoppingmall-client-order name=" + $Name + " order=([^\s]+)$")
+    if ($null -eq $match) { return $null }
+    return $match.Matches[0].Groups[1].Value
+}
+
 function App-Bin {
     param([string]$Project, [string]$Script)
     $bin = Join-Path $SampleDir "$Project/build/install/$Script/bin"
@@ -210,7 +259,12 @@ try {
     Wait-Port $apiAHttp.Host $apiAHttp.Port
     Wait-Port $apiBHttp.Host $apiBHttp.Port
 
-    Write-Host "topology=ready"
+    Wait-LogCount (Join-Path $LogDir "api-a.log") "shoppingmall-ready kind=http node=api-a" 1
+    Wait-LogCount (Join-Path $LogDir "api-b.log") "shoppingmall-ready kind=http node=api-b" 1
+    Wait-LogCount (Join-Path $LogDir "api-a.log") "shoppingmall-ready kind=object-route node=api-a target=workflow-a" 1
+    Wait-LogCount (Join-Path $LogDir "api-a.log") "shoppingmall-ready kind=object-route node=api-a target=workflow-b" 1
+    Wait-LogCount (Join-Path $LogDir "api-b.log") "shoppingmall-ready kind=object-route node=api-b target=workflow-a" 1
+    Wait-LogCount (Join-Path $LogDir "api-b.log") "shoppingmall-ready kind=object-route node=api-b target=workflow-b" 1
     $clientLog = Join-Path $LogDir "client.log"
     & (App-Bin "Client" "Client") --config $clientConfig *> $clientLog
     if ($LASTEXITCODE -ne 0) {
@@ -218,17 +272,75 @@ try {
     }
     Get-Content -Path $clientLog
 
-    if (-not (Select-String -Path $clientLog -Pattern "shoppingmall-server-evidence=completed" -Quiet)) {
-        throw "Server evidence marker was not found."
-    }
-    if (-not (Select-String -Path $clientLog -Pattern "shoppingmall=completed" -Quiet)) {
+    if (-not (Select-String -Path $clientLog -Pattern "^shoppingmall=completed$" -Quiet)) {
         throw "Client completion marker was not found."
     }
-    if (-not (Select-String -Path (Join-Path $FlowLogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
-        throw "Message flow evidence was not found."
+
+    $successOrder = Get-ClientOrder $clientLog "success"
+    $concurrentOrder = Get-ClientOrder $clientLog "concurrent"
+    $inventoryFailureOrder = Get-ClientOrder $clientLog "inventory-failure"
+    $paymentFailureOrder = Get-ClientOrder $clientLog "payment-failure"
+    $scaleOutOrder = Get-ClientOrder $clientLog "scale-out"
+    foreach ($order in @($successOrder, $concurrentOrder, $inventoryFailureOrder, $paymentFailureOrder, $scaleOutOrder)) {
+        if ([string]::IsNullOrWhiteSpace($order)) { throw "Client did not report its produced order ID." }
     }
-    Write-Host "shoppingmall full client/server self-check completed"
+
+    $runnerPendingKey = $redisKeyPrefix + "runner-pending"
+    $runnerRelocationKey = $redisKeyPrefix + "runner-relocation"
+    $pending = Invoke-JsonPost "http://$($apiAHttp.Host):$($apiAHttp.Port)/self-check/idempotency/pending" ("{`"cartId`":`"cart-success`",`"shippingAddressId`":`"addr-home`",`"paymentMethodId`":`"pm-ok`",`"idempotencyKey`":`"$runnerPendingKey`"}")
+    $pendingOrder = $pending.orderId
+    if ([string]::IsNullOrWhiteSpace($pendingOrder)) { throw "Runner pending fixture did not produce an order ID." }
+
+    $workflowALog = Join-Path $LogDir "workflow-a.log"
+    $workflowBLog = Join-Path $LogDir "workflow-b.log"
+    for ($attempt = 1; $attempt -le 20; $attempt++) {
+        if ((Get-LogCount $workflowALog "shoppingmall-order started order=") -ge 1 -and (Get-LogCount $workflowBLog "shoppingmall-order started order=") -ge 1) { break }
+        $runnerWitnessKey = $redisKeyPrefix + "runner-witness-$attempt"
+        Invoke-JsonPost "http://$($apiAHttp.Host):$($apiAHttp.Port)/orders/start" ("{`"cartId`":`"cart-success`",`"shippingAddressId`":`"addr-home`",`"paymentMethodId`":`"pm-ok`",`"idempotencyKey`":`"$runnerWitnessKey`"}") | Out-Null
+        Start-Sleep -Milliseconds $WaitIntervalMilliseconds
+    }
+    Wait-LogAtLeast $workflowALog "shoppingmall-order started order=" 1
+    Wait-LogAtLeast $workflowBLog "shoppingmall-order started order=" 1
+
+    $checkpoint = Invoke-JsonPost "http://$($apiAHttp.Host):$($apiAHttp.Port)/self-check/workflow/inventory-reserved" ("{`"cartId`":`"cart-success`",`"shippingAddressId`":`"addr-office`",`"paymentMethodId`":`"pm-ok`",`"idempotencyKey`":`"$runnerRelocationKey`"}")
+    $checkpointOrder = $checkpoint.state.orderId
+    if ([string]::IsNullOrWhiteSpace($checkpointOrder)) { throw "Runner relocation fixture did not produce an order ID." }
+    $checkpointGeneration = [long]$checkpoint.objectGeneration
+    if ($checkpointGeneration -le 0) { throw "Runner relocation fixture did not report ObjectGeneration." }
+
+    $sourceHttp = $null
+    for ($attempt = 0; $attempt -lt $WaitAttempts; $attempt++) {
+        if ((Get-LogCount $workflowALog "shoppingmall-order started order=$checkpointOrder ") -ge 1) {
+            $sourceHttp = "http://$($workflowAHttp.Host):$($workflowAHttp.Port)"
+            break
+        }
+        if ((Get-LogCount $workflowBLog "shoppingmall-order started order=$checkpointOrder ") -ge 1) {
+            $sourceHttp = "http://$($workflowBHttp.Host):$($workflowBHttp.Port)"
+            break
+        }
+        Start-Sleep -Milliseconds $WaitIntervalMilliseconds
+    }
+    if ($null -eq $sourceHttp) { throw "Runner could not locate the relocation source workflow." }
+    $relocation = Invoke-JsonPost "$sourceHttp/self-check/relocate" '{}'
+    if ($relocation.outcome -ne "RELOCATED") { throw "Planned relocation did not complete." }
+
+    $resume = Invoke-JsonPost "http://$($apiBHttp.Host):$($apiBHttp.Port)/self-check/workflow/$checkpointOrder/continue" '{}'
+    if ($resume.state.status -ne "Confirmed") { throw "Relocated checkpoint did not resume to Confirmed." }
+
+    Invoke-JsonPost "http://$($apiAHttp.Host):$($apiAHttp.Port)/self-check/projection/$successOrder/delete" '{}' | Out-Null
+    $rebuilt = Invoke-JsonPost "http://$($apiBHttp.Host):$($apiBHttp.Port)/self-check/projection/$successOrder/rebuild" '{}'
+    if ($rebuilt.state.status -ne "Confirmed") { throw "Projection rebuild did not restore Confirmed." }
+    $assertionBody = "{`"successfulOrderId`":`"$successOrder`",`"pendingRecoveredOrderId`":`"$pendingOrder`",`"concurrentOrderId`":`"$concurrentOrder`",`"resumedOrderId`":`"$checkpointOrder`",`"inventoryFailureOrderId`":`"$inventoryFailureOrder`",`"paymentFailureOrderId`":`"$paymentFailureOrder`",`"scaleOutOrderId`":`"$scaleOutOrder`"}"
+    $assertion = Invoke-JsonPost "http://$($apiAHttp.Host):$($apiAHttp.Port)/self-check/assert" $assertionBody
+    if (-not $assertion.passed) { throw "Server evidence assertion failed." }
+    Wait-LogAtLeast (Join-Path $LogDir "api-a.log") "shoppingmall-evidence order=$checkpointOrder events=" 1
+    Wait-ReplayExactlyOnce "shoppingmall-order replayed order=$checkpointOrder generation=$checkpointGeneration"
+    Wait-LogCount $workflowALog "shoppingmall-order external-effect-repeated order=$checkpointOrder" 0
+    Wait-LogCount $workflowBLog "shoppingmall-order external-effect-repeated order=$checkpointOrder" 0
     $Status = 0
 } finally {
     Cleanup $Status
+}
+if ($Status -eq 0) {
+    Write-Host "shoppingmall-placement=completed"
 }

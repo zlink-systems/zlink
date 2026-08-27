@@ -33,10 +33,10 @@ class GameQuestClientScenario {
     apiA: BrowserHttpClient,
     apiB: BrowserHttpClient,
     missionA: BrowserHttpClient,
-    missionB: BrowserHttpClient,
     apiAStream: ZlinkStreamConnector,
     apiBStream: ZlinkStreamConnector,
     apiBReconnectStream: ZlinkStreamConnector,
+    lifecycleCompletionPath?: string,
     signal?: AbortSignal
   ): Promise<void> {
     await Promise.all([apiAStream.connect(signal), apiBStream.connect(signal)]);
@@ -100,12 +100,6 @@ class GameQuestClientScenario {
       .packetName(PacketNames.killMonsterReq)
       .submit<KillMonsterRes>(signal);
     zlinkStreamAssert.ensure(duplicate.eventId === thirdKill.eventId, 'Sample scenario assertion failed.');
-    const afterCompletion = await apiAStream.request(killMonsterReq('player-alice', 'wolf', 'forest', 'kill-4'), Object)
-      .packetName(PacketNames.killMonsterReq)
-      .submit<KillMonsterRes>(signal);
-    zlinkStreamAssert.ensure(afterCompletion.eventId === 'player-alice-kill-4', 'Sample scenario assertion failed.');
-    await apiAStream.expectNone(PacketNames.questCompletedNotify).within(250).run(signal);
-
     const auctionComplete = waitForQuestCompletion(apiAStream, QuestIds.OpenAuction, signal);
     const auction = await apiAStream.request(unlockFeatureReq('player-alice', 'auction', 'unlock-auction'), Object)
       .packetName(PacketNames.unlockFeatureReq)
@@ -128,9 +122,8 @@ class GameQuestClientScenario {
       progress.questId === QuestIds.FirstHunt && progress.status === QuestStatuses.RewardGranted), 'Sample scenario assertion failed.');
     const beforeDeactivate = requireQuest(aliceRejoined.activeQuests, QuestIds.FirstHunt);
 
-    const closeOwnerA = await missionA.post('/self-check/owner/player-alice/close').fetch<{ closed: boolean }>();
-    const closeOwnerB = await missionB.post('/self-check/owner/player-alice/close').fetch<{ closed: boolean }>();
-    zlinkStreamAssert.ensure(closeOwnerA.closed || closeOwnerB.closed, 'Sample scenario assertion failed.');
+    const closeOwner = await missionA.post('/self-check/owner/player-alice/close').fetch<{ accepted: boolean }>();
+    zlinkStreamAssert.ensure(closeOwner.accepted, 'Sample scenario assertion failed.');
 
     // Close is one-way. Sync observes the completed owner lifecycle before
     // the next one-way action may start a new Instance activation.
@@ -248,6 +241,29 @@ class GameQuestClientScenario {
     const reconciled = await waitForStreamProjection(apiBReconnectStream, 'player-alice', (progress) =>
       progress.questId === QuestIds.FirstHunt && progress.currentCount >= 4, signal);
     zlinkStreamAssert.ensure(reconciled.some((progress) => progress.questId === QuestIds.FirstHunt && progress.currentCount >= 4), 'Sample scenario assertion failed.');
+
+    const afterCompletion = await apiBReconnectStream.request(killMonsterReq('player-alice', 'wolf', 'forest', 'kill-4'), Object)
+      .packetName(PacketNames.killMonsterReq)
+      .submit<KillMonsterRes>(signal);
+    zlinkStreamAssert.ensure(afterCompletion.eventId === 'player-alice-kill-4', 'Sample scenario assertion failed.');
+    await apiBReconnectStream.expectNone(PacketNames.questCompletedNotify).within(250).run(signal);
+
+    await apiBReconnectStream.request(killMonsterReq('player-alice', 'wolf', 'desert', 'owner-ready-intent'), Object)
+      .packetName(PacketNames.killMonsterReq)
+      .submit<KillMonsterRes>(signal);
+    zlinkStreamAssert.ensure(lifecycleCompletionPath !== undefined, 'Runner lifecycle completion path is required.');
+    console.log('gamequest-owner awaiting-termination player=player-alice');
+    const ownerTermination = await fetch(lifecycleCompletionPath, { signal });
+    zlinkStreamAssert.ensure(ownerTermination.ok, 'Runner owner termination stage failed.');
+    let ownerUnavailable = false;
+    try {
+      await apiBReconnectStream.request(killMonsterReq('player-alice', 'wolf', 'forest', 'owner-unavailable-intent'), Object)
+        .packetName(PacketNames.killMonsterReq)
+        .submit<KillMonsterRes>(signal);
+    } catch {
+      ownerUnavailable = true;
+    }
+    zlinkStreamAssert.ensure(ownerUnavailable, 'Ready owner gameplay call did not fail.');
 
     await apiBReconnectStream.close();
     const assertion = await waitForServerAssertion(apiA, signal);

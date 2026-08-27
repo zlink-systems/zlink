@@ -562,7 +562,7 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         Assert.Contains(logger.Messages, message =>
             message.StartsWith("zlink flow: ", StringComparison.Ordinal)
-            && message.Contains("event_id=zlink.dispatch_error", StringComparison.Ordinal)
+            && message.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
             && message.Contains("surface=actor", StringComparison.Ordinal)
             && message.Contains("kind=send", StringComparison.Ordinal)
             && message.Contains("packet=missing-actor-send", StringComparison.Ordinal)
@@ -619,7 +619,7 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         Assert.Contains(logger.Messages, message =>
             message.StartsWith("zlink flow: ", StringComparison.Ordinal)
-            && message.Contains("event_id=zlink.dispatch_error", StringComparison.Ordinal)
+            && message.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
             && message.Contains("surface=actor", StringComparison.Ordinal)
             && message.Contains("kind=send", StringComparison.Ordinal)
             && message.Contains("packet=malformed-actor-send", StringComparison.Ordinal)
@@ -1046,10 +1046,6 @@ public sealed partial class UnhandledDispatchPolicyTests
         public ZLinkBackendRouteReceived? RecvRoute(RecvFlags flags) => null;
 
         public void OnDispatchEvent(Action<ZLinkBackendSpotDispatchInfo> handler)
-        {
-        }
-
-        public void OnSendReady(Action handler)
         {
         }
 

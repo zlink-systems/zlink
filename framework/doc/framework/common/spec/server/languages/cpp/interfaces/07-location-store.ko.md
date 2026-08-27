@@ -1,8 +1,8 @@
-# C++ Location·Relocation Store·Redis exact interface
+# C++ Location·Relocation Store·Redis 언어별 interface
 
-[C++ exact interface 목차](README.ko.md) ·
-[Location Runtime](../../../21-location-runtime.ko.md) ·
-[Redis Location Store](../../../22-location-store-redis.ko.md)
+[C++ 언어별 interface 목차](README.ko.md) ·
+[Location Runtime](../../../05-location-relocation/01-location-runtime.ko.md) ·
+[Redis Location Store](../../../05-location-relocation/02-location-store-redis.ko.md)
 
 이 문서는 외부 provider가 구현하는 최소 public SPI, application이 사용하는 location option과 운영
 query, 공식 Redis extension의 public declaration을 고정한다. Authority, owner lease, reservation,
@@ -163,7 +163,7 @@ public:
 } // namespace zlink::framework
 ```
 
-Key는 Framework가 발급하는 opaque UTF-8 `1..1024` bytes 문자열이며 case-sensitive exact match를
+Key는 Framework가 발급하는 opaque UTF-8 `1..1024` bytes 문자열이며 case-sensitive 비교를
 사용한다. Version과 cursor는 provider가 발급하는 opaque UTF-8 `1..4096` bytes 문자열이다.
 Value는 최대 1 MiB다. `retention`이 없으면 만료되지 않으며, 만료 판단에는 provider clock을
 사용한다. `store_now`는 같은 provider 관측에서 얻은 시각이므로 Framework는 local clock을 TTL
@@ -171,8 +171,8 @@ Value는 최대 1 MiB다. `retention`이 없으면 만료되지 않으며, 만�
 
 `write(...)`는 모든 condition을 먼저 검사하고 모두 참일 때만 모든 mutation을 하나의 atomic
 commit으로 적용한다. 조건 하나라도 거짓이면 mutation과 version 증가는 모두 0이고
-`store_write_conflict_t`를 반환한다. Condition은 Missing 또는 exact Version 비교만 제공한다.
-Conflict 결과에 domain state나 current value를 싣지 않으며 Framework가 필요한 key를 exact read한다.
+`store_write_conflict_t`를 반환한다. Condition은 Missing 또는 Version 비교만 제공한다.
+Conflict 결과에 domain state나 current value를 싣지 않으며 Framework가 필요한 key를 직접 read한다.
 
 한 write request는 condition과 mutation을 합쳐 최대 2,048개의 unique key와 최대 4 MiB의 encoded
 크기를 허용한다. 같은 key의 condition 또는 mutation을 중복할 수 없다.
@@ -251,10 +251,10 @@ public:
 } // namespace zlink::framework
 ```
 
-Reference는 Framework가 put 전에 발급하는 opaque UTF-8 `1..4096` bytes 문자열이며 exact match를
+Reference는 Framework가 put 전에 발급하는 opaque UTF-8 `1..4096` bytes 문자열이며 match를
 사용한다. 삭제되거나 만료된 reference도 다른 content에 다시 사용하지 않는다. 같은 reference와 같은
 bytes를 다시 put하면 `blob_already_stored_t`, 다른 bytes를 put하면 `blob_conflict_t`다. 이 규칙으로
-Framework는 timeout이나 연결 오류 뒤에 같은 reference를 exact read하여 저장 결과를 재조정할 수 있다.
+Framework는 timeout이나 연결 오류 뒤에 같은 reference를 직접 read하여 저장 결과를 재조정할 수 있다.
 `retention`은 양수여야 한다.
 
 Blob 하나는 최대 64 MiB다. Actor·Spot relocation의 state·queue·timer handoff payload는 이 Store를
@@ -271,7 +271,7 @@ ownership은 caller에게 이전된다.
 C++ interface는 다른 언어의 cancellation token을 그대로 옮기지 않는다. Framework가 operation을
 시작하지 않은 상태에서 host shutdown이나 deadline이 확정되면 provider를 호출하지 않는다. 호출을
 시작한 뒤 timeout, transport 오류 또는 process interruption이 발생하면 commit 여부가 불확실할 수
-있다. Framework는 Location Store의 exact read와 version 또는 Relocation Store의 Framework-issued
+있다. Framework는 Location Store의 직접 read와 version 또는 Relocation Store의 Framework-issued
 reference로 결과를 재조정한다.
 
 입력 범위 위반과 같은 caller 오류는 operation을 시작하기 전에 검증한다. Conflict, Missing,
@@ -413,9 +413,9 @@ public:
 NodeRid는 transport routing identity이므로 public `zlink::routing_id_t`를 유지한다. Store version,
 private owner token과 provider clock은 운영 query에 노출하지 않는다.
 
-Actor ID와 Spot ID의 exact lookup은 각각 현재 object location 하나를 조회한다. Missing이면 빈
+Actor ID와 Spot ID의 lookup은 각각 현재 object location 하나를 조회한다. Missing이면 빈
 `std::optional`, Creating이면 `creating`, Ready이면 `ready`, commit 뒤 current owner를 사용할 수 없으면
-`unavailable` entry를 반환한다. Spot exact lookup은 User Spot과 Instance Spot을 같은 Spot ID 조회 계약으로
+`unavailable` entry를 반환한다. Spot lookup은 User Spot과 Instance Spot을 같은 Spot ID 조회 계약으로
 다룬다. List query의 `object_kind`는 필수이며 stable type과 MeshName은 선택 filter다. Page size는
 `1..1000`, encoded page는 최대 4 MiB이고 continuation token은 query가 발급한 opaque 값이다. Store 조회가
 실패하면 operation 전체가 `framework_error_kind_t::unavailable`로 실패하며 page 일부를 반환하지 않는다.

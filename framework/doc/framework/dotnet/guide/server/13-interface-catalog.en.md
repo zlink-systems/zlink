@@ -306,7 +306,7 @@ logs/traces or the Framework's internal diagnostics.
 
 ## 8. Related Documents
 
-- [Public contract governance principles](../../../common/spec/server/00-public-contract-governance.en.md)
+- [Public contract governance principles](../../../common/spec/server/00-foundation/01-public-contract-governance.en.md)
 - [.NET exact interface index](../../../common/spec/server/languages/dotnet/interfaces/README.en.md)
 
 ---

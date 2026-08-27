@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "../Configuration/sample_names.hpp"
+#include "../Configuration/sample_readiness.hpp"
 #include "../Configuration/sample_configuration.hpp"
 
 #include <zlink/framework.hpp>
@@ -58,7 +59,7 @@ class courier_session_t final : public packet_stream_session_t
                                              bind_courier_session_req_t{request.courier_id}))
                            .submit ();
             stream.reply_packet (reply).submit ();
-            std::cerr << "deliverydispatch courier-session: bound courier=" << request.courier_id
+            std::cerr << "deliverydispatch-courier bound courier=" << request.courier_id
                       << "\n";
             co_return;
         }
@@ -114,5 +115,7 @@ int main (int argc, char **argv)
     options.add_stream_node (sample_names_t::courier_stream_node)
       .bind (topology.courier_stream_endpoint)
       .register_session<courier_session_t> ();
+    app.add_hosted_service (std::make_unique<route_readiness_service_t> (
+      sample_names_t::courier_session_node, sample_names_t::courier_actor_discovery));
     return app.run (argc, argv);
 }

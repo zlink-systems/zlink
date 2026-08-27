@@ -203,6 +203,7 @@ export interface ZLinkNestFrameworkOptionsBuilder {
   setMaintenanceWave(waveId: string): this;
   setActorTransferTimeout(timeoutMs: number): this;
   setMessageFollowDuration(timeoutMs: number): this;
+  setSessionReplacementCallbackTimeout(timeoutMs: number): this;
   configureStreamCompression(): ZLinkStreamCompressionBuilder;
   configureLocations(): ZLinkLocationOptions;
   configureNetwork(): ZLinkNetworkOptions;
@@ -215,6 +216,7 @@ export interface ZLinkNestFrameworkOptionsBuilder {
 
 export interface ZLinkNestFrameworkAdditionalOptions {
   readonly requestTimeoutMs?: number;
+  readonly sessionReplacementCallbackTimeoutMs?: number;
   readonly filters?: readonly Type<ZLinkHandlerFilter>[];
   readonly worker?: ZLinkWorkerOptions;
   readonly dispatch?: ZLinkDispatchOptions;

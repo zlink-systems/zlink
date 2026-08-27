@@ -7,6 +7,10 @@ import {
   type ZLinkOwnerLeaseReadResult
 } from './internal-location-contracts';
 import type { ZLinkOwnerLeaseStore } from './internal-store-contracts';
+import { AsyncResource } from 'node:async_hooks';
+import { ZLinkStateLane } from '../execution/state-lane';
+
+const detachedLeaseRefreshResource = new AsyncResource('zlink:owner-lease-tracker');
 
 export interface ZLinkOwnerLeaseTrackerOptions {
   readonly store: ZLinkOwnerLeaseStore;
@@ -19,12 +23,19 @@ interface OwnerLeaseTrackerSnapshot {
   readonly fetchedAtMs: number;
 }
 
+interface OwnerLeaseRefresh {
+  readonly promise: Promise<OwnerLeaseTrackerSnapshot>;
+  readonly resolve: (snapshot: OwnerLeaseTrackerSnapshot) => void;
+  readonly reject: (error: unknown) => void;
+}
+
 export class ZLinkOwnerLeaseTracker {
+  private readonly lane = new ZLinkStateLane();
   private readonly store: ZLinkOwnerLeaseStore;
   private readonly options: Required<ZLinkLocationOptionOverrides>;
   private readonly monotonicNowMs: () => number;
   private readonly snapshots = new Map<string, OwnerLeaseTrackerSnapshot>();
-  private readonly refreshes = new Map<string, Promise<OwnerLeaseTrackerSnapshot>>();
+  private readonly refreshes = new Map<string, OwnerLeaseRefresh>();
   private liveOwnerFingerprint?: string;
   private liveOwnerVersion = 0;
 
@@ -62,7 +73,7 @@ export class ZLinkOwnerLeaseTracker {
   }
 
   async getLiveOwnerSetVersion(signal?: AbortSignal): Promise<number> {
-    const owners = [...this.snapshots.keys()];
+    const owners = await this.lane.run(() => [...this.snapshots.keys()]);
     const refreshed = await Promise.all(owners.map(ownerId => this.getSnapshot(ownerId, signal)));
     const live = refreshed
       .filter(snapshot => this.isLive(snapshot))
@@ -70,48 +81,91 @@ export class ZLinkOwnerLeaseTracker {
       .filter(ownerId => ownerId.length > 0)
       .sort()
       .join('\n');
-    if (live !== this.liveOwnerFingerprint) {
-      this.liveOwnerFingerprint = live;
-      this.liveOwnerVersion++;
-    }
-    return this.liveOwnerVersion;
+    return await this.lane.run(() => {
+      if (live !== this.liveOwnerFingerprint) {
+        this.liveOwnerFingerprint = live;
+        this.liveOwnerVersion++;
+      }
+      return this.liveOwnerVersion;
+    });
   }
 
   private async getSnapshot(
     ownerId: string,
     signal?: AbortSignal
   ): Promise<OwnerLeaseTrackerSnapshot> {
+    const prepared = await this.lane.run(() => this.prepareSnapshotRefresh(ownerId));
+    if (prepared.snapshot !== undefined) return prepared.snapshot;
+    if (prepared.start) {
+      void runDetachedLeaseRefresh(() => this.refreshSnapshot(ownerId, signal, prepared.refresh));
+    }
+    return await prepared.refresh.promise;
+  }
+
+  private prepareSnapshotRefresh(ownerId: string): {
+    readonly snapshot?: OwnerLeaseTrackerSnapshot;
+    readonly refresh: OwnerLeaseRefresh;
+    readonly start: boolean;
+  } {
     const current = this.snapshots.get(ownerId);
     if (current !== undefined
       && this.monotonicNowMs() - current.fetchedAtMs < this.options.pollingIntervalMs
       && this.isLive(current)) {
-      return current;
+      return {
+        snapshot: current,
+        refresh: { promise: Promise.resolve(current), resolve: () => undefined, reject: () => undefined },
+        start: false
+      };
     }
-
     const activeRefresh = this.refreshes.get(ownerId);
-    if (activeRefresh !== undefined) {
-      return activeRefresh;
-    }
+    if (activeRefresh !== undefined) return { refresh: activeRefresh, start: false };
 
-    const refresh = this.refreshSnapshot(ownerId, signal);
+    let resolve!: (snapshot: OwnerLeaseTrackerSnapshot) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<OwnerLeaseTrackerSnapshot>((complete, fail) => {
+      resolve = complete;
+      reject = fail;
+    });
+    const refresh = { promise, resolve, reject };
     this.refreshes.set(ownerId, refresh);
-    try {
-      return await refresh;
-    } finally {
-      this.refreshes.delete(ownerId);
-    }
+    return { refresh, start: true };
   }
 
   private async refreshSnapshot(
     ownerId: string,
-    signal?: AbortSignal
-  ): Promise<OwnerLeaseTrackerSnapshot> {
-    const snapshot = {
-      result: await this.store.readOwnerLease(ownerId, signal),
-      fetchedAtMs: this.monotonicNowMs()
-    };
+    signal: AbortSignal | undefined,
+    refresh: OwnerLeaseRefresh
+  ): Promise<void> {
+    try {
+      const snapshot = {
+        result: await this.store.readOwnerLease(ownerId, signal),
+        fetchedAtMs: this.monotonicNowMs()
+      };
+      await this.lane.run(() => this.completeSnapshotRefresh(ownerId, refresh, snapshot));
+    } catch (error) {
+      await this.lane.run(() => this.failSnapshotRefresh(ownerId, refresh, error));
+    }
+  }
+
+  private completeSnapshotRefresh(
+    ownerId: string,
+    refresh: OwnerLeaseRefresh,
+    snapshot: OwnerLeaseTrackerSnapshot
+  ): void {
+    if (this.refreshes.get(ownerId) !== refresh) return;
     this.snapshots.set(ownerId, snapshot);
-    return snapshot;
+    this.refreshes.delete(ownerId);
+    refresh.resolve(snapshot);
+  }
+
+  private failSnapshotRefresh(
+    ownerId: string,
+    refresh: OwnerLeaseRefresh,
+    error: unknown
+  ): void {
+    if (this.refreshes.get(ownerId) !== refresh) return;
+    this.refreshes.delete(ownerId);
+    refresh.reject(error);
   }
 
   private isLive(snapshot: OwnerLeaseTrackerSnapshot): boolean {
@@ -160,4 +214,8 @@ export class ZLinkLiveRowFilter {
   ): Promise<boolean> {
     return await this.leaseTracker.isOwnerLive(ownerIdOf(row), signal);
   }
+}
+
+function runDetachedLeaseRefresh(work: () => Promise<void>): Promise<void> {
+  return detachedLeaseRefreshResource.runInAsyncScope(work);
 }

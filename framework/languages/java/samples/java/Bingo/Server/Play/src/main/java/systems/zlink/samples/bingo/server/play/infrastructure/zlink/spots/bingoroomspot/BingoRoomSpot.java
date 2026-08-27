@@ -9,6 +9,8 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
@@ -28,6 +30,8 @@ import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
 public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
+    private static final Logger logger = LoggerFactory.getLogger(BingoRoomSpot.class);
+
     private final ZLinkSpotContext context;
     private final BingoRoomSettingsInitializer settingsInitializer;
     private final Map<String, PlayerActor> actors = new HashMap<>();
@@ -100,6 +104,8 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
             .timeout(SampleTimings.RequestTimeout)
             .yield(Messages.GetPlayerRecordRes.class)
             .thenAccept(record -> {
+                logger.info("bingo-record fetched actor={} wins={} losses={}",
+                    actor.actorId(), record.getWins(), record.getLosses());
                 if (pendingJoins.get(actor.actorId()) != request) {
                     return;
                 }
@@ -113,6 +119,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         PlayerActor actor) {
         if (!actors.containsKey(actor.actorId()) || game == null) {
             observers.remove(actor.actorId());
+            logger.info("bingo-lifecycle room-leave actor={}", actor.actorId());
             return CompletableFuture.completedFuture(null);
         }
         Messages.BingoRoomState finalState = game.snapshot();
@@ -125,7 +132,12 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
             .requestToChannel(SampleNames.ApiChannel, report)
             .timeout(SampleTimings.RequestTimeout)
             .yield(Messages.ReportBingoResultRes.class)
-            .thenAccept(ignored -> actors.remove(actor.actorId()));
+            .thenAccept(record -> {
+                logger.info("bingo-record reported actor={} wins={} losses={}",
+                    actor.actorId(), record.getWins(), record.getLosses());
+                actors.remove(actor.actorId());
+                logger.info("bingo-lifecycle room-leave actor={}", actor.actorId());
+            });
     }
 
     @Override

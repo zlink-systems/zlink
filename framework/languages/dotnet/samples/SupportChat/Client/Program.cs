@@ -1,7 +1,5 @@
 using SupportChat.Client.Configuration;
-using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
-using Zlink.Samples.Logging;
 
 namespace SupportChat.Client;
 
@@ -11,10 +9,6 @@ internal static class Program
     {
         var configuration = SupportChatClientConfiguration.Load(args);
         var streamEndpoint = configuration.StreamEndpoint;
-        using var loggerFactory = SampleLogging.CreateFactory(
-            configuration.LogDirectory,
-            "client");
-        var logger = loggerFactory.CreateLogger("SupportChat.Client");
 
         await using var agent = CreateClient(streamEndpoint);
         await using var customer1 = CreateClient(streamEndpoint);
@@ -31,7 +25,7 @@ internal static class Program
             reconnectingCustomer,
             waitingCustomer);
 
-        logger.LogInformation("supportchat=completed");
+        Console.WriteLine("supportchat=completed");
     }
 
     private static IZlinkStreamConnector CreateClient(string streamEndpoint)

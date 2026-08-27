@@ -4,346 +4,346 @@ A Spot relocation, including an Actor bound to a session, keeps the same
 `ObjectGeneration`. Since relocation itself isn't a physical/logical
 disconnect, it doesn't run the Actor disconnect callback.
 
-[.NET exact interface table of contents](README.en.md)
+[.NET per-language interface table of contents](README.en.md)
 
 ## 1. Spot
 
 SpotId is a `string` with UTF-8 encoded size 1..255 bytes, and is a
 logical ID unique across the whole Location Store transaction domain.
-Comparison is case-sensitive exact match, with no normalization. A
+Comparison is case-sensitive comparison, with no normalization. A
 regular message only takes SpotId and resolves current authority.
-`SpotRef` is the immutable location snapshot used when closing an exact
+`SpotRef` is the immutable location snapshot used when closing an
 incarnation, and doesn't own a runtime resource or local Spot instance.
 
 ```csharp
 public enum ZLinkSpotKind
 {
-    Invalid = 0,
-    Entry = 1,
-    User = 2,
-    Instance = 3
+ Invalid = 0,
+ Entry = 1,
+ User = 2,
+ Instance = 3
 }
 
 public readonly record struct SpotRef(
-    string SpotId,
-    ulong ObjectGeneration,
-    string MeshName,
-    RoutingId NodeRid);
+ string SpotId,
+ ulong ObjectGeneration,
+ string MeshName,
+ RoutingId NodeRid);
 
 public enum ZLinkSpotCloseReason
 {
-    ExplicitClose = 0,
-    HostShutdown = 1,
-    RelocationOut = 2,
-    IdleEvicted = 3
+ ExplicitClose = 0,
+ HostShutdown = 1,
+ RelocationOut = 2,
+ IdleEvicted = 3
 }
 
 public readonly record struct ZLinkSpotClosingContext(
-    ZLinkSpotCloseReason Reason,
-    DateTimeOffset Deadline);
+ ZLinkSpotCloseReason Reason,
+ DateTimeOffset Deadline);
 
 public enum ZLinkSpotRelocationReadyOutcome
 {
-    Continued = 0,
-    Relocated = 1
+ Continued = 0,
+ Relocated = 1
 }
 
 public readonly record struct ZLinkSpotRelocationReadyCompletion(
-    ZLinkSpotRelocationReadyOutcome Outcome);
+ ZLinkSpotRelocationReadyOutcome Outcome);
 
 public interface IZLinkSpotRelocationReadyCall
 {
-    void Defer();
+ void Defer();
 }
 
 public interface IZLinkSpot
 {
-    IZLinkSpotContext Context { get; }
-    void Configure()
-    {
-    }
+ IZLinkSpotContext Context { get; }
+ void Configure()
+ {
+ }
 
-    ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
-        ZLinkMessage request,
-        CancellationToken cancellationToken)
-    {
-        // the default lifecycle accepts the creation request.
-        return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
-    }
+ ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
+ ZLinkMessage request,
+ CancellationToken cancellationToken)
+ {
+ // the default lifecycle accepts the creation request.
+ return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
+ }
 
-    ValueTask OnInitializeAsync(CancellationToken cancellationToken)
-    {
-        return ValueTask.CompletedTask;
-    }
+ ValueTask OnInitializeAsync(CancellationToken cancellationToken)
+ {
+ return ValueTask.CompletedTask;
+ }
 
-    ValueTask OnClosingAsync(
-        ZLinkSpotClosingContext context,
-        CancellationToken cleanupCancellationToken)
-    {
-        return ValueTask.CompletedTask;
-    }
+ ValueTask OnClosingAsync(
+ ZLinkSpotClosingContext context,
+ CancellationToken cleanupCancellationToken)
+ {
+ return ValueTask.CompletedTask;
+ }
 
-    ValueTask OnRelocationReadyCompletedAsync(
-        ZLinkSpotRelocationReadyCompletion completion,
-        CancellationToken cancellationToken)
-    {
-        // override only when the application needs round-boundary follow-up processing.
-        return ValueTask.CompletedTask;
-    }
+ ValueTask OnRelocationReadyCompletedAsync(
+ ZLinkSpotRelocationReadyCompletion completion,
+ CancellationToken cancellationToken)
+ {
+ // override only when the application needs round-boundary follow-up processing.
+ return ValueTask.CompletedTask;
+ }
 }
 
 public interface IZLinkInstanceSpot
 {
-    IZLinkInstanceSpotContext Context { get; }
-    void Configure()
-    {
-    }
+ IZLinkInstanceSpotContext Context { get; }
+ void Configure()
+ {
+ }
 
-    ValueTask OnInitializeAsync(CancellationToken cancellationToken)
-    {
-        return ValueTask.CompletedTask;
-    }
+ ValueTask OnInitializeAsync(CancellationToken cancellationToken)
+ {
+ return ValueTask.CompletedTask;
+ }
 
-    ValueTask OnClosingAsync(
-        ZLinkSpotClosingContext context,
-        CancellationToken cleanupCancellationToken)
-    {
-        return ValueTask.CompletedTask;
-    }
+ ValueTask OnClosingAsync(
+ ZLinkSpotClosingContext context,
+ CancellationToken cleanupCancellationToken)
+ {
+ return ValueTask.CompletedTask;
+ }
 }
 
 public interface IZLinkSpotRelocationAdapter<TSpot>
-    where TSpot : class
+ where TSpot : class
 {
-    ValueTask<byte[]> CaptureAsync(
-        TSpot spot,
-        CancellationToken cancellationToken);
-    ValueTask RestoreAsync(
-        TSpot spot,
-        ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken);
+ ValueTask<byte[]> CaptureAsync(
+ TSpot spot,
+ CancellationToken cancellationToken);
+ ValueTask RestoreAsync(
+ TSpot spot,
+ ReadOnlyMemory<byte> payload,
+ CancellationToken cancellationToken);
 }
 
 public readonly record struct ZLinkSpotCreateResponse(
-    bool Accepted,
-    ZLinkMessage? Reply)
+ bool Accepted,
+ ZLinkMessage? Reply)
 {
-    public static ZLinkSpotCreateResponse Accept(ZLinkMessage? reply = null);
-    public static ZLinkSpotCreateResponse Accept<TReply>(TReply reply);
-    public static ZLinkSpotCreateResponse Reject(ZLinkMessage? reply = null);
-    public static ZLinkSpotCreateResponse Reject<TReply>(TReply reply);
+ public static ZLinkSpotCreateResponse Accept(ZLinkMessage? reply = null);
+ public static ZLinkSpotCreateResponse Accept<TReply>(TReply reply);
+ public static ZLinkSpotCreateResponse Reject(ZLinkMessage? reply = null);
+ public static ZLinkSpotCreateResponse Reject<TReply>(TReply reply);
 }
 
 public interface IZLinkSpotHandlerRegistry : IZLinkActorHandlerRegistry
 {
-    void AddPacket<THandler>() where THandler : class;
-    void AddSubscribe<THandler>(string channelName, string topic) where THandler : class;
+ void AddPacket<THandler>() where THandler : class;
+ void AddSubscribe<THandler>(string channelName, string topic) where THandler : class;
 }
 
 public interface IZLinkInstanceSpotHandlerRegistry
 {
-    void AddPacket<THandler>() where THandler : class;
+ void AddPacket<THandler>() where THandler : class;
 }
 
 public interface IZLinkSpotOutbound
 {
-    IZLinkSpotSendCall SendToSpot<TMessage>(string spotId, TMessage message);
-    IZLinkSpotRequestCall RequestToSpot<TRequest>(string spotId, TRequest request);
-    IZLinkPublishCall Publish<TEvent>(
-        string channelName,
-        string topic,
-        TEvent message);
-    IZLinkSendCall SendToChannel<TMessage>(
-        string channelName,
-        TMessage message);
-    IZLinkRequestCall RequestToChannel<TRequest>(
-        string channelName,
-        TRequest request);
+ IZLinkSpotSendCall SendToSpot<TMessage>(string spotId, TMessage message);
+ IZLinkSpotRequestCall RequestToSpot<TRequest>(string spotId, TRequest request);
+ IZLinkPublishCall Publish<TEvent>(
+ string channelName,
+ string topic,
+ TEvent message);
+ IZLinkSendCall SendToChannel<TMessage>(
+ string channelName,
+ TMessage message);
+ IZLinkRequestCall RequestToChannel<TRequest>(
+ string channelName,
+ TRequest request);
 }
 
 public interface IZLinkSpotCommonContext
 {
-    string MeshName { get; }
-    string SpotId { get; }
-    ulong ObjectGeneration { get; }
-    RoutingId NodeRid { get; }
-    IZLinkSpotOutbound Outbound { get; }
-    ValueTask<IZLinkTimer> AddTimer<THandler>(
-        string name,
-        TimeSpan period,
-        ZLinkTimerOptions? options = null,
-        CancellationToken cancellationToken = default)
-        where THandler : class;
-    IZLinkWorkerCall<TResult> RunCpuWorker<TResult>(
-        Func<CancellationToken, TResult> work);
-    IZLinkWorkerCall<TResult> RunIoWorker<TResult>(
-        Func<CancellationToken, ValueTask<TResult>> work);
+ string MeshName { get; }
+ string SpotId { get; }
+ ulong ObjectGeneration { get; }
+ RoutingId NodeRid { get; }
+ IZLinkSpotOutbound Outbound { get; }
+ ValueTask<IZLinkTimer> AddTimer<THandler>(
+ string name,
+ TimeSpan period,
+ ZLinkTimerOptions? options = null,
+ CancellationToken cancellationToken = default)
+ where THandler : class;
+ IZLinkWorkerCall<TResult> RunCpuWorker<TResult>(
+ Func<CancellationToken, TResult> work);
+ IZLinkWorkerCall<TResult> RunIoWorker<TResult>(
+ Func<CancellationToken, ValueTask<TResult>> work);
 }
 
 public interface IZLinkSpotContext : IZLinkSpotCommonContext
 {
-    IZLinkSpotHandlerRegistry Handlers { get; }
+ IZLinkSpotHandlerRegistry Handlers { get; }
 
-    IZLinkSpotRelocationReadyCall RelocationReady();
+ IZLinkSpotRelocationReadyCall RelocationReady();
 
-    ValueTask LeaveActorAsync(
-        IZLinkActor actor,
-        CancellationToken cancellationToken = default);
+ ValueTask LeaveActorAsync(
+ IZLinkActor actor,
+ CancellationToken cancellationToken = default);
 
-    ValueTask<bool> CloseAsync(
-        CancellationToken cancellationToken = default);
+ ValueTask<bool> CloseAsync(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkInstanceSpotContext : IZLinkSpotCommonContext
 {
-    IZLinkInstanceSpotHandlerRegistry Handlers { get; }
+ IZLinkInstanceSpotHandlerRegistry Handlers { get; }
 
-    ValueTask<bool> CloseAsync(
-        CancellationToken cancellationToken = default);
+ ValueTask<bool> CloseAsync(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkEntrySpot
 {
-    IZLinkEntrySpotContext Context { get; }
-    void Configure()
-    {
-    }
+ IZLinkEntrySpotContext Context { get; }
+ void Configure()
+ {
+ }
 
-    ValueTask OnInitializeAsync(CancellationToken cancellationToken)
-    {
-        return ValueTask.CompletedTask;
-    }
+ ValueTask OnInitializeAsync(CancellationToken cancellationToken)
+ {
+ return ValueTask.CompletedTask;
+ }
 
-    ValueTask OnClosingAsync(
-        ZLinkSpotClosingContext context,
-        CancellationToken cleanupCancellationToken)
-    {
-        return ValueTask.CompletedTask;
-    }
+ ValueTask OnClosingAsync(
+ ZLinkSpotClosingContext context,
+ CancellationToken cleanupCancellationToken)
+ {
+ return ValueTask.CompletedTask;
+ }
 }
 
 public interface IZLinkSpotActorMembershipLifecycle<TActor>
-    where TActor : IZLinkActor
+ where TActor : IZLinkActor
 {
-    ValueTask OnJoinedActorAsync(
-        TActor actor,
-        CancellationToken cancellationToken);
+ ValueTask OnJoinedActorAsync(
+ TActor actor,
+ CancellationToken cancellationToken);
 
-    ValueTask OnLeaveActorAsync(
-        TActor actor,
-        CancellationToken cancellationToken);
+ ValueTask OnLeaveActorAsync(
+ TActor actor,
+ CancellationToken cancellationToken);
 
-    ValueTask OnDisconnectActorAsync(
-        TActor actor,
-        CancellationToken cancellationToken)
-    {
-        // a Spot that doesn't need to handle disconnects doesn't have to implement this callback.
-        return ValueTask.CompletedTask;
-    }
+ ValueTask OnDisconnectActorAsync(
+ TActor actor,
+ CancellationToken cancellationToken)
+ {
+ // a Spot that doesn't need to handle disconnects doesn't have to implement this callback.
+ return ValueTask.CompletedTask;
+ }
 }
 
 public interface IZLinkUserSpotActorLifecycle<TActor>
-    : IZLinkSpotActorMembershipLifecycle<TActor>
-    where TActor : IZLinkActor
+ : IZLinkSpotActorMembershipLifecycle<TActor>
+ where TActor : IZLinkActor
 {
-    ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
-        string actorId,
-        ZLinkMessage request,
-        CancellationToken cancellationToken);
+ ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+ string actorId,
+ ZLinkMessage request,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkSpot<TActor> : IZLinkSpot, IZLinkUserSpotActorLifecycle<TActor>
-    where TActor : IZLinkActor;
+ where TActor : IZLinkActor;
 
 public readonly record struct ZLinkActorCreateResponse(
-    bool Accepted,
-    ZLinkMessage? Reply)
+ bool Accepted,
+ ZLinkMessage? Reply)
 {
-    public static ZLinkActorCreateResponse Accept(ZLinkMessage? reply = null);
-    public static ZLinkActorCreateResponse Accept<TReply>(TReply reply);
-    public static ZLinkActorCreateResponse Reject(ZLinkMessage? reply = null);
-    public static ZLinkActorCreateResponse Reject<TReply>(TReply reply);
+ public static ZLinkActorCreateResponse Accept(ZLinkMessage? reply = null);
+ public static ZLinkActorCreateResponse Accept<TReply>(TReply reply);
+ public static ZLinkActorCreateResponse Reject(ZLinkMessage? reply = null);
+ public static ZLinkActorCreateResponse Reject<TReply>(TReply reply);
 }
 
 public interface IZLinkEntrySpot<TActor>
-    : IZLinkEntrySpot, IZLinkSpotActorMembershipLifecycle<TActor>
-    where TActor : IZLinkActor
+ : IZLinkEntrySpot, IZLinkSpotActorMembershipLifecycle<TActor>
+ where TActor : IZLinkActor
 {
-    ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
-        TActor actor,
-        ZLinkMessage createRequest,
-        CancellationToken cancellationToken)
-    {
-        // the default lifecycle approves Actor creation.
-        return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
-    }
+ ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
+ TActor actor,
+ ZLinkMessage createRequest,
+ CancellationToken cancellationToken)
+ {
+ // the default lifecycle approves Actor creation.
+ return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
+ }
 }
 
 public readonly record struct ZLinkSpotActorJoinResult(
-    bool Accepted,
-    ZLinkMessage? Reply)
+ bool Accepted,
+ ZLinkMessage? Reply)
 {
-    public static ZLinkSpotActorJoinResult Accept(ZLinkMessage? reply = null);
-    public static ZLinkSpotActorJoinResult Accept<TReply>(TReply reply);
-    public static ZLinkSpotActorJoinResult Reject(ZLinkMessage? reply = null);
-    public static ZLinkSpotActorJoinResult Reject<TReply>(TReply reply);
+ public static ZLinkSpotActorJoinResult Accept(ZLinkMessage? reply = null);
+ public static ZLinkSpotActorJoinResult Accept<TReply>(TReply reply);
+ public static ZLinkSpotActorJoinResult Reject(ZLinkMessage? reply = null);
+ public static ZLinkSpotActorJoinResult Reject<TReply>(TReply reply);
 }
 
 public interface IZLinkEntrySpotContext : IZLinkSpotCommonContext
 {
-    IZLinkSpotHandlerRegistry Handlers { get; }
+ IZLinkSpotHandlerRegistry Handlers { get; }
 
-    ValueTask DestroyActorAsync(
-        IZLinkActor actor,
-        CancellationToken cancellationToken = default);
+ ValueTask DestroyActorAsync(
+ IZLinkActor actor,
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSpotActorSendHandler<TSpot, TActor, in TMessage>
-    where TSpot : class
-    where TActor : IZLinkActor
+ where TSpot : class
+ where TActor : IZLinkActor
 {
-    ValueTask HandleAsync(
-        TSpot spot,
-        TActor actor,
-        IZLinkMessageContext context,
-        TMessage message,
-        CancellationToken cancellationToken);
+ ValueTask HandleAsync(
+ TSpot spot,
+ TActor actor,
+ IZLinkMessageContext context,
+ TMessage message,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkSpotActorRequestHandler<TSpot, TActor, in TRequest, TReply>
-    where TSpot : class
-    where TActor : IZLinkActor
+ where TSpot : class
+ where TActor : IZLinkActor
 {
-    ValueTask<TReply> HandleAsync(
-        TSpot spot,
-        TActor actor,
-        IZLinkMessageContext context,
-        TRequest request,
-        CancellationToken cancellationToken);
+ ValueTask<TReply> HandleAsync(
+ TSpot spot,
+ TActor actor,
+ IZLinkMessageContext context,
+ TRequest request,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkEntrySpotActorSendHandler<TEntrySpot, TActor, in TMessage>
-    where TEntrySpot : class, IZLinkEntrySpot
-    where TActor : IZLinkActor
+ where TEntrySpot : class, IZLinkEntrySpot
+ where TActor : IZLinkActor
 {
-    ValueTask HandleAsync(
-        TEntrySpot entrySpot,
-        TActor actor,
-        IZLinkMessageContext context,
-        TMessage message,
-        CancellationToken cancellationToken);
+ ValueTask HandleAsync(
+ TEntrySpot entrySpot,
+ TActor actor,
+ IZLinkMessageContext context,
+ TMessage message,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkEntrySpotActorRequestHandler<TEntrySpot, TActor, in TRequest, TReply>
-    where TEntrySpot : class, IZLinkEntrySpot
-    where TActor : IZLinkActor
+ where TEntrySpot : class, IZLinkEntrySpot
+ where TActor : IZLinkActor
 {
-    ValueTask<TReply> HandleAsync(
-        TEntrySpot entrySpot,
-        TActor actor,
-        IZLinkMessageContext context,
-        TRequest request,
-        CancellationToken cancellationToken);
+ ValueTask<TReply> HandleAsync(
+ TEntrySpot entrySpot,
+ TActor actor,
+ IZLinkMessageContext context,
+ TRequest request,
+ CancellationToken cancellationToken);
 }
 ```
 
@@ -367,24 +367,24 @@ or `TActor`, not a handler field.
 Instance-Spot-only reason and isn't delivered to Entry Spot or User Spot.
 The idle judgment condition and the reactivation rule after cleanup are
 owned by
-[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../03-spot-actor/01-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 `Deadline` is the closing operation's absolute deadline. The framework
 doesn't cancel `cleanupCancellationToken` before the callback invocation,
 and cancels it when the
-[deadline](../../../01-glossary.en.md#deadline) ends. An already
+[deadline](../../../00-foundation/02-glossary.en.md#deadline) ends. An already
 cancelled handler token isn't reused. Only Entry/User/Instance Spot
 receive this callback — a per-Actor closing callback isn't provided.
 Host Shutdown runs the callback while Actor membership and the local
 instance are valid, and cleans up scope and
-[authority](../../../01-glossary.en.md#authority) after completion.
+[authority](../../../00-foundation/02-glossary.en.md#authority) after completion.
 A standalone Actor relocation doesn't close the Entry Spot, so it doesn't
 call this callback.
 
 `IZLinkSpotRelocationAdapter<TSpot>` is registered with
 `PreserveStateWith<TAdapter>()`. It's only called when materializing a
-cross-node User/[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
+cross-node User/[Instance Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
 instance. In a whole User Spot relocation, the
-[Spot](../../../01-glossary.en.md#spot) adapter handles the Spot
+[Spot](../../../00-foundation/02-glossary.en.md#spot) adapter handles the Spot
 application payload, and each member Actor's payload is handled
 separately by the Actor adapter registered on the Actor factory.
 `RecreateOnRelocation()` doesn't call the adapter and re-creates the
@@ -406,14 +406,14 @@ callback completes, so the application must copy it to keep it. A capture
 exception restores admission after a durable abort and source
 normalization. An instance with a restore exception is discarded, and a
 new attempt applies the same immutable payload to a new instance the
-[factory](../../../01-glossary.en.md#factory) creates. If the
+[factory](../../../00-foundation/02-glossary.en.md#factory) creates. If the
 framework cancels a callback due to the operation deadline, it's
 classified as `DeadlineExceeded`. The framework doesn't guarantee
 exactly-once execution of the callback's external side effect.
 
 When maintenance restores an Actor to a different node's Entry Spot, it
 first finishes the Actor adapter restore, then commits Location
-authority and Entry [membership](../../../01-glossary.en.md#membership).
+authority and Entry [membership](../../../00-foundation/02-glossary.en.md#membership).
 Since this isn't an application membership change, it doesn't call the
 target's `OnJoinedActorAsync(...)`, the source's
 `OnLeaveActorAsync(...)`, or a relocation-dedicated callback. It restores
@@ -464,80 +464,80 @@ during process recovery, the override must be retry-safe.
 The current-location query for Spot and Actor is performed by the
 manager using the global ID. A public resolver and runtime handle aren't
 provided. The owner route and generation update rule follows
-[Spot Address Messaging](../../../16-spot-address-messaging.en.md).
+[Spot Address Messaging](../../../03-spot-actor/06-spot-address-messaging.en.md).
 
 The Spot handler signatures are as follows.
 
 ```csharp
 public interface IZLinkSpotPacketHandler<TSpot, in TMessage>
-    where TSpot : class
+ where TSpot : class
 {
-    ValueTask HandleAsync(
-        TSpot spot,
-        TMessage message,
-        CancellationToken cancellationToken);
+ ValueTask HandleAsync(
+ TSpot spot,
+ TMessage message,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkSpotRequestHandler<TSpot, in TRequest, TReply>
-    where TSpot : class
+ where TSpot : class
 {
-    ValueTask<TReply> HandleAsync(
-        TSpot spot,
-        TRequest request,
-        CancellationToken cancellationToken);
+ ValueTask<TReply> HandleAsync(
+ TSpot spot,
+ TRequest request,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkSpotSubscriptionHandler<TSpot, in TEvent>
-    where TSpot : class
+ where TSpot : class
 {
-    ValueTask HandleAsync(
-        TSpot spot,
-        TEvent message,
-        ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken);
+ ValueTask HandleAsync(
+ TSpot spot,
+ TEvent message,
+ ZLinkPublishMessageContext context,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkSpotTimerHandler<TSpot>
-    where TSpot : class
+ where TSpot : class
 {
-    ValueTask HandleAsync(
-        TSpot spot,
-        ZLinkTimerTick tick,
-        CancellationToken cancellationToken);
+ ValueTask HandleAsync(
+ TSpot spot,
+ ZLinkTimerTick tick,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkTimer : IAsyncDisposable
 {
-    bool IsDisposed { get; }
-    ValueTask CancelAsync();
+ bool IsDisposed { get; }
+ ValueTask CancelAsync();
 }
 
 public sealed record ZLinkTimerOptions
 {
-    public ZLinkTimerOverrunPolicy OverrunPolicy { get; init; }
-        = ZLinkTimerOverrunPolicy.SkipLateTicks;
-    public int MaxCatchUpTicks { get; init; } = 1;
-    public bool StopOnUnhandledException { get; init; }
+ public ZLinkTimerOverrunPolicy OverrunPolicy { get; init; }
+ = ZLinkTimerOverrunPolicy.SkipLateTicks;
+ public int MaxCatchUpTicks { get; init; } = 1;
+ public bool StopOnUnhandledException { get; init; }
 }
 
 public enum ZLinkTimerOverrunPolicy
 {
-    SkipLateTicks = 1,
-    CatchUpBounded = 2,
-    DelayNextTick = 3
+ SkipLateTicks = 1,
+ CatchUpBounded = 2,
+ DelayNextTick = 3
 }
 
 public readonly record struct ZLinkTimerTick(
-    string Name,
-    ulong DeliveryIndex,
-    ulong ScheduledIndex,
-    TimeSpan Period,
-    DateTimeOffset ScheduledAt,
-    DateTimeOffset StartedAt,
-    TimeSpan ScheduledElapsed,
-    TimeSpan StartedElapsed,
-    TimeSpan Delay,
-    ulong SkippedTicks);
+ string Name,
+ ulong DeliveryIndex,
+ ulong ScheduledIndex,
+ TimeSpan Period,
+ DateTimeOffset ScheduledAt,
+ DateTimeOffset StartedAt,
+ TimeSpan ScheduledElapsed,
+ TimeSpan StartedElapsed,
+ TimeSpan Delay,
+ ulong SkippedTicks);
 ```
 
 When timer options are omitted, `OverrunPolicy` defaults to `SkipLateTicks`
@@ -555,7 +555,7 @@ re-register it on the target. A framework-managed timer resource isn't
 included in the payload — it's re-created on the target as a logical
 registration. The source doesn't dispatch a new tick after sealing the
 queue, and the target only submits the restored pending tick and the
-next tick to the [owner](../../../01-glossary.en.md#owner) mailbox
+next tick to the [owner](../../../00-foundation/02-glossary.en.md#owner) mailbox
 after finishing Restore and authority commit and dispatch admission
 opens.
 
@@ -564,89 +564,89 @@ An external client of a Spot uses the following signatures.
 ```csharp
 public interface IZLinkSpotClient
 {
-    IZLinkSpotSendCall SendToSpot<TMessage>(string spotId, TMessage message);
-    IZLinkSpotRequestCall RequestToSpot<TRequest>(string spotId, TRequest request);
+ IZLinkSpotSendCall SendToSpot<TMessage>(string spotId, TMessage message);
+ IZLinkSpotRequestCall RequestToSpot<TRequest>(string spotId, TRequest request);
 }
 
 public interface IZLinkSpotSendCall : IZLinkMetadataCall<IZLinkSpotSendCall>
 {
-    IZLinkSpotSendCall InstanceSpot();
-    IZLinkSpotSendCall InstanceSpot(string instanceSpotType);
-    IZLinkSpotSendCall InMesh(string meshName);
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+ IZLinkSpotSendCall InstanceSpot();
+ IZLinkSpotSendCall InstanceSpot(string instanceSpotType);
+ IZLinkSpotSendCall InMesh(string meshName);
+ ValueTask Async(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSpotRequestCall : IZLinkMetadataCall<IZLinkSpotRequestCall>
 {
-    IZLinkSpotRequestCall InstanceSpot();
-    IZLinkSpotRequestCall InstanceSpot(string instanceSpotType);
-    IZLinkSpotRequestCall InMesh(string meshName);
-    IZLinkSpotRequestCall Timeout(TimeSpan timeout);
-    ValueTask<TReply> Async<TReply>(
-        CancellationToken cancellationToken = default);
-    ValueTask<TReply> Yield<TReply>(
-        CancellationToken cancellationToken = default);
+ IZLinkSpotRequestCall InstanceSpot();
+ IZLinkSpotRequestCall InstanceSpot(string instanceSpotType);
+ IZLinkSpotRequestCall InMesh(string meshName);
+ IZLinkSpotRequestCall Timeout(TimeSpan timeout);
+ ValueTask<TReply> Async<TReply>(
+ CancellationToken cancellationToken = default);
+ ValueTask<TReply> Yield<TReply>(
+ CancellationToken cancellationToken = default);
 }
 
 public enum ZLinkSpotCreateState
 {
-    Existing = 0,
-    Created = 1,
-    Rejected = 2
+ Existing = 0,
+ Created = 1,
+ Rejected = 2
 }
 
 public readonly record struct ZLinkSpotCreateResult(
-    SpotRef Spot,
-    ZLinkSpotCreateState State,
-    ZLinkMessage? Reply);
+ SpotRef Spot,
+ ZLinkSpotCreateState State,
+ ZLinkMessage? Reply);
 
 public interface IZLinkSpotManager
 {
-    IZLinkSpotCreateCall Create(string spotType);
-    IZLinkSpotGetOrCreateCall GetOrCreate(
-        string spotId,
-        string spotType);
-    ValueTask<SpotRef?> FindAsync(
-        string spotId,
-        CancellationToken cancellationToken = default);
-    ValueTask<bool> CloseAsync(
-        SpotRef spot,
-        CancellationToken cancellationToken = default);
+ IZLinkSpotCreateCall Create(string spotType);
+ IZLinkSpotGetOrCreateCall GetOrCreate(
+ string spotId,
+ string spotType);
+ ValueTask<SpotRef?> FindAsync(
+ string spotId,
+ CancellationToken cancellationToken = default);
+ ValueTask<bool> CloseAsync(
+ SpotRef spot,
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSpotCreateCall
 {
-    IZLinkSpotCreateCall InMesh(string meshName);
-    IZLinkSpotCreateCall Request(ZLinkMessage request);
-    IZLinkSpotCreateCall Request<TRequest>(TRequest request);
-    IZLinkSpotCreateCall Timeout(TimeSpan timeout);
-    ValueTask<ZLinkSpotCreateResult> Async(CancellationToken cancellationToken = default);
-    ValueTask<ZLinkSpotCreateResult> Yield(CancellationToken cancellationToken = default);
+ IZLinkSpotCreateCall InMesh(string meshName);
+ IZLinkSpotCreateCall Request(ZLinkMessage request);
+ IZLinkSpotCreateCall Request<TRequest>(TRequest request);
+ IZLinkSpotCreateCall Timeout(TimeSpan timeout);
+ ValueTask<ZLinkSpotCreateResult> Async(CancellationToken cancellationToken = default);
+ ValueTask<ZLinkSpotCreateResult> Yield(CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSpotGetOrCreateCall
 {
-    IZLinkSpotGetOrCreateCall InMesh(string meshName);
-    IZLinkSpotGetOrCreateCall Request(ZLinkMessage request);
-    IZLinkSpotGetOrCreateCall Request<TRequest>(TRequest request);
-    IZLinkSpotGetOrCreateCall Timeout(TimeSpan timeout);
-    ValueTask<ZLinkSpotCreateResult> Async(CancellationToken cancellationToken = default);
-    ValueTask<ZLinkSpotCreateResult> Yield(CancellationToken cancellationToken = default);
+ IZLinkSpotGetOrCreateCall InMesh(string meshName);
+ IZLinkSpotGetOrCreateCall Request(ZLinkMessage request);
+ IZLinkSpotGetOrCreateCall Request<TRequest>(TRequest request);
+ IZLinkSpotGetOrCreateCall Timeout(TimeSpan timeout);
+ ValueTask<ZLinkSpotCreateResult> Async(CancellationToken cancellationToken = default);
+ ValueTask<ZLinkSpotCreateResult> Yield(CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSpotPublisherClient
 {
-    IZLinkPublishCall Publish<TEvent>(
-        string channelName,
-        string topic,
-        TEvent message);
+ IZLinkPublishCall Publish<TEvent>(
+ string channelName,
+ string topic,
+ TEvent message);
 }
 ```
 
 Entry/User/Instance SpotId is a global string key with UTF-8 encoded
 size 1..255 bytes. Stable type is UTF-8 1..255 bytes, compared as a
-case-sensitive exact value with no normalization. `SpotRef.ObjectGeneration`
+case-sensitive value comparison with no normalization. `SpotRef.ObjectGeneration`
 is `1..long.MaxValue`. MeshName and NodeRid are the route snapshot at
 query time and aren't included in the identity key.
 
@@ -657,14 +657,14 @@ with `NotFound`. Only a call with `InstanceSpot()` or
 `InstanceSpot(instanceSpotType)` specified can newly create and
 initialize a Missing Instance Spot to prepare it for use. This process is
 called cold activation. A call to a
-[Ready](../../../01-glossary.en.md#ready) Instance authority uses the
-[stable type](../../../01-glossary.en.md#stable-type) stored in
+[Ready](../../../00-foundation/02-glossary.en.md#ready) Instance authority uses the
+[stable type](../../../00-foundation/02-glossary.en.md#stable-type) stored in
 authority, so the caller doesn't need to provide the type again. If an
 Instance marker is used but the existing authority is a User Spot, or the
 specified stable type differs from the authority's type, it's
 `TypeMismatch`.
 
-In [cold activation](../../../01-glossary.en.md#cold-activation),
+In [cold activation](../../../00-foundation/02-glossary.en.md#cold-activation),
 `InstanceSpot()` only uses the registered Instance Spot type when exactly
 one is registered on the selected Mesh. If multiple types are
 registered, the type must be specified with
@@ -712,7 +712,7 @@ secure, together, a `Creating` record and admission room with itself as
 owner. Only the one target that succeeds this runs factory and
 initialization.
 
-`CloseAsync(spotRef)` only closes the exact incarnation. If that
+`CloseAsync(spotRef)` only closes the specified incarnation. If that
 incarnation doesn't exist, `false`; if the generation differs,
 `InvalidOperation`; if in pre-commit seal, `Unavailable`. If Actor
 membership remains on the User Spot, `false` — it doesn't automatically
@@ -720,7 +720,7 @@ leave/destroy the Actor. The framework doesn't find the current ref again
 and close a different incarnation.
 
 `IZLinkSpotManager` only provides User Spot's explicit create/
-get-or-create, resolve, and exact close. The manager doesn't have an
+get-or-create, resolve, and close. The manager doesn't have an
 argument to select Spot kind or an Instance Spot create/get-or-create
 overload. Instance Spot's creation path is the one explicit
 `InstanceSpot(...)` opt-in on the Spot-dedicated message call. It leaves
@@ -759,14 +759,14 @@ isn't provided.
 
 `IZLinkSpotPublisherClient.Publish(...)` and
 `IZLinkSpotOutbound.Publish(...)` are
-[Logical Multicast](../../../01-glossary.en.md#logical-multicast).
+[Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast).
 Both an external publisher's and a Spot callback's outbound only take
 ChannelName and topic. A process-local
-[ChannelName](../../../01-glossary.en.md#channelname) index selects
-the owner [MeshNode](../../../01-glossary.en.md#meshnode), and the
-caller doesn't additionally pass [MeshName](../../../01-glossary.en.md#meshname).
+[ChannelName](../../../00-foundation/02-glossary.en.md#channelname) index selects
+the owner [MeshNode](../../../00-foundation/02-glossary.en.md#meshnode), and the
+caller doesn't additionally pass [MeshName](../../../00-foundation/02-glossary.en.md#meshname).
 Each remote target follows the MeshNode ROUTER's send rule, and matching
-Spot queues on the same node share immutable message storage. The exact
+Spot queues on the same node share immutable message storage. The
 configuration surface is owned by
 [Topology Configuration §5](03-configuration-topology.en.md#5-publisher-and-runtime-option).
 Per-target admission/failure results of remote transport and the local

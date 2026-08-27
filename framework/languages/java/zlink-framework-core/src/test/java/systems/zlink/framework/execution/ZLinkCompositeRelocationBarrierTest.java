@@ -215,7 +215,8 @@ final class ZLinkCompositeRelocationBarrierTest {
     void turnBoundarySealWaitsForYieldedTerminalContinuation()
         throws Exception {
         ZLinkAsyncSerialQueue spot = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue actor = new ZLinkAsyncSerialQueue(true);
+        ZLinkAsyncSerialQueue actor = new ZLinkAsyncSerialQueue(
+            ZLinkExecutionLanePolicy.spotReturningGate());
         ZLinkAsyncSerialQueue timer = new ZLinkAsyncSerialQueue();
         ZLinkCompositeRelocationBarrier barrier =
             new ZLinkCompositeRelocationBarrier();

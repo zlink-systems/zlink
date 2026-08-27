@@ -32,7 +32,7 @@ public record ZLinkLocationObjectFilter(
 The query does not provide an unbounded list. Page size is `1..1000`, the encoded page is at most 4 MiB,
 and the continuation token is an opaque value issued by the query.
 
-Exact lookup by Actor ID and Spot ID each queries one current object location. Missing returns an empty
+Direct lookup by Actor ID and Spot ID each queries one current object location. Missing returns an empty
 `Optional`; Creating returns a `CREATING` entry; Ready returns a `READY` entry; and an unavailable current
 owner after commit returns an `UNAVAILABLE` entry. `findSpotLocation(...)` treats User Spot and Instance
 Spot under the same Spot-ID lookup contract. A Store query failure fails the whole operation with

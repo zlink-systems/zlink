@@ -1,6 +1,7 @@
 package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.entryspot
 
 import kotlinx.coroutines.future.await
+import org.slf4j.LoggerFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
@@ -22,6 +23,8 @@ class BingoEntrySpot(
     override val context: ZLinkEntrySpotContext,
     private val spots: ZLinkSpotManager,
 ) : ZLinkSuspendingEntrySpot<PlayerActor>() {
+    private val logger = LoggerFactory.getLogger(BingoEntrySpot::class.java)
+
     override suspend fun onCreateActorSuspending(
         actor: PlayerActor,
         createRequest: ZLinkMessage,
@@ -34,10 +37,12 @@ class BingoEntrySpot(
     override suspend fun onJoinedActorSuspending(actor: PlayerActor) {
         if (actor.destroyAfterEntrySpotJoin) {
             context.destroyActor(actor).await()
+            logger.info("bingo-lifecycle entry-destroy-complete actor={}", actor.actorId())
         }
     }
 
-    override suspend fun onLeaveActorSuspending(actor: PlayerActor) = Unit
+    override suspend fun onLeaveActorSuspending(actor: PlayerActor) {
+    }
 
     override suspend fun onDisconnectActorSuspending(actor: PlayerActor) {
         actor.markDisconnected()

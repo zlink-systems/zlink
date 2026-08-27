@@ -45,11 +45,11 @@ internal static partial class ZLinkFrameworkRegistrationValidator
 
             var automatic =
                 router.AcquisitionMode == ZLinkPeerAcquisitionMode.AutoConnect;
-            if (spotNode.HasExplicitRoutingId
-                && (automatic || spotNode.ObjectRoleSelected))
-                throw new ZLinkConfigurationException(
-                    $"MeshNode '{spotNode.SpotNodeName}' cannot use a fixed routing ID "
-                    + "with automatic discovery or an Object role.");
+            // A fixed RID is allowed in an automatic discovery topology and on a MeshNode with an
+            // Object role: implementation and test scenarios need to name a specific peer, and an
+            // auto-assigned UUID cannot be named. A reclaim that collides with a live owner still
+            // fails as RoutingIdConflict, exactly as an automatic RID does.
+            // See spec/server/languages/dotnet/interfaces/03-configuration-topology.ko.md.
             if (spotNode.RoutingIdPrefix is not null && !automatic)
                 throw new ZLinkConfigurationException(
                     $"MeshNode '{spotNode.SpotNodeName}' can use a routing ID prefix "

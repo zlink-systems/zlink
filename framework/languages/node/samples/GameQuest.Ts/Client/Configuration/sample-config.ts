@@ -5,6 +5,7 @@ type GameQuestClientConfig = {
   apiBStreamEndpoint: string;
   missionAHttpUrl: string;
   missionBHttpUrl: string;
+  lifecycleCompletionPath?: string;
 };
 
 async function loadSampleConfig(): Promise<GameQuestClientConfig> {

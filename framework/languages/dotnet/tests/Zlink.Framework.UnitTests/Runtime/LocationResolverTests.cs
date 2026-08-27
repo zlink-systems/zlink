@@ -498,7 +498,7 @@ public sealed class LocationResolverTests
         var externalHandle = Assert.IsType<ZLinkResolvedSpotHandle>(
             await addresses.ResolveActorSpotHandleAsync("shared-actor"));
 
-        handles.UpdateActor(external with
+        await handles.UpdateActorAsync(external with
         {
             SpotId = "external-moved",
             MembershipEpoch = external.MembershipEpoch + 1
@@ -536,11 +536,11 @@ public sealed class LocationResolverTests
         Assert.Equal("play", spot.Snapshot.RouterChannelId);
         Assert.Equal("play", actor.Snapshot.RouterChannelId);
 
-        handles.UpdateSpot(InMemoryLocationStoreTests.Spot(OwnerA, "spot-mapped") with
+        await handles.UpdateSpotAsync(InMemoryLocationStoreTests.Spot(OwnerA, "spot-mapped") with
         {
             SpotGeneration = 2
         });
-        handles.UpdateActor(InMemoryLocationStoreTests.Actor(OwnerA, "actor-mapped") with
+        await handles.UpdateActorAsync(InMemoryLocationStoreTests.Actor(OwnerA, "actor-mapped") with
         {
             SpotKind = ZLinkSpotKind.User,
             SpotId = "spot-mapped",
@@ -617,7 +617,7 @@ public sealed class LocationResolverTests
     }
 
     [Fact]
-    public void Spot_Handle_Registry_Uses_Global_SpotId_Across_Mesh_Labels()
+    public async Task Spot_Handle_Registry_Uses_Global_SpotId_Across_Mesh_Labels()
     {
         const string spotId = "shared-spot";
         var handle = new ZLinkResolvedSpotHandle(
@@ -625,21 +625,21 @@ public sealed class LocationResolverTests
             1,
             _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null));
         var handles = new ZLinkSpotHandleRegistry();
-        handles.RegisterSpot(new ZLinkSpotLocationKey(spotId), handle);
+        await handles.RegisterSpotAsync(new ZLinkSpotLocationKey(spotId), handle);
 
-        handles.UpdateSpot(InMemoryLocationStoreTests.Spot(OwnerB, "shared-spot") with
+        await handles.UpdateSpotAsync(InMemoryLocationStoreTests.Spot(OwnerB, "shared-spot") with
         {
             MeshName = "other",
             OwnerNodeRid = RoutingId.From("node-2"),
             SpotGeneration = 2
         });
-        handles.RemoveSpot(new ZLinkSpotLocationKey(spotId), 3);
+        await handles.RemoveSpotAsync(new ZLinkSpotLocationKey(spotId), 3);
 
         Assert.Throws<ZLinkFrameworkException>(() => _ = handle.Snapshot);
     }
 
     [Fact]
-    public void Polling_Refresh_Invalidates_Handles_Whose_Row_Vanished()
+    public async Task Polling_Refresh_Invalidates_Handles_Whose_Row_Vanished()
     {
         const string spotId = "shared-spot";
         var key = new ZLinkSpotLocationKey(spotId);
@@ -652,10 +652,10 @@ public sealed class LocationResolverTests
             2,
             _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null));
         var handles = new ZLinkSpotHandleRegistry();
-        handles.RegisterSpot(key, first);
-        handles.RegisterSpot(key, second);
+        await handles.RegisterSpotAsync(key, first);
+        await handles.RegisterSpotAsync(key, second);
 
-        foreach (var handle in handles.SnapshotLiveHandles())
+        foreach (var handle in await handles.SnapshotLiveHandlesAsync())
             handle.InvalidateCurrent();
 
         Assert.Throws<ZLinkFrameworkException>(() => _ = first.Snapshot);
@@ -733,7 +733,7 @@ public sealed class LocationResolverTests
 
         Assert.Throws<ZLinkFrameworkException>(() => _ = handle.Snapshot);
 
-        handles.UpdateSpot(initial with
+        await handles.UpdateSpotAsync(initial with
         {
             OwnerNodeRid = RoutingId.From("node-recovered"),
             SpotGeneration = written.ObjectGeneration + 1
@@ -922,7 +922,7 @@ public sealed class LocationResolverTests
         var handle = Assert.IsType<ZLinkResolvedSpotHandle>(
             await addresses.ResolveActorSpotHandleAsync(actor.ActorId));
 
-        handles.UpdateActor(actor with
+        await handles.UpdateActorAsync(actor with
         {
             OwnerNodeRid = RoutingId.From("node-2"),
             SpotId = "spot-new",

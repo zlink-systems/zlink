@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/dispatch/application_job_queue_capacity.hpp"
 #include "runtime/dispatch/host_capacity_runtime.hpp"
@@ -5041,6 +5042,14 @@ bool verify_remote_actor_completion_keeps_session_ref_until_route_ack ()
 
 int main ()
 {
+    zlink::framework::runtime::configure_handler_coroutine_executor (4);
+    struct executor_shutdown_t
+    {
+        ~executor_shutdown_t ()
+        {
+            zlink::framework::runtime::shutdown_handler_coroutine_executor ();
+        }
+    } executor_shutdown;
     {
         using queue_t =
           zlink::framework::runtime::application_job_queue_t;
@@ -5191,7 +5200,7 @@ int main ()
             return 109;
         }
 
-        const std::array<std::string_view, 10> expected_metric_names{
+        const std::array<std::string_view, 14> expected_metric_names{
           "zlink.host.core_hwm.effective_budget",
           "zlink.host.core_hwm.applied",
           "zlink.host.core_hwm.accounted",
@@ -5201,7 +5210,11 @@ int main ()
           "zlink.host.application_job_queue.jobs",
           "zlink.host.application_job_queue.capacity_waiters",
           "zlink.host.application_job_queue.capacity_waits",
-          "zlink.host.application_job_queue.capacity_wait_duration"};
+          "zlink.host.application_job_queue.capacity_wait_duration",
+          "zlink.host.application_job_queue.pressure_state",
+          "zlink.host.application_job_queue.pressure_transitions",
+          "zlink.host.application_job_queue.pause_duration",
+          "zlink.host.application_job_queue.flow_state_config_failures"};
         for (std::size_t index = 0; index < expected_metric_names.size ();
              ++index) {
             if (host_capacity_metric_catalog[index].name
@@ -5220,7 +5233,19 @@ int main ()
             || host_capacity_metric_catalog[8].unit != "{wait}"
             || host_capacity_metric_catalog[9].kind
                  != detail::metric_instrument_kind_t::counter
-            || host_capacity_metric_catalog[9].unit != "s") {
+            || host_capacity_metric_catalog[9].unit != "s"
+            || !host_capacity_metric_catalog[10].state_label
+            || host_capacity_metric_catalog[10].unit != "{state}"
+            || host_capacity_metric_catalog[11].kind
+                 != detail::metric_instrument_kind_t::counter
+            || !host_capacity_metric_catalog[11].state_label
+            || host_capacity_metric_catalog[12].kind
+                 != detail::metric_instrument_kind_t::observable
+            || !host_capacity_metric_catalog[12].state_label
+            || host_capacity_metric_catalog[12].unit != "s"
+            || host_capacity_metric_catalog[13].kind
+                 != detail::metric_instrument_kind_t::counter
+            || host_capacity_metric_catalog[13].state_label) {
             return 111;
         }
     }

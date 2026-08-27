@@ -14,6 +14,7 @@ import {
   type ZLinkRouteMeshRuntime,
   type ZLinkRouteMeshRuntimeOptions,
   type ZLinkFrameworkRuntime,
+  type ZLinkHostCapacityStatus,
   type ZLinkLocationRuntimeQuery,
   type ZLinkSpotManager,
   type ZLinkSpotPublisherClient
@@ -23,7 +24,11 @@ import {
   serializeHostStatus,
   serializeRouteStatus
 } from '../Support/public-status-observer';
-import { MonitoringPublishGate, MonitoringUserSpot } from '../Handlers/service-handlers';
+import {
+  MonitoringCapacityGate,
+  MonitoringPublishGate,
+  MonitoringUserSpot
+} from '../Handlers/service-handlers';
 
 export function createServiceEndpoints(
   evidence: EvidenceStore,
@@ -35,6 +40,7 @@ export function createServiceEndpoints(
   spots: ZLinkSpotManager,
   actors: ZLinkActorManager,
   publishGate: MonitoringPublishGate,
+  capacityGate: MonitoringCapacityGate,
   observerProbe: PublicObserverProbe,
   stop: () => void
 ): HttpRoute[] {
@@ -42,6 +48,27 @@ export function createServiceEndpoints(
     { method: 'GET', path: '/health', handle: () => ({ status: 'ready', role: 'service', rid: evidence.rid }) },
     { method: 'GET', path: '/evidence', handle: () => evidence.snapshot() },
     { method: 'GET', path: '/status/host', handle: () => serializeHostStatus(frameworkRuntime.status) },
+    {
+      method: 'GET',
+      path: '/status/capacity',
+      handle: () => serializeCapacityStatus(frameworkRuntime.status.capacity)
+    },
+    {
+      method: 'POST',
+      path: '/admin/capacity-gate/arm',
+      handle: () => {
+        capacityGate.arm();
+        return { status: 'armed' };
+      }
+    },
+    {
+      method: 'POST',
+      path: '/admin/capacity/reset',
+      handle: () => {
+        frameworkRuntime.resetCapacityMetrics();
+        return serializeCapacityStatus(frameworkRuntime.status.capacity);
+      }
+    },
     { method: 'GET', path: '/status/route/missing', handle: () => routeRuntime.snapshot('missing-mesh') },
     {
       method: 'GET',
@@ -115,6 +142,24 @@ export function createServiceEndpoints(
           )
           .submit();
         evidence.add(`publish-submitted|rid=${evidence.rid}|marker=${marker}`);
+        return { status: 'submitted', marker };
+      }
+    },
+    {
+      method: 'POST',
+      path: '/admin/capacity-publish',
+      handle: async (body) => {
+        const marker = (body as { readonly marker?: unknown }).marker;
+        if (typeof marker !== 'string' || marker.length === 0) throw new TypeError('publish marker is required.');
+        await publisher
+          .publish(
+            RuntimeMonitoringNames.spotChannel,
+            RuntimeMonitoringNames.spotChannel,
+            RuntimeMonitoringNames.capacityTopic,
+            new MonitoringEvent(marker)
+          )
+          .submit();
+        evidence.add(`capacity-publish-submitted|rid=${evidence.rid}|marker=${marker}`);
         return { status: 'submitted', marker };
       }
     },
@@ -293,4 +338,48 @@ function publicErrorKind(error: unknown): string {
     : error instanceof Error
       ? error.name
       : String(error);
+}
+
+function serializeCapacityStatus(status: ZLinkHostCapacityStatus): object {
+  const core = status.coreHwm;
+  const queue = status.applicationJobQueue;
+  return {
+    measurementEpoch: String(status.measurementEpoch),
+    coreHwm: {
+      configuredMemoryLimitBytes: core.configuredMemoryLimitBytes === undefined
+        ? undefined : String(core.configuredMemoryLimitBytes),
+      configuredBudgetBytes: core.configuredBudgetBytes === undefined
+        ? undefined : String(core.configuredBudgetBytes),
+      configuredProfile: core.configuredProfile,
+      effectiveBudgetBytes: String(core.effectiveBudgetBytes),
+      totalAppliedHwmBytes: String(core.totalAppliedHwmBytes),
+      coreQueueAccountedBytes: String(core.coreQueueAccountedBytes),
+      applicationAccountedBytes: String(core.applicationAccountedBytes),
+      currentAccountedBytes: String(core.currentAccountedBytes),
+      peakAccountedBytes: String(core.peakAccountedBytes),
+      completionCurrentAccountedBytes: String(core.completionCurrentAccountedBytes),
+      completionPeakAccountedBytes: String(core.completionPeakAccountedBytes),
+      completionPendingMessageCount: String(core.completionPendingMessageCount)
+    },
+    applicationJobQueue: {
+      configuredProfile: queue.configuredProfile,
+      configuredManualMax: queue.configuredManualMax === undefined
+        ? undefined : String(queue.configuredManualMax),
+      configuredPauseThresholdPercent: queue.configuredPauseThresholdPercent,
+      configuredResumeThresholdPercent: queue.configuredResumeThresholdPercent,
+      effectiveProcessorCount: String(queue.effectiveProcessorCount),
+      effectiveMaxQueuedApplicationJobs: String(queue.effectiveMaxQueuedApplicationJobs),
+      pausePermitCount: String(queue.pausePermitCount),
+      resumePermitCount: String(queue.resumePermitCount),
+      reservedSupplyPermits: String(queue.reservedSupplyPermits),
+      queuedApplicationJobs: String(queue.queuedApplicationJobs),
+      permitsInUse: String(queue.permitsInUse),
+      peakPermitsInUse: String(queue.peakPermitsInUse),
+      capacityWaiters: String(queue.capacityWaiters),
+      capacityWaitCount: String(queue.capacityWaitCount),
+      capacityWaitDurationSeconds: queue.capacityWaitDurationSeconds,
+      pressureState: queue.pressureState,
+      currentPauseDurationSeconds: queue.currentPauseDurationSeconds
+    }
+  };
 }

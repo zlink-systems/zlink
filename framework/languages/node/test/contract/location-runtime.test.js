@@ -6,6 +6,12 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
+const {
+  ZLinkActorLocationClaims
+} = require('../../packages/framework/dist/runtime/locations/actor-location-claims');
+const {
+  ZLinkSpotLocationClaims
+} = require('../../packages/framework/dist/runtime/locations/spot-location-claims');
 const authorityKeys = require(
   '../../packages/framework/dist/runtime/locations/authority-key-codec'
 );
@@ -255,6 +261,70 @@ test('location lifecycle reclaims tracked Spot and Actor rows after an owner lea
   assert.equal(await store.resolveActor({ meshName: 'play', actorId: 'actor-1' }), undefined);
   assert.equal(await store.resolveSpot({ meshName: 'play', spotId: 'spot-1' }), undefined);
   await runtime.stop();
+});
+
+test('actor reclaim skips a tracked entry replaced while its Store read is pending', async () => {
+  let releaseResolve;
+  const resolvePending = new Promise((resolve) => { releaseResolve = resolve; });
+  const runtime = {
+    ownerId: 'owner-a',
+    currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 2n },
+    async writeActor() { throw new Error('stale actor reclaim must not write'); }
+  };
+  const claims = new ZLinkActorLocationClaims(runtime, {
+    async resolveActor() { await resolvePending; return undefined; }
+  }, 'play');
+  const canonical = internal.ZLinkLocationKeyCodec.encodeActorKey({ meshName: 'play', actorId: 'actor-race' });
+  let oldDeactivated = 0;
+  const old = {
+    row: { meshName: 'play', actorId: 'actor-race', leaseGeneration: 1n }, generation: 1n,
+    deactivate: async () => { oldDeactivated += 1; }
+  };
+  const replacement = {
+    row: { meshName: 'play', actorId: 'actor-race', leaseGeneration: 2n }, generation: 2n
+  };
+  claims.actors.set(canonical, old);
+  const reclaim = claims.reclaimOwnerRows();
+  await new Promise((resolve) => setImmediate(resolve));
+  claims.actors.set(canonical, replacement);
+  releaseResolve();
+  await reclaim;
+
+  assert.equal(claims.actors.get(canonical), replacement);
+  assert.equal(oldDeactivated, 0);
+});
+
+test('Spot reclaim skips a tracked entry replaced while its Store read is pending', async () => {
+  let releaseResolve;
+  const resolvePending = new Promise((resolve) => { releaseResolve = resolve; });
+  const runtime = {
+    ownerId: 'owner-a',
+    currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 2n },
+    async writeSpot() { throw new Error('stale Spot reclaim must not write'); }
+  };
+  const claims = new ZLinkSpotLocationClaims(runtime, undefined, {
+    async resolveSpot() { await resolvePending; return undefined; }
+  });
+  const canonical = internal.ZLinkLocationKeyCodec.encodeSpotKey({ meshName: 'play', spotId: 'spot-race' });
+  let oldDeactivated = 0;
+  const old = {
+    kind: 'legacy',
+    row: { meshName: 'play', spotId: 'spot-race', leaseGeneration: 1n }, generation: 1n,
+    deactivate: async () => { oldDeactivated += 1; }
+  };
+  const replacement = {
+    kind: 'legacy',
+    row: { meshName: 'play', spotId: 'spot-race', leaseGeneration: 2n }, generation: 2n
+  };
+  claims.spots.set(canonical, old);
+  const reclaim = claims.reclaimOwnerRows();
+  await new Promise((resolve) => setImmediate(resolve));
+  claims.spots.set(canonical, replacement);
+  releaseResolve();
+  await reclaim;
+
+  assert.equal(claims.spots.get(canonical), replacement);
+  assert.equal(oldDeactivated, 0);
 });
 
 test('location runtime bounds fixed routing-id owner lease renewal by the configured timeout', async () => {

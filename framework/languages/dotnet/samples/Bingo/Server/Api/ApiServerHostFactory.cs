@@ -52,9 +52,16 @@ public static class ApiServerHostFactory
                 .Listen()
                 .AddHandlerGroup("api");
         });
-        builder.Services.AddSingleton(new BingoMeshStatusReport(
-            "api",
-            SampleNames.PlayMeshName));
+        builder.Services.AddSingleton(new BingoReadyReport(
+            BingoReadyKind.MeshRoute,
+            $"api-{nodeName}",
+            SampleNames.MatchmakingMeshName,
+            "matchmaking"));
+        builder.Services.AddSingleton(new BingoReadyReport(
+            BingoReadyKind.MeshRoute,
+            $"api-{nodeName}",
+            SampleNames.PlayMeshName,
+            "room"));
         builder.Services.AddHostedService<BingoMeshStatusReporter>();
         return builder.Build();
     }

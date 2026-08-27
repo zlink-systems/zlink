@@ -19,16 +19,15 @@ internal sealed class CourierSessionBinder(
     {
         var actor = await FindOrEnsureActorAsync(courierId, cancellationToken);
         logger.LogInformation(
-            "deliverydispatch courier-session: actor ready courier={CourierId}",
+            "deliverydispatch-courier bind-relayed courier={CourierId}",
             courierId);
         await context.Actors.BindOrGetAsync(
             actor,
             cancellationToken);
 
         logger.LogInformation(
-            "deliverydispatch courier-session: bound courier={CourierId} session={SessionId}",
-            courierId,
-            context.SessionId);
+            "deliverydispatch-courier bound courier={CourierId}",
+            courierId);
 
         return new BindCourierSessionRes(courierId);
     }

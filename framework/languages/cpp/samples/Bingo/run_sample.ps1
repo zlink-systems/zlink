@@ -26,6 +26,7 @@ function Find-Binary([string]$Name) {
 }
 
 $ApiBin = Find-Binary "sample_cpp_framework_bingo_api"
+$MatchmakingBin = Find-Binary "sample_cpp_framework_bingo_matchmaking"
 $PlayBin = Find-Binary "sample_cpp_framework_bingo_play"
 $SessionBin = Find-Binary "sample_cpp_framework_bingo_session"
 $ClientBin = Find-Binary "sample_cpp_framework_bingo_client"
@@ -107,15 +108,44 @@ function Wait-Endpoint([string]$Name, [string]$Endpoint, [int]$TimeoutSeconds = 
     throw "Timed out waiting for $Name at $Endpoint"
 }
 
-function Wait-Log([string]$Name, [string]$Path, [string]$Pattern, [int]$TimeoutSeconds = 60) {
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        if ((Test-Path $Path) -and (Select-String -Path $Path -Pattern $Pattern -Quiet)) {
+function Wait-Log([string]$Name, [string]$Path, [string]$Pattern) {
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        if ((Test-Path $Path) -and (Select-String -Path $Path -SimpleMatch -CaseSensitive -Pattern $Pattern -Quiet)) {
             return
         }
         Start-Sleep -Milliseconds 100
     }
     throw "Timed out waiting for $Name evidence in $Path"
+}
+
+function Get-LogLineCount([string[]]$Paths, [string]$ExpectedLine) {
+    $count = 0
+    foreach ($path in $Paths) {
+        if (-not (Test-Path $path)) {
+            continue
+        }
+        Get-Content -Path $path | ForEach-Object {
+            if ($_.Contains($ExpectedLine)) {
+                $count++
+            }
+        }
+    }
+    return $count
+}
+
+function Wait-LogCount([string]$Name, [string[]]$Paths, [string]$ExpectedLine, [int]$ExpectedCount) {
+    $actualCount = 0
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        $actualCount = Get-LogLineCount $Paths $ExpectedLine
+        if ($actualCount -eq $ExpectedCount) {
+            return
+        }
+        if ($actualCount -gt $ExpectedCount) {
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Expected $Name exactly $ExpectedCount time(s), found $actualCount."
 }
 
 function Start-Server([string]$Name, [string]$Binary, [string[]]$Arguments) {
@@ -140,7 +170,7 @@ try {
         "--output-on-failure"
     )
 
-    $ports = Reserve-Endpoints 22
+    $ports = Reserve-Endpoints 24
     $apiAChannelEndpoint = if ($env:BINGO_API_A_CHANNEL_ENDPOINT) { $env:BINGO_API_A_CHANNEL_ENDPOINT } else { "tcp://$($ports[2])" }
     $playAChannelEndpoint = if ($env:BINGO_PLAY_A_CHANNEL_ENDPOINT) { $env:BINGO_PLAY_A_CHANNEL_ENDPOINT } else { "tcp://$($ports[3])" }
     $sessionASpotEndpoint = if ($env:BINGO_SESSION_A_SPOT_ENDPOINT) { $env:BINGO_SESSION_A_SPOT_ENDPOINT } else { "tcp://$($ports[4])" }
@@ -157,10 +187,13 @@ try {
     $apiBChannelEndpoint = if ($env:BINGO_API_B_CHANNEL_ENDPOINT) { $env:BINGO_API_B_CHANNEL_ENDPOINT } else { "tcp://$($ports[15])" }
     $playARouteEndpoint = if ($env:BINGO_PLAY_A_ROUTE_ENDPOINT) { $env:BINGO_PLAY_A_ROUTE_ENDPOINT } else { "tcp://$($ports[0])" }
     $playBRouteEndpoint = if ($env:BINGO_PLAY_B_ROUTE_ENDPOINT) { $env:BINGO_PLAY_B_ROUTE_ENDPOINT } else { "tcp://$($ports[1])" }
-    $apiAPlayRouteEndpoint = if ($env:BINGO_API_A_PLAY_ROUTE_ENDPOINT) { $env:BINGO_API_A_PLAY_ROUTE_ENDPOINT } else { "tcp://$($ports[17])" }
-    $apiBPlayRouteEndpoint = if ($env:BINGO_API_B_PLAY_ROUTE_ENDPOINT) { $env:BINGO_API_B_PLAY_ROUTE_ENDPOINT } else { "tcp://$($ports[18])" }
-    $sessionAPlayRouteEndpoint = if ($env:BINGO_SESSION_A_PLAY_ROUTE_ENDPOINT) { $env:BINGO_SESSION_A_PLAY_ROUTE_ENDPOINT } else { "tcp://$($ports[19])" }
-    $sessionBPlayRouteEndpoint = if ($env:BINGO_SESSION_B_PLAY_ROUTE_ENDPOINT) { $env:BINGO_SESSION_B_PLAY_ROUTE_ENDPOINT } else { "tcp://$($ports[20])" }
+    $apiAPlayRouteEndpoint = if ($env:BINGO_API_A_PLAY_ROUTE_ENDPOINT) { $env:BINGO_API_A_PLAY_ROUTE_ENDPOINT } else { "tcp://$($ports[16])" }
+    $apiBPlayRouteEndpoint = if ($env:BINGO_API_B_PLAY_ROUTE_ENDPOINT) { $env:BINGO_API_B_PLAY_ROUTE_ENDPOINT } else { "tcp://$($ports[17])" }
+    $apiAMatchmakingRouteEndpoint = if ($env:BINGO_API_A_MATCHMAKING_ROUTE_ENDPOINT) { $env:BINGO_API_A_MATCHMAKING_ROUTE_ENDPOINT } else { "tcp://$($ports[18])" }
+    $apiBMatchmakingRouteEndpoint = if ($env:BINGO_API_B_MATCHMAKING_ROUTE_ENDPOINT) { $env:BINGO_API_B_MATCHMAKING_ROUTE_ENDPOINT } else { "tcp://$($ports[19])" }
+    $matchmakingRouteEndpoint = if ($env:BINGO_MATCHMAKING_ROUTE_ENDPOINT) { $env:BINGO_MATCHMAKING_ROUTE_ENDPOINT } else { "tcp://$($ports[20])" }
+    $sessionAPlayRouteEndpoint = if ($env:BINGO_SESSION_A_PLAY_ROUTE_ENDPOINT) { $env:BINGO_SESSION_A_PLAY_ROUTE_ENDPOINT } else { "tcp://$($ports[21])" }
+    $sessionBPlayRouteEndpoint = if ($env:BINGO_SESSION_B_PLAY_ROUTE_ENDPOINT) { $env:BINGO_SESSION_B_PLAY_ROUTE_ENDPOINT } else { "tcp://$($ports[22])" }
 
     $redis = Start-ZlinkSampleRedis "zlink-redis-cpp-sample-bingo"
     $RedisContainer = $redis.ContainerId
@@ -178,6 +211,9 @@ try {
         "--sample.topology.playBRouteEndpoint=$playBRouteEndpoint",
         "--sample.topology.apiAPlayRouteEndpoint=$apiAPlayRouteEndpoint",
         "--sample.topology.apiBPlayRouteEndpoint=$apiBPlayRouteEndpoint",
+        "--sample.topology.apiAMatchmakingRouteEndpoint=$apiAMatchmakingRouteEndpoint",
+        "--sample.topology.apiBMatchmakingRouteEndpoint=$apiBMatchmakingRouteEndpoint",
+        "--sample.topology.matchmakingRouteEndpoint=$matchmakingRouteEndpoint",
         "--sample.topology.sessionAPlayRouteEndpoint=$sessionAPlayRouteEndpoint",
         "--sample.topology.sessionBPlayRouteEndpoint=$sessionBPlayRouteEndpoint",
         "--sample.topology.playASpotEndpoint=$playASpotEndpoint",
@@ -188,17 +224,23 @@ try {
         "--sample.topology.sessionRouterEndpoint=$sessionARouterEndpoint",
         "--sample.topology.sessionAStreamEndpoint=$sessionAStreamEndpoint",
         "--sample.topology.sessionBStreamEndpoint=$sessionBStreamEndpoint",
+        "--sample.topology.logDir=$LogDir",
         "--sample.topology.redisEndpoint=$redisEndpoint",
         "--sample.topology.redisKeyPrefix=$RedisKeyPrefix"
     )
     $serverArgs = @("--sample.host.keepRunning", "true") + $topologyArgs
 
+    Start-Server "matchmaking" $MatchmakingBin $serverArgs
+    Wait-Endpoint "matchmaking" $matchmakingRouteEndpoint
+
     Start-Server "api-a" $ApiBin ($serverArgs + @("--sample.topology.apiNode=a"))
     Wait-Endpoint "api-a" $apiAChannelEndpoint
     Wait-Endpoint "api-a-play-route" $apiAPlayRouteEndpoint
+    Wait-Endpoint "api-a-matchmaking-route" $apiAMatchmakingRouteEndpoint
     Start-Server "api-b" $ApiBin ($serverArgs + @("--sample.topology.apiNode=b"))
     Wait-Endpoint "api-b" $apiBChannelEndpoint
     Wait-Endpoint "api-b-play-route" $apiBPlayRouteEndpoint
+    Wait-Endpoint "api-b-matchmaking-route" $apiBMatchmakingRouteEndpoint
 
     Start-Server "session-a" $SessionBin ($serverArgs + @(
         "--sample.topology.sessionNode=a",
@@ -206,7 +248,6 @@ try {
         "--sample.topology.sessionRouterEndpoint=$sessionARouterEndpoint",
         "--sample.topology.streamEndpoint=$sessionAStreamEndpoint"
     ))
-    Wait-Endpoint "session-a-router" $sessionARouterEndpoint
     Wait-Endpoint "session-a-stream" $sessionAStreamEndpoint
     Wait-Endpoint "session-a-play-route" $sessionAPlayRouteEndpoint
 
@@ -216,32 +257,22 @@ try {
         "--sample.topology.sessionRouterEndpoint=$sessionBRouterEndpoint",
         "--sample.topology.streamEndpoint=$sessionBStreamEndpoint"
     ))
-    Wait-Endpoint "session-b-router" $sessionBRouterEndpoint
     Wait-Endpoint "session-b-stream" $sessionBStreamEndpoint
     Wait-Endpoint "session-b-play-route" $sessionBPlayRouteEndpoint
 
     Start-Server "play-a" $PlayBin ($serverArgs + @("--sample.topology.playNode=a"))
-    Wait-Endpoint "play-a" $playAChannelEndpoint
-    Wait-Endpoint "play-a-route" $playARouteEndpoint
     Wait-Endpoint "play-a-spot-router" $playASpotRouterEndpoint
-    Wait-Endpoint "play-a-spot-pub" $playASpotEndpoint
     Start-Server "play-b" $PlayBin ($serverArgs + @("--sample.topology.playNode=b"))
-    Wait-Endpoint "play-b" $playBChannelEndpoint
-    Wait-Endpoint "play-b-route" $playBRouteEndpoint
     Wait-Endpoint "play-b-spot-router" $playBSpotRouterEndpoint
-    Wait-Endpoint "play-b-spot-pub" $playBSpotEndpoint
 
-    Wait-Log "api-a play-a route discovery" (Join-Path $LogDir "api-a.log") "zlink auto-connect dial type=client-server mesh=bingo\.play\.2201 .*targetRid=2201"
-    Wait-Log "api-a play-b route discovery" (Join-Path $LogDir "api-a.log") "zlink auto-connect dial type=client-server mesh=bingo\.play\.2202 .*targetRid=2202"
-    Wait-Log "api-b play-a route discovery" (Join-Path $LogDir "api-b.log") "zlink auto-connect dial type=client-server mesh=bingo\.play\.2201 .*targetRid=2201"
-    Wait-Log "api-b play-b route discovery" (Join-Path $LogDir "api-b.log") "zlink auto-connect dial type=client-server mesh=bingo\.play\.2202 .*targetRid=2202"
-    Wait-Log "session-a play-a route discovery" (Join-Path $LogDir "session-a.log") "zlink auto-connect dial type=client-server mesh=bingo\.play\.2201 .*targetRid=2201"
-    Wait-Log "session-a play-b route discovery" (Join-Path $LogDir "session-a.log") "zlink auto-connect dial type=client-server mesh=bingo\.play\.2202 .*targetRid=2202"
-    Wait-Log "session-b play-a route discovery" (Join-Path $LogDir "session-b.log") "zlink auto-connect dial type=client-server mesh=bingo\.play\.2201 .*targetRid=2201"
-    Wait-Log "session-b play-b route discovery" (Join-Path $LogDir "session-b.log") "zlink auto-connect dial type=client-server mesh=bingo\.play\.2202 .*targetRid=2202"
-
-    $settleSeconds = if ($env:BINGO_STARTUP_SETTLE_SECONDS) { [int]$env:BINGO_STARTUP_SETTLE_SECONDS } else { 2 }
-    Start-Sleep -Seconds $settleSeconds
+    Wait-Log "play-a peer route readiness" (Join-Path $LogDir "play-a.log") "bingo-ready kind=peer-route node=play-a peer=play-b"
+    Wait-Log "play-b peer route readiness" (Join-Path $LogDir "play-b.log") "bingo-ready kind=peer-route node=play-b peer=play-a"
+    Wait-Log "api-a matchmaking route readiness" (Join-Path $LogDir "api-a.log") "bingo-ready kind=mesh-route node=api-a mesh=matchmaking"
+    Wait-Log "api-a room route readiness" (Join-Path $LogDir "api-a.log") "bingo-ready kind=mesh-route node=api-a mesh=room"
+    Wait-Log "api-b matchmaking route readiness" (Join-Path $LogDir "api-b.log") "bingo-ready kind=mesh-route node=api-b mesh=matchmaking"
+    Wait-Log "api-b room route readiness" (Join-Path $LogDir "api-b.log") "bingo-ready kind=mesh-route node=api-b mesh=room"
+    Wait-Log "session-a room route readiness" (Join-Path $LogDir "session-a.log") "bingo-ready kind=mesh-route node=session-a mesh=room"
+    Wait-Log "session-b room route readiness" (Join-Path $LogDir "session-b.log") "bingo-ready kind=mesh-route node=session-b mesh=room"
 
     $clientLog = Join-Path $LogDir "client.log"
     Invoke-Checked $ClientBin @(
@@ -261,16 +292,23 @@ try {
     if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo .* name=.*Notify" -Quiet)) {
         throw "Bingo C++ client did not write stream-inbound push marker."
     }
-    $playLogs = Join-Path $LogDir "play-*.log"
-    if (-not (Select-String -Path $playLogs -Pattern "entry spot: actor destroy completed\. actor=player-1" -Quiet)) {
-        throw "Bingo C++ sample did not record player-1 actor destroy completion."
+    $playLogs = @((Join-Path $LogDir "play-a.log"), (Join-Path $LogDir "play-b.log"))
+    $sessionLogs = @((Join-Path $LogDir "session-a.log"), (Join-Path $LogDir "session-b.log"))
+
+    Wait-LogCount "player-1 record fetch" $playLogs "bingo-record fetched actor=player-1 wins=0 losses=0" 1
+    Wait-LogCount "player-2 record fetch" $playLogs "bingo-record fetched actor=player-2 wins=0 losses=0" 1
+    Wait-LogCount "player-1 record report" $playLogs "bingo-record reported actor=player-1 wins=1 losses=0" 1
+    Wait-LogCount "player-2 record report" $playLogs "bingo-record reported actor=player-2 wins=0 losses=1" 1
+    foreach ($actorId in @("player-1", "player-2", "observer")) {
+        Wait-LogCount "$actorId room leave" $playLogs "bingo-lifecycle room-leave actor=$actorId" 1
+        Wait-LogCount "$actorId Entry Spot leave" $playLogs "bingo-lifecycle entry-leave actor=$actorId" 1
     }
-    if (-not (Select-String -Path $playLogs -Pattern "entry spot: actor destroy completed\. actor=player-2" -Quiet)) {
-        throw "Bingo C++ sample did not record player-2 actor destroy completion."
-    }
-    if (Select-String -Path $playLogs -Pattern "entry spot: actor destroy completed\. actor=observer" -Quiet) {
-        throw "Bingo C++ sample destroyed observer actor during player cleanup."
-    }
+    Wait-LogCount "player-1 Entry Spot destroy completion" $playLogs "bingo-lifecycle entry-destroy-complete actor=player-1" 1
+    Wait-LogCount "player-2 Entry Spot destroy completion" $playLogs "bingo-lifecycle entry-destroy-complete actor=player-2" 1
+    Wait-LogCount "player-1 session disconnect" $sessionLogs "bingo-lifecycle session-disconnect actor=player-1 destroy=false" 1
+    Wait-LogCount "player-2 session disconnect" $sessionLogs "bingo-lifecycle session-disconnect actor=player-2 destroy=false" 1
+    Wait-LogCount "observer record report" $playLogs "bingo-record reported actor=observer" 0
+    Wait-LogCount "observer Entry Spot destroy completion" $playLogs "bingo-lifecycle entry-destroy-complete actor=observer" 0
 
     $Status = 0
 } finally {
@@ -281,3 +319,4 @@ if ($Status -ne 0) {
     exit $Status
 }
 Write-Host "bingo full client/server self-check completed"
+Write-Host "bingo-placement=completed"

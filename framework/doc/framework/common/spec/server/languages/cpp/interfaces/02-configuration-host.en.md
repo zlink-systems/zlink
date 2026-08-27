@@ -1,6 +1,6 @@
-# C++ Configuration And Host Exact Interface
+# C++ Configuration And Host Per-Language Interface
 
-[C++ exact interface table of contents](README.en.md)
+[C++ per-language interface table of contents](README.en.md)
 
 ## 1. Host Maintenance
 
@@ -24,66 +24,66 @@ lifecycle operation taking MeshName isn't provided.
 namespace zlink::framework {
 
 enum class framework_runtime_state_t {
-    preparing = 0,
-    serving = 1,
-    relocating = 2,
-    relocated = 3,
-    draining = 4,
-    stopped = 5,
-    error = 6
+ preparing = 0,
+ serving = 1,
+ relocating = 2,
+ relocated = 3,
+ draining = 4,
+ stopped = 5,
+ error = 6
 };
 
 enum class relocation_outcome_t {
-    relocated = 0,
-    blocked = 1
+ relocated = 0,
+ blocked = 1
 };
 
 enum class relocation_mode_t {
-    planned_maintenance = 0,
-    rolling_update = 1
+ planned_maintenance = 0,
+ rolling_update = 1
 };
 
 enum class relocation_reason_t {
-    none = 0,
-    target_unavailable = 1,
-    store_unavailable = 2,
-    relocation_disabled = 3,
-    state_incompatible = 4,
-    deadline_exceeded = 5,
-    relocation_failed = 6,
-    runtime_not_ready = 7,
-    manual_topology_unsupported = 8,
-    shutdown_requested = 9,
-    operation_in_progress = 10
+ none = 0,
+ target_unavailable = 1,
+ store_unavailable = 2,
+ relocation_disabled = 3,
+ state_incompatible = 4,
+ deadline_exceeded = 5,
+ relocation_failed = 6,
+ runtime_not_ready = 7,
+ manual_topology_unsupported = 8,
+ shutdown_requested = 9,
+ operation_in_progress = 10
 };
 
 struct relocation_options_t {
-    relocation_mode_t mode;
-    std::optional<std::int64_t> target_application_version;
-    std::optional<std::chrono::milliseconds> deadline;
+ relocation_mode_t mode;
+ std::optional<std::int64_t> target_application_version;
+ std::optional<std::chrono::milliseconds> deadline;
 };
 
 struct relocation_result_t {
-    relocation_mode_t mode;
-    std::int64_t effective_target_application_version;
-    relocation_outcome_t outcome;
-    relocation_reason_t reason;
+ relocation_mode_t mode;
+ std::int64_t effective_target_application_version;
+ relocation_outcome_t outcome;
+ relocation_reason_t reason;
 };
 
 enum class termination_outcome_t {
-    stopped = 0,
-    force_stopped = 1
+ stopped = 0,
+ force_stopped = 1
 };
 
 enum class termination_reason_t {
-    none = 0,
-    deadline_exceeded = 1,
-    teardown_failed = 2
+ none = 0,
+ deadline_exceeded = 1,
+ teardown_failed = 2
 };
 
 struct termination_result_t {
-    termination_outcome_t outcome;
-    termination_reason_t reason;
+ termination_outcome_t outcome;
+ termination_reason_t reason;
 };
 
 } // namespace zlink::framework
@@ -121,17 +121,17 @@ and keeps the host process and infrastructure connection.
 Both modes narrow candidates in the following order.
 
 1. `planned_maintenance` keeps only candidates whose version matches
-   source. `rolling_update` keeps only candidates that exactly match the
-   requested target version.
+ source. `rolling_update` keeps only candidates that exactly match the
+ requested target version.
 2. It keeps only a `serving` Object Server on the same Mesh that isn't
-   the source.
+ the source.
 3. It applies factory, stable-type, and relocation-policy/adapter
-   compatibility checks to the remaining candidates.
+ compatibility checks to the remaining candidates.
 4. It checks population capacity and reservation availability, and
-   excludes a candidate in the same non-empty maintenance wave as source.
+ excludes a candidate in the same non-empty maintenance wave as source.
 5. It keeps only a candidate whose RID and lifecycle generation match
-   in the same descriptor snapshot and Core peer table, and whose Core
-   peer is `admitted` and `ready`.
+ in the same descriptor snapshot and Core peer table, and whose Core
+ peer is `admitted` and `ready`.
 6. It applies node-wide placement weight on the final candidate set.
 
 Since the version condition is applied before capability/capacity/weight,
@@ -153,7 +153,7 @@ peer table. This restriction doesn't apply to `shutdown()`.
 every target's `Prepared` completion and host `Relocating` descriptor
 publication. It's also used, instead of `relocation_disabled`, when
 connection-bound work wasn't terminal drained within the pre-`Captured`
-[deadline](../../../01-glossary.en.md#deadline). A bound-session
+[deadline](../../../00-foundation/02-glossary.en.md#deadline). A bound-session
 request is not drained; it follows the same frozen-journal and
 ingress-hold rules as any other Actor request. The Framework
 cleans up the relocation staging and reservation, releases the
@@ -193,41 +193,41 @@ namespace zlink::framework {
 
 class app_t {
 public:
-    app_t();
-    ~app_t();
-    app_t(app_t &&) noexcept;
-    app_t &operator=(app_t &&) noexcept;
-    app_t(const app_t &) = delete;
-    app_t &operator=(const app_t &) = delete;
+ app_t();
+ ~app_t();
+ app_t(app_t &&) noexcept;
+ app_t &operator=(app_t &&) noexcept;
+ app_t(const app_t &) = delete;
+ app_t &operator=(const app_t &) = delete;
 
-    static app_t create();
+ static app_t create();
 
-    config_builder_t &config() noexcept;
-    logging_builder_t &logging() noexcept;
-    health_builder_t &health() noexcept;
+ config_builder_t &config() noexcept;
+ logging_builder_t &logging() noexcept;
+ health_builder_t &health() noexcept;
 
-    app_t &add_module(module_t &module);
-    zlink_framework_options_t &add_zlink_framework();
-    app_t &add_zlink_framework(
-      std::function<void(zlink_framework_options_t &)> configure);
-    template <typename TModule, typename... TArgs>
-    app_t &add_zlink_framework(TArgs &&...args);
-    app_t &add_hosted_service(std::unique_ptr<hosted_service_t> service);
+ app_t &add_module(module_t &module);
+ zlink_framework_options_t &add_zlink_framework();
+ app_t &add_zlink_framework(
+ std::function<void(zlink_framework_options_t &)> configure);
+ template <typename TModule, typename... TArgs>
+ app_t &add_zlink_framework(TArgs &&...args);
+ app_t &add_hosted_service(std::unique_ptr<hosted_service_t> service);
 
-    bool is_ready() const noexcept;
-    app_t &set_message_flow_mode(message_flow_log_mode_t mode) noexcept;
-    message_flow_log_mode_t message_flow_mode() const noexcept;
+ bool is_ready() const noexcept;
+ app_t &set_message_flow_mode(message_flow_log_mode_t mode) noexcept;
+ message_flow_log_mode_t message_flow_mode() const noexcept;
 
-    task_t<relocation_result_t> relocate(
-      relocation_options_t options,
-      std::stop_token wait_cancellation = {});
-    task_t<termination_result_t> shutdown(
-      std::chrono::milliseconds deadline = std::chrono::seconds{30},
-      std::stop_token wait_cancellation = {});
+ task_t<relocation_result_t> relocate(
+ relocation_options_t options,
+ std::stop_token wait_cancellation = {});
+ task_t<termination_result_t> shutdown(
+ std::chrono::milliseconds deadline = std::chrono::seconds{30},
+ std::stop_token wait_cancellation = {});
 
-    int run(int argc, char **argv);
-    void stop() noexcept;
-    void request_stop() noexcept;
+ int run(int argc, char **argv);
+ void stop() noexcept;
+ void request_stop() noexcept;
 };
 
 } // namespace zlink::framework
@@ -249,45 +249,45 @@ interface.
 namespace zlink::framework {
 
 enum class service_lifetime_t {
-    singleton = 0,
-    scoped = 1,
-    transient = 2
+ singleton = 0,
+ scoped = 1,
+ transient = 2
 };
 
 class service_collection_t {
 public:
-    service_collection_t();
-    ~service_collection_t();
-    service_collection_t(service_collection_t &&) noexcept;
-    service_collection_t &operator=(service_collection_t &&) noexcept;
-    service_collection_t(const service_collection_t &) = delete;
-    service_collection_t &operator=(const service_collection_t &) = delete;
+ service_collection_t();
+ ~service_collection_t();
+ service_collection_t(service_collection_t &&) noexcept;
+ service_collection_t &operator=(service_collection_t &&) noexcept;
+ service_collection_t(const service_collection_t &) = delete;
+ service_collection_t &operator=(const service_collection_t &) = delete;
 
-    template <typename T>
-    service_collection_t &add_singleton();
+ template <typename T>
+ service_collection_t &add_singleton();
 
-    template <typename T, typename... TDependencies>
-    service_collection_t &add_singleton();
+ template <typename T, typename... TDependencies>
+ service_collection_t &add_singleton();
 
-    template <typename T>
-    service_collection_t &add_singleton(std::unique_ptr<T> instance);
+ template <typename T>
+ service_collection_t &add_singleton(std::unique_ptr<T> instance);
 
-    template <typename T>
-    service_collection_t &add_scoped();
+ template <typename T>
+ service_collection_t &add_scoped();
 
-    template <typename T, typename... TDependencies>
-    service_collection_t &add_scoped();
+ template <typename T, typename... TDependencies>
+ service_collection_t &add_scoped();
 
-    template <typename T>
-    service_collection_t &add_transient();
+ template <typename T>
+ service_collection_t &add_transient();
 
-    template <typename T, typename... TDependencies>
-    service_collection_t &add_transient();
+ template <typename T, typename... TDependencies>
+ service_collection_t &add_transient();
 
-    template <typename T, typename... TDependencies, typename TFactory>
-    service_collection_t &add_factory(
-      TFactory factory,
-      service_lifetime_t lifetime = service_lifetime_t::transient);
+ template <typename T, typename... TDependencies, typename TFactory>
+ service_collection_t &add_factory(
+ TFactory factory,
+ service_lifetime_t lifetime = service_lifetime_t::transient);
 };
 
 } // namespace zlink::framework
@@ -296,36 +296,36 @@ public:
 The default construction rule is below.
 
 - `add_singleton<T>()` and `add_transient<T>()` auto-construct only a
-  default-constructible type.
+ default-constructible type.
 - A type with a constructor dependency specifies the dependency type,
-  like `add_singleton<T, Dep1, Dep2>()`, `add_scoped<T, Dep1, Dep2>()`,
-  `add_transient<T, Dep1, Dep2>()`. The Framework resolves `Dep1`,
-  `Dep2` from the internal provider and then calls `T(Dep1 &, Dep2 &)`.
+ like `add_singleton<T, Dep1, Dep2>()`, `add_scoped<T, Dep1, Dep2>()`,
+ `add_transient<T, Dep1, Dep2>()`. The Framework resolves `Dep1`,
+ `Dep2` from the internal provider and then calls `T(Dep1 &, Dep2 &)`.
 - `add_scoped<T>()` only resolves inside a scope the framework owns.
 - Only when complex external object construction or conditional
-  construction is needed, use
-  `add_factory<T, Dep1, Dep2>()`. The
-  [Factory](../../../01-glossary.en.md#factory) only receives a
-  typed reference of the declared dependency, not a runtime provider or
-  scope.
+ construction is needed, use
+ `add_factory<T, Dep1, Dep2>()`. The
+ [Factory](../../../00-foundation/02-glossary.en.md#factory) only receives a
+ typed reference of the declared dependency, not a runtime provider or
+ scope.
 - A Channel/HTTP handler class, once registered to a handler group or
-  HTTP route, is built by the Framework in the dispatch scope. The
-  application doesn't register the same handler type to the service
-  collection again.
+ HTTP route, is built by the Framework in the dispatch scope. The
+ application doesn't register the same handler type to the service
+ collection again.
 - A Spot packet/Actor payload handler is a Spot member function, so
-  it isn't a separate service. A timer handler class is built once in
-  the Spot activation scope, and the same activation's ticks reuse it.
-  Only the dependency declared in the timer handler's
-  `dependency_types` is resolved in that scope.
+ it isn't a separate service. A timer handler class is built once in
+ the Spot activation scope, and the same activation's ticks reuse it.
+ Only the dependency declared in the timer handler's
+ `dependency_types` is resolved in that scope.
 - An external DI library, such as `Boost.Ext.DI`, isn't put as a public
-  dependency.
+ dependency.
 
 `scoped` lifetime is a DI lifetime the Framework owns, not a raw
 transport capability. The Framework internally builds the scope
 boundary of handler dispatch, STREAM session, and Spot activation. A
 channel handler builds a scope per dispatch,
-[STREAM session](../../../01-glossary.en.md#stream-session) has a
-session scope, and [Spot](../../../01-glossary.en.md#spot) and
+[STREAM session](../../../00-foundation/02-glossary.en.md#stream-session) has a
+session scope, and [Spot](../../../00-foundation/02-glossary.en.md#spot) and
 Entry Spot have an activation scope. An actor factory is resolved in
 the actor creation scope, and the actor instance itself is owned by
 the actor runtime.
@@ -334,9 +334,9 @@ An example is below.
 
 ```cpp
 options.services()
-  .add_singleton<order_repository_t>()
-  .add_transient<order_service_t, order_repository_t>()
-  .add_transient<order_handler_t, order_service_t>();
+ .add_singleton<order_repository_t>()
+ .add_transient<order_service_t, order_repository_t>()
+ .add_transient<order_handler_t, order_service_t>();
 ```
 
 ## 4. Hosted Service And Module
@@ -348,24 +348,24 @@ namespace zlink::framework {
 
 class hosted_service_t {
 public:
-    virtual ~hosted_service_t() = default;
-    virtual void start() = 0;
-    virtual void request_stop() noexcept {}
-    virtual void stop() noexcept = 0;
+ virtual ~hosted_service_t() = default;
+ virtual task_t<void> start(service_provider_t &services) = 0;
+ virtual void request_stop() noexcept {}
+ virtual void stop() noexcept = 0;
 };
 
 class module_t {
 public:
-    virtual ~module_t() = default;
-    virtual void configure(zlink_framework_options_t &options) = 0;
+ virtual ~module_t() = default;
+ virtual void configure(zlink_framework_options_t &options) = 0;
 };
 
 template <typename TModule>
 concept framework_module_contract_t =
-  requires(TModule &module,
-    zlink_framework_options_t &options) {
-      module.configure(options);
-  };
+ requires(TModule &module,
+ zlink_framework_options_t &options) {
+ module.configure(options);
+ };
 
 } // namespace zlink::framework
 ```
@@ -401,7 +401,7 @@ request/send/publish handler can be bundled under the same group name
 and connected to a channel with the channel builder's
 `.add_handler_group(...)`.
 The handler group must match the channel kind. A
-[RouteMesh](../../../01-glossary.en.md#routemesh) ChannelName can
+[RouteMesh](../../../00-foundation/02-glossary.en.md#routemesh) ChannelName can
 take a request/send handler group, and a fanout channel can only take
 a publish handler group. Connecting a mismatched group fails as a
 configuration error when writing options.
@@ -414,9 +414,9 @@ allow duplication whether a channel references a group first and a
 handler comes in later, or a handler is registered first and a channel
 references the group later.
 A MeshNode can have a ROUTER listen endpoint and zero or more
-[ChannelName](../../../01-glossary.en.md#channelname)
-[membership](../../../01-glossary.en.md#membership)s. A
-[MeshNode](../../../01-glossary.en.md#meshname) dedicated to call or
+[ChannelName](../../../00-foundation/02-glossary.en.md#channelname)
+[membership](../../../00-foundation/02-glossary.en.md#membership)s. A
+[MeshNode](../../../00-foundation/02-glossary.en.md#meshname) dedicated to call or
 Node direct can start with no membership, and a MeshNode providing a
 Channel handler must register at least one Server membership. Each
 Server ChannelName can have a request/send handler group. A fanout
@@ -439,31 +439,31 @@ to build a category logger inside the handler.
 auto &options = app.add_zlink_framework();
 options.use_filter<audit_filter_t>();
 options.metadata()
-  .allow_session_to_actor("trace-id")
-  .allow_actor_to_session("trace-id");
+ .allow_session_to_actor("trace-id")
+ .allow_actor_to_session("trace-id");
 
 auto mesh = options.add_route_mesh(sample_names_t::application_mesh);
 mesh.listen(7300).set_routing_id(topology.application_rid);
 mesh.channel(sample_names_t::api_channel).server().add_handler_group("api");
 mesh.channel(sample_names_t::play_channel).client();
 
-    // sets the message-flow observation level used at startup.
+ // sets the message-flow observation level used at startup.
 options.configure_dispatch().message_flow(
-  zlink::framework::message_flow_log_mode_t::errors);
+ zlink::framework::message_flow_log_mode_t::errors);
 
 options.handlers()
-  .group("api")
-  .add<authenticate_player_handler_t>()
-  .add<match_bingo_api_handler_t>()
-  .add_send<player_command_handler_t>();
+ .group("api")
+ .add<authenticate_player_handler_t>()
+ .add<match_bingo_api_handler_t>()
+ .add_send<player_command_handler_t>();
 
 options.handlers()
-  .group("events")
-  .add_publish<notification_event_handler_t>();
+ .group("events")
+ .add_publish<notification_event_handler_t>();
 ```
 
 Using automatic peer discovery looks up the same
-[MeshName](../../../01-glossary.en.md#meshname)'s MeshNode
+[MeshName](../../../00-foundation/02-glossary.en.md#meshname)'s MeshNode
 descriptor from a registered `location_store_t` provider. The official
 Redis package is one of the usable providers.
 A manual peer is registered with `peer_connections().connect(endpoint)`
@@ -499,26 +499,26 @@ for their unhandled policy.
 options.add_location_store(redis_location_store);
 
 auto mesh = options.add_route_mesh(sample_names_t::application_mesh)
-  .listen(7300)
-  .set_routing_id(topology.application_rid);
+ .listen(7300)
+ .set_routing_id(topology.application_rid);
 mesh.channel(sample_names_t::api_channel)
-  .server()
-  .add_handler_group("api");
+ .server()
+ .add_handler_group("api");
 
 options.add_fanout_channel(sample_names_t::notification_channel)
-  .enable_publisher(7400)
-  .set_routing_id(topology.notification_publisher_rid)
-  .enable_subscriber() // automatically discovers a publisher of the same ChannelName from the location store.
-  .add_handler_group("events");
+ .enable_publisher(7400)
+ .set_routing_id(topology.notification_publisher_rid)
+ .enable_subscriber() // automatically discovers a publisher of the same ChannelName from the location store.
+ .add_handler_group("events");
 
 mesh.channel(sample_names_t::game_channel).client();
 mesh.peer_connections().connect(topology.play_router_endpoint);
 mesh.add_entry_spot<session_entry_spot_t>();
 
 options.add_stream_node(sample_names_t::stream_name)
-  .bind(7500)
-  .enable_actor_dispatch()
-  .register_session<client_session_t>()
+ .bind(7500)
+ .enable_actor_dispatch()
+ .register_session<client_session_t>()
 ```
 
 The Entry Spot's SpotId is issued by the Framework in the format
@@ -527,7 +527,7 @@ application to set the Entry Spot's RoutingId or a fixed SpotId isn't
 provided.
 
 `enable_actor_dispatch()` configures session Actor dispatch to use
-global ActorId lookup and exact ActorRef bind. It doesn't take a
+global ActorId lookup and ActorRef bind. It doesn't take a
 target MeshName or infer one from the first MeshNode. Don't call it on
 a STREAM node that doesn't use Actor dispatch. Calling it twice on the
 same builder fails startup.
@@ -546,7 +546,7 @@ configuration error.
 
 A MeshNode opens a ROUTER endpoint with `listen(...)` and selects a
 role after `channel(...)`. An automatic peer is configured with the
-Redis [descriptor](../../../01-glossary.en.md#descriptor), and a
+Redis [descriptor](../../../00-foundation/02-glossary.en.md#descriptor), and a
 manual peer with `peer_connections()`. Node/Channel/Spot/Actor messages
 use the same MeshNode ROUTER.
 In fluent options, a value used as an identifier or connection address
@@ -554,10 +554,10 @@ In fluent options, a value used as an identifier or connection address
 name — doesn't allow an empty or whitespace-only string. An invalid
 value is closed as a framework error at builder-call or options-apply
 time, without being passed down to the low-level socket/runtime.
-Spot code uses [Node direct](../../../01-glossary.en.md#node-direct),
+Spot code uses [Node direct](../../../00-foundation/02-glossary.en.md#node-direct),
 ChannelName select-one, and Logical Multicast as a client of the owner
 MeshNode.
-[Logical Multicast](../../../01-glossary.en.md#logical-multicast)
+[Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast)
 doesn't compose a separate PUB/SUB role. Only classic fanout uses an
 independent PUB/SUB socket.
 
@@ -575,169 +575,169 @@ namespace zlink::framework {
 
 class http_options_builder_t {
 public:
-    http_options_builder_t &listen(std::string endpoint);
-    http_options_builder_t &configure_tls(
-      std::function<void(http_tls_options_builder_t &)> configure);
-    http_options_builder_t &configure_server(
-      std::function<void(http_server_options_builder_t &)> configure);
+ http_options_builder_t &listen(std::string endpoint);
+ http_options_builder_t &configure_tls(
+ std::function<void(http_tls_options_builder_t &)> configure);
+ http_options_builder_t &configure_server(
+ std::function<void(http_server_options_builder_t &)> configure);
 
-    template <typename THandler>
-    http_options_builder_t &map_get(std::string path);
+ template <typename THandler>
+ http_options_builder_t &map_get(std::string path);
 
-    template <typename THandler>
-    http_options_builder_t &map_post(std::string path);
+ template <typename THandler>
+ http_options_builder_t &map_post(std::string path);
 
-    template <typename THandler>
-    http_options_builder_t &map_put(std::string path);
+ template <typename THandler>
+ http_options_builder_t &map_put(std::string path);
 
-    template <typename THandler>
-    http_options_builder_t &map_delete(std::string path);
+ template <typename THandler>
+ http_options_builder_t &map_delete(std::string path);
 
-    template <typename TMiddleware>
-    http_options_builder_t &use();
+ template <typename TMiddleware>
+ http_options_builder_t &use();
 
-    http_options_builder_t &map_health(std::string path);
-    http_options_builder_t &map_readiness(std::string path);
-    http_options_builder_t &map_liveness(std::string path);
+ http_options_builder_t &map_health(std::string path);
+ http_options_builder_t &map_readiness(std::string path);
+ http_options_builder_t &map_liveness(std::string path);
 };
 
 struct http_context_t {
-    http_method_t method;
-    std::string path;
-    std::string correlation_id;
-    std::map<std::string, std::string> request_headers;
-    std::map<std::string, std::string> response_headers;
-    std::optional<std::string> response_body;
-    int response_status;
+ http_method_t method;
+ std::string path;
+ std::string correlation_id;
+ std::map<std::string, std::string> request_headers;
+ std::map<std::string, std::string> response_headers;
+ std::optional<std::string> response_body;
+ int response_status;
 
-    http_context_t &response_header(std::string name, std::string value);
-    http_context_t &json_response(int status, std::string body);
+ http_context_t &response_header(std::string name, std::string value);
+ http_context_t &json_response(int status, std::string body);
 };
 
 struct http_request_t {
-    http_method_t method;
-    std::string path;
-    std::string target;
-    std::string query_string;
-    std::string correlation_id;
-    std::map<std::string, std::string> headers;
-    std::map<std::string, std::string> route_values;
-    std::map<std::string, std::string> query_values;
-    std::string body;
-    std::string content_type;
-    std::string remote_endpoint;
+ http_method_t method;
+ std::string path;
+ std::string target;
+ std::string query_string;
+ std::string correlation_id;
+ std::map<std::string, std::string> headers;
+ std::map<std::string, std::string> route_values;
+ std::map<std::string, std::string> query_values;
+ std::string body;
+ std::string content_type;
+ std::string remote_endpoint;
 };
 
 struct http_response_t {
-    int status = 200;
-    std::string body;
-    std::string content_type = "application/json";
-    std::map<std::string, std::string> headers;
+ int status = 200;
+ std::string body;
+ std::string content_type = "application/json";
+ std::map<std::string, std::string> headers;
 
-    http_response_t &header(std::string name, std::string value);
+ http_response_t &header(std::string name, std::string value);
 };
 
 class handler_options_builder_t {
 public:
-    class group_builder_t {
-    public:
-        template <typename THandler>
-        group_builder_t &add();
+ class group_builder_t {
+ public:
+ template <typename THandler>
+ group_builder_t &add();
 
-        template <typename THandler>
-        group_builder_t &add_send();
+ template <typename THandler>
+ group_builder_t &add_send();
 
-        template <typename THandler>
-        group_builder_t &add_publish();
-    };
+ template <typename THandler>
+ group_builder_t &add_publish();
+ };
 
-    group_builder_t group(std::string group_name);
+ group_builder_t group(std::string group_name);
 };
 
 class metadata_policy_builder_t {
 public:
-    metadata_policy_builder_t &add_forwarded_metadata_key(std::string key);
-    metadata_policy_builder_t &allow_session_to_actor(std::string key);
-    metadata_policy_builder_t &allow_actor_to_session(std::string key);
+ metadata_policy_builder_t &add_forwarded_metadata_key(std::string key);
+ metadata_policy_builder_t &allow_session_to_actor(std::string key);
+ metadata_policy_builder_t &allow_actor_to_session(std::string key);
 };
 
 class codec_registration_context_t {
 public:
-    template <typename TPayload>
-    codec_registration_context_t &add_serializer(
-      typename serializer_t<TPayload>::serialize_fn_t serialize,
-      typename serializer_t<TPayload>::deserialize_fn_t deserialize,
-      std::string content_type = "application/octet-stream");
+ template <typename TPayload>
+ codec_registration_context_t &add_serializer(
+ typename serializer_t<TPayload>::serialize_fn_t serialize,
+ typename serializer_t<TPayload>::deserialize_fn_t deserialize,
+ std::string content_type = "application/octet-stream");
 };
 
 class codec_options_builder_t {
 public:
-    template <typename TExtension>
-    codec_options_builder_t &use();
-    template <typename TExtension>
-    codec_options_builder_t &use(const TExtension &extension);
+ template <typename TExtension>
+ codec_options_builder_t &use();
+ template <typename TExtension>
+ codec_options_builder_t &use(const TExtension &extension);
 };
 
 enum class core_hwm_profile_t {
-    compact = 0,
-    low_latency = 1,
-    balanced = 2,
-    throughput = 3
+ compact = 0,
+ low_latency = 1,
+ balanced = 2,
+ throughput = 3
 };
 
 enum class application_job_queue_profile_t {
-    compact = 0,
-    low_latency = 1,
-    balanced = 2,
-    throughput = 3
+ compact = 0,
+ low_latency = 1,
+ balanced = 2,
+ throughput = 3
 };
 enum class application_job_queue_pressure_state_t {
-    running = 0,
-    paused = 1
+ running = 0,
+ paused = 1
 };
 
 class zlink_framework_options_t {
 public:
-    handler_options_builder_t handlers();
-    codec_options_builder_t codecs();
-    metadata_policy_builder_t metadata();
-    network_options_t &configure_network();
-    worker_options_t &worker();
-    dispatch_options_t &configure_dispatch();
-    dispatch_options_t dispatch_options() const;
-    core_hwm_options_t &configure_core_hwm();
-    inbound_dispatch_options_t &configure_inbound_dispatch();
-    location_options_t &configure_locations();
-    location_options_t location_options() const;
-    zlink_framework_options_t &set_max_pending(std::size_t count);
-    zlink_framework_options_t &set_application_version(
-      std::int64_t application_version);
-    zlink_framework_options_t &set_maintenance_wave(
-      std::optional<std::string> maintenance_wave);
-    zlink_framework_options_t &set_default_request_timeout(
-      std::chrono::milliseconds timeout);
-    service_collection_t &services() noexcept;
-    zlink_framework_options_t &add_location_store(
-      std::shared_ptr<location_store_t> store);
-    template <typename TStore>
-    typename TStore::options_builder_type add_location_store();
-    client_server_channel_builder_t add_client_server_channel(
-      std::string channel_name);
-    fanout_channel_builder_t add_fanout_channel(std::string channel_name);
-    mesh_node_builder_t add_route_mesh(std::string mesh_name);
-    stream_node_options_builder_t add_stream_node(std::string stream_name);
-    stream_compression_options_builder_t configure_stream_compression();
-    http_options_builder_t &http() noexcept;
-    template <typename TFilter>
-    zlink_framework_options_t &use_filter();
+ handler_options_builder_t handlers();
+ codec_options_builder_t codecs();
+ metadata_policy_builder_t metadata();
+ network_options_t &configure_network();
+ worker_options_t &worker();
+ dispatch_options_t &configure_dispatch();
+ dispatch_options_t dispatch_options() const;
+ core_hwm_options_t &configure_core_hwm();
+ inbound_dispatch_options_t &configure_inbound_dispatch();
+ location_options_t &configure_locations();
+ location_options_t location_options() const;
+ zlink_framework_options_t &set_max_pending(std::size_t count);
+ zlink_framework_options_t &set_application_version(
+ std::int64_t application_version);
+ zlink_framework_options_t &set_maintenance_wave(
+ std::optional<std::string> maintenance_wave);
+ zlink_framework_options_t &set_default_request_timeout(
+ std::chrono::milliseconds timeout);
+ service_collection_t &services() noexcept;
+ zlink_framework_options_t &add_location_store(
+ std::shared_ptr<location_store_t> store);
+ template <typename TStore>
+ typename TStore::options_builder_type add_location_store();
+ client_server_channel_builder_t add_client_server_channel(
+ std::string channel_name);
+ fanout_channel_builder_t add_fanout_channel(std::string channel_name);
+ mesh_node_builder_t add_route_mesh(std::string mesh_name);
+ stream_node_options_builder_t add_stream_node(std::string stream_name);
+ stream_compression_options_builder_t configure_stream_compression();
+ http_options_builder_t &http() noexcept;
+ template <typename TFilter>
+ zlink_framework_options_t &use_filter();
 
-    zlink_framework_options_t &handler_coroutine_workers(
-      std::size_t worker_count);
-    std::size_t handler_coroutine_workers() const noexcept;
-    zlink_framework_options_t &add_relocation_store(
-      std::shared_ptr<relocation_store_t> store);
-    template <typename TStore>
-    typename TStore::options_builder_type add_relocation_store();
+ zlink_framework_options_t &handler_coroutine_workers(
+ std::size_t worker_count);
+ std::size_t handler_coroutine_workers() const noexcept;
+ zlink_framework_options_t &add_relocation_store(
+ std::shared_ptr<relocation_store_t> store);
+ template <typename TStore>
+ typename TStore::options_builder_type add_relocation_store();
 };
 
 } // namespace zlink::framework
@@ -776,7 +776,7 @@ If there's even one
 `RecreateOnRelocation` or `PreserveStateWith` factory, or even one
 Instance Spot factory, it also registers exactly one Relocation Store
 with `add_relocation_store(...)`. A same-node configuration with no
-[Instance Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
+[Instance Spot](../../../00-foundation/02-glossary.en.md#entry-spot-user-spot-and-instance-spot)
 factory and only `DisableRelocation` factories doesn't need a
 Relocation Store. If a needed Store is missing, or the same capability
 is duplicate-registered, the Framework terminates with a configuration
@@ -820,21 +820,21 @@ A usage example is below.
 auto &options = app.add_zlink_framework();
 auto mesh = options.add_route_mesh(sample_names_t::application_mesh);
 mesh.listen(7300) // opens the endpoint this RouteMesh receives peer messages on.
-  .set_routing_id(topology.application_rid); // identifies this node within the same mesh.
+ .set_routing_id(topology.application_rid); // identifies this node within the same mesh.
 mesh.channel(sample_names_t::api_channel)
-  .server() // publishes this node as a request-processing candidate for api_channel.
-  .add_handler_group("api"); // connects the DI handler group to register with the Channel handler.
+ .server() // publishes this node as a request-processing candidate for api_channel.
+ .add_handler_group("api"); // connects the DI handler group to register with the Channel handler.
 mesh.channel(sample_names_t::play_channel)
-  .client(); // registers only the play_channel call path, with no Server membership.
+ .client(); // registers only the play_channel call path, with no Server membership.
 
 options.http()
-  .listen(topology.api_http_endpoint) // opens the listener an HTTP client connects to.
-  .map_post<create_game_http_handler_t>("/games"); // connects POST /games to the DI handler.
+ .listen(topology.api_http_endpoint) // opens the listener an HTTP client connects to.
+ .map_post<create_game_http_handler_t>("/games"); // connects POST /games to the DI handler.
 ```
 
 The [C++ HTTP Hosting handler signature forms](../60-http-hosting.en.md#3-handler-signature-forms)
 are the canonical declaration of an HTTP handler's type aliases, DI
-constructor, and `handle(...)` shapes. This exact-interface document does not
+constructor, and `handle(...)` shapes. This -interface document does not
 redeclare the same application handler class.
 
 `map_get<THandler>(...)`, `map_post<THandler>(...)`,
@@ -900,12 +900,12 @@ example default to the short alias.
 ```cpp
 task_t<match_bingo_api_res_t> handle(const match_bingo_api_req_t &request)
 {
-    allocate_bingo_room_res_t allocated = co_await _client
-      .request(sample_names_t::play_channel,
-               allocate_bingo_room_req_t { request.mode })
-      .submit<allocate_bingo_room_res_t>();
+ allocate_bingo_room_res_t allocated = co_await _client
+ .request(sample_names_t::play_channel,
+ allocate_bingo_room_req_t { request.mode })
+ .submit<allocate_bingo_room_res_t>();
 
-    co_return match_bingo_api_res_t { allocated.room_id };
+ co_return match_bingo_api_res_t { allocated.room_id };
 }
 ```
 
@@ -918,18 +918,18 @@ version.
 ```cpp
 class order_module_t final : public zlink::framework::module_t {
 public:
-    void configure(
-      zlink::framework::zlink_framework_options_t &options) override
-    {
-        options.services().add_singleton<order_repository_t>();
-        options.services()
-          .add_factory<order_service_t, order_repository_t>(
-            [](order_repository_t &repository) {
-              return std::make_unique<order_service_t>(repository);
-        });
-        options.services().add_transient<order_handler_t>();
-        options.handlers().group("orders").add_publish<order_handler_t>();
-    }
+ void configure(
+ zlink::framework::zlink_framework_options_t &options) override
+ {
+ options.services().add_singleton<order_repository_t>();
+ options.services()
+ .add_factory<order_service_t, order_repository_t>(
+ [](order_repository_t &repository) {
+ return std::make_unique<order_service_t>(repository);
+ });
+ options.services().add_transient<order_handler_t>();
+ options.handlers().group("orders").add_publish<order_handler_t>();
+ }
 };
 ```
 
@@ -942,153 +942,153 @@ default Framework surface.
 namespace zlink::framework {
 
 enum class optional_t {
-    no = 0,
-    yes = 1
+ no = 0,
+ yes = 1
 };
 
 class configuration_model_t {
 public:
-    configuration_model_t &set(std::string key, std::string value);
-    bool contains(std::string_view key) const;
-    bool has_section(std::string_view key) const;
-    std::optional<std::string> get(std::string_view key) const;
+ configuration_model_t &set(std::string key, std::string value);
+ bool contains(std::string_view key) const;
+ bool has_section(std::string_view key) const;
+ std::optional<std::string> get(std::string_view key) const;
 };
 
 class configuration_section_t {
 public:
-    configuration_section_t(
-      const configuration_model_t &model,
-      std::string prefix);
-    std::string key() const;
-    bool contains(std::string_view key) const;
-    std::optional<std::string> get(std::string_view key) const;
-    std::string require(std::string_view key) const;
+ configuration_section_t(
+ const configuration_model_t &model,
+ std::string prefix);
+ std::string key() const;
+ bool contains(std::string_view key) const;
+ std::optional<std::string> get(std::string_view key) const;
+ std::string require(std::string_view key) const;
 };
 
 template <typename T>
 concept configuration_bindable =
-  requires(const configuration_section_t &section) {
-      { T::bind(section) } -> std::same_as<T>;
-  };
+ requires(const configuration_section_t &section) {
+ { T::bind(section) } -> std::same_as<T>;
+ };
 
 class config_builder_t {
 public:
-    configuration_model_t &model() noexcept;
-    const configuration_model_t &model() const noexcept;
-    config_builder_t &load_json(std::string path);
-    config_builder_t &load_json(std::string path, optional_t optional);
-    config_builder_t &load_env(std::string prefix);
-    config_builder_t &load_cli(int argc, char **argv);
-    config_builder_t &use_environment(std::string name);
-    std::string environment() const;
-    bool is_environment(std::string_view name) const;
-    configuration_section_t section(std::string prefix) const;
+ configuration_model_t &model() noexcept;
+ const configuration_model_t &model() const noexcept;
+ config_builder_t &load_json(std::string path);
+ config_builder_t &load_json(std::string path, optional_t optional);
+ config_builder_t &load_env(std::string prefix);
+ config_builder_t &load_cli(int argc, char **argv);
+ config_builder_t &use_environment(std::string name);
+ std::string environment() const;
+ bool is_environment(std::string_view name) const;
+ configuration_section_t section(std::string prefix) const;
 
-    template <configuration_bindable T>
-    std::optional<T> bind(std::string prefix) const;
+ template <configuration_bindable T>
+ std::optional<T> bind(std::string prefix) const;
 
-    template <configuration_bindable T>
-    T bind_required(std::string prefix) const;
+ template <configuration_bindable T>
+ T bind_required(std::string prefix) const;
 };
 
 enum class log_level_t {
-    trace = 0,
-    debug = 1,
-    info = 2,
-    warn = 3,
-    error = 4,
-    critical = 5,
-    off = 6
+ trace = 0,
+ debug = 1,
+ info = 2,
+ warn = 3,
+ error = 4,
+ critical = 5,
+ off = 6
 };
 enum class logging_backend_t { builtin = 0, structured = 1 };
 enum class logging_overflow_policy_t {
-    drop_debug = 0,
-    drop_oldest = 1,
-    block = 2
+ drop_debug = 0,
+ drop_oldest = 1,
+ block = 2
 };
 struct log_field_t { std::string key; std::string value; };
 struct log_record_t {
-    log_level_t level = log_level_t::info;
-    std::string category;
-    std::string message;
-    std::vector<log_field_t> fields;
-    std::chrono::system_clock::time_point timestamp;
-    std::thread::id thread_id;
+ log_level_t level = log_level_t::info;
+ std::string category;
+ std::string message;
+ std::vector<log_field_t> fields;
+ std::chrono::system_clock::time_point timestamp;
+ std::thread::id thread_id;
 };
 struct logging_async_options_t {
-    std::size_t queue_capacity = 8192;
-    logging_overflow_policy_t overflow_policy =
-      logging_overflow_policy_t::drop_debug;
+ std::size_t queue_capacity = 8192;
+ logging_overflow_policy_t overflow_policy =
+ logging_overflow_policy_t::drop_debug;
 };
 struct rotating_file_options_t {
-    std::size_t max_file_size = 10 * 1024 * 1024;
-    std::size_t max_files = 5;
+ std::size_t max_file_size = 10 * 1024 * 1024;
+ std::size_t max_files = 5;
 };
 
 template <typename TCategory = void>
 class logger_t {
 public:
-    logger_t() = default;
-    bool is_enabled(log_level_t level) const noexcept;
-    void log(log_level_t level,
-      std::string message,
-      std::initializer_list<log_field_t> fields = {}) const;
-    void log_with_fields(log_level_t level,
-      std::string message,
-      std::vector<log_field_t> fields) const;
-    void trace(std::string message,
-      std::initializer_list<log_field_t> fields = {}) const;
-    void debug(std::string message,
-      std::initializer_list<log_field_t> fields = {}) const;
-    void info(std::string message,
-      std::initializer_list<log_field_t> fields = {}) const;
-    void warn(std::string message,
-      std::initializer_list<log_field_t> fields = {}) const;
-    void error(std::string message,
-      std::initializer_list<log_field_t> fields = {}) const;
-    void critical(std::string message,
-      std::initializer_list<log_field_t> fields = {}) const;
-    const std::string &category() const noexcept;
+ logger_t() = default;
+ bool is_enabled(log_level_t level) const noexcept;
+ void log(log_level_t level,
+ std::string message,
+ std::initializer_list<log_field_t> fields = {}) const;
+ void log_with_fields(log_level_t level,
+ std::string message,
+ std::vector<log_field_t> fields) const;
+ void trace(std::string message,
+ std::initializer_list<log_field_t> fields = {}) const;
+ void debug(std::string message,
+ std::initializer_list<log_field_t> fields = {}) const;
+ void info(std::string message,
+ std::initializer_list<log_field_t> fields = {}) const;
+ void warn(std::string message,
+ std::initializer_list<log_field_t> fields = {}) const;
+ void error(std::string message,
+ std::initializer_list<log_field_t> fields = {}) const;
+ void critical(std::string message,
+ std::initializer_list<log_field_t> fields = {}) const;
+ const std::string &category() const noexcept;
 };
 
 class logger_factory_t {
 public:
-    logger_factory_t();
-    logger_t<> create(std::string category) const;
+ logger_factory_t();
+ logger_t<> create(std::string category) const;
 
-    template <typename TCategory>
-    logger_t<TCategory> create() const;
+ template <typename TCategory>
+ logger_t<TCategory> create() const;
 };
 
 class logging_builder_t {
 public:
-    using sink_t = std::function<void(const log_record_t &)>;
+ using sink_t = std::function<void(const log_record_t &)>;
 
-    logging_builder_t &use_console();
-    logging_builder_t &use_file(std::string path);
-    logging_builder_t &use_rotating_file(
-      std::string path,
-      rotating_file_options_t options = {});
-    logging_builder_t &use_callback_sink(sink_t sink);
-    logging_builder_t &use_provider(std::string name, sink_t sink);
-    logging_builder_t &use_async(logging_async_options_t options = {});
-    logging_builder_t &use_backend(logging_backend_t backend);
-    logging_builder_t &disable_record_capture();
-    logging_builder_t &set_max_captured_records(std::size_t max);
-    logging_builder_t &set_min_level(log_level_t level);
-    logging_builder_t &set_level(std::string level);
+ logging_builder_t &use_console();
+ logging_builder_t &use_file(std::string path);
+ logging_builder_t &use_rotating_file(
+ std::string path,
+ rotating_file_options_t options = {});
+ logging_builder_t &use_callback_sink(sink_t sink);
+ logging_builder_t &use_provider(std::string name, sink_t sink);
+ logging_builder_t &use_async(logging_async_options_t options = {});
+ logging_builder_t &use_backend(logging_backend_t backend);
+ logging_builder_t &disable_record_capture();
+ logging_builder_t &set_max_captured_records(std::size_t max);
+ logging_builder_t &set_min_level(log_level_t level);
+ logging_builder_t &set_level(std::string level);
 
-    bool console_enabled() const noexcept;
-    bool has_output_sink() const noexcept;
-    bool async_enabled() const noexcept;
-    logging_backend_t backend() const noexcept;
-    log_level_t min_level() const noexcept;
-    const std::string &level() const noexcept;
-    const std::vector<std::string> &file_paths() const noexcept;
-    const std::vector<std::string> &provider_names() const noexcept;
-    const std::vector<log_record_t> &captured_records() const noexcept;
-    logger_factory_t factory() const;
-    logger_t<> create_logger(std::string category) const;
+ bool console_enabled() const noexcept;
+ bool has_output_sink() const noexcept;
+ bool async_enabled() const noexcept;
+ logging_backend_t backend() const noexcept;
+ log_level_t min_level() const noexcept;
+ const std::string &level() const noexcept;
+ const std::vector<std::string> &file_paths() const noexcept;
+ const std::vector<std::string> &provider_names() const noexcept;
+ const std::vector<log_record_t> &captured_records() const noexcept;
+ logger_factory_t factory() const;
+ logger_t<> create_logger(std::string category) const;
 };
 
 } // namespace zlink::framework
@@ -1106,7 +1106,7 @@ The following six instrument names, which the Framework records to
 the standard metric provider for Instance activation, are used as-is
 in byte form. Kind, unit, label, and the closed outcome value are
 owned by
-[Runtime Metrics §4](../../../25-runtime-metrics.en.md#4-object-and-stream).
+[Runtime Metrics §4](../../../06-observability/02-runtime-metrics.en.md#6-object-count-capacity-and-relocation-instruments).
 
 - `zlink.instance_spot.activations`
 - `zlink.instance_spot.activation.duration`
@@ -1132,7 +1132,7 @@ reply path, and a path with no reply frame, such as a local actor call,
 completes the `task_t` or pending operation with a framework error. A
 one-way failure is dropped but leaves a default structured log and counter.
 
-The exact dispatch option declaration is owned by the
+The dispatch option declaration is owned by the
 [Monitoring interface](08-monitoring.en.md).
 
 The Framework records dispatch errors and message flow as structured
@@ -1159,92 +1159,92 @@ enum class http_method_t { get, post, put, delete_ };
 class http_route_t
 {
 public:
-    http_method_t method;
-    std::string   path;
-    std::string   handler_name;
-    bool context_response_precedence = false;  // prioritizes the response the context built
-    bool validates_json_content_type = true;   // validates the JSON content type
+ http_method_t method;
+ std::string path;
+ std::string handler_name;
+ bool context_response_precedence = false; // prioritizes the response the context built
+ bool validates_json_content_type = true; // validates the JSON content type
 };
 
 struct http_tls_options_t {
-    std::string certificate_file;
-    std::string private_key_file;
+ std::string certificate_file;
+ std::string private_key_file;
 };
 struct http_endpoint_t { std::string uri; std::optional<http_tls_options_t> tls; };
 struct http_server_options_t {
-    std::size_t max_connections = 1024;
-    std::size_t max_request_body_size = 1024 * 1024;
-    std::size_t max_header_size = 64 * 1024;
-    std::chrono::milliseconds request_headers_timeout{5000};
-    std::chrono::milliseconds request_body_timeout{5000};
-    std::chrono::milliseconds write_timeout{5000};
-    std::chrono::milliseconds keep_alive_timeout{5000};
-    std::chrono::milliseconds graceful_shutdown_timeout{5000};
-    std::size_t max_keep_alive_requests = 100;
+ std::size_t max_connections = 1024;
+ std::size_t max_request_body_size = 1024 * 1024;
+ std::size_t max_header_size = 64 * 1024;
+ std::chrono::milliseconds request_headers_timeout{5000};
+ std::chrono::milliseconds request_body_timeout{5000};
+ std::chrono::milliseconds write_timeout{5000};
+ std::chrono::milliseconds keep_alive_timeout{5000};
+ std::chrono::milliseconds graceful_shutdown_timeout{5000};
+ std::size_t max_keep_alive_requests = 100;
 };
 struct http_options_snapshot_t {
-    std::vector<http_endpoint_t> endpoints;
-    std::vector<http_route_t> routes;
-    std::vector<std::string> middleware_names;
-    http_server_options_t server;
-    std::optional<std::string> health_path;
-    std::optional<std::string> readiness_path;
-    std::optional<std::string> liveness_path;
+ std::vector<http_endpoint_t> endpoints;
+ std::vector<http_route_t> routes;
+ std::vector<std::string> middleware_names;
+ http_server_options_t server;
+ std::optional<std::string> health_path;
+ std::optional<std::string> readiness_path;
+ std::optional<std::string> liveness_path;
 };
 
 class http_tls_options_builder_t {
 public:
-    explicit http_tls_options_builder_t(http_tls_options_t &options) noexcept;
-    http_tls_options_builder_t &certificate_file(std::string path);
-    http_tls_options_builder_t &private_key_file(std::string path);
+ explicit http_tls_options_builder_t(http_tls_options_t &options) noexcept;
+ http_tls_options_builder_t &certificate_file(std::string path);
+ http_tls_options_builder_t &private_key_file(std::string path);
 };
 
 class http_server_options_builder_t {
 public:
-    explicit http_server_options_builder_t(
-      http_server_options_t &options) noexcept;
-    http_server_options_builder_t &set_max_connections(std::size_t value);
-    http_server_options_builder_t &set_max_request_body_size(std::size_t bytes);
-    http_server_options_builder_t &set_max_header_size(std::size_t bytes);
-    http_server_options_builder_t &set_request_headers_timeout(
-      std::chrono::milliseconds value);
-    http_server_options_builder_t &set_request_body_timeout(
-      std::chrono::milliseconds value);
-    http_server_options_builder_t &set_write_timeout(
-      std::chrono::milliseconds value);
-    http_server_options_builder_t &set_keep_alive_timeout(
-      std::chrono::milliseconds value);
-    http_server_options_builder_t &set_graceful_shutdown_timeout(
-      std::chrono::milliseconds value);
-    http_server_options_builder_t &set_max_keep_alive_requests(
-      std::size_t value);
+ explicit http_server_options_builder_t(
+ http_server_options_t &options) noexcept;
+ http_server_options_builder_t &set_max_connections(std::size_t value);
+ http_server_options_builder_t &set_max_request_body_size(std::size_t bytes);
+ http_server_options_builder_t &set_max_header_size(std::size_t bytes);
+ http_server_options_builder_t &set_request_headers_timeout(
+ std::chrono::milliseconds value);
+ http_server_options_builder_t &set_request_body_timeout(
+ std::chrono::milliseconds value);
+ http_server_options_builder_t &set_write_timeout(
+ std::chrono::milliseconds value);
+ http_server_options_builder_t &set_keep_alive_timeout(
+ std::chrono::milliseconds value);
+ http_server_options_builder_t &set_graceful_shutdown_timeout(
+ std::chrono::milliseconds value);
+ http_server_options_builder_t &set_max_keep_alive_requests(
+ std::size_t value);
 };
 ```
 
 - **Middleware is a `before`/`after` pair.** It isn't a `next` delegate
-  approach — the shape is different from a
-  [handler filter](../../../06-framework-api.en.md).
+ approach — the shape is different from a
+ [handler filter](../../../00-foundation/06-framework-api.en.md).
 - **A middleware instance is built with `create_instance`, receiving
-  the DI provider together.**
+ the DI provider together.**
 
 ## 7. Transport
 
 ```cpp
 enum class transport_scheme_t {
-    tcp = 0,
-    ipc = 1,
-    tls = 2,
-    websocket = 3,
-    websocket_tls = 4
+ tcp = 0,
+ ipc = 1,
+ tls = 2,
+ websocket = 3,
+ websocket_tls = 4
 };
 
 class transport_endpoint_t
 {
 public:
-    transport_endpoint_t (transport_scheme_t scheme, std::string uri);
-    transport_scheme_t scheme() const noexcept;
-    const std::string &uri() const noexcept;
-    static transport_endpoint_t parse(std::string uri);
+ transport_endpoint_t (transport_scheme_t scheme, std::string uri);
+ transport_scheme_t scheme() const noexcept;
+ const std::string &uri() const noexcept;
+ static transport_endpoint_t parse(std::string uri);
 };
 ```
 
@@ -1265,11 +1265,11 @@ metadata builder is owned by this document's configuration
 registration surface.
 
 - RouteMesh ChannelName and a classic fanout channel are different
-  namespace and socket contracts.
+ namespace and socket contracts.
 - Spot/Actor registration is put on the owner `mesh_node_builder_t`.
 
 The meaning of claim progress during drain is owned by
-[Graceful Drain §5](../../../30-host-relocation-flow.en.md).
+[Graceful Drain §5](../../../05-location-relocation/05-host-relocation-flow.en.md).
 
 ## 9. Configuration Lookup
 

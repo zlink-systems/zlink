@@ -219,14 +219,14 @@ the same `OrderId` workflow. The API doesn't directly change the event stream or
 
 | Behavior Needed | Framework Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Find the current owner by `OrderId` even if the process changes. | A global Spot message | If the caller specifies the global Spot ID, the Framework resolves the current Ready authority. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
-| Be able to create a missing order workflow on the first command. | Instance intent | Cold activation starts only on a Missing Instance Spot. [Interaction Model §7](../../spec/server/03-interaction-model.en.md#7-spot-and-actor) |
-| Connect the API and Workflow via a logical mesh. | RouteMesh | The caller doesn't assemble a MeshName or owner endpoint as an application route. [RouteMesh Topology](../../spec/server/07-channel-topology.en.md) |
-| Confirm request completion. | Spot request/reply | A request completes with a typed reply, timeout, or terminal error. [Interaction Model §4](../../spec/server/03-interaction-model.en.md#4-send-and-request) |
-| Process one order's transitions in order. | The Spot handler turn | Puts Application state changes in a single owner flow, with no competing writer outside the handler. [Async Execution Policy](../../spec/server/05-async-execution-policy.en.md) |
-| Use JSON messages with the same wire meaning across languages. | The Framework typed JSON codec | The JSON default codec is chosen with no per-message registration. [Framework API §9](../../spec/server/06-framework-api.en.md#9-codec) |
-| Share the owner and generation. | The Location Store | The Framework manages object location and authority. [Location Runtime](../../spec/server/21-location-runtime.en.md) |
-| Define the scope of a Ready owner failure. | Failure/failover policy | A Ready owner failure doesn't turn into automatic cold activation on a different node. [Failure And Failover §4.4](../../spec/server/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
+| Find the current owner by `OrderId` even if the process changes. | A global Spot message | If the caller specifies the global Spot ID, the Framework resolves the current Ready authority. [Interaction Model §2](../../spec/server/00-foundation/04-interaction-model.en.md) |
+| Be able to create a missing order workflow on the first command. | Instance intent | Cold activation starts only on a Missing Instance Spot. [Interaction Model §7](../../spec/server/00-foundation/04-interaction-model.en.md#7-spot-and-actor) |
+| Connect the API and Workflow via a logical mesh. | RouteMesh | The caller doesn't assemble a MeshName or owner endpoint as an application route. [RouteMesh Topology](../../spec/server/02-channel-transport/01-channel-topology.en.md) |
+| Confirm request completion. | Spot request/reply | A request completes with a typed reply, timeout, or terminal error. [Interaction Model §4](../../spec/server/00-foundation/04-interaction-model.en.md#4-send-and-request) |
+| Process one order's transitions in order. | The Spot handler turn | Puts Application state changes in a single owner flow, with no competing writer outside the handler. [Async Execution Policy](../../spec/server/01-execution/README.en.md) |
+| Use JSON messages with the same wire meaning across languages. | The Framework typed JSON codec | The JSON default codec is chosen with no per-message registration. [Framework API §9](../../spec/server/00-foundation/06-framework-api.en.md#12-codec) |
+| Share the owner and generation. | The Location Store | The Framework manages object location and authority. [Location Runtime](../../spec/server/05-location-relocation/01-location-runtime.en.md) |
+| Define the scope of a Ready owner failure. | Failure/failover policy | A Ready owner failure doesn't turn into automatic cold activation on a different node. [Failure And Failover §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
 
 Instance intent is a feature that decides the creation moment when an object is Missing. It's not a
 feature that automatically recovers an already-Ready object's owner failure on a different node. A
@@ -447,7 +447,7 @@ message OrderFailedEvent {
 | `Order*Event` | Workflow → `OrderEventStore`, append | An event recorded in the stream after passing the expected version becomes the basis for a state transition. |
 
 A request/reply's timeout, cancellation, and route error are not turned into a success response. The
-common terminal result of `Send` and `Request` follows the [Framework Error Model](../../spec/server/32-framework-error-model.en.md),
+common terminal result of `Send` and `Request` follows the [Framework Error Model](../../spec/server/00-foundation/07-framework-error-model.en.md),
 and the sample doesn't automatically resubmit a failed operation to a different owner.
 
 ### 6.3 State And Event Order
@@ -683,7 +683,7 @@ sequenceDiagram
 | `Missing` after explicit `Close` completes | A new Instance intent command | Can create a new generation. |
 | Planned relocation | An owner change for the existing object | Uses the same object and relocation contract, not treated as crash failover. |
 
-This table applies the scope of the [Failure/Failover Policy](../../spec/server/31-failure-failover-policy.en.md)
+This table applies the scope of the [Failure/Failover Policy](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md)
 to the sample. `InstanceSpot` decides the creation moment of a missing object, but doesn't add a
 feature that automatically releases authority or restores the event stream on a different node after
 a Ready owner failure. A failed request isn't automatically resubmitted to a new owner. If a separate
@@ -836,6 +836,74 @@ into the Client path. The runner calls self-check hooks only to prepare fixtures
 server-side evidence; those calls are outside the Client process code path. Runner observation does
 not substitute for a Client assertion of public responses and state.
 
+### 10.1 Evidence the Runner Confirms
+
+The runner matches the strings in the tables below verbatim. These strings are not a per-language
+choice. All five implementations emit the same string the same number of times; changing the
+wording means changing this table first. Node names are fixed as `api-a`, `api-b`, `workflow-a`,
+and `workflow-b`.
+
+**Evidence must be a string the sample owns.** Lines the framework prints — runtime readiness logs,
+the message-flow tracer, structured-trace projections, process startup boilerplate — are not success
+criteria. They change for framework reasons, and when they do, the sample runner breaks silently.
+
+Readiness is confirmed before the Client scenario runs. These are the two things step 4 of §10
+requires.
+
+| Fact confirmed | Log | Emitting node |
+| --- | --- | --- |
+| The HTTP edge is open | `shoppingmall-ready kind=http node=<NodeId>` | `api-a`, `api-b` |
+| RouteMesh object capability is available | `shoppingmall-ready kind=object-route node=<NodeId> target=<WorkflowNodeId>` | `api-a`, `api-b` (once each for `workflow-a`, `workflow-b`) |
+
+The second row is confirmed **from a passive signal**. The runner does not prove readiness by
+sending a request of its own, such as `/ready?targetRid=`.
+
+Server evidence is confirmed after the Client scenario finishes.
+
+| Fact confirmed | Log | Exact count |
+| --- | --- | --- |
+| A Workflow node started an order | `shoppingmall-order started order=<OrderId> spot=<SpotId>` | at least 1 **in each Workflow node log separately** |
+| CommerceApi left its evidence | `shoppingmall-evidence order=<OrderId> events=<N>` | at least 1 |
+| After a planned relocation, replay kept the generation and resumed at the next step (§9.2-11) | `shoppingmall-order replayed order=<OrderId> generation=<N>` | 1 |
+| An already-completed external effect was not repeated (§9.2-11) | `shoppingmall-order external-effect-repeated order=<OrderId>` | 0 |
+
+**The first row is counted in each node's log separately.** Do not pass both log files to a single
+search so that "a match in either one" passes.
+
+**The last two rows require actually causing a relocation.** §11 requires, as a completion
+criterion, that a planned relocation keeps the same `ObjectGeneration`, resumes from the next step
+after event replay, and does not repeat an already-completed external effect. Wiring up the stores
+does not satisfy that criterion. Without that stage these rows cannot pass — and they should not.
+
+#### The runner-only hook boundary
+
+Restating the boundary §9 sets, in a form the runner can check.
+
+- **The Client calls only CommerceApi's public order API.** It does not call `/self-check/*` hooks
+  from inside the Client process. Fixture preparation and server-evidence checks are made by the
+  runner itself, before the Client starts or after it finishes.
+- **The Client calls over the public transport.** It does not talk to CommerceApi directly over an
+  internal channel or mesh API. Doing so means the public order API surface §9 exists to exercise
+  is never exercised.
+- Identifiers the runner sends to a self-check hook are **values this run actually produced**. Do
+  not send pre-written order IDs — they would keep passing after they stop corresponding to the run.
+
+There are two completion markers.
+
+| Marker | Printed by | Meaning |
+| --- | --- | --- |
+| `shoppingmall=completed` | the Client | the whole §9 client self-check passed |
+| `shoppingmall-placement=completed` | the runner | every row of the §10.1 table passed |
+
+**The runner confirms `shoppingmall=completed` directly.** A client process exit code does not
+stand in for it. Do not use a per-language placement marker such as `PASS ShoppingMall.<Lang>` —
+the runner placement marker step 6 of §10 refers to is `shoppingmall-placement=completed`, and
+nothing else.
+
+Log waits poll every `100 ms` for at most `300` attempts. This budget applies to readiness and to
+evidence alike, and **`.sh` and `.ps1` use the same value.** Reading once without waiting is not
+allowed. All five languages ship both a `.sh` and a `.ps1`.
+
 ## 11. Completion Criteria
 
 - [ ] The document explains ShoppingMall's business problem, start/end scope, and comparison with
@@ -858,5 +926,5 @@ not substitute for a Client assertion of public responses and state.
 - [ ] The Client self-check directly confirms public responses, state, and forbidden results, while
       runner observation separately confirms events and external effects.
 - [ ] The sample code uses only the public Framework API and the default typed JSON codec.
-- [ ] The smoke run confirms readiness with a bounded wait and prints the success marker
-      conditionally.
+- [ ] The smoke run confirms readiness with a bounded wait, prints the success marker
+      conditionally, and passes every row of the §10.1 table down to the string and the count.

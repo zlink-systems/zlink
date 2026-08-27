@@ -428,6 +428,18 @@ inline void from_protobuf (const pb::StopObservingBingoEventsRes &message,
     value.stopped = message.stopped ();
 }
 
+inline void to_protobuf (const observer_returned_to_entry_spot_notify_t &value,
+                         pb::ObserverReturnedToEntrySpotNotify &message)
+{
+    message.set_actor_id (value.actor_id);
+}
+
+inline void from_protobuf (const pb::ObserverReturnedToEntrySpotNotify &message,
+                           observer_returned_to_entry_spot_notify_t &value)
+{
+    value.actor_id = message.actor_id ();
+}
+
 inline void to_protobuf (const player_joined_notify_t &value, pb::PlayerJoinedNotify &message)
 {
     message.set_room_id (value.room_id);
@@ -571,6 +583,8 @@ ZLINK_BINGO_STREAM_PAYLOAD (observe_bingo_events_req_t, ObserveBingoEventsReq)
 ZLINK_BINGO_STREAM_PAYLOAD (observe_bingo_events_res_t, ObserveBingoEventsRes)
 ZLINK_BINGO_STREAM_PAYLOAD (stop_observing_bingo_events_req_t, StopObservingBingoEventsReq)
 ZLINK_BINGO_STREAM_PAYLOAD (stop_observing_bingo_events_res_t, StopObservingBingoEventsRes)
+ZLINK_BINGO_STREAM_PAYLOAD (observer_returned_to_entry_spot_notify_t,
+                            ObserverReturnedToEntrySpotNotify)
 ZLINK_BINGO_STREAM_PAYLOAD (player_joined_notify_t, PlayerJoinedNotify)
 ZLINK_BINGO_STREAM_PAYLOAD (game_started_notify_t, BingoGameStartedNotify)
 ZLINK_BINGO_STREAM_PAYLOAD (number_drawn_notify_t, BingoNumberDrawnNotify)

@@ -1,10 +1,10 @@
 <!-- framework-adapter-nav:start -->
-[문서 목록](../../../README.ko.md) | [이전: Runtime Execution](../../common/spec/server/41-internal-serialization.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
+[문서 목록](../../../README.ko.md) | [이전: Runtime Execution](../../common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
 <!-- framework-adapter-nav:end -->
 
 [스펙 목차](../../common/README.ko.md)
 
-[.NET 묶음](../README.ko.md) | [Runtime Lifecycle](../../common/spec/server/README.ko.md) | [Runtime Execution](../../common/spec/server/41-internal-serialization.ko.md) | [Backend Policy](backend-dependency-policy.ko.md) | [공통 E2E](../../common/e2e/README.ko.md)
+[.NET 묶음](../README.ko.md) | [Runtime Lifecycle](../../common/spec/server/README.ko.md) | [Runtime Execution](../../common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md) | [Backend Policy](backend-dependency-policy.ko.md) | [공통 E2E](../../common/e2e/README.ko.md)
 
 # ZLink Framework .NET Regression Test Matrix
 
@@ -256,7 +256,7 @@ socket·context·message handle, process-wide diagnostics, static runtime state,
 routing id 자동 할당의 `.NET` public 입력 규칙은
 [configuration과 topology exact interface](../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.ko.md)를
 따른다. descriptor claim과 startup 순서는
-[계층 경계와 식별자](../../common/spec/server/40-internal-layering.ko.md)에 설명한다.
+[계층 경계와 식별자](../../common/spec/server/00-foundation/08-layering.ko.md)에 설명한다.
 
 | 항목 | 계층 | 통과 기준 |
 |------|------|-----------|
@@ -331,12 +331,7 @@ backend gate 와 별도로 유지한다.
 대상 문서는 다음과 같다.
 
 - `README.ko.md`
-- `01-system-structure.ko.md`
-- `02-handler-interfaces.ko.md`
 - `03-stream-connector.ko.md`
-- `04-routing-id-allocation.ko.md`
-- `05-route-mesh.ko.md`
-- `06-location-store.ko.md`
 - `dotnet-http-client.ko.md`
 - `regression-test-matrix.ko.md`
 - `../../common/spec/server/README.ko.md`
@@ -359,7 +354,7 @@ backend gate 와 별도로 유지한다.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[문서 목록](../../../README.ko.md) | [이전: Runtime Execution](../../common/spec/server/41-internal-serialization.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
+[문서 목록](../../../README.ko.md) | [이전: Runtime Execution](../../common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
 <!-- framework-adapter-nav:bottom:end -->
 
 ## 11. 공개 계약 문서에서 이관한 회귀 테스트 항목
@@ -435,7 +430,7 @@ backend gate 와 별도로 유지한다.
 | 런타임 토글 | `IZLinkDiagnosticsRuntime.Level` (DI singleton) |
 | 표준 출력 | `ActivitySource("Zlink.Framework")`, `ILogger` structured log |
 | 공통 개념 | `.NET` |
-| meter 이름(상수) | `ZLinkMeters.Framework` = `"zlink.framework"`이며 [공통 metrics 계약](../../common/spec/server/25-runtime-metrics.ko.md)과 byte-exact로 일치한다 |
+| meter 이름(상수) | `ZLinkMeters.Framework` = `"zlink.framework"`이며 [공통 metrics 계약](../../common/spec/server/06-observability/02-runtime-metrics.ko.md)과 byte-exact로 일치한다 |
 | 계기 방출 | `System.Diagnostics.Metrics.Meter("zlink.framework")` — `Counter`/`UpDownCounter`/`ObservableGauge`/`Histogram` |
 | 앱 연결(공통 케이스) | OTel `MeterProviderBuilder.AddMeter(ZLinkMeters.Framework)` — 이게 전부다 |
 | 비-OTel/테스트 수집 | .NET 표준 `MeterListener`가 `ZLinkMeters.Framework`를 직접 구독 — zlink 전용 listener interface 없음 |
@@ -447,7 +442,7 @@ backend gate 와 별도로 유지한다.
 | Relocate 순서 | all-or-none preflight → admission seal → current turn completion → queue·journal·timer freeze → Actor·Spot relocation → STREAM barrier → authority commit |
 | User Spot aggregate | User Spot과 소속 Actor를 하나의 aggregate로 relocation하며 participant 전체와 generation을 Location Store commit에서 검증한다 |
 | Spot 생성 경계 | direct Spot send/request의 fluent builder에 Instance marker를 지정한다. Missing Instance는 marker가 정확히 한 factory type을 선택할 때만 cold placement를 시작한다 |
-| terminal result | `ZLinkFrameworkRelocationResult`와 `ZLinkFrameworkTerminationResult`의 enum 숫자와 허용 조합이 [graceful drain 계약](../../common/spec/server/30-host-relocation-flow.ko.md)과 일치한다 |
+| terminal result | `ZLinkFrameworkRelocationResult`와 `ZLinkFrameworkTerminationResult`의 enum 숫자와 허용 조합이 [graceful drain 계약](../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md)과 일치한다 |
 | 명시 제어 | `FrameworkRuntimeContracts.Relocation_and_shutdown_are_separate_host_operations`: DI singleton `IZLinkFrameworkRuntime`은 `RelocateAsync(options, ...)`와 `ShutdownAsync(...)`를 분리한다. Relocation deadline은 options에 두며 두 operation의 `deadline == null`은 30초다 |
 | concurrent caller | `Relocating` 이후 같은 relocation caller는 shared operation의 mode, deadline과 terminal result를 공유한다. `Blocked`는 terminal cache에 넣지 않는다 |
 | readiness probe | `IZLinkFrameworkRuntime.Status.IsReady`는 host `Serving`에서만 true이고 component readiness는 host state projection을 포함한다 |

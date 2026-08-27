@@ -4,9 +4,9 @@ title: "Node.js transport readiness implementation"
 
 # Node.js transport readiness implementation
 
-[Common layering](../../common/spec/server/40-internal-layering.en.md) ·
-[Transport liveness](../../common/spec/server/29-transport-liveness.en.md) ·
-[MeshNode contract](../../common/spec/server/13-mesh-node.en.md)
+[Common layering](../../common/spec/server/00-foundation/08-layering.en.md) ·
+[Transport liveness](../../common/spec/server/02-channel-transport/05-transport-liveness.en.md) ·
+[MeshNode contract](../../common/spec/server/03-spot-actor/03-mesh-node.en.md)
 
 > This document records how the current Node.js Framework implementation connects the
 > common contract to its responsibility boundaries. It does not add a public contract or
@@ -15,7 +15,7 @@ title: "Node.js transport readiness implementation"
 ## 1. Scope and observable result
 
 The state in which Framework may use a remote node as a message target is
-[ready](../../common/spec/server/01-glossary.en.md#ready). The Node.js implementation does not
+[ready](../../common/spec/server/00-foundation/02-glossary.en.md#ready). The Node.js implementation does not
 derive this state from a transport monitor event alone. It checks all three conditions for
 the same peer:
 
@@ -26,7 +26,7 @@ the same peer:
 If any condition fails, the next Framework request completes with a `NotConnected` terminal
 without starting a native request. A request that has already started is not automatically
 sent to another peer. This preserves the common rule that a request is not executed twice;
-see [failure and failover scope](../../common/spec/server/31-failure-failover-policy.en.md).
+see [failure and failover scope](../../common/spec/server/05-location-relocation/06-failure-failover-policy.en.md).
 
 The implementation has the following responsibility graph:
 
@@ -232,7 +232,7 @@ Node distinguishes these cases at the call boundary without adding a public erro
 
 `ActorLocationStale` is not automatically resubmitted because Node cannot know whether the
 target has already processed the application envelope. The Application may start a new
-operation after receiving the failure. This follows the [Framework error model](../../common/spec/server/32-framework-error-model.en.md)
+operation after receiving the failure. This follows the [Framework error model](../../common/spec/server/00-foundation/07-framework-error-model.en.md)
 and the common one-terminal-completion rule.
 
 ## 8. Actual Node execution queue defaults

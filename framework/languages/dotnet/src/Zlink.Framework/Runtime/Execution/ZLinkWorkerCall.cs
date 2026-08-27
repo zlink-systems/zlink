@@ -90,7 +90,7 @@ internal sealed class ZLinkWorkerCall<TResult>(
         Action<CancellationToken> cancel,
         TimeSpan? timeout)
     {
-        private readonly object _admissionGate = new();
+        private readonly ZLinkStateLane _lane = new();
         private readonly Action<CancellationToken> _cancel = cancel;
         private readonly Action<TResult> _complete = complete;
         private readonly Action<Exception> _fail = fail;
@@ -153,17 +153,15 @@ internal sealed class ZLinkWorkerCall<TResult>(
             ZLinkWorkerPool pool,
             out ZLinkWorkerSubmitResult submitResult)
         {
-            lock (_admissionGate)
+            var result = AwaitStateLane(_lane.RunAsync(() =>
             {
                 if (Volatile.Read(ref _settled) != 0)
-                {
-                    submitResult = default;
-                    return false;
-                }
+                    return (Submitted: false, Result: default(ZLinkWorkerSubmitResult));
 
-                submitResult = pool.TrySubmit(Run, FailStopped);
-                return true;
-            }
+                return (Submitted: true, Result: pool.TrySubmit(Run, FailStopped));
+            }));
+            submitResult = result.Result;
+            return result.Submitted;
         }
 
         public void Run(CancellationToken shutdownToken)
@@ -218,15 +216,13 @@ internal sealed class ZLinkWorkerCall<TResult>(
 
         private void FailTimedOut()
         {
-            lock (_admissionGate)
-            {
+            AwaitStateLane(_lane.RunAsync(() =>
                 TrySettle(static (self, _) => self._fail(
-                        new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DeadlineExceeded,
-                            "Worker call timed out.",
-                            ZLinkRetryAdvice.DoNotRetry)),
-                    this);
-            }
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.DeadlineExceeded,
+                        "Worker call timed out.",
+                        ZLinkRetryAdvice.DoNotRetry)),
+                    this)));
         }
 
         private void TrySettle(
@@ -251,13 +247,17 @@ internal sealed class ZLinkWorkerCall<TResult>(
 
         private void CancelBeforeOrAfterAdmission(CancellationToken cancellationToken)
         {
-            lock (_admissionGate)
-            {
+            AwaitStateLane(_lane.RunAsync(() =>
                 TrySettle(
                     static (self, state) => self._cancel((CancellationToken)state!),
                     this,
-                cancellationToken);
-            }
+                cancellationToken)));
         }
+
+        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+            operation.GetAwaiter().GetResult();
+
+        private static void AwaitStateLane(ValueTask operation) =>
+            operation.GetAwaiter().GetResult();
     }
 }

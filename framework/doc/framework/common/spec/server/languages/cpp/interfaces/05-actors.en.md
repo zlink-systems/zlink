@@ -1,4 +1,7 @@
-# C++ Actor Exact Interface
+# C++ Actor Per-Language Interface
+
+[C++ per-language interface table of contents](README.en.md) · [Actor Model](../../../03-spot-actor/04-actor-model.en.md) ·
+[Spot · Actor Membership](../../../03-spot-actor/05-spot-actor-membership.en.md)
 
 Spot relocation that includes an Actor bound to a Session restores the
 Actor and queue at the target, commits owner and membership, and then
@@ -12,12 +15,9 @@ disconnect, it doesn't run the Actor disconnect callback. It doesn't
 change the route and physical connection of a different Actor not
 included in the relocation target.
 
-[C++ exact interface table of contents](README.en.md) · [Actor Model](../../../14-actor-model.en.md) ·
-[Spot · Actor Membership](../../../15-spot-actor.en.md)
-
 ## 1. Identity And Maintenance Policy
 
-The exact declaration of `actor_context_t`, which an Actor uses, is
+The declaration of `actor_context_t`, which an Actor uses, is
 owned by the [Spot interface](04-spots.en.md).
 
 ```cpp
@@ -25,95 +25,95 @@ namespace zlink::framework {
 
 class actor_id_t final {
 public:
-    explicit actor_id_t(std::string value);
-    std::string_view value() const noexcept;
-    auto operator<=>(const actor_id_t &) const = default;
+ explicit actor_id_t(std::string value);
+ std::string_view value() const noexcept;
+ auto operator<=>(const actor_id_t &) const = default;
 };
 
 class actor_ref_t final {
 public:
-    actor_ref_t(actor_id_t actor_id,
-      std::uint64_t object_generation,
-      std::string mesh_name,
-      node_rid_t node_rid);
+ actor_ref_t(actor_id_t actor_id,
+ std::uint64_t object_generation,
+ std::string mesh_name,
+ node_rid_t node_rid);
 
-    const actor_id_t &actor_id() const noexcept;
-    std::uint64_t object_generation() const noexcept;
-    std::string_view mesh_name() const noexcept;
-    const node_rid_t &node_rid() const noexcept;
+ const actor_id_t &actor_id() const noexcept;
+ std::uint64_t object_generation() const noexcept;
+ std::string_view mesh_name() const noexcept;
+ const node_rid_t &node_rid() const noexcept;
 };
 
 struct actor_join_accepted_t {
-    std::uint64_t operation_id_high;
-    std::uint64_t operation_id_low;
-    actor_ref_t actor;
-    std::optional<message_t> reply;
+ std::uint64_t operation_id_high;
+ std::uint64_t operation_id_low;
+ actor_ref_t actor;
+ std::optional<message_t> reply;
 };
 
 struct actor_join_rejected_t {
-    std::uint64_t operation_id_high;
-    std::uint64_t operation_id_low;
-    std::optional<message_t> reply;
+ std::uint64_t operation_id_high;
+ std::uint64_t operation_id_low;
+ std::optional<message_t> reply;
 };
 
 struct actor_join_failed_t {
-    std::uint64_t operation_id_high;
-    std::uint64_t operation_id_low;
-    framework_error_kind_t error_kind;
+ std::uint64_t operation_id_high;
+ std::uint64_t operation_id_low;
+ framework_error_kind_t error_kind;
 };
 
 using actor_join_completion_t = std::variant<
-  actor_join_accepted_t,
-  actor_join_rejected_t,
-  actor_join_failed_t>;
+ actor_join_accepted_t,
+ actor_join_rejected_t,
+ actor_join_failed_t>;
 
 class actor_t {
 public:
-    virtual ~actor_t() = default;
-    virtual actor_context_t &context() noexcept = 0;
-    virtual const actor_context_t &context() const noexcept = 0;
-    virtual void configure() {}
-    virtual task_t<void> on_join_completed(
-      const actor_join_completion_t &completion);
+ virtual ~actor_t() = default;
+ virtual actor_context_t &context() noexcept = 0;
+ virtual const actor_context_t &context() const noexcept = 0;
+ virtual void configure() {}
+ virtual task_t<void> on_join_completed(
+ const actor_join_completion_t &completion);
 };
 
 template <typename TActor>
-  requires std::derived_from<TActor, actor_t>
+ requires std::derived_from<TActor, actor_t>
 class actor_factory_t {
 public:
-    virtual ~actor_factory_t() = default;
-    virtual task_t<std::shared_ptr<TActor>> create(
-      actor_context_t context,
-      std::stop_token operation_cancellation) = 0;
+ virtual ~actor_factory_t() = default;
+ virtual task_t<std::shared_ptr<TActor>> create(
+ actor_context_t context,
+ std::stop_token operation_cancellation) = 0;
 };
 
 template <typename TActor>
 class actor_relocation_adapter_t {
 public:
-    virtual ~actor_relocation_adapter_t() = default;
-    virtual task_t<std::vector<std::byte>> capture(
-      TActor &actor,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<void> restore(
-      TActor &actor,
-      std::vector<std::byte> payload,
-      std::stop_token operation_cancellation) = 0;
+ virtual ~actor_relocation_adapter_t() = default;
+ virtual task_t<std::vector<std::byte>> capture(
+ TActor &actor,
+ std::stop_token operation_cancellation) = 0;
+ virtual task_t<void> restore(
+ TActor &actor,
+ std::vector<std::byte> payload,
+ std::stop_token operation_cancellation) = 0;
 };
 
 template <typename TActor>
 class actor_factory_builder_t {
 public:
-    void disable_relocation();
-    void recreate_on_relocation();
-    template <typename TAdapter>
-      requires std::derived_from<TAdapter, actor_relocation_adapter_t<TActor>>
-    void preserve_state_with();
+ void disable_relocation();
+ void recreate_on_relocation();
+ template <typename TAdapter>
+ requires std::derived_from<TAdapter, actor_relocation_adapter_t<TActor>>
+ void preserve_state_with();
 };
 
 } // namespace zlink::framework
 ```
 
-`actor_id_t` is a UTF-8 `1..255`-byte exact global identity. The
+`actor_id_t` is a UTF-8 `1..255`-byte global identity. The
 constructor rejects an invalid value with `std::invalid_argument` and
 doesn't apply trim, case folding, or Unicode normalization.
 `actor_ref_t` is an immutable location snapshot holding the global
@@ -126,7 +126,7 @@ Framework wired in. ActorId and ObjectGeneration are read from
 `context()`, and a separate identity value isn't stored independently.
 The Framework builds the concrete Actor with
 `actor_factory_t<TActor>::create(...)` and then calls `configure()`.
-The factory only uses the exact context and cancellation it received,
+The factory only uses the context and cancellation it received,
 and doesn't take ActorId, a different owner RID, relocation phase, or
 Store token as a duplicate input.
 
@@ -181,45 +181,45 @@ namespace zlink::framework {
 
 class actor_send_call_t {
 public:
-    actor_send_call_t &metadata(std::string key, std::string value);
-    task_t<void> submit();
+ actor_send_call_t &metadata(std::string key, std::string value);
+ task_t<void> submit();
 };
 
 class actor_request_call_t {
 public:
-    actor_request_call_t &timeout(std::chrono::milliseconds timeout);
-    actor_request_call_t &metadata(std::string key, std::string value);
+ actor_request_call_t &timeout(std::chrono::milliseconds timeout);
+ actor_request_call_t &metadata(std::string key, std::string value);
 
-    template <typename TReply>
-    task_t<TReply> submit();
+ template <typename TReply>
+ task_t<TReply> submit();
 
-    template <typename TReply>
-    task_t<TReply> yield();
+ template <typename TReply>
+ task_t<TReply> yield();
 
-    task_t<message_t> submit_message();
-    task_t<message_t> yield_message();
+ task_t<message_t> submit_message();
+ task_t<message_t> yield_message();
 };
 
 class actor_client_t {
 public:
-    virtual ~actor_client_t() = default;
+ virtual ~actor_client_t() = default;
 
-    template <typename TMessage>
-    actor_send_call_t send(actor_id_t actor_id, TMessage message);
+ template <typename TMessage>
+ actor_send_call_t send(actor_id_t actor_id, TMessage message);
 
-    template <typename TRequest>
-    actor_request_call_t request(actor_id_t actor_id, TRequest request);
+ template <typename TRequest>
+ actor_request_call_t request(actor_id_t actor_id, TRequest request);
 };
 
 } // namespace zlink::framework
 ```
 
 Actor send and request only take a global `actor_id_t` as target. There's
-no overload that takes [MeshName](../../../01-glossary.en.md#meshname),
-ActorRef, [owner](../../../01-glossary.en.md#owner) NodeRid, or the
+no overload that takes [MeshName](../../../00-foundation/02-glossary.en.md#meshname),
+ActorRef, [owner](../../../00-foundation/02-glossary.en.md#owner) NodeRid, or the
 current SpotId. The runtime only caches a positive Ready route and
 doesn't keep a negative cache. A missing route is distinguished as
-`not_found`, and an exact-ref generation mismatch as
+`not_found`, and an -ref generation mismatch as
 `invalid_operation`.
 
 ## 3. Single-Use Manager Operation
@@ -228,52 +228,52 @@ doesn't keep a negative cache. A missing route is distinguished as
 namespace zlink::framework {
 
 struct actor_create_existing_t {
-    actor_ref_t actor;
+ actor_ref_t actor;
 };
 
 struct actor_create_created_t {
-    actor_ref_t actor;
-    std::optional<message_t> reply;
+ actor_ref_t actor;
+ std::optional<message_t> reply;
 };
 
 struct actor_create_rejected_t {
-    std::optional<message_t> reply;
+ std::optional<message_t> reply;
 };
 
 using actor_create_result_t = std::variant<
-  actor_create_existing_t,
-  actor_create_created_t,
-  actor_create_rejected_t>;
+ actor_create_existing_t,
+ actor_create_created_t,
+ actor_create_rejected_t>;
 
 class actor_create_call_t {
 public:
-    actor_create_call_t(actor_create_call_t &&) noexcept;
-    actor_create_call_t &operator=(actor_create_call_t &&) noexcept;
-    actor_create_call_t(const actor_create_call_t &) = delete;
-    actor_create_call_t &operator=(const actor_create_call_t &) = delete;
+ actor_create_call_t(actor_create_call_t &&) noexcept;
+ actor_create_call_t &operator=(actor_create_call_t &&) noexcept;
+ actor_create_call_t(const actor_create_call_t &) = delete;
+ actor_create_call_t &operator=(const actor_create_call_t &) = delete;
 
-    actor_create_call_t &in_mesh(std::string mesh_name);
-    actor_create_call_t &creation_request(message_t request);
+ actor_create_call_t &in_mesh(std::string mesh_name);
+ actor_create_call_t &creation_request(message_t request);
 
-    template <typename TCreation>
-    actor_create_call_t &creation_request(TCreation request);
+ template <typename TCreation>
+ actor_create_call_t &creation_request(TCreation request);
 
-    actor_create_call_t &timeout(std::chrono::milliseconds timeout);
-    task_t<actor_create_result_t> submit();
-    task_t<actor_create_result_t> yield();
+ actor_create_call_t &timeout(std::chrono::milliseconds timeout);
+ task_t<actor_create_result_t> submit();
+ task_t<actor_create_result_t> yield();
 };
 
 class actor_manager_t {
 public:
-    virtual ~actor_manager_t() = default;
-    virtual actor_create_call_t create(
-      actor_id_t actor_id, std::string stable_type) = 0;
-    virtual actor_create_call_t get_or_create(
-      actor_id_t actor_id, std::string stable_type) = 0;
-    virtual task_t<std::optional<actor_ref_t>> find(actor_id_t actor_id) = 0;
-    virtual task_t<std::optional<spot_ref_t>> find_spot(
-      actor_id_t actor_id) = 0;
-    virtual task_t<bool> destroy(actor_ref_t actor) = 0;
+ virtual ~actor_manager_t() = default;
+ virtual actor_create_call_t create(
+ actor_id_t actor_id, std::string stable_type) = 0;
+ virtual actor_create_call_t get_or_create(
+ actor_id_t actor_id, std::string stable_type) = 0;
+ virtual task_t<std::optional<actor_ref_t>> find(actor_id_t actor_id) = 0;
+ virtual task_t<std::optional<spot_ref_t>> find_spot(
+ actor_id_t actor_id) = 0;
+ virtual task_t<bool> destroy(actor_ref_t actor) = 0;
 };
 
 } // namespace zlink::framework
@@ -289,7 +289,7 @@ unknown Mesh is `not_found`.
 `Create` returns `already_exists` for an existing identity, and returns
 `actor_create_created_t` or `actor_create_rejected_t` for a new
 attempt. `GetOrCreate` returns a
-[Ready](../../../01-glossary.en.md#ready) Actor of the same stable
+[Ready](../../../00-foundation/02-glossary.en.md#ready) Actor of the same stable
 type as `actor_create_existing_t` without a callback. If it's Creating,
 it waits for the authority change, and a CAS loser doesn't start a
 separate factory or callback. A different operation receives
@@ -301,20 +301,20 @@ and re-encodes the reply with the current correlation/reply route. The
 terminal is kept for 5 minutes after the original deadline. A callback
 exception isn't a rejected result — it's a typed creation failure. A
 different type is `type_mismatch`.
-[Deadline](../../../01-glossary.en.md#deadline) applies across
+[Deadline](../../../00-foundation/02-glossary.en.md#deadline) applies across
 resolve, reservation, factory, and Ready as a whole. `Find` only
 returns a Ready ref and doesn't create one. `FindSpot` only returns the
 Ready `spot_ref_t` of the current User Spot membership, and returns an
 empty optional for Entry
-[membership](../../../01-glossary.en.md#membership) or a Missing
-Actor. `Destroy` only changes the exact ActorRef.
+[membership](../../../00-foundation/02-glossary.en.md#membership) or a Missing
+Actor. `Destroy` only changes the ActorRef.
 With no matching incarnation it's `false`, a different generation is
 `invalid_operation`, and while moving it's `unavailable`.
 A public Actor directory and local Actor bind overload aren't
 provided.
 
 Actor creation confirms the selected owner MeshNode's
-[Entry Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
+[Entry Spot](../../../00-foundation/02-glossary.en.md#entry-spot-user-spot-and-instance-spot)
 membership together inside the Ready barrier. Actor work payload is
 delivered directly to the Actor queue regardless of membership kind,
 without going through the Entry Spot callback. The original creation
@@ -323,44 +323,44 @@ owner or new incarnation. If the caller receives a timeout,
 cancellation, or moving result, it must explicitly start a new
 operation.
 
-## 4. STREAM Exact-Ref Binding
+## 4. STREAM -Ref Binding
 
 ```cpp
 namespace zlink::framework {
 
 class session_actor_t {
 public:
-    const actor_ref_t &ref() const noexcept;
-    task_t<void> relay(const message_t &payload);
-    task_t<void> relay(
-      const session_message_context_t &context,
-      const message_t &payload);
-    task_t<void> notify_disconnected();
+ const actor_ref_t &ref() const noexcept;
+ task_t<void> relay(const message_t &payload);
+ task_t<void> relay(
+ const session_message_context_t &context,
+ const message_t &payload);
+ task_t<void> notify_disconnected();
 };
 
 class session_actor_manager_t {
 public:
-    std::vector<session_actor_t> bound() const;
-    std::optional<session_actor_t> find(actor_id_t actor_id) const;
-    request_call_t<session_actor_t> bind(actor_ref_t actor_ref);
-    request_call_t<session_actor_t> bind_or_get(actor_ref_t actor_ref);
+ std::vector<session_actor_t> bound() const;
+ std::optional<session_actor_t> find(actor_id_t actor_id) const;
+ request_call_t<session_actor_t> bind(actor_ref_t actor_ref);
+ request_call_t<session_actor_t> bind_or_get(actor_ref_t actor_ref);
 };
 
 } // namespace zlink::framework
 ```
 
-Bind sends a control request only once, to the exact ActorRef location
+Bind sends a control request only once, to the ActorRef location
 the caller submitted. On a stale/moving result, it doesn't look up the
 global ActorId again or auto-bind to a fresh incarnation. `find(...)`
 only looks up an Actor already bound to that STREAM session — it isn't
 the global Actor directory.
 
 `notify_disconnected()` is a logical disconnect that doesn't close the
-physical connection. It runs the exact binding's Spot callback at most once,
+physical connection. It runs the binding's Spot callback at most once,
 then commits the binding as a tombstone and removes it after terminal. The
 physical STREAM connection and Actor/Spot membership are kept, and no new
 public unbind API is provided. Rebind completes as soon as the new identity
-becomes current and does not wait for the previous session. The previous exact
+becomes current and does not wait for the previous session. The previous
 session may notify the client in `on_actor_binding_replaced(...)`. The framework closes the
 connection `100 ms` after the callback reaches a successful or failed terminal; an empty outbound
 queue does not shorten this delay.
@@ -379,16 +379,16 @@ connection-bound operation. If there's no valid binding or the
 connection generation changed, it ends with a session-not-bound or
 stale result, and the Framework doesn't find a different session and
 resubmit. Connection close doesn't change the Actor's
-[Spot](../../../01-glossary.en.md#spot) membership or automatically
+[Spot](../../../00-foundation/02-glossary.en.md#spot) membership or automatically
 end the Actor.
 
 ## 5. Public Trace Category
 
 The declarations in this document belong to public trace's
 `actor-relocation` category. The common meaning is owned by
-[Actor Model](../../../14-actor-model.en.md),
-[Spot · Actor Membership](../../../15-spot-actor.en.md), and
-[Session Actor Dispatch](../../../20-session-actor-dispatch.en.md).
+[Actor Model](../../../03-spot-actor/04-actor-model.en.md),
+[Spot · Actor Membership](../../../03-spot-actor/05-spot-actor-membership.en.md), and
+[Session Actor Dispatch](../../../04-session/02-session-actor-binding.en.md).
 
 `yield()` and `yield_message()` declared in this document are only
 valid while the current Actor handler is running in a `SpotWide` User

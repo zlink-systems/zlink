@@ -85,7 +85,7 @@ public final class Messages {
     public record RunOrderWorkflowMsg(String orderId) {
     }
 
-    public record ContinueOrderWorkflowRes(OrderState state) {
+    public record ContinueOrderWorkflowRes(OrderState state, long objectGeneration) {
     }
 
     public record RebuildOrderProjectionReq(String orderId) {

@@ -8,6 +8,7 @@ public record SampleTopology(
     String redisKeyPrefix,
     String logDirectory,
     String apiChannelEndpoint,
+    String apiSpotRouterEndpoint,
     String apiHttpEndpoint,
     String supportChannelEndpoint,
     String sessionStreamEndpoint,
@@ -26,6 +27,7 @@ public record SampleTopology(
     public Api api() {
         return new Api(
             required(apiChannelEndpoint, "apiChannelEndpoint"),
+            required(apiSpotRouterEndpoint, "apiSpotRouterEndpoint"),
             required(apiHttpEndpoint, "apiHttpEndpoint"));
     }
 
@@ -59,7 +61,7 @@ public record SampleTopology(
     public record Location(String redisEndpoint, String redisKeyPrefix) {
     }
 
-    public record Api(String channelEndpoint, String httpEndpoint) {
+    public record Api(String channelEndpoint, String spotRouterEndpoint, String httpEndpoint) {
     }
 
     public record Session(

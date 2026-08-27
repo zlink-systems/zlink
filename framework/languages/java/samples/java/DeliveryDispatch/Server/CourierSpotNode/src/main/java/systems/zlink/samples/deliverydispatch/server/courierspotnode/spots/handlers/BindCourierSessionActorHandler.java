@@ -20,7 +20,7 @@ public final class BindCourierSessionActorHandler
         CourierActor actor,
         ZLinkMessageContext context,
         Messages.BindCourierSessionReq request) {
-        System.out.println("courier-bind-relayed=" + request.courierId());
+        System.out.println("deliverydispatch-courier bind-relayed courier=" + request.courierId());
         return CompletableFuture.completedFuture(new Messages.BindCourierSessionRes(
             request.courierId(),
             request.actor(),

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed class ZLinkActorSessionRegistry(
@@ -5,12 +7,12 @@ internal sealed class ZLinkActorSessionRegistry(
     Action<string>? handoffDiagnostic = null,
     TimeSpan? sessionBindingTombstoneRetention = null)
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<ZLinkActorId, ZLinkActorRuntimeState> _states = [];
 
     public ZLinkActorRuntimeState GetOrCreate(ZLinkActorId actorId)
     {
-        lock (_gate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_states.TryGetValue(actorId, out var existing)) return existing;
 
@@ -22,49 +24,55 @@ internal sealed class ZLinkActorSessionRegistry(
                 services: services);
             _states.Add(actorId, created);
             return created;
-        }
+        }));
     }
 
     public bool TryGet(ZLinkActorId actorId, out ZLinkActorRuntimeState state)
     {
-        lock (_gate)
+        var lookup = AwaitStateLane(_lane.RunAsync(() =>
         {
-            return _states.TryGetValue(actorId, out state!);
-        }
+            var found = _states.TryGetValue(actorId, out var current);
+            return (found, current);
+        }));
+        state = lookup.current!;
+        return lookup.found;
     }
 
     public void TryRemove(ZLinkActorId actorId, ZLinkActorRuntimeState state)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_states.TryGetValue(actorId, out var existing)
                 && ReferenceEquals(existing, state)
                 && state.SessionId is null
                 && state.Activation is null)
                 _states.Remove(actorId);
-        }
+        }));
     }
 
     public void RemoveIfCurrent(ZLinkActorId actorId, ZLinkActorRuntimeState state)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_states.TryGetValue(actorId, out var existing)
                 && ReferenceEquals(existing, state))
                 _states.Remove(actorId);
-        }
+        }));
     }
 
     public async ValueTask ResetGenerationAsync(
         CancellationToken cancellationToken = default,
         Action<Exception>? detachedCleanupFailure = null)
     {
-        ZLinkActorRuntimeState[] states;
-        lock (_gate)
+        // The reset call itself is the force-stop admission boundary.  Take
+        // the snapshot before the first asynchronous cleanup wait so every
+        // state is fenced before the caller can observe reset in progress.
+        var states = AwaitStateLane(_lane.RunAsync(() =>
         {
-            states = _states.Values.ToArray();
+            var snapshot = _states.Values.ToArray();
             _states.Clear();
-        }
+            return snapshot;
+        }));
 
         foreach (var state in states)
             state.FenceRuntimeGeneration();
@@ -109,6 +117,12 @@ internal sealed class ZLinkActorSessionRegistry(
 
     public ZLinkActorRuntimeState[] Snapshot()
     {
-        lock (_gate) return _states.Values.ToArray();
+        return AwaitStateLane(_lane.RunAsync(() => _states.Values.ToArray()));
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }

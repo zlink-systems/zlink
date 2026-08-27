@@ -19,7 +19,10 @@ public final class PrepareInventoryReservedCheckpointSpotHandler
     public CompletionStage<Messages.ContinueOrderWorkflowRes> handle(
         OrderWorkflowSpot spot,
         Messages.PrepareInventoryReservedCheckpointReq request) {
+        System.out.println("shoppingmall-order started order=" + request.request().orderId()
+            + " spot=" + spot.context().spotId());
         return CompletableFuture.completedFuture(new Messages.ContinueOrderWorkflowRes(
-            workflow.prepareInventoryReservedInSpot(request.request())));
+            workflow.prepareInventoryReservedInSpot(request.request()),
+            spot.context().objectGeneration()));
     }
 }

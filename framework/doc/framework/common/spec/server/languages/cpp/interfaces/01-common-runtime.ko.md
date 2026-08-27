@@ -1,6 +1,6 @@
-# C++ common runtime exact interface
+# C++ common runtime 언어별 interface
 
-[C++ exact interface 목차](README.ko.md)
+[C++ 언어별 interface 목차](README.ko.md)
 
 <!-- framework-adapter-nav:start -->
 [스펙 목차](README.ko.md) | [이전: C++ 시스템 구조](../01-system-structure.ko.md) | [다음: C++ HTTP Hosting](../60-http-hosting.ko.md)
@@ -81,7 +81,7 @@ C++ 공개 header는 사용자가 구성하거나 호출하는 타입과 결과�
 유지하더라도 사용자는 그 상태의 자료구조나 처리 순서를 알 필요가 없어야 한다.
 
 공개 `route_client_t`와 `route_send_call_t`는 node와 global Spot ID를 대상으로 하는 typed 호출을
-제공한다. [User Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)과 Instance Spot은 같은 ID-only 호출 표면을 사용하며, 별도 handle·resolver·논리 주소
+제공한다. [User Spot](../../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot)과 Instance Spot은 같은 ID-only 호출 표면을 사용하며, 별도 handle·resolver·논리 주소
 타입을 제공하지 않는다. request 계열은 `channel_request_call_t`을 반환한다. 사용자는 target MeshNode,
 location owner token이나 generation을 넘기지 않으며 routing envelope, location claim과
 serializer 선택은 framework가 처리한다.
@@ -116,12 +116,12 @@ C++는 설치된 header가 곧 공개 표면이므로 다음 규칙을 지킨다
 - template header에는 type check와 공개 facade forwarding만 둔다.
 - public class의 state는 공개 계약 타입만 사용한다.
 - JSON, MessagePack, Protobuf와 같은 선택 dependency 타입은 해당 codec extension의 공개 계약에만
-  나타날 수 있다.
+ 나타날 수 있다.
 - contract test는 설치된 public header만 include한다.
 - public inline 함수는 공개 validation과 forwarding을 넘어서 transport state를 조작하지 않는다.
 
 모든 framework 타입은 `zlink::framework` namespace 아래에 둔다. 각 타입의
-declaration은 [exact interface 목차](README.ko.md)에서 지정한 단 하나의 범주 문서가
+declaration은 [언어별 interface 목차](README.ko.md)에서 지정한 단 하나의 범주 문서가
 소유한다.
 
 ## 4. Common result, coroutine과 message
@@ -132,93 +132,93 @@ namespace zlink::framework {
 template <typename T>
 class result_t {
 public:
-    static result_t success(T value);
-    static result_t failure(
-      framework_error_kind_t kind,
-      std::string message);
-    bool has_value() const noexcept;
-    explicit operator bool() const noexcept;
-    const T &value() const;
-    T &value();
-    const framework_exception_t *error() const noexcept;
-    framework_error_kind_t error_kind() const;
+ static result_t success(T value);
+ static result_t failure(
+ framework_error_kind_t kind,
+ std::string message);
+ bool has_value() const noexcept;
+ explicit operator bool() const noexcept;
+ const T &value() const;
+ T &value();
+ const framework_exception_t *error() const noexcept;
+ framework_error_kind_t error_kind() const;
 };
 
 template <>
 class result_t<void> {
 public:
-    static result_t success();
-    static result_t failure(
-      framework_error_kind_t kind,
-      std::string message);
-    bool has_value() const noexcept;
-    explicit operator bool() const noexcept;
-    void value() const;
-    const framework_exception_t *error() const noexcept;
-    framework_error_kind_t error_kind() const;
+ static result_t success();
+ static result_t failure(
+ framework_error_kind_t kind,
+ std::string message);
+ bool has_value() const noexcept;
+ explicit operator bool() const noexcept;
+ void value() const;
+ const framework_exception_t *error() const noexcept;
+ framework_error_kind_t error_kind() const;
 };
 
 template <typename T>
 class task_t {
 public:
-    struct promise_type {
-        task_t get_return_object();
-        std::suspend_never initial_suspend() noexcept;
-        std::suspend_never final_suspend() noexcept;
-        void unhandled_exception();
-        void return_value(result_t<T> result);
+ struct promise_type {
+ task_t get_return_object();
+ std::suspend_never initial_suspend() noexcept;
+ std::suspend_never final_suspend() noexcept;
+ void unhandled_exception();
+ void return_value(result_t<T> result);
 
-        template <typename U>
-        void return_value(U &&value);
-    };
+ template <typename U>
+ void return_value(U &&value);
+ };
 
-    explicit task_t(result_t<T> result);
-    task_t(task_t &&) noexcept = default;
-    task_t &operator=(task_t &&) noexcept = default;
-    task_t(const task_t &) = delete;
-    task_t &operator=(const task_t &) = delete;
-    ~task_t() = default;
-    bool await_ready() const noexcept;
-    void await_suspend(std::coroutine_handle<> continuation);
-    T await_resume();
-    const result_t<T> &result() const;
+ explicit task_t(result_t<T> result);
+ task_t(task_t &&) noexcept = default;
+ task_t &operator=(task_t &&) noexcept = default;
+ task_t(const task_t &) = delete;
+ task_t &operator=(const task_t &) = delete;
+ ~task_t() = default;
+ bool await_ready() const noexcept;
+ void await_suspend(std::coroutine_handle<> continuation);
+ T await_resume();
+ const result_t<T> &result() const;
 };
 
 template <>
 class task_t<void> {
 public:
-    struct promise_type {
-        task_t get_return_object();
-        std::suspend_never initial_suspend() noexcept;
-        std::suspend_never final_suspend() noexcept;
-        void unhandled_exception();
-        void return_void() noexcept;
-    };
+ struct promise_type {
+ task_t get_return_object();
+ std::suspend_never initial_suspend() noexcept;
+ std::suspend_never final_suspend() noexcept;
+ void unhandled_exception();
+ void return_void() noexcept;
+ };
 
-    explicit task_t(result_t<void> result);
-    task_t(task_t &&) noexcept = default;
-    task_t &operator=(task_t &&) noexcept = default;
-    task_t(const task_t &) = delete;
-    task_t &operator=(const task_t &) = delete;
-    ~task_t() = default;
-    bool await_ready() const noexcept;
-    void await_suspend(std::coroutine_handle<> continuation);
-    void await_resume();
-    const result_t<void> &result() const;
+ explicit task_t(result_t<void> result);
+ task_t(task_t &&) noexcept = default;
+ task_t &operator=(task_t &&) noexcept = default;
+ task_t(const task_t &) = delete;
+ task_t &operator=(const task_t &) = delete;
+ ~task_t() = default;
+ bool await_ready() const noexcept;
+ void await_suspend(std::coroutine_handle<> continuation);
+ void await_resume();
+ const result_t<void> &result() const;
 };
 
 class message_t {
 public:
-    message_t() = default;
+ message_t() = default;
 
-    template <typename TValue>
-    static message_t from(TValue value);
+ template <typename TValue>
+ static message_t from(TValue value);
 
-    template <typename TValue>
-    TValue decode() const;
+ template <typename TValue>
+ TValue decode() const;
 
-    bool encoded() const noexcept;
-    bool empty() const noexcept;
+ bool encoded() const noexcept;
+ bool empty() const noexcept;
 };
 
 } // namespace zlink::framework
@@ -261,11 +261,11 @@ SPOT과 STREAM의 backpressure는 public **call object, timeout, result error ki
 
 - **application handler가 framework queue를 직접 제어하는 API를 두지 않는다.**
 - **기본 정책은 무한 queue가 아니다.** queue 상한·submit timeout·overflow 정책은 framework runtime
-  설정으로 닫고, **한도 초과는 실패 result로 반환한다.**
+ 설정으로 닫고, **한도 초과는 실패 result로 반환한다.**
 - 한도 초과의 error kind는 operation family와 queue 위치에 따라 다르다. 위 §오류 매핑 표와
-  [Spot 메시징 §5.3](../../../12-spot-messaging.ko.md)을 따른다 — 일괄 `capacity_exceeded`가
-  아니다. one-way·send의 source-local 포화는 `deadline_exceeded`, request의 local queue
-  포화는 `capacity_exceeded`, remote queue 포화는 `unavailable`이다.
+ [Spot 메시징 §5.3](../../../03-spot-actor/02-spot-messaging.ko.md)을 따른다 — 일괄 `capacity_exceeded`가
+ 아니다. one-way·send의 source-local 포화는 `deadline_exceeded`, request의 local queue
+ 포화는 `capacity_exceeded`, remote queue 포화는 `unavailable`이다.
 
 이 규칙은 일반 SPOT·STREAM 실행 queue에 적용된다. Message Follow relay가 잠시 보관하는
 payload에는 별도의 message-count·byte 상한을 두지 않는다. 다만 개별 wire message 크기와
@@ -281,7 +281,7 @@ message storage는 Framework 내부에 유지한다. filter는 result를 반환�
 `rejected`로 완료한다. `next()`는 한 번만 호출할 수 있으며 두 번째 호출은
 `invalid_operation` 오류다.
 
-filter의 등록 순서·`next` 의미·scope는 [framework API §8.1](../../../06-framework-api.ko.md)이
+filter의 등록 순서·`next` 의미·scope는 [framework API §8.1](../../../00-foundation/06-framework-api.ko.md)이
 소유한다.
 
 ### 6.3 Public surface 경계
@@ -319,12 +319,12 @@ logical timer registration과 callback metadata만 사용한다.
 
 Dispatch 실패는 public event type으로 표현하지 않는다. Framework는 application이 구성한 표준 provider에
 structured log·trace·metric을 기록하며 callback observer, error sink와 raw event DTO를 공개하지 않는다.
-Provider 실패는 원래 dispatch 결과를 바꾸지 않는다. 진단 수준의 exact declaration은
+Provider 실패는 원래 dispatch 결과를 바꾸지 않는다. 진단 수준의 선언은
 [Monitoring §2](08-monitoring.ko.md#2-메시지-흐름-진단)가 소유한다.
 
 ### 7.2 Dispatch 실행 정책
 
-`handler_execution_t`는 handler 실행 방식을 구분한다. Dispatch와 message-flow 진단 수준의 exact
+`handler_execution_t`는 handler 실행 방식을 구분한다. Dispatch와 message-flow 진단 수준의
 declaration은 [Monitoring interface](08-monitoring.ko.md)가 소유한다.
 
 ### 7.3 Worker
@@ -333,31 +333,31 @@ declaration은 [Monitoring interface](08-monitoring.ko.md)가 소유한다.
 template <typename TResult> class worker_call_t
 {
 public:
-    using executor_t = std::function<task_t<TResult>(
-      std::stop_token)>;
+ using executor_t = std::function<task_t<TResult>(
+ std::stop_token)>;
 
-    worker_call_t() = default;
-    explicit worker_call_t(executor_t executor);
-    worker_call_t &timeout (std::chrono::milliseconds value);
-    task_t<TResult> submit ();
-    task_t<TResult> yield ();
+ worker_call_t() = default;
+ explicit worker_call_t(executor_t executor);
+ worker_call_t &timeout (std::chrono::milliseconds value);
+ task_t<TResult> submit ();
+ task_t<TResult> yield ();
 };
 
 class worker_options_t {
 public:
-    std::size_t min_threads() const noexcept;
-    worker_options_t &min_threads(std::size_t value);
-    std::size_t max_threads() const noexcept;
-    worker_options_t &max_threads(std::size_t value);
-    std::chrono::milliseconds idle_timeout() const noexcept;
-    worker_options_t &idle_timeout(std::chrono::milliseconds value);
-    std::size_t max_queue_length() const noexcept;
-    worker_options_t &max_queue_length(std::size_t value);
+ std::size_t min_threads() const noexcept;
+ worker_options_t &min_threads(std::size_t value);
+ std::size_t max_threads() const noexcept;
+ worker_options_t &max_threads(std::size_t value);
+ std::chrono::milliseconds idle_timeout() const noexcept;
+ worker_options_t &idle_timeout(std::chrono::milliseconds value);
+ std::size_t max_queue_length() const noexcept;
+ worker_options_t &max_queue_length(std::size_t value);
 };
 ```
 
 **worker는 spot·session 실행 문맥 밖에서 실행하는 작업이다.** 완료를 원래 실행 문맥에서 재개하는
-규칙은 [비동기 실행 정책](../../../05-async-execution-policy.ko.md)이 소유한다. Worker function에는 timeout,
+규칙은 [비동기 실행 정책](../../../01-execution/README.ko.md)이 소유한다. Worker function에는 timeout,
 host 종료와 caller cancellation을 합친 `std::stop_token`을 전달한다. `submit()`은 결과를 기다리지
 않는 terminal이고 `submit()`은 현재 turn을 유지하며 결과를 기다린다. `yield()`는 `SpotWide` User Spot
 또는 Instance Spot의 shared turn에서만 그 turn을 반환하고 결과를 기다린다. 다른 실행 문맥에서는
@@ -373,8 +373,8 @@ worker를 제출하거나 turn을 반환하지 않고 `invalid_operation`으로 
 
 
 같은 Spot의 dispatch 직렬화와 `yield()` 허용 범위는
-[stage-wrapper §3](../../../17-stage-wrapper-on-spot.ko.md)과
-[비동기 실행 정책](../../../05-async-execution-policy.ko.md)이 소유한다.
+[stage-wrapper §3](../../../03-spot-actor/07-stage-wrapper-on-spot.ko.md)과
+[비동기 실행 정책](../../../01-execution/README.ko.md)이 소유한다.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->

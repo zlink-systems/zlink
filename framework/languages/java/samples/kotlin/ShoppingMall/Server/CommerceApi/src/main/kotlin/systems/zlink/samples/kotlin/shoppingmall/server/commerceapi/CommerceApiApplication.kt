@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
+import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.configureDispatch
@@ -15,6 +16,7 @@ import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import systems.zlink.contracts.core.RoutingId
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceStore
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleNames
@@ -55,14 +57,14 @@ class CommerceApiApplication {
                 .client()
 
             configurer.addRouteMesh(SampleNames.OrderWorkflowMesh)
-                .setRoutingIdPrefix("shoppingmall-api")
+                .setRoutingId(RoutingId.from(role.instanceId))
                 .listen()
                 .objects().client()
         }
     }
 
     companion object {
-        fun run(configPath: String): AutoCloseable {
+        fun run(configPath: String): ConfigurableApplicationContext {
             val environment = StandardEnvironment().apply {
                 propertySources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME)
                 propertySources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)
@@ -74,7 +76,7 @@ class CommerceApiApplication {
             builder.application().setKeepAlive(true)
             val context = builder.run()
             context.getBean(CommerceStore::class.java).seedDefaults()
-            return AutoCloseable { context.close() }
+            return context
         }
     }
 }

@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Timers;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -6,6 +7,7 @@ namespace Zlink.Framework.Runtime.Host;
 internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 {
     private readonly object _disposeGate = new();
+    private readonly ZLinkStateLane _stateLane = new();
     private readonly IDisposable _pressureMetricRegistration;
     private Task? _disposeTask;
     private int _operationFenced;
@@ -51,8 +53,6 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     internal ZLinkHostCapacityProjection Capacity { get; }
 
-    public object SyncRoot { get; } = new();
-
     public CancellationTokenSource StopTokenSource { get; } = new();
 
     internal CancellationTokenSource ForceStopTokenSource { get; } = new();
@@ -95,6 +95,11 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     internal void BuildRouteMeshChannelIndex()
     {
+        RunStateAsync(BuildRouteMeshChannelIndexOnLane).GetAwaiter().GetResult();
+    }
+
+    private void BuildRouteMeshChannelIndexOnLane()
+    {
         foreach (var registration in Registration.SpotNodes.Values)
         {
             if (!SpotNodes.TryGetValue(registration.SpotNodeName, out var nodeRuntime))
@@ -124,30 +129,31 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     public List<Task> ListenerTasks { get; } = [];
 
-    public bool TryGetSpotNodeByRoutingId(
-        RoutingId nodeRid,
-        out ZLinkSpotNodeRuntime nodeRuntime)
-    {
-        foreach (var candidate in SpotNodes.Values)
-            if (candidate.Node.RoutingId == nodeRid)
-            {
-                nodeRuntime = candidate;
-                return true;
-            }
+    // All former SyncRoot-protected component dictionaries share this lane.
+    // The dispose gate remains separate because it serializes the external
+    // disposal protocol and intentionally spans asynchronous resource cleanup.
+    internal ValueTask<T> RunStateAsync<T>(Func<T> work) => _stateLane.RunAsync(work);
 
-        nodeRuntime = null!;
-        return false;
+    internal ValueTask RunStateAsync(Action work) => _stateLane.RunAsync(work);
+
+    public ZLinkSpotNodeRuntime? FindSpotNodeByRoutingId(RoutingId nodeRid)
+    {
+        return RunStateAsync(() => SpotNodes.Values
+                .FirstOrDefault(candidate => candidate.Node.RoutingId == nodeRid))
+            .GetAwaiter().GetResult();
     }
 
     public void CancelActiveSpotOperations()
     {
-        foreach (var node in SpotNodes.Values) node.CancelActiveOperations();
+        var nodes = RunStateAsync(() => SpotNodes.Values.ToArray())
+            .GetAwaiter().GetResult();
+        foreach (var node in nodes) node.CancelActiveOperations();
     }
 
     public void ForceStopStreamSessions()
     {
-        ZLinkStreamNodeRuntime[] streams;
-        lock (SyncRoot) streams = StreamNodes.Values.ToArray();
+        var streams = RunStateAsync(() => StreamNodes.Values.ToArray())
+            .GetAwaiter().GetResult();
         foreach (var stream in streams) stream.ForceStopSessions();
     }
 
@@ -167,10 +173,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         {
             if (_disposeTask is not null) return new ValueTask(_disposeTask);
 
-            RuntimeResources resources;
-            lock (SyncRoot)
-            {
-                resources = new RuntimeResources(
+            var resources = RunStateAsync(() =>
+                new RuntimeResources(
                     SpotNodes.Values.ToArray(),
                     StreamNodes.Values.ToArray(),
                     ClientServerClientBundles.Values.ToArray(),
@@ -179,8 +183,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
                     PublisherBundles.Values.ToArray(),
                     AutomaticFanoutSubscriberRuntimes.Values.ToArray(),
                     SubscriberBundles.Values.ToArray(),
-                    ListenerTasks.ToArray());
-            }
+                    ListenerTasks.ToArray())).GetAwaiter().GetResult();
 
             return new ValueTask(
                 _disposeTask = DisposeCoreAsync(resources, forceStopToken));

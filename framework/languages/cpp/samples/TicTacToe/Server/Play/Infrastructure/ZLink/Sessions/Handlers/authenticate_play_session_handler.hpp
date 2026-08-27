@@ -8,7 +8,10 @@
 #include <zlink/framework.hpp>
 
 #include <cstdlib>
+#include <iostream>
+#include <mutex>
 #include <string_view>
+#include <unordered_set>
 
 namespace zlink::samples::tictactoe
 {
@@ -57,6 +60,16 @@ class authenticate_play_session_handler_t
                                                           "Player actor could not be located.");
         }
         auto actor = co_await actors.bind_or_get (located.value ().ref ()).submit ();
+        bool first_player_x_binding = false;
+        {
+            std::lock_guard lock (bound_actors_mutex);
+            first_player_x_binding = actor.actor_id () == "player-x"
+              && bound_actors.insert (std::string (actor.actor_id ())).second;
+        }
+        if (first_player_x_binding) {
+            std::cout << "tictactoe-lifecycle actor-bound actor=" << actor.actor_id ()
+                      << std::endl;
+        }
 
         const auto reply_payload = authenticate_res_t{player};
         const auto reply_message = zlink::message_t::from_json (reply_payload);
@@ -67,6 +80,8 @@ class authenticate_play_session_handler_t
 
   private:
     channel_client_t &_client;
+    inline static std::mutex bound_actors_mutex;
+    inline static std::unordered_set<std::string> bound_actors;
 };
 // --8<-- [end:doc-session-auth]
 

@@ -86,12 +86,22 @@ import type {
 import type {
   ZLinkActorMessageFollowContext
 } from '../../../../packages/framework/dist/runtime/actors/actor-message-follow-context.js';
+import type {
+  ZLinkInternalRelocationIntegrityFaultGate
+} from '../../../../packages/framework/dist/runtime/host/relocation-integrity-fault-gate.js';
 const { ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE: TRANSPORT_DELIVERY_GATE } =
   require(path.resolve(
     __dirname,
     '../../../../../../../packages/framework/dist/runtime/actors/actor-transport-delivery-gate.js'
   )) as typeof import(
     '../../../../packages/framework/dist/runtime/actors/actor-transport-delivery-gate.js'
+  );
+const { ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE: RELOCATION_INTEGRITY_FAULT_GATE } =
+  require(path.resolve(
+    __dirname,
+    '../../../../../../../packages/framework/dist/runtime/host/relocation-integrity-fault-gate.js'
+  )) as typeof import(
+    '../../../../packages/framework/dist/runtime/host/relocation-integrity-fault-gate.js'
   );
 
 let options: ServerOptions;
@@ -190,6 +200,32 @@ class TransportDeliveryGate implements ZLinkInternalActorTransportDeliveryGate {
     const entry = this.entries.get(operationId);
     if (entry === undefined) throw new Error(`Transport delivery '${operationId}' is not armed.`);
     return entry;
+  }
+}
+
+@Injectable()
+class RelocationIntegrityFaultGate implements ZLinkInternalRelocationIntegrityFaultGate {
+  private readonly armed = new Map<'checksum-mismatch' | 'identity-conflict', number>();
+  private readonly fired = new Map<'checksum-mismatch' | 'identity-conflict', number>();
+
+  arm(variant: 'checksum-mismatch' | 'identity-conflict'): void {
+    this.armed.set(variant, (this.armed.get(variant) ?? 0) + 1);
+  }
+
+  consumeChecksumMismatch(): boolean { return this.consume('checksum-mismatch'); }
+
+  consumeIdentityConflict(): boolean { return this.consume('identity-conflict'); }
+
+  snapshot(): object {
+    return { armed: Object.fromEntries(this.armed), fired: Object.fromEntries(this.fired) };
+  }
+
+  private consume(variant: 'checksum-mismatch' | 'identity-conflict'): boolean {
+    const count = this.armed.get(variant) ?? 0;
+    if (count === 0) return false;
+    this.armed.set(variant, count - 1);
+    this.fired.set(variant, (this.fired.get(variant) ?? 0) + 1);
+    return true;
   }
 }
 
@@ -903,9 +939,14 @@ Module({
     BoundPushHandler,
     ApplyActorLifecycleStateHandler,
     TransportDeliveryGate,
+    RelocationIntegrityFaultGate,
     {
       provide: TRANSPORT_DELIVERY_GATE,
       useExisting: TransportDeliveryGate
+    },
+    {
+      provide: RELOCATION_INTEGRITY_FAULT_GATE,
+      useExisting: RelocationIntegrityFaultGate
     }
   ]
 })(ActorNodeModule);
@@ -917,6 +958,7 @@ async function main(): Promise<void> {
   actorManager = app.get(ZLINK_ACTOR_MANAGER, { strict: false }) as ZLinkActorManager;
   const actorClient = app.get(ZLINK_ACTOR_CLIENT, { strict: false }) as ZLinkActorClient;
   const transportDeliveryGate = app.get(TransportDeliveryGate, { strict: false });
+  const relocationIntegrityFaultGate = app.get(RelocationIntegrityFaultGate, { strict: false });
   const locationQuery = app.get(
     ZLINK_LOCATION_RUNTIME_QUERY,
     { strict: false }
@@ -938,6 +980,16 @@ async function main(): Promise<void> {
       handle: () => meshSnapshot(routeMeshRuntime, locationQuery)
     },
     { method: 'GET', path: '/evidence', handle: () => evidence.snapshot() },
+    {
+      method: 'POST', path: /^\/relocation-integrity\/(checksum-mismatch|identity-conflict)\/arm$/, handle: (_body, match) => {
+        const variant = match![1] as 'checksum-mismatch' | 'identity-conflict';
+        relocationIntegrityFaultGate.arm(variant);
+        return relocationIntegrityFaultGate.snapshot();
+      }
+    },
+    {
+      method: 'GET', path: '/relocation-integrity', handle: () => relocationIntegrityFaultGate.snapshot()
+    },
     {
       method: 'POST', path: '/relocate', handle: async (body) => {
         const deadlineMs = Math.max(

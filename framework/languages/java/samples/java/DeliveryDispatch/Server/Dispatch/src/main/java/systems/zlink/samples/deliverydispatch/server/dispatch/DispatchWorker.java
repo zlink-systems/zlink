@@ -66,13 +66,15 @@ public final class DispatchWorker {
     public CompletionStage<Void> reassign(DeliveryOffer offer) {
         int nextIndex = offer.candidateIndex() + 1;
         if (nextIndex >= Candidates.size()) {
-            System.err.println("deliverydispatch dispatch: delivery=" + offer.request().deliveryId()
-                + " was rejected by all couriers");
             return publishStatus(
                     offer.request(),
                     Messages.DeliveryStatus.Failed,
                     Candidates.get(Candidates.size() - 1))
-                .thenAccept(ignored -> offers.close(offer.request().deliveryId()));
+                .thenRun(() -> {
+                    offers.close(offer.request().deliveryId());
+                    System.out.println("deliverydispatch-dispatch failed delivery="
+                        + offer.request().deliveryId() + " reason=candidates-exhausted");
+                });
         }
 
         String courierId = Candidates.get(nextIndex);

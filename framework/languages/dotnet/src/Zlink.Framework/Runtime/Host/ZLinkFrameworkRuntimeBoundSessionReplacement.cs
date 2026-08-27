@@ -16,8 +16,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             || sourceNodeRid != authority.TargetNodeRid)
             return false;
 
-        var nodeRuntime = _state?.SpotNodes.Values.SingleOrDefault(
-            node => node.Node.RoutingId == receivingNodeRid);
+        var state = _state;
+        var nodeRuntime = state is null
+            ? null
+            : AwaitStateLane(state.RunStateAsync(() =>
+                state.SpotNodes.Values.SingleOrDefault(
+                    node => node.Node.RoutingId == receivingNodeRid)));
         if (nodeRuntime is null
             || nodeRuntime.Node.MeshStatus().LifecycleGeneration
                != retired.SessionOwnerNodeGeneration
@@ -27,15 +31,14 @@ internal sealed partial class ZLinkFrameworkRuntime
         // The Actor authority fence is deliberately not consulted to find an
         // Actor here. It only authenticates the transport source above; the
         // retired session identity is the sole lookup key on this node.
-        if (!_actorBoundSessionCoordinator.TryGetExactRetiredSessionBinding(
+        if (_actorBoundSessionCoordinator.GetExactRetiredSessionBinding(
                 ZLinkActorId.FromBoundary(authority.ActorId, nameof(authority.ActorId)),
                 retired.SessionOwnerNodeRid,
                 retired.SessionRid,
                 retired.SessionOwnerNodeGeneration,
                 retired.SessionOwnerId,
                 retired.SessionOwnerLeaseGeneration,
-                retired.RetiredBindingGeneration,
-                out var binding)
+                retired.RetiredBindingGeneration) is not { } binding
             || binding.Context.SessionRuntime is not { } session)
             return false;
 

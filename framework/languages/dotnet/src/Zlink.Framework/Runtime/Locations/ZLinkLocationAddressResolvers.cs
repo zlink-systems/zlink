@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
@@ -45,7 +47,8 @@ internal sealed class ZLinkLocationAddressResolvers
             row.SpotGeneration,
             ct => RefreshSpotAsync(key, ct),
             () => _rows.InvalidateSpotRoute(key));
-        _handles?.RegisterSpot(key, handle);
+        if (_handles is not null)
+            await _handles.RegisterSpotAsync(key, handle).ConfigureAwait(false);
         return handle;
     }
 
@@ -75,7 +78,8 @@ internal sealed class ZLinkLocationAddressResolvers
             row.MembershipEpoch,
             ct => RefreshActorAsync(key, ct),
             () => _rows.InvalidateActorRoute(key));
-        _handles?.RegisterActor(key, handle);
+        if (_handles is not null)
+            await _handles.RegisterActorAsync(key, handle).ConfigureAwait(false);
         return handle;
     }
 
@@ -165,7 +169,7 @@ internal sealed class ZLinkResolvedSpotHandle
 {
     private readonly Func<CancellationToken, ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>> _refresh;
     private readonly Action? _invalidateRoute;
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private ZLinkHandleAvailability _availability = ZLinkHandleAvailability.Available;
     private ulong _version;
     private ZLinkSpotHandleSnapshot _snapshot;
@@ -184,26 +188,23 @@ internal sealed class ZLinkResolvedSpotHandle
 
     internal ZLinkSpotHandleSnapshot Snapshot
     {
-        get
+        get => AwaitStateLane(_lane.RunAsync(() =>
         {
-            lock (_gate)
-            {
-                if (_availability != ZLinkHandleAvailability.Available)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        "The resolved spot handle is no longer available.");
-                return _snapshot;
-            }
-        }
+            if (_availability != ZLinkHandleAvailability.Available)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.NotFound,
+                    "The resolved spot handle is no longer available.");
+            return _snapshot;
+        }));
     }
 
-    internal string MeshName { get { lock (_gate) return _snapshot.RouterChannelId; } }
+    internal string MeshName => AwaitStateLane(_lane.RunAsync(() => _snapshot.RouterChannelId));
 
-    internal string SpotId { get { lock (_gate) return _snapshot.SpotId; } }
+    internal string SpotId => AwaitStateLane(_lane.RunAsync(() => _snapshot.SpotId));
 
     internal void Update(ZLinkSpotHandleSnapshot snapshot, ulong version)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (version < _version
                 || (version == _version
@@ -211,17 +212,17 @@ internal sealed class ZLinkResolvedSpotHandle
             _snapshot = snapshot;
             _version = version;
             _availability = ZLinkHandleAvailability.Available;
-        }
+        }));
     }
 
     internal void Invalidate(ulong version)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (version < _version) return;
             _version = version;
             _availability = ZLinkHandleAvailability.Removed;
-        }
+        }));
     }
 
     /// <summary>Invalidates at the current version: a later update with a
@@ -229,10 +230,10 @@ internal sealed class ZLinkResolvedSpotHandle
     /// same version does not.</summary>
     internal void InvalidateCurrent()
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             _availability = ZLinkHandleAvailability.Removed;
-        }
+        }));
     }
 
     internal async ValueTask<bool> RefreshAsync(CancellationToken cancellationToken)
@@ -244,6 +245,12 @@ internal sealed class ZLinkResolvedSpotHandle
     }
 
     internal void InvalidateRoute() => _invalidateRoute?.Invoke();
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }
 
 internal enum ZLinkHandleAvailability

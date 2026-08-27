@@ -1,12 +1,12 @@
 # .NET Location/Relocation Provider Public Interface
 
-[.NET exact interface table of contents](README.en.md) · [Location Runtime](../../../21-location-runtime.en.md) ·
-[Location Store Provider](../../../22-location-store-redis.en.md) ·
-[Relocation Store Provider](../../../23-relocation-store-redis.en.md)
+[.NET per-language interface table of contents](README.en.md) · [Location Runtime](../../../05-location-relocation/01-location-runtime.en.md) ·
+[Location Store Provider](../../../05-location-relocation/02-location-store-redis.en.md) ·
+[Relocation Store Provider](../../../05-location-relocation/03-relocation-store-redis.en.md)
 
 ## 1. Scope
 
-This document fixes the exact C# declaration of the minimal Store SPI an
+This document fixes the C# declaration of the minimal Store SPI an
 external provider author implements. The provider only implements
 conditional atomic batch on opaque key/value, and the operation that
 stores an immutable blob at a framework-issued reference.
@@ -28,84 +28,84 @@ public readonly record struct ZLinkStoreVersion(string Value);
 public readonly record struct ZLinkStoreScanCursor(string Value);
 
 public sealed record ZLinkStoreValue(
-    ReadOnlyMemory<byte> Bytes,
-    ZLinkStoreVersion Version,
-    DateTimeOffset? ExpiresAt,
-    DateTimeOffset StoreNow);
+ ReadOnlyMemory<byte> Bytes,
+ ZLinkStoreVersion Version,
+ DateTimeOffset? ExpiresAt,
+ DateTimeOffset StoreNow);
 
 public abstract record ZLinkStoreReadResult
 {
-    private protected ZLinkStoreReadResult() { }
+ private protected ZLinkStoreReadResult() { }
 
-    public sealed record Missing(DateTimeOffset StoreNow)
-        : ZLinkStoreReadResult;
+ public sealed record Missing(DateTimeOffset StoreNow)
+ : ZLinkStoreReadResult;
 
-    public sealed record Found(ZLinkStoreValue Value)
-        : ZLinkStoreReadResult;
+ public sealed record Found(ZLinkStoreValue Value)
+ : ZLinkStoreReadResult;
 }
 
 public abstract record ZLinkStoreCondition
 {
-    private protected ZLinkStoreCondition() { }
+ private protected ZLinkStoreCondition() { }
 
-    public sealed record Missing(ZLinkStoreKey Key)
-        : ZLinkStoreCondition;
+ public sealed record Missing(ZLinkStoreKey Key)
+ : ZLinkStoreCondition;
 
-    public sealed record Version(
-        ZLinkStoreKey Key,
-        ZLinkStoreVersion Expected)
-        : ZLinkStoreCondition;
+ public sealed record Version(
+ ZLinkStoreKey Key,
+ ZLinkStoreVersion Expected)
+ : ZLinkStoreCondition;
 }
 
 public abstract record ZLinkStoreMutation
 {
-    private protected ZLinkStoreMutation() { }
+ private protected ZLinkStoreMutation() { }
 
-    public sealed record Put(
-        ZLinkStoreKey Key,
-        ReadOnlyMemory<byte> Bytes,
-        TimeSpan? Retention)
-        : ZLinkStoreMutation;
+ public sealed record Put(
+ ZLinkStoreKey Key,
+ ReadOnlyMemory<byte> Bytes,
+ TimeSpan? Retention)
+ : ZLinkStoreMutation;
 
-    public sealed record Delete(ZLinkStoreKey Key)
-        : ZLinkStoreMutation;
+ public sealed record Delete(ZLinkStoreKey Key)
+ : ZLinkStoreMutation;
 }
 
 public sealed record ZLinkStoreWriteRequest(
-    IReadOnlyList<ZLinkStoreCondition> Conditions,
-    IReadOnlyList<ZLinkStoreMutation> Mutations);
+ IReadOnlyList<ZLinkStoreCondition> Conditions,
+ IReadOnlyList<ZLinkStoreMutation> Mutations);
 
 public abstract record ZLinkStoreWriteResult
 {
-    private protected ZLinkStoreWriteResult() { }
+ private protected ZLinkStoreWriteResult() { }
 
-    public sealed record Applied(
-        IReadOnlyDictionary<ZLinkStoreKey, ZLinkStoreVersion> PutVersions,
-        DateTimeOffset StoreNow)
-        : ZLinkStoreWriteResult;
+ public sealed record Applied(
+ IReadOnlyDictionary<ZLinkStoreKey, ZLinkStoreVersion> PutVersions,
+ DateTimeOffset StoreNow)
+ : ZLinkStoreWriteResult;
 
-    public sealed record Conflict(DateTimeOffset StoreNow)
-        : ZLinkStoreWriteResult;
+ public sealed record Conflict(DateTimeOffset StoreNow)
+ : ZLinkStoreWriteResult;
 }
 
 public sealed record ZLinkStoreScanRequest(
-    string Prefix,
-    ZLinkStoreScanCursor? Cursor,
-    int Limit);
+ string Prefix,
+ ZLinkStoreScanCursor? Cursor,
+ int Limit);
 
 public sealed record ZLinkStoreScanPage(
-    IReadOnlyList<KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>> Items,
-    ZLinkStoreScanCursor? NextCursor,
-    DateTimeOffset StoreNow);
+ IReadOnlyList<KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>> Items,
+ ZLinkStoreScanCursor? NextCursor,
+ DateTimeOffset StoreNow);
 
 public abstract record ZLinkStoreScanResult
 {
-    private protected ZLinkStoreScanResult() { }
+ private protected ZLinkStoreScanResult() { }
 
-    public sealed record Page(ZLinkStoreScanPage Value)
-        : ZLinkStoreScanResult;
+ public sealed record Page(ZLinkStoreScanPage Value)
+ : ZLinkStoreScanResult;
 
-    public sealed record Expired : ZLinkStoreScanResult;
+ public sealed record Expired : ZLinkStoreScanResult;
 }
 
 /// <summary>
@@ -114,17 +114,17 @@ public abstract record ZLinkStoreScanResult
 /// </summary>
 public interface IZLinkLocationStore
 {
-    ValueTask<ZLinkStoreReadResult> ReadAsync(
-        ZLinkStoreKey key,
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkStoreReadResult> ReadAsync(
+ ZLinkStoreKey key,
+ CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkStoreWriteResult> WriteAsync(
-        ZLinkStoreWriteRequest request,
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkStoreWriteResult> WriteAsync(
+ ZLinkStoreWriteRequest request,
+ CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkStoreScanResult> ScanAsync(
-        ZLinkStoreScanRequest request,
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkStoreScanResult> ScanAsync(
+ ZLinkStoreScanRequest request,
+ CancellationToken cancellationToken = default);
 }
 ```
 
@@ -155,47 +155,47 @@ public readonly record struct ZLinkBlobReference(string Value);
 
 public abstract record ZLinkBlobPutResult
 {
-    private protected ZLinkBlobPutResult() { }
+ private protected ZLinkBlobPutResult() { }
 
-    public sealed record Stored(
-        DateTimeOffset ExpiresAt,
-        DateTimeOffset StoreNow)
-        : ZLinkBlobPutResult;
+ public sealed record Stored(
+ DateTimeOffset ExpiresAt,
+ DateTimeOffset StoreNow)
+ : ZLinkBlobPutResult;
 
-    public sealed record AlreadyStored(
-        DateTimeOffset ExpiresAt,
-        DateTimeOffset StoreNow)
-        : ZLinkBlobPutResult;
+ public sealed record AlreadyStored(
+ DateTimeOffset ExpiresAt,
+ DateTimeOffset StoreNow)
+ : ZLinkBlobPutResult;
 
-    public sealed record Conflict(DateTimeOffset StoreNow)
-        : ZLinkBlobPutResult;
+ public sealed record Conflict(DateTimeOffset StoreNow)
+ : ZLinkBlobPutResult;
 }
 
 public abstract record ZLinkBlobReadResult
 {
-    private protected ZLinkBlobReadResult() { }
+ private protected ZLinkBlobReadResult() { }
 
-    public sealed record Missing(DateTimeOffset StoreNow)
-        : ZLinkBlobReadResult;
+ public sealed record Missing(DateTimeOffset StoreNow)
+ : ZLinkBlobReadResult;
 
-    public sealed record Found(
-        ReadOnlyMemory<byte> Bytes,
-        DateTimeOffset ExpiresAt,
-        DateTimeOffset StoreNow)
-        : ZLinkBlobReadResult;
+ public sealed record Found(
+ ReadOnlyMemory<byte> Bytes,
+ DateTimeOffset ExpiresAt,
+ DateTimeOffset StoreNow)
+ : ZLinkBlobReadResult;
 }
 
 public abstract record ZLinkBlobRenewResult
 {
-    private protected ZLinkBlobRenewResult() { }
+ private protected ZLinkBlobRenewResult() { }
 
-    public sealed record Missing(DateTimeOffset StoreNow)
-        : ZLinkBlobRenewResult;
+ public sealed record Missing(DateTimeOffset StoreNow)
+ : ZLinkBlobRenewResult;
 
-    public sealed record Renewed(
-        DateTimeOffset ExpiresAt,
-        DateTimeOffset StoreNow)
-        : ZLinkBlobRenewResult;
+ public sealed record Renewed(
+ DateTimeOffset ExpiresAt,
+ DateTimeOffset StoreNow)
+ : ZLinkBlobRenewResult;
 }
 
 /// <summary>
@@ -204,24 +204,24 @@ public abstract record ZLinkBlobRenewResult
 /// </summary>
 public interface IZLinkRelocationStore
 {
-    ValueTask<ZLinkBlobPutResult> PutAsync(
-        ZLinkBlobReference reference,
-        ReadOnlyMemory<byte> payload,
-        TimeSpan retention,
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkBlobPutResult> PutAsync(
+ ZLinkBlobReference reference,
+ ReadOnlyMemory<byte> payload,
+ TimeSpan retention,
+ CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkBlobReadResult> ReadAsync(
-        ZLinkBlobReference reference,
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkBlobReadResult> ReadAsync(
+ ZLinkBlobReference reference,
+ CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkBlobRenewResult> RenewAsync(
-        ZLinkBlobReference reference,
-        TimeSpan retention,
-        CancellationToken cancellationToken = default);
+ ValueTask<ZLinkBlobRenewResult> RenewAsync(
+ ZLinkBlobReference reference,
+ TimeSpan retention,
+ CancellationToken cancellationToken = default);
 
-    ValueTask DeleteAsync(
-        ZLinkBlobReference reference,
-        CancellationToken cancellationToken = default);
+ ValueTask DeleteAsync(
+ ZLinkBlobReference reference,
+ CancellationToken cancellationToken = default);
 }
 ```
 
@@ -258,7 +258,7 @@ I/O or commit. If cancellation, timeout, or transport failure occurs
 after the call has started, whether the commit was applied may be
 uncertain.
 
-The framework reconciles the result using the Location Store's exact
+The framework reconciles the result using the Location Store's
 read and version, or the Relocation Store's caller-issued reference.
 `Conflict`, `Missing`, `Expired`, and `AlreadyStored` are closed normal
 results. A Store call exception that isn't `ArgumentException` or

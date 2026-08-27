@@ -30,6 +30,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <string_view>
 #include <thread>
 #include <tuple>
@@ -653,34 +654,61 @@ mesh_node_host_service_t::create_actor (bool exclusive,
               return message_t::from_raw (std::move (raw), _serializers);
           })));
 
-    std::vector<mesh_node_descriptor_t> candidates;
     const auto selected_mesh = mesh_name.value_or (_nodes.front ()->mesh_name ());
-    location_page_request_t page;
-    do {
-        auto listed = _location_store->list_mesh_nodes (selected_mesh, page).result ().value ();
-        for (auto &descriptor : listed.items) {
-            if (mesh_name && descriptor.mesh_name != *mesh_name)
-                continue;
-            const auto capability = std::find_if (
-              descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-              [&] (const object_capability_t &value) {
-                  return value.object_kind == placement_object_kind_t::actor
-                         && value.stable_type == stable_type;
-              });
-            if (descriptor.state == framework_runtime_state_t::serving
-                && descriptor.object_role == object_role_t::server
-                && descriptor.placement_weight > 0
-                && placement_capacity_available (descriptor, placement_object_kind_t::actor,
-                                                 stable_type)
-                && capability != descriptor.object_capabilities.end ())
-                candidates.push_back (std::move (descriptor));
-        }
-        page.continuation_token = std::move (listed.continuation_token);
-    } while (page.continuation_token);
+    const auto source_runtime =
+      std::find_if (_nodes.begin (), _nodes.end (), [&] (const auto &node) {
+          const auto rid = node->routing_id ();
+          return rid && rid->to_string () == operation.source_node_rid.value ();
+      });
+    if (source_runtime == _nodes.end ())
+        return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
+          framework_error_kind_t::unavailable, "Actor creation source MeshNode is not available"));
+
+    const auto source_rid = (*source_runtime)->native_node ().status ().routing_id ();
+    using peer_epoch_t = std::tuple<std::string, std::uint64_t, std::uint64_t>;
+    std::set<peer_epoch_t> unavailable_peer_epochs;
+    std::vector<mesh_node_descriptor_t> candidates;
+    auto refresh_candidates = [&] {
+        candidates.clear ();
+        location_page_request_t page;
+        do {
+            auto listed = _location_store->list_mesh_nodes (selected_mesh, page).result ().value ();
+            for (auto &descriptor : listed.items) {
+                if (mesh_name && descriptor.mesh_name != *mesh_name)
+                    continue;
+                const auto capability = std::find_if (
+                  descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
+                  [&] (const object_capability_t &value) {
+                      return value.object_kind == placement_object_kind_t::actor
+                             && value.stable_type == stable_type;
+                  });
+                if (descriptor.state != framework_runtime_state_t::serving
+                    || descriptor.object_role != object_role_t::server
+                    || descriptor.placement_weight <= 0
+                    || !placement_capacity_available (descriptor, placement_object_kind_t::actor,
+                                                      stable_type)
+                    || capability == descriptor.object_capabilities.end ())
+                    continue;
+                if (descriptor.rid == source_rid) {
+                    candidates.push_back (std::move (descriptor));
+                    continue;
+                }
+                const auto epoch =
+                  (*source_runtime)
+                    ->admitted_peer_epoch (descriptor.rid, descriptor.lifecycle_generation);
+                if (epoch
+                    && !unavailable_peer_epochs.contains (
+                      {descriptor.rid.to_hex (), descriptor.lifecycle_generation, *epoch}))
+                    candidates.push_back (std::move (descriptor));
+            }
+            page.continuation_token = std::move (listed.continuation_token);
+        } while (page.continuation_token);
+    };
+    refresh_candidates ();
     if (candidates.empty ()) {
         return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
-          mesh_name ? framework_error_kind_t::not_found : framework_error_kind_t::capacity_exceeded,
-          "No eligible Actor target is ready"));
+          framework_error_kind_t::unavailable,
+          "No eligible Actor target has an admitted RouteMesh peer"));
     }
     const auto choose_target = [&] {
         const auto total_weight = std::accumulate (
@@ -709,12 +737,10 @@ mesh_node_host_service_t::create_actor (bool exclusive,
         });
     };
     auto target_runtime = find_target_runtime ();
-    const auto source_runtime =
-      std::find_if (_nodes.begin (), _nodes.end (), [&] (const auto &node) {
-          const auto rid = node->routing_id ();
-          return rid && rid->to_string () == operation.source_node_rid.value ();
-      });
-
+    auto target_peer_epoch =
+      target.rid == source_rid
+        ? std::optional<std::uint64_t>{}
+        : (*source_runtime)->admitted_peer_epoch (target.rid, target.lifecycle_generation);
     std::vector<std::byte> request_bytes;
     if (request) {
         const auto raw = detail::message_to_raw (*request, *_serializers);
@@ -769,6 +795,10 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                   "Actor placement candidates were exhausted"));
             target = choose_target ();
             target_runtime = find_target_runtime ();
+            target_peer_epoch =
+              target.rid == source_rid
+                ? std::optional<std::uint64_t>{}
+                : (*source_runtime)->admitted_peer_epoch (target.rid, target.lifecycle_generation);
             reserve.target = {.mesh_name = target.mesh_name,
                               .node_rid = node_rid_t::from_string (target.rid.to_string ()),
                               .node_lifecycle_generation = target.lifecycle_generation,
@@ -787,11 +817,36 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                   .result ();
             };
             if (target_runtime == _nodes.end ()) {
-                if (source_runtime == _nodes.end ()) {
-                    (void) fail_creation ();
-                    return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
-                      framework_error_kind_t::unavailable,
-                      "Actor creation source MeshNode is not available"));
+                const auto peer_epoch =
+                  (*source_runtime)->admitted_peer_epoch (target.rid, target.lifecycle_generation);
+                if (!peer_epoch || !target_peer_epoch || *peer_epoch != *target_peer_epoch) {
+                    // The Store descriptor can outlive a replaced peer.  This
+                    // reservation has not reached transport admission, so it
+                    // is safe to abandon it and re-resolve within the original
+                    // deadline rather than letting raw submit retry its stale RID.
+                    if (target_peer_epoch) {
+                        unavailable_peer_epochs.insert (
+                          {target.rid.to_hex (), target.lifecycle_generation, *target_peer_epoch});
+                    }
+                    (void) _location_store->abort ({reserve.key, winner->fence}).result ();
+                    refresh_candidates ();
+                    if (candidates.empty ())
+                        return task_t<actor_create_result_t> (
+                          result_t<actor_create_result_t>::failure (
+                            framework_error_kind_t::unavailable,
+                            "Actor placement target is not RouteMesh-admitted"));
+                    target = choose_target ();
+                    target_runtime = find_target_runtime ();
+                    target_peer_epoch =
+                      target.rid == source_rid
+                        ? std::optional<std::uint64_t>{}
+                        : (*source_runtime)
+                            ->admitted_peer_epoch (target.rid, target.lifecycle_generation);
+                    reserve.target = {.mesh_name = target.mesh_name,
+                                      .node_rid = node_rid_t::from_string (target.rid.to_string ()),
+                                      .node_lifecycle_generation = target.lifecycle_generation,
+                                      .owner = {target.owner_id, target.lease_generation}};
+                    continue;
                 }
                 const auto source_status = (*source_runtime)->native_node ().status ();
                 protocol::actor_create_header_t command;
@@ -1558,7 +1613,7 @@ mesh_node_host_service_t::close_user_spot (const std::shared_ptr<detail::mesh_no
     return output;
 }
 
-void mesh_node_host_service_t::start (service_provider_t &services)
+task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
 {
     try {
         _services = &services;
@@ -2384,6 +2439,7 @@ void mesh_node_host_service_t::start (service_provider_t &services)
         stop ();
         throw;
     }
+    return task_t<void> (result_t<void>::success ());
 }
 
 void mesh_node_host_service_t::request_stop () noexcept

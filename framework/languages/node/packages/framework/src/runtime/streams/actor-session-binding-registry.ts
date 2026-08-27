@@ -1,10 +1,14 @@
 import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
 import { createAbortError, throwIfAborted } from '../abort';
+import { AsyncResource } from 'node:async_hooks';
+import { ZLinkStateLane } from '../execution/state-lane';
 import { routingIdsEqual } from '../routing-id';
 import type {
   ServiceSessionBindingAdmissionClaim,
   ServiceSessionBindingAdmissionResult
 } from '../foundation/service-session-binding-ingress-port';
+
+const detachedStateLaneResource = new AsyncResource('zlink:actor-session-binding-registry');
 export interface ZLinkActorSessionBindingActor {
   readonly actorId: string;
 }
@@ -58,10 +62,12 @@ export interface ZLinkActorSessionRelocationSnapshot extends ZLinkActorSessionRe
 }
 
 interface ZLinkActorSessionFrameAdmission {
-  complete(): void;
+  complete(): Promise<void>;
+  completeCore(): void;
 }
 
-interface ZLinkActorSessionRequestFrameAdmission extends ZLinkActorSessionFrameAdmission {
+interface ZLinkActorSessionRequestFrameAdmission {
+  complete(): Promise<void>;
   /**
    * Claims the one allowed submission attempt. A request captured by a seal
    * before this call waits for that exact seal to publish or abort its route;
@@ -132,6 +138,7 @@ export class ZLinkActorSessionBindingRegistry<
   TContext extends ZLinkActorSessionBindingContext<TActor>,
   TActor extends ZLinkActorSessionBindingActor
 > {
+  private readonly lane = new ZLinkStateLane();
   private readonly routes = new Map<string, ZLinkActorSessionRoute<TContext, TActor>>();
   private readonly sealWaiters = new Map<string, Set<{
     readonly bindingToken: string;
@@ -164,7 +171,17 @@ export class ZLinkActorSessionBindingRegistry<
     }
   }
 
-  bind(
+  async bind(
+    context: TContext,
+    actor: TActor,
+    bindingToken: string,
+    authorityFence?: ZLinkActorSessionAuthorityFence,
+    sessionIdentity?: string
+  ): Promise<void> {
+    await this.lane.run(() => this.bindCore(context, actor, bindingToken, authorityFence, sessionIdentity));
+  }
+
+  private bindCore(
     context: TContext,
     actor: TActor,
     bindingToken: string,
@@ -182,7 +199,20 @@ export class ZLinkActorSessionBindingRegistry<
     context.bindLocal(actor, bindingToken);
   }
 
-  replace(
+  async replace(
+    previous: ZLinkActorSessionRoute<TContext, TActor>,
+    context: TContext,
+    actor: TActor,
+    bindingToken: string,
+    authorityFence?: ZLinkActorSessionAuthorityFence,
+    sessionIdentity?: string
+  ): Promise<void> {
+    await this.lane.run(() => this.replaceCore(
+      previous, context, actor, bindingToken, authorityFence, sessionIdentity
+    ));
+  }
+
+  private replaceCore(
     previous: ZLinkActorSessionRoute<TContext, TActor>,
     context: TContext,
     actor: TActor,
@@ -222,7 +252,21 @@ export class ZLinkActorSessionBindingRegistry<
     });
   }
 
-  replaceAndReleaseSeal(
+  async replaceAndReleaseSeal(
+    previous: ZLinkActorSessionRoute<TContext, TActor>,
+    context: TContext,
+    actor: TActor,
+    bindingToken: string,
+    sealId: string,
+    authorityFence?: ZLinkActorSessionAuthorityFence,
+    sessionIdentity?: string
+  ): Promise<void> {
+    await this.lane.run(() => this.replaceAndReleaseSealCore(
+      previous, context, actor, bindingToken, sealId, authorityFence, sessionIdentity
+    ));
+  }
+
+  private replaceAndReleaseSealCore(
     previous: ZLinkActorSessionRoute<TContext, TActor>,
     context: TContext,
     actor: TActor,
@@ -241,8 +285,8 @@ export class ZLinkActorSessionBindingRegistry<
     // JavaScript cannot interleave another ingress turn between these two
     // synchronous mutations. The replacement preserves the seal, then the
     // exact release publishes the route to held ingress as one owner turn.
-    this.replace(previous, context, actor, bindingToken, authorityFence, sessionIdentity);
-    if (!this.abortSeal(actor.actorId, sealId)) {
+    this.replaceCore(previous, context, actor, bindingToken, authorityFence, sessionIdentity);
+    if (!this.abortSealCore(actor.actorId, sealId)) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorLocationStale,
         `Actor '${actor.actorId}' route switch lost its relocation seal.`,
@@ -251,15 +295,31 @@ export class ZLinkActorSessionBindingRegistry<
     }
   }
 
-  find(actorId: string): TActor | undefined {
+  async find(actorId: string): Promise<TActor | undefined> {
+    return await this.lane.run(() => this.findCore(actorId));
+  }
+
+  private findCore(actorId: string): TActor | undefined {
     return this.routes.get(actorId)?.actor;
   }
 
-  route(actorId: string): ZLinkActorSessionRoute<TContext, TActor> | undefined {
+  async route(actorId: string): Promise<ZLinkActorSessionRoute<TContext, TActor> | undefined> {
+    return await this.lane.run(() => this.routeCore(actorId));
+  }
+
+  private routeCore(actorId: string): ZLinkActorSessionRoute<TContext, TActor> | undefined {
     return this.routes.get(actorId);
   }
 
-  capturePendingReplyClaim(
+  async capturePendingReplyClaim(
+    actorId: string,
+    actor: ZLinkActorSessionBindingActor,
+    bindingToken: string
+  ): Promise<{ readonly context: TContext } | undefined> {
+    return await this.lane.run(() => this.capturePendingReplyClaimCore(actorId, actor, bindingToken));
+  }
+
+  private capturePendingReplyClaimCore(
     actorId: string,
     actor: ZLinkActorSessionBindingActor,
     bindingToken: string
@@ -271,7 +331,11 @@ export class ZLinkActorSessionBindingRegistry<
     return Object.freeze({ context: route.context });
   }
 
-  unbind(actorId: string, context: TContext, bindingToken: string): void {
+  async unbind(actorId: string, context: TContext, bindingToken: string): Promise<void> {
+    await this.lane.run(() => this.unbindCore(actorId, context, bindingToken));
+  }
+
+  private unbindCore(actorId: string, context: TContext, bindingToken: string): void {
     const route = this.routes.get(actorId);
     if (route === undefined || route.context !== context || route.bindingToken !== bindingToken) {
       return;
@@ -293,23 +357,35 @@ export class ZLinkActorSessionBindingRegistry<
     );
   }
 
-  unbindActor(actorId: string): void {
+  async unbindActor(actorId: string): Promise<void> {
+    await this.lane.run(() => this.unbindActorCore(actorId));
+  }
+
+  private unbindActorCore(actorId: string): void {
     const route = this.routes.get(actorId);
     if (route === undefined) {
       return;
     }
-    this.unbind(actorId, route.context, route.bindingToken);
+    this.unbindCore(actorId, route.context, route.bindingToken);
   }
 
-  cleanup(context: TContext): void {
+  async cleanup(context: TContext): Promise<void> {
+    await this.lane.run(() => this.cleanupCore(context));
+  }
+
+  private cleanupCore(context: TContext): void {
     for (const route of [...this.routes.values()]) {
       if (route.context === context) {
-        this.unbind(route.actor.actorId, context, route.bindingToken);
+        this.unbindCore(route.actor.actorId, context, route.bindingToken);
       }
     }
   }
 
-  requireRoute(actorId: string): ZLinkActorSessionRoute<TContext, TActor> {
+  async requireRoute(actorId: string): Promise<ZLinkActorSessionRoute<TContext, TActor>> {
+    return await this.lane.run(() => this.requireRouteCore(actorId));
+  }
+
+  private requireRouteCore(actorId: string): ZLinkActorSessionRoute<TContext, TActor> {
     const route = this.routes.get(actorId);
     if (route !== undefined) {
       return route;
@@ -321,8 +397,12 @@ export class ZLinkActorSessionBindingRegistry<
     );
   }
 
-  requireCurrentToken(actorId: string, bindingToken: string): void {
-    const route = this.requireRoute(actorId);
+  async requireCurrentToken(actorId: string, bindingToken: string): Promise<void> {
+    await this.lane.run(() => this.requireCurrentTokenCore(actorId, bindingToken));
+  }
+
+  private requireCurrentTokenCore(actorId: string, bindingToken: string): void {
+    const route = this.requireRouteCore(actorId);
     if (route.bindingToken === bindingToken) {
       return;
     }
@@ -333,8 +413,12 @@ export class ZLinkActorSessionBindingRegistry<
     );
   }
 
-  accept(actorId: string, bindingToken: string): void {
-    const route = this.requireRoute(actorId);
+  async accept(actorId: string, bindingToken: string): Promise<void> {
+    await this.lane.run(() => this.acceptCore(actorId, bindingToken));
+  }
+
+  private acceptCore(actorId: string, bindingToken: string): void {
+    const route = this.requireRouteCore(actorId);
     if (route.bindingToken !== bindingToken) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
@@ -363,20 +447,26 @@ export class ZLinkActorSessionBindingRegistry<
   ): Promise<void> {
     for (;;) {
       throwIfAborted(signal);
-      const route = this.requireRoute(actorId);
-      this.requireCurrentToken(actorId, bindingToken);
-      if (route.sealId === undefined) {
-        try {
-          this.accept(actorId, bindingToken);
-          return;
-        } catch (error) {
-          // A new seal can race the check above. Re-enter the wait only for
-          // that relocation fence; unrelated binding failures stay visible.
-          if (this.routes.get(actorId)?.sealId === undefined) throw error;
-        }
-      }
+      const accepted = await this.lane.run(() => this.acceptWhenReadyCore(actorId, bindingToken));
+      if (accepted) return;
       await this.waitForSealRelease(actorId, bindingToken, signal);
     }
+  }
+
+  private acceptWhenReadyCore(actorId: string, bindingToken: string): boolean {
+    const route = this.requireRouteCore(actorId);
+    this.requireCurrentTokenCore(actorId, bindingToken);
+    if (route.sealId === undefined) {
+      try {
+        this.acceptCore(actorId, bindingToken);
+        return true;
+      } catch (error) {
+        // A new seal can race the check above. Re-enter the wait only for
+        // that relocation fence; unrelated binding failures stay visible.
+        if (this.routes.get(actorId)?.sealId === undefined) throw error;
+      }
+    }
+    return false;
   }
 
   async beginAcceptedFrameWhenReady(
@@ -386,27 +476,38 @@ export class ZLinkActorSessionBindingRegistry<
   ): Promise<ZLinkActorSessionFrameAdmission> {
     for (;;) {
       throwIfAborted(signal);
-      const route = this.requireRoute(actorId);
-      this.requireCurrentToken(actorId, bindingToken);
-      if (route.sealId === undefined) {
-        route.activeFrames.count++;
-        let completed = false;
-        return {
-          complete: () => {
-            if (completed) return;
-            completed = true;
-            route.activeFrames.count--;
-            if (
-              route.activeFrames.count === 0
-              && this.routes.get(actorId)?.activeFrames === route.activeFrames
-            ) {
-              this.resolveActiveFrameWaiters(actorId);
-            }
-          }
-        };
-      }
+      const admission = await this.lane.run(() => this.beginAcceptedFrameCore(actorId, bindingToken));
+      if (admission !== undefined) return admission;
       await this.waitForSealRelease(actorId, bindingToken, signal);
     }
+  }
+
+  private beginAcceptedFrameCore(
+    actorId: string,
+    bindingToken: string
+  ): ZLinkActorSessionFrameAdmission | undefined {
+    const route = this.requireRouteCore(actorId);
+    this.requireCurrentTokenCore(actorId, bindingToken);
+    if (route.sealId !== undefined) return undefined;
+    route.activeFrames.count++;
+    let completed = false;
+    const completeCore = () => {
+      if (completed) return;
+      completed = true;
+      route.activeFrames.count--;
+      if (
+        route.activeFrames.count === 0
+        && this.routes.get(actorId)?.activeFrames === route.activeFrames
+      ) {
+        this.resolveActiveFrameWaiters(actorId);
+      }
+    };
+    return {
+      complete: async () => {
+        await this.lane.run(completeCore);
+      },
+      completeCore
+    };
   }
 
   async beginAcceptedRequestFrameWhenReady(
@@ -415,7 +516,15 @@ export class ZLinkActorSessionBindingRegistry<
     signal?: AbortSignal
   ): Promise<ZLinkActorSessionRequestFrameAdmission> {
     const frame = await this.beginAcceptedFrameWhenReady(actorId, bindingToken, signal);
-    const activeFrames = this.requireRoute(actorId).activeFrames;
+    return await this.lane.run(() => this.beginAcceptedRequestFrameCore(actorId, bindingToken, frame));
+  }
+
+  private beginAcceptedRequestFrameCore(
+    actorId: string,
+    bindingToken: string,
+    frame: ZLinkActorSessionFrameAdmission
+  ): ZLinkActorSessionRequestFrameAdmission {
+    const activeFrames = this.requireRouteCore(actorId).activeFrames;
     let submissionStarted = false;
     let capturedBySeal = false;
     let finished = false;
@@ -427,29 +536,30 @@ export class ZLinkActorSessionBindingRegistry<
         // frame, while the request correlation and its detached terminal
         // remain alive. This removes the 42 -> request terminal -> 44 -> 42
         // cycle without turning the capture into another submission.
-        frame.complete();
+        frame.completeCore();
       }
     };
     activeFrames.requests.add(request);
     return {
-      beginSubmission: (submissionSignal) => {
-        if (submissionStarted) return undefined;
-        // Claim before the asynchronous seal wait. A second continuation
-        // must not observe an unclaimed request while the first is waiting
-        // for command 44 to publish the route.
-        submissionStarted = true;
-        if (!capturedBySeal) {
-          // From here the request may already have reached the remote peer.
-          // Spec 32:153-157 forbids a second logical-target submission.
-          return undefined;
-        }
-        return this.acceptWhenReady(actorId, bindingToken, submissionSignal);
+      beginSubmission: async (submissionSignal) => {
+        const captured = await this.lane.run(() => {
+          if (submissionStarted) return false;
+          // Claim before the asynchronous seal wait. A second continuation
+          // must not observe an unclaimed request while the first is waiting
+          // for command 44 to publish the route.
+          submissionStarted = true;
+          return capturedBySeal;
+        });
+        if (!captured) return;
+        await this.acceptWhenReady(actorId, bindingToken, submissionSignal);
       },
-      complete: () => {
-        if (finished) return;
-        finished = true;
-        activeFrames.requests.delete(request);
-        frame.complete();
+      complete: async () => {
+        await this.lane.run(() => {
+          if (finished) return;
+          finished = true;
+          activeFrames.requests.delete(request);
+          frame.completeCore();
+        });
       }
     };
   }
@@ -468,12 +578,16 @@ export class ZLinkActorSessionBindingRegistry<
     try {
       return await operation();
     } finally {
-      admission.complete();
+      await admission.complete();
     }
   }
 
-  seal(actorId: string, sealId: string, expected: ZLinkActorSessionRouteFence): void {
-    const route = this.requireRoute(actorId);
+  async seal(actorId: string, sealId: string, expected: ZLinkActorSessionRouteFence): Promise<void> {
+    await this.lane.run(() => this.sealCore(actorId, sealId, expected));
+  }
+
+  private sealCore(actorId: string, sealId: string, expected: ZLinkActorSessionRouteFence): void {
+    const route = this.requireRouteCore(actorId);
     if (route.sealId !== undefined) {
       if (route.sealId === sealId && routeMatchesFence(route, expected)) {
         return;
@@ -506,7 +620,7 @@ export class ZLinkActorSessionBindingRegistry<
     expected: ZLinkActorSessionRouteFence,
     signal?: AbortSignal
   ): Promise<void> {
-    this.seal(actorId, sealId, expected);
+    await this.lane.run(() => this.sealCore(actorId, sealId, expected));
     await this.waitForActiveFrames(actorId, signal);
   }
 
@@ -517,60 +631,95 @@ export class ZLinkActorSessionBindingRegistry<
   ): Promise<void> {
     for (;;) {
       throwIfAborted(signal);
-      const queue = this.relocations.get(claim.actorId);
-      const existing = queue?.seals.get(claim.sealId);
-      if (existing !== undefined) {
-        assertRelocationClaim(existing, claim);
-        await waitForSessionRelocation(existing.ready, signal);
+      const step = await this.lane.run(() => this.prepareRelocationSeal(claim, expected, signal));
+      if (step.kind === 'existing') {
+        await waitForSessionRelocation(step.wait, signal);
         return;
       }
-      const predecessor = queue?.activeSealId === undefined
-        ? undefined
-        : queue.seals.get(queue.activeSealId);
-      if (predecessor !== undefined && predecessor.phase !== 'terminal') {
-        if (predecessor.sessionIdentity === undefined || claim.sessionIdentity === undefined) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-            `Actor '${claim.actorId}' session ingress is sealed by another relocation.`,
-            true
-          );
-        }
-        assertSuccessorSessionIdentity(predecessor, claim);
-        await waitForSessionRelocation(predecessor.terminal, signal);
+      if (step.kind === 'predecessor') {
+        await waitForSessionRelocation(step.wait, signal);
         continue;
       }
-
-      this.seal(claim.actorId, claim.sealId, expected);
-      let resolveTerminal!: () => void;
-      const terminal = new Promise<void>((resolve) => { resolveTerminal = resolve; });
-      const ready = this.waitForActiveFrames(claim.actorId, signal);
-      const actorQueue: ZLinkActorSessionRelocationQueue = queue ?? {
-        actorId: claim.actorId,
-        seals: new Map(),
-        outbound: [],
-        nextArrivalOrder: 1n,
-        outboundCount: 0
-      };
-      const state: ZLinkActorSessionRelocationState = {
-        ...claim,
-        phase: 'sealed',
-        ready,
-        terminal,
-        resolveTerminal
-      };
-      actorQueue.seals.set(claim.sealId, state);
-      actorQueue.activeSealId = claim.sealId;
-      this.relocations.set(claim.actorId, actorQueue);
-      await ready;
+      await step.wait;
       return;
     }
   }
 
-  relocationSnapshot(actorId: string, sealId: string): ZLinkActorSessionRelocationSnapshot | undefined {
+  private prepareRelocationSeal(
+    claim: ZLinkActorSessionRelocationClaim,
+    expected: ZLinkActorSessionRouteFence,
+    signal?: AbortSignal
+  ):
+    | { readonly kind: 'existing' | 'predecessor'; readonly wait: Promise<void> }
+    | { readonly kind: 'new'; readonly wait: Promise<void> } {
+    const queue = this.relocations.get(claim.actorId);
+    const existing = queue?.seals.get(claim.sealId);
+    if (existing !== undefined) {
+      assertRelocationClaim(existing, claim);
+      return { kind: 'existing', wait: existing.ready };
+    }
+    const predecessor = queue?.activeSealId === undefined
+      ? undefined
+      : queue.seals.get(queue.activeSealId);
+    if (predecessor !== undefined && predecessor.phase !== 'terminal') {
+      if (predecessor.sessionIdentity === undefined || claim.sessionIdentity === undefined) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          `Actor '${claim.actorId}' session ingress is sealed by another relocation.`,
+          true
+        );
+      }
+      assertSuccessorSessionIdentity(predecessor, claim);
+      return { kind: 'predecessor', wait: predecessor.terminal };
+    }
+
+    this.sealCore(claim.actorId, claim.sealId, expected);
+    let resolveTerminal!: () => void;
+    const terminal = new Promise<void>((resolve) => { resolveTerminal = resolve; });
+    const ready = this.waitForActiveFramesCore(claim.actorId, signal);
+    const actorQueue: ZLinkActorSessionRelocationQueue = queue ?? {
+      actorId: claim.actorId,
+      seals: new Map(),
+      outbound: [],
+      nextArrivalOrder: 1n,
+      outboundCount: 0
+    };
+    const state: ZLinkActorSessionRelocationState = {
+      ...claim,
+      phase: 'sealed',
+      ready,
+      terminal,
+      resolveTerminal
+    };
+    actorQueue.seals.set(claim.sealId, state);
+    actorQueue.activeSealId = claim.sealId;
+    this.relocations.set(claim.actorId, actorQueue);
+    return { kind: 'new', wait: ready };
+  }
+
+  async relocationSnapshot(
+    actorId: string,
+    sealId: string
+  ): Promise<ZLinkActorSessionRelocationSnapshot | undefined> {
+    return await this.lane.run(() => this.relocationSnapshotCore(actorId, sealId));
+  }
+
+  private relocationSnapshotCore(
+    actorId: string,
+    sealId: string
+  ): ZLinkActorSessionRelocationSnapshot | undefined {
     return this.relocations.get(actorId)?.seals.get(sealId);
   }
 
-  retainRelocationOutbound(
+  async retainRelocationOutbound(
+    actorId: string,
+    operation: ZLinkActorSessionRetainedOutbound,
+    sealId?: string
+  ): Promise<ServiceSessionBindingAdmissionResult> {
+    return await this.lane.run(() => this.retainRelocationOutboundCorePublic(actorId, operation, sealId));
+  }
+
+  private retainRelocationOutboundCorePublic(
     actorId: string,
     operation: ZLinkActorSessionRetainedOutbound,
     sealId?: string
@@ -594,7 +743,14 @@ export class ZLinkActorSessionBindingRegistry<
     return this.retainRelocationOutboundCore(actorId, operation, 'legacy');
   }
 
-  admitRelocationOutbound(
+  async admitRelocationOutbound(
+    claim: ServiceSessionBindingAdmissionClaim,
+    operation: ZLinkActorSessionRetainedOutbound
+  ): Promise<ServiceSessionBindingAdmissionResult> {
+    return await this.lane.run(() => this.admitRelocationOutboundCore(claim, operation));
+  }
+
+  private admitRelocationOutboundCore(
     claim: ServiceSessionBindingAdmissionClaim,
     operation: ZLinkActorSessionRetainedOutbound
   ): ServiceSessionBindingAdmissionResult {
@@ -693,7 +849,11 @@ export class ZLinkActorSessionBindingRegistry<
     return 'retained';
   }
 
-  discardRelocationOutbound(actorId: string, sealId: string, error: unknown): void {
+  async discardRelocationOutbound(actorId: string, sealId: string, error: unknown): Promise<void> {
+    await this.lane.run(() => this.discardRelocationOutboundCore(actorId, sealId, error));
+  }
+
+  private discardRelocationOutboundCore(actorId: string, sealId: string, error: unknown): void {
     const queue = this.relocations.get(actorId);
     if (queue === undefined) return;
     for (let index = queue.outbound.length - 1; index >= 0; index--) {
@@ -713,6 +873,50 @@ export class ZLinkActorSessionBindingRegistry<
     commitOwnerTransition: () => Promise<void>,
     acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof
   ): Promise<void> {
+    const prepared = await this.lane.run(() => this.prepareRelocationApply(
+      actorId,
+      sealId,
+      applyFingerprint,
+      action,
+      acceptedProducerProof
+    ));
+    if (prepared.applyPromise !== undefined) {
+      await prepared.applyPromise;
+      return;
+    }
+    startOutsideStateLane(() => {
+      void (async () => {
+        try {
+          await commitOwnerTransition();
+          await this.lane.run(() => this.completeRelocationApply(prepared));
+          prepared.resolve!();
+        } catch (error) {
+          await this.lane.run(() => this.failRelocationApply(prepared));
+          prepared.reject!(error);
+        }
+      })();
+    });
+    await prepared.promise!;
+  }
+
+  private prepareRelocationApply(
+    actorId: string,
+    sealId: string,
+    applyFingerprint: string,
+    action: 'commit' | 'abort',
+    acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof
+  ): {
+    readonly queue: ZLinkActorSessionRelocationQueue;
+    readonly state: ZLinkActorSessionRelocationState;
+    readonly applyPromise?: Promise<void>;
+    readonly action?: 'commit' | 'abort';
+    readonly acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof;
+    readonly promise?: Promise<void>;
+    readonly resolve?: () => void;
+    readonly reject?: (error: unknown) => void;
+    readonly actorId?: string;
+    readonly sealId?: string;
+  } {
     const queue = this.relocations.get(actorId);
     const state = queue?.seals.get(sealId);
     if (queue === undefined || state === undefined) {
@@ -730,8 +934,7 @@ export class ZLinkActorSessionBindingRegistry<
           true
         );
       }
-      await state.applyPromise;
-      return;
+      return { queue, state, applyPromise: state.applyPromise };
     }
     if (
       action === 'commit'
@@ -754,48 +957,73 @@ export class ZLinkActorSessionBindingRegistry<
 
     state.phase = 'applying';
     state.applyFingerprint = applyFingerprint;
-    const applyPromise = Promise.resolve().then(async () => {
-      try {
-        await commitOwnerTransition();
-        const proof = action === 'commit'
-          ? acceptedProducerProof ?? this.currentProducerProof(actorId)
-          : relocationSourceProof(state);
-        state.acceptedProducerProof = proof;
-        for (let index = queue.outbound.length - 1; index >= 0; index--) {
-          const entry = queue.outbound[index]!;
-          if (entry.sealId !== sealId) continue;
-          if (entry.authorization !== 'pendingTarget') {
-            entry.released = true;
-            continue;
-          }
-          if (
-            action === 'commit'
-            && proof !== undefined
-            && entry.claim !== undefined
-            && matchesAcceptedProducerProof(proof, entry.claim)
-          ) {
-            entry.released = true;
-            continue;
-          }
-          queue.outbound.splice(index, 1);
-          this.failOutbound(
-            queue,
-            entry,
-            new Error(`Actor '${actorId}' pending Session producer did not match command 44 proof.`)
-          );
-        }
-        this.startOutboundDrain(queue);
-        state.phase = 'applied';
-      } catch (error) {
-        state.phase = 'sealed';
-        state.applyFingerprint = undefined;
-        state.applyPromise = undefined;
-        state.acceptedProducerProof = undefined;
-        throw error;
-      }
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((complete, fail) => {
+      resolve = complete;
+      reject = fail;
     });
-    state.applyPromise = applyPromise;
-    await applyPromise;
+    state.applyPromise = promise;
+    return {
+      queue,
+      state,
+      action,
+      acceptedProducerProof,
+      promise,
+      resolve,
+      reject,
+      actorId,
+      sealId
+    };
+  }
+
+  private completeRelocationApply(prepared: {
+    readonly queue: ZLinkActorSessionRelocationQueue;
+    readonly state: ZLinkActorSessionRelocationState;
+    readonly action?: 'commit' | 'abort';
+    readonly acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof;
+    readonly actorId?: string;
+    readonly sealId?: string;
+  }): void {
+    const { queue, state, action, acceptedProducerProof, actorId, sealId } = prepared;
+    const proof = action === 'commit'
+      ? acceptedProducerProof ?? this.currentProducerProof(actorId!)
+      : relocationSourceProof(state);
+    state.acceptedProducerProof = proof;
+    for (let index = queue.outbound.length - 1; index >= 0; index--) {
+      const entry = queue.outbound[index]!;
+      if (entry.sealId !== sealId) continue;
+      if (entry.authorization !== 'pendingTarget') {
+        entry.released = true;
+        continue;
+      }
+      if (
+        action === 'commit'
+        && proof !== undefined
+        && entry.claim !== undefined
+        && matchesAcceptedProducerProof(proof, entry.claim)
+      ) {
+        entry.released = true;
+        continue;
+      }
+      queue.outbound.splice(index, 1);
+      this.failOutbound(
+        queue,
+        entry,
+        new Error(`Actor '${actorId}' pending Session producer did not match command 44 proof.`)
+      );
+    }
+    this.startOutboundDrain(queue);
+    state.phase = 'applied';
+  }
+
+  private failRelocationApply(prepared: {
+    readonly state: ZLinkActorSessionRelocationState;
+  }): void {
+    prepared.state.phase = 'sealed';
+    prepared.state.applyFingerprint = undefined;
+    prepared.state.applyPromise = undefined;
+    prepared.state.acceptedProducerProof = undefined;
   }
 
   private currentProducerProof(
@@ -835,7 +1063,15 @@ export class ZLinkActorSessionBindingRegistry<
     };
   }
 
-  observeRelocationTerminal(
+  async observeRelocationTerminal(
+    actorId: string,
+    sealId: string,
+    applyFingerprint: string
+  ): Promise<void> {
+    await this.lane.run(() => this.observeRelocationTerminalCore(actorId, sealId, applyFingerprint));
+  }
+
+  private observeRelocationTerminalCore(
     actorId: string,
     sealId: string,
     applyFingerprint: string
@@ -872,7 +1108,11 @@ export class ZLinkActorSessionBindingRegistry<
    * single physical route's disconnect, which must not disturb a relocation
    * seal it does not own (see `clearRouteRelocation`).
    */
-  clearRelocation(actorId: string, error: unknown): void {
+  async clearRelocation(actorId: string, error: unknown): Promise<void> {
+    await this.lane.run(() => this.clearRelocationCore(actorId, error));
+  }
+
+  private clearRelocationCore(actorId: string, error: unknown): void {
     const queue = this.relocations.get(actorId);
     if (queue === undefined) return;
     this.relocations.delete(actorId);
@@ -925,7 +1165,11 @@ export class ZLinkActorSessionBindingRegistry<
     this.deleteEmptyRelocationQueue(queue);
   }
 
-  abortSeal(actorId: string, sealId: string): boolean {
+  async abortSeal(actorId: string, sealId: string): Promise<boolean> {
+    return await this.lane.run(() => this.abortSealCore(actorId, sealId));
+  }
+
+  private abortSealCore(actorId: string, sealId: string): boolean {
     const route = this.routes.get(actorId);
     if (route === undefined || route.sealId !== sealId) return false;
     route.sealId = undefined;
@@ -933,19 +1177,34 @@ export class ZLinkActorSessionBindingRegistry<
     return true;
   }
 
-  updateAuthorityFence(actorId: string, authorityFence: ZLinkActorSessionAuthorityFence): void {
-    const route = this.requireRoute(actorId);
+  async updateAuthorityFence(
+    actorId: string,
+    authorityFence: ZLinkActorSessionAuthorityFence
+  ): Promise<void> {
+    await this.lane.run(() => this.updateAuthorityFenceCore(actorId, authorityFence));
+  }
+
+  private updateAuthorityFenceCore(actorId: string, authorityFence: ZLinkActorSessionAuthorityFence): void {
+    const route = this.requireRouteCore(actorId);
     route.authorityFence = authorityFence;
   }
 
-  validateSeal(actorId: string, sealId: string): boolean {
+  async validateSeal(actorId: string, sealId: string): Promise<boolean> {
+    return await this.lane.run(() => this.validateSealCore(actorId, sealId));
+  }
+
+  private validateSealCore(actorId: string, sealId: string): boolean {
     const route = this.routes.get(actorId);
     return route !== undefined
       && route.sealId === sealId;
   }
 
   /** True while a relocation seal currently holds this actor's ingress. */
-  isSealed(actorId: string): boolean {
+  async isSealed(actorId: string): Promise<boolean> {
+    return await this.lane.run(() => this.isSealedCore(actorId));
+  }
+
+  private isSealedCore(actorId: string): boolean {
     return this.routes.get(actorId)?.sealId !== undefined;
   }
 
@@ -954,10 +1213,21 @@ export class ZLinkActorSessionBindingRegistry<
     bindingToken: string,
     signal?: AbortSignal
   ): Promise<void> {
-    const route = this.requireRoute(actorId);
-    this.requireCurrentToken(actorId, bindingToken);
-    if (route.sealId === undefined) return;
-    await new Promise<void>((resolve, reject) => {
+    const prepared = await this.lane.run(() => ({
+      wait: this.waitForSealReleaseCore(actorId, bindingToken, signal)
+    }));
+    await prepared.wait;
+  }
+
+  private waitForSealReleaseCore(
+    actorId: string,
+    bindingToken: string,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const route = this.requireRouteCore(actorId);
+    this.requireCurrentTokenCore(actorId, bindingToken);
+    if (route.sealId === undefined) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
       const waiters = this.sealWaiters.get(actorId) ?? new Set();
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -984,32 +1254,43 @@ export class ZLinkActorSessionBindingRegistry<
         waiters.delete(waiter);
         if (waiters.size === 0) this.sealWaiters.delete(actorId);
       };
-      timer = setTimeout(() => {
-        removeWaiter();
-        rejectWaiter(createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-          `Actor '${actorId}' session seal was not released within the relocation seal timeout.`,
-          true
-        ));
-      }, this.sealWaitTimeoutMs);
+      timer = startOutsideStateLane(() => setTimeout(() => {
+        this.lane.tryPost(() => {
+          removeWaiter();
+          rejectWaiter(createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+            `Actor '${actorId}' session seal was not released within the relocation seal timeout.`,
+            true
+          ));
+        });
+      }, this.sealWaitTimeoutMs));
       timer.unref?.();
       const onAbort = () => {
-        removeWaiter();
-        rejectWaiter(signal?.reason ?? createAbortError());
+        this.lane.tryPost(() => {
+          removeWaiter();
+          rejectWaiter(signal?.reason ?? createAbortError());
+        });
       };
       if (signal === undefined) return;
       if (signal.aborted) {
         onAbort();
         return;
       }
-      signal.addEventListener('abort', onAbort, { once: true });
+      startOutsideStateLane(() => signal.addEventListener('abort', onAbort, { once: true }));
     });
   }
 
   private async waitForActiveFrames(actorId: string, signal?: AbortSignal): Promise<void> {
-    const route = this.requireRoute(actorId);
-    if (route.activeFrames.count === 0) return;
-    await new Promise<void>((resolve, reject) => {
+    const prepared = await this.lane.run(() => ({
+      wait: this.waitForActiveFramesCore(actorId, signal)
+    }));
+    await prepared.wait;
+  }
+
+  private waitForActiveFramesCore(actorId: string, signal?: AbortSignal): Promise<void> {
+    const route = this.requireRouteCore(actorId);
+    if (route.activeFrames.count === 0) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
       const waiters = this.activeFrameWaiters.get(actorId) ?? new Set();
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1032,28 +1313,32 @@ export class ZLinkActorSessionBindingRegistry<
         }
       };
       const onAbort = () => {
-        waiters.delete(waiter);
-        if (waiters.size === 0) this.activeFrameWaiters.delete(actorId);
-        waiter.reject(signal?.reason ?? createAbortError());
+        this.lane.tryPost(() => {
+          waiters.delete(waiter);
+          if (waiters.size === 0) this.activeFrameWaiters.delete(actorId);
+          waiter.reject(signal?.reason ?? createAbortError());
+        });
       };
       waiters.add(waiter);
       this.activeFrameWaiters.set(actorId, waiters);
       //  Spec 48:205 — transport/deadline limits keep applying during
       //  relocation: the sealing side must not wait forever for active
       //  frames that themselves may be waiting on this relocation.
-      timer = setTimeout(() => {
-        waiters.delete(waiter);
-        if (waiters.size === 0) this.activeFrameWaiters.delete(actorId);
-        waiter.reject(createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-          `Actor '${actorId}' session seal timed out waiting for active frames.`,
-          true
-        ));
-      }, this.sealWaitTimeoutMs);
+      timer = startOutsideStateLane(() => setTimeout(() => {
+        this.lane.tryPost(() => {
+          waiters.delete(waiter);
+          if (waiters.size === 0) this.activeFrameWaiters.delete(actorId);
+          waiter.reject(createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+            `Actor '${actorId}' session seal timed out waiting for active frames.`,
+            true
+          ));
+        });
+      }, this.sealWaitTimeoutMs));
       timer.unref?.();
       if (signal === undefined) return;
       if (signal.aborted) onAbort();
-      else signal.addEventListener('abort', onAbort, { once: true });
+      else startOutsideStateLane(() => signal.addEventListener('abort', onAbort, { once: true }));
     });
   }
 
@@ -1073,31 +1358,44 @@ export class ZLinkActorSessionBindingRegistry<
 
   private startOutboundDrain(queue: ZLinkActorSessionRelocationQueue): void {
     if (queue.drainPromise !== undefined) return;
-    const drain = Promise.resolve().then(async () => {
+    const drain = startOutsideStateLane(async () => {
       for (;;) {
-        const entry = queue.outbound.at(0);
-        if (entry === undefined || !entry.released) return;
-        if (entry.settled) {
-          queue.outbound.shift();
-          continue;
-        }
+        const entry = await this.lane.run(() => {
+          const current = queue.outbound.at(0);
+          if (current === undefined || !current.released) return undefined;
+          if (current.settled) {
+            queue.outbound.shift();
+            return null;
+          }
+          return current;
+        });
+        if (entry === undefined) return;
+        if (entry === null) continue;
         try {
           const delivered = await entry.operation.deliver();
-          if (delivered) this.settleOutbound(queue, entry);
-          else this.failOutbound(
-            queue,
-            entry,
-            new Error(`Actor '${queue.actorId}' retained Session outbound delivery was rejected.`)
-          );
+          await this.lane.run(() => {
+            if (delivered) this.settleOutbound(queue, entry);
+            else this.failOutbound(
+              queue,
+              entry,
+              new Error(`Actor '${queue.actorId}' retained Session outbound delivery was rejected.`)
+            );
+            if (queue.outbound[0] === entry) queue.outbound.shift();
+          });
         } catch (error) {
-          this.failOutbound(queue, entry, error);
+          await this.lane.run(() => {
+            this.failOutbound(queue, entry, error);
+            if (queue.outbound[0] === entry) queue.outbound.shift();
+          });
         }
-        if (queue.outbound[0] === entry) queue.outbound.shift();
       }
-    }).finally(() => {
-      if (queue.drainPromise === drain) queue.drainPromise = undefined;
-      if (queue.outbound[0]?.released === true) this.startOutboundDrain(queue);
-      else this.deleteEmptyRelocationQueue(queue);
+    });
+    startOutsideStateLane(() => {
+      void drain.finally(async () => await this.lane.run(() => {
+        if (queue.drainPromise === drain) queue.drainPromise = undefined;
+        if (queue.outbound[0]?.released === true) this.startOutboundDrain(queue);
+        else this.deleteEmptyRelocationQueue(queue);
+      }));
     });
     queue.drainPromise = drain;
   }
@@ -1251,6 +1549,10 @@ function assertRelocationClaim(
       true
     );
   }
+}
+
+function startOutsideStateLane<T>(work: () => T): T {
+  return detachedStateLaneResource.runInAsyncScope(work);
 }
 
 function matchesRelocationSourceProof(

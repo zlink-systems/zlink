@@ -163,13 +163,13 @@ record, not to demonstrate relocation.
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Find the current owner per player. | A global Spot message | Resolves the current Ready authority by SpotId. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
-| Prepare a missing player owner on the first event. | Instance intent | Only the first message that explicitly specifies a missing Instance Spot starts cold activation. [Interaction Model §7](../../spec/server/03-interaction-model.en.md#7-spot-and-actor) |
-| Process one player's events in order. | The Spot execution gate | Uses the owner turn as the Application state-change boundary. [Async Execution Policy](../../spec/server/05-async-execution-policy.en.md) |
-| Keep the connection and push. | STREAM Session and bound session | The binding route points at the current connection. [STREAM Session](../../spec/server/19-stream-session.en.md) |
-| Prepare a session actor and Spot. | The public Actor/Spot manager | Uses the global ID and stable type; the caller doesn't choose the owner NodeRid. [Framework API](../../spec/server/06-framework-api.en.md) |
+| Find the current owner per player. | A global Spot message | Resolves the current Ready authority by SpotId. [Interaction Model §2](../../spec/server/00-foundation/04-interaction-model.en.md) |
+| Prepare a missing player owner on the first event. | Instance intent | Only the first message that explicitly specifies a missing Instance Spot starts cold activation. [Interaction Model §7](../../spec/server/00-foundation/04-interaction-model.en.md#7-spot-and-actor) |
+| Process one player's events in order. | The Spot execution gate | Uses the owner turn as the Application state-change boundary. [Async Execution Policy](../../spec/server/01-execution/README.en.md) |
+| Keep the connection and push. | STREAM Session and bound session | The binding route points at the current connection. [STREAM Session](../../spec/server/04-session/01-stream-session.en.md) |
+| Prepare a session actor and Spot. | The public Actor/Spot manager | Uses the global ID and stable type; the caller doesn't choose the owner NodeRid. [Framework API](../../spec/server/00-foundation/06-framework-api.en.md) |
 | Correct progress. | Application store and an explicit request | The Framework provides no event-sourcing or reconcile policy. |
-| Define the owner failure scope. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failover Policy §4.4](../../spec/server/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
+| Define the owner failure scope. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failover Policy §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
 
 Instance intent is the choice for preparing the first owner when the SpotId is Missing. It's not a
 feature that automatically resubmits a failed message to a different node after a Ready owner
@@ -535,10 +535,94 @@ fixed sleep is not used as a success criterion.
 gamequest=completed
 ```
 
-The per-language runner checks the API/mission server evidence together with the common completion
-marker above. A marker some specific runner outputs separately, like rehydrate or scale-out, uses
-only that language runner's actual output, and is not treated as part of the common message
-contract.
+The per-language runner checks every piece of evidence fixed by §10.1 together with the common
+completion marker above.
+
+### 10.1 Evidence the Runner Confirms
+
+The runner matches the strings in the tables below verbatim. These strings are not a per-language
+choice. All five implementations emit the same string the same number of times; changing the
+wording means changing this table first. Node names are fixed as `api-a`, `api-b`, `mission-a`, and
+`mission-b`.
+
+**Evidence must be a string the sample owns.** Lines the framework prints — runtime readiness logs,
+the message-flow tracer, structured-trace projections, process startup boilerplate — are not success
+criteria. They change for framework reasons, and when they do, the sample runner breaks silently.
+Reading them for diagnosis is fine; deciding completion by them is not.
+
+Readiness is confirmed before the client starts.
+
+| Fact confirmed | Log | Emitting node |
+| --- | --- | --- |
+| The Mission node's Instance factory is ready | `gamequest-ready kind=instance-factory node=<NodeId>` | `mission-a`, `mission-b` |
+| The Api node's STREAM endpoint is ready | `gamequest-ready kind=stream node=<NodeId>` | `api-a`, `api-b` |
+| The Api node acquired a route to the Mission spot mesh | `gamequest-ready kind=spot-route node=<NodeId> mesh=<MeshName>` | `api-a`, `api-b` |
+
+**Do not start the client on the strength of the STREAM endpoint alone.** `kind=stream` proves
+only that the endpoint is listening — if the Api node has not yet acquired a route to the Mission
+spot mesh at that moment, the first `JoinSessionReq` dies before remote actor creation completes.
+The third row covers that window. Without it, an implementation whose routes converge quickly
+passes by luck while a slower one fails, and papering over that difference with a fixed sleep is
+exactly what §10 forbids.
+
+Server evidence is confirmed after the client scenario finishes.
+
+| Fact confirmed | Log | Exact count |
+| --- | --- | --- |
+| The Api node routed a client event | `gamequest-api event-routed player=<PlayerId>` | at least 4 across both Api node logs |
+| The Mission node processed an event | `gamequest-mission processed player=<PlayerId> quest=<QuestId>` | at least 4 across both Mission node logs |
+| Reconcile produced a result (§9-7) | `gamequest-mission reconciled player=<PlayerId> quest=<QuestId>` | 1 **per player** that a reconcile was run for |
+| A new generation replayed after owner close (§9-8) | `gamequest-mission replayed player=<PlayerId> generation=<N>` | 1 |
+| The next call after killing the Ready owner was `Unavailable` (§9-9) | `gamequest-owner unavailable player=<PlayerId>` | 1 (**emitted by the surviving Api node**) |
+| No automatic replacement handler ran (§9-9) | `gamequest-owner replacement-handler-invoked player=<PlayerId>` | 0 (**counted across both Mission node logs**) |
+
+**The first two rows are counted across both node logs, against an exact lower bound.** Which node
+handles what is not a confirmed fact — an actor send handler runs on **the node where the actor
+lives**, not where the stream arrived, and placement is the Framework's choice. "At least one in
+each node separately" is therefore unsatisfiable.
+
+Still, **do not pass both log files to a single search so that "a match in either one" passes** —
+that is exactly what `grep -q` with two files does. Sum the matches and compare against the bound,
+so that losing an entire flow is caught.
+
+The `unavailable` row **cannot be emitted by the Mission node that was killed.** The surviving Api
+node, which receives the failed Spot send, emits it. The `replacement-handler-invoked` zero count is
+only meaningful when it is counted **across both Mission logs** and carries `player=` — otherwise it
+cannot distinguish "no replacement ran" from "the runner looked at the wrong file."
+
+**The last three rows require actually creating those situations.**
+
+- §9-8 holds only if the next intent runs after `ClosePlayerQuestMsg`. .NET, Java, and Kotlin can
+  already send that message through their Mission self-check endpoint. Node uses
+  `ClosePlayerQuestReq/Res` in the same place, and C++ has the handler but exposes no path to it from
+  the client — both are **sample-contract fixes and need no framework change.**
+- §9-9 holds only if the next gameplay call runs after the Ready owner process is killed. This needs
+  no new endpoint or message type — the existing `KillMonsterReq` suffices — but it does require
+  **runner stage control: read an owner-ready marker, identify and kill that Mission process, then
+  release the client to make the next call.** §9-9 is an item §11 requires as a completion criterion.
+
+Without those stages these rows cannot pass — and they should not.
+
+There are two completion markers, both printed by the client.
+
+| Marker | Meaning |
+| --- | --- |
+| `gamequest=completed` | the whole §9 client self-check passed |
+| `gamequest-server-evidence=completed` | server-evidence verification passed |
+
+**Neither marker substitutes for the other.** Do not print one and omit the other; the runner
+confirms both directly. A client process exit code or a browser verdict does not stand in for them.
+
+Stages only one language used to run, like rehydrate or scale-out, get no marker of their own. The
+facts they prove are already carried by the `replayed` and `processed` rows above.
+
+Log waits poll every `100 ms` for at most `300` attempts. This budget applies to readiness and to
+evidence alike, and **`.sh` and `.ps1` use the same value.** Reading once without waiting, or
+reading after a fixed sleep, is not allowed. All five languages ship both a `.sh` and a `.ps1` — today
+C++ and Java have no `.ps1`.
+
+Once every row passes, the runner prints `gamequest-placement=completed` last. If any row fails, it
+does not print this marker.
 
 ## 11. Completion Criteria
 
@@ -555,4 +639,5 @@ contract.
 - After reconnect, session binding is refreshed, but player owner state is kept.
 - Only the Framework public API and the default typed JSON codec are used, without adding raw
   frames, private runtime, or a per-message codec registry.
-- The runner performs build, readiness, self-check, evidence, and cleanup.
+- The runner performs build, readiness, self-check, and cleanup, and passes every row of the §10.1
+  table down to the string and the count.

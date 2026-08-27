@@ -12,7 +12,7 @@ internal sealed class ZLinkSessionActorCoordinator(
 {
     private readonly ZLinkSessionActorBindingRegistry _bindings =
         new(runtime);
-    private readonly object _actorOperationGatesLock = new();
+    private readonly ZLinkStateLane _actorOperationGatesLane = new();
     private readonly Dictionary<ZLinkActorId, ActorOperationGate> _actorOperationGates = [];
 
     public IReadOnlyCollection<IZLinkSessionActor> BoundActors => _bindings.BoundActors;
@@ -53,21 +53,13 @@ internal sealed class ZLinkSessionActorCoordinator(
         var actorId = ZLinkActorId.FromBoundary(
             actor.ActorId,
             nameof(actor));
-        ActorOperationGate operation;
-        lock (_actorOperationGatesLock)
-        {
-            if (!_actorOperationGates.TryGetValue(actorId, out operation!))
-            {
-                operation = new ActorOperationGate();
-                _actorOperationGates.Add(actorId, operation);
-            }
-            operation.Users++;
-        }
-        var acquired = false;
+        var operation = await _actorOperationGatesLane.RunAsync(() =>
+                AcquireActorOperationGate(actorId))
+            .ConfigureAwait(false);
+        ActorOperationGate.Lease? lease = null;
         try
         {
-            await operation.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            acquired = true;
+            lease = await operation.AcquireAsync(cancellationToken).ConfigureAwait(false);
             return await BindActorWithinGateAsync(
                     context,
                     actor,
@@ -77,23 +69,136 @@ internal sealed class ZLinkSessionActorCoordinator(
         }
         finally
         {
-            if (acquired)
-                operation.Gate.Release();
-            lock (_actorOperationGatesLock)
-            {
-                operation.Users--;
-                if (operation.Users == 0
-                    && _actorOperationGates.Remove(actorId, out var removed)
-                    && ReferenceEquals(removed, operation))
-                    operation.Gate.Dispose();
-            }
+            lease?.Dispose();
+            await _actorOperationGatesLane.RunAsync(() =>
+                    ReleaseActorOperationGate(actorId, operation))
+                .ConfigureAwait(false);
         }
+    }
+
+    private ActorOperationGate AcquireActorOperationGate(ZLinkActorId actorId)
+    {
+        if (!_actorOperationGates.TryGetValue(actorId, out var operation))
+        {
+            operation = new ActorOperationGate();
+            _actorOperationGates.Add(actorId, operation);
+        }
+        operation.Users++;
+        return operation;
+    }
+
+    private void ReleaseActorOperationGate(
+        ZLinkActorId actorId,
+        ActorOperationGate operation)
+    {
+        operation.Users--;
+        if (operation.Users == 0
+            && _actorOperationGates.Remove(actorId, out var removed)
+            && ReferenceEquals(removed, operation))
+            operation.Dispose();
     }
 
     private sealed class ActorOperationGate
     {
-        internal SemaphoreSlim Gate { get; } = new(1, 1);
+        private readonly ZLinkStateLane _lane = new();
+        private readonly LinkedList<Waiter> _waiters = new();
+        private bool _held;
+
         internal int Users { get; set; }
+
+        internal async ValueTask<Lease> AcquireAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var waiter = new Waiter(cancellationToken);
+            using var registration = cancellationToken.UnsafeRegister(
+                static state =>
+                {
+                    var cancellation = ((ActorOperationGate Gate, Waiter Waiter))state!;
+                    cancellation.Gate.Cancel(cancellation.Waiter);
+                },
+                (this, waiter));
+            await _lane.RunAsync(() => Enqueue(waiter)).ConfigureAwait(false);
+            return await waiter.Completion.Task.ConfigureAwait(false);
+        }
+
+        internal void Dispose() =>
+            AwaitStateLane(_lane.DisposeAsync());
+
+        private void Enqueue(Waiter waiter)
+        {
+            if (waiter.Completion.Task.IsCompleted)
+                return;
+            if (!_held)
+            {
+                _held = true;
+                waiter.Grant(this);
+                return;
+            }
+
+            waiter.Node = _waiters.AddLast(waiter);
+        }
+
+        private void Cancel(Waiter waiter)
+        {
+            _lane.TryPost(() =>
+            {
+                if (waiter.Node is { } node)
+                {
+                    _waiters.Remove(node);
+                    waiter.Node = null;
+                }
+                waiter.Cancel();
+
+                return ValueTask.CompletedTask;
+            });
+        }
+
+        private void Release()
+        {
+            AwaitStateLane(_lane.RunAsync(() =>
+            {
+                while (_waiters.First is { } node)
+                {
+                    var next = node.Value;
+                    _waiters.RemoveFirst();
+                    next.Node = null;
+                    if (next.Completion.Task.IsCompleted)
+                        continue;
+                    next.Grant(this);
+                    return;
+                }
+
+                _held = false;
+            }));
+        }
+
+        private static void AwaitStateLane(ValueTask operation) =>
+            operation.GetAwaiter().GetResult();
+
+        internal sealed class Lease(ActorOperationGate owner) : IDisposable
+        {
+            private ActorOperationGate? _owner = owner;
+
+            public void Dispose() =>
+                Interlocked.Exchange(ref _owner, null)?.Release();
+        }
+
+        private sealed class Waiter(CancellationToken cancellationToken)
+        {
+            internal TaskCompletionSource<Lease> Completion { get; } = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            internal LinkedListNode<Waiter>? Node { get; set; }
+
+            internal void Grant(ActorOperationGate owner)
+            {
+                Completion.TrySetResult(new Lease(owner));
+            }
+
+            internal void Cancel()
+            {
+                Completion.TrySetCanceled(cancellationToken);
+            }
+        }
     }
 
     private async ValueTask<IZLinkSessionActor> BindActorWithinGateAsync(

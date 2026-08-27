@@ -52,6 +52,8 @@ public final class ZLinkFrameworkRegistration {
     private final ExecutorService serialExecutor =
         Executors.newVirtualThreadPerTaskExecutor();
     private Duration defaultRequestTimeout = Duration.ofSeconds(30);
+    private Duration sessionReplacementCallbackTimeout =
+        Duration.ofMillis(30_000);
     private Duration messageFollowDuration = Duration.ofSeconds(30);
     private ZLinkRelocationStore relocationStore;
     private long applicationVersion;
@@ -63,6 +65,15 @@ public final class ZLinkFrameworkRegistration {
 
     void setDefaultRequestTimeout(Duration defaultRequestTimeout) {
         this.defaultRequestTimeout = defaultRequestTimeout;
+    }
+
+    public Duration sessionReplacementCallbackTimeout() {
+        return sessionReplacementCallbackTimeout;
+    }
+
+    void setSessionReplacementCallbackTimeout(
+        Duration sessionReplacementCallbackTimeout) {
+        this.sessionReplacementCallbackTimeout = sessionReplacementCallbackTimeout;
     }
 
     public Duration messageFollowDuration() {
@@ -285,8 +296,15 @@ public final class ZLinkFrameworkRegistration {
             throw new ZLinkConfigurationException(
                 "Recreate or Snapshot relocation policy requires a Relocation Store");
         }
+        Set<String> streamSessionTypeNames = new LinkedHashSet<>();
         for (StreamNodeRegistration streamNode : streamNodes) {
             streamNode.validate(meshNodes);
+            String sessionTypeName = streamNode.sessionType().getName();
+            if (!streamSessionTypeNames.add(sessionTypeName)) {
+                throw new ZLinkConfigurationException(
+                    "stream session type is registered by multiple nodes: "
+                        + sessionTypeName);
+            }
         }
     }
 

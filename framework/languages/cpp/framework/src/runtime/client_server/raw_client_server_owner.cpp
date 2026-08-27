@@ -183,7 +183,7 @@ raw_client_server_server_t::~raw_client_server_server_t () noexcept
 
 void raw_client_server_server_t::start ()
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([this] {
     if (_port) {
         return;
     }
@@ -248,6 +248,7 @@ void raw_client_server_server_t::start ()
     _router = std::move (router);
     _receive_flow_registration =
       std::move (receive_flow_registration);
+    }).get ();
 }
 
 void raw_client_server_server_t::close () noexcept
@@ -258,8 +259,9 @@ void raw_client_server_server_t::close () noexcept
     std::unique_ptr<zlink::socket_monitor_t> monitor;
     application_job_queue_t::receive_flow_registration_t
       receive_flow_registration;
-    {
-        std::lock_guard lock (_mutex);
+    try {
+        _lane.run ([this, &port, &router, &monitor_poller, &monitor,
+                    &receive_flow_registration] {
         if (_closed) {
             return;
         }
@@ -270,6 +272,10 @@ void raw_client_server_server_t::close () noexcept
         monitor = std::move (_monitor);
         receive_flow_registration =
           std::move (_receive_flow_registration);
+        }).get ();
+    }
+    catch (...) {
+        return;
     }
     receive_flow_registration.close ();
     _mailbox.close ();
@@ -295,38 +301,41 @@ void raw_client_server_server_t::close () noexcept
 
 std::string raw_client_server_server_t::endpoint () const
 {
-    std::lock_guard lock (_mutex);
-    return _options.descriptor.advertised_endpoint;
+    return _lane.run ([this] {
+        return _options.descriptor.advertised_endpoint;
+    }).get ();
 }
 
 protocol::client_server_server_admission_t
 raw_client_server_server_t::descriptor () const
 {
-    std::lock_guard lock (_mutex);
-    return _options.descriptor;
+    return _lane.run ([this] {
+        return _options.descriptor;
+    }).get ();
 }
 
 void raw_client_server_server_t::update_descriptor (
   protocol::client_server_server_admission_t descriptor)
 {
-    std::lock_guard lock (_mutex);
-    if (descriptor.channel_name
-          != _options.descriptor.channel_name
-        || descriptor.server_routing_id
-             != _options.descriptor.server_routing_id
-        || descriptor.lifecycle_generation
-             != _options.descriptor.lifecycle_generation
-        || descriptor.security_identity
-             != _options.descriptor.security_identity
-        || descriptor.advertised_endpoint
-             != _options.descriptor.advertised_endpoint
-        || descriptor.descriptor_revision
-             <= _options.descriptor.descriptor_revision) {
-        throw std::invalid_argument (
-          "ClientServer descriptor update violates its immutable fence");
-    }
-    _options.descriptor = std::move (descriptor);
-    _descriptor_update_pending = true;
+    return _lane.run ([this, descriptor = std::move (descriptor)] () mutable {
+        if (descriptor.channel_name
+              != _options.descriptor.channel_name
+            || descriptor.server_routing_id
+                 != _options.descriptor.server_routing_id
+            || descriptor.lifecycle_generation
+                 != _options.descriptor.lifecycle_generation
+            || descriptor.security_identity
+                 != _options.descriptor.security_identity
+            || descriptor.advertised_endpoint
+                 != _options.descriptor.advertised_endpoint
+            || descriptor.descriptor_revision
+                 <= _options.descriptor.descriptor_revision) {
+            throw std::invalid_argument (
+              "ClientServer descriptor update violates its immutable fence");
+        }
+        _options.descriptor = std::move (descriptor);
+        _descriptor_update_pending = true;
+    }).get ();
 }
 
 mesh::service_mailbox_t &
@@ -341,14 +350,12 @@ std::size_t raw_client_server_server_t::drain_monitor_events (
     static_cast<void> (now);
     std::size_t count = 0;
     for (;;) {
-        std::optional<zlink::monitor_event_t> event;
-        {
-            std::lock_guard lock (_mutex);
+        const auto event = _lane.run ([this] {
             if (!_monitor || !_monitor->valid ()) {
-                return count;
+                return std::optional<zlink::monitor_event_t>{};
             }
             if (!_monitor_poller) {
-                return count;
+                return std::optional<zlink::monitor_event_t>{};
             }
             zlink::poll_event_t readiness;
             try {
@@ -359,14 +366,14 @@ std::size_t raw_client_server_server_t::drain_monitor_events (
                     || (static_cast<short> (readiness.revents)
                         & static_cast<short> (zlink::poll_event_flag_t::pollin))
                          == 0) {
-                    return count;
+                    return std::optional<zlink::monitor_event_t>{};
                 }
             }
             catch (...) {
-                return count;
+                return std::optional<zlink::monitor_event_t>{};
             }
-            event = _monitor->recv (zlink::recv_flags_t::dontwait);
-        }
+            return _monitor->recv (zlink::recv_flags_t::dontwait);
+        }).get ();
         if (!event) {
             return count;
         }
@@ -395,11 +402,12 @@ std::size_t raw_client_server_server_t::drain_monitor_events (
                   return "channel=" + _options.descriptor.channel_name
                          + " client=" + routing_id_label (client);
               });
-            std::lock_guard lock (_mutex);
-            // The monitor value is a ready-count, not a physical connection
-            // identity.  The route id is the stable identity available at
-            // this framework boundary.
-            _connections.insert_or_assign (client, client);
+            _lane.run ([this, &client] {
+                // The monitor value is a ready-count, not a physical connection
+                // identity.  The route id is the stable identity available at
+                // this framework boundary.
+                _connections.insert_or_assign (client, client);
+            }).get ();
         } else if (event->event == zlink::monitor_event::disconnected) {
             trace_client_server_lazy (
               "server-disconnected",
@@ -407,11 +415,12 @@ std::size_t raw_client_server_server_t::drain_monitor_events (
                   return "channel=" + _options.descriptor.channel_name
                          + " client=" + routing_id_label (client);
               });
-            {
-                std::lock_guard lock (_mutex);
+            _lane.run ([this, &client] {
                 _connections.erase (client);
-            }
-            (void) _liveness.disconnect (client, client);
+            }).get ();
+            (void) _lane.run ([this, &client] {
+                return _liveness.disconnect (client, client);
+            }).get ();
         }
     }
 }
@@ -420,32 +429,35 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
   mesh::service_liveness_registry_t::clock_t::time_point now,
   std::shared_ptr<application_job_queue_t::permit_t> application_permit)
 {
-    _last_pump_bytes = 0;
-    std::shared_ptr<detail::backend::raw_route_port_t> port;
-    {
-        std::lock_guard lock (_mutex);
-        port = _port;
-    }
+    const auto port = _lane.run ([this] {
+        _last_pump_bytes = 0;
+        return _port;
+    }).get ();
     if (!port) {
         co_return client_server_pump_result_t::no_data;
     }
-    if (_pending_received) {
+    const auto pending = _lane.run ([this] {
+        if (!_pending_received)
+            return std::optional<client_server_pump_result_t>{};
         for (const auto &part : _pending_received->parts)
             _last_pump_bytes += part.size ();
-        if (!_mailbox.try_enqueue (
-              std::move (*_pending_received))) {
-            co_return client_server_pump_result_t::backpressured;
+        if (!_mailbox.try_enqueue (std::move (*_pending_received))) {
+            return std::optional{client_server_pump_result_t::backpressured};
         }
         _pending_received.reset ();
-        co_return client_server_pump_result_t::application;
-    }
+        return std::optional{client_server_pump_result_t::application};
+    }).get ();
+    if (pending)
+        co_return *pending;
     std::optional<detail::backend::raw_received_t> received;
     received = port->try_receive ();
     if (!received) {
         co_return client_server_pump_result_t::no_data;
     }
-    for (const auto &part : received->parts)
-        _last_pump_bytes += part.size ();
+    _lane.run ([this, &received] {
+        for (const auto &part : received->parts)
+            _last_pump_bytes += part.size ();
+    }).get ();
     if (received->parts.empty ()) {
         co_return client_server_pump_result_t::protocol_error;
     }
@@ -487,14 +499,13 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                 (void) port->reply (*received, reject_message);
                 co_return client_server_pump_result_t::infrastructure;
             }
-            {
-                std::lock_guard lock (_mutex);
+            _lane.run ([this, &received, now] {
                 _connections.insert_or_assign (
                   received->source_routing_id,
                   received->source_routing_id);
-            }
-            _liveness.admit (
-              received->source_routing_id, received->source_routing_id, now);
+                _liveness.admit (received->source_routing_id,
+                                 received->source_routing_id, now);
+            }).get ();
             const detail::backend::raw_message_t admit_message{
               protocol::encode_client_server_server_admission (
                 protocol::command::admit, _options.descriptor)};
@@ -513,14 +524,13 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
               });
             co_return client_server_pump_result_t::infrastructure;
         }
-        std::optional<std::vector<std::uint8_t>> connection;
-        {
-            std::lock_guard lock (_mutex);
+        const auto connection = _lane.run ([this, &received] {
             const auto found =
               _connections.find (received->source_routing_id);
             if (found != _connections.end ())
-                connection = found->second;
-        }
+                return std::optional<std::vector<std::uint8_t>>{found->second};
+            return std::optional<std::vector<std::uint8_t>>{};
+        }).get ();
         if (!connection)
             co_return client_server_pump_result_t::protocol_error;
         if (header.kind == protocol::command::livenessProbe
@@ -531,9 +541,12 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
             const auto liveness =
               protocol::decode_liveness (received->parts.front ());
             if (liveness.kind == protocol::command::livenessProbe) {
-                const auto acknowledged = _liveness.acknowledge_probe (
-                  received->source_routing_id, *connection,
-                  liveness.probe_id);
+                const auto acknowledged = _lane.run ([this, &received, &connection,
+                                                       &liveness] {
+                    return _liveness.acknowledge_probe (
+                      received->source_routing_id, *connection,
+                      liveness.probe_id);
+                }).get ();
                 const detail::backend::raw_message_t ack_message{
                   protocol::encode_liveness (
                     protocol::command::livenessAck,
@@ -553,9 +566,11 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                     co_return client_server_pump_result_t::protocol_error;
                 }
             } else {
-                (void) _liveness.acknowledge (
-                  received->source_routing_id, *connection,
-                  liveness.probe_id, now);
+                (void) _lane.run ([this, &received, &connection, &liveness, now] {
+                    return _liveness.acknowledge (
+                      received->source_routing_id, *connection,
+                      liveness.probe_id, now);
+                }).get ();
             }
             co_return client_server_pump_result_t::infrastructure;
         }
@@ -576,20 +591,25 @@ raw_client_server_server_t::enqueue_application_record (
     if (received.parts.size () != 2) {
         return client_server_pump_result_t::protocol_error;
     }
-    {
-        std::lock_guard lock (_mutex);
+    const auto accepted = _lane.run ([this, &received] {
         if (_connections.find (received.source_routing_id)
             == _connections.end ()) {
-            return client_server_pump_result_t::protocol_error;
+            return false;
         }
-    }
+        return true;
+    }).get ();
+    if (!accepted)
+        return client_server_pump_result_t::protocol_error;
     const auto header = messaging::envelope_codec_t{}.decode_header (
       zlink::message_t::from (received.parts.front ()), false);
     if (!header) {
         return client_server_pump_result_t::protocol_error;
     }
     const auto &envelope = header.value ();
-    if (envelope.channel_name != _options.descriptor.channel_name) {
+    const auto matches_channel = _lane.run ([this, &envelope] {
+        return envelope.channel_name == _options.descriptor.channel_name;
+    }).get ();
+    if (!matches_channel) {
         return client_server_pump_result_t::protocol_error;
     }
     if (envelope.kind == messaging::message_kind_t::request) {
@@ -631,60 +651,69 @@ raw_client_server_server_t::enqueue_application_record (
           permit->release_for_handler_entry ();
           permit.reset ();
       }};
-    if (!_mailbox.try_enqueue (std::move (record))) {
-        _pending_received.emplace (std::move (record));
-        return client_server_pump_result_t::backpressured;
-    }
-    return client_server_pump_result_t::application;
+    return _lane.run ([this, &record] {
+        if (!_mailbox.try_enqueue (std::move (record))) {
+            _pending_received.emplace (std::move (record));
+            return client_server_pump_result_t::backpressured;
+        }
+        return client_server_pump_result_t::application;
+    }).get ();
 }
 
-bool raw_client_server_server_t::has_pending_application () const noexcept
+bool raw_client_server_server_t::has_pending_application () const
 {
-    return _pending_received.has_value ();
+    return _lane.run ([this] { return _pending_received.has_value (); }).get ();
+}
+
+std::size_t raw_client_server_server_t::last_pump_bytes () const
+{
+    return _lane.run ([this] { return _last_pump_bytes; }).get ();
 }
 
 task_t<mesh::service_liveness_tick_t>
 raw_client_server_server_t::tick_liveness (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    auto result = _liveness.tick (now);
-    std::shared_ptr<detail::backend::raw_route_port_t> port;
-    std::optional<protocol::client_server_server_admission_t> update;
-    std::vector<std::vector<std::uint8_t>> clients;
-    {
-        std::lock_guard lock (_mutex);
-        port = _port;
+    auto prepared = _lane.run ([this, now] {
+        struct prepared_t
+        {
+            mesh::service_liveness_tick_t result;
+            std::shared_ptr<detail::backend::raw_route_port_t> port;
+            std::optional<protocol::client_server_server_admission_t> update;
+            std::vector<std::vector<std::uint8_t>> clients;
+        } value{_liveness.tick (now), _port, std::nullopt, {}};
         if (_descriptor_update_pending) {
-            update = _options.descriptor;
-            clients.reserve (_connections.size ());
+            value.update = _options.descriptor;
+            value.clients.reserve (_connections.size ());
             for (const auto &[client, _] : _connections)
-                clients.push_back (client);
+                value.clients.push_back (client);
             _descriptor_update_pending = false;
         }
-    }
-    if (port) {
-        if (update) {
+        return value;
+    }).get ();
+    if (prepared.port) {
+        if (prepared.update) {
             const detail::backend::raw_message_t update_message{
               protocol::encode_client_server_server_admission (
-                protocol::command::update, *update)};
-            for (const auto &client : clients)
-                (void) co_await port->send (client, update_message);
+                protocol::command::update, *prepared.update)};
+            for (const auto &client : prepared.clients)
+                (void) co_await prepared.port->send (client, update_message);
         }
-        for (const auto &probe : result.probes) {
+        for (const auto &probe : prepared.result.probes) {
             const detail::backend::raw_message_t probe_message{
               protocol::encode_liveness (
                 protocol::command::livenessProbe, probe.probe_id)};
-            (void) co_await port->send (
+            (void) co_await prepared.port->send (
               probe.node_routing_id, probe_message);
         }
     }
-    co_return result;
+    co_return prepared.result;
 }
 
 std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
 raw_client_server_server_t::next_liveness_activity () const
 {
-    return _liveness.next_activity ();
+    return _lane.run ([this] { return _liveness.next_activity (); }).get ();
 }
 
 bool raw_client_server_server_t::reply (
@@ -702,11 +731,7 @@ bool raw_client_server_server_t::reply (
         throw std::invalid_argument (
           "ClientServer reply requires a decodable request envelope");
     }
-    std::shared_ptr<detail::backend::raw_route_port_t> port;
-    {
-        std::lock_guard lock (_mutex);
-        port = _port;
-    }
+    const auto port = _lane.run ([this] { return _port; }).get ();
     if (!port)
         return false;
     zlink::framework::detail::channel_reply_writer_t writer;
@@ -752,11 +777,7 @@ bool raw_client_server_server_t::reply (
         throw std::invalid_argument (
           "ClientServer reply requires a decodable request envelope");
     }
-    std::shared_ptr<detail::backend::raw_route_port_t> port;
-    {
-        std::lock_guard lock (_mutex);
-        port = _port;
-    }
+    const auto port = _lane.run ([this] { return _port; }).get ();
     if (!port)
         return false;
     zlink::framework::detail::channel_reply_writer_t writer;
@@ -801,7 +822,8 @@ struct raw_client_server_client_t::control_reply_state_t
         detail::backend::raw_request_completion_t completion;
     };
 
-    std::mutex mutex;
+    runtime::offload_executor_t lane_executor;
+    runtime::state_lane_t lane{lane_executor};
     bool admission_in_flight = false;
     std::optional<parked_reply_t> admission;
     std::vector<std::pair<std::uint64_t, parked_reply_t>> probes;
@@ -830,7 +852,7 @@ raw_client_server_client_t::~raw_client_server_client_t () noexcept
 
 void raw_client_server_client_t::start ()
 {
-    std::lock_guard lock (_mutex);
+    return _lane.run ([this] {
     if (_port) {
         return;
     }
@@ -881,6 +903,7 @@ void raw_client_server_client_t::start ()
     _dealer = std::move (dealer);
     _receive_flow_registration =
       std::move (receive_flow_registration);
+    }).get ();
 }
 
 void raw_client_server_client_t::close () noexcept
@@ -891,8 +914,9 @@ void raw_client_server_client_t::close () noexcept
     std::unique_ptr<zlink::socket_monitor_t> monitor;
     application_job_queue_t::receive_flow_registration_t
       receive_flow_registration;
-    {
-        std::lock_guard lock (_mutex);
+    try {
+        _lane.run ([this, &port, &dealer, &monitor_poller, &monitor,
+                    &receive_flow_registration] {
         if (_closed) {
             return;
         }
@@ -904,6 +928,10 @@ void raw_client_server_client_t::close () noexcept
         monitor = std::move (_monitor);
         receive_flow_registration =
           std::move (_receive_flow_registration);
+        }).get ();
+    }
+    catch (...) {
+        return;
     }
     receive_flow_registration.close ();
     if (port) {
@@ -926,10 +954,9 @@ void raw_client_server_client_t::close () noexcept
     dealer.reset ();
 }
 
-bool raw_client_server_client_t::ready () const noexcept
+bool raw_client_server_client_t::ready () const
 {
-    std::lock_guard lock (_mutex);
-    return _ready;
+    return _lane.run ([this] { return _ready; }).get ();
 }
 
 task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
@@ -938,10 +965,9 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
     static_cast<void> (now);
     std::size_t count = 0;
     for (;;) {
-        std::optional<zlink::monitor_event_t> event;
-        std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-        {
-            std::lock_guard lock (_mutex);
+        const auto event_and_port = _lane.run ([this] {
+            std::pair<std::optional<zlink::monitor_event_t>,
+                      std::shared_ptr<detail::backend::raw_dealer_port_t>> value;
             if (_monitor && _monitor->valid () && _monitor_poller) {
                 zlink::poll_event_t readiness;
                 bool readable = false;
@@ -959,12 +985,15 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
                 catch (...) {
                 }
                 if (readable) {
-                    event = _monitor->recv (
+                    value.first = _monitor->recv (
                       zlink::recv_flags_t::dontwait);
-                    port = _port;
+                    value.second = _port;
                 }
             }
-        }
+            return value;
+        }).get ();
+        const auto &event = event_and_port.first;
+        const auto &port = event_and_port.second;
         if (!event) {
             co_return count;
         }
@@ -991,13 +1020,12 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
                                ? std::vector<std::uint8_t>{}
                                : _options.client_routing_id);
               });
-            {
-                std::lock_guard lock (_mutex);
+            _lane.run ([this] {
                 _connection_id = liveness_connection_identity (
                   _options.expected_server);
                 ++_connection_generation;
                 _ready = false;
-            }
+            }).get ();
             if (port) {
                 //  Spec 51 §4 (ClientServer direction): hello starts as a
                 //  Core dealer request; the admit/reject decision arrives
@@ -1016,20 +1044,22 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
               });
             bool current = false;
             std::vector<std::uint8_t> connection;
-            {
-                std::lock_guard lock (_mutex);
+            current = _lane.run ([this, &connection] {
                 connection = liveness_connection_identity (
                   _options.expected_server);
-                current = _connection_id == connection;
+                const auto current = _connection_id == connection;
                 if (current) {
                     _ready = false;
                     _connection_id.clear ();
                     ++_connection_generation;
                 }
-            }
+                return current;
+            }).get ();
             if (current) {
-                (void) _liveness.disconnect (
-                  _options.expected_server.server_routing_id, connection);
+                (void) _lane.run ([this, &connection] {
+                    return _liveness.disconnect (
+                      _options.expected_server.server_routing_id, connection);
+                }).get ();
             }
         }
     }
@@ -1038,12 +1068,10 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
 task_t<client_server_pump_result_t> raw_client_server_client_t::pump_one (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    _last_pump_bytes = 0;
-    std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-    {
-        std::lock_guard lock (_mutex);
-        port = _port;
-    }
+    const auto port = _lane.run ([this] {
+        _last_pump_bytes = 0;
+        return _port;
+    }).get ();
     if (!port) {
         co_return client_server_pump_result_t::no_data;
     }
@@ -1054,8 +1082,10 @@ task_t<client_server_pump_result_t> raw_client_server_client_t::pump_one (
     if (!received) {
         co_return client_server_pump_result_t::no_data;
     }
-    for (const auto &part : *received)
-        _last_pump_bytes += part.size ();
+    _lane.run ([this, &received] {
+        for (const auto &part : *received)
+            _last_pump_bytes += part.size ();
+    }).get ();
     if (received->empty ()) {
         co_return client_server_pump_result_t::protocol_error;
     }
@@ -1071,10 +1101,9 @@ task_t<client_server_pump_result_t> raw_client_server_client_t::pump_one (
         }
         if (header.kind == protocol::command::reject) {
             (void) protocol::decode_reject (received->front ());
-            {
-                std::lock_guard lock (_mutex);
+            _lane.run ([this] {
                 _ready = false;
-            }
+            }).get ();
             co_return client_server_pump_result_t::infrastructure;
         }
         if (header.kind == protocol::command::livenessProbe
@@ -1082,17 +1111,17 @@ task_t<client_server_pump_result_t> raw_client_server_client_t::pump_one (
             if (received->size () != 1) {
                 co_return client_server_pump_result_t::protocol_error;
             }
-            std::vector<std::uint8_t> connection;
-            {
-                std::lock_guard lock (_mutex);
-                connection = _connection_id;
-            }
+            const auto connection = _lane.run ([this] {
+                return _connection_id;
+            }).get ();
             const auto liveness =
               protocol::decode_liveness (received->front ());
             if (liveness.kind == protocol::command::livenessProbe) {
-                const auto acknowledged = _liveness.acknowledge_probe (
-                  _options.expected_server.server_routing_id,
-                  connection, liveness.probe_id);
+                const auto acknowledged = _lane.run ([this, &connection, &liveness] {
+                    return _liveness.acknowledge_probe (
+                      _options.expected_server.server_routing_id,
+                      connection, liveness.probe_id);
+                }).get ();
                 const detail::backend::raw_message_t ack_message{
                   protocol::encode_liveness (
                     protocol::command::livenessAck,
@@ -1104,9 +1133,11 @@ task_t<client_server_pump_result_t> raw_client_server_client_t::pump_one (
                     co_return client_server_pump_result_t::protocol_error;
                 }
             } else {
-                (void) _liveness.acknowledge (
-                  _options.expected_server.server_routing_id,
-                  connection, liveness.probe_id, now);
+                (void) _lane.run ([this, &connection, &liveness, now] {
+                    return _liveness.acknowledge (
+                      _options.expected_server.server_routing_id,
+                      connection, liveness.probe_id, now);
+                }).get ();
             }
             co_return client_server_pump_result_t::infrastructure;
         }
@@ -1121,12 +1152,10 @@ task_t<mesh::service_liveness_tick_t>
 raw_client_server_client_t::tick_liveness (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    auto result = _liveness.tick (now);
-    std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-    {
-        std::lock_guard lock (_mutex);
-        port = _port;
-    }
+    const auto result = _lane.run ([this, now] {
+        return _liveness.tick (now);
+    }).get ();
+    const auto port = _lane.run ([this] { return _port; }).get ();
     if (port) {
         for (const auto &probe : result.probes) {
             //  Spec 51 §4 (ClientServer direction): the client-initiated
@@ -1136,8 +1165,7 @@ raw_client_server_client_t::tick_liveness (
         }
     }
     if (!result.timed_out_nodes.empty ()) {
-        std::lock_guard lock (_mutex);
-        _ready = false;
+        _lane.run ([this] { _ready = false; }).get ();
     }
     co_return result;
 }
@@ -1145,7 +1173,7 @@ raw_client_server_client_t::tick_liveness (
 std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
 raw_client_server_client_t::next_liveness_activity () const
 {
-    return _liveness.next_activity ();
+    return _lane.run ([this] { return _liveness.next_activity (); }).get ();
 }
 
 client_server_pump_result_t
@@ -1156,15 +1184,17 @@ raw_client_server_client_t::accept_server_admission (
 {
     const auto server =
       protocol::decode_client_server_server_admission (frame, kind);
-    std::vector<std::uint8_t> connection;
-    bool invalid = false;
-    bool ready = false;
-    {
-        std::lock_guard lock (_mutex);
+    const auto state = _lane.run ([this, &server] {
+        struct state_t
+        {
+            std::vector<std::uint8_t> connection;
+            bool invalid = false;
+            bool ready = false;
+        } value;
         const auto identity_is_not_pinned =
           _options.expected_server.server_routing_id.empty ()
           && _options.expected_server.lifecycle_generation == 0;
-        invalid =
+        value.invalid =
           server.channel_name
               != _options.expected_server.channel_name
             || (!identity_is_not_pinned
@@ -1181,16 +1211,17 @@ raw_client_server_client_t::accept_server_admission (
             || server.server_routing_id.empty ()
             || server.lifecycle_generation == 0
             || _connection_id.empty ();
-        if (!invalid) {
+        if (!value.invalid) {
             _options.expected_server = server;
             _ready =
               server.state == mesh::service_node_state_t::serving
               && server.weight > 0;
-            ready = _ready;
-            connection = _connection_id;
+            value.ready = _ready;
+            value.connection = _connection_id;
         }
-    }
-    if (invalid)
+        return value;
+    }).get ();
+    if (state.invalid)
         return client_server_pump_result_t::protocol_error;
     trace_client_server_lazy (
       "client-admitted",
@@ -1198,33 +1229,45 @@ raw_client_server_client_t::accept_server_admission (
           return "endpoint=" + server.advertised_endpoint
                  + " channel=" + server.channel_name + " client="
                  + routing_id_label (_options.client_routing_id)
-                 + " ready=" + (ready ? "true" : "false");
+                 + " ready=" + (state.ready ? "true" : "false");
       });
-    _liveness.admit (server.server_routing_id, connection, now);
+    _lane.run ([this, &server, &state, now] {
+        _liveness.admit (server.server_routing_id, state.connection, now);
+    }).get ();
     return client_server_pump_result_t::infrastructure;
 }
 
 void raw_client_server_client_t::begin_admission_request (
   const std::shared_ptr<detail::backend::raw_dealer_port_t> &port)
 {
-    {
-        std::lock_guard lock (_control_replies->mutex);
-        if (_control_replies->admission_in_flight)
-            return;
-        _control_replies->admission_in_flight = true;
-    }
-    protocol::client_server_client_admission_t admission;
-    std::vector<std::uint8_t> connection;
-    std::uint64_t connection_generation = 0;
-    {
-        std::lock_guard lock (_mutex);
-        admission = _options.admission;
-        connection = _connection_id;
-        connection_generation = _connection_generation;
-    }
+    const auto replies = _control_replies;
+    const auto admitted = replies->lane.run ([replies] {
+        if (replies->admission_in_flight)
+            return false;
+        replies->admission_in_flight = true;
+        return true;
+    }).get ();
+    if (!admitted)
+        return;
+    const auto state = _lane.run ([this] {
+        struct state_t
+        {
+            protocol::client_server_client_admission_t admission;
+            std::vector<std::uint8_t> connection;
+            std::uint64_t connection_generation = 0;
+        } value;
+        value.admission = _options.admission;
+        value.connection = _connection_id;
+        value.connection_generation = _connection_generation;
+        return value;
+    }).get ();
+    auto admission = state.admission;
+    auto connection = state.connection;
+    const auto connection_generation = state.connection_generation;
     if (connection.empty ()) {
-        std::lock_guard lock (_control_replies->mutex);
-        _control_replies->admission_in_flight = false;
+        replies->lane.run ([replies] {
+            replies->admission_in_flight = false;
+        }).get ();
         return;
     }
     trace_client_server_lazy (
@@ -1240,7 +1283,7 @@ void raw_client_server_client_t::begin_admission_request (
                                 client_server_admission_timeout));
     detail::observe_task_completion (
       *running,
-      [state = _control_replies, running, connection,
+      [state = replies, running, connection,
        connection_generation] (
         const result_t<detail::backend::raw_request_completion_t> &settled) {
           trace_client_server_lazy (
@@ -1257,19 +1300,21 @@ void raw_client_server_client_t::begin_admission_request (
                                     settled.value ().parts.size ())
                             : std::string ());
             });
-          std::lock_guard lock (state->mutex);
-          state->admission_in_flight = false;
-          if (settled) {
-              state->admission.emplace (
-                control_reply_state_t::parked_reply_t{
-                  connection, connection_generation, settled.value ()});
-          } else {
-              state->admission.emplace (
-                control_reply_state_t::parked_reply_t{
-                  connection, connection_generation,
-                  detail::backend::raw_request_completion_t{
-                    detail::backend::raw_request_result_t::failed, {}}});
-          }
+          (void) state->lane.try_post (
+            [state, connection, connection_generation, settled] {
+                state->admission_in_flight = false;
+                if (settled) {
+                    state->admission.emplace (
+                      control_reply_state_t::parked_reply_t{
+                        connection, connection_generation, settled.value ()});
+                } else {
+                    state->admission.emplace (
+                      control_reply_state_t::parked_reply_t{
+                        connection, connection_generation,
+                        detail::backend::raw_request_completion_t{
+                          detail::backend::raw_request_result_t::failed, {}}});
+                }
+            });
       });
 }
 
@@ -1277,13 +1322,11 @@ void raw_client_server_client_t::begin_probe_request (
   const std::shared_ptr<detail::backend::raw_dealer_port_t> &port,
   std::uint64_t probe_id)
 {
-    std::vector<std::uint8_t> connection;
-    std::uint64_t connection_generation = 0;
-    {
-        std::lock_guard lock (_mutex);
-        connection = _connection_id;
-        connection_generation = _connection_generation;
-    }
+    const auto state = _lane.run ([this] {
+        return std::pair{_connection_id, _connection_generation};
+    }).get ();
+    const auto &connection = state.first;
+    const auto connection_generation = state.second;
     if (connection.empty ())
         return;
     detail::backend::raw_message_t probe_message{
@@ -1301,33 +1344,36 @@ void raw_client_server_client_t::begin_probe_request (
         const result_t<detail::backend::raw_request_completion_t> &settled) {
           if (!settled)
               return;
-          std::lock_guard lock (state->mutex);
-          state->probes.emplace_back (
-            probe_id,
-            control_reply_state_t::parked_reply_t{
-              connection, connection_generation, settled.value ()});
+          (void) state->lane.try_post (
+            [state, probe_id, connection, connection_generation, settled] {
+                state->probes.emplace_back (
+                  probe_id,
+                  control_reply_state_t::parked_reply_t{
+                    connection, connection_generation, settled.value ()});
+            });
       });
 }
 
 bool raw_client_server_client_t::apply_pending_control_replies (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    std::optional<control_reply_state_t::parked_reply_t> admission;
-    std::vector<std::pair<std::uint64_t,
-                          control_reply_state_t::parked_reply_t>>
-      probes;
-    {
-        std::lock_guard lock (_control_replies->mutex);
-        admission.swap (_control_replies->admission);
-        probes.swap (_control_replies->probes);
-    }
-    std::vector<std::uint8_t> current_connection;
-    std::uint64_t current_generation = 0;
-    {
-        std::lock_guard lock (_mutex);
-        current_connection = _connection_id;
-        current_generation = _connection_generation;
-    }
+    const auto replies = _control_replies;
+    auto pending = replies->lane.run ([replies] {
+        std::pair<std::optional<control_reply_state_t::parked_reply_t>,
+                  std::vector<std::pair<std::uint64_t,
+                                        control_reply_state_t::parked_reply_t>>>
+          value;
+        value.first.swap (replies->admission);
+        value.second.swap (replies->probes);
+        return value;
+    }).get ();
+    auto admission = std::move (pending.first);
+    auto probes = std::move (pending.second);
+    const auto current = _lane.run ([this] {
+        return std::pair{_connection_id, _connection_generation};
+    }).get ();
+    const auto &current_connection = current.first;
+    const auto current_generation = current.second;
     bool progressed = false;
     if (admission) {
         progressed = true;
@@ -1347,14 +1393,15 @@ bool raw_client_server_client_t::apply_pending_control_replies (
                              static_cast<int> (completion.result));
               });
             //  The current (new) connection still needs its own admission.
-            std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-            bool request = false;
-            {
-                std::lock_guard lock (_mutex);
-                request = !_closed && !_ready && !_connection_id.empty ();
-                if (request)
-                    port = _port;
-            }
+            const auto retry_state = _lane.run ([this] {
+                std::pair<bool, std::shared_ptr<detail::backend::raw_dealer_port_t>> value;
+                value.first = !_closed && !_ready && !_connection_id.empty ();
+                if (value.first)
+                    value.second = _port;
+                return value;
+            }).get ();
+            const auto request = retry_state.first;
+            const auto &port = retry_state.second;
             if (request && port)
                 begin_admission_request (port);
         } else if (completion.result
@@ -1369,8 +1416,7 @@ bool raw_client_server_client_t::apply_pending_control_replies (
                 } else if (header.kind == protocol::command::reject) {
                     (void) protocol::decode_reject (
                       completion.parts.front ());
-                    std::lock_guard lock (_mutex);
-                    _ready = false;
+                    _lane.run ([this] { _ready = false; }).get ();
                 } else {
                     trace_client_server (
                       "client-admission-invalid-reply");
@@ -1382,14 +1428,15 @@ bool raw_client_server_client_t::apply_pending_control_replies (
         } else {
             //  The request failed or timed out. Retry while the physical
             //  connection is still current and admission has not happened.
-            std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-            bool retry = false;
-            {
-                std::lock_guard lock (_mutex);
-                retry = !_closed && !_ready && !_connection_id.empty ();
-                if (retry)
-                    port = _port;
-            }
+            const auto retry_state = _lane.run ([this] {
+                std::pair<bool, std::shared_ptr<detail::backend::raw_dealer_port_t>> value;
+                value.first = !_closed && !_ready && !_connection_id.empty ();
+                if (value.first)
+                    value.second = _port;
+                return value;
+            }).get ();
+            const auto retry = retry_state.first;
+            const auto &port = retry_state.second;
             if (retry && port)
                 begin_admission_request (port);
         }
@@ -1417,15 +1464,11 @@ bool raw_client_server_client_t::apply_pending_control_replies (
                 || liveness.probe_id != probe.first) {
                 continue;
             }
-            std::vector<std::uint8_t> server_routing_id;
-            {
-                std::lock_guard lock (_mutex);
-                server_routing_id =
-                  _options.expected_server.server_routing_id;
-            }
-            (void) _liveness.acknowledge (
-              server_routing_id, current_connection, liveness.probe_id,
-              now);
+            (void) _lane.run ([this, &current_connection, &liveness, now] {
+                return _liveness.acknowledge (
+                  _options.expected_server.server_routing_id,
+                  current_connection, liveness.probe_id, now);
+            }).get ();
         }
         catch (const protocol::service_wire_error_t &) {
             trace_client_server ("client-probe-malformed-reply");
@@ -1442,17 +1485,23 @@ task_t<zlink::submit_result_t> raw_client_server_client_t::send (
         throw std::invalid_argument (
           "ClientServer send timeout must be positive");
     }
-    std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-    std::string channel;
-    bool ready = false;
-    {
-        std::lock_guard lock (_mutex);
-        ready = _ready;
-        if (ready) {
-            port = _port;
-            channel = _options.admission.channel_name;
+    const auto state = _lane.run ([this] {
+        struct state_t
+        {
+            std::shared_ptr<detail::backend::raw_dealer_port_t> port;
+            std::string channel;
+            bool ready = false;
+        } value;
+        value.ready = _ready;
+        if (value.ready) {
+            value.port = _port;
+            value.channel = _options.admission.channel_name;
         }
-    }
+        return value;
+    }).get ();
+    const auto &port = state.port;
+    const auto &channel = state.channel;
+    const auto ready = state.ready;
     if (!ready)
         co_return zlink::submit_result_t::not_connected;
     //  A ClientServer one-way rides the channel envelope as a Command
@@ -1496,19 +1545,26 @@ raw_client_server_client_t::request (
         throw std::invalid_argument (
           "ClientServer request timeout must be positive");
     }
-    std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-    std::string channel;
-    std::string endpoint;
-    bool ready = false;
-    {
-        std::lock_guard lock (_mutex);
-        ready = _ready && static_cast<bool> (_port);
-        if (ready) {
-            port = _port;
-            channel = _options.admission.channel_name;
-            endpoint = _options.expected_server.advertised_endpoint;
+    const auto state = _lane.run ([this] {
+        struct state_t
+        {
+            std::shared_ptr<detail::backend::raw_dealer_port_t> port;
+            std::string channel;
+            std::string endpoint;
+            bool ready = false;
+        } value;
+        value.ready = _ready && static_cast<bool> (_port);
+        if (value.ready) {
+            value.port = _port;
+            value.channel = _options.admission.channel_name;
+            value.endpoint = _options.expected_server.advertised_endpoint;
         }
-    }
+        return value;
+    }).get ();
+    const auto &port = state.port;
+    const auto &channel = state.channel;
+    const auto &endpoint = state.endpoint;
+    const auto ready = state.ready;
     if (!ready) {
         co_return client_server_request_completion_t{
           foundation::operation_terminal_t::transport_failed};
@@ -1602,6 +1658,11 @@ raw_client_server_client_t::request (
 std::size_t raw_client_server_client_t::pending_request_count () const noexcept
 {
     return _pending_requests.load (std::memory_order_relaxed);
+}
+
+std::size_t raw_client_server_client_t::last_pump_bytes () const
+{
+    return _lane.run ([this] { return _last_pump_bytes; }).get ();
 }
 
 } // namespace zlink::framework::runtime::client_server

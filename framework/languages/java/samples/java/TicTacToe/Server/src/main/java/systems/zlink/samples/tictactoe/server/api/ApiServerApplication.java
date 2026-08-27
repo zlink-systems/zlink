@@ -12,6 +12,9 @@ import org.springframework.boot.web.servlet.server.ConfigurableServletWebServerF
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.ApplicationListener;
+import org.springframework.boot.web.context.WebServerInitializedEvent;
+import org.slf4j.LoggerFactory;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
@@ -19,6 +22,8 @@ import systems.zlink.samples.tictactoe.server.configuration.SampleLocationStore;
 import systems.zlink.samples.tictactoe.server.api.handlers.AuthenticatePlayerHandler;
 import systems.zlink.samples.tictactoe.server.api.handlers.CreateGameHttpHandler;
 import systems.zlink.samples.tictactoe.server.configuration.ApiSettings;
+import systems.zlink.samples.tictactoe.server.configuration.TicTacToeReadinessReporter;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 
 
 
@@ -64,5 +69,18 @@ public final class ApiServerApplication {
             server.setAddress(InetAddress.getLoopbackAddress());
             server.setPort(endpoint.getPort());
         };
+    }
+
+    @Bean
+    ApplicationListener<WebServerInitializedEvent> ticTacToeHttpReadiness(ApiSettings settings) {
+        return event -> LoggerFactory.getLogger(ApiServerApplication.class)
+            .info("tictactoe-ready kind=http node={}", settings.nodeId());
+    }
+
+    @Bean(destroyMethod = "close")
+    TicTacToeReadinessReporter ticTacToeSpotRouteReadiness(
+        ApiSettings settings,
+        ZLinkRouteMeshRuntime meshes) {
+        return TicTacToeReadinessReporter.spotRoute(settings.nodeId(), meshes);
     }
 }

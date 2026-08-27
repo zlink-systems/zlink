@@ -18,10 +18,13 @@ class BindCourierSessionActorHandler : ZLinkSuspendingEntrySpotActorRequestHandl
         actor: CourierActor,
         context: ZLinkMessageContext,
         request: BindCourierSessionReq,
-    ): BindCourierSessionRes =
-        BindCourierSessionRes(
+    ): BindCourierSessionRes {
+        val response = BindCourierSessionRes(
             courierId = request.courierId,
             actor = requireNotNull(request.actor) { "BindCourierSessionReq.actor is required" },
             sessionRoute = requireNotNull(request.sessionRoute) { "BindCourierSessionReq.sessionRoute is required" },
         )
+        println("deliverydispatch-courier bind-relayed courier=${request.courierId}")
+        return response
+    }
 }

@@ -208,14 +208,14 @@ projection을 직접 변경하지 않으며, `GetOrderStateReq`도 조회 외의
 
 | 필요한 동작 | 선택한 Framework 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| process가 바뀌어도 `OrderId`로 현재 owner를 찾는다. | global Spot message | Caller가 global Spot ID를 지정하면 Framework가 current Ready authority를 resolve한다. [상호작용 모델 §2](../../spec/server/03-interaction-model.ko.md#2-공통-모델) |
-| 없는 주문 workflow를 첫 command에서 만들 수 있다. | Instance intent | Missing Instance Spot에서만 cold activation을 시작한다. [상호작용 모델 §7](../../spec/server/03-interaction-model.ko.md#7-spot과-actor) |
-| API와 Workflow를 logical mesh로 연결한다. | RouteMesh | Caller가 MeshName이나 owner endpoint를 application route로 조립하지 않는다. [RouteMesh topology](../../spec/server/07-channel-topology.ko.md) |
-| 요청 완료를 확인한다. | Spot request/reply | Request는 typed reply, timeout 또는 terminal error로 완료된다. [상호작용 모델 §4](../../spec/server/03-interaction-model.ko.md#4-send와-request) |
-| 한 주문의 전이를 순서대로 처리한다. | Spot handler turn | Application state 변경을 하나의 owner 흐름에 두고 handler 밖의 경쟁 writer를 만들지 않는다. [Async execution policy](../../spec/server/05-async-execution-policy.ko.md) |
-| JSON message를 언어별로 같은 wire 의미로 사용한다. | Framework typed JSON codec | JSON 기본 codec은 message별 등록 없이 선택된다. [Framework API §9](../../spec/server/06-framework-api.ko.md#9-codec) |
-| owner와 generation을 공유한다. | Location Store | Object location과 authority를 Framework가 관리한다. [Location runtime](../../spec/server/21-location-runtime.ko.md) |
-| Ready owner 장애의 범위를 정한다. | failure/failover policy | Ready owner 장애는 다른 node의 자동 cold activation으로 바뀌지 않는다. [Failure and failover §4.4](../../spec/server/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
+| process가 바뀌어도 `OrderId`로 현재 owner를 찾는다. | global Spot message | Caller가 global Spot ID를 지정하면 Framework가 current Ready authority를 resolve한다. [상호작용 모델 §2](../../spec/server/00-foundation/04-interaction-model.ko.md) |
+| 없는 주문 workflow를 첫 command에서 만들 수 있다. | Instance intent | Missing Instance Spot에서만 cold activation을 시작한다. [상호작용 모델 §7](../../spec/server/00-foundation/04-interaction-model.ko.md#7-spot과-actor) |
+| API와 Workflow를 logical mesh로 연결한다. | RouteMesh | Caller가 MeshName이나 owner endpoint를 application route로 조립하지 않는다. [RouteMesh topology](../../spec/server/02-channel-transport/01-channel-topology.ko.md) |
+| 요청 완료를 확인한다. | Spot request/reply | Request는 typed reply, timeout 또는 terminal error로 완료된다. [상호작용 모델 §4](../../spec/server/00-foundation/04-interaction-model.ko.md#4-send와-request) |
+| 한 주문의 전이를 순서대로 처리한다. | Spot handler turn | Application state 변경을 하나의 owner 흐름에 두고 handler 밖의 경쟁 writer를 만들지 않는다. [Async execution policy](../../spec/server/01-execution/README.ko.md) |
+| JSON message를 언어별로 같은 wire 의미로 사용한다. | Framework typed JSON codec | JSON 기본 codec은 message별 등록 없이 선택된다. [Framework API §9](../../spec/server/00-foundation/06-framework-api.ko.md#12-codec) |
+| owner와 generation을 공유한다. | Location Store | Object location과 authority를 Framework가 관리한다. [Location runtime](../../spec/server/05-location-relocation/01-location-runtime.ko.md) |
+| Ready owner 장애의 범위를 정한다. | failure/failover policy | Ready owner 장애는 다른 node의 자동 cold activation으로 바뀌지 않는다. [Failure and failover §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
 
 Instance intent는 object가 Missing일 때 생성 시점을 정하는 기능이다. 이미 Ready인 object의 owner
 장애를 다른 node에서 자동으로 복구하는 기능이 아니다. 계획된 relocation은 같은 object와 generation을
@@ -433,7 +433,7 @@ message OrderFailedEvent {
 | `Order*Event` | Workflow → `OrderEventStore`, append | expected version을 통과해 stream에 기록된 event가 상태 전이의 기준이 된다. |
 
 Request/reply의 timeout, cancellation과 route 오류는 성공 응답으로 바꾸지 않는다. `Send`와
-`Request`의 공통 terminal 결과는 [Framework error model](../../spec/server/32-framework-error-model.ko.md)을
+`Request`의 공통 terminal 결과는 [Framework error model](../../spec/server/00-foundation/07-framework-error-model.ko.md)을
 따르며, sample은 실패한 operation을 다른 owner에 자동 재제출하지 않는다.
 
 ### 6.3 상태와 event 순서
@@ -661,7 +661,7 @@ sequenceDiagram
 | explicit `Close` 완료 뒤 `Missing` | 새 Instance intent command | 새 generation을 만들 수 있다. |
 | planned relocation | 기존 object의 owner 변경 | 같은 object와 relocation 계약을 사용하며 crash failover로 처리하지 않는다. |
 
-이 표는 [failure/failover policy](../../spec/server/31-failure-failover-policy.ko.md)의 범위를 sample에
+이 표는 [failure/failover policy](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)의 범위를 sample에
 적용한 것이다. `InstanceSpot`은 Missing object의 생성 시점을 정하지만, Ready owner 장애 뒤
 authority를 자동 release하거나 다른 node에서 event stream을 복원하는 기능을 추가하지 않는다.
 실패한 request는 새 owner에 자동 재제출하지 않는다. 별도 production failover가 필요하면 authority
@@ -805,6 +805,70 @@ Smoke runner는 server internal endpoint, store direct query와 test-only adapte
 호출하며, 이 호출은 Client process code path가 아니다. Runner observation은 public response와
 state에 대한 Client assertion을 대신하지 않는다.
 
+### 10.1 Runner가 확인하는 evidence
+
+Runner는 아래 표의 문자열을 그대로 찾는다. 문자열은 언어별 재량이 아니다. 다섯 구현이 같은
+문자열을 같은 횟수로 출력해야 하며, 문구를 바꾸려면 이 표를 먼저 바꾼다. Node 이름은 `api-a`,
+`api-b`, `workflow-a`, `workflow-b`로 고정한다.
+
+**Evidence는 샘플이 소유한 문자열이어야 한다.** Framework가 찍는 줄(runtime readiness 로그,
+message flow tracer, structured trace 투영, process 기동 boilerplate)을 성공 기준으로 삼지 않는다.
+그 줄들은 framework 사정으로 바뀌고, 바뀌면 샘플 runner가 조용히 깨진다.
+
+Readiness는 Client scenario를 실행하기 전에 확인한다. §10 4단계가 요구하는 두 가지다.
+
+| 확인하는 사실 | 로그 | 출력 node |
+| --- | --- | --- |
+| HTTP edge가 열렸다 | `shoppingmall-ready kind=http node=<NodeId>` | `api-a`, `api-b` |
+| RouteMesh object capability를 확보했다 | `shoppingmall-ready kind=object-route node=<NodeId> target=<WorkflowNodeId>` | `api-a`, `api-b` (`workflow-a`, `workflow-b` 각각) |
+
+두 번째 행은 **수동 신호로 확인한다.** Runner가 `/ready?targetRid=` 같은 요청을 만들어 보내
+readiness를 증명하지 않는다.
+
+Server evidence는 Client scenario가 끝난 뒤 확인한다.
+
+| 확인하는 사실 | 로그 | 정확한 횟수 |
+| --- | --- | --- |
+| Workflow node가 order를 시작했다 | `shoppingmall-order started order=<OrderId> spot=<SpotId>` | **각 Workflow node 로그에서 따로** 1 이상 |
+| CommerceApi가 evidence를 남겼다 | `shoppingmall-evidence order=<OrderId> events=<N>` | 1 이상 |
+| planned relocation 뒤 같은 generation에서 replay하고 다음 단계로 진행했다(§9.2-11) | `shoppingmall-order replayed order=<OrderId> generation=<N>` | 1 |
+| 이미 완료한 외부 효과를 반복하지 않았다(§9.2-11) | `shoppingmall-order external-effect-repeated order=<OrderId>` | 0 |
+
+**첫 행은 각 node 로그를 따로 센다.** 두 로그 파일을 한 번의 검색에 함께 넘겨 "둘 중 하나라도
+맞으면 통과"가 되게 하지 않는다.
+
+**마지막 두 행은 relocation을 실제로 일으켜야 한다.** §11은 "planned relocation이 같은
+`ObjectGeneration`을 유지하고 event replay 뒤 다음 단계부터 진행하며 이미 완료한 외부 효과를
+반복하지 않는다"를 완료 기준으로 요구한다. Store를 배선해 두는 것만으로는 이 기준을 만족하지
+않는다. 그 단계를 실행하지 않으면 이 행들은 통과할 수 없으며, 통과하지 못하는 것이 맞다.
+
+#### Runner-only hook의 경계
+
+§9가 정한 경계를 runner가 검사할 수 있는 형태로 다시 적는다.
+
+- **Client는 CommerceApi의 public order API만 호출한다.** `/self-check/*` 계열 hook을 Client
+  process 안에서 호출하지 않는다. Fixture 준비와 server evidence 확인은 Client를 시작하기 전이나
+  끝난 뒤 runner가 직접 호출한다.
+- **Client는 public transport로 호출한다.** 내부 channel·mesh API로 CommerceApi에 직접 말하지
+  않는다. 그렇게 하면 §9가 시험하려는 public order API 표면이 시험되지 않는다.
+- Runner가 self-check hook에 보내는 식별자는 **이번 실행이 실제로 만든 값**을 쓴다. 미리 적어 둔
+  order ID를 보내지 않는다 — 그 ID가 이번 실행과 무관해져도 통과해 버린다.
+
+완료 marker는 둘이다.
+
+| marker | 출력 주체 | 뜻 |
+| --- | --- | --- |
+| `shoppingmall=completed` | Client | §9 client self-check 전체 통과 |
+| `shoppingmall-placement=completed` | Runner | §10.1 표의 모든 행 통과 |
+
+**Runner는 `shoppingmall=completed`를 직접 확인한다.** Client 프로세스의 종료 코드로 대신하지
+않는다. `PASS ShoppingMall.<Lang>` 같은 언어별 placement marker는 쓰지 않는다 — §10 6단계가
+말하는 runner placement marker는 위의 `shoppingmall-placement=completed` 하나다.
+
+Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
+적용하며 **`.sh`와 `.ps1`이 같은 값을 쓴다.** 대기 없이 한 번만 읽지 않는다. 다섯 언어 모두
+`.sh`와 `.ps1`을 함께 제공한다.
+
 ## 11. 완료 기준
 
 - [ ] 문서가 ShoppingMall의 업무 문제, 시작·종료 범위와 기존 방식 비교를 설명한다.
@@ -822,4 +886,5 @@ state에 대한 Client assertion을 대신하지 않는다.
 - [ ] Client self-check가 public response와 state, 금지 결과를 직접 확인하고 runner observation hook가
       event와 external effect를 별도로 확인한다.
 - [ ] sample code가 public Framework API와 기본 typed JSON codec만 사용한다.
-- [ ] smoke 실행이 readiness를 bounded wait로 확인하고 성공 marker를 조건부로 출력한다.
+- [ ] smoke 실행이 readiness를 bounded wait로 확인하고 성공 marker를 조건부로 출력하며,
+      §10.1 표의 모든 행을 문자열과 횟수까지 통과시킨다.

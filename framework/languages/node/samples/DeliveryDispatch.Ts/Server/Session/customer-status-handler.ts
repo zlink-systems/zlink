@@ -19,6 +19,9 @@ class CustomerStatusHandler {
       message.occurredAtUnixMs,
       message.courierId
     )).submit();
+    if (message.status === 'Delivered') {
+      console.log(`deliverydispatch-customer pushed status=Delivered delivery=${message.deliveryId}`);
+    }
   }
 }
 

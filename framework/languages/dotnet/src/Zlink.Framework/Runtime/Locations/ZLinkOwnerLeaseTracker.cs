@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
@@ -11,8 +13,7 @@ internal sealed class ZLinkOwnerLeaseTracker
     private readonly ZLinkLocationOptions _options;
     private readonly TimeProvider _time;
     private readonly ZLinkLocationStoreHealth? _health;
-    private readonly object _cacheGate = new();
-    private readonly Dictionary<string, Snapshot> _cache =
+    private readonly ConcurrentDictionary<string, Snapshot> _cache =
         new(StringComparer.Ordinal);
     internal TimeProvider TimeProvider => _time;
 
@@ -85,9 +86,7 @@ internal sealed class ZLinkOwnerLeaseTracker
         string ownerId,
         CancellationToken cancellationToken)
     {
-        Snapshot? current;
-        lock (_cacheGate)
-            _cache.TryGetValue(ownerId, out current);
+        _cache.TryGetValue(ownerId, out var current);
         if (current is not null
             && _time.GetElapsedTime(current.FetchedAt) < _options.PollingInterval)
         {
@@ -123,8 +122,7 @@ internal sealed class ZLinkOwnerLeaseTracker
                 fetchedAt),
             _ => throw new ArgumentOutOfRangeException(nameof(read))
         };
-        lock (_cacheGate)
-            _cache[ownerId] = refreshed;
+        _cache[ownerId] = refreshed;
         return refreshed;
     }
 

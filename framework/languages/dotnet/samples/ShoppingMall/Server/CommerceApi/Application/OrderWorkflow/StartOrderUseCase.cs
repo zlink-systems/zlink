@@ -28,11 +28,12 @@ internal sealed class StartOrderUseCase(
 
         var cart = await preparation.LoadCartAndValidateAsync(request, cancellationToken);
 
-        var mapping = existing ?? await commerce.ReserveIdempotencyAsync(
-            request.IdempotencyKey,
-            cancellationToken);
+        var reservation = existing is null
+            ? await commerce.ReserveIdempotencyAsync(request.IdempotencyKey, cancellationToken)
+            : new IdempotencyReservation(existing, false);
+        var mapping = reservation.Mapping;
         var command = await preparation.BuildCommandAsync(request, mapping, cart, cancellationToken);
-        var state = existing is null
+        var state = reservation.Created
             ? await workflows.StartAsync(command, cancellationToken)
             : await ReadOrStartAsync(mapping.OrderId, command, cancellationToken);
         return new StartOrderRes(state.OrderId, state);
@@ -42,10 +43,14 @@ internal sealed class StartOrderUseCase(
             StartOrderWorkflowReq workflowCommand,
             CancellationToken token)
         {
-            var projection = await readModels.FindAsync(orderId, token);
-            return projection is null
-                ? await workflows.StartAsync(workflowCommand, token)
-                : OrderContractMapper.ToContract(projection);
+            for (var attempt = 0; attempt < 20; attempt++)
+            {
+                var projection = await readModels.FindAsync(orderId, token);
+                if (projection is not null) return OrderContractMapper.ToContract(projection);
+                await Task.Delay(TimeSpan.FromMilliseconds(10), token);
+            }
+
+            return await workflows.StartAsync(workflowCommand, token);
         }
     }
 }
@@ -96,9 +101,10 @@ internal sealed class PrepareInventoryReservedOrderUseCase(
         CancellationToken cancellationToken)
     {
         var cart = await preparation.LoadCartAndValidateAsync(request, cancellationToken);
-        var mapping = await commerce.ReserveIdempotencyAsync(
+        var reservation = await commerce.ReserveIdempotencyAsync(
             request.IdempotencyKey,
             cancellationToken);
+        var mapping = reservation.Mapping;
         var command = await preparation.BuildCommandAsync(request, mapping, cart, cancellationToken);
         var state = await workflows.PrepareInventoryReservedCheckpointAsync(command, cancellationToken);
         return new StartOrderRes(state.OrderId, state);

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
@@ -9,37 +11,57 @@ namespace Zlink.Framework.Runtime.Locations;
 /// </summary>
 internal sealed class ZLinkSpotHandleRegistry
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<ZLinkActorLocationKey, List<WeakReference<ZLinkResolvedSpotHandle>>> _actors = [];
     private readonly Dictionary<ZLinkSpotLocationKey, List<WeakReference<ZLinkResolvedSpotHandle>>> _spots = [];
 
-    internal void RegisterSpot(ZLinkSpotLocationKey key, ZLinkResolvedSpotHandle handle)
-        => Register(_spots, key, handle);
+    internal ValueTask RegisterSpotAsync(
+        ZLinkSpotLocationKey key,
+        ZLinkResolvedSpotHandle handle) =>
+        _lane.RunAsync(() => Register(_spots, key, handle));
 
-    internal void RegisterActor(ZLinkActorLocationKey key, ZLinkResolvedSpotHandle handle)
-        => Register(_actors, key, handle);
+    internal ValueTask RegisterActorAsync(
+        ZLinkActorLocationKey key,
+        ZLinkResolvedSpotHandle handle) =>
+        _lane.RunAsync(() => Register(_actors, key, handle));
 
-    internal void UpdateSpot(ZLinkResolvedSpotLocation row)
-        => Apply(_spots, new ZLinkSpotLocationKey(row.SpotId), handle => handle.Update(
-            new ZLinkSpotHandleSnapshot(
-                row.MeshName,
-                row.OwnerNodeRid,
-                row.SpotId,
-                row.SpotGeneration,
-                row.SpotKind,
-                row.AuthorityOwnerGeneration,
-                row.OwnerNodeGeneration,
-                checked((ulong)row.LeaseGeneration)),
-            row.SpotGeneration));
+    internal async ValueTask UpdateSpotAsync(ZLinkResolvedSpotLocation row)
+    {
+        var snapshot = new ZLinkSpotHandleSnapshot(
+            row.MeshName,
+            row.OwnerNodeRid,
+            row.SpotId,
+            row.SpotGeneration,
+            row.SpotKind,
+            row.AuthorityOwnerGeneration,
+            row.OwnerNodeGeneration,
+            checked((ulong)row.LeaseGeneration));
+        var handles = await _lane.RunAsync(() => Apply(
+                _spots,
+                new ZLinkSpotLocationKey(row.SpotId)))
+            .ConfigureAwait(false);
+        foreach (var handle in handles)
+            handle.Update(snapshot, row.SpotGeneration);
+    }
 
-    internal void RemoveSpot(ZLinkSpotLocationKey key, ulong spotGeneration)
-        => Apply(_spots, key, handle => handle.Invalidate(spotGeneration));
+    internal async ValueTask RemoveSpotAsync(ZLinkSpotLocationKey key, ulong spotGeneration)
+    {
+        var handles = await _lane.RunAsync(() => Apply(_spots, key))
+            .ConfigureAwait(false);
+        foreach (var handle in handles)
+            handle.Invalidate(spotGeneration);
+    }
 
-    internal void UpdateActor(ZLinkResolvedActorLocation row)
-        => Apply(
-            _actors,
-            new ZLinkActorLocationKey(row.ActorId),
-            handle => handle.Update(ToSnapshot(row), row.MembershipEpoch));
+    internal async ValueTask UpdateActorAsync(ZLinkResolvedActorLocation row)
+    {
+        var snapshot = ToSnapshot(row);
+        var handles = await _lane.RunAsync(() => Apply(
+                _actors,
+                new ZLinkActorLocationKey(row.ActorId)))
+            .ConfigureAwait(false);
+        foreach (var handle in handles)
+            handle.Update(snapshot, row.MembershipEpoch);
+    }
 
     private ZLinkSpotHandleSnapshot ToSnapshot(ZLinkResolvedActorLocation row)
         => row.SpotKind == ZLinkSpotKind.Entry || string.IsNullOrEmpty(row.SpotId)
@@ -62,19 +84,22 @@ internal sealed class ZLinkSpotHandleRegistry
                 row.OwnerNodeGeneration,
                 checked((ulong)row.LeaseGeneration));
 
-    internal void RemoveActor(ZLinkActorLocationKey key)
-        => Apply(_actors, key, static handle => handle.InvalidateCurrent());
-
-    internal IReadOnlyList<ZLinkResolvedSpotHandle> SnapshotLiveHandles()
+    internal async ValueTask RemoveActorAsync(ZLinkActorLocationKey key)
     {
-        lock (_gate)
+        var handles = await _lane.RunAsync(() => Apply(_actors, key))
+            .ConfigureAwait(false);
+        foreach (var handle in handles)
+            handle.InvalidateCurrent();
+    }
+
+    internal ValueTask<IReadOnlyList<ZLinkResolvedSpotHandle>> SnapshotLiveHandlesAsync() =>
+        _lane.RunAsync<IReadOnlyList<ZLinkResolvedSpotHandle>>(() =>
         {
             var live = new List<ZLinkResolvedSpotHandle>();
             Collect(_spots, live);
             Collect(_actors, live);
             return live;
-        }
-    }
+        });
 
     private static void Collect<TKey>(
         Dictionary<TKey, List<WeakReference<ZLinkResolvedSpotHandle>>> handles,
@@ -93,34 +118,30 @@ internal sealed class ZLinkSpotHandleRegistry
         ZLinkResolvedSpotHandle handle)
         where TKey : notnull
     {
-        lock (_gate)
+        if (!handles.TryGetValue(key, out var entries))
         {
-            if (!handles.TryGetValue(key, out var entries))
-            {
-                entries = [];
-                handles.Add(key, entries);
-            }
-            entries.RemoveAll(static entry => !entry.TryGetTarget(out _));
-            entries.Add(new WeakReference<ZLinkResolvedSpotHandle>(handle));
+            entries = [];
+            handles.Add(key, entries);
         }
+        entries.RemoveAll(static entry => !entry.TryGetTarget(out _));
+        entries.Add(new WeakReference<ZLinkResolvedSpotHandle>(handle));
     }
 
-    private void Apply<TKey>(
+    private static IReadOnlyList<ZLinkResolvedSpotHandle> Apply<TKey>(
         Dictionary<TKey, List<WeakReference<ZLinkResolvedSpotHandle>>> handles,
-        TKey key,
-        Action<ZLinkResolvedSpotHandle> update)
+        TKey key)
         where TKey : notnull
     {
-        lock (_gate)
+        if (!handles.TryGetValue(key, out var entries))
+            return Array.Empty<ZLinkResolvedSpotHandle>();
+        var live = new List<ZLinkResolvedSpotHandle>();
+        entries.RemoveAll(entry =>
         {
-            if (!handles.TryGetValue(key, out var entries)) return;
-            entries.RemoveAll(entry =>
-            {
-                if (!entry.TryGetTarget(out var handle)) return true;
-                update(handle);
-                return false;
-            });
-            if (entries.Count == 0) handles.Remove(key);
-        }
+            if (!entry.TryGetTarget(out var handle)) return true;
+            live.Add(handle);
+            return false;
+        });
+        if (entries.Count == 0) handles.Remove(key);
+        return live;
     }
 }

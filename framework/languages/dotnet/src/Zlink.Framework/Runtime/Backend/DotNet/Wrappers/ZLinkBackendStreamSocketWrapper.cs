@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
@@ -13,8 +14,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     private readonly ZLinkMeshCompletionTable _completions;
     private readonly ZLinkMeshDispatchPump? _ownedCompletionPump;
     private readonly bool _ownsNode;
-    private readonly object _sendGate = new();
-    private readonly object _sessionGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private IStreamSessionService? _session;
     private bool _sessionStarted;
 
@@ -54,8 +54,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     private IStreamSessionService Session()
     {
-        if (_session is { } existing) return existing;
-        lock (_sessionGate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_session is null)
             {
@@ -65,7 +64,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
             }
 
             return _session;
-        }
+        }));
     }
 
     public void Bind(string endpoint)
@@ -115,8 +114,8 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     public bool Send(RoutingId routingId, Message payload, SendFlags flags)
     {
-        lock (_sendGate)
-            return _socket.TrySend(routingId).Message(payload).Flags(flags).Submit();
+        return AwaitStateLane(_lane.RunAsync(
+            () => _socket.TrySend(routingId).Message(payload).Flags(flags).Submit()));
     }
 
     public async ValueTask SendAsync(
@@ -132,8 +131,8 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     public bool Send(RoutingId routingId, IReadOnlyList<Message> parts, SendFlags flags)
     {
-        lock (_sendGate)
-            return _socket.TrySend(routingId).Messages(parts).Flags(flags).Submit();
+        return AwaitStateLane(_lane.RunAsync(
+            () => _socket.TrySend(routingId).Messages(parts).Flags(flags).Submit()));
     }
 
     public void DisconnectPeer(RoutingId routingId)
@@ -275,21 +274,21 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         var session = Session();
         foreach (var binding in session.Bindings(sessionRid))
             if (string.Equals(binding.Actor.ActorId, actorId, StringComparison.Ordinal))
-                lock (_sendGate)
-                    return session.SendToActor(sessionRid, binding.Actor, parts, flags)
-                        == SubmitResult.Ok;
+                return AwaitStateLane(_lane.RunAsync(
+                    () => session.SendToActor(sessionRid, binding.Actor, parts, flags)
+                        == SubmitResult.Ok));
 
         return false;
     }
 
     public async ValueTask DisposeAsync()
     {
-        IStreamSessionService? session;
-        lock (_sessionGate)
+        var session = await _lane.RunAsync(() =>
         {
-            session = _sessionStarted ? _session : null;
+            var started = _sessionStarted ? _session : null;
             _session = null;
-        }
+            return started;
+        }).ConfigureAwait(false);
 
         if (session is not null)
             await session.DisposeAsync().ConfigureAwait(false);
@@ -303,5 +302,9 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
                 await _ownedCompletionPump.DisposeAsync().ConfigureAwait(false);
             await _node.DisposeAsync().ConfigureAwait(false);
         }
+        await _lane.DisposeAsync().ConfigureAwait(false);
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }

@@ -3,6 +3,7 @@ import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
   type ZLinkDispatchFailure
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
@@ -44,40 +45,41 @@ export class ZLinkDispatchErrorReporter {
   }
 
   report(event: ZLinkRuntimeDispatchFailure): void {
+    const normalized = normalizeDispatchFailure(event);
     const tracePoint = this.flow.begin(ZLinkMessageFlowOutcome.Error);
-    const dropReason = channelDropReason(event);
+    const dropReason = channelDropReason(normalized);
     if (dropReason !== undefined) {
       this.metrics?.count('zlink.mesh_node.messages.dropped', 1, {
-        surface: event.surface,
-        message_kind: event.messageKind,
+        surface: normalized.surface,
+        message_kind: normalized.messageKind,
         reason: dropReason
       });
     }
     if (tracePoint === undefined) return;
-    const errorInfo = dispatchErrorInfo(event);
+    const errorInfo = dispatchErrorInfo(normalized);
     this.reportedEvents += 1;
     tracePoint.trace({
       outcome: ZLinkMessageFlowOutcome.Error,
-      surface: event.surface,
-      messageKind: event.messageKind,
-      packetName: event.packetName,
-      channelName: event.channelName,
-      channelRouteKind: event.channelRouteKind,
-      meshName: event.meshName,
-      topic: event.topic,
-      correlationId: event.correlationId,
-      flowId: event.flowId,
-      flowOrigin: event.flowOrigin,
-      sourceRid: event.sourceRid,
-      targetRid: event.targetRid,
-      serverRid: event.serverRid,
-      spotId: event.spotId,
-      instanceSpotType: event.instanceSpotType,
-      activationState: event.activationState,
-      actorId: event.actorId,
-      commandId: event.commandId,
-      errorReason: event.reason,
-      errorAction: event.action,
+      surface: normalized.surface,
+      messageKind: normalized.messageKind,
+      packetName: normalized.packetName,
+      channelName: normalized.channelName,
+      channelRouteKind: normalized.channelRouteKind,
+      meshName: normalized.meshName,
+      topic: normalized.topic,
+      correlationId: normalized.correlationId,
+      flowId: normalized.flowId,
+      flowOrigin: normalized.flowOrigin,
+      sourceRid: normalized.sourceRid,
+      targetRid: normalized.targetRid,
+      serverRid: normalized.serverRid,
+      spotId: normalized.spotId,
+      instanceSpotType: normalized.instanceSpotType,
+      activationState: normalized.activationState,
+      actorId: normalized.actorId,
+      commandId: normalized.commandId,
+      errorReason: normalized.reason,
+      errorAction: normalized.action,
       errorType: errorInfo.errorType,
       errorMessage: errorInfo.errorMessage,
       errorCauseType: errorInfo.errorCauseType,
@@ -92,6 +94,16 @@ export class ZLinkDispatchErrorReporter {
   get providerFailureCount(): number {
     return this.flow.providerFailureCount;
   }
+}
+
+function normalizeDispatchFailure(event: ZLinkRuntimeDispatchFailure): ZLinkRuntimeDispatchFailure {
+  if (event.messageKind !== 'publish') return event;
+  return {
+    ...event,
+    surface: ZLinkDispatchErrorSurface.ClassicFanout,
+    messageKind: ZLinkDispatchMessageKind.Send,
+    channelRouteKind: undefined
+  };
 }
 
 function channelDropReason(event: ZLinkRuntimeDispatchFailure): string | undefined {

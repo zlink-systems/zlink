@@ -9,15 +9,18 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.core.env.StandardEnvironment
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
+import org.springframework.boot.ApplicationRunner
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTopology
+import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatReadinessReporter
 import systems.zlink.samples.kotlin.supportchat.server.session.sessions.SupportChatSession
 
 @EnableZLinkFramework
@@ -50,6 +53,14 @@ class SessionApplication {
                 .enableActorDispatch()
                 .registerSession(SupportChatSession::class.java)
         }
+
+    @Bean
+    fun sessionStreamReadiness(): ApplicationRunner =
+        ApplicationRunner { println("supportchat-ready kind=stream node=session") }
+
+    @Bean(destroyMethod = "close")
+    fun sessionSpotRouteReadiness(meshes: ZLinkRouteMeshRuntime): SupportChatReadinessReporter =
+        SupportChatReadinessReporter("session", meshes)
 
     @Bean
     fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore = SampleLocationStore.create(topology)

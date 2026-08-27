@@ -1,5 +1,7 @@
 package systems.zlink.samples.gamequest.client;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -7,6 +9,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.samples.gamequest.server.configuration.SampleNames;
 import systems.zlink.samples.gamequest.shared.contracts.Messages;
 import systems.zlink.httpclient.ZLinkHttpClient;
@@ -215,7 +219,23 @@ public final class GameQuestClientScenario {
                 && progress.currentCount() == 5
                 && progress.status().equals(Messages.QuestStatuses.RewardGranted)));
         apiAStream.close().submit().toCompletableFuture().join();
-        System.out.println(SampleNames.RehydrateMarker);
+    }
+
+    public void verifyOwnerUnavailable(ZLinkStreamConnector apiAStream) throws Exception {
+        String playerId = "player-owner-unavailable";
+        apiAStream.connect().submit().toCompletableFuture().join();
+        apiAStream.request(new Messages.JoinSessionReq(playerId))
+            .submit(Messages.JoinSessionRes.class).toCompletableFuture().join();
+        waitForOwnerTerminationRelease();
+        try {
+            apiAStream.request(new Messages.KillMonsterReq(
+                    playerId, "wolf", "forest", "owner-unavailable-kill"))
+                .submit(Messages.KillMonsterRes.class).toCompletableFuture().join();
+            throw new IllegalStateException("Ready owner gameplay call unexpectedly succeeded");
+        } catch (java.util.concurrent.CompletionException error) {
+            ensure(isUnavailable(error));
+        }
+        apiAStream.close().submit().toCompletableFuture().join();
     }
 
     private void verifyScaleOut(
@@ -250,7 +270,6 @@ public final class GameQuestClientScenario {
         CompletableFuture.allOf(requestA, requestB, progressA, progressB).join();
         ensure(progressA.join().payload().progress().currentCount() == 1);
         ensure(progressB.join().payload().progress().currentCount() == 1);
-        System.out.println("gamequest-scale-out=completed");
     }
 
     private Messages.GameQuestServerAssertRes waitForServerAssertion() throws Exception {
@@ -282,6 +301,37 @@ public final class GameQuestClientScenario {
             }
         } while (Instant.now().isBefore(deadline));
         throw new IllegalStateException("Projection did not reach " + questId + "=" + currentCount);
+    }
+
+    private void waitForOwnerTerminationRelease() throws InterruptedException {
+        if (options.ownerUnavailableReleaseFile().isBlank()) {
+            throw new IllegalStateException("sample.ownerUnavailableReleaseFile is required");
+        }
+        Path releaseFile = Path.of(options.ownerUnavailableReleaseFile());
+        for (int attempt = 0; attempt < 300; attempt++) {
+            if (Files.exists(releaseFile)) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException("Timed out waiting for owner termination release");
+    }
+
+    private static boolean isUnavailable(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof ZLinkFrameworkException framework
+                && framework.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE) {
+                return true;
+            }
+            if (current instanceof IllegalStateException remote
+                && remote.getMessage() != null
+                && remote.getMessage().startsWith("Unavailable:")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private boolean hasProgress(List<Messages.QuestProgress> progress, String questId, int currentCount) {

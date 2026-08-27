@@ -172,7 +172,7 @@ internal sealed class ZLinkActorMessageFollower
             actorId,
             requestId,
             replyCapability);
-        if (!_directReplyCompletions.TryGet(key, out var pending))
+        if (_directReplyCompletions.TryGet(key) is not { } pending)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_follow_reply_not_found actor={actorId} request_id={requestId}");
@@ -301,7 +301,7 @@ internal sealed class ZLinkActorMessageFollower
         if (flags != ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind)
             return false;
         var key = new DirectReplyKey(actorId, requestId, replyCapability);
-        if (!_directReplyCompletions.TryGet(key, out var pending))
+        if (_directReplyCompletions.TryGet(key) is not { } pending)
             return false;
         if (!pending.TryBeginDelivery())
         {
@@ -346,7 +346,7 @@ internal sealed class ZLinkActorMessageFollower
         IReadOnlyList<Message> parts,
         SendFlags flags)
     {
-        if (!_directReplyCompletions.TryGet(key, out var current)
+        if (_directReplyCompletions.TryGet(key) is not { } current
             || !ReferenceEquals(current, pending)
             || !pending.TryBeginDelivery())
             return SubmitResult.Terminated;
@@ -404,6 +404,13 @@ internal sealed class ZLinkActorMessageFollower
                         TimeSpan.FromMilliseconds(remaining),
                         cancellationToken)
                     .ConfigureAwait(false);
+            // Keep the expired route claimable during terminal retention. The
+            // first late reply observes IsExpired and completes it without
+            // invoking the callback; a route with no reply is retired below.
+            await Task.Delay(
+                    ZLinkRelocationReplyLifetime.TerminalRetention,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {

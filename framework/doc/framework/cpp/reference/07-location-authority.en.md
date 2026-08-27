@@ -79,7 +79,7 @@ Relocation has no separate participant, record, callback-concurrency, or in-flig
 Target staging briefly acquires the host's shared Application Job Queue reservation before
 receive, returns it after finite durable handoff, and later acquires live permits progressively
 for runnable turns. Core memory accounting, frame-size, and Store limits still apply. See
-[Relocation Flow §5.3](../../common/spec/server/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
+[Relocation Flow §5.3](../../common/spec/server/05-location-relocation/04-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
 
 **When to use.** Adjust this only when the defaults do not fit the deployment environment
 (network latency, Store response time).

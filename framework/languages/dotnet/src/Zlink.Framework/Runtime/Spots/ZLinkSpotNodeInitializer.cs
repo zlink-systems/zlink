@@ -205,12 +205,16 @@ internal sealed class ZLinkSpotNodeInitializer(
         }
     }
 
+    //  An object role or automatic discovery needs the descriptor published in the Location Store
+    //  regardless of where the routing ID came from. Skipping the claim for an explicit routing ID
+    //  left an object-role node invisible as a Spot target: peers saw it Ready, but no compatible
+    //  User Spot target was ever found. A reclaim that collides with a live owner is already
+    //  handled below as RejectedConflict, which is the same outcome an automatic RID produces.
     private static bool RequiresDescriptorClaim(
         ZLinkSpotNodeRegistration registration) =>
-        !registration.HasExplicitRoutingId
-        && (registration.ObjectRoleSelected
-            || registration.Router?.AcquisitionMode
-               == ZLinkPeerAcquisitionMode.AutoConnect);
+        registration.ObjectRoleSelected
+        || registration.Router?.AcquisitionMode
+           == ZLinkPeerAcquisitionMode.AutoConnect;
 
     private static Exception CreateClaimFailure(
         ZLinkSpotNodeRegistration registration,

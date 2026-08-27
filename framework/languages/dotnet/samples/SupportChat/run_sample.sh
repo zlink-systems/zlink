@@ -10,6 +10,8 @@ LOG_DIR="${RUN_DIR}/logs"
 SAMPLE_LOG_DIR="${RUN_DIR}/sample-logs"
 SUPPORTCHAT_LOG_DIR="${SAMPLE_LOG_DIR}"
 mkdir -p "${LOG_DIR}" "${SUPPORTCHAT_LOG_DIR}"
+SUPPORTCHAT_WAIT_ATTEMPTS=300
+SUPPORTCHAT_WAIT_INTERVAL_SECONDS=0.1
 
 PIDS=()
 REDIS_CONTAINER=""
@@ -108,11 +110,11 @@ wait_port() {
   local port
   host="$(endpoint_host "${endpoint}")"
   port="$(endpoint_port "${endpoint}")"
-  for _ in $(seq 1 600); do
+  for _ in $(seq 1 "${SUPPORTCHAT_WAIT_ATTEMPTS}"); do
     if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
       return 0
     fi
-    sleep 0.1
+    sleep "${SUPPORTCHAT_WAIT_INTERVAL_SECONDS}"
   done
   echo "Timed out waiting for ${name} at ${endpoint}" >&2
   return 1
@@ -132,16 +134,32 @@ start_server() {
   PIDS+=("$!")
 }
 
-wait_log() {
+log_count() {
   local pattern="$1"
-  local file="$2"
-  for _ in $(seq 1 50); do
-    if grep -Eq "${pattern}" "${file}"; then
+  shift
+  local count=0
+  local file
+  local matches
+  for file in "$@"; do
+    if [[ -f "${file}" ]]; then
+      matches="$(grep -F -c -- "${pattern}" "${file}" || true)"
+      count=$((count + matches))
+    fi
+  done
+  echo "${count}"
+}
+
+wait_log_at_least() {
+  local expected="$1"
+  local pattern="$2"
+  shift 2
+  for _ in $(seq 1 "${SUPPORTCHAT_WAIT_ATTEMPTS}"); do
+    if (( $(log_count "${pattern}" "$@") >= expected )); then
       return 0
     fi
-    sleep 0.2
+    sleep "${SUPPORTCHAT_WAIT_INTERVAL_SECONDS}"
   done
-  echo "Timed out waiting for '${pattern}' in ${file}" >&2
+  echo "Timed out waiting for at least ${expected} occurrence(s) of '${pattern}'" >&2
   return 1
 }
 
@@ -195,24 +213,31 @@ dotnet build "${SCRIPT_DIR}/SupportChat.csproj" --maxcpucount:1
 
 start_server support "${SCRIPT_DIR}/Server/Support/SupportChat.Server.Support.csproj" --config "${SUPPORT_CONFIG_FILE}"
 wait_port support-mesh "${SUPPORTCHAT_SUPPORT_MESH_ENDPOINT}"
+wait_log_at_least 1 "supportchat-ready kind=public node=support" "${LOG_DIR}/support.log"
 
 start_server api "${SCRIPT_DIR}/Server/Api/SupportChat.Server.Api.csproj" --config "${API_CONFIG_FILE}"
 wait_port api-mesh "${SUPPORTCHAT_API_MESH_ENDPOINT}"
+wait_log_at_least 1 "supportchat-ready kind=public node=api" "${LOG_DIR}/api.log"
+wait_log_at_least 1 "supportchat-ready kind=spot-route node=api mesh=supportchat" "${LOG_DIR}/api.log"
 
 start_server session "${SCRIPT_DIR}/Server/Session/SupportChat.Server.Session.csproj" --config "${SESSION_CONFIG_FILE}"
 wait_port session-mesh "${SUPPORTCHAT_SESSION_MESH_ENDPOINT}"
 wait_port session-stream "${SUPPORTCHAT_STREAM_ENDPOINT}"
+wait_log_at_least 1 "supportchat-ready kind=stream node=session" "${LOG_DIR}/session.log"
+wait_log_at_least 1 "supportchat-ready kind=spot-route node=session mesh=supportchat" "${LOG_DIR}/session.log"
 
 dotnet run --no-build --project "${SCRIPT_DIR}/Client/SupportChat.Client.csproj" -- \
   --config "${CLIENT_CONFIG_FILE}" >"${LOG_DIR}/client.log" 2>&1
 
-grep -q "supportchat=completed" "${LOG_DIR}/client.log"
-grep -q "supportchat-closed-typing-ignore=verified" "${LOG_DIR}/client.log"
-wait_log "support conversation: created" "${LOG_DIR}/support.log"
-wait_log "support conversation: actor joined" "${LOG_DIR}/support.log"
-wait_log "status=WaitingForAgent" "${LOG_DIR}/support.log"
-wait_log "status=Active" "${LOG_DIR}/support.log"
-wait_log "status=WaitingForClose" "${LOG_DIR}/support.log"
-wait_log "status=Closed" "${LOG_DIR}/support.log"
-echo "supportchat-server-evidence=completed"
+wait_log_at_least 1 "supportchat=completed" "${LOG_DIR}/client.log"
+wait_log_at_least 1 "supportchat-closed-typing-ignore=verified" "${LOG_DIR}/client.log"
+wait_log_at_least 1 "supportchat-conversation created conversation=" "${LOG_DIR}/api.log" "${LOG_DIR}/support.log"
+wait_log_at_least 1 "supportchat-conversation agent-joined conversation=" "${LOG_DIR}/api.log" "${LOG_DIR}/support.log"
+wait_log_at_least 1 "supportchat-conversation status=WaitingForAgent conversation=" "${LOG_DIR}/api.log" "${LOG_DIR}/support.log"
+wait_log_at_least 1 "supportchat-conversation status=Active conversation=" "${LOG_DIR}/api.log" "${LOG_DIR}/support.log"
+wait_log_at_least 1 "supportchat-conversation status=WaitingForClose conversation=" "${LOG_DIR}/api.log" "${LOG_DIR}/support.log"
+wait_log_at_least 1 "supportchat-conversation status=Closed conversation=" "${LOG_DIR}/api.log" "${LOG_DIR}/support.log"
 RUN_SUCCEEDED=1
+cleanup
+trap - EXIT
+echo "supportchat-placement=completed"

@@ -1,6 +1,9 @@
 # Framework Public Contract Per Language
 
-This directory defines the exact form in which the Framework server
+<!-- framework-adapter-nav:start -->
+[Language interface table of contents](README.en.md) | [Spec table of contents](../README.en.md)
+<!-- framework-adapter-nav:end -->
+This directory defines the form in which the Framework server
 package's common behavior is provided in each language's public API. The
 signatures recorded here are the formal contract the corresponding
 language's implementation and contract tests must follow.
@@ -14,7 +17,7 @@ and the HTTP client is owned by
 Behavior common across languages is defined by the
 [common spec](../README.en.md), and the procedure for changing a
 contract follows
-[Public Contract Governance](../00-public-contract-governance.en.md).
+[Public Contract Governance](../00-foundation/01-public-contract-governance.en.md).
 
 | Language | Public contract |
 |------|-----------|
@@ -27,3 +30,8 @@ contract follows
 The per-language specs aren't documents that copy each other's
 signatures. They each fix the same common behavior as a public contract
 that users of that language can use naturally.
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[Language interface table of contents](README.en.md) | [Spec table of contents](../README.en.md)
+<!-- framework-adapter-nav:bottom:end -->

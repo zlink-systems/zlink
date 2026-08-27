@@ -12,6 +12,10 @@ public interface ZLinkFrameworkOptions {
 
     void setDefaultRequestTimeout(Duration timeout);
 
+    Duration sessionReplacementCallbackTimeout();
+
+    void setSessionReplacementCallbackTimeout(Duration timeout);
+
     ZLinkCodecRegistryBuilder codecs();
 
     void addHandlersFromPackageOf(Class<?> markerType);

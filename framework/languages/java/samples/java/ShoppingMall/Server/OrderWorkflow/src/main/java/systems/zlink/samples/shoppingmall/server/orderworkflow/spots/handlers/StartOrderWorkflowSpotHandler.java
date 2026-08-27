@@ -18,6 +18,8 @@ public final class StartOrderWorkflowSpotHandler
     public CompletionStage<Messages.StartOrderWorkflowRes> handle(
         OrderWorkflowSpot spot,
         Messages.StartOrderWorkflowReq request) {
+        System.out.println("shoppingmall-order started order=" + request.orderId()
+            + " spot=" + spot.context().spotId());
         return workflow.startInSpot(spot, request)
             .thenApply(Messages.StartOrderWorkflowRes::new);
     }

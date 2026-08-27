@@ -34,6 +34,8 @@ export interface ZLinkActorClaimActivation<TActor> {
   readonly activated?: TActor;
   readonly existingLocation?: ZLinkActorLocation;
   readonly generation?: bigint;
+  /** Owner lease captured by the successful Actor Location claim. */
+  readonly ownerLeaseGeneration?: bigint;
 }
 
 export class ZLinkActorLocationClaims {
@@ -61,7 +63,11 @@ export class ZLinkActorLocationClaims {
       return { existingLocation: claim.existing };
     }
     try {
-      return { activated: await activate(), generation: claim.generation };
+      return {
+        activated: await activate(),
+        generation: claim.generation,
+        ownerLeaseGeneration: claim.claimed?.leaseGeneration
+      };
     } catch (error) {
       await this.release(actorType, actorId);
       throw error;
@@ -282,18 +288,22 @@ export class ZLinkActorLocationClaims {
       const key = { meshName: tracked.row.meshName, actorId: tracked.row.actorId };
       try {
         const current = await this.actorStore.resolveActor(key);
+        if (this.actors.get(canonical) !== tracked) continue;
         if (current === undefined
           || current.ownerId !== owner.ownerId
           || (current.leaseGeneration !== tracked.row.leaseGeneration
             && current.leaseGeneration !== owner.leaseGeneration)) {
+          if (this.actors.get(canonical) !== tracked) continue;
           this.actors.delete(canonical);
           await tracked.deactivate?.();
           continue;
         }
         if (current.leaseGeneration === owner.leaseGeneration) {
+          if (this.actors.get(canonical) !== tracked) continue;
           tracked.row = { ...current };
           continue;
         }
+        if (this.actors.get(canonical) !== tracked) continue;
         const result = await this.runtime.writeActor(
           current,
           ZLinkLocationWriteIntent.Takeover
@@ -304,6 +314,7 @@ export class ZLinkActorLocationClaims {
           ));
           continue;
         }
+        if (this.actors.get(canonical) !== tracked) continue;
         tracked.row = {
           ...current,
           ownerId: owner.ownerId,

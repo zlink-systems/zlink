@@ -116,9 +116,13 @@ export class ServiceStatefulRegistry {
   }
 
   createEntrySpot(spotId = this.nodeRid): ServiceSpotState {
+    return this.createEntrySpotCore(spotId);
+  }
+
+  private createEntrySpotCore(spotId = this.nodeRid): ServiceSpotState {
     const current = this.spots.get(spotId);
     if (current !== undefined) return current;
-    return this.restoreSpot(
+    return this.restoreSpotCore(
       { spotId, generation: this.nodeGeneration },
       'entry',
       'entry',
@@ -127,6 +131,14 @@ export class ServiceStatefulRegistry {
   }
 
   createSpot(
+    spotId: string,
+    kind: Exclude<ServiceSpotKind, 'entry'> = 'user',
+    stableType: string = kind
+  ): ServiceSpotState {
+    return this.createSpotCore(spotId, kind, stableType);
+  }
+
+  private createSpotCore(
     spotId: string,
     kind: Exclude<ServiceSpotKind, 'entry'> = 'user',
     stableType: string = kind
@@ -167,6 +179,15 @@ export class ServiceStatefulRegistry {
     stableType: string,
     authorityOwnerGeneration: bigint
   ): ServiceSpotState {
+    return this.restoreSpotCore(ref, kind, stableType, authorityOwnerGeneration);
+  }
+
+  private restoreSpotCore(
+    ref: ServiceSpotRef,
+    kind: ServiceSpotKind,
+    stableType: string,
+    authorityOwnerGeneration: bigint
+  ): ServiceSpotState {
     requireText(ref.spotId, 'spotId');
     requirePositive(ref.generation, 'spot.generation');
     requireText(stableType, 'stableType');
@@ -201,6 +222,10 @@ export class ServiceStatefulRegistry {
   }
 
   requireSpot(ref: ServiceSpotRef): ServiceSpotState {
+    return this.requireSpotCore(ref);
+  }
+
+  private requireSpotCore(ref: ServiceSpotRef): ServiceSpotState {
     const current = this.spots.get(ref.spotId);
     if (current === undefined || current.ref.generation !== ref.generation || current.state !== 'ready') {
       throw new ServiceStaleGenerationError('spot', ref.spotId);
@@ -209,7 +234,7 @@ export class ServiceStatefulRegistry {
   }
 
   closeSpot(ref: ServiceSpotRef): boolean {
-    const current = this.requireSpot(ref);
+    const current = this.requireSpotCore(ref);
     if (current.kind === 'entry') return false;
     for (const actor of this.actors.values()) {
       if (
@@ -227,11 +252,19 @@ export class ServiceStatefulRegistry {
   createActor(
     actorId: string,
     stableType = 'actor',
-    initialSpot = this.createEntrySpot().ref
+    initialSpot?: ServiceSpotRef
+  ): ServiceActorState {
+    return this.createActorCore(actorId, stableType, initialSpot);
+  }
+
+  private createActorCore(
+    actorId: string,
+    stableType = 'actor',
+    initialSpot = this.createEntrySpotCore().ref
   ): ServiceActorState {
     requireText(actorId, 'actorId');
     requireText(stableType, 'stableType');
-    this.requireSpot(initialSpot);
+    this.requireSpotCore(initialSpot);
     const current = this.actors.get(actorId);
     if (current !== undefined) {
       if (this.actorTypes.get(actorId) !== stableType) {
@@ -267,7 +300,7 @@ export class ServiceStatefulRegistry {
     membershipEpoch: bigint,
     authorityOwnerGeneration = actor.generation
   ): ServiceActorState {
-    this.requireSpot(spot);
+    this.requireSpotCore(spot);
     requirePositive(actor.generation, 'actor.generation');
     requirePositive(membershipEpoch, 'membershipEpoch');
     requirePositive(authorityOwnerGeneration, 'authorityOwnerGeneration');
@@ -299,6 +332,10 @@ export class ServiceStatefulRegistry {
   }
 
   requireActor(ref: ServiceActorRef): ServiceActorState {
+    return this.requireActorCore(ref);
+  }
+
+  private requireActorCore(ref: ServiceActorRef): ServiceActorState {
     const current = this.actors.get(ref.actorId);
     if (
       current === undefined
@@ -311,8 +348,12 @@ export class ServiceStatefulRegistry {
   }
 
   joinActor(actor: ServiceActorRef, target: ServiceSpotRef): ServiceMembershipTransition {
-    const current = this.requireActor(actor);
-    this.requireSpot(target);
+    return this.joinActorCore(actor, target);
+  }
+
+  private joinActorCore(actor: ServiceActorRef, target: ServiceSpotRef): ServiceMembershipTransition {
+    const current = this.requireActorCore(actor);
+    this.requireSpotCore(target);
     const next: ServiceActorState = Object.freeze({
       ...current,
       spot: Object.freeze({ ...target }),
@@ -330,16 +371,16 @@ export class ServiceStatefulRegistry {
   }
 
   leaveActor(actor: ServiceActorRef, expectedMembershipEpoch: bigint): ServiceMembershipTransition {
-    const entry = this.createEntrySpot().ref;
-    const current = this.requireActor(actor);
+    const entry = this.createEntrySpotCore().ref;
+    const current = this.requireActorCore(actor);
     if (current.membershipEpoch !== expectedMembershipEpoch) {
       throw new ServiceStaleGenerationError('actor', actor.actorId);
     }
-    return this.joinActor(actor, entry);
+    return this.joinActorCore(actor, entry);
   }
 
   destroyActor(actor: ServiceActorRef): ServiceActorState {
-    const current = this.requireActor(actor);
+    const current = this.requireActorCore(actor);
     this.actors.delete(actor.actorId);
     this.bindings.delete(actorKey(actor));
     return current;
@@ -353,7 +394,7 @@ export class ServiceStatefulRegistry {
     sessionOwnerId?: string,
     sessionOwnerLeaseGeneration?: bigint
   ): ServiceSessionBinding {
-    const current = this.requireActor(actor);
+    const current = this.requireActorCore(actor);
     requireText(sessionRid, 'sessionRid');
     requireText(sessionOwnerNodeRid, 'sessionOwnerNodeRid');
     const binding: ServiceSessionBinding = Object.freeze({
@@ -371,7 +412,7 @@ export class ServiceStatefulRegistry {
   }
 
   installSessionBinding(binding: ServiceSessionBinding): void {
-    this.requireActor(binding.actor);
+    this.requireActorCore(binding.actor);
     requirePositive(binding.bindingGeneration, 'bindingGeneration');
     const current = this.bindings.get(actorKey(binding.actor));
     if (
@@ -387,6 +428,10 @@ export class ServiceStatefulRegistry {
   }
 
   binding(actor: ServiceActorRef): ServiceSessionBinding | undefined {
+    return this.bindingCore(actor);
+  }
+
+  private bindingCore(actor: ServiceActorRef): ServiceSessionBinding | undefined {
     const binding = this.bindings.get(actorKey(actor));
     return binding?.actor.generation === actor.generation ? binding : undefined;
   }
@@ -413,7 +458,7 @@ export class ServiceStatefulRegistry {
   }
 
   validateBoundSession(actor: ServiceActorRef, expectedBindingGeneration: bigint): ServiceSessionBinding {
-    const binding = this.binding(actor);
+    const binding = this.bindingCore(actor);
     if (binding === undefined || binding.bindingGeneration !== expectedBindingGeneration) {
       throw new ServiceStaleGenerationError('binding', actor.actorId);
     }
@@ -493,11 +538,11 @@ export class ServiceStatefulRegistry {
     }
     this.reservations.delete(key);
     if (reservation.objectKind === 'actor') {
-      return this.createActor(reservation.key, reservation.stableType);
+      return this.createActorCore(reservation.key, reservation.stableType);
     }
     const spotKind: ServiceSpotKind =
       reservation.objectKind === 'instanceSpot' ? 'instance' : 'user';
-    return this.createSpot(
+    return this.createSpotCore(
       reservation.key,
       spotKind,
       reservation.stableType

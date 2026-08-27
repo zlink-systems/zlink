@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -24,7 +25,8 @@ class gamequest_client_scenario_t
     bool run (const std::string &api_a_stream_endpoint,
               const std::string &api_b_stream_endpoint,
               const std::string &api_a_http_url,
-              const std::string &api_b_http_url)
+              const std::string &api_b_http_url,
+              const std::string &owner_loss_release_file)
     {
         try {
             auto api_a_core = connect (api_a_stream_endpoint);
@@ -216,15 +218,14 @@ class gamequest_client_scenario_t
             ensure (ruins_completed.get ().progress.status == quest_status_t::reward_granted,
                     "reconnected player did not receive the notify on the new node");
 
-            /* owner deactivate→reactivate(§14): Spot을 닫고 다시 생성했을 때 event stream
-             * replay로 앞선 진행이 복원된다. */
-            auto deactivated = alice_b.request (
-                                     projection_admin_req_t{"player-alice", "", "deactivate"})
-                                .packet_name (projection_admin_req_t::packet_name)
-                                .async<projection_admin_res_t> ()
-                                .result ();
-            ensure (deactivated && deactivated.value ().ok,
-                    "player-alice owner deactivation failed");
+            /* §9-8: the close contract is the one-way ClosePlayerQuestMsg.  The
+             * maintenance request only gives the client a path to that message;
+             * it does not replace it with a request/reply close API. */
+            auto closed = alice_b.request (projection_admin_req_t{"player-alice", "", "close"})
+                            .packet_name (projection_admin_req_t::packet_name)
+                            .async<projection_admin_res_t> ()
+                            .result ();
+            ensure (closed && closed.value ().ok, "player-alice ClosePlayerQuestMsg failed");
 
             /* A call that already resolved the retired Ready owner terminates
              * as stale. The Framework invalidates that route, but does not
@@ -298,10 +299,54 @@ class gamequest_client_scenario_t
                       && scale_b_progress.get ().progress.current_count == 1,
                     "GameQuest scale-out progress push mismatch");
 
+            /* §9-9: make a Ready owner observable to the runner, then wait for
+             * it to stop that exact Mission process before issuing the next
+             * gameplay call through the surviving API node. */
+            auto owner_failure_core = connect (api_b_stream_endpoint);
+            auto owner_failure = zlink::stream_e2e_client::use (owner_failure_core);
+            auto owner_joined = owner_failure.request (join_session_req_t{"player-owner-failure"})
+                                  .packet_name (join_session_req_t::packet_name)
+                                  .async<join_session_res_t> ()
+                                  .result ();
+            ensure (static_cast<bool> (owner_joined), "owner-failure player join failed");
+            auto owner_progress = owner_failure.wait_for<quest_progress_notify_t> ()
+                                    .where ([] (const quest_progress_notify_t &notify) {
+                                        return notify.player_id == "player-owner-failure"
+                                               && notify.progress.quest_id
+                                                    == quest_ids_t::first_hunt
+                                               && notify.progress.current_count == 1;
+                                    })
+                                    .timeout (std::chrono::seconds (12))
+                                    .to_future ("owner-failure progress wait failed");
+            auto owner_setup = owner_failure.request (
+                                  kill_monster_req_t{"player-owner-failure", "wolf", "forest",
+                                                     "owner-ready-kill"})
+                                 .packet_name (kill_monster_req_t::packet_name)
+                                 .async<kill_monster_res_t> ()
+                                 .result ();
+            ensure (owner_setup && owner_setup.value ().event_id
+                      == "player-owner-failure-owner-ready-kill",
+                    "owner-failure setup event id mismatch");
+            ensure (owner_progress.get ().progress.current_count == 1,
+                    "owner-failure owner did not process the setup event");
+            std::cout << "gamequest-owner-loss-stage-ready player=player-owner-failure" << std::endl;
+            wait_for_release (owner_loss_release_file);
+
+            auto unavailable = owner_failure.request (
+                                 kill_monster_req_t{"player-owner-failure", "wolf", "forest",
+                                                    "owner-unavailable-kill"})
+                                .packet_name (kill_monster_req_t::packet_name)
+                                .async<kill_monster_res_t> ()
+                                .result ();
+            ensure (!unavailable
+                      && unavailable.error_code ()
+                           == zlink::stream_connector::error_code_t::remote_error,
+                    "killed Ready owner call did not end with Unavailable");
+
             assert_server (api_a_http_url);
             assert_server (api_b_http_url);
-            std::cout << "gamequest-server-evidence=completed\n";
-            std::cout << "gamequest=completed\n";
+            std::cout << "gamequest-server-evidence=completed" << std::endl;
+            std::cout << "gamequest=completed" << std::endl;
             return true;
         }
         catch (const std::exception &error) {
@@ -335,6 +380,18 @@ class gamequest_client_scenario_t
                                 return progress.quest_id == quest_id
                                        && progress.current_count == current_count;
                             });
+    }
+
+    static void wait_for_release (const std::string &release_file)
+    {
+        ensure (!release_file.empty (), "owner-loss release file is required");
+        for (int attempt = 0; attempt < 300; ++attempt) {
+            if (std::filesystem::exists (release_file)) {
+                return;
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (100));
+        }
+        throw std::runtime_error ("timed out waiting for owner-loss release");
     }
 
     static void dump_initial_join_quests (const std::string &player_id,

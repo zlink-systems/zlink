@@ -12,6 +12,7 @@ import {
 import {
   PrepareInventoryEffectReq,
   PrepareInventoryReservedReq,
+  PrepareRelocationCheckpointReq,
   VerifyExpectedVersionFenceReq
 } from '../../../Shared/Internal/shoppingmall-workflow-messages';
 import type { VerifyExpectedVersionFenceRes } from '../../../Shared/Internal/shoppingmall-workflow-messages';
@@ -47,6 +48,20 @@ class ZLinkOrderWorkflowRouter implements OrderWorkflowRouterPort {
     return this.request(new PrepareInventoryEffectReq(
       request.orderId, request.cartId, request.shippingAddressId, request.paymentMethodId,
       request.idempotencyKey, request.sourceCommandId, request.lines, request.amount, request.currency
+    ));
+  }
+
+  prepareRelocationCheckpoint(request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes & { objectGeneration: string }> {
+    return this.request(new PrepareRelocationCheckpointReq(
+      request.orderId,
+      request.cartId,
+      request.shippingAddressId,
+      request.paymentMethodId,
+      request.idempotencyKey,
+      request.sourceCommandId,
+      request.lines,
+      request.amount,
+      request.currency
     ));
   }
 

@@ -129,13 +129,13 @@ Support가 등록하는 identity·roster·conversation Actor factory와 Conversa
 
 | 필요한 동작 | 선택한 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| client connection을 actor에 연결한다. | STREAM session binding | 현재 binding route로 server push를 전달한다. [STREAM session](../../spec/server/19-stream-session.ko.md) |
-| identity actor를 준비한다. | Actor GetOrCreate | stable ActorId와 type으로 기존 actor를 재사용한다. [상호작용 모델 §2.1](../../spec/server/03-interaction-model.ko.md#21-상호작용을-시작하는-public-interface) |
-| 새 conversation의 logical address를 만든다. | User Spot manager Create | Framework가 global SpotId를 발급하고 owner를 선택한다. [Framework API](../../spec/server/06-framework-api.ko.md) |
-| actor를 ConversationSpot에 참여시킨다. | public actor join | ActorRef나 owner NodeRid를 application payload로 보내지 않는다. [Spot·Actor membership](../../spec/server/15-spot-actor.ko.md) |
-| 대화 상태를 순서대로 변경한다. | Spot turn | domain aggregate의 mutable state를 한 execution gate에서 변경한다. [Async execution policy](../../spec/server/05-async-execution-policy.ko.md) |
-| current ConversationId actor로 relay한다. | session metadata routing | Session이 payload를 domain decode하지 않고 metadata로 bound actor를 고른다. [Session–Actor dispatch](../../spec/server/20-session-actor-dispatch.ko.md) |
-| owner 장애를 표현한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy](../../spec/server/31-failure-failover-policy.ko.md#42-기존-actor와-spot) |
+| client connection을 actor에 연결한다. | STREAM session binding | 현재 binding route로 server push를 전달한다. [STREAM session](../../spec/server/04-session/01-stream-session.ko.md) |
+| identity actor를 준비한다. | Actor GetOrCreate | stable ActorId와 type으로 기존 actor를 재사용한다. [상호작용 모델 §2.1](../../spec/server/00-foundation/04-interaction-model.ko.md#2-상호작용을-시작하는-public-interface) |
+| 새 conversation의 logical address를 만든다. | User Spot manager Create | Framework가 global SpotId를 발급하고 owner를 선택한다. [Framework API](../../spec/server/00-foundation/06-framework-api.ko.md) |
+| actor를 ConversationSpot에 참여시킨다. | public actor join | ActorRef나 owner NodeRid를 application payload로 보내지 않는다. [Spot·Actor membership](../../spec/server/03-spot-actor/05-spot-actor-membership.ko.md) |
+| 대화 상태를 순서대로 변경한다. | Spot turn | domain aggregate의 mutable state를 한 execution gate에서 변경한다. [Async execution policy](../../spec/server/01-execution/README.ko.md) |
+| current ConversationId actor로 relay한다. | session metadata routing | Session이 payload를 domain decode하지 않고 metadata로 bound actor를 고른다. [Session–Actor dispatch](../../spec/server/04-session/02-session-actor-binding.ko.md) |
+| owner 장애를 표현한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#42-기존-actor와-spot) |
 
 Session은 binding token과 current ActorRef를 직접 cache하지 않는다. GetOrCreate 결과의 exact
 ActorRef는 같은 binding operation에만 사용한다. Actor destroy 뒤 같은 ActorId를 새로 만들면
@@ -583,9 +583,75 @@ log line을 성공 기준으로 사용하지 않는다.
 supportchat=completed
 ```
 
-언어별 runner는 위 공통 completion marker와 함께 closed-typing 및 server evidence를
-검사한다. authentication, assignment, reconnect 같은 self-check 이름을 공통 completion
-marker로 중복 선언하지 않는다.
+언어별 runner는 위 공통 completion marker와 함께 §10.1이 정한 evidence를 모두 검사한다.
+
+### 10.1 Runner가 확인하는 evidence
+
+Runner는 아래 표의 문자열을 그대로 찾는다. 문자열은 언어별 재량이 아니다. 다섯 구현이 같은
+문자열을 같은 횟수로 출력해야 하며, 문구를 바꾸려면 이 표를 먼저 바꾼다. Node 이름은 `api`,
+`session`, `support`로 고정한다.
+
+**Evidence는 샘플이 소유한 문자열이어야 한다.** Framework가 찍는 줄(runtime readiness 로그,
+message flow tracer, structured trace 투영, process 기동 boilerplate)을 성공 기준으로 삼지 않는다.
+그 줄들은 framework 사정으로 바뀌고, 바뀌면 샘플 runner가 조용히 깨진다.
+
+Readiness는 client를 실행하기 전에 확인한다.
+
+| 확인하는 사실 | 로그 | 출력 node |
+| --- | --- | --- |
+| Public endpoint가 열렸다 | `supportchat-ready kind=public node=<NodeId>` | `api`, `support` |
+| STREAM endpoint가 열렸다 | `supportchat-ready kind=stream node=session` | `session` |
+| Support spot mesh로 가는 route를 확보했다 | `supportchat-ready kind=spot-route node=<NodeId> mesh=<MeshName>` | `api`, `session` |
+
+**endpoint가 열렸다는 사실만으로 client를 시작하지 않는다.** `kind=public`과 `kind=stream`은
+endpoint가 listen한다는 것만 증명한다 — 그 시점에 `api`나 `session`이 Support spot mesh로 가는
+route를 아직 못 잡았으면 첫 conversation 요청이 죽는다. 세 번째 행이 그 구간을 덮는다. 이 행이
+없으면 route 수렴이 빠른 구현은 우연히 통과하고 느린 구현만 실패하는데, 그 차이를 고정 sleep으로
+메우는 것이 정확히 §10이 금지하는 일이다.
+
+Server evidence는 client scenario가 끝난 뒤 확인한다.
+
+| 확인하는 사실 | 로그 | 정확한 횟수 |
+| --- | --- | --- |
+| Conversation이 만들어졌다 | `supportchat-conversation created conversation=<ConversationId>` | 1 이상 |
+| Agent가 conversation에 join했다 | `supportchat-conversation agent-joined conversation=<ConversationId> agent=<AgentId>` | 1 이상 |
+| 상태가 전이했다 | `supportchat-conversation status=<Status> conversation=<ConversationId>` | `WaitingForAgent`·`Active`·`WaitingForClose`·`Closed` 각각 1 이상 |
+
+**상태 전이 행은 `api`와 `support` 로그를 합쳐 센다.** 어느 상태를 어느 node가 찍는지는 확인
+대상이 아니다 — 그 값을 러너에 박아 두면 전이의 소유자가 바뀔 때 조용히 깨지고, `.sh`와 `.ps1`이
+서로 다른 파일을 보는 사고가 난다.
+
+완료 marker는 둘이며 client가 출력한다.
+
+| marker | 뜻 |
+| --- | --- |
+| `supportchat=completed` | §9 client self-check 전체 통과 |
+| `supportchat-closed-typing-ignore=verified` | Closed 이후 typing·close 요청이 무시됨을 확인 |
+
+두 번째 marker의 표기는 위 문자열 하나다. `supportchat closed-typing-ignore=verified`처럼 하이픈
+대신 공백을 쓴 변형을 쓰지 않는다. **runner는 두 marker를 모두 직접 확인한다** — client 프로세스의
+종료 코드나 browser 판정으로 대신하지 않는다.
+
+#### Marker는 그 사실이 일어난 자리에서 출력한다
+
+**여러 marker를 scenario 끝에서 조건 없이 몰아 출력하지 않는다.** 그렇게 하면 앞에서 예외가 날 때
+한 줄도 찍히지 않고, 러너는 그 전에 client 종료 코드로 이미 실패한다. 결과적으로 marker 여러 개를
+찾는 검사가 **"프로세스가 0으로 끝났다" 하나를 여러 번 확인하는 것**이 되어, 어느 사실이 실제로
+일어났는지 구분하지 못한다. 각 marker는 그 사실이 성립한 지점에서 출력한다.
+
+#### Self-check는 실제 경로를 지나야 한다
+
+Server-side self-check가 **도메인 객체를 직접 만들어 굴리는 in-process 전용 경로**로 결과를 만들지
+않는다. Actor Spot, Session relay와 wire codec을 지나지 않은 결과는 이 sample이 검증하려는 것을
+검증하지 않으며, 미리 정해 둔 `…=verified` 문자열을 돌려주는 것과 다르지 않다. 같은 사실은 실제
+stream scenario가 이미 시험한다.
+
+Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
+적용하며 **`.sh`와 `.ps1`이 같은 값을 쓴다.** 재시도 없는 단발 검사를 쓰지 않는다. 다섯 언어 모두
+`.sh`와 `.ps1`을 함께 제공한다.
+
+모든 행이 통과하면 runner가 마지막에 `supportchat-placement=completed`를 출력한다. 한 행이라도
+실패하면 이 marker를 출력하지 않는다.
 
 ## 11. 완료 기준
 
@@ -599,4 +665,5 @@ marker로 중복 선언하지 않는다.
 - Framework public API와 typed JSON codec만 사용하며 private runtime, raw frame과 sample-only
   routing helper를 추가하지 않는다.
 - Ready owner 장애를 crash failover로 표시하지 않고 Unavailable 경계를 유지한다.
-- runner가 build, readiness, self-check, evidence와 cleanup을 수행한다.
+- runner가 build, readiness, self-check, cleanup을 수행하고 §10.1 표의 모든 행을 문자열과
+  횟수까지 통과시킨다.

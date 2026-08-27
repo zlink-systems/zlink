@@ -172,14 +172,14 @@ Observer는 room member가 아니다. Observer의 local Entry Spot handler가 mi
 
 | 필요한 동작 | 선택한 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| 수동 peer로 object route를 구성한다. | RouteMesh manual endpoint | automatic discovery와 구분되는 topology를 보여 준다. [Channel topology](../../spec/server/07-channel-topology.ko.md) |
-| room을 새로 만든다. | User Spot manager Create | Framework가 global RoomId를 발급하고 owner를 선택한다. [상호작용 모델 §2.1](../../spec/server/03-interaction-model.ko.md#21-상호작용을-시작하는-public-interface) |
-| remote room에 join한다. | global Spot·Actor message | Caller는 RoomId·ActorId를 지정하고 current owner를 Framework가 resolve한다. [Spot address messaging](../../spec/server/16-spot-address-messaging.ko.md) |
-| 다른 node의 room에 Player Actor를 join한다. | `PreserveStateWith`, Actor relocation adapter와 Relocation Store | Framework가 Actor state를 보존해 Room owner로 이동한다. [Relocation policy §5](../../spec/server/15-spot-actor.ko.md#5-모든-이동-경로가-공유하는-relocation-policy), [Store 등록 §10](../../spec/server/06-framework-api.ko.md#10-location-store와-relocation-store) |
-| client connection을 actor에 연결한다. | STREAM session binding | current session으로 server push를 보낸다. [STREAM session](../../spec/server/19-stream-session.ko.md) |
-| milestone을 여러 Play ingress에 알린다. | Logical Multicast | publisher가 subscriber node 목록을 관리하지 않는다. [상호작용 모델 §5](../../spec/server/03-interaction-model.ko.md#5-spot-logical-multicast) |
-| game 종료 뒤 actor를 정리한다. | public leave와 Entry Spot destroy | disconnect cleanup과 explicit destroy를 분리한다. [Spot·Actor membership §3](../../spec/server/15-spot-actor.ko.md#3-entry-spot과-user-spot의-actor-membership) |
-| owner 장애를 표현한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy](../../spec/server/31-failure-failover-policy.ko.md#42-기존-actor와-spot) |
+| 수동 peer로 object route를 구성한다. | RouteMesh manual endpoint | automatic discovery와 구분되는 topology를 보여 준다. [Channel topology](../../spec/server/02-channel-transport/01-channel-topology.ko.md) |
+| room을 새로 만든다. | User Spot manager Create | Framework가 global RoomId를 발급하고 owner를 선택한다. [상호작용 모델 §2.1](../../spec/server/00-foundation/04-interaction-model.ko.md#2-상호작용을-시작하는-public-interface) |
+| remote room에 join한다. | global Spot·Actor message | Caller는 RoomId·ActorId를 지정하고 current owner를 Framework가 resolve한다. [Spot address messaging](../../spec/server/03-spot-actor/06-spot-address-messaging.ko.md) |
+| 다른 node의 room에 Player Actor를 join한다. | `PreserveStateWith`, Actor relocation adapter와 Relocation Store | Framework가 Actor state를 보존해 Room owner로 이동한다. [Relocation policy §5](../../spec/server/03-spot-actor/05-spot-actor-membership.ko.md#6-모든-이동-경로가-공유하는-relocation-policy), [Store 등록 §10](../../spec/server/00-foundation/06-framework-api.ko.md#13-location-store와-relocation-store-등록) |
+| client connection을 actor에 연결한다. | STREAM session binding | current session으로 server push를 보낸다. [STREAM session](../../spec/server/04-session/01-stream-session.ko.md) |
+| milestone을 여러 Play ingress에 알린다. | Logical Multicast | publisher가 subscriber node 목록을 관리하지 않는다. [상호작용 모델 §5](../../spec/server/00-foundation/04-interaction-model.ko.md#5-spot-logical-multicast) |
+| game 종료 뒤 actor를 정리한다. | public leave와 Entry Spot destroy | disconnect cleanup과 explicit destroy를 분리한다. [Spot·Actor membership §3](../../spec/server/03-spot-actor/05-spot-actor-membership.ko.md#3-entry-spot과-user-spot의-actor-membership) |
+| owner 장애를 표현한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#42-기존-actor와-spot) |
 
 Room creation의 Create call에는 initial room settings와 필요하면 최초 placement Mesh를
 전달할 수 있지만, Play endpoint나 NodeRid를 업무 값으로 전달하지 않는다. 이미 존재하는
@@ -675,6 +675,72 @@ Runner는 completion marker와 함께 reconnect 뒤 반환된 game state, 두 pl
 observer subscription과 milestone 결과를 확인한다. Self-check assertion이나 runner log evidence로
 판정하며, 언어별로 존재하지 않는 단계 marker를 공통 계약으로 추가하지 않는다.
 
+### 10.1 Runner가 확인하는 evidence
+
+Runner는 아래 표의 문자열을 그대로 찾는다. 문자열은 언어별 재량이 아니다. 다섯 구현이 같은
+문자열을 같은 횟수로 출력해야 하며, 문구를 바꾸려면 이 표를 먼저 바꾼다. Node 이름은 `api-a`,
+`api-b`, `play-a`, `play-b`로 고정하고, **Actor ID는 `player-x`, `player-o`, `observer`로 고정한다.**
+지금 Java·Kotlin만 observer를 `player-observer`로 쓰고 있어, `actor=observer`를 0회로 검사해도
+실제 observer가 destroy돼도 통과해 버린다.
+
+Readiness는 client를 시작하기 전에 확인한다.
+
+| 확인하는 사실 | 로그 | 출력 node |
+| --- | --- | --- |
+| Play node가 상대 Play node를 peer로 admit했다 | `tictactoe-ready kind=peer-route node=<NodeId> peer=<PeerNodeId>` | `play-a`, `play-b` |
+| Api node가 HTTP endpoint를 열었다 | `tictactoe-ready kind=http node=<NodeId>` | `api-a`, `api-b` |
+| Api node가 Play spot mesh로 가는 route를 확보했다 | `tictactoe-ready kind=spot-route node=<NodeId> mesh=<SpotMeshName>` | `api-a`, `api-b` |
+
+**HTTP가 떴다는 사실만으로 client를 시작하지 않는다.** `kind=http`는 endpoint가 listen한다는
+것만 증명한다 — 그 시점에 Api node가 Play spot mesh로 가는 route를 아직 못 잡았으면 첫
+`JoinSpot`이 timeout으로 죽는다. 세 번째 행이 그 구간을 덮는다. 이 행이 없으면 route 수렴이
+빠른 구현은 우연히 통과하고 느린 구현만 실패하는데, 그 차이를 고정 sleep으로 메우는 것이
+정확히 §10 3단계가 금지하는 일이다.
+
+`kind=peer-route` 행은 **표에 적힌 그 peer가 ready인지** 확인한다. "ready인 peer가 하나 이상"으로
+느슨하게 판정하지 않는다 — 상대가 아닌 peer가 먼저 올라와도 통과해 버린다. 그러려면 peer를
+이름으로 지목할 수 있어야 하므로 **spot mesh에 고정 RID를 쓴다.** Peer 상태에는 endpoint가 없어
+자동 배정된 RID로는 어느 peer가 상대인지 식별할 수 없다. [Object role이 있는 MeshNode에도 고정
+RID를 허용하는 것](../../spec/server/languages/dotnet/interfaces/03-configuration-topology.ko.md)이
+이 용도 때문이다.
+
+**고정 sleep으로 readiness를 대신하지 않는다.** §10 3단계는 각 process의 public readiness와
+RouteMesh peer readiness를 확인하라고 정한다. "topology가 안정될 때까지 N초 기다린다"는 방식은
+확인이 아니라 추측이므로 허용하지 않는다. **Framework 내부 문자열이나 process 기동
+boilerplate를 readiness 근거로 삼지 않는다** — 샘플이 소유하지 않는 문자열은 framework나
+boilerplate가 바뀌면 조용히 깨진다.
+
+Server evidence는 Play node가 출력하며 client scenario가 끝난 뒤 확인한다.
+
+| 확인하는 사실 | 로그 | 정확한 횟수 |
+| --- | --- | --- |
+| reconnect한 client가 existing Actor에 binding됐다 | `tictactoe-lifecycle actor-bound actor=<ActorId>` | `player-x` 1 |
+| `LeaveGameMsg` 처리가 끝났다 | `tictactoe-lifecycle leave-completed actor=<ActorId>` | `player-x` 1, `player-o` 1 |
+| Actor destroy가 끝났다 | `tictactoe-lifecycle actor-destroy-complete actor=<ActorId>` | `player-x` 1, `player-o` 1 |
+| Observer는 destroy되지 않는다 | `tictactoe-lifecycle actor-destroy-complete actor=observer` | 0 |
+
+`tictactoe-lifecycle` 행은 두 Play node 로그를 합쳐 센다. 어느 player가 어느 node에 배치되는지는
+확인 대상이 아니다.
+
+Client evidence는 §9 self-check가 통과했음을 runner가 읽을 수 있게 남긴 것이다. Client가 browser로
+동작하는 구현도 같은 문자열을 같은 자리에 남긴다.
+
+| 확인하는 사실 | 로그 |
+| --- | --- |
+| Observer가 Play B stream에 붙었다 | `observer-connected endpoint=<PlayBStreamEndpoint>` |
+| Observer 구독이 확인됐다 | `observer-subscription=verified subscribed=true` |
+| Milestone push payload가 game 결과와 일치한다 | `observer-win-milestone=verified actor=player-x wins=100` |
+| Reconnect 뒤 받은 state가 현재 game과 일치한다 | `reconnected-game-state=verified actor=player-x room=<RoomId>` |
+
+완료 marker는 **`tictactoe=completed` 하나다.** `tictactoe completed`처럼 `=`가 없는 변형을 쓰거나
+두 형태를 모두 받아들이지 않는다.
+
+Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
+적용한다. 대기 없이 한 번만 읽거나 고정 sleep 뒤 읽는 방식은 허용하지 않는다.
+
+모든 행이 통과하면 runner가 마지막에 `tictactoe-placement=completed`를 출력한다. 한 행이라도
+실패하면 이 marker를 출력하지 않는다.
+
 ## 11. 완료 기준
 
 - Api 2개와 Play 2개가 같은 public contract와 object capability를 제공한다.
@@ -695,7 +761,8 @@ observer subscription과 milestone 결과를 확인한다. Self-check assertion�
 - milestone이 public Logical Multicast로 publish되고 observer push가 payload를 검증한다.
 - Physical disconnect는 bound Actor의 current Spot에서 disconnected lifecycle callback을 실행하고
   binding을 정리하지만 leave, membership 변경이나 destroy를 시작하지 않는다. 각 player가 one-way
-  `LeaveGameMsg`를 보낸 뒤에만 명시적인 leave와 destroy를 실행하며 Runner가 Actor별 결과를 확인한다.
+  `LeaveGameMsg`를 보낸 뒤에만 명시적인 leave와 destroy를 실행하며 Runner가 §10.1 표의 모든 행을
+  문자열과 횟수까지 통과시킨다.
 - 모든 언어가 TicTacToe handler를 public builder·handler registry에 직접 등록한다. 각 등록 호출의
   주석은 처리하는 message가 request, send, subscribe 중 무엇인지 밝히며 자동 scan을 사용하지 않는다.
   이 수동 연결·등록 조합은 TicTacToe에만 적용하고, C++은 다른 sample에서도 handler만 직접 등록한다.

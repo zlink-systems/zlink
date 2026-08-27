@@ -85,10 +85,8 @@ internal sealed class AuthenticatePlaySessionHandler(
 
         if (result is ZLinkActorCreateResult.Existing)
             logger.LogInformation(
-                "play stream: existing actor exact identity verified. sessionId={SessionId}, actor={ActorId}, generation={ObjectGeneration}",
-                context.SessionId,
-                boundActor.ActorId,
-                boundActor.Ref.ObjectGeneration);
+                "tictactoe-lifecycle actor-bound actor={ActorId}",
+                boundActor.ActorId);
     }
 }
 // --8<-- [end:doc-session-auth]

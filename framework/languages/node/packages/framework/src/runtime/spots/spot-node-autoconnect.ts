@@ -10,6 +10,8 @@ import {
 } from '../../contracts';
 import type { ZLinkSpotNodeOptions } from '../configuration';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
+import { AsyncResource } from 'node:async_hooks';
+import { ZLinkStateLane } from '../execution/state-lane';
 import { toBackendRoutingId as toBackendRoutingId } from '../routing-id';
 import {
   ZLinkLocationRuntime,
@@ -150,8 +152,15 @@ function hasManualRouterConnections(spotNode: ZLinkSpotNodeOptions): boolean {
     || (spotNode.router?.manualPeerConnections?.length ?? 0) > 0;
 }
 
+const detachedSpotNodeAutoConnectResource = new AsyncResource('zlink:spot-node-autoconnect');
+
+interface ZLinkSpotNodeConnectionIntent {
+  connectionIntentId?: bigint;
+}
+
 class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
-  private readonly connectionIntents = new Map<string, bigint>();
+  private readonly lane = new ZLinkStateLane();
+  private readonly connectionIntents = new Map<string, ZLinkSpotNodeConnectionIntent>();
 
   constructor(
     private readonly node: ZLinkBackendMeshNode,
@@ -164,7 +173,10 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
 
   async connect(target: ZLinkAutoConnectTarget): Promise<boolean> {
     if (this.manualConnections) return false;
-    return await this.connectPeer(target);
+    const key = connectionKey(target);
+    const intent = await this.lane.run(() => this.prepareConnectCore(key));
+    if (intent === undefined) return true;
+    return await runDetachedSpotNodeAutoConnect(() => this.connectPeer(target, key, intent));
   }
 
   disconnect(target: ZLinkAutoConnectTarget): void {
@@ -231,11 +243,18 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     }
   }
 
-  private async connectPeer(target: ZLinkAutoConnectTarget): Promise<boolean> {
-    const key = connectionKey(target);
-    if (this.connectionIntents.has(key)) {
-      return true;
-    }
+  private prepareConnectCore(key: string): ZLinkSpotNodeConnectionIntent | undefined {
+    if (this.connectionIntents.has(key)) return undefined;
+    const intent: ZLinkSpotNodeConnectionIntent = {};
+    this.connectionIntents.set(key, intent);
+    return intent;
+  }
+
+  private async connectPeer(
+    target: ZLinkAutoConnectTarget,
+    key: string,
+    intent: ZLinkSpotNodeConnectionIntent
+  ): Promise<boolean> {
     try {
       const connectionIntentId = await this.node.connectPeer({
         endpoint: target.endpoint,
@@ -247,22 +266,32 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
         ),
         expectedLifecycleGeneration: target.lifecycleGeneration
       });
-      this.connectionIntents.set(key, connectionIntentId);
-      return true;
+      const accepted = await this.lane.run(() => {
+        if (this.connectionIntents.get(key) !== intent) return false;
+        intent.connectionIntentId = connectionIntentId;
+        return true;
+      });
+      if (!accepted) this.node.removePeerConnection(connectionIntentId);
+      return accepted;
     } catch {
       // A discovered endpoint can become unavailable between the store read and
       // the socket connect. Leave the target inactive so the next reconciliation
       // can retry without terminating the host's background runtime.
+      await this.lane.run(() => {
+        if (this.connectionIntents.get(key) === intent) this.connectionIntents.delete(key);
+      });
       return false;
     }
   }
 
   private disconnectPeer(target: ZLinkAutoConnectTarget): void {
     const key = connectionKey(target);
-    const connectionIntentId = this.connectionIntents.get(key);
-    if (connectionIntentId !== undefined) {
-      this.node.removePeerConnection(connectionIntentId);
+    const intent = this.connectionIntents.get(key);
+    if (intent !== undefined) {
       this.connectionIntents.delete(key);
+      if (intent.connectionIntentId !== undefined) {
+        this.node.removePeerConnection(intent.connectionIntentId);
+      }
     }
     for (const peer of this.node.peers()) {
       if (peer.routingId === null) {
@@ -277,6 +306,10 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
       this.node.disconnectPeer(peer.routingId, peer.lifecycleGeneration);
     }
   }
+}
+
+function runDetachedSpotNodeAutoConnect<T>(work: () => Promise<T>): Promise<T> {
+  return detachedSpotNodeAutoConnectResource.runInAsyncScope(work);
 }
 
 function connectionKey(target: ZLinkAutoConnectTarget): string {

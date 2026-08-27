@@ -137,6 +137,7 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
   }
 
   releaseBeforeHandler(): void {
+    if (this.owner.shouldHoldPermitBeforeHandler()) return;
     this.release();
   }
 
@@ -196,12 +197,17 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
 
   constructor(
     private readonly configuration: ApplicationJobQueueConfiguration,
-    private readonly nowMs: () => number = () => performance.now()
+    private readonly nowMs: () => number = () => performance.now(),
+    private readonly handlerStartGate?: () => boolean
   ) {
     this.receiveFlowController = new ApplicationJobReceiveFlowController(
       this,
       state => state
     );
+  }
+
+  shouldHoldPermitBeforeHandler(): boolean {
+    return this.handlerStartGate?.() === true;
   }
 
   registerReceiveFlowTarget(

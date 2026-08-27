@@ -65,15 +65,17 @@ internal sealed class ZLinkFanoutPacketDispatcher
             return;
         }
 
-        ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease operation;
-        if (_runtime is null)
-            operation = new ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease();
+        var admission = _runtime is null
+            ? new ZLinkInboundOperationAdmission(
+                true,
+                ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease.None)
         //  Delivering a fanout record to its handler changes nothing in the
         //  Location Store, so it is not object work (spec 21 §4).
-        else if (!_runtime.TryEnterInboundOperation(
-                     countAsRequest: false, out operation, ownsObjectWork: false))
+            : _runtime.TryEnterInboundOperation(
+                countAsRequest: false, ownsObjectWork: false);
+        if (!admission.Accepted)
             return;
-        using (operation)
+        using (admission.Lease)
         {
             using var currentFlow = ZLinkFlowContext.Enter(
                 header.FlowId,

@@ -1,5 +1,5 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { SampleNames } from '../../Shared/Configuration/sample-names';
+import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 import { DispatchWorker } from './dispatch-worker';
 import { DeliveryOfferStore } from './delivery-offer-store';
 import { createDeliveryDispatchLocationStore, deliveryDispatchLocationOptions } from '../Configuration/location-store';
@@ -33,7 +33,7 @@ function createDispatchCenterModule() {
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
           const mesh = builder.addRouteMesh(SampleNames.courierMeshName)
-            .listen(config.dispatchSpotEndpoint).setRoutingIdPrefix('delivery-dispatch');
+            .listen(config.dispatchSpotEndpoint).routingId(DeliveryDispatchNodeIds.dispatch);
           mesh.objects().client();
           const dispatchChannel = builder.addClientServerChannel(SampleNames.dispatchChannel);
           dispatchChannel.client();

@@ -1,24 +1,24 @@
 package systems.zlink.framework.runtime.actors;
-import java.util.Comparator;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.function.Supplier;
-
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
@@ -26,6 +26,7 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /** Owns the transfer-only backlog and bounded source-retirement state. */
 final class ZLinkActorTransferHandoff implements AutoCloseable {
@@ -36,20 +37,40 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             return thread;
         });
 
-    private final Map<String, Backlog> backlogs =
-        new ConcurrentHashMap<>();
-    private final AtomicLong arrivalIndex = new AtomicLong();
+    // This transfer's C2 state is owned by one lane. Scheduler, packet terminal,
+    // suppression, and removal callbacks deliberately run after their state turn.
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final Map<String, Backlog> backlogs = new HashMap<>();
+    private long arrivalIndex;
     private final Map<String, MessageFollowSource> messageFollowSources =
-        new ConcurrentHashMap<>();
-    private final Set<Retention> retirements = ConcurrentHashMap.newKeySet();
-    private final AtomicLong messageFollowToken = new AtomicLong();
+        new HashMap<>();
+    private final Set<Retention> retirements = new HashSet<>();
+    private long messageFollowToken;
     private final ZLinkMessageFollowSuppressionRegistry messageFollowSuppression =
         new ZLinkMessageFollowSuppressionRegistry();
     private boolean closed;
 
-    synchronized void begin(String actorId) {
-        requireOpen();
-        backlogs.put(actorId, new Backlog());
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
+    void begin(String actorId) {
+        inStateLane(() -> {
+            requireOpen();
+            backlogs.put(actorId, new Backlog());
+            return null;
+        });
     }
 
     ZLinkActorHandoffPacket capture(
@@ -58,57 +79,55 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         Message payload,
         ZLinkActorReplyRoute replyRoute,
         byte[] acceptedJournalRecord) {
-        Backlog backlog = backlogs.get(actorId);
-        if (backlog == null) {
-            return null;
-        }
-        ZLinkActorHandoffPacket packet =
-            new ZLinkActorHandoffPacket(
-                arrivalIndex.incrementAndGet(), header, payload, replyRoute,
-                acceptedJournalRecord);
-        synchronized (backlog) {
-            if (backlogs.get(actorId) != backlog) {
-                packet.close();
+        CaptureResult result = inStateLane(() -> {
+            Backlog backlog = backlogs.get(actorId);
+            if (backlog == null) {
                 return null;
+            }
+            ZLinkActorHandoffPacket packet = new ZLinkActorHandoffPacket(
+                ++arrivalIndex, header, payload, replyRoute, acceptedJournalRecord);
+            if (backlogs.get(actorId) != backlog) {
+                return new CaptureResult(null, packet);
             }
             long bytes = packet.retainedBytes();
             backlog.packets.add(packet);
             backlog.bytes += bytes;
+            return new CaptureResult(packet, null);
+        });
+        if (result == null) {
+            return null;
         }
-        return packet;
+        if (result.discarded() != null) {
+            result.discarded().close();
+        }
+        return result.captured();
     }
 
     List<ZLinkActorHandoffPacket> take(String actorId) {
-        Backlog backlog = backlogs.get(actorId);
-        if (backlog == null) {
-            return List.of();
-        }
-        synchronized (backlog) {
+        return inStateLane(() -> {
+            Backlog backlog = backlogs.get(actorId);
+            if (backlog == null) {
+                return List.of();
+            }
             List<ZLinkActorHandoffPacket> snapshot = List.copyOf(backlog.packets);
             backlog.packets.clear();
             backlog.bytes = 0;
             return snapshot;
-        }
+        });
     }
 
     int pendingCount(String actorId) {
-        Backlog backlog = backlogs.get(actorId);
-        if (backlog == null) {
-            return 0;
-        }
-        synchronized (backlog) {
-            return backlog.packets.size();
-        }
+        return inStateLane(() -> {
+            Backlog backlog = backlogs.get(actorId);
+            return backlog == null ? 0 : backlog.packets.size();
+        });
     }
 
     List<ZLinkActorHandoffPacket> finish(String actorId) {
-        Backlog backlog = backlogs.remove(actorId);
-        if (backlog == null) {
-            return List.of();
-        }
-        synchronized (backlog) {
-            return List.copyOf(backlog.packets);
-        }
+        return inStateLane(() -> {
+            Backlog backlog = backlogs.remove(actorId);
+            return backlog == null ? List.of() : List.copyOf(backlog.packets);
+        });
     }
 
     /**
@@ -120,13 +139,13 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     List<ZLinkActorHandoffPacket> takeForRestore(
         String actorId,
         List<ZLinkActorHandoffPacket> committed) {
-        Backlog backlog = backlogs.get(actorId);
-        if (backlog == null) {
-            return committed == null || committed.isEmpty()
-                ? List.of()
-                : List.copyOf(committed);
-        }
-        synchronized (backlog) {
+        return inStateLane(() -> {
+            Backlog backlog = backlogs.get(actorId);
+            if (backlog == null) {
+                return committed == null || committed.isEmpty()
+                    ? List.of()
+                    : List.copyOf(committed);
+            }
             List<ZLinkActorHandoffPacket> restored = new ArrayList<>(
                 (committed == null ? 0 : committed.size()) + backlog.packets.size());
             if (committed != null) {
@@ -142,24 +161,22 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             restored.sort(Comparator.comparingLong(
                 ZLinkActorHandoffPacket::arrivalIndex));
             return List.copyOf(restored);
-        }
+        });
     }
 
     void fail(String actorId, Throwable error) {
-        Backlog backlog = backlogs.remove(actorId);
-        if (backlog == null) {
-            return;
-        }
-        synchronized (backlog) {
-            backlog.packets.forEach(packet -> {
-                if (packet.fail(error)) {
-                    packet.close();
-                }
-            });
-        }
+        List<ZLinkActorHandoffPacket> packets = inStateLane(() -> {
+            Backlog backlog = backlogs.remove(actorId);
+            return backlog == null ? List.of() : List.copyOf(backlog.packets);
+        });
+        packets.forEach(packet -> {
+            if (packet.fail(error)) {
+                packet.close();
+            }
+        });
     }
 
-    synchronized void retain(
+    void retain(
         String actorId,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
@@ -168,7 +185,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         retain(actorId, sourceActorRef, targetActorRef, null, duration, removal);
     }
 
-    synchronized void retain(
+    void retain(
         String actorId,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
@@ -186,7 +203,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             removal);
     }
 
-    synchronized void retain(
+    void retain(
         String actorId,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
@@ -195,55 +212,73 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
         Duration duration,
         Consumer<MessageFollowSource> removal) {
-        requireOpen();
-        if (targetAddress != null
-            && (sourceRoute == null || targetRoute == null)) {
-            throw new IllegalArgumentException(
-                "exact source and target routes are required when a Message Follow target address is set");
+        RetainState retainedState = inStateLane(() -> {
+            requireOpen();
+            if (targetAddress != null
+                && (sourceRoute == null || targetRoute == null)) {
+                throw new IllegalArgumentException(
+                    "exact source and target routes are required when a Message Follow target address is set");
+            }
+            MessageFollowSource source = new MessageFollowSource(
+                sourceActorRef, targetActorRef, targetAddress,
+                sourceRoute, targetRoute,
+                ++messageFollowToken, messageFollowSuppression);
+            MessageFollowSource replaced = messageFollowSources.put(actorId, source);
+            Retention retained = new Retention(actorId, source, removal);
+            retirements.add(retained);
+            return new RetainState(source, replaced, retained);
+        });
+        if (retainedState.replaced() != null) {
+            retainedState.replaced().expireMessageFollowNotices();
         }
-        MessageFollowSource source = new MessageFollowSource(
-            sourceActorRef, targetActorRef, targetAddress,
-            sourceRoute, targetRoute,
-            messageFollowToken.incrementAndGet(), messageFollowSuppression);
-        MessageFollowSource replaced = messageFollowSources.put(actorId, source);
-        if (replaced != null) {
-            replaced.expireMessageFollowNotices();
-        }
-        Retention retained = new Retention(actorId, source, removal);
-        retirements.add(retained);
         ScheduledFuture<?> future = retirementsExecutor.schedule(
-            () -> retire(retained),
+            () -> retire(retainedState.retained()),
             duration.toMillis(),
             TimeUnit.MILLISECONDS);
-        retained.future(future);
+        boolean retained = inStateLane(() -> {
+            if (!retirements.contains(retainedState.retained())) {
+                return false;
+            }
+            retainedState.retained().future(future);
+            return true;
+        });
+        if (!retained) {
+            future.cancel(false);
+        }
     }
 
     Optional<MessageFollowSource> messageFollowSource(String actorId) {
-        return Optional.ofNullable(messageFollowSources.get(actorId));
+        return inStateLane(() -> Optional.ofNullable(messageFollowSources.get(actorId)));
     }
 
-    synchronized Optional<MessageFollowSource> takeMessageFollowSource(String actorId) {
-        MessageFollowSource source = messageFollowSources.remove(actorId);
-        if (source == null) {
+    Optional<MessageFollowSource> takeMessageFollowSource(String actorId) {
+        TakeSourceState taken = inStateLane(() -> {
+            MessageFollowSource source = messageFollowSources.remove(actorId);
+            if (source == null) {
+                return null;
+            }
+            Retention retained = retirements.stream()
+                .filter(candidate -> candidate.actorId().equals(actorId)
+                    && candidate.source().equals(source))
+                .findFirst()
+                .orElse(null);
+            if (retained != null) {
+                retirements.remove(retained);
+            }
+            return new TakeSourceState(source, retained);
+        });
+        if (taken == null) {
             return Optional.empty();
         }
-        source.expireMessageFollowNotices();
-        Retention retained = retirements.stream()
-            .filter(candidate -> candidate.actorId().equals(actorId)
-                && candidate.source().equals(source))
-            .findFirst()
-            .orElse(null);
-        if (retained != null && retirements.remove(retained)) {
-            ScheduledFuture<?> future = retained.future();
-            if (future != null) {
-                future.cancel(false);
-            }
+        taken.source().expireMessageFollowNotices();
+        if (taken.retained() != null && taken.retained().future() != null) {
+            taken.retained().future().cancel(false);
         }
-        return Optional.of(source);
+        return Optional.of(taken.source());
     }
 
     int messageFollowSourceCount() {
-        return messageFollowSources.size();
+        return inStateLane(messageFollowSources::size);
     }
 
     int messageFollowSuppressionCount() {
@@ -265,7 +300,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         long objectGeneration,
         long payloadBytes,
         Supplier<CompletionStage<T>> submission) {
-        MessageFollowSource source = messageFollowSources.get(actorId);
+        MessageFollowSource source = inStateLane(
+            () -> messageFollowSources.get(actorId));
         if (source == null) {
             return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
@@ -300,34 +336,58 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
+    public void close() {
+        CloseState state = inStateLane(() -> {
+            if (closed) {
+                return null;
+            }
+            closed = true;
+            List<Retention> retained = List.copyOf(retirements);
+            retirements.clear();
+            List<Backlog> heldBacklogs = List.copyOf(backlogs.values());
+            backlogs.clear();
+            messageFollowSources.clear();
+            return new CloseState(retained, heldBacklogs);
+        });
+        if (state == null) {
             return;
         }
-        closed = true;
         retirementsExecutor.shutdownNow();
-        List.copyOf(retirements).forEach(retained -> {
+        state.retained().forEach(retained -> {
             ScheduledFuture<?> future = retained.future();
             if (future != null) {
                 future.cancel(false);
             }
             try {
-                retire(retained);
+                retained.source().expireMessageFollowNotices();
+                retained.removal().accept(retained.source());
             } catch (RuntimeException ignored) {
                 // Runtime shutdown must continue retiring the remaining owned sources.
             }
         });
-        backlogs.keySet().forEach(actorId -> fail(
-            actorId, new IllegalStateException("Actor runtime closed during transfer.")));
+        state.backlogs().stream()
+            .flatMap(backlog -> backlog.packets.stream())
+            .forEach(packet -> {
+                if (packet.fail(new IllegalStateException(
+                    "Actor runtime closed during transfer."))) {
+                    packet.close();
+                }
+            });
     }
 
     private void retire(Retention retained) {
-        if (!retirements.remove(retained)) {
+        RetireState state = inStateLane(() -> {
+            if (!retirements.remove(retained)) {
+                return null;
+            }
+            messageFollowSources.remove(retained.actorId(), retained.source());
+            return new RetireState(retained.source(), retained.removal());
+        });
+        if (state == null) {
             return;
         }
-        messageFollowSources.remove(retained.actorId(), retained.source());
-        retained.source().expireMessageFollowNotices();
-        retained.removal().accept(retained.source());
+        state.source().expireMessageFollowNotices();
+        state.removal().accept(state.source());
     }
 
     private void requireOpen() {
@@ -340,7 +400,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         private final String actorId;
         private final MessageFollowSource source;
         private final Consumer<MessageFollowSource> removal;
-        private volatile ScheduledFuture<?> future;
+        private ScheduledFuture<?> future;
 
         private Retention(
             String actorId,
@@ -377,6 +437,28 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         private long bytes;
     }
 
+    private record CaptureResult(
+        ZLinkActorHandoffPacket captured,
+        ZLinkActorHandoffPacket discarded) {
+    }
+
+    private record RetainState(
+        MessageFollowSource source,
+        MessageFollowSource replaced,
+        Retention retained) {
+    }
+
+    private record TakeSourceState(MessageFollowSource source, Retention retained) {
+    }
+
+    private record RetireState(
+        MessageFollowSource source,
+        Consumer<MessageFollowSource> removal) {
+    }
+
+    private record CloseState(List<Retention> retained, List<Backlog> backlogs) {
+    }
+
     static final class MessageFollowSource {
         private final ZLinkBackendActorRef sourceActorRef;
         private final ZLinkBackendActorRef targetActorRef;
@@ -385,8 +467,9 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         private final ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute;
         private final long token;
         private final ZLinkMessageFollowSuppressionRegistry suppression;
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private final Set<ZLinkMessageFollowSuppressionRegistry.Key> suppressionKeys =
-            ConcurrentHashMap.newKeySet();
+            new HashSet<>();
         private boolean suppressionExpired;
         private int pendingMessages;
         private long pendingBytes;
@@ -421,23 +504,52 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
         long token() { return token; }
 
+        private <T> T inStateLane(Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
+            }
+        }
+
         boolean matchesSourceRoute(
             ZLinkServiceMessageFollowWireCodec.ActorRoute candidate) {
             return sourceRoute != null && sourceRoute.equals(candidate);
         }
 
-        synchronized Optional<ZLinkMessageFollowSuppressionRegistry.Claim>
+        Optional<ZLinkMessageFollowSuppressionRegistry.Claim>
             beginMessageFollowNotice(
                 ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute) {
-            if (!matchesSourceRoute(sourceRoute)
-                || targetRoute == null
-                || suppressionExpired) {
+            ZLinkMessageFollowSuppressionRegistry.Key key = inStateLane(() -> {
+                if (!matchesSourceRoute(sourceRoute)
+                    || targetRoute == null
+                    || suppressionExpired) {
+                    return null;
+                }
+                ZLinkMessageFollowSuppressionRegistry.Key candidate =
+                    ZLinkMessageFollowSuppressionRegistry.Key.actor(
+                        sourceRoute, targetRoute);
+                suppressionKeys.add(candidate);
+                return candidate;
+            });
+            if (key == null) {
                 return Optional.empty();
             }
-            ZLinkMessageFollowSuppressionRegistry.Key key =
-                ZLinkMessageFollowSuppressionRegistry.Key.actor(sourceRoute, targetRoute);
-            suppressionKeys.add(key);
-            return suppression.begin(key);
+            Optional<ZLinkMessageFollowSuppressionRegistry.Claim> claim =
+                suppression.begin(key);
+            boolean accepted = inStateLane(() -> !suppressionExpired);
+            if (accepted) {
+                return claim;
+            }
+            suppression.expire(key);
+            return Optional.empty();
         }
 
         void markMessageFollowNoticeSent(
@@ -450,31 +562,43 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             suppression.abort(claim);
         }
 
-        synchronized void expireMessageFollowNotices() {
-            suppressionExpired = true;
-            suppressionKeys.forEach(suppression::expire);
-            suppressionKeys.clear();
+        void expireMessageFollowNotices() {
+            List<ZLinkMessageFollowSuppressionRegistry.Key> keys =
+                inStateLane(() -> {
+                    suppressionExpired = true;
+                    List<ZLinkMessageFollowSuppressionRegistry.Key> snapshot =
+                        List.copyOf(suppressionKeys);
+                    suppressionKeys.clear();
+                    return snapshot;
+                });
+            keys.forEach(suppression::expire);
         }
 
-        private synchronized boolean tryAcquire(long bytes) {
-            if (bytes < 0) {
-                return false;
-            }
-            pendingMessages++;
-            pendingBytes += bytes;
-            return true;
+        private boolean tryAcquire(long bytes) {
+            return inStateLane(() -> {
+                if (bytes < 0) {
+                    return false;
+                }
+                pendingMessages++;
+                pendingBytes += bytes;
+                return true;
+            });
         }
 
-        private synchronized void release(long bytes) {
-            pendingMessages--;
-            pendingBytes -= bytes;
+        private void release(long bytes) {
+            inStateLane(() -> {
+                pendingMessages--;
+                pendingBytes -= bytes;
+                return null;
+            });
         }
 
-        synchronized int pendingMessages() { return pendingMessages; }
-        synchronized long pendingBytes() { return pendingBytes; }
+        int pendingMessages() { return inStateLane(() -> pendingMessages); }
+        long pendingBytes() { return inStateLane(() -> pendingBytes); }
 
-        synchronized MessageFollowQueueSnapshot queueSnapshot() {
-            return new MessageFollowQueueSnapshot(pendingMessages, pendingBytes);
+        MessageFollowQueueSnapshot queueSnapshot() {
+            return inStateLane(() ->
+                new MessageFollowQueueSnapshot(pendingMessages, pendingBytes));
         }
     }
 

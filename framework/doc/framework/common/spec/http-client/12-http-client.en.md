@@ -1,6 +1,6 @@
 # HTTP Client — Common Spec
 
-[Spec table of contents](../server/README.en.md) | [Previous: Channel Messaging](../server/08-channel-messaging.en.md) | [Next: SPOT Messaging](../server/12-spot-messaging.en.md)
+[Spec table of contents](../server/README.en.md) | [Previous: Channel Messaging](../server/02-channel-transport/02-channel-messaging.en.md) | [Next: SPOT Messaging](../server/03-spot-actor/02-spot-messaging.en.md)
 
 > This document defines the boundary for registering and calling an
 > HTTP client in Framework. It owns identity, the fluent builder form,
@@ -23,7 +23,7 @@
 distributed as a separate package, but it's a **framework-dedicated
 companion client**, and the contract is owned by framework.
 
-| | [STREAM Connector](../server/01-glossary.en.md#stream-connector) | HTTP Client |
+| | [STREAM Connector](../server/00-foundation/02-glossary.en.md#stream-connector) | HTTP Client |
 |---|---|---|
 | Package | Separate | Separate |
 | Contract ownership | Framework common spec ([32](../stream-connector/32-stream-connector.en.md)) | Framework common spec (this document) |
@@ -41,7 +41,7 @@ HTTP client.
 
 **What it consumes is framework's contract, not its runtime.** That way
 a CLI and client scenario doesn't drag in the framework host/runtime.
-The combination with the [Spot](../server/01-glossary.en.md#spot) execution
+The combination with the [Spot](../server/00-foundation/02-glossary.en.md#spot) execution
 context happens only through §3.2's **single injection point** — if the
 scheduler isn't injected, the HTTP client is an ordinary client that
 doesn't know about turns.
@@ -85,7 +85,7 @@ one-way. TypeScript inheritance signature constraints are owned by each
 language's exact interface. `Yield`, which returns the shared Spot
 gate, is only provided to a server request and Worker call, and isn't
 included in the HTTP request builder
-([04 §1.1](../server/05-async-execution-policy.en.md)).
+([04 §1.1](../server/01-execution/README.en.md)).
 
 | Execution Mode | What It Waits For | Spot Execution Queue |
 |---|---|---|
@@ -142,7 +142,7 @@ The C++ HTTP client expresses the same scheduler seam with
 
 **Doesn't build a public terminator that synchronously unwraps the
 completion value**
-([04 §2](../server/05-async-execution-policy.en.md)). A blocking alternative
+([04 §2](../server/01-execution/README.en.md)). A blocking alternative
 terminator of the same meaning is a contract violation. If a
 synchronous wait is needed in a test or CLI, the caller wraps it
 directly with a language idiom (`GetAwaiter().GetResult()`,
@@ -172,7 +172,7 @@ inside a handler — it loses the connection pool and turn seam.
 
 **The HTTP client shares a codec extension with framework, but keeps a
 separate registry instance**
-([Stream Session §5](../server/19-stream-session.en.md#5-codec-layer-separation)).
+([Stream Session §5](../server/04-session/01-stream-session.en.md#6-payload-conversion-and-the-codec-boundary)).
 The same codec extension object can be registered on both, but
 **registration must be done separately per host.**
 
@@ -183,7 +183,7 @@ doesn't go through the registry.
 
 **The HTTP client doesn't build its own exception hierarchy.** It uses
 the framework common error model's
-([Framework Error Model](../server/32-framework-error-model.en.md)) error kind
+([Framework Error Model](../server/00-foundation/07-framework-error-model.en.md)) error kind
 as is. **It doesn't create a new HTTP-client-dedicated error kind.**
 
 | Situation | Kind |

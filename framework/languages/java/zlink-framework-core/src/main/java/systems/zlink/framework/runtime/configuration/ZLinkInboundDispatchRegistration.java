@@ -2,16 +2,20 @@ package systems.zlink.framework.runtime.configuration;
 
 import java.util.Objects;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.configuration.ZLinkCoreHwmProfile;
 import systems.zlink.framework.configuration.ZLinkInboundDispatchOptions;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /** Startup-only model for the host's single inbound-dispatch policy. */
 public final class ZLinkInboundDispatchRegistration
     implements ZLinkInboundDispatchOptions {
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private Long coreHwmMemoryLimitBytes;
     private Long coreHwmBudgetBytes;
     private ZLinkCoreHwmProfile coreHwmProfile = ZLinkCoreHwmProfile.BALANCED;
@@ -22,47 +26,107 @@ public final class ZLinkInboundDispatchRegistration
     private int applicationJobQueueResumeThresholdPercent = 60;
     private ZLinkApplicationJobQueue applicationJobQueue;
 
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
     @Override
-    public synchronized OptionalLong coreHwmMemoryLimitBytes() {
+    public OptionalLong coreHwmMemoryLimitBytes() {
+        return inStateLane(this::coreHwmMemoryLimitBytesCore);
+    }
+
+    private OptionalLong coreHwmMemoryLimitBytesCore() {
         return optional(coreHwmMemoryLimitBytes);
     }
 
     @Override
-    public synchronized void setCoreHwmMemoryLimitBytes(long value) {
+    public void setCoreHwmMemoryLimitBytes(long value) {
+        inStateLane(() -> {
+            setCoreHwmMemoryLimitBytesCore(value);
+            return null;
+        });
+    }
+
+    private void setCoreHwmMemoryLimitBytesCore(long value) {
         requireMutable();
         coreHwmMemoryLimitBytes = positive(value, "CoreHwmMemoryLimitBytes");
     }
 
     @Override
-    public synchronized OptionalLong coreHwmBudgetBytes() {
+    public OptionalLong coreHwmBudgetBytes() {
+        return inStateLane(this::coreHwmBudgetBytesCore);
+    }
+
+    private OptionalLong coreHwmBudgetBytesCore() {
         return optional(coreHwmBudgetBytes);
     }
 
     @Override
-    public synchronized void setCoreHwmBudgetBytes(long value) {
+    public void setCoreHwmBudgetBytes(long value) {
+        inStateLane(() -> {
+            setCoreHwmBudgetBytesCore(value);
+            return null;
+        });
+    }
+
+    private void setCoreHwmBudgetBytesCore(long value) {
         requireMutable();
         coreHwmBudgetBytes = positive(value, "CoreHwmBudgetBytes");
     }
 
     @Override
-    public synchronized ZLinkCoreHwmProfile coreHwmProfile() {
+    public ZLinkCoreHwmProfile coreHwmProfile() {
+        return inStateLane(this::coreHwmProfileCore);
+    }
+
+    private ZLinkCoreHwmProfile coreHwmProfileCore() {
         return coreHwmProfile;
     }
 
     @Override
-    public synchronized void setCoreHwmProfile(ZLinkCoreHwmProfile value) {
+    public void setCoreHwmProfile(ZLinkCoreHwmProfile value) {
+        inStateLane(() -> {
+            setCoreHwmProfileCore(value);
+            return null;
+        });
+    }
+
+    private void setCoreHwmProfileCore(ZLinkCoreHwmProfile value) {
         requireMutable();
         coreHwmProfile = Objects.requireNonNull(value, "coreHwmProfile");
     }
 
     @Override
-    public synchronized ZLinkApplicationJobQueueProfile
+    public ZLinkApplicationJobQueueProfile
         applicationJobQueueProfile() {
+        return inStateLane(this::applicationJobQueueProfileCore);
+    }
+
+    private ZLinkApplicationJobQueueProfile applicationJobQueueProfileCore() {
         return applicationJobQueueProfile;
     }
 
     @Override
-    public synchronized void setApplicationJobQueueProfile(
+    public void setApplicationJobQueueProfile(
+        ZLinkApplicationJobQueueProfile value) {
+        inStateLane(() -> {
+            setApplicationJobQueueProfileCore(value);
+            return null;
+        });
+    }
+
+    private void setApplicationJobQueueProfileCore(
         ZLinkApplicationJobQueueProfile value) {
         requireMutable();
         applicationJobQueueProfile = Objects.requireNonNull(
@@ -70,12 +134,23 @@ public final class ZLinkInboundDispatchRegistration
     }
 
     @Override
-    public synchronized OptionalLong maxQueuedApplicationJobs() {
+    public OptionalLong maxQueuedApplicationJobs() {
+        return inStateLane(this::maxQueuedApplicationJobsCore);
+    }
+
+    private OptionalLong maxQueuedApplicationJobsCore() {
         return optional(maxQueuedApplicationJobs);
     }
 
     @Override
-    public synchronized void setMaxQueuedApplicationJobs(long value) {
+    public void setMaxQueuedApplicationJobs(long value) {
+        inStateLane(() -> {
+            setMaxQueuedApplicationJobsCore(value);
+            return null;
+        });
+    }
+
+    private void setMaxQueuedApplicationJobsCore(long value) {
         requireMutable();
         if (value < 1 || value > Integer.MAX_VALUE) {
             throw new ZLinkConfigurationException(
@@ -85,12 +160,24 @@ public final class ZLinkInboundDispatchRegistration
     }
 
     @Override
-    public synchronized int applicationJobQueuePauseThresholdPercent() {
+    public int applicationJobQueuePauseThresholdPercent() {
+        return inStateLane(this::applicationJobQueuePauseThresholdPercentCore);
+    }
+
+    private int applicationJobQueuePauseThresholdPercentCore() {
         return applicationJobQueuePauseThresholdPercent;
     }
 
     @Override
-    public synchronized void setApplicationJobQueuePauseThresholdPercent(
+    public void setApplicationJobQueuePauseThresholdPercent(
+        int value) {
+        inStateLane(() -> {
+            setApplicationJobQueuePauseThresholdPercentCore(value);
+            return null;
+        });
+    }
+
+    private void setApplicationJobQueuePauseThresholdPercentCore(
         int value) {
         requireMutable();
         if (value < 1 || value > 100) {
@@ -101,12 +188,24 @@ public final class ZLinkInboundDispatchRegistration
     }
 
     @Override
-    public synchronized int applicationJobQueueResumeThresholdPercent() {
+    public int applicationJobQueueResumeThresholdPercent() {
+        return inStateLane(this::applicationJobQueueResumeThresholdPercentCore);
+    }
+
+    private int applicationJobQueueResumeThresholdPercentCore() {
         return applicationJobQueueResumeThresholdPercent;
     }
 
     @Override
-    public synchronized void setApplicationJobQueueResumeThresholdPercent(
+    public void setApplicationJobQueueResumeThresholdPercent(
+        int value) {
+        inStateLane(() -> {
+            setApplicationJobQueueResumeThresholdPercentCore(value);
+            return null;
+        });
+    }
+
+    private void setApplicationJobQueueResumeThresholdPercentCore(
         int value) {
         requireMutable();
         if (value < 0 || value > 99) {
@@ -116,7 +215,12 @@ public final class ZLinkInboundDispatchRegistration
         applicationJobQueueResumeThresholdPercent = value;
     }
 
-    public synchronized ZLinkApplicationJobQueue applicationJobQueue(
+    public ZLinkApplicationJobQueue applicationJobQueue(
+        Executor handlerExecutor) {
+        return inStateLane(() -> applicationJobQueueCore(handlerExecutor));
+    }
+
+    private ZLinkApplicationJobQueue applicationJobQueueCore(
         Executor handlerExecutor) {
         if (applicationJobQueue == null) {
             if (applicationJobQueueResumeThresholdPercent

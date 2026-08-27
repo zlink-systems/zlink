@@ -1,5 +1,5 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { SampleNames } from '../../Shared/Configuration/sample-names';
+import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 import { CustomerSessionFactory } from './customer-session';
 import { CustomerActorDirectory, CustomerActorFactory } from './customer-actor';
 import { CustomerEntrySpot } from './customer-entry-spot';
@@ -35,7 +35,7 @@ function createSessionModule() {
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
           const mesh = builder.addRouteMesh(SampleNames.customerMeshName)
-              .listen(config.sessionSpotRouterEndpoint).setRoutingIdPrefix('delivery-customer');
+              .listen(config.sessionSpotRouterEndpoint).routingId(DeliveryDispatchNodeIds.customerGateway);
           const objectServer = mesh.objects().server();
           objectServer.addEntrySpot(CustomerEntrySpot);
           objectServer.addActorFactory(

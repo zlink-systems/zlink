@@ -23,6 +23,7 @@ struct configuration_t
     std::optional<std::string> mesh_advertise_host;
     bool subscriber_only = false;
     bool disable_bots = false;
+    bool allow_empty_zone_set = false;
     std::optional<std::string> fault_tick_zone;
 
     static configuration_t bind (
@@ -40,6 +41,7 @@ struct configuration_t
           section.get ("meshAdvertiseHost"),
           section.get ("subscriberOnly").value_or ("false") == "true",
           section.get ("disableBots").value_or ("false") == "true",
+          section.get ("allowEmptyZoneSet").value_or ("false") == "true",
           section.get ("faultTickZone")};
     }
 };

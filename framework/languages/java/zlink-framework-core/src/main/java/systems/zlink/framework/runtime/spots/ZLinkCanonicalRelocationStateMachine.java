@@ -504,31 +504,42 @@ final class ZLinkCanonicalRelocationStateMachine
         Fence fence,
         TargetAttempt attempt,
         RoutingId source) {
+        CompletableFuture<Void> publication;
         synchronized (attempt) {
             if (attempt.readyPublication() != null) {
                 return attempt.readyPublication();
             }
-            CompletionStage<Void> publication = attempt.ready()
-                .thenCompose(ignored -> sendReady(source, attempt.prepare()))
-                .thenRun(() -> armCutoverFallback(fence, attempt))
-                .exceptionallyCompose(failure ->
-                    rollbackReadySubmission(fence, attempt, unwrap(failure)));
+            publication = new CompletableFuture<>();
             attempt.readyPublication(publication);
-            publication.whenComplete((ignored, failure) -> {
-                if (failure != null && !attempt.fallbackArmed()) {
-                    synchronized (attempt) {
-                        //  READY is a one-way submission.  Its transport or
-                        //  source-side conflict failure leaves the prepared
-                        //  target intact so an exact PREPARE can submit READY
-                        //  again with the same fence and RelocationId.
-                        if (attempt.readyPublication() == publication) {
-                            attempt.readyPublication(null);
-                        }
+        }
+        publication.whenComplete((ignored, failure) -> {
+            if (failure != null && !attempt.fallbackArmed()) {
+                synchronized (attempt) {
+                    //  READY is a one-way submission.  Its transport or
+                    //  source-side conflict failure leaves the prepared
+                    //  target intact so an exact PREPARE can submit READY
+                    //  again with the same fence and RelocationId.
+                    if (attempt.readyPublication() == publication) {
+                        attempt.readyPublication(null);
                     }
                 }
+            }
+        });
+        //  The placeholder is visible before an already-completed ready
+        //  stage may run this chain's synchronous prefix and reenter here.
+        attempt.ready()
+            .thenCompose(ignored -> sendReady(source, attempt.prepare()))
+            .thenRun(() -> armCutoverFallback(fence, attempt))
+            .exceptionallyCompose(failure ->
+                rollbackReadySubmission(fence, attempt, unwrap(failure)))
+            .whenComplete((ignored, failure) -> {
+                if (failure == null) {
+                    publication.complete(null);
+                } else {
+                    publication.completeExceptionally(failure);
+                }
             });
-            return publication;
-        }
+        return publication;
     }
 
     private CompletionStage<Void> rollbackReadySubmission(
@@ -929,7 +940,7 @@ final class ZLinkCanonicalRelocationStateMachine
         Fence fence,
         TargetAttempt attempt,
         boolean fallback) {
-        CompletionStage<Void> publication;
+        CompletableFuture<Void> publication;
         synchronized (attempt) {
             if (attempt.publication() != null) {
                 return attempt.publication();
@@ -943,28 +954,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 ZLinkRuntimeMetrics.increment(
                     "zlink.relocation.cutover_timeout", Map.of());
             }
-            publication = attempt.prepared()
-                .thenCompose(this::commitUntilRestoreExpiry)
-                .thenApply(published -> {
-                    //  S2 — target owner CAS confirmed.
-                    attempt.committed(true);
-                    attempt.committedNanos(System.nanoTime());
-                    return published;
-                })
-                .thenCompose(ignored -> attempt.request())
-                .thenCompose(target::publish)
-                .thenApply(ignored -> {
-                    //  S3 — application dispatch opened on the target.
-                    long committedNanos = attempt.committedNanos();
-                    if (committedNanos != 0) {
-                        ZLinkRuntimeMetrics.record(
-                            "zlink.relocation.target_resume",
-                            Duration.ofNanos(
-                                System.nanoTime() - committedNanos),
-                            Map.of());
-                    }
-                    return ignored;
-                });
+            publication = new CompletableFuture<>();
             attempt.publication(publication);
         }
         publication.whenComplete((ignored, failure) -> {
@@ -976,6 +966,37 @@ final class ZLinkCanonicalRelocationStateMachine
                 retainTerminalTarget(fence, attempt);
             }
         });
+        //  Publish the claim before completed prepare/commit stages can run
+        //  inline and make the target attempt observable again.
+        attempt.prepared()
+            .thenCompose(this::commitUntilRestoreExpiry)
+            .thenApply(published -> {
+                //  S2 — target owner CAS confirmed.
+                attempt.committed(true);
+                attempt.committedNanos(System.nanoTime());
+                return published;
+            })
+            .thenCompose(ignored -> attempt.request())
+            .thenCompose(target::publish)
+            .thenApply(ignored -> {
+                //  S3 — application dispatch opened on the target.
+                long committedNanos = attempt.committedNanos();
+                if (committedNanos != 0) {
+                    ZLinkRuntimeMetrics.record(
+                        "zlink.relocation.target_resume",
+                        Duration.ofNanos(
+                            System.nanoTime() - committedNanos),
+                        Map.of());
+                }
+                return ignored;
+            })
+            .whenComplete((ignored, failure) -> {
+                if (failure == null) {
+                    publication.complete(null);
+                } else {
+                    publication.completeExceptionally(failure);
+                }
+            });
         return publication;
     }
 

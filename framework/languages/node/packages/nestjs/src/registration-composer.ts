@@ -386,6 +386,7 @@ export function createRegistrationOptions(options: ZLinkNestModuleRegistrationOp
     maintenanceWave: options.maintenanceWave,
     actorTransferTimeoutMs: options.actorTransferTimeoutMs,
     messageFollowDurationMs: options.messageFollowDurationMs,
+    sessionReplacementCallbackTimeoutMs: options.sessionReplacementCallbackTimeoutMs,
     channels,
     codecs: options.codecs,
     coreHwm: options.coreHwm,

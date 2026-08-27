@@ -1,6 +1,6 @@
 # Stream Connector — Common Spec
 
-[Spec table of contents](../server/README.en.md) | [Previous: Session Actor Dispatch](../server/20-session-actor-dispatch.en.md) | [Next: Location Runtime](../server/21-location-runtime.en.md)
+[Spec table of contents](../server/README.en.md) | [Previous: Session Actor Dispatch](../server/04-session/02-session-actor-binding.en.md) | [Next: Location Runtime](../server/05-location-relocation/01-location-runtime.en.md)
 
 > This document is the **language-neutral canonical document of the
 > client stream connector**. It owns the target execution environment,
@@ -16,17 +16,17 @@
 > [typescript](languages/typescript/README.en.md). This document
 > defines **what is guaranteed**, and the per-language spec defines
 > **what shape that meaning takes in that language**
-> ([Public Contract Governance](../server/00-public-contract-governance.en.md)).
+> ([Public Contract Governance](../server/00-foundation/01-public-contract-governance.en.md)).
 
 ## 1. Purpose And Scope
 
 Stream Connector is the **client-side library that connects to the
 server framework's STREAM model**. It lets the client send and receive
 the same
-[packet](../server/01-glossary.en.md#stream-packet) (header + payload) the
+[packet](../server/00-foundation/02-glossary.en.md#stream-packet) (header + payload) the
 server session callback receives.
 
-The [Connector](../server/01-glossary.en.md#stream-connector) doesn't include
+The [Connector](../server/00-foundation/02-glossary.en.md#stream-connector) doesn't include
 a domain. The user composes their own protocol on top of it, such as
 chat, game, equipment control, or notification.
 
@@ -128,16 +128,16 @@ The leading 2 bytes of a STREAM frame are `header_size`.
 - `kind`/`codec` are encoded as a **1-byte enum**, not a string.
 - Packet name is `u8 name_len + UTF-8 bytes`, at most **255 bytes**.
   **`Response` and `Error` don't carry a
-  [packet name](../server/01-glossary.en.md#packet-name)** — encoded with
+  [packet name](../server/00-foundation/02-glossary.en.md#packet-name)** — encoded with
   `name_len = 0`. Since a response doesn't select a handler and
   correlation is already decided by `request_seq`, this field isn't
   used (see "reply correlation" in
-  [03 Message Model](../server/04-message-model.en.md)).
+  [03 Message Model](../server/00-foundation/05-message-model.en.md)).
 - Metadata continues as `u16 meta_len + metadata bytes`, and
   correlation id as `u8 len + bytes`.
 - The flow field's **36-byte `flow_id` and 1-byte `flow_origin`
   always exist together** or are both absent. The meaning is owned by
-  [Message Flow Correlation §3](../server/27-flow-correlation.en.md#3-format-and-ownership).
+  [Message Flow Correlation §3](../server/06-observability/04-flow-correlation.en.md#3-format-and-ownership).
 - **Every multi-byte integer is network byte order.**
 
 Application code doesn't build or modify this header directly — the
@@ -154,7 +154,7 @@ connector runtime owns it.
 | has flow id | `0x10` | The `flow_id`/`flow_origin` fields are present |
 
 `has flow id` isn't set on a `Control` packet
-([flow-correlation §3](../server/27-flow-correlation.en.md#3-format-and-ownership)).
+([flow-correlation §3](../server/06-observability/04-flow-correlation.en.md#3-format-and-ownership)).
 
 ### 4.4 Metadata
 
@@ -217,7 +217,7 @@ no flow flag. **The payload differs per control packet.**
 
 `session-closing` is a control packet the server sends right before
 closing a session, and the client reads it to confirm `closeReason`
-([Complete Host Relocation Flow §9](../server/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)).
+([Complete Host Relocation Flow §9](../server/05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions)).
 
 ```text
 +------------+-------------------+----------------+--------------------+
@@ -305,7 +305,7 @@ is put **only in request/response/error response.**
   belongs to which is already decided by sequence. The same terminal
   reply principle is used when relaying an Actor request in a STREAM
   session
-  ([Session Actor Dispatch §3](../server/20-session-actor-dispatch.en.md#3-inbound-dispatch-and-reply)).
+  ([Session Actor Dispatch §3](../server/04-session/02-session-actor-binding.en.md#5-bind-and-relay)).
 - **When a request timeout, close, or disconnect occurs, every pending
   request completes as failure and is removed from the map.** It isn't
   automatically resent after reconnection (§6).
@@ -440,7 +440,7 @@ the same across every language.**
 | Wait timeout (waiting for a specific packet) | 5 seconds |
 | Heartbeat | On — interval 1 second, timeout 5 seconds |
 | Reconnect | On — initial delay 250ms, max delay 5 seconds, backoff factor 2.0, max attempts 3 |
-| [Dispatch mode](../server/01-glossary.en.md#dispatch-mode) | `Manual` (§7) |
+| [Dispatch mode](../server/00-foundation/02-glossary.en.md#dispatch-mode) | `Manual` (§7) |
 | Codec | JSON (§5.4) |
 | Compression | Lz4 (§8) |
 | Send/receive payload bound | 64KB each (§4.7) |
@@ -476,7 +476,7 @@ doesn't change send, request, or connection state.
 Once the connection drops, the connector exposes a **close reason.**
 The value set is a **closed set** aligned with the server-side
 `close_reason`
-([runtime-metrics §4](../server/25-runtime-metrics.en.md#4-object-and-stream)),
+([runtime-metrics §4](../server/06-observability/02-runtime-metrics.en.md#6-object-count-capacity-and-relocation-instruments)),
 and the wire encoding is owned by §4.6's `session-closing` control
 packet.
 
@@ -491,7 +491,7 @@ packet.
 
 A client that received `ServerDrain` looks at this value to **decide
 reconnection and backoff**
-([Complete Host Relocation Flow §9](../server/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)).
+([Complete Host Relocation Flow §9](../server/05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions)).
 **A capability for the server to specify a replacement endpoint isn't
 included in this contract.**
 
@@ -717,11 +717,11 @@ test name differs, the meaning must be the same.
 
 The connector takes a diagnostics level as a creation-time option. The values and their
 meaning are the four values `Off`/`Errors`/`Normal`/`Detailed` of
-[Message flow tracing §4](../server/26-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope),
+[Message flow tracing §4](../server/06-observability/03-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope--level-and-sampling),
 and **the default is `Errors`.** The connector is subject to the client connector rule of
-[Flow correlation §4](../server/27-flow-correlation.en.md#4-when-a-flow-is-created), so a
+[Flow correlation §4](../server/06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created), so a
 runtime level change follows
-[Message flow tracing §4.1](../server/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime)
+[Message flow tracing §4.1](../server/06-observability/03-message-flow-tracing.en.md#5-changing-the-record-level-at-runtime-and-the-cost-rule)
 as is. The application can read and change the level without recreating the connector, the
 change applies from the processing points after it, and already-built frames are not
 retroactively changed. Each processing point reads the current level once and decides with
@@ -732,7 +732,7 @@ attaches `flow_id`/`flow_origin` to outbound frames (§4.2, flag `0x10`) and val
 inbound frame's flow fields, delivering them on the received message.
 
 When the level is `Off`, the client connector rule of
-[Flow correlation §4](../server/27-flow-correlation.en.md#4-when-a-flow-is-created) applies
+[Flow correlation §4](../server/06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created) applies
 as is.
 
 - Outbound frames neither create nor attach `flow_id`/`flow_origin` (flag `0x10` is not
@@ -743,6 +743,6 @@ as is.
 
 The diagnostics level does not affect protocol information. A request's correlation id is
 created and preserved even at `Off`. Conversely, **a one-way `Send` never creates a
-correlation id at any level** — [Flow correlation §2](../server/27-flow-correlation.en.md#2-the-role-of-the-two-identifiers)'s
+correlation id at any level** — [Flow correlation §2](../server/06-observability/04-flow-correlation.en.md#2-the-role-of-the-two-identifiers)'s
 "a one-way message without a reply doesn't create a `correlation_id`" applies to the
 connector as well (flag `0x08` is not set).

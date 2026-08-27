@@ -17,8 +17,8 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/06-spot.en.m
 
 # 6. Spot
 
-> **The document that owns this chapter's contract** — the [Spot model](../../../common/spec/server/11-spot-model.en.md)
-> and [SPOT messaging](../../../common/spec/server/12-spot-messaging.en.md) own the behavior, and
+> **The document that owns this chapter's contract** — the [Spot model](../../../common/spec/server/03-spot-actor/01-spot-model.en.md)
+> and [SPOT messaging](../../../common/spec/server/03-spot-actor/02-spot-messaging.en.md) own the behavior, and
 > the [per-language Spot public contract](../../../common/spec/server/languages/README.en.md)
 > owns the exact signatures. Actor and Spot membership are explained in
 > [Actor & Spot Hosting](07-actor-spot.en.md).
@@ -679,7 +679,7 @@ number of skipped ticks.
 | `ScheduledAt` · `started_at` | Scheduled time / actual execution start time |
 | `ScheduledElapsed` · `StartedElapsed` | Elapsed since the timer started (scheduled basis / actual basis) |
 | `Delay` | `StartedElapsed - ScheduledElapsed` -- this tick's delay against schedule |
-| `SkippedTicks` | Number of ticks skipped right before this tick |
+| `skipped_ticks` | Number of ticks skipped right before this tick |
 | `Period` | The registered period |
 
 ```cpp

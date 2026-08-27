@@ -1,12 +1,11 @@
-<!-- framework-adapter-nav:start -->
-[스펙 목차](README.ko.md) | [이전: C++ exact interface](interfaces/README.ko.md) | [다음: C++ 내장 HTTP 서버](61-embedded-http-server.ko.md)
-<!-- framework-adapter-nav:end -->
-
 [Framework 공통 문서](../../../../README.ko.md)
 
 
 # C++ HTTP hosting 공개 계약
 
+<!-- framework-adapter-nav:start -->
+[C++ 계약 목차](README.ko.md) | [언어별 interface 목차](../README.ko.md) | [이전: C++ 공개 interface](interfaces/README.ko.md) | [다음: C++ 내장 HTTP 서버](61-embedded-http-server.ko.md)
+<!-- framework-adapter-nav:end -->
 > 이 문서는 C++ HTTP hosting이 제공해야 하는 정식 계약이다.
 
 ## 1. 요청 처리 계약
@@ -243,7 +242,7 @@ Raw route는 `request_type`, `reply_type` alias를 요구하지 않는다. raw r
 ## 4. Route Builder
 
 지원 범위는 typed JSON route와 raw HTTP route다. `GET`, `POST`, `PUT`, `DELETE`를 같은
-규칙으로 등록할 수 있어야 한다. `http_options_builder_t`의 exact declaration은
+규칙으로 등록할 수 있어야 한다. `http_options_builder_t`의 선언은
 [C++ configuration과 host interface](interfaces/02-configuration-host.ko.md#41-http-hosting)가
 단독으로 소유한다. 이 절은 route builder의 사용 의미와 HTTP request/response 계약을 정의한다.
 
@@ -472,7 +471,7 @@ framework error kind는 HTTP status로 매핑한다.
 | `protocol_error` | `400 Bad Request` | client body가 DTO로 변환되지 않았거나 request 의미가 framework 계약과 맞지 않는다 |
 | `not_found` | `404 Not Found` | 대상 route, channel, service를 찾지 못했다 |
 | `framework_exception_t::code() == std::errc::timed_out` | `504 Gateway Timeout` | HTTP hosting 뒤의 zlink request가 시간 안에 끝나지 않았다 |
-| `framework_exception_t::code()`가 [shutdown](../../01-glossary.ko.md#shutdown) 경계를 나타내고 host가 종료 중임 | `503 Service Unavailable` | host가 종료 중이다 |
+| `framework_exception_t::code()`가 [shutdown](../../00-foundation/02-glossary.ko.md#shutdown) 경계를 나타내고 host가 종료 중임 | `503 Service Unavailable` | host가 종료 중이다 |
 | `internal_failure` | `500 Internal Server Error` | 내부 handler 또는 runtime 실패다 |
 
 HTTP server runtime이 body size limit을 초과한 request를 감지하면 `413 Payload Too Large`로
@@ -492,7 +491,7 @@ HTTP server는 `hosted_service_t`로 실행한다.
 - 진행 중 request는 graceful shutdown timeout 안에서 완료되도록 기다린다.
 - shutdown 중 새 zlink submit을 무기한 만들지 않는다.
 
-HTTP endpoint는 handler가 주입받는 framework client가 ready 상태가 된 뒤에만 [ready](../../01-glossary.ko.md#ready)로 전환한다.
+HTTP endpoint는 handler가 주입받는 framework client가 ready 상태가 된 뒤에만 [ready](../../00-foundation/02-glossary.ko.md#ready)로 전환한다.
 종료 시에는 새 HTTP request를 먼저 거부하고 진행 중 handler가 messaging drain 기한 안에서 완료될
 기회를 제공한다.
 
@@ -552,7 +551,7 @@ framework의 `http_request_t`, `http_response_t`와 `http_context_t`만 사용�
 | package 위치 | HTTP hosting은 framework server package가 제공한다. |
 | 구현 dependency 노출 | public header와 signature에 Beast, Asio와 SSL 구현 타입을 노출하지 않는다. |
 | HTTPS/TLS | certificate와 private key 설정을 public option으로 제공한다. |
-| route matching | exact path와 `{name}` path parameter를 지원한다. |
+| route matching | literal path와 `{name}` path parameter를 지원한다. |
 | method | `GET`, `POST`, `PUT`, `DELETE`를 같은 builder 규칙으로 지원한다. |
 | cancellation | handler signature에 별도 cancellation token을 추가하지 않고 request timeout과 host drain 계약을 적용한다. |
 | response customization | typed DTO의 기본 status는 `200 OK`다. status와 header 직접 제어는 `http_response_t` 반환 handler가 제공한다. |
@@ -612,5 +611,5 @@ Handler signature regression matrix:
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[스펙 목차](README.ko.md) | [이전: C++ exact interface](interfaces/README.ko.md) | [다음: C++ 내장 HTTP 서버](61-embedded-http-server.ko.md)
+[C++ 계약 목차](README.ko.md) | [언어별 interface 목차](../README.ko.md) | [이전: C++ 공개 interface](interfaces/README.ko.md) | [다음: C++ 내장 HTTP 서버](61-embedded-http-server.ko.md)
 <!-- framework-adapter-nav:bottom:end -->

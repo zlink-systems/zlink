@@ -29,14 +29,14 @@
 
 | 문서 | 다루는 범위 |
 |------|-------------|
-| [개요](framework/common/spec/server/02-overview.ko.md) | Framework의 목적과 우선 범위 |
-| [상호작용 모델](framework/common/spec/server/03-interaction-model.ko.md) | request-response, command, publish-subscribe 사용자 모델 |
-| [메시지 모델](framework/common/spec/server/04-message-model.ko.md) | header/payload 구조와 metadata 정책 |
-| [Channel topology](framework/common/spec/server/07-channel-topology.ko.md) | channel grouping, discovery, 수동 연결, 내부 transport 매핑 |
-| [Framework API](framework/common/spec/server/06-framework-api.ko.md) | 언어별 framework API의 공통 방향 |
-| [비동기 실행 정책](framework/common/spec/server/05-async-execution-policy.ko.md) | async submit, blocking 금지, coroutine/adapter 공통 의미 |
-| [Actor 모델](framework/common/spec/server/14-actor-model.ko.md) | actor 위치, session binding, Entry Spot, user Spot, dispatch 기준 |
-| [Session Actor Dispatch](framework/common/spec/server/20-session-actor-dispatch.ko.md) | session과 actor를 연결하는 helper와 routing 정책 |
+| [개요](framework/common/spec/server/00-foundation/03-overview.ko.md) | Framework의 목적과 우선 범위 |
+| [상호작용 모델](framework/common/spec/server/00-foundation/04-interaction-model.ko.md) | request-response, command, publish-subscribe 사용자 모델 |
+| [메시지 모델](framework/common/spec/server/00-foundation/05-message-model.ko.md) | header/payload 구조와 metadata 정책 |
+| [Channel topology](framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md) | channel grouping, discovery, 수동 연결, 내부 transport 매핑 |
+| [Framework API](framework/common/spec/server/00-foundation/06-framework-api.ko.md) | 언어별 framework API의 공통 방향 |
+| [비동기 실행 정책](framework/common/spec/server/01-execution/README.ko.md) | async submit, blocking 금지, coroutine/adapter 공통 의미 |
+| [Actor 모델](framework/common/spec/server/03-spot-actor/04-actor-model.ko.md) | actor 위치, session binding, Entry Spot, user Spot, dispatch 기준 |
+| [Session Actor Dispatch](framework/common/spec/server/04-session/02-session-actor-binding.ko.md) | session과 actor를 연결하는 helper와 routing 정책 |
 **공통 샘플 시나리오** ([색인](framework/common/sample/README.ko.md)) — 정본 6종을 모든 언어가
 같은 역할 분리·메시지 이름·smoke 순서로 구현한다.
 
@@ -128,7 +128,7 @@ Kotlin guide는 coroutine과 `Flow` 사용법을 설명한다.
 
 ## 읽는 순서
 
-1. [공통 개요](framework/common/spec/server/02-overview.ko.md) → [상호작용 모델](framework/common/spec/server/03-interaction-model.ko.md) → [actor 모델](framework/common/spec/server/14-actor-model.ko.md)
+1. [공통 개요](framework/common/spec/server/00-foundation/03-overview.ko.md) → [상호작용 모델](framework/common/spec/server/00-foundation/04-interaction-model.ko.md) → [actor 모델](framework/common/spec/server/03-spot-actor/04-actor-model.ko.md)
 2. 사용할 언어의 [framework/&lt;lang&gt;](framework/dotnet/README.ko.md) guide
 3. HTTP가 필요하면 [framework/&lt;lang&gt;/guide/http-client](framework/dotnet/guide/http-client/README.ko.md), 외부 client 접속이면 [framework/&lt;lang&gt;/guide/stream-connector](framework/cpp/guide/stream-connector/INDEX.ko.md)
 

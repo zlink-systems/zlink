@@ -14,6 +14,7 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Locations.Redis;
 using Zlink.Framework.Contracts.Dispatch;
+using Zlink.Framework.Contracts.Spots;
 using Zlink.Samples.Logging;
 
 namespace ShoppingMall.Server.CommerceApi;
@@ -35,6 +36,7 @@ internal static class Program
 
         builder.WebHost.UseUrls(instance.HttpUrl);
         builder.Services.AddSingleton(topology);
+        builder.Services.AddSingleton(instance);
         builder.Services.AddSingleton(new RedisCommerceStores(topology));
         builder.Services.AddSingleton<IOrderReadModelStore>(static provider =>
             provider.GetRequiredService<RedisCommerceStores>());
@@ -45,6 +47,7 @@ internal static class Program
         builder.Services.AddSingleton<StartOrderUseCase>();
         builder.Services.AddSingleton<PrepareInventoryReservedOrderUseCase>();
         builder.Services.AddSingleton<GetOrderStateUseCase>();
+        builder.Services.AddHostedService<ShoppingMallReadinessReporter>();
 
         builder.Services.AddZLinkFramework(options =>
         {
@@ -61,6 +64,9 @@ internal static class Program
                 .SetRoutingIdPrefix("commerce-api");
             mesh.Objects().Client();
             mesh.Channel(SampleNames.OrderProjectionChannel).Client();
+            //  Workflow peers are found through the Location Store. A manual peer connection here
+            //  switches the node to manual acquisition, which conflicts with the routing ID prefix
+            //  set above and fails startup.
         });
 
         var app = builder.Build();
@@ -83,6 +89,8 @@ internal static class Program
             }
         });
         app.Services.GetRequiredService<RedisCommerceStores>().SeedDefaults();
+        app.Lifetime.ApplicationStarted.Register(() =>
+            app.Logger.LogInformation("shoppingmall-ready kind=http node={NodeId}", instance.InstanceId));
 
         app.MapGet("/health", () => Results.Ok(new { ready = true, instance = instance.InstanceId }));
         app.MapPost("/orders/start", async (
@@ -146,6 +154,35 @@ internal static class Program
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await useCase.ExecuteAsync(request, cancellationToken));
+        });
+        app.MapPost("/self-check/relocation/{orderId}/arm", async (
+            string orderId,
+            ICommerceStateStore commerce,
+            CancellationToken cancellationToken) =>
+        {
+            await commerce.ArmPlannedRelocationReplayAsync(orderId, cancellationToken);
+            return Results.Ok();
+        });
+        app.MapPost("/self-check/relocation-ready/{anchorId}", async (
+            string anchorId,
+            IZLinkSpotClient spotClient,
+            CancellationToken cancellationToken) =>
+        {
+            var ready = await spotClient.RequestToSpot(
+                    anchorId,
+                    new SignalPlannedRelocationReadyReq())
+                .Async<SignalPlannedRelocationReadyRes>(cancellationToken);
+            return Results.Ok(ready);
+        });
+        app.MapPost("/self-check/workflow/{orderId}/close", async (
+            string orderId,
+            IOrderWorkflowRouter workflows,
+            CancellationToken cancellationToken) =>
+        {
+            var state = await workflows.ContinueAsync(
+                new ContinueOrderWorkflowReq(orderId, $"runner-close:{orderId}"),
+                cancellationToken);
+            return Results.Ok(new { closed = state.Status is OrderStatuses.Confirmed or OrderStatuses.Failed });
         });
         app.MapPost("/self-check/assert", async (
             ServerAssertionReq request,
@@ -215,8 +252,12 @@ internal static class Program
                 && evidence.ReleasedReservationCount >= 1
                 && evidence.PaymentFailureCount >= 1
                 && evidence.StartedIdempotencyCount == 8;
-            loggerFactory.CreateLogger("ShoppingMall.Server.CommerceApi")
-                .LogInformation("shoppingmall evidence: {Evidence}", string.Join("; ", lines));
+            var logger = loggerFactory.CreateLogger("ShoppingMall.Server.CommerceApi");
+            foreach (var (orderId, orderEvents) in evidence.EventsByOrder)
+                logger.LogInformation(
+                    "shoppingmall-evidence order={OrderId} events={EventCount}",
+                    orderId,
+                    orderEvents.Length);
             return Results.Ok(new ServerAssertionRes(passed, lines));
         });
 

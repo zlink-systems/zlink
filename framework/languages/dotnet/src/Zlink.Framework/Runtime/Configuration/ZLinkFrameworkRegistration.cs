@@ -9,6 +9,9 @@ internal sealed class ZLinkFrameworkRegistration
 
     public TimeSpan DefaultRequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
+    public TimeSpan SessionReplacementCallbackTimeout { get; set; } =
+        TimeSpan.FromMilliseconds(30_000);
+
     public TimeSpan DefaultSocketSendTimeout { get; set; } = TimeSpan.FromMilliseconds(1000);
 
     public long ApplicationVersion { get; set; }
@@ -483,7 +486,7 @@ internal sealed class ZLinkActorCatalog
         return _factories.TryGetValue(actorType, out var factoryType)
             ? factoryType
             : throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InternalFailure,
+                ZLinkFrameworkErrorKind.NotFound,
                 $"Actor factory '{actorType}' is not registered.");
     }
 }

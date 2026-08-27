@@ -2,6 +2,7 @@
 
 #include "../Configuration/evidence_store.hpp"
 #include "../Configuration/sample_names.hpp"
+#include "../Configuration/sample_readiness.hpp"
 #include "../Configuration/sample_configuration.hpp"
 #include "Handlers/tracking_handlers.hpp"
 
@@ -36,5 +37,7 @@ int main (int argc, char **argv)
       .client ();
     customer_mesh.objects ().client ();
     options.handlers ().group ("tracking").add<delivery_status_changed_handler_t> ();
+    app.add_hosted_service (std::make_unique<route_readiness_service_t> (
+      sample_names_t::tracking_node, sample_names_t::customer_actor_discovery));
     return app.run (argc, argv);
 }

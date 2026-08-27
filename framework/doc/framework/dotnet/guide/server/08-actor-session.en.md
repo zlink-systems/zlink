@@ -18,7 +18,7 @@ View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/08-a
 # 8. Session And Actor Binding
 
 > **The documents that own this chapter's contract** —
-> [Session Actor dispatch](../../../common/spec/server/20-session-actor-dispatch.en.md) owns the
+> [Session Actor dispatch](../../../common/spec/server/04-session/02-session-actor-binding.en.md) owns the
 > behavior, and the
 > [per-language STREAM session / bound session public contract](../../../common/spec/server/languages/README.en.md)
 > owns the exact signatures.

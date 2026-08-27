@@ -6,6 +6,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 source "../../runner-common.sh"
 zlink_sample_configure_port_pool java
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
+readonly DELIVERYDISPATCH_WAIT_ATTEMPTS=300
+readonly DELIVERYDISPATCH_WAIT_INTERVAL_SECONDS=0.1
 
 if rg -n 'System\.(getProperty|getenv)' Server Client --glob '*.java'; then
   echo "DeliveryDispatch application code must use sample config files" >&2
@@ -60,13 +62,44 @@ fi
 pids=()
 redis_container_id=""
 log_dir="build/sample-logs"
-ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="tracking.log customer-gateway.log courier-session.log courier-node1.log courier-node2.log dispatch.log"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="tracking.log customer-gateway.log courier-session.log courier-node-1.log courier-node-2.log dispatch.log"
 flow_log_dir="$(pwd)/logs"
 config_dir="$(mktemp -d)"
 chmod 0700 "${config_dir}"
 mkdir -p "${log_dir}" "${flow_log_dir}"
 rm -f "${log_dir}"/*.log
 rm -f "${flow_log_dir}"/*.log
+
+count_evidence() {
+  local evidence="$1"
+  shift
+  local count=0 log matches
+  for log in "$@"; do
+    [[ -f "${log}" ]] || continue
+    matches="$(grep -Fc "${evidence}" "${log}" || true)"
+    count=$((count + matches))
+  done
+  echo "${count}"
+}
+
+wait_for_evidence_count() {
+  local description="$1" expected="$2" evidence="$3"
+  shift 3
+  local attempt actual
+  for ((attempt=1; attempt<=DELIVERYDISPATCH_WAIT_ATTEMPTS; attempt++)); do
+    actual="$(count_evidence "${evidence}" "$@")"
+    if [[ "${actual}" == "${expected}" ]]; then
+      return 0
+    fi
+    if (( actual > expected )); then
+      echo "DeliveryDispatch ${description}: expected ${expected} '${evidence}', found ${actual}" >&2
+      return 1
+    fi
+    sleep "${DELIVERYDISPATCH_WAIT_INTERVAL_SECONDS}"
+  done
+  echo "DeliveryDispatch ${description}: timed out waiting for ${expected} '${evidence}'" >&2
+  return 1
+}
 
 print_logs() {
   local status="$1"
@@ -225,8 +258,8 @@ EOF
 tracking_config="${config_dir}/tracking.properties"
 customer_gateway_config="${config_dir}/customer-gateway.properties"
 courier_session_config="${config_dir}/courier-session.properties"
-courier_node1_config="${config_dir}/courier-node1.properties"
-courier_node2_config="${config_dir}/courier-node2.properties"
+courier_node1_config="${config_dir}/courier-node-1.properties"
+courier_node2_config="${config_dir}/courier-node-2.properties"
 dispatch_config="${config_dir}/dispatch.properties"
 client_config="${config_dir}/client.properties"
 write_config "$tracking_config" tracking
@@ -248,51 +281,70 @@ gradle_run \
 
 "$(app_bin Server/Tracking Tracking)" --config "$tracking_config" >"${log_dir}/tracking.log" 2>&1 &
 pids+=("$!")
-wait_port "$(endpoint_host "${tracking}")" "$(endpoint_port "${tracking}")"
 
 "$(app_bin Server/CustomerGateway CustomerGateway)" --config "$customer_gateway_config" >"${log_dir}/customer-gateway.log" 2>&1 &
 pids+=("$!")
-wait_port "$(endpoint_host "${customer_stream}")" "$(endpoint_port "${customer_stream}")"
-wait_port "$(endpoint_host "${customer_router}")" "$(endpoint_port "${customer_router}")"
 
 "$(app_bin Server/CourierSession CourierSession)" --config "$courier_session_config" >"${log_dir}/courier-session.log" 2>&1 &
 pids+=("$!")
-wait_port "$(endpoint_host "${courier_stream}")" "$(endpoint_port "${courier_stream}")"
-wait_port "$(endpoint_host "${courier_session_spot}")" "$(endpoint_port "${courier_session_spot}")"
 
-"$(app_bin Server/CourierSpotNode CourierSpotNode)" --config "$courier_node1_config" >"${log_dir}/courier-node1.log" 2>&1 &
+"$(app_bin Server/CourierSpotNode CourierSpotNode)" --config "$courier_node1_config" >"${log_dir}/courier-node-1.log" 2>&1 &
 pids+=("$!")
-"$(app_bin Server/CourierSpotNode CourierSpotNode)" --config "$courier_node2_config" >"${log_dir}/courier-node2.log" 2>&1 &
+"$(app_bin Server/CourierSpotNode CourierSpotNode)" --config "$courier_node2_config" >"${log_dir}/courier-node-2.log" 2>&1 &
 pids+=("$!")
-wait_port "$(endpoint_host "${courier_node1_spot}")" "$(endpoint_port "${courier_node1_spot}")"
-wait_port "$(endpoint_host "${courier_node2_spot}")" "$(endpoint_port "${courier_node2_spot}")"
 
 "$(app_bin Server/Dispatch Dispatch)" --config "$dispatch_config" >"${log_dir}/dispatch.log" 2>&1 &
 pids+=("$!")
-wait_port "$(endpoint_host "${dispatch_http}")" "$(endpoint_port "${dispatch_http}")"
-wait_port "$(endpoint_host "${dispatch_spot}")" "$(endpoint_port "${dispatch_spot}")"
-wait_framework_ready_logs "${log_dir}" 1
-wait_framework_peer_ready_counts "${log_dir}" \
-  "tracking.log:1" \
-  "customer-gateway.log:1" \
-  "courier-session.log:2" \
-  "courier-node1.log:3" \
-  "courier-node2.log:3" \
-  "dispatch.log:2"
+wait_for_evidence_count "tracking route readiness" 1 \
+  "deliverydispatch-ready kind=route node=tracking" "${log_dir}/tracking.log"
+wait_for_evidence_count "customer gateway route readiness" 1 \
+  "deliverydispatch-ready kind=route node=customer-gateway" "${log_dir}/customer-gateway.log"
+wait_for_evidence_count "courier session route readiness" 1 \
+  "deliverydispatch-ready kind=route node=courier-session" "${log_dir}/courier-session.log"
+wait_for_evidence_count "courier node 1 route readiness" 1 \
+  "deliverydispatch-ready kind=route node=courier-node-1" "${log_dir}/courier-node-1.log"
+wait_for_evidence_count "courier node 2 route readiness" 1 \
+  "deliverydispatch-ready kind=route node=courier-node-2" "${log_dir}/courier-node-2.log"
+wait_for_evidence_count "dispatch route readiness" 1 \
+  "deliverydispatch-ready kind=route node=dispatch" "${log_dir}/dispatch.log"
+wait_for_evidence_count "dispatch courier node 1 readiness" 1 \
+  "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-1" "${log_dir}/dispatch.log"
+wait_for_evidence_count "dispatch courier node 2 readiness" 1 \
+  "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2" "${log_dir}/dispatch.log"
 
-echo "topology=ready"
 "$(app_bin Client Client)" --config "$client_config" >"${log_dir}/client.log" 2>&1
 cat "${log_dir}/client.log"
 
-grep -q "deliverydispatch-reassignment=completed" "${log_dir}/client.log"
-grep -q "deliverydispatch-server-evidence=completed" "${log_dir}/client.log"
-grep -q "deliverydispatch=completed" "${log_dir}/client.log"
-for courier_id in courier-a courier-b; do
-  if ! grep -q "courier-bind-relayed=${courier_id}" \
-      "${log_dir}/courier-node1.log" "${log_dir}/courier-node2.log"; then
-    echo "DeliveryDispatch bind did not reach the courier actor: ${courier_id}" >&2
-    exit 1
-  fi
-done
+wait_for_evidence_count "client reassignment marker" 1 \
+  "deliverydispatch-reassignment=completed" "${log_dir}/client.log"
+wait_for_evidence_count "client server evidence marker" 1 \
+  "deliverydispatch-server-evidence=completed" "${log_dir}/client.log"
+wait_for_evidence_count "client completion marker" 1 \
+  "deliverydispatch=completed" "${log_dir}/client.log"
 
-echo "deliverydispatch full client/server self-check completed"
+wait_for_evidence_count "courier a binding" 1 \
+  "deliverydispatch-courier bound courier=courier-a" "${log_dir}/courier-session.log"
+wait_for_evidence_count "courier b binding" 1 \
+  "deliverydispatch-courier bound courier=courier-b" "${log_dir}/courier-session.log"
+wait_for_evidence_count "courier a bind relay" 1 \
+  "deliverydispatch-courier bind-relayed courier=courier-a" \
+  "${log_dir}/courier-node-1.log" "${log_dir}/courier-node-2.log"
+wait_for_evidence_count "courier b bind relay" 1 \
+  "deliverydispatch-courier bind-relayed courier=courier-b" \
+  "${log_dir}/courier-node-1.log" "${log_dir}/courier-node-2.log"
+wait_for_evidence_count "customer binding" 1 \
+  "deliverydispatch-customer bound customer=customer-1" "${log_dir}/customer-gateway.log"
+wait_for_evidence_count "customer delivered pushes" 2 \
+  "deliverydispatch-customer pushed status=Delivered delivery=" "${log_dir}/customer-gateway.log"
+wait_for_evidence_count "tracking delivered statuses" 2 \
+  "deliverydispatch-tracking status=Delivered delivery=" "${log_dir}/tracking.log"
+wait_for_evidence_count "stale decision" 1 \
+  "deliverydispatch-dispatch stale-decision-ignored delivery=delivery-reassign courier=courier-a attempt=1" \
+  "${log_dir}/dispatch.log"
+wait_for_evidence_count "candidates exhausted" 1 \
+  "deliverydispatch-dispatch failed delivery=delivery-exhausted reason=candidates-exhausted" \
+  "${log_dir}/dispatch.log"
+
+deliverydispatch_cleanup
+trap - EXIT
+echo "deliverydispatch-placement=completed"

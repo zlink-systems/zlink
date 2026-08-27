@@ -7,7 +7,7 @@
 > meaning concrete shape on the Java/Kotlin surface.
 
 The common meaning of async execution, `CompletionStage`, and the Kotlin coroutine wrapper
-follows the [Async Execution And Coroutine Policy](../common/spec/server/05-async-execution-policy.en.md).
+follows the [Async Execution And Coroutine Policy](../common/spec/server/01-execution/README.en.md).
 
 Sample and E2E config files, the ban on environment variables, and
 `@ConfigurationProperties`-binding criteria follow the

@@ -12,7 +12,7 @@ import type { BingoSampleConfig } from '../Configuration/sample-config';
 function createBingoMatchmakingModule() {
   class BingoMatchmakingModule {}
   const configuration = createBingoConfigurationModule([
-    'matchmakingEndpoint', 'redisEndpoint', 'redisKeyPrefix', 'logDir'
+    'matchmakingEndpoint', 'nodeId', 'redisEndpoint', 'redisKeyPrefix', 'logDir'
   ]);
   zlinkModule(__dirname, {
     imports: [

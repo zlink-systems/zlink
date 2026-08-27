@@ -27,6 +27,14 @@ public static class SessionServerHostFactory
             logDirectory,
             "session");
         builder.Services.AddSingleton(topology);
+        builder.Services.AddSingleton(new SupportChatReadiness(
+            SupportChatReadyKind.Stream,
+            "session"));
+        builder.Services.AddSingleton(new SupportChatReadiness(
+            SupportChatReadyKind.SpotRoute,
+            "session",
+            SampleNames.MeshName));
+        builder.Services.AddHostedService<SupportChatReadinessReporter>();
         builder.Services.AddZLinkFramework(options =>
         {
             // Channel clients wire through Redis discovery; the session's first

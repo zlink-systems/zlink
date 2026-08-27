@@ -34,6 +34,11 @@ await using var courierB = ZlinkStreamConnectorFactory.Create(new ZlinkStreamCon
     DispatchMode = ZlinkStreamDispatchMode.Immediate
 });
 
-await new DeliveryDispatchClientScenario(logger).RunAsync(http, customer, courierA, courierB);
+await new DeliveryDispatchClientScenario(logger).RunAsync(
+    http,
+    customer,
+    courierA,
+    courierB,
+    Path.Combine(configuration.WorkDirectory, "events.log"));
 
 logger.LogInformation("deliverydispatch=completed");

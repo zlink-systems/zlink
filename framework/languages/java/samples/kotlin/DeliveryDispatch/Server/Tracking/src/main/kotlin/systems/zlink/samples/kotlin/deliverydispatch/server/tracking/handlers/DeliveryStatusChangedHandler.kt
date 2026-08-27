@@ -22,6 +22,11 @@ class DeliveryStatusChangedHandler(
         context: ZLinkMessageContext,
     ): DeliveryStatusChangedRes {
         evidenceStore.append(request)
+        if (request.status.name == "Delivered") {
+            println(
+                "deliverydispatch-tracking status=Delivered delivery=${request.deliveryId}",
+            )
+        }
         val actorRef = actorRefs.find(request.customerId).await()
             .orElseThrow {
                 IllegalStateException("customer actor not found: ${request.customerId}")

@@ -79,7 +79,7 @@ export class ZLinkBoundSessionService {
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
     throwIfAborted(signal);
-    const route = this.routes.requireRoute(actorId);
+    const route = await this.routes.requireRoute(actorId);
     const frame = this.frameMessages.createJsonFrameMessage(
       ZLinkStreamMessageKind.Send,
       resolvePacketName(message, packetName),
@@ -95,7 +95,7 @@ export class ZLinkBoundSessionService {
         metadata,
         signal
       });
-      this.routes.requireCurrentToken(actorId, route.bindingToken);
+      await this.routes.requireCurrentToken(actorId, route.bindingToken);
       return result;
     } finally {
       frame.close();
@@ -109,7 +109,7 @@ export class ZLinkBoundSessionService {
     metadata: ReadonlyMap<string, string>,
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
-    const route = this.routes.route(actorId);
+    const route = await this.routes.route(actorId);
     if (route === undefined) {
       return { status: ZLinkSubmitStatus.TargetNotFound };
     }
@@ -123,7 +123,7 @@ export class ZLinkBoundSessionService {
     );
     try {
       throwIfAborted(signal);
-      if (this.routes.route(actorId)?.bindingToken !== route.bindingToken) {
+      if ((await this.routes.route(actorId))?.bindingToken !== route.bindingToken) {
         return { status: ZLinkSubmitStatus.TargetNotFound };
       }
       return await route.context.stream.submitRaw(frame, signal);
@@ -132,17 +132,17 @@ export class ZLinkBoundSessionService {
     }
   }
 
-  sendLocalBoundSession(
+  async sendLocalBoundSession(
     actorId: string,
     message: unknown,
     packetName: string | undefined,
     metadata: ReadonlyMap<string, string>
-  ): boolean {
-    const route = this.routes.route(actorId);
+  ): Promise<boolean> {
+    const route = await this.routes.route(actorId);
     if (route === undefined) {
       return false;
     }
-    return this.writeLocalBoundSessionFrame(
+    return await this.writeLocalBoundSessionFrame(
       actorId,
       route,
       ZLinkStreamMessageKind.Send,
@@ -155,19 +155,19 @@ export class ZLinkBoundSessionService {
     );
   }
 
-  sendLocalBoundSessionResponse(
+  async sendLocalBoundSessionResponse(
     actorId: string,
     packetName: string,
     requestSeq: bigint,
     message: unknown,
     metadata: ReadonlyMap<string, string>,
     compressPayload: boolean
-  ): boolean {
-    const route = this.routes.route(actorId);
+  ): Promise<boolean> {
+    const route = await this.routes.route(actorId);
     if (route === undefined) {
       return false;
     }
-    return this.writeLocalBoundSessionFrame(
+    return await this.writeLocalBoundSessionFrame(
       actorId,
       route,
       ZLinkStreamMessageKind.Response,
@@ -180,18 +180,18 @@ export class ZLinkBoundSessionService {
     );
   }
 
-  sendLocalBoundSessionError(
+  async sendLocalBoundSessionError(
     actorId: string,
     packetName: string,
     requestSeq: bigint,
     error: unknown,
     metadata: ReadonlyMap<string, string>
-  ): boolean {
-    const route = this.routes.route(actorId);
+  ): Promise<boolean> {
+    const route = await this.routes.route(actorId);
     if (route === undefined) {
       return false;
     }
-    return this.writeLocalBoundSessionFrame(
+    return await this.writeLocalBoundSessionFrame(
       actorId,
       route,
       ZLinkStreamMessageKind.Error,
@@ -289,14 +289,14 @@ export class ZLinkBoundSessionService {
 
   async disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
-    const route = this.routes.requireRoute(actorId);
+    const route = await this.routes.requireRoute(actorId);
     try {
       await this.requireTransport().disconnect(actorId, {
         bindingToken: route.bindingToken,
         signal
       });
     } finally {
-      this.routes.unbind(actorId, route.context, route.bindingToken);
+      await this.routes.unbind(actorId, route.context, route.bindingToken);
     }
   }
 
@@ -331,7 +331,7 @@ export class ZLinkBoundSessionService {
     }
   }
 
-  private writeLocalBoundSessionFrame(
+  private async writeLocalBoundSessionFrame(
     actorId: string,
     route: ZLinkStreamActorSessionRoute,
     kind: ZLinkStreamMessageKind,
@@ -341,7 +341,7 @@ export class ZLinkBoundSessionService {
     requestSeq: bigint | undefined,
     payload: unknown,
     operationName: string
-  ): boolean {
+  ): Promise<boolean> {
     const frame = this.frameMessages.createJsonFrameMessage(
       kind,
       packetName,
@@ -351,7 +351,7 @@ export class ZLinkBoundSessionService {
       payload
     );
     try {
-      if (this.routes.route(actorId)?.bindingToken !== route.bindingToken) {
+      if ((await this.routes.route(actorId))?.bindingToken !== route.bindingToken) {
         return false;
       }
       if (!route.context.stream.writeRaw(frame)) {

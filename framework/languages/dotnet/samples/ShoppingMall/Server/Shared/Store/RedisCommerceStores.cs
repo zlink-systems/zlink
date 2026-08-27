@@ -79,18 +79,19 @@ public sealed class RedisCommerceStores :
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask<IdempotencyMapping> ReserveIdempotencyAsync(
+    public async ValueTask<IdempotencyReservation> ReserveIdempotencyAsync(
         string idempotencyKey,
         CancellationToken cancellationToken)
     {
         return await WithStateAsync(state =>
         {
-            if (state.Idempotency.TryGetValue(idempotencyKey, out var existing)) return existing;
+            if (state.Idempotency.TryGetValue(idempotencyKey, out var existing))
+                return new IdempotencyReservation(existing, false);
 
             var orderId = $"order-{++state.NextOrderSequence:0000}";
             var created = new IdempotencyMapping(idempotencyKey, orderId, false);
             state.Idempotency[idempotencyKey] = created;
-            return created;
+            return new IdempotencyReservation(created, true);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -117,6 +118,26 @@ public sealed class RedisCommerceStores :
                 orderId,
                 false);
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask ArmPlannedRelocationReplayAsync(
+        string orderId,
+        CancellationToken cancellationToken)
+    {
+        await WithStateAsync(state =>
+            {
+                state.PlannedRelocationReplayOrders.Add(orderId);
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<bool> TryConsumePlannedRelocationReplayAsync(
+        string orderId,
+        CancellationToken cancellationToken)
+    {
+        return await WithStateAsync(
+            state => state.PlannedRelocationReplayOrders.Remove(orderId),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask SaveOrderPaymentMethodAsync(
@@ -308,11 +329,11 @@ public sealed class RedisCommerceStores :
                 64.00m,
                 "USD"));
 
-            // The runner prepares two InventoryReserved fixtures before the Client
-            // starts. Keep enough stock for those fixtures and the four successful
-            // Client paths without changing the failure seed.
-            state.Inventory.TryAdd("sku-keyboard", 6);
-            state.Inventory.TryAdd("sku-mouse", 6);
+            // The runner prepares two recovery fixtures and one planned-relocation
+            // fixture. Keep enough stock for them and the successful Client paths
+            // without changing the failure seed.
+            state.Inventory.TryAdd("sku-keyboard", 8);
+            state.Inventory.TryAdd("sku-mouse", 8);
             state.Inventory.TryAdd("sku-headset", 3);
             state.Inventory.TryAdd("sku-soldout", 1);
 
@@ -450,6 +471,10 @@ internal sealed class PersistedCommerceState
     public Dictionary<string, string> Payments { get; set; } = new(StringComparer.Ordinal);
 
     public Dictionary<string, string> OrderPaymentMethods { get; set; } = new(StringComparer.Ordinal);
+
+    public HashSet<string> PlannedRelocationReplayOrders { get; set; } = new(StringComparer.Ordinal);
+
+
 }
 
 internal sealed record InventoryReservation(

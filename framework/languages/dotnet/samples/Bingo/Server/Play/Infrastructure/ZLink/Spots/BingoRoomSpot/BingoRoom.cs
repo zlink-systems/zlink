@@ -122,8 +122,7 @@ internal sealed class BingoRoom(
                 record.Losses);
             await PublishAsync(change, cancellationToken);
             logger.LogInformation(
-                "bingo room: player record loaded. room={RoomId}, actor={ActorId}, wins={Wins}, losses={Losses}",
-                Context.SpotId,
+                "bingo-record fetched actor={ActorId} wins={Wins} losses={Losses}",
                 actor.ActorId,
                 record.Wins,
                 record.Losses);
@@ -164,10 +163,8 @@ internal sealed class BingoRoom(
                 .RequestToChannel(SampleNames.ApiChannel, report)
                 .Yield<ReportBingoResultRes>(cancellationToken);
             logger.LogInformation(
-                "bingo room: result reported. room={RoomId}, actor={ActorId}, won={Won}, wins={Wins}, losses={Losses}",
-                report.RoomId,
+                "bingo-record reported actor={ActorId} wins={Wins} losses={Losses}",
                 report.ActorId,
-                report.Won,
                 record.Wins,
                 record.Losses);
         }
@@ -177,8 +174,7 @@ internal sealed class BingoRoom(
             && string.Equals(_observerActor.ActorId, actor.ActorId, StringComparison.Ordinal))
             _observerActor = null;
         logger.LogInformation(
-            "bingo room: actor left. room={RoomId}, actor={ActorId}",
-            Context.SpotId,
+            "bingo-lifecycle room-leave actor={ActorId}",
             actor.ActorId);
         if (_actors.Count == 0 && _observerActor is null)
             _ = await Context.CloseAsync(cancellationToken);

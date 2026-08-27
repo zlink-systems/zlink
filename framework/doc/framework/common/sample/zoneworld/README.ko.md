@@ -129,6 +129,27 @@ flowchart LR
   same-owner 인접쌍(ZW-E4의 전제)이 모두 결정적으로 존재한다 — 대각 분할({nw,se}/{ne,sw})은
   same-owner 인접쌍이 없어 E4를 불충족으로 만들므로 배제한다. 선호는 claim 시도 순서일 뿐
   owner 계산이 아니며, placement 판정은 여전히 Framework capacity가 소유한다.
+- **ready 신호 문자열을 고정한다.** ZoneNode는 준비를 마치면 표준 출력에
+  `topology=ready node=<NodeId> zones=<쉼표로 이은 ZoneId>`를 정확히 한 줄 낸다. zone이
+  없으면 `zones=` 뒤를 비운다. runner가 이 줄을 기다려 다음 단계로 넘어가므로 언어마다
+  문자열이 다르면 같은 runner 절차를 쓸 수 없다. 이 줄에 다른 field를 덧붙이지 않는다.
+- **Bootstrap은 zone 2개를 확보한 뒤에 ready를 알린다.** ZoneNode는 startup에서 claim을
+  시도하고, 자기 census가 zone 2개가 될 때까지 반복한다. 확보하기 전에 ready를 알리면
+  `ZW-C1`이 "두 ZoneNode의 Registered·Connected 각각 정확"을 단언할 때 zone을 갖지 않은
+  node도 통과시켜 단언의 뜻이 달라진다. factory만 등록하고 첫 요청에서 zone Spot을 만드는
+  구현은 이 조건을 만족하지 않는다.
+- **claim 재시도는 `250 ms` 간격으로 최대 `120`회다.** 다른 ZoneNode가 아직 뜨지 않아
+  capacity가 남아 있을 수 있으므로 즉시 실패하지 않고 반복한다. 120회를 모두 쓰고도 zone
+  2개를 확보하지 못하면 startup 실패로 끝낸다 — 조용히 zone 없이 ready를 알리지 않는다.
+  간격과 횟수를 언어마다 다르게 두면 같은 시나리오가 언어별로 다른 시점에 실패해 판정이
+  갈리므로 값을 고정한다.
+- **crash 교체 process는 zone을 확보하지 않고 ready를 알린다.** §7.5가 crash replacement를
+  "새 object를 수용할 수 있게 되는 것"으로 정의하고 이전 owner object의 자동 복원을 금지하기
+  때문이다. 이 경우에만 zone 0개로 ready이며, runner가 그 의도를 명시적으로 켠다. 설정
+  이름은 `allowEmptyZoneSet`으로 고정한다(각 언어의 이름 규칙을 따라 표기만 바꾼다 —
+  `allow_empty_zone_set`, `allowsEmptyZoneSet`). 이 경로에서는 `attempt`가 `8`에 이르고
+  census가 비어 있으면 재시도를 멈추고 ready를 알린다. 일반 startup에서는 이 경로를 쓰지
+  않는다.
 - zoneworld.mesh는 ChannelName, Spot·Actor direct message와 Logical Multicast를 운반한다.
 - zoneworld.broadcast는 mesh와 독립된 classic fanout publisher/subscriber 연결이다.
 - Zone Spot·Player Actor 같은 object의 owner는 Location Store placement가 선택한다.
@@ -163,15 +184,15 @@ Framework가 자동 발급하며 고정 RID를 설정하지 않는다.
 
 | 필요한 동작 | 선택한 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| ZoneId로 현재 zone owner를 찾는다. | global Spot message | global SpotId authority를 Framework가 resolve한다. [상호작용 모델 §2](../../spec/server/03-interaction-model.ko.md#2-공통-모델) |
-| PlayerId로 actor를 찾는다. | global Actor message | Actor location과 current owner를 application route로 노출하지 않는다. [Actor model](../../spec/server/14-actor-model.ko.md) |
-| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. relocation 전체 순서(owner 전환·relay·target queue·CAS)의 단일 권위는 [Relocation flow](../../spec/server/28-relocation-flow.ko.md)이고, target admission·membership·lifecycle은 [Spot·Actor membership §4.2](../../spec/server/15-spot-actor.ko.md#42-다른-node의-spot으로-actor를-join하는-순서)가 소유한다. |
-| 이동 중 이전 owner message를 전달한다. | Message Follow | committed target route를 사용하며 실패한 operation을 다른 owner에 재제출하지 않는다. [Object routing §2.4](../../spec/server/18-object-routing.ko.md#24-이전-owner-route에-도착한-message) |
-| 인접 zone에 snapshot을 전달한다. | Logical Multicast | topic과 target subscription으로 경계를 표현한다. [상호작용 모델 §5](../../spec/server/03-interaction-model.ko.md#5-spot-logical-multicast) |
-| 전 node 공지·점검을 보낸다. | classic fanout | publisher가 node 목록을 관리하지 않는다. [상호작용 모델 §6](../../spec/server/03-interaction-model.ko.md#6-classic-fanout) |
-| node 상태를 관찰한다. | runtime monitoring event | 상태 변화와 local report를 Ops에서 수집한다. [Runtime monitoring](../../spec/server/24-runtime-monitoring.ko.md) |
-| actor 연결을 유지한다. | bound STREAM session | relocation 중 같은 connection을 유지하고 binding 위치만 갱신한다. [Failure policy §6](../../spec/server/31-failure-failover-policy.ko.md#6-session과-binding) |
-| RID 충돌을 피한다. | SetRoutingIdPrefix zn | application NodeId나 ZoneId와 transport identity를 분리한다. [MeshNode spec](../../spec/server/13-mesh-node.ko.md) |
+| ZoneId로 현재 zone owner를 찾는다. | global Spot message | global SpotId authority를 Framework가 resolve한다. [상호작용 모델 §2](../../spec/server/00-foundation/04-interaction-model.ko.md) |
+| PlayerId로 actor를 찾는다. | global Actor message | Actor location과 current owner를 application route로 노출하지 않는다. [Actor model](../../spec/server/03-spot-actor/04-actor-model.ko.md) |
+| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. relocation 전체 순서(owner 전환·relay·target queue·CAS)의 단일 권위는 [Relocation flow](../../spec/server/05-location-relocation/04-relocation-flow.ko.md)이고, target admission·membership·lifecycle은 [Spot·Actor membership §4.2](../../spec/server/03-spot-actor/05-spot-actor-membership.ko.md#42-다른-node의-spot으로-actor를-join하는-순서)가 소유한다. |
+| 이동 중 이전 owner message를 전달한다. | Message Follow | committed target route를 사용하며 실패한 operation을 다른 owner에 재제출하지 않는다. [Object routing §2.4](../../spec/server/03-spot-actor/08-routing.ko.md#25-이전-owner-route에-도착한-message) |
+| 인접 zone에 snapshot을 전달한다. | Logical Multicast | topic과 target subscription으로 경계를 표현한다. [상호작용 모델 §5](../../spec/server/00-foundation/04-interaction-model.ko.md#5-spot-logical-multicast) |
+| 전 node 공지·점검을 보낸다. | classic fanout | publisher가 node 목록을 관리하지 않는다. [상호작용 모델 §6](../../spec/server/00-foundation/04-interaction-model.ko.md#6-classic-fanout) |
+| node 상태를 관찰한다. | runtime monitoring event | 상태 변화와 local report를 Ops에서 수집한다. [Runtime monitoring](../../spec/server/06-observability/01-runtime-monitoring.ko.md) |
+| actor 연결을 유지한다. | bound STREAM session | relocation 중 같은 connection을 유지하고 binding 위치만 갱신한다. [Failure policy §6](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#6-session과-binding) |
+| RID 충돌을 피한다. | SetRoutingIdPrefix zn | application NodeId나 ZoneId와 transport identity를 분리한다. [MeshNode spec](../../spec/server/03-spot-actor/03-mesh-node.ko.md) |
 
 Player Actor factory는 `PreserveStateWith` relocation adapter를 등록한다. Capture/Restore payload는
 좌표, ZoneId, bot 방향과 마지막 적용 movement ID처럼 Application이 소유하는 state만 보존한다.
@@ -195,7 +216,7 @@ Player-facing wire는 **logical-only**다: NodeId, transport RID, relocation 발
 |---|---|
 | 이동 거부(OutOfRange/TooFar/DiagonalCrossing/ZoneMaintenance) | `MoveRejectedNotify.reason`의 해당 코드 |
 | JoinWorld의 zone admission 거부(점검 등) | `JoinWorldRes.error`의 typed 코드(예: `ZoneMaintenance`) |
-| 그 외 Framework Join/request 실패 | 해당 `error` field에 [Spot·Actor membership §4](../../spec/server/15-spot-actor.ko.md#4-actor의-spot-join)의 public failure kind 이름을 **그대로**(예: `NotFound`, `CapacityExceeded`, `InternalFailure`, `DataLost`, `InvalidOperation`, `ShuttingDown`) — 이 폐쇄 집합 밖 문자열 금지 |
+| 그 외 Framework Join/request 실패 | 해당 `error` field에 [Spot·Actor membership §4](../../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)의 public failure kind 이름을 **그대로**(예: `NotFound`, `CapacityExceeded`, `InternalFailure`, `DataLost`, `InvalidOperation`, `ShuttingDown`) — 이 폐쇄 집합 밖 문자열 금지 |
 | target owner crash로 인한 operation 종료 | `JoinWorldRes.error`/해당 request의 `error` = `Unavailable` |
 | request deadline 초과 | 해당 request의 `error` = `DeadlineExceeded` |
 | session route 갱신 timeout | WebSocket close(별도 message 없음, §7.5) |
@@ -427,7 +448,7 @@ Actor가 좌표를 갱신하고 Zone Spot에 UpdatePositionMsg를 보내 사본�
 
 Zone join은 Framework Actor Join이므로 handler 안에서 동기적으로 완료되지 않는다. Actor는
 join을 `Defer()`로 등록하고 현재 handler를 정상 종료하며, join 결과는 completion callback으로
-도착한다([Spot·Actor membership §3](../../spec/server/15-spot-actor.ko.md#3-membership)). 따라서
+도착한다([Spot·Actor membership §3](../../spec/server/03-spot-actor/05-spot-actor-membership.ko.md)). 따라서
 `JoinWorldRes`는 join completion callback에서 발신한다 — **JoinWorldRes 성공 = target zone
 admission까지 완료**가 이 시나리오의 규범 의미이며, admission 이전 상태(cache 등)로
 JoinWorldRes terminal을 만드는 구현은 비적합이다.
@@ -513,7 +534,7 @@ Y 방향 bot 하나를 두고, 500ms BotTickMsg마다 3칸 이동한다. 이동�
 ### 7.4 Ops 관찰, announce와 maintenance
 
 Ops는 runtime event와 ZoneNode의 explicit report를 NodeStatusNotify와 NodeAlertNotify로
-변환한다. 여기서 runtime event는 [Runtime monitoring](../../spec/server/24-runtime-monitoring.ko.md)의
+변환한다. 여기서 runtime event는 [Runtime monitoring](../../spec/server/06-observability/01-runtime-monitoring.ko.md)의
 현재 상태 조회·변화 관찰 surface를 뜻하며, 각 항목은 부분 event가 아니라 완전한 status다.
 WatchNodesRes의 Registered와 Connected는 서로 다른 관측값이다. Connected는 runtime status
 관찰의 peer state에서 얻고, Registered는 Framework topology status가 등록 신호를 노출하지
@@ -547,7 +568,7 @@ ZoneMaintenance로 거부한다. 허용 범위는 같은 zone 내부 이동뿐�
 maintenance store에 기록하므로 ZoneNode 재시작 뒤 같은 NodeId의 maintenance state를 복원한다.
 
 이 maintenance는 application admission desired state이며 [Host relocation flow]
-(../../spec/server/30-host-relocation-flow.ko.md)의 `Relocate(PlannedMaintenance)`를 호출하지
+(../../spec/server/05-location-relocation/05-host-relocation-flow.ko.md)의 `Relocate(PlannedMaintenance)`를 호출하지
 않는다 — ZW-E는 Spec 30 host relocation의 검증 대상이 아니다(그 커버리지는 별도 harness가
 소유한다).
 
@@ -804,3 +825,25 @@ self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열�
 언어별 runner가 일부 ID를 runner-driven으로 구현할 수는 있으나(예: C4 fault 주입), ID의
 전제·행동·단언 의미는 바꾸지 않는다. 이 표에 없는 ID를 새로 만들 때는 이 문서에 먼저
 추가한다.
+
+#### ZoneNode를 멈추고 다시 띄우는 시나리오의 고정값
+
+여러 시나리오가 ZoneNode를 멈춘다. **어떤 방식으로 멈추는지와 다시 띄울 때 어떤 zone 집합을
+갖는지는 언어별 재량이 아니다.** 이 값이 비어 있어서 네 구현이 서로 다른 신호를 썼고, 같은 ID가
+언어마다 다른 것을 시험했다.
+
+| ID | 멈추는 방식 | 근거 |
+| --- | --- | --- |
+| ZW-B4 | 급정지(abrupt) | publish가 즉시 끊겨야 3 tick expiry를 관측한다 |
+| ZW-C2 | 정상 종료(graceful) | 표의 전제가 "정상 종료"다. drain 경로의 disconnect event를 본다 |
+| ZW-C3 | 급정지(abrupt) | §2.2 — "crash된 node는 false report를 보낼 수 없으므로 이 TTL이 유일한 false 전환 규칙이다" |
+| ZW-E5 | 급정지(abrupt) | maintenance desired state가 process 밖 store에 있음을 보인다 |
+| ZW-G3 | 정상 종료(graceful) | 표의 전제가 "정상 교체(stop→start)"다 |
+| ZW-G4 | 급정지(abrupt) | 표의 전제가 "crash 교체(kill→start)"다 |
+
+**다시 띄운 ZoneNode는 zone을 되찾지 않는다.** §2.2가 "Ready owner 장애는 자동 replacement가
+아니다"라고 정하므로, 재기동한 process는 **zone 0개로 ready가 되는 replacement 구성**으로
+띄운다. 멈춘 방식이 정상 종료든 급정지든 같다. zone을 claim하는 것은 최초 cold start뿐이다.
+
+이 값을 비워 두면 재기동한 node가 zone 2개를 요구하며 claim을 반복하다 예산을 소진한다 —
+실제로 cpp 구현이 그 상태였다.

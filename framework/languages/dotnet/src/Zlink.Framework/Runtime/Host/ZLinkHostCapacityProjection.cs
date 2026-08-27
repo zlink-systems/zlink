@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Host;
 
 /// <summary>
@@ -9,6 +11,7 @@ internal sealed class ZLinkHostCapacityProjection
     private readonly IZLinkBackendRuntimeContext _context;
     private readonly ZLinkInboundDispatchOptionsModel _configuration;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
+    private readonly ZLinkStateLane _lane = new();
     private ulong _measurementEpoch;
 
     internal ZLinkHostCapacityProjection(
@@ -23,24 +26,24 @@ internal sealed class ZLinkHostCapacityProjection
 
     internal ZLinkHostCapacityStatus GetStatus()
     {
-        lock (_applicationJobQueue.SyncRoot)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             var core = _context.GetCoreHwmBudgetSnapshot();
             return new ZLinkHostCapacityStatus(
                 _measurementEpoch,
                 MapCoreStatus(core, _configuration),
-                _applicationJobQueue.GetStatusUnderLock());
-        }
+                _applicationJobQueue.GetStatus());
+        }));
     }
 
     internal void ResetMetrics()
     {
-        lock (_applicationJobQueue.SyncRoot)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             _context.ResetCoreHwmBudgetMetrics();
-            _applicationJobQueue.ResetMetricsUnderLock();
+            _applicationJobQueue.ResetMetrics();
             _measurementEpoch = checked(_measurementEpoch + 1);
-        }
+        }));
     }
 
     internal static ZLinkCoreHwmStatus MapCoreStatus(
@@ -73,4 +76,10 @@ internal sealed class ZLinkHostCapacityProjection
             snapshot.OutstandingApplicationLeaseCount,
             snapshot.RetiredQueueCount,
             snapshot.DeferredOriginCreditBytes);
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 }

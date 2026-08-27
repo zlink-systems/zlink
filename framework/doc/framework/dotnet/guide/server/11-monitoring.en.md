@@ -146,8 +146,8 @@ flow respectively. Publish never confirms a per-subscriber result, so it never c
 per-target trace or count.
 
 For exact attributes and propagation rules, see
-[Message Flow Tracing](../../../common/spec/server/26-message-flow-tracing.en.md) and
-[Flow Correlation](../../../common/spec/server/27-flow-correlation.en.md).
+[Message Flow Tracing](../../../common/spec/server/06-observability/03-message-flow-tracing.en.md) and
+[Flow Correlation](../../../common/spec/server/06-observability/04-flow-correlation.en.md).
 
 ## 4. Common Problems
 
@@ -178,7 +178,7 @@ For exact attributes and propagation rules, see
 - Runnable verification examples for this chapter's contract:
   [13-interface-catalog](13-interface-catalog.en.md) §7 — the verification class
   `EventingContracts`
-- The formal contract: [spec/aspnet-core-monitoring](../../../common/spec/server/languages/dotnet/01-system-structure.en.md)
+- The formal contract: [spec/aspnet-core-monitoring](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md)
 - Location operational queries: [10-location](10-location.en.md)
 - Runtime metrics/mesh status/drain observation: [12-operations](12-operations.en.md)
 

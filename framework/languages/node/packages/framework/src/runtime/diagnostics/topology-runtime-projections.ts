@@ -44,6 +44,10 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
   ) {}
 
   snapshot(channelName: string): ZLinkClientServerStatus {
+    return this.snapshotCore(channelName);
+  }
+
+  private snapshotCore(channelName: string): ZLinkClientServerStatus {
     const topology = this.requireRuntime().clientServerTopology(channelName);
     if (topology.localRole === undefined) {
       throw new ZLinkConfigurationException(`ClientServer channel '${channelName}' is not registered.`);
@@ -89,23 +93,23 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
   ): AsyncIterable<ZLinkObservedStatus<ZLinkClientServerStatus>> {
     const runtime = this.requireRuntime();
     const queue = new RuntimeEventQueue<ZLinkClientServerStatus>(capacity, signal);
-    let lastSnapshot = this.snapshot(channelName);
+    let lastSnapshot = this.snapshotCore(channelName);
     const stop = runtime.observeClientServerTopology(channelName, () => {
       this.sequence += 1n;
-      lastSnapshot = this.snapshot(channelName);
+      lastSnapshot = this.snapshotCore(channelName);
       queue.push(lastSnapshot, channelName);
     });
     const hostObserver: HostObserver = {
       changed: () => {
         this.sequence += 1n;
-        lastSnapshot = this.snapshot(channelName);
+        lastSnapshot = this.snapshotCore(channelName);
         queue.push(lastSnapshot, channelName);
       },
       stop: () => {
         this.sequence += 1n;
         let current = lastSnapshot;
         try {
-          current = this.snapshot(channelName);
+          current = this.snapshotCore(channelName);
           lastSnapshot = current;
         } catch {
           // The last complete projection remains valid after native teardown.
@@ -149,7 +153,7 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
   }
 
   isReady(channelName: string): boolean {
-    return this.snapshot(channelName).isReady;
+    return this.snapshotCore(channelName).isReady;
   }
 
   private requireRuntime(): ZLinkChannelRuntimeManager {
@@ -170,6 +174,10 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
   ) {}
 
   snapshot(channelName: string): ZLinkFanoutStatus {
+    return this.snapshotCore(channelName);
+  }
+
+  private snapshotCore(channelName: string): ZLinkFanoutStatus {
     const publishers = this.requireRuntime().fanoutTopology(channelName).descriptors
       .map((descriptor): ZLinkPeerStatus => ({
         nodeRid: descriptor.publisherRoutingId,
@@ -210,23 +218,23 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
   ): AsyncIterable<ZLinkObservedStatus<ZLinkFanoutStatus>> {
     const runtime = this.requireRuntime();
     const queue = new RuntimeEventQueue<ZLinkFanoutStatus>(capacity, signal);
-    let lastSnapshot = this.snapshot(channelName);
+    let lastSnapshot = this.snapshotCore(channelName);
     const stop = runtime.observeFanoutTopology(channelName, () => {
       this.sequence += 1n;
-      lastSnapshot = this.snapshot(channelName);
+      lastSnapshot = this.snapshotCore(channelName);
       queue.push(lastSnapshot, channelName);
     });
     const hostObserver: HostObserver = {
       changed: () => {
         this.sequence += 1n;
-        lastSnapshot = this.snapshot(channelName);
+        lastSnapshot = this.snapshotCore(channelName);
         queue.push(lastSnapshot, channelName);
       },
       stop: () => {
         this.sequence += 1n;
         let current = lastSnapshot;
         try {
-          current = this.snapshot(channelName);
+          current = this.snapshotCore(channelName);
           lastSnapshot = current;
         } catch {
           // The last complete projection remains valid after native teardown.

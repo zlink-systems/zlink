@@ -11,8 +11,10 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <future>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -128,15 +130,23 @@ void verify_client_server_runtime_projection_and_observation ()
     assert (before.ready_server_count == 0);
 
     std::atomic_int event_count{0};
+    std::mutex event_mutex;
+    std::condition_variable event_changed;
     auto observation = runtime.observe (
       "client-server-runtime-unit", 8,
-      [&event_count] (const zlink::framework::observed_status_t<
-                        zlink::framework::client_server_runtime_event_t> &observed) {
+      [&event_count, &event_changed] (const zlink::framework::observed_status_t<
+                                       zlink::framework::client_server_runtime_event_t> &observed) {
           assert (observed.status.channel_name == "client-server-runtime-unit");
           event_count.fetch_add (1, std::memory_order_relaxed);
+          event_changed.notify_all ();
       });
-    const auto initial_events = event_count.load (std::memory_order_relaxed);
-
+    {
+        std::unique_lock lock (event_mutex);
+        const auto observation_deadline = std::chrono::steady_clock::now () + 5s;
+        assert (event_changed.wait_until (lock, observation_deadline, [&] {
+            return event_count.load (std::memory_order_relaxed) != 0;
+        }));
+    }
     char program[] = "client-server-runtime-unit";
     char *arguments[] = {program, nullptr};
     std::atomic_int exit_code{-1};
@@ -161,7 +171,6 @@ void verify_client_server_runtime_projection_and_observation ()
     assert (after.servers.size () == 1);
     assert (after.servers.front ().ready);
     assert (after.servers.front ().descriptor_source == "manual");
-    assert (event_count.load (std::memory_order_relaxed) > initial_events);
 
     observation->close ();
     app.request_stop ();

@@ -13,15 +13,18 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.core.env.StandardEnvironment
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
+import org.springframework.boot.ApplicationRunner
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTopology
+import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatReadinessReporter
 
 @EnableZLinkFramework
 @EnableConfigurationProperties(SampleTopology::class)
@@ -35,6 +38,7 @@ class ApiApplication {
         ZLinkFrameworkConfigurer { options ->
             val api = topology.api()
             val channelEndpoint = URI.create(api.channelEndpoint)
+            options.configureLocations()
             options.addHandlersFromPackageOf(ApiApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch {
@@ -48,7 +52,19 @@ class ApiApplication {
                 .addHandlerGroup(SampleNames.ApiChannel)
             options.addClientServerChannel(SampleNames.SupportChannel)
                 .client()
+            val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
+            node.listen(api.routerEndpoint)
+                .setRoutingIdPrefix("support-api")
+            node.objects().client()
         }
+
+    @Bean
+    fun apiPublicReadiness(): ApplicationRunner =
+        ApplicationRunner { println("supportchat-ready kind=public node=api") }
+
+    @Bean(destroyMethod = "close")
+    fun apiSpotRouteReadiness(meshes: ZLinkRouteMeshRuntime): SupportChatReadinessReporter =
+        SupportChatReadinessReporter("api", meshes)
 
     @Bean
     fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore = SampleLocationStore.create(topology)

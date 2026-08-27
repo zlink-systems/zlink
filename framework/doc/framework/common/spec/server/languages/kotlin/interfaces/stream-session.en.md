@@ -1,7 +1,7 @@
 # Kotlin STREAM Session Public Interface
 
 [Interface table of contents](README.en.md) · [Java STREAM Session](../../java/interfaces/stream-session.en.md) ·
-[Session Actor Dispatch](../../../20-session-actor-dispatch.en.md)
+[Session Actor Dispatch](../../../04-session/02-session-actor-binding.en.md)
 
 The Kotlin session lifecycle and coroutine handler use the Java session
 contract unchanged. The builder member that turns on Actor dispatch is
@@ -9,7 +9,7 @@ contract unchanged. The builder member that turns on Actor dispatch is
 requires a Mesh whose object role is Client or Server, and a Location
 Store. The global ActorId determines current authority and Mesh.
 
-Session bind takes an exact `ActorRef` once. There's no bind overload
+Session bind takes an `ActorRef` once. There's no bind overload
 taking only a local Actor instance or ActorId. If there's no current
 mapping at bind, `NotFound`; if the generation differs, `InvalidOperation`;
 if in the pre-commit seal window, `Unavailable`. The framework doesn't
@@ -27,13 +27,13 @@ notification while the connection is kept. After bind, relay/disconnect
 use the per-Actor stored route and don't query the Location Store per
 message. A physical disconnect has the framework perform an automatic
 all-settled notification to every current binding, running the Spot
-callback at most once per exact binding identity. A relocation route
+callback at most once per specified binding identity. A relocation route
 update is only allowed on the same ObjectGeneration. A logical notification
-also runs the exact binding callback at most once, then commits the binding as
+also runs the binding callback at most once, then commits the binding as
 a tombstone and removes it after terminal. The physical STREAM connection and
 Actor/Spot membership are kept, and no new public Unbind API is provided.
 Rebind completes as soon as the new identity becomes current and does not wait
-for the previous session. The previous exact session may notify the client in
+for the previous session. The previous session may notify the client in
 `onActorBindingReplacedSuspending(...)`. The framework closes the connection `100 ms` after the
 callback reaches a successful or failed terminal; an empty outbound queue does not shorten this delay. Callback or close failure
 doesn't remove the new binding or restore the old one. A
@@ -69,104 +69,104 @@ server-to-client outbound messages.
 
 ```kotlin
 interface ZLinkSuspendingTypedSessionPacketHandler<
-    TSessionContext : ZLinkSessionContext,
-    TMessage : Any,
+ TSessionContext : ZLinkSessionContext,
+ TMessage : Any,
 > {
-    fun packetName(): String
-    fun messageType(): Class<TMessage>
-    suspend fun handle(
-        context: TSessionContext,
-        dispatch: ZLinkSessionDispatchContext,
-        message: TMessage,
-    )
+ fun packetName(): String
+ fun messageType(): Class<TMessage>
+ suspend fun handle(
+ context: TSessionContext,
+ dispatch: ZLinkSessionDispatchContext,
+ message: TMessage,
+ )
 }
 
 abstract class ZLinkSuspendingSession : ZLinkSession {
-    abstract override fun context(): ZLinkSessionContext
-    protected open suspend fun onConnectedSuspending()
-    protected open suspend fun onDisconnectedSuspending()
-    protected open suspend fun onActorBindingReplacedSuspending(actorId: String)
-    protected open suspend fun onErrorSuspending(error: ZLinkStreamError)
-    protected open suspend fun onDispatchSuspending(
-        dispatch: ZLinkSessionDispatchContext,
-        payload: ZLinkMessage,
-    )
+ abstract override fun context(): ZLinkSessionContext
+ protected open suspend fun onConnectedSuspending()
+ protected open suspend fun onDisconnectedSuspending()
+ protected open suspend fun onActorBindingReplacedSuspending(actorId: String)
+ protected open suspend fun onErrorSuspending(error: ZLinkStreamError)
+ protected open suspend fun onDispatchSuspending(
+ dispatch: ZLinkSessionDispatchContext,
+ payload: ZLinkMessage,
+ )
 }
 
 suspend fun ZLinkSessionActors.bindOrGetActor(
-    actor: ActorRef,
+ actor: ActorRef,
 ): ZLinkSessionActor
 
 interface ZLinkKotlinSessionSendCall {
-    fun metadata(key: String, value: String): ZLinkKotlinSessionSendCall
-    fun compress(): ZLinkKotlinSessionSendCall
-    fun timeout(timeout: Duration): ZLinkKotlinSessionSendCall
-    suspend fun await()
+ fun metadata(key: String, value: String): ZLinkKotlinSessionSendCall
+ fun compress(): ZLinkKotlinSessionSendCall
+ fun timeout(timeout: Duration): ZLinkKotlinSessionSendCall
+ suspend fun await()
 }
 
 interface ZLinkKotlinSessionReplyCall {
-    fun compress(): ZLinkKotlinSessionReplyCall
-    suspend fun await()
+ fun compress(): ZLinkKotlinSessionReplyCall
+ suspend fun await()
 }
 
 interface ZLinkKotlinSessionClient {
-    fun send(message: Any): ZLinkKotlinSessionSendCall
-    fun reply(message: Any): ZLinkKotlinSessionReplyCall
+ fun send(message: Any): ZLinkKotlinSessionSendCall
+ fun reply(message: Any): ZLinkKotlinSessionReplyCall
 }
 
 interface ZLinkKotlinSessionActor {
-    fun relay(message: ZLinkMessage): ZLinkKotlinSubmissionCall
-    fun relay(
-        dispatch: ZLinkSessionDispatchContext,
-        message: ZLinkMessage,
-    ): ZLinkKotlinSubmissionCall
+ fun relay(message: ZLinkMessage): ZLinkKotlinSubmissionCall
+ fun relay(
+ dispatch: ZLinkSessionDispatchContext,
+ message: ZLinkMessage,
+ ): ZLinkKotlinSubmissionCall
 }
 
 interface ZLinkKotlinBoundSession {
-    fun send(message: Any): ZLinkKotlinMessageSendCall
+ fun send(message: Any): ZLinkKotlinMessageSendCall
 }
 ```
 
-## Exact Generated JVM Signature
+## Generated JVM Signature
 
 ```java
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingTypedSessionPacketHandler<TSessionContext extends systems.zlink.framework.streams.ZLinkSessionContext, TMessage> {
-  public abstract java.lang.String packetName();
-  public abstract java.lang.Class<TMessage> messageType();
-  public abstract java.lang.Object handle(TSessionContext, systems.zlink.framework.streams.ZLinkSessionDispatchContext, TMessage, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public abstract java.lang.String packetName();
+ public abstract java.lang.Class<TMessage> messageType();
+ public abstract java.lang.Object handle(TSessionContext, systems.zlink.framework.streams.ZLinkSessionDispatchContext, TMessage, kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public abstract class systems.zlink.framework.kotlin.ZLinkSuspendingSession implements systems.zlink.framework.streams.ZLinkSession {
-  public systems.zlink.framework.kotlin.ZLinkSuspendingSession();
-  public abstract systems.zlink.framework.streams.ZLinkSessionContext context();
-  public final java.util.concurrent.CompletionStage<java.lang.Void> onConnected();
-  public final java.util.concurrent.CompletionStage<java.lang.Void> onDisconnected();
-  public final java.util.concurrent.CompletionStage<java.lang.Void> onActorBindingReplaced(java.lang.String);
-  public final java.util.concurrent.CompletionStage<java.lang.Void> onError(systems.zlink.framework.streams.ZLinkStreamError);
-  public final java.util.concurrent.CompletionStage<java.lang.Void> onDispatch(systems.zlink.framework.streams.ZLinkSessionDispatchContext, systems.zlink.framework.messaging.ZLinkMessage);
+ public systems.zlink.framework.kotlin.ZLinkSuspendingSession();
+ public abstract systems.zlink.framework.streams.ZLinkSessionContext context();
+ public final java.util.concurrent.CompletionStage<java.lang.Void> onConnected();
+ public final java.util.concurrent.CompletionStage<java.lang.Void> onDisconnected();
+ public final java.util.concurrent.CompletionStage<java.lang.Void> onActorBindingReplaced(java.lang.String);
+ public final java.util.concurrent.CompletionStage<java.lang.Void> onError(systems.zlink.framework.streams.ZLinkStreamError);
+ public final java.util.concurrent.CompletionStage<java.lang.Void> onDispatch(systems.zlink.framework.streams.ZLinkSessionDispatchContext, systems.zlink.framework.messaging.ZLinkMessage);
 }
 public final class systems.zlink.framework.kotlin.ZLinkFrameworkExtensionsKt {
-  public static final java.lang.Object bindOrGetActor(systems.zlink.framework.streams.ZLinkSessionActors, systems.zlink.framework.actors.ActorRef, kotlin.coroutines.Continuation<? super systems.zlink.framework.streams.ZLinkSessionActor>);
+ public static final java.lang.Object bindOrGetActor(systems.zlink.framework.streams.ZLinkSessionActors, systems.zlink.framework.actors.ActorRef, kotlin.coroutines.Continuation<? super systems.zlink.framework.streams.ZLinkSessionActor>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall metadata(java.lang.String, java.lang.String);
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall compress();
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall timeout-LRDsOJo(long);
-  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall metadata(java.lang.String, java.lang.String);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall compress();
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall timeout-LRDsOJo(long);
+ public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionReplyCall {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionReplyCall compress();
-  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionReplyCall compress();
+ public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionClient {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall send(java.lang.Object);
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionReplyCall reply(java.lang.Object);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall send(java.lang.Object);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionReplyCall reply(java.lang.Object);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionActor {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall relay(systems.zlink.framework.messaging.ZLinkMessage);
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall relay(systems.zlink.framework.streams.ZLinkSessionDispatchContext, systems.zlink.framework.messaging.ZLinkMessage);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall relay(systems.zlink.framework.messaging.ZLinkMessage);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall relay(systems.zlink.framework.streams.ZLinkSessionDispatchContext, systems.zlink.framework.messaging.ZLinkMessage);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinBoundSession {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall send(java.lang.Object);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall send(java.lang.Object);
 }
 ```
 

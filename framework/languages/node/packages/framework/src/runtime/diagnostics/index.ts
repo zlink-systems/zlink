@@ -51,9 +51,12 @@ import type {
   ZLinkBackendSocketMonitor,
   ZLinkBackendSocketMonitorEvent
 } from '../backend';
+import { AsyncResource } from 'node:async_hooks';
+import { ZLinkStateLane } from '../execution/state-lane';
 import { normalizeOpaqueRoutingId } from '../routing-id';
 
 const ZLINK_DISCONNECT_REASON_HANDSHAKE_FAILED = 3;
+const detachedStateLaneResource = new AsyncResource('zlink:location-runtime-monitoring-source');
 
 /** Runtime composition port. It is intentionally absent from the public contract barrel. */
 export interface ZLinkRuntimeEventPublisher {
@@ -113,6 +116,7 @@ export class ZLinkSocketMonitoringSource {
 }
 
 export class ZLinkLocationRuntimeMonitoringSource {
+  private readonly lane = new ZLinkStateLane();
   private previousStatus?: string;
   private previousTopology?: string;
   private previousServiceSummary?: string;
@@ -132,53 +136,94 @@ export class ZLinkLocationRuntimeMonitoringSource {
     let topology;
     let serviceSummary;
     try {
-      [status, topology, serviceSummary] = await Promise.all([
+      [status, topology, serviceSummary] = await startOutsideStateLane(() => Promise.all([
         this.query.getStatus(signal),
         this.query.listTopology({}, undefined, signal),
         this.query.listServiceSummaries({}, undefined, signal)
-      ]);
+      ]));
     } catch (error) {
-      if (!this.storeFailure) {
-        this.storeFailure = true;
-        await this.publisher.publish({
+      if (await this.lane.run(() => this.markStoreFailureCore())) {
+        await startOutsideStateLane(() => this.publisher.publish({
           sourceName: this.registration.sourceName,
           timestamp: new Date(),
           event: LocationRuntimeEventKind.StoreFailure
-        } satisfies ZLinkLocationRuntimeEvent);
+        } satisfies ZLinkLocationRuntimeEvent));
       }
       return;
     }
 
-    if (this.storeFailure) {
-      this.storeFailure = false;
-      await this.publisher.publish({
+    if (await this.lane.run(() => this.markStoreRecoveredCore())) {
+      await startOutsideStateLane(() => this.publisher.publish({
         sourceName: this.registration.sourceName,
         timestamp: new Date(),
         event: LocationRuntimeEventKind.StoreRecovered
-      } satisfies ZLinkLocationRuntimeEvent);
+      } satisfies ZLinkLocationRuntimeEvent));
     }
 
-    this.previousStatus = await publishLocationRuntimeIfChanged(
-      this.publisher,
-      this.registration.sourceName,
+    await this.publishIfChanged(
       LocationRuntimeEventKind.StatusChanged,
-      this.previousStatus,
       status
     );
-    this.previousTopology = await publishLocationRuntimeIfChanged(
-      this.publisher,
-      this.registration.sourceName,
+    await this.publishIfChanged(
       LocationRuntimeEventKind.TopologyChanged,
-      this.previousTopology,
       topology.items
     );
-    this.previousServiceSummary = await publishLocationRuntimeIfChanged(
-      this.publisher,
-      this.registration.sourceName,
+    await this.publishIfChanged(
       LocationRuntimeEventKind.ServiceSummaryChanged,
-      this.previousServiceSummary,
       serviceSummary.items
     );
+  }
+
+  private markStoreFailureCore(): boolean {
+    if (this.storeFailure) return false;
+    this.storeFailure = true;
+    return true;
+  }
+
+  private markStoreRecoveredCore(): boolean {
+    if (!this.storeFailure) return false;
+    this.storeFailure = false;
+    return true;
+  }
+
+  private async publishIfChanged(event: ZLinkLocationRuntimeEventKind, snapshot: unknown): Promise<void> {
+    const current = stableSnapshot(snapshot);
+    const previous = await this.lane.run(() => this.previousSnapshotCore(event));
+    if (current === previous) return;
+    await startOutsideStateLane(() => publishLocationRuntimeChange(
+      this.publisher,
+      this.registration.sourceName,
+      event,
+      snapshot
+    ));
+    await this.lane.run(() => this.updateSnapshotCore(event, current));
+  }
+
+  private previousSnapshotCore(event: ZLinkLocationRuntimeEventKind): string | undefined {
+    switch (event) {
+      case LocationRuntimeEventKind.StatusChanged:
+        return this.previousStatus;
+      case LocationRuntimeEventKind.TopologyChanged:
+        return this.previousTopology;
+      case LocationRuntimeEventKind.ServiceSummaryChanged:
+        return this.previousServiceSummary;
+      default:
+        return undefined;
+    }
+  }
+
+  private updateSnapshotCore(event: ZLinkLocationRuntimeEventKind, current: string): void {
+    switch (event) {
+      case LocationRuntimeEventKind.StatusChanged:
+        this.previousStatus = current;
+        return;
+      case LocationRuntimeEventKind.TopologyChanged:
+        this.previousTopology = current;
+        return;
+      case LocationRuntimeEventKind.ServiceSummaryChanged:
+        this.previousServiceSummary = current;
+        return;
+    }
   }
 }
 
@@ -337,17 +382,12 @@ function mapSocketEvent(
   }
 }
 
-async function publishLocationRuntimeIfChanged<T>(
+async function publishLocationRuntimeChange<T>(
   publisher: ZLinkRuntimeEventPublisher,
   sourceName: string,
   event: ZLinkLocationRuntimeEventKind,
-  previous: string | undefined,
   snapshot: T
-): Promise<string> {
-  const current = stableSnapshot(snapshot);
-  if (current === previous) {
-    return previous;
-  }
+): Promise<void> {
   const base = { sourceName, timestamp: new Date() };
   const runtimeEvent: ZLinkLocationRuntimeEvent = event === LocationRuntimeEventKind.StatusChanged
     ? { ...base, event, status: snapshot as ZLinkLocationRuntimeStatus }
@@ -355,7 +395,10 @@ async function publishLocationRuntimeIfChanged<T>(
       ? { ...base, event, topology: snapshot as readonly ZLinkLocationTopologyEntry[] }
       : { ...base, event: LocationRuntimeEventKind.ServiceSummaryChanged, serviceSummary: snapshot as readonly ZLinkLocationServiceSummary[] };
   await publisher.publish(runtimeEvent);
-  return current;
+}
+
+function startOutsideStateLane<T>(work: () => T): T {
+  return detachedStateLaneResource.runInAsyncScope(work);
 }
 
 function stableSnapshot(value: unknown): string {

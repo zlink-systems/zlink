@@ -180,14 +180,14 @@ observer Spot type is added.
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Build the object route with a manual peer. | RouteMesh manual endpoint | Shows a topology distinct from automatic discovery. [Channel Topology](../../spec/server/07-channel-topology.en.md) |
-| Create a new room. | The User Spot manager's Create | The Framework issues the global RoomId and chooses the owner. [Interaction Model §2.1](../../spec/server/03-interaction-model.en.md#21-the-public-interface-that-starts-an-interaction) |
-| Join a remote room. | A global Spot/Actor message | The caller specifies the RoomId/ActorId, and the Framework resolves the current owner. [Spot Address Messaging](../../spec/server/16-spot-address-messaging.en.md) |
-| Join a Player Actor to a room on another node. | `PreserveStateWith`, an Actor relocation adapter, and the Relocation Store | The Framework preserves Actor state while moving it to the room owner. [Relocation Policy §5](../../spec/server/15-spot-actor.en.md#5-relocation-policy-shared-by-every-move-path), [Store Registration §10](../../spec/server/06-framework-api.en.md#10-location-store-and-relocation-store) |
-| Connect the client connection to an actor. | STREAM session binding | Sends a server push to the current session. [STREAM Session](../../spec/server/19-stream-session.en.md) |
-| Notify multiple Play ingresses of a milestone. | Logical Multicast | The publisher doesn't manage a subscriber node list. [Interaction Model §5](../../spec/server/03-interaction-model.en.md#5-spot-logical-multicast) |
-| Clean up the actor after the game ends. | Public leave and Entry Spot destroy | Separates disconnect cleanup from explicit destroy. [Spot/Actor Membership §3](../../spec/server/15-spot-actor.en.md#3-actor-membership-for-entry-spot-and-user-spot) |
-| Express an owner failure. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failover Policy](../../spec/server/31-failure-failover-policy.en.md#42-an-existing-actor-and-spot) |
+| Build the object route with a manual peer. | RouteMesh manual endpoint | Shows a topology distinct from automatic discovery. [Channel Topology](../../spec/server/02-channel-transport/01-channel-topology.en.md) |
+| Create a new room. | The User Spot manager's Create | The Framework issues the global RoomId and chooses the owner. [Interaction Model §2.1](../../spec/server/00-foundation/04-interaction-model.en.md#2-the-public-interface-that-starts-an-interaction) |
+| Join a remote room. | A global Spot/Actor message | The caller specifies the RoomId/ActorId, and the Framework resolves the current owner. [Spot Address Messaging](../../spec/server/03-spot-actor/06-spot-address-messaging.en.md) |
+| Join a Player Actor to a room on another node. | `PreserveStateWith`, an Actor relocation adapter, and the Relocation Store | The Framework preserves Actor state while moving it to the room owner. [Relocation Policy §5](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md#6-relocation-policy-shared-by-every-move-path), [Store Registration §10](../../spec/server/00-foundation/06-framework-api.en.md#13-location-store-and-relocation-store-registration) |
+| Connect the client connection to an actor. | STREAM session binding | Sends a server push to the current session. [STREAM Session](../../spec/server/04-session/01-stream-session.en.md) |
+| Notify multiple Play ingresses of a milestone. | Logical Multicast | The publisher doesn't manage a subscriber node list. [Interaction Model §5](../../spec/server/00-foundation/04-interaction-model.en.md#5-spot-logical-multicast) |
+| Clean up the actor after the game ends. | Public leave and Entry Spot destroy | Separates disconnect cleanup from explicit destroy. [Spot/Actor Membership §3](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md#3-actor-membership-for-entry-spot-and-user-spot) |
+| Express an owner failure. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failover Policy](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#42-an-existing-actor-and-spot) |
 
 Room creation's Create call can pass initial room settings and, if needed, the first placement Mesh,
 but doesn't pass a Play endpoint or NodeRid as a business value. A direct message to an already
@@ -702,6 +702,74 @@ both players' leave and destroy results, the observer subscription, and the mile
 self-check assertion or runner log evidence decides the result. A step marker that doesn't exist
 per language isn't added to the common contract.
 
+### 10.1 Evidence the Runner Confirms
+
+The runner matches the strings in the tables below verbatim. These strings are not a per-language
+choice. All five implementations emit the same string the same number of times; changing the
+wording means changing this table first. Node names are fixed as `api-a`, `api-b`, `play-a`, and
+`play-b`, and **Actor IDs are fixed as `player-x`, `player-o`, and `observer`.** Today only Java and
+Kotlin call the observer `player-observer`, so a zero-count check on `actor=observer` passes even
+if the real observer is destroyed.
+
+Readiness is confirmed before the client starts.
+
+| Fact confirmed | Log | Emitting node |
+| --- | --- | --- |
+| The Play node admitted the other Play node as a peer | `tictactoe-ready kind=peer-route node=<NodeId> peer=<PeerNodeId>` | `play-a`, `play-b` |
+| The Api node opened its HTTP endpoint | `tictactoe-ready kind=http node=<NodeId>` | `api-a`, `api-b` |
+| The Api node acquired a route to the Play spot mesh | `tictactoe-ready kind=spot-route node=<NodeId> mesh=<SpotMeshName>` | `api-a`, `api-b` |
+
+**Do not start the client on the strength of HTTP alone.** `kind=http` proves only that the
+endpoint is listening — if the Api node has not yet acquired a route to the Play spot mesh at that
+moment, the first `JoinSpot` dies on a timeout. The third row covers that window. Without it, an
+implementation whose routes converge quickly passes by luck while a slower one fails, and papering
+over that difference with a fixed sleep is exactly what step 3 of §10 forbids.
+
+The `kind=peer-route` row confirms that **the peer named in the row** is ready. Do not weaken it to
+"at least one peer is ready" — that passes when some peer other than the expected one comes up
+first. Naming a peer requires being able to name it, so **the spot mesh uses a fixed RID.** Peer
+status carries no endpoint, so an auto-assigned RID gives no way to tell which peer is the expected
+one. [Allowing a fixed RID on a MeshNode with an object
+role](../../spec/server/languages/dotnet/interfaces/03-configuration-topology.en.md) exists for
+exactly this use.
+
+**A fixed sleep never stands in for readiness.** Step 3 of §10 requires confirming each process's
+public readiness and RouteMesh peer readiness. "Wait N seconds for the topology to settle" is a
+guess, not a confirmation, and is not allowed. **Framework-internal strings and process startup
+boilerplate are not readiness evidence** — a string the sample does not own breaks silently when
+the framework or the boilerplate changes.
+
+Server evidence is emitted by the Play nodes and confirmed after the client scenario finishes.
+
+| Fact confirmed | Log | Exact count |
+| --- | --- | --- |
+| A reconnected client bound to the existing Actor | `tictactoe-lifecycle actor-bound actor=<ActorId>` | `player-x` 1 |
+| `LeaveGameMsg` handling completed | `tictactoe-lifecycle leave-completed actor=<ActorId>` | `player-x` 1, `player-o` 1 |
+| Actor destroy completed | `tictactoe-lifecycle actor-destroy-complete actor=<ActorId>` | `player-x` 1, `player-o` 1 |
+| The observer is not destroyed | `tictactoe-lifecycle actor-destroy-complete actor=observer` | 0 |
+
+`tictactoe-lifecycle` rows are counted across both Play node logs. Which player lands on which node
+is not a confirmed fact.
+
+Client evidence is what the §9 self-check leaves behind so the runner can read that it passed. An
+implementation whose client runs in a browser leaves the same strings in the same place.
+
+| Fact confirmed | Log |
+| --- | --- |
+| The observer attached to the Play B stream | `observer-connected endpoint=<PlayBStreamEndpoint>` |
+| The observer subscription was confirmed | `observer-subscription=verified subscribed=true` |
+| The milestone push payload matches the game result | `observer-win-milestone=verified actor=player-x wins=100` |
+| The state received after reconnect matches the current game | `reconnected-game-state=verified actor=player-x room=<RoomId>` |
+
+There is exactly **one completion marker: `tictactoe=completed`.** Do not use a variant without the
+`=`, such as `tictactoe completed`, and do not accept both forms.
+
+Log waits poll every `100 ms` for at most `300` attempts. This budget applies to readiness and to
+evidence alike. Reading once without waiting, or reading after a fixed sleep, is not allowed.
+
+Once every row passes, the runner prints `tictactoe-placement=completed` last. If any row fails, it
+does not print this marker.
+
 ## 11. Completion Criteria
 
 - The 2 Apis and 2 Plays provide the same public contract and object capability.
@@ -724,7 +792,7 @@ per language isn't added to the common contract.
 - A physical disconnect runs the disconnected lifecycle callback at the bound Actor's current Spot
   and cleans up the binding, but doesn't start leave, change membership, or destroy the Actor.
   Explicit leave and destroy run only after each player sends one-way `LeaveGameMsg`, and the runner
-  checks the result for each Actor.
+  passes every row of the §10.1 table down to the string and the count.
 - Every language registers the TicTacToe handlers explicitly through public builders and handler
   registries. A comment beside each registration identifies whether its message is a request,
   send, or subscription, and no automatic scan is used. Only TicTacToe combines manual connections

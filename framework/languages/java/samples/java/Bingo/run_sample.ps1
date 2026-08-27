@@ -126,23 +126,48 @@ function Protect-ConfigFile {
     }
 }
 
+function Get-LogCount {
+    param([string[]]$Path, [string]$Evidence)
+    return @(Select-String -Path $Path -Pattern $Evidence -SimpleMatch -ErrorAction SilentlyContinue).Count
+}
+
+function Wait-LogCount {
+    param([string[]]$Path, [string]$Evidence, [int]$Expected)
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        $actual = Get-LogCount -Path $Path -Evidence $Evidence
+        if ($actual -eq $Expected) { return }
+        if ($actual -gt $Expected) {
+            throw "Expected $Expected matches for '$Evidence' in $Path, found $actual."
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Timed out waiting for $Expected matches for '$Evidence' in $Path."
+}
+
+function Assert-LogCount {
+    param([string[]]$Path, [string]$Evidence, [int]$Expected)
+    $actual = Get-LogCount -Path $Path -Evidence $Evidence
+    if ($actual -ne $Expected) {
+        throw "Expected $Expected matches for '$Evidence' in $Path, found $actual."
+    }
+}
+
 $Status = 1
 try {
-    $endpoints = @(Get-ZlinkSampleApplicationEndpoints -Language Java -Count 15)
+    $endpoints = @(Get-ZlinkSampleApplicationEndpoints -Language Java -Count 13)
     $apiAChannel = Split-Endpoint $endpoints[0]
-    $playAChannel = Split-Endpoint $endpoints[1]
-    $sessionASpot = Split-Endpoint $endpoints[2]
-    $sessionARouter = Split-Endpoint $endpoints[3]
-    $playASpot = Split-Endpoint $endpoints[4]
-    $playARouter = Split-Endpoint $endpoints[5]
-    $sessionAStream = Split-Endpoint $endpoints[6]
-    $apiBChannel = Split-Endpoint $endpoints[7]
-    $playBChannel = Split-Endpoint $endpoints[8]
-    $sessionBSpot = Split-Endpoint $endpoints[9]
-    $sessionBRouter = Split-Endpoint $endpoints[10]
-    $playBSpot = Split-Endpoint $endpoints[11]
-    $playBRouter = Split-Endpoint $endpoints[12]
-    $sessionBStream = Split-Endpoint $endpoints[13]
+    $apiAMesh = Split-Endpoint $endpoints[1]
+    $sessionARouter = Split-Endpoint $endpoints[2]
+    $playARouter = Split-Endpoint $endpoints[3]
+    $sessionAStream = Split-Endpoint $endpoints[4]
+    $apiBChannel = Split-Endpoint $endpoints[5]
+    $apiBMesh = Split-Endpoint $endpoints[6]
+    $sessionBRouter = Split-Endpoint $endpoints[7]
+    $playBRouter = Split-Endpoint $endpoints[8]
+    $sessionBStream = Split-Endpoint $endpoints[9]
+    $apiAMatchmaking = Split-Endpoint $endpoints[10]
+    $apiBMatchmaking = Split-Endpoint $endpoints[11]
+    $matchmakingRouter = Split-Endpoint $endpoints[12]
 
     $redis = Start-ZlinkSampleRedis "zlink-redis-java-sample-bingo" -Language Java
     $RedisContainer = $redis.ContainerId
@@ -154,36 +179,27 @@ try {
 sample.redisEndpoint=$redisEndpoint
 sample.redisKeyPrefix=$redisKeyPrefix
 sample.logDirectory=$($FlowLogDir.Replace('\', '/'))
+sample.apiAChannelEndpoint=tcp://$($apiAChannel.Host):$($apiAChannel.Port)
+sample.apiBChannelEndpoint=tcp://$($apiBChannel.Host):$($apiBChannel.Port)
+sample.apiAMeshEndpoint=tcp://$($apiAMesh.Host):$($apiAMesh.Port)
+sample.apiBMeshEndpoint=tcp://$($apiBMesh.Host):$($apiBMesh.Port)
+sample.sessionARouterEndpoint=tcp://$($sessionARouter.Host):$($sessionARouter.Port)
+sample.sessionBRouterEndpoint=tcp://$($sessionBRouter.Host):$($sessionBRouter.Port)
+sample.playASpotRouterEndpoint=tcp://$($playARouter.Host):$($playARouter.Port)
+sample.playBSpotRouterEndpoint=tcp://$($playBRouter.Host):$($playBRouter.Port)
+sample.sessionAStreamEndpoint=tcp://$($sessionAStream.Host):$($sessionAStream.Port)
+sample.sessionBStreamEndpoint=tcp://$($sessionBStream.Host):$($sessionBStream.Port)
+sample.matchmakingRouterEndpoint=tcp://$($matchmakingRouter.Host):$($matchmakingRouter.Port)
 "@
     function Write-SampleConfig {
         param([string]$Name, [string]$RoleName, [string]$RoleValue)
         $path = Join-Path $ConfigDir "$Name.properties"
-        $roleProperties = switch ($RoleName) {
-            "apiNode" { @"
-sample.apiAChannelEndpoint=tcp://$($apiAChannel.Host):$($apiAChannel.Port)
-sample.apiBChannelEndpoint=tcp://$($apiBChannel.Host):$($apiBChannel.Port)
-"@ }
-            "playNode" { @"
-sample.playAChannelEndpoint=tcp://$($playAChannel.Host):$($playAChannel.Port)
-sample.playBChannelEndpoint=tcp://$($playBChannel.Host):$($playBChannel.Port)
-sample.playASpotEndpoint=tcp://$($playASpot.Host):$($playASpot.Port)
-sample.playBSpotEndpoint=tcp://$($playBSpot.Host):$($playBSpot.Port)
-sample.playASpotRouterEndpoint=tcp://$($playARouter.Host):$($playARouter.Port)
-sample.playBSpotRouterEndpoint=tcp://$($playBRouter.Host):$($playBRouter.Port)
-"@ }
-            "sessionNode" { @"
-sample.sessionASpotEndpoint=tcp://$($sessionASpot.Host):$($sessionASpot.Port)
-sample.sessionBSpotEndpoint=tcp://$($sessionBSpot.Host):$($sessionBSpot.Port)
-sample.sessionARouterEndpoint=tcp://$($sessionARouter.Host):$($sessionARouter.Port)
-sample.sessionBRouterEndpoint=tcp://$($sessionBRouter.Host):$($sessionBRouter.Port)
-sample.sessionAStreamEndpoint=tcp://$($sessionAStream.Host):$($sessionAStream.Port)
-sample.sessionBStreamEndpoint=tcp://$($sessionBStream.Host):$($sessionBStream.Port)
-sample.sessionARouterRid=1101
-sample.sessionBRouterRid=1102
-"@ }
-            default { throw "Unknown Bingo role config: $RoleName" }
+        $matchmakingEndpoint = if ($RoleName -eq "apiNode" -and $RoleValue -eq "b") {
+            "tcp://$($apiBMatchmaking.Host):$($apiBMatchmaking.Port)"
+        } else {
+            "tcp://$($apiAMatchmaking.Host):$($apiAMatchmaking.Port)"
         }
-        Set-Content -Path $path -Value "$commonProperties`nsample.$RoleName=$RoleValue`n$roleProperties" -Encoding utf8NoBOM
+        Set-Content -Path $path -Value "$commonProperties`nsample.apiMatchmakingRouterEndpoint=$matchmakingEndpoint`nsample.$RoleName=$RoleValue" -Encoding utf8NoBOM
         Protect-ConfigFile $path
         return $path
     }
@@ -193,6 +209,7 @@ sample.sessionBRouterRid=1102
     $apiBConfig = Write-SampleConfig "api-b" "apiNode" "b"
     $playAConfig = Write-SampleConfig "play-a" "playNode" "a"
     $playBConfig = Write-SampleConfig "play-b" "playNode" "b"
+    $matchmakingConfig = Write-SampleConfig "matchmaking" "matchmakingNode" "matchmaking"
     $clientConfig = Join-Path $ConfigDir "client.properties"
     Set-Content -Path $clientConfig -Value @(
         "sessionAStreamEndpoint=tcp://$($sessionAStream.Host):$($sessionAStream.Port)",
@@ -214,9 +231,10 @@ sample.sessionBRouterRid=1102
         Pop-Location
     }
 
-    Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", "--no-daemon", ":Server:Session:installDist", ":Server:Api:installDist", ":Server:Play:installDist", ":Client:installDist", "--quiet")
+    Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", "--no-daemon", ":Server:Session:installDist", ":Server:Api:installDist", ":Server:Play:installDist", ":Server:Matchmaking:installDist", ":Client:installDist", "--quiet")
 
     Start-AppRole "Server/Session" "Session" $sessionAConfig "session-a.log"
+    Start-AppRole "Server/Matchmaking" "Matchmaking" $matchmakingConfig "matchmaking.log"
     Start-AppRole "Server/Session" "Session" $sessionBConfig "session-b.log"
     Start-AppRole "Server/Api" "Api" $apiAConfig "api-a.log"
     Start-AppRole "Server/Api" "Api" $apiBConfig "api-b.log"
@@ -229,10 +247,18 @@ sample.sessionBRouterRid=1102
     Wait-Port $sessionBStream.Host $sessionBStream.Port
     Wait-Port $apiAChannel.Host $apiAChannel.Port
     Wait-Port $apiBChannel.Host $apiBChannel.Port
+    Wait-Port $matchmakingRouter.Host $matchmakingRouter.Port
     Wait-Port $playARouter.Host $playARouter.Port
-    Wait-Port $playASpot.Host $playASpot.Port
     Wait-Port $playBRouter.Host $playBRouter.Port
-    Wait-Port $playBSpot.Host $playBSpot.Port
+
+    Wait-LogCount @((Join-Path $LogDir "play-a.log")) "bingo-ready kind=peer-route node=play-a peer=play-b" 1
+    Wait-LogCount @((Join-Path $LogDir "play-b.log")) "bingo-ready kind=peer-route node=play-b peer=play-a" 1
+    Wait-LogCount @((Join-Path $LogDir "api-a.log")) "bingo-ready kind=mesh-route node=api-a mesh=matchmaking" 1
+    Wait-LogCount @((Join-Path $LogDir "api-a.log")) "bingo-ready kind=mesh-route node=api-a mesh=room" 1
+    Wait-LogCount @((Join-Path $LogDir "api-b.log")) "bingo-ready kind=mesh-route node=api-b mesh=matchmaking" 1
+    Wait-LogCount @((Join-Path $LogDir "api-b.log")) "bingo-ready kind=mesh-route node=api-b mesh=room" 1
+    Wait-LogCount @((Join-Path $LogDir "session-a.log")) "bingo-ready kind=mesh-route node=session-a mesh=room" 1
+    Wait-LogCount @((Join-Path $LogDir "session-b.log")) "bingo-ready kind=mesh-route node=session-b mesh=room" 1
 
     $clientLog = Join-Path $LogDir "client.log"
     & (Get-AppBin "Client" "Client") --config $clientConfig *> $clientLog
@@ -245,7 +271,40 @@ sample.sessionBRouterRid=1102
     if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo" -Quiet)) {
         throw "Client inbound stream evidence was not found."
     }
+
+    $playLogs = @((Join-Path $LogDir "play-a.log"), (Join-Path $LogDir "play-b.log"))
+    $sessionLogs = @((Join-Path $LogDir "session-a.log"), (Join-Path $LogDir "session-b.log"))
+    $businessEvidence = @(
+        "bingo-record fetched actor=player-1 wins=0 losses=0",
+        "bingo-record fetched actor=player-2 wins=0 losses=0",
+        "bingo-record reported actor=player-1 wins=1 losses=0",
+        "bingo-record reported actor=player-2 wins=0 losses=1",
+        "bingo-lifecycle room-leave actor=player-1",
+        "bingo-lifecycle room-leave actor=player-2",
+        "bingo-lifecycle room-leave actor=observer",
+        "bingo-lifecycle entry-leave actor=player-1",
+        "bingo-lifecycle entry-leave actor=player-2",
+        "bingo-lifecycle entry-leave actor=observer",
+        "bingo-lifecycle entry-destroy-complete actor=player-1",
+        "bingo-lifecycle entry-destroy-complete actor=player-2"
+    )
+    foreach ($evidence in $businessEvidence) {
+        Wait-LogCount $playLogs $evidence 1
+    }
+    Wait-LogCount $sessionLogs "bingo-lifecycle session-disconnect actor=player-1 destroy=false" 1
+    Wait-LogCount $sessionLogs "bingo-lifecycle session-disconnect actor=player-2 destroy=false" 1
+    Wait-LogCount $playLogs "bingo-record reported actor=observer" 0
+    Wait-LogCount $playLogs "bingo-lifecycle entry-destroy-complete actor=observer" 0
+    foreach ($evidence in $businessEvidence) {
+        Assert-LogCount $playLogs $evidence 1
+    }
+    Assert-LogCount $playLogs "bingo-record reported actor=observer" 0
+    Assert-LogCount $playLogs "bingo-lifecycle entry-destroy-complete actor=observer" 0
+    Assert-LogCount $sessionLogs "bingo-lifecycle session-disconnect actor=player-1 destroy=false" 1
+    Assert-LogCount $sessionLogs "bingo-lifecycle session-disconnect actor=player-2 destroy=false" 1
+
     $Status = 0
+    Write-Output "bingo-placement=completed"
 } finally {
     Cleanup $Status
 }

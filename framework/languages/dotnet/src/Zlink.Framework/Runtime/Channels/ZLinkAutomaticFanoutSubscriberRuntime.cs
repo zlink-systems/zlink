@@ -26,7 +26,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationToken _runtimeStopToken;
     private readonly TimeProvider _time;
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<
         (RoutingId PublisherRid, ulong LifecycleGeneration),
         Connection> _connections = [];
@@ -81,9 +81,9 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
             .Where(static plan => plan.Connect)
             .ToDictionary(
                 static plan => IdentityKey(plan.Descriptor));
-        List<Connection> removed = [];
-        lock (_gate)
+        var removed = await _lane.RunAsync(() =>
         {
+            List<Connection> removed = [];
             _location = location;
             _excluded = plans
                 .Where(static plan => !plan.Connect)
@@ -115,10 +115,11 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
             {
                 var connection = new Connection(this, plan.Descriptor);
                 _connections.Add(key, connection);
-                connection.Start();
+                StartConnection(connection);
             }
             PublishSnapshotNoLock();
-        }
+            return removed;
+        }).ConfigureAwait(false);
 
         foreach (var connection in removed)
             await connection.DisposeAsync().ConfigureAwait(false);
@@ -127,17 +128,17 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
     internal async ValueTask ClearAsync(
         ZLinkLocationRuntimeSnapshot location)
     {
-        List<Connection> removed;
-        lock (_gate)
+        var removed = await _lane.RunAsync(() =>
         {
             if (Volatile.Read(ref _disposed) != 0)
-                return;
+                return Array.Empty<Connection>();
             _location = location;
             _excluded = Array.Empty<ZLinkFanoutPublisherConnectionSnapshot>();
-            removed = _connections.Values.ToList();
+            var removed = _connections.Values.ToArray();
             _connections.Clear();
             PublishSnapshotNoLock();
-        }
+            return removed;
+        }).ConfigureAwait(false);
 
         foreach (var connection in removed)
             await connection.DisposeAsync().ConfigureAwait(false);
@@ -147,28 +148,28 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         DateTimeOffset? lastSuccessAt,
         DateTimeOffset failureAt)
     {
-        lock (_gate)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             _location = new ZLinkLocationRuntimeSnapshot(
                 "degraded",
                 lastSuccessAt,
                 failureAt);
             PublishSnapshotNoLock();
-        }
+        }));
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
-        Connection[] connections;
-        lock (_gate)
+        var connections = await _lane.RunAsync(() =>
         {
-            connections = _connections.Values.ToArray();
+            var connections = _connections.Values.ToArray();
             _connections.Clear();
             _excluded = Array.Empty<ZLinkFanoutPublisherConnectionSnapshot>();
             PublishSnapshotNoLock();
-        }
+            return connections;
+        }).ConfigureAwait(false);
         foreach (var connection in connections)
             await connection.DisposeAsync().ConfigureAwait(false);
         if (_ownsApplicationJobQueue)
@@ -177,8 +178,25 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
 
     private void ConnectionChanged()
     {
-        lock (_gate)
+        if (_lane.IsOnLane)
+        {
             PublishSnapshotNoLock();
+            return;
+        }
+
+        AwaitStateLane(_lane.RunAsync(PublishSnapshotNoLock));
+    }
+
+    private static void StartConnection(Connection connection)
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+        {
+            connection.Start();
+            return;
+        }
+
+        using (ExecutionContext.SuppressFlow())
+            connection.Start();
     }
 
     private void PublishSnapshotNoLock()
@@ -211,11 +229,14 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
             state,
             lastFailure);
 
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
     private sealed class Connection(
         ZLinkAutomaticFanoutSubscriberRuntime owner,
         ZLinkFanoutPublisherDescriptor descriptor) : IAsyncDisposable
     {
-        private readonly object _gate = new();
+        private readonly ZLinkStateLane _lane = new();
         private readonly CancellationTokenSource _stop =
             CancellationTokenSource.CreateLinkedTokenSource(
                 owner._runtimeStopToken);
@@ -229,31 +250,42 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
 
         internal string Endpoint
         {
-            get { lock (_gate) return _descriptor.Endpoint; }
+            get => AwaitStateLane(_lane.RunAsync(() => _descriptor.Endpoint));
         }
 
         internal void Start()
         {
-            _loop = Task.Run(RunAsync, CancellationToken.None);
+            AwaitStateLane(_lane.RunAsync(StartCore));
         }
 
         internal void UpdateDescriptor(
             ZLinkFanoutPublisherDescriptor value)
         {
-            lock (_gate)
-                _descriptor = value;
+            AwaitStateLane(_lane.RunAsync(() => _descriptor = value));
             owner.ConnectionChanged();
         }
 
         internal ZLinkFanoutPublisherConnectionSnapshot Read()
         {
-            lock (_gate)
-                return Snapshot(
+            return AwaitStateLane(_lane.RunAsync(() =>
+                Snapshot(
                     _descriptor,
                     true,
                     _ready,
                     _state,
-                    _lastFailure);
+                    _lastFailure)));
+        }
+
+        private void StartCore()
+        {
+            if (ExecutionContext.IsFlowSuppressed())
+            {
+                _loop = Task.Run(RunAsync, CancellationToken.None);
+                return;
+            }
+
+            using (ExecutionContext.SuppressFlow())
+                _loop = Task.Run(RunAsync, CancellationToken.None);
         }
 
         private async Task RunAsync()
@@ -261,20 +293,23 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
             var reconnecting = false;
             while (!_stop.IsCancellationRequested)
             {
-                SetState(
+                await SetStateAsync(
                     reconnecting
                         ? ZLinkFanoutPublisherConnectionState.Reconnecting
                         : ZLinkFanoutPublisherConnectionState.Connecting,
                     ready: false,
-                    failure: _lastFailure);
+                    failure: await ReadLastFailureAsync().ConfigureAwait(false))
+                    .ConfigureAwait(false);
                 reconnecting = true;
                 await RunAttemptAsync(_stop.Token).ConfigureAwait(false);
                 if (_stop.IsCancellationRequested)
                     break;
-                SetState(
+                var lastFailure = await ReadLastFailureAsync().ConfigureAwait(false);
+                await SetStateAsync(
                     ZLinkFanoutPublisherConnectionState.Disconnected,
                     ready: false,
-                    failure: _lastFailure ?? "subscriber connection ended");
+                    failure: lastFailure ?? "subscriber connection ended")
+                    .ConfigureAwait(false);
                 try
                 {
                     await Task.Delay(
@@ -304,22 +339,19 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                     socket.Options,
                     owner._socketConfig);
                 socket.SetSubscription(string.Empty);
-                socket.Connect(Endpoint);
-                lock (_gate)
+                socket.Connect(await _lane.RunAsync(
+                    () => _descriptor.Endpoint).ConfigureAwait(false));
+                await _lane.RunAsync(() =>
                 {
                     _lastActivity = owner._time.GetUtcNow();
                     _lastFailure = null;
-                }
+                }).ConfigureAwait(false);
 
                 var receive = owner._receiveLoop.RunFanoutConnectionLoopAsync(
                     owner._channelName.Value,
                     socket,
                     OnActivity,
-                    () =>
-                    {
-                        lock (_gate)
-                            _lastFailure = "invalid fanout liveness beacon";
-                    },
+                    () => SetFailure("invalid fanout liveness beacon"),
                     owner._applicationJobQueue,
                     owner._errorSink,
                     attempt.Token);
@@ -336,8 +368,8 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
             }
             catch (Exception exception)
             {
-                lock (_gate)
-                    _lastFailure = exception.Message;
+                await _lane.RunAsync(() => _lastFailure = exception.Message)
+                    .ConfigureAwait(false);
             }
             finally
             {
@@ -348,8 +380,9 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                     }
                     catch (Exception exception)
                     {
-                        lock (_gate)
-                            _lastFailure ??= exception.Message;
+                        await _lane.RunAsync(
+                            () => _lastFailure ??= exception.Message)
+                            .ConfigureAwait(false);
                     }
             }
         }
@@ -364,15 +397,15 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                         owner._time,
                         attempt.Token)
                     .ConfigureAwait(false);
-                DateTimeOffset lastActivity;
-                lock (_gate)
-                    lastActivity = _lastActivity;
+                var lastActivity = await _lane.RunAsync(
+                    () => _lastActivity).ConfigureAwait(false);
                 if (!ZLinkFanoutLivenessProtocol.IsInboundTimedOut(
                         lastActivity,
                         owner._time.GetUtcNow()))
                     continue;
-                lock (_gate)
-                    _lastFailure = "fanout publisher inbound timeout";
+                await _lane.RunAsync(
+                    () => _lastFailure = "fanout publisher inbound timeout")
+                    .ConfigureAwait(false);
                 await attempt.CancelAsync().ConfigureAwait(false);
                 return;
             }
@@ -380,29 +413,35 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
 
         private void OnActivity()
         {
-            lock (_gate)
+            AwaitStateLane(_lane.RunAsync(() =>
             {
                 _lastActivity = owner._time.GetUtcNow();
                 _ready = true;
                 _state = ZLinkFanoutPublisherConnectionState.Ready;
                 _lastFailure = null;
-            }
+            }));
             owner.ConnectionChanged();
         }
 
-        private void SetState(
+        private async ValueTask SetStateAsync(
             ZLinkFanoutPublisherConnectionState state,
             bool ready,
             string? failure)
         {
-            lock (_gate)
+            await _lane.RunAsync(() =>
             {
                 _state = state;
                 _ready = ready;
                 _lastFailure = failure;
-            }
+            }).ConfigureAwait(false);
             owner.ConnectionChanged();
         }
+
+        private ValueTask<string?> ReadLastFailureAsync() =>
+            _lane.RunAsync(() => _lastFailure);
+
+        private void SetFailure(string failure) =>
+            AwaitStateLane(_lane.RunAsync(() => _lastFailure = failure));
 
         public async ValueTask DisposeAsync()
         {
@@ -414,8 +453,9 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                 }
                 catch (OperationCanceledException)
                 {
-                }
+            }
             _stop.Dispose();
+            await _lane.DisposeAsync().ConfigureAwait(false);
         }
 
         private static async Task AwaitAttemptTaskAsync(Task task)
@@ -428,5 +468,11 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
             {
             }
         }
+
+        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+            operation.GetAwaiter().GetResult();
+
+        private static void AwaitStateLane(ValueTask operation) =>
+            operation.GetAwaiter().GetResult();
     }
 }

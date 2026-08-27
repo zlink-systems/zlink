@@ -91,9 +91,9 @@ unchanged?
   no binding afterward, and no Stream client receives a push from it.
 - Detailed behavior: verifies the separation between direct message
   and binding from
-  [Actor Model §2.3](../spec/server/14-actor-model.en.md#23-spot-membership-and-stream-binding),
-  [Actor Model §5](../spec/server/14-actor-model.en.md#5-actor-messaging) and
-  [Session Actor Dispatch §4](../spec/server/20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route).
+  [Actor Model §2.3](../spec/server/03-spot-actor/04-actor-model.en.md#23-spot-membership-and-stream-binding),
+  [Actor Model §5](../spec/server/03-spot-actor/04-actor-model.en.md#5-actor-messaging) and
+  [Session Actor Dispatch §4](../spec/server/04-session/02-session-actor-binding.en.md).
 
 #### TA-A3 Bind A Session After A Direct Message
 
@@ -121,7 +121,7 @@ bound to a Session?
   `session-b` client.
 - Detailed behavior: verifies the independence of explicit bind and
   direct message from
-  [Session Actor Dispatch §2](../spec/server/20-session-actor-dispatch.en.md#2-the-whole-flow-the-application-sees).
+  [Session Actor Dispatch §2](../spec/server/04-session/02-session-actor-binding.en.md).
 
 #### TA-A4 A Direct Message Continues After Logical Disconnect And Fails After Actor Removal
 
@@ -148,8 +148,8 @@ and end in `NotFound` after the Actor is removed?
   processed once by the Actor handler. The request after Actor removal ends in
   `NotFound`, and no handler evidence is added.
 - Detailed behavior: verifies
-  [How A Connection Disconnect Is Told To An Actor](../spec/server/20-session-actor-dispatch.en.md#41-how-a-connection-disconnect-is-told-to-an-actor)
-  and [How A Session Holds An Actor Route](../spec/server/20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route).
+  [How A Connection Disconnect Is Told To An Actor](../spec/server/04-session/02-session-actor-binding.en.md)
+  and [How A Session Holds An Actor Route](../spec/server/04-session/02-session-actor-binding.en.md).
 
 ### Track B — Distinguish Logical Target From Failure Result
 
@@ -172,7 +172,7 @@ non-existent `ActorId` end in `NotFound` without the handler running?
   Neither Actor node's application evidence has that Actor ID or a
   marker.
 - Detailed behavior: verifies target-absence classification from
-  [Error Model §2](../spec/server/32-framework-error-model.en.md#2-the-shared-errorkind).
+  [Error Model §2](../spec/server/00-foundation/07-framework-error-model.en.md#2-the-shared-errorkind).
 
 #### TA-B2 An Actor Recreated With The Same ActorId Processes A New Direct Message
 
@@ -200,7 +200,7 @@ message while a previous `ActorRef`'s lifecycle operation is rejected?
   Actor's binding and lifecycle don't change.
 - Detailed behavior: verifies the distinction between ID-only
   application message and exact-reference control from
-  [Failover Policy §4.1](../spec/server/31-failure-failover-policy.en.md#41-logical-id-messaging-and-objectgeneration).
+  [Failover Policy §4.1](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#41-logical-id-messaging-and-objectgeneration).
 
 #### TA-B3 Ends In Unavailable When The Current Owner Is Unreachable
 
@@ -229,9 +229,9 @@ succeed after the connection recovers?
   different Actor or owner. After recovery, the new request is
   processed once by the same Actor and a reply is returned.
 - Detailed behavior: verifies route failure from
-  [Failover Policy §2](../spec/server/31-failure-failover-policy.en.md#2-common-judgment-criteria)
+  [Failover Policy §2](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#2-common-judgment-criteria)
   and
-  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
 ## 5. Completion Criteria
 

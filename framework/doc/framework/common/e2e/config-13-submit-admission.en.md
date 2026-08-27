@@ -94,7 +94,7 @@ while ready, with the target handler running once?
   result payload. The corresponding handler records the operation ID
   once.
 - Detailed behavior: verifies normal send completion from
-  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
 #### SA-E2E-02 Accept A Pending Send Once Shared Job Capacity Recovers
 
@@ -115,7 +115,7 @@ complete normally, processed at most once by the handler?
   payload, and the marker appears only once in handler evidence. The
   application doesn't call send again.
 - Detailed behavior: verifies waiting for send-ready from
-  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
 #### SA-E2E-03 End A Pending Send In A Bounded Terminal
 
@@ -140,7 +140,7 @@ indefinitely, each ending once in either success or
   the second target's operation ends in `DeadlineExceeded`, absent
   from handler evidence.
 - Detailed behavior: verifies
-  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
 #### SA-E2E-04 Late Capacity After Deadline Doesn't Revive The Operation
 
@@ -161,7 +161,7 @@ handler?
 - Verification: The previous marker is absent from handler evidence,
   and only the new marker is processed once.
 - Detailed behavior: verifies blocking late admission from
-  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
 #### SA-E2E-05 Distinguish Target Absence From Route Disconnection
 
@@ -181,7 +181,7 @@ target's disconnected route `Unavailable`?
   and the known ID in exactly one `Unavailable` terminal. Neither
   marker appears in target handler evidence.
 - Detailed behavior: verifies error mapping from
-  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
 #### SA-E2E-06 Honor The Relocate And Shutdown Admission Seal
 
@@ -202,8 +202,8 @@ ShuttingDown get rejected with the formal terminal?
   rejection result, and the Shutdown variant in `ShuttingDown`, with
   no target handler evidence.
 - Detailed behavior: verifies
-  [Host State And Completion Results](../spec/server/30-host-relocation-flow.en.md#3-host-state-and-completion-results)
-  and [Admission Per State](../spec/server/30-host-relocation-flow.en.md#12-admission-per-state).
+  [Host State And Completion Results](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#3-host-state-and-completion-results)
+  and [Admission Per State](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#15-admission-per-state).
 
 #### SA-E2E-07 Distinguish An Admission Terminal From A Publish Commit
 
@@ -228,9 +228,9 @@ delivery?
   is processed at most once at the accepted target, and the public
   publish terminal doesn't change.
 - Detailed behavior: verifies
-  [Spot Messaging §4](../spec/server/12-spot-messaging.en.md#4-channel-scoped-logical-multicast)
+  [Spot Messaging §4](../spec/server/03-spot-actor/02-spot-messaging.en.md#4-channel-scoped-logical-multicast)
   and
-  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
 ### Track B — Operation Families Use The Same Admission Semantics
 
@@ -251,7 +251,7 @@ produce the same terminal and handler evidence?
 - Verification: Both awaitables complete normally with no result
   payload, and each node's handler processes its own marker once.
 - Detailed behavior: verifies
-  [Interaction Model §3](../spec/server/03-interaction-model.en.md#3-node-direct-and-channel-select-one).
+  [Interaction Model §3](../spec/server/00-foundation/04-interaction-model.en.md#3-node-direct-and-channel-select-one).
 
 #### SA-E2E-09 Apply The Send Deadline For Each Channel Topology
 
@@ -278,9 +278,9 @@ timeout result when capacity does not recover?
   normal terminal and one handler execution. The timeout send is
   `DeadlineExceeded` with zero handler executions.
 - Detailed behavior: verifies
-  [Channel Messaging §7](../spec/server/08-channel-messaging.en.md#7-failure-and-termination)
+  [Channel Messaging §7](../spec/server/02-channel-transport/02-channel-messaging.en.md#8-failure-and-termination)
   and
-  [ClientServer Channel §6](../spec/server/09-client-server-channel.en.md#6-send-request-and-reply).
+  [ClientServer Channel §6](../spec/server/02-channel-transport/03-client-server-channel.en.md#5-send-request-and-reply).
 
 #### SA-E2E-11 Keep SpotId Send's Admission And Logical Identity
 
@@ -301,7 +301,7 @@ it?
   marker on either A or B's handler. Only the new operation is
   processed once, at A.
 - Detailed behavior: verifies
-  [Failover Policy §2](../spec/server/31-failure-failover-policy.en.md#2-common-judgment-criteria).
+  [Failover Policy §2](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#2-common-judgment-criteria).
 
 #### SA-E2E-12 Keep ActorId Send's Admission And Logical Identity
 
@@ -322,7 +322,7 @@ the new send processed?
   marker. The new send completes normally, processed once by the
   Actor handler.
 - Detailed behavior: verifies
-  [Failover Policy §4.1](../spec/server/31-failure-failover-policy.en.md#41-logical-id-messaging-and-objectgeneration).
+  [Failover Policy §4.1](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#41-logical-id-messaging-and-objectgeneration).
 
 #### SA-E2E-13 Logical Multicast Processes Admittable Targets Once
 
@@ -348,7 +348,7 @@ does another target process the marker once?
   publish-dedicated monitoring. E2E doesn't read the private snapshot
   or attempt count.
 - Detailed behavior: verifies
-  [Spot Messaging §4](../spec/server/12-spot-messaging.en.md#4-channel-scoped-logical-multicast).
+  [Spot Messaging §4](../spec/server/03-spot-actor/02-spot-messaging.en.md#4-channel-scoped-logical-multicast).
 
 #### SA-E2E-14 Complete A Classic Fanout Publish Even With No Subscriber
 
@@ -367,7 +367,7 @@ complete normally, without replaying to a late subscriber?
 - Verification: The publish completes normally with no result payload.
   The late subscriber's handler has no previous marker.
 - Detailed behavior: verifies
-  [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout).
+  [Framework API §11](../spec/server/00-foundation/06-framework-api.en.md).
 
 #### SA-E2E-15 Compare Bound Session's And Session Actor Relay's Local/Remote Results
 
@@ -390,9 +390,9 @@ Actor relay use the same deadline and non-replay rule?
   target evidence appears once each. Pending sends are
   `DeadlineExceeded` and don't replay after a later capacity recovery.
 - Detailed behavior: verifies
-  [One-Way Submit](../spec/server/05-async-execution-policy.en.md#13-one-way-submit),
-  [Admission Deadline](../spec/server/05-async-execution-policy.en.md#14-admission-deadline), and
-  [Session Actor Inbound Dispatch](../spec/server/20-session-actor-dispatch.en.md#3-inbound-dispatch-and-reply).
+  [One-Way Submit](../spec/server/01-execution/README.en.md),
+  [Admission Deadline](../spec/server/01-execution/01-submit-and-completion.en.md), and
+  [Session Actor Inbound Dispatch](../spec/server/04-session/02-session-actor-binding.en.md).
 
 #### SA-E2E-16 Keep Server Stream Send Order
 
@@ -417,8 +417,8 @@ successful sequence in submission order?
   matches the source's successful-terminal order with no duplicates.
   The `timeout` marker doesn't arrive at the client.
 - Detailed behavior: verifies
-  [Async Execution — Per-STREAM-Send-Call Timeout](../spec/server/05-async-execution-policy.en.md#per-stream-send-call-timeout) and
-  [Stream Session Codec-Layer Separation](../spec/server/19-stream-session.en.md#5-codec-layer-separation).
+  [Async Execution — Per-STREAM-Send-Call Timeout](../spec/server/01-execution/README.en.md) and
+  [Stream Session Codec-Layer Separation](../spec/server/04-session/01-stream-session.en.md).
 
 #### SA-E2E-17 A Stream Reply Token Is Used Only Once
 
@@ -443,7 +443,7 @@ only one start admission, with the client reply also at most one?
   reply is at most one, and reusing a terminal token doesn't
   produce a reply.
 - Detailed behavior: verifies one-shot state from
-  [Error Model §3](../spec/server/32-framework-error-model.en.md#3-errors-checkable-before-the-call).
+  [Error Model §3](../spec/server/00-foundation/07-framework-error-model.en.md#3-errors-checkable-before-the-call).
 
 ### Track C — Confirm Target Selection And Post-Terminal Behavior
 
@@ -467,9 +467,9 @@ ready member?
   doesn't process it. The Channel send completes normally, and ready
   Server B processes the marker once.
 - Detailed behavior: verifies
-  [Interaction Model §3](../spec/server/03-interaction-model.en.md#3-node-direct-and-channel-select-one)
+  [Interaction Model §3](../spec/server/00-foundation/04-interaction-model.en.md#3-node-direct-and-channel-select-one)
   and
-  [Failover Policy §2](../spec/server/31-failure-failover-policy.en.md#2-common-judgment-criteria).
+  [Failover Policy §2](../spec/server/05-location-relocation/06-failure-failover-policy.en.md#2-common-judgment-criteria).
 
 #### SA-E2E-19 Route Recovery After Terminal Doesn't Resubmit The Operation
 
@@ -490,7 +490,7 @@ marker not delivered, with only the new operation processed?
   and only the new marker is processed once. The previous awaitable's
   terminal also doesn't change.
 - Detailed behavior: verifies non-replay from
-  [Transport Liveness §6](../spec/server/29-transport-liveness.en.md#6-connection-loss-and-reconnect).
+  [Transport Liveness §6](../spec/server/02-channel-transport/05-transport-liveness.en.md#6-connection-loss-and-reconnect).
 
 #### SA-E2E-20 Separate Submit Completion From Remote Handler Completion
 
@@ -512,7 +512,7 @@ remote handler is still waiting?
   before handler completion. Handler completion is recorded once,
   after the gate opens.
 - Detailed behavior: verifies source-admission completion from
-  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
 ## 5. Completion Criteria
 

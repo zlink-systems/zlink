@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Diagnostics.Metrics;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Messaging;
@@ -1313,7 +1314,8 @@ public sealed class SessionActorCoordinatorTests
     [Fact]
     public async Task Canonical_Seal_Retries_Target_Push_Until_Command_44_Commits()
     {
-        var runtime = CreateRuntime();
+        var loggerFactory = new SessionRouteLoggerFactory();
+        var runtime = CreateRuntime(loggerFactory: loggerFactory);
         runtime.Registration.Locations.UseInMemoryStores = true;
         var store = runtime.Registration.Locations.ResolveStore()!;
         var targetNode = RoutingId.From("actor-node-canonical-target");
@@ -1457,6 +1459,36 @@ public sealed class SessionActorCoordinatorTests
         await pending.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Single(stream.Writes);
         Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[0].Payload);
+
+        await runtime.RouteCanonicalSessionActorAsync(
+            command44,
+            new ZLinkSessionRelocationAuthenticatedRoute(
+                targetNode,
+                targetNodeGeneration,
+                identity.MeshName,
+                targetAuthority,
+                OwnerLeaseGeneration: 0),
+            CancellationToken.None);
+        await runtime.RouteCanonicalSessionActorAsync(
+            command44 with
+            {
+                RelocationId = new ZLinkServiceWireCodec.RelocationWireId(107, 109)
+            },
+            new ZLinkSessionRelocationAuthenticatedRoute(
+                targetNode,
+                targetNodeGeneration,
+                identity.MeshName,
+                targetAuthority,
+                targetOwnerLease),
+            CancellationToken.None);
+
+        Assert.Equal(
+            2,
+            loggerFactory.Entries.Count(entry =>
+                entry.Level == LogLevel.Warning
+                && entry.Message.StartsWith(
+                    "late_session_route_update ",
+                    StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -1492,7 +1524,7 @@ public sealed class SessionActorCoordinatorTests
             route.Ref.ActorId,
             sessionRid,
             "binding-seal-timeout");
-        _ = table.Bind(
+        _ = await table.BindAsync(
             ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route)),
             context,
             actor.BindingToken,
@@ -1512,7 +1544,7 @@ public sealed class SessionActorCoordinatorTests
             siblingRoute.Ref.ActorId,
             sessionRid,
             "binding-seal-timeout-sibling");
-        _ = table.Bind(
+        _ = await table.BindAsync(
             ZLinkActorId.FromBoundary(
                 siblingRoute.Ref.ActorId,
                 nameof(siblingRoute)),
@@ -1538,7 +1570,7 @@ public sealed class SessionActorCoordinatorTests
             BindingGeneration: 5,
             SessionOwnerNodeGeneration: 7,
             sessionRid);
-        var admission = table.AdmitOutbound(
+        var admission = await table.AdmitOutboundAsync(
             targetTenure,
             new ZLinkSessionOutboundTenureProof(
                 targetTenure,
@@ -1589,10 +1621,9 @@ public sealed class SessionActorCoordinatorTests
         Assert.Equal(0, Volatile.Read(ref closeCount));
         Assert.False(routeWait.IsCompleted);
         Assert.False(retained.Completion.IsCompleted);
-        Assert.True(table.TryGet(
+        Assert.NotNull(await table.GetBindingAsync(
             route.Ref.ActorId,
-            actor.BindingToken,
-            out ZLinkSessionBindingEntry _));
+            actor.BindingToken));
 
         time.Advance(TimeSpan.FromMilliseconds(1));
         await closed.Task.WaitAsync(TimeSpan.FromSeconds(1));
@@ -1602,14 +1633,12 @@ public sealed class SessionActorCoordinatorTests
             ZLinkSessionOutboundDelivery.Discarded,
             await retained.Completion.WaitAsync(TimeSpan.FromSeconds(1)));
         Assert.True(await routeWait.WaitAsync(TimeSpan.FromSeconds(1)));
-        Assert.False(table.TryGet(
+        Assert.Null(await table.GetBindingAsync(
             route.Ref.ActorId,
-            actor.BindingToken,
-            out ZLinkSessionBindingEntry _));
-        Assert.False(table.TryGet(
+            actor.BindingToken));
+        Assert.Null(await table.GetBindingAsync(
             siblingRoute.Ref.ActorId,
-            sibling.BindingToken,
-            out ZLinkSessionBindingEntry _));
+            sibling.BindingToken));
         Assert.Equal(0, time.ActiveTimerCount);
 
         var late = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
@@ -1620,7 +1649,7 @@ public sealed class SessionActorCoordinatorTests
             seal.Session,
             ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Abort(
                 route.AuthorityOwnerGeneration));
-        Assert.False(table.RouteCanonical(
+        Assert.False(await table.RouteCanonicalAsync(
             late,
             new ZLinkSessionRelocationAuthenticatedRoute(
                 route.Ref.NodeRid,
@@ -1921,7 +1950,7 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
-    public void Session_Owner_Tombstone_Rejects_Every_Late_Commit_Until_Expiry()
+    public async Task Session_Owner_Tombstone_Rejects_Every_Late_Commit_Until_Expiry()
     {
         var time = new ManualTimeProvider();
         var table = new ZLinkSessionActorBindingTable(
@@ -1941,7 +1970,7 @@ public sealed class SessionActorCoordinatorTests
             sessionRid,
             "binding-tombstone");
         var actorKey = ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route));
-        _ = table.Bind(
+        _ = await table.BindAsync(
             actorKey,
             context,
             actor.BindingToken,
@@ -1950,7 +1979,7 @@ public sealed class SessionActorCoordinatorTests
             route,
             sessionOwnerNodeGeneration: 7);
 
-        table.Tombstone(
+        await table.TombstoneAsync(
             route.Ref.ActorId,
             sessionRid,
             actor.BindingToken,
@@ -1958,14 +1987,14 @@ public sealed class SessionActorCoordinatorTests
             sessionOwnerNodeGeneration: 7,
             route);
 
-        Assert.Equal(1, table.TombstoneCount);
-        AssertLateCommitRejected();
-        AssertLateCommitRejected();
-        Assert.Equal(1, table.TombstoneCount);
+        Assert.Equal(1, await table.GetTombstoneCountAsync());
+        await AssertLateCommitRejectedAsync();
+        await AssertLateCommitRejectedAsync();
+        Assert.Equal(1, await table.GetTombstoneCountAsync());
 
         time.Advance(TimeSpan.FromSeconds(2));
-        Assert.Equal(0, table.TombstoneCount);
-        _ = table.Bind(
+        Assert.Equal(0, await table.GetTombstoneCountAsync());
+        _ = await table.BindAsync(
             actorKey,
             context,
             actor.BindingToken,
@@ -1973,16 +2002,15 @@ public sealed class SessionActorCoordinatorTests
             bindingGeneration: 5,
             route,
             sessionOwnerNodeGeneration: 7);
-        Assert.True(table.TryGet(
+        Assert.NotNull(await table.GetBindingAsync(
             route.Ref.ActorId,
-            actor.BindingToken,
-            out ZLinkSessionBindingEntry _));
+            actor.BindingToken));
         return;
 
-        void AssertLateCommitRejected()
+        async Task AssertLateCommitRejectedAsync()
         {
-            var error = Assert.Throws<ZLinkFrameworkException>(() =>
-                table.Bind(
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await table.BindAsync(
                     actorKey,
                     context,
                     actor.BindingToken,
@@ -1996,7 +2024,7 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
-    public void Session_Owner_Tombstone_Requires_The_Full_Actor_Route_Fence()
+    public async Task Session_Owner_Tombstone_Requires_The_Full_Actor_Route_Fence()
     {
         var table = new ZLinkSessionActorBindingTable(
             TimeSpan.FromSeconds(30),
@@ -2013,7 +2041,7 @@ public sealed class SessionActorCoordinatorTests
             sessionRid,
             "binding-full-fence");
         var actorKey = ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route));
-        _ = table.Bind(
+        _ = await table.BindAsync(
             actorKey,
             context,
             actor.BindingToken,
@@ -2025,8 +2053,8 @@ public sealed class SessionActorCoordinatorTests
             route.Ref.ActorId,
             targetNodeGeneration: 4);
 
-        var error = Assert.Throws<ZLinkFrameworkException>(() =>
-            table.Tombstone(
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await table.TombstoneAsync(
                 route.Ref.ActorId,
                 sessionRid,
                 actor.BindingToken,
@@ -2035,16 +2063,16 @@ public sealed class SessionActorCoordinatorTests
                 reusedRidFromAnotherLifecycle));
 
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
-        Assert.True(table.TryGet(
-            route.Ref.ActorId,
-            actor.BindingToken,
-            out ZLinkSessionBindingEntry retained));
+        var retained = Assert.IsType<ZLinkSessionBindingEntry>(
+            await table.GetBindingAsync(
+                route.Ref.ActorId,
+                actor.BindingToken));
         Assert.Equal(route, retained.Route);
-        Assert.Equal(0, table.TombstoneCount);
+        Assert.Equal(0, await table.GetTombstoneCountAsync());
     }
 
     [Fact]
-    public void Session_Owner_Tombstone_Capacity_Fails_Closed()
+    public async Task Session_Owner_Tombstone_Capacity_Fails_Closed()
     {
         var table = new ZLinkSessionActorBindingTable(
             TimeSpan.FromMinutes(1),
@@ -2054,21 +2082,21 @@ public sealed class SessionActorCoordinatorTests
         var routeB = SessionBindingRoute("actor-capacity-b", 1);
         var routeC = SessionBindingRoute("actor-capacity-c", 1);
 
-        AddTombstone(routeA, "session-a", "binding-a");
-        AddTombstone(routeB, "session-b", "binding-b");
-        var capacity = Assert.Throws<ZLinkFrameworkException>(() =>
-            AddTombstone(routeC, "session-c", "binding-c"));
+        await AddTombstoneAsync(routeA, "session-a", "binding-a");
+        await AddTombstoneAsync(routeB, "session-b", "binding-b");
+        var capacity = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await AddTombstoneAsync(routeC, "session-c", "binding-c"));
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, capacity.Kind);
-        Assert.Equal(2, table.TombstoneCount);
+        Assert.Equal(2, await table.GetTombstoneCountAsync());
         return;
 
-        void AddTombstone(
+        async Task AddTombstoneAsync(
             ZLinkSessionBindingRoute route,
             string session,
             string token)
         {
-            table.Tombstone(
+            await table.TombstoneAsync(
                 route.Ref.ActorId,
                 RoutingId.From(session),
                 token,
@@ -2095,7 +2123,7 @@ public sealed class SessionActorCoordinatorTests
             context.RoutingId!.Value,
             "binding-first");
         var actorKey = ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route));
-        _ = table.Bind(
+        _ = await table.BindAsync(
             actorKey,
             context,
             firstActor.BindingToken,
@@ -2127,7 +2155,7 @@ public sealed class SessionActorCoordinatorTests
             route.Ref.ActorId,
             reboundContext.RoutingId!.Value,
             "binding-second");
-        _ = table.Bind(
+        _ = await table.BindAsync(
             actorKey,
             reboundContext,
             reboundActor.BindingToken,
@@ -2138,12 +2166,13 @@ public sealed class SessionActorCoordinatorTests
 
         // The late abort carries the pre-rebind binding identity and must not
         // touch the rebound session.
-        Assert.False(table.AbortRouteSeal(seal));
-        Assert.True(table.TryAccept(
-            route.Ref.ActorId,
-            reboundActor.BindingToken,
-            out var acceptedHighWater));
-        Assert.Equal(1UL, acceptedHighWater);
+        Assert.False(await table.AbortRouteSealAsync(seal));
+        var acceptance = Assert.IsType<ZLinkSessionFrameAcceptance>(
+            await table.AcceptAsync(
+                route.Ref.ActorId,
+                reboundActor.BindingToken));
+        Assert.True(acceptance.Accepted);
+        Assert.Equal(1UL, acceptance.AcceptedHighWater);
     }
 
     private static ZLinkSessionBindingRoute SessionBindingRoute(
@@ -2313,7 +2342,8 @@ public sealed class SessionActorCoordinatorTests
 
     private static ZLinkFrameworkRuntime CreateRuntime(
         IZLinkActorResolver? actorDirectory = null,
-        TimeSpan? defaultRequestTimeout = null)
+        TimeSpan? defaultRequestTimeout = null,
+        ILoggerFactory? loggerFactory = null)
     {
         var registration = new ZLinkFrameworkRegistration();
         if (defaultRequestTimeout is { } timeout)
@@ -2321,6 +2351,7 @@ public sealed class SessionActorCoordinatorTests
         var services = new ServiceCollection();
         services.AddSingleton(registration);
         if (actorDirectory is not null) services.AddSingleton(actorDirectory);
+        if (loggerFactory is not null) services.AddSingleton(loggerFactory);
         var provider = services.BuildServiceProvider();
 
         return new ZLinkFrameworkRuntime(
@@ -2334,6 +2365,56 @@ public sealed class SessionActorCoordinatorTests
     }
 
     private sealed record SessionPush(string Value);
+
+    private sealed class SessionRouteLoggerFactory : ILoggerFactory
+    {
+        private readonly SessionRouteLogger _logger = new();
+
+        internal IReadOnlyList<(LogLevel Level, string Message)> Entries =>
+            _logger.Entries;
+
+        public void AddProvider(ILoggerProvider provider) => _ = provider;
+
+        public ILogger CreateLogger(string categoryName)
+        {
+            _ = categoryName;
+            return _logger;
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class SessionRouteLogger : ILogger
+    {
+        private readonly List<(LogLevel Level, string Message)> _entries = [];
+
+        internal IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get
+            {
+                lock (_entries)
+                    return _entries.ToArray();
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _ = eventId;
+            lock (_entries)
+                _entries.Add((logLevel, formatter(state, exception)));
+        }
+    }
 
     private sealed class MissingActorDirectory : IZLinkActorResolver
     {

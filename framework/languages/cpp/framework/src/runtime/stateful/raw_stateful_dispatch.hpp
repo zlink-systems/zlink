@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/stateful_object_runtime.hpp"
 
@@ -345,8 +346,10 @@ class raw_relocation_replay_coordinator_t
 
     mesh::raw_mesh_node_owner_t *_transport;
     std::function<bool ()> _flow_capture;
-    mutable std::mutex _gate;
-    std::condition_variable _gate_condition;
+    offload_executor_t _lane_executor;
+    mutable state_lane_t _lane;
+    std::mutex _activity_wait_mutex;
+    std::condition_variable _activity_changed;
     std::map<key_t, target_state_t> _targets;
     std::map<terminal_key_t, terminal_source_state_t> _terminal_sources;
     std::map<terminal_key_t, terminal_target_state_t> _terminal_targets;

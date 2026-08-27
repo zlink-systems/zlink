@@ -26,7 +26,7 @@ class PlayActorLeaveGameHandler
     actor.markForDestroyAfterRoomLeave();
     await spot.context.leaveActor(actor);
     actor.roomId = undefined;
-    console.log(`actor: LeaveGameMsg completed. actor=${actor.actorId}`);
+    console.log(`tictactoe-lifecycle leave-completed actor=${actor.actorId}`);
   }
 }
 

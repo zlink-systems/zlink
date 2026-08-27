@@ -26,9 +26,13 @@ async function main(): Promise<void> {
     abortOnError: false
   });
   const config = apiApp.get<TicTacToeSampleConfig>(TICTACTOE_SAMPLE_CONFIG);
+  const routeMeshRuntime = apiApp.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME);
   await waitForRouteMeshReady(
-    apiApp.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME),
+    routeMeshRuntime,
     SampleNames.playSpotNode
+  );
+  process.stdout.write(
+    `tictactoe-ready kind=spot-route node=${config.instanceName} mesh=${SampleNames.playSpotNode}\n`
   );
   const createGameReq = getCreateGameEndpoint(apiApp);
 
@@ -48,6 +52,7 @@ async function main(): Promise<void> {
     }
   });
   await listen(server, config.apiHttpEndpoint);
+  process.stdout.write(`tictactoe-ready kind=http node=${config.instanceName}\n`);
   process.stdout.write(`${JSON.stringify({
     event: 'ready',
     endpoint: config.apiEndpoints[config.apiIndex],

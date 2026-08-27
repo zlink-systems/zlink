@@ -855,9 +855,10 @@ route_mesh_runtime_host_service_t::route_mesh_runtime_host_service_t (
 {
 }
 
-void route_mesh_runtime_host_service_t::start (service_provider_t &)
+task_t<void> route_mesh_runtime_host_service_t::start (service_provider_t &)
 {
     _runtime->start ();
+    return task_t<void> (result_t<void>::success ());
 }
 
 void route_mesh_runtime_host_service_t::request_stop () noexcept

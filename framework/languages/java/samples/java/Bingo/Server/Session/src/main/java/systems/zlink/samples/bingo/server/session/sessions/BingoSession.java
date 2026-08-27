@@ -1,6 +1,8 @@
 package systems.zlink.samples.bingo.server.session.sessions;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -12,8 +14,11 @@ import systems.zlink.framework.streams.ZLinkStreamError;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 
 public final class BingoSession implements ZLinkSession {
+    private static final Logger logger = LoggerFactory.getLogger(BingoSession.class);
+
     private final ZLinkSessionContext context;
     private final ZLinkSessionPacketDispatcher<ZLinkSessionContext> handlers;
+    private String boundActorId;
 
     public BingoSession(
         ZLinkSessionContext context,
@@ -36,7 +41,14 @@ public final class BingoSession implements ZLinkSession {
     public CompletionStage<Void> onDisconnected() {
         return CompletableFuture.allOf(context.actors().bound().stream()
             .map(actor -> actor.notifyDisconnected().toCompletableFuture())
-            .toArray(CompletableFuture[]::new));
+            .toArray(CompletableFuture[]::new))
+            .thenRun(() -> {
+                if (boundActorId != null) {
+                    logger.info(
+                        "bingo-lifecycle session-disconnect actor={} destroy=false",
+                        boundActorId);
+                }
+            });
     }
 
     @Override
@@ -49,9 +61,16 @@ public final class BingoSession implements ZLinkSession {
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
         return handlers.tryHandle(context, dispatch, payload).thenCompose(handled ->
-            handled
-                ? CompletableFuture.completedFuture(null)
-                : requireSingleBoundActor(dispatch.packetName()).relay(payload).thenApply(ignored -> null));
+            handled ? rememberBoundActor() : requireSingleBoundActor(dispatch.packetName())
+                .relay(payload)
+                .thenApply(ignored -> null));
+    }
+
+    private CompletionStage<Void> rememberBoundActor() {
+        if (context.actors().bound().size() == 1) {
+            boundActorId = context.actors().bound().getFirst().actorId();
+        }
+        return CompletableFuture.completedFuture(null);
     }
 
     private ZLinkSessionActor requireSingleBoundActor(String packetName) {

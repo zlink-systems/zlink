@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 // Actor lifecycle policy over the runtime's common serial execution engine.
@@ -7,7 +9,7 @@ namespace Zlink.Framework.Runtime.Actors;
 // work accepted before the close.
 internal sealed class ZLinkActorDispatchMailbox
 {
-    private readonly object _sync = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly ZLinkSerialExecutionQueue _queue;
     private bool _admissionClosed;
     private int _acceptedWaiters;
@@ -24,10 +26,7 @@ internal sealed class ZLinkActorDispatchMailbox
 
     public int PendingRequestCount
     {
-        get
-        {
-            lock (_sync) return _pendingRequests;
-        }
+        get => AwaitStateLane(_lane.RunAsync(() => _pendingRequests));
     }
 
     public ValueTask<Turn> EnterAsync(
@@ -35,26 +34,24 @@ internal sealed class ZLinkActorDispatchMailbox
         bool countAsPendingRequest = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Waiter waiter;
-        lock (_sync)
+        var waiter = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_admissionClosed)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NotFound,
                     "Actor dispatch admission is closed for a terminal lifecycle transition.");
-            waiter = PostWaiterUnderLock(
+            return PostWaiterOnLane(
                 ZLinkSerialWorkLane.Application,
                 cancellationToken,
                 countAsPendingRequest);
-        }
+        }));
         return AwaitTurnAsync(waiter);
     }
 
     public BarrierReservation ReserveBarrier()
     {
         var cancellation = new CancellationTokenSource();
-        Waiter waiter;
-        lock (_sync)
+        var waiter = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_admissionClosed)
             {
@@ -63,19 +60,18 @@ internal sealed class ZLinkActorDispatchMailbox
                     ZLinkFrameworkErrorKind.Unavailable,
                     "Actor lifecycle admission is closed for a terminal transition.");
             }
-            waiter = PostWaiterUnderLock(
+            return PostWaiterOnLane(
                 ZLinkSerialWorkLane.Lifecycle,
                 cancellation.Token,
                 countAsPendingRequest: false);
-        }
+        }));
         return new BarrierReservation(waiter, cancellation);
     }
 
     public BarrierReservation CloseAdmissionAndReserveLifecycleBarrier()
     {
         var cancellation = new CancellationTokenSource();
-        Waiter waiter;
-        lock (_sync)
+        var waiter = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_admissionClosed)
             {
@@ -89,7 +85,7 @@ internal sealed class ZLinkActorDispatchMailbox
             {
                 // Terminal cleanup must remain behind every ordinary turn that
                 // was accepted before admission closed.
-                waiter = PostWaiterUnderLock(
+                return PostWaiterOnLane(
                     ZLinkSerialWorkLane.Application,
                     cancellation.Token,
                     countAsPendingRequest: false);
@@ -100,7 +96,7 @@ internal sealed class ZLinkActorDispatchMailbox
                 cancellation.Dispose();
                 throw;
             }
-        }
+        }));
         return new BarrierReservation(waiter, cancellation);
     }
 
@@ -113,27 +109,27 @@ internal sealed class ZLinkActorDispatchMailbox
     /// </summary>
     public bool TryReopenAdmissionForIncomingHandoff()
     {
-        lock (_sync)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!_admissionClosed) return true;
             if (_acceptedWaiters != 0) return false;
             _admissionClosed = false;
             return true;
-        }
+        }));
     }
 
     public void ReopenAdmission()
     {
-        lock (_sync)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_acceptedWaiters != 0)
                 throw new InvalidOperationException(
                     "Actor dispatch admission cannot reopen while a previous lifecycle turn remains.");
             _admissionClosed = false;
-        }
+        }));
     }
 
-    private Waiter PostWaiterUnderLock(
+    private Waiter PostWaiterOnLane(
         ZLinkSerialWorkLane lane,
         CancellationToken cancellationToken,
         bool countAsPendingRequest)
@@ -143,9 +139,14 @@ internal sealed class ZLinkActorDispatchMailbox
             cancellationToken,
             countAsPendingRequest);
         if (countAsPendingRequest) _pendingRequests++;
-        var admission = lane == ZLinkSerialWorkLane.Lifecycle
-            ? _queue.TryPostNextWithAdmission(waiter.RunAsync, out _)
-            : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out _);
+        // Queue draining is a long-running task. It starts after this method returns, so
+        // SuppressFlow is sufficient: TryPost only admits and schedules a cold task; it does
+        // not synchronously invoke waiter.RunAsync.
+        ZLinkSerialPostAdmission admission;
+        using (ExecutionContext.SuppressFlow())
+            admission = lane == ZLinkSerialWorkLane.Lifecycle
+                ? _queue.TryPostNextWithAdmission(waiter.RunAsync, out _)
+                : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out _);
         if (admission == ZLinkSerialPostAdmission.Accepted)
         {
             waiter.MarkAccepted();
@@ -160,22 +161,26 @@ internal sealed class ZLinkActorDispatchMailbox
             "Actor dispatch queue is closed.");
     }
 
-    private void OnWaiterStarted(Waiter waiter)
-    {
-        lock (_sync)
+    private ValueTask OnWaiterStartedAsync(Waiter waiter) =>
+        _lane.RunAsync(() =>
         {
             if (waiter.CountsAsPendingRequest) _pendingRequests--;
-        }
-    }
+        });
 
     private void OnWaiterFinished(Waiter waiter)
     {
-        lock (_sync)
+        AwaitStateLane(_lane.RunAsync(() =>
         {
             if (!waiter.TryFinishAccepted()) return;
             _acceptedWaiters--;
-        }
+        }));
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
     private static async ValueTask<Turn> AwaitTurnAsync(Waiter waiter)
     {
@@ -276,7 +281,7 @@ internal sealed class ZLinkActorDispatchMailbox
 
         internal async ValueTask RunAsync(CancellationToken _)
         {
-            _owner.OnWaiterStarted(this);
+            await _owner.OnWaiterStartedAsync(this).ConfigureAwait(false);
             if (_cancellationToken.IsCancellationRequested
                 || !_ready.TrySetResult(new Turn(this)))
             {

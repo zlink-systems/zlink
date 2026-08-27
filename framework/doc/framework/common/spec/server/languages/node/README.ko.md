@@ -1,5 +1,8 @@
 # ZLink Framework Node.js 공개 계약
 
+<!-- framework-adapter-nav:start -->
+[언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)
+<!-- framework-adapter-nav:end -->
 이 디렉토리는 Node.js framework가 제공해야 하는 **정식 public contract**를 소유한다.
 package export, public declaration과 contract test는 이 계약을 따라야 한다.
 
@@ -20,3 +23,8 @@ Host 종료는 별도 `shutdown()` operation이다.
 Node.js public interface는 **일반 handler에 취소 인자를 자동으로 추가하지 않는다.** 호출자가
 중단할 수 있어야 하는 request 대기·연결·종료 같은 장기 작업은 Node 관례에 따라 optional
 `AbortSignal`을 사용한다. 정확한 적용 대상은 인터페이스 시그니처가 고정한다.
+
+---
+<!-- framework-adapter-nav:bottom:start -->
+[언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)
+<!-- framework-adapter-nav:bottom:end -->

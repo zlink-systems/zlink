@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 
@@ -21,7 +22,7 @@ internal sealed class ZLinkStoreLocationResolvers :
     private readonly ZLinkOwnerLeaseTracker _leaseTracker;
     private readonly ZLinkLocationOptions _options;
     private readonly TimeProvider _time;
-    private readonly object _routeCacheGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<ZLinkSpotLocationKey, CachedRoute<ZLinkResolvedSpotLocation>>
         _spotRoutes = [];
     private readonly Dictionary<ZLinkActorLocationKey, CachedRoute<ZLinkResolvedActorLocation>>
@@ -161,11 +162,12 @@ internal sealed class ZLinkStoreLocationResolvers :
             ZLinkSpotLocationKey key,
             CancellationToken cancellationToken)
     {
-        if (TryGetCached(_spotRoutes, key, out var cached))
+        var cached = await TryGetCachedAsync(_spotRoutes, key).ConfigureAwait(false);
+        if (cached.Found)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"resolve_spot_row spot={key.SpotId} source=cache hit={cached is not null}");
-            return (cached, true, ZLinkLocationResolutionKind.Ready);
+                $"resolve_spot_row spot={key.SpotId} source=cache hit={cached.Row is not null}");
+            return (cached.Row, true, ZLinkLocationResolutionKind.Ready);
         }
 
         ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -226,8 +228,9 @@ internal sealed class ZLinkStoreLocationResolvers :
             ZLinkActorLocationKey key,
             CancellationToken cancellationToken)
     {
-        if (TryGetCached(_actorRoutes, key, out var cached))
-            return (cached, true, ZLinkLocationResolutionKind.Ready);
+        var cached = await TryGetCachedAsync(_actorRoutes, key).ConfigureAwait(false);
+        if (cached.Found)
+            return (cached.Row, true, ZLinkLocationResolutionKind.Ready);
 
         var authority = await ZLinkLocationStoreRead.ExecuteAsync(
             _health,
@@ -281,14 +284,12 @@ internal sealed class ZLinkStoreLocationResolvers :
 
     internal void InvalidateSpotRoute(ZLinkSpotLocationKey key)
     {
-        lock (_routeCacheGate)
-            _spotRoutes.Remove(key);
+        AwaitStateLane(_lane.RunAsync(() => _spotRoutes.Remove(key)));
     }
 
     internal void InvalidateActorRoute(ZLinkActorLocationKey key)
     {
-        lock (_routeCacheGate)
-            _actorRoutes.Remove(key);
+        AwaitStateLane(_lane.RunAsync(() => _actorRoutes.Remove(key)));
     }
 
     internal bool InvalidateMessageFollowRoute(
@@ -298,7 +299,7 @@ internal sealed class ZLinkStoreLocationResolvers :
         var key = source.IsActor
             ? new ZLinkActorLocationKey(source.ObjectId)
             : default;
-        lock (_routeCacheGate)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (source.IsActor)
             {
@@ -329,32 +330,27 @@ internal sealed class ZLinkStoreLocationResolvers :
                 || spot.AuthorityOwnerGeneration
                    != source.AuthorityOwnerGeneration
                 || spot.LeaseGeneration <= 0
-                || (ulong)spot.LeaseGeneration != source.OwnerLeaseGeneration)
+                    || (ulong)spot.LeaseGeneration != source.OwnerLeaseGeneration)
                 return false;
             return _spotRoutes.Remove(spotKey);
-        }
+        }));
     }
 
     internal bool HasCachedActorRoute(ZLinkActorLocationKey key)
     {
-        lock (_routeCacheGate)
-            return _actorRoutes.ContainsKey(key);
+        return AwaitStateLane(_lane.RunAsync(() => _actorRoutes.ContainsKey(key)));
     }
 
-    private bool TryGetCached<TKey, TRow>(
+    private ValueTask<(bool Found, TRow? Row)> TryGetCachedAsync<TKey, TRow>(
         Dictionary<TKey, CachedRoute<TRow>> routes,
-        TKey key,
-        out TRow? row)
+        TKey key)
         where TKey : notnull
         where TRow : class
     {
-        lock (_routeCacheGate)
+        return _lane.RunAsync(() =>
         {
             if (!routes.TryGetValue(key, out var route))
-            {
-                row = null;
-                return false;
-            }
+                return (false, (TRow?)null);
 
             var cacheAge = _time.GetElapsedTime(route.StoredAt);
             var ownerLeaseAge = _time.GetElapsedTime(
@@ -365,13 +361,11 @@ internal sealed class ZLinkStoreLocationResolvers :
                     && route.StoreRecoveryGeneration != _health.RecoveryGeneration))
             {
                 routes.Remove(key);
-                row = null;
-                return false;
+                return (false, (TRow?)null);
             }
 
-            row = route.Row;
-            return true;
-        }
+            return (true, route.Row);
+        });
     }
 
     private async ValueTask<bool> AdmitAndCacheReadyRouteAsync<TKey, TRow>(
@@ -412,10 +406,12 @@ internal sealed class ZLinkStoreLocationResolvers :
             ownerLeaseLifetimeMeasuredAt,
             leaseLifetime,
             _health?.RecoveryGeneration ?? 0);
-        lock (_routeCacheGate)
-            routes[key] = route;
+        await _lane.RunAsync(() => routes[key] = route).ConfigureAwait(false);
         return true;
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
     private static ZLinkResolvedSpotLocation? ProjectSpot(
         ZLinkAuthorityReadResult authority)

@@ -47,8 +47,12 @@ function createCommerceApiServer(
         return;
       }
       if (request.method === 'POST' && url.pathname === '/self-check/idempotency/pending') {
-        const body = await readJson(request);
-        sendJson(response, 200, store.createPendingMapping(body.idempotencyKey, body.orderId, body.ownerInstanceId));
+        const body = await readJson(request) as StartOrderReq;
+        const workflowRequest = store.reserveOrder(body);
+        sendJson(response, 200, {
+          orderId: workflowRequest.orderId,
+          idempotencyKey: workflowRequest.idempotencyKey
+        });
         return;
       }
       if (request.method === 'POST' && url.pathname === '/self-check/workflow/inventory-reserved') {
@@ -57,10 +61,25 @@ function createCommerceApiServer(
         sendJson(response, 200, { state: result.state });
         return;
       }
+      if (request.method === 'POST' && url.pathname === '/self-check/workflow/relocation-checkpoint') {
+        const body = await readJson(request) as StartOrderReq;
+        const result = await workflowRouter.prepareRelocationCheckpoint(store.reserveOrder(body));
+        sendJson(response, 200, result);
+        return;
+      }
       if (request.method === 'POST' && url.pathname === '/self-check/workflow/inventory-effect') {
         const body = await readJson(request) as StartOrderReq;
         const result = await workflowRouter.prepareInventoryEffect(store.reserveOrder(body));
         sendJson(response, 200, { state: result.state });
+        return;
+      }
+      const orderActionMatch = url.pathname.match(/^\/orders\/([^/]+)\/(continue|rebuild)$/);
+      if (request.method === 'POST' && orderActionMatch !== null) {
+        const orderId = decodeURIComponent(orderActionMatch[1]);
+        const action = orderActionMatch[2];
+        sendJson(response, 200, action === 'continue'
+          ? await workflowRouter.continue(orderId)
+          : await workflowRouter.rebuild(orderId));
         return;
       }
       const continueMatch = url.pathname.match(/^\/self-check\/workflow\/([^/]+)\/continue$/);

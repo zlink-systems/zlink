@@ -1,5 +1,5 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { SampleNames } from '../../Shared/Configuration/sample-names';
+import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 import { CourierSessionFactory } from './courier-session';
 import { createDeliveryDispatchLocationStore, deliveryDispatchLocationOptions } from '../Configuration/location-store';
 import {
@@ -31,7 +31,7 @@ function createCourierSessionModule() {
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
           const mesh = builder.addRouteMesh(SampleNames.courierMeshName)
-            .listen(config.courierSessionSpotEndpoint).setRoutingIdPrefix('delivery-session');
+            .listen(config.courierSessionSpotEndpoint).routingId(DeliveryDispatchNodeIds.courierSession);
           mesh.objects().client();
           return builder.addStreamNode(SampleNames.courierStreamNode)
               .enableActorDispatch()

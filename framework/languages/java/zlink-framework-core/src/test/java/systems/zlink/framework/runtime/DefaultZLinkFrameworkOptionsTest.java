@@ -254,6 +254,25 @@ final class DefaultZLinkFrameworkOptionsTest {
     }
 
     @Test
+    void sessionReplacementCallbackTimeoutDefaultsToThirtySecondsAndRejectsNonPositiveValues() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+
+        assertEquals(
+            Duration.ofMillis(30_000),
+            options.sessionReplacementCallbackTimeout());
+        options.setSessionReplacementCallbackTimeout(Duration.ofMillis(17));
+        assertEquals(
+            Duration.ofMillis(17),
+            options.sessionReplacementCallbackTimeout());
+        assertThrows(
+            ZLinkConfigurationException.class,
+            () -> options.setSessionReplacementCallbackTimeout(Duration.ZERO));
+        assertThrows(
+            ZLinkConfigurationException.class,
+            () -> options.setSessionReplacementCallbackTimeout(Duration.ofMillis(-1)));
+    }
+
+    @Test
     void globalConfigurationMutatesRegistrationModel() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
@@ -927,6 +946,20 @@ final class DefaultZLinkFrameworkOptionsTest {
     }
 
     @Test
+    void streamNodesRejectTheSameSessionTypeAcrossOneHost() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+
+        options.addStreamNode("gateway-a")
+            .bind("inproc://gateway-a")
+            .registerSession(GameSession.class);
+        options.addStreamNode("gateway-b")
+            .bind("inproc://gateway-b")
+            .registerSession(GameSession.class);
+
+        assertThrows(ZLinkConfigurationException.class, options::validate);
+    }
+
+    @Test
     void streamNodeRejectsBlankTlsServerPaths() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
@@ -969,7 +1002,7 @@ final class DefaultZLinkFrameworkOptionsTest {
         { var stream = options.addStreamNode("gateway-b");
             stream.bind("inproc://gateway-b");
             stream.enableActorDispatch();
-            stream.registerSession(GameSession.class); }
+            stream.registerSession(AlternateGameSession.class); }
 
         assertDoesNotThrow(options::validate);
         assertEquals(
@@ -1107,6 +1140,28 @@ final class DefaultZLinkFrameworkOptionsTest {
 
 
     public static final class GameSession implements ZLinkSession {
+        @Override
+        public ZLinkSessionContext context() {
+            return null;
+        }
+
+        @Override
+        public CompletionStage<Void> onConnected() {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onDisconnected() {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onError(ZLinkStreamError error) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class AlternateGameSession implements ZLinkSession {
         @Override
         public ZLinkSessionContext context() {
             return null;

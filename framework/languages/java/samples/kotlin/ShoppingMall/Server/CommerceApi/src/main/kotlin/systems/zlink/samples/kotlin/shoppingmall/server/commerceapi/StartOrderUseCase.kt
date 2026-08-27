@@ -9,6 +9,7 @@ import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleName
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleTopology
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.OrderState
+import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.PrepareInventoryReservedApiRes
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderReq
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderRes
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderWorkflowReq
@@ -42,20 +43,25 @@ class StartOrderUseCase(
         return StartOrderRes(state.orderId, state.status)
     }
 
-    suspend fun prepareInventoryReserved(request: StartOrderReq) =
+    suspend fun prepareInventoryReserved(request: StartOrderReq): PrepareInventoryReservedApiRes =
         prepareInventoryReservedState(request)
 
-    private suspend fun prepareInventoryReservedState(request: StartOrderReq): OrderState {
+    private suspend fun prepareInventoryReservedState(request: StartOrderReq): PrepareInventoryReservedApiRes {
         val existing = store.findIdempotency(request.idempotencyKey)
         if (existing != null && existing.started) {
-            return store.findReadModel(existing.orderId) ?: store.placeholder(existing.orderId)
+            return PrepareInventoryReservedApiRes(
+                store.findReadModel(existing.orderId) ?: store.placeholder(existing.orderId),
+                0,
+            )
         }
         if (existing != null && existing.ownerInstanceId != instanceId) {
             throw IllegalStateException("Inventory-reserved checkpoint must run on owning CommerceApi.")
         }
 
         val command = buildCommand(request, existing)
-        return workflows.prepareInventoryReserved(command)
+        return workflows.prepareInventoryReserved(command).let { response ->
+            PrepareInventoryReservedApiRes(response.state, response.objectGeneration)
+        }
     }
 
     private fun buildCommand(

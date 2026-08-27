@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/mesh/service_topology_registry.hpp"
 
 #include <cstdint>
 #include <functional>
 #include <map>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -119,7 +119,8 @@ class service_descriptor_registry_t
     static void notify (std::vector<watch_callback_t> callbacks,
                         service_descriptor_event_t event) noexcept;
 
-    mutable std::mutex _mutex;
+    offload_executor_t _lane_executor;
+    mutable state_lane_t _lane{_lane_executor};
     std::map<service_descriptor_key_t, service_descriptor_record_t> _records;
     std::map<std::uint64_t, watcher_t> _watchers;
     std::uint64_t _change_stamp = 0;

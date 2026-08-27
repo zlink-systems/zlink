@@ -49,6 +49,15 @@ final class ZLinkActorJoinAuthorityStoreTest {
     }
 
     @Test
+    void missingActorFactoryIsNotFound() {
+        ZLinkFrameworkException error = assertThrows(
+            ZLinkFrameworkException.class,
+            () -> runtime(reads(row())).resolveActorFactoryType("missing"));
+
+        assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, error.kind());
+    }
+
+    @Test
     void incompleteFenceIsProtocolError() {
         ZLinkAuthoritySnapshot invalid = new ZLinkAuthoritySnapshot(
             "v1", new byte[0], 7L, 2L, "owner", 3L,

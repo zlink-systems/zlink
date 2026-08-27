@@ -15,7 +15,6 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
 import {
   normalizeRoutingId,
   routingIdWireHex,
@@ -62,26 +61,16 @@ export class ZLinkRemoteActorJoinReceiver {
       );
     }
     const actorManager = this.requireActorManager();
-    const stableType = await this.resolveStableType(join);
-    if (join.actorType !== stableType) {
+    const stableType = hasAuthorityFence(join)
+      ? await this.resolveStableType(join)
+      : join.actorType;
+    if (hasAuthorityFence(join) && join.actorType !== stableType) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorTypeMismatch,
         `Actor '${join.actorId}' join stable type does not match its Authority row.`
       );
     }
-    let actor;
-    try {
-      actor = await actorManager.getOrCreateActor(join.actorId, stableType);
-    } catch (error) {
-      if (isMissingActorFactory(error)) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestRejected,
-          `Actor '${join.actorId}' Authority stable type '${stableType}' is not registered locally.`,
-          error
-        );
-      }
-      throw error;
-    }
+    const actor = await actorManager.getOrCreateActor(join.actorId, stableType);
     const state = actorManager.getState(join.actorId);
     if (state === undefined) {
       throw new Error(`Actor '${join.actorId}' state was not created.`);
@@ -142,18 +131,7 @@ export class ZLinkRemoteActorJoinReceiver {
   ): Promise<{ readonly actorType: string }> {
     const actorManager = this.requireActorManager();
     const stableType = await this.resolveStableType(join);
-    try {
-      actorManager.requireRelocationActorFactory(stableType);
-    } catch (error) {
-      if (isMissingActorFactory(error)) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestRejected,
-          `Actor '${join.actorId}' Authority stable type '${stableType}' is not registered locally.`,
-          error
-        );
-      }
-      throw error;
-    }
+    actorManager.requireRelocationActorFactory(stableType);
     return { actorType: stableType };
   }
 
@@ -221,15 +199,26 @@ export class ZLinkRemoteActorJoinReceiver {
   }
 }
 
-type JoinAuthorityFence = Pick<
-  ReturnType<typeof decodeRemoteActorJoinPayload>,
-  | 'actorId'
-  | 'actorNodeRid'
-  | 'actorGeneration'
-  | 'actorNodeGeneration'
-  | 'expectedAuthorityOwnerGeneration'
-  | 'expectedOwnerLeaseGeneration'
-> | ZLinkCanonicalActorJoinAuthorityFence;
+type JoinAuthorityFence = ZLinkCanonicalActorJoinAuthorityFence | {
+  readonly actorId: string;
+  readonly actorNodeRid: RoutingId;
+  readonly actorGeneration: string;
+  readonly actorNodeGeneration: string;
+  readonly expectedAuthorityOwnerGeneration: string;
+  readonly expectedOwnerLeaseGeneration: string;
+};
+
+function hasAuthorityFence(
+  join: ReturnType<typeof decodeRemoteActorJoinPayload>
+): join is ReturnType<typeof decodeRemoteActorJoinPayload> & {
+  readonly actorNodeGeneration: string;
+  readonly expectedAuthorityOwnerGeneration: string;
+  readonly expectedOwnerLeaseGeneration: string;
+} {
+  return join.actorNodeGeneration !== undefined
+    && join.expectedAuthorityOwnerGeneration !== undefined
+    && join.expectedOwnerLeaseGeneration !== undefined;
+}
 
 function decodeJoinAuthorityFence(join: JoinAuthorityFence): {
   readonly objectGeneration: bigint;
@@ -272,9 +261,4 @@ function decodeJoinAuthorityFence(join: JoinAuthorityFence): {
     authorityOwnerGeneration,
     ownerLeaseGeneration
   };
-}
-
-function isMissingActorFactory(error: unknown): error is ZLinkConfigurationException {
-  return error instanceof ZLinkConfigurationException
-    && /^Actor factory '.+' is not registered\.$/.test(error.message);
 }

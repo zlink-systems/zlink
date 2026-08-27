@@ -536,7 +536,7 @@ class spot_route_client_service_t final : public fw::hosted_service_t
     {
     }
 
-    void start (fw::service_provider_t &services) override
+    fw::task_t<void> start (fw::service_provider_t &services) override
     {
         auto &routes = services.get_required<fw::route_client_t> ();
         auto &sink = services.get_required<event_sink_t> ();
@@ -570,7 +570,7 @@ class spot_route_client_service_t final : public fw::hosted_service_t
             }
             sink.append (std::string ("spot-route-error|") + error_kind_wire_name (kind) + "|"
                          + (reply.error () ? reply.error ()->what () : "request failed"));
-            return;
+            co_return;
         }
 
         /* (b) framework error: no host registers this packet. */
@@ -580,6 +580,7 @@ class spot_route_client_service_t final : public fw::hosted_service_t
         record_failure (sink, routes, target, "spot-route-app-error",
                         test_host_spot_route_fail_request_t{_value});
         write_ready ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -649,7 +650,7 @@ class channel_client_service_t final : public fw::hosted_service_t
     {
     }
 
-    void start (fw::service_provider_t &services) override
+    fw::task_t<void> start (fw::service_provider_t &services) override
     {
         auto &client = services.get_required<fw::channel_client_t> ();
         auto &sink = services.get_required<event_sink_t> ();
@@ -660,12 +661,13 @@ class channel_client_service_t final : public fw::hosted_service_t
         if (!reply) {
             sink.append (std::string ("channel-client-error|")
                          + (reply.error () ? reply.error ()->what () : "request failed"));
-            return;
+            co_return;
         }
         sink.append ("channel-client-reply|" + reply.value ().value);
         client.send (_channel, test_host_profile_send_t{_value + "-send"}).submit ();
         sink.append ("channel-client-sent|" + _value + "-send");
         write_ready ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -683,7 +685,7 @@ class fanout_publish_service_t final : public fw::hosted_service_t
     {
     }
 
-    void start (fw::service_provider_t &services) override
+    fw::task_t<void> start (fw::service_provider_t &services) override
     {
         auto &publisher = services.get_required<fw::publisher_t> ();
         auto &sink = services.get_required<event_sink_t> ();
@@ -696,6 +698,7 @@ class fanout_publish_service_t final : public fw::hosted_service_t
             std::this_thread::sleep_for (std::chrono::milliseconds (250));
         }
         sink.append ("channel-publisher-done|" + _topic + ":" + _value);
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -1265,7 +1268,7 @@ class user_spot_target_service_t final : public fw::hosted_service_t
     {
     }
 
-    void start (fw::service_provider_t &services) override
+    fw::task_t<void> start (fw::service_provider_t &services) override
     {
         auto &spots = services.get_required<fw::spot_manager_t> ();
         auto &sink = services.get_required<event_sink_t> ();
@@ -1301,7 +1304,7 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                 sink.append (std::string ("user-spot-target-error|kind=")
                              + error_kind_wire_name (created.error_kind ()) + "|"
                              + (created.error () ? created.error ()->what () : "spot create failed"));
-                return;
+                co_return;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (250));
         }
@@ -1322,6 +1325,7 @@ class user_spot_target_service_t final : public fw::hosted_service_t
         _probe = std::thread ([this, &sink, &actors, target_node_rid] {
             probe_joined_actor (sink, actors, target_node_rid);
         });
+        co_return;
     }
 
     void stop () noexcept override
@@ -1427,7 +1431,7 @@ class user_spot_source_service_t final : public fw::hosted_service_t
     {
     }
 
-    void start (fw::service_provider_t &services) override
+    fw::task_t<void> start (fw::service_provider_t &services) override
     {
         auto &sink = services.get_required<event_sink_t> ();
         auto &actor_manager = services.get_required<fw::actor_manager_t> ();
@@ -1437,6 +1441,7 @@ class user_spot_source_service_t final : public fw::hosted_service_t
         _worker = std::thread ([this, &sink, &actor_manager, &actors, &mesh_runtime] {
             run (sink, actor_manager, actors, mesh_runtime);
         });
+        co_return;
     }
 
     void stop () noexcept override

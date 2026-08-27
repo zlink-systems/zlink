@@ -18,7 +18,8 @@
     "setActorTransferTimeout",
     "setApplicationVersion",
     "setMaintenanceWave",
-    "setMessageFollowDuration"
+    "setMessageFollowDuration",
+    "setSessionReplacementCallbackTimeout"
   ],
   "bindingVersion": "0.13.2"
 }

@@ -1,7 +1,7 @@
 <!-- framework-adapter-nav:start -->
 [문서 목록](../../../README.ko.md) | [이전: Backend Policy](backend-dependency-policy.ko.md) | [다음: Regression Test Matrix](regression-test-matrix.ko.md)<!-- framework-adapter-nav:end -->
 
-[공통 layering](../../common/spec/server/40-internal-layering.ko.md) | [공통 spec](../../common/spec/server/README.ko.md)
+[공통 layering](../../common/spec/server/00-foundation/08-layering.ko.md) | [공통 spec](../../common/spec/server/README.ko.md)
 
 # .NET Runtime Integration과 Receive Ownership
 

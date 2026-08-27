@@ -28,14 +28,14 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         ValidateAuthorityKey(key);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkAuthorityReadResult>(() =>
         {
-            return ValueTask.FromResult<ZLinkAuthorityReadResult>(
+            return
                 _authorities.TryGetValue(key.Value, out var snapshot)
                     ? new ZLinkAuthorityReadResult.Found(
                         snapshot with { StoreNow = _time.GetUtcNow() })
-                    : new ZLinkAuthorityReadResult.Missing(_time.GetUtcNow()));
-        }
+                    : new ZLinkAuthorityReadResult.Missing(_time.GetUtcNow());
+        });
     }
 
     public ValueTask<ZLinkAuthorityCompareExchangeResult>
@@ -49,7 +49,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedStoreVersion);
         ArgumentNullException.ThrowIfNull(mutation);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkAuthorityCompareExchangeResult>(() =>
         {
             var now = _time.GetUtcNow();
             _authorities.TryGetValue(key.Value, out var current);
@@ -61,12 +61,12 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     StringComparison.Ordinal)
                 || IsAuthorityInPreparedAggregate(key))
             {
-                return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
+                return
                     new ZLinkAuthorityCompareExchangeResult.Conflict(
                         current is null
                             ? new ZLinkAuthorityReadResult.Missing(now)
                             : new ZLinkAuthorityReadResult.Found(
-                                current with { StoreNow = now })));
+                                current with { StoreNow = now }));
             }
 
             if (mutation is ZLinkAuthorityMutation.Restore restore)
@@ -78,13 +78,13 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 if (current.OwnerId != restore.ExpectedOwner.OwnerId
                     || current.OwnerLeaseGeneration
                     != restore.ExpectedOwner.LeaseGeneration)
-                    return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
+                    return
                         new ZLinkAuthorityCompareExchangeResult.Conflict(
                             new ZLinkAuthorityReadResult.Found(
-                                current with { StoreNow = now })));
+                                current with { StoreNow = now }));
                 if (!CanIncrement(_authorityRevision))
-                    return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                        new ZLinkAuthorityCompareExchangeResult.GenerationExhausted());
+                    return
+                        new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
                 var restored = current with
                 {
                     StoreVersion = Next(ref _authorityRevision).ToString(),
@@ -92,8 +92,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     StoreNow = now
                 };
                 _authorities[key.Value] = restored;
-                return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                    new ZLinkAuthorityCompareExchangeResult.Stored(restored));
+                return
+                    new ZLinkAuthorityCompareExchangeResult.Stored(restored);
             }
 
             if (mutation is ZLinkAuthorityMutation.Delete)
@@ -103,21 +103,21 @@ internal sealed partial class ZLinkInMemoryLocationStore
                             current.OwnerId,
                             current.OwnerLeaseGeneration),
                         now))
-                    return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
+                    return
                         new ZLinkAuthorityCompareExchangeResult.Conflict(
                             new ZLinkAuthorityReadResult.Found(
-                                current with { StoreNow = now })));
+                                current with { StoreNow = now }));
                 if (!CanIncrement(_authorityRevision))
-                    return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                        new ZLinkAuthorityCompareExchangeResult.GenerationExhausted());
+                    return
+                        new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
                 var version = Next(ref _authorityRevision).ToString();
                 AdjustAllocationCapacity(
                     _activePlacementCapacity,
                     current.Allocation,
                     -1);
                 _authorities.Remove(key.Value);
-                return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                    new ZLinkAuthorityCompareExchangeResult.Deleted(version, now));
+                return
+                    new ZLinkAuthorityCompareExchangeResult.Deleted(version, now);
             }
 
             var put = (ZLinkAuthorityMutation.Put)mutation;
@@ -132,12 +132,12 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     current.OwnerLeaseGeneration);
             if (!MatchesLiveOwnerLease(requiredOwner, now))
             {
-                return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
+                return
                     new ZLinkAuthorityCompareExchangeResult.Conflict(
                         current is null
                             ? new ZLinkAuthorityReadResult.Missing(now)
                             : new ZLinkAuthorityReadResult.Found(
-                                current with { StoreNow = now })));
+                                current with { StoreNow = now }));
             }
             var nextAllocation = current.Allocation;
             var nextAuthorityOwnerGeneration =
@@ -161,11 +161,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
                         out _,
                         requireNewPlacementEligibility: false))
                 {
-                    return ValueTask.FromResult<
-                        ZLinkAuthorityCompareExchangeResult>(
+                    return
                         new ZLinkAuthorityCompareExchangeResult.Conflict(
                             new ZLinkAuthorityReadResult.Found(
-                                current with { StoreNow = now })));
+                                current with { StoreNow = now }));
                 }
 
                 if (put.TargetAuthorityOwnerGeneration == 0)
@@ -174,10 +173,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
                         _authorityOwnerGeneration,
                         checked((long)current.AuthorityOwnerGeneration));
                     if (!CanIncrement(highWater))
-                        return ValueTask.FromResult<
-                            ZLinkAuthorityCompareExchangeResult>(
+                        return
                             new ZLinkAuthorityCompareExchangeResult
-                                .GenerationExhausted());
+                                .GenerationExhausted();
                     nextAuthorityOwnerGeneration =
                         checked((ulong)(highWater + 1));
                 }
@@ -187,11 +185,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
                             <= current.AuthorityOwnerGeneration
                         || put.TargetAuthorityOwnerGeneration > long.MaxValue)
                     {
-                        return ValueTask.FromResult<
-                            ZLinkAuthorityCompareExchangeResult>(
+                        return
                             new ZLinkAuthorityCompareExchangeResult.Conflict(
                                 new ZLinkAuthorityReadResult.Found(
-                                    current with { StoreNow = now })));
+                                    current with { StoreNow = now }));
                     }
                     nextAuthorityOwnerGeneration =
                         put.TargetAuthorityOwnerGeneration;
@@ -199,8 +196,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 nextAllocation = targetAllocation;
             }
             if (!CanIncrement(_authorityRevision))
-                return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                    new ZLinkAuthorityCompareExchangeResult.GenerationExhausted());
+                return
+                    new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
 
             var owner = put.TargetOwner
                         ?? new ZLinkLocationOwnerToken(
@@ -228,9 +225,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     nextAllocation);
             }
             _authorities[key.Value] = stored;
-            return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                new ZLinkAuthorityCompareExchangeResult.Stored(stored));
-        }
+            return
+                new ZLinkAuthorityCompareExchangeResult.Stored(stored);
+        });
     }
 
     public ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
@@ -243,7 +240,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         if (limit is < 1 or > 1000)
             throw new ArgumentOutOfRangeException(nameof(limit));
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkAuthorityScanResult>(() =>
         {
             AuthorityScan scan;
             var position = 0;
@@ -276,8 +273,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
                         out scan!)
                     || scan.ExpiresAt <= _time.GetUtcNow())
                 {
-                    return ValueTask.FromResult<ZLinkAuthorityScanResult>(
-                        new ZLinkAuthorityScanResult.ScanExpired());
+                    return
+                        new ZLinkAuthorityScanResult.ScanExpired();
                 }
             }
 
@@ -290,10 +287,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 : null;
             if (next is null)
                 _authorityScans.Remove(scanId);
-            return ValueTask.FromResult<ZLinkAuthorityScanResult>(
+            return
                 new ZLinkAuthorityScanResult.Page(
-                    new ZLinkAuthorityPage(items, next)));
-        }
+                    new ZLinkAuthorityPage(items, next));
+        });
     }
 
     public ValueTask<ZLinkObjectReserveResult> ReserveAsync(
@@ -302,7 +299,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         ValidateReservationRequest(request);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkObjectReserveResult>(() =>
         {
             var now = _time.GetUtcNow();
             RemoveExpiredCreationTerminals(now);
@@ -313,23 +310,23 @@ internal sealed partial class ZLinkInMemoryLocationStore
                         request.Key,
                         out var spotId)
                 && _entrySpotIdClaims.ContainsKey(spotId))
-                return ValueTask.FromResult<ZLinkObjectReserveResult>(
+                return
                     new ZLinkObjectReserveResult.Conflict(
-                        new ZLinkAuthorityReadResult.Missing(now)));
+                        new ZLinkAuthorityReadResult.Missing(now));
             if (_authorities.TryGetValue(request.Key.Value, out var existing))
-                return ValueTask.FromResult<ZLinkObjectReserveResult>(
+                return
                     existing.Allocation.State == ZLinkPlacementAllocationState.Active
                         ? new ZLinkObjectReserveResult.AlreadyExists(existing)
                         : new ZLinkObjectReserveResult.Conflict(
-                            new ZLinkAuthorityReadResult.Found(existing)));
+                            new ZLinkAuthorityReadResult.Found(existing));
             if (!MatchesLiveTarget(
                     request.TargetDescriptor,
                     request.TargetNodeLifecycleGeneration,
                     request.TargetOwner,
                     now))
-                return ValueTask.FromResult<ZLinkObjectReserveResult>(
+                return
                     new ZLinkObjectReserveResult.Conflict(
-                        new ZLinkAuthorityReadResult.Missing(now)));
+                        new ZLinkAuthorityReadResult.Missing(now));
             if (!TryGetEligibleTarget(
                     request.TargetDescriptor,
                     request.TargetNodeLifecycleGeneration,
@@ -338,19 +335,19 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     request.StableType,
                     now,
                     out var targetDescriptor))
-                return ValueTask.FromResult<ZLinkObjectReserveResult>(
+                return
                     new ZLinkObjectReserveResult.Conflict(
-                        new ZLinkAuthorityReadResult.Missing(now)));
+                        new ZLinkAuthorityReadResult.Missing(now));
             if (!HasPlacementCapacity(
                     targetDescriptor,
                     request.Capacity))
-                return ValueTask.FromResult<ZLinkObjectReserveResult>(
-                    new ZLinkObjectReserveResult.PlacementCapacityExhausted());
+                return
+                    new ZLinkObjectReserveResult.PlacementCapacityExhausted();
             if (!CanIncrement(_authorityRevision)
                 || !CanIncrement(_authorityObjectGeneration)
                 || !CanIncrement(_authorityOwnerGeneration))
-                return ValueTask.FromResult<ZLinkObjectReserveResult>(
-                    new ZLinkObjectReserveResult.GenerationExhausted());
+                return
+                    new ZLinkObjectReserveResult.GenerationExhausted();
 
             var reservationVersion = Guid.NewGuid().ToString("N");
             var snapshot = new ZLinkAuthoritySnapshot(
@@ -389,9 +386,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 request.TargetOwner);
             _authorityReservations[reservationVersion] =
                 new ReservationState(reservation, ReservationStatus.Reserved);
-            return ValueTask.FromResult<ZLinkObjectReserveResult>(
-                new ZLinkObjectReserveResult.Reserved(reservation));
-        }
+            return
+                new ZLinkObjectReserveResult.Reserved(reservation);
+        });
     }
 
     public ValueTask<ZLinkObjectCommitResult> CommitAsync(
@@ -402,17 +399,17 @@ internal sealed partial class ZLinkInMemoryLocationStore
         ArgumentNullException.ThrowIfNull(reservation);
         ValidateAuthorityPayload(readyPayload);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkObjectCommitResult>(() =>
         {
             if (!_authorityReservations.TryGetValue(
                     reservation.ReservationVersion,
                     out var state)
                 || state.Reservation != reservation)
-                return ValueTask.FromResult<ZLinkObjectCommitResult>(
-                    new ZLinkObjectCommitResult.Stale());
+                return
+                    new ZLinkObjectCommitResult.Stale();
             if (state.Status == ReservationStatus.Created)
-                return ValueTask.FromResult<ZLinkObjectCommitResult>(
-                    new ZLinkObjectCommitResult.AlreadyCommitted(state.Snapshot!));
+                return
+                    new ZLinkObjectCommitResult.AlreadyCommitted(state.Snapshot!);
             if (state.Status is ReservationStatus.Aborted
                 or ReservationStatus.Rejected
                 or ReservationStatus.Failed
@@ -422,19 +419,19 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 || current.StoreVersion != reservation.StoreVersion
                 || current.Allocation.State
                 != ZLinkPlacementAllocationState.Reserved)
-                return ValueTask.FromResult<ZLinkObjectCommitResult>(
-                    new ZLinkObjectCommitResult.Stale());
+                return
+                    new ZLinkObjectCommitResult.Stale();
             var now = _time.GetUtcNow();
             if (!MatchesLiveTarget(
                     reservation.TargetDescriptor,
                     reservation.TargetNodeLifecycleGeneration,
                     reservation.TargetOwner,
                     now))
-                return ValueTask.FromResult<ZLinkObjectCommitResult>(
-                    new ZLinkObjectCommitResult.Stale());
+                return
+                    new ZLinkObjectCommitResult.Stale();
             if (!CanIncrement(_authorityRevision))
-                return ValueTask.FromResult<ZLinkObjectCommitResult>(
-                    new ZLinkObjectCommitResult.GenerationExhausted());
+                return
+                    new ZLinkObjectCommitResult.GenerationExhausted();
 
             var stored = current with
             {
@@ -458,9 +455,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
             _authorities[reservation.Key.Value] = stored;
             state.Status = ReservationStatus.Created;
             state.Snapshot = stored;
-            return ValueTask.FromResult<ZLinkObjectCommitResult>(
-                new ZLinkObjectCommitResult.Committed(stored));
-        }
+            return
+                new ZLinkObjectCommitResult.Committed(stored);
+        });
     }
 
     public ValueTask<ZLinkObjectCreationCompleteResult> CompleteCreationAsync(
@@ -475,7 +472,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         if (completion is ZLinkObjectCreationCompletion.Created created)
             ValidateAuthorityPayload(created.ReadyPayload);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkObjectCreationCompleteResult>(() =>
         {
             var now = _time.GetUtcNow();
             RemoveExpiredCreationTerminals(now);
@@ -486,19 +483,19 @@ internal sealed partial class ZLinkInMemoryLocationStore
             if (_creationTerminals.TryGetValue(
                     publication.Operation,
                     out var completed))
-                return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
+                return
                     new ZLinkObjectCreationCompleteResult.AlreadyCompleted(
-                        completed with { StoreNow = now }));
+                        completed with { StoreNow = now });
             if (!_authorityReservations.TryGetValue(
                     reservation.ReservationVersion,
                     out var state)
                 || state.Reservation != reservation)
-                return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
-                    new ZLinkObjectCreationCompleteResult.Stale());
+                return
+                    new ZLinkObjectCreationCompleteResult.Stale();
             if (state.Terminal is not null)
-                return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
+                return
                     new ZLinkObjectCreationCompleteResult.AlreadyCompleted(
-                        state.Terminal with { StoreNow = now }));
+                        state.Terminal with { StoreNow = now });
             if (state.Status == ReservationStatus.Aborted
                 || !_authorities.TryGetValue(
                     reservation.Key.Value,
@@ -506,18 +503,18 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 || current.StoreVersion != reservation.StoreVersion
                 || current.Allocation.State
                 != ZLinkPlacementAllocationState.Reserved)
-                return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
-                    new ZLinkObjectCreationCompleteResult.Stale());
+                return
+                    new ZLinkObjectCreationCompleteResult.Stale();
             if (!MatchesLiveTarget(
                     reservation.TargetDescriptor,
                     reservation.TargetNodeLifecycleGeneration,
                 reservation.TargetOwner,
                     now))
-                return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
-                    new ZLinkObjectCreationCompleteResult.Stale());
+                return
+                    new ZLinkObjectCreationCompleteResult.Stale();
             if (!CanIncrement(_authorityRevision))
-                return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
-                    new ZLinkObjectCreationCompleteResult.GenerationExhausted());
+                return
+                    new ZLinkObjectCreationCompleteResult.GenerationExhausted();
 
             var terminalState = completion switch
             {
@@ -575,7 +572,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
             state.Terminal = terminal;
             _creationTerminals[publication.Operation] = terminal;
 
-            return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
+            return
                 completion switch
                 {
                     ZLinkObjectCreationCompletion.Created =>
@@ -585,8 +582,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     ZLinkObjectCreationCompletion.Failed =>
                         new ZLinkObjectCreationCompleteResult.Failed(terminal),
                     _ => throw new ArgumentOutOfRangeException(nameof(completion))
-                });
-        }
+                };
+        });
     }
 
     public ValueTask<ZLinkCreationTerminalReadResult> ReadCreationTerminalAsync(
@@ -595,16 +592,16 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         ValidateCreationOperation(operation);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkCreationTerminalReadResult>(() =>
         {
             var now = _time.GetUtcNow();
             RemoveExpiredCreationTerminals(now);
-            return ValueTask.FromResult<ZLinkCreationTerminalReadResult>(
+            return
                 _creationTerminals.TryGetValue(operation, out var terminal)
                     ? new ZLinkCreationTerminalReadResult.Found(
                         terminal with { StoreNow = now })
-                    : new ZLinkCreationTerminalReadResult.Missing(now));
-        }
+                    : new ZLinkCreationTerminalReadResult.Missing(now);
+        });
     }
 
     public ValueTask<ZLinkObjectAbortResult> AbortAsync(
@@ -613,17 +610,17 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         ArgumentNullException.ThrowIfNull(reservation);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkObjectAbortResult>(() =>
         {
             if (!_authorityReservations.TryGetValue(
                     reservation.ReservationVersion,
                     out var state)
                 || state.Reservation != reservation)
-                return ValueTask.FromResult<ZLinkObjectAbortResult>(
-                    new ZLinkObjectAbortResult.Stale());
+                return
+                    new ZLinkObjectAbortResult.Stale();
             if (state.Status == ReservationStatus.Aborted)
-                return ValueTask.FromResult<ZLinkObjectAbortResult>(
-                    new ZLinkObjectAbortResult.AlreadyAborted());
+                return
+                    new ZLinkObjectAbortResult.AlreadyAborted();
             if (state.Status is ReservationStatus.Created
                 or ReservationStatus.Rejected
                 or ReservationStatus.Failed
@@ -633,11 +630,11 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 || current.StoreVersion != reservation.StoreVersion
                 || current.Allocation.State
                 != ZLinkPlacementAllocationState.Reserved)
-                return ValueTask.FromResult<ZLinkObjectAbortResult>(
-                    new ZLinkObjectAbortResult.Stale());
+                return
+                    new ZLinkObjectAbortResult.Stale();
             if (!CanIncrement(_authorityRevision))
-                return ValueTask.FromResult<ZLinkObjectAbortResult>(
-                    new ZLinkObjectAbortResult.GenerationExhausted());
+                return
+                    new ZLinkObjectAbortResult.GenerationExhausted();
 
             Next(ref _authorityRevision);
             AdjustAllocationCapacity(
@@ -646,9 +643,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 -1);
             _authorities.Remove(reservation.Key.Value);
             state.Status = ReservationStatus.Aborted;
-            return ValueTask.FromResult<ZLinkObjectAbortResult>(
-                new ZLinkObjectAbortResult.Aborted());
-        }
+            return
+                new ZLinkObjectAbortResult.Aborted();
+        });
     }
 
     public ValueTask<ZLinkAggregatePrepareResult> PrepareAggregateAsync(
@@ -657,14 +654,14 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         ValidateAggregateRequest(request);
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkAggregatePrepareResult>(() =>
         {
             var fence = new ZLinkAggregateFence(
                 request.AggregateId,
                 request.AggregateGeneration);
             if (_authorityAggregates.TryGetValue(fence, out var existing))
             {
-                return ValueTask.FromResult<ZLinkAggregatePrepareResult>(
+                return
                     (existing.Status is AggregateStatus.Prepared
                         or AggregateStatus.Committed)
                     && AggregateRequestsEqual(existing.Request, request)
@@ -673,15 +670,15 @@ internal sealed partial class ZLinkInMemoryLocationStore
                             TargetAuthorityOwnerGenerations =
                                 existing.TargetAuthorityOwnerGenerations
                         }
-                        : new ZLinkAggregatePrepareResult.Conflict());
+                        : new ZLinkAggregatePrepareResult.Conflict();
             }
             if (request.Participants.Any(participant =>
                     !_authorities.TryGetValue(
                         participant.Key.Value,
                         out var current)
                     || current.StoreVersion != participant.ExpectedStoreVersion))
-                return ValueTask.FromResult<ZLinkAggregatePrepareResult>(
-                    new ZLinkAggregatePrepareResult.Conflict());
+                return
+                    new ZLinkAggregatePrepareResult.Conflict();
             var now = _time.GetUtcNow();
             var relocating = request.Participants
                 .Where(static participant =>
@@ -711,13 +708,13 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     request.TargetDescriptorLifecycleGeneration,
                     out var targetDescriptor)
                 || !HasPlacementCapacity(targetDescriptor, request.Capacity))
-                return ValueTask.FromResult<ZLinkAggregatePrepareResult>(
-                    new ZLinkAggregatePrepareResult.Conflict());
+                return
+                    new ZLinkAggregatePrepareResult.Conflict();
 
             if (_authorityOwnerGeneration
                 > long.MaxValue - relocating.Length)
-                return ValueTask.FromResult<ZLinkAggregatePrepareResult>(
-                    new ZLinkAggregatePrepareResult.GenerationExhausted());
+                return
+                    new ZLinkAggregatePrepareResult.GenerationExhausted();
             var targetAuthorityOwnerGenerations =
                 new Dictionary<ZLinkAuthorityKey, ulong>(
                     request.Participants.Count);
@@ -748,13 +745,13 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     },
                     1);
             }
-            return ValueTask.FromResult<ZLinkAggregatePrepareResult>(
+            return
                 new ZLinkAggregatePrepareResult.Prepared(fence)
                 {
                     TargetAuthorityOwnerGenerations =
                         targetAuthorityOwnerGenerations
-                });
-        }
+                };
+        });
     }
 
     public ValueTask<ZLinkAggregateCommitResult> CommitAggregateAsync(
@@ -762,32 +759,32 @@ internal sealed partial class ZLinkInMemoryLocationStore
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkAggregateCommitResult>(() =>
         {
             if (!_authorityAggregates.TryGetValue(fence, out var aggregate)
                 || aggregate.Status == AggregateStatus.Aborted)
-                return ValueTask.FromResult(ZLinkAggregateCommitResult.Stale);
+                return ZLinkAggregateCommitResult.Stale;
             if (aggregate.Status == AggregateStatus.Committed)
-                return ValueTask.FromResult(
-                    ZLinkAggregateCommitResult.AlreadyCommitted);
+                return
+                    ZLinkAggregateCommitResult.AlreadyCommitted;
 
             if (_authorityRevision > long.MaxValue
                     - aggregate.Request.Participants.Count)
-                return ValueTask.FromResult(
-                    ZLinkAggregateCommitResult.GenerationExhausted);
+                return
+                    ZLinkAggregateCommitResult.GenerationExhausted;
             if (aggregate.Request.Participants.Any(participant =>
                     !_authorities.TryGetValue(
                         participant.Key.Value,
                         out var current)
                     || current.StoreVersion != participant.ExpectedStoreVersion))
-                return ValueTask.FromResult(ZLinkAggregateCommitResult.Stale);
+                return ZLinkAggregateCommitResult.Stale;
             var now = _time.GetUtcNow();
             if (!MatchesLiveTarget(
                     aggregate.Request.TargetDescriptor,
                     aggregate.Request.TargetDescriptorLifecycleGeneration,
                     aggregate.Request.TargetOwner,
                     now))
-                return ValueTask.FromResult(ZLinkAggregateCommitResult.Stale);
+                return ZLinkAggregateCommitResult.Stale;
 
             foreach (var participant in aggregate.Request.Participants)
             {
@@ -837,8 +834,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 _authorities[participant.Key.Value] = stored;
             }
             aggregate.Status = AggregateStatus.Committed;
-            return ValueTask.FromResult(ZLinkAggregateCommitResult.Committed);
-        }
+            return ZLinkAggregateCommitResult.Committed;
+        });
     }
 
     public ValueTask<ZLinkAggregateAbortResult> AbortAggregateAsync(
@@ -846,15 +843,15 @@ internal sealed partial class ZLinkInMemoryLocationStore
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        return _lane.RunAsync<ZLinkAggregateAbortResult>(() =>
         {
             if (!_authorityAggregates.TryGetValue(fence, out var aggregate))
-                return ValueTask.FromResult(ZLinkAggregateAbortResult.Stale);
+                return ZLinkAggregateAbortResult.Stale;
             if (aggregate.Status == AggregateStatus.Aborted)
-                return ValueTask.FromResult(
-                    ZLinkAggregateAbortResult.AlreadyAborted);
+                return
+                    ZLinkAggregateAbortResult.AlreadyAborted;
             if (aggregate.Status == AggregateStatus.Committed)
-                return ValueTask.FromResult(ZLinkAggregateAbortResult.Stale);
+                return ZLinkAggregateAbortResult.Stale;
             foreach (var participant in aggregate.Request.Participants.Where(
                          static participant =>
                              participant.OwnerTransition
@@ -873,8 +870,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     -1);
             }
             aggregate.Status = AggregateStatus.Aborted;
-            return ValueTask.FromResult(ZLinkAggregateAbortResult.Aborted);
-        }
+            return ZLinkAggregateAbortResult.Aborted;
+        });
     }
 
     private bool MatchesLiveTarget(
@@ -1126,7 +1123,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         };
     }
 
-    internal (long Pending, long Active) GetPlacementCapacityUsage(
+    internal ValueTask<(long Pending, long Active)> GetPlacementCapacityUsageAsync(
         ZLinkMeshNodeDescriptorKey descriptor,
         ulong descriptorLifecycleGeneration,
         ZLinkPlacementObjectKind objectKind,
@@ -1138,12 +1135,12 @@ internal sealed partial class ZLinkInMemoryLocationStore
             descriptorLifecycleGeneration,
             objectKind,
             stableType);
-        lock (_gate)
+        return _lane.RunAsync<(long Pending, long Active)>(() =>
         {
             return (
                 _pendingPlacementCapacity.GetValueOrDefault(key),
                 _activePlacementCapacity.GetValueOrDefault(key));
-        }
+        });
     }
 
     private void MoveAuthorityAllocationCapacity(

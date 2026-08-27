@@ -23,6 +23,7 @@ import {
   type ZLinkClientServerAdmission
 } from './client-server-service-wire';
 import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
+import { ZLinkStateLane } from '../execution/state-lane';
 
 interface ActiveClientServerTarget {
   descriptor: ZLinkClientServerServerDescriptor;
@@ -37,6 +38,7 @@ interface ActiveClientServerTarget {
  * descriptors into RouteMesh peer rows.
  */
 export class ZLinkClientServerLocationRuntime {
+  private readonly lane = new ZLinkStateLane();
   private readonly options: Required<ZLinkLocationOptionOverrides>;
   private readonly store: ZLinkClientServerLocationStore;
   private readonly localDescriptors = new Map<string, ZLinkClientServerServerDescriptor>();
@@ -61,25 +63,36 @@ export class ZLinkClientServerLocationRuntime {
   }
 
   async start(signal?: AbortSignal): Promise<void> {
-    if (this.controller !== undefined) return;
+    if (await this.lane.run(() => this.controller !== undefined)) return;
     await this.publishServers(signal);
     await this.reconcileClients(signal);
-    this.controller = new AbortController();
+    const started = await this.lane.run(() => {
+      if (this.controller !== undefined) return false;
+      this.controller = new AbortController();
+      return true;
+    });
+    if (!started) return;
     this.schedule();
   }
 
   async tick(signal?: AbortSignal): Promise<void> {
+    await this.tickCore(signal);
+  }
+
+  private async tickCore(signal?: AbortSignal): Promise<void> {
     await this.publishServers(signal);
     await this.reconcileClients(signal);
   }
 
   async stop(signal?: AbortSignal): Promise<void> {
-    this.controller?.abort();
-    this.controller = undefined;
-    if (this.timer !== undefined) {
-      clearTimeout(this.timer);
+    const timer = await this.lane.run(() => {
+      this.controller?.abort();
+      this.controller = undefined;
+      const current = this.timer;
       this.timer = undefined;
-    }
+      return current;
+    });
+    if (timer !== undefined) clearTimeout(timer);
     await this.disconnectClients();
     await this.drainAndRemoveServers(signal);
   }
@@ -93,7 +106,8 @@ export class ZLinkClientServerLocationRuntime {
 
   async reclaimOwnerRows(signal?: AbortSignal): Promise<void> {
     const owner = this.requireOwnerToken();
-    for (const [channelName, current] of this.localDescriptors) {
+    const descriptors = await this.lane.run(() => [...this.localDescriptors]);
+    for (const [channelName, current] of descriptors) {
       if (current.ownerId === owner.ownerId
         && current.leaseGeneration === owner.leaseGeneration) {
         continue;
@@ -114,7 +128,7 @@ export class ZLinkClientServerLocationRuntime {
         );
       }
       const published = { ...candidate, updatedAt: result.updatedAt };
-      this.localDescriptors.set(channelName, published);
+      await this.lane.run(() => this.localDescriptors.set(channelName, published));
       this.sockets.setClientServerServerDescriptor(published, channelName);
     }
   }
@@ -123,7 +137,7 @@ export class ZLinkClientServerLocationRuntime {
     const owner = this.requireOwnerToken();
     for (const [channelName, channel] of this.registration.channels) {
       if (channel.server === undefined) continue;
-      const current = this.localDescriptors.get(channelName);
+      const current = await this.lane.run(() => this.localDescriptors.get(channelName));
       if (current !== undefined) {
         const runtimeWeight = this.sockets.clientServerServerWeight(channelName);
         const candidate = runtimeWeight === current.weight
@@ -144,7 +158,7 @@ export class ZLinkClientServerLocationRuntime {
           );
         }
         const published = { ...candidate, updatedAt: result.updatedAt };
-        this.localDescriptors.set(channelName, published);
+        await this.lane.run(() => this.localDescriptors.set(channelName, published));
         this.sockets.setClientServerServerDescriptor(published, channelName);
         continue;
       }
@@ -173,7 +187,7 @@ export class ZLinkClientServerLocationRuntime {
         );
       }
       const published = { ...descriptor, updatedAt: result.updatedAt };
-      this.localDescriptors.set(channelName, published);
+      await this.lane.run(() => this.localDescriptors.set(channelName, published));
       this.sockets.setClientServerServerDescriptor(published, channelName);
     }
   }
@@ -190,9 +204,9 @@ export class ZLinkClientServerLocationRuntime {
       ]));
       const desiredStableKeys = new Set(rows.map(clientServerStableKey));
       for (const [connectionId, descriptor] of desired) {
-        const current = this.connections.get(connectionId);
+        const current = await this.lane.run(() => this.connections.get(connectionId));
         if (current === undefined) {
-          this.openConnection(descriptor, connectionId);
+          await this.openConnection(descriptor, connectionId);
           continue;
         }
         if (!sameDescriptor(current.descriptor, descriptor)) {
@@ -201,13 +215,20 @@ export class ZLinkClientServerLocationRuntime {
               toDiscoveryDescriptor(descriptor),
               connectionId
             );
-            if (updated) current.descriptor = descriptor;
+            if (updated) {
+              await this.lane.run(() => {
+                if (this.connections.get(connectionId) === current) current.descriptor = descriptor;
+              });
+            }
           } else {
-            current.descriptor = descriptor;
+            await this.lane.run(() => {
+              if (this.connections.get(connectionId) === current) current.descriptor = descriptor;
+            });
           }
         }
       }
-      for (const [connectionId, current] of [...this.connections]) {
+      const connections = await this.lane.run(() => [...this.connections]);
+      for (const [connectionId, current] of connections) {
         if (current.descriptor.channelName !== channelName || desired.has(connectionId)) continue;
         if (desiredStableKeys.has(clientServerStableKey(current.descriptor))
           && current.state === 'ready') {
@@ -254,22 +275,23 @@ export class ZLinkClientServerLocationRuntime {
   }
 
   private async disconnectClients(): Promise<void> {
+    const connectionIds = await this.lane.run(() => [...this.connections.keys()]);
     await Promise.allSettled(
-      [...this.connections.keys()].map(connectionId => this.closeConnection(connectionId))
+      connectionIds.map(connectionId => this.closeConnection(connectionId))
     );
   }
 
-  private openConnection(
+  private async openConnection(
     descriptor: ZLinkClientServerServerDescriptor,
     connectionId: string
-  ): void {
+  ): Promise<void> {
     const target: ActiveClientServerTarget = {
       descriptor,
       connectionId,
       state: 'pending',
       handshakeInFlight: false
     };
-    this.connections.set(connectionId, target);
+    await this.lane.run(() => this.connections.set(connectionId, target));
     try {
       target.dealer = this.sockets.openClientServerConnection(
         descriptor.channelName,
@@ -289,7 +311,9 @@ export class ZLinkClientServerLocationRuntime {
         }
       );
     } catch (error) {
-      this.connections.delete(connectionId);
+      await this.lane.run(() => {
+        if (this.connections.get(connectionId) === target) this.connections.delete(connectionId);
+      });
       throw error;
     }
   }
@@ -299,43 +323,52 @@ export class ZLinkClientServerLocationRuntime {
     _routingId: string,
     _endpoint: string
   ): Promise<void> {
-    const current = this.connections.get(connectionId);
-    if (current === undefined
-      || current.state === 'ready'
-      || current.handshakeInFlight) {
+    const current = await this.lane.run(() => {
+      const target = this.connections.get(connectionId);
+      if (target === undefined || target.state === 'ready' || target.handshakeInFlight) return undefined;
+      const dealer = target.dealer;
+      if (dealer === undefined) return undefined;
+      target.handshakeInFlight = true;
+      return { target, dealer };
+    });
+    if (current === undefined) {
       return;
     }
-    const dealer = current.dealer;
-    if (dealer === undefined) return;
-    current.handshakeInFlight = true;
     try {
       const admission = await requestAdmission(
-        dealer,
-        current.descriptor,
+        current.dealer,
+        current.target.descriptor,
         this.options.ownerLeaseRenewTimeoutMs
       );
-      const latest = this.connections.get(connectionId);
-      if (latest !== current) return;
-      requireMatchingAdmission(current.descriptor, admission);
-      const admittedDescriptor = {
-        ...current.descriptor,
-        descriptorRevision: admission.descriptorRevision,
-        weight: admission.weight,
-        state: admission.state
-      };
-      current.descriptor = admittedDescriptor;
+      const admittedDescriptor = await this.lane.run(() => {
+        if (this.connections.get(connectionId) !== current.target) return undefined;
+        requireMatchingAdmission(current.target.descriptor, admission);
+        const descriptor = {
+          ...current.target.descriptor,
+          descriptorRevision: admission.descriptorRevision,
+          weight: admission.weight,
+          state: admission.state
+        };
+        current.target.descriptor = descriptor;
+        return descriptor;
+      });
+      if (admittedDescriptor === undefined) return;
       if (!this.sockets.admitClientServerConnection(
         toDiscoveryDescriptor(admittedDescriptor, admission.normalizedEffectiveMaxMessageBytes),
         connectionId
       )) {
         throw new ZLinkConfigurationException(
-          `ClientServer '${current.descriptor.channelName}' admission was stale.`
+          `ClientServer '${current.target.descriptor.channelName}' admission was stale.`
         );
       }
-      current.state = 'ready';
-      await this.removeSupersededConnections(current);
+      await this.lane.run(() => {
+        if (this.connections.get(connectionId) === current.target) current.target.state = 'ready';
+      });
+      await this.removeSupersededConnections(current.target);
     } finally {
-      current.handshakeInFlight = false;
+      await this.lane.run(() => {
+        if (this.connections.get(connectionId) === current.target) current.target.handshakeInFlight = false;
+      });
     }
   }
 
@@ -343,7 +376,8 @@ export class ZLinkClientServerLocationRuntime {
     admitted: ActiveClientServerTarget
   ): Promise<void> {
     const stableKey = clientServerStableKey(admitted.descriptor);
-    const superseded = [...this.connections.values()]
+    const connections = await this.lane.run(() => [...this.connections.values()]);
+    const superseded = connections
       .filter(current =>
         current.connectionId !== admitted.connectionId
         && clientServerStableKey(current.descriptor) === stableKey)
@@ -354,21 +388,26 @@ export class ZLinkClientServerLocationRuntime {
   }
 
   private async handleConnectionTerminated(connectionId: string): Promise<void> {
-    if (!this.connections.delete(connectionId)) return;
+    const removed = await this.lane.run(() => this.connections.delete(connectionId));
+    if (!removed) return;
     await this.sockets.disconnectClientServerConnection(connectionId);
   }
 
   private async closeConnection(connectionId: string): Promise<void> {
-    const current = this.connections.get(connectionId);
+    const current = await this.lane.run(() => {
+      const target = this.connections.get(connectionId);
+      if (target !== undefined) this.connections.delete(connectionId);
+      return target;
+    });
     if (current === undefined) return;
-    this.connections.delete(connectionId);
     await this.sockets.closeClientServerConnection(connectionId);
   }
 
   private async drainAndRemoveServers(signal?: AbortSignal): Promise<void> {
     const owner = this.locationRuntime.currentOwnerToken;
     if (owner === undefined) return;
-    for (const [channelName, descriptor] of this.localDescriptors) {
+    const descriptors = await this.lane.run(() => [...this.localDescriptors]);
+    for (const [channelName, descriptor] of descriptors) {
       const draining = {
         ...descriptor,
         descriptorRevision: descriptor.descriptorRevision + 1n,
@@ -388,7 +427,7 @@ export class ZLinkClientServerLocationRuntime {
       }
       this.sockets.setClientServerServerDescriptor(undefined, channelName);
     }
-    this.localDescriptors.clear();
+    await this.lane.run(() => this.localDescriptors.clear());
   }
 
   private requireOwnerToken(): ZLinkLocationOwnerToken {
@@ -406,7 +445,7 @@ export class ZLinkClientServerLocationRuntime {
     if (controller === undefined || controller.signal.aborted) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void this.tick(controller.signal)
+      void this.tickCore(controller.signal)
         .catch((error) => this.locationRuntime.reportDiscoveryFailure(error))
         .finally(() => this.schedule());
     }, this.options.pollingIntervalMs);

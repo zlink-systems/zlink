@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.concurrent.Executor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 
 final class ZLinkChannelDispatchRegistry {
     private final Executor executor;
@@ -37,15 +38,18 @@ final class ZLinkChannelDispatchRegistry {
         Map<String, ChannelRequestHandlerRegistration> requests) {
         sendHandlers.put(channelName, sends);
         requestHandlers.put(channelName, requests);
-        sendQueues.put(channelName, new ZLinkAsyncSerialQueue(executor, false));
-        requestQueues.put(channelName, new ZLinkAsyncSerialQueue(executor, false));
+        sendQueues.put(channelName, new ZLinkAsyncSerialQueue(
+            executor, ZLinkExecutionLanePolicy.generic()));
+        requestQueues.put(channelName, new ZLinkAsyncSerialQueue(
+            executor, ZLinkExecutionLanePolicy.generic()));
     }
 
     void registerFanout(
         String channelName,
         Map<String, ChannelPublishHandlerRegistration> publishes) {
         publishHandlers.put(channelName, publishes);
-        publishQueues.put(channelName, new ZLinkAsyncSerialQueue(executor, false));
+        publishQueues.put(channelName, new ZLinkAsyncSerialQueue(
+            executor, ZLinkExecutionLanePolicy.generic()));
     }
 
     void registerRoute(
@@ -54,8 +58,10 @@ final class ZLinkChannelDispatchRegistry {
         Map<String, ChannelRouteRequestHandlerRegistration> requests) {
         routeSendHandlers.put(channelName, sends);
         routeRequestHandlers.put(channelName, requests);
-        routeSendQueues.put(channelName, new ZLinkAsyncSerialQueue(executor, false));
-        routeRequestQueues.put(channelName, new ZLinkAsyncSerialQueue(executor, false));
+        routeSendQueues.put(channelName, new ZLinkAsyncSerialQueue(
+            executor, ZLinkExecutionLanePolicy.generic()));
+        routeRequestQueues.put(channelName, new ZLinkAsyncSerialQueue(
+            executor, ZLinkExecutionLanePolicy.generic()));
     }
 
     void registerInternalRequest(

@@ -973,6 +973,8 @@ raw_relocation_replay_coordinator_t::raw_relocation_replay_coordinator_t (
   std::chrono::milliseconds relay_retry_interval,
   std::chrono::milliseconds terminal_tombstone_retention) :
     _transport (&transport),
+    _lane_executor (),
+    _lane (_lane_executor),
     _terminal_record_limit (terminal_record_limit),
     _terminal_byte_limit (terminal_byte_limit),
     _relay_retry_interval (relay_retry_interval),
@@ -1040,11 +1042,17 @@ raw_relocation_replay_coordinator_t::target_activity_guard_t::
 void raw_relocation_replay_coordinator_t::release_target_activity (
   const key_t &target) noexcept
 {
-    std::lock_guard lock (_gate);
-    const auto found = _targets.find (target);
-    if (found != _targets.end () && found->second.active_stages != 0)
-        --found->second.active_stages;
-    _gate_condition.notify_all ();
+    try {
+        _lane.run ([this, &target] {
+            const auto found = _targets.find (target);
+            if (found != _targets.end () && found->second.active_stages != 0)
+                --found->second.active_stages;
+        }).get ();
+        std::lock_guard lock (_activity_wait_mutex);
+        _activity_changed.notify_all ();
+    }
+    catch (...) {
+    }
 }
 
 raw_relocation_replay_coordinator_t::terminal_key_t
@@ -1076,14 +1084,15 @@ bool raw_relocation_replay_coordinator_t::register_target (
         || !valid_relocation_object (registration.object)
         || !registration.stage)
         return false;
-    std::lock_guard lock (_gate);
     try {
-        const auto target_key = key (
-          registration.relocation,
-          registration.target_attempt_generation,
-          registration.object);
-        return _targets.emplace (
-          target_key, target_state_t{std::move (registration)}).second;
+        return _lane.run ([this, registration = std::move (registration)] () mutable {
+            const auto target_key = key (
+              registration.relocation,
+              registration.target_attempt_generation,
+              registration.object);
+            return _targets.emplace (
+              target_key, target_state_t{std::move (registration)}).second;
+        }).get ();
     }
     catch (...) {
         return false;
@@ -1095,14 +1104,15 @@ bool raw_relocation_replay_coordinator_t::seal_target (
   std::uint64_t target_attempt_generation,
   const protocol::relocation_object_t &object)
 {
-    std::lock_guard lock (_gate);
-    const auto found = _targets.find (
-      key (relocation, target_attempt_generation, object));
-    if (found == _targets.end () || found->second.closing
-        || found->second.removing)
-        return false;
-    found->second.closing = true;
-    return true;
+    return _lane.run ([this, &relocation, target_attempt_generation, &object] {
+        const auto found = _targets.find (
+          key (relocation, target_attempt_generation, object));
+        if (found == _targets.end () || found->second.closing
+            || found->second.removing)
+            return false;
+        found->second.closing = true;
+        return true;
+    }).get ();
 }
 
 bool raw_relocation_replay_coordinator_t::drain_target (
@@ -1110,21 +1120,27 @@ bool raw_relocation_replay_coordinator_t::drain_target (
   std::uint64_t target_attempt_generation,
   const protocol::relocation_object_t &object)
 {
-    std::unique_lock lock (_gate);
     const auto target_key = key (
       relocation, target_attempt_generation, object);
-    const auto found = _targets.find (target_key);
-    if (found == _targets.end () || !found->second.closing)
+    if (!_lane.run ([this, &target_key] {
+            const auto found = _targets.find (target_key);
+            return found != _targets.end () && found->second.closing;
+        }).get ())
         return false;
-    _gate_condition.wait (lock, [this, &target_key] {
-        const auto current = _targets.find (target_key);
-        return current == _targets.end ()
-               || current->second.active_stages == 0;
+    std::unique_lock wait_lock (_activity_wait_mutex);
+    _activity_changed.wait (wait_lock, [this, &target_key] {
+        return _lane.run ([this, &target_key] {
+            const auto current = _targets.find (target_key);
+            return current == _targets.end ()
+                   || current->second.active_stages == 0;
+        }).get ();
     });
-    const auto current = _targets.find (target_key);
-    return current != _targets.end ()
-           && !current->second.removing
-           && current->second.active_stages == 0;
+    return _lane.run ([this, &target_key] {
+        const auto current = _targets.find (target_key);
+        return current != _targets.end ()
+               && !current->second.removing
+               && current->second.active_stages == 0;
+    }).get ();
 }
 
 bool raw_relocation_replay_coordinator_t::unregister_target (
@@ -1132,26 +1148,32 @@ bool raw_relocation_replay_coordinator_t::unregister_target (
   std::uint64_t target_attempt_generation,
   const protocol::relocation_object_t &object)
 {
-    std::unique_lock lock (_gate);
     const auto target_key = key (
       relocation, target_attempt_generation, object);
-    auto found = _targets.find (target_key);
-    if (found == _targets.end ())
+    if (!_lane.run ([this, &target_key] {
+            const auto found = _targets.find (target_key);
+            if (found == _targets.end () || found->second.removing)
+                return false;
+            found->second.removing = true;
+            found->second.closing = true;
+            return true;
+        }).get ())
         return false;
-    if (found->second.removing)
-        return false;
-    found->second.removing = true;
-    found->second.closing = true;
-    _gate_condition.wait (lock, [this, &target_key] {
-        const auto current = _targets.find (target_key);
-        return current == _targets.end ()
-               || current->second.active_stages == 0;
+    std::unique_lock wait_lock (_activity_wait_mutex);
+    _activity_changed.wait (wait_lock, [this, &target_key] {
+        return _lane.run ([this, &target_key] {
+            const auto current = _targets.find (target_key);
+            return current == _targets.end ()
+                   || current->second.active_stages == 0;
+        }).get ();
     });
-    found = _targets.find (target_key);
-    if (found == _targets.end ())
-        return false;
-    _targets.erase (found);
-    return true;
+    return _lane.run ([this, &target_key] {
+        const auto found = _targets.find (target_key);
+        if (found == _targets.end () || found->second.active_stages != 0)
+            return false;
+        _targets.erase (found);
+        return true;
+    }).get ();
 }
 
 task_t<raw_relocation_replay_result_t>
@@ -1219,13 +1241,20 @@ raw_relocation_replay_coordinator_t::process_data (
       data.relocation, data.target_attempt_generation,
       data.object);
     target_activity_guard_t activity_guard (this, state_key);
-    std::function<bool (const protocol::relocation_data_t &)> stage;
-    std::function<void (const protocol::relocation_data_t &)> rollback;
+    struct stage_work_t
     {
-        std::unique_lock lock (_gate);
+        raw_relocation_replay_result_t result =
+          raw_relocation_replay_result_t::restore_failed;
+        std::function<bool (const protocol::relocation_data_t &)> stage;
+        std::function<void (const protocol::relocation_data_t &)> rollback;
+    };
+    auto work = _lane.run ([this, &state_key, &record, &data] {
+        stage_work_t work;
         const auto found = _targets.find (state_key);
-        if (found == _targets.end ())
-            return raw_relocation_replay_result_t::not_registered;
+        if (found == _targets.end ()) {
+            work.result = raw_relocation_replay_result_t::not_registered;
+            return work;
+        }
         auto &state = found->second;
         const auto &registration = state.registration;
         if (registration.relocation != data.relocation
@@ -1239,32 +1268,41 @@ raw_relocation_replay_coordinator_t::process_data (
                  != registration.relocation_source_node_generation
             || !frozen_matches_registration (
                 data.record, registration))
-            return raw_relocation_replay_result_t::stale_fence;
-        if (state.closing || state.removing)
-            return raw_relocation_replay_result_t::stale_fence;
+            {
+                work.result = raw_relocation_replay_result_t::stale_fence;
+                return work;
+            }
+        if (state.closing || state.removing) {
+            work.result = raw_relocation_replay_result_t::stale_fence;
+            return work;
+        }
         try {
-            stage = registration.stage;
-            rollback = registration.rollback;
+            work.stage = registration.stage;
+            work.rollback = registration.rollback;
             ++state.active_stages;
-            activity_guard.activate ();
+            work.result = raw_relocation_replay_result_t::applied;
         }
         catch (...) {
-            return raw_relocation_replay_result_t::restore_failed;
+            work.result = raw_relocation_replay_result_t::restore_failed;
         }
-    }
+        return work;
+    }).get ();
+    if (work.result != raw_relocation_replay_result_t::applied)
+        return work.result;
+    activity_guard.activate ();
 
     bool staged = false;
     try {
-        staged = stage (data);
+        staged = work.stage (data);
     }
     catch (...) {
         staged = false;
     }
 
     if (!staged) {
-        if (rollback) {
+        if (work.rollback) {
             try {
-                rollback (data);
+                work.rollback (data);
             }
             catch (...) {
             }
@@ -1289,23 +1327,25 @@ bool raw_relocation_replay_coordinator_t::register_terminal_source (
         || registration.reply_route_id == 0
         || !registration.complete)
         return false;
-    std::lock_guard lock (_gate);
-    if (_terminal_sources.size () >= _terminal_record_limit)
-        return false;
-    return _terminal_sources.emplace (
-      terminal_key (registration.relocation,
-                    registration.operation),
-      terminal_source_state_t{std::move (registration)}).second;
+    return _lane.run ([this, registration = std::move (registration)] () mutable {
+        if (_terminal_sources.size () >= _terminal_record_limit)
+            return false;
+        return _terminal_sources.emplace (
+          terminal_key (registration.relocation,
+                        registration.operation),
+          terminal_source_state_t{std::move (registration)}).second;
+    }).get ();
 }
 
 bool raw_relocation_replay_coordinator_t::unregister_terminal_source (
   const protocol::relocation_id_t &relocation,
   const protocol::wire_operation_id_t &operation)
 {
-    std::lock_guard lock (_gate);
-    return _terminal_sources.erase (
-             terminal_key (relocation, operation))
-           != 0;
+    return _lane.run ([this, &relocation, &operation] {
+        return _terminal_sources.erase (
+                 terminal_key (relocation, operation))
+               != 0;
+    }).get ();
 }
 
 bool raw_relocation_replay_coordinator_t::register_terminal_target (
@@ -1326,27 +1366,28 @@ bool raw_relocation_replay_coordinator_t::register_terminal_target (
                  == protocol::framework_error_code::none))
         return false;
     const auto bytes = retained_bytes (registration);
-    std::lock_guard lock (_gate);
-    const auto item_key = terminal_key (
-      relay.relocation, relay.operation);
-    const auto existing = _terminal_targets.find (item_key);
-    if (existing != _terminal_targets.end ())
-        return existing->second.registration.relay == relay
-               && existing->second.registration.request_source
-                    == registration.request_source
-               && existing->second.registration.application_reply
-                    == registration.application_reply;
-    if (_terminal_targets.size () >= _terminal_record_limit
-        || bytes > _terminal_byte_limit - std::min (
-             _terminal_byte_limit, _terminal_retained_bytes))
-        return false;
-    terminal_target_state_t state;
-    state.registration = std::move (registration);
-    state.retained_bytes = bytes;
-    state.next_retry = clock_t::time_point::min ();
-    _terminal_targets.emplace (item_key, std::move (state));
-    _terminal_retained_bytes += bytes;
-    return true;
+    return _lane.run ([this, registration = std::move (registration), bytes] () mutable {
+        const auto item_key = terminal_key (
+          registration.relay.relocation, registration.relay.operation);
+        const auto existing = _terminal_targets.find (item_key);
+        if (existing != _terminal_targets.end ())
+            return existing->second.registration.relay == registration.relay
+                   && existing->second.registration.request_source
+                        == registration.request_source
+                   && existing->second.registration.application_reply
+                        == registration.application_reply;
+        if (_terminal_targets.size () >= _terminal_record_limit
+            || bytes > _terminal_byte_limit - std::min (
+                 _terminal_byte_limit, _terminal_retained_bytes))
+            return false;
+        terminal_target_state_t state;
+        state.registration = std::move (registration);
+        state.retained_bytes = bytes;
+        state.next_retry = clock_t::time_point::min ();
+        _terminal_targets.emplace (item_key, std::move (state));
+        _terminal_retained_bytes += bytes;
+        return true;
+    }).get ();
 }
 
 task_t<std::size_t> raw_relocation_replay_coordinator_t::retry_terminal_relays (
@@ -1359,9 +1400,8 @@ task_t<std::size_t> raw_relocation_replay_coordinator_t::retry_terminal_relays (
         protocol::reply_relay_t relay;
         std::optional<protocol::application_payload_t> reply;
     };
-    std::vector<pending_send_t> pending;
-    {
-        std::lock_guard lock (_gate);
+    auto pending = _lane.run ([this, now] {
+        std::vector<pending_send_t> pending;
         for (auto &[item_key, state] : _terminal_targets) {
             if (state.acknowledging || state.next_retry > now)
                 continue;
@@ -1374,7 +1414,8 @@ task_t<std::size_t> raw_relocation_replay_coordinator_t::retry_terminal_relays (
               state.registration.application_reply});
             state.next_retry = now + _relay_retry_interval;
         }
-    }
+        return pending;
+    }).get ();
     std::size_t sent = 0;
     for (auto &item : pending) {
         try {
@@ -1425,16 +1466,22 @@ raw_relocation_replay_coordinator_t::process_reply_relay (
           fingerprint.end (), encoded.begin (), encoded.end ());
     }
     const auto digest = digest_bytes (fingerprint);
-    std::function<bool (
-      const protocol::reply_relay_t &,
-      const std::optional<protocol::application_payload_t> &)> complete;
-    protocol::request_source_fence_t request_source;
-    bool duplicate = false;
+    struct completion_work_t
     {
-        std::lock_guard lock (_gate);
+        raw_relocation_replay_result_t failure =
+          raw_relocation_replay_result_t::not_registered;
+        std::function<bool (
+          const protocol::reply_relay_t &,
+          const std::optional<protocol::application_payload_t> &)> complete;
+        protocol::request_source_fence_t request_source;
+        bool duplicate = false;
+        bool proceed = false;
+    };
+    auto work = _lane.run ([this, &item_key, &relay, &record, &digest] {
+        completion_work_t work;
         const auto found = _terminal_sources.find (item_key);
         if (found == _terminal_sources.end ())
-            co_return raw_relocation_replay_result_t::not_registered;
+            return work;
         auto &state = found->second;
         const auto &registration = state.registration;
         if (relay.relocation != registration.relocation
@@ -1449,40 +1496,56 @@ raw_relocation_replay_coordinator_t::process_reply_relay (
                  != registration.target_node_routing_id
             || record.source_node_generation
                  != registration.target_node_generation)
-            co_return raw_relocation_replay_result_t::stale_fence;
+            {
+                work.failure = raw_relocation_replay_result_t::stale_fence;
+                return work;
+            }
         if (state.completed) {
-            if (state.digest != digest)
-                co_return raw_relocation_replay_result_t::conflicting_duplicate;
-            duplicate = true;
+            if (state.digest != digest) {
+                work.failure = raw_relocation_replay_result_t::conflicting_duplicate;
+                return work;
+            }
+            work.duplicate = true;
         }
         else if (state.completing) {
-            co_return raw_relocation_replay_result_t::sequence_gap;
+            work.failure = raw_relocation_replay_result_t::sequence_gap;
+            return work;
         }
         else {
             state.completing = true;
-            complete = registration.complete;
+            work.complete = std::move (state.registration.complete);
         }
-        request_source = registration.request_source;
-    }
+        work.request_source = registration.request_source;
+        work.proceed = true;
+        return work;
+    }).get ();
+    if (!work.proceed)
+        co_return work.failure;
 
-    if (!duplicate) {
+    if (!work.duplicate) {
         bool persisted = false;
         try {
-            persisted = complete (relay, reply);
+            persisted = work.complete (relay, reply);
         }
         catch (...) {
             persisted = false;
         }
-        std::lock_guard lock (_gate);
-        const auto found = _terminal_sources.find (item_key);
-        if (found == _terminal_sources.end ())
-            co_return raw_relocation_replay_result_t::not_registered;
-        found->second.completing = false;
-        if (!persisted)
-            co_return raw_relocation_replay_result_t::persistence_failed;
-        found->second.completed = true;
-        found->second.digest = digest;
-        found->second.completed_at = clock_t::now ();
+        const auto completed = _lane.run ([this, &item_key, persisted, &digest, &work] {
+            const auto found = _terminal_sources.find (item_key);
+            if (found == _terminal_sources.end ())
+                return raw_relocation_replay_result_t::not_registered;
+            found->second.completing = false;
+            if (!persisted) {
+                found->second.registration.complete = std::move (work.complete);
+                return raw_relocation_replay_result_t::persistence_failed;
+            }
+            found->second.completed = true;
+            found->second.digest = digest;
+            found->second.completed_at = clock_t::now ();
+            return raw_relocation_replay_result_t::terminal_received;
+        }).get ();
+        if (completed != raw_relocation_replay_result_t::terminal_received)
+            co_return completed;
     }
 
     const protocol::reply_relay_ack_t ack{
@@ -1490,8 +1553,8 @@ raw_relocation_replay_coordinator_t::process_reply_relay (
       relay.coordinator,
       relay.operation,
       relay.reply_route_id,
-      request_source,
-      duplicate
+      work.request_source,
+      work.duplicate
         ? protocol::reply_relay_ack_status_t::already_terminal
         : protocol::reply_relay_ack_status_t::terminal_received};
     try {
@@ -1502,7 +1565,7 @@ raw_relocation_replay_coordinator_t::process_reply_relay (
     catch (...) {
         co_return raw_relocation_replay_result_t::transport_failed;
     }
-    co_return duplicate
+    co_return work.duplicate
       ? raw_relocation_replay_result_t::terminal_duplicate
       : raw_relocation_replay_result_t::terminal_received;
 }
@@ -1516,12 +1579,18 @@ raw_relocation_replay_coordinator_t::process_reply_relay_ack (
         co_return raw_relocation_replay_result_t::invalid;
     const auto item_key = terminal_key (
       ack.relocation, ack.operation);
-    std::function<bool (protocol::reply_relay_ack_status_t)> persist;
+    struct ack_work_t
     {
-        std::lock_guard lock (_gate);
+        raw_relocation_replay_result_t failure =
+          raw_relocation_replay_result_t::not_registered;
+        std::function<bool (protocol::reply_relay_ack_status_t)> persist;
+        bool proceed = false;
+    };
+    auto work = _lane.run ([this, &item_key, &ack, &record] {
+        ack_work_t work;
         const auto found = _terminal_targets.find (item_key);
         if (found == _terminal_targets.end ())
-            co_return raw_relocation_replay_result_t::not_registered;
+            return work;
         auto &state = found->second;
         const auto &registration = state.registration;
         if (ack.relocation != registration.relay.relocation
@@ -1533,30 +1602,42 @@ raw_relocation_replay_coordinator_t::process_reply_relay_ack (
                  != registration.request_source.node_routing_id
             || record.source_node_generation
                  != registration.request_source.node_generation)
-            co_return raw_relocation_replay_result_t::stale_fence;
-        if (state.acknowledging)
-            co_return raw_relocation_replay_result_t::ack_ignored;
+            {
+                work.failure = raw_relocation_replay_result_t::stale_fence;
+                return work;
+            }
+        if (state.acknowledging) {
+            work.failure = raw_relocation_replay_result_t::ack_ignored;
+            return work;
+        }
         state.acknowledging = true;
-        persist = registration.persist_ack;
-    }
+        work.persist = std::move (state.registration.persist_ack);
+        work.proceed = true;
+        return work;
+    }).get ();
+    if (!work.proceed)
+        co_return work.failure;
 
     bool persisted = false;
     try {
-        persisted = persist (ack.status);
+        persisted = work.persist (ack.status);
     }
     catch (...) {
         persisted = false;
     }
-    std::lock_guard lock (_gate);
-    const auto found = _terminal_targets.find (item_key);
-    if (found == _terminal_targets.end ())
-        co_return raw_relocation_replay_result_t::not_registered;
-    found->second.acknowledging = false;
-    if (!persisted)
-        co_return raw_relocation_replay_result_t::persistence_failed;
-    _terminal_retained_bytes -= found->second.retained_bytes;
-    _terminal_targets.erase (found);
-    co_return raw_relocation_replay_result_t::relay_acknowledged;
+    co_return _lane.run ([this, &item_key, persisted, &work] {
+        const auto found = _terminal_targets.find (item_key);
+        if (found == _terminal_targets.end ())
+            return raw_relocation_replay_result_t::not_registered;
+        found->second.acknowledging = false;
+        if (!persisted) {
+            found->second.registration.persist_ack = std::move (work.persist);
+            return raw_relocation_replay_result_t::persistence_failed;
+        }
+        _terminal_retained_bytes -= found->second.retained_bytes;
+        _terminal_targets.erase (found);
+        return raw_relocation_replay_result_t::relay_acknowledged;
+    }).get ();
 }
 
 bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired (
@@ -1565,70 +1646,81 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
   const protocol::request_source_fence_t &exact_source)
 {
     const auto item_key = terminal_key (relocation, operation);
-    std::function<bool ()> persist;
+    struct expiry_work_t
     {
-        std::lock_guard lock (_gate);
+        std::function<bool ()> persist;
+        bool proceed = false;
+    };
+    auto work = _lane.run ([this, &item_key, &exact_source] {
+        expiry_work_t work;
         const auto found = _terminal_targets.find (item_key);
         if (found == _terminal_targets.end ()
             || found->second.registration.request_source
                  != exact_source
             || found->second.acknowledging)
-            return false;
+            return work;
         found->second.acknowledging = true;
-        persist =
-          found->second.registration.persist_source_lease_expiry;
-    }
+        work.persist = std::move (
+          found->second.registration.persist_source_lease_expiry);
+        work.proceed = true;
+        return work;
+    }).get ();
+    if (!work.proceed)
+        return false;
     bool persisted = false;
     try {
-        persisted = persist ();
+        persisted = work.persist ();
     }
     catch (...) {
         persisted = false;
     }
-    std::lock_guard lock (_gate);
-    const auto found = _terminal_targets.find (item_key);
-    if (found == _terminal_targets.end ())
-        return false;
-    found->second.acknowledging = false;
-    if (!persisted)
-        return false;
-    _terminal_retained_bytes -= found->second.retained_bytes;
-    _terminal_targets.erase (found);
-    return true;
+    return _lane.run ([this, &item_key, persisted, &work] {
+        const auto found = _terminal_targets.find (item_key);
+        if (found == _terminal_targets.end ())
+            return false;
+        found->second.acknowledging = false;
+        if (!persisted) {
+            found->second.registration.persist_source_lease_expiry =
+              std::move (work.persist);
+            return false;
+        }
+        _terminal_retained_bytes -= found->second.retained_bytes;
+        _terminal_targets.erase (found);
+        return true;
+    }).get ();
 }
 
 std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (
   clock_t::time_point now)
 {
-    std::lock_guard lock (_gate);
-    std::size_t removed = 0;
-    for (auto iterator = _terminal_sources.begin ();
-         iterator != _terminal_sources.end ();) {
-        if (iterator->second.completed
-            && iterator->second.completed_at
-                 + _terminal_tombstone_retention <= now) {
-            iterator = _terminal_sources.erase (iterator);
-            ++removed;
+    return _lane.run ([this, now] {
+        std::size_t removed = 0;
+        for (auto iterator = _terminal_sources.begin ();
+             iterator != _terminal_sources.end ();) {
+            if (iterator->second.completed
+                && iterator->second.completed_at
+                     + _terminal_tombstone_retention <= now) {
+                iterator = _terminal_sources.erase (iterator);
+                ++removed;
+            }
+            else {
+                ++iterator;
+            }
         }
-        else {
-            ++iterator;
-        }
-    }
-    return removed;
+        return removed;
+    }).get ();
 }
 
 std::size_t
 raw_relocation_replay_coordinator_t::pending_terminal_relays () const
 {
-    std::lock_guard lock (_gate);
-    return _terminal_targets.size ();
+    return _lane.run ([this] { return _terminal_targets.size (); }).get ();
 }
 
 std::size_t
 raw_relocation_replay_coordinator_t::terminal_retained_bytes () const
 {
-    std::lock_guard lock (_gate);
-    return _terminal_retained_bytes;
+    return _lane.run ([this] { return _terminal_retained_bytes; }).get ();
 }
 
 

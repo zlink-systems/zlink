@@ -46,10 +46,17 @@ public final class SubscribeDeliverySessionHandler
                     .request(new Messages.EnsureCustomerActorReq(CustomerId))
                     .submit()
                     .thenApply(SubscribeDeliverySessionHandler::requireActor))
-            .thenCompose(actor -> context.actors().find(actor.actorId()).isEmpty()
-                ? context.actors().bind(actor).thenApply(ignored -> actor)
-                : CompletableFuture.completedFuture(actor))
-            .thenAccept(actor -> {
+            .thenCompose(actor -> {
+                boolean requiresBinding = context.actors().find(actor.actorId()).isEmpty();
+                CompletionStage<ActorRef> bound = requiresBinding
+                    ? context.actors().bind(actor).thenApply(ignored -> actor)
+                    : CompletableFuture.completedFuture(actor);
+                return bound.thenApply(ignored -> requiresBinding);
+            })
+            .thenAccept(bound -> {
+                if (bound) {
+                    System.out.println("deliverydispatch-customer bound customer=" + CustomerId);
+                }
                 customers.subscribe(CustomerId, request.deliveryId());
                 context.client().reply(
                     new Messages.SubscribeDeliveryRes(request.deliveryId())).submit();

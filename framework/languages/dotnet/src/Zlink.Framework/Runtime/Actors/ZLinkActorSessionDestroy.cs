@@ -37,7 +37,7 @@ internal sealed partial class ZLinkActorSessionManager
                         ZLinkFrameworkErrorKind.NotFound,
                         $"Actor '{actor.Context.ActorId}' is not owned by this Entry Spot.");
 
-                state.BeginTeardown();
+                state.BeginTeardownOnLane();
                 return actorRef;
             },
             cancellationToken).ConfigureAwait(false);

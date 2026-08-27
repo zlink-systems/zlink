@@ -1,6 +1,6 @@
 # .NET bound STREAM session 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md)
+[.NET 언어별 interface 목차](README.ko.md)
 
 ## 1. Bound STREAM session
 

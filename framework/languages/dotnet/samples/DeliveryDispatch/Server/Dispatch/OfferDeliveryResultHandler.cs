@@ -27,8 +27,9 @@ internal sealed class OfferDeliveryResultHandler(
         if (offer is null)
         {
             logger.LogInformation(
-                "deliverydispatch dispatch: dropped a late decision delivery={DeliveryId} attempt={Attempt}",
+                "deliverydispatch-dispatch stale-decision-ignored delivery={DeliveryId} courier={CourierId} attempt={Attempt}",
                 message.DeliveryId,
+                message.CourierId,
                 message.Attempt);
             return;
         }

@@ -2425,7 +2425,7 @@ public sealed class RelocationRuntimeTests
         Assert.Equal(ready, committed.Snapshot.Payload.ToArray());
         Assert.Equal(
             (0L, 1L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 new ZLinkMeshNodeDescriptorKey(
                     "mesh",
                     RoutingId.From("source")),
@@ -2435,7 +2435,7 @@ public sealed class RelocationRuntimeTests
 
         Assert.Equal(
             (0L, 0L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 new ZLinkMeshNodeDescriptorKey(
                     "mesh",
                     RoutingId.From("target")),
@@ -2482,7 +2482,7 @@ public sealed class RelocationRuntimeTests
             moved.Snapshot.AuthorityOwnerGeneration);
         Assert.Equal(
             (0L, 0L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 new ZLinkMeshNodeDescriptorKey(
                     "mesh",
                     RoutingId.From("source")),
@@ -2491,7 +2491,7 @@ public sealed class RelocationRuntimeTests
                 "Game.Actor"));
         Assert.Equal(
             (0L, 1L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 new ZLinkMeshNodeDescriptorKey(
                     "mesh",
                     RoutingId.From("target")),
@@ -2524,7 +2524,7 @@ public sealed class RelocationRuntimeTests
                     capacityDelta: 1)));
         Assert.Equal(
             (1L, 0L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 descriptor,
                 1,
                 ZLinkPlacementObjectKind.Actor,
@@ -2533,7 +2533,7 @@ public sealed class RelocationRuntimeTests
             await store.AbortAsync(abortedReservation.Reservation));
         Assert.Equal(
             (0L, 0L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 descriptor,
                 1,
                 ZLinkPlacementObjectKind.Actor,
@@ -2552,7 +2552,7 @@ public sealed class RelocationRuntimeTests
                 new byte[] { 0x44 }));
         Assert.Equal(
             (0L, 1L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 descriptor,
                 1,
                 ZLinkPlacementObjectKind.Actor,
@@ -2564,7 +2564,7 @@ public sealed class RelocationRuntimeTests
                 new ZLinkAuthorityMutation.Delete()));
         Assert.Equal(
             (0L, 0L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 descriptor,
                 1,
                 ZLinkPlacementObjectKind.Actor,
@@ -2785,14 +2785,14 @@ public sealed class RelocationRuntimeTests
             committedAuthority.Snapshot.AuthorityOwnerGeneration);
         Assert.Equal(
             (0L, 0L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 sourceDescriptor,
                 1,
                 ZLinkPlacementObjectKind.Actor,
                 "Game.Actor"));
         Assert.Equal(
             (0L, 1L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 targetDescriptor,
                 1,
                 ZLinkPlacementObjectKind.Actor,
@@ -2868,7 +2868,7 @@ public sealed class RelocationRuntimeTests
         Assert.Equal(owner.Token.OwnerId, normalized.Snapshot.OwnerId);
         Assert.Equal(
             (0L, 1L),
-            store.GetPlacementCapacityUsage(
+            await store.GetPlacementCapacityUsageAsync(
                 descriptor,
                 1,
                 ZLinkPlacementObjectKind.Actor,

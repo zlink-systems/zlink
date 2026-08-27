@@ -241,6 +241,58 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void connectionIdForAdmissionReusesSingleLanePeerAcrossDirectionBuckets()
+        throws Exception {
+        // Some binding lanes cannot report a transport-pair identity. They
+        // still carry HELLO and ADMIT for the same single physical route, but
+        // those commands infer opposite directions. A delayed ADMIT must not
+        // manufacture a replacement connectionId and reset peer liveness.
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from(
+                "single-lane-reuse-local-" + System.nanoTime()));
+            node.setBind(
+                "inproc://jvm-single-lane-reuse-" + System.nanoTime());
+            node.start();
+            RoutingId peer = RoutingId.from("single-lane-reuse-peer");
+
+            Method connectionIdForAdmission = ZLinkJavaRawMeshNode.class
+                .getDeclaredMethod(
+                    "connectionIdForAdmission",
+                    RoutingId.class,
+                    ZLinkServiceAdmissionGuard.ConnectionDirection.class,
+                    ZLinkJavaRawMeshNode.TransportPair.class);
+            connectionIdForAdmission.setAccessible(true);
+
+            String first = (String) connectionIdForAdmission.invoke(
+                node,
+                peer,
+                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
+                null);
+
+            var topologyField = ZLinkJavaRawMeshNode.class
+                .getDeclaredField("topology");
+            topologyField.setAccessible(true);
+            var topology = (ZLinkServiceTopologyRegistry) topologyField.get(node);
+            assertEquals(
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(
+                    descriptor(peer),
+                    new ZLinkServiceTopologyRegistry.Connection(
+                        first,
+                        ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
+                        "single-lane")));
+
+            String retransmitted = (String) connectionIdForAdmission.invoke(
+                node,
+                peer,
+                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
+                null);
+            assertEquals(first, retransmitted);
+        }
+    }
+
+    @Test
     void sourceWideAdmissionReadySelectsOnlyReadyPeers() {
         RoutingId readyRid = RoutingId.from("ready-peer");
         RoutingId pendingRid = RoutingId.from("pending-peer");
@@ -1206,14 +1258,13 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 assertArrayEquals(
                     new byte[] {1, 2, 3},
                     record.parts().get(1).toByteArray());
-                // The service envelope has one protocol header and one payload
-                // frame. Both native receive claims remain owned by this record
-                // until its terminal close.
-                awaitOutstandingApplicationLease(context, 2L);
+                assertEquals(0L, context.coreHwmBudgetSnapshot()
+                    .outstandingApplicationLeaseCount());
             } finally {
                 record.close();
             }
-            awaitOutstandingApplicationLease(context, 0L);
+            assertEquals(0L, context.coreHwmBudgetSnapshot()
+                .outstandingApplicationLeaseCount());
             CompletableFuture<ZLinkMeshDispatchRecord> progressed =
                 new CompletableFuture<>();
             nextDispatch.set(progressed);
@@ -1474,16 +1525,4 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         assertTrue(node.hasLivePeerIntent(endpoint));
     }
 
-    private static void awaitOutstandingApplicationLease(
-        systems.zlink.contracts.core.Context context,
-        long expected) throws InterruptedException {
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (context.coreHwmBudgetSnapshot()
-            .outstandingApplicationLeaseCount() != expected
-            && System.nanoTime() < deadline) {
-            Thread.sleep(1);
-        }
-        assertEquals(expected, context.coreHwmBudgetSnapshot()
-            .outstandingApplicationLeaseCount());
-    }
 }

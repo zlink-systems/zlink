@@ -7,6 +7,8 @@ namespace GameQuest.Client;
 
 internal sealed class GameQuestClientScenario(GameQuestTopology topology)
 {
+    private const int OwnerLossReleaseAttempts = 300;
+
     // End-to-end client story:
     // 1. Subscribe player-alice on API A and verify quest progress/completion from combat events.
     // 2. Replay a duplicate event and confirm the same event id is treated idempotently.
@@ -56,6 +58,8 @@ internal sealed class GameQuestClientScenario(GameQuestTopology topology)
         var closeOwner = await mission.Post("/self-check/owner/player-alice/close")
             .AsyncRaw(cancellationToken);
         ZlinkStreamAssert.Ensure(closeOwner.Status is >= 200 and < 300, "Assertion failed: closeOwner.Status is >= 200 and < 300");
+        Console.WriteLine("gamequest-client close-replay-armed player=player-alice");
+        await WaitForReleaseAsync(topology.CloseReplayReleaseFile, "close replay", cancellationToken);
         var rehydratedAfterClose = await apiAStream.Request(new SyncQuestProgressReq("player-alice"))
             .Async<SyncQuestProgressRes>(cancellationToken);
         ZlinkStreamAssert.Ensure(
@@ -70,6 +74,7 @@ internal sealed class GameQuestClientScenario(GameQuestTopology topology)
         ZlinkStreamAssert.Ensure(ruinsCompletedPush.Payload.PlayerId == "player-alice", "Assertion failed: ruinsCompletedPush.Payload.PlayerId == \"player-alice\"");
         ZlinkStreamAssert.Ensure(ruinsCompletedPush.Payload.Progress.QuestId == QuestIds.VisitRuins, "Assertion failed: ruinsCompletedPush.Payload.Progress.QuestId == QuestIds.VisitRuins");
         ZlinkStreamAssert.Ensure(ruinsCompletedPush.Payload.RewardGranted, "Assertion failed: ruinsCompletedPush.Payload.RewardGranted");
+
 
         // Simulate an authoritative server event while Bob has no bound session.
         var offlineItem = await apiA.Post("/self-check/gameplay/collect/player-bob/healing-herb/1/herb-1")
@@ -124,10 +129,54 @@ internal sealed class GameQuestClientScenario(GameQuestTopology topology)
             cancellationToken);
         ZlinkStreamAssert.Ensure(reconciled.Any(p => p.QuestId == QuestIds.FirstHunt && p.CurrentCount >= 4), "Assertion failed: reconciled.Any(p => p.QuestId == QuestIds.FirstHunt && p.CurrentCount >= 4)");
 
+        //  Section 9-9 is the terminal check for this player: after the Ready owner process is
+        //  killed the next call is Unavailable and no replacement handler runs. The spec does not
+        //  promise the object comes back, so nothing may depend on player-alice afterwards.
+        Console.WriteLine("gamequest-client owner-loss-armed player=player-alice");
+        await WaitForReleaseAsync(topology.OwnerLossReleaseFile, "owner loss", cancellationToken);
+        await AssertOwnerUnavailableAsync(apiAStream, cancellationToken);
+
         await apiAStream.DisposeAsync();
 
         var assertion = await WaitForServerAssertionAsync(apiA, cancellationToken);
         ZlinkStreamAssert.Ensure(assertion.Passed, "Assertion failed: assertion.Passed");
+    }
+
+    private static async ValueTask WaitForReleaseAsync(
+        string releaseFile,
+        string stage,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < OwnerLossReleaseAttempts; attempt++)
+        {
+            if (File.Exists(releaseFile)) return;
+            await Task.Delay(100, cancellationToken);
+        }
+
+        throw new TimeoutException($"Timed out waiting for the GameQuest {stage} release.");
+    }
+
+
+    private static async ValueTask AssertOwnerUnavailableAsync(
+        IZlinkStreamConnector apiAStream,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            _ = await apiAStream.Request(new KillMonsterReq(
+                    "player-alice", "wolf", "forest", "owner-loss-1"))
+                .Async<KillMonsterRes>(cancellationToken);
+        }
+        //  Match on the Unavailable meaning, not on one error code. The connector surfaces this as
+        //  "unavailable: Instance Spot '...' is currently unavailable", and pinning the code made
+        //  the assertion miss its own expected failure.
+        catch (ZlinkStreamException exception)
+            when (exception.Error.Message.Contains("unavailable", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException("The owner-loss gameplay call did not fail as Unavailable.");
     }
 
     private async ValueTask<ServerAssertionResponse> WaitForServerAssertionAsync(

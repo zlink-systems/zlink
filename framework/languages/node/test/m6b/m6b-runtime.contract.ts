@@ -4037,7 +4037,7 @@ test('boundSessionReplaced command 51 matches its golden and malformed fixtures'
   }
 });
 
-test('bound-session replacement is one-way, retries admission, and fences a late tombstone', async () => {
+test('bound-session replacement is one-way, does not retry admission, and fences a late tombstone', async () => {
   type TestIngress = RawServiceIngressRecord & {
     readonly resolveReply?: (parts: readonly Buffer[]) => void;
   };
@@ -4194,13 +4194,10 @@ test('bound-session replacement is one-way, retries admission, and fences a late
     const oldBinding = oldSessionRuntime.sessionBindings('old-rid')[0]!;
     assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 1);
     await new Promise(resolve => setTimeout(resolve, 80));
-    assert.deepEqual(replacementNotices, [{
-      actorId: actor.actorId,
-      sessionRid: 'old-rid',
-      bindingGeneration: oldBinding.bindingGeneration
-    }]);
+    assert.deepEqual(replacementNotices, []);
 
-    // A duplicate one-way notice is idempotent at the retired owner.
+    // A delayed one-way notice is still accepted once. No framework retry
+    // occurs after the original send admission failed.
     const replacementHeader = encodeBoundSessionReplacedHeader(
       {
         actor,

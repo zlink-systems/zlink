@@ -33,7 +33,7 @@ adapter로 우회하지 않는다. 필요한 binding public API가 없으면 먼
 
 ## 4. C++ 책임 그래프
 
-C++ 구현은 [공통 layering 원칙](../../common/spec/server/40-internal-layering.ko.md)의 책임 그래프를
+C++ 구현은 [공통 layering 원칙](../../common/spec/server/00-foundation/08-layering.ko.md)의 책임 그래프를
 따른다. public header와 domain runtime은 binding type을 노출하지 않는다. binding과
 framework의 의미가 같은 지점에서는 semantic runtime이 binding public API를 직접 호출한다.
 소유권, lifecycle, readiness, error 또는 동시성 규칙을 바꾸는 지점에서는 아래의

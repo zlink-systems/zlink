@@ -542,12 +542,13 @@ se::task_t<bool> run_transition (se::coroutine_connector_t &source,
                                    return node.node_id == target_node_id && !node.connected;
                                })
                                .async ();
-    std::cout << "scenario ZW-B4-C2-C3 armed node=" << target_node_id << std::endl;
+    std::cout << "scenario ZW-B4-C3 armed node=" << target_node_id << std::endl;
 
     (void) co_await expired_wait;
     std::cout << "scenario ZW-B4 passed\n";
+    //  The disconnect is awaited only to order the report-TTL wait after it. ZW-C2 is asserted
+    //  by its own graceful lane; this lane stops the node abruptly.
     (void) co_await disconnected_wait;
-    std::cout << "scenario ZW-C2 passed\n";
     auto expired_report_wait = ops.wait_for<node_status_notify_t> ()
                                  .where ([target_node_id] (const auto &node) {
                                      return node.node_id == target_node_id && !node.registered;
@@ -557,6 +558,28 @@ se::task_t<bool> run_transition (se::coroutine_connector_t &source,
     std::cout << "scenario ZW-C3 passed\n";
     co_await source.close ().async ();
     co_await target.close ().async ();
+    co_await ops.close ().async ();
+    co_return true;
+}
+
+se::task_t<bool> run_c2 (se::coroutine_connector_t &ops, const std::string &target_node_id)
+{
+    //  ZW-C2's precondition is a *normal* shutdown, so it needs its own lane: the B4/C3 lane
+    //  stops the node abruptly and cannot observe the drain path. The sample spec's stop table
+    //  fixes which scenario uses which signal.
+    require (!target_node_id.empty (), "C2 requires --target-node-id");
+    co_await ops.connect ().async ();
+    //  NodeStatusNotify only reaches a client that is watching (ZW-C1). Arming the wait without
+    //  the WatchNodesReq subscription first makes it wait forever.
+    (void) co_await ops.request (watch_nodes_req_t{}).async<watch_nodes_res_t> ();
+    auto disconnected_wait = ops.wait_for<node_status_notify_t> ()
+                               .where ([target_node_id] (const auto &node) {
+                                   return node.node_id == target_node_id && !node.connected;
+                               })
+                               .async ();
+    std::cout << "scenario ZW-C2 armed node=" << target_node_id << std::endl;
+    (void) co_await disconnected_wait;
+    std::cout << "scenario ZW-C2 passed\n";
     co_await ops.close ().async ();
     co_return true;
 }
@@ -721,6 +744,7 @@ int main (int argc, char **argv)
           topology.scenario == "main"         ? run_main (game, neighbor, probe, ops)
           : topology.scenario == "D2"         ? run_announce (ops, "ZW-D2")
           : topology.scenario == "transition" ? run_transition (game, neighbor, ops)
+          : topology.scenario == "C2"         ? run_c2 (ops, topology.target_node_id)
           : topology.scenario == "E5-arm"     ? run_e5_arm (ops, topology.target_node_id)
           : topology.scenario == "E5"         ? run_e5_restore (ops, topology.target_node_id)
           : topology.scenario == "G3" || topology.scenario == "G4-fresh"

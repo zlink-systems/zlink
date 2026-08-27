@@ -19,7 +19,7 @@ public final class RunOrderWorkflowMsgHandler
     public CompletionStage<Void> handle(
         OrderWorkflowSpot spot,
         Messages.RunOrderWorkflowMsg message) {
-        workflow.continueOrderInSpot(message.orderId());
+        workflow.continueOrderInSpot(spot, message.orderId());
         return CompletableFuture.completedFuture(null);
     }
 }

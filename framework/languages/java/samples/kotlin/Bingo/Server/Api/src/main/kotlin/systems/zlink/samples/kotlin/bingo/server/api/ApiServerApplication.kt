@@ -18,8 +18,10 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleLocationStore
+import systems.zlink.samples.kotlin.bingo.server.configuration.BingoReadinessReporter
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTopology
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 
 
 
@@ -58,6 +60,12 @@ class ApiServerApplication {
 
     @Bean
     fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore = SampleLocationStore.create(topology)
+
+    @Bean(destroyMethod = "close")
+    fun bingoReadinessReporter(
+        topology: SampleTopology,
+        meshes: ZLinkRouteMeshRuntime,
+    ): BingoReadinessReporter = BingoReadinessReporter.api(topology, meshes)
 
     companion object {
         fun run(args: Array<String> = emptyArray()): AutoCloseable {

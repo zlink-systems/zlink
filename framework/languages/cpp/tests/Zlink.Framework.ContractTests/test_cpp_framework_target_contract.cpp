@@ -2071,13 +2071,13 @@ int main ()
      * the per-Spot serial queue has accepted or rejected the work item. */
     gate.require (
       spot_runtime.find (
-        "std::unique_lock admission_lock (callback_mutex)")
+        "auto queue = callback_lane.run ([this] {")
           != std::string::npos
         && spot_runtime.find (
              "if (callback_admission_closed || idle_eviction_in_progress)")
              != std::string::npos
         && spot_runtime.find (
-             "return serial_queue->try_post_async")
+             "return queue->try_post_async")
              != std::string::npos,
       "CPP-DISP-006",
       "Spot admission and serial enqueue use separate lock spans");
@@ -2203,7 +2203,7 @@ int main ()
              "pending.completion->complete (result)")
              != std::string::npos
         && actor_gateway_runtime.find (
-             "[state, actor_id, pending = std::move (pending), dispatched,")
+             "[state, actor_id, pending = std::move (*pending), dispatch, dispatched,")
              != std::string::npos
         && actor_gateway_runtime.find (
              "continue_gate] (const result_t<void> &result) mutable {")

@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("sample")
 public record ApiSettings(
+    String nodeId,
     String apiBindUrl,
     String apiChannelEndpoint,
     List<String> playEndpoints,
@@ -16,6 +17,7 @@ public record ApiSettings(
     String logDirectory) implements SampleLogSettings {
 
     public ApiSettings {
+        require(nodeId, "nodeId");
         require(apiBindUrl, "apiBindUrl");
         require(apiChannelEndpoint, "apiChannelEndpoint");
         if (playEndpoints == null || playEndpoints.isEmpty()) {

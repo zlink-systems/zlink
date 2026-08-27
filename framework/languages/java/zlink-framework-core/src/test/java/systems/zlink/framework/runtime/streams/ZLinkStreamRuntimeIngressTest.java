@@ -12,12 +12,15 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindO
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +57,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAd
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.actors.ActorRef;
@@ -81,6 +85,7 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.replacementMode = ReplacementMode.NONE;
         TestSession.decodeWirePayload = false;
         TestSession.decodedWirePayload.set(null);
+        TestSession.constructionHook = null;
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
         runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
@@ -254,6 +259,30 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void livenessTimeoutsAreIncludedInClosedConnectionMetrics()
+        throws Exception {
+        assertLivenessCloseReason("lastHeartbeatPongNanos", "heartbeat_timeout");
+        assertLivenessCloseReason("lastApplicationNanos", "idle_timeout");
+    }
+
+    @Test
+    void drainedCloseUsesServerShutdownMetricReason() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        List<String> closeReasons = Collections.synchronizedList(new ArrayList<>());
+        try (AutoCloseable ignored = installClosedMetricSink(closeReasons)) {
+            ZLinkStreamRuntime runtime = start(stream, 0);
+            runtimes.add(runtime);
+
+            awaitSession();
+            runtime.beginDrain();
+            runtime.closeAsync().toCompletableFuture().join();
+
+            assertEquals(List.of("server_shutdown"), closeReasons);
+        }
+    }
+
+    @Test
     void sessionConstructionFailureDoesNotStopAnotherPeer() throws Exception {
         TestSession.failNextConstruction = true;
         FakeStream stream = new FakeStream();
@@ -326,6 +355,29 @@ final class ZLinkStreamRuntimeIngressTest {
         stream.firstReceiveRelease.countDown();
         close.get(5, TimeUnit.SECONDS);
         assertEquals(1, stream.closeCalls.get());
+    }
+
+    @Test
+    void pendingSessionCreatorReentryFailsInsteadOfJoiningItsOwnPendingFuture()
+        throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+        Object streamNode = lastRegistration.streamNodes().getFirst();
+        AtomicReference<Throwable> reentryFailure = new AtomicReference<>();
+        TestSession.constructionHook = () -> {
+            try {
+                invokeGetOrCreateSession(runtime, streamNode, stream, PEER_A);
+            } catch (Throwable failure) {
+                reentryFailure.set(unwrapInvocationFailure(failure));
+            }
+        };
+
+        invokeGetOrCreateSession(runtime, streamNode, stream, PEER_A);
+
+        assertInstanceOf(IllegalStateException.class, reentryFailure.get());
+        assertEquals(1, TestSession.createdCount.get(),
+            "only the original creator may publish the Session");
     }
 
     @Test
@@ -522,19 +574,20 @@ final class ZLinkStreamRuntimeIngressTest {
             actorRef.nodeRid(), replacement(actorRef));
 
         assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
-        assertTrue(stream.sessionClosingSendsLatch.await(8, TimeUnit.SECONDS));
+        assertTrue(stream.sessionClosingSendsLatch.await(2, TimeUnit.SECONDS));
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(
             System.nanoTime() - started);
         assertEquals(1, session.replacementCallbacks.get());
-        assertTrue(elapsedMillis >= 4_800,
+        assertTrue(elapsedMillis >= 80,
             "a stalled callback must be bounded by the callback deadline");
-        assertTrue(elapsedMillis < 8_000,
+        assertTrue(elapsedMillis < 2_000,
             "callback deadline did not return to the scheduler promptly");
     }
 
     private static ReplacementFixture startReplacement(FakeStream stream) {
         stream.enqueue(PEER_A, frame("initial", "{}"));
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setSessionReplacementCallbackTimeout(Duration.ofMillis(100));
         options.addStreamNode("stream")
             .bind("tcp://127.0.0.1:18081")
             .registerSession(TestSession.class);
@@ -722,6 +775,76 @@ final class ZLinkStreamRuntimeIngressTest {
                     CompletableFuture.completedFuture(null));
     }
 
+    private void assertLivenessCloseReason(
+        String expiredTimestampField,
+        String expectedReason) throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        List<String> closeReasons = Collections.synchronizedList(new ArrayList<>());
+        try (AutoCloseable ignored = installClosedMetricSink(closeReasons)) {
+            ZLinkStreamRuntime runtime = start(stream, 0);
+            runtimes.add(runtime);
+
+            expireSessionForLiveness(runtime, expiredTimestampField);
+            runtime.closeAsync().toCompletableFuture().join();
+
+            assertEquals(List.of(expectedReason), closeReasons);
+        }
+    }
+
+    private static AutoCloseable installClosedMetricSink(List<String> closeReasons) {
+        return ZLinkRuntimeMetrics.install(new ZLinkRuntimeMetrics.Sink() {
+            @Override
+            public void increment(String name, Map<String, String> tags) {
+                if ("zlink.stream.connections.closed".equals(name)) {
+                    closeReasons.add(tags.get("close_reason"));
+                }
+            }
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void expireSessionForLiveness(
+        ZLinkStreamRuntime runtime,
+        String expiredTimestampField) throws Exception {
+        Field sessionsField = ZLinkStreamRuntime.class.getDeclaredField("sessions");
+        sessionsField.setAccessible(true);
+        Map<String, Object> sessions = (Map<String, Object>) sessionsField.get(runtime);
+        Object state = null;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            synchronized (sessions) {
+                if (!sessions.isEmpty()) {
+                    state = sessions.values().iterator().next();
+                    break;
+                }
+            }
+            Thread.sleep(1);
+        }
+        if (state == null) {
+            throw new AssertionError("STREAM session was not created");
+        }
+
+        long now = System.nanoTime();
+        setSessionTimestamp(state, "lastHeartbeatPongNanos", now);
+        setSessionTimestamp(state, "lastApplicationNanos", now);
+        setSessionTimestamp(
+            state,
+            expiredTimestampField,
+            now - TimeUnit.SECONDS.toNanos(31));
+        Method checkSessionLiveness = ZLinkStreamRuntime.class
+            .getDeclaredMethod("checkSessionLiveness");
+        checkSessionLiveness.setAccessible(true);
+        checkSessionLiveness.invoke(runtime);
+    }
+
+    private static void setSessionTimestamp(Object state, String name, long value)
+        throws ReflectiveOperationException {
+        Field field = state.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.setLong(state, value);
+    }
+
     private static TestSession awaitSession() throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
@@ -779,6 +902,38 @@ final class ZLinkStreamRuntimeIngressTest {
             new byte[0]);
     }
 
+    private static Object invokeGetOrCreateSession(
+        ZLinkStreamRuntime runtime,
+        Object streamNode,
+        ZLinkBackendStreamSocket stream,
+        RoutingId routingId) throws Exception {
+        Method method = Arrays.stream(ZLinkStreamRuntime.class
+                .getDeclaredMethods())
+            .filter(candidate -> candidate.getName()
+                .equals("getOrCreateSessionState"))
+            .findFirst()
+            .orElseThrow();
+        method.setAccessible(true);
+        try {
+            return method.invoke(runtime, streamNode, stream, routingId);
+        } catch (java.lang.reflect.InvocationTargetException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof Exception exception) {
+                throw exception;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new AssertionError(cause);
+        }
+    }
+
+    private static Throwable unwrapInvocationFailure(Throwable failure) {
+        return failure instanceof java.lang.reflect.InvocationTargetException invocation
+            ? invocation.getCause()
+            : failure;
+    }
+
     public static final class TestSession implements ZLinkSession {
         private static final AtomicReference<TestSession> lastSession =
             new AtomicReference<>();
@@ -787,6 +942,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private static volatile boolean failNextConstruction;
         private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
         private static volatile boolean decodeWirePayload;
+        private static volatile Runnable constructionHook;
         private static final AtomicReference<WirePayload> decodedWirePayload =
             new AtomicReference<>();
         private final ZLinkSessionContext context;
@@ -807,6 +963,10 @@ final class ZLinkStreamRuntimeIngressTest {
                 throw new IllegalStateException("test session construction failure");
             }
             this.context = context;
+            Runnable hook = constructionHook;
+            if (hook != null) {
+                hook.run();
+            }
             createdCount.incrementAndGet();
             lastSession.set(this);
         }

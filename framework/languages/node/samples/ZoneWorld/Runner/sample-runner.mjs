@@ -17,7 +17,9 @@ const requiredScenarioIds = [
 const logicalZoneIds = ['zone-nw', 'zone-ne', 'zone-sw', 'zone-se'];
 
 export async function runSample(ctx) {
-  if (process.env.ZLINK_ZONEWORLD_LANE === 'b8') {
+  //  lane은 runner option(--lane)으로만 받는다. 이 sample은 환경 변수로 구성을 바꾸지
+  //  않는다 — 구성 입력은 --config <path> 하나다.
+  if (ctx.lane === 'b8') {
     await runB8Lane(ctx);
     return;
   }
@@ -235,7 +237,7 @@ async function runFullLane(ctx) {
   const targetAfterFailure = await zoneNodeConfig(ctx, shared, targetNode.nodeId, 'target-after-failure', {
     disableBots: true,
     waitForPlacementPeer: true,
-    bootstrapZones: false
+    allowEmptyZoneSet: true
   });
   await ctx.start('target-after-failure', 'dist/Server/ZoneNode/main.js', ['--config', targetAfterFailure.path]);
   await waitForExactLogLine(
@@ -279,7 +281,7 @@ async function runFullLane(ctx) {
   const targetAfterMaintenance = await zoneNodeConfig(ctx, shared, targetNode.nodeId, 'target-after-maintenance', {
     disableBots: true,
     waitForPlacementPeer: true,
-    bootstrapZones: false
+    allowEmptyZoneSet: true
   });
   await ctx.start('target-after-maintenance', 'dist/Server/ZoneNode/main.js', ['--config', targetAfterMaintenance.path]);
   await waitForExactLogLine(

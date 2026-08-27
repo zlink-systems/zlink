@@ -1,12 +1,13 @@
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
 
 internal sealed class ZLinkSpotLocationLifecycle(
     ZLinkLocationRuntime runtime)
 {
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<ZLinkSpotId, TrackedSpot> _spots = [];
 
     internal async ValueTask<ZLinkLocationWriteStatus> ClaimAsync(
@@ -25,7 +26,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
         var lifecycleKind = ZLinkSpotLifecycleKind.FromBoundary(spotKind);
         if (lifecycleKind is ZLinkSpotLifecycleKind.Entry)
         {
-            Track(
+            await TrackAsync(
                 spotId,
                 spotGeneration,
                 storeVersion: null,
@@ -61,7 +62,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
                != runtime.OwnerToken.LeaseGeneration)
             return ZLinkLocationWriteStatus.RejectedConflict;
 
-        Track(
+        await TrackAsync(
             spotId,
             snapshot.ObjectGeneration,
             snapshot.StoreVersion,
@@ -75,19 +76,16 @@ internal sealed class ZLinkSpotLocationLifecycle(
         return ZLinkLocationWriteStatus.Stored;
     }
 
+    internal ValueTask<ulong?> GetTrackedGenerationAsync(ZLinkSpotId spotId) =>
+        _lane.RunAsync(() => _spots.TryGetValue(spotId, out var tracked)
+            ? tracked.SpotGeneration
+            : (ulong?)null);
+
     internal bool TryGetTrackedGeneration(ZLinkSpotId spotId, out ulong generation)
     {
-        lock (_gate)
-        {
-            if (_spots.TryGetValue(spotId, out var tracked))
-            {
-                generation = tracked.SpotGeneration;
-                return true;
-            }
-        }
-
-        generation = 0;
-        return false;
+        var trackedGeneration = AwaitStateLane(GetTrackedGenerationAsync(spotId));
+        generation = trackedGeneration.GetValueOrDefault();
+        return trackedGeneration.HasValue;
     }
 
     internal async ValueTask<ZLinkLocationWriteStatus> TrackRelocatedAsync(
@@ -129,7 +127,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
                != nodeGeneration)
             return ZLinkLocationWriteStatus.RejectedConflict;
 
-        Track(
+        await TrackAsync(
             spotId,
             objectGeneration,
             snapshot.StoreVersion,
@@ -143,27 +141,26 @@ internal sealed class ZLinkSpotLocationLifecycle(
         return ZLinkLocationWriteStatus.Stored;
     }
 
-    internal void ForgetRelocated(ZLinkSpotId spotId, ulong objectGeneration)
-    {
-        lock (_gate)
+    internal ValueTask ForgetRelocatedAsync(
+        ZLinkSpotId spotId,
+        ulong objectGeneration) =>
+        _lane.RunAsync(() =>
         {
             if (_spots.TryGetValue(spotId, out var tracked)
                 && tracked.SpotGeneration == objectGeneration)
                 _spots.Remove(spotId);
-        }
-    }
+        });
 
     internal async ValueTask ReleaseAsync(
         ZLinkMeshName meshName,
         ZLinkSpotId spotId,
         CancellationToken cancellationToken = default)
     {
-        TrackedSpot? tracked;
-        lock (_gate)
-        {
-            if (!_spots.TryGetValue(spotId, out tracked))
-                return;
-        }
+        var tracked = await _lane.RunAsync(() =>
+            _spots.TryGetValue(spotId, out var current) ? current : null)
+            .ConfigureAwait(false);
+        if (tracked is null)
+            return;
 
         if (tracked.StoreVersion is { } expectedVersion)
         {
@@ -204,34 +201,31 @@ internal sealed class ZLinkSpotLocationLifecycle(
                     $"removing Spot '{spotId.Value}' authority");
         }
 
-        lock (_gate)
+        await _lane.RunAsync(() =>
         {
             if (_spots.TryGetValue(spotId, out var current)
                 && ReferenceEquals(current, tracked))
                 _spots.Remove(spotId);
-        }
+        }).ConfigureAwait(false);
     }
 
-    internal Func<CancellationToken, ValueTask>? TakeOwnershipLostDeactivation(
+    internal ValueTask<Func<CancellationToken, ValueTask>?> TakeOwnershipLostDeactivationAsync(
         string canonicalKey)
     {
         var spotId = TryDecodeCanonicalSpotId(canonicalKey);
-        if (spotId is null) return null;
+        if (spotId is null) return ValueTask.FromResult<Func<CancellationToken, ValueTask>?>(null);
         var spotKey = spotId.Value;
-        lock (_gate)
+        return _lane.RunAsync(() =>
         {
             if (!_spots.Remove(spotKey, out var spot))
                 return null;
             return spot.Deactivate;
-        }
+        });
     }
 
-    internal void ResetGeneration()
-    {
-        lock (_gate) _spots.Clear();
-    }
+    internal ValueTask ResetGenerationAsync() => _lane.RunAsync(_spots.Clear);
 
-    private void Track(
+    private ValueTask TrackAsync(
         ZLinkSpotId spotId,
         ulong spotGeneration,
         string? storeVersion,
@@ -243,7 +237,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
         ZLinkSpotLifecycleKind spotKind,
         Func<CancellationToken, ValueTask>? deactivate)
     {
-        lock (_gate)
+        return _lane.RunAsync(() =>
         {
             _spots[spotId] = new TrackedSpot(
                 spotGeneration,
@@ -255,8 +249,11 @@ internal sealed class ZLinkSpotLocationLifecycle(
                 nodeGeneration,
                 spotKind,
                 deactivate);
-        }
+        });
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 
     private static bool MatchesReadySpot(
         ZLinkAuthoritySnapshot snapshot,

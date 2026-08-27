@@ -21,6 +21,7 @@ internal static partial class ZLinkFrameworkRegistrationValidator
                 registration.Locations.Enabled,
                 handlerExposure);
 
+        ValidateUniqueStreamSessionTypes(registration);
         foreach (var streamNode in registration.StreamNodes.Values) ValidateStreamNode(streamNode, registration);
 
         foreach (var spotNode in registration.SpotNodes.Values)
@@ -46,6 +47,24 @@ internal static partial class ZLinkFrameworkRegistrationValidator
 
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         registration.Locations.CaptureStartupOptions();
+    }
+
+    private static void ValidateUniqueStreamSessionTypes(
+        ZLinkFrameworkRegistration registration)
+    {
+        var owners = new Dictionary<Type, string>();
+        foreach (var streamNode in registration.StreamNodes.Values)
+        {
+            var sessionType = streamNode.HeaderSessionType;
+            if (sessionType is null)
+                continue;
+
+            if (!owners.TryAdd(sessionType, streamNode.StreamNodeName))
+                throw new ZLinkConfigurationException(
+                    $"STREAM session type '{sessionType.FullName ?? sessionType.Name}' is registered by "
+                    + "more than one process-local node "
+                    + $"('{owners[sessionType]}' and '{streamNode.StreamNodeName}').");
+        }
     }
 
     private static void ValidateRouteMeshChannelNames(

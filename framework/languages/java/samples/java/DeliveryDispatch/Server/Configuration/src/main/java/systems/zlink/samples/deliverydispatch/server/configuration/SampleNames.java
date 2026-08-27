@@ -20,7 +20,13 @@ public final class SampleNames {
     public static final String CustomerActorType = "deliverydispatch.customer.actor";
     public static final String CourierActorType = "deliverydispatch.courier.actor";
 
-    public static final String TopologyReadyMarker = "topology=ready";
+    public static final String DispatchNode = "dispatch";
+    public static final String TrackingNode = "tracking";
+    public static final String CourierNode1 = "courier-node-1";
+    public static final String CourierNode2 = "courier-node-2";
+    public static final String CustomerGatewayNode = "customer-gateway";
+    public static final String CourierSessionNode = "courier-session";
+
     public static final String ReassignmentMarker = "deliverydispatch-reassignment=completed";
     public static final String ServerEvidenceMarker = "deliverydispatch-server-evidence=completed";
     public static final String CompletedMarker = "deliverydispatch=completed";

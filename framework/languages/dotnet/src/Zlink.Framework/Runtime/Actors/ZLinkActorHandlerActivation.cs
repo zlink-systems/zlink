@@ -7,24 +7,20 @@ internal sealed class ZLinkActorHandlerActivation : IAsyncDisposable
 {
     private readonly AsyncServiceScope _scope;
     private readonly ZLinkScopedHandlerInstanceOwner _instances;
-    private readonly object _gate = new();
-    private Task? _disposeTask;
+    private readonly Lazy<Task> _disposeTask;
 
     public ZLinkActorHandlerActivation(IServiceProvider services)
     {
         _scope = services.CreateAsyncScope();
         _instances = new ZLinkScopedHandlerInstanceOwner(_scope.ServiceProvider);
+        _disposeTask = new Lazy<Task>(
+            DisposeCoreAsync,
+            LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     public ZLinkScopedHandlerInstanceOwner Instances => _instances;
 
-    public ValueTask DisposeAsync()
-    {
-        Task task;
-        lock (_gate)
-            task = _disposeTask ??= DisposeCoreAsync();
-        return new ValueTask(task);
-    }
+    public ValueTask DisposeAsync() => new(_disposeTask.Value);
 
     private async Task DisposeCoreAsync()
     {

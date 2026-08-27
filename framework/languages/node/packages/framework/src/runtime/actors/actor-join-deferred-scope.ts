@@ -61,6 +61,10 @@ class ActorJoinRegistrationScope {
   }
 
   async prepareSealedJoins(): Promise<void> {
+    await this.prepareSealedJoinsCore();
+  }
+
+  private async prepareSealedJoinsCore(): Promise<void> {
     if (this.prepared) {
       return;
     }
@@ -74,7 +78,7 @@ class ActorJoinRegistrationScope {
     if (this.intents.length === 0) {
       return;
     }
-    await this.prepareSealedJoins();
+    await this.prepareSealedJoinsCore();
     // A deferred callback failure cannot replace the handler result with a
     // second request outcome. The dispatcher releases that result only after
     // this terminal work, while the next queued turn remains behind it.

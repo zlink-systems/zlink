@@ -13,7 +13,7 @@ internal sealed class ShoppingMallClientScenario
     // 4. Run inventory and payment failure paths and verify the stored failure reasons.
     // 5. Rebuild a projection prepared by the smoke runner through the public order API.
     // 6. Start a scale-out order and leave server evidence to the runner observation hook.
-    public async ValueTask RunAsync(
+    public async ValueTask<ShoppingMallClientOrders> RunAsync(
         ZLinkHttpClient apiA,
         ZLinkHttpClient apiB,
         CancellationToken cancellationToken = default)
@@ -121,7 +121,15 @@ internal sealed class ShoppingMallClientScenario
             .Fetch<StartOrderRes>(cancellationToken);
         var scaleConfirmed = await WaitForStatusAsync(apiA, scale.OrderId, OrderStatuses.Confirmed, cancellationToken);
         ZlinkStreamAssert.Ensure(scaleConfirmed.Status == OrderStatuses.Confirmed, "Assertion failed: scaleConfirmed.Status == OrderStatuses.Confirmed");
-
+        return new ShoppingMallClientOrders(
+            success.OrderId,
+            pending.OrderId,
+            concurrentAResult.OrderId,
+            resumed.State.OrderId,
+            inventoryStarted.OrderId,
+            paymentStarted.OrderId,
+            scale.OrderId,
+            rebuilt.State.OrderId);
     }
 
     private static async ValueTask<OrderState> GetOrderAsync(
@@ -161,3 +169,13 @@ internal sealed class ShoppingMallClientScenario
                || state.Status == OrderStatuses.Confirmed;
     }
 }
+
+internal sealed record ShoppingMallClientOrders(
+    string SuccessfulOrderId,
+    string PendingRecoveredOrderId,
+    string ConcurrentOrderId,
+    string ResumedOrderId,
+    string InventoryFailureOrderId,
+    string PaymentFailureOrderId,
+    string ScaleOutOrderId,
+    string RepairOrderId);

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/execution/state_lane.hpp"
+
 #include <service_wire_constants.hpp>
 
 #include <cstdint>
@@ -15,8 +17,7 @@
 namespace zlink::framework::runtime::mesh
 {
 
-std::uint64_t
-sum_service_weights (std::span<const int> weights);
+std::uint64_t sum_service_weights (std::span<const int> weights);
 
 enum class service_node_state_t
 {
@@ -59,8 +60,7 @@ struct service_node_descriptor_t
     // rolling cross-language migration: older Node peers still require it,
     // while newer peers require v13. The vector remains byte-sorted on wire.
     std::vector<std::string> protocol_capabilities{
-      "framework-service-v12",
-      zlink::framework::runtime::protocol::required_capability};
+      "framework-service-v12", zlink::framework::runtime::protocol::required_capability};
     service_object_role_t object_role = service_object_role_t::none;
     int placement_weight = 100;
     std::uint32_t active_capacity_limit = 10000;
@@ -92,13 +92,15 @@ struct admitted_peer_t
 {
     service_node_descriptor_t descriptor;
     std::vector<std::uint8_t> connection_id;
-    service_connection_direction_t direction =
-      service_connection_direction_t::inbound;
+    service_connection_direction_t direction = service_connection_direction_t::inbound;
+    // Changes whenever this exact admitted connection is replaced.  Callers
+    // use it only as an operation-local availability epoch; it is not a wire
+    // generation or an ordering token.
+    std::uint64_t admission_epoch = 0;
 };
 
-bool route_mesh_connection_not_required (
-  const service_node_descriptor_t &local,
-  const service_node_descriptor_t &remote) noexcept;
+bool route_mesh_connection_not_required (const service_node_descriptor_t &local,
+                                         const service_node_descriptor_t &remote) noexcept;
 
 class service_topology_registry_t
 {
@@ -109,28 +111,23 @@ class service_topology_registry_t
     service_node_descriptor_t local_descriptor () const;
     void set_change_handler (std::function<void ()> handler);
 
-    peer_admission_result_t admit (
-      service_node_descriptor_t descriptor,
-      std::vector<std::uint8_t> connection_id);
-    peer_admission_result_t admit (
-      service_node_descriptor_t descriptor,
-      std::vector<std::uint8_t> connection_id,
-      service_connection_direction_t direction);
-    peer_admission_result_t admit (
-      service_node_descriptor_t descriptor,
-      std::vector<std::uint8_t> connection_id,
-      service_connection_direction_t direction,
-      const service_node_descriptor_t &expected_descriptor);
+    peer_admission_result_t admit (service_node_descriptor_t descriptor,
+                                   std::vector<std::uint8_t> connection_id);
+    peer_admission_result_t admit (service_node_descriptor_t descriptor,
+                                   std::vector<std::uint8_t> connection_id,
+                                   service_connection_direction_t direction);
+    peer_admission_result_t admit (service_node_descriptor_t descriptor,
+                                   std::vector<std::uint8_t> connection_id,
+                                   service_connection_direction_t direction,
+                                   const service_node_descriptor_t &expected_descriptor);
     bool disconnect (const std::vector<std::uint8_t> &node_routing_id,
                      const std::vector<std::uint8_t> &connection_id);
 
     std::vector<admitted_peer_t> peers () const;
     std::vector<service_node_descriptor_t> not_required_peers () const;
-    std::optional<admitted_peer_t>
-    peer (const std::vector<std::uint8_t> &node_routing_id) const;
+    std::optional<admitted_peer_t> peer (const std::vector<std::uint8_t> &node_routing_id) const;
     std::optional<admitted_peer_t> select (const std::string &channel_name);
-    std::vector<admitted_peer_t>
-    multicast_targets (const std::string &channel_name) const;
+    std::vector<admitted_peer_t> multicast_targets (const std::string &channel_name) const;
 
   private:
     struct byte_vector_less_t
@@ -142,30 +139,24 @@ class service_topology_registry_t
     static bool valid_descriptor (const service_node_descriptor_t &descriptor);
     static bool selectable (const service_node_descriptor_t &descriptor,
                             const std::string &channel_name);
-    peer_admission_result_t admit_impl (
-      service_node_descriptor_t descriptor,
-      std::vector<std::uint8_t> connection_id,
-      std::optional<service_connection_direction_t> direction,
-      const service_node_descriptor_t *expected_descriptor);
+    peer_admission_result_t admit_impl (service_node_descriptor_t descriptor,
+                                        std::vector<std::uint8_t> connection_id,
+                                        std::optional<service_connection_direction_t> direction,
+                                        const service_node_descriptor_t *expected_descriptor);
 
-    mutable std::mutex _mutex;
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
     service_node_descriptor_t _local;
     std::map<std::vector<std::uint8_t>, admitted_peer_t, byte_vector_less_t> _peers;
-    std::map<std::vector<std::uint8_t>,
-             service_node_descriptor_t,
-             byte_vector_less_t>
+    std::map<std::vector<std::uint8_t>, service_node_descriptor_t, byte_vector_less_t>
       _not_required_peers;
     struct selection_state_t
     {
         bool initialized = false;
         std::uint64_t topology_version = 0;
         std::uint64_t total_weight = 0;
-        std::map<std::vector<std::uint8_t>,
-                 std::uint64_t,
-                 byte_vector_less_t>
-          weights;
-        std::map<std::vector<std::uint8_t>, std::int64_t, byte_vector_less_t>
-          cumulative;
+        std::map<std::vector<std::uint8_t>, std::uint64_t, byte_vector_less_t> weights;
+        std::map<std::vector<std::uint8_t>, std::int64_t, byte_vector_less_t> cumulative;
         std::vector<std::vector<std::uint8_t>> ordered_node_ids;
         std::vector<std::uint64_t> ordered_weights;
         std::vector<std::int64_t> precomputed_initial_cumulative;
@@ -188,3 +179,4 @@ class service_topology_registry_t
 };
 
 } // namespace zlink::framework::runtime::mesh
+#include <mutex>

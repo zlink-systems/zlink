@@ -573,10 +573,11 @@ class stop_after_delay_t final : public zlink::framework::hosted_service_t
   public:
     explicit stop_after_delay_t (zlink::framework::app_t &app) : _app (&app) {}
 
-    void start (zlink::framework::service_provider_t &) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
     {
         std::this_thread::sleep_for (std::chrono::milliseconds (50));
         _app->stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -594,7 +595,7 @@ class stream_roundtrip_client_t final : public zlink::framework::hosted_service_
         _app (&app), _endpoint (std::move (endpoint)), _runtime (std::move (runtime))
     {
     }
-    void start (zlink::framework::service_provider_t &) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
     {
         for (int attempt = 0; attempt < 80; ++attempt) {
             try {
@@ -608,6 +609,7 @@ class stream_roundtrip_client_t final : public zlink::framework::hosted_service_
             }
         }
         _app->stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -974,7 +976,7 @@ class auto_connect_request_client_t final : public zlink::framework::hosted_serv
   public:
     explicit auto_connect_request_client_t (zlink::framework::app_t &app) : _app (&app) {}
 
-    void start (zlink::framework::service_provider_t &) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
     {
         auto client = _app->advanced ().zlink ().request_client ("orders");
         for (int attempt = 0; attempt < 40; ++attempt) {
@@ -992,6 +994,7 @@ class auto_connect_request_client_t final : public zlink::framework::hosted_serv
             std::this_thread::sleep_for (std::chrono::milliseconds (25));
         }
         _app->stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -1012,7 +1015,7 @@ class missing_auto_connect_request_client_t final
         _app (&app)
     {
     }
-    void start (zlink::framework::service_provider_t &) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
     {
         auto reply = _app->advanced ().zlink ().request_client ("orders")
                        .request (auto_connect_request_t{17})
@@ -1023,6 +1026,7 @@ class missing_auto_connect_request_client_t final
             observed_error = reply.error_kind ();
         }
         _app->stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -1043,7 +1047,7 @@ class rejected_auto_connect_request_client_t final
     {
     }
 
-    void start (zlink::framework::service_provider_t &) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
     {
         auto client =
           _app->advanced ().zlink ().request_client ("orders");
@@ -1063,6 +1067,7 @@ class rejected_auto_connect_request_client_t final
               std::chrono::milliseconds (25));
         }
         _app->stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -1194,7 +1199,7 @@ class user_spot_manager_client_t final
     {
     }
 
-    void start (
+    zlink::framework::task_t<void> start (
       zlink::framework::service_provider_t &services) override
     {
         try {
@@ -1213,7 +1218,7 @@ class user_spot_manager_client_t final
                   created.error () ? created.error ()->what ()
                                    : "User Spot create failed";
                 _app->stop ();
-                return;
+                co_return;
             }
             auto found = manager.find (rid).result ();
             if (!found || !found.value ()) {
@@ -1221,7 +1226,7 @@ class user_spot_manager_client_t final
                   found.error () ? found.error ()->what ()
                                  : "User Spot find failed";
                 _app->stop ();
-                return;
+                co_return;
             }
             auto closed =
               manager.close (*found.value ()).result ();
@@ -1230,7 +1235,7 @@ class user_spot_manager_client_t final
                   closed.error () ? closed.error ()->what ()
                                   : "User Spot close failed";
                 _app->stop ();
-                return;
+                co_return;
             }
             observed = true;
         }
@@ -1238,6 +1243,7 @@ class user_spot_manager_client_t final
             last_error = error.what ();
         }
         _app->stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -1261,7 +1267,7 @@ class generated_user_spot_collision_client_t final
     {
     }
 
-    void start (
+    zlink::framework::task_t<void> start (
       zlink::framework::service_provider_t &services) override
     {
         try {
@@ -1282,7 +1288,7 @@ class generated_user_spot_collision_client_t final
                     ? occupied.error ()->what ()
                     : "Failed to create the collision identity";
                 _app->stop ();
-                return;
+                co_return;
             }
             _store->force_reserve_conflict.store (
               true, std::memory_order_release);
@@ -1299,7 +1305,7 @@ class generated_user_spot_collision_client_t final
                 last_error =
                   "Generated User Spot collision was not rejected immediately";
                 _app->stop ();
-                return;
+                co_return;
             }
             auto existing =
               manager.get_or_create (collision, "occupied")
@@ -1315,7 +1321,7 @@ class generated_user_spot_collision_client_t final
                 last_error =
                   "GetOrCreate did not preserve the caller RID incarnation";
                 _app->stop ();
-                return;
+                co_return;
             }
             auto mismatch =
               manager.get_or_create (collision, "room")
@@ -1330,7 +1336,7 @@ class generated_user_spot_collision_client_t final
                 last_error =
                   "GetOrCreate changed caller RID type mismatch semantics";
                 _app->stop ();
-                return;
+                co_return;
             }
             observed = true;
         }
@@ -1338,6 +1344,7 @@ class generated_user_spot_collision_client_t final
             last_error = error.what ();
         }
         _app->stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -1360,7 +1367,7 @@ class source_cleanup_client_t final
     {
     }
 
-    void start (
+    zlink::framework::task_t<void> start (
       zlink::framework::service_provider_t &services) override
     {
         auto &manager =
@@ -1385,6 +1392,7 @@ class source_cleanup_client_t final
               result.error () ? result.error ()->what ()
                               : "User Spot failure was not preserved";
         _app->stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -1401,7 +1409,7 @@ class auto_connect_publish_client_t final : public zlink::framework::hosted_serv
   public:
     explicit auto_connect_publish_client_t (zlink::framework::app_t &app) : _app (&app) {}
 
-    void start (zlink::framework::service_provider_t &) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
     {
         auto publisher = _app->advanced ().zlink ().publisher ();
         for (int attempt = 0; attempt < 80; ++attempt) {
@@ -1438,6 +1446,7 @@ class auto_connect_publish_client_t final : public zlink::framework::hosted_serv
             std::this_thread::sleep_for (std::chrono::milliseconds (25));
         }
         _app->stop ();
+        co_return;
     }
 
     void stop () noexcept override {}
@@ -1668,6 +1677,18 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RejectsInvalidRoutingAndRelocationLi
         options.configure_locations ().session_relocation_seal_timeout =
           std::chrono::milliseconds::zero ();
         EXPECT_THROW (options.apply (), zlink::framework::framework_exception_t);
+    }
+    {
+        options_fixture_t fixture;
+        auto options = fixture.make_options ();
+        EXPECT_EQ (std::chrono::milliseconds (30000),
+                   options.session_replacement_callback_timeout ());
+        options.set_session_replacement_callback_timeout (std::chrono::milliseconds (17));
+        EXPECT_EQ (std::chrono::milliseconds (17),
+                   options.session_replacement_callback_timeout ());
+        EXPECT_THROW (
+          options.set_session_replacement_callback_timeout (std::chrono::milliseconds::zero ()),
+          zlink::framework::framework_exception_t);
     }
     {
         options_fixture_t fixture;

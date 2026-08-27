@@ -26,8 +26,18 @@ class OrderWorkflowService {
     return this.store.prepareInventoryEffect(request, role);
   }
 
-  continue(request: { orderId: string }, role: string): ContinueOrderWorkflowRes {
-    const response = this.store.continueOrder(request.orderId, role);
+  prepareRelocationCheckpoint(
+    request: StartOrderWorkflowReq,
+    role: string,
+    objectGeneration: bigint
+  ): StartOrderWorkflowRes {
+    const response = this.store.prepareInventoryReserved(request, role);
+    this.store.markRelocationCheckpoint(request.orderId, objectGeneration);
+    return response;
+  }
+
+  continue(request: { orderId: string }, role: string, objectGeneration?: bigint): ContinueOrderWorkflowRes {
+    const response = this.store.continueOrder(request.orderId, role, objectGeneration);
     return response;
   }
 

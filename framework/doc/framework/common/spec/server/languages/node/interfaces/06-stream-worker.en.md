@@ -2,7 +2,7 @@
 
 [Interface table of contents](README.en.md) · [Node.js contract table of contents](../README.en.md)
 
-This document fixes the exact TypeScript declarations related to
+This document fixes the TypeScript declarations related to
 STREAM, timer, and worker that `@zlink-systems/framework` and
 `@zlink-systems/nestjs` export in ZLink Framework. Behavioral meaning is
 owned by the [common spec](../../../README.en.md) — this document
@@ -13,32 +13,32 @@ parameters, and return types.
 
 ```ts
 export interface ZLinkSpotPublisherClient {
-    publish(channelName: string, topic: string, event: unknown): ZLinkPublishCall;
+ publish(channelName: string, topic: string, event: unknown): ZLinkPublishCall;
 }
 
 export declare function ZLinkSpotRequest(packetName?: string): MethodDecorator;
 
 export interface ZLinkSpotRequestHandler<TSpot, TRequest, TReply> {
-    handle(spot: TSpot, request: TRequest, context: ZLinkMessageContext): Promise<TReply>;
+ handle(spot: TSpot, request: TRequest, context: ZLinkMessageContext): Promise<TReply>;
 }
 
 export declare function ZLinkSpotSubscription(channelName: string, topic: string): MethodDecorator;
 
 export interface ZLinkSpotSubscriptionHandler<TSpot, TEvent> {
-    handle(spot: TSpot, event: TEvent, context: ZLinkPublishMessageContext): Promise<void>;
+ handle(spot: TSpot, event: TEvent, context: ZLinkPublishMessageContext): Promise<void>;
 }
 
 export interface ZLinkSpotTimerHandler<TSpot> {
-    handle(spot: TSpot, tick: ZLinkTimerTick): Promise<void>;
+ handle(spot: TSpot, tick: ZLinkTimerTick): Promise<void>;
 }
 
 export interface ZLinkStream {
-    readonly sessionId: string;
-    readonly routingId?: RoutingId;
-    readonly localAddr?: string;
-    readonly remoteAddr?: string;
-    write(payload: ZLinkMessage, flags?: number): boolean;
-    close(signal?: AbortSignal): Promise<void>;
+ readonly sessionId: string;
+ readonly routingId?: RoutingId;
+ readonly localAddr?: string;
+ readonly remoteAddr?: string;
+ write(payload: ZLinkMessage, flags?: number): boolean;
+ close(signal?: AbortSignal): Promise<void>;
 }
 ```
 
@@ -46,40 +46,40 @@ export interface ZLinkStream {
 
 ```ts
 export interface ZLinkStreamCompressionBuilder {
-    useDefault(): this;
-    useLz4(): this;
-    use(codec: ZLinkStreamCompressionCodec): this;
-    disable(): this;
+ useDefault(): this;
+ useLz4(): this;
+ use(codec: ZLinkStreamCompressionCodec): this;
+ disable(): this;
 }
 
 export interface ZLinkStreamCompressionCodec {
-    compress(payload: Uint8Array): Uint8Array;
-    decompress(payload: Uint8Array, maxDecompressedSize: number): Uint8Array;
+ compress(payload: Uint8Array): Uint8Array;
+ decompress(payload: Uint8Array, maxDecompressedSize: number): Uint8Array;
 }
 
 export interface ZLinkStreamCompressionOptions {
-    readonly disabled?: boolean;
-    readonly codec?: ZLinkStreamCompressionCodec;
+ readonly disabled?: boolean;
+ readonly codec?: ZLinkStreamCompressionCodec;
 }
 
 export interface ZLinkStreamError {
-    readonly error: ZLinkStreamSessionError;
-    readonly message?: string;
+ readonly error: ZLinkStreamSessionError;
+ readonly message?: string;
 }
 
 export interface ZLinkStreamNodeBuilder {
-    bind(endpoint: string): this;
-    bind(port?: number): this;
-    setBindHost(bindHost: string): this;
-    setAdvertiseHost(advertiseHost: string): this;
-    configureSocket(): ZLinkStreamSocketConfig;
-    enableActorDispatch(): this;
-    setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
-    registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
+ bind(endpoint: string): this;
+ bind(port?: number): this;
+ setBindHost(bindHost: string): this;
+ setAdvertiseHost(advertiseHost: string): this;
+ configureSocket(): ZLinkStreamSocketConfig;
+ enableActorDispatch(): this;
+ setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
+ registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }
 
 export interface ZLinkStreamSocketConfig {
-    maxMessageSize: number;
+ maxMessageSize: number;
 }
 
 export declare function ZLinkStreamPacket(): MethodDecorator;
@@ -87,20 +87,20 @@ export declare function ZLinkStreamPacket(): MethodDecorator;
 export declare function ZLinkStreamRaw(): MethodDecorator;
 
 export declare enum ZLinkStreamSessionError {
-    Internal = "internal",
-    TransportError = "transportError"
+ Internal = "internal",
+ TransportError = "transportError"
 }
 
 export interface ZLinkTimer {
-    readonly isDisposed: boolean;
-    cancel(signal?: AbortSignal): Promise<void>;
-    dispose(): Promise<void>;
+ readonly isDisposed: boolean;
+ cancel(signal?: AbortSignal): Promise<void>;
+ dispose(): Promise<void>;
 }
 
 export interface ZLinkTimerOptions {
-    overrunPolicy?: ZLinkTimerOverrunPolicy;
-    maxCatchUpTicks?: number;
-    stopOnUnhandledException?: boolean;
+ overrunPolicy?: ZLinkTimerOverrunPolicy;
+ maxCatchUpTicks?: number;
+ stopOnUnhandledException?: boolean;
 }
 ```
 
@@ -118,48 +118,48 @@ Framework limit doesn't apply to server-to-client outbound messages.
 
 ```ts
 export declare enum ZLinkTimerOverrunPolicy {
-    SkipLateTicks = "skipLateTicks",
-    CatchUpBounded = "catchUpBounded",
-    DelayNextTick = "delayNextTick"
+ SkipLateTicks = "skipLateTicks",
+ CatchUpBounded = "catchUpBounded",
+ DelayNextTick = "delayNextTick"
 }
 
 export interface ZLinkTimerTick {
-    readonly name: string;
-    readonly deliveryIndex: bigint;
-    readonly scheduledIndex: bigint;
-    readonly periodMs: number;
-    readonly scheduledAt: Date;
-    readonly startedAt: Date;
-    readonly scheduledElapsedMs: number;
-    readonly startedElapsedMs: number;
-    readonly delayMs: number;
-    readonly skippedTicks: bigint;
+ readonly name: string;
+ readonly deliveryIndex: bigint;
+ readonly scheduledIndex: bigint;
+ readonly periodMs: number;
+ readonly scheduledAt: Date;
+ readonly startedAt: Date;
+ readonly scheduledElapsedMs: number;
+ readonly startedElapsedMs: number;
+ readonly delayMs: number;
+ readonly skippedTicks: bigint;
 }
 
 export declare enum ZLinkUnhandledDispatchAction {
-    ReplyError = "replyError",
-    LogAndDrop = "logAndDrop",
-    Drop = "drop",
-    Throw = "throw"
+ ReplyError = "replyError",
+ LogAndDrop = "logAndDrop",
+ Drop = "drop",
+ Throw = "throw"
 }
 
 export interface ZLinkUnhandledDispatchOptions {
-    request: ZLinkUnhandledDispatchAction;
-    send: ZLinkUnhandledDispatchAction;
-    publish: ZLinkUnhandledDispatchAction;
+ request: ZLinkUnhandledDispatchAction;
+ send: ZLinkUnhandledDispatchAction;
+ publish: ZLinkUnhandledDispatchAction;
 }
 
 export interface ZLinkWorkerCall<T> {
-    timeoutMs(durationMs: number): ZLinkWorkerCall<T>;
-    submit(signal?: AbortSignal): Promise<T>;
-    yield(signal?: AbortSignal): Promise<T>;
+ timeoutMs(durationMs: number): ZLinkWorkerCall<T>;
+ submit(signal?: AbortSignal): Promise<T>;
+ yield(signal?: AbortSignal): Promise<T>;
 }
 
 export interface ZLinkWorkerOptions {
-    readonly minThreads: number;
-    readonly maxThreads: number;
-    readonly idleTimeoutMs: number;
-    readonly maxQueueLength: number;
+ readonly minThreads: number;
+ readonly maxThreads: number;
+ readonly idleTimeoutMs: number;
+ readonly maxQueueLength: number;
 }
 ```
 

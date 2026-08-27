@@ -35,12 +35,12 @@ target별 수락·실패 field가 없다. Kotlin 전용 projection으로 이를 
 
 ClientServer target과 fanout publisher는 Java `ZLinkPeerState`와 `ZLinkTopologyReason`을 그대로
 사용한다. Kotlin 전용 connection 상태 enum을 만들지 않는다.
-같은 ChannelName에 Client와 Server를 함께 등록한 [snapshot](../../../01-glossary.ko.md#snapshot)의 local role은 Java
+같은 ChannelName에 Client와 Server를 함께 등록한 [snapshot](../../../00-foundation/02-glossary.ko.md#snapshot)의 local role은 Java
 `ZLinkClientServerRole.CLIENT_AND_SERVER`로 나타낸다. 이는 별도 role registration 두 개의 aggregate
 projection일 뿐 builder role이나 registration key가 아니다. Kotlin 전용 enum이나 변환 값을 만들지 않는다.
 
 Fanout ready 의미도 Java 계약을 그대로 사용한다. Publisher 전용 SUB socket의 native-ready만으로
-[ready](../../../01-glossary.ko.md#ready)가 되지 않으며, 같은 socket에서 첫 valid application
+[ready](../../../00-foundation/02-glossary.ko.md#ready)가 되지 않으며, 같은 socket에서 첫 valid application
 record 또는 liveness beacon까지 받아야 한다. 15초 inbound timeout은 해당 publisher의 peer state를
 `NOT_CONNECTED`로 바꾼다.
 
@@ -50,7 +50,7 @@ contract가 아니다. Kotlin은 Java의 `OFF`, `ERRORS`, `NORMAL`, `DETAILED` �
 Application이 구성한 표준 logger·trace·metric provider 실패는 원래 message operation의 terminal 결과를
 바꾸지 않으며 별도 진단으로 격리한다.
 
-[RouteMesh](../../../01-glossary.ko.md#routemesh) placement status는 새 object 수락 가능 여부와
+[RouteMesh](../../../00-foundation/02-glossary.ko.md#routemesh) placement status는 새 object 수락 가능 여부와
 현재 process의 active Actor·Spot 수만 제공한다. Node-wide placement weight, stable type별 capacity,
 pending activation과 reservation failure는 내부 배치 판단 값이므로 공개하지 않는다.
 `isAvailable`은 host가 `SERVING`이고 Object Server이며, placement weight가 양수이고, Actor 또는

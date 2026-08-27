@@ -140,7 +140,7 @@ public final class ZoneBootstrap implements ApplicationRunner {
             }
         }
         System.out.println("topology=ready node=" + topology.nodeId()
-            + " zones=" + census.zoneIds());
+            + " zones=" + String.join(",", census.zoneIds()));
     }
 
 }

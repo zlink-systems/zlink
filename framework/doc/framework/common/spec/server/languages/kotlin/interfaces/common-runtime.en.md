@@ -63,7 +63,7 @@ target in the order: version, `SERVING` Object Server that isn't
 source, stable type/factory/adapter capability, capacity and a
 different maintenance wave, an `ADMITTED` Core peer matching RID/
 lifecycle generation, placement weight. It doesn't fall back to a
-different version. If there's no version/wave/capacity or exact-ready
+different version. If there's no version/wave/capacity or -ready
 target satisfying the registered factory/type/relocation-adapter eligibility, it re-checks until
 the deadline and then it's `BLOCKED/TARGET_UNAVAILABLE`. After target selection, an incompatible
 transferred state schema/type adapter is `BLOCKED/STATE_INCOMPATIBLE`; a Store lookup failure is
@@ -90,11 +90,11 @@ isn't added.
 
 ```kotlin
 val relocation = frameworkRuntime.relocate(
-    ZLinkFrameworkRelocationOptions(
-        ZLinkFrameworkRelocationMode.ROLLING_UPDATE,
-        12L, // only selects a Ready node that exactly matches this version.
-        Duration.ofSeconds(30)
-    )
+ ZLinkFrameworkRelocationOptions(
+ ZLinkFrameworkRelocationMode.ROLLING_UPDATE,
+ 12L, // only selects a Ready node that exactly matches this version.
+ Duration.ofSeconds(30)
+ )
 ).await()
 val stopped = frameworkRuntime.shutdown().await()
 ```
@@ -104,13 +104,13 @@ There's no separate `relocateAsync`, `shutdownAsync`, `drain`, or
 `ZLinkFrameworkRelocationResult`, and the host termination result is
 `ZLinkFrameworkTerminationResult`, waited on with `CompletionStage.await()`.
 
-## Exact Generated JVM Signature
+## Generated JVM Signature
 
 The JVM signature below is the generated form of the Kotlin source
 contract.
 
 ```java
 public final class systems.zlink.framework.kotlin.ZLinkCoroutineTurnAwaitKt {
-  public static final <T> java.lang.Object await(java.util.concurrent.CompletionStage<T>, kotlin.coroutines.Continuation<? super T>);
+ public static final <T> java.lang.Object await(java.util.concurrent.CompletionStage<T>, kotlin.coroutines.Continuation<? super T>);
 }
 ```

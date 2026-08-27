@@ -12,8 +12,10 @@ GAMEQUEST_LOG_DIR="${SAMPLE_LOG_DIR}"
 mkdir -p "${LOG_DIR}" "${SAMPLE_LOG_DIR}"
 
 PIDS=()
+declare -A SERVER_PIDS=()
 REDIS_CONTAINER=""
 RUN_SUCCEEDED=0
+WAIT_ATTEMPTS=300
 
 cleanup() {
   find "${RUN_DIR}" -type f -name "*.json" -delete 2>/dev/null || true
@@ -45,7 +47,7 @@ cleanup() {
   if [[ -n "${REDIS_CONTAINER}" ]]; then
     zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
-  zlink_sample_copy_evidence "${RUN_DIR}" "GameQuest"
+  zlink_sample_copy_evidence "${RUN_DIR}" "GameQuest" || true
   if [[ "${RUN_SUCCEEDED}" == "1" ]]; then
     rm -rf "${RUN_DIR}"
   else
@@ -127,7 +129,7 @@ wait_port() {
   local port
   host="$(endpoint_host "${endpoint}")"
   port="$(endpoint_port "${endpoint}")"
-  for _ in $(seq 1 600); do
+  for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
     if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
       return 0
     fi
@@ -140,7 +142,7 @@ wait_port() {
 wait_http() {
   local name="$1"
   local endpoint="$2"
-  for _ in $(seq 1 600); do
+  for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
     if curl -fsS "${endpoint}/health" >/dev/null 2>&1; then
       return 0
     fi
@@ -162,6 +164,87 @@ start_server() {
   assembly="${project_dir}/bin/Debug/net8.0/${project_name}.dll"
   dotnet "${assembly}" "$@" >"${LOG_DIR}/${name}.log" 2>&1 &
   PIDS+=("$!")
+  SERVER_PIDS["${name}"]="$!"
+}
+
+wait_log_contains() {
+  local file="$1"
+  local pattern="$2"
+  for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
+    if grep -Fq -- "${pattern}" "${file}" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for '${pattern}' in ${file}" >&2
+  return 1
+}
+
+count_log_matches() {
+  local file="$1"
+  local pattern="$2"
+  grep -Fc -- "${pattern}" "${file}" || true
+}
+
+require_at_least() {
+  local file="$1"
+  local pattern="$2"
+  wait_log_contains "${file}" "${pattern}"
+}
+
+wait_total_at_least() {
+  local expected="$1"
+  local pattern="$2"
+  shift 2
+  for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
+    local total=0
+    local file
+    for file in "$@"; do
+      total=$(( total + $(count_log_matches "${file}" "${pattern}") ))
+    done
+    if (( total >= expected )); then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for ${expected} '${pattern}' row(s)" >&2
+  return 1
+}
+
+find_owner_mission() {
+  local pattern_a="gamequest-owner ready player=player-alice generation=2 node=mission-a"
+  local pattern_b="gamequest-owner ready player=player-alice generation=2 node=mission-b"
+  for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
+    if grep -Fq -- "${pattern_a}" "${LOG_DIR}/mission-a.log" 2>/dev/null; then
+      echo "mission-a"
+      return 0
+    fi
+    if grep -Fq -- "${pattern_b}" "${LOG_DIR}/mission-b.log" 2>/dev/null; then
+      echo "mission-b"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for the player-alice owner-ready marker" >&2
+  return 1
+}
+
+find_closed_mission() {
+  local pattern_a="gamequest-owner closed player=player-alice generation=1 node=mission-a"
+  local pattern_b="gamequest-owner closed player=player-alice generation=1 node=mission-b"
+  for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
+    if grep -Fq -- "${pattern_a}" "${LOG_DIR}/mission-a.log" 2>/dev/null; then
+      echo "mission-a"
+      return 0
+    fi
+    if grep -Fq -- "${pattern_b}" "${LOG_DIR}/mission-b.log" 2>/dev/null; then
+      echo "mission-b"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for the player-alice owner-closed marker" >&2
+  return 1
 }
 
 wait_port redis "tcp://${GAMEQUEST_REDIS_ENDPOINT}"
@@ -170,6 +253,8 @@ MISSION_B_CONFIG_FILE="${RUN_DIR}/appsettings.mission-b.json"
 API_A_CONFIG_FILE="${RUN_DIR}/appsettings.api-a.json"
 API_B_CONFIG_FILE="${RUN_DIR}/appsettings.api-b.json"
 CLIENT_CONFIG_FILE="${RUN_DIR}/appsettings.client.json"
+CLOSE_REPLAY_RELEASE_FILE="${RUN_DIR}/close-replay-release"
+OWNER_LOSS_RELEASE_FILE="${RUN_DIR}/owner-loss-release"
 python3 - "${MISSION_A_CONFIG_FILE}" "${MISSION_B_CONFIG_FILE}" "${API_A_CONFIG_FILE}" "${API_B_CONFIG_FILE}" "${CLIENT_CONFIG_FILE}" <<PY
 import json
 import sys
@@ -219,42 +304,71 @@ with open(sys.argv[-1], "w", encoding="utf-8") as output:
         "MissionBHttpBaseUrl": "${GAMEQUEST_MISSION_B_HTTP_URL}",
         "GameApiAStreamEndpoint": "${GAMEQUEST_GAMEAPI_A_STREAM_ENDPOINT}",
         "GameApiBStreamEndpoint": "${GAMEQUEST_GAMEAPI_B_STREAM_ENDPOINT}",
+        "CloseReplayReleaseFile": "${CLOSE_REPLAY_RELEASE_FILE}",
+        "OwnerLossReleaseFile": "${OWNER_LOSS_RELEASE_FILE}",
     }}, output, indent=2)
 PY
 
 start_server mission-a "${SCRIPT_DIR}/Server/QuestMission/GameQuest.QuestMission.csproj" --config "${MISSION_A_CONFIG_FILE}"
 wait_port mission-a-mesh "${GAMEQUEST_MISSION_A_MESH_ENDPOINT}"
 wait_http mission-a "${GAMEQUEST_MISSION_A_HTTP_URL}"
+wait_log_contains "${LOG_DIR}/mission-a.log" "gamequest-ready kind=instance-factory node=mission-a"
 
 start_server mission-b "${SCRIPT_DIR}/Server/QuestMission/GameQuest.QuestMission.csproj" --config "${MISSION_B_CONFIG_FILE}"
 wait_port mission-b-mesh "${GAMEQUEST_MISSION_B_MESH_ENDPOINT}"
 wait_http mission-b "${GAMEQUEST_MISSION_B_HTTP_URL}"
+wait_log_contains "${LOG_DIR}/mission-b.log" "gamequest-ready kind=instance-factory node=mission-b"
 
 start_server api-a "${SCRIPT_DIR}/Server/GameApi/GameQuest.GameApi.csproj" --config "${API_A_CONFIG_FILE}"
 wait_port api-a-stream "${GAMEQUEST_API_A_STREAM_BIND_ENDPOINT}"
 wait_port api-a-mesh "${GAMEQUEST_GAMEAPI_A_MESH_ENDPOINT}"
 wait_http api-a "${GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL}"
+wait_log_contains "${LOG_DIR}/api-a.log" "gamequest-ready kind=stream node=api-a"
+wait_log_contains "${LOG_DIR}/api-a.log" "gamequest-ready kind=spot-route node=api-a mesh=gamequest"
 
 start_server api-b "${SCRIPT_DIR}/Server/GameApi/GameQuest.GameApi.csproj" --config "${API_B_CONFIG_FILE}"
 wait_port api-b-stream "${GAMEQUEST_API_B_STREAM_BIND_ENDPOINT}"
 wait_port api-b-mesh "${GAMEQUEST_GAMEAPI_B_MESH_ENDPOINT}"
 wait_http api-b "${GAMEQUEST_GAMEAPI_B_HTTP_BASE_URL}"
+wait_log_contains "${LOG_DIR}/api-b.log" "gamequest-ready kind=stream node=api-b"
+wait_log_contains "${LOG_DIR}/api-b.log" "gamequest-ready kind=spot-route node=api-b mesh=gamequest"
 
 dotnet run --no-build --project "${SCRIPT_DIR}/Client/GameQuest.Client.csproj" -- \
-  --config "${CLIENT_CONFIG_FILE}" >"${LOG_DIR}/client.log" 2>&1
+  --config "${CLIENT_CONFIG_FILE}" >"${LOG_DIR}/client.log" 2>&1 &
+CLIENT_PID="$!"
+PIDS+=("${CLIENT_PID}")
 
-# Each client connection terminates on its configured Session Server. The
-# Actor handler may execute on either server because Actor placement is owned
-# by the Framework, so a specific API process must not be asserted as the
-# gameplay owner.
-grep -q "surface=stream kind=request packet=JoinSessionReq" "${LOG_DIR}/api-a.log"
-grep -q "surface=stream kind=request packet=JoinSessionReq" "${LOG_DIR}/api-b.log"
-grep -q "gamequest api event routed" "${LOG_DIR}/api-a.log" "${LOG_DIR}/api-b.log"
-grep -q "gamequest mission processed" "${LOG_DIR}/mission-a.log"
-grep -q "gamequest mission processed" "${LOG_DIR}/mission-b.log"
-grep -q "gamequest player quest spot ready" "${LOG_DIR}/mission-a.log"
-grep -q "gamequest player quest spot ready" "${LOG_DIR}/mission-b.log"
-curl -fsS -X POST "${GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL}/self-check/assert" | grep -q '"passed":true'
-curl -fsS "${GAMEQUEST_MISSION_A_HTTP_URL}/self-check/events" | grep -q "QuestReconciled"
-echo "gamequest-server-evidence=completed"
+wait_log_contains "${LOG_DIR}/client.log" "gamequest-client close-replay-armed player=player-alice"
+CLOSED_MISSION="$(find_closed_mission)"
+touch "${CLOSE_REPLAY_RELEASE_FILE}"
+wait_log_contains "${LOG_DIR}/client.log" "gamequest-client owner-loss-armed player=player-alice"
+OWNER_MISSION="$(find_owner_mission)"
+kill -9 "${SERVER_PIDS["${OWNER_MISSION}"]}"
+touch "${OWNER_LOSS_RELEASE_FILE}"
+wait "${CLIENT_PID}"
+
+# Section 10.1: counted across both node logs against a lower bound. An actor send handler runs on
+# the node where the actor lives, not where the stream arrived, so per-node counts are unsatisfiable.
+wait_total_at_least 4 "gamequest-api event-routed player=" "${LOG_DIR}/api-a.log" "${LOG_DIR}/api-b.log"
+wait_total_at_least 4 "gamequest-mission processed player=" "${LOG_DIR}/mission-a.log" "${LOG_DIR}/mission-b.log"
+
+wait_total_at_least 1 "gamequest-mission reconciled player=player-alice quest=" "${LOG_DIR}/mission-a.log" "${LOG_DIR}/mission-b.log"
+reconciled_count=$(( $(count_log_matches "${LOG_DIR}/mission-a.log" "gamequest-mission reconciled player=player-alice quest=") + $(count_log_matches "${LOG_DIR}/mission-b.log" "gamequest-mission reconciled player=player-alice quest=") ))
+[[ "${reconciled_count}" == "1" ]]
+wait_total_at_least 1 "gamequest-mission replayed player=player-alice generation=" "${LOG_DIR}/mission-a.log" "${LOG_DIR}/mission-b.log"
+replayed_count=$(( $(count_log_matches "${LOG_DIR}/mission-a.log" "gamequest-mission replayed player=player-alice generation=") + $(count_log_matches "${LOG_DIR}/mission-b.log" "gamequest-mission replayed player=player-alice generation=") ))
+[[ "${replayed_count}" == "1" ]]
+wait_total_at_least 1 "gamequest-owner unavailable player=player-alice" "${LOG_DIR}/api-a.log" "${LOG_DIR}/api-b.log"
+unavailable_count=$(( $(count_log_matches "${LOG_DIR}/api-a.log" "gamequest-owner unavailable player=player-alice") + $(count_log_matches "${LOG_DIR}/api-b.log" "gamequest-owner unavailable player=player-alice") ))
+[[ "${unavailable_count}" == "1" ]]
+replacement_count=$(( $(count_log_matches "${LOG_DIR}/mission-a.log" "gamequest-owner replacement-handler-invoked player=player-alice") + $(count_log_matches "${LOG_DIR}/mission-b.log" "gamequest-owner replacement-handler-invoked player=player-alice") ))
+[[ "${replacement_count}" == "0" ]]
+wait_log_contains "${LOG_DIR}/client.log" "gamequest=completed"
+wait_log_contains "${LOG_DIR}/client.log" "gamequest-server-evidence=completed"
+[[ "$(count_log_matches "${LOG_DIR}/client.log" "gamequest=completed")" == "1" ]]
+[[ "$(count_log_matches "${LOG_DIR}/client.log" "gamequest-server-evidence=completed")" == "1" ]]
+
 RUN_SUCCEEDED=1
+cleanup >/dev/null 2>&1
+trap - EXIT
+echo "gamequest-placement=completed"

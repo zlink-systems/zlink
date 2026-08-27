@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime;
 
 /// <summary>
@@ -10,7 +12,7 @@ internal sealed class ZLinkBoundedIngressAdmission
     internal const int SourceIngressHoldRecordCapacity = int.MaxValue;
     internal const long SourceIngressHoldByteCapacity = long.MaxValue;
 
-    private readonly object _gate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly int _recordCapacity;
     private readonly long _byteCapacity;
     private int _records;
@@ -30,11 +32,11 @@ internal sealed class ZLinkBoundedIngressAdmission
         _byteCapacity = byteCapacity;
     }
 
-    internal bool TryAcquire(long encodedBytes)
+    internal ValueTask<bool> TryAcquireAsync(long encodedBytes)
     {
         if (encodedBytes < 0)
-            return false;
-        lock (_gate)
+            return ValueTask.FromResult(false);
+        return _lane.RunAsync(() =>
         {
             if (_closed
                 || _records >= _recordCapacity
@@ -43,77 +45,95 @@ internal sealed class ZLinkBoundedIngressAdmission
             _records++;
             _bytes += encodedBytes;
             return true;
-        }
+        });
     }
 
-    internal void Release(long encodedBytes)
+    internal ValueTask ReleaseAsync(long encodedBytes)
     {
         if (encodedBytes < 0)
             throw new ArgumentOutOfRangeException(nameof(encodedBytes));
-        TaskCompletionSource? completed = null;
-        lock (_gate)
+        return ReleaseAsyncCore(encodedBytes);
+    }
+
+    private async ValueTask ReleaseAsyncCore(long encodedBytes)
+    {
+        var completed = await _lane.RunAsync(() =>
         {
             if (_records == 0 || encodedBytes > _bytes)
                 throw new InvalidOperationException(
                     "Ingress admission release does not match an acquired record.");
             _records--;
             _bytes -= encodedBytes;
+            TaskCompletionSource? completed = null;
             if (_records == 0)
             {
                 completed = _emptyWaiter;
                 _emptyWaiter = null;
             }
-        }
+            return completed;
+        }).ConfigureAwait(false);
         completed?.TrySetResult();
     }
 
-    internal void ReleaseAll()
+    internal async ValueTask ReleaseAllAsync()
     {
-        TaskCompletionSource? completed;
-        lock (_gate)
+        var completed = await _lane.RunAsync(() =>
         {
             _records = 0;
             _bytes = 0;
-            completed = _emptyWaiter;
+            var completed = _emptyWaiter;
             _emptyWaiter = null;
-        }
+            return completed;
+        }).ConfigureAwait(false);
         completed?.TrySetResult();
     }
 
-    internal ValueTask CloseAndWaitForEmptyAsync(
+    internal async ValueTask CloseAndWaitForEmptyAsync(
         CancellationToken cancellationToken)
     {
-        Task? wait;
-        lock (_gate)
+        var wait = await _lane.RunAsync(() =>
         {
             _closed = true;
             if (_records == 0)
-                return ValueTask.CompletedTask;
+                return (Task?)null;
             _emptyWaiter ??= new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            wait = _emptyWaiter.Task;
-        }
-        return new ValueTask(wait.WaitAsync(cancellationToken));
+            return _emptyWaiter.Task;
+        }).ConfigureAwait(false);
+        if (wait is not null)
+            await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    internal (int Records, long Bytes) Snapshot()
-    {
-        lock (_gate) return (_records, _bytes);
-    }
+    internal ValueTask<(int Records, long Bytes)> SnapshotAsync() =>
+        _lane.RunAsync(() => (_records, _bytes));
 
-    internal long RemainingByteCapacity
-    {
-        get
-        {
-            lock (_gate) return _byteCapacity - _bytes;
-        }
-    }
+    internal ValueTask<long> GetRemainingByteCapacityAsync() =>
+        _lane.RunAsync(() => _byteCapacity - _bytes);
 
-    internal int RemainingRecordCapacity
-    {
-        get
-        {
-            lock (_gate) return _recordCapacity - _records;
-        }
-    }
+    internal ValueTask<int> GetRemainingRecordCapacityAsync() =>
+        _lane.RunAsync(() => _recordCapacity - _records);
+
+    internal bool TryAcquire(long encodedBytes) =>
+        AwaitStateLane(TryAcquireAsync(encodedBytes));
+
+    internal void Release(long encodedBytes) =>
+        AwaitStateLane(ReleaseAsync(encodedBytes));
+
+    internal void ReleaseAll() =>
+        AwaitStateLane(ReleaseAllAsync());
+
+    internal (int Records, long Bytes) Snapshot() =>
+        AwaitStateLane(SnapshotAsync());
+
+    internal long RemainingByteCapacity =>
+        AwaitStateLane(GetRemainingByteCapacityAsync());
+
+    internal int RemainingRecordCapacity =>
+        AwaitStateLane(GetRemainingRecordCapacityAsync());
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
 }

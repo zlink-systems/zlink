@@ -41,14 +41,14 @@ export class ZLinkRemoteActorPacketTargetStore {
 
   constructor(private readonly options: ZLinkRemoteActorPacketTargetStoreOptions) {}
 
-  updateFromWire(actorId: string, value: unknown): void {
+  async updateFromWire(actorId: string, value: unknown): Promise<void> {
     const actorPacketTarget = this.decodeFromWire(value);
     const state = this.options.actorManager()?.getState(actorId);
     if (actorPacketTarget !== undefined) {
       if (typeof state?.setRemoteActorPacketTarget === 'function') {
         state.setRemoteActorPacketTarget(actorPacketTarget);
       }
-      const sessionActor = this.options.streamBindingRuntime().find(actorId);
+      const sessionActor = await this.options.streamBindingRuntime().find(actorId);
       if (sessionActor !== undefined) {
         this.rememberSessionActorTarget(sessionActor, actorPacketTarget);
       }
@@ -61,7 +61,17 @@ export class ZLinkRemoteActorPacketTargetStore {
     return decodeRemoteActorPacketTarget(value);
   }
 
-  clear(actorId: string): void {
+  clear(
+    actorId: string,
+    expectedTenureKey?: string,
+    expectedActor?: ZLinkSessionActor
+  ): void {
+    if (
+      expectedTenureKey !== undefined
+      && (expectedActor === undefined
+        || expectedActor.actorId !== actorId
+        || this.tenureKeyForActor(expectedActor) !== expectedTenureKey)
+    ) return;
     const state = this.options.actorManager()?.getState(actorId);
     if (typeof state?.setRemoteActorPacketTarget === 'function') {
       state.setRemoteActorPacketTarget(undefined);
@@ -162,7 +172,23 @@ export class ZLinkRemoteActorPacketTargetStore {
     };
   }
 
-  rememberActorTarget(actor: ZLinkSessionActor, target: ZLinkRemoteActorPacketTarget): void {
+  tenureKeyForActor(actor: ZLinkSessionActor): string {
+    return sessionActorPacketTargetTenureKey(actor);
+  }
+
+  tenureKeyForActorRef(actorId: string, actorRef: ActorRef): string {
+    return sessionActorPacketTargetTenureKeyForRef(actorId, actorRef);
+  }
+
+  rememberActorTarget(
+    actor: ZLinkSessionActor,
+    target: ZLinkRemoteActorPacketTarget,
+    expectedTenureKey?: string
+  ): void {
+    if (
+      expectedTenureKey !== undefined
+      && this.tenureKeyForActor(actor) !== expectedTenureKey
+    ) return;
     const state = this.options.actorManager()?.getState(actor.actorId);
     if (typeof state?.setRemoteActorPacketTarget === 'function') {
       state.setRemoteActorPacketTarget(target);
@@ -190,14 +216,18 @@ export class ZLinkRemoteActorPacketTargetStore {
 }
 
 function sessionActorPacketTargetTenureKey(actor: ZLinkSessionActor): string {
-  const ref = actor.ref as ActorRef & {
+  return sessionActorPacketTargetTenureKeyForRef(actor.actorId, actor.ref);
+}
+
+function sessionActorPacketTargetTenureKeyForRef(actorId: string, actorRef: ActorRef): string {
+  const ref = actorRef as ActorRef & {
     readonly bindingGeneration?: bigint;
     readonly ownershipGeneration?: bigint;
     readonly ownerLeaseGeneration?: bigint;
   };
   return [
     String(ref.nodeRid),
-    actor.actorId,
+    actorId,
     String(ref.objectGeneration),
     ref.bindingGeneration?.toString() ?? '',
     ref.ownershipGeneration?.toString() ?? '',

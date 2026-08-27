@@ -361,7 +361,9 @@ internal static class ZLinkTraceFormat
         long? size)
     {
         var fields = new List<KeyValuePair<string, object?>>(22);
-        Add(fields, "event_id", "zlink.message_flow");
+        //  Structured log 본문의 key는 관찰 스펙의 "Structured log 대체 표기"가 고정한다 —
+        //  첫 key는 `event`다. telemetry attribute 이름(`event_id`)과는 다른 집합이다.
+        Add(fields, "event", "zlink.message_flow");
         Add(fields, "phase", OutcomeKey(flow.Outcome));
         Add(fields, "surface", SurfaceKey(flow.Surface));
         Add(fields, "kind", MessageKindKey(flow.MessageKind));
@@ -392,7 +394,7 @@ internal static class ZLinkTraceFormat
         ZLinkFlowOrigin? flowOrigin)
     {
         var fields = new List<KeyValuePair<string, object?>>(20);
-        Add(fields, "event_id", "zlink.dispatch_error");
+        Add(fields, "event", "zlink.dispatch_error");
         Add(fields, "surface", SurfaceKey(error.Surface));
         Add(fields, "kind", MessageKindKey(error.MessageKind));
         Add(fields, "mesh", error.MeshName);

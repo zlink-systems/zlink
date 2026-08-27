@@ -2,14 +2,20 @@ namespace DeliveryDispatch.Server.Configuration;
 
 public static class SampleNames
 {
+    public const string DispatchNode = "dispatch";
+    public const string TrackingNode = "tracking";
+    public const string CourierNode1 = "courier-node-1";
+    public const string CourierNode2 = "courier-node-2";
+    public const string CustomerGatewayNode = "customer-gateway";
+    public const string CourierSessionNode = "courier-session";
     public const string CourierMeshName = "deliverydispatch.courier";
     public const string CustomerMeshName = "deliverydispatch.customer";
     public const string DispatchChannel = "deliverydispatch.dispatch";
     public const string TrackingRouteChannel = "deliverydispatch.tracking";
     public const string CustomerSpotNode = "delivery-customer-node";
     public const string CourierSessionSpotNode = "delivery-courier-session-node";
-    public const string CourierActorNode1 = "delivery-courier-node-1";
-    public const string CourierActorNode2 = "delivery-courier-node-2";
+    public const string CourierActorNode1 = CourierNode1;
+    public const string CourierActorNode2 = CourierNode2;
     public const string CourierEntrySpotNode1 = "delivery-courier-entry-1";
     public const string CourierEntrySpotNode2 = "delivery-courier-entry-2";
     public const string CustomerStreamNode = "delivery-customer-stream";

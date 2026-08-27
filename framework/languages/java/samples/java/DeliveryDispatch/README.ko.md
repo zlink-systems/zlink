@@ -23,7 +23,7 @@
 ```
 
 runner는 사용 가능한 local port와 격리된 Redis location store를 준비한 뒤 각 role을 별도 process로
-시작한다. 모든 endpoint가 열리면 `topology=ready`를 출력하고 client self-check를 실행한다.
+시작한다. 여섯 route와 dispatch의 두 courier actor route readiness를 확인한 뒤 client self-check를 실행한다.
 
 성공하면 아래 marker가 출력된다.
 
@@ -31,7 +31,7 @@ runner는 사용 가능한 local port와 격리된 Redis location store를 준�
 deliverydispatch-reassignment=completed
 deliverydispatch-server-evidence=completed
 deliverydispatch=completed
-deliverydispatch full client/server self-check completed
+deliverydispatch-placement=completed
 ```
 
 실패하면 `build/sample-logs/` 아래 role stdout과 stderr를 출력한다. Message flow도 role stdout에

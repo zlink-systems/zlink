@@ -37,11 +37,14 @@ internal sealed class OrderWorkflowSpot(
         StartOrderWorkflowReq request,
         CancellationToken cancellationToken)
     {
-        var state = await workflow.StartAndContinueAsync(request, cancellationToken);
+        var state = await workflow.StartAndContinueAsync(
+            request,
+            cancellationToken,
+            state => CloseIfTerminalAsync(state, CancellationToken.None));
         logger.LogInformation(
-            "shoppingmall order: started. order={OrderId}, status={Status}",
+            "shoppingmall-order started order={OrderId} spot={SpotId}",
             state.OrderId,
-            state.Status);
+            Context.SpotId);
         await CloseIfTerminalAsync(state, cancellationToken);
         return new StartOrderWorkflowRes(state);
     }
@@ -50,7 +53,26 @@ internal sealed class OrderWorkflowSpot(
         ContinueOrderWorkflowReq request,
         CancellationToken cancellationToken)
     {
-        var state = await workflow.ContinueAsync(request, cancellationToken);
+        var repeatedExternalEffect = false;
+        var state = await workflow.ContinueAsync(
+            request,
+            cancellationToken,
+            () => repeatedExternalEffect = true);
+        if (await selfChecks.TryConsumePlannedRelocationReplayAsync(
+                state.OrderId,
+                cancellationToken))
+        {
+            logger.LogInformation(
+                "shoppingmall-order replayed order={OrderId} generation={Generation}",
+                state.OrderId,
+                Context.ObjectGeneration);
+        }
+        if (repeatedExternalEffect)
+        {
+            logger.LogWarning(
+                "shoppingmall-order external-effect-repeated order={OrderId}",
+                state.OrderId);
+        }
         logger.LogInformation(
             "shoppingmall order: continued. order={OrderId}, status={Status}",
             state.OrderId,
@@ -91,6 +113,16 @@ internal sealed class OrderWorkflowSpot(
         return new RebuildOrderProjectionRes(state);
     }
 
+    public async ValueTask<CloseOrderWorkflowForPlannedRelocationRes>
+        CloseForPlannedRelocationAsync(
+            CloseOrderWorkflowForPlannedRelocationReq request,
+            CancellationToken cancellationToken)
+    {
+        _ = request;
+        await Context.CloseAsync(cancellationToken);
+        return new CloseOrderWorkflowForPlannedRelocationRes(true);
+    }
+
     private async ValueTask CloseIfTerminalAsync(
         OrderState state,
         CancellationToken cancellationToken)
@@ -98,4 +130,5 @@ internal sealed class OrderWorkflowSpot(
         if (state.Status is OrderStatuses.Confirmed or OrderStatuses.Failed)
             await Context.CloseAsync(cancellationToken);
     }
+
 }

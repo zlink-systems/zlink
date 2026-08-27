@@ -64,8 +64,8 @@ Store 장애 scenario를 판정하려면 먼저 같은 topology가 정상 상태
 - 절차: Consumer의 public RouteMesh status를 읽고 서로 다른 request 20개를 보낸다.
 - 검증: Status는 ready target count 2를 제공하고 20개 request가 reply 하나씩 받는다. Handler count 합계는
   20이다.
-- 세부 동작: [정상 처리 순서](../spec/server/21-location-runtime.ko.md#14-정상-처리-순서)와
-  [Read와 CAS](../spec/server/21-location-runtime.ko.md#51-read와-cas)를 검증한다.
+- 세부 동작: [정상 처리 순서](../spec/server/05-location-relocation/01-location-runtime.ko.md)와
+  [Read와 CAS](../spec/server/05-location-relocation/01-location-runtime.ko.md#61-read와-cas)를 검증한다.
 
 #### SF-A2 Watch 없이 polling으로 provider 변경을 반영한다
 
@@ -81,7 +81,7 @@ Provider-specific watch가 없는 Location Store도 bounded snapshot polling으�
 - 절차: Provider B를 시작하여 ready target 증가를 기다린다. B를 정상 종료하고 target 감소를 기다린다.
 - 검증: B 추가 뒤 두 provider가 request를 처리할 수 있고 제거 뒤에는 A만 처리한다. 모든 대기는 polling
   interval과 common tolerance에서 계산한다.
-- 세부 동작: [Location runtime §3](../spec/server/21-location-runtime.ko.md)을
+- 세부 동작: [Location runtime §3](../spec/server/05-location-relocation/01-location-runtime.ko.md)을
   검증한다.
 
 ### Track B — Location Store 장애 중 fail-static 경계를 확인
@@ -100,7 +100,7 @@ connection으로 message를 계속 처리할 수 있다.
   구간에 request 결과와 status를 읽는다.
 - 검증: Existing connection의 requests는 계속 reply를 받는다. Status는 정식 degraded reason을 제공할 수
   있지만 ready transport를 Store 오류만으로 즉시 제거하지 않는다.
-- 세부 동작: [Location runtime §4](../spec/server/21-location-runtime.ko.md)의
+- 세부 동작: [Location runtime §4](../spec/server/05-location-relocation/01-location-runtime.ko.md)의
   fail-static 경계를 검증한다.
 
 #### SF-B2 Failure grace를 넘겨도 기존 connection과 신규 discovery를 구분한다
@@ -116,7 +116,7 @@ Failure grace를 넘긴 뒤에는 Store에서 검증할 수 없는 신규 provid
 - 절차: Store를 grace보다 길게 중지하고 provider B를 시작한다. A에 request를 계속 보낸다.
 - 검증: A requests는 성공하며 public status에 B가 ready target으로 추가되지 않는다. Store 복구 뒤에만 B가
   current target set에 들어간다.
-- 세부 동작: [Location runtime §4](../spec/server/21-location-runtime.ko.md)를
+- 세부 동작: [Location runtime §4](../spec/server/05-location-relocation/01-location-runtime.ko.md)를
   검증한다.
 
 #### SF-B3 Discovery grace가 stateful owner lease를 연장하지 않는다
@@ -134,8 +134,8 @@ Discovery connection을 유지하는 grace와 Actor·Spot owner가 신규 업무
   application evidence를 읽는다.
 - 검증: RouteMesh peer는 transport liveness가 정상일 수 있지만 신규 stateful request는 정식 unavailable
   result로 끝난다. Lease deadline 뒤 timer callback evidence도 증가하지 않는다.
-- 세부 동작: [Object routing과 생성 recovery](../spec/server/31-failure-failover-policy.ko.md#4-object-routing과-생성-recovery)와
-  [Store 장애](../spec/server/31-failure-failover-policy.ko.md#7-store-장애)를 검증한다.
+- 세부 동작: [Object routing과 생성 recovery](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#4-object-routing과-생성-recovery)와
+  [Store 장애](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#7-store-장애)를 검증한다.
 
 ### Track C — Stale provider와 lifecycle을 구분
 
@@ -153,7 +153,7 @@ Provider가 descriptor를 지우지 못하고 종료되어도 owner lease가 만
   set에 수렴할 때까지 기다린다. Follow-up request 20개를 보낸다.
 - 검증: Status의 ready peer·target에는 B가 없고 20개를 A가 처리한다. B endpoint로 반복 timeout을 발생시켜
   성공으로 간주하지 않는다.
-- 세부 동작: [실행 중인 node와 제공 기능을 찾는다](../spec/server/21-location-runtime.ko.md#3-실행-중인-node와-제공-기능을-찾는다)를
+- 세부 동작: [실행 중인 node와 제공 기능을 찾는다](../spec/server/05-location-relocation/01-location-runtime.ko.md#4-실행-중인-node와-제공-기능을-찾는다)를
   검증한다.
 
 #### SF-C2 정상 Shutdown은 lease expiry를 기다리지 않는다
@@ -170,7 +170,7 @@ Provider가 descriptor를 지우지 못하고 종료되어도 owner lease가 만
   follow-up requests를 보낸다.
 - 검증: B는 신규 target에서 빠지고 이미 accepted work만 bounded하게 끝낸다. Shutdown terminal 뒤 A가 모든
   follow-up request를 처리한다.
-- 세부 동작: [Host maintenance §10](../spec/server/30-host-relocation-flow.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §10](../spec/server/05-location-relocation/05-host-relocation-flow.ko.md)을 검증한다.
 
 #### SF-C3 이전 owner lifecycle이 replacement를 바꾸지 못한다
 
@@ -185,7 +185,7 @@ Provider가 descriptor를 지우지 못하고 종료되어도 owner lease가 만
 - 절차: A2가 marker request를 처리한 뒤 old A를 재개한다. 서로 다른 marker의 requests를 계속 보낸다.
 - 검증: Public status는 A2를 current ready peer로 유지하고 requests는 A2에서 한 번씩 처리된다. Old A의
   handler evidence는 증가하지 않는다.
-- 세부 동작: [Failover policy §3](../spec/server/31-failure-failover-policy.ko.md)을 검증한다.
+- 세부 동작: [Failover policy §3](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을 검증한다.
 
 #### SF-C4 여러 service role을 가진 host를 한 lifecycle로 정리한다
 
@@ -202,7 +202,7 @@ Provider가 descriptor를 지우지 못하고 종료되어도 owner lease가 만
 - 절차: Host를 강제 종료하고 replacement를 시작한다. 각 public status가 ready가 된 뒤 role별 marker를
   한 번 보낸다.
 - 검증: 모든 marker를 replacement handler가 한 번 처리하고 old process evidence는 증가하지 않는다.
-- 세부 동작: [Transport liveness §6](../spec/server/29-transport-liveness.ko.md)를
+- 세부 동작: [Transport liveness §6](../spec/server/02-channel-transport/05-transport-liveness.ko.md)를
   검증한다.
 
 #### SF-C5 Public operational query를 bounded page로 읽는다
@@ -218,7 +218,7 @@ query는 page size와 continuation token을 사용해야 한다.
 - 절차: 각 page size variant에서 첫 page부터 continuation이 끝날 때까지 public query를 반복한다.
 - 검증: 각 page item 수는 요청 상한을 넘지 않고 전체 logical IDs는 1,001개로 정확하다. Continuation은
   client가 해석하거나 수정하지 않는다.
-- 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/server/21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다)를 검증한다.
+- 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/server/05-location-relocation/01-location-runtime.ko.md#74-운영-도구에서-현재-위치를-조회한다)를 검증한다.
 
 #### SF-C5A ID 조회와 page 결과의 object 상태를 구분한다
 
@@ -237,7 +237,7 @@ Public object query에서 missing exact lookup은 empty이고 page에는 해당 
 - 검증: Missing exact lookup은 empty이고 page에는 missing ID 항목이 없다. `Creating`, `Ready`,
   `Unavailable` objects는 ID 조회와 page item에서 같은 상태 entry를 반환한다. Store failure variant는
   items나 continuation을 포함하지 않는 page 전체 error다.
-- 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/server/21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다)를 검증한다.
+- 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/server/05-location-relocation/01-location-runtime.ko.md#74-운영-도구에서-현재-위치를-조회한다)를 검증한다.
 
 ### Track D — Store 복구 뒤 current topology 수렴
 
@@ -255,7 +255,7 @@ snapshot으로 reconcile할 수 있다.
   유지한다.
 - 검증: 모든 request가 terminal result를 하나씩 받고 current provider set은 A·B로 유지된다. Application
   evidence에 불필요한 re-registration 호출은 없다.
-- 세부 동작: [Store 연결이 끊기면 이전 owner의 새 작업을 막는다](../spec/server/21-location-runtime.ko.md#4-store-연결이-끊기면-이전-owner의-새-작업을-막는다)를 검증한다.
+- 세부 동작: [Store 연결이 끊기면 이전 owner의 새 작업을 막는다](../spec/server/05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)를 검증한다.
 
 #### SF-D2 긴 장애 뒤 재등록한 provider만 유지한다
 
@@ -271,8 +271,8 @@ Store 장애가 lease TTL보다 길면 모든 이전 lease가 만료된다. 복�
   수렴할 때까지 A requests를 보낸다.
 - 검증: A requests는 가능한 구간에서 계속 성공하고 복구 뒤 ready target은 A 하나다. B를 replacement로
   자동 생성하거나 이전 route로 보내지 않는다.
-- 세부 동작: [Store 연결 fence](../spec/server/21-location-runtime.ko.md#4-store-연결이-끊기면-이전-owner의-새-작업을-막는다)와
-  [정상 처리 순서](../spec/server/21-location-runtime.ko.md#14-정상-처리-순서)를 검증한다.
+- 세부 동작: [Store 연결 fence](../spec/server/05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)와
+  [정상 처리 순서](../spec/server/05-location-relocation/01-location-runtime.ko.md)를 검증한다.
 
 #### SF-D3 Public status가 Ready·Degraded·Ready로 수렴한다
 
@@ -286,7 +286,7 @@ Application은 Store 장애와 복구를 public topology status에서 확인할 
 - 절차: Store를 중지하여 degraded status를 기다리고 다시 시작하여 Ready status를 기다린다.
 - 검증: 같은 source에서 관찰한 sequence는 증가하고 각 단계의 마지막 `GetStatus`가 실제 Store·target
   상태와 일치한다. 모든 중간 event의 존재는 요구하지 않는다.
-- 세부 동작: [Runtime monitoring §3](../spec/server/24-runtime-monitoring.ko.md)을
+- 세부 동작: [Runtime monitoring §3](../spec/server/06-observability/01-runtime-monitoring.ko.md)을
   검증한다.
 
 ### Track E — 느린 Store 응답을 application dispatch와 격리
@@ -305,7 +305,7 @@ Store I/O가 느리다는 이유로 같은 process의 event loop나 application 
   100개를 보내 모두 완료한 뒤 Store response를 해제한다.
 - 검증: Channel requests는 Store gate 해제 전에 reply를 하나씩 받는다. Store operation도 해제 뒤 정식
   terminal을 반환한다.
-- 세부 동작: [Worker offload](../spec/server/05-async-execution-policy.ko.md#12-worker-offload)의 I/O wait 격리를
+- 세부 동작: [Worker offload](../spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md)의 I/O wait 격리를
   검증한다.
 
 ### Track F — Relocation과 owner recovery의 public 결과를 확인
@@ -323,7 +323,7 @@ state로 사용해야 한다.
 - 절차: Source 언어에서 object를 만들고 state를 변경한다. 다른 언어 caller가 request하고, target 언어로
   relocation한 뒤 다시 request한다.
 - 검증: Public ID와 ObjectGeneration은 유지되고 payload·reply와 state 값이 모든 방향에서 같다.
-- 세부 동작: [Public contract governance](../spec/server/00-public-contract-governance.ko.md)의 interop을 검증한다.
+- 세부 동작: [Public contract governance](../spec/server/00-foundation/01-public-contract-governance.ko.md)의 interop을 검증한다.
 
 #### SF-F2 장기 relocation은 operation deadline 안에서 완료하고 실패 뒤 새 call을 허용한다
 
@@ -340,7 +340,7 @@ Capture·restore가 오래 걸려도 current relocation operation의 absolute de
   새 call을 시작한다.
 - 검증: 첫 operation은 state를 보존하여 성공한다. Failed operation은 source location과 state를 유지하고
   새 operation ID의 call만 target에서 완료한다.
-- 세부 동작: [Actor와 Spot relocation 전체 흐름](../spec/server/28-relocation-flow.ko.md)을 검증한다.
+- 세부 동작: [Actor와 Spot relocation 전체 흐름](../spec/server/05-location-relocation/04-relocation-flow.ko.md)을 검증한다.
 
 #### SF-F3 Relocation Store 장애가 막는 것과 막지 않는 것을 구분한다
 
@@ -363,7 +363,7 @@ store 잔존 책임이 필요한 결과만 복구 뒤 재구성되는가.
   request가 성공한다. Pending request variant의 caller는 terminal 하나를 받으며, store 기록에 의존하는
   결과 재구성은 store 복구 뒤에만 성립한다. 어느 variant도 operation을 자동 재개하거나 중복 terminal을
   만들지 않는다.
-- 세부 동작: [Relocation Store의 취소, 오류와 결과 재구성](../spec/server/23-relocation-store-redis.ko.md#5-취소-오류와-결과-재구성)을 검증한다.
+- 세부 동작: [Relocation Store의 취소, 오류와 결과 재구성](../spec/server/05-location-relocation/03-relocation-store-redis.ko.md#5-취소-오류와-결과-재구성)을 검증한다.
 
 #### SF-F4 ObjectGeneration과 owner replacement를 public ref로 구분한다
 
@@ -378,7 +378,7 @@ Relocation은 같은 logical incarnation을 유지하고 explicit close 뒤 recr
   recreate한다.
 - 검증: Relocation 뒤 generation은 initial과 같고 location만 target으로 바뀐다. Recreate ref는 다른
   nonzero generation이며 이전 exact ref lifecycle call은 current object를 바꾸지 않는다.
-- 세부 동작: [Failover policy §4.1](../spec/server/31-failure-failover-policy.ko.md)을
+- 세부 동작: [Failover policy §4.1](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을
   검증한다.
 
 #### SF-F5 Creating owner crash 뒤 public request가 bounded recovery 결과를 얻는다
@@ -397,8 +397,8 @@ Instance Spot cold activation 중 owner가 crash해도 stale owner가 신규 업
 - 검증: Pending request는 success 또는 정식 failure 중 하나로 한 번 끝난다. Recovery가 같은 generation을
   계속하면 follow-up request는 그 결과에 합류하고, 취소되어 public resolve가 Ready object를 반환하지 않으면
   다음 call이 새 activation을 시작한다. 어느 경우에도 old owner evidence는 증가하지 않는다.
-- 세부 동작: [Location runtime §6.1](../spec/server/21-location-runtime.ko.md)과
-  [Failure와 failover §4.4](../spec/server/31-failure-failover-policy.ko.md)를
+- 세부 동작: [Location runtime §6.1](../spec/server/05-location-relocation/01-location-runtime.ko.md)과
+  [Failure와 failover §4.4](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)를
   검증한다.
 
 #### SF-F6 Operational query 중 concurrent 변경을 다음 page cycle에 반영한다
@@ -415,7 +415,7 @@ Paged query 중 object가 추가·제거되어도 한 scan에서 duplicate ID를
   시작한다.
 - 검증: 각 scan 안의 IDs는 중복이 없고 page 상한을 지킨다. 두 번째 scan은 완료된 current mutations를
   반영한다. Client는 continuation token을 수정하지 않는다.
-- 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/server/21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다)를 검증한다.
+- 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/server/05-location-relocation/01-location-runtime.ko.md#74-운영-도구에서-현재-위치를-조회한다)를 검증한다.
 
 #### SF-F7 Large state relocation은 chunk 경계를 넘어도 복원한다
 
@@ -433,7 +433,7 @@ Framework는 relocation adapter 전용 크기 상한을 두지 않고, participa
 - 절차: 각 object를 target node로 Relocate하고 public request로 state checksum·length를 조회한다.
 - 검증: 모든 state가 target에서 checksum·logical length가 같고 request를 처리한다. 한 byte 큰 state와
   예산보다 큰 state는 크기 상한을 이유로 `Blocked/StateIncompatible`로 끝나지 않는다.
-- 세부 동작: [Actor와 Spot relocation 전체 흐름](../spec/server/28-relocation-flow.ko.md)의 chunk 분할과
+- 세부 동작: [Actor와 Spot relocation 전체 흐름](../spec/server/05-location-relocation/04-relocation-flow.ko.md)의 chunk 분할과
   in-flight 예산 경계를 검증한다.
 
 #### SF-F8 Target owner lease가 만료되면 source를 유지한다
@@ -450,7 +450,7 @@ Target preparation 중 target owner가 current가 아니게 되면 stale complet
   해제한다.
 - 검증: Relocate는 target unavailable result로 끝나고 public current location은 source다. Source follow-up
   request가 성공하며 target handler는 신규 workload를 받지 않는다.
-- 세부 동작: [Failover policy §5](../spec/server/31-failure-failover-policy.ko.md)을 검증한다.
+- 세부 동작: [Failover policy §5](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을 검증한다.
 
 #### SF-F9 Old lifecycle cleanup이 replacement service roles를 제거하지 않는다
 
@@ -467,7 +467,7 @@ Target preparation 중 target owner가 current가 아니게 되면 stale complet
 - 절차: Replacement Channel request를 확인한 뒤 old provider를 재개하고 같은 request를 반복한다.
 - 검증: Public status는 replacement provider를 current ready target으로 유지하고 모든 follow-up marker를
   replacement가 한 번 처리한다. 이 scenario에서는 Actor·Spot object location을 판정하지 않는다.
-- 세부 동작: [Failover policy §3](../spec/server/31-failure-failover-policy.ko.md)을 검증한다.
+- 세부 동작: [Failover policy §3](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을 검증한다.
 
 #### SF-F10 많은 accepted requests와 relocation completion을 함께 처리한다
 
@@ -484,7 +484,7 @@ Accepted request가 많은 object를 이동해도 각 request의 reply와 reloca
   뒤 follow-up request를 보낸다.
 - 검증: 각 accepted request는 reply, timeout 또는 relocation failure 중 하나로 한 번 끝난다. Relocate
   terminal도 하나이며 follow-up은 current target에서 한 번 처리된다.
-- 세부 동작: [Host maintenance §7](../spec/server/30-host-relocation-flow.ko.md)을
+- 세부 동작: [Host maintenance §7](../spec/server/05-location-relocation/05-host-relocation-flow.ko.md)을
   검증한다.
 
 #### SF-F11 Waiter 종료와 전송 실패 뒤 payload 값을 보존한다
@@ -504,7 +504,7 @@ target에 복원하는가.
 - 검증: A awaitable은 전송 실패 또는 지원 언어의 cancellation 결과를 유지하고 A는 source memory에서
   복원된다. B target state checksum은 B와 정확히 같고 A bytes가 섞이지 않는다. 각 operation은 terminal
   하나를 가진다.
-- 세부 동작: [Actor와 Spot relocation 전체 흐름](../spec/server/28-relocation-flow.ko.md)의 payload
+- 세부 동작: [Actor와 Spot relocation 전체 흐름](../spec/server/05-location-relocation/04-relocation-flow.ko.md)의 payload
   identity 결합과 실패 규칙을 검증한다.
 
 ### Track G — Capacity 결과를 public create·relocation으로 검증
@@ -524,7 +524,7 @@ target에 복원하는가.
 - 검증: Successful active counts는 어떤 limit도 넘지 않는다. Capacity가 없는 calls는
   `CapacityExceeded`이고 factory-failed calls는 active count에 남지 않는다. Cleanup 뒤 새 create가
   available slot을 사용할 수 있다.
-- 세부 동작: [MeshNode §5](../spec/server/13-mesh-node.ko.md)를 검증한다.
+- 세부 동작: [MeshNode §5](../spec/server/03-spot-actor/03-mesh-node.ko.md)를 검증한다.
 
 #### SF-G2 Unlimited population과 activation concurrency를 구분한다
 
@@ -540,7 +540,7 @@ Population limit 0은 unlimited이며 activation concurrency는 동시에 factor
 - 절차: 많은 creates를 동시에 시작하고 factory gate를 순차 해제한다.
 - 검증: Factory active count는 concurrency limit을 넘지 않지만 모든 valid creates는 결국 성공한다.
   Entry Spot은 Spot population에 포함되지 않고 member Actors는 Actor count에 포함된다.
-- 세부 동작: [MeshNode §5](../spec/server/13-mesh-node.ko.md)를 검증한다.
+- 세부 동작: [MeshNode §5](../spec/server/03-spot-actor/03-mesh-node.ko.md)를 검증한다.
 
 ## 5. 완료 기준
 

@@ -66,9 +66,10 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
                 SampleTimings.IdleTimeout,
                 SampleTimings.CloseGraceTimeout,
                 500));
+        logger.info("supportchat-conversation created conversation={}", context.spotId());
         logger.info(
-            "support conversation: created. conversation={}, customer={}",
-            context.spotId(), create.customerActorId());
+            "supportchat-conversation status={} conversation={}",
+            SampleNames.Statuses.WaitingForAgent, context.spotId());
         return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
     }
 
@@ -111,14 +112,14 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
         if (SampleNames.Roles.Agent.equals(actor.role())) {
             publish(requireConversation().joinAgent(
                 actor.participantId(), actor.displayName(), System.currentTimeMillis()));
+            logger.info(
+                "supportchat-conversation agent-joined conversation={} agent={}",
+                context.spotId(), actor.participantId());
         } else {
             actor.joinConversation(requireConversation().snapshot().conversationId());
             actors.put(actor.participantId(), actor);
             assignAgent();
         }
-        logger.info(
-            "support conversation: actor joined. conversation={}, participant={}, role={}",
-            context.spotId(), actor.participantId(), actor.role());
         return CompletableFuture.completedFuture(null);
     }
 
@@ -186,8 +187,8 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
         for (Conversation.Event event : change.events()) {
             Messages.ConversationState state = ConversationContracts.state(event.state());
             logger.info(
-                "support conversation: state changed. conversation={}, status={}, event={}",
-                state.conversationId(), state.status(), event.kind());
+                "supportchat-conversation status={} conversation={}",
+                state.status(), state.conversationId());
         }
     }
 

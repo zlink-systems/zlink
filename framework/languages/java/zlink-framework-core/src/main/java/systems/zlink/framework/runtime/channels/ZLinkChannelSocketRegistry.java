@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletionException;
 import java.time.Duration;
 import java.time.Instant;
 import systems.zlink.contracts.core.RoutingId;
@@ -42,13 +43,16 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.dispatch
     .ZLinkApplicationJobReceiveFlowController;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import java.util.function.Supplier;
 
 final class ZLinkChannelSocketRegistry {
     private static final long READY_POLL_INTERVAL_MILLIS = 5;
 
     private final Map<String, ChannelRegistration> registrations = new HashMap<>();
     private final ZLinkApplicationJobQueue applicationJobQueue;
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<ZLinkBackendObject,
         ZLinkApplicationJobReceiveFlowController.Registration>
         receiveFlowRegistrations = new IdentityHashMap<>();
@@ -88,18 +92,43 @@ final class ZLinkChannelSocketRegistry {
         this.applicationJobQueue = applicationJobQueue;
     }
 
+    // The package-private surface remains synchronous: registration and
+    // selection were complete before its callers returned under the monitor.
+    // Do not post these turns asynchronously, or callers can observe a
+    // partially registered channel.
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
     void registerChannel(ChannelRegistration registration) {
-        registrations.put(registration.name(), registration);
+        inStateLane(() -> {
+            registrations.put(registration.name(), registration);
+            return null;
+        });
     }
 
     ChannelRegistration registration(String channelName) {
-        return registrations.get(channelName);
+        return inStateLane(() -> registrations.get(channelName));
     }
 
     void registerClient(String channelName, ZLinkBackendDealerSocket socket) {
         registerReceiveFlow(socket);
-        clients.put(channelName, socket);
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            clients.put(channelName, socket);
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     void registerServer(
@@ -107,37 +136,53 @@ final class ZLinkChannelSocketRegistry {
         RoutingId routingId,
         ZLinkBackendRouterSocket socket) {
         registerReceiveFlow(socket);
-        servers.put(channelName, socket);
-        serverRoutingIds.put(channelName, routingId);
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            servers.put(channelName, socket);
+            serverRoutingIds.put(channelName, routingId);
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     void registerPublisher(
         String channelName,
         RoutingId routingId,
         ZLinkBackendPublisherSocket socket) {
-        publishers.put(channelName, socket);
-        publisherRoutingIds.put(channelName, routingId);
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            publishers.put(channelName, socket);
+            publisherRoutingIds.put(channelName, routingId);
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     void registerSubscriber(String channelName, ZLinkBackendSubscriberSocket socket) {
-        subscribers.put(channelName, socket);
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            subscribers.put(channelName, socket);
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     void registerRouteRouter(String channelName, ZLinkBackendRouterSocket socket) {
         registerReceiveFlow(socket);
-        routeRouters.put(channelName, socket);
-        routeSocketLocks.put(channelName, new Object());
-        ownedSockets.add(socket);
+        inStateLane(() -> {
+            routeRouters.put(channelName, socket);
+            routeSocketLocks.put(channelName, new Object());
+            ownedSockets.add(socket);
+            return null;
+        });
     }
 
     ZLinkBackendDealerSocket client(String channelName) {
-        return clients.get(channelName);
+        return inStateLane(() -> clients.get(channelName));
     }
 
-    synchronized ZLinkBackendDealerSocket clientForOutbound(String channelName) {
+    ZLinkBackendDealerSocket clientForOutbound(String channelName) {
+        return inStateLane(() -> clientForOutboundCore(channelName));
+    }
+
+    private ZLinkBackendDealerSocket clientForOutboundCore(String channelName) {
         Set<ClientServerConnection> physical =
             Collections.newSetFromMap(new IdentityHashMap<>());
         physical.addAll(clientServerConnections.values());
@@ -250,45 +295,57 @@ final class ZLinkChannelSocketRegistry {
         // physical DEALER. The absolute flow-state application happens before
         // that monitor is acquired so a binding call cannot block routing.
         registerReceiveFlow(dealer);
-        synchronized (this) {
+        inStateLane(() -> {
             clientServerConnections.put(
                 connectionId,
                 new ClientServerConnection(
                     connectionId, descriptor, dealer, false));
             ownedSockets.add(dealer);
-        }
+            return null;
+        });
     }
 
     void registerClientServerMonitor(
         String connectionId,
         ZLinkBackendSocketMonitor monitor) {
         ClientServerConnection current;
-        synchronized (this) {
-            current = clientServerConnections.get(connectionId);
-            if (current != null) {
-                current.monitor = monitor;
+        current = inStateLane(() -> {
+            ClientServerConnection registered = clientServerConnections.get(connectionId);
+            if (registered != null) {
+                registered.monitor = monitor;
                 ownedSockets.add(monitor);
             }
-        }
+            return registered;
+        });
         if (current == null) {
             monitor.close();
         }
     }
 
-    synchronized void enableUnmanagedBackendClientMode() {
-        unmanagedBackendClientMode = true;
+    void enableUnmanagedBackendClientMode() {
+        inStateLane(() -> {
+            unmanagedBackendClientMode = true;
+            return null;
+        });
     }
 
-    synchronized AdmissionFence clientServerTransportReady(
+    AdmissionFence clientServerTransportReady(
         String connectionId) {
-        ClientServerConnection current =
-            clientServerConnections.get(connectionId);
-        return clientServerTransportReady(
-            connectionId,
-            current == null ? null : current.dealer);
+        return inStateLane(() -> {
+            ClientServerConnection current =
+                clientServerConnections.get(connectionId);
+            return clientServerTransportReadyCore(
+                connectionId, current == null ? null : current.dealer);
+        });
     }
 
-    synchronized AdmissionFence clientServerTransportReady(
+    AdmissionFence clientServerTransportReady(
+        String connectionId,
+        ZLinkBackendDealerSocket dealer) {
+        return inStateLane(() -> clientServerTransportReadyCore(connectionId, dealer));
+    }
+
+    private AdmissionFence clientServerTransportReadyCore(
         String connectionId,
         ZLinkBackendDealerSocket dealer) {
         ClientServerConnection current =
@@ -306,16 +363,27 @@ final class ZLinkChannelSocketRegistry {
             current.dealer);
     }
 
-    synchronized void clientServerTransportTerminated(
+    void clientServerTransportTerminated(
         String connectionId) {
-        ClientServerConnection current =
-            clientServerConnections.get(connectionId);
-        clientServerTransportTerminated(
-            connectionId,
-            current == null ? null : current.dealer);
+        inStateLane(() -> {
+            ClientServerConnection current =
+                clientServerConnections.get(connectionId);
+            clientServerTransportTerminatedCore(
+                connectionId, current == null ? null : current.dealer);
+            return null;
+        });
     }
 
-    synchronized void clientServerTransportTerminated(
+    void clientServerTransportTerminated(
+        String connectionId,
+        ZLinkBackendDealerSocket dealer) {
+        inStateLane(() -> {
+            clientServerTransportTerminatedCore(connectionId, dealer);
+            return null;
+        });
+    }
+
+    private void clientServerTransportTerminatedCore(
         String connectionId,
         ZLinkBackendDealerSocket dealer) {
         ClientServerConnection current =
@@ -338,15 +406,15 @@ final class ZLinkChannelSocketRegistry {
         String connectionId,
         ZLinkBackendDealerSocket expectedDealer) {
         ClientServerConnection current;
-        synchronized (this) {
-            current = clientServerConnections.get(connectionId);
-            if (current != null
-                && (expectedDealer == null || current.dealer == expectedDealer)) {
-                current.ready = false;
-            } else {
-                current = null;
+        current = inStateLane(() -> {
+            ClientServerConnection registered = clientServerConnections.get(connectionId);
+            if (registered != null
+                && (expectedDealer == null || registered.dealer == expectedDealer)) {
+                registered.ready = false;
+                return registered;
             }
-        }
+            return null;
+        });
         if (current != null) {
             reconnectClientServer(current);
         }
@@ -355,25 +423,25 @@ final class ZLinkChannelSocketRegistry {
     boolean admitClientServerConnection(
         String connectionId,
         ZLinkClientServerServerDescriptor descriptor) {
-        ClientServerConnection current;
-        synchronized (this) {
-            current = clientServerConnections.get(connectionId);
-        }
-        return current != null && admitClientServerConnection(
-            connectionId,
-            descriptor,
-            new AdmissionFence(
+        AdmissionFence fence = inStateLane(() -> {
+            ClientServerConnection current =
+                clientServerConnections.get(connectionId);
+            return current == null ? null : new AdmissionFence(
                 current.physicalGeneration,
                 current.admissionGeneration,
-                current.dealer));
+                current.dealer);
+        });
+        return fence != null && admitClientServerConnection(
+            connectionId,
+            descriptor,
+            fence);
     }
 
     boolean admitClientServerConnection(
         String connectionId,
         ZLinkClientServerServerDescriptor descriptor,
         AdmissionFence fence) {
-        ClientServerConnection closeAfter = null;
-        synchronized (this) {
+        AdmissionResult result = inStateLane(() -> {
             ClientServerConnection current =
                 clientServerConnections.get(connectionId);
             if (current == null
@@ -381,7 +449,7 @@ final class ZLinkChannelSocketRegistry {
                 || current.dealer != fence.dealer()
                 || current.physicalGeneration != fence.physicalGeneration()
                 || current.admissionGeneration != fence.admissionGeneration()) {
-                return false;
+                return new AdmissionResult(false, null);
             }
             current.descriptor = descriptor;
             current.ready = true;
@@ -404,40 +472,48 @@ final class ZLinkChannelSocketRegistry {
                     shared.aliases.add(alias);
                 }
                 current.aliases.clear();
-                closeAfter = current;
+                return new AdmissionResult(true, current);
             }
+            return new AdmissionResult(true, null);
+        });
+        if (result.closeAfter() != null) {
+            closeClientServerPhysical(result.closeAfter());
         }
-        if (closeAfter != null) {
-            closeClientServerPhysical(closeAfter);
-        }
-        return true;
+        return result.admitted();
     }
 
-    synchronized void updateClientServerConnection(
+    void updateClientServerConnection(
         String connectionId,
         ZLinkClientServerServerDescriptor descriptor,
         boolean ready) {
-        ClientServerConnection current =
-            clientServerConnections.get(connectionId);
-        if (current != null) {
-            current.descriptor = descriptor;
-            current.ready = ready;
-        }
+        inStateLane(() -> {
+            ClientServerConnection current =
+                clientServerConnections.get(connectionId);
+            if (current != null) {
+                current.descriptor = descriptor;
+                current.ready = ready;
+            }
+            return null;
+        });
     }
 
-    synchronized ZLinkClientServerServerDescriptor
+    ZLinkClientServerServerDescriptor
         clientServerConnectionDescriptor(String connectionId) {
-        ClientServerConnection current =
-            clientServerConnections.get(connectionId);
-        return current == null ? null : current.descriptor;
+        return inStateLane(() -> {
+            ClientServerConnection current =
+                clientServerConnections.get(connectionId);
+            return current == null ? null : current.descriptor;
+        });
     }
 
-    synchronized boolean ownsClientServerPhysical(
+    boolean ownsClientServerPhysical(
         String connectionId,
         ZLinkBackendDealerSocket dealer) {
-        ClientServerConnection current =
-            clientServerConnections.get(connectionId);
-        return current != null && current.dealer == dealer;
+        return inStateLane(() -> {
+            ClientServerConnection current =
+                clientServerConnections.get(connectionId);
+            return current != null && current.dealer == dealer;
+        });
     }
 
     void removeClientServerConnection(String connectionId) {
@@ -447,37 +523,43 @@ final class ZLinkChannelSocketRegistry {
     void removeClientServerConnection(
         String connectionId,
         ZLinkBackendDealerSocket expectedDealer) {
-        ClientServerConnection current;
-        boolean closePhysical = false;
-        synchronized (this) {
-            current = clientServerConnections.get(connectionId);
-            if (current == null
-                || (expectedDealer != null && current.dealer != expectedDealer)) {
-                return;
+        Removal removal = inStateLane(() -> {
+            ClientServerConnection registered = clientServerConnections.get(connectionId);
+            if (registered == null
+                || (expectedDealer != null && registered.dealer != expectedDealer)) {
+                return null;
             }
-            current = clientServerConnections.remove(connectionId);
-            if (current != null) {
-                current.aliases.remove(connectionId);
-                closePhysical = current.aliases.isEmpty();
+            ClientServerConnection removed = clientServerConnections.remove(connectionId);
+            if (removed != null) {
+                removed.aliases.remove(connectionId);
             }
-        }
-        if (current == null) {
+            return removed == null ? null : new Removal(
+                removed, removed.aliases.isEmpty());
+        });
+        if (removal == null) {
             return;
         }
-        if (closePhysical) {
-            closeClientServerPhysical(current);
+        if (removal.closePhysical()) {
+            closeClientServerPhysical(removal.connection());
         }
     }
 
-    synchronized int clientServerPhysicalConnectionCount() {
-        Set<ClientServerConnection> physical =
-            Collections.newSetFromMap(new IdentityHashMap<>());
-        physical.addAll(clientServerConnections.values());
-        return physical.size();
+    int clientServerPhysicalConnectionCount() {
+        return inStateLane(() -> {
+            Set<ClientServerConnection> physical =
+                Collections.newSetFromMap(new IdentityHashMap<>());
+            physical.addAll(clientServerConnections.values());
+            return physical.size();
+        });
     }
 
-    synchronized List<ClientServerTargetSnapshot>
+    List<ClientServerTargetSnapshot>
         clientServerTargetSnapshots(String channelName) {
+        return inStateLane(() -> clientServerTargetSnapshotsCore(channelName));
+    }
+
+    private List<ClientServerTargetSnapshot> clientServerTargetSnapshotsCore(
+        String channelName) {
         Map<String, ClientServerTargetSnapshot> targets =
             new LinkedHashMap<>();
         Set<ClientServerConnection> physical =
@@ -505,77 +587,96 @@ final class ZLinkChannelSocketRegistry {
         return List.copyOf(targets.values());
     }
 
-    synchronized boolean hasClientRegistration(String channelName) {
-        ChannelRegistration registration = registrations.get(channelName);
-        return registration != null
-            && registration.kind() == ChannelKind.CLIENT_SERVER
-            && registration.clientEnabled();
+    boolean hasClientRegistration(String channelName) {
+        return inStateLane(() -> {
+            ChannelRegistration registration = registrations.get(channelName);
+            return registration != null
+                && registration.kind() == ChannelKind.CLIENT_SERVER
+                && registration.clientEnabled();
+        });
     }
 
-    synchronized boolean hasServerRegistration(String channelName) {
-        ChannelRegistration registration = registrations.get(channelName);
-        return registration != null
-            && registration.kind() == ChannelKind.CLIENT_SERVER
-            && registration.clientServerServerEnabled();
+    boolean hasServerRegistration(String channelName) {
+        return inStateLane(() -> {
+            ChannelRegistration registration = registrations.get(channelName);
+            return registration != null
+                && registration.kind() == ChannelKind.CLIENT_SERVER
+                && registration.clientServerServerEnabled();
+        });
     }
 
     void setClientServerServerDescriptor(
         String channelName,
         ZLinkClientServerServerDescriptor descriptor) {
-        synchronized (this) {
+        inStateLane(() -> {
             if (descriptor == null) {
                 clientServerServerDescriptors.remove(channelName);
             } else {
                 clientServerServerDescriptors.put(channelName, descriptor);
             }
-        }
+            return null;
+        });
         if (descriptor != null) {
             pushClientServerDescriptorUpdate(channelName, descriptor);
         }
     }
 
-    synchronized ZLinkClientServerServerDescriptor
+    ZLinkClientServerServerDescriptor
         clientServerServerDescriptor(String channelName) {
-        return clientServerServerDescriptors.get(channelName);
+        return inStateLane(() -> clientServerServerDescriptors.get(channelName));
     }
 
-    synchronized int clientServerServerWeight(
+    int clientServerServerWeight(
         String channelName,
         int fallback) {
-        ZLinkBackendRouterSocket server = servers.get(channelName);
+        ZLinkBackendRouterSocket server =
+            inStateLane(() -> servers.get(channelName));
         return server == null ? fallback : server.peerWeight();
     }
 
-    synchronized void initializeClientServerServerDescriptors(String ownerId) {
-        for (Map.Entry<String, ZLinkBackendRouterSocket> entry
-            : servers.entrySet()) {
-            ChannelRegistration registration =
-                registrations.get(entry.getKey());
+    void initializeClientServerServerDescriptors(String ownerId) {
+        List<ServerDescriptorInput> inputs = inStateLane(() ->
+            servers.entrySet().stream()
+                .map(entry -> new ServerDescriptorInput(
+                    entry.getKey(), entry.getValue(),
+                    serverRoutingIds.get(entry.getKey()),
+                    registrations.get(entry.getKey())))
+                .toList());
+        List<ServerDescriptorValue> descriptors = new ArrayList<>();
+        for (ServerDescriptorInput input : inputs) {
+            ChannelRegistration registration = input.registration();
             if (registration == null
                 || registration.serverBinds().isEmpty()) {
                 continue;
             }
             String endpoint = advertisedEndpoint(
                 registration.serverBinds().get(0),
-                entry.getValue(),
+                input.router(),
                 registration.clientServerAdvertiseHost());
-            clientServerServerDescriptors.put(
-                entry.getKey(),
+            descriptors.add(new ServerDescriptorValue(
+                input.channelName(),
                 new ZLinkClientServerServerDescriptor(
-                    entry.getKey(),
-                    serverRoutingIds.get(entry.getKey()),
+                    input.channelName(),
+                    input.routingId(),
                     ThreadLocalRandom.current()
                         .nextLong(1, Long.MAX_VALUE),
                     1,
                     endpoint,
-                    entry.getValue().peerWeight(),
+                    input.router().peerWeight(),
                     systems.zlink.framework.runtime.host
                         .ZLinkFrameworkRuntimeState.SERVING,
                     "default",
                     ownerId,
                     1,
-                    Instant.EPOCH));
+                    Instant.EPOCH)));
         }
+        inStateLane(() -> {
+            for (ServerDescriptorValue descriptor : descriptors) {
+                clientServerServerDescriptors.put(
+                    descriptor.channelName(), descriptor.descriptor());
+            }
+            return null;
+        });
     }
 
     boolean tryHandleClientServerControl(
@@ -618,10 +719,8 @@ final class ZLinkChannelSocketRegistry {
                     return true;
                 }
             } else {
-            ZLinkClientServerServerDescriptor descriptor;
-            synchronized (this) {
-                descriptor = clientServerServerDescriptors.get(channelName);
-            }
+            ZLinkClientServerServerDescriptor descriptor = inStateLane(
+                () -> clientServerServerDescriptors.get(channelName));
             if (!(control instanceof ZLinkClientServerServiceWire.Hello hello)
                 || descriptor == null
                 || !hello.channelName().equals(channelName)
@@ -660,95 +759,98 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void tickClientServerLiveness(long nowNanos) {
-        List<ClientServerConnection> clientConnections;
-        List<ClientServerServerPeer> serverPeers;
-        synchronized (this) {
+        LivenessSnapshot snapshot = inStateLane(() -> {
             Set<ClientServerConnection> physical =
                 Collections.newSetFromMap(new IdentityHashMap<>());
             physical.addAll(clientServerConnections.values());
-            clientConnections = new ArrayList<>(physical);
-            serverPeers = List.copyOf(clientServerServerPeers.values());
-        }
+            return new LivenessSnapshot(
+                new ArrayList<>(physical),
+                List.copyOf(clientServerServerPeers.values()),
+                clientServerControlCursor);
+        });
+        List<ClientServerConnection> clientConnections = snapshot.clientConnections();
+        List<ClientServerServerPeer> serverPeers = snapshot.serverPeers();
         clientConnections.sort(Comparator.comparing(
             ClientServerConnection::connectionId));
         int connectionCount = clientConnections.size();
         int connectionStart = connectionCount == 0
             ? 0
             : (int) Math.floorMod(
-                clientServerControlCursor, connectionCount);
+                snapshot.controlCursor(), connectionCount);
         for (int offset = 0; offset < connectionCount; offset++) {
             ClientServerConnection connection = clientConnections.get(
                 (connectionStart + offset) % connectionCount);
-            clientServerControlCursor =
-                (connectionStart + offset + 1) % connectionCount;
+            int nextCursor = (connectionStart + offset + 1) % connectionCount;
+            inStateLane(() -> {
+                clientServerControlCursor = nextCursor;
+                return null;
+            });
             drainClientServerControls(connection);
             flushClientServerLivenessAck(connection);
-            long probeId = 0;
-            boolean reconnect = false;
-            synchronized (this) {
+            ClientLivenessAction action = inStateLane(() -> {
                 if (!connection.aliases.stream().anyMatch(
                         alias -> clientServerConnections.get(alias)
                             == connection)
                     || !connection.ready) {
-                    continue;
+                    return ClientLivenessAction.NONE;
                 }
                 if (nowNanos >= connection.deadlineAtNanos) {
                     connection.ready = false;
-                    reconnect = true;
+                    return ClientLivenessAction.RECONNECT;
                 } else if (nowNanos >= connection.nextProbeAtNanos) {
                     connection.nextProbeAtNanos =
                         nowNanos + CLIENT_SERVER_PROBE_INTERVAL_NANOS;
-                    probeId = connection.outstandingProbeId == 0
-                        ? allocateProbeId()
+                    long probeId = connection.outstandingProbeId == 0
+                        ? allocateProbeIdCore()
                         : connection.outstandingProbeId;
                     connection.outstandingProbeId = probeId;
+                    return new ClientLivenessAction(false, probeId);
                 }
-            }
-            if (reconnect) {
+                return ClientLivenessAction.NONE;
+            });
+            if (action.reconnect()) {
                 reconnectClientServer(connection);
                 continue;
             }
-            if (probeId == 0) {
+            if (action.probeId() == 0) {
                 continue;
             }
-            sendClientServerProbe(connection, probeId);
+            sendClientServerProbe(connection, action.probeId());
         }
         for (ClientServerServerPeer peer : serverPeers) {
-            long probeId;
-            boolean disconnect = false;
-            synchronized (this) {
+            ServerPeerLivenessAction action = inStateLane(() -> {
                 ClientServerServerPeer current =
                     clientServerServerPeers.get(peer.key);
                 if (current != peer) {
-                    continue;
+                    return ServerPeerLivenessAction.NONE;
                 }
                 if (nowNanos >= current.deadlineAtNanos) {
                     clientServerServerPeers.remove(peer.key);
-                    disconnect = true;
-                    probeId = 0;
+                    return ServerPeerLivenessAction.DISCONNECT;
                 } else if (nowNanos >= current.nextProbeAtNanos) {
                     current.nextProbeAtNanos =
                         nowNanos + CLIENT_SERVER_PROBE_INTERVAL_NANOS;
-                    probeId = current.outstandingProbeId == 0
-                        ? allocateProbeId()
+                    long probeId = current.outstandingProbeId == 0
+                        ? allocateProbeIdCore()
                         : current.outstandingProbeId;
                     current.outstandingProbeId = probeId;
+                    return new ServerPeerLivenessAction(false, probeId);
                 } else {
-                    probeId = 0;
+                    return ServerPeerLivenessAction.NONE;
                 }
-            }
-            if (disconnect) {
+            });
+            if (action.disconnect()) {
                 try {
                     peer.router.disconnectPeer(peer.routingId);
                 } catch (RuntimeException ignored) {
                 }
                 continue;
             }
-            if (probeId == 0) {
+            if (action.probeId() == 0) {
                 continue;
             }
             try (Message message = Message.from(
-                ZLinkClientServerServiceWire.encodeLivenessProbe(probeId))) {
+                ZLinkClientServerServiceWire.encodeLivenessProbe(action.probeId()))) {
                 try {
                     peer.router.send(
                         peer.routingId,
@@ -785,7 +887,10 @@ final class ZLinkChannelSocketRegistry {
                         received.parts().get(0).toByteArray());
                 if (control
                         instanceof ZLinkClientServerServiceWire.LivenessProbe probe) {
-                    connection.pendingLivenessAckId = probe.probeId();
+                    inStateLane(() -> {
+                        connection.pendingLivenessAckId = probe.probeId();
+                        return null;
+                    });
                     try (Message ack = Message.from(
                         ZLinkClientServerServiceWire.encodeLivenessAck(
                             probe.probeId()))) {
@@ -793,7 +898,10 @@ final class ZLinkChannelSocketRegistry {
                             connection.dealer.send(List.of(ack))
                                 .whenComplete((ignored, failure) -> {
                                     if (failure == null) {
-                                        connection.pendingLivenessAckId = 0;
+                                        inStateLane(() -> {
+                                            connection.pendingLivenessAckId = 0;
+                                            return null;
+                                        });
                                     }
                                 });
                         } catch (ZlinkSubmitException ignored) {
@@ -823,7 +931,7 @@ final class ZLinkChannelSocketRegistry {
 
     private void flushClientServerLivenessAck(
         ClientServerConnection connection) {
-        long probeId = connection.pendingLivenessAckId;
+        long probeId = inStateLane(() -> connection.pendingLivenessAckId);
         if (probeId == 0) {
             return;
         }
@@ -832,7 +940,10 @@ final class ZLinkChannelSocketRegistry {
             connection.dealer.send(List.of(ack))
                 .whenComplete((ignored, failure) -> {
                     if (failure == null) {
-                        connection.pendingLivenessAckId = 0;
+                        inStateLane(() -> {
+                            connection.pendingLivenessAckId = 0;
+                            return null;
+                        });
                     }
                 });
         } catch (ZlinkSubmitException ignored) {
@@ -851,28 +962,30 @@ final class ZLinkChannelSocketRegistry {
         }
     }
 
-    private synchronized void acceptClientServerClientAck(
+    private void acceptClientServerClientAck(
         ClientServerConnection connection,
         long probeId) {
-        if (!connection.aliases.stream().anyMatch(
-                alias -> clientServerConnections.get(alias) == connection)
-            || connection.outstandingProbeId != probeId) {
-            return;
-        }
-        connection.outstandingProbeId = 0;
-        connection.deadlineAtNanos =
-            System.nanoTime() + CLIENT_SERVER_DEADLINE_NANOS;
+        inStateLane(() -> {
+            if (!connection.aliases.stream().anyMatch(
+                    alias -> clientServerConnections.get(alias) == connection)
+                || connection.outstandingProbeId != probeId) {
+                return null;
+            }
+            connection.outstandingProbeId = 0;
+            connection.deadlineAtNanos =
+                System.nanoTime() + CLIENT_SERVER_DEADLINE_NANOS;
+            return null;
+        });
     }
 
     private void applyClientServerUpdate(
         ClientServerConnection connection,
         ZLinkClientServerServiceWire.Admission update) {
-        boolean reconnect = false;
-        synchronized (this) {
+        boolean reconnect = inStateLane(() -> {
             if (!connection.aliases.stream().anyMatch(
                     alias -> clientServerConnections.get(alias) == connection)
                 || !connection.ready) {
-                return;
+                return false;
             }
             ZLinkClientServerServerDescriptor before = connection.descriptor;
             if (!update.channelName().equals(before.channelName())
@@ -883,7 +996,7 @@ final class ZLinkChannelSocketRegistry {
                     before.securityIdentity())
                 || !update.advertisedEndpoint().equals(before.endpoint())) {
                 connection.ready = false;
-                reconnect = true;
+                return true;
             } else if (update.descriptorRevision()
                 >= before.descriptorRevision()) {
                 ZLinkClientServerServerDescriptor candidate =
@@ -892,13 +1005,14 @@ final class ZLinkChannelSocketRegistry {
                     == before.descriptorRevision()) {
                     if (!sameClientServerDescriptor(candidate, before)) {
                         connection.ready = false;
-                        reconnect = true;
+                        return true;
                     }
                 } else {
                     connection.descriptor = candidate;
                 }
             }
-        }
+            return false;
+        });
         if (reconnect) {
             reconnectClientServer(connection);
         }
@@ -906,14 +1020,17 @@ final class ZLinkChannelSocketRegistry {
 
     private void terminateClientServerProtocol(
         ClientServerConnection connection) {
-        synchronized (this) {
+        boolean active = inStateLane(() -> {
             if (!connection.aliases.stream().anyMatch(
                     alias -> clientServerConnections.get(alias) == connection)) {
-                return;
+                return false;
             }
             connection.ready = false;
+            return true;
+        });
+        if (active) {
+            reconnectClientServer(connection);
         }
-        reconnectClientServer(connection);
     }
 
     // Transport liveness spec 55 section 6: terminal cleanup never leaves a
@@ -923,19 +1040,26 @@ final class ZLinkChannelSocketRegistry {
         ClientServerConnection connection) {
         ZLinkBackendSocketMonitor monitor;
         ZLinkApplicationJobReceiveFlowController.Registration receiveFlow;
-        synchronized (this) {
+        ClientServerClose close = inStateLane(() -> {
             if (connection.physicalClosed) {
-                return;
+                return null;
             }
             connection.physicalClosed = true;
-            monitor = connection.monitor;
+            ZLinkBackendSocketMonitor registeredMonitor = connection.monitor;
             connection.monitor = null;
-            if (monitor != null) {
-                ownedSockets.removeIf(candidate -> candidate == monitor);
+            if (registeredMonitor != null) {
+                ownedSockets.removeIf(candidate -> candidate == registeredMonitor);
             }
             ownedSockets.removeIf(candidate -> candidate == connection.dealer);
-            receiveFlow = receiveFlowRegistrations.remove(connection.dealer);
+            return new ClientServerClose(
+                registeredMonitor,
+                receiveFlowRegistrations.remove(connection.dealer));
+        });
+        if (close == null) {
+            return;
         }
+        monitor = close.monitor();
+        receiveFlow = close.receiveFlow();
         closeReceiveFlowRegistration(receiveFlow);
         synchronized (connection.transportLock) {
             if (monitor != null) {
@@ -952,16 +1076,18 @@ final class ZLinkChannelSocketRegistry {
     }
 
     private void reconnectClientServer(ClientServerConnection connection) {
-        String endpoint;
-        synchronized (this) {
+        String endpoint = inStateLane(() -> {
             if (!connection.aliases.stream().anyMatch(
                     alias -> clientServerConnections.get(alias) == connection)) {
-                return;
+                return null;
             }
             connection.physicalGeneration++;
             connection.admissionGeneration++;
             connection.outstandingProbeId = 0;
-            endpoint = connection.descriptor.endpoint();
+            return connection.descriptor.endpoint();
+        });
+        if (endpoint == null) {
+            return;
         }
         synchronized (connection.transportLock) {
             try {
@@ -972,45 +1098,50 @@ final class ZLinkChannelSocketRegistry {
         }
     }
 
-    private synchronized void admitClientServerServerPeer(
+    private void admitClientServerServerPeer(
         String channelName,
         RoutingId routingId,
         ZLinkBackendRouterSocket router) {
-        String key = serverPeerKey(channelName, routingId);
-        long now = System.nanoTime();
-        clientServerServerPeers.put(
-            key,
-            new ClientServerServerPeer(
+        inStateLane(() -> {
+            String key = serverPeerKey(channelName, routingId);
+            long now = System.nanoTime();
+            clientServerServerPeers.put(
                 key,
-                channelName,
-                routingId,
-                router,
-                now + CLIENT_SERVER_PROBE_INTERVAL_NANOS,
-                now + CLIENT_SERVER_DEADLINE_NANOS));
+                new ClientServerServerPeer(
+                    key,
+                    channelName,
+                    routingId,
+                    router,
+                    now + CLIENT_SERVER_PROBE_INTERVAL_NANOS,
+                    now + CLIENT_SERVER_DEADLINE_NANOS));
+            return null;
+        });
     }
 
-    private synchronized void acceptClientServerServerAck(
+    private void acceptClientServerServerAck(
         String channelName,
         RoutingId routingId,
         long probeId) {
-        ClientServerServerPeer peer =
-            clientServerServerPeers.get(
-                serverPeerKey(channelName, routingId));
-        if (peer == null || peer.outstandingProbeId != probeId) {
-            return;
-        }
-        peer.outstandingProbeId = 0;
-        peer.deadlineAtNanos =
-            System.nanoTime() + CLIENT_SERVER_DEADLINE_NANOS;
+        inStateLane(() -> {
+            ClientServerServerPeer peer =
+                clientServerServerPeers.get(
+                    serverPeerKey(channelName, routingId));
+            if (peer == null || peer.outstandingProbeId != probeId) {
+                return null;
+            }
+            peer.outstandingProbeId = 0;
+            peer.deadlineAtNanos =
+                System.nanoTime() + CLIENT_SERVER_DEADLINE_NANOS;
+            return null;
+        });
     }
 
     private void pushClientServerDescriptorUpdate(
         String channelName,
         ZLinkClientServerServerDescriptor descriptor) {
         List<ClientServerServerPeer> peers;
-        synchronized (this) {
-            peers = List.copyOf(clientServerServerPeers.values());
-        }
+        peers = inStateLane(
+            () -> List.copyOf(clientServerServerPeers.values()));
         for (ClientServerServerPeer peer : peers) {
             if (!peer.channelName.equals(channelName)) {
                 continue;
@@ -1034,7 +1165,7 @@ final class ZLinkChannelSocketRegistry {
         }
     }
 
-    private synchronized long allocateProbeId() {
+    private long allocateProbeIdCore() {
         long result = nextClientServerProbeId;
         nextClientServerProbeId =
             result == Long.MAX_VALUE ? 1 : result + 1;
@@ -1042,53 +1173,64 @@ final class ZLinkChannelSocketRegistry {
     }
 
     ZLinkBackendRouterSocket server(String channelName) {
-        return servers.get(channelName);
+        return inStateLane(() -> servers.get(channelName));
     }
 
     ZLinkBackendPublisherSocket publisher(String channelName) {
-        return publishers.get(channelName);
+        return inStateLane(() -> publishers.get(channelName));
     }
 
-    synchronized String listenerEndpoint(
+    String listenerEndpoint(
         ZLinkListenerKind kind,
         String channelName) {
-        ChannelRegistration registration = registrations.get(channelName);
-        if (registration == null) {
-            throw new ZLinkConfigurationException(
-                "channel is not configured: " + channelName);
-        }
         return switch (kind) {
             case CLIENT_SERVER -> {
-                if (registration.kind() != ChannelKind.CLIENT_SERVER
-                    || !registration.clientServerServerEnabled()) {
-                    throw new ZLinkConfigurationException(
-                        "ClientServer server is not configured: " + channelName);
-                }
-                ZLinkBackendRouterSocket router = servers.get(channelName);
-                if (router == null || registration.serverBinds().isEmpty()) {
-                    throw new ZLinkConfigurationException(
-                        "ClientServer listener is not started: " + channelName);
-                }
+                RouterListener listener = inStateLane(() -> {
+                    ChannelRegistration registration = registrations.get(channelName);
+                    if (registration == null) {
+                        throw new ZLinkConfigurationException(
+                            "channel is not configured: " + channelName);
+                    }
+                    if (registration.kind() != ChannelKind.CLIENT_SERVER
+                        || !registration.clientServerServerEnabled()) {
+                        throw new ZLinkConfigurationException(
+                            "ClientServer server is not configured: " + channelName);
+                    }
+                    ZLinkBackendRouterSocket router = servers.get(channelName);
+                    if (router == null || registration.serverBinds().isEmpty()) {
+                        throw new ZLinkConfigurationException(
+                            "ClientServer listener is not started: " + channelName);
+                    }
+                    return new RouterListener(
+                        registration.serverBinds().getFirst(), router,
+                        registration.clientServerAdvertiseHost());
+                });
                 yield advertisedEndpoint(
-                    registration.serverBinds().getFirst(),
-                    router,
-                    registration.clientServerAdvertiseHost());
+                    listener.endpoint(), listener.router(), listener.advertiseHost());
             }
             case FANOUT -> {
-                if (registration.kind() != ChannelKind.FANOUT
-                    || !registration.publisherEnabled()) {
-                    throw new ZLinkConfigurationException(
-                        "fanout publisher is not configured: " + channelName);
-                }
-                ZLinkBackendPublisherSocket publisher = publishers.get(channelName);
-                if (publisher == null || registration.publisherBinds().isEmpty()) {
-                    throw new ZLinkConfigurationException(
-                        "fanout listener is not started: " + channelName);
-                }
+                PublisherListener listener = inStateLane(() -> {
+                    ChannelRegistration registration = registrations.get(channelName);
+                    if (registration == null) {
+                        throw new ZLinkConfigurationException(
+                            "channel is not configured: " + channelName);
+                    }
+                    if (registration.kind() != ChannelKind.FANOUT
+                        || !registration.publisherEnabled()) {
+                        throw new ZLinkConfigurationException(
+                            "fanout publisher is not configured: " + channelName);
+                    }
+                    ZLinkBackendPublisherSocket publisher = publishers.get(channelName);
+                    if (publisher == null || registration.publisherBinds().isEmpty()) {
+                        throw new ZLinkConfigurationException(
+                            "fanout listener is not started: " + channelName);
+                    }
+                    return new PublisherListener(
+                        registration.publisherBinds().getFirst(), publisher,
+                        registration.fanoutAdvertiseHost());
+                });
                 yield advertisedEndpoint(
-                    registration.publisherBinds().getFirst(),
-                    publisher,
-                    registration.fanoutAdvertiseHost());
+                    listener.endpoint(), listener.publisher(), listener.advertiseHost());
             }
             default -> throw new ZLinkConfigurationException(
                 "listener kind is not a Channel listener: " + kind);
@@ -1096,15 +1238,16 @@ final class ZLinkChannelSocketRegistry {
     }
 
     ZLinkBackendSubscriberSocket subscriber(String channelName) {
-        return subscribers.get(channelName);
+        return inStateLane(() -> subscribers.get(channelName));
     }
 
     ZLinkBackendRouterSocket routeRouter(String channelName) {
-        return routeRouters.get(channelName);
+        return inStateLane(() -> routeRouters.get(channelName));
     }
 
     Object routeSocketLock(String channelName, Object fallback) {
-        return routeSocketLocks.getOrDefault(channelName, fallback);
+        return inStateLane(
+            () -> routeSocketLocks.getOrDefault(channelName, fallback));
     }
 
     Map<String, ZLinkBackendSpotRouteBridge> spotRouteBridges() {
@@ -1124,39 +1267,56 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void registerSpotRouterNode(String channelName, ZLinkInternalSpotNode node) {
-        spotRouterNodes.put(channelName, node);
+        inStateLane(() -> {
+            spotRouterNodes.put(channelName, node);
+            return null;
+        });
     }
 
     ZLinkInternalSpotNode spotRouterNode(String channelName) {
-        return spotRouterNodes.get(channelName);
+        return inStateLane(() -> spotRouterNodes.get(channelName));
     }
 
     Map<String, ZLinkBackendSocket> monitoringSocketSources() {
-        Map<String, ZLinkBackendSocket> sources = new HashMap<>();
-        sources.putAll(clients);
-        sources.putAll(servers);
-        sources.putAll(publishers);
-        sources.putAll(subscribers);
-        sources.putAll(routeRouters);
-        return Map.copyOf(sources);
+        return inStateLane(() -> {
+            Map<String, ZLinkBackendSocket> sources = new HashMap<>();
+            sources.putAll(clients);
+            sources.putAll(servers);
+            sources.putAll(publishers);
+            sources.putAll(subscribers);
+            sources.putAll(routeRouters);
+            return Map.copyOf(sources);
+        });
     }
 
     List<ZLinkChannelRuntime.AutoConnectSurface> autoConnectSurfaces() {
+        AutoConnectSnapshot snapshot = inStateLane(() -> new AutoConnectSnapshot(
+            List.copyOf(registrations.values()),
+            Map.copyOf(clients),
+            Map.copyOf(servers),
+            Map.copyOf(serverRoutingIds),
+            Map.copyOf(publishers),
+            Map.copyOf(publisherRoutingIds),
+            Map.copyOf(routeRouters)));
         List<ZLinkChannelRuntime.AutoConnectSurface> surfaces = new ArrayList<>();
-        for (ChannelRegistration channel : registrations.values()) {
-            addAutoConnectSurfaces(channel, surfaces);
+        for (ChannelRegistration channel : snapshot.registrations()) {
+            addAutoConnectSurfaces(channel, surfaces, snapshot);
         }
         return List.copyOf(surfaces);
     }
 
     void closeSpotRouteBridges() {
-        closeAll(spotRouteBridges.values(), Collections.newSetFromMap(
-            new IdentityHashMap<>()));
+        List<ZLinkBackendSpotRouteBridge> bridges = List.copyOf(
+            spotRouteBridges.values());
         spotRouteBridges.clear();
+        closeAll(bridges, Collections.newSetFromMap(
+            new IdentityHashMap<>()));
     }
 
     void closeAll() {
-        for (ChannelRegistration registration : registrations.values()) {
+        List<ChannelRegistration> registrationsToDetach = inStateLane(
+            () -> List.copyOf(registrations.values()));
+        for (ChannelRegistration registration : registrationsToDetach) {
             registration.detachRuntimeConnections();
         }
         // ClientServer physical connections close first so that spec 55
@@ -1165,23 +1325,26 @@ final class ZLinkChannelSocketRegistry {
         // close the DEALER before its monitor.
         Set<ClientServerConnection> physical =
             Collections.newSetFromMap(new IdentityHashMap<>());
-        synchronized (this) {
-            physical.addAll(clientServerConnections.values());
+        physical.addAll(inStateLane(() -> {
+            Set<ClientServerConnection> connections =
+                Collections.newSetFromMap(new IdentityHashMap<>());
+            connections.addAll(clientServerConnections.values());
             clientServerConnections.clear();
             clientServerServerDescriptors.clear();
             clientServerServerPeers.clear();
-        }
+            return connections;
+        }));
         for (ClientServerConnection connection : physical) {
             closeClientServerPhysical(connection);
         }
-        List<ZLinkBackendObject> owned;
-        synchronized (this) {
+        List<ZLinkBackendObject> owned = inStateLane(() -> {
             // closeClientServerPhysical removes its monitor and DEALER from
             // the owned set. Snapshot only after that ordered close so the
             // generic drain cannot close either physical object a second time.
-            owned = List.copyOf(ownedSockets);
+            List<ZLinkBackendObject> snapshot = List.copyOf(ownedSockets);
             ownedSockets.clear();
-        }
+            return snapshot;
+        });
         owned.forEach(this::deregisterReceiveFlow);
         closeAll(owned, Collections.newSetFromMap(
             new IdentityHashMap<>()));
@@ -1195,9 +1358,8 @@ final class ZLinkChannelSocketRegistry {
             applicationJobQueue.registerReceiveFlowTarget(
                 socket::setReceiveFlowState);
         ZLinkApplicationJobReceiveFlowController.Registration previous;
-        synchronized (this) {
-            previous = receiveFlowRegistrations.put(socket, registration);
-        }
+        previous = inStateLane(
+            () -> receiveFlowRegistrations.put(socket, registration));
         closeReceiveFlowRegistration(previous);
     }
 
@@ -1209,17 +1371,15 @@ final class ZLinkChannelSocketRegistry {
             applicationJobQueue.registerReceiveFlowTarget(
                 socket::setReceiveFlowState);
         ZLinkApplicationJobReceiveFlowController.Registration previous;
-        synchronized (this) {
-            previous = receiveFlowRegistrations.put(socket, registration);
-        }
+        previous = inStateLane(
+            () -> receiveFlowRegistrations.put(socket, registration));
         closeReceiveFlowRegistration(previous);
     }
 
     private void deregisterReceiveFlow(ZLinkBackendObject socket) {
         ZLinkApplicationJobReceiveFlowController.Registration registration;
-        synchronized (this) {
-            registration = receiveFlowRegistrations.remove(socket);
-        }
+        registration = inStateLane(
+            () -> receiveFlowRegistrations.remove(socket));
         closeReceiveFlowRegistration(registration);
     }
 
@@ -1232,27 +1392,29 @@ final class ZLinkChannelSocketRegistry {
 
     private void addAutoConnectSurfaces(
         ChannelRegistration channel,
-        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
+        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
+        AutoConnectSnapshot snapshot) {
         if (channel.kind() == ChannelKind.CLIENT_SERVER) {
-            addClientServerSurfaces(channel, surfaces);
+            addClientServerSurfaces(channel, surfaces, snapshot);
         } else if (channel.kind() == ChannelKind.FANOUT) {
-            addFanoutSurfaces(channel, surfaces);
+            addFanoutSurfaces(channel, surfaces, snapshot);
         } else if (channel.kind() == ChannelKind.ROUTE_MESH) {
-            addRouteSurfaces(channel, surfaces);
+            addRouteSurfaces(channel, surfaces, snapshot);
         }
     }
 
     private void addClientServerSurfaces(
         ChannelRegistration channel,
-        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
-        ZLinkBackendRouterSocket server = servers.get(channel.name());
+        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
+        AutoConnectSnapshot snapshot) {
+        ZLinkBackendRouterSocket server = snapshot.servers().get(channel.name());
         if (server != null) {
             for (String endpoint : channel.serverBinds()) {
                 surfaces.add(new ZLinkChannelRuntime.AutoConnectSurface(
                     ZLinkAutoConnectType.CLIENT_SERVER,
                     channel.name(),
                     ZLinkLocationRole.ROUTER,
-                    serverRoutingIds.get(channel.name()),
+                    snapshot.serverRoutingIds().get(channel.name()),
                     advertisedEndpoint(
                         endpoint,
                         server,
@@ -1270,24 +1432,25 @@ final class ZLinkChannelSocketRegistry {
                 channel.routingId(),
                 "",
                 100,
-                clients.get(channel.name()),
+                snapshot.clients().get(channel.name()),
                 channel.clientManualEndpoints()));
         }
     }
 
     private void addFanoutSurfaces(
         ChannelRegistration channel,
-        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
-        if (publishers.containsKey(channel.name())) {
+        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
+        AutoConnectSnapshot snapshot) {
+        if (snapshot.publishers().containsKey(channel.name())) {
             for (String endpoint : channel.publisherBinds()) {
                 surfaces.add(new ZLinkChannelRuntime.AutoConnectSurface(
                     ZLinkAutoConnectType.FANOUT,
                     channel.name(),
                     ZLinkLocationRole.PUB,
-                    publisherRoutingIds.get(channel.name()),
+                    snapshot.publisherRoutingIds().get(channel.name()),
                     advertisedEndpoint(
                         endpoint,
-                        publishers.get(channel.name()),
+                        snapshot.publishers().get(channel.name()),
                         channel.fanoutAdvertiseHost()),
                     100,
                     null,
@@ -1309,8 +1472,9 @@ final class ZLinkChannelSocketRegistry {
 
     private void addRouteSurfaces(
         ChannelRegistration channel,
-        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
-        ZLinkBackendRouterSocket router = routeRouters.get(channel.name());
+        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
+        AutoConnectSnapshot snapshot) {
+        ZLinkBackendRouterSocket router = snapshot.routeRouters().get(channel.name());
         if (router == null) {
             return;
         }
@@ -1426,6 +1590,75 @@ final class ZLinkChannelSocketRegistry {
         int weight,
         boolean connectionReady,
         boolean ready) {
+    }
+
+    private record AdmissionResult(
+        boolean admitted,
+        ClientServerConnection closeAfter) {
+    }
+
+    private record Removal(
+        ClientServerConnection connection,
+        boolean closePhysical) {
+    }
+
+    private record LivenessSnapshot(
+        List<ClientServerConnection> clientConnections,
+        List<ClientServerServerPeer> serverPeers,
+        long controlCursor) {
+    }
+
+    private record ClientLivenessAction(boolean reconnect, long probeId) {
+        private static final ClientLivenessAction NONE =
+            new ClientLivenessAction(false, 0);
+        private static final ClientLivenessAction RECONNECT =
+            new ClientLivenessAction(true, 0);
+    }
+
+    private record ServerPeerLivenessAction(boolean disconnect, long probeId) {
+        private static final ServerPeerLivenessAction NONE =
+            new ServerPeerLivenessAction(false, 0);
+        private static final ServerPeerLivenessAction DISCONNECT =
+            new ServerPeerLivenessAction(true, 0);
+    }
+
+    private record ClientServerClose(
+        ZLinkBackendSocketMonitor monitor,
+        ZLinkApplicationJobReceiveFlowController.Registration receiveFlow) {
+    }
+
+    private record RouterListener(
+        String endpoint,
+        ZLinkBackendRouterSocket router,
+        String advertiseHost) {
+    }
+
+    private record PublisherListener(
+        String endpoint,
+        ZLinkBackendPublisherSocket publisher,
+        String advertiseHost) {
+    }
+
+    private record ServerDescriptorInput(
+        String channelName,
+        ZLinkBackendRouterSocket router,
+        RoutingId routingId,
+        ChannelRegistration registration) {
+    }
+
+    private record ServerDescriptorValue(
+        String channelName,
+        ZLinkClientServerServerDescriptor descriptor) {
+    }
+
+    private record AutoConnectSnapshot(
+        List<ChannelRegistration> registrations,
+        Map<String, ZLinkBackendDealerSocket> clients,
+        Map<String, ZLinkBackendRouterSocket> servers,
+        Map<String, RoutingId> serverRoutingIds,
+        Map<String, ZLinkBackendPublisherSocket> publishers,
+        Map<String, RoutingId> publisherRoutingIds,
+        Map<String, ZLinkBackendRouterSocket> routeRouters) {
     }
 
     private static final class ClientServerConnection {

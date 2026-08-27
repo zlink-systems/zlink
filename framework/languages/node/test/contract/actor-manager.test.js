@@ -5022,7 +5022,7 @@ function createMockSpotNode(overrides) {
       actor,
       targetNodeRid,
       targetSpotId,
-      zlink.Message.from(request),
+      request,
       (result, parts) => {
         completions.set(operationId.low, legacyJoinCompletion(result, parts, targetSpotId));
       },
@@ -5046,7 +5046,7 @@ function createMockSpotNode(overrides) {
       targetNodeRid,
       targetSpotId,
       targetGeneration,
-      request.payload,
+      request,
       timeoutMs
     );
   }
@@ -5056,7 +5056,7 @@ function createMockSpotNode(overrides) {
     const submitted = legacyJoinActorEntrySpot(
       actor,
       targetNodeRid,
-      zlink.Message.from(request),
+      request,
       (result, parts) => {
         completions.set(operationId.low, legacyJoinCompletion(result, parts, result.joinedSpotId ?? null));
       },

@@ -48,10 +48,7 @@ class AuthenticatePlaySessionHandler {
     if (created.status === 'existing') {
       // Keep the exact ActorRef as server-only evidence. AuthenticateRes exposes
       // PlayerInfo only, so the client cannot choose or forge an Actor route.
-      console.log(
-        `tictactoe-auth existing-actor-bound actor=${actorRef.actorId} ` +
-        `mesh=${actorRef.meshName} nodeRid=${actorRef.nodeRid} generation=${actorRef.objectGeneration}`
-      );
+      console.log(`tictactoe-lifecycle actor-bound actor=${actorRef.actorId}`);
     }
     context.client.reply(authenticateRes(authenticated.player)).submit();
   }

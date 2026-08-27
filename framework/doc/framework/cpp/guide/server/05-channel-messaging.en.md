@@ -17,8 +17,8 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/05-channel-m
 
 # 5. Channel Messaging — request · send · pub/sub
 
-> **The document that owns this chapter's contract** — [Channel Messaging](../../../common/spec/server/08-channel-messaging.en.md)
-> and [ClientServer Channel](../../../common/spec/server/09-client-server-channel.en.md) own the
+> **The document that owns this chapter's contract** — [Channel Messaging](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md)
+> and [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md) own the
 > behavior, and the [per-language channel messaging public contract](../../../common/spec/server/languages/README.en.md)
 > owns the surface. This chapter covers how to actually register and call that surface,
 > focused on usage.
@@ -885,7 +885,7 @@ options.codecs ().use (std::make_shared<avro_codec_extension_t> ());
 ```
 
 After registration, high-level calls still exchange business objects as-is, and
-serialization is handled by Avro. See the [framework-api §9](../../../common/spec/server/06-framework-api.en.md#9-codec)
+serialization is handled by Avro. See the [framework-api §9](../../../common/spec/server/00-foundation/06-framework-api.en.md#12-codec)
 table for registration surfaces in other languages.
 
 ## 8. Scaling A ChannelName Horizontally

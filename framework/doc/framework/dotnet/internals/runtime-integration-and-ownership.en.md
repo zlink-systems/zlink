@@ -1,7 +1,7 @@
 <!-- framework-adapter-nav:start -->
 [Document List](../../../README.en.md) | [Previous: Backend Policy](backend-dependency-policy.en.md) | [Next: Regression Test Matrix](regression-test-matrix.en.md)<!-- framework-adapter-nav:end -->
 
-[Common layering](../../common/spec/server/40-internal-layering.en.md) | [Common spec](../../common/spec/server/README.en.md)
+[Common layering](../../common/spec/server/00-foundation/08-layering.en.md) | [Common spec](../../common/spec/server/README.en.md)
 
 # .NET Runtime Integration and Receive Ownership
 

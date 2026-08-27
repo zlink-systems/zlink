@@ -12,6 +12,39 @@ $SampleLogDir = Join-Path $RunDir "sample-logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 New-Item -ItemType Directory -Force -Path $SampleLogDir | Out-Null
 $SUPPORTCHAT_LOG_DIR = $SampleLogDir
+$SupportChatWaitAttempts = 300
+$SupportChatWaitDelayMilliseconds = 100
+
+function Get-SupportChatLogCount {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Path,
+        [Parameter(Mandatory = $true)][string]$Pattern
+    )
+
+    $count = 0
+    foreach ($entry in $Path) {
+        if (Test-Path -LiteralPath $entry) {
+            $count += @(Select-String -Path $entry -SimpleMatch -Pattern $Pattern).Count
+        }
+    }
+    return $count
+}
+
+function Wait-SupportChatLogCount {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Path,
+        [Parameter(Mandatory = $true)][string]$Pattern,
+        [int]$Expected = 1
+    )
+
+    for ($attempt = 1; $attempt -le $SupportChatWaitAttempts; $attempt++) {
+        if ((Get-SupportChatLogCount -Path $Path -Pattern $Pattern) -ge $Expected) {
+            return
+        }
+        Start-Sleep -Milliseconds $SupportChatWaitDelayMilliseconds
+    }
+    throw "Timed out waiting for at least $Expected occurrence(s) of '$Pattern'."
+}
 
 try {
     $ports = New-SamplePorts -Count 4 -BasePort 0
@@ -25,7 +58,7 @@ try {
     $redis = Start-SampleRedisContainer "zlink-supportchat-dotnet-redis"
     $RedisContainer = $redis.ContainerId
     $SUPPORTCHAT_REDIS_ENDPOINT = $redis.Endpoint
-    Wait-SampleTcpEndpoint "redis" "tcp://$SUPPORTCHAT_REDIS_ENDPOINT"
+    Wait-SampleTcpEndpoint "redis" "tcp://$SUPPORTCHAT_REDIS_ENDPOINT" -Attempts $SupportChatWaitAttempts
     $common = @{
         LogDirectory = $SampleLogDir
         RedisEndpoint = $SUPPORTCHAT_REDIS_ENDPOINT
@@ -53,31 +86,33 @@ try {
     Invoke-SampleDotnetBuild (Join-Path $ScriptDir "SupportChat.csproj")
 
     Start-SampleDotnetAssembly -Name "support" -Project (Join-Path $ScriptDir "Server/Support/SupportChat.Server.Support.csproj") -LogDirectory $LogDir -Arguments @("--config", $supportConfigFile) | Out-Null
-    Wait-SampleTcpEndpoint "support-mesh" $SUPPORTCHAT_SUPPORT_MESH_ENDPOINT
+    Wait-SampleTcpEndpoint "support-mesh" $SUPPORTCHAT_SUPPORT_MESH_ENDPOINT -Attempts $SupportChatWaitAttempts
+    Wait-SupportChatLogCount -Path (Join-Path $LogDir "support.out.log") -Pattern "supportchat-ready kind=public node=support"
 
     Start-SampleDotnetAssembly -Name "api" -Project (Join-Path $ScriptDir "Server/Api/SupportChat.Server.Api.csproj") -LogDirectory $LogDir -Arguments @("--config", $apiConfigFile) | Out-Null
-    Wait-SampleTcpEndpoint "api-mesh" $SUPPORTCHAT_API_MESH_ENDPOINT
+    Wait-SampleTcpEndpoint "api-mesh" $SUPPORTCHAT_API_MESH_ENDPOINT -Attempts $SupportChatWaitAttempts
+    Wait-SupportChatLogCount -Path (Join-Path $LogDir "api.out.log") -Pattern "supportchat-ready kind=public node=api"
+    Wait-SupportChatLogCount -Path (Join-Path $LogDir "api.out.log") -Pattern "supportchat-ready kind=spot-route node=api mesh=supportchat"
 
     Start-SampleDotnetAssembly -Name "session" -Project (Join-Path $ScriptDir "Server/Session/SupportChat.Server.Session.csproj") -LogDirectory $LogDir -Arguments @("--config", $sessionConfigFile) | Out-Null
-    Wait-SampleTcpEndpoint "session-mesh" $SUPPORTCHAT_SESSION_MESH_ENDPOINT
-    Wait-SampleTcpEndpoint "session-stream" $SUPPORTCHAT_STREAM_ENDPOINT
+    Wait-SampleTcpEndpoint "session-mesh" $SUPPORTCHAT_SESSION_MESH_ENDPOINT -Attempts $SupportChatWaitAttempts
+    Wait-SampleTcpEndpoint "session-stream" $SUPPORTCHAT_STREAM_ENDPOINT -Attempts $SupportChatWaitAttempts
+    Wait-SupportChatLogCount -Path (Join-Path $LogDir "session.out.log") -Pattern "supportchat-ready kind=stream node=session"
+    Wait-SupportChatLogCount -Path (Join-Path $LogDir "session.out.log") -Pattern "supportchat-ready kind=spot-route node=session mesh=supportchat"
 
     $clientLog = Join-Path $LogDir "client.log"
     Invoke-SampleDotnetRun -Project (Join-Path $ScriptDir "Client/SupportChat.Client.csproj") -Arguments @("--config", $clientConfigFile) *> $clientLog
-    if (-not (Select-String -Path $clientLog -Pattern "supportchat=completed" -Quiet)) {
-        throw "SupportChat client did not complete."
-    }
-    if (-not (Select-String -Path $clientLog -Pattern "supportchat-closed-typing-ignore=verified" -Quiet)) {
-        throw "SupportChat client did not verify closed typing ignore."
-    }
-
-    Assert-SampleLogContains -LogDirectory $LogDir -Pattern "support conversation: created"
-    Assert-SampleLogContains -LogDirectory $LogDir -Pattern "support conversation: actor joined"
-    Assert-SampleLogContains -LogDirectory $LogDir -Pattern "status=WaitingForAgent"
-    Assert-SampleLogContains -LogDirectory $LogDir -Pattern "status=Active"
-    Assert-SampleLogContains -LogDirectory $LogDir -Pattern "status=WaitingForClose"
-    Assert-SampleLogContains -LogDirectory $LogDir -Pattern "status=Closed"
-    Write-Host "supportchat-server-evidence=completed"
+    Wait-SupportChatLogCount -Path $clientLog -Pattern "supportchat=completed"
+    Wait-SupportChatLogCount -Path $clientLog -Pattern "supportchat-closed-typing-ignore=verified"
+    $apiAndSupportLogs = @(
+        (Join-Path $LogDir "api.out.log"),
+        (Join-Path $LogDir "support.out.log"))
+    Wait-SupportChatLogCount -Path $apiAndSupportLogs -Pattern "supportchat-conversation created conversation="
+    Wait-SupportChatLogCount -Path $apiAndSupportLogs -Pattern "supportchat-conversation agent-joined conversation="
+    Wait-SupportChatLogCount -Path $apiAndSupportLogs -Pattern "supportchat-conversation status=WaitingForAgent conversation="
+    Wait-SupportChatLogCount -Path $apiAndSupportLogs -Pattern "supportchat-conversation status=Active conversation="
+    Wait-SupportChatLogCount -Path $apiAndSupportLogs -Pattern "supportchat-conversation status=WaitingForClose conversation="
+    Wait-SupportChatLogCount -Path $apiAndSupportLogs -Pattern "supportchat-conversation status=Closed conversation="
     $RunSucceeded = $true
 }
 finally {
@@ -93,3 +128,5 @@ finally {
         Remove-Item -Recurse -Force $RunDir -ErrorAction SilentlyContinue
     }
 }
+
+Write-Host "supportchat-placement=completed"

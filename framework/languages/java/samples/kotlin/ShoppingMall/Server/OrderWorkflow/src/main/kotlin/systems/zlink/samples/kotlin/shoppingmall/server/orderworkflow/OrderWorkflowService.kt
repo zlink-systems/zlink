@@ -75,7 +75,9 @@ class OrderWorkflowService(private val store: CommerceStore) {
         return requireProjection(command.orderId)
     }
 
-    fun continueWorkflow(orderId: String): OrderState {
+    fun continueWorkflow(orderId: String): OrderState = continueWorkflow(null, orderId)
+
+    fun continueWorkflow(spot: OrderWorkflowSpot?, orderId: String): OrderState {
         // Each iteration advances one event-stream transition; a started order
         // reaches a terminal state within a handful of steps.
         for (step in 0 until MAX_WORKFLOW_STEPS) {
@@ -85,6 +87,9 @@ class OrderWorkflowService(private val store: CommerceStore) {
                 return store.findReadModel(orderId) ?: store.placeholder(orderId)
             }
             val status = aggregate.status()
+            if (status == OrderStatus.InventoryReserved && spot != null) {
+                println("shoppingmall-order replayed order=$orderId generation=${spot.context().objectGeneration()}")
+            }
             val ts = now()
             val next: List<Any> = when (status) {
                 OrderStatus.Created -> {

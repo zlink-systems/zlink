@@ -49,7 +49,7 @@ public interface ICommerceStateStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    ValueTask<IdempotencyMapping> ReserveIdempotencyAsync(
+    ValueTask<IdempotencyReservation> ReserveIdempotencyAsync(
         string idempotencyKey,
         CancellationToken cancellationToken);
 
@@ -59,6 +59,14 @@ public interface ICommerceStateStore
 
     ValueTask CreatePendingMappingAsync(
         string idempotencyKey,
+        string orderId,
+        CancellationToken cancellationToken);
+
+    ValueTask ArmPlannedRelocationReplayAsync(
+        string orderId,
+        CancellationToken cancellationToken);
+
+    ValueTask<bool> TryConsumePlannedRelocationReplayAsync(
         string orderId,
         CancellationToken cancellationToken);
 
@@ -127,6 +135,10 @@ public sealed record IdempotencyMapping(
     string IdempotencyKey,
     string OrderId,
     bool Started);
+
+public sealed record IdempotencyReservation(
+    IdempotencyMapping Mapping,
+    bool Created);
 
 public sealed record StoreEvidence(
     IReadOnlyDictionary<string, string[]> EventsByOrder,

@@ -26,5 +26,11 @@ class DeliveryStatusUpdatedHandler : ZLinkSuspendingEntrySpotActorSendHandler<
                 occurredAt = message.occurredAt,
             ),
         )
+        if (message.status.name == "Delivered") {
+            println(
+                "deliverydispatch-customer pushed status=Delivered " +
+                    "delivery=${message.deliveryId}",
+            )
+        }
     }
 }

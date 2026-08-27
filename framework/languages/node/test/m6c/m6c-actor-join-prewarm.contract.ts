@@ -12,6 +12,15 @@ import {
   type ZLinkParkedActorArrival
 } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
 import {
+  ZLinkFormalRemoteActorTransferRegistry
+} from '../../packages/framework/src/runtime/spots/formal-remote-actor-transfer-registry';
+import {
+  ZLinkPostCommitActorBinder
+} from '../../packages/framework/src/runtime/actors/post-commit-actor-binder';
+import {
+  ZLinkPostCommitActorLocation
+} from '../../packages/framework/src/runtime/actors/post-commit-actor-location';
+import {
   ZLinkSpotActorPacketDispatch,
   type ZLinkActorPacketDelivery,
   type ZLinkActorRequestTerminal
@@ -78,6 +87,71 @@ function admission(transferId: string, objectGeneration = OBJECT_GENERATION) {
 function flushMicrotasks(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
+
+test('formal transfer rechecks its exact entry after target lifecycle await', async () => {
+  const registry = new ZLinkFormalRemoteActorTransferRegistry();
+  const transferId = 'await-exact-transfer';
+  registry.begin({
+    actor: { context: { actorId: ACTOR_ID } } as never,
+    spotId: SPOT_ID,
+    transferId,
+    handoffBacklog: []
+  });
+
+  const terminal = registry.completeSourceLeaveTerminal(ACTOR_ID, transferId, true);
+  assert.equal(registry.completeTargetLifecycle(ACTOR_ID, transferId), true);
+  registry.delete(ACTOR_ID);
+
+  assert.equal(await terminal, false);
+});
+
+test('post-commit binder retains a newer desired ref across bind await', async () => {
+  let releaseFirstBind!: () => void;
+  const firstBind = new Promise<void>((resolve) => { releaseFirstBind = resolve; });
+  const attempts: ActorRef[] = [];
+  const binder = new ZLinkPostCommitActorBinder({
+    bind: async (actorRef) => {
+      attempts.push(actorRef);
+      if (attempts.length === 1) await firstBind;
+    }
+  });
+  const first = fallbackRef();
+  const second = { ...fallbackRef(), objectGeneration: OBJECT_GENERATION + 1n };
+
+  const completion = binder.bind(first);
+  assert.equal(binder.bind(second), completion);
+  releaseFirstBind();
+
+  await completion;
+  assert.deepEqual(attempts, [first, second]);
+});
+
+test('post-commit location completes one queue head after its callback await', async () => {
+  let releaseJoined!: () => void;
+  const joined = new Promise<void>((resolve) => { releaseJoined = resolve; });
+  const events: string[] = [];
+  let resolveLeft!: () => void;
+  const left = new Promise<void>((resolve) => { resolveLeft = resolve; });
+  const location = new ZLinkPostCommitActorLocation({
+    lifecycle: {
+      async notifyActorJoinedSpot() {
+        events.push('joined');
+        await joined;
+      },
+      async notifyActorLeftSpot() {
+        events.push('left');
+        resolveLeft();
+      }
+    } as never
+  });
+
+  location.joinedEventually('Player', ACTOR_ID, MESH_NAME, SPOT_ID, 1n, 1n, 1n);
+  location.leftEventually('Player', ACTOR_ID, SPOT_ID, 1n, 1n, 1n);
+  releaseJoined();
+
+  await left;
+  assert.deepEqual(events, ['joined', 'left']);
+});
 
 function pendingCanonicalJoinHarness() {
   const registry = new ZLinkFormalRemoteActorAdmissionRegistry();

@@ -77,8 +77,8 @@ class CommerceStore(private val topology: SampleTopology) {
                 listOf(OrderLineInput("sku-headset", 1)), 64.00, "USD"))
 
             val inventory = childObject(state, "inventory")
-            putIfAbsentInt(inventory, "sku-keyboard", 5)
-            putIfAbsentInt(inventory, "sku-mouse", 5)
+            putIfAbsentInt(inventory, "sku-keyboard", 20)
+            putIfAbsentInt(inventory, "sku-mouse", 20)
             putIfAbsentInt(inventory, "sku-headset", 3)
             putIfAbsentInt(inventory, "sku-soldout", 1)
 
@@ -190,7 +190,11 @@ class CommerceStore(private val topology: SampleTopology) {
                 AuthorizePaymentResult(false, null, reason)
             } else {
                 val paymentId = "payment-$orderId"
-                childObject(state, "payments").put(paymentId, "%.2f %s".format(amount, currency))
+                val payments = childObject(state, "payments")
+                if (payments.has(paymentId)) {
+                    println("shoppingmall-order external-effect-repeated order=$orderId")
+                }
+                payments.put(paymentId, "%.2f %s".format(amount, currency))
                 AuthorizePaymentResult(true, paymentId, null)
             }
         }

@@ -84,7 +84,7 @@ Actor/Spot traces share the same flow ID?
   and room Spot dispatch records all share the same flow ID and
   marker. Each hop's application handler runs once.
 - Detailed behavior: verifies
-  [Flow Correlation §5](../spec/server/27-flow-correlation.en.md#5-propagation-rule).
+  [Flow Correlation §5](../spec/server/06-observability/04-flow-correlation.en.md#5-propagation-rule).
 
 #### OBS-A2 Leave A Flow Even On A Dispatch-Failure Record
 
@@ -104,7 +104,7 @@ trace include the original flow ID?
   caller made, and the formal error phase. The normal packet is also
   handled as an independent flow, and the two markers don't mix.
 - Detailed behavior: verifies
-  [Flow Correlation §7](../spec/server/27-flow-correlation.en.md#7-reply-and-failure).
+  [Flow Correlation §7](../spec/server/06-observability/04-flow-correlation.en.md#7-reply-and-failure).
 
 #### OBS-A3 A Tracing-Off Span Doesn't Propagate An Inbound Flow
 
@@ -125,7 +125,7 @@ last node use a new ID different from the earlier flow?
   flow trace. The target builds a new flow ID different from the
   source, and processes the application payload normally.
 - Detailed behavior: verifies
-  [Flow Correlation §4](../spec/server/27-flow-correlation.en.md#4-when-a-flow-is-created).
+  [Flow Correlation §4](../spec/server/06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created).
 
 #### OBS-A4 Deliver Fanout Payload While A Timer Builds A New Flow
 
@@ -146,8 +146,8 @@ respect their formal boundaries?
   message-flow trace. The missing-handler subscriber's local record is a `surface=classic_fanout`
   `no_handler` dispatch error without `channel_route_kind`. The timer trace has a separate flow ID
   and `flow_origin=timer`, and its handler runs once.
-- Detailed behavior: verifies [Message Flow Tracing — Attribute Inclusion Conditions](../spec/server/26-message-flow-tracing.en.md#32-attribute-inclusion-conditions)
-  and [Flow Correlation — When A Flow Is Created](../spec/server/27-flow-correlation.en.md#4-when-a-flow-is-created).
+- Detailed behavior: verifies [Message Flow Tracing — Attribute Inclusion Conditions](../spec/server/06-observability/03-message-flow-tracing.en.md#32-attribute-inclusion-conditions)
+  and [Flow Correlation — When A Flow Is Created](../spec/server/06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created).
 
 #### OBS-A5 Apply A Runtime Tracing-Level Change
 
@@ -169,7 +169,7 @@ level?
   Off marker has no flow trace, the Errors marker has only error records,
   and a new flow trace resumes from the last marker.
 - Detailed behavior: verifies
-  [Message-Flow Tracing — Changing The Record Level At Runtime](../spec/server/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime).
+  [Message-Flow Tracing — Changing The Record Level At Runtime](../spec/server/06-observability/03-message-flow-tracing.en.md#5-changing-the-record-level-at-runtime-and-the-cost-rule).
 
 ### Track B — Cross-Check Runtime Metric Against Actual Events
 
@@ -193,7 +193,7 @@ connection count?
   increases by exactly that many auto-reconnect events, and the label
   uses only the spec's closed values.
 - Detailed behavior: verifies
-  [Runtime Metrics §4](../spec/server/25-runtime-metrics.en.md#4-object-and-stream).
+  [Runtime Metrics §4](../spec/server/06-observability/02-runtime-metrics.en.md).
 
 #### OBS-B2 Confirm Actor Relocation Metric
 
@@ -223,8 +223,8 @@ once in the relocation-completed/duration/interruption metrics?
   time exceeding its target doesn't turn the completed outcome into a
   failure.
 - Detailed behavior: verifies
-  [Object And STREAM Metrics](../spec/server/25-runtime-metrics.en.md#4-object-and-stream) and
-  [Host Relocation And Shutdown Metrics](../spec/server/25-runtime-metrics.en.md#5-host-relocation-and-shutdown).
+  [Object And STREAM Metrics](../spec/server/06-observability/02-runtime-metrics.en.md) and
+  [Host Relocation And Shutdown Metrics](../spec/server/06-observability/02-runtime-metrics.en.md#8-host-relocation-and-shutdown).
 
 #### OBS-B3 Confirm The Absence Of A Publish Metric And Owner-Lease Lateness
 
@@ -248,9 +248,9 @@ lateness metric?
   sample increases, and no metric label has a flow ID, Actor ID, or
   Spot ID.
 - Detailed behavior: verifies
-  [Runtime Metrics §6](../spec/server/25-runtime-metrics.en.md#6-location-and-telemetry)
+  [Runtime Metrics §6](../spec/server/06-observability/02-runtime-metrics.en.md#9-location-and-telemetry)
   and
-  [§7](../spec/server/25-runtime-metrics.en.md#7-label-cardinality).
+  [§7](../spec/server/06-observability/02-runtime-metrics.en.md#10-label-cardinality).
 
 #### OBS-B4 Process Messaging Even Without A Metric Reader
 
@@ -272,7 +272,7 @@ reader provide the same request/send result?
   or evidence queue. Allocation and clock-read cost are a benchmark's
   responsibility.
 - Detailed behavior: verifies
-  [Runtime Metrics §8](../spec/server/25-runtime-metrics.en.md#8-collection-boundary).
+  [Runtime Metrics §8](../spec/server/06-observability/02-runtime-metrics.en.md#11-collection-boundary).
 
 ### Track C — Operate Host Relocate And Shutdown
 
@@ -305,7 +305,7 @@ together reflect the `Serving→Relocating→Relocated` transition?
   process health endpoint is kept alive. The Host state metric also
   reflects the same closed state.
 - Detailed behavior: verifies
-  [Host Maintenance §13](../spec/server/30-host-relocation-flow.en.md#13-observability-information).
+  [Host Maintenance §13](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#16-observability-information).
 
 #### OBS-C2 Keep A Bound Session Push After Actor Handoff
 
@@ -327,8 +327,8 @@ relay get handled at the new owner with the same Session binding?
   request handler evidence is also at B. The client receives the push
   once, and binding count and Actor identity are kept.
 - Detailed behavior: verifies
-  [The Common Handoff Order For Every Actor And Spot](../spec/server/30-host-relocation-flow.en.md#82-the-common-order-every-actor-and-spot-follows)
-  and [The Session Actor Relocation Route Barrier](../spec/server/20-session-actor-dispatch.en.md#5-actor-relocation-route-barrier).
+  [The Common Handoff Order For Every Actor And Spot](../spec/server/05-location-relocation/05-host-relocation-flow.en.md)
+  and [The Session Actor Relocation Route Barrier](../spec/server/04-session/02-session-actor-binding.en.md).
 
 #### OBS-C3 Move A User Spot Aggregate Together With Its Member Actors
 
@@ -352,7 +352,7 @@ processed at the target with identity/generation/state kept?
   `OnClosing(RelocationOut)` and target restore application callbacks
   are also recorded the formal number of times per operation.
 - Detailed behavior: verifies
-  [Host Maintenance §8.5](../spec/server/30-host-relocation-flow.en.md#85-spotwide-user-spot).
+  [Host Maintenance §8.5](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#103-spotwide-user-spot).
 
 #### OBS-C4 Shutdown Performs Closing Callback And Session Close Without Relocation
 
@@ -375,7 +375,7 @@ and the client close reason observed exactly once during Shutdown?
   Host result is `Stopped/None`. No new object is created on the
   target node.
 - Detailed behavior: verifies
-  [The Race Between Shutdown And Relocate](../spec/server/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
+  [The Race Between Shutdown And Relocate](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
 
 #### OBS-C5 Keep The Source When There's No Eligible Target
 
@@ -397,8 +397,8 @@ requests?
   generation are kept, and the follow-up request succeeds. It doesn't
   auto-start Shutdown.
 - Detailed behavior: verifies
-  [Conditions Checked Before Selecting A Target](../spec/server/30-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)
-  and [Selecting A Target Matching The Mode](../spec/server/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
+  [Conditions Checked Before Selecting A Target](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)
+  and [Selecting A Target Matching The Mode](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C6 Move To The Exact New Version Via Rolling Update
 
@@ -421,7 +421,7 @@ Relocate, is every current object processed at the N+1 target?
   source process stays Relocated, and a subsequent explicit Shutdown
   ends in Stopped.
 - Detailed behavior: verifies
-  [Host Maintenance §5](../spec/server/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
+  [Host Maintenance §5](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C7 Planned Maintenance Uses A Same-Version Target
 
@@ -442,7 +442,7 @@ workload to a different version-N target?
   current object location and follow-up handler evidence point at the
   target, with state and generation kept.
 - Detailed behavior: verifies
-  [Host Maintenance §5](../spec/server/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
+  [Host Maintenance §5](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C8 Perform A Bounded Forced Teardown At The Shutdown Deadline
 
@@ -464,7 +464,7 @@ application gate, does Shutdown end in
   and the forced-shutdown metric delta is 1. A late callback
   completion doesn't change the Host terminal.
 - Detailed behavior: verifies
-  [The Race Between Shutdown And Relocate](../spec/server/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
+  [The Race Between Shutdown And Relocate](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
 
 #### OBS-C9A Automatic Topology Starts Relocation Only After The Target Is Ready
 
@@ -487,8 +487,8 @@ not-ready, and complete relocation once ready?
   the target is ready, Relocate succeeds and follow-up requests are
   processed at the target.
 - Detailed behavior: verifies
-  [Conditions Checked Before Selecting A Target](../spec/server/30-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)
-  and [Selecting A Target Matching The Mode](../spec/server/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
+  [Conditions Checked Before Selecting A Target](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)
+  and [Selecting A Target Matching The Mode](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 
 #### OBS-C10 Select Only The Exact Version The Relocation Mode Defines
@@ -510,7 +510,7 @@ target?
   target, and the second is the N+1 target. There's no handler
   evidence on the N+2 or wrong-version target.
 - Detailed behavior: verifies
-  [Host Maintenance §5](../spec/server/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
+  [Host Maintenance §5](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C11 Handle Concurrent Relocate Option Conflicts
 
@@ -534,7 +534,7 @@ terminal, while a different-option caller gets
   `Blocked/OperationInProgress`, and don't change the first
   operation's effective version or deadline.
 - Detailed behavior: verifies
-  [Concurrent Calls And Cancellation](../spec/server/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation).
+  [Concurrent Calls And Cancellation](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation).
 
 #### OBS-C12 Distinguish Relocate Waiters From Shutdown Contention
 
@@ -557,7 +557,7 @@ Shutdown variant preserve the shared operation and terminal-once behavior?
   shared operation continues; the first receives `ShutdownRequested` or an already-fixed relocation
   result. Repeated status queries do not change the Shutdown terminal.
 - Detailed behavior: verifies
-  [Host Maintenance §11](../spec/server/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
+  [Host Maintenance §11](../spec/server/05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
 
 ## 5. Completion Criteria
 

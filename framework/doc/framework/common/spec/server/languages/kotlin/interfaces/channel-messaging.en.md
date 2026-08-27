@@ -30,117 +30,117 @@ suspension doesn't extend the dispatch scope beyond terminal completion.
 A Spot direct send/request isn't reduced to a Channel call. Since a
 Kotlin-only Spot wrapper configures `instanceSpot` and `inMesh` before
 terminal `await()`/`yield()`, it keeps the fluent state of Missing
-Instance cold activation. Kotlin's Spot-dedicated wrapper and exact JVM
+Instance cold activation. Kotlin's Spot-dedicated wrapper and JVM
 signature are owned by the [Spot Interface](spots.en.md).
 
 ## Kotlin Source Signature
 
 ```kotlin
 interface ZLinkSuspendingRequestHandler<TRequest, TReply> {
-    suspend fun handle(request: TRequest, context: ZLinkMessageContext): TReply
+ suspend fun handle(request: TRequest, context: ZLinkMessageContext): TReply
 }
 
 interface ZLinkSuspendingSendHandler<TMessage> {
-    suspend fun handle(message: TMessage, context: ZLinkMessageContext)
+ suspend fun handle(message: TMessage, context: ZLinkMessageContext)
 }
 
 interface ZLinkSuspendingPublishHandler<TMessage> {
-    suspend fun handle(message: TMessage, context: ZLinkPublishMessageContext)
+ suspend fun handle(message: TMessage, context: ZLinkPublishMessageContext)
 }
 
 interface ZLinkSuspendingRouteRequestHandler<TRequest, TReply> {
-    suspend fun handle(request: TRequest, context: ZLinkRouteMessageContext): TReply
+ suspend fun handle(request: TRequest, context: ZLinkRouteMessageContext): TReply
 }
 
 interface ZLinkSuspendingRouteSendHandler<TMessage> {
-    suspend fun handle(message: TMessage, context: ZLinkRouteMessageContext)
+ suspend fun handle(message: TMessage, context: ZLinkRouteMessageContext)
 }
 
 interface ZLinkKotlinMessageSendCall {
-    fun metadata(key: String, value: String): ZLinkKotlinMessageSendCall
-    suspend fun await()
+ fun metadata(key: String, value: String): ZLinkKotlinMessageSendCall
+ suspend fun await()
 }
 
 interface ZLinkKotlinSubmissionCall {
-    suspend fun await()
+ suspend fun await()
 }
 
 interface ZLinkKotlinRequestCall<TReply> {
-    fun metadata(key: String, value: String): ZLinkKotlinRequestCall<TReply>
-    fun timeout(timeout: Duration): ZLinkKotlinRequestCall<TReply>
-    suspend fun await(): TReply
-    suspend fun yield(): TReply
+ fun metadata(key: String, value: String): ZLinkKotlinRequestCall<TReply>
+ fun timeout(timeout: Duration): ZLinkKotlinRequestCall<TReply>
+ suspend fun await(): TReply
+ suspend fun yield(): TReply
 }
 
 interface ZLinkKotlinClient {
-    fun sendToChannel(
-        channelName: String,
-        message: Any,
-    ): ZLinkKotlinMessageSendCall
+ fun sendToChannel(
+ channelName: String,
+ message: Any,
+ ): ZLinkKotlinMessageSendCall
 
-    fun <TReply : Any> requestToChannel(
-        channelName: String,
-        request: Any,
-        replyType: KClass<TReply>,
-    ): ZLinkKotlinRequestCall<TReply>
+ fun <TReply : Any> requestToChannel(
+ channelName: String,
+ request: Any,
+ replyType: KClass<TReply>,
+ ): ZLinkKotlinRequestCall<TReply>
 }
 
 inline fun <reified TReply : Any> ZLinkKotlinClient.requestToChannel(
-    channelName: String,
-    request: Any,
+ channelName: String,
+ request: Any,
 ): ZLinkKotlinRequestCall<TReply> =
-    requestToChannel(channelName, request, TReply::class)
+ requestToChannel(channelName, request, TReply::class)
 
 interface ZLinkKotlinFanoutClient {
-    fun publish(
-        channelName: String,
-        topic: String,
-        event: Any,
-    ): ZLinkKotlinSubmissionCall
-    fun publish(
-        channelName: String,
-        event: Any,
-    ): ZLinkKotlinSubmissionCall
+ fun publish(
+ channelName: String,
+ topic: String,
+ event: Any,
+ ): ZLinkKotlinSubmissionCall
+ fun publish(
+ channelName: String,
+ event: Any,
+ ): ZLinkKotlinSubmissionCall
 }
 
 interface ZLinkKotlinRouteClient {
-    fun sendToNode(
-        meshName: String,
-        target: RoutingId,
-        message: Any,
-    ): ZLinkKotlinMessageSendCall
+ fun sendToNode(
+ meshName: String,
+ target: RoutingId,
+ message: Any,
+ ): ZLinkKotlinMessageSendCall
 
-    fun <TReply : Any> requestToNode(
-        meshName: String,
-        target: RoutingId,
-        request: Any,
-        replyType: KClass<TReply>,
-    ): ZLinkKotlinRequestCall<TReply>
+ fun <TReply : Any> requestToNode(
+ meshName: String,
+ target: RoutingId,
+ request: Any,
+ replyType: KClass<TReply>,
+ ): ZLinkKotlinRequestCall<TReply>
 
-    fun sendToChannel(
-        channelName: String,
-        message: Any,
-    ): ZLinkKotlinMessageSendCall
+ fun sendToChannel(
+ channelName: String,
+ message: Any,
+ ): ZLinkKotlinMessageSendCall
 
-    fun <TReply : Any> requestToChannel(
-        channelName: String,
-        request: Any,
-        replyType: KClass<TReply>,
-    ): ZLinkKotlinRequestCall<TReply>
+ fun <TReply : Any> requestToChannel(
+ channelName: String,
+ request: Any,
+ replyType: KClass<TReply>,
+ ): ZLinkKotlinRequestCall<TReply>
 }
 
 inline fun <reified TReply : Any> ZLinkKotlinRouteClient.requestToNode(
-    meshName: String,
-    target: RoutingId,
-    request: Any,
+ meshName: String,
+ target: RoutingId,
+ request: Any,
 ): ZLinkKotlinRequestCall<TReply> =
-    requestToNode(meshName, target, request, TReply::class)
+ requestToNode(meshName, target, request, TReply::class)
 
 inline fun <reified TReply : Any> ZLinkKotlinRouteClient.requestToChannel(
-    channelName: String,
-    request: Any,
+ channelName: String,
+ request: Any,
 ): ZLinkKotlinRequestCall<TReply> =
-    requestToChannel(channelName, request, TReply::class)
+ requestToChannel(channelName, request, TReply::class)
 
 public inline fun <reified T : Any> messageOf(value: T): ZLinkMessage
 public fun messageOf(value: Any, declaredType: KClass<*>): ZLinkMessage
@@ -175,14 +175,14 @@ shutdown with `ShuttingDown`. Absence of target or session binding is
 `NotFound`. If cancellation is triggered first, it completes as coroutine
 cancellation.
 
-Passing the internal liveness-dedicated exact byte `01 5A 4C 46 31` to
+Passing the internal liveness-dedicated byte `01 5A 4C 46 31` to
 `publishToTopic(...)`, which takes a topic, raises the Java runtime's
 `ZLinkConfigurationException` without starting transport. The overload
-that omits [topic](../../../01-glossary.en.md#topic) uses the typed
+that omits [topic](../../../00-foundation/02-glossary.en.md#topic) uses the typed
 event's packet name, so it doesn't create this internal topic.
 
 The RouteMesh DSL doesn't change the Java builder's meaning — it only
-provides a receiver and lambda. It configures a per-[ChannelName](../../../01-glossary.en.md#channelname)
+provides a receiver and lambda. It configures a per-[ChannelName](../../../00-foundation/02-glossary.en.md#channelname)
 role on one MeshNode's physical connection.
 
 The Kotlin runtime directly uses Java's `ZLinkRouteMeshRuntimeOptions`.
@@ -191,7 +191,7 @@ while `mesh(meshName)` selects the placement option. `channel(channelName)`
 selects a ChannelName registered on exactly one Mesh. The Kotlin DSL's
 `routeMesh` and `channel` don't add a new overload to this runtime option.
 So these three methods must be confirmed with the same name, arguments,
-and return type in both the Java exact interface and the Kotlin package
+and return type in both the Java per-language interface and the Kotlin package
 consumer.
 
 RouteMesh Channel Server and ClientServer Server weight use the Java
@@ -209,86 +209,86 @@ the coroutine bridge's completion condition.
 
 ```kotlin
 fun ZLinkFrameworkOptions.routeMesh(
-    meshName: String,
-    configure: ZLinkMeshNodeBuilder.() -> Unit,
+ meshName: String,
+ configure: ZLinkMeshNodeBuilder.() -> Unit,
 ): ZLinkMeshNodeBuilder
 
 fun ZLinkMeshNodeBuilder.channel(
-    channelName: String,
-    configure: ZLinkMeshChannelBuilder.() -> Unit = {},
+ channelName: String,
+ configure: ZLinkMeshChannelBuilder.() -> Unit = {},
 ): ZLinkMeshChannelBuilder
 
 fun ZLinkMeshPeerConnections.connect(
-    expectedRoutingId: RoutingId,
-    endpoint: String,
+ expectedRoutingId: RoutingId,
+ endpoint: String,
 )
 ```
 
 ```kotlin
 val reply = routeClient
-    .requestToChannel<InventoryReply>("inventory", request)
-    .await()
+ .requestToChannel<InventoryReply>("inventory", request)
+ .await()
 ```
 
-## Exact Generated JVM Signature
+## Generated JVM Signature
 
 The JVM signature below is the generated form of the Kotlin source
 contract.
 
 ```java
 public final class systems.zlink.framework.kotlin.ZLinkMessageExtensionsKt {
-  public static final <T> systems.zlink.framework.messaging.ZLinkMessage messageOf(T);
-  public static final systems.zlink.framework.messaging.ZLinkMessage messageOf(java.lang.Object, kotlin.reflect.KClass<?>);
-  public static final <T> T decode(systems.zlink.framework.messaging.ZLinkMessage);
+ public static final <T> systems.zlink.framework.messaging.ZLinkMessage messageOf(T);
+ public static final systems.zlink.framework.messaging.ZLinkMessage messageOf(java.lang.Object, kotlin.reflect.KClass<?>);
+ public static final <T> T decode(systems.zlink.framework.messaging.ZLinkMessage);
 }
 public final class systems.zlink.framework.kotlin.ZLinkRouteMeshExtensionsKt {
-  public static final systems.zlink.framework.configuration.ZLinkMeshNodeBuilder routeMesh(systems.zlink.framework.configuration.ZLinkFrameworkOptions, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, kotlin.Unit>);
-  public static final systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channel(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkMeshChannelBuilder, kotlin.Unit>);
-  public static systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channel$default(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1, int, java.lang.Object);
-  public static final void connect(systems.zlink.framework.configuration.ZLinkMeshPeerConnections, systems.zlink.contracts.core.RoutingId, java.lang.String);
+ public static final systems.zlink.framework.configuration.ZLinkMeshNodeBuilder routeMesh(systems.zlink.framework.configuration.ZLinkFrameworkOptions, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, kotlin.Unit>);
+ public static final systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channel(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkMeshChannelBuilder, kotlin.Unit>);
+ public static systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channel$default(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1, int, java.lang.Object);
+ public static final void connect(systems.zlink.framework.configuration.ZLinkMeshPeerConnections, systems.zlink.contracts.core.RoutingId, java.lang.String);
 }
 public final class systems.zlink.framework.kotlin.ZLinkSuspendingHandlersKt {
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingPublishHandler<TMessage> {
-  public abstract java.lang.Object handle(TMessage, systems.zlink.framework.channels.ZLinkPublishMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public abstract java.lang.Object handle(TMessage, systems.zlink.framework.channels.ZLinkPublishMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler<TRequest, TReply> {
-  public abstract java.lang.Object handle(TRequest, systems.zlink.framework.ZLinkMessageContext, kotlin.coroutines.Continuation<? super TReply>);
+ public abstract java.lang.Object handle(TRequest, systems.zlink.framework.ZLinkMessageContext, kotlin.coroutines.Continuation<? super TReply>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingRouteRequestHandler<TRequest, TReply> {
-  public abstract java.lang.Object handle(TRequest, systems.zlink.framework.channels.ZLinkRouteMessageContext, kotlin.coroutines.Continuation<? super TReply>);
+ public abstract java.lang.Object handle(TRequest, systems.zlink.framework.channels.ZLinkRouteMessageContext, kotlin.coroutines.Continuation<? super TReply>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingRouteSendHandler<TMessage> {
-  public abstract java.lang.Object handle(TMessage, systems.zlink.framework.channels.ZLinkRouteMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public abstract java.lang.Object handle(TMessage, systems.zlink.framework.channels.ZLinkRouteMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingSendHandler<TMessage> {
-  public abstract java.lang.Object handle(TMessage, systems.zlink.framework.ZLinkMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public abstract java.lang.Object handle(TMessage, systems.zlink.framework.ZLinkMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall metadata(java.lang.String, java.lang.String);
-  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall metadata(java.lang.String, java.lang.String);
+ public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall {
-  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> metadata(java.lang.String, java.lang.String);
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> timeout-LRDsOJo(long);
-  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super TReply>);
-  public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super TReply>);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> metadata(java.lang.String, java.lang.String);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> timeout-LRDsOJo(long);
+ public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super TReply>);
+ public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super TReply>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinClient {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall sendToChannel(java.lang.String, java.lang.Object);
-  public abstract <TReply> systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> requestToChannel(java.lang.String, java.lang.Object, kotlin.reflect.KClass<TReply>);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall sendToChannel(java.lang.String, java.lang.Object);
+ public abstract <TReply> systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> requestToChannel(java.lang.String, java.lang.Object, kotlin.reflect.KClass<TReply>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinFanoutClient {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall publish(java.lang.String, java.lang.String, java.lang.Object);
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall publish(java.lang.String, java.lang.Object);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall publish(java.lang.String, java.lang.String, java.lang.Object);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall publish(java.lang.String, java.lang.Object);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinRouteClient {
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall sendToNode(java.lang.String, systems.zlink.contracts.core.RoutingId, java.lang.Object);
-  public abstract <TReply> systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> requestToNode(java.lang.String, systems.zlink.contracts.core.RoutingId, java.lang.Object, kotlin.reflect.KClass<TReply>);
-  public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall sendToChannel(java.lang.String, java.lang.Object);
-  public abstract <TReply> systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> requestToChannel(java.lang.String, java.lang.Object, kotlin.reflect.KClass<TReply>);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall sendToNode(java.lang.String, systems.zlink.contracts.core.RoutingId, java.lang.Object);
+ public abstract <TReply> systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> requestToNode(java.lang.String, systems.zlink.contracts.core.RoutingId, java.lang.Object, kotlin.reflect.KClass<TReply>);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall sendToChannel(java.lang.String, java.lang.Object);
+ public abstract <TReply> systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> requestToChannel(java.lang.String, java.lang.Object, kotlin.reflect.KClass<TReply>);
 }
 ```

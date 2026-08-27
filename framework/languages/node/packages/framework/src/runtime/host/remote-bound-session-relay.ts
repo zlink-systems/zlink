@@ -56,7 +56,7 @@ export interface ZLinkRemoteBoundSessionRelayOptions {
   readonly actorSessionNode?: (actorId: string) => ZLinkBackendActorSessionNode | undefined;
   readonly destroyedActorRefs: ReadonlyMap<string, ActorRef>;
   readonly boundSessionFactory: (actorId: string) => DefaultZLinkBoundSession;
-  readonly updateRemoteActorPacketTarget: (actorId: string, value: unknown) => void;
+  readonly updateRemoteActorPacketTarget: (actorId: string, value: unknown) => Promise<void>;
   readonly actorPacketTargetForState: (
     actorId: string,
     routerChannelIdHint?: string
@@ -118,17 +118,29 @@ export class ZLinkRemoteBoundSessionRelay {
       currentGeneration !== undefined &&
       (ownershipGeneration === undefined || ownershipGeneration < currentGeneration)
     ) return;
-    this.options.updateRemoteActorPacketTarget(actorId, actorPacketTarget);
-    if (actorRef !== undefined) {
-      await this.options.streamBindingRuntime().rebindActor(actorRef);
-    }
     if (ownershipGeneration !== undefined) {
       this.actorOwnershipGenerations.set(actorId, ownershipGeneration);
     }
-    const sent = this.options.streamBindingRuntime().sendLocalBoundSession(actorId, message, packetName, metadata);
+    await this.options.updateRemoteActorPacketTarget(actorId, actorPacketTarget);
+    if (
+      ownershipGeneration !== undefined
+      && this.actorOwnershipGenerations.get(actorId) !== ownershipGeneration
+    ) return;
+    if (actorRef !== undefined) {
+      await this.options.streamBindingRuntime().rebindActor(actorRef);
+    }
+    if (
+      ownershipGeneration !== undefined
+      && this.actorOwnershipGenerations.get(actorId) !== ownershipGeneration
+    ) return;
+    const sent = await this.options.streamBindingRuntime().sendLocalBoundSession(actorId, message, packetName, metadata);
     if (sent) {
       return;
     }
+    if (
+      ownershipGeneration !== undefined
+      && this.actorOwnershipGenerations.get(actorId) !== ownershipGeneration
+    ) return;
     if (this.options.actorManager()?.getState(actorId)?.remoteBoundSessionTarget === undefined) {
       return;
     }
@@ -150,8 +162,8 @@ export class ZLinkRemoteBoundSessionRelay {
     replyOptions: ZLinkActorResponseOptions,
     actorPacketTarget?: unknown
   ): Promise<void> {
-    this.options.updateRemoteActorPacketTarget(actorId, actorPacketTarget);
-    this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
+    await this.options.updateRemoteActorPacketTarget(actorId, actorPacketTarget);
+    await this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
       actorId,
       packetName,
       requestSeq,
@@ -169,8 +181,8 @@ export class ZLinkRemoteBoundSessionRelay {
     metadata: ReadonlyMap<string, string>,
     actorPacketTarget?: unknown
   ): Promise<void> {
-    this.options.updateRemoteActorPacketTarget(actorId, actorPacketTarget);
-    this.options.streamBindingRuntime().sendLocalBoundSessionError(
+    await this.options.updateRemoteActorPacketTarget(actorId, actorPacketTarget);
+    await this.options.streamBindingRuntime().sendLocalBoundSessionError(
       actorId,
       packetName,
       requestSeq,
@@ -181,11 +193,11 @@ export class ZLinkRemoteBoundSessionRelay {
 
   async receiveRemoteBoundSessionSend(payload: unknown): Promise<{ readonly ok: boolean }> {
     const send = decodeRemoteBoundSessionSendPayload(payload);
-    this.options.updateRemoteActorPacketTarget(send.actorId, send.actorPacketTarget);
+    await this.options.updateRemoteActorPacketTarget(send.actorId, send.actorPacketTarget);
     const owner = actorSessionBindingRuntimeOwnerIfRegistered(
       this.options.streamBindingRuntime()
     );
-    const retained = owner?.retainRelocationOutbound(send.actorId, {
+    const retained = await owner?.retainRelocationOutbound(send.actorId, {
       deliver: () => this.deliverRemoteBoundSessionSend(send),
       fail: error => this.options.reportOwnershipRefreshError?.(send.actorId, error)
     }, send.relocationSealId);
@@ -196,7 +208,7 @@ export class ZLinkRemoteBoundSessionRelay {
 
   private async deliverRemoteBoundSessionSend(send: RemoteBoundSessionSend): Promise<boolean> {
     const metadata = new Map(Object.entries(send.metadata ?? {}));
-    if (this.options.streamBindingRuntime().sendLocalBoundSession(
+    if (await this.options.streamBindingRuntime().sendLocalBoundSession(
       send.actorId,
       send.message,
       send.boundPacketName,
@@ -220,8 +232,8 @@ export class ZLinkRemoteBoundSessionRelay {
 
   async receiveRemoteBoundSessionResponse(payload: unknown): Promise<{ readonly ok: boolean }> {
     const response = decodeRemoteBoundSessionResponsePayload(payload);
-    this.options.updateRemoteActorPacketTarget(response.actorId, response.actorPacketTarget);
-    const sent = this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
+    await this.options.updateRemoteActorPacketTarget(response.actorId, response.actorPacketTarget);
+    const sent = await this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
       response.actorId,
       response.boundPacketName,
       response.requestSeq,
@@ -234,8 +246,8 @@ export class ZLinkRemoteBoundSessionRelay {
 
   async receiveRemoteBoundSessionError(payload: unknown): Promise<{ readonly ok: boolean }> {
     const response = decodeRemoteBoundSessionErrorPayload(payload);
-    this.options.updateRemoteActorPacketTarget(response.actorId, response.actorPacketTarget);
-    const sent = this.options.streamBindingRuntime().sendLocalBoundSessionError(
+    await this.options.updateRemoteActorPacketTarget(response.actorId, response.actorPacketTarget);
+    const sent = await this.options.streamBindingRuntime().sendLocalBoundSessionError(
       response.actorId,
       response.boundPacketName,
       response.requestSeq,
@@ -278,7 +290,7 @@ export class ZLinkRemoteBoundSessionRelay {
     let state!: ActiveServiceWireSessionRelocation;
     const sealController = new AbortController();
     const sealPromise = Promise.resolve().then(async () => {
-      this.validateServiceWireSessionRoute(value);
+      await this.validateServiceWireSessionRoute(value);
       await actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime()).sealRelocation(
         {
           actorId,
@@ -309,7 +321,7 @@ export class ZLinkRemoteBoundSessionRelay {
       sealController
     };
     this.activeServiceWireRelocations.set(key, state);
-    const expire = (error: unknown): void => {
+    const expire = async (error: unknown): Promise<void> => {
       if (state.terminal === true || state.routePromise !== undefined) return;
       state.terminal = true;
       sealController.abort(error);
@@ -324,7 +336,7 @@ export class ZLinkRemoteBoundSessionRelay {
         });
       }
       const owner = actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime());
-      owner.clearRelocation(actorId, error);
+      await owner.clearRelocation(actorId, error);
       void this.options.streamBindingRuntime().disconnectBoundSession(actorId)
         .catch(disconnectError => this.options.reportOwnershipRefreshError?.(actorId, disconnectError));
       state.sealAbortCleanup?.();
@@ -335,12 +347,12 @@ export class ZLinkRemoteBoundSessionRelay {
       true
     );
     state.sealTimer = setTimeout(
-      () => expire(timeoutError()),
+      () => { void expire(timeoutError()); },
       this.options.sessionRelocationSealTimeoutMs ?? 3_000
     );
     state.sealTimer.unref?.();
     if (signal !== undefined) {
-      const onAbort = () => expire(signal.reason ?? timeoutError());
+      const onAbort = () => { void expire(signal.reason ?? timeoutError()); };
       state.sealAbortCleanup = () => signal.removeEventListener('abort', onAbort);
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
@@ -357,8 +369,8 @@ export class ZLinkRemoteBoundSessionRelay {
       }
       if (state.terminal !== true) {
         const owner = actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime());
-        if (owner.relocationSnapshot(actorId, key) !== undefined) {
-          owner.clearRelocation(actorId, error);
+        if (await owner.relocationSnapshot(actorId, key) !== undefined) {
+          await owner.clearRelocation(actorId, error);
           void this.options.streamBindingRuntime().disconnectBoundSession(actorId)
             .catch(disconnectError => this.options.reportOwnershipRefreshError?.(actorId, disconnectError));
         }
@@ -379,6 +391,7 @@ export class ZLinkRemoteBoundSessionRelay {
         // The Session owner already closed this binding at the seal deadline.
         // A late command 44 is terminal and cannot reactivate the route.
         this.terminalServiceWireRelocations.touch(key);
+        this.warnLateSessionRouteUpdate(value);
         return;
       }
       if (terminal.routeFingerprint !== fingerprint) {
@@ -387,17 +400,19 @@ export class ZLinkRemoteBoundSessionRelay {
         );
       }
       this.terminalServiceWireRelocations.touch(key);
+      this.warnLateSessionRouteUpdate(value);
       return;
     }
     const state = this.activeServiceWireRelocations.get(key);
     if (state === undefined) {
-      actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime()).discardRelocationOutbound(
+      await actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime()).discardRelocationOutbound(
         value.actor.actorId,
         key,
         new ZLinkRemoteBoundSessionFenceError(
           `Actor '${value.actor.actorId}' command 44 did not match an active command 42.`
         )
       );
+      this.warnLateSessionRouteUpdate(value);
       return;
     }
     if (
@@ -414,6 +429,7 @@ export class ZLinkRemoteBoundSessionRelay {
           `Session relocation '${key}' repeated command 44 with different bytes.`
         );
       }
+      this.warnLateSessionRouteUpdate(value);
       await state.routePromise;
       return;
     }
@@ -478,6 +494,10 @@ export class ZLinkRemoteBoundSessionRelay {
     this.terminalServiceWireRelocations.clear();
   }
 
+  private warnLateSessionRouteUpdate(value: ServiceSessionRelocationRoute): void {
+    console.warn(`late_session_route_update session=${value.session.sessionRid}`);
+  }
+
   private async applyServiceWireSessionRelocationRoute(
     key: string,
     value: ServiceSessionRelocationRoute
@@ -492,7 +512,7 @@ export class ZLinkRemoteBoundSessionRelay {
         fingerprint,
         'abort',
         async () => {
-          if (!runtime.abortActorRouteSeal(value.actor.actorId, key)) {
+          if (!(await runtime.abortActorRouteSeal(value.actor.actorId, key))) {
             throw new ZLinkRemoteBoundSessionFenceError(
               `Actor '${value.actor.actorId}' command 44 abort lost its Session seal.`
             );
@@ -501,7 +521,7 @@ export class ZLinkRemoteBoundSessionRelay {
       );
     } else {
       const committedRoute = value.route;
-      const current = runtime.find(value.actor.actorId)?.ref;
+      const current = (await runtime.find(value.actor.actorId))?.ref;
       if (current === undefined || current.objectGeneration !== value.actor.generation) {
         throw new ZLinkRemoteBoundSessionFenceError(
           `Actor '${value.actor.actorId}' command 44 has no exact Session binding.`
@@ -526,22 +546,28 @@ export class ZLinkRemoteBoundSessionRelay {
             confirmRemoteSessionBinding: 'send',
             releaseSeal: { sealId: key }
           });
-          this.actorOwnershipGenerations.set(
-            value.actor.actorId,
-            committedRoute.targetAuthorityOwnerGeneration
-          );
+          const currentGeneration = this.actorOwnershipGenerations.get(value.actor.actorId);
+          if (
+            currentGeneration === undefined
+            || currentGeneration < committedRoute.targetAuthorityOwnerGeneration
+          ) {
+            this.actorOwnershipGenerations.set(
+              value.actor.actorId,
+              committedRoute.targetAuthorityOwnerGeneration
+            );
+          }
         }
       );
     }
-    owner.observeRelocationTerminal(
+    await owner.observeRelocationTerminal(
       value.actor.actorId,
       key,
       fingerprint
     );
   }
 
-  private validateServiceWireSessionRoute(value: ServiceSessionRelocationSeal): void {
-    const current = this.options.streamBindingRuntime().sessionRouteFence(
+  private async validateServiceWireSessionRoute(value: ServiceSessionRelocationSeal): Promise<void> {
+    const current = await this.options.streamBindingRuntime().sessionRouteFence(
       value.actor.actor.actorId
     );
     if (
@@ -614,7 +640,7 @@ export class ZLinkRemoteBoundSessionRelay {
     signal?: AbortSignal
   ): Promise<void> {
     const state = this.options.actorManager()?.getState(actor.context.actorId);
-    if (this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
+    if (await this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
       actor.context.actorId,
       packetName,
       requestSeq,
@@ -667,7 +693,7 @@ export class ZLinkRemoteBoundSessionRelay {
     fallbackActorRef?: ActorRef,
     signal?: AbortSignal
   ): Promise<void> {
-    if (this.options.streamBindingRuntime().sendLocalBoundSessionError(
+    if (await this.options.streamBindingRuntime().sendLocalBoundSessionError(
       actorId,
       packetName,
       requestSeq,

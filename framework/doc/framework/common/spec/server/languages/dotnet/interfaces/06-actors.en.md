@@ -6,227 +6,227 @@ snapshot to the target MeshName/NodeRid. Since relocation itself isn't a
 physical/logical disconnect, it doesn't run the Actor disconnect
 callback.
 
-[.NET exact interface table of contents](README.en.md)
+[.NET per-language interface table of contents](README.en.md)
 
 ## 1. Actor
 
 ActorId is a logical ID unique across the whole Location Store
 transaction domain. Its UTF-8 encoded size is 1..255 bytes, it's compared
-as a case-sensitive exact value, and it isn't normalized. A regular Actor
+as a case-sensitive value comparison, and it isn't normalized. A regular Actor
 message only takes ActorId and resolves current authority. `ActorRef` is
-the immutable location snapshot used to change an exact incarnation or
+the immutable location snapshot used to change an specified incarnation or
 bind to a session.
 
 ```csharp
 public readonly record struct ActorRef(
-    string ActorId,
-    ulong ObjectGeneration,
-    string MeshName,
-    RoutingId NodeRid);
+ string ActorId,
+ ulong ObjectGeneration,
+ string MeshName,
+ RoutingId NodeRid);
 
 public interface IZLinkActor
 {
-    IZLinkActorContext Context { get; }
-    void Configure() { }
-    ValueTask OnJoinCompletedAsync(
-        ZLinkActorJoinCompletion completion,
-        CancellationToken cancellationToken)
-    {
-        return ValueTask.CompletedTask;
-    }
+ IZLinkActorContext Context { get; }
+ void Configure() { }
+ ValueTask OnJoinCompletedAsync(
+ ZLinkActorJoinCompletion completion,
+ CancellationToken cancellationToken)
+ {
+ return ValueTask.CompletedTask;
+ }
 }
 
 public interface IZLinkActorContext
 {
-    string ActorId { get; }
-    ulong ObjectGeneration { get; }
-    string MeshName { get; }
-    string? SpotId { get; }
-    IZLinkBoundSession BoundSession { get; }
-    IZLinkActorJoinSpotCall JoinSpot(string spotId);
-    IZLinkActorJoinSpotCall JoinSpot(
-        string spotId,
-        ZLinkMessage request);
-    IZLinkActorJoinSpotCall JoinSpot<TRequest>(
-        string spotId,
-        TRequest request)
-    {
-        return JoinSpot(spotId, ZLinkMessage.From(request));
-    }
-    IZLinkActorJoinEntrySpotCall JoinEntrySpot();
-    IZLinkActorJoinEntrySpotCall JoinEntrySpot(
-        ZLinkMessage request);
-    IZLinkActorJoinEntrySpotCall JoinEntrySpot<TRequest>(
-        TRequest request)
-    {
-        return JoinEntrySpot(ZLinkMessage.From(request));
-    }
+ string ActorId { get; }
+ ulong ObjectGeneration { get; }
+ string MeshName { get; }
+ string? SpotId { get; }
+ IZLinkBoundSession BoundSession { get; }
+ IZLinkActorJoinSpotCall JoinSpot(string spotId);
+ IZLinkActorJoinSpotCall JoinSpot(
+ string spotId,
+ ZLinkMessage request);
+ IZLinkActorJoinSpotCall JoinSpot<TRequest>(
+ string spotId,
+ TRequest request)
+ {
+ return JoinSpot(spotId, ZLinkMessage.From(request));
+ }
+ IZLinkActorJoinEntrySpotCall JoinEntrySpot();
+ IZLinkActorJoinEntrySpotCall JoinEntrySpot(
+ ZLinkMessage request);
+ IZLinkActorJoinEntrySpotCall JoinEntrySpot<TRequest>(
+ TRequest request)
+ {
+ return JoinEntrySpot(ZLinkMessage.From(request));
+ }
 }
 
 public interface IZLinkActorHandlerRegistry
 {
-    void AddHandler<THandler>()
-        where THandler : class;
-    void AddHandler<THandler>(string packetName)
-        where THandler : class;
-    void AddActorPacket<THandler, TActor>()
-        where THandler : class
-        where TActor : IZLinkActor;
-    void AddActorPacket<THandler, TActor>(string packetName)
-        where THandler : class
-        where TActor : IZLinkActor;
+ void AddHandler<THandler>()
+ where THandler : class;
+ void AddHandler<THandler>(string packetName)
+ where THandler : class;
+ void AddActorPacket<THandler, TActor>()
+ where THandler : class
+ where TActor : IZLinkActor;
+ void AddActorPacket<THandler, TActor>(string packetName)
+ where THandler : class
+ where TActor : IZLinkActor;
 }
 
 public interface IZLinkActorFactory
 {
-    ValueTask<IZLinkActor> CreateAsync(
-        IZLinkActorContext context,
-        CancellationToken cancellationToken = default);
+ ValueTask<IZLinkActor> CreateAsync(
+ IZLinkActorContext context,
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkActorFactory<TActor>
-    : IZLinkActorFactory
-    where TActor : class, IZLinkActor
+ : IZLinkActorFactory
+ where TActor : class, IZLinkActor
 {
-    new ValueTask<TActor> CreateAsync(
-        IZLinkActorContext context,
-        CancellationToken cancellationToken = default);
+ new ValueTask<TActor> CreateAsync(
+ IZLinkActorContext context,
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkActorRelocationAdapter<TActor>
-    where TActor : class, IZLinkActor
+ where TActor : class, IZLinkActor
 {
-    ValueTask<byte[]> CaptureAsync(
-        TActor actor,
-        CancellationToken cancellationToken);
-    ValueTask RestoreAsync(
-        TActor actor,
-        ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken);
+ ValueTask<byte[]> CaptureAsync(
+ TActor actor,
+ CancellationToken cancellationToken);
+ ValueTask RestoreAsync(
+ TActor actor,
+ ReadOnlyMemory<byte> payload,
+ CancellationToken cancellationToken);
 }
 
 public interface IZLinkActorClient
 {
-    IZLinkActorSendCall SendToActor<TMessage>(
-        string actorId,
-        TMessage message);
-    IZLinkActorRequestCall RequestToActor<TRequest>(
-        string actorId,
-        TRequest request);
+ IZLinkActorSendCall SendToActor<TMessage>(
+ string actorId,
+ TMessage message);
+ IZLinkActorRequestCall RequestToActor<TRequest>(
+ string actorId,
+ TRequest request);
 }
 
 public interface IZLinkActorManager
 {
-    IZLinkActorCreateCall Create(
-        string actorId,
-        string actorType);
-    IZLinkActorGetOrCreateCall GetOrCreate(
-        string actorId,
-        string actorType);
-    ValueTask<ActorRef?> FindAsync(
-        string actorId,
-        CancellationToken cancellationToken = default);
-    ValueTask<SpotRef?> FindSpotAsync(
-        string actorId,
-        CancellationToken cancellationToken = default);
-    ValueTask<bool> DestroyAsync(
-        ActorRef actor,
-        CancellationToken cancellationToken = default);
+ IZLinkActorCreateCall Create(
+ string actorId,
+ string actorType);
+ IZLinkActorGetOrCreateCall GetOrCreate(
+ string actorId,
+ string actorType);
+ ValueTask<ActorRef?> FindAsync(
+ string actorId,
+ CancellationToken cancellationToken = default);
+ ValueTask<SpotRef?> FindSpotAsync(
+ string actorId,
+ CancellationToken cancellationToken = default);
+ ValueTask<bool> DestroyAsync(
+ ActorRef actor,
+ CancellationToken cancellationToken = default);
 }
 
 public abstract record ZLinkActorCreateResult
 {
-    private protected ZLinkActorCreateResult() { }
+ private protected ZLinkActorCreateResult() { }
 
-    public sealed record Existing(ActorRef Actor)
-        : ZLinkActorCreateResult;
+ public sealed record Existing(ActorRef Actor)
+ : ZLinkActorCreateResult;
 
-    public sealed record Created(
-        ActorRef Actor,
-        ZLinkMessage? Reply)
-        : ZLinkActorCreateResult;
+ public sealed record Created(
+ ActorRef Actor,
+ ZLinkMessage? Reply)
+ : ZLinkActorCreateResult;
 
-    public sealed record Rejected(ZLinkMessage? Reply)
-        : ZLinkActorCreateResult;
+ public sealed record Rejected(ZLinkMessage? Reply)
+ : ZLinkActorCreateResult;
 }
 
 public interface IZLinkActorCreateCall
 {
-    IZLinkActorCreateCall InMesh(string meshName);
-    IZLinkActorCreateCall Request(ZLinkMessage request);
-    IZLinkActorCreateCall Request<TRequest>(TRequest request);
-    IZLinkActorCreateCall Timeout(TimeSpan timeout);
-    ValueTask<ZLinkActorCreateResult> Async(
-        CancellationToken cancellationToken = default);
-    ValueTask<ZLinkActorCreateResult> Yield(
-        CancellationToken cancellationToken = default);
+ IZLinkActorCreateCall InMesh(string meshName);
+ IZLinkActorCreateCall Request(ZLinkMessage request);
+ IZLinkActorCreateCall Request<TRequest>(TRequest request);
+ IZLinkActorCreateCall Timeout(TimeSpan timeout);
+ ValueTask<ZLinkActorCreateResult> Async(
+ CancellationToken cancellationToken = default);
+ ValueTask<ZLinkActorCreateResult> Yield(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkActorGetOrCreateCall
 {
-    IZLinkActorGetOrCreateCall InMesh(string meshName);
-    IZLinkActorGetOrCreateCall Request(ZLinkMessage request);
-    IZLinkActorGetOrCreateCall Request<TRequest>(TRequest request);
-    IZLinkActorGetOrCreateCall Timeout(TimeSpan timeout);
-    ValueTask<ZLinkActorCreateResult> Async(
-        CancellationToken cancellationToken = default);
-    ValueTask<ZLinkActorCreateResult> Yield(
-        CancellationToken cancellationToken = default);
+ IZLinkActorGetOrCreateCall InMesh(string meshName);
+ IZLinkActorGetOrCreateCall Request(ZLinkMessage request);
+ IZLinkActorGetOrCreateCall Request<TRequest>(TRequest request);
+ IZLinkActorGetOrCreateCall Timeout(TimeSpan timeout);
+ ValueTask<ZLinkActorCreateResult> Async(
+ CancellationToken cancellationToken = default);
+ ValueTask<ZLinkActorCreateResult> Yield(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkActorSendCall : IZLinkMetadataCall<IZLinkActorSendCall>
 {
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+ ValueTask Async(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkActorRequestCall : IZLinkMetadataCall<IZLinkActorRequestCall>
 {
-    IZLinkActorRequestCall Timeout(TimeSpan timeout);
-    ValueTask<TReply> Async<TReply>(
-        CancellationToken cancellationToken = default);
-    ValueTask<TReply> Yield<TReply>(
-        CancellationToken cancellationToken = default);
+ IZLinkActorRequestCall Timeout(TimeSpan timeout);
+ ValueTask<TReply> Async<TReply>(
+ CancellationToken cancellationToken = default);
+ ValueTask<TReply> Yield<TReply>(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkActorDeferredJoinCall
 {
-    void Defer();
+ void Defer();
 }
 
 public interface IZLinkActorJoinSpotCall : IZLinkActorDeferredJoinCall
 {
-    IZLinkActorJoinSpotCall Timeout(TimeSpan timeout);
+ IZLinkActorJoinSpotCall Timeout(TimeSpan timeout);
 }
 
 public interface IZLinkActorJoinEntrySpotCall : IZLinkActorDeferredJoinCall
 {
-    IZLinkActorJoinEntrySpotCall Timeout(TimeSpan timeout);
+ IZLinkActorJoinEntrySpotCall Timeout(TimeSpan timeout);
 }
 
 public readonly record struct ZLinkActorJoinOperationId(ulong High, ulong Low);
 
 public abstract record ZLinkActorJoinCompletion
 {
-    private protected ZLinkActorJoinCompletion() { }
-    public sealed record Accepted(
-        ZLinkActorJoinOperationId OperationId,
-        ActorRef Actor,
-        ZLinkMessage? Reply) : ZLinkActorJoinCompletion;
-    public sealed record Rejected(
-        ZLinkActorJoinOperationId OperationId,
-        ZLinkMessage? Reply) : ZLinkActorJoinCompletion;
-    public sealed record Failed(
-        ZLinkActorJoinOperationId OperationId,
-        ZLinkFrameworkErrorKind Kind) : ZLinkActorJoinCompletion;
+ private protected ZLinkActorJoinCompletion() { }
+ public sealed record Accepted(
+ ZLinkActorJoinOperationId OperationId,
+ ActorRef Actor,
+ ZLinkMessage? Reply) : ZLinkActorJoinCompletion;
+ public sealed record Rejected(
+ ZLinkActorJoinOperationId OperationId,
+ ZLinkMessage? Reply) : ZLinkActorJoinCompletion;
+ public sealed record Failed(
+ ZLinkActorJoinOperationId OperationId,
+ ZLinkFrameworkErrorKind Kind) : ZLinkActorJoinCompletion;
 }
 ```
 
 The Actor packet handler is registered on the registry the Spot owns.
-The handler's exact context and generic parameter are defined by the
+The handler's context and generic parameter are defined by the
 [Spot Interface](05-spots.en.md). `SpotId == null` means the Entry Spot
 stage, and a value present means it's a member of that user
-[Spot](../../../01-glossary.en.md#spot). A separate boolean
+[Spot](../../../00-foundation/02-glossary.en.md#spot). A separate boolean
 representing the same state isn't provided.
 
 The Actor Join call only provides a resultless synchronous `Defer()`, and
@@ -261,7 +261,7 @@ Relocation policy is owned by the Actor factory registration.
 `DisableRelocation` rejects, before capture, a move that requires
 cross-node materialization. `RecreateOnRelocation` creates the same
 logical identity again with the target
-[factory](../../../01-glossary.en.md#factory), without restoring
+[factory](../../../00-foundation/02-glossary.en.md#factory), without restoring
 application state. `PreserveStateWith<TAdapter>()` transfers the byte array
 `IZLinkActorRelocationAdapter<TActor>` returns directly from the source to
 the target as an opaque application
@@ -272,7 +272,7 @@ given a relocation reference, accepted journal, relocation phase,
 source/target owner, or Store CAS version.
 
 For maintenance that materializes an Actor instance on a different node,
-cross-node User Spot/[Entry Spot](../../../01-glossary.en.md#entry-user-instance-spot)
+cross-node User Spot/[Entry Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
 join, and every Actor participant of a whole User Spot relocation, the
 same Actor factory policy is used. Only for `PreserveStateWith` are the
 Actor adapter's `CaptureAsync(...)` and `RestoreAsync(...)` called. A
@@ -281,7 +281,7 @@ same-node join doesn't call the adapter and isn't rejected with
 policy is rejected before capture, without an adapter.
 
 The target finishes restore and accepted-journal validation/staging
-before the [owner](../../../01-glossary.en.md#owner) commit, without
+before the [owner](../../../00-foundation/02-glossary.en.md#owner) commit, without
 running an application handler. After the owner commit and lifecycle
 callback, the saved existing work is put on the actual Actor queue first,
 and the relocation temporary queue's work is moved after that. Once
@@ -311,7 +311,7 @@ restore exception occurs, the instance is discarded and the same
 immutable payload is applied to a new instance. A different target isn't
 automatically selected. If the framework cancels a callback due to the
 operation deadline, it's classified as `DeadlineExceeded`. Only the
-current exact owner and attempt fence can commit completion and open
+current owner and attempt fence can commit completion and open
 admission, and a relocation ID isn't provided to the callback.
 
 If connection-bound work already accepted before starting relocation
@@ -332,20 +332,20 @@ can't create the same Actor concurrently. This reservation is processed
 in the following order.
 
 1. The provider creates a `Creating` row on authority and secures the
-   target's pending capacity together.
+ target's pending capacity together.
 2. Only the target that secured the reservation first runs the factory
-   and the Entry Spot's `OnCreateActorAsync(...)`.
+ and the Entry Spot's `OnCreateActorAsync(...)`.
 3. If the callback approves, it commits initial Entry
-   [membership](../../../01-glossary.en.md#membership), `Ready`,
-   active capacity, and the `Created` terminal result together.
+ [membership](../../../00-foundation/02-glossary.en.md#membership), `Ready`,
+ active capacity, and the `Created` terminal result together.
 4. If the callback rejects, it doesn't create Ready or active capacity,
-   and publishes the `Rejected` terminal result while cleaning up the
-   Creating row and pending capacity.
+ and publishes the `Rejected` terminal result while cleaning up the
+ Creating row and pending capacity.
 5. Node shutdown, timeout, or a callback exception is published as an
-   `Aborted` failure, distinct from an application `Rejected`.
+ `Aborted` failure, distinct from an application `Rejected`.
 6. A target that loses the reservation race doesn't start a separate
-   factory. It reads the existing reservation result the provider
-   returned and joins the current creation attempt.
+ factory. It reads the existing reservation result the provider
+ returned and joins the current creation attempt.
 
 Resolve and remote messaging only use the `Ready` state. Entry Spot
 initialization also completes before the host's `Serving` publication.
@@ -366,7 +366,7 @@ the specified Mesh doesn't exist, `NotFound`. The caller doesn't specify
 a target RID, predicate, or callback.
 
 `Create` returns `AlreadyExists` if a
-[Ready](../../../01-glossary.en.md#ready) incarnation of the same
+[Ready](../../../00-foundation/02-glossary.en.md#ready) incarnation of the same
 ActorId exists, and `TypeMismatch` if stable type differs. `GetOrCreate`
 returns a Ready Actor of the same type as `Existing`, and waits for the
 authority change if it's a Creating attempt. A CAS loser doesn't run a
@@ -387,15 +387,15 @@ ObjectGeneration, and creation attempt.
 `FindAsync(actorId)` only returns the current Ready `ActorRef`.
 `FindSpotAsync(actorId)` only returns the `SpotRef` of the current User
 Spot membership. A separate Actor directory and public handle/resolver
-aren't provided. `DestroyAsync(actorRef)` only closes the exact
+aren't provided. `DestroyAsync(actorRef)` only closes the
 incarnation. If that incarnation doesn't exist, `false`; if the
 generation differs, `InvalidOperation`; if in pre-commit seal,
 `Unavailable` — it doesn't find the current ref and hidden-retry.
 
 `ActorRef.ObjectGeneration` is `1..long.MaxValue`. `MeshName` and
-`NodeRid` are the route [snapshot](../../../01-glossary.en.md#snapshot)
+`NodeRid` are the route [snapshot](../../../00-foundation/02-glossary.en.md#snapshot)
 at query time, and aren't included in logical identity. Even after
 relocation, ActorId and
-[ObjectGeneration](../../../01-glossary.en.md#objectgeneration) are
+[ObjectGeneration](../../../00-foundation/02-glossary.en.md#objectgeneration) are
 kept, and a ref with the new location is issued. Regular messaging
 doesn't fix the ref route.

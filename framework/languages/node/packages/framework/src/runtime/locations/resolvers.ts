@@ -56,6 +56,7 @@ import {
   ZLinkOwnerLeaseTracker
 } from './lease-tracker';
 import { routingIdsEqual } from '../routing-id';
+import { ZLinkStateLane } from '../execution/state-lane';
 
 export interface ZLinkStoreLocationResolverStores {
   readonly authorityStore: ZLinkAuthorityStore;
@@ -163,6 +164,7 @@ export class ZLinkStoreLocationResolvers implements
   ZLinkPeerLocationResolver,
   ZLinkSpotHandleResolver,
   ZLinkActorSpotHandleResolver {
+  private readonly lane = new ZLinkStateLane();
   private readonly liveRows: ZLinkLiveRowFilter;
   private readonly monotonicNowMs: () => number;
   private readonly actorRoutes = new Map<string, CachedReadyRoute<ZLinkActorLocation>>();
@@ -264,8 +266,7 @@ export class ZLinkStoreLocationResolvers implements
       (total, candidate) => total + BigInt(candidate.placementWeight),
       0n
     );
-    let ticket = this.nextActorPlacement % totalWeight;
-    this.nextActorPlacement++;
+    let ticket = await this.lane.run(() => this.takeActorPlacementTicket(totalWeight));
     for (const candidate of candidates) {
       const weight = BigInt(candidate.placementWeight);
       if (ticket < weight) return candidate.rid;
@@ -388,7 +389,7 @@ export class ZLinkStoreLocationResolvers implements
     actorId: string,
     signal?: AbortSignal
   ): Promise<ZLinkResolvedActorRoute | undefined> {
-    const cached = this.getCached(this.directActorRoutes, actorId);
+    const cached = await this.lane.run(() => this.getCachedCore(this.directActorRoutes, actorId));
     if (cached !== undefined) return cached;
     const current = await this.options.stores.authorityStore.readAuthority(
       encodeAuthorityKey('actor', actorId),
@@ -413,7 +414,7 @@ export class ZLinkStoreLocationResolvers implements
       || decoded.actor.actorId !== actorId
       || decoded.actor.objectGeneration !== current.objectGeneration
     ) {
-      return this.cacheDirectActorRoute(
+      return await this.cacheDirectActorRoute(
         actorId,
         projectCanonicalActorRoute(current, actorId),
         remainingLeaseMs
@@ -457,24 +458,26 @@ export class ZLinkStoreLocationResolvers implements
         : {}),
       enclosingSpotRoute
     };
-    return this.cacheDirectActorRoute(actorId, route, remainingLeaseMs);
+    return await this.cacheDirectActorRoute(actorId, route, remainingLeaseMs);
   }
 
-  private cacheDirectActorRoute(
+  private async cacheDirectActorRoute(
     actorId: string,
     route: ZLinkResolvedActorRoute | undefined,
     remainingLeaseMs: number
-  ): ZLinkResolvedActorRoute | undefined {
-    if (route === undefined) return undefined;
-    const maxAgeMs = this.options.routeCacheMaxAgeMs ?? 15000;
-    if (maxAgeMs > 0) {
-      this.directActorRoutes.set(actorId, {
-        row: route,
-        expiresAtMs: this.monotonicNowMs() + Math.min(maxAgeMs, remainingLeaseMs),
-        storeVersion: route.authorityStoreVersion
-      });
-    }
-    return route;
+  ): Promise<ZLinkResolvedActorRoute | undefined> {
+    return await this.lane.run(() => {
+      if (route === undefined) return undefined;
+      const maxAgeMs = this.options.routeCacheMaxAgeMs ?? 15000;
+      if (maxAgeMs > 0) {
+        this.directActorRoutes.set(actorId, {
+          row: route,
+          expiresAtMs: this.monotonicNowMs() + Math.min(maxAgeMs, remainingLeaseMs),
+          storeVersion: route.authorityStoreVersion
+        });
+      }
+      return route;
+    });
   }
 
   observeActorAuthorityVersion(actorId: string, storeVersion: string): void {
@@ -503,7 +506,7 @@ export class ZLinkStoreLocationResolvers implements
     signal?: AbortSignal
   ): Promise<ZLinkSpotLocation | undefined> {
     const cacheKey = `${key.meshName}\u0000${String(key.spotId)}`;
-    const cached = this.getCached(this.spotRoutes, cacheKey);
+    const cached = await this.lane.run(() => this.getCachedCore(this.spotRoutes, cacheKey));
     if (cached !== undefined) return cached;
     const row = await this.liveRows.resolve(
       await this.options.stores.spotStore.resolveSpot(key, signal),
@@ -567,7 +570,7 @@ export class ZLinkStoreLocationResolvers implements
     signal?: AbortSignal
   ): Promise<ZLinkActorLocation | undefined> {
     const cacheKey = `${key.meshName}\u0000${key.actorId}`;
-    const cached = this.getCached(this.actorRoutes, cacheKey);
+    const cached = await this.lane.run(() => this.getCachedCore(this.actorRoutes, cacheKey));
     if (cached !== undefined) return cached;
     const meshNames = key.meshName.length === 0
       ? this.options.spotMeshNames ?? []
@@ -690,7 +693,13 @@ export class ZLinkStoreLocationResolvers implements
     return invalidated;
   }
 
-  private getCached<TRow>(
+  private takeActorPlacementTicket(totalWeight: bigint): bigint {
+    const ticket = this.nextActorPlacement % totalWeight;
+    this.nextActorPlacement++;
+    return ticket;
+  }
+
+  private getCachedCore<TRow>(
     cache: Map<string, CachedReadyRoute<TRow>>,
     key: string
   ): TRow | undefined {
@@ -720,8 +729,10 @@ export class ZLinkStoreLocationResolvers implements
     if (maxAgeMs <= 0) return true;
     const lifetimeMs = Math.min(maxAgeMs, remainingLeaseMs);
     if (lifetimeMs <= 0) return false;
-    cache.set(key, { row, expiresAtMs: this.monotonicNowMs() + lifetimeMs });
-    return true;
+    return await this.lane.run(() => {
+      cache.set(key, { row, expiresAtMs: this.monotonicNowMs() + lifetimeMs });
+      return true;
+    });
   }
 }
 
@@ -868,6 +879,7 @@ export class ZLinkLocationSpotRouteResolver implements ZLinkSpotRouteResolver {
 }
 
 export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
+  private readonly lane = new ZLinkStateLane();
   private readonly cache = new Map<string, CachedReadyRoute<ZLinkSpotRouteTarget>>();
   private readonly routeEpochs = new Map<string, number>();
   private readonly activeResolutions = new Map<string, number>();
@@ -889,15 +901,9 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
 
   async resolve(spotId: RoutingId, signal?: AbortSignal): Promise<ZLinkSpotRouteTarget> {
     const key = String(spotId);
-    const epoch = this.beginResolution(key);
+    const prepared = await this.lane.run(() => this.beginResolutionCore(key));
     try {
-      const cached = this.cache.get(key);
-      if (cached !== undefined) {
-        if (this.monotonicNowMs() < cached.expiresAtMs) {
-          return cached.row;
-        }
-        this.cache.delete(key);
-      }
+      if (prepared.cached !== undefined) return prepared.cached;
 
       const current = await this.store.readAuthority(
         encodeAuthorityKey('user_spot', key),
@@ -946,16 +952,9 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
               signal
             )
           };
-          if (this.routeCacheMaxAgeMs > 0 && this.currentEpoch(key) === epoch) {
-            const lifetimeMs = Math.min(this.routeCacheMaxAgeMs, remainingLeaseMs ?? 0);
-            if (lifetimeMs > 0 && this.currentEpoch(key) === epoch) {
-              this.cache.set(key, {
-                row: target,
-                expiresAtMs: this.monotonicNowMs() + lifetimeMs,
-                storeVersion: current.storeVersion.value
-              });
-            }
-          }
+          await this.lane.run(() => this.cacheResolutionCore(
+            key, prepared.epoch, target, remainingLeaseMs, current.storeVersion.value
+          ));
           return target;
         }
       }
@@ -974,29 +973,54 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
         `SPOT '${spotId}' has no Ready authority.`
       );
     } finally {
-      this.finishResolution(key);
+      await this.lane.run(() => this.finishResolutionCore(key));
     }
   }
 
   invalidate(spotId: RoutingId): void {
     const key = String(spotId);
-    this.cache.delete(key);
-    if (this.activeResolutions.has(key)) {
-      this.routeEpochs.set(key, this.currentEpoch(key) + 1);
-    } else {
-      this.routeEpochs.delete(key);
-    }
+    this.invalidateCore(key);
     this.fallback?.invalidate?.(spotId);
   }
 
-  private beginResolution(key: string): number {
-    const epoch = this.currentEpoch(key);
-    this.routeEpochs.set(key, epoch);
-    this.activeResolutions.set(key, (this.activeResolutions.get(key) ?? 0) + 1);
-    return epoch;
+  private invalidateCore(key: string): void {
+    this.cache.delete(key);
+    if (this.activeResolutions.has(key)) {
+      this.routeEpochs.set(key, this.currentEpochCore(key) + 1);
+    } else {
+      this.routeEpochs.delete(key);
+    }
   }
 
-  private finishResolution(key: string): void {
+  private beginResolutionCore(key: string): { readonly epoch: number; readonly cached?: ZLinkSpotRouteTarget } {
+    const epoch = this.currentEpochCore(key);
+    this.routeEpochs.set(key, epoch);
+    this.activeResolutions.set(key, (this.activeResolutions.get(key) ?? 0) + 1);
+    const cached = this.cache.get(key);
+    if (cached === undefined) return { epoch };
+    if (this.monotonicNowMs() < cached.expiresAtMs) return { epoch, cached: cached.row };
+    this.cache.delete(key);
+    return { epoch };
+  }
+
+  private cacheResolutionCore(
+    key: string,
+    epoch: number,
+    target: ZLinkSpotRouteTarget,
+    remainingLeaseMs: number | undefined,
+    storeVersion: string
+  ): void {
+    if (this.routeCacheMaxAgeMs <= 0 || this.currentEpochCore(key) !== epoch) return;
+    const lifetimeMs = Math.min(this.routeCacheMaxAgeMs, remainingLeaseMs ?? 0);
+    if (lifetimeMs <= 0 || this.currentEpochCore(key) !== epoch) return;
+    this.cache.set(key, {
+      row: target,
+      expiresAtMs: this.monotonicNowMs() + lifetimeMs,
+      storeVersion
+    });
+  }
+
+  private finishResolutionCore(key: string): void {
     const active = this.activeResolutions.get(key);
     if (active === undefined || active <= 1) {
       this.activeResolutions.delete(key);
@@ -1006,7 +1030,7 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
     this.activeResolutions.set(key, active - 1);
   }
 
-  private currentEpoch(key: string): number {
+  private currentEpochCore(key: string): number {
     return this.routeEpochs.get(key) ?? 0;
   }
 }

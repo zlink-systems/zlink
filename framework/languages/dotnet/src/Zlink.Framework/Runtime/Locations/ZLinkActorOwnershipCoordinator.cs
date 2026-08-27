@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -31,15 +32,14 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     ZLinkLocationRuntime runtime,
     ZLinkStoreLocationResolvers resolver) : IZLinkActorLocationLifecycle, IAsyncDisposable
 {
-    private readonly object _gate = new();
-    private readonly object _disposeStartGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly SemaphoreSlim _backgroundDrainGate = new(1, 1);
     private readonly Dictionary<ZLinkActorId, TrackedActor> _actors = [];
     private readonly HashSet<TrackedActor> _trackedActors = [];
     private CancellationTokenSource _reconciliationStop = new();
     private bool _backgroundStopping;
     private int _disposed;
-    private Task? _disposeTask;
+    private TaskCompletionSource? _disposeCompletion;
 
     public async ValueTask<ZLinkActorClaimActivation<TActor>> ExecuteActorClaimThenActivateAsync<TActor>(
         ZLinkMeshName meshName,
@@ -83,14 +83,14 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         {
             // The claim preceded the failed activation; without a rollback
             // the key would stay owned by an instance that never existed.
-            MarkActivationFailed(actorId);
+            await MarkActivationFailedAsync(actorId).ConfigureAwait(false);
             try
             {
                 await ReleaseActorAsync(actorId, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception releaseFailure)
             {
-                StartActivationFailureReconciliation(actorId);
+                await StartActivationFailureReconciliationAsync(actorId).ConfigureAwait(false);
                 throw new AggregateException(activationFailure, releaseFailure);
             }
             throw;
@@ -109,18 +109,13 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         var canonical = actorId;
         while (true)
         {
-            var retryFailedActivation = false;
-            lock (_gate)
-            {
-                if (_actors.TryGetValue(canonical, out var tracked))
-                {
-                    if (!tracked.ActivationFailed)
-                        return new ZLinkActorClaimResult(ZLinkActorClaimStatus.AlreadyOwned, null);
-                    retryFailedActivation = true;
-                }
-            }
-
-            if (!retryFailedActivation) break;
+            var retryFailedActivation = await _lane.RunAsync(() =>
+                _actors.TryGetValue(canonical, out var tracked)
+                    ? tracked.ActivationFailed ? 1 : 2
+                    : 0).ConfigureAwait(false);
+            if (retryFailedActivation == 2)
+                return new ZLinkActorClaimResult(ZLinkActorClaimStatus.AlreadyOwned, null);
+            if (retryFailedActivation == 0) break;
             try
             {
                 await ReleaseActorAsync(actorId, cancellationToken).ConfigureAwait(false);
@@ -161,12 +156,12 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 ZLinkActorClaimStatus.Conflict,
                 ToLocation(found.Snapshot, authority));
 
-        lock (_gate)
+        await _lane.RunAsync(() =>
         {
             var tracked = new TrackedActor(found.Snapshot, authority, deactivate);
             _actors[canonical] = tracked;
             _trackedActors.Add(tracked);
-        }
+        }).ConfigureAwait(false);
         return new ZLinkActorClaimResult(ZLinkActorClaimStatus.Claimed, null);
     }
 
@@ -190,11 +185,8 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         Func<CancellationToken, ValueTask>? deactivate,
         CancellationToken cancellationToken = default)
     {
-        lock (_gate)
-        {
-            if (_actors.ContainsKey(actorId))
-                return;
-        }
+        if (await _lane.RunAsync(() => _actors.ContainsKey(actorId)).ConfigureAwait(false))
+            return;
 
         var read = await runtime.Store.ReadAuthorityAsync(
                 ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value),
@@ -206,12 +198,12 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 $"Actor '{actorId}' committed creation authority is missing.",
                 ZLinkRetryAdvice.RetryAfterBackoff);
 
-        AdoptCommittedActorAuthority(
+        await AdoptCommittedActorAuthorityAsync(
             actorId,
             actorType,
             actorRef,
             found.Snapshot,
-            deactivate);
+            deactivate).ConfigureAwait(false);
     }
 
     internal ValueTask AdoptCommittedActorAuthorityAsync(
@@ -227,14 +219,14 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             deactivate,
             cancellationToken);
 
-    internal void AdoptCommittedActorAuthority(
+    internal async ValueTask AdoptCommittedActorAuthorityAsync(
         ZLinkActorId actorId,
         string actorType,
         ActorRef actorRef,
         ZLinkAuthoritySnapshot snapshot,
         Func<CancellationToken, ValueTask>? deactivate)
     {
-        lock (_gate)
+        var existing = await _lane.RunAsync(() =>
         {
             if (_actors.TryGetValue(actorId, out var tracked))
             {
@@ -244,13 +236,15 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         tracked.Payload.StableType,
                         actorType,
                         StringComparison.Ordinal))
-                    return;
+                    return true;
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"Actor '{actorId}' is already tracked with another authority.",
                     ZLinkRetryAdvice.RetryAfterBackoff);
             }
-        }
+            return false;
+        }).ConfigureAwait(false);
+        if (existing) return;
 
         if (snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
             || snapshot.ObjectGeneration != actorRef.ObjectGeneration
@@ -271,16 +265,17 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 $"Actor '{actorId}' committed creation authority does not belong to this runtime.",
                 ZLinkRetryAdvice.RetryAfterBackoff);
 
-        TrackCommittedActorAuthority(actorId, snapshot, authority, deactivate);
+        await TrackCommittedActorAuthorityAsync(actorId, snapshot, authority, deactivate)
+            .ConfigureAwait(false);
     }
 
-    internal void AdoptCommittedActorAuthority(
+    internal ValueTask AdoptCommittedActorAuthorityAsync(
         string actorId,
         string actorType,
         ActorRef actorRef,
         ZLinkAuthoritySnapshot snapshot,
         Func<CancellationToken, ValueTask>? deactivate) =>
-        AdoptCommittedActorAuthority(
+        AdoptCommittedActorAuthorityAsync(
             ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
             actorType,
             actorRef,
@@ -366,7 +361,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 .ConfigureAwait(false);
             if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
             {
-                UpdateTrackedSnapshot(actorId, stored.Snapshot);
+                await UpdateTrackedSnapshotAsync(actorId, stored.Snapshot).ConfigureAwait(false);
                 return;
             }
             if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
@@ -445,7 +440,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 .ConfigureAwait(false);
             if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
             {
-                UpdateTrackedSnapshot(actorId, stored.Snapshot);
+                await UpdateTrackedSnapshotAsync(actorId, stored.Snapshot).ConfigureAwait(false);
                 return;
             }
             if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
@@ -554,7 +549,8 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     ZLinkFrameworkErrorKind.DataLost,
                     $"Actor '{actorId}' committed authority references another relocation root.",
                     retryAdvice: ZLinkRetryAdvice.DoNotRetry);
-            TrackCommittedActorAuthority(actorId, snapshot, authority, deactivate);
+            await TrackCommittedActorAuthorityAsync(actorId, snapshot, authority, deactivate)
+                .ConfigureAwait(false);
             return new ZLinkCommittedActorAuthority(
                 snapshot.AuthorityOwnerGeneration,
                 ZLinkMeshName.FromBoundary(authority.MeshName, nameof(authority.MeshName)),
@@ -660,7 +656,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     != targetAuthorityOwnerGeneration)
                     throw new ZLinkRelocationDataLostException(
                         $"Actor '{actorId}' authority commit did not preserve the expected target generation.");
-                TrackCommittedActorAuthority(
+                await TrackCommittedActorAuthorityAsync(
                     actorId,
                     stored.Snapshot,
                     authority with
@@ -675,7 +671,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         NodeRid = target.Rid,
                         NodeGeneration = target.LifecycleGeneration
                     },
-                    deactivate);
+                    deactivate).ConfigureAwait(false);
                 return new ZLinkCommittedActorAuthority(
                     stored.Snapshot.AuthorityOwnerGeneration,
                     meshName,
@@ -698,11 +694,11 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         != targetAuthorityOwnerGeneration)
                         throw new ZLinkRelocationDataLostException(
                             $"Actor '{actorId}' reconciled authority does not match its expected target generation.");
-                    TrackCommittedActorAuthority(
+                    await TrackCommittedActorAuthorityAsync(
                         actorId,
                         currentSnapshot,
                         currentAuthority,
-                        deactivate);
+                        deactivate).ConfigureAwait(false);
                     return new ZLinkCommittedActorAuthority(
                         currentSnapshot.AuthorityOwnerGeneration,
                         ZLinkMeshName.FromBoundary(
@@ -861,13 +857,12 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         return false;
     }
 
-    private void TrackCommittedActorAuthority(
+    private ValueTask TrackCommittedActorAuthorityAsync(
         ZLinkActorId actorId,
         ZLinkAuthoritySnapshot snapshot,
         ZLinkActorAuthorityPayload payload,
         Func<CancellationToken, ValueTask>? deactivate)
-    {
-        lock (_gate)
+        => _lane.RunAsync(() =>
         {
             if (_actors.TryGetValue(actorId, out var current))
             {
@@ -879,8 +874,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             var tracked = new TrackedActor(snapshot, payload, deactivate);
             _actors.Add(actorId, tracked);
             _trackedActors.Add(tracked);
-        }
-    }
+        });
 
     internal async ValueTask NotifyActorMovedToEntrySpotAsync(
         ZLinkActorId actorId,
@@ -893,7 +887,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     ? throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
                         $"Actor '{actorId}' owner changed before its Entry Spot update.")
-                    : RestoreEntrySpot(actorId, payload),
+                    : RestoreEntrySpotCore(actorId, payload),
                 expectedActorRef: null,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
@@ -914,7 +908,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     {
         await RenewOwnedActorAsync(
                 actorId,
-                payload => RestoreEntrySpot(actorId, payload),
+                payload => RestoreEntrySpotCore(actorId, payload),
                 expectedActorRef: null,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
@@ -960,24 +954,21 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             targetEntrySpotGeneration,
             cancellationToken);
 
-    private ZLinkActorAuthorityPayload RestoreEntrySpot(
+    private ZLinkActorAuthorityPayload RestoreEntrySpotCore(
         ZLinkActorId actorId,
         ZLinkActorAuthorityPayload payload)
     {
-        lock (_gate)
+        if (!_actors.TryGetValue(actorId, out var tracked)
+            || string.IsNullOrEmpty(tracked.EntrySpotId))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{actorId}' Entry Spot identity is unavailable.");
+        return payload with
         {
-            if (!_actors.TryGetValue(actorId, out var tracked)
-                || string.IsNullOrEmpty(tracked.EntrySpotId))
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Actor '{actorId}' Entry Spot identity is unavailable.");
-            return payload with
-            {
-                CurrentSpotKind = ZLinkSpotKind.Entry,
-                CurrentSpotId = tracked.EntrySpotId,
-                CurrentSpotGeneration = tracked.EntrySpotGeneration
-            };
-        }
+            CurrentSpotKind = ZLinkSpotKind.Entry,
+            CurrentSpotId = tracked.EntrySpotId,
+            CurrentSpotGeneration = tracked.EntrySpotGeneration
+        };
     }
 
     public async ValueTask ReleaseActorAsync(
@@ -986,12 +977,10 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     {
         cancellationToken.ThrowIfCancellationRequested();
         var canonical = actorId;
-        TrackedActor tracked;
-        TaskCompletionSource? releaseCompletion = null;
-        Task releaseTask;
-        lock (_gate)
+        var release = await _lane.RunAsync(() =>
         {
-            if (!_actors.TryGetValue(canonical, out tracked!)) return;
+            if (!_actors.TryGetValue(canonical, out var tracked)) return null;
+            TaskCompletionSource? releaseCompletion = null;
             if (tracked.ReleaseTask is null)
             {
                 releaseCompletion = new TaskCompletionSource(
@@ -999,31 +988,32 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 tracked.ReleaseTask = releaseCompletion.Task;
             }
 
-            releaseTask = tracked.ReleaseTask;
-        }
+            return new ReleaseStart(tracked, releaseCompletion, tracked.ReleaseTask);
+        }).ConfigureAwait(false);
+        if (release is null) return;
 
-        if (releaseCompletion is not null)
+        if (release.ReleaseCompletion is not null)
         {
             try
             {
-                await ReleaseTrackedActorAsync(canonical, tracked).ConfigureAwait(false);
-                releaseCompletion.TrySetResult();
+                await ReleaseTrackedActorAsync(canonical, release.Tracked).ConfigureAwait(false);
+                release.ReleaseCompletion.TrySetResult();
             }
             catch (Exception exception)
             {
-                lock (_gate)
+                await _lane.RunAsync(() =>
                 {
                     if (_actors.TryGetValue(canonical, out var current)
-                        && ReferenceEquals(current, tracked)
-                        && ReferenceEquals(current.ReleaseTask, releaseTask))
+                        && ReferenceEquals(current, release.Tracked)
+                        && ReferenceEquals(current.ReleaseTask, release.ReleaseTask))
                         current.ReleaseTask = null;
-                }
+                }).ConfigureAwait(false);
 
-                releaseCompletion.TrySetException(exception);
+                release.ReleaseCompletion.TrySetException(exception);
             }
         }
 
-        await releaseTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await release.ReleaseTask.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1040,7 +1030,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (OwnsActor(actorId))
+        if (await OwnsActorAsync(actorId).ConfigureAwait(false))
         {
             await ReleaseActorAsync(actorId, cancellationToken).ConfigureAwait(false);
             return;
@@ -1084,50 +1074,38 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
-    internal bool OwnsActor(ZLinkActorId actorId)
-    {
-        lock (_gate)
-        {
-            return _actors.ContainsKey(actorId);
-        }
-    }
+    internal ValueTask<bool> OwnsActorAsync(ZLinkActorId actorId) =>
+        _lane.RunAsync(() => _actors.ContainsKey(actorId));
 
-    internal void ResetGeneration()
-    {
-        lock (_gate) _actors.Clear();
-    }
+    internal ValueTask ResetGenerationAsync() => _lane.RunAsync(_actors.Clear);
 
-    private void MarkActivationFailed(ZLinkActorId actorId)
+    private ValueTask MarkActivationFailedAsync(ZLinkActorId actorId) => _lane.RunAsync(() =>
     {
         var canonical = actorId;
-        lock (_gate)
-        {
-            if (_actors.TryGetValue(canonical, out var tracked))
-                tracked.ActivationFailed = true;
-        }
-    }
+        if (_actors.TryGetValue(canonical, out var tracked))
+            tracked.ActivationFailed = true;
+    });
 
-    private void StartActivationFailureReconciliation(ZLinkActorId actorId)
+    private ValueTask StartActivationFailureReconciliationAsync(ZLinkActorId actorId) =>
+        _lane.RunAsync(() =>
     {
         var canonical = actorId;
         TrackedActor? tracked;
-        lock (_gate)
+        if (!_actors.TryGetValue(canonical, out tracked)
+            || Interlocked.Exchange(ref tracked.ReconciliationStarted, 1) != 0)
+            return;
+        if (_disposed != 0 || _backgroundStopping)
         {
-            if (!_actors.TryGetValue(canonical, out tracked)
-                || Interlocked.Exchange(ref tracked.ReconciliationStarted, 1) != 0)
-                return;
-            if (_disposed != 0 || _backgroundStopping)
-            {
-                Interlocked.Exchange(ref tracked.ReconciliationStarted, 0);
-                return;
-            }
+            Interlocked.Exchange(ref tracked.ReconciliationStarted, 0);
+            return;
+        }
+        using (ExecutionContext.SuppressFlow())
             tracked.ReconciliationTask = ReconcileActivationFailureAsync(
                 actorId,
                 canonical,
                 tracked,
                 _reconciliationStop.Token);
-        }
-    }
+    });
 
     private async Task ReconcileActivationFailureAsync(
         ZLinkActorId actorId,
@@ -1135,6 +1113,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         TrackedActor tracked,
         CancellationToken stopToken)
     {
+        await Task.Yield();
         try
         {
             await ZLinkReconciliationRunner.RunAsync(
@@ -1149,34 +1128,60 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
         finally
         {
-            lock (_gate)
+            await _lane.RunAsync(() =>
             {
                 if (_actors.TryGetValue(canonical, out var current)
                     && ReferenceEquals(current, tracked))
                     Interlocked.Exchange(ref tracked.ReconciliationStarted, 0);
-            }
+            }).ConfigureAwait(false);
         }
     }
 
     public ValueTask DisposeAsync()
     {
-        lock (_disposeStartGate)
-            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+        var completion = Volatile.Read(ref _disposeCompletion);
+        if (completion is null)
+        {
+            var candidate = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            completion = Interlocked.CompareExchange(
+                ref _disposeCompletion,
+                candidate,
+                null) ?? candidate;
+            if (ReferenceEquals(completion, candidate))
+                _ = CompleteDisposeAsync(candidate);
+        }
+        return new ValueTask(completion.Task);
+    }
+
+    private async Task CompleteDisposeAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            await DisposeCoreAsync().ConfigureAwait(false);
+            completion.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            completion.TrySetException(exception);
+        }
     }
 
     private async Task DisposeCoreAsync()
     {
         Interlocked.Exchange(ref _disposed, 1);
-        _reconciliationStop.Cancel();
+        var reconciliationStop = await _lane.RunAsync(() => _reconciliationStop)
+            .ConfigureAwait(false);
+        reconciliationStop.Cancel();
         await DrainBackgroundWorkCoreAsync().ConfigureAwait(false);
 
-        TrackedActor[] trackedActors;
-        lock (_gate)
+        var trackedActors = await _lane.RunAsync(() =>
         {
-            trackedActors = _trackedActors.ToArray();
+            var actors = _trackedActors.ToArray();
             _actors.Clear();
             _trackedActors.Clear();
-        }
+            return actors;
+        }).ConfigureAwait(false);
 
         foreach (var tracked in trackedActors)
         {
@@ -1184,26 +1189,28 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             tracked.WriteGate.Dispose();
         }
 
-        _reconciliationStop.Dispose();
+        await _lane.DisposeAsync().ConfigureAwait(false);
+        reconciliationStop.Dispose();
         _backgroundDrainGate.Dispose();
     }
 
     internal ValueTask PauseBackgroundWorkAsync()
         => DrainBackgroundWorkCoreAsync();
 
-    internal void ResumeBackgroundWork()
+    internal async ValueTask ResumeBackgroundWorkAsync()
     {
-        CancellationTokenSource? stopped = null;
-        lock (_gate)
+        var stopped = await _lane.RunAsync<CancellationTokenSource?>(() =>
         {
-            if (_disposed != 0 || !_backgroundStopping) return;
+            if (_disposed != 0 || !_backgroundStopping) return null;
+            CancellationTokenSource? prior = null;
             if (_reconciliationStop.IsCancellationRequested)
             {
-                stopped = _reconciliationStop;
+                prior = _reconciliationStop;
                 _reconciliationStop = new CancellationTokenSource();
             }
             _backgroundStopping = false;
-        }
+            return prior;
+        }).ConfigureAwait(false);
         stopped?.Dispose();
     }
 
@@ -1212,27 +1219,26 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         await _backgroundDrainGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            Task[] tasks;
-            CancellationTokenSource stop;
-            lock (_gate)
+            var background = await _lane.RunAsync(() =>
             {
-                stop = _reconciliationStop;
+                var stop = _reconciliationStop;
                 _backgroundStopping = true;
                 if (!stop.IsCancellationRequested) stop.Cancel();
-                tasks = _actors.Values
+                var tasks = _actors.Values
                     .SelectMany(static actor => new[] { actor.ReconciliationTask, actor.ReleaseTask })
                     .Where(static task => task is not null)
                     .Cast<Task>()
                     .Distinct()
                     .ToArray();
-            }
+                return new BackgroundDrainStart(stop, tasks);
+            }).ConfigureAwait(false);
 
-            if (tasks.Length != 0)
+            if (background.Tasks.Length != 0)
                 try
                 {
-                    await Task.WhenAll(tasks).ConfigureAwait(false);
+                    await Task.WhenAll(background.Tasks).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (stop.IsCancellationRequested)
+                catch (OperationCanceledException) when (background.Stop.IsCancellationRequested)
                 {
                 }
                 catch (Exception exception)
@@ -1241,10 +1247,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         $"actor ownership background drain failed: {exception.Message}");
                 }
 
-            lock (_gate)
-            {
-                _backgroundStopping = true;
-            }
+            await _lane.RunAsync(() => _backgroundStopping = true).ConfigureAwait(false);
         }
         finally
         {
@@ -1252,23 +1255,21 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
-    internal Func<CancellationToken, ValueTask>? TakeOwnershipLostDeactivation(string canonicalKey)
+    internal ValueTask<Func<CancellationToken, ValueTask>?> TakeOwnershipLostDeactivationAsync(
+        string canonicalKey) => _lane.RunAsync(() =>
     {
         // Ownership loss carries the exact authority key while local tracking
         // uses the framework-wide Actor id.
-        lock (_gate)
+        foreach (var (actorId, actor) in _actors)
         {
-            foreach (var (actorId, actor) in _actors)
-            {
-                var encoded = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value).Value;
-                if (!string.Equals(encoded, canonicalKey, StringComparison.Ordinal)) continue;
-                _actors.Remove(actorId);
-                return actor.Deactivate;
-            }
-
-            return null;
+            var encoded = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value).Value;
+            if (!string.Equals(encoded, canonicalKey, StringComparison.Ordinal)) continue;
+            _actors.Remove(actorId);
+            return actor.Deactivate;
         }
-    }
+
+        return null;
+    });
 
     private async ValueTask RenewOwnedActorAsync(
         ZLinkActorId actorId,
@@ -1277,30 +1278,28 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         CancellationToken cancellationToken)
     {
         var canonical = actorId;
-        TrackedActor? tracked;
-        lock (_gate)
+        var tracked = await _lane.RunAsync(() =>
         {
-            if (!_actors.TryGetValue(canonical, out tracked))
+            if (!_actors.TryGetValue(canonical, out var current))
             {
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NotFound,
                     $"Actor '{actorId}' is not tracked by this location owner.");
             }
 
-            if (tracked.ReleaseTask is not null)
+            if (current.ReleaseTask is not null)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NotFound,
                     $"Actor '{actorId}' location is being released.");
-        }
+            return current;
+        }).ConfigureAwait(false);
 
         await tracked.WriteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             for (var attempt = 0; attempt < 4; attempt++)
             {
-                ZLinkActorAuthorityPayload proposed;
-                ZLinkAuthoritySnapshot snapshot;
-                lock (_gate)
+                var update = await _lane.RunAsync(() =>
                 {
                     if (!_actors.TryGetValue(canonical, out var current)
                         || !ReferenceEquals(current, tracked))
@@ -1312,7 +1311,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                             ZLinkFrameworkErrorKind.NotFound,
                             $"Actor '{actorId}' location is being released.");
 
-                    snapshot = tracked.Snapshot;
+                    var snapshot = tracked.Snapshot;
                     if (expectedActorRef is { } actorRef
                         && (actorRef.ObjectGeneration
                             != snapshot.ObjectGeneration
@@ -1320,19 +1319,20 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.InvalidOperation,
                             $"Actor '{actorId}' reference no longer matches its authority.");
-                    proposed = mutate(tracked.Payload);
-                }
+                    var proposed = mutate(tracked.Payload);
+                    return new RenewAttempt(snapshot, proposed);
+                }).ConfigureAwait(false);
 
-                if (ReferenceEquals(proposed, tracked.Payload))
+                if (ReferenceEquals(update.Proposed, tracked.Payload))
                     return;
 
                 var authorityKey =
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
                 var result = await runtime.Store.CompareExchangeAuthorityAsync(
                         authorityKey,
-                        snapshot.StoreVersion,
+                        update.Snapshot.StoreVersion,
                         new ZLinkAuthorityMutation.Put(
-                            EncodeAuthorityPayload(snapshot.Payload, proposed),
+                            EncodeAuthorityPayload(update.Snapshot.Payload, update.Proposed),
                             ZLinkAuthorityGenerationTransition.Preserve,
                             TargetOwner: null,
                             TargetAllocation: null),
@@ -1340,15 +1340,15 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     .ConfigureAwait(false);
                 if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
                 {
-                    lock (_gate)
+                    await _lane.RunAsync(() =>
                     {
                         if (_actors.TryGetValue(canonical, out var current)
                             && ReferenceEquals(current, tracked))
                         {
-                            tracked.Payload = proposed;
+                            tracked.Payload = update.Proposed;
                             tracked.Snapshot = stored.Snapshot;
                         }
-                    }
+                    }).ConfigureAwait(false);
                     return;
                 }
 
@@ -1359,23 +1359,25 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (refreshed is not ZLinkAuthorityReadResult.Found found
-                    || found.Snapshot.OwnerId != snapshot.OwnerId
+                    || found.Snapshot.OwnerId != update.Snapshot.OwnerId
                     || found.Snapshot.OwnerLeaseGeneration
-                       != snapshot.OwnerLeaseGeneration
+                       != update.Snapshot.OwnerLeaseGeneration
                     || found.Snapshot.ObjectGeneration
-                       != snapshot.ObjectGeneration
+                       != update.Snapshot.ObjectGeneration
                     || !TryDecodeCurrentActorAuthority(
                         found.Snapshot.Payload.Span,
                         out var payload))
                     break;
-                lock (_gate)
+                var continueRetry = await _lane.RunAsync(() =>
                 {
                     if (!_actors.TryGetValue(canonical, out var current)
                         || !ReferenceEquals(current, tracked))
-                        break;
+                        return false;
                     tracked.Snapshot = found.Snapshot;
                     tracked.Payload = payload;
-                }
+                    return true;
+                }).ConfigureAwait(false);
+                if (!continueRetry) break;
             }
 
             var lostKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
@@ -1400,14 +1402,14 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         await tracked.WriteGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            ZLinkAuthoritySnapshot snapshot;
-            lock (_gate)
+            var snapshot = await _lane.RunAsync(() =>
             {
                 if (!_actors.TryGetValue(canonical, out var current)
                     || !ReferenceEquals(current, tracked))
-                    return;
-                snapshot = tracked.Snapshot;
-            }
+                    return null;
+                return tracked.Snapshot;
+            }).ConfigureAwait(false);
+            if (snapshot is null) return;
 
             var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(canonical.Value);
             var result = await runtime.Store.CompareExchangeAuthorityAsync(
@@ -1438,12 +1440,12 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     $"Actor '{canonical}' authority changed before release.",
                     ZLinkRetryAdvice.RetryAfterBackoff);
 
-            lock (_gate)
+            await _lane.RunAsync(() =>
             {
                 if (_actors.TryGetValue(canonical, out var current)
                     && ReferenceEquals(current, tracked))
                     _actors.Remove(canonical);
-            }
+            }).ConfigureAwait(false);
         }
         finally
         {
@@ -1565,21 +1567,19 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 publication with { ApplicationPayload = encoded });
     }
 
-    internal void UpdateTrackedSnapshot(
+    internal ValueTask UpdateTrackedSnapshotAsync(
         ZLinkActorId actorId,
         ZLinkAuthoritySnapshot snapshot)
-    {
-        lock (_gate)
+        => _lane.RunAsync(() =>
         {
             if (_actors.TryGetValue(actorId, out var tracked))
                 tracked.Snapshot = snapshot;
-        }
-    }
+        });
 
-    internal void UpdateTrackedSnapshot(
+    internal ValueTask UpdateTrackedSnapshotAsync(
         string actorId,
         ZLinkAuthoritySnapshot snapshot) =>
-        UpdateTrackedSnapshot(
+        UpdateTrackedSnapshotAsync(
             ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
             snapshot);
 
@@ -1634,4 +1634,17 @@ internal sealed class ZLinkActorOwnershipCoordinator(
 
         public int ReconciliationStarted;
     }
+
+    private sealed record ReleaseStart(
+        TrackedActor Tracked,
+        TaskCompletionSource? ReleaseCompletion,
+        Task ReleaseTask);
+
+    private readonly record struct RenewAttempt(
+        ZLinkAuthoritySnapshot Snapshot,
+        ZLinkActorAuthorityPayload Proposed);
+
+    private readonly record struct BackgroundDrainStart(
+        CancellationTokenSource Stop,
+        Task[] Tasks);
 }

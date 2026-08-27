@@ -4,383 +4,196 @@ The documents in this directory describe the Framework's common public
 contract. Each document self-contains the inputs, state, normal flow, and
 failure/completion conditions its implementation and contract tests need.
 
-This directory and the per-language exact interfaces are the single authority
-for the Framework public contract. Documents `40` through `52` in this directory
-are internal design documentation: they explain the state and component structure
-used to implement that contract and do not add public behavior. Co-location does
-not make those documents normative; when public behavior differs, documents `00`
-through `32` and the per-language exact interfaces prevail.
-
-## Verification Runner Isolation
-
-Samples and E2E suites for multiple language implementations of the same contract
-must be runnable concurrently on one host. This is a contract-verification
-environment rule, not public API behavior. A run that needs Redis does not share
-one instance per language or separate only by Redis database number. It creates a
-dedicated Docker Redis container and key prefix for every run.
-
-Samples use the language-specific `20000-29999` ranges defined by the
-[sample runner isolation standard](../../sample/README.en.md#the-sample-run-script-and-redis-isolation-standard).
-E2E uses the language-specific `30000-39999` ranges defined by the
-[E2E runner execution contract](../../e2e/README.en.md#27-run_e2e-execution-contract).
-The tables in those documents own the exact non-overlapping Redis host-port and
-application-listener ranges.
-
-A standalone config runner and every config runner invoked by an aggregate run
-share a language-wide whole-run lock, so actual config E2E processes execute
-sequentially within one language. The aggregate runner itself stays lock-free,
-so two aggregate runs may alternate at config boundaries, but their actual
-config processes never overlap. The same E2E can run concurrently in different
-languages because language-specific port ranges, per-run Redis endpoints,
-temporary configuration, log directories, and cleanup targets are separate. Java
-and Kotlin share some Gradle output, so a build-only lock shared by sample and E2E
-runners serializes only Gradle execution. This lock is shared within one runner
-execution environment. Running WSL Bash and Windows PowerShell against the same
-checkout at the same time is unsupported because they use different
-operating-system lock namespaces.
-
-## Authoring Standards And Shared Terms
-
-- [Spec writing guide](../../../../../../doc/principal/documentation/spec-writing-guide.ko.md)
-
-## Topic-Based Navigation
-
-The `40`–`52` entries are non-normative internal-design documents that add no public contract. This
-index places public specs and internal designs together by topic and lists each document once.
-
-### Foundation And Configuration
-
-- [00 Public contract governance](00-public-contract-governance.en.md)
-- [01 Framework messaging glossary](01-glossary.en.md)
-- [02 Framework overview](02-overview.en.md)
-- [03 Interaction model](03-interaction-model.en.md)
-- [05 Async execution policy](05-async-execution-policy.en.md)
-- [06 Framework API](06-framework-api.en.md)
-- [10 Network listener identity](10-network-listener-identity.en.md)
-
-### Messaging, HWM, And Backpressure
-
-- [04 Message model](04-message-model.en.md)
-- [07 RouteMesh topology](07-channel-topology.en.md)
-- [08 Channel messaging](08-channel-messaging.en.md)
-- [09 ClientServer Channel](09-client-server-channel.en.md)
-- [12 Spot messaging](12-spot-messaging.en.md)
-- [17 Stage wrapper on Spot](17-stage-wrapper-on-spot.en.md)
-- [32 Framework error model](32-framework-error-model.en.md) — defines the shared `ErrorKind`, Send/Request completion conditions, and the boundary of an application's retry decision.
-- [33 Core byte HWM and Application job flow](33-core-hwm-application-job-flow.en.md) — separates Core byte capacity from Framework job-count capacity and keeps pre-handler asynchronous stages in one structured flow.
-- [46. Receive And Dispatch Loop](46-internal-dispatch-loop.en.md) — non-normative internal design. Whether to wake per message or batch-process. What wakes it
-
-### Spot, Actor, And Session
-
-- [11 Spot model](11-spot-model.en.md)
-- [13 MeshNode](13-mesh-node.en.md)
-- [14 Actor model](14-actor-model.en.md)
-- [15 Spot and Actor membership](15-spot-actor.en.md)
-- [16 Spot address messaging](16-spot-address-messaging.en.md)
-- [18 Spot/Actor routing](18-object-routing.en.md)
-- [19 STREAM server session](19-stream-session.en.md)
-- [20 Session Actor dispatch](20-session-actor-dispatch.en.md)
-- [41. Spot · Actor Execution Serialization](41-internal-serialization.en.md) — non-normative internal design. Why the queueing spot and execution authority are separated. Why execution resource mustn't be proportional to Spot count
-- [47. Object Kind And Activation](47-internal-object-lifecycle.en.md) — non-normative internal design. How the three Spot kinds are distinguished. When a missing object is built and how Ready owner failure is handled
-- [48. Session And Actor Binding](48-internal-session-binding.en.md) — non-normative internal design. How to keep two places from pointing at the same Actor while a connection is swapped
-
-### Location, Relocation, And Handoff
-
-- [21 Location runtime](21-location-runtime.en.md) — defines the order in which the Framework uses object location, authority, and the two Stores.
-- [22 Location Store provider SPI and the official Redis implementation](22-location-store-redis.en.md) — defines the atomic key/value and scan contract a provider must implement.
-- [23 Relocation Store provider SPI and the official Redis implementation](23-relocation-store-redis.en.md) — defines the immutable payload storage contract a provider must implement.
-- [28 Complete Actor and Spot relocation flow](28-relocation-flow.en.md) — defines the owner transition, queue merge, Location Store CAS, and Session route order shared by all four runtimes.
-- [30 Complete Host Relocation Flow](30-host-relocation-flow.en.md) — defines the complete lifecycle in which a Host fixes relocation units, moves them in batch order, returns `Relocated`, retains Message Follow, and finishes with `Shutdown`.
-- [31 Failure handling and failover scope](31-failure-failover-policy.en.md) — defines the automatic-recovery boundary for target reselection, reconnect, creation recovery, and stateful relocation.
-- [44. Message Continuity During A Move](44-internal-relocation-continuity.en.md) — non-normative internal design. Where a message goes while an object is moving
-- [45. Target Selection And Route Cache](45-internal-routing-and-cache.en.md) — non-normative internal design. How often location is looked up. How `Missing` differs from a `Ready` owner that can't be used
-- [52. Relocation Handoff State Transitions](52-internal-relocation-handoff.en.md) — non-normative internal design. How all four runtimes implement the same source, target, and Session transitions and queue order
-
-### Monitoring And Operations
-
-- [24 Runtime state and operational diagnostics](24-runtime-monitoring.en.md) — defines the health, topology status, and structured logs an application reads.
-- [25 Runtime metric names and labels](25-runtime-metrics.en.md) — defines only metric names, units, and bounded labels.
-- [26 Message flow tracing](26-message-flow-tracing.en.md) — defines the phases, outcomes, and trace attributes of a single message.
-- [27 Request correlation and causal flow](27-flow-correlation.en.md) — defines the generation and propagation of the correlation ID and flow ID.
-- [29 Transport liveness](29-transport-liveness.en.md)
-- [49. Liveness And Status Publication](49-internal-liveness-and-state.en.md) — non-normative internal design. How to determine whether the peer is still reachable without letting that judgment change authority
-
-### Runtime Ownership And Wire Protocol
-
-- [40. Layer Boundary And Identifier](40-internal-layering.en.md) — non-normative internal design. Where to draw the binding boundary. Which values mustn't be merged
-- [42. Application And Infrastructure Execution Separation](42-internal-progress-isolation.en.md) — non-normative internal design. What must still progress even while a handler is stuck. Why it's a region separation, not a reserved section
-- [43. Operation Completion Confirmation](43-internal-completion.en.md) — non-normative internal design. How to make only one win when multiple paths try to finish at once. How not to lose a response
-- [50. Payload Ownership And Copy](50-internal-message-ownership.en.md) — non-normative internal design. How many times a byte is copied from socket to handler. When deserialization happens
-- [51. Service Wire Protocol](51-internal-service-wire-protocol.en.md) — non-normative internal design. The byte format and command exchanged between nodes
-
-## Internal Design Documents (Non-Normative)
-
-> **Document status — internal design, not normative public specification.** The `40`–`52` documents below explain implementation structure used to satisfy the public contracts in `00`–`33`. They do not add or change application-visible behavior.
-
-The C++, .NET, JVM, and Node.js service runtimes are implemented in different
-languages. This document set explains the **internal design decisions they must share
-to give an application the same result.**
-
-### What This Document Set Answers
-
-The formal spec decides "what must be built." This document set
-answers what can't be known just by reading the spec.
-
-- **What structure is needed to satisfy several spec requirements together.** For
-  example, it explains the structure that preserves per-Actor queues while also
-  serializing all `SpotWide` execution.
-- **Which criteria select an internal implementation where the spec does not.**
-- **Which boundaries tend to diverge across implementations, and what must be
-  verified there.**
-
-Content the spec already decided isn't repeated — only a link is put.
-
-A `Decision` in this document set is not a public contract; it is an internal
-structure decision for satisfying that contract. A `Result To Confirm` checks
-the spec's public result and internal invariants in an implementation and does
-not create a new user guarantee. If public behavior, error meaning, or failover
-scope differs from the spec, the spec prevails. Internals are then aligned to
-the spec, or, if the public contract itself must change, the
-[public-contract procedure](00-public-contract-governance.en.md#4-public-contract-procedure)
+This directory and the per-language interfaces are the single authority
+for the Framework public contract. The documents in this directory form two
+layers (the "Layer" column in the topic tables below). The **contract** layer
+defines the behavior the application observes, and the **implementation spec**
+layer defines the structural decisions every language's service runtime
+follows in common so that it delivers that contract with the same result. A
+single document can carry both layers, in which case each sentence states
+which one it is. The implementation spec adds no new public behavior, but it
+is normative for runtimes — breaking a decision changes what the application
+observes. A conflict between the two layers is a defect. The implementation
+spec is corrected against the contract; if the contract itself must change,
+the
+[public contract procedure](00-foundation/01-public-contract-governance.en.md#5-public-contract-procedure)
 is followed first.
 
-Deviations from these decisions and verification progress are not recorded in this public
-internals document. This document describes only implementation structure and decisions.
+The rule for isolating verification runners so that samples and E2E suites for
+multiple language implementations of the same contract can run concurrently on
+one host belongs to the verification environment, not to this spec — see the
+[sample runner isolation standard](../../sample/README.en.md#the-sample-run-script-and-redis-isolation-standard)
+and the
+[E2E runner execution contract](../../e2e/README.en.md#27-run_e2e-execution-contract).
 
-### Component And Responsible Chapter
+## What This Spec Answers
 
-Each chapter explains one component marked in the diagram below. Start at the component
-you need and follow its chapter number.
+| Topic | Reader's Question | Entry Document |
+|---|---|---|
+| foundation | What rules does this spec as a whole follow, and what common vocabulary and API registration does it use | [00-foundation/README.en.md](00-foundation/README.en.md) |
+| execution | When and in what order does a handler run, and what structure guarantees completion, cancellation, and concurrency | [01-execution/README.en.md](01-execution/README.en.md) |
+| channel-transport | How are the physical connections between MeshNodes and the paths that send messages over a Channel structured | [02-channel-transport/README.en.md](02-channel-transport/README.en.md) |
+| spot-actor | What are Spot and Actor, and what path does a message take to reach one | [03-spot-actor/README.en.md](03-spot-actor/README.en.md) |
+| session | How is one external connection (a session) tied to an Actor, and what is guaranteed when it disconnects or moves | [04-session/README.en.md](04-session/README.en.md) |
+| location-relocation | How is the current location of an Actor or Spot found, and what is preserved when it moves to another node | [05-location-relocation/README.en.md](05-location-relocation/README.en.md) |
+| observability | What does an operator use to check the Framework's current state and the cause of a failure | [06-observability/README.en.md](06-observability/README.en.md) |
 
-**This diagram is a chapter-finding map, not a layer diagram.** The
-left bundle and the right bundle are **different processes**, and even
-if one host plays both roles, the diagram's two spots each operate in
-a different call.
+## Reading Order
 
-```mermaid
-flowchart LR
-    subgraph SEND["sender process"]
-        SEL["selector · route cache<br/>「45」"]
-    end
+**First-time reader** (new to this spec as a whole)
 
-    subgraph WIRE["between processes"]
-        direction TB
-        TR["peer connection · liveness<br/>「49」"]
-        REC["service wire record<br/>「wire」"]
-    end
+1. foundation
+2. channel-transport
+3. spot-actor
+4. session
+5. location-relocation
+6. observability
+7. execution — only when needed, to check implementation detail
 
-    subgraph OWNER["owner process"]
-        direction TB
-        RL["receive loop<br/>「46」"]
-        AD["admission<br/>「46」"]
-        GATE["execution gate<br/>「41」「42」"]
-        H["application handler"]
-        FIN["completion<br/>「43」"]
-    end
+**New-language porting owner** (implementing a new service runtime)
 
-    subgraph STATE["owner process state"]
-        direction TB
-        OBJ["Spot · Actor<br/>「47」"]
-        SB["session binding<br/>「48」"]
-        MV["relocation · Message Follow<br/>「44」"]
-    end
+1. foundation
+2. execution
+3. channel-transport
+4. spot-actor
+5. session
+6. location-relocation
+7. observability
 
-    COD["codec · payload ownership<br/>「50」"]
-    LS[("Location Store")]
-    OBS["status · metric<br/>「49」"]
+**Application developer** (using the Framework through an existing language binding)
 
-    SEL --> TR --> REC --> RL --> AD --> GATE --> H --> FIN
-    FIN -. "response" .-> TR
-    SEL -. "lookup" .-> LS
-    AD -. "confirms owner" .-> OBJ
-    OBJ --- SB
-    OBJ --- MV
-    MV -. "invalidates cache" .-> SEL
-    SEL -. "serializes" .-> COD
-    COD -. "deserializes" .-> H
-    GATE -. "doesn't occupy" .-> OBS
-```
+1. foundation
+2. channel-transport
+3. spot-actor
+4. session
+5. observability
+6. location-relocation — only when calling Host relocation directly
+7. execution — usually not needed. Implementation detail is already reflected in the contract
 
-**A solid line is an axis a message actually crosses, and a dotted
-line is a reference/lookup/notification.** "1. Layer Boundary And
-Identifier" spans this whole diagram — since it decides which
-component may know a binding type, it isn't placed in one spot.
+## Topics
 
-The reason `codec` and `Location Store` are put outside the bundle is
-that both processes use them. codec serializes on the sending side and
-deserializes after moving ownership on the receiving side, and Location
-Store is each looked up and recorded by both processes. Putting them
-inside one bundle would read as if only that process uses them.
+### 00-foundation
 
-The two dotted lines are specifically marked because they're a
-connection easy to miss when reading a chapter separately.
+Covers the contract-ownership rules, vocabulary, top-level model, interaction
+targets and completion semantics, message/response/error shapes,
+language-neutral registration API, and runtime layering boundaries shared by
+the whole Framework. Every other topic assumes this topic's vocabulary and
+rules.
 
-- `execution gate → status · metric`'s **"doesn't occupy"** — the
-  decision from [49](49-internal-liveness-and-state.en.md) that observation
-  must bypass execution authority. Turning on observation must not
-  slow down processing.
-- `relocation → selector`'s **"invalidates cache"** — the point where
-  [44](44-internal-relocation-continuity.en.md) and
-  [45](45-internal-routing-and-cache.en.md) meet. Without this line, every
-  traffic detours until the cache lifetime ends after a move.
+| Document | Question It Answers | Layer |
+|---|---|---|
+| [01. public-contract-governance](00-foundation/01-public-contract-governance.en.md) | What procedure must a change to the Framework public contract follow | Contract |
+| [02. glossary](00-foundation/02-glossary.en.md) | What exactly does each term that recurs throughout this spec mean | Contract |
+| [03. overview](00-foundation/03-overview.en.md) | What layer is the Framework, and what does each language implement separately | Contract |
+| [04. interaction-model](00-foundation/04-interaction-model.en.md) | What is a Framework operation's target, and when is it considered complete | Contract |
+| [05. message-model](00-foundation/05-message-model.en.md) | What shape and rules do a sent message and its response/error follow | Contract |
+| [06. framework-api](00-foundation/06-framework-api.en.md) | What must an application register at the root to start the Framework | Contract |
+| [07. framework-error-model](00-foundation/07-framework-error-model.en.md) | What common error does an application receive when Send/Request fails | Contract |
+| [08. layering](00-foundation/08-layering.en.md) | What pieces does runtime code split into, and what values must never be merged | Implementation spec |
 
-A performance-critical decision is gathered in
-[50](50-internal-message-ownership.en.md)'s copy count,
-[45](45-internal-routing-and-cache.en.md)'s location cache,
-[46](46-internal-dispatch-loop.en.md)'s batching/wake method/timer resource,
-[41](41-internal-serialization.en.md)'s execution resource constraint, and
-[47](47-internal-object-lifecycle.en.md)'s memory accounting.
+### 01-execution
 
-### Structure Decisions That Span Chapters
+Covers the full execution path from submit through handler execution,
+completion, cancellation, execution serialization, and payload ownership —
+everything from an accepted call to its arrival at and completion in the
+handler. Most of it is implementation spec that every language's service
+runtime must follow in common.
 
-Some topics are covered by multiple documents. The spec is authoritative for
-public behavior; align internal structure to the following documents.
+| Document | Question It Answers | Layer |
+|---|---|---|
+| [01. submit-and-completion](01-execution/01-submit-and-completion.en.md) | When is a call accepted, and what completes it | Contract+Implementation |
+| [02. handler-turn-and-execution-gate](01-execution/02-handler-turn-and-execution-gate.en.md) | Why is state safe even though the handler has no synchronization code | Contract+Implementation |
+| [03. cancellation-and-shutdown](01-execution/03-cancellation-and-shutdown.en.md) | How do cancellation and shutdown treat work already accepted | Contract |
+| [10. spot-timer](03-spot-actor/10-spot-timer.en.md) | When does a Spot timer run, and what happens to a late tick | Contract+Implementation |
+| [04. application-job-queue-and-backpressure](01-execution/04-application-job-queue-and-backpressure.en.md) | Under overload, what is blocked first, and what does the application observe | Contract+Implementation |
+| [05. payload-ownership-and-codec](01-execution/05-payload-ownership-and-codec.en.md) | How many times is a message's bytes copied from the socket to the handler | Contract+Implementation |
 
-| Topic | Reference Document |
-|---|---|
-| The public result when a queue saturates | The family × location table in [Spot Messaging 「5.3 Work Put On The Spot Application Queue」](12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue) |
-| The owner-occupancy bound and the lifecycle continuous-execution bound | [Actor Model 「3. Actor Queue」](14-actor-model.en.md#3-actor-queue) |
-| The target-selection procedure and tiebreak | [Channel Messaging 「Selection Order」](08-channel-messaging.en.md#selection-order) |
-| Observer merging and loss | [Runtime Status And Operational Diagnostics](24-runtime-monitoring.en.md) |
-| Where `ObjectGeneration` is used and where it isn't | [Spot · Actor Routing 「2.5」](18-object-routing.en.md#25-where-objectgeneration-is-used-and-where-its-not) |
+The shared-permit rule carried over from the session topic is owned as a
+single contract sentence by `05`'s "Ordinary ingress permit order" section.
 
-### Debugging Principles
+### 02-channel-transport
 
-When chasing an intermittent failure, **turn on the message tracking and file logs
-that already exist and read them first.** Adding fresh temporary logging and
-re-running the reproduction is not allowed. That approach spends a whole
-reproduction cycle to see a single exception, and it misses causes that were
-already printed in the existing logs.
+Covers the physical connections (RouteMesh, ClientServer, listener identity),
+how Node-direct and Channel select-one choose a target over them, connection
+liveness checks, and the byte/command format on the wire.
 
-#### 1. What To Turn On First
+| Document | Question It Answers | Layer |
+|---|---|---|
+| [01. channel-topology](02-channel-transport/01-channel-topology.en.md) | How are RouteMesh's physical connections and ChannelName's logical membership structured | Contract |
+| [02. channel-messaging](02-channel-transport/02-channel-messaging.en.md) | How do Node-direct and ChannelName select-one each choose a target | Contract |
+| [03. client-server-channel](02-channel-transport/03-client-server-channel.en.md) | How does a Server respond with a handler to a request a Client started | Contract |
+| [04. network-listener-identity](02-channel-transport/04-network-listener-identity.en.md) | Why do a listener's bind address and advertised address differ, and when is each used | Contract |
+| [05. transport-liveness](02-channel-transport/05-transport-liveness.en.md) | How is a remote connection's liveness checked, and how is it reconnected when it drops | Contract+Implementation |
+| [06. wire-protocol](02-channel-transport/06-wire-protocol.en.md) | What bytes and commands actually pass between nodes | Implementation spec |
 
-| Target | How |
-|---|---|
-| Message flow (full-path tracing with `flow` and `corr`) | runtime diagnostics message flow mode |
-| C++ / .NET spot discovery trace | `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` |
-| Java / Kotlin stream trace | `ZLINK_JAVA_STREAM_TRACE=1` |
-| Sample server log retention | .NET `ZLINK_SAMPLE_EVIDENCE_DIR`, JVM `ZLINK_SAMPLE_KEEP_RUN_DIR=1`, Node keeps them on failure automatically |
+### 03-spot-actor
 
-When a sample fails intermittently, retain server logs **from the first
-reproduction**. A run without logs records only that it failed, not why, so that
-cycle is wasted.
+Covers the three Spot kinds (Entry, User, Instance) and Actor identity,
+membership, and relocation, together with the two paths a message takes to
+reach one (Spot-direct, Logical Multicast) and when the Location Store is
+re-queried.
 
-#### 2. How To Read Them
+| Document | Question It Answers | Layer |
+|---|---|---|
+| [01. spot-model](03-spot-actor/01-spot-model.en.md) | When is each Entry/User/Instance Spot created, and what do they share and not share | Contract |
+| [02. spot-messaging](03-spot-actor/02-spot-messaging.en.md) | What path does a message sent to a Spot take to reach the actual Spot | Contract |
+| [03. mesh-node](03-spot-actor/03-mesh-node.en.md) | What is a MeshNode's identity, its object-placement conditions, and its startup order | Contract |
+| [04. actor-model](03-spot-actor/04-actor-model.en.md) | How are an Actor's identity, location, message queue, and lifecycle defined | Contract |
+| [05. spot-actor-membership](03-spot-actor/05-spot-actor-membership.en.md) | How is an Actor created, and in what order do Spot membership and relocation happen | Contract |
+| [06. spot-address-messaging](03-spot-actor/06-spot-address-messaging.en.md) | How is a global SpotId created and looked up, and how is that Spot called directly | Contract |
+| [07. stage-wrapper-on-spot](03-spot-actor/07-stage-wrapper-on-spot.en.md) | How is a higher-level execution model such as room or stage built on top of the Spot contract | Contract |
+| [08. routing](03-spot-actor/08-routing.en.md) | When does a message to a Spot or Actor re-query location, and when not | Contract+Implementation |
+| [09. object-lifecycle](03-spot-actor/09-object-lifecycle.en.md) | How does code distinguish the three Spot kinds, and when is a missing object created | Implementation spec |
 
-Put a passing case and a failing case side by side under `flow` and find **which
-transition stopped**. `flow` is the only value that ties one message across
-process boundaries. Filtering a whole trace category out as noise walks straight
-past the line that names the cause.
+### 04-session
 
-#### 3. Every Failure Belongs On The Flow
+Covers the registration, acceptance, codec, and error boundary of a single
+STREAM connection (a session), and the Session's responsibility during
+binding, rebinding, disconnect, and relocation of the connection to an Actor.
 
-Never build a terminal that hands the application an error kind and drops the
-cause. A failure with no recorded cause can only be traced by reproducing it, and
-the reproduction cycle becomes the cost of the investigation. Failures,
-refusals, and aborts are recorded as `message_flow_outcome` `error`, carrying the
-originating exception in `errorType` / `errorMessage`, **under the same `flow` as
-the message that produced them**.
+| Document | Question It Answers | Layer |
+|---|---|---|
+| [01. stream-session](04-session/01-stream-session.en.md) | Once a connection is accepted, what path does a packet take to reach the callback | Contract |
+| [02. session-actor-binding](04-session/02-session-actor-binding.en.md) | How is a Session tied to an Actor, and what is guaranteed while the connection is being replaced or moved | Contract+Implementation |
 
-#### 4. Cost Rule For Adding Traces
+### 05-location-relocation
 
-**Decision**: when message flow tracing is off, building the log message must cost
-nothing.
+Covers how the current location of an Actor or Spot is found (the Location
+Store), how a request completing after relocation is recovered (the
+Relocation Store), the common order for a planned move (Host relocation,
+Actor Join, and so on), and the scope of automatic failover.
 
-| Path | Method |
-|---|---|
-| Hot path traced per message | Wrap in `if (enabled(outcome))` so neither the event nor a lambda is built |
-| Rare transitions such as failure or abort | Use the lazy form (`trace(outcome, build)` / `traceLazy`) so the event is built only after the gate |
+| Document | Question It Answers | Layer |
+|---|---|---|
+| [01. location-runtime](05-location-relocation/01-location-runtime.en.md) | How does the Framework find an object's current location and move it to another node | Contract |
+| [02. location-store-redis](05-location-relocation/02-location-store-redis.en.md) | What must a direct implementation of the Location Store guarantee | Contract |
+| [03. relocation-store-redis](05-location-relocation/03-relocation-store-redis.en.md) | What must a direct implementation of relocation-related payload storage guarantee | Contract |
+| [04. relocation-flow](05-location-relocation/04-relocation-flow.en.md) | In what order do owner and message change while moving an Actor or Spot to another node | Contract+Implementation |
+| [05. host-relocation-flow](05-location-relocation/05-host-relocation-flow.en.md) | In what order does Host `Relocate` move workloads, and what does `Shutdown` clean up | Contract |
+| [06. failure-failover-policy](05-location-relocation/06-failure-failover-policy.en.md) | When a failure occurs, how far does the Framework automatically continue the same work | Contract |
 
-The lazy form removes the `if` at the call site but allocates one lambda (C++
-inlines it, so nothing is allocated). Hot paths therefore wrap even the lazy form
-in an `if`, so no lambda is created either. Never write a call site that
-concatenates strings before the gate.
+### 06-observability
 
-**Language discretion**: how the gate is expressed. C++ uses a template lambda,
-.NET an interpolated string handler and `Func<>`, Java a `Supplier<>`, Node a
-thunk. What must match is the observable result — no cost at all when off.
+Covers how an operator queries the current state, aggregates values over
+time, and traces the progress of a single message and a business flow chained
+across several messages. The order for chasing an intermittent failure is
+defined by
+[README "4. The Order For Chasing An Intermittent Failure"](06-observability/README.en.md#4-the-order-for-chasing-an-intermittent-failure),
+and the cost rule for leaving tracing on is defined by
+[03. message-flow-tracing "5. Changing The Record Level At Runtime And The Cost Rule"](06-observability/03-message-flow-tracing.en.md#5-changing-the-record-level-at-runtime-and-the-cost-rule).
 
-**Result to verify**: after adding a trace, confirm from the call-site code that
-with tracing off the path builds no string, no event, and no lambda.
+| Document | Question It Answers | Layer |
+|---|---|---|
+| [01. runtime-monitoring](06-observability/01-runtime-monitoring.en.md) | How does an operator query the Framework runtime's current state and find a cause in the log | Contract |
+| [02. runtime-metrics](06-observability/02-runtime-metrics.en.md) | What are the names, units, and labels of the metrics for throughput, waiting, and failure | Contract |
+| [03. message-flow-tracing](06-observability/03-message-flow-tracing.en.md) | How does one confirm how far a single message got and where it failed | Contract |
+| [04. flow-correlation](06-observability/04-flow-correlation.en.md) | How is a request and its reply, or a business flow chained across several messages, identified | Contract |
 
-### How To Read
+## Per-Language Interfaces
 
-Each document states the following for every decision.
-
-| Mark | Meaning |
-|---|---|
-| **Decision** | The structure every service runtime must follow. Violating it changes the result the application sees |
-| **Per-Language Discretion** | What's fine to implement differently as long as the observed result is the same. Forcing them to match becomes unnatural in that language |
-| **Result To Confirm** | The condition the implementation must satisfy. The confirmation method differs per item |
-
-**Writing something as discretion requires two things together**: why the observable
-result is the same, and the standard that confirms it. Missing either one means it is
-not discretion but something not yet decided. A choice that produces an observable
-difference such as a latency floor is written as a **constrained choice**, not
-discretion (see [46. Receive And Dispatch Loop 「5. Pick One Wake-Up
-Method」](46-internal-dispatch-loop.en.md#5-pick-one-wake-up-method)).
-
-**A runtime must not invent a refusal condition, retry, or record that
-isn't documented.** If such behavior changes the application's observable
-result, add a common decision first and require every runtime to follow it.
-
-Only the wire protocol document doesn't apply this distinction. It's
-paired with
-`framework/runtime/protocol/service-wire-v1.schema.json`, and explains
-the field relationship and validation order the schema decides.
-
-Not every "result to confirm" can be judged by a contract test. The
-confirmation method differs per item, and when moving the list into
-work, first decide which method to confirm it with.
-
-#### Citation Notation
-
-A citation is by **section title**. Clicking the link jumps directly to
-that section.
-
-```markdown
-[Actor Model 「3. Actor Queue」](14-actor-model.en.md#3-actor-queue)
-```
-
-**Don't cite by line number.** A `§123` form only jumps to the top of
-the document, forcing the reader to find that spot again, and even one
-line changing in the cited document throws off where it points. A
-section title only breaks when that section disappears or is renamed,
-and that's revealed by link checking at that time.
-
-The anchor is the title lowercased with a space joined by `-`.
-Confirmed with the following.
-
-```bash
-mkdocs build --strict   # run from doc/site
-```
-
-| Confirmation Method | Which Item |
-|---|---|
-| Contract test | A result the application observes — error kind, order, whether a callback is called |
-| White-box invariant | Runtime-internal state — queue occupancy, execution authority count, state transition |
-| Static check | Code structure — type leak, duplicate implementation, a prohibited include |
-| Measurement | Cost — allocation count, lock-acquisition count, throughput. A threshold must be decided first to judge |
-
-For example, "don't run two work items concurrently in one execution
-authority" is a decision, and whether to build it with promise
-chaining or with a lock and queue is discretion.
-
-### What This Document Set Doesn't Define
-
-| Content | Owning Document |
-|---|---|
-| The name and signature of an API the application calls | [Per-Language Public Contract](languages/README.en.md) |
-| The meaning and completion condition of public behavior | [Formal Spec](README.en.md) |
-| The raw socket/transport internal Core provides | [Core Raw Runtime Internal Boundary](https://zlink-systems.github.io/zlink/internals/runtime-boundary/) |
-
-Each runtime implements this document's meaning in independent source;
-sharing a common native binary isn't required.
-
-## Server Exact Interface Per Language
-
-The exact public types, signatures, and async representation each language
-uses for the common server contract are owned by the following documents.
+The public types, signatures, and asynchronous representation each
+language uses for the common server contract are owned by the following
+documents.
 
 - [C++](languages/cpp/README.en.md)
 - [.NET](languages/dotnet/README.en.md)
@@ -390,14 +203,88 @@ uses for the common server contract are owned by the following documents.
 
 ## HTTP Client
 
-- [HTTP client spec index](../http-client/README.en.md)
+- [HTTP client spec table of contents](../http-client/README.en.md)
 - [12 HTTP client integration contract](../http-client/12-http-client.en.md)
 - [Per-language HTTP client contract](../http-client/language-interfaces.en.md)
-
-`10-revision-candidates.ko.md` is not a public contract — it's a document
-that manages design candidates for the next revision.
 
 ## Stream Connector
 
 - [32 Stream connector](../stream-connector/32-stream-connector.en.md)
 - [Per-language Stream connector contract](../stream-connector/README.en.md#per-language-public-api)
+
+## Citation Convention
+
+A citation uses the **section title**. Clicking the link jumps straight to
+that section.
+
+```markdown
+[Actor Model "3. Actor Queue"](03-spot-actor/04-actor-model.en.md#3-actor-queue)
+```
+
+**Do not cite by line number.** A `§123` form only lands at the top of the
+document, forcing the reader to search again, and it goes stale the moment
+the cited document changes by even one line. A section title breaks only when
+that section disappears or is renamed, and link checking catches that.
+
+The anchor is the title lowercased with spaces joined by `-`. Verify with:
+
+```bash
+mkdocs build --strict   # run from doc/site
+```
+
+## Where Old Documents Went
+
+This spec reorganized the old layout, where every document carried one global
+number (`00` through `52`), into topic directories. A link or memory keyed on
+an old number finds the new location in the table below. Where an old
+document split across several new documents, the section ranges are given.
+
+| Old Document | New Location |
+|---|---|
+| `00-public-contract-governance` | [00-foundation/01-public-contract-governance](00-foundation/01-public-contract-governance.en.md) |
+| `01-glossary` | [00-foundation/02-glossary](00-foundation/02-glossary.en.md) |
+| `02-overview` | [00-foundation/03-overview](00-foundation/03-overview.en.md) |
+| `03-interaction-model` | [00-foundation/04-interaction-model](00-foundation/04-interaction-model.en.md) |
+| `04-message-model` | [00-foundation/05-message-model](00-foundation/05-message-model.en.md) |
+| `05-async-execution-policy` | §1.1–§1.4·§2·§6 → [01-execution/01-submit-and-completion](01-execution/01-submit-and-completion.en.md) · §1.1(Yield)·§3·§3.1 → [02-handler-turn-and-execution-gate](01-execution/02-handler-turn-and-execution-gate.en.md) · §4 → [03-cancellation-and-shutdown](01-execution/03-cancellation-and-shutdown.en.md) · §5 → [04-spot-timer](03-spot-actor/10-spot-timer.en.md) · §10 → [05-application-job-queue-and-backpressure](01-execution/04-application-job-queue-and-backpressure.en.md) |
+| `06-framework-api` | [00-foundation/06-framework-api](00-foundation/06-framework-api.en.md) |
+| `07-channel-topology` | [02-channel-transport/01-channel-topology](02-channel-transport/01-channel-topology.en.md) |
+| `08-channel-messaging` | [02-channel-transport/02-channel-messaging](02-channel-transport/02-channel-messaging.en.md) |
+| `09-client-server-channel` | [02-channel-transport/03-client-server-channel](02-channel-transport/03-client-server-channel.en.md) |
+| `10-network-listener-identity` | [02-channel-transport/04-network-listener-identity](02-channel-transport/04-network-listener-identity.en.md) |
+| `11-spot-model` | [03-spot-actor/01-spot-model](03-spot-actor/01-spot-model.en.md) |
+| `12-spot-messaging` | [03-spot-actor/02-spot-messaging](03-spot-actor/02-spot-messaging.en.md) |
+| `13-mesh-node` | [03-spot-actor/03-mesh-node](03-spot-actor/03-mesh-node.en.md) |
+| `14-actor-model` | [03-spot-actor/04-actor-model](03-spot-actor/04-actor-model.en.md) |
+| `15-spot-actor` | [03-spot-actor/05-spot-actor-membership](03-spot-actor/05-spot-actor-membership.en.md) |
+| `16-spot-address-messaging` | [03-spot-actor/06-spot-address-messaging](03-spot-actor/06-spot-address-messaging.en.md) |
+| `17-stage-wrapper-on-spot` | [03-spot-actor/07-stage-wrapper-on-spot](03-spot-actor/07-stage-wrapper-on-spot.en.md) |
+| `18-object-routing` | [03-spot-actor/08-routing](03-spot-actor/08-routing.en.md) |
+| `19-stream-session` | [session/01-stream-session](04-session/01-stream-session.en.md) |
+| `20-session-actor-dispatch` | [session/02-session-actor-binding](04-session/02-session-actor-binding.en.md) |
+| `21-location-runtime` | [05-location-relocation/01-location-runtime](05-location-relocation/01-location-runtime.en.md) |
+| `22-location-store-redis` | [05-location-relocation/02-location-store-redis](05-location-relocation/02-location-store-redis.en.md) |
+| `23-relocation-store-redis` | [05-location-relocation/03-relocation-store-redis](05-location-relocation/03-relocation-store-redis.en.md) |
+| `24-runtime-monitoring` | [06-observability/01-runtime-monitoring](06-observability/01-runtime-monitoring.en.md) |
+| `25-runtime-metrics` | [06-observability/02-runtime-metrics](06-observability/02-runtime-metrics.en.md) |
+| `26-message-flow-tracing` | [06-observability/03-message-flow-tracing](06-observability/03-message-flow-tracing.en.md) |
+| `27-flow-correlation` | [06-observability/04-flow-correlation](06-observability/04-flow-correlation.en.md) |
+| `28-relocation-flow` | [05-location-relocation/04-relocation-flow](05-location-relocation/04-relocation-flow.en.md) |
+| `29-transport-liveness` | [02-channel-transport/05-transport-liveness](02-channel-transport/05-transport-liveness.en.md) |
+| `30-host-relocation-flow` | [05-location-relocation/05-host-relocation-flow](05-location-relocation/05-host-relocation-flow.en.md) |
+| `31-failure-failover-policy` | [05-location-relocation/06-failure-failover-policy](05-location-relocation/06-failure-failover-policy.en.md) |
+| `32-framework-error-model` | [00-foundation/07-framework-error-model](00-foundation/07-framework-error-model.en.md) |
+| `33-core-hwm-application-job-flow` | [01-execution/05-application-job-queue-and-backpressure](01-execution/04-application-job-queue-and-backpressure.en.md) |
+| `40-internal-layering` | [00-foundation/08-layering](00-foundation/08-layering.en.md) |
+| `41-internal-serialization` | [01-execution/02-handler-turn-and-execution-gate](01-execution/02-handler-turn-and-execution-gate.en.md) |
+| `42-internal-progress-isolation` | §1–§4·§7 → [01-execution/02-handler-turn-and-execution-gate](01-execution/02-handler-turn-and-execution-gate.en.md) · §5·§6 → [05-application-job-queue-and-backpressure](01-execution/04-application-job-queue-and-backpressure.en.md) |
+| `43-internal-completion` | [01-execution/01-submit-and-completion](01-execution/01-submit-and-completion.en.md) |
+| `44-internal-relocation-continuity` | [05-location-relocation/04-relocation-flow](05-location-relocation/04-relocation-flow.en.md) |
+| `45-internal-routing-and-cache` | §1·§1.1·§2 → [03-spot-actor/08-routing](03-spot-actor/08-routing.en.md) · §3–§7 → [02-channel-transport/02-channel-messaging](02-channel-transport/02-channel-messaging.en.md) |
+| `46-internal-dispatch-loop` | §1·§2·§6·§8 → [01-execution/05-application-job-queue-and-backpressure](01-execution/04-application-job-queue-and-backpressure.en.md) · §7 → [04-spot-timer](03-spot-actor/10-spot-timer.en.md) · §3·§4 → [02-handler-turn-and-execution-gate](01-execution/02-handler-turn-and-execution-gate.en.md) |
+| `47-internal-object-lifecycle` | [03-spot-actor/09-object-lifecycle](03-spot-actor/09-object-lifecycle.en.md) |
+| `48-internal-session-binding` | [session/02-session-actor-binding](04-session/02-session-actor-binding.en.md) |
+| `49-internal-liveness-and-state` | §1 → [02-channel-transport/05-transport-liveness](02-channel-transport/05-transport-liveness.en.md) · §2 → [03-spot-actor/03-mesh-node](03-spot-actor/03-mesh-node.en.md) · §3–§5 → [06-observability](06-observability/README.en.md) |
+| `50-internal-message-ownership` | [01-execution/06-payload-ownership-and-codec](01-execution/05-payload-ownership-and-codec.en.md) |
+| `51-internal-service-wire-protocol` | [02-channel-transport/06-wire-protocol](02-channel-transport/06-wire-protocol.en.md) |
+| `52-internal-relocation-handoff` | [05-location-relocation/04-relocation-flow](05-location-relocation/04-relocation-flow.en.md) |

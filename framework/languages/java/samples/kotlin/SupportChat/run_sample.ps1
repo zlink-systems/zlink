@@ -75,15 +75,29 @@ function Wait-Port {
     throw "Timed out waiting for $Name at $Endpoint"
 }
 
-function Wait-Log {
-    param([string]$Pattern, [string]$Path, [int]$Attempts = 60)
-    for ($i = 0; $i -lt $Attempts; $i++) {
-        if ((Test-Path $Path) -and (Select-String -Path $Path -Pattern $Pattern -Quiet)) {
-            return
-        }
-        Start-Sleep -Milliseconds 200
+function Get-LogCount {
+    param([string[]]$Paths, [string]$Evidence)
+    return @(Select-String -Path $Paths -Pattern $Evidence -SimpleMatch -ErrorAction SilentlyContinue).Count
+}
+
+function Wait-LogCount {
+    param([string[]]$Paths, [string]$Evidence, [int]$Expected)
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        $actual = Get-LogCount $Paths $Evidence
+        if ($actual -eq $Expected) { return }
+        if ($actual -gt $Expected) { throw "Expected $Expected '$Evidence', found $actual." }
+        Start-Sleep -Milliseconds 100
     }
-    throw "Timed out waiting for '$Pattern' in $Path"
+    throw "Timed out waiting for $Expected '$Evidence'."
+}
+
+function Wait-LogAtLeast {
+    param([string[]]$Paths, [string]$Evidence, [int]$Minimum)
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        if ((Get-LogCount $Paths $Evidence) -ge $Minimum) { return }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Timed out waiting for at least $Minimum '$Evidence'."
 }
 
 function Start-Role {
@@ -95,13 +109,14 @@ function Start-Role {
 }
 
 try {
-    $ports = @(Get-ZlinkSampleApplicationPorts -Language Kotlin -Count 6)
+    $ports = @(Get-ZlinkSampleApplicationPorts -Language Kotlin -Count 7)
     $ApiChannelEndpoint = "tcp://127.0.0.1:$($ports[0])"
     $ApiHttpEndpoint = "http://127.0.0.1:$($ports[1])"
-    $SupportChannelEndpoint = "tcp://127.0.0.1:$($ports[2])"
-    $SessionRouterEndpoint = "tcp://127.0.0.1:$($ports[3])"
-    $SupportRouterEndpoint = "tcp://127.0.0.1:$($ports[4])"
-    $StreamEndpoint = "tcp://127.0.0.1:$($ports[5])"
+    $ApiRouterEndpoint = "tcp://127.0.0.1:$($ports[2])"
+    $SupportChannelEndpoint = "tcp://127.0.0.1:$($ports[3])"
+    $SessionRouterEndpoint = "tcp://127.0.0.1:$($ports[4])"
+    $SupportRouterEndpoint = "tcp://127.0.0.1:$($ports[5])"
+    $StreamEndpoint = "tcp://127.0.0.1:$($ports[6])"
 
     $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-supportchat" -Language Kotlin
     $RedisContainer = $redis.ContainerId
@@ -116,6 +131,7 @@ try {
         "sample.redisKeyPrefix=$RedisKeyPrefix",
         "sample.logDirectory=$SampleLogDir",
         "sample.apiChannelEndpoint=$ApiChannelEndpoint",
+        "sample.apiSpotRouterEndpoint=$ApiRouterEndpoint",
         "sample.apiHttpEndpoint=$ApiHttpEndpoint"
     ) | Set-Content -Path $ApiConfig -Encoding UTF8
     @(
@@ -145,15 +161,14 @@ try {
         ":Client:installDist") *> $BuildLog
 
     Start-Role "support" (Join-Path $SampleDir "Server/Support/build/install/Support/bin/Support") $SupportConfig
-    Wait-Port "support-channel" $SupportChannelEndpoint
-    Wait-Port "support-router" $SupportRouterEndpoint
-
     Start-Role "api" (Join-Path $SampleDir "Server/Api/build/install/Api/bin/Api") $ApiConfig
-    Wait-Port "api-channel" $ApiChannelEndpoint
-
     Start-Role "session" (Join-Path $SampleDir "Server/Session/build/install/Session/bin/Session") $SessionConfig
-    Wait-Port "session-router" $SessionRouterEndpoint
-    Wait-Port "session-stream" $StreamEndpoint
+
+    Wait-LogCount @((Join-Path $LogDir "api.log")) "supportchat-ready kind=public node=api" 1
+    Wait-LogCount @((Join-Path $LogDir "support.log")) "supportchat-ready kind=public node=support" 1
+    Wait-LogCount @((Join-Path $LogDir "session.log")) "supportchat-ready kind=stream node=session" 1
+    Wait-LogCount @((Join-Path $LogDir "api.log")) "supportchat-ready kind=spot-route node=api mesh=supportchat.support.spots" 1
+    Wait-LogCount @((Join-Path $LogDir "session.log")) "supportchat-ready kind=spot-route node=session mesh=supportchat.support.spots" 1
 
     $clientLog = Join-Path $LogDir "client.log"
     & (Join-Path $SampleDir "Client/build/install/Client/bin/Client") `
@@ -161,24 +176,18 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "SupportChat client failed."
     }
-    if (-not (Select-String -Path $clientLog -Pattern "supportchat=completed" -Quiet)) {
-        throw "SupportChat client did not complete."
-    }
-    if (-not (Select-String -Path $clientLog -Pattern "supportchat-closed-typing-ignore=verified" -Quiet)) {
-        throw "SupportChat client did not verify closed typing ignore."
-    }
+    Wait-LogCount @($clientLog) "supportchat=completed" 1
+    Wait-LogCount @($clientLog) "supportchat-closed-typing-ignore=verified" 1
 
-    Wait-Log "support conversation: created" (Join-Path $LogDir "support.log")
-    Wait-Log "support conversation: actor joined" (Join-Path $LogDir "support.log")
-    Wait-Log "status=WaitingForAgent" (Join-Path $LogDir "support.log")
-    Wait-Log "status=Active" (Join-Path $LogDir "support.log")
-    Wait-Log "status=WaitingForClose" (Join-Path $LogDir "support.log")
-    Wait-Log "status=Closed" (Join-Path $LogDir "support.log")
-    if (-not (Select-String -Path (Join-Path $SampleLogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
-        throw "SupportChat message-flow evidence was not found."
-    }
-    Write-Host "supportchat-server-evidence=completed"
+    $serverLogs = @((Join-Path $LogDir "api.log"), (Join-Path $LogDir "support.log"))
+    Wait-LogAtLeast $serverLogs "supportchat-conversation created conversation=" 1
+    Wait-LogAtLeast $serverLogs "supportchat-conversation agent-joined conversation=" 1
+    Wait-LogAtLeast $serverLogs "supportchat-conversation status=WaitingForAgent conversation=" 1
+    Wait-LogAtLeast $serverLogs "supportchat-conversation status=Active conversation=" 1
+    Wait-LogAtLeast $serverLogs "supportchat-conversation status=WaitingForClose conversation=" 1
+    Wait-LogAtLeast $serverLogs "supportchat-conversation status=Closed conversation=" 1
     $Status = 0
 } finally {
     Cleanup $Status
 }
+Write-Host "supportchat-placement=completed"

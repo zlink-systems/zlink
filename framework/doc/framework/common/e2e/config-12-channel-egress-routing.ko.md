@@ -71,8 +71,8 @@ internal retry count와 log 순서는 판정에 사용하지 않는다.
 - 절차: Session이 `game.play` request를, Play가 `game.session` request를 각각 한 번 보낸다.
 - 검증: 각 request는 상대 역할의 marker가 포함된 reply를 하나만 받는다. 두 handler는 자기 request를
   각각 한 번 처리하며 다른 역할의 handler에는 같은 operation ID가 기록되지 않는다.
-- 세부 동작: [Channel topology §4.2](../spec/server/07-channel-topology.ko.md)와
-  [Channel messaging §3.2](../spec/server/08-channel-messaging.ko.md)를 검증한다.
+- 세부 동작: [Channel topology §4.2](../spec/server/02-channel-transport/01-channel-topology.ko.md)와
+  [Channel messaging §3.2](../spec/server/02-channel-transport/02-channel-messaging.ko.md)를 검증한다.
 
 #### CH-E2E-02 Handler가 다른 topology의 Channel을 호출한다
 
@@ -89,7 +89,7 @@ request의 reply가 섞이면 원래 caller가 다른 operation의 결과를 받
   Workflow를 순서대로 요청하고 두 결과를 원래 reply에 넣는다.
 - 검증: Audit과 Workflow handler는 해당 ID를 각각 한 번 처리한다. Session은 두 downstream 결과가
   포함된 reply 하나를 받고 별도 unsolicited message를 받지 않는다.
-- 세부 동작: [ClientServer Channel §6.2](../spec/server/09-client-server-channel.ko.md)의
+- 세부 동작: [ClientServer Channel §6.2](../spec/server/02-channel-transport/03-client-server-channel.ko.md)의
   nested request와 reply 구분을 검증한다.
 
 #### CH-E2E-03 Spot callback과 timer에서 ClientServer request를 보낸다
@@ -108,8 +108,8 @@ Spot callback이 request를 기다리거나 timer가 같은 Spot 상태를 변�
 - 검증: Application evidence는 `handler-start, workflow-reply, handler-end, timer-start,
   workflow-reply, timer-end` 순서이며 sequence는 단계마다 한 번 증가한다. Timer 결과를 고정 sleep으로
   추정하지 않는다.
-- 세부 동작: [비동기 실행 정책 §2](../spec/server/05-async-execution-policy.ko.md)과
-  [ClientServer Channel §6.2](../spec/server/09-client-server-channel.ko.md)를
+- 세부 동작: [비동기 실행 정책 §2](../spec/server/01-execution/README.ko.md)과
+  [ClientServer Channel §6.2](../spec/server/02-channel-transport/03-client-server-channel.ko.md)를
   검증한다.
 
 #### CH-E2E-06 같은 ChannelName을 여러 송신 경로에 등록하면 시작하지 못한다
@@ -127,7 +127,7 @@ Spot callback이 request를 기다리거나 timer가 같은 Spot 상태를 변�
   사용하는 정상 host를 시작한다.
 - 검증: Negative host는 ready가 되지 않고 public configuration error로 종료된다. 정상 host는 두
   Channel이 ready가 되고 각각 한 번 호출할 수 있다.
-- 세부 동작: [Channel topology §4.4](../spec/server/07-channel-topology.ko.md)를
+- 세부 동작: [Channel topology §4.4](../spec/server/02-channel-transport/01-channel-topology.ko.md)를
   검증한다.
 
 #### CH-E2E-07A 등록하지 않은 ChannelName은 NotFound다
@@ -142,7 +142,7 @@ Process에 송신 경로가 없는 이름을 호출할 때 다른 RouteMesh나 C
 - 시작 조건: Caller process에 `missing.channel`을 어떤 topology에도 등록하지 않는다.
 - 절차: Caller endpoint가 `missing.channel` request를 한 번 시작한다.
 - 검증: Public error kind는 `NotFound`이며 모든 역할 handler evidence에 operation ID가 없다.
-- 세부 동작: [Channel messaging §3.3](../spec/server/08-channel-messaging.ko.md)을 검증한다.
+- 세부 동작: [Channel messaging §3.3](../spec/server/02-channel-transport/02-channel-messaging.ko.md)을 검증한다.
 
 #### CH-E2E-07B Local Server role만 있어도 remote member를 호출한다
 
@@ -158,7 +158,7 @@ RouteMesh Channel의 Server role은 handler를 제공하면서 같은 Channel me
 - 절차: 첫 API server의 application endpoint가 `game.api` request를 20번 시작한다.
 - 검증: 각 request는 reply 하나를 받고, 적어도 하나는 다른 process의 handler가 처리한다. Handler count
   합계는 20이며 operation ID 중복이 없다.
-- 세부 동작: [Channel topology §4.2](../spec/server/07-channel-topology.ko.md)를
+- 세부 동작: [Channel topology §4.2](../spec/server/02-channel-transport/01-channel-topology.ko.md)를
   검증한다.
 
 #### CH-E2E-07C Known target에 연결할 수 없으면 Unavailable이다
@@ -175,8 +175,8 @@ Target membership은 알려졌지만 connection이 ready가 아니면 현재 사
 - 절차: Caller가 operation ID가 포함된 request를 한 번 보낸다.
 - 검증: Request는 `Unavailable` terminal 하나로 끝나고 어느 handler에도 operation ID가 기록되지 않는다.
   다른 RouteMesh나 ClientServer가 처리하면 실패다.
-- 세부 동작: [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)와
-  [§5](../spec/server/32-framework-error-model.ko.md)를 검증한다.
+- 세부 동작: [오류 모델 §4](../spec/server/00-foundation/07-framework-error-model.ko.md)와
+  [§5](../spec/server/00-foundation/07-framework-error-model.ko.md)를 검증한다.
 
 #### CH-E2E-11 ChannelName만으로 다른 MeshNode의 Server를 호출한다
 
@@ -192,7 +192,7 @@ Application은 target RID와 endpoint를 전달하지 않고 `ChannelName`으로
 - 절차: Session이 `game.api` request와 send를 각각 한 번 시작한다.
 - 검증: Request는 API 역할 marker가 포함된 reply를 받고 send marker는 API handler 한 곳에 한 번
   기록된다. Caller endpoint는 MeshName, RID와 endpoint를 입력으로 받지 않는다.
-- 세부 동작: [Channel messaging §3.2](../spec/server/08-channel-messaging.ko.md)의
+- 세부 동작: [Channel messaging §3.2](../spec/server/02-channel-transport/02-channel-messaging.ko.md)의
   ChannelName select-one을 검증한다.
 
 ### Track B — ClientServer target을 선택하고 lifecycle을 처리
@@ -210,7 +210,7 @@ Application은 target RID와 endpoint를 전달하지 않고 `ChannelName`으로
 - 절차: Workflow caller가 서로 다른 operation ID의 request 800개를 순차 또는 제한된 concurrency로 보낸다.
 - 검증: 800개가 모두 reply 하나를 받고 handler count 합계가 800이다. Weight 300 server의 처리 비율은
   65~85%다.
-- 세부 동작: [ClientServer Channel §5](../spec/server/09-client-server-channel.ko.md)를
+- 세부 동작: [ClientServer Channel §5](../spec/server/02-channel-transport/03-client-server-channel.ko.md)를
   검증한다.
 
 #### CH-E2E-04B Draining server는 신규 request에서 제외한다
@@ -228,7 +228,7 @@ Drain은 이미 받은 request를 마치게 하면서 신규 request 선택을 �
   시작한 뒤 신규 request 50개를 보낸다. 마지막으로 A handler signal을 해제한다.
 - 검증: 첫 request는 A의 reply로 한 번 완료된다. 신규 50개는 모두 B가 처리하며 A에는 추가 marker가
   없다.
-- 세부 동작: [ClientServer Channel §7](../spec/server/09-client-server-channel.ko.md)을
+- 세부 동작: [ClientServer Channel §7](../spec/server/02-channel-transport/03-client-server-channel.ko.md)을
   검증한다.
 
 #### CH-E2E-04C Server 재시작 뒤 신규 request를 처리한다
@@ -246,7 +246,7 @@ Server process가 재시작되면 이전 lifecycle의 connection과 reply는 더
   시작하고 ready가 확인되는 즉시 새 operation ID의 request를 한 번 보낸다.
 - 검증: 새 request는 재시작한 server의 lifecycle marker가 포함된 reply 하나를 받는다. 이전 process의
   marker가 새 request evidence에 나타나지 않는다.
-- 세부 동작: [ClientServer Channel §8](../spec/server/09-client-server-channel.ko.md)을 검증한다.
+- 세부 동작: [ClientServer Channel §8](../spec/server/02-channel-transport/03-client-server-channel.ko.md)을 검증한다.
 
 #### CH-E2E-05 Client role이 없는 process는 ClientServer request를 시작하지 못한다
 
@@ -262,7 +262,7 @@ ClientServer에서는 Client role을 등록한 process만 server connection과 �
 - 절차: Negative process와 정상 caller가 각각 request를 한 번 시작한다.
 - 검증: Negative process의 request는 `NotConfigured`이며 handler가 실행되지 않는다. 정상 caller의 request는
   Workflow handler에서 한 번 처리된다.
-- 세부 동작: [ClientServer Channel §3](../spec/server/09-client-server-channel.ko.md)의
+- 세부 동작: [ClientServer Channel §3](../spec/server/02-channel-transport/03-client-server-channel.ko.md)의
   role 책임을 검증한다.
 
 #### CH-E2E-10 ClientServer one-way send는 reply를 만들지 않는다
@@ -277,7 +277,7 @@ One-way send는 ready server 하나에 message를 제출하며 request reply를 
 - 절차: Caller가 고유 marker의 send를 한 번 제출하고 public handler evidence를 bounded polling한다.
 - 검증: Send public terminal은 성공하고 server 한 곳의 handler에 marker가 한 번 기록된다. Client에는
   request completion이나 unsolicited payload가 없다.
-- 세부 동작: [ClientServer Channel §6](../spec/server/09-client-server-channel.ko.md)을
+- 세부 동작: [ClientServer Channel §6](../spec/server/02-channel-transport/03-client-server-channel.ko.md)을
   검증한다.
 
 #### CH-E2E-12 같은 process의 Client와 Server도 일반 후보로 선택한다
@@ -294,7 +294,7 @@ Server도 remote Server와 같은 weight 규칙을 적용하며 무조건 우선
 - 절차: A의 application endpoint가 request 400개를 보낸다.
 - 검증: 400개가 모두 reply 하나를 받고 local과 remote handler가 각각 35~65%를 처리한다. Handler count
   합계는 400이며 local 호출에도 remote와 같은 application result가 적용된다.
-- 세부 동작: [ClientServer Channel §5.1](../spec/server/09-client-server-channel.ko.md)을
+- 세부 동작: [ClientServer Channel §5.1](../spec/server/02-channel-transport/03-client-server-channel.ko.md)을
   검증한다.
 
 ### Track C — Channel handler가 다른 public target을 호출
@@ -315,8 +315,8 @@ operation의 identity와 reply가 섞이면 원래 ClientServer request가 잘�
   request를 순서대로 실행한다.
 - 검증: Spot과 Actor handler는 같은 operation ID를 각각 한 번 처리한다. Workflow caller는 두 결과가
   포함된 reply 하나를 받으며 별도 payload를 받지 않는다.
-- 세부 동작: [ClientServer Channel §6.2](../spec/server/09-client-server-channel.ko.md)와
-  [Spot messaging](../spec/server/12-spot-messaging.ko.md)을 검증한다.
+- 세부 동작: [ClientServer Channel §6.2](../spec/server/02-channel-transport/03-client-server-channel.ko.md)와
+  [Spot messaging](../spec/server/03-spot-actor/02-spot-messaging.ko.md)을 검증한다.
 
 ### Track D — Remote listener 주소 확정
 
@@ -336,8 +336,8 @@ Framework는 확정된 port와 `AdvertiseHost`를 조합하여 공개해야 한�
   대응하는 remote client가 각 topology의 정상 message를 한 번 보낸다.
 - 검증: 모든 actual port는 0이 아니며 advertised endpoint에는 wildcard host와 port 0이 없다. 각 remote
   client가 대응 handler 또는 subscriber result를 받으며 다른 topology의 endpoint로 연결되지 않는다.
-- 세부 동작: [Network listener identity §4](../spec/server/10-network-listener-identity.ko.md)와
-  [§5](../spec/server/10-network-listener-identity.ko.md)를 검증한다.
+- 세부 동작: [Network listener identity §4](../spec/server/02-channel-transport/04-network-listener-identity.ko.md)와
+  [§5](../spec/server/02-channel-transport/04-network-listener-identity.ko.md)를 검증한다.
 
 ## 5. 완료 기준
 

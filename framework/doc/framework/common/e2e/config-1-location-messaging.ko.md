@@ -102,8 +102,8 @@ request의 reply를 받는가.
 - 검증: Client는 요청 marker와 선택된 provider RID가 들어 있는 `ProfileLookupRes`를 받는다. Provider
   A 또는 B 한 곳의 public application evidence에 같은 marker가 정확히 한 번 기록되고 다른
   provider에는 기록되지 않는다. Consumer의 public status에는 두 peer와 ready target 두 개가 있다.
-- 세부 동작: [RouteMesh topology §6](../spec/server/07-channel-topology.ko.md)과
-  [runtime monitoring §2.2](../spec/server/24-runtime-monitoring.ko.md)를 검증한다.
+- 세부 동작: [RouteMesh topology §6](../spec/server/02-channel-transport/01-channel-topology.ko.md)과
+  [runtime monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.ko.md)를 검증한다.
 
 #### RM-A2 Manual endpoint로 provider를 연결한다
 
@@ -122,8 +122,8 @@ automatic topology와 같은 identity 확인을 수행하고, 양쪽이 동시�
   endpoint를 등록하고 동시에 시작한다. 각 반복에서 ready peer가 하나가 된 뒤 profile 조회를 호출한다.
 - 검증: 두 반복 모두 client가 같은 의미의 `ProfileLookupRes`를 받으며 provider handler는 한 번만
   실행된다. 양방향 반복에서도 consumer의 public status에는 해당 RID의 ready peer가 하나만 나타난다.
-- 세부 동작: [RouteMesh topology §5.1](../spec/server/07-channel-topology.ko.md)과
-  [§6](../spec/server/07-channel-topology.ko.md)의 Manual topology 계약을 검증한다.
+- 세부 동작: [RouteMesh topology §5.1](../spec/server/02-channel-transport/01-channel-topology.ko.md)과
+  [§6](../spec/server/02-channel-transport/01-channel-topology.ko.md)의 Manual topology 계약을 검증한다.
 
 #### RM-A3 Object Client pair의 connection 필요 여부
 
@@ -146,9 +146,9 @@ Object Client 두 개는 Actor나 Spot을 host하지 않으므로 object traffic
   뒤 두 구성은 peer state를 `ready`로 표시하고 ready peer 수를 `1`로 제공한다. Weight `0`은 새
   Channel target 선택에서는 제외되지만 Server membership과 connection 필요 여부를 없애지 않는다.
   `not_required`를 `not_connected` 또는 topology 장애로 표시하면 실패다.
-- 세부 동작: [RouteMesh topology §4.2](../spec/server/07-channel-topology.ko.md),
-  [§5.1](../spec/server/07-channel-topology.ko.md)과
-  [runtime monitoring §2.2](../spec/server/24-runtime-monitoring.ko.md)를 검증한다.
+- 세부 동작: [RouteMesh topology §4.2](../spec/server/02-channel-transport/01-channel-topology.ko.md),
+  [§5.1](../spec/server/02-channel-transport/01-channel-topology.ko.md)과
+  [runtime monitoring §2.2](../spec/server/06-observability/01-runtime-monitoring.ko.md)를 검증한다.
 
 #### RM-A4 Provider replacement에 새 RID를 사용한다
 
@@ -168,8 +168,8 @@ Automatic topology의 RID는 process lifecycle을 구분한다. 같은 applicati
 - 검증: Public status에 나타난 v2 RID의 UUID suffix는 v1과 다르고 lowercase canonical UUID v4
   형식이다. 교체 뒤 request는 v2의 public application evidence에만 한 번 기록된다. Consumer를
   재시작하지 않으며 public status에 v1이 ready peer나 target으로 남으면 실패다.
-- 세부 동작: [MeshNode §3.1](../spec/server/13-mesh-node.ko.md)과
-  [transport liveness §6](../spec/server/29-transport-liveness.ko.md)을 검증한다.
+- 세부 동작: [MeshNode §3.1](../spec/server/03-spot-actor/03-mesh-node.ko.md)과
+  [transport liveness §6](../spec/server/02-channel-transport/05-transport-liveness.ko.md)을 검증한다.
 
 #### RM-A6 서로 다른 RouteMesh를 격리한다
 
@@ -187,7 +187,7 @@ provider에서만 처리되는가.
   endpoint를 한 번씩 호출한다. 그 뒤 profile provider 하나만 정상 종료하고 두 endpoint를 다시 호출한다.
 - 검증: 각 marker는 해당 Mesh의 provider evidence에만 기록된다. Profile provider 제거는
   `workflow-mesh` status, ready target 수와 handler evidence를 바꾸지 않는다.
-- 세부 동작: [RouteMesh topology §3](../spec/server/07-channel-topology.ko.md)의 MeshName
+- 세부 동작: [RouteMesh topology §3](../spec/server/02-channel-transport/01-channel-topology.ko.md)의 MeshName
   격리 계약을 검증한다.
 
 #### RM-A7 Global Actor·Spot identity 충돌
@@ -202,7 +202,7 @@ Actor ID와 Spot ID는 Mesh별 주소가 아니라 Location Store namespace 전�
 - 시작 조건: `profile-mesh`와 `workflow-mesh`의 Object owner가 같은 stable Actor·User Spot type을 제공하고 대상 ID는 Missing이다.
 - 절차: 두 역할 server가 같은 Actor ID와 Spot ID로 public GetOrCreate를 동시에 호출한다. 각 terminal 뒤 manager `Find`와 global ID direct request를 실행한다.
 - 검증: ID별로 current ref 하나가 반환되고 direct request는 그 ref의 owner에서만 한 번 처리된다. 다른 type·kind를 요청한 operation은 계약된 mismatch result로 끝나며 두 번째 object를 만들지 않는다.
-- 세부 동작: [Location runtime](../spec/server/21-location-runtime.ko.md)과 [Spot 주소 messaging](../spec/server/16-spot-address-messaging.ko.md)을 검증한다.
+- 세부 동작: [Location runtime](../spec/server/05-location-relocation/01-location-runtime.ko.md)과 [Spot 주소 messaging](../spec/server/03-spot-actor/06-spot-address-messaging.ko.md)을 검증한다.
 
 ### Track B — Provider 수와 lifecycle 변경
 
@@ -221,7 +221,7 @@ request를 처리하는가.
   ready target 수가 2가 된 뒤 고유 marker를 가진 request 40개를 보낸다.
 - 검증: 추가 전 marker는 A에만 있다. 추가 뒤에는 A와 B가 각각 한 건 이상 처리하고 두 provider의
   handler count 합이 40이다. Client request 40개는 모두 reply 하나로 끝난다.
-- 세부 동작: [RouteMesh topology §7](../spec/server/07-channel-topology.ko.md)의
+- 세부 동작: [RouteMesh topology §7](../spec/server/02-channel-transport/01-channel-topology.ko.md)의
   ready target 선택을 검증한다.
 
 #### RM-B2 Provider를 정상 종료한 뒤 target에서 제외한다
@@ -239,8 +239,8 @@ Provider가 정상 종료되면 Framework는 해당 provider를 신규 Channel t
 - 검증: 종료 뒤 보낸 20개는 모두 A evidence에 정확히 한 번 기록되고 client는 모두 정상 reply를
   받는다. B에는 종료 뒤 marker가 없으며 consumer의 public status에는 B가 ready peer나 target으로
   남지 않는다.
-- 세부 동작: [MeshNode §8](../spec/server/13-mesh-node.ko.md)과
-  [transport liveness §7](../spec/server/29-transport-liveness.ko.md)을 검증한다.
+- 세부 동작: [MeshNode §8](../spec/server/03-spot-actor/03-mesh-node.ko.md)과
+  [transport liveness §7](../spec/server/02-channel-transport/05-transport-liveness.ko.md)을 검증한다.
 
 #### RM-B3 Provider crash 뒤 남은 provider를 사용한다
 
@@ -262,9 +262,9 @@ in-flight request는 B에서 자동 재실행되지 않는가.
 - 검증: In-flight request는 `Unavailable` 또는 설정한 deadline의 `DeadlineExceeded`로 한 번만 끝나며
   B evidence에는 같은 marker가 없다. A 제외 뒤 보낸 20개는 모두 B에서 한 번씩 처리되고 정상 reply를
   받는다. Consumer를 재시작하지 않으며 무한 대기나 자동 replay가 있으면 실패다.
-- 세부 동작: [장애 대응 §3](../spec/server/31-failure-failover-policy.ko.md),
-  [transport liveness §6](../spec/server/29-transport-liveness.ko.md)과
-  [오류 모델 §5](../spec/server/32-framework-error-model.ko.md)를 검증한다.
+- 세부 동작: [장애 대응 §3](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md),
+  [transport liveness §6](../spec/server/02-channel-transport/05-transport-liveness.ko.md)과
+  [오류 모델 §5](../spec/server/00-foundation/07-framework-error-model.ko.md)를 검증한다.
 
 ### Track C — Ready connection에서 message를 처리
 
@@ -284,8 +284,8 @@ message를 각각 한 번 기록하는가.
   완료된 뒤 provider의 bounded evidence wait로 command 처리를 별도로 기다린다.
 - 검증: Request client는 marker와 provider RID가 담긴 reply를 받는다. Send client는 reply payload
   없이 정상 완료된다. Provider request와 command evidence에는 각 marker가 정확히 한 번 기록된다.
-- 세부 동작: [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)와
-  [§5](../spec/server/32-framework-error-model.ko.md)를 검증한다.
+- 세부 동작: [오류 모델 §4](../spec/server/00-foundation/07-framework-error-model.ko.md)와
+  [§5](../spec/server/00-foundation/07-framework-error-model.ko.md)를 검증한다.
 
 #### RM-C2 RID를 지정한 Node direct request
 
@@ -302,8 +302,8 @@ message를 각각 한 번 기록하는가.
   snapshot에 없는 `api-missing` RID로 같은 request를 보낸다.
 - 검증: 첫 request는 B evidence에만 한 번 기록되고 B RID가 담긴 reply를 받는다. 두 번째 request는
   `NotFound`로 한 번만 끝나며 어느 provider handler도 실행하지 않는다.
-- 세부 동작: [Channel messaging §3.1](../spec/server/08-channel-messaging.ko.md)과
-  [오류 모델 §5](../spec/server/32-framework-error-model.ko.md)를 검증한다.
+- 세부 동작: [Channel messaging §3.1](../spec/server/02-channel-transport/02-channel-messaging.ko.md)과
+  [오류 모델 §5](../spec/server/00-foundation/07-framework-error-model.ko.md)를 검증한다.
 
 #### RM-C4 Timeout 뒤 late reply를 버린다
 
@@ -322,7 +322,7 @@ reply를 다음 request의 결과로 사용하거나 끝난 request를 두 번�
   evidence wait로 확인한다.
 - 검증: 첫 request는 `DeadlineExceeded`로 한 번만 끝난다. 뒤의 두 request는 각 marker와 일치하는
   reply를 받는다. 늦은 reply가 client 결과를 추가하거나 다른 correlation marker에 연결되면 실패다.
-- 세부 동작: [오류 모델 §5](../spec/server/32-framework-error-model.ko.md)의 timeout과
+- 세부 동작: [오류 모델 §5](../spec/server/00-foundation/07-framework-error-model.ko.md)의 timeout과
   late reply 계약을 검증한다.
 
 #### RM-C5 Handler가 없는 message를 처리한다
@@ -343,9 +343,9 @@ provider가 받은 dispatch 결과를 application evidence에 기록한다.
   `reply_error`가 기록된다. Unknown send는 reply payload 없이 끝나며 logger evidence에는
   `no_handler`와 `drop`이 기록된다. 두 message 모두 application handler 실행은 `0`건이다. 정상
   request는 영향 없이 reply를 받는다.
-- 세부 동작: [Channel messaging §5](../spec/server/08-channel-messaging.ko.md),
-  [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)와
-  [message-flow tracing §3.1](../spec/server/26-message-flow-tracing.ko.md)을 검증한다.
+- 세부 동작: [Channel messaging §5](../spec/server/02-channel-transport/02-channel-messaging.ko.md),
+  [오류 모델 §4](../spec/server/00-foundation/07-framework-error-model.ko.md)와
+  [message-flow tracing §3.1](../spec/server/06-observability/03-message-flow-tracing.ko.md)을 검증한다.
 
 #### RM-C7 Weight profile에 따라 provider를 선택한다
 
@@ -363,7 +363,7 @@ round-robin의 결정적 순서로 모든 request를 중복 없이 처리하는�
 - 검증: 각 profile에서 provider의 고유 marker 합과 client reply 수가 request 수와 같고 중복 marker가
   없다. Equal profile은 후보 식별자 순서에 따른 정확한 교대를, weighted profile은 spec의 smooth
   weighted round-robin이 정한 정확한 `3:1` 주기와 요청별 순서를 따른다.
-- 세부 동작: [Channel messaging §3.2](../spec/server/08-channel-messaging.ko.md)의
+- 세부 동작: [Channel messaging §3.2](../spec/server/02-channel-transport/02-channel-messaging.ko.md)의
   deterministic smooth weighted round-robin을 검증한다. 실행 중 weight 제외·복원은
   [Config 5 RL-B4](config-5-resilience-lifecycle.ko.md)가 검증한다.
 
@@ -386,8 +386,8 @@ scenario는 SS transport에 listener 상한을 추가하지 않고, 여러 크�
   request를 한 번 더 보낸다.
 - 검증: 각 payload request는 입력과 같은 길이와 checksum의 reply를 받고 provider handler가 한 번
   실행된다. 마지막 정상 request도 reply를 받으며, payload 일부만 전달된 evidence가 없다.
-- 세부 동작: [RouteMesh SS message 크기와 mailbox 상한](../spec/server/07-channel-topology.ko.md#8-routemesh-ss-message-크기와-mailbox-상한)의 SS 경계를 확인한다.
-  StreamNode 상한은 [STREAM session — Framework 내부 recv loop와 application 표면](../spec/server/19-stream-session.ko.md#4-framework-내부-recv-loop와-application-표면)에서
+- 세부 동작: [RouteMesh SS message 크기와 mailbox 상한](../spec/server/02-channel-transport/01-channel-topology.ko.md#11-routemesh-ss-message-크기와-mailbox-상한)의 SS 경계를 확인한다.
+  StreamNode 상한은 [STREAM session — Framework 내부 recv loop와 application 표면](../spec/server/04-session/01-stream-session.ko.md)에서
   별도로 정의한다.
 
 #### RM-C9 Application job queue capacity 뒤 수신을 재개한다
@@ -408,9 +408,9 @@ handler 시작 뒤 수신 재개와 정상 request 처리를 표시하는가.
 - 검증: Gate 동안 effective max는 1이고 reserved/queued가 1이며 capacity waiter가 관찰된다. Gate를 열면
   callback 첫 instruction에서 permit이 반환되어 두 request가 각각 정확히 한 번 처리된다. Drop이나 generic
   capacity error가 없고 public RouteMesh status는 ready를 유지한다.
-- 세부 동작: [Framework API §2.1](../spec/server/06-framework-api.ko.md),
-  [runtime monitoring §2.1](../spec/server/24-runtime-monitoring.ko.md)과
-  [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)를 검증한다.
+- 세부 동작: [Framework API §2.1](../spec/server/00-foundation/06-framework-api.ko.md),
+  [runtime monitoring §2.1](../spec/server/06-observability/01-runtime-monitoring.ko.md)과
+  [오류 모델 §4](../spec/server/00-foundation/07-framework-error-model.ko.md)를 검증한다.
 
 ## 5. 완료 조건
 

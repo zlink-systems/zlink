@@ -18,6 +18,8 @@ import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleSettings
+import systems.zlink.samples.kotlin.tictactoe.server.configuration.TicTacToeReadinessReporter
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.TicTacToeGameCreatedHandler
 
 
@@ -53,6 +55,16 @@ class PlayServerApplication {
     @Bean(destroyMethod = "close")
     fun locationStore(settings: SampleSettings): ZLinkRedisLocationStore =
         SampleLocationStore.create(settings)
+
+    @Bean(destroyMethod = "close")
+    fun ticTacToeReadinessReporter(
+        settings: SampleSettings,
+        meshes: ZLinkRouteMeshRuntime,
+    ): TicTacToeReadinessReporter = TicTacToeReadinessReporter.play(
+        settings.nodeId,
+        if (settings.nodeId == "play-a") "play-b" else "play-a",
+        meshes,
+    )
 
     @Bean
     fun ticTacToeJsonMapper(): ObjectMapper =

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Timers;
@@ -34,7 +35,7 @@ internal abstract partial class ZLinkSpotActivation :
     private readonly ZLinkSpotSubscriptionRegistry _subscriptions = new();
     private readonly ZLinkSpotTimerRegistry _timers;
     private readonly ZLinkSpotId _spotId;
-    private readonly object _lifecycleGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly SemaphoreSlim _membershipPublicationGate = new(1, 1);
     private ZLinkSpotActorHandlerRegistry? _actorHandlers;
     private bool _configurationOpen = true;

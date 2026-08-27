@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
@@ -5,7 +7,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     private readonly Action<string>? _connect;
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
     private readonly Action<string>? _disconnect;
-    private readonly object _disposeGate = new();
+    private readonly ZLinkStateLane _lane = new();
     private readonly HashSet<string> _manualConnections = new(StringComparer.Ordinal);
     private int _disposed;
     private Task? _disposeTask;
@@ -46,72 +48,91 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        Task task;
-        TaskCompletionSource? start = null;
-        lock (_disposeGate)
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
         {
-            if (_disposeTask is null)
-            {
-                Volatile.Write(ref _disposed, 1);
-                start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _disposeTask = DisposeCoreAsync(start.Task);
-            }
-            task = _disposeTask;
+            var spinner = new SpinWait();
+            Task? task;
+            while ((task = Volatile.Read(ref _disposeTask)) is null)
+                spinner.SpinOnce();
+            return new ValueTask(task);
         }
-        start?.TrySetResult();
-        return new ValueTask(task);
+
+        Volatile.Write(ref _disposeTask, completion.Task);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        StartDisposeCore(started.Task, completion);
+        started.TrySetResult();
+        return new ValueTask(completion.Task);
     }
 
-    private async Task DisposeCoreAsync(Task started)
+    private void StartDisposeCore(Task started, TaskCompletionSource completion)
     {
-        await started.ConfigureAwait(false);
-        var failures = new ZLinkFailureCollector();
-        failures.Capture(DetachManualConnections);
-        failures.Capture(DetachReceiveFlow);
-        await _connectionGate.WaitAsync().ConfigureAwait(false);
+        if (ExecutionContext.IsFlowSuppressed())
+        {
+            _ = DisposeCoreAsync(started, completion);
+            return;
+        }
+
+        using (ExecutionContext.SuppressFlow())
+            _ = DisposeCoreAsync(started, completion);
+    }
+
+    private async Task DisposeCoreAsync(Task started, TaskCompletionSource completion)
+    {
         try
         {
-            await failures.CaptureAsync(Socket.DisposeAsync).ConfigureAwait(false);
+            await started.ConfigureAwait(false);
+            var failures = new ZLinkFailureCollector();
+            IDisposable? attachment = null;
+            await failures.CaptureAsync(async () =>
+            {
+                attachment = await _lane.RunAsync(DetachManualConnectionsCore)
+                    .ConfigureAwait(false);
+            }).ConfigureAwait(false);
+            failures.Capture(() => attachment?.Dispose());
+            failures.Capture(DetachReceiveFlow);
+            await _connectionGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await failures.CaptureAsync(Socket.DisposeAsync).ConfigureAwait(false);
+            }
+            finally
+            {
+                _connectionGate.Release();
+            }
+            failures.Capture(_connectionGate.Dispose);
+            failures.Capture(ReceiveGate.Dispose);
+            failures.ThrowIfAny();
+            completion.TrySetResult();
         }
-        finally
+        catch (Exception error)
         {
-            _connectionGate.Release();
+            completion.TrySetException(error);
         }
-        failures.Capture(_connectionGate.Dispose);
-        failures.Capture(ReceiveGate.Dispose);
-        failures.ThrowIfAny();
     }
 
     internal void OwnManualConnectionAttachment(IDisposable attachment)
     {
         ArgumentNullException.ThrowIfNull(attachment);
-        IDisposable? previous = null;
-        var dispose = false;
-        lock (_disposeGate)
+        var (previous, dispose) = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (Volatile.Read(ref _disposed) != 0)
-                dispose = true;
-            else
-            {
-                previous = _manualConnectionAttachment;
-                _manualConnectionAttachment = attachment;
-            }
-        }
+                return ((IDisposable?)null, true);
+            var replaced = _manualConnectionAttachment;
+            _manualConnectionAttachment = attachment;
+            return (replaced, false);
+        }));
         previous?.Dispose();
         if (!dispose) return;
         attachment.Dispose();
         throw new ObjectDisposedException(nameof(ZLinkChannelRuntimeBundle));
     }
 
-    private void DetachManualConnections()
+    private IDisposable? DetachManualConnectionsCore()
     {
-        IDisposable? attachment;
-        lock (_disposeGate)
-        {
-            attachment = _manualConnectionAttachment;
-            _manualConnectionAttachment = null;
-        }
-        attachment?.Dispose();
+        var attachment = _manualConnectionAttachment;
+        _manualConnectionAttachment = null;
+        return attachment;
     }
 
     private void DetachReceiveFlow() =>
@@ -122,18 +143,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         _connectionGate.Wait();
         try
         {
-            ThrowIfDisposed();
-            if (!_manualConnections.Add(endpoint)) return;
-            try
-            {
-                (_connect ?? throw new InvalidOperationException(
-                    "This channel socket does not support connections."))(endpoint);
-            }
-            catch
-            {
-                _manualConnections.Remove(endpoint);
-                throw;
-            }
+            AwaitStateLane(_lane.RunAsync(() => ConnectManualCore(endpoint)));
         }
         finally
         {
@@ -146,22 +156,43 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         _connectionGate.Wait();
         try
         {
-            ThrowIfDisposed();
-            if (!_manualConnections.Remove(endpoint)) return;
-            try
-            {
-                (_disconnect ?? throw new InvalidOperationException(
-                    "This channel socket does not support disconnections."))(endpoint);
-            }
-            catch
-            {
-                _manualConnections.Add(endpoint);
-                throw;
-            }
+            AwaitStateLane(_lane.RunAsync(() => DisconnectManualCore(endpoint)));
         }
         finally
         {
             _connectionGate.Release();
+        }
+    }
+
+    private void ConnectManualCore(string endpoint)
+    {
+        ThrowIfDisposed();
+        if (!_manualConnections.Add(endpoint)) return;
+        try
+        {
+            (_connect ?? throw new InvalidOperationException(
+                "This channel socket does not support connections."))(endpoint);
+        }
+        catch
+        {
+            _manualConnections.Remove(endpoint);
+            throw;
+        }
+    }
+
+    private void DisconnectManualCore(string endpoint)
+    {
+        ThrowIfDisposed();
+        if (!_manualConnections.Remove(endpoint)) return;
+        try
+        {
+            (_disconnect ?? throw new InvalidOperationException(
+                "This channel socket does not support disconnections."))(endpoint);
+        }
+        catch
+        {
+            _manualConnections.Add(endpoint);
+            throw;
         }
     }
 
@@ -170,5 +201,11 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         if (Volatile.Read(ref _disposed) != 0)
             throw new ObjectDisposedException(nameof(ZLinkChannelRuntimeBundle));
     }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
+        operation.GetAwaiter().GetResult();
 
 }

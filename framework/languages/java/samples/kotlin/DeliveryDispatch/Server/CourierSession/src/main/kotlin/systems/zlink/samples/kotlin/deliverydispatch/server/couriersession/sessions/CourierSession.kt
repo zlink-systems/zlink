@@ -69,6 +69,7 @@ class CourierSession(
         sessionContext.client()
             .reply(BindCourierSessionRes(request.courierId, snapshot, sessionContext.sessionId()))
             .submit()
+        println("deliverydispatch-courier bound courier=${request.courierId}")
     }
 
     private suspend fun findOrEnsureActor(courierId: String): ActorRef =

@@ -2,9 +2,9 @@
 
 #include "../Configuration/evidence_store.hpp"
 #include "../Configuration/sample_names.hpp"
+#include "../Configuration/sample_readiness.hpp"
 #include "../Configuration/sample_timings.hpp"
 #include "../Configuration/sample_configuration.hpp"
-#include "Handlers/route_ready_handler.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink/locations/redis.hpp>
@@ -235,8 +235,8 @@ class dispatch_worker_t
             co_await _statuses.publish (offer.request, delivery_status_t::failed,
                                         _couriers.candidates ().back ());
             _state.close (offer.request.delivery_id);
-            std::cerr << "deliverydispatch dispatch: delivery=" << offer.request.delivery_id
-                      << " was rejected by all couriers\n";
+            std::cerr << "deliverydispatch-dispatch failed delivery=" << offer.request.delivery_id
+                      << " reason=candidates-exhausted\n";
             co_return;
         }
         const auto &courier_id = _couriers.candidates ()[next_index];
@@ -348,7 +348,7 @@ class offer_delivery_result_handler_t
 class offer_deadline_sweeper_t final : public hosted_service_t
 {
   public:
-    void start (service_provider_t &services) override
+    task_t<void> start (service_provider_t &services) override
     {
         _state = &services.get_required<dispatch_state_t> ();
         _worker = std::make_unique<dispatch_worker_t> (make_worker (
@@ -357,6 +357,7 @@ class offer_deadline_sweeper_t final : public hosted_service_t
           services.get_required<channel_client_t> ()));
         _running.store (true);
         _thread = std::thread ([this] { run (); });
+        co_return;
     }
 
     void stop () noexcept override
@@ -390,8 +391,9 @@ class offer_deadline_sweeper_t final : public hosted_service_t
         for (auto &decision : pending.second) {
             auto offer = state.settle (decision.delivery_id, decision.attempt);
             if (!offer) {
-                std::cerr << "deliverydispatch dispatch: stale decision delivery="
-                          << decision.delivery_id << " attempt=" << decision.attempt << "\n";
+                std::cerr << "deliverydispatch-dispatch stale-decision-ignored delivery="
+                          << decision.delivery_id << " courier=" << decision.courier_id
+                          << " attempt=" << decision.attempt << "\n";
                 continue;
             }
             _work.push_back (settle (worker, *offer, std::move (decision)));
@@ -549,9 +551,16 @@ int main (int argc, char **argv)
     options.http ()
       .listen (topology.dispatch_api_http_url)
       .map_health ("/health")
-      .map_get<route_ready_handler_t> ("/ready")
       .map_post<create_delivery_http_handler_t> ("/deliveries")
       .map_post<server_assertion_http_handler_t> ("/self-check/assert");
     app.add_hosted_service (std::make_unique<offer_deadline_sweeper_t> ());
+    app.add_hosted_service (std::make_unique<route_readiness_service_t> (
+      sample_names_t::dispatch_node, sample_names_t::courier_actor_discovery));
+    app.add_hosted_service (std::make_unique<actor_route_readiness_service_t> (
+      sample_names_t::courier_actor_discovery, sample_names_t::courier_actor_instance_1,
+      sample_names_t::courier_actor_instance_1));
+    app.add_hosted_service (std::make_unique<actor_route_readiness_service_t> (
+      sample_names_t::courier_actor_discovery, sample_names_t::courier_actor_instance_2,
+      sample_names_t::courier_actor_instance_2));
     return app.run (argc, argv);
 }

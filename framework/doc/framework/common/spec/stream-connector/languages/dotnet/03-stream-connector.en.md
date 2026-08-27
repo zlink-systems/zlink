@@ -1,5 +1,5 @@
 <!-- framework-adapter-nav:start -->
-[Document list](../../../../../../README.en.md) | [Previous: .NET System Structure](../../../server/languages/dotnet/01-system-structure.en.md)
+[Document list](../../../../../../README.en.md) | [Previous: .NET System Structure](../../../server/languages/dotnet/interfaces/02-configuration-host.en.md)
 <!-- framework-adapter-nav:end -->
 
 [.NET spec table of contents](../../../server/languages/dotnet/README.en.md)
@@ -28,7 +28,7 @@ snapshot.
 - [package snapshot](../../../../../../../languages/dotnet/contract/packages/Systems.Zlink.Stream.Connector.package.txt)
 
 This document doesn't repeat listing the
-[snapshot](../../../server/01-glossary.en.md#snapshot)'s member — it fixes the
+[snapshot](../../../server/00-foundation/02-glossary.en.md#snapshot)'s member — it fixes the
 **surface structure and `.NET`-specific meaning.** The verification
 procedure is owned by [this document §15](#15-regression-test).
 
@@ -342,7 +342,7 @@ ends, cleans up the ambient flow.**
 
 The wire representation is owned by
 [Common Spec §4.2](../../32-stream-connector.en.md) and
-[flow-correlation](../../../server/27-flow-correlation.en.md).
+[flow-correlation](../../../server/06-observability/04-flow-correlation.en.md).
 
 ## 13. Metric
 
@@ -422,7 +422,7 @@ preview length **can't be negative.**
 
 | Test Case | Verification Standard |
 |---------------|-----------|
-| `StreamConnectorTests.ConnectorImplementationIsHiddenBehindPublicInterface` | The implementation type is hidden, and the [factory](../../../server/01-glossary.en.md#factory) returns the public interface. |
+| `StreamConnectorTests.ConnectorImplementationIsHiddenBehindPublicInterface` | The implementation type is hidden, and the [factory](../../../server/00-foundation/02-glossary.en.md#factory) returns the public interface. |
 | `StreamConnectorTests.ConnectorCallInterfacesMatchTheFrozenSurface` | Fixes the exact member of the lifecycle, send, request, and wait call. |
 | `StreamConnectorTests.ConnectorOptionsMatchTheFrozenDefaults` | Fixes the connector option's default value. |
 | `StreamConnectorTests.ManualDispatchRunsHandlerOnDispatchCaller` | The Manual callback runs on the dispatch caller. |
@@ -431,7 +431,7 @@ preview length **can't be negative.**
 | `StreamConnectorTests.RequestTimeoutRemovesPendingRequest` | Removes the pending request after timeout. |
 | `StreamConnectorTests.TcpTypedRequestCorrelatesResponse` | Keeps typed request and response correlation. |
 | `StreamConnectorTests.TypedConnectorUsesJsonByDefaultAndDecodeReply` | The typed default codec is JSON. |
-| `StreamConnectorTests.PacketNameAttributeIsUsedByDefault` | Uses the [packet name](../../../server/01-glossary.en.md#packet-name) attribute as the default identity. |
+| `StreamConnectorTests.PacketNameAttributeIsUsedByDefault` | Uses the [packet name](../../../server/00-foundation/02-glossary.en.md#packet-name) attribute as the default identity. |
 | `StreamConnectorTests.DisconnectEventCarriesTheFrozenCloseReasonContract` | Fixes the disconnect event's closed close reason. |
 | `StreamConnectorTests.SessionClosingPublishesServerDrainReasonAfterDisconnectedState` | Converts a session-closing frame to the `ServerDrain` reason. |
 | `StreamConnectorTests.SharedCloseFaultIsObservedByRepeatedCloseAndDispose` | Repeated close and dispose observe the same failure. |

@@ -79,6 +79,7 @@ function createContext(redisEndpoint) {
   }
   return {
     env,
+    lane: runnerOptions.lane,
     logDir,
     nodeRoot,
     redisEndpoint,
@@ -129,7 +130,22 @@ function createContext(redisEndpoint) {
         configPath
       ];
       if (entryName) args.push('--entry', entryName);
-      run(process.execPath, args, { cwd: sampleRoot, env });
+      //  Tee the browser scenario's output into browser-client.log as well as this runner's
+      //  stdout. The client's completion markers are only observable there, and a sample runner
+      //  must confirm them from a log rather than trusting the browser's own verdict.
+      const browserLog = path.join(logDir, 'browser-client.log');
+      const result = spawnSync(platformExecutable(process.execPath), args, {
+        cwd: sampleRoot,
+        env,
+        encoding: 'utf8'
+      });
+      if (result.error) throw result.error;
+      const captured = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      fs.writeFileSync(browserLog, captured, { mode: 0o600 });
+      process.stdout.write(captured);
+      if (result.status !== 0) {
+        throw new Error(`browser sample exited with ${result.status}. See ${browserLog}.`);
+      }
     },
     startBrowser(definition, entryName) {
       const completionSignalPath = path.join(runDir, 'browser-lifecycle-complete');
@@ -304,11 +320,17 @@ function removeRedisAttempt(containerId, name) {
 }
 
 function parseRunnerOptions(args) {
-  const options = { keepRunDir: false, redisImage: 'redis:7.2-alpine' };
+  const options = { keepRunDir: false, redisImage: 'redis:7.2-alpine', lane: undefined };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--keep-run-dir') {
       options.keepRunDir = true;
+      continue;
+    }
+    if (argument === '--lane') {
+      const value = args[++index];
+      if (!value || value.startsWith('--')) throw new Error('--lane <name> is required.');
+      options.lane = value;
       continue;
     }
     if (argument === '--redis-image') {

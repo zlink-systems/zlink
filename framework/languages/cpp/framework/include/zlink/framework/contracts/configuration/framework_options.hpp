@@ -1486,6 +1486,23 @@ class zlink_framework_options_t
         return _options->application_job_queue_resume_threshold_percent;
     }
 
+    zlink_framework_options_t &
+    set_session_replacement_callback_timeout (std::chrono::milliseconds timeout)
+    {
+        if (timeout <= std::chrono::milliseconds::zero ()) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "Session replacement callback timeout must be a positive whole-millisecond duration");
+        }
+        _options->session_replacement_callback_timeout = timeout;
+        return *this;
+    }
+
+    std::chrono::milliseconds session_replacement_callback_timeout () const noexcept
+    {
+        return _options->session_replacement_callback_timeout;
+    }
+
     location_options_t &configure_locations () { return _options->locations; }
 
     location_options_t location_options () const { return _options->locations; }

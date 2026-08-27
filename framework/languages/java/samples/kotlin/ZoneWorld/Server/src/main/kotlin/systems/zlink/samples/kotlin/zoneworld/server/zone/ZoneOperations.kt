@@ -104,7 +104,7 @@ class ZoneBootstrap(
                     "start=(${bot.x},${bot.y}), dir=(${bot.dirX},${bot.dirY})")
             }
         }
-        println("topology=ready node=${topology.nodeValue()} zones=${census.zoneIds()}")
+        println("topology=ready node=${topology.nodeValue()} zones=${census.zoneIds().joinToString(",")}")
     }
 }
 

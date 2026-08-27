@@ -11,11 +11,13 @@ import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.samples.bingo.server.configuration.SampleLocationStore;
 import systems.zlink.samples.bingo.server.configuration.SampleApplication;
+import systems.zlink.samples.bingo.server.configuration.BingoReadinessReporter;
 import systems.zlink.samples.bingo.server.session.sessions.BingoSession;
 import systems.zlink.samples.bingo.server.configuration.SampleNames;
 import systems.zlink.samples.bingo.server.configuration.SampleTopology;
 import systems.zlink.samples.bingo.server.configuration.BingoMetricsReporter;
 import io.micrometer.core.instrument.MeterRegistry;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 
 
 
@@ -61,5 +63,12 @@ public final class SessionServerApplication {
     @Bean(destroyMethod = "close")
     BingoMetricsReporter bingoMetricsReporter(MeterRegistry registry) {
         return new BingoMetricsReporter(registry, "session");
+    }
+
+    @Bean(destroyMethod = "close")
+    BingoReadinessReporter bingoReadinessReporter(
+        SampleTopology topology,
+        ZLinkRouteMeshRuntime meshes) {
+        return BingoReadinessReporter.session(topology, meshes);
     }
 }
