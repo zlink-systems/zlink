@@ -66,10 +66,10 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 
 | 언어 | 조율자 | 큐 primitive |
 |---|---|---|
-| dotnet | 이미 있음 | **공정성(owner time budget) 추가 필요** |
-| java | **신설** — Actor 큐를 Spot 조율자로 이관 | 이미 있음 |
-| cpp | **신설** — 이름 맵을 조율자로 | 용량·우선순위·공정성 **추가** |
-| node | 조율자 있음 — 큐 맵 보유 여부 확인 필요 | 확인 필요 |
+| dotnet | 있음 · **Actor·Session 조율자 개명 필요** | **공정성(owner time budget) 추가 필요** |
+| java | **3계층 모두 신설** — Actor 큐를 Spot 조율자로 이관 | 이미 있음 |
+| cpp | **3계층 모두 신설** — 이름 맵을 조율자로 | 용량·우선순위·공정성 **추가** |
+| node | Spot·Session 있음 · **Actor는 만들지 않음**(단일 스레드) | `BoundedSerialScheduler` 정렬 |
 
 **구현은 별도 세션에서 진행한다.** 이름·라우팅·검증 항목은 [executor-naming-contract.ko.md](executor-naming-contract.ko.md)에 고정돼 있다.
 
@@ -99,6 +99,7 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 ① ~~실행기 계층~~ → **확정: (A) dotnet 조율 + java primitive** (위 확정 사항)
 ② 정본 언어 — **계층별로 나눈다**: lane primitive·조율자는 .NET, 큐 primitive·turn 경계는 java.
    [[reference-first-porting-policy]]의 ".NET 단일 정본"을 계층별 정본으로 **개정 필요**
-③ 범위 — Spot·Actor·Session 함께 권고, Channel은 별도
+③ ~~범위~~ → **확정: Spot·Actor·Session 셋 함께.** Channel은 transport 성격이라 별도.
+   단 셋의 소유 구조가 다르다 — **Spot만 큐 맵을 갖고 Actor·Session은 인스턴스당 큐 하나**다(계약서 §1.5 R-N1a). Spot 형태를 기계적으로 복사하지 않는다
 ④ 호환 경계 회수(dotnet 664 · cpp 456) — §7-1 이후 재측정
 ⑤ ~~node의 Actor별·Timer별 큐~~ → **확인 완료: 없다.** 단일 스레드라 Actor 간 병렬이 불가능하므로 결손이 아니라 일관된 설계다(계약서 §7 R-N13)

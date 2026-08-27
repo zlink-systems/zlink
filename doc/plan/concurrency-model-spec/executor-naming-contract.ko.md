@@ -74,6 +74,71 @@ Timer는 payload가 없어 회계할 것이 없으므로 `SpotWide`에서 큐를
 
 ---
 
+## 1.5 Actor·Session 조율자 — 소유 단위가 다르다 (실측 2026-08-28)
+
+범위는 **Spot·Actor·Session 셋**이다(미결 ③ 확정). 다만 셋의 소유 구조가 같지 않다.
+
+### 실측
+
+| 계층 | dotnet | java | cpp | node |
+|---|---|---|---|---|
+| Spot | `ZLinkSpotSerialExecutor` 1,320 | 없음 | 없음 | `spot-serial-executor` 314 |
+| Actor | `ZLinkActorDispatchMailbox` 341 | 없음 | 없음 | 없음 |
+| Session | `ZLinkStreamSessionSerialExecutor` 111 | 없음 (`ZLinkStreamRuntime`의 `stateLane`) | 없음 (`stream_runtime.dispatch_queue`) | `session-serial-executor` 73 |
+
+**Spot과 결정적 차이**: Actor·Session 실행기는 **큐 맵이 없다. 인스턴스당 큐 하나**다.
+
+```csharp
+// dotnet ZLinkActorDispatchMailbox — Actor 하나당 인스턴스 하나
+private readonly ZLinkStateLane _lane = new();
+private readonly ZLinkSerialExecutionQueue _queue;   // ← 맵이 아니라 단수
+
+// dotnet ZLinkStreamSessionSerialExecutor — Session 하나당 인스턴스 하나
+private readonly ZLinkSerialExecutionQueue _queue;   // ← 단수
+private readonly ZLinkStateLane _lane = new();
+```
+
+Spot만 "Spot 1 + Actor N + Timer M"을 **소유**하므로 맵을 갖는다. Actor·Session은 자기 것
+하나만 갖고, 하위 소유 대상이 없다.
+
+### 규범
+
+**R-N1a.** 조율자는 **자기 계층의 직렬 단위 + 자신이 수명을 소유하는 하위 단위**만 갖는다.
+
+| 계층 | 소유 | 근거 |
+|---|---|---|
+| **Spot** | `spotQueue` + `actorQueues` + `timerQueues` + `executionMode` | Actor·Timer의 수명이 Spot에 종속 |
+| **Actor** | `actorQueue` (단수) | 하위 소유 대상 없음 |
+| **Session** | `sessionQueue` (단수) | 하위 소유 대상 없음 |
+
+**하위 단위가 없는 계층에 맵을 만들지 않는다.** Spot 형태를 기계적으로 복사하지 않는다.
+
+**R-N1b.** 정본 이름:
+
+| 계층 | 조율자 | 진입점 |
+|---|---|---|
+| Spot | `ZLinkSpotSerialExecutor` | §1.2의 4개 |
+| Actor | `ZLinkActorSerialExecutor` | `executeActor` · `executeLifecycle` |
+| Session | `ZLinkSessionSerialExecutor` | `executeApplication` · `executeControl` · `executeInfrastructure` · `executeFinal` |
+
+> dotnet 현행 `ZLinkActorDispatchMailbox` → `ZLinkActorSerialExecutor`로 개명한다.
+> "Mailbox"는 다른 계층과 어휘가 갈린다.
+> dotnet 현행 `ZLinkStreamSessionSerialExecutor` → `ZLinkSessionSerialExecutor`.
+> `Stream` 접두는 계층 이름과 중복이다.
+
+**R-N1c.** Session 진입점 4종은 dotnet 현행(`EnqueueApplication`·`EnqueueControl`·
+`EnqueueInfrastructure`·`EnqueueFinal`)을 정본으로 하되 **동사를 `execute`로 통일**한다.
+계층마다 `enqueue`/`execute`가 갈리지 않게 한다.
+
+**R-N1d.** java·cpp는 **세 계층 모두 조율자가 없다.** `ZLinkStreamRuntime`의 `stateLane`,
+`stream_runtime.dispatch_queue`처럼 런타임 안에 직접 들고 있다. **셋 다 신설한다.**
+
+**R-N1e.** node는 Spot·Session 조율자가 있고 Actor는 없다. **Actor 조율자를 신설하지 않는다** —
+단일 스레드라 Actor별 직렬 단위가 무의미하다(R-N13과 같은 근거). `executeActor`는 Spot
+조율자가 받아 `spotQueue`로 라우팅한다.
+
+---
+
 ## 2. 직렬 큐 primitive — `ZLinkSerialExecutionQueue`
 
 **정본: java `execution/ZLinkAsyncSerialQueue.java`의 책임 + dotnet의 이름**
@@ -182,12 +247,12 @@ snapshot = stateLane.run(() -> new ActorStateSnapshot(
 
 ## 6. 언어별 현행 대비 작업
 
-| 언어 | 조율자 | 큐 primitive | 기타 |
-|---|---|---|---|
-| **dotnet** | 이름·구조 **정본** 그대로 | `ownerTimeBudget` **추가**(R-N7) · 정책 주입(R-N5) | `_laneGate` lock → state lane(R-N2) |
-| **java** | **신설**. `ZLinkActorDispatchSerials.queues`를 조율자로 이관(R-N1) | 책임 **정본** 그대로. 클래스명만 `ZLinkSerialExecutionQueue`로 | 이미 state lane 소유 — 유지 |
-| **cpp** | **신설**. `spot_runtime` 이름 맵을 조율자로(R-N1) | 용량·우선순위·공정성 **추가**(R-N5·R-N7) | 조회 스냅샷 묶기(R-N9·R-N10) |
-| **node** | 있음(`spot-serial-executor.ts`). **큐 맵 없음** — §7 참조 | `ZLinkBoundedSerialScheduler` 확인 후 정렬 | turn 경계·lock 문제 없음 |
+| 언어 | Spot 조율자 | Actor 조율자 | Session 조율자 | 큐 primitive | 기타 |
+|---|---|---|---|---|---|
+| **dotnet** | **정본** 그대로 | **개명** `ActorDispatchMailbox`→`ActorSerialExecutor` | **개명** `StreamSessionSerialExecutor`→`SessionSerialExecutor` · 동사 `Enqueue*`→`Execute*` | `ownerTimeBudget` **추가**(R-N7) · 정책 주입(R-N5) | `_laneGate` lock → state lane(R-N2) |
+| **java** | **신설** — `ZLinkActorDispatchSerials.queues` 이관(R-N1) | **신설** | **신설** — `ZLinkStreamRuntime.stateLane`에서 분리 | 책임 **정본**. 클래스명만 `ZLinkSerialExecutionQueue`로 | 이미 state lane 소유 — 유지 |
+| **cpp** | **신설** — `spot_runtime` 이름 맵 이관(R-N1) | **신설** | **신설** — `stream_runtime.dispatch_queue`에서 분리 | 용량·우선순위·공정성 **추가**(R-N5·R-N7) | 조회 스냅샷 묶기(R-N9·R-N10) |
+| **node** | 있음 — 큐 맵 없음(§7) | **만들지 않음**(R-N1e) | 있음(`session-serial-executor` 73줄) | `ZLinkBoundedSerialScheduler` 정렬 | turn 경계·lock 문제 없음 |
 
 ---
 
@@ -224,6 +289,8 @@ node `spot-serial-executor.ts`는 **`scheduler` 하나만 갖고 `actorQueues`·
 **R-N14.** 구현 세션은 다음을 확인한다.
 
 1. 조율자 외에 Actor·Timer 큐를 소유하는 곳이 **0**인가 (R-N1)
+1a. **하위 소유 대상이 없는 계층(Actor·Session)에 큐 맵이 없는가** (R-N1a)
+1b. 세 계층 조율자 이름이 §1.5 표와 일치하는가. 동사가 `execute`로 통일됐는가 (R-N1b·R-N1c)
 2. `actorQueues`·`timerQueues` 맵이 lock이 아닌 state lane 소유인가 (R-N2)
 3. §1.2의 네 진입점 외 공개 API가 없는가 (R-N3)
 4. `ownerTimeBudget`이 4언어에 있는가 (R-N7)
