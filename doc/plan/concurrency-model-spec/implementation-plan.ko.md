@@ -67,7 +67,8 @@ primitive에는 채워야 할 것이 남아 있다.**
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
 | P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | 상수로 박힌 `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`을 정책 주입으로 바꾼다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs:7,8` | `ZLinkExecutionLanePolicy` 일곱 값이 주입된다 |
-| P1-6 | 큐에 owner FIFO의 count·byte 상한을 **신설**한다 — permit을 든 작업은 재지 않는다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 두 항목 통과 |
+| P1-6 | 큐에 owner FIFO의 count·byte 상한을 **신설**한다 — permit을 든 작업은 재지 않는다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 세 항목 통과 |
+| P1-7 | **`SpotWide`에서 Actor lane 겹침을 없앤다** — `_queue`로 직행 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:109` | `SpotWide` Spot의 `_actorLanes`·`_timerLanes`가 빈다 |
 
 **dotnet 큐에는 owner FIFO의 byte 상한이 없다(실측 2026-08-28).** `ZLinkSerialExecutionQueue`의
 admission은 relocation seal과 stopping 상태만 본다 — `applicationByteCapacity`에 해당하는 값이
@@ -75,6 +76,12 @@ admission은 relocation seal과 stopping 상태만 본다 — `applicationByteCa
 있다(`ZLinkAsyncSerialQueue.enqueueWithPayloadBytes` · `ZLinkDefaultSpotContext:665`). node는
 `ZLinkBoundedSerialScheduler`에 바이트 회계가 있으나 `SpotWide`에서 Actor queue를 거치지 않아
 Actor별로 갈리지 않는다.
+
+**`SpotWide` 2단 겹침은 걷어낸다(확정 2026-08-28).** 그 겹침이 사는 것이 없다 — 순서는 Spot
+큐 하나로 끝나고, 유입 제한은 이 계층 권한이 아니며, `SpotWide`는 Spot 전체가 한 줄이라 Actor를
+따로 세워도 어느 Actor가 먼저 돌지 않는다. relocation도 `SpotWide`에서는 Spot 전체를 한 덩어리로
+옮긴다(dotnet의 Actor별 seal 경로는 `PerActor`에서만 열린다). 반대로 겹침은 자기 데드락을
+만들어 java가 `yieldCurrent`로 회피하고 있다. node는 이미 직행한다.
 
 **단, 이 상한은 유입 제한이 아니다.** ordinary ingress는 permit을 이미 들고 owner queue에
 도착하므로(스펙 04 §3의 3단계) owner queue가 다시 재면 안 된다. node는 `submitPreAdmitted`로
@@ -112,6 +119,8 @@ java는 큐 primitive가 정본이고 **조율자가 셋 다 없다.** 런타임
 | P2-3 | `ZLinkSessionSerialExecutor` 신설 · `ZLinkStreamRuntime.stateLane`에서 실행 책임을 분리 | `runtime/streams/ZLinkStreamRuntime.java` | 진입점 넷이 스펙 07 §3과 일치 |
 | P2-4 | `ZLinkAsyncSerialQueue` → `ZLinkSerialExecutionQueue` 개명 | `execution/ZLinkAsyncSerialQueue.java` | 이전 이름 0건 |
 | P2-5 | Actor 경로의 `sharedSpotGate()` 분기를 조율자 안으로 넣는다 | `runtime/spots/ZLinkDefaultSpotContext.java` | 호출자가 큐를 고르는 자리 0건 |
+| P2-6 | **`SpotWide`에서 Actor 큐 겹침을 없앤다** — `dispatchQueue`로 직행 | `runtime/spots/ZLinkDefaultSpotContext.java:665` | `sharedSpotGate()`에서 Actor 큐를 거치지 않는다 |
+| P2-7 | P2-6과 함께 `yieldCurrent` 자기 데드락 회피를 **제거**한다 | 같은 파일 `:679` | 겹침이 없어져 그 분기가 필요 없다 |
 
 **P2-3은 분리이지 이동이 아니다.** `ZLinkStreamRuntime.stateLane`은 상태 소유와 작업 실행을
 함께 지고 있다. 상태 소유는 그 자리에 남기고(스펙 06), 작업 실행만 새 조율자로 옮긴다 —
@@ -130,6 +139,7 @@ cpp도 조율자가 셋 다 없고, 큐 primitive에 수용량·우선순위·�
 | P3-3 | `session_serial_executor_t` 신설 · `stream_runtime.dispatch_queue`에서 분리 | `runtime/streams/stream_runtime.{hpp,cpp}` | 진입점 넷이 스펙 07 §3과 일치 |
 | P3-4 | 큐 primitive에 정책 주입 · lifecycle lane · `ownerTimeBudget`을 추가한다 | `runtime/execution/` | 스펙 07 §10 "수용량과 backpressure"·"공정성" test 통과 |
 | P3-5 | 조회 스냅샷 묶기 (P0-1과 같은 작업 — 먼저 끝났으면 생략) | `runtime/spots/spot_runtime.cpp` | 같은 값을 두 번 읽는 자리 0건 |
+| P3-6 | `SpotWide`에서 Actor·timer 큐를 만들지 않는다 | `runtime/spots/spot_runtime.cpp` | `SpotWide` Spot의 이름 맵이 빈다 |
 
 **P3-4를 P3-1보다 먼저 한다.** 조율자가 큐를 소유하려면 그 큐가 정책을 받을 수 있어야 한다.
 순서를 뒤집으면 조율자를 만든 뒤 큐 시그니처를 다시 바꾸게 된다.

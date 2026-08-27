@@ -101,7 +101,7 @@
 
 | | `PER_ACTOR` | `SPOT_WIDE` |
 |---|---|---|
-| **Actor** | Actor 큐 | Actor 큐 → **Spot 큐** (2단) |
+| **Actor** | Actor 큐 | **Spot 큐 직행** (2026-08-28 개정 — 이전 판은 2단) |
 | **Timer** | Timer 큐 | Spot 큐만 (Timer 큐 건너뜀) |
 
 **두 언어가 독립적으로 같은 비대칭을 구현했다.** 이유는 java 주석이 명시한다:
@@ -163,8 +163,12 @@ dotnet에는 owner time budget 대응물이 **아예 없다**. 고성능 실시�
 
 **R8-3 용량 회계 분담**
 
-Actor 큐가 **payload admission을 소유**한다. 상위 Spot 큐로 넘길 때는 **고정 turn 비용만**
-예약한다. 이중 예약하지 않는다. Timer는 payload가 없으므로 `SPOT_WIDE`에서 Timer 큐를
+**개정 2026-08-28 — 이 절은 폐기한다.** `SpotWide`에서 Actor 큐를 거치지 않기로 확정했으므로
+이중 예약 문제 자체가 없어진다. 큐 상한은 로컬 제출에만 걸리며 ordinary ingress는 permit을
+들고 오므로 다시 재지 않는다(스펙 04 §3). 현행 계약은 스펙 07 §4·§5가 소유한다.
+
+이전 판의 서술: Actor 큐가 payload admission을 소유하고 상위 Spot 큐는 고정 turn 비용만
+예약한다. Timer는 payload가 없으므로 `SPOT_WIDE`에서 Timer 큐를
 만들지 않는다(§4.2).
 
 **언어별 작업량**

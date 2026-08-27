@@ -47,8 +47,11 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 이는 이미 성문화된 **발견 10**을 지키는 일이다. cpp가 lane 전환 중 그 규칙을 어겼다.
 
 **dotnet과 java의 Spot 실행 구조는 거의 같다.** Actor는 `SPOT_WIDE`에서 Actor 큐 → Spot 큐로
-2단, Timer는 Spot 큐로 직행 — 양 언어 동일하다. 그 비대칭의 이유는 순서가 아니라
-**용량 회계**다(Actor 큐가 payload admission을 소유하고 Timer는 payload가 없다).
+2단, Timer는 Spot 큐로 직행 — 양 언어 동일하다.
+
+**그 2단은 걷어내기로 확정했다(2026-08-28).** 겹침이 사는 것이 없다 — 순서는 Spot 큐 하나로
+끝나고, 유입 제한은 이 계층 권한이 아니며(스펙 04 소유), `SpotWide`는 Spot 전체가 한 줄이라
+Actor를 따로 세워도 어느 Actor가 먼저 돌지 않는다. node 현행(Spot 큐 직행)이 정본이다.
 
 ---
 
@@ -61,7 +64,8 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 |---|---|---|
 | **조율자** | **dotnet** | Spot마다 전용 조율자가 Spot 큐 · Actor별 큐 · Timer별 큐를 **모두 소유**. 진입점이 큐를 고르고 호출자는 모른다 |
 | **큐 primitive** | **java** | 실행뿐 아니라 **backpressure · lifecycle burst · owner time budget · 정책 주입**을 계약으로 |
-| 용량 회계 | — | Actor 큐가 payload admission 소유. 상위 Spot 큐는 고정 turn 비용만 예약 (이중 예약 금지) |
+| 큐 경로 | **node** | `SpotWide`는 Spot 큐 직행. Actor·timer 큐는 `PerActor`에서만 만든다 (2026-08-28 확정) |
+| 용량 회계 | — | owner FIFO 상한은 로컬 제출에만. ordinary ingress는 permit을 들고 오므로 다시 재지 않는다(04 §3) |
 
 **언어별 작업량**
 
@@ -109,7 +113,6 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
    `ZLinkActorDispatchMailboxSet` 세 맵이 조율자 밖에 흩어져 있다. `await`가 turn을 양보하므로
    Actor별 직렬 단위는 node에서도 필요하다. 그 맵을 담을 Spot 조율자도 node에는 없다 —
    현행 `ZLinkSpotSerialExecutor`는 직렬 단위 wrapper다(계약서 §7 · 플랜 §6)
-⑥ **`SpotWide`에서 Actor 큐를 거칠 이유가 있는가.** 순서는 Spot 큐 하나로 끝나고 유입 제한은
-   이 계층 권한이 아니다(스펙 04가 소유). 남는 것은 owner FIFO의 로컬 제출 격리뿐인데 그것만으로
-   2단 겹침을 요구할지 미정. 네 언어가 갈린다 — java만 ingress에 byte를 재고(04 §3 위반 의심),
-   node는 건너뛰고, .NET·cpp는 회계 자체가 없다(스펙 07 §5)
+⑥ ~~`SpotWide`에서 Actor 큐를 거칠 이유~~ → **확정: 없다. 걷어낸다.** 순서는 Spot 큐 하나로
+   끝나고 유입 제한은 이 계층 권한이 아니다(04 소유). node 현행이 정본이고 나머지 셋이 맞춘다
+⑦ java가 ordinary ingress에 owner queue byte를 재는 것이 04 §3 위반인지 판정(플랜 P0-4)

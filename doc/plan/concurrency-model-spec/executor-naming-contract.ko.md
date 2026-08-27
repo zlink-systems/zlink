@@ -63,14 +63,18 @@ Spot 하나마다 인스턴스 하나. **세 종류 직렬 단위의 수명과 �
 
 | 경로 | `PerActor` | `SpotWide` |
 |---|---|---|
-| `executeActor` | `actorQueues[actorId]` | `actorQueues[actorId]` → **`spotQueue`** (2단) |
-| `executeTimer` | `timerQueues[timerName]` | **`spotQueue`만** (timer 큐 생성 안 함) |
+| `executeActor` | `actorQueues[actorId]` | **`spotQueue`** (Actor 큐 생성 안 함) |
+| `executeTimer` | `timerQueues[timerName]` | **`spotQueue`** (timer 큐 생성 안 함) |
 | `executeSpot` | `spotQueue` | `spotQueue` |
 | `executeLifecycle` | `spotQueue` | `spotQueue` |
 
-**R-N4.** Actor가 `SpotWide`에서 2단인 이유는 **순서가 아니라 용량 회계**다(§3 참조).
-Timer는 payload가 없어 회계할 것이 없으므로 `SpotWide`에서 큐를 만들지 않는다.
-**이 비대칭을 "버그"로 보고 대칭화하지 않는다.**
+**R-N4 (개정 2026-08-28).** `SpotWide`에서는 `actorQueues`·`timerQueues`를 **만들지 않는다.**
+어느 mode에서도 한 작업이 큐 둘을 연달아 지나지 않는다.
+
+앞선 판(2단 겹침)은 그 겹침이 **용량 회계를 산다**는 전제였는데, 그 전제가 틀렸다 —
+유입 제한은 이 계층의 권한이 아니고(스펙 04 소유), `SpotWide`는 Spot 전체가 한 줄이라 Actor를
+따로 세워도 어느 Actor가 먼저 돌지 않는다. 겹침이 사는 것이 없다. 계약은 스펙 07 §4가
+소유한다.
 
 ---
 
@@ -190,23 +194,18 @@ Spot만 "Spot 1 + Actor N + Timer M"을 **소유**하므로 맵을 갖는다. Ac
 
 ---
 
-## 3. 용량 회계 분담 (고정)
+## 3. 용량 회계 (개정 2026-08-28)
 
-**R-N8.** `executeActor`가 `SpotWide`로 2단을 탈 때:
+**R-N8 (개정).** `SpotWide`에서 Actor 작업은 Spot 큐로 **직행한다.** Actor 큐를 거치지 않으므로
+"아래에서 payload, 위에서 고정 비용"이라는 이중 예약 금지 규칙 자체가 없어진다. 근거와 계약은
+스펙 07 §4가 소유한다.
 
-```
-actorQueues[actorId] .enqueueWithPayloadBytes(payloadBytes, ...)   ← payload admission 소유
-    └→ spotQueue     .enqueue(...)                                 ← 고정 turn 비용만
-```
+**R-N8a.** 큐의 count·byte 상한은 **로컬 제출에만** 걸린다. ordinary ingress는 permit을 들고
+owner 큐에 도착하므로(스펙 04 §3) 다시 재지 않는다. 이 상한의 소유 문서는 스펙 04 §8의
+owner FIFO다.
 
-**Actor 큐가 payload admission을 소유하고, 상위 Spot 큐는 고정 비용만 예약한다.**
-같은 payload를 두 큐에서 이중 예약하지 않는다.
-
-> 근거: java 현행 주석 — *"The Actor queue owns payload admission. The shared Spot gate
-> reserves only its fixed turn cost here."* 이 분담이 없으면 Actor별 용량 제한이 무의미해지거나
-> 상위 큐가 조기 포화된다.
-
----
+**R-N8b.** 상한이 걸리는 단위는 그 mode가 만든 큐를 따라간다 — `PerActor`는 Actor별,
+`SpotWide`는 Spot별.
 
 ## 4. 상태 조회 — turn 경계 (고정)
 
@@ -311,7 +310,8 @@ Actor 큐를 거치지 않는다(`spot-activation-state.ts:407`). 순서는 보�
 2. `actorQueues`·`timerQueues` 맵이 lock이 아닌 state lane 소유인가 (R-N2)
 3. §1.2의 네 진입점 외 공개 API가 없는가 (R-N3)
 4. `ownerTimeBudget`이 4언어에 있는가 (R-N7)
-5. `SpotWide` Actor 경로에서 payload가 **이중 예약되지 않는가** (R-N8)
+5. `SpotWide` Spot의 `actorQueues`·`timerQueues`가 **비어 있는가** (R-N4·R-N8)
+5a. permit을 든 작업이 owner 큐에서 byte를 예약하는 자리가 **0**인가 (R-N8a)
 6. 한 메시지 경로에서 같은 값을 두 번 읽는 자리가 **0**인가 (R-N10)
 7. 상위 소유를 전제하는 자리에 단언이 있는가 (R-N11)
 
