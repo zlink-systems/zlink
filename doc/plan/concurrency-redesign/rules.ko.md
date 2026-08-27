@@ -246,6 +246,32 @@ grep -rlE 'ZLinkStateLane' --include=*.cs . | wc -l                    # lane �
 grep -rhoE 'AwaitStateLane' --include=*.cs . | wc -l                   # 호환 경계(부채)
 ```
 
+**cpp** — 2026-08-27 정정. 종전 명령은 `std::lock_guard<`/`(` 형태만 잡아 실제의 1/4만 셌다.
+이 트리의 관용구는 `std::lock_guard lock (_mutex);`(변수명+공백)이므로 **`\b`로 끊어야** 한다.
+
+```bash
+cd /home/hep7/project/zlink
+R=framework/languages/cpp/framework
+FILES=$(find $R/src $R/include \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) | grep -vE '/tests?/')
+echo "$FILES" | xargs grep -hoE 'std::(lock_guard|unique_lock|scoped_lock|shared_lock)\b' | wc -l  # RAII 취득
+echo "$FILES" | xargs grep -hoE 'recursive_mutex' | wc -l                                        # 재진입 잔존 신호
+echo "$FILES" | xargs grep -lE 'state_lane_t' | wc -l                                            # lane 사용 파일
+echo "$FILES" | xargs grep -hoE '\.run\s*\(' | wc -l                                            # lane 호출(브리지 상한)
+echo "$FILES" | xargs grep -coE 'std::(lock_guard|unique_lock|shared_lock)\b' | grep -v ':0' \
+  | sort -t: -k2 -rn | head -10                                                                  # 상위 파일
+```
+
+**java·kotlin**
+
+```bash
+cd framework/languages/java
+find . -path '*/src/main/java/*' -name '*.java' | xargs grep -hoE '\bsynchronized\b' | wc -l
+find . -path '*/src/main/kotlin/*' -name '*.kt' 2>/dev/null | xargs grep -hoE '\bsynchronized\b' | wc -l
+```
+
+**node** — lock이 없으므로 `await` 경계 스냅샷이 지표다. 정적 계수는 cp3-audit-node.ko.md §2의
+AST 방법을 따른다(단순 grep으로는 재현되지 않는다).
+
 ## 7. 전환 중 발견 (스펙 후보 — 마일스톤에서 스펙 06에 일괄 반영)
 
 - **(1, 표본)** lane 안에서 시작한 timeout 작업의 AsyncLocal 소유권 상속 → SuppressFlow 처방.
