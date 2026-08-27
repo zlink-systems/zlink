@@ -15,11 +15,12 @@
 |---|---|---|
 | 1 | **[spec-draft-concurrency-model.ko.md](spec-draft-concurrency-model.ko.md)** | **스펙 초안 본문.** 고정할 규범 R1~R14, 즉시 조치 3건, 미결 |
 | 2 | **[executor-naming-contract.ko.md](executor-naming-contract.ko.md)** | **구현 계약서.** 클래스·메서드·필드 이름과 라우팅 규칙 R-N1~R-N14. **구현 세션은 이 문서를 따른다** |
-| 3 | [executor-layer-survey.ko.md](executor-layer-survey.ko.md) | 4언어 실행기 계층이 어떻게 생겼나 |
-| 4 | [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md) | **메시지 1건이 블로킹 브리지를 몇 번 통과하나** |
-| 5 | [socket-lock-reclassification.ko.md](socket-lock-reclassification.ko.md) | socket lock 371개 중 무엇이 중복인가 |
+| 3 | **[implementation-plan.ko.md](implementation-plan.ko.md)** | **구현 플랜.** 착수 순서 P0~P5, 언어별 파일과 완료 판정, 실패 방식, 미결 |
+| 4 | [executor-layer-survey.ko.md](executor-layer-survey.ko.md) | 4언어 실행기 계층이 어떻게 생겼나 |
+| 5 | [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md) | **메시지 1건이 블로킹 브리지를 몇 번 통과하나** |
+| 6 | [socket-lock-reclassification.ko.md](socket-lock-reclassification.ko.md) | socket lock 371개 중 무엇이 중복인가 |
 
-**구현 세션은 1·2만 읽으면 된다.** 3~5는 그 근거다.
+**구현 세션은 1~3을 읽는다.** 계약은 정식 스펙 07이 소유하고, 4~6은 그 근거다.
 
 ---
 
@@ -69,9 +70,11 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 | dotnet | 있음 · **Actor·Session 조율자 개명 필요** | **공정성(owner time budget) 추가 필요** |
 | java | **3계층 모두 신설** — Actor 큐를 Spot 조율자로 이관 | 이미 있음 |
 | cpp | **3계층 모두 신설** — 이름 맵을 조율자로 | 용량·우선순위·공정성 **추가** |
-| node | Spot·Session 있음 · **Actor는 만들지 않음**(단일 스레드) | `BoundedSerialScheduler` 정렬 |
+| node | Spot·Session 있음 · **Actor 큐 맵 3개를 조율자로 이관** | `BoundedSerialScheduler` 정렬 |
 
-**구현은 별도 세션에서 진행한다.** 이름·라우팅·검증 항목은 [executor-naming-contract.ko.md](executor-naming-contract.ko.md)에 고정돼 있다.
+**구현은 별도 세션에서 진행한다.** 계약은 정식 스펙
+[07. 직렬 실행기 계층](../../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md)이
+소유하고, 착수 순서와 언어별 작업은 [implementation-plan.ko.md](implementation-plan.ko.md)에 있다.
 
 ---
 
@@ -102,4 +105,8 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 ③ ~~범위~~ → **확정: Spot·Actor·Session 셋 함께.** Channel은 transport 성격이라 별도.
    단 셋의 소유 구조가 다르다 — **Spot만 큐 맵을 갖고 Actor·Session은 인스턴스당 큐 하나**다(계약서 §1.5 R-N1a). Spot 형태를 기계적으로 복사하지 않는다
 ④ 호환 경계 회수(dotnet 664 · cpp 456) — §7-1 이후 재측정
-⑤ ~~node의 Actor별·Timer별 큐~~ → **확인 완료: 없다.** 단일 스레드라 Actor 간 병렬이 불가능하므로 결손이 아니라 일관된 설계다(계약서 §7 R-N13)
+⑤ ~~node의 Actor별·Timer별 큐~~ → **정정: 있다.** `actorSerials`·`timerSerials`·
+   `ZLinkActorDispatchMailboxSet` 세 맵이 조율자 밖에 흩어져 있다. `await`가 turn을 양보하므로
+   Actor별 직렬 단위는 node에서도 필요하다 — node도 이관 대상이다(계약서 §7)
+⑥ node `SpotWide`에서 Actor 작업이 Actor 큐를 거치지 않아 Actor별 payload 상한이 걸리지
+   않는다. 그 상한이 `SpotWide`에서 필요한 보장인지 판단 필요(스펙 07 §9)

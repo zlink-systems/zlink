@@ -257,16 +257,20 @@ snapshot 타입 이름은 `<대상>StateSnapshot`으로 한다.
 의미를 바꾸는 개명은 하지 않는다. `executeActor`를 cpp에서 `execute_actor`로 쓰는 것은
 표기 변환이지만, `dispatch_actor`로 쓰는 것은 다른 이름을 짓는 것이다.
 
-### node의 Actor queue — **언어별 재량**
+### node의 `SpotWide` Actor 경로 — **언어별 재량**
 
-node runtime은 JavaScript turn 하나가 끝날 때까지 다른 callback이 끼어들지 못하므로 Actor
-둘이 실제로 겹쳐 실행되는 일이 없다. 따라서 node는 **Actor마다 queue를 만들지 않고 Actor
-조율자도 두지 않는다.** `executeActor` 진입점은 §3대로 제공하되 Spot 조율자가 받아 Spot
-queue로 보낸다.
+node runtime은 `PerActor`에서 다른 언어와 같이 Actor마다, timer 이름마다 직렬 단위를
+만든다. JavaScript turn 하나는 원자적이지만 `await`에서 양보하므로, 서로 다른 Actor의
+async handler는 단일 스레드에서도 겹쳐 진행된다 — Actor별 직렬 단위는 node에서도 §4와 같은
+이유로 필요하다.
 
-관찰 결과가 다른 언어와 같은 이유는, `PerActor`에서 다른 언어가 얻는 것이 Actor 간 동시
-실행이고 node에는 그 동시 실행 자체가 성립하지 않기 때문이다. 같은 Actor 안의 순서와 Actor별
-수용량 상한은 Spot queue 하나로도 그대로 관찰된다. 확인 기준은 §10의 "언어 간 동등성"이다.
+`SpotWide`에서만 다르다. node는 Actor 작업을 Actor queue를 거치지 않고 **Spot queue 하나로
+바로 보낸다.** 순서는 그대로 보장된다 — Spot queue가 이미 전체를 한 줄로 세운다.
+
+관찰 결과가 다른 언어와 갈리는 지점은 하나다. §5의 Actor별 payload 바이트 상한이
+`SpotWide`에서 걸리지 않는다. 확인 기준은 §10 "수용량과 backpressure"의 첫 항목이며, node는
+`SpotWide`에서 그 항목을 만족하지 않는다. 이 차이를 없앨지는 Actor별 상한이 `SpotWide`에서
+필요한 보장인지에 달려 있고, 아직 정하지 않았다.
 
 ## 10. 검증 요구
 
@@ -317,9 +321,10 @@ queue로 보낸다.
 
 **언어 간 동등성**
 
-- 위 항목이 .NET·java·cpp·node에서 같은 결과를 낸다. node는 "실행 mode별 동시 실행과 순서"의
-  겹쳐 실행 항목만 제외한다 — 단일 스레드라 `PerActor`에서도 handler 둘이 겹쳐 실행되지
-  않는다(§9).
+- 위 항목이 .NET·java·cpp·node에서 같은 결과를 낸다. node에서 "겹쳐 실행된다"는 async
+  handler 둘이 `await`를 사이에 두고 번갈아 진행되는 것으로 관찰한다.
+- node는 "수용량과 backpressure"의 첫 항목을 `PerActor`에서만 만족한다 — `SpotWide`에서
+  Actor별 상한이 걸리지 않는 것이 현재 상태다(§9).
 
 ---
 

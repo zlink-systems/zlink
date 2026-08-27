@@ -266,17 +266,22 @@ Use the names set in §2, §3, and §6; convert only the spelling to each langua
 Do not rename in a way that changes meaning. Writing `executeActor` as `execute_actor` in cpp is
 spelling conversion; writing it as `dispatch_actor` is inventing a different name.
 
-### node's Actor queue — **language discretion**
+### node's `SpotWide` Actor path — **language discretion**
 
-In the node runtime no other callback can cut into a JavaScript turn before it ends, so two
-Actors never actually run overlapped. node therefore **creates no per-Actor queue and no Actor
-coordinator.** The `executeActor` entry point is still provided per §3, but the Spot coordinator
-receives it and sends it to the Spot queue.
+Under `PerActor` the node runtime creates a serial unit per Actor and per timer name just like
+the other languages. One JavaScript turn is atomic, but it yields at `await`, so async handlers
+of two different Actors do make progress overlapped even on a single thread — a per-Actor serial
+unit is needed in node for the same reason as in §4.
 
-The observable result matches the other languages because what the others gain under `PerActor`
-is concurrent execution between Actors, and in node that concurrency does not arise at all.
-Ordering within one Actor and the per-Actor capacity ceiling are still observed with the Spot
-queue alone. The criterion for checking this is "Cross-language equivalence" in §10.
+Only `SpotWide` differs. node sends Actor work **straight to the Spot queue** without going
+through an Actor queue. Order is still guaranteed — the Spot queue already puts everything in
+one line.
+
+There is exactly one point where the observable result diverges from the other languages: the
+per-Actor payload byte ceiling of §5 does not apply under `SpotWide`. The criterion for checking
+this is the first item under "Capacity and backpressure" in §10, and node does not satisfy that
+item under `SpotWide`. Whether to close this gap depends on whether the per-Actor ceiling is a
+guarantee that `SpotWide` needs, which is not yet decided.
 
 ## 10. Verification Requirements
 
@@ -330,9 +335,10 @@ and the exception a reentrant call receives). Each item maps to one test.
 
 **Cross-language equivalence**
 
-- The items above produce the same result in .NET, java, cpp, and node. node excludes only the
-  overlapped-execution items under "Concurrency and order per execution mode" — being
-  single-threaded, two handlers do not run overlapped even under `PerActor` (§9).
+- The items above produce the same result in .NET, java, cpp, and node. In node, "run
+  overlapped" is observed as two async handlers making progress alternately across an `await`.
+- node satisfies the first item under "Capacity and backpressure" only under `PerActor` — that
+  the per-Actor ceiling does not apply under `SpotWide` is the current state (§9).
 
 ---
 

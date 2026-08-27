@@ -83,7 +83,7 @@ Timer는 payload가 없어 회계할 것이 없으므로 `SpotWide`에서 큐를
 | 계층 | dotnet | java | cpp | node |
 |---|---|---|---|---|
 | Spot | `ZLinkSpotSerialExecutor` 1,320 | 없음 | 없음 | `spot-serial-executor` 314 |
-| Actor | `ZLinkActorDispatchMailbox` 341 | 없음 | 없음 | 없음 |
+| Actor | `ZLinkActorDispatchMailbox` 341 | 없음 | 없음 | `actors/actor-mailbox.ts` 78 (조율자 밖에서 소유) |
 | Session | `ZLinkStreamSessionSerialExecutor` 111 | 없음 (`ZLinkStreamRuntime`의 `stateLane`) | 없음 (`stream_runtime.dispatch_queue`) | `session-serial-executor` 73 |
 
 **Spot과 결정적 차이**: Actor·Session 실행기는 **큐 맵이 없다. 인스턴스당 큐 하나**다.
@@ -133,9 +133,15 @@ Spot만 "Spot 1 + Actor N + Timer M"을 **소유**하므로 맵을 갖는다. Ac
 **R-N1d.** java·cpp는 **세 계층 모두 조율자가 없다.** `ZLinkStreamRuntime`의 `stateLane`,
 `stream_runtime.dispatch_queue`처럼 런타임 안에 직접 들고 있다. **셋 다 신설한다.**
 
-**R-N1e.** node는 Spot·Session 조율자가 있고 Actor는 없다. **Actor 조율자를 신설하지 않는다** —
-단일 스레드라 Actor별 직렬 단위가 무의미하다(R-N13과 같은 근거). `executeActor`는 Spot
-조율자가 받아 `spotQueue`로 라우팅한다.
+**R-N1e (정정 2026-08-28).** node는 Spot·Session 조율자가 있고, **Actor별·timer별 직렬 단위도
+실재한다** — `spot-activation-state.ts`의 `actorSerials`, `spot-activation.ts`의 `timerSerials`,
+그리고 `actors/actor-mailbox.ts`의 `ZLinkActorDispatchMailboxSet`(actorId→mailbox 맵). 앞서
+"node에는 Actor별 큐가 없다"고 적었던 것은 `spot-serial-executor.ts` 안만 보고 내린 판정이며
+사실이 아니다.
+
+`await`가 turn을 양보하므로 서로 다른 Actor의 async handler는 단일 스레드에서도 겹쳐
+진행된다. Actor별 직렬 단위는 node에서도 필요하다. **따라서 node도 다른 언어와 같이 조율자를
+신설하고 이 맵들을 그 안으로 옮긴다.**
 
 ---
 
@@ -252,21 +258,27 @@ snapshot = stateLane.run(() -> new ActorStateSnapshot(
 | **dotnet** | **정본** 그대로 | **개명** `ActorDispatchMailbox`→`ActorSerialExecutor` | **개명** `StreamSessionSerialExecutor`→`SessionSerialExecutor` · 동사 `Enqueue*`→`Execute*` | `ownerTimeBudget` **추가**(R-N7) · 정책 주입(R-N5) | `_laneGate` lock → state lane(R-N2) |
 | **java** | **신설** — `ZLinkActorDispatchSerials.queues` 이관(R-N1) | **신설** | **신설** — `ZLinkStreamRuntime.stateLane`에서 분리 | 책임 **정본**. 클래스명만 `ZLinkSerialExecutionQueue`로 | 이미 state lane 소유 — 유지 |
 | **cpp** | **신설** — `spot_runtime` 이름 맵 이관(R-N1) | **신설** | **신설** — `stream_runtime.dispatch_queue`에서 분리 | 용량·우선순위·공정성 **추가**(R-N5·R-N7) | 조회 스냅샷 묶기(R-N9·R-N10) |
-| **node** | 있음 — 큐 맵 없음(§7) | **만들지 않음**(R-N1e) | 있음(`session-serial-executor` 73줄) | `ZLinkBoundedSerialScheduler` 정렬 | turn 경계·lock 문제 없음 |
+| **node** | 있음 — **큐 맵 3개를 조율자로 이관**(§7) | **신설** — `ZLinkActorDispatchMailbox` 개명·이관 | 있음(`session-serial-executor` 73줄) | `ZLinkBoundedSerialScheduler` 정렬 | turn 경계·lock 문제 없음 · `SpotWide` Actor 상한은 미결 |
 
 ---
 
-## 7. node 예외 (확인 완료 2026-08-28)
+## 7. node 실측 (정정 2026-08-28)
 
-node `spot-serial-executor.ts`는 **`scheduler` 하나만 갖고 `actorQueues`·`timerQueues`가 없다.**
-전체 검색에서도 actorId별 직렬 단위가 없다.
+`spot-serial-executor.ts`만 보면 `scheduler` 하나뿐이라 Actor별 큐가 없어 보인다. 그러나 그
+맵은 다른 파일에 있다.
 
-**이는 결손이 아니라 일관된 설계다.** node는 단일 스레드라 Actor 간 병렬 실행이 애초에
-불가능하고, JS turn이 이미 원자적이다. Actor별 큐를 두어도 병렬성이 생기지 않는다.
+| 대상 | 위치 | 형태 |
+|---|---|---|
+| Actor별 직렬 단위 | `spots/spot-activation-state.ts:93` | `actorSerials: Map<string, ZLinkSpotSerialExecutor>` — `PerActor`에서만 만든다 |
+| timer별 직렬 단위 | `spots/spot-activation.ts:471` | `timerSerials: Map<string, ZLinkSpotSerialExecutor>` — timer registry가 closure로 잡는다 |
+| Actor packet mailbox | `actors/actor-mailbox.ts:55` | `ZLinkActorDispatchMailboxSet` — `spot-entry-activation.ts`·`spot-activation-state.ts` 두 곳이 소유 |
 
-**R-N13.** node는 `actorQueues`·`timerQueues`를 **두지 않는다.** `executeActor`·`executeTimer`
-진입점은 §1.2대로 제공하되 내부적으로 `spotQueue`로 라우팅한다. 진입점 계약은 4언어 동일하고
-구현만 다르다.
+**R-N13 (개정).** node도 Actor별·timer별 직렬 단위를 갖는다. 위 세 맵을 Spot 조율자 안으로
+옮긴다 — 지금은 세 곳에 흩어져 있어 R-N1을 어긴다.
+
+**남는 차이 하나.** `SpotWide`에서 node는 `actorSerial()`이 공용 `serial`을 그대로 돌려주어
+Actor 큐를 거치지 않는다(`spot-activation-state.ts:407`). 순서는 보장되지만 Actor별 payload
+바이트 상한이 걸리지 않는다. 이 차이를 없앨지는 미결이다(스펙 07 §9).
 
 ---
 
