@@ -103,6 +103,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 import systems.zlink.framework.runtime.internal.service.ZLinkCanonicalActorJoinReplyCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
@@ -175,6 +176,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean applicationDrainActive = new AtomicBoolean();
+    // Descriptor mutation and deferred-ready state are one C2 group.
+    private final ZLinkStateLane descriptorStateLane = new ZLinkStateLane();
+    // Lazy SpotNode construction is a separate C1 registry state.
+    private final ZLinkStateLane spotNodeStateLane = new ZLinkStateLane();
+    // User operation slots and their retention sweep form one C2 group.
+    private final ZLinkStateLane userSpotTerminalStateLane = new ZLinkStateLane();
     private final ZLinkServiceM6AWireCodec wire =
         new ZLinkServiceM6AWireCodec();
     private final ZLinkServiceM6BWireCodec statefulWire =
@@ -573,7 +580,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     @Override
-    public synchronized void setChannelWeight(String channelName, int weight) {
+    public void setChannelWeight(String channelName, int weight) {
+        inDescriptorStateLane(() -> {
+            setChannelWeightCore(channelName, weight);
+            return null;
+        });
+    }
+
+    private void setChannelWeightCore(String channelName, int weight) {
         if (weight < 0 || weight > 10_000) {
             throw new IllegalArgumentException(
                 "channel weight must be in 0..10000");
@@ -623,7 +637,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     @Override
-    public synchronized void setPlacementWeight(int weight) {
+    public void setPlacementWeight(int weight) {
+        inDescriptorStateLane(() -> {
+            setPlacementWeightCore(weight);
+            return null;
+        });
+    }
+
+    private void setPlacementWeightCore(int weight) {
         if (weight < 0 || weight > 10_000) {
             throw new IllegalArgumentException(
                 "placement weight must be in 0..10000");
@@ -772,13 +793,23 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     @Override
-    public synchronized void deferServiceReadyPublication() {
-        requireCreated();
-        deferServiceReadyPublication = true;
+    public void deferServiceReadyPublication() {
+        inDescriptorStateLane(() -> {
+            requireCreated();
+            deferServiceReadyPublication = true;
+            return null;
+        });
     }
 
     @Override
-    public synchronized void markServiceReady() {
+    public void markServiceReady() {
+        inDescriptorStateLane(() -> {
+            markServiceReadyCore();
+            return null;
+        });
+    }
+
+    private void markServiceReadyCore() {
         if (state != MeshNodeState.READY) {
             throw new IllegalStateException(
                 "raw MeshNode must be READY before service readiness is published");
@@ -1249,11 +1280,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
 
     @Override
     public void setApplicationReceiver(ZLinkMeshApplicationReceiver value) {
-        applicationReceiver =
+        ZLinkMeshApplicationReceiver receiver =
             Objects.requireNonNull(value, "applicationReceiver");
-        ZLinkJavaRawSpotNode current = spotNode;
+        ZLinkJavaRawSpotNode current = inSpotNodeStateLane(() -> {
+            applicationReceiver = receiver;
+            return spotNode;
+        });
         if (current != null) {
-            current.setApplicationReceiver(value);
+            current.setApplicationReceiver(receiver);
         }
     }
 
@@ -1271,7 +1305,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     @Override
-    public synchronized ZLinkInternalSpotNode spotNode() {
+    public ZLinkInternalSpotNode spotNode() {
+        return inSpotNodeStateLane(this::spotNodeCore);
+    }
+
+    private ZLinkInternalSpotNode spotNodeCore() {
         if (spotNode == null) {
             spotNode = new ZLinkJavaRawSpotNode(this);
             if (applicationReceiver != null) {
@@ -7928,7 +7966,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         byte[] fingerprint,
         long deadlineUnixMs) {
         long now = currentTimeMillis.getAsLong();
-        synchronized (userSpotTerminals) {
+        return inUserSpotTerminalStateLane(() -> {
             userSpotTerminals.entrySet().removeIf(
                 entry -> entry.getValue().terminal.isDone()
                     && entry.getValue().retentionDeadlineUnixMs < now);
@@ -7954,7 +7992,42 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             userSpotTerminals.put(key, created);
             return new UserSpotTerminalAdmission(
                 created, true, false, false);
+        });
+    }
+
+    private <T> T inDescriptorStateLane(Supplier<T> work) {
+        try {
+            return descriptorStateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            return rethrowStateFailure(failure);
         }
+    }
+
+    private <T> T inSpotNodeStateLane(Supplier<T> work) {
+        try {
+            return spotNodeStateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            return rethrowStateFailure(failure);
+        }
+    }
+
+    private <T> T inUserSpotTerminalStateLane(Supplier<T> work) {
+        try {
+            return userSpotTerminalStateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            return rethrowStateFailure(failure);
+        }
+    }
+
+    private static <T> T rethrowStateFailure(CompletionException failure) {
+        Throwable cause = failure.getCause();
+        if (cause instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (cause instanceof Error error) {
+            throw error;
+        }
+        throw failure;
     }
 
     private static byte[] fingerprint(byte[] canonicalCommand) {

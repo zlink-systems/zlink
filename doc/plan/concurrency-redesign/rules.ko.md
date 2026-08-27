@@ -90,6 +90,7 @@
 |---|---|---|---|
 | dotnet | `dotnet test tests/Zlink.Framework.UnitTests` | `framework/languages/dotnet/samples/run_samples.sh` | 기준 1893+ / 실패 0 |
 | cpp | `ctest --test-dir build -L 'framework-(unit\|contract)' -LE 'e2e\|sample\|perf'` | `framework/languages/cpp/samples/run_samples.sh` | flake: Bingo 후반 ~1/5, TTT teardown ~1/15. exit 86/134는 1회 재실행 |
+| jvm spring | `:zlink-framework-spring-boot-starter:test`(39) | — | **2026-08-27 캠페인 범위 편입** — jvm R 전환이 `ZLinkRouteMeshRuntimeService`를 건드렸다 |
 | java | `./gradlew :zlink-framework-core:test` | `framework/languages/java/samples/run_samples.sh` | 러너가 java→kotlin 순차. **기준 1149/실패 0**(2026-08-27 cleanTest 실측) |
 | jvm 추가 모듈 | `:zlink-stream-connector:test`(123) · `:zlink-framework-locations-redis:test`(27) | — | **2026-08-27 캠페인 범위 편입** — jvm 결함 6건 수정이 이 두 모듈을 건드렸다. 종전 매트릭스에 없었다 |
 | kotlin | `./gradlew :zlink-framework-kotlin:test` | (같은 러너) | `ZLINK_SAMPLE_LANGUAGES`로 분리 가능 |
@@ -123,6 +124,10 @@ CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
 ### 알려진 기존 실패 (게이트 판정 제외 — 회귀로 읽지 말 것)
 
 - **ZoneWorld**: cpp split-brain·dotnet mesh admission (Z1·Z2). CP3에서 판정, §3.1에서 수정.
+- **jvm `ZLinkMicrometerMetricSinkTest.exportsExactHostCapacityCatalogFromTheSingleStatusProjection`**
+  (2026-08-27 이분 실증): `expected: <5.0> but was: <NaN>`로 간헐 실패한다. 메트릭 집계 타이밍
+  의존이다. **전환분을 되돌린 기준선에서 실패하고 적용 상태에서 통과**했으며, 적용 상태 3회
+  반복도 전부 통과했다. 전환과 무관한 flake다.
 - **cpp Bingo 샘플 `wait observer Entry Spot return` 정지** (2026-08-27 대조 실증):
   후반 관측자 Entry Spot 복귀 대기에서 오류 없이 멈춘다(placement marker 미도달).
   **전환 이전부터 있던 실패다** — 소형 배치 커밋 전 11:41 실행과 전환 250여 취득 완료 후

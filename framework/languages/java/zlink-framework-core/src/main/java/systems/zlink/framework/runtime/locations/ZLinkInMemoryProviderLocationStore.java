@@ -3,7 +3,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
+import java.util.function.Supplier;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -28,8 +31,9 @@ public final class ZLinkInMemoryProviderLocationStore
         4L * 1024 * 1024;
     private static final Duration SCAN_RETENTION =
         Duration.ofMinutes(1);
-    private final Object gate = new Object();
     private final Clock clock;
+    // Rows, scan snapshots, and the version counter form one C2 state group.
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, Entry> rows = new HashMap<>();
     private final Map<String, ScanSnapshot> snapshots =
         new HashMap<>();
@@ -49,13 +53,13 @@ public final class ZLinkInMemoryProviderLocationStore
         ZLinkStoreCancellation cancellation) {
         requireActive(cancellation);
         String value = requireKey(key);
-        synchronized (gate) {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             Entry entry = live(value, now);
             return completed(entry == null
                 ? new ZLinkStoreReadMissing(now)
                 : new ZLinkStoreReadFound(entry.value(now)));
-        }
+        });
     }
 
     @Override
@@ -69,7 +73,7 @@ public final class ZLinkInMemoryProviderLocationStore
         List<ZLinkStoreMutation> mutations =
             List.copyOf(request.mutations());
         validateUniqueKeys(conditions, mutations);
-        synchronized (gate) {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             for (ZLinkStoreCondition condition : conditions) {
                 if (!matches(condition, now)) {
@@ -95,7 +99,7 @@ public final class ZLinkInMemoryProviderLocationStore
             }
             return completed(new ZLinkStoreWriteApplied(
                 Map.copyOf(putVersions), now));
-        }
+        });
     }
 
     @Override
@@ -113,7 +117,7 @@ public final class ZLinkInMemoryProviderLocationStore
             throw new IllegalArgumentException(
                 "scan prefix exceeds 1024 UTF-8 bytes");
         }
-        synchronized (gate) {
+        return inStateLane(() -> {
             Instant now = clock.instant();
             removeExpiredSnapshots(now);
             String snapshotId;
@@ -180,6 +184,21 @@ public final class ZLinkInMemoryProviderLocationStore
             }
             return completed(new ZLinkStoreScanPageResult(
                 new ZLinkStoreScanPage(page, next, now)));
+        });
+    }
+
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
         }
     }
 

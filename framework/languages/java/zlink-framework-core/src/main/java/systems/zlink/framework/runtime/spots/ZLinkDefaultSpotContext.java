@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
@@ -27,6 +28,7 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
@@ -357,7 +359,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private final ZLinkUserSpotExecutionMode executionMode;
     private final ZLinkSpotRelocationCoordinationMode relocationCoordinationMode;
     private final boolean instanceSpot;
-    private final Object relocationReadyLock = new Object();
+    // The relocation barrier and readiness waiter share one C2 ownership
+    // region: a readiness claim must observe the same relocation boundary as
+    // the barrier that later consumes it.
+    private final ZLinkStateLane relocationStateLane = new ZLinkStateLane();
     private RelocationReadyWaiter relocationReadyWaiter;
     private ZLinkUserSpotRelocationBarrier relocationBarrier;
     private final ZLinkSpotHandlerCatalog handlerCatalog = new ZLinkSpotHandlerCatalog(
@@ -802,13 +807,15 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return Collections.unmodifiableMap(lanes);
     }
 
-    synchronized ZLinkUserSpotRelocationBarrier relocationBarrier(
+    ZLinkUserSpotRelocationBarrier relocationBarrier(
         ZLinkActorSessionCoordinator actors) {
-        if (relocationBarrier == null) {
-            relocationBarrier =
-                new ZLinkUserSpotRelocationBarrier(this, actors);
-        }
-        return relocationBarrier;
+        return inRelocationStateLane(() -> {
+            if (relocationBarrier == null) {
+                relocationBarrier =
+                    new ZLinkUserSpotRelocationBarrier(this, actors);
+            }
+            return relocationBarrier;
+        });
     }
 
     <T> CompletionStage<T> runLifecycleExecution(
@@ -886,7 +893,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         }
         RelocationReadyWaiter waiter =
             new RelocationReadyWaiter(claim, cancelled);
-        synchronized (relocationReadyLock) {
+        CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> result =
+            inRelocationStateLane(() -> {
             if (relocationReadyWaiter != null) {
                 return CompletableFuture.failedFuture(
                     new IllegalStateException(
@@ -897,6 +905,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                     Optional.empty());
             }
             relocationReadyWaiter = waiter;
+            return waiter.result;
+        });
+        if (result != waiter.result) {
+            return result;
         }
         pollRelocationReadyCancellation(waiter);
         return waiter.result;
@@ -1054,10 +1066,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private CompletionStage<Void> reachRelocationReadyBoundary() {
         streamTrace(STREAM_TRACE ? "relocation-ready-boundary-start spot=" + spotId() : null);
         RelocationReadyWaiter waiter;
-        synchronized (relocationReadyLock) {
-            waiter = relocationReadyWaiter;
+        waiter = inRelocationStateLane(() -> {
+            RelocationReadyWaiter current = relocationReadyWaiter;
             relocationReadyWaiter = null;
-        }
+            return current;
+        });
         if (waiter == null || waiter.cancelled.getAsBoolean()) {
             if (waiter != null) {
                 waiter.result.complete(Optional.empty());
@@ -1104,11 +1117,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                     return;
                 }
                 if (waiter.cancelled.getAsBoolean()) {
-                    synchronized (relocationReadyLock) {
+                    inRelocationStateLane(() -> {
                         if (relocationReadyWaiter == waiter) {
                             relocationReadyWaiter = null;
                         }
-                    }
+                        return null;
+                    });
                     waiter.result.complete(Optional.empty());
                     return;
                 }
@@ -1127,6 +1141,21 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.rejectAfterRelocationReady(
                 operation);
+    }
+
+    private <T> T inRelocationStateLane(Supplier<T> work) {
+        try {
+            return relocationStateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
 
     private static final class RelocationReadyWaiter {

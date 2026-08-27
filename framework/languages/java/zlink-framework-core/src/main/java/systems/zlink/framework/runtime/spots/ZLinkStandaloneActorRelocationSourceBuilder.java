@@ -30,6 +30,7 @@ import systems.zlink.framework.runtime.internal.locations
     .ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRelocationAdapterRegistry;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
@@ -864,6 +865,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private final byte[] timerEnvelope;
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
         private final String targetSpotId;
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private List<ZLinkAsyncSerialQueue.QueuedRecord> finalJournal =
             List.of();
         private systems.zlink.framework.runtime.internal.relocation
@@ -960,15 +962,18 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 });
         }
 
-        synchronized void acceptTargetAuthorityOwnerGeneration(
+        void acceptTargetAuthorityOwnerGeneration(
             long targetAuthorityOwnerGeneration) {
-            if (!committed
-                || targetAuthorityOwnerGeneration
-                    <= sourceAuthorityOwnerGeneration()) {
-                throw new IllegalStateException(
-                    "Actor relocation target owner generation is invalid");
-            }
-            installRelocationForward(targetAuthorityOwnerGeneration);
+            inStateLane(() -> {
+                if (!committed
+                    || targetAuthorityOwnerGeneration
+                        <= sourceAuthorityOwnerGeneration()) {
+                    throw new IllegalStateException(
+                        "Actor relocation target owner generation is invalid");
+                }
+                installRelocationForward(targetAuthorityOwnerGeneration);
+                return null;
+            });
         }
 
         CompletionStage<Void> relayCapturedIngress(
@@ -978,10 +983,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             Objects.requireNonNull(timeout, "timeout");
             systems.zlink.framework.runtime.internal.relocation
                 .ZLinkRetainedSerialQueueCommit.Commit retained;
-            synchronized (this) {
+            try {
+                retained = inStateLane(() -> {
                 if (terminal || committed) {
-                    return failed(new IllegalStateException(
-                        "Actor relocation relay boundary is terminal"));
+                    throw new IllegalStateException(
+                        "Actor relocation relay boundary is terminal");
                 }
                 if (relocationCommit == null) {
                     relocationCommit = actors.retainActorRelocationCommit(
@@ -990,7 +996,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             "Actor relocation source queue was lost"));
                     installExpectedRelocationForward();
                 }
-                retained = relocationCommit;
+                    return relocationCommit;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             systems.zlink.framework.runtime.internal.relocation
                 .ZLinkRetainedSerialQueueCommit.Cut cut;
@@ -1002,10 +1011,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     .sorted((left, right) -> Long.compareUnsigned(
                         left.sequence(), right.sequence()))
                     .toList();
-            synchronized (this) {
+            inStateLane(() -> {
                 finalJournal = relayed;
                 captureFinished = true;
-            }
+                return null;
+            });
             CompletionStage<Void> chain =
                 CompletableFuture.completedFuture(null);
             if (sealedSessionRoute.isPresent()) {
@@ -1079,35 +1089,51 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         stageRequest.fence().aggregateGeneration())));
         }
 
-        synchronized void completeSourceQueueCommit() {
-            if (relocationCommit == null
-                || !committed && !captureFinished) {
-                throw new IllegalStateException(
-                    "Actor relocation source queue is not durably committed");
-            }
-            committed = true;
-            relocationCommit.complete();
+        void completeSourceQueueCommit() {
+            systems.zlink.framework.runtime.internal.relocation
+                .ZLinkRetainedSerialQueueCommit.Commit retained = inStateLane(() -> {
+                    if (relocationCommit == null
+                        || !committed && !captureFinished) {
+                        throw new IllegalStateException(
+                            "Actor relocation source queue is not durably committed");
+                    }
+                    committed = true;
+                    return relocationCommit;
+                });
+            retained.complete();
         }
 
-        synchronized boolean relayBoundaryCommitted() {
-            return committed;
+        boolean relayBoundaryCommitted() {
+            return inStateLane(() -> committed);
         }
 
         CompletionStage<Void> discardInitialAfterCommit() {
-            synchronized (this) {
+            try {
+                inStateLane(() -> {
                 if (!committed || terminal) {
-                    return failed(new IllegalStateException(
-                        "Actor relocation source is not committed"));
+                    throw new IllegalStateException(
+                        "Actor relocation source is not committed");
                 }
+                    return null;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             finish();
             return CompletableFuture.completedFuture(null);
         }
 
         CompletionStage<Void> cleanupLocal() {
-            if (!committed || terminal) {
-                return failed(new IllegalStateException(
-                    "Actor relocation source is not committed"));
+            try {
+                inStateLane(() -> {
+                    if (!committed || terminal) {
+                        throw new IllegalStateException(
+                            "Actor relocation source is not committed");
+                    }
+                    return null;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             relocationReplies.closeActorTimersAfterRelocation(
                 owned.actorId());
@@ -1115,10 +1141,17 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 List.of(owned.actorId()));
         }
 
-        synchronized CompletionStage<Void> abort() {
-            if (terminal || committed) {
-                return failed(new IllegalStateException(
-                    "committed Actor relocation cannot be aborted"));
+        CompletionStage<Void> abort() {
+            try {
+                inStateLane(() -> {
+                    if (terminal || committed) {
+                        throw new IllegalStateException(
+                            "committed Actor relocation cannot be aborted");
+                    }
+                    return null;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             return abortSessionRoute(sessionSealer, sealedSessionRoute)
                 .thenRun(() -> {
@@ -1135,9 +1168,27 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 });
         }
 
-        private synchronized void finish() {
-            if (!terminal) {
-                terminal = true;
+        private void finish() {
+            inStateLane(() -> {
+                if (!terminal) {
+                    terminal = true;
+                }
+                return null;
+            });
+        }
+
+        private <T> T inStateLane(java.util.function.Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
             }
         }
     }

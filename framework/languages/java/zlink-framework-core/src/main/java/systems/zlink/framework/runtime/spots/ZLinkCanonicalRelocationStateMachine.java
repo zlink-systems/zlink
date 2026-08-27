@@ -14,7 +14,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -38,6 +37,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToke
 import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
@@ -74,14 +74,11 @@ final class ZLinkCanonicalRelocationStateMachine
     private final ZLinkRelocationPayloadTransfer.Budget budget;
     private final RoutingId localNodeRid;
     private final long localNodeGeneration;
-    private final ConcurrentHashMap<Fence, SourceAttempt> sources =
-        new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Fence, TargetAttempt> targets =
-        new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Fence, TerminalTarget> terminalTargets =
-        new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Fence, RetainedSource> retainedSources =
-        new ConcurrentHashMap<>();
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final Map<Fence, SourceAttempt> sources = new HashMap<>();
+    private final Map<Fence, TargetAttempt> targets = new HashMap<>();
+    private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
+    private final Map<Fence, RetainedSource> retainedSources = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows =
         new AtomicInteger();
 
@@ -182,7 +179,13 @@ final class ZLinkCanonicalRelocationStateMachine
             Fence fence = new Fence(
                 prepare.id(), prepare.targetAttemptGeneration());
             SourceAttempt created = new SourceAttempt(request, prepare);
-            SourceAttempt current = sources.putIfAbsent(fence, created);
+            SourceAttempt current = inStateLane(() -> {
+                SourceAttempt existing = sources.get(fence);
+                if (existing == null) {
+                    sources.put(fence, created);
+                }
+                return existing;
+            });
             SourceAttempt attempt = current == null ? created : current;
             if (!attempt.request().equals(request)
                 || !java.util.Arrays.equals(
@@ -203,7 +206,7 @@ final class ZLinkCanonicalRelocationStateMachine
                     int remaining = attempt.activeWaiters().decrementAndGet();
                     if (failure != null
                         && remaining == 0) {
-                        sources.remove(fence, attempt);
+                        inStateLane(() -> sources.remove(fence, attempt));
                     }
                 });
         });
@@ -256,7 +259,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 //  Cutover submit terminal (S1). The payload and boundary
                 //  batch copies stay retained for the retransmission window
                 //  regardless of the submit result (spec 28 §4.4).
-                sources.remove(key, attempt);
+                inStateLane(() -> sources.remove(key, attempt));
                 retainSourceCopies(key, attempt, encodedCutover);
             });
     }
@@ -269,7 +272,14 @@ final class ZLinkCanonicalRelocationStateMachine
             attempt.request().targetNodeRid(),
             attempt.batch().encodedFrames(),
             encodedCutover);
-        if (retainedSources.putIfAbsent(key, retained) != null) {
+        boolean retainedNew = inStateLane(() -> {
+            if (retainedSources.containsKey(key)) {
+                return false;
+            }
+            retainedSources.put(key, retained);
+            return true;
+        });
+        if (!retainedNew) {
             return;
         }
         long submitNanos = System.nanoTime();
@@ -278,7 +288,7 @@ final class ZLinkCanonicalRelocationStateMachine
         //  Exactly-once copy cleanup after the retransmission window.
         retentionScheduler.schedule(
             now.plus(transferOptions.cutoverWaitTimeout()),
-            () -> retainedSources.remove(key, retained));
+            () -> inStateLane(() -> retainedSources.remove(key, retained)));
         //  Source quiescence (SafeToShutdown component): the unit is done
         //  when both the retransmission window and the Message Follow route
         //  window (S4) have elapsed — both source-local (spec 30 §11).
@@ -304,7 +314,8 @@ final class ZLinkCanonicalRelocationStateMachine
      */
     CompletionStage<Void> retransmitBoundaryBatch(
         ZLinkSpotRetireControl.Fence fence) {
-        RetainedSource retained = retainedSources.get(Fence.from(fence));
+        RetainedSource retained = inStateLane(() -> retainedSources.get(
+            Fence.from(fence)));
         if (retained == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -325,7 +336,7 @@ final class ZLinkCanonicalRelocationStateMachine
         Duration timeout) {
         requireTimeout(timeout);
         Fence key = Fence.from(fence);
-        SourceAttempt attempt = sources.get(key);
+        SourceAttempt attempt = inStateLane(() -> sources.get(key));
         if (attempt == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -333,7 +344,7 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(new IllegalArgumentException(
                 "canonical relocation abort target differs"));
         }
-        sources.remove(key, attempt);
+        inStateLane(() -> sources.remove(key, attempt));
         return coordinator.abortPreparedFence(
             new ZLinkAggregateFence(fence.aggregateId(),
                 fence.aggregateGeneration()), OPEN);
@@ -405,7 +416,7 @@ final class ZLinkCanonicalRelocationStateMachine
         }
         Fence fence = new Fence(
             prepare.id(), prepare.targetAttemptGeneration());
-        TerminalTarget terminal = terminalTargets.get(fence);
+        TerminalTarget terminal = inStateLane(() -> terminalTargets.get(fence));
         if (terminal != null) {
             if (terminal.source().equals(transportSource)
                 && java.util.Arrays.equals(
@@ -423,7 +434,13 @@ final class ZLinkCanonicalRelocationStateMachine
                 "terminal canonical relocation prepare differs"));
         }
         TargetAttempt created = new TargetAttempt(prepare);
-        TargetAttempt current = targets.putIfAbsent(fence, created);
+        TargetAttempt current = inStateLane(() -> {
+            TargetAttempt existing = targets.get(fence);
+            if (existing == null) {
+                targets.put(fence, created);
+            }
+            return existing;
+        });
         TargetAttempt attempt = current == null ? created : current;
         if (!java.util.Arrays.equals(
                 ZLinkCanonicalRelocationProtocol.encodePrepare(
@@ -458,7 +475,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 if (failure == null) {
                     attempt.ready().complete(null);
                 } else {
-                    targets.remove(fence, attempt);
+                    inStateLane(() -> targets.remove(fence, attempt));
                     Throwable cause = unwrap(failure);
                     if (request) {
                         publishFailure(
@@ -504,25 +521,18 @@ final class ZLinkCanonicalRelocationStateMachine
         Fence fence,
         TargetAttempt attempt,
         RoutingId source) {
-        CompletableFuture<Void> publication;
-        synchronized (attempt) {
-            if (attempt.readyPublication() != null) {
-                return attempt.readyPublication();
-            }
-            publication = new CompletableFuture<>();
-            attempt.readyPublication(publication);
+        CompletableFuture<Void> created = new CompletableFuture<>();
+        PublicationClaim claim = attempt.claimReadyPublication(created);
+        if (!claim.owner()) {
+            return claim.publication();
         }
+        CompletableFuture<Void> publication = created;
         publication.whenComplete((ignored, failure) -> {
             if (failure != null && !attempt.fallbackArmed()) {
-                synchronized (attempt) {
-                    //  READY is a one-way submission.  Its transport or
-                    //  source-side conflict failure leaves the prepared
-                    //  target intact so an exact PREPARE can submit READY
-                    //  again with the same fence and RelocationId.
-                    if (attempt.readyPublication() == publication) {
-                        attempt.readyPublication(null);
-                    }
-                }
+                // READY is a one-way submission. Its transport or source-side
+                // conflict failure leaves the prepared target intact so an
+                // exact PREPARE can submit READY again with the same fence.
+                attempt.clearReadyPublication(publication);
             }
         });
         //  The placeholder is visible before an already-completed ready
@@ -563,7 +573,8 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private void expireReadySubmission(Fence fence, TargetAttempt attempt) {
-        if (!targets.remove(fence, attempt) || attempt.fallbackArmed()) {
+        boolean removed = inStateLane(() -> targets.remove(fence, attempt));
+        if (!removed || attempt.fallbackArmed()) {
             return;
         }
         ZLinkSpotRetireControl.StageRequest request =
@@ -795,7 +806,7 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkCanonicalRelocationProtocol.Ready ready) {
         Fence fence = new Fence(
             ready.id(), ready.targetAttemptGeneration());
-        SourceAttempt attempt = sources.get(fence);
+        SourceAttempt attempt = inStateLane(() -> sources.get(fence));
         if (attempt == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -817,7 +828,7 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkCanonicalRelocationProtocol.Failed failure) {
         Fence fence = new Fence(
             failure.id(), failure.targetAttemptGeneration());
-        SourceAttempt attempt = sources.get(fence);
+        SourceAttempt attempt = inStateLane(() -> sources.get(fence));
         if (attempt == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -843,7 +854,7 @@ final class ZLinkCanonicalRelocationStateMachine
         RoutingId transportSource,
         ZLinkCanonicalRelocationProtocol.State state) {
         Fence fence = new Fence(state.id(), state.targetAttemptGeneration());
-        TargetAttempt attempt = targets.get(fence);
+        TargetAttempt attempt = inStateLane(() -> targets.get(fence));
         if (attempt == null
             || !attempt.prepare().sourceNodeRid().equals(transportSource)
             || !state.coordinator().equals(attempt.prepare().coordinator())
@@ -880,9 +891,9 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkCanonicalRelocationProtocol.Cutover cutover) {
         Fence fence = new Fence(
             cutover.id(), cutover.targetAttemptGeneration());
-        TargetAttempt attempt = targets.get(fence);
+        TargetAttempt attempt = inStateLane(() -> targets.get(fence));
         if (attempt == null) {
-            TerminalTarget terminal = terminalTargets.get(fence);
+            TerminalTarget terminal = inStateLane(() -> terminalTargets.get(fence));
             if (terminal != null && terminal.source().equals(transportSource)
                 && (terminal.encodedCutover() == null
                     || java.util.Arrays.equals(
@@ -908,7 +919,7 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(new IllegalArgumentException(
                 "canonical relocation cutover fence differs"));
         }
-        RelayBoundary boundary = attempt.boundary();
+        RelayBoundary.Snapshot boundary = attempt.boundary().snapshot();
         if (boundary.recordCount() != cutover.boundaryRecordCount()
             || boundary.checksumCrc32c()
                 != cutover.boundaryChecksumCrc32c()) {
@@ -940,28 +951,26 @@ final class ZLinkCanonicalRelocationStateMachine
         Fence fence,
         TargetAttempt attempt,
         boolean fallback) {
-        CompletableFuture<Void> publication;
-        synchronized (attempt) {
-            if (attempt.publication() != null) {
-                return attempt.publication();
-            }
-            if (fallback) {
-                //  The cutover wait elapsed without a cutover or retransmit.
-                LOGGER.warning(
-                    "cutover_timeout: relay-ready wait elapsed without a"
-                        + " CUTOVER; continuing with target-only CAS: "
-                        + fence.id());
-                ZLinkRuntimeMetrics.increment(
-                    "zlink.relocation.cutover_timeout", Map.of());
-            }
-            publication = new CompletableFuture<>();
-            attempt.publication(publication);
+        CompletableFuture<Void> created = new CompletableFuture<>();
+        PublicationClaim claim = attempt.claimPublication(created);
+        if (!claim.owner()) {
+            return claim.publication();
         }
+        if (fallback) {
+            //  The cutover wait elapsed without a cutover or retransmit.
+            LOGGER.warning(
+                "cutover_timeout: relay-ready wait elapsed without a"
+                    + " CUTOVER; continuing with target-only CAS: "
+                    + fence.id());
+            ZLinkRuntimeMetrics.increment(
+                "zlink.relocation.cutover_timeout", Map.of());
+        }
+        CompletableFuture<Void> publication = created;
         publication.whenComplete((ignored, failure) -> {
             if (failure != null && !attempt.committed()) {
                 attempt.request().thenCompose(target::abort)
                     .whenComplete((discarded, discardFailure) ->
-                        targets.remove(fence, attempt));
+                        inStateLane(() -> targets.remove(fence, attempt)));
             } else {
                 retainTerminalTarget(fence, attempt);
             }
@@ -1008,13 +1017,19 @@ final class ZLinkCanonicalRelocationStateMachine
             prepare.sourceNodeRid(),
             ZLinkCanonicalRelocationProtocol.encodePrepare(prepare),
             attempt.receivedCutover());
-        TerminalTarget current = terminalTargets.putIfAbsent(fence, terminal);
+        TerminalTarget current = inStateLane(() -> {
+            TerminalTarget existing = terminalTargets.get(fence);
+            if (existing == null) {
+                terminalTargets.put(fence, terminal);
+            }
+            return existing;
+        });
         if (current == null) {
             retentionScheduler.schedule(
                 prepared.restoreDeadline(),
-                () -> terminalTargets.remove(fence, terminal));
+                () -> inStateLane(() -> terminalTargets.remove(fence, terminal)));
         }
-        targets.remove(fence, attempt);
+        inStateLane(() -> targets.remove(fence, attempt));
     }
 
     private CompletionStage<ZLinkAggregateRelocationCoordinator.Published>
@@ -1454,7 +1469,7 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private SourceAttempt requireSource(Fence fence, RoutingId targetRid) {
-        SourceAttempt attempt = sources.get(fence);
+        SourceAttempt attempt = inStateLane(() -> sources.get(fence));
         if (attempt == null
             || !attempt.request().targetNodeRid().equals(targetRid)) {
             throw new IllegalStateException(
@@ -1464,7 +1479,7 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private TargetAttempt requireTarget(Fence fence, RoutingId sourceRid) {
-        TargetAttempt attempt = targets.get(fence);
+        TargetAttempt attempt = inStateLane(() -> targets.get(fence));
         if (attempt == null
             || !attempt.prepare().sourceNodeRid().equals(sourceRid)) {
             throw new IllegalStateException(
@@ -1652,6 +1667,31 @@ final class ZLinkCanonicalRelocationStateMachine
         return CompletableFuture.failedFuture(failure);
     }
 
+    private static <T> T awaitStateLane(
+        ZLinkStateLane stateLane,
+        java.util.function.Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
+    private <T> T inStateLane(java.util.function.Supplier<T> work) {
+        return awaitStateLane(stateLane, work);
+    }
+
+    private record PublicationClaim(
+        CompletionStage<Void> publication,
+        boolean owner) { }
+
     private record Fence(UUID id, long attempt) {
         static Fence from(ZLinkSpotRetireControl.Fence fence) {
             return new Fence(fence.aggregateId(), fence.aggregateGeneration());
@@ -1681,27 +1721,35 @@ final class ZLinkCanonicalRelocationStateMachine
      * running record count and CRC-32C the cutover carries (spec 28 §4.4).
      */
     private static final class RelayBatch {
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private final List<byte[]> encodedFrames = new ArrayList<>();
         private final java.util.zip.CRC32C checksum =
             new java.util.zip.CRC32C();
         private long recordCount;
 
-        synchronized void append(byte[] frozenRecord, byte[] encodedFrame) {
-            checksum.update(frozenRecord, 0, frozenRecord.length);
-            recordCount++;
-            encodedFrames.add(encodedFrame.clone());
+        void append(byte[] frozenRecord, byte[] encodedFrame) {
+            inStateLane(() -> {
+                checksum.update(frozenRecord, 0, frozenRecord.length);
+                recordCount++;
+                encodedFrames.add(encodedFrame.clone());
+                return null;
+            });
         }
 
-        synchronized long recordCount() {
-            return recordCount;
+        long recordCount() {
+            return inStateLane(() -> recordCount);
         }
 
-        synchronized long checksumCrc32c() {
-            return checksum.getValue();
+        long checksumCrc32c() {
+            return inStateLane(checksum::getValue);
         }
 
-        synchronized List<byte[]> encodedFrames() {
-            return List.copyOf(encodedFrames);
+        List<byte[]> encodedFrames() {
+            return inStateLane(() -> List.copyOf(encodedFrames));
+        }
+
+        private <T> T inStateLane(java.util.function.Supplier<T> work) {
+            return awaitStateLane(stateLane, work);
         }
     }
 
@@ -1710,22 +1758,28 @@ final class ZLinkCanonicalRelocationStateMachine
      * against (spec 28 §4.4).
      */
     private static final class RelayBoundary {
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private final java.util.zip.CRC32C checksum =
             new java.util.zip.CRC32C();
         private long recordCount;
 
-        synchronized void append(byte[] frozenRecord) {
-            checksum.update(frozenRecord, 0, frozenRecord.length);
-            recordCount++;
+        void append(byte[] frozenRecord) {
+            inStateLane(() -> {
+                checksum.update(frozenRecord, 0, frozenRecord.length);
+                recordCount++;
+                return null;
+            });
         }
 
-        synchronized long recordCount() {
-            return recordCount;
+        Snapshot snapshot() {
+            return inStateLane(() -> new Snapshot(recordCount, checksum.getValue()));
         }
 
-        synchronized long checksumCrc32c() {
-            return checksum.getValue();
+        private <T> T inStateLane(java.util.function.Supplier<T> work) {
+            return awaitStateLane(stateLane, work);
         }
+
+        private record Snapshot(long recordCount, long checksumCrc32c) { }
     }
 
     /** Retained copies for the cutover retransmission window (spec 28 §4.4). */
@@ -1777,6 +1831,7 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private static final class TargetAttempt {
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private final ZLinkCanonicalRelocationProtocol.Prepare prepare;
         private final ZLinkRelocationPayloadTransfer.Assembler assembler;
         private final RelayBoundary boundary = new RelayBoundary();
@@ -1812,20 +1867,28 @@ final class ZLinkCanonicalRelocationStateMachine
         }
 
         long committedNanos() {
-            return committedNanos;
+            return inStateLane(() -> committedNanos);
         }
 
         void committedNanos(long value) {
-            committedNanos = value;
+            inStateLane(() -> {
+                committedNanos = value;
+                return null;
+            });
         }
 
         byte[] receivedCutover() {
-            byte[] value = receivedCutover;
-            return value == null ? null : value.clone();
+            return inStateLane(() -> {
+                byte[] value = receivedCutover;
+                return value == null ? null : value.clone();
+            });
         }
 
         void receivedCutover(byte[] value) {
-            receivedCutover = value.clone();
+            inStateLane(() -> {
+                receivedCutover = value.clone();
+                return null;
+            });
         }
 
         CompletableFuture<ZLinkSpotRetireControl.StageRequest> request() {
@@ -1842,35 +1905,80 @@ final class ZLinkCanonicalRelocationStateMachine
         }
 
         CompletionStage<Void> publication() {
-            return publication;
+            return inStateLane(() -> publication);
         }
 
         void publication(CompletionStage<Void> value) {
-            publication = value;
+            inStateLane(() -> {
+                publication = value;
+                return null;
+            });
         }
 
         CompletionStage<Void> readyPublication() {
-            return readyPublication;
+            return inStateLane(() -> readyPublication);
         }
 
         void readyPublication(CompletionStage<Void> value) {
-            readyPublication = value;
+            inStateLane(() -> {
+                readyPublication = value;
+                return null;
+            });
         }
 
-        synchronized boolean fallbackArmed() {
-            return fallbackArmed;
+        PublicationClaim claimReadyPublication(CompletableFuture<Void> created) {
+            return inStateLane(() -> {
+                if (readyPublication != null) {
+                    return new PublicationClaim(readyPublication, false);
+                }
+                readyPublication = created;
+                return new PublicationClaim(created, true);
+            });
         }
 
-        synchronized void fallbackArmed(boolean value) {
-            fallbackArmed = value;
+        void clearReadyPublication(CompletableFuture<Void> publication) {
+            inStateLane(() -> {
+                if (readyPublication == publication) {
+                    readyPublication = null;
+                }
+                return null;
+            });
         }
 
-        synchronized boolean committed() {
-            return committed;
+        PublicationClaim claimPublication(CompletableFuture<Void> created) {
+            return inStateLane(() -> {
+                if (publication != null) {
+                    return new PublicationClaim(publication, false);
+                }
+                publication = created;
+                return new PublicationClaim(created, true);
+            });
         }
 
-        synchronized void committed(boolean value) {
-            committed = value;
+        boolean fallbackArmed() {
+            return inStateLane(() -> fallbackArmed);
+        }
+
+        void fallbackArmed(boolean value) {
+            inStateLane(() -> {
+                fallbackArmed = value;
+                return null;
+            });
+        }
+
+        boolean committed() {
+            return inStateLane(() -> committed);
+        }
+
+        void committed(boolean value) {
+            inStateLane(() -> {
+                committed = value;
+                return null;
+            });
+        }
+
+        private <T> T inStateLane(java.util.function.Supplier<T> work) {
+            return awaitStateLane(stateLane, work);
         }
     }
 

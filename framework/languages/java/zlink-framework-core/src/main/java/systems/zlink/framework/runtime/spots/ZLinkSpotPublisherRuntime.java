@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -32,6 +33,7 @@ import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.spots.ZLinkSpotPublisherClient;
@@ -47,9 +49,10 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         Duration> admissionTimeout;
     private final Function<Class<?>, String> contentTypeResolver;
     private final ZLinkMessageFlowTracer flow;
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, ZLinkInternalSpotNode> nodesByChannel = new HashMap<>();
     private final Map<String, ZLinkBackendSpot> spotsByChannel = new HashMap<>();
-    private volatile boolean closed;
+    private boolean closed;
 
     ZLinkSpotPublisherRuntime(
         ZLinkMessageSerializer serializer,
@@ -146,11 +149,14 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     }
 
     void register(String channelName, ZLinkInternalSpotNode node) {
-        nodesByChannel.put(channelName, node);
+        inStateLane(() -> {
+            nodesByChannel.put(channelName, node);
+            return null;
+        });
     }
 
     boolean contains(String channelName) {
-        return nodesByChannel.containsKey(channelName);
+        return inStateLane(() -> nodesByChannel.containsKey(channelName));
     }
 
     ZLinkSpotPublisherClient client() {
@@ -296,7 +302,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         String contentType,
         ZLinkApplicationMetadata metadata) {
         MulticastFuture result = new MulticastFuture(payload);
-        if (closed) {
+        if (isClosed()) {
             result.closePayloadOnce();
             result.completeRejected(new ZLinkOneWayPublishAdmission(
                 ZLinkOneWayCalls.SHUTDOWN));
@@ -305,36 +311,16 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         //  Captured on the submitting thread; the executor hop below would
         //  otherwise lose the ambient flow (R1 value-passing).
         ZLinkFlowContext.State flowState = captureOutboundFlow();
-        Runnable operation = () -> {
-                if (!result.beginCommit()) {
-                    result.closePayloadOnce();
-                    return;
-                }
-                result.completeCommitted(new ZLinkOneWayPublishAdmission(
-                    ZLinkOneWayCalls.SUBMITTED));
-                try {
-                    submitNow(
-                        meshName,
-                        channelName,
-                        topic,
-                        payload,
-                        packetName,
-                        contentType,
-                        metadata,
-                        flowState);
-                } catch (RuntimeException error) {
-                    LOGGER.log(
-                        Level.WARNING,
-                        "Logical Multicast target processing failed after source-local admission.",
-                        error);
-                } finally {
-                    result.closePayloadOnce();
-                }
-            };
+        Runnable operation = () -> executeMulticast(
+            meshName, channelName, topic, payload, packetName, contentType,
+            metadata, flowState, result, true);
+        Runnable handoffOperation = () -> executeMulticast(
+            meshName, channelName, topic, payload, packetName, contentType,
+            metadata, flowState, result, false);
         try {
             multicastExecutor.execute(operation);
         } catch (RejectedExecutionException rejected) {
-            if (closed || multicastExecutor.isShutdown()) {
+            if (isClosed() || multicastExecutor.isShutdown()) {
                 result.closePayloadOnce();
                 result.completeRejected(emptyAdmission(ZLinkOneWayCalls.SHUTDOWN));
                 return result;
@@ -343,16 +329,53 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                 admissionTimeout.apply(requireChannel(meshName)));
             try {
                 multicastHandoffExecutor.execute(() -> awaitExecutorAdmission(
-                    operation, result, timeoutMillis));
+                    handoffOperation, result, timeoutMillis));
             } catch (RejectedExecutionException capacityExhausted) {
                 result.closePayloadOnce();
                 result.completeRejected(emptyAdmission(
-                    closed || multicastExecutor.isShutdown()
+                    isClosed() || multicastExecutor.isShutdown()
                         ? ZLinkOneWayCalls.SHUTDOWN
                         : ZLinkOneWayCalls.TIMED_OUT));
             }
         }
         return result;
+    }
+
+    private void executeMulticast(
+        String meshName,
+        String channelName,
+        String topic,
+        Message payload,
+        Optional<String> packetName,
+        String contentType,
+        ZLinkApplicationMetadata metadata,
+        ZLinkFlowContext.State flowState,
+        MulticastFuture result,
+        boolean completeBeforeSubmit) {
+        if (!result.beginCommit()) {
+            result.closePayloadOnce();
+            return;
+        }
+        if (completeBeforeSubmit) {
+            result.completeCommitted(new ZLinkOneWayPublishAdmission(
+                ZLinkOneWayCalls.SUBMITTED));
+        }
+        try {
+            submitNow(
+                meshName, channelName, topic, payload, packetName, contentType,
+                metadata, flowState);
+        } catch (RuntimeException error) {
+            LOGGER.log(
+                Level.WARNING,
+                "Logical Multicast target processing failed after source-local admission.",
+                error);
+        } finally {
+            if (!completeBeforeSubmit) {
+                result.completeCommitted(new ZLinkOneWayPublishAdmission(
+                    ZLinkOneWayCalls.SUBMITTED));
+            }
+            result.closePayloadOnce();
+        }
     }
 
     CompletionStage<ZLinkOneWayPublishAdmission> submitAsync(
@@ -383,14 +406,14 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
             }
             result.closePayloadOnce();
             result.completeRejected(emptyAdmission(
-                closed || multicastExecutor.isShutdown()
+                isClosed() || multicastExecutor.isShutdown()
                     ? ZLinkOneWayCalls.SHUTDOWN
                     : ZLinkOneWayCalls.TIMED_OUT));
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             result.closePayloadOnce();
             result.completeRejected(emptyAdmission(
-                closed || multicastExecutor.isShutdown()
+                isClosed() || multicastExecutor.isShutdown()
                     ? ZLinkOneWayCalls.SHUTDOWN
                     : ZLinkOneWayCalls.TIMED_OUT));
         }
@@ -419,13 +442,17 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     @Override
     public void close() {
         List<ZLinkBackendSpot> spots;
-        synchronized (this) {
+        spots = inStateLane(() -> {
             if (closed) {
-                return;
+                return null;
             }
             closed = true;
-            spots = List.copyOf(spotsByChannel.values());
+            List<ZLinkBackendSpot> current = List.copyOf(spotsByChannel.values());
             spotsByChannel.clear();
+            return current;
+        });
+        if (spots == null) {
+            return;
         }
         RuntimeException firstFailure = null;
         for (ZLinkBackendSpot spot : spots) {
@@ -450,65 +477,117 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     private static final class MulticastFuture
         extends CompletableFuture<ZLinkOneWayPublishAdmission> {
         private final Message payload;
+        private final ZLinkStateLane stateLane = new ZLinkStateLane(Runnable::run);
         private boolean committed;
+        private boolean cancelled;
         private boolean payloadReleased;
 
         MulticastFuture(Message payload) {
             this.payload = payload;
         }
 
-        synchronized boolean beginCommit() {
-            if (isCancelled()) {
-                return false;
-            }
-            committed = true;
-            return true;
+        boolean beginCommit() {
+            return inStateLane(() -> {
+                if (cancelled) {
+                    return false;
+                }
+                committed = true;
+                return true;
+            });
         }
 
         @Override
-        public synchronized boolean cancel(boolean mayInterruptIfRunning) {
-            if (committed) {
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            boolean accepted = inStateLane(() -> {
+                if (committed || cancelled) {
+                    return false;
+                }
+                cancelled = true;
+                return true;
+            });
+            if (!accepted) {
                 return false;
             }
-            boolean cancelled = super.cancel(false);
-            if (cancelled) {
-                closePayloadOnce();
+            closePayloadOnce();
+            return super.cancel(false);
+        }
+
+        void closePayloadOnce() {
+            if (inStateLane(() -> {
+                if (payloadReleased) {
+                    return false;
+                }
+                payloadReleased = true;
+                return true;
+            })) {
+                payload.close();
             }
-            return cancelled;
         }
 
-        synchronized void closePayloadOnce() {
-            if (payloadReleased) {
-                return;
+        void completeCommitted(ZLinkOneWayPublishAdmission value) {
+            super.complete(value);
+        }
+
+        void completeRejected(ZLinkOneWayPublishAdmission value) {
+            super.complete(value);
+        }
+
+        private <T> T inStateLane(java.util.function.Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
             }
-            payloadReleased = true;
-            payload.close();
-        }
-
-        synchronized boolean completeCommitted(ZLinkOneWayPublishAdmission value) {
-            return super.complete(value);
-        }
-
-        synchronized boolean completeRejected(ZLinkOneWayPublishAdmission value) {
-            return super.complete(value);
         }
     }
 
-    private synchronized ZLinkBackendSpot publisherSpot(String channelName) {
-        if (closed) {
-            throw new ZLinkConfigurationException("SPOT publisher runtime is closed");
-        }
-        ZLinkInternalSpotNode node = requireChannel(channelName);
-        return spotsByChannel.computeIfAbsent(channelName, ignored -> node.createSpot());
+    private ZLinkBackendSpot publisherSpot(String channelName) {
+        return inStateLane(() -> {
+            if (closed) {
+                throw new ZLinkConfigurationException("SPOT publisher runtime is closed");
+            }
+            ZLinkInternalSpotNode node = requireChannelCore(channelName);
+            return spotsByChannel.computeIfAbsent(channelName, ignored -> node.createSpot());
+        });
     }
 
     private ZLinkInternalSpotNode requireChannel(String channelName) {
+        return inStateLane(() -> requireChannelCore(channelName));
+    }
+
+    private ZLinkInternalSpotNode requireChannelCore(String channelName) {
         ZLinkInternalSpotNode node = nodesByChannel.get(channelName);
         if (node == null) {
             throw new ZLinkConfigurationException(
                 "SPOT publisher client is not configured: " + channelName);
         }
         return node;
+    }
+
+    private boolean isClosed() {
+        return inStateLane(() -> closed);
+    }
+
+    private <T> T inStateLane(java.util.function.Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
 
 }

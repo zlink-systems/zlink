@@ -5,6 +5,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletionException;
+import java.util.function.Supplier;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
  * Owns handler instances for one Framework lifecycle boundary.
@@ -12,6 +15,7 @@ import java.util.Map;
 public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
     private final ZLinkHandlerActivator.Activation activation;
     private final Map<Class<?>, Object> instances = new LinkedHashMap<>();
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private boolean closed;
 
     public ZLinkHandlerInstanceOwner(ZLinkHandlerActivator activator) {
@@ -19,24 +23,30 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
             .openActivation();
     }
 
-    public synchronized Object instance(Class<?> handlerType) {
-        Objects.requireNonNull(handlerType, "handlerType");
-        if (closed) {
-            throw new IllegalStateException("handler instance owner is closed");
-        }
-        return instances.computeIfAbsent(handlerType, activation::create);
+    public Object instance(Class<?> handlerType) {
+        return inStateLane(() -> {
+            Objects.requireNonNull(handlerType, "handlerType");
+            if (closed) {
+                throw new IllegalStateException("handler instance owner is closed");
+            }
+            return instances.computeIfAbsent(handlerType, activation::create);
+        });
     }
 
     @Override
     public void close() {
         List<Object> owned;
-        synchronized (this) {
+        owned = inStateLane(() -> {
             if (closed) {
-                return;
+                return null;
             }
             closed = true;
-            owned = new ArrayList<>(instances.values());
+            List<Object> current = new ArrayList<>(instances.values());
             instances.clear();
+            return current;
+        });
+        if (owned == null) {
+            return;
         }
         RuntimeException firstFailure = null;
         for (int index = owned.size() - 1; index >= 0; index--) {
@@ -61,6 +71,21 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
         }
         if (firstFailure != null) {
             throw firstFailure;
+        }
+    }
+
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
         }
     }
 }

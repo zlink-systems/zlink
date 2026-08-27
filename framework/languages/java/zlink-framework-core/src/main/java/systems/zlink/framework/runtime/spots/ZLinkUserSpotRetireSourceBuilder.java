@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.spots;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Collections;
 import java.util.concurrent.CancellationException;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -70,8 +69,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
         actorFactories;
     private final ZLinkServiceAuthorityPayloadCodec spotAuthorities =
         new ZLinkServiceAuthorityPayloadCodec();
-    private final List<UnresolvedPreparation> unresolved =
-        Collections.synchronizedList(new ArrayList<>());
+    private final UnresolvedPreparations unresolved =
+        new UnresolvedPreparations();
 
     ZLinkUserSpotRetireSourceBuilder(
         String meshName,
@@ -273,14 +272,11 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     int unresolvedPreparationCount() {
-        return unresolved.size();
+        return unresolved.count();
     }
 
     CompletionStage<Void> reconcileUnresolvedPreparations() {
-        List<UnresolvedPreparation> pending;
-        synchronized (unresolved) {
-            pending = List.copyOf(unresolved);
-        }
+        List<UnresolvedPreparation> pending = unresolved.snapshot();
         CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
         for (UnresolvedPreparation context : pending) {
             chain = chain.thenCompose(ignored -> {
@@ -1094,7 +1090,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         private final ZLinkSpotRuntime relocationReplies;
         private final ZLinkSessionRelocationPeerClient sessionSealer;
         private final List<SealedSessionRoute> sealedSessionRoutes;
-        private final List<UnresolvedPreparation> unresolved;
+        private final UnresolvedPreparations unresolved;
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
@@ -1138,7 +1134,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             ZLinkSpotRuntime relocationReplies,
             ZLinkSessionRelocationPeerClient sessionSealer,
             List<SealedSessionRoute> sealedSessionRoutes,
-            List<UnresolvedPreparation> unresolved,
+            UnresolvedPreparations unresolved,
             ZLinkSpotRetireControl.StageRequest stageRequest) {
             this.barrier = barrier;
             this.seal = seal;
@@ -1540,22 +1536,74 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     private static void rememberUnresolved(
-        List<UnresolvedPreparation> unresolved,
+        UnresolvedPreparations unresolved,
         UnresolvedPreparation context) {
-        synchronized (unresolved) {
-            boolean known = unresolved.stream().anyMatch(candidate ->
-                candidate.seal().equals(context.seal()));
-            if (!known) {
-                unresolved.add(context);
-            }
-        }
+        unresolved.remember(context);
     }
 
     private static void forgetUnresolved(
-        List<UnresolvedPreparation> unresolved,
+        UnresolvedPreparations unresolved,
         ZLinkUserSpotRelocationBarrier.Seal seal) {
-        synchronized (unresolved) {
-            unresolved.removeIf(candidate -> candidate.seal().equals(seal));
+        unresolved.forget(seal);
+    }
+
+    private static final class UnresolvedPreparations {
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
+        private final List<UnresolvedPreparation> entries = new ArrayList<>();
+
+        int count() {
+            return inStateLane(entries::size);
+        }
+
+        List<UnresolvedPreparation> snapshot() {
+            return inStateLane(() -> List.copyOf(entries));
+        }
+
+        void add(UnresolvedPreparation context) {
+            inStateLane(() -> {
+                entries.add(context);
+                return null;
+            });
+        }
+
+        void remove(UnresolvedPreparation context) {
+            inStateLane(() -> {
+                entries.remove(context);
+                return null;
+            });
+        }
+
+        void remember(UnresolvedPreparation context) {
+            inStateLane(() -> {
+                boolean known = entries.stream().anyMatch(candidate ->
+                    candidate.seal().equals(context.seal()));
+                if (!known) {
+                    entries.add(context);
+                }
+                return null;
+            });
+        }
+
+        void forget(ZLinkUserSpotRelocationBarrier.Seal seal) {
+            inStateLane(() -> {
+                entries.removeIf(candidate -> candidate.seal().equals(seal));
+                return null;
+            });
+        }
+
+        private <T> T inStateLane(Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
+            }
         }
     }
 

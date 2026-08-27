@@ -8,7 +8,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
  * Deterministic Location authority provider used by the JVM runtime contract.
@@ -17,6 +20,9 @@ import java.util.function.Consumer;
 final class ZLinkInMemoryLocationAuthority {
     private static final int MAX_PAYLOAD_BYTES = 1024 * 1024;
 
+    // Rows, listener registration, and all generation counters are one C2
+    // state group. Listener callbacks leave the lane after the transition.
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, Snapshot> rows = new HashMap<>();
     private final List<Consumer<Change>> listeners = new ArrayList<>();
     private final Supplier<Instant> now;
@@ -34,13 +40,29 @@ final class ZLinkInMemoryLocationAuthority {
         this.now = Objects.requireNonNull(now, "now");
     }
 
-    public synchronized Read read(String key) {
+    public Read read(String key) {
+        return inStateLane(() -> readCore(key));
+    }
+
+    private Read readCore(String key) {
         requireKey(key);
         Snapshot snapshot = rows.get(key);
         return new Read(now.get(), snapshot == null ? null : snapshot.copy());
     }
 
-    public synchronized CasResult compareExchange(
+    public CasResult compareExchange(
+        String key,
+        Expectation expectation,
+        Mutation mutation) {
+        CompareExchangeState state = inStateLane(() ->
+            compareExchangeCore(key, expectation, mutation));
+        if (state.change() != null) {
+            state.listeners().forEach(listener -> listener.accept(state.change()));
+        }
+        return state.result();
+    }
+
+    private CompareExchangeState compareExchangeCore(
         String key,
         Expectation expectation,
         Mutation mutation) {
@@ -49,19 +71,20 @@ final class ZLinkInMemoryLocationAuthority {
         Objects.requireNonNull(mutation, "mutation");
         Snapshot current = rows.get(key);
         if (!expectation.matches(current)) {
-            return CasResult.conflict(read(key));
+            return withoutChange(CasResult.conflict(readCore(key)));
         }
 
         long newStoreVersion = nextStoreVersion();
         Instant storeNow = now.get();
         if (mutation.kind() == MutationKind.DELETE) {
             if (current == null) {
-                return CasResult.conflict(read(key));
+                return withoutChange(CasResult.conflict(readCore(key)));
             }
             rows.remove(key);
-            publish(new Change(
-                nextSequence(), key, newStoreVersion, ChangeKind.DELETED));
-            return CasResult.deleted(newStoreVersion, storeNow);
+            return withChange(
+                CasResult.deleted(newStoreVersion, storeNow),
+                new Change(
+                    nextSequence(), key, newStoreVersion, ChangeKind.DELETED));
         }
 
         byte[] payload = Objects.requireNonNull(mutation.payload(), "payload");
@@ -74,21 +97,21 @@ final class ZLinkInMemoryLocationAuthority {
         switch (mutation.kind()) {
             case PRESERVE -> {
                 if (current == null) {
-                    return CasResult.conflict(read(key));
+                    return withoutChange(CasResult.conflict(readCore(key)));
                 }
                 nextObject = current.objectGeneration();
                 nextOwner = current.authorityOwnerGeneration();
             }
             case NEW_OWNER -> {
                 if (current == null) {
-                    return CasResult.conflict(read(key));
+                    return withoutChange(CasResult.conflict(readCore(key)));
                 }
                 nextObject = current.objectGeneration();
                 nextOwner = nextOwnerGeneration();
             }
             case NEW_OBJECT -> {
                 if (current != null) {
-                    return CasResult.conflict(read(key));
+                    return withoutChange(CasResult.conflict(readCore(key)));
                 }
                 nextObject = nextObjectGeneration();
                 nextOwner = nextOwnerGeneration();
@@ -105,23 +128,47 @@ final class ZLinkInMemoryLocationAuthority {
             nextOwner,
             payload);
         rows.put(key, stored);
-        publish(new Change(
-            nextSequence(), key, newStoreVersion, ChangeKind.STORED));
-        return CasResult.stored(storeNow, stored);
+        return withChange(
+            CasResult.stored(storeNow, stored),
+            new Change(
+                nextSequence(), key, newStoreVersion, ChangeKind.STORED));
     }
 
-    public synchronized AutoCloseable subscribe(Consumer<Change> listener) {
+    public AutoCloseable subscribe(Consumer<Change> listener) {
         Objects.requireNonNull(listener, "listener");
-        listeners.add(listener);
+        inStateLane(() -> {
+            listeners.add(listener);
+            return null;
+        });
         return () -> {
-            synchronized (ZLinkInMemoryLocationAuthority.this) {
+            inStateLane(() -> {
                 listeners.remove(listener);
-            }
+                return null;
+            });
         };
     }
 
-    private void publish(Change change) {
-        List.copyOf(listeners).forEach(listener -> listener.accept(change));
+    private CompareExchangeState withoutChange(CasResult result) {
+        return new CompareExchangeState(result, List.of(), null);
+    }
+
+    private CompareExchangeState withChange(CasResult result, Change change) {
+        return new CompareExchangeState(result, List.copyOf(listeners), change);
+    }
+
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
 
     private long nextStoreVersion() {
@@ -191,6 +238,12 @@ final class ZLinkInMemoryLocationAuthority {
     }
 
     public record Read(Instant storeNow, Snapshot snapshot) {
+    }
+
+    private record CompareExchangeState(
+        CasResult result,
+        List<Consumer<Change>> listeners,
+        Change change) {
     }
 
     public record Expectation(boolean missing, long storeVersion) {

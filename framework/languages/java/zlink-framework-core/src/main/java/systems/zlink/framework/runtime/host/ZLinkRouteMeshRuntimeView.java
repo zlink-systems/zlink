@@ -10,7 +10,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Flow;
+import java.util.function.Supplier;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.atomic.AtomicLong;
@@ -38,6 +40,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.PeerChannels;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkStatusPublisher;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.core.RoutingId;
 
@@ -357,9 +360,10 @@ final class ZLinkRouteMeshRuntimeView
 
     private final class SignalHub implements AutoCloseable {
         private final ZLinkInternalMeshNode node;
-        private final Object gate = new Object();
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private final List<PublisherSignal> signals = new ArrayList<>();
-        private volatile boolean stopped;
+        private boolean stopped;
+        private boolean pumpStarted;
         private Thread pump;
 
         SignalHub(ZLinkInternalMeshNode node) {
@@ -367,33 +371,44 @@ final class ZLinkRouteMeshRuntimeView
         }
 
         boolean isStopped() {
-            return stopped;
+            return inStateLane(() -> stopped);
         }
 
         void register(PublisherSignal signal) {
             Objects.requireNonNull(signal, "signal");
-            synchronized (gate) {
+            RegisterState registration = inStateLane(() -> {
                 if (stopped) {
-                    return;
+                    return new RegisterState(false, false);
                 }
                 signals.removeIf(PublisherSignal::isCollected);
                 signals.add(signal);
-                signal.signal();
-                if (pump == null) {
-                    pump = Thread.ofVirtual()
-                        .name("zlink-mesh-status-monitor")
-                        .start(this::pump);
+                if (!pumpStarted) {
+                    pumpStarted = true;
+                    return new RegisterState(true, true);
                 }
+                return new RegisterState(true, false);
+            });
+            if (!registration.accepted) {
+                return;
+            }
+            signal.signal();
+            if (registration.start) {
+                Thread created = Thread.ofVirtual()
+                    .name("zlink-mesh-status-monitor")
+                    .start(this::pump);
+                inStateLane(() -> {
+                    pump = created;
+                    return null;
+                });
             }
         }
 
         void signal() {
             sequence.incrementAndGet();
-            PublisherSignal[] current;
-            synchronized (gate) {
+            PublisherSignal[] current = inStateLane(() -> {
                 signals.removeIf(PublisherSignal::isCollected);
-                current = signals.toArray(PublisherSignal[]::new);
-            }
+                return signals.toArray(PublisherSignal[]::new);
+            });
             for (PublisherSignal signal : current) {
                 signal.signal();
             }
@@ -412,7 +427,7 @@ final class ZLinkRouteMeshRuntimeView
                 // adapter. This is one runtime-owned source probe for the hub;
                 // subscribers receive hub signals and never poll the source.
                 SourceSnapshot previous = sourceSnapshot();
-                while (!stopped) {
+                while (!isStopped()) {
                     boolean monitorChanged = monitor != null
                         && monitor.recv(RecvFlags.DONT_WAIT) != null;
                     SourceSnapshot current = sourceSnapshot();
@@ -461,18 +476,34 @@ final class ZLinkRouteMeshRuntimeView
 
         @Override
         public void close() {
-            Thread current;
-            synchronized (gate) {
+            Thread current = inStateLane(() -> {
                 if (stopped) {
-                    return;
+                    return null;
                 }
                 stopped = true;
-                current = pump;
                 signals.clear();
-            }
+                return pump;
+            });
             if (current != null) {
                 current.interrupt();
             }
         }
+
+        private <T> T inStateLane(Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
+            }
+        }
+
+        private record RegisterState(boolean accepted, boolean start) { }
     }
 }

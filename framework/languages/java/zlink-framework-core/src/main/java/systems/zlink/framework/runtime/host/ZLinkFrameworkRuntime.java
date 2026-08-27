@@ -89,7 +89,10 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.contracts.core.RoutingId;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 public final class ZLinkFrameworkRuntime
     implements AutoCloseable,
@@ -108,7 +111,7 @@ public final class ZLinkFrameworkRuntime
     private final ZLinkBackendContext backendContext;
     private final systems.zlink.framework.runtime.internal.dispatch
         .ZLinkApplicationJobQueue applicationJobQueue;
-    private final Object capacityLock = new Object();
+    private final ZLinkStateLane capacityStateLane = new ZLinkStateLane();
     private AutoCloseable capacityMetricRegistration = () -> { };
     private AutoCloseable applicationJobQueuePressureMetricRegistration =
         () -> { };
@@ -940,7 +943,7 @@ public final class ZLinkFrameworkRuntime
         if (!coreHwmContextActive.get()) {
             throw inactiveCapacityContext();
         }
-        synchronized (capacityLock) {
+        inCapacityStateLane(() -> {
             try {
                 backendContext.resetCoreHwmBudgetMetrics();
                 applicationJobQueue.resetMetrics();
@@ -952,7 +955,8 @@ public final class ZLinkFrameworkRuntime
                 }
                 throw failure;
             }
-        }
+            return null;
+        });
     }
 
     public Flow.Publisher<
@@ -1694,7 +1698,7 @@ public final class ZLinkFrameworkRuntime
 
     private systems.zlink.framework.monitoring.ZLinkHostCapacityStatus
         capacityStatus() {
-        synchronized (capacityLock) {
+        return inCapacityStateLane(() -> {
             systems.zlink.framework.monitoring.ZLinkCoreHwmStatus core =
                 coreHwmBudgetSnapshot()
                     .map(this::projectCoreHwm)
@@ -1729,7 +1733,7 @@ public final class ZLinkFrameworkRuntime
                     capacityMeasurementEpoch,
                     core,
                     queueStatus);
-        }
+        });
     }
 
     private systems.zlink.framework.monitoring.ZLinkCoreHwmStatus
@@ -1815,6 +1819,21 @@ public final class ZLinkFrameworkRuntime
         } catch (RuntimeException failure) {
             if (!coreHwmContextActive.get()) {
                 return Optional.empty();
+            }
+            throw failure;
+        }
+    }
+
+    private <T> T inCapacityStateLane(Supplier<T> work) {
+        try {
+            return capacityStateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
             }
             throw failure;
         }
@@ -1928,11 +1947,12 @@ public final class ZLinkFrameworkRuntime
     }
 
     private void closeBackendContext() {
-        synchronized (capacityLock) {
+        inCapacityStateLane(() -> {
             coreHwmBudgetSnapshot().ifPresent(snapshot ->
                 lastCoreHwmStatus = projectCoreHwm(snapshot));
             coreHwmContextActive.set(false);
-        }
+            return null;
+        });
         applicationJobQueue.close();
         try {
             capacityMetricRegistration.close();

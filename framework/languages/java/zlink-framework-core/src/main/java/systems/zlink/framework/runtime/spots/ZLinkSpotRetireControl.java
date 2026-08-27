@@ -21,9 +21,12 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 /**
@@ -157,8 +160,10 @@ final class ZLinkSpotRetireControl {
 
     static final class Target {
         private final TargetEndpoint endpoint;
-        private final ConcurrentHashMap<Fence, Slot> slots =
-            new ConcurrentHashMap<>();
+        // A slot's staged/published/aborted fields and this index are one C2
+        // aggregate. A concurrent map would not preserve their transition.
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
+        private final Map<Fence, Slot> slots = new HashMap<>();
 
         private Target(TargetEndpoint endpoint) {
             this.endpoint = Objects.requireNonNull(endpoint, "endpoint");
@@ -182,9 +187,8 @@ final class ZLinkSpotRetireControl {
                 }
                 return stage(stage, encoded);
             }
-            Slot slot = slots.get(command.fence());
-            if (slot == null
-                || !slot.request.sourceNodeRid().equals(transportSource)) {
+            Slot slot = inStateLane(() -> slots.get(command.fence()));
+            if (slot == null || !slot.request.sourceNodeRid().equals(transportSource)) {
                 return failed(new IllegalStateException(
                     "relocation target stage is unavailable"));
             }
@@ -199,81 +203,135 @@ final class ZLinkSpotRetireControl {
             byte[] encoded) {
             byte[] digest = sha256(encoded);
             Slot candidate = new Slot(command.request(), digest);
-            Slot slot = slots.putIfAbsent(command.fence(), candidate);
-            if (slot == null) {
-                slot = candidate;
-                try {
-                    endpoint.stage(command.request())
-                        .whenComplete((ignored, failure) -> {
-                            if (failure == null) {
-                                candidate.staged.complete(null);
-                            } else {
-                                slots.remove(command.fence(), candidate);
-                                candidate.staged.completeExceptionally(
-                                    unwrap(failure));
-                            }
-                        });
-                } catch (RuntimeException failure) {
-                    slots.remove(command.fence(), candidate);
-                    candidate.staged.completeExceptionally(failure);
+            StageState state = inStateLane(() -> {
+                Slot slot = slots.get(command.fence());
+                if (slot == null) {
+                    slots.put(command.fence(), candidate);
+                    return new StageState(candidate, true, null);
                 }
-            } else if (!Arrays.equals(slot.stageDigest, digest)) {
-                return failed(new IllegalArgumentException(
-                    "duplicate relocation stage payload differs"));
-            }
-            synchronized (slot) {
+                if (!Arrays.equals(slot.stageDigest, digest)) {
+                    return new StageState(null, false,
+                        new IllegalArgumentException(
+                            "duplicate relocation stage payload differs"));
+                }
                 if (slot.aborted) {
-                    return failed(new IllegalStateException(
-                        "aborted relocation cannot be staged again"));
+                    return new StageState(null, false,
+                        new IllegalStateException(
+                            "aborted relocation cannot be staged again"));
                 }
+                return new StageState(slot, false, null);
+            });
+            if (state.failure != null) {
+                return failed(state.failure);
             }
-            return slot.staged.thenApply(ignored -> encodeAck(command.fence()));
+            if (state.start) {
+                startStage(command.fence(), candidate);
+            }
+            return state.slot.staged.thenApply(ignored -> encodeAck(command.fence()));
         }
 
         private CompletionStage<byte[]> publish(Slot slot) {
-            CompletableFuture<byte[]> published;
-            synchronized (slot) {
+            PublishState state = inStateLane(() -> {
                 if (slot.aborted) {
-                    return failed(new IllegalStateException(
-                        "aborted relocation cannot be published"));
+                    return new PublishState(null, null,
+                        new IllegalStateException(
+                            "aborted relocation cannot be published"));
                 }
                 if (slot.published != null) {
-                    return slot.published;
+                    return new PublishState(slot.published, null, null);
                 }
-                published = new CompletableFuture<>();
+                CompletableFuture<byte[]> published = new CompletableFuture<>();
                 slot.published = published;
+                return new PublishState(published, slot, null);
+            });
+            if (state.failure != null) {
+                return failed(state.failure);
+            }
+            if (state.start == null) {
+                return state.published;
             }
             //  Install the exact slot claim before a completed stage invokes
             //  endpoint.publish inline and reenters relocation control.
-            slot.staged
-                .thenCompose(ignored -> endpoint.publish(slot.request))
-                .thenApply(ignored -> encodeAck(slot.request.fence()))
+            state.start.staged
+                .thenCompose(ignored -> endpoint.publish(state.start.request))
+                .thenApply(ignored -> encodeAck(state.start.request.fence()))
                 .whenComplete((ack, failure) -> {
                     if (failure == null) {
-                        published.complete(ack);
+                        state.published.complete(ack);
                     } else {
-                        published.completeExceptionally(failure);
+                        state.published.completeExceptionally(failure);
                     }
                 });
-            return published;
+            return state.published;
         }
 
         private CompletionStage<byte[]> abort(Slot slot) {
-            synchronized (slot) {
+            AbortState state = inStateLane(() -> {
                 if (slot.published != null) {
-                    return failed(new IllegalStateException(
+                    return new AbortState(false, new IllegalStateException(
                         "published relocation cannot roll back to source"));
                 }
                 if (slot.aborted) {
-                    return CompletableFuture.completedFuture(
-                        encodeAck(slot.request.fence()));
+                    return new AbortState(false, null);
                 }
                 slot.aborted = true;
+                return new AbortState(true, null);
+            });
+            if (state.failure != null) {
+                return failed(state.failure);
+            }
+            if (!state.start) {
+                return CompletableFuture.completedFuture(
+                    encodeAck(slot.request.fence()));
             }
             return slot.staged.handle((ignored, stageFailure) -> null)
                 .thenCompose(ignored -> endpoint.abort(slot.request))
                 .thenApply(ignored -> encodeAck(slot.request.fence()));
         }
+
+        private void startStage(Fence fence, Slot candidate) {
+            try {
+                endpoint.stage(candidate.request).whenComplete((ignored, failure) -> {
+                    if (failure == null) {
+                        candidate.staged.complete(null);
+                    } else {
+                        inStateLane(() -> {
+                            slots.remove(fence, candidate);
+                            return null;
+                        });
+                        candidate.staged.completeExceptionally(unwrap(failure));
+                    }
+                });
+            } catch (RuntimeException failure) {
+                inStateLane(() -> {
+                    slots.remove(fence, candidate);
+                    return null;
+                });
+                candidate.staged.completeExceptionally(failure);
+            }
+        }
+
+        private <T> T inStateLane(Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
+            }
+        }
+
+        private record StageState(Slot slot, boolean start,
+                                  RuntimeException failure) { }
+        private record PublishState(CompletableFuture<byte[]> published,
+                                    Slot start,
+                                    RuntimeException failure) { }
+        private record AbortState(boolean start, RuntimeException failure) { }
 
     }
 
@@ -641,7 +699,7 @@ final class ZLinkSpotRetireControl {
         private final StageRequest request;
         private final byte[] stageDigest;
         private final CompletableFuture<Void> staged = new CompletableFuture<>();
-        private CompletionStage<byte[]> published;
+        private CompletableFuture<byte[]> published;
         private boolean aborted;
 
         private Slot(StageRequest request, byte[] stageDigest) {
