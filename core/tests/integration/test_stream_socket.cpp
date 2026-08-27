@@ -33,6 +33,7 @@ static const size_t stream_routing_id_size = 4;
 static const char *const stream_socket_smoke_cases[] = {
   "test_stream_callback_lifecycle",
   "test_stream_recv_api_dispatch_conflict",
+  "test_stream_no_data_recv_part_locks_raw_mode",
   "test_stream_successful_recv_part_locks_raw_mode",
   "test_stream_rejects_unrouted_send_without_poisoning_next_routed_send",
   "test_stream_notify_option_remains_available_with_dispatch",
@@ -1284,6 +1285,37 @@ void test_stream_recv_api_dispatch_conflict ()
     test_context_socket_close_zero_linger (stream);
 }
 
+void test_stream_no_data_recv_part_locks_raw_mode ()
+{
+    void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (stream);
+
+    zlink_msg_t part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_NO_DATA,
+      zlink_recv_part (stream, &source_rid, &part, &has_more,
+                       ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_BUSY,
+      zlink_stream_packet_handler (stream, &stream_packet_callback, NULL));
+    TEST_ASSERT_EQUAL_INT (EBUSY, zlink_errno ());
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_BUSY,
+      zlink_recv_handler (stream, stream_echo_msg_handler, NULL));
+    TEST_ASSERT_EQUAL_INT (EBUSY, zlink_errno ());
+
+    test_context_socket_close_zero_linger (stream);
+}
+
 #if defined(ZLINK_HAVE_WINDOWS)
 void test_stream_successful_recv_part_locks_raw_mode ()
 {
@@ -2519,6 +2551,9 @@ int main (void)
         RUN_TEST (test_stream_callback_lifecycle);
     if (should_run_stream_socket_test ("test_stream_recv_api_dispatch_conflict"))
         RUN_TEST (test_stream_recv_api_dispatch_conflict);
+    if (should_run_stream_socket_test (
+          "test_stream_no_data_recv_part_locks_raw_mode"))
+        RUN_TEST (test_stream_no_data_recv_part_locks_raw_mode);
     if (should_run_stream_socket_test ("test_stream_successful_recv_part_locks_raw_mode"))
         RUN_TEST (test_stream_successful_recv_part_locks_raw_mode);
     if (should_run_stream_socket_test (

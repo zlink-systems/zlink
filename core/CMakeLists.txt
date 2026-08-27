@@ -27,6 +27,7 @@ include(CheckCXXCompilerFlag)
 include(CheckLibraryExists)
 include(CheckCSourceCompiles)
 include(CheckCSourceRuns)
+include(CheckCXXSourceCompiles)
 include(CMakeDependentOption)
 include(CheckCXXSymbolExists)
 include(CheckStructHasMember)
@@ -1320,7 +1321,35 @@ endif()
 
 # Ensure ASIO configuration macros are consistent across all targets.
 if(ZLINK_HAVE_ASIO)
-  add_compile_definitions(BOOST_ASIO_STANDALONE=1 BOOST_ASIO_NO_DEPRECATED=1)
+  # In standalone mode Asio detects std::aligned_alloc from standard-library
+  # feature macros that may depend on header inclusion order. If translation
+  # units disagree, Asio's shared small-block recycling cache can allocate via
+  # aligned_alloc in one unit and release via operator delete in another.
+  # Probe once with the selected C++ standard and force one backend everywhere.
+  unset(ZLINK_HAVE_STD_ALIGNED_ALLOC CACHE)
+  unset(ZLINK_HAVE_STD_ALIGNED_ALLOC)
+  check_cxx_source_compiles(
+    "#include <cstddef>
+     #include <cstdlib>
+     int main() {
+       const std::size_t alignment = alignof(std::max_align_t);
+       void *p = std::aligned_alloc(alignment, alignment);
+       std::free(p);
+       return 0;
+     }"
+    ZLINK_HAVE_STD_ALIGNED_ALLOC)
+  if(ZLINK_HAVE_STD_ALIGNED_ALLOC)
+    set(ZLINK_ASIO_ALIGNED_ALLOC_DEFINITION BOOST_ASIO_HAS_STD_ALIGNED_ALLOC=1)
+    message(STATUS "ASIO aligned allocation backend: std::aligned_alloc")
+  else()
+    set(ZLINK_ASIO_ALIGNED_ALLOC_DEFINITION BOOST_ASIO_DISABLE_STD_ALIGNED_ALLOC=1)
+    message(STATUS "ASIO aligned allocation backend: platform fallback")
+  endif()
+
+  add_compile_definitions(
+    BOOST_ASIO_STANDALONE=1
+    BOOST_ASIO_NO_DEPRECATED=1
+    ${ZLINK_ASIO_ALIGNED_ALLOC_DEFINITION})
 endif()
 
 foreach(target ${build_targets})
@@ -1335,7 +1364,8 @@ foreach(target ${build_targets})
     # Use standalone Asio mode (no dependency on other Boost libraries)
     target_compile_definitions(${target} PRIVATE
       BOOST_ASIO_STANDALONE=1
-      BOOST_ASIO_NO_DEPRECATED=1)
+      BOOST_ASIO_NO_DEPRECATED=1
+      ${ZLINK_ASIO_ALIGNED_ALLOC_DEFINITION})
   endif()
 endforeach()
 

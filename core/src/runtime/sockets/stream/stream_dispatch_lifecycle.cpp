@@ -85,6 +85,12 @@ int zlink::stream_t::stream_set_packet_msg_handler_with_userdata (
 
 int zlink::stream_t::stream_mark_raw_part_receive ()
 {
+    // Raw-part receive is permanent for the lifetime of the socket. Once it
+    // wins the mode-selection race, later receive calls do not need to enter
+    // the API mutex again.
+    if (_raw_part_receive_active.load (std::memory_order_acquire))
+        return 0;
+
     std::lock_guard<std::recursive_mutex> lock (_api_mutex);
     if (_dispatch_active.load (std::memory_order_acquire)) {
         errno = EBUSY;
