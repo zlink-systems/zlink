@@ -5,50 +5,55 @@
 
 작성: 2026-08-26 · 갱신: 2026-08-27 · 브랜치 `refactor/lane-ownership-concurrency` (base `3cbfbde4f9`)
 
-## 0. 지금 이어받기 (2026-08-27 — 캠페인 꼬리)
+## 0. 지금 이어받기 (2026-08-27 세션 마감 — §0 남은 일 5항목 종결)
 
-**본체는 끝났다.** 4언어 L0·L1·L2 전부 종결, async 경계 스냅샷 실질 0(cp3-audit 전수),
-dotnet lock 999→113(−89%, 잔존 전부 정당화), 스펙 06 개정(발견 1~9 반영, `078d1e22b6`),
-Z0 cross-language e2e 전쌍 통과. **살아 있는 상태는 [progress.ko.md](progress.ko.md) §4
-추적표(T1~T9)가 정본**이고, 규칙·게이트·요청 템플릿·STOP·발견 로그·기존 실패 목록은
-[rules.ko.md](rules.ko.md)다. 새 세션은 **progress §4 → §1 매트릭스 → rules 전체** 순으로 읽는다.
+**이 문서 §0이 열거했던 남은 일 5항목을 항목별로 처리했다.** 살아 있는 상태는
+[progress.ko.md](progress.ko.md) §4 추적표가 정본이고, 규칙·게이트·측정 규율·발견 로그·
+기존 실패 목록은 [rules.ko.md](rules.ko.md)다.
 
-### 남은 일 (progress §4와 일치해야 한다)
+### §0 남은 일 5항목 처리 결과
 
-1. **T6/Z4 — dotnet ZoneWorld 이분 판정. 최우선.**
-   조용한 환경 ×8 측정 완료: **pass 1 / fail 7**, 모드 매런 상이(ZW-B8×2·D1×2·B4·G4·C2 —
-   progress T6 상세). "부하 오염" 가설 기각. **기준선 worktree가 준비돼 있다**:
-   `/home/hep7/project/zlink-z4base` = base `3cbfbde4f9` checkout + `.artifacts` 심링크 완료
-   (dotnet 샘플도 `.artifacts` 없으면 즉시 실패한다 — 심링크 필수).
-   - 기준선 트리의 `framework/languages/dotnet/samples`에서
-     `MSBUILDDISABLENODEREUSE=1 flock -w 14400 /tmp/zlink-dotnet-gate.lock timeout 1200 bash
-     run_samples.sh ZoneWorld` ×8 (첫 런은 빌드 포함 — timeout 1200 필요)
-   - 모드 분포를 현행(1/8)과 비교해 **기존 결함 vs 캠페인 회귀 판정**(TTT 판정 절차 `d0bb9d95a3`)
-   - 회귀로 나오면 콘솔 계측 추가 말고 **기존 `.flow`(message tracking)부터** 켜서 진단.
-     임시 로깅은 add-then-delete. 원인 확정 시 spec gap 3분류(스펙 근거/샘플 스펙/서버 spec gap) 기록.
-   - dotnet 판정 후 cpp ZoneWorld ×8 동일 측정.
-2. **T10 — CP3 감사 마무리.** node는 **보고 완료**(cp3-audit-node.ko.md — NOT CLEAN,
-   결함 의심 5건 H2·M3): 의심 5건을 codex로 검증(재현 또는 반박)하고 실증되면 수정+테스트.
-   **cpp·jvm 감사는 세션 종료로 미착수** — dotnet cp3-audit.ko.md와 같은 방법론으로 sol에 재요청
-   (요구 4항목: ①lock 취득 전수 계수 ②async 경계 스냅샷 전수 [정당화|결함 의심] 분류표
-   ③호환 경계 목록·잔존 사유 ④posddd ② 상위 10). 읽기 전용이라 Z4 측정과 병렬 가능.
-3. **T5 — java·cpp 샘플 스위트 재실행.** java는 teardown 근본 수정(`e4944785a1`) 반영 확인,
-   cpp는 TTT 기존 간헐(rules §4)을 감안해 TTT 외 그린 판정.
-4. **T4 — java FrameworkModuleBoundaryTest ReceiveFlowState import 1건** 캠페인 원인 여부 분류.
-5. **T9 — 추적표·메모리 최종 정리 + `spec/` 트리 재잠금**(§8-4) + worktree 정리
-   (`git worktree remove /home/hep7/project/zlink-z4base`) 후 **main 병합 판단은 사용자**.
+| # | 항목 | 결과 |
+|---|---|---|
+| 1 | T6/Z4 ZoneWorld 이분 판정 | **범위 제외** — 사용자 지시 2건(dotnet은 다른 세션 담당 / "zoneworld는 제외"). dotnet Z4도 cpp ZoneWorld ×8도 미수행. `zlink-z4base` worktree는 다른 세션이 쓰므로 **건드리지 않았다** |
+| 2 | T10 CP3 감사 마무리 | **완료** — node 의심 5건 전건 [실증]→수정, cpp·jvm 감사 신규 수행(요구 4항목 충족)→결함 8건 추가 발견→전건 수정. **결함 합계 13건** |
+| 3 | T5 java·cpp 샘플 스위트 | **완료** — node 6/6 · cpp 5/6 · java placement 6/6. 실패 2건은 대조로 이번 세션 무관 확정 |
+| 4 | T4 java import 분류 | **완료** — 기존 드리프트(도입 커밋 `22949bcedb`가 base 조상, offender·테스트 diff 0). T8 이월 |
+| 5 | T9 정리 | **완료** — 진행표·rules·메모리 갱신, **`spec/` 트리 재잠금 수행**(쓰기 가능 380→0), `zlink-cppbase` worktree 제거. **main 병합 판단은 사용자 몫으로 남긴다** |
 
-### 세션 운영 규칙 (요약 — 정본은 rules.ko.md)
+### 이 세션이 뒤집은 전제 두 개
 
-- **Claude는 감독·리뷰·판정·게이트·커밋만.** 구현은 codex
-  (`codex exec -m gpt-5.6-terra -c model_reasoning_effort="high" -s danger-full-access
-  --skip-git-repo-check ... < /dev/null` — **`< /dev/null` 필수**, 조사는 `-m gpt-5.6-sol`).
-- **게이트는 중앙(Claude)만 실행, 에이전트 집계 보고 맹신 금지**(부정확 보고 3회 실증 —
-  집계 원문을 요구한다). 트리 락 4개(`/tmp/zlink-{dotnet,cpp,node,jvm}-gate.lock` flock),
-  java·kotlin은 Gradle 트리 공유라 동시 빌드 금지. dotnet은 `MSBUILDDISABLENODEREUSE=1`,
-  행 의심 시 `--blame-hang --blame-hang-timeout 8m`.
-- cpp 중앙 빌드는 항상 `framework/languages/cpp/build`(에이전트 스테일 빌드 디렉터리 허위
-  보고 사례 3회).
+1. **"본체는 끝났다"가 사실이 아니었다.** cpp·jvm CP3 감사를 처음 돌리고 node 의심 5건을
+   검증하니 **4언어 전부 NOT CLEAN**, 결함 **13건 전건 실증**(node 5·cpp 2·jvm 6).
+2. **cpp 지표 −84%(204)는 계수 오류였다.** 관용구가 `std::lock_guard lock (_mutex);`인데
+   정규식이 변수명 낀 형태를 놓쳤다. 실측 **890**. 정정된 명령은 rules §6.
+
+### 최종 게이트 (이번 세션 변경이 만든 회귀 0건)
+
+| 게이트 | 결과 |
+|---|---|
+| node unit·계약 | contract 1538(기존 실패 23) · m6a 41/41 · m6b 104/104 · m6c 113/115(기존 2) |
+| jvm 4모듈 | core 1149/0 · kotlin 67/0 · connector 123/0 · redis 27/0 |
+| cpp unit·계약 | 45개 중 실패 1 = `layout_contract`(기존) |
+| **Z0 cross-language e2e** | **dotnet 무관 10스테이지 전부 rc=0** |
+| 6샘플(ZoneWorld 제외) | node 6/6 · cpp 5/6 · java placement 6/6 |
+
+**cpp 전환 890 → 512**: 소형 배치 101→0 · `channel_runtime` 37→0(T7 "미해소 C2" 해소) ·
+`public_host_runtime` 99→0(lane 6개, 주 mutex 선언 제거) · `spot_runtime` 151→34
+(`recursive_mutex` **132→0**, lane 5개).
+
+### 다음 세션이 이어받을 것
+
+- **ZoneWorld 전체**(Z1~Z4) — 이번 범위에서 제외됨
+- cpp `spot_node_builder_state_t::mutex`를 직접 취득하는 **허용 범위 밖 호출자 3개**
+  (`spot_runtime.hpp`에 호환용 `recursive_mutex` 선언 1개 잔존)
+- **기존 실패 이월**(rules §4): cpp Bingo `wait observer Entry Spot return` 정지(4/4, 결정적) ·
+  cpp `layout_contract` · java 금지 패턴 정적 검사 · node 계약 23건·m6c 2건
+- **핵심 내부 아키텍처의 언어 간 통일**(rules §9) — 진입 소유 형태와 정본 언어를 정하는 스펙 판정 사안
+- **main 병합 판단**(사용자)
+
+`spec/` 트리는 재잠금됐다. 다시 고쳐야 하면
+`chmod -R u+w framework/doc/framework/common/spec`로 풀고 작업 후 다시 잠근다.
 
 ## 1. 이 작업이 왜 시작됐나
 
