@@ -4,7 +4,7 @@ title: "상태 소유와 state lane"
 
 # 상태 소유와 state lane
 
-[Execution 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Payload 소유권과 codec](05-payload-ownership-and-codec.ko.md)
+[Execution 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Payload 소유권과 codec](05-payload-ownership-and-codec.ko.md) · [다음: 07. 직렬 실행기 계층](07-serial-executor-layers.ko.md)
 
 > 이 문서는 컴포넌트가 자신의 mutable 상태를 어떤 메커니즘으로 지키는지를 정의한다 —
 > 한 번에 하나의 turn만 그 상태를 만지도록 보장하는 primitive의 계약이다. 모든 언어
@@ -279,9 +279,28 @@ Mutable authorization을 그대로 넘겨 쓰면 잔존 결함이다. 최종 보
 가져다 쓰면 그 queue가 지고 있는 relocation·lifecycle 책임까지 함께 떠안게 된다. 그래서
 상태 소유에는 이 실행용 queue를 쓰지 않는다.
 
-다른 언어로 포팅할 때는 구체적인 자료형이나 API 모양을 그대로 옮기는 대신, 이 문서가
+다른 언어로 포팅할 때는 구체적인 자료형이나 언어 관용구를 그대로 옮기는 대신, 이 문서가
 정의하는 같은 보장 — 한 번에 한 turn만 실행, FIFO, 재진입의 즉시 예외 검출, 소유
 collection의 무잠금 — 을 만족하는 그 언어의 primitive를 쓴다.
+
+**다만 공개 표면의 이름과 계약은 예외다.** state lane의 다음 여섯은 4개 언어가 같은 이름
+(언어별 표기 변환만)과 같은 의미를 갖는다. 실측으로 이미 네 언어가 일치한다.
+
+| 계약 | 의미 | .NET | java | cpp | node |
+|---|---|---|---|---|---|
+| `current` | 현재 실행 중인 lane | `Current` | `current()` | `current()` | `current` |
+| `isOnLane` | 이 lane 위인가 | `IsOnLane` | `isOnLane()` | `is_on_lane()` | `isOnLane` |
+| `run` | lane turn에서 실행 | `RunAsync()` | `runAsync()` | `run()` | `run()` |
+| `tryPost` | 대기 없이 게시 | `TryPost()` | `tryPost()` | `try_post()` | `tryPost()` |
+| `throwIfReentrant` | 재진입 시 예외 | `ThrowIfReentrant()` | `throwIfReentrant()` | `throw_if_reentrant()` | `throwIfReentrant()` |
+| `close` | 종료 | `DisposeAsync()` | — | `close()` | `closed` |
+
+`throwIfReentrant`는 **선택이 아니라 필수 계약이다.** 상위 실행 단위가 직렬 소유를 보장하는
+자리라도 그 전제를 검사 없이 믿지 않는다 — 재진입이 뚫리면 hang이 되고, 검사하는 주체가
+없으면 조용히 데드락으로 나타난다.
+
+실행기 계층(Spot·Actor·Session 조율자와 직렬 큐 primitive)의 이름과 계약은
+[07. 직렬 실행기 계층](07-serial-executor-layers.ko.md)이 정한다.
 
 .NET은 lane 소유권 표시에 `AsyncLocal`을 쓰므로, 장기 작업을 시작하는 지점에서는
 `ExecutionContext.SuppressFlow`로 그 상속을 끊는다. Async 함수의 동기 prefix가 첫
@@ -334,4 +353,4 @@ Node.js의 동기 메서드는 하나의 JavaScript turn 안에서 끝나는 동
 
 ---
 
-[Execution 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Payload 소유권과 codec](05-payload-ownership-and-codec.ko.md)
+[Execution 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Payload 소유권과 codec](05-payload-ownership-and-codec.ko.md) · [다음: 07. 직렬 실행기 계층](07-serial-executor-layers.ko.md)

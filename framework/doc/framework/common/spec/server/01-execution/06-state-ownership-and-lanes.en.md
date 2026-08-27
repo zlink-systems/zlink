@@ -4,7 +4,7 @@ title: "State Ownership And State Lanes"
 
 # State Ownership And State Lanes
 
-[Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 05. Payload Ownership And Codec](05-payload-ownership-and-codec.en.md)
+[Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 05. Payload Ownership And Codec](05-payload-ownership-and-codec.en.md) · [Next: 07. Serial Executor Layers](07-serial-executor-layers.en.md)
 
 > This document defines the mechanism by which a component guards its own mutable state —
 > a primitive contract guaranteeing that only one turn touches that state at a time. Every
@@ -307,10 +307,30 @@ its state, borrowing this execution queue instead, would take on the relocation/
 responsibilities that queue carries along with it. For that reason, state ownership does not
 use this execution queue.
 
-When porting to another language, rather than carrying over the concrete type or API shape as
-is, use that language's primitive that satisfies the same guarantees this document defines —
+When porting to another language, rather than carrying over the concrete type or language idiom
+as is, use that language's primitive that satisfies the same guarantees this document defines —
 one turn executing at a time, FIFO, immediate exception detection on reentrancy, and no locking
 on owned collections.
+
+**The public surface names and contracts are the exception.** These six on the state lane carry
+the same name (spelling conversion only) and the same meaning across all four languages.
+Measurement confirms the four already agree.
+
+| Contract | Meaning | .NET | java | cpp | node |
+|---|---|---|---|---|---|
+| `current` | the lane currently executing | `Current` | `current()` | `current()` | `current` |
+| `isOnLane` | am I on this lane | `IsOnLane` | `isOnLane()` | `is_on_lane()` | `isOnLane` |
+| `run` | execute in a lane turn | `RunAsync()` | `runAsync()` | `run()` | `run()` |
+| `tryPost` | post without waiting | `TryPost()` | `tryPost()` | `try_post()` | `tryPost()` |
+| `throwIfReentrant` | throw on reentrancy | `ThrowIfReentrant()` | `throwIfReentrant()` | `throw_if_reentrant()` | `throwIfReentrant()` |
+| `close` | shut down | `DisposeAsync()` | — | `close()` | `closed` |
+
+`throwIfReentrant` is a **required contract, not an option.** Even where an upper execution unit
+guarantees serial ownership, do not trust that premise unchecked — once reentrancy slips through
+it becomes a hang, and with nobody checking it surfaces as a silent deadlock.
+
+Names and contracts for the executor layers (Spot/Actor/Session coordinators and the serial queue
+primitive) are set by [07. Serial executor layers](07-serial-executor-layers.en.md).
 
 In .NET, the lane-ownership marker uses `AsyncLocal`, so break that inheritance at the point a
 long-running operation is started with `ExecutionContext.SuppressFlow`. If the async function's
@@ -367,4 +387,4 @@ language's unit test and sample gate results. Each item leads to one test.
 
 ---
 
-[Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 05. Payload Ownership And Codec](05-payload-ownership-and-codec.en.md)
+[Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 05. Payload Ownership And Codec](05-payload-ownership-and-codec.en.md) · [Next: 07. Serial Executor Layers](07-serial-executor-layers.en.md)
