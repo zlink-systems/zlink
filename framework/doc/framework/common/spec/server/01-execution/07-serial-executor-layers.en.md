@@ -315,6 +315,16 @@ matches because under any of these exactly one party drives that queue at a time
 out in submission order. The criterion for checking this is "Concurrency and order per execution
 mode" in §10.
 
+**What this pattern is called.** The overall shape — enqueue an invocation and let a scheduler
+take them one at a time — is **Active Object** in the pattern literature (Lavender & Schmidt,
+PLoP 1995 · *Pattern Languages of Program Design 2*, 1996). That original gives each object its
+own scheduler thread, though. Running on shared resources with no thread per owner, and the flag
+decision that splits "drive it yourself" from "just publish" in order to do so, belong to the
+**combining** lineage — Oyama, Taura, and Yonezawa, *Executing parallel programs with
+synchronization bottlenecks efficiently* (1999), and flat combining (Hendler, Incze, Shavit, and
+Tzafrir, SPAA 2010). That all four language runtimes arrived at the same shape without
+referencing each other is not coincidence; each followed this lineage.
+
 ### 6.6 The Loop That Drives Turns
 
 Once woken, the loop **admits only one caller at a time.** It takes one work item, runs it on a

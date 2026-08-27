@@ -306,6 +306,15 @@ Enqueue(work)
 도는 주체가 한 번에 하나이고 꺼내는 순서가 제출 순서이기 때문이다. 확인 기준은 §10의
 "실행 mode별 동시 실행과 순서"다.
 
+**이 패턴의 이름.** 호출을 queue에 넣고 scheduler가 하나씩 꺼내 실행하는 전체 모양은 패턴
+문헌의 **Active Object**다(Lavender & Schmidt, PLoP 1995 · *Pattern Languages of Program
+Design 2*, 1996). 다만 그 원형은 객체마다 전용 scheduler thread를 둔다. 이 문서가 owner마다
+thread를 두지 않고 공유 자원 위에서 돌리는 것, 그리고 그러기 위해 "제출자가 직접 돌릴지
+게시만 할지"를 flag로 가르는 것은 **combining** 계열에 해당한다 — Oyama·Taura·Yonezawa,
+*Executing parallel programs with synchronization bottlenecks efficiently*(1999)와 flat
+combining(Hendler·Incze·Shavit·Tzafrir, SPAA 2010). 네 언어 runtime이 서로 참조 없이 같은
+모양이 된 것은 우연이 아니라 이 계보를 각자 따라간 결과다.
+
 ### 6.6 turn을 구동하는 loop
 
 깨어난 loop는 **한 번에 하나만 들어간다.** 작업 하나를 꺼내 turn 위에서 돌리고, 끝나면 다음
