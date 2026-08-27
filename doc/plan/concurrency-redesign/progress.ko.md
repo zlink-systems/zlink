@@ -23,14 +23,14 @@ jvm 열은 java·kotlin을 함께 적는다(빌드 트리 공유). 언어별 클
 | **마무리** 호환 경계 회수 | **판정 완료** — 실질 스냅샷 0 달성(cp3-audit), 경계 656은 §5 조건 충족 시 사유 기록 잔존·핫패스 회수는 이월 | 대기 | 대기 | **해당없음** |
 | **마무리** posddd ② 잔여 | **최우선 완료**(OperationLease 0B 검증) — 나머지는 이월 후보 | 대기 | 대기 | 대기 |
 | **마일스톤 게이트** (CP3) | **대부분 완료** — unit 1900/0·6샘플·cross-language e2e 그린, 스냅샷 실질 0, sol 감사·스펙 06 개정(`078d1e22b6`) 완료. §8 판정: Z2 부분 하위증상 입증(0/3→3/5) | 대기 | 대기 | 대기 |
-| **Z0** cross-language e2e 그린 (샘플 작업 선행) | 대기 — 전 언어 락 단독, 공동 1회 | ← | ← | ← |
-| **샘플** TicTacToe | 대기 | 대기 | 대기 | 대기 |
-| **샘플** Bingo | 대기 | 대기 (flake ~1/5 주의) | 대기 | 대기 |
-| **샘플** SupportChat | 대기 | 대기 | 대기 | 대기 |
-| **샘플** ShoppingMall | 대기 | 대기 (layout_contract 기존 실패 — rules §4) | 대기 | 대기 |
-| **샘플** DeliveryDispatch | 대기 | 대기 | 대기 | 대기 |
-| **샘플** GameQuest | 대기 | 대기 | 대기 | 대기 |
-| **샘플** ZoneWorld (Z1~Z4) | 대기 — Z2 mesh admission 수정 | 대기 — Z1 split-brain·Z3 fast_mutex 수정 | 대기 | 대기 |
+| **Z0** cross-language e2e 그린 (샘플 작업 선행) | **완료** — 전쌍 통과 (2026-08-27) | ← | ← | ← |
+| **샘플** TicTacToe | **완료** (CP2-7 스위트 그린) | 대기 — TTT JoinGameNotify 유실은 **기존 결함 판정**(worktree 이분 실증 `d0bb9d95a3`, rules §4) | java 재실행 대기(T5) | **완료** (T2 후 스위트 그린) |
+| **샘플** Bingo | **완료** (CP2-7 스위트 그린) | 재실행 대기 (flake ~1/5 주의) | java 재실행 대기(T5) | **완료** (스위트 그린) |
+| **샘플** SupportChat | **완료** (CP2-7 스위트 그린) | 재실행 대기 | java 재실행 대기(T5) | **완료** (스위트 그린) |
+| **샘플** ShoppingMall | **완료** (CP2-7 스위트 그린) | 재실행 대기 (layout_contract 기존 실패 — rules §4) | java 재실행 대기(T5) | **완료** (스위트 그린) |
+| **샘플** DeliveryDispatch | **완료** (CP2-7 스위트 그린) | 재실행 대기 | java 재실행 대기(T5) | **완료** (스위트 그린) |
+| **샘플** GameQuest | **완료** (CP2-7 스위트 그린) | 재실행 대기 | java 재실행 대기(T5) | **완료** (스위트 그린) |
+| **샘플** ZoneWorld (Z1~Z4) | Z2 수정 커밋 · **Z4 조용한 측정 진행 중 — 4런 연속 실패(모드 상이, T6)** | Z1·Z3 수정 커밋 · Z4 대기 | 대기 | 대기 |
 
 \* L2 클래스 전환 진입 조건: 해당 언어 L1 완료 + dotnet 마일스톤 게이트 통과 (rules §2).
 샘플 행은 최종 단계에서 **1개 완료마다 감독관 리뷰** 후 다음으로(rules §3.1). ZoneWorld 외
@@ -92,7 +92,7 @@ node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 | T3 | java 샘플 릴리스 게이트 지문 5건 | **종결** | 기존 드리프트 확정·지문 갱신 22/22, 커밋됨 |
 | T4 | java FrameworkModuleBoundaryTest ReceiveFlowState import 1건 | 분류 필요 | 캠페인 원인 여부 미판정 |
 | T5 | 언어별 샘플 스위트 | node **그린** · java **teardown 근본 수정 커밋**(재실행 대기) · cpp TTT는 **기존 결함 판정**(worktree 이분 실증 — 배치9 이전 4/6 동일 실패, rules §4 등재·이월) | cpp 스위트는 TTT 기존 간헐 감안해 재실행 판정 |
-| T6 | Z4 — ZoneWorld 조용한 반복 측정(dotnet·cpp 각 8~30런) 후 게이트 복귀 | 대기 | Z1·Z2 수정 커밋됨. 부하 없는 상태에서 측정 |
+| T6 | Z4 — ZoneWorld 조용한 반복 측정(dotnet·cpp 각 8~30런) 후 게이트 복귀 | **진행 중 — dotnet 측정 결과 나쁨** | 조용한 환경 dotnet ×8 중 1~4런 **전부 실패, 모드가 매런 다름**: ①ZW-B8(JoinWorldRes 타임아웃·경계 후 재접속이 relocated Actor 재바인딩 실패) ②ZW-B4(ZoneChangedNotify 타임아웃) ③ZW-G4(WebSocket Aborted·Unavailable 종료 실패) ④ZW-D1(WorldAnnounceNotify 미기대 도착). **"부하 오염" 가설 기각** — 이전 2/8 실패는 부하 탓이 아니었다. 다음: 8런 완주 후 worktree 이분(TTT 절차 재사용, handoff §0)으로 기존 vs 캠페인 회귀 판정 → 필요 시 .flow 계측 진단. 측정 명령: `cd framework/languages/dotnet/samples && flock -w 7200 /tmp/zlink-dotnet-gate.lock timeout 420 bash run_samples.sh ZoneWorld` 반복 |
 | T7 | 구조 보류 판정 (cpp channel_runtime_state·mesh_node_runtime, node STOP 9건, dotnet ChannelRuntimeManager 잔여 확인) | 마일스톤 기록 완료 | 필요 시 후속 캠페인 |
 | T8 | 기존 결함 이월 (cpp layout_contract 샘플 blocking result, node m6c 계약 2건, java module boundary?) | 이월 목록 | rules §4 |
 | T9 | 최종 문서·메모리 정리 + main 병합 판단(사용자) | 대기 | |

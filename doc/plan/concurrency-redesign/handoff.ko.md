@@ -3,7 +3,45 @@
 이 문서 하나로 새 세션이 이어받을 수 있게 쓴다. 설계 근거는
 [design.ko.md](design.ko.md), 이 문서는 **지금 어디까지 됐고 다음에 무엇을 하는가**다.
 
-작성: 2026-08-26 · 브랜치 `refactor/lane-ownership-concurrency` (base `3cbfbde4f9`)
+작성: 2026-08-26 · 갱신: 2026-08-27 · 브랜치 `refactor/lane-ownership-concurrency` (base `3cbfbde4f9`)
+
+## 0. 지금 이어받기 (2026-08-27 — 캠페인 꼬리)
+
+**본체는 끝났다.** 4언어 L0·L1·L2 전부 종결, async 경계 스냅샷 실질 0(cp3-audit 전수),
+dotnet lock 999→113(−89%, 잔존 전부 정당화), 스펙 06 개정(발견 1~9 반영, `078d1e22b6`),
+Z0 cross-language e2e 전쌍 통과. **살아 있는 상태는 [progress.ko.md](progress.ko.md) §4
+추적표(T1~T9)가 정본**이고, 규칙·게이트·요청 템플릿·STOP·발견 로그·기존 실패 목록은
+[rules.ko.md](rules.ko.md)다. 새 세션은 **progress §4 → §1 매트릭스 → rules 전체** 순으로 읽는다.
+
+### 남은 일 (progress §4와 일치해야 한다)
+
+1. **T6/Z4 — dotnet ZoneWorld 조용한 반복 측정이 나쁘다. 최우선.**
+   조용한 환경 ×8 중 1~4런 전부 실패, **모드가 매런 다름**(ZW-B8/B4/G4/D1 — progress T6에
+   상세). "이전 2/8 실패=부하 오염" 가설은 기각됐다. 다음 순서:
+   - ×8 완주 후 실패 모드 집계 (`framework/languages/dotnet/samples`에서
+     `flock -w 7200 /tmp/zlink-dotnet-gate.lock timeout 420 bash run_samples.sh ZoneWorld` 반복)
+   - **worktree 이분으로 기존 결함 vs 캠페인 회귀 판정** — cpp TTT 때 쓴 절차(`d0bb9d95a3`):
+     `git worktree add <경로> <캠페인 이전 커밋>` → dotnet은 그 트리에서 그대로 빌드·같은 ×8 측정
+     → 이전에도 같은 비율로 실패하면 기존, 아니면 회귀(이분 계속)
+   - 원인 진단은 콘솔 계측 추가 말고 **기존 `.flow`(message tracking)부터 켜서 읽는다**.
+     임시 로깅은 add-then-delete.
+   - dotnet 판정 후 cpp ZoneWorld ×8 동일 측정.
+2. **T5 — java·cpp 샘플 스위트 재실행.** java는 teardown 근본 수정(`e4944785a1`) 반영 확인,
+   cpp는 TTT 기존 간헐(rules §4)을 감안해 TTT 외 그린 판정.
+3. **T4 — java FrameworkModuleBoundaryTest ReceiveFlowState import 1건** 캠페인 원인 여부 분류.
+4. **T9 — 추적표·메모리 최종 정리 + `spec/` 트리 재잠금**(§8-4) 후 **main 병합 판단은 사용자**.
+
+### 세션 운영 규칙 (요약 — 정본은 rules.ko.md)
+
+- **Claude는 감독·리뷰·판정·게이트·커밋만.** 구현은 codex
+  (`codex exec -m gpt-5.6-terra -c model_reasoning_effort="high" -s danger-full-access
+  --skip-git-repo-check ... < /dev/null` — **`< /dev/null` 필수**, 조사는 `-m gpt-5.6-sol`).
+- **게이트는 중앙(Claude)만 실행, 에이전트 집계 보고 맹신 금지**(부정확 보고 3회 실증 —
+  집계 원문을 요구한다). 트리 락 4개(`/tmp/zlink-{dotnet,cpp,node,jvm}-gate.lock` flock),
+  java·kotlin은 Gradle 트리 공유라 동시 빌드 금지. dotnet은 `MSBUILDDISABLENODEREUSE=1`,
+  행 의심 시 `--blame-hang --blame-hang-timeout 8m`.
+- cpp 중앙 빌드는 항상 `framework/languages/cpp/build`(에이전트 스테일 빌드 디렉터리 허위
+  보고 사례 3회).
 
 ## 1. 이 작업이 왜 시작됐나
 
@@ -175,9 +213,8 @@ design.ko.md §7의 순서는 `_gate` 밀도로 정한 초안이다. **표본이
 
 ## 7. 이어받을 때 알아야 할 제약
 
-- **진행 방식·현황·병렬 단계·보고 프로토콜은 [progress.ko.md](progress.ko.md)가 정본이다.**
-  이 문서는 배경과 설계 근거를 담고, 살아 있는 상태는 그쪽에서 갱신한다. 새 세션은
-  progress §2(현황) → §4(언어 병렬 단계) → §5(보고·리뷰 프로토콜) 순으로 읽으면 된다.
+- **현황은 [progress.ko.md](progress.ko.md)(진행표 — 여기서만 상태 갱신), 규칙·프로토콜은
+  [rules.ko.md](rules.ko.md)가 정본이다.** 이 문서는 배경·설계 근거·이어받기 요약(§0)만 담는다.
 - **.NET이 규칙의 정본이다.** 다른 언어는 .NET에서 확정된 규칙을 옮긴다. 다만 언어별
   primitive 포팅(progress §4 L0)은 dotnet 전환과 무의존이라 **지금 병렬로 착수 가능**하다.
   빌드 트리는 4개(dotnet·cpp·node·JVM)이고 **java와 kotlin은 Gradle 트리를 공유하므로
@@ -194,18 +231,18 @@ design.ko.md §7의 순서는 `_gate` 밀도로 정한 초안이다. **표본이
   프롬프트에 넣는다. 이 세션에서 codex가 검증 없이 변경만 남기고 죽은 사례가 있었고, 그 변경이
   단위 테스트를 깨뜨려 되돌렸다.
 
-## 8. 별개로 남아 있는 캠페인 미완료 4건
+## 8. spec-server-reorg에서 넘어온 4건 — 현재 상태 (2026-08-27)
 
-spec-server-reorg 캠페인은 본체가 끝나 `3cbfbde4f9`로 `main`에 푸시됐다. 남은 4건은 이 작업과
-별개이며 잊지 않도록 여기 적어 둔다. 상세는 `doc/plan/spec-server-reorg/progress.ko.md` §8.1.
+spec-server-reorg 캠페인은 본체가 끝나 `3cbfbde4f9`로 `main`에 푸시됐다. 넘어온 4건은 이
+캠페인의 Z1~Z4로 흡수됐다. 상세는 `doc/plan/spec-server-reorg/progress.ko.md` §8.1.
 
-1. **cpp ZoneWorld 세션 split-brain** — 서버는 세션을 죽은 것으로 보는데 client는 살아 있다고
-   본다. 종료 경로 3개 중 하나는 고쳤으나 실패 경로 확정은 미완. 7샘플 일괄이 재현 경로다.
-2. **dotnet ZoneWorld mesh admission** — `Hello` 무한 반복. 직접 3회 실행 0/3. 기존 결함이며
-   codex 시도는 단위 테스트를 깨뜨려 되돌렸다.
-3. **`fast_mutex.hpp:76` abort** — `EINVAL` on unlock = 소유 객체 파괴. 1번과 같은 계열로 본다.
-4. **`spec/` 트리 재잠금** — 리뷰가 닫히면
-   `chmod -R a-w framework/doc/framework/common/spec` 한 줄.
-
-**1·2·3은 이 동시성 작업의 하위 증상으로 판단**해 개별 추적을 중단한 상태다. 표본 전환이
-성공하면 같은 원인인지 다시 본다.
+1. **Z1 — cpp ZoneWorld 세션 split-brain**: **수정 커밋됨.** 교체된 peer의 stale 후보 고정
+   재시도가 원인 — (RID, lifecycle, epoch) operation-local 제외+후보 재조회로 수정
+   (spec 03-mesh-node §5.2·§6, 08-routing 근거).
+2. **Z2 — dotnet ZoneWorld mesh admission**: **수정 커밋됨**(Z1과 같은 계열,
+   `ZLinkActorManagerService`+`ZLinkMeshNodeTargetAvailability`). 0/3→3/5로 개선 실증했으나
+   **Z4 조용한 측정에서 다른 모드로 계속 실패 중**(§0-1) — 잔여 결함 존재.
+3. **Z3 — `fast_mutex.hpp:76` abort**: `shared_ptr<unique_lock>` 형태 코드 제거, 재현 0. **종결.**
+4. **`spec/` 트리 재잠금** — 아직 안 했다. 캠페인 종료 시
+   `chmod -R a-w framework/doc/framework/common/spec` 한 줄. (스펙 06 개정이 끝났으므로
+   T9에서 실행)
