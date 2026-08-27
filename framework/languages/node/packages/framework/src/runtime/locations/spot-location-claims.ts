@@ -242,18 +242,22 @@ export class ZLinkSpotLocationClaims {
             meshName: tracked.row.meshName,
             spotId: tracked.row.spotId
           });
+          if (this.spots.get(canonical) !== tracked) continue;
           if (current === undefined
             || current.ownerId !== owner.ownerId
             || (current.leaseGeneration !== tracked.row.leaseGeneration
               && current.leaseGeneration !== owner.leaseGeneration)) {
+            if (this.spots.get(canonical) !== tracked) continue;
             this.spots.delete(canonical);
             await tracked.deactivate?.();
             continue;
           }
           if (current.leaseGeneration === owner.leaseGeneration) {
+            if (this.spots.get(canonical) !== tracked) continue;
             tracked.row = { ...current };
             continue;
           }
+          if (this.spots.get(canonical) !== tracked) continue;
           const result = await this.runtime.writeSpot(
             current,
             ZLinkLocationWriteIntent.Takeover
@@ -264,6 +268,7 @@ export class ZLinkSpotLocationClaims {
             ));
             continue;
           }
+          if (this.spots.get(canonical) !== tracked) continue;
           tracked.row = {
             ...current,
             ownerId: owner.ownerId,
@@ -276,14 +281,17 @@ export class ZLinkSpotLocationClaims {
 
         const key = encodeAuthorityKey('instance_spot', String(tracked.spotId));
         const current = await this.authorityStore?.readAuthority(key);
+        if (this.spots.get(canonical) !== tracked) continue;
         if (current === undefined || current.kind === 'missing'
           || !matchesTrackedAuthorityIdentity(current, tracked)
           || current.ownerId !== owner.ownerId) {
+          if (this.spots.get(canonical) !== tracked) continue;
           this.spots.delete(canonical);
           await tracked.deactivate?.();
           continue;
         }
         if (current.ownerLeaseGeneration !== owner.leaseGeneration) {
+          if (this.spots.get(canonical) !== tracked) continue;
           const rebound = await this.authorityStore!.compareExchangeAuthority(
             key,
             current.storeVersion,
@@ -303,9 +311,11 @@ export class ZLinkSpotLocationClaims {
             ));
             continue;
           }
+          if (this.spots.get(canonical) !== tracked) continue;
           tracked.storeVersion = rebound.storeVersion.value;
           tracked.ownerLeaseGeneration = owner.leaseGeneration;
         } else {
+          if (this.spots.get(canonical) !== tracked) continue;
           tracked.storeVersion = current.storeVersion.value;
         }
       } catch (error) {

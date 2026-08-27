@@ -404,7 +404,21 @@ class channel_native_client_t
             {
                 zlink::message_t request_header = parts[0];
                 zlink::message_t request_body = parts[1];
+                std::lock_guard client_lock (_mutex);
+                if (_closed.load (std::memory_order_acquire)
+                    || _transport != transport) {
+                    co_return detail::boundary_failure<
+                      runtime::messaging::message_parts_t> (
+                      detail::boundary_error_t::shutdown,
+                      "channel native client is closed");
+                }
                 std::lock_guard transport_lock (transport->mutex);
+                if (!transport->socket) {
+                    co_return detail::boundary_failure<
+                      runtime::messaging::message_parts_t> (
+                      detail::boundary_error_t::shutdown,
+                      "channel native client is closed");
+                }
                 pending.emplace (
                   transport->socket->request ()
                     .message (request_header)
@@ -478,7 +492,19 @@ class channel_native_client_t
             const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
               operation_deadline - now);
             {
+                std::lock_guard client_lock (_mutex);
+                if (_closed.load (std::memory_order_acquire)
+                    || _transport != transport) {
+                    throw detail::make_boundary_exception (
+                      detail::boundary_error_t::shutdown,
+                      "channel native client is closed");
+                }
                 std::lock_guard transport_lock (transport->mutex);
+                if (!transport->socket) {
+                    throw detail::make_boundary_exception (
+                      detail::boundary_error_t::shutdown,
+                      "channel native client is closed");
+                }
                 const auto configured_timeout =
                   transport->socket->options ().send_timeout ();
                 // The routed submit is synchronous, so the per-operation

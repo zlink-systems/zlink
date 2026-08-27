@@ -9833,6 +9833,12 @@ node_rid_t spot_node_runtime_t::node_rid () const
 std::optional<std::string> spot_node_runtime_t::spot_name_for (spot_id_t spot_id) const
 {
     std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    return spot_name_for_unlocked (spot_id);
+}
+
+std::optional<std::string>
+spot_node_runtime_t::spot_name_for_unlocked (const spot_id_t &spot_id) const
+{
     const auto found = _state->spot_names_by_id.find (std::string (spot_id));
     if (found == _state->spot_names_by_id.end ()) {
         return std::nullopt;
@@ -9960,7 +9966,7 @@ void spot_node_runtime_t::record_actor_spot (const actor_ref_t &actor_ref, spot_
 {
     std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
     const auto key = actor_key (actor_ref);
-    auto name = spot_name_for (spot_id).value_or ("");
+    auto name = spot_name_for_unlocked (spot_id).value_or ("");
     detail::record_actor_route_unlocked (
       *_state, key,
       spot_route_t{node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),

@@ -635,6 +635,7 @@ export class ZLinkActorPacketRelay {
       ? undefined
       : await aggregateOwner.committedRoute(actor.actorId);
     const storedActorRef = aggregateRoute?.actor ?? storedRoute?.actor ?? actor.ref;
+    const capturedTenureKey = this.targets.tenureKeyForActorRef(actor.actorId, storedActorRef);
     if (
       localNodeRid !== undefined
       && routingIdsEqual(storedActorRef.nodeRid, localNodeRid)
@@ -746,13 +747,23 @@ export class ZLinkActorPacketRelay {
       signal
     );
     const actorPacketTarget = this.targets.decodeFromWire(reply.actorPacketTarget);
+    const currentStoredRoute = await streamRuntime.sessionRouteFence(actor.actorId);
+    const currentAggregateRoute = aggregateOwner === undefined
+      ? undefined
+      : await aggregateOwner.committedRoute(actor.actorId);
+    const currentActorRef = currentAggregateRoute?.actor ?? currentStoredRoute?.actor ?? actor.ref;
+    const currentTenure = this.targets.tenureKeyForActorRef(actor.actorId, currentActorRef)
+      === capturedTenureKey;
     if (
+      currentTenure
+      && this.targets.tenureKeyForActor(actor) === capturedTenureKey
+      &&
       actorPacketTarget !== undefined &&
       (localNodeRid === undefined || !routingIdsEqual(actorPacketTarget.targetNodeRid, localNodeRid))
     ) {
-      this.targets.rememberActorTarget(actor, actorPacketTarget);
-    } else if (reply.ok !== false) {
-      this.targets.clear(actor.actorId);
+      this.targets.rememberActorTarget(actor, actorPacketTarget, capturedTenureKey);
+    } else if (currentTenure && reply.ok !== false) {
+      this.targets.clear(actor.actorId, capturedTenureKey, actor);
     }
     if (reply.deferredResponse === true && reply.ok !== false) {
       return true;

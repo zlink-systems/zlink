@@ -484,6 +484,80 @@ test('managed stream skips native unbind after transport teardown', async () => 
   assert.equal(nativeUnbinds, 0);
 });
 
+test('managed stream fences a native bind that completes after transport teardown', async () => {
+  const operations = new Map();
+  let nextOperation = 1n;
+  let releaseBind;
+  const bindCanFinish = new Promise((resolve) => { releaseBind = resolve; });
+  let nativeUnbinds = 0;
+  const operation = (kind) => {
+    const id = { high: 0n, low: nextOperation++ };
+    operations.set(id.low, kind);
+    return id;
+  };
+  const binding = {
+    actor: { actorId: 'actor-bind-closed', generation: 1n },
+    bindingGeneration: 9n
+  };
+  const service = {
+    start() {}, shutdown() { return 0; }, close() {},
+    status() {
+      return {
+        state: 2, lifecycleGeneration: 1n, sessionCount: 1n,
+        bindingCount: 1n, pendingMessageCount: 0n, pendingByteCount: 0n, lastError: 0
+      };
+    },
+    lookupActor() { return operation('lookup'); },
+    bindActor() { return operation('bind'); },
+    unbindActor(_sessionRid, _actor, bindingGeneration) {
+      nativeUnbinds += 1;
+      assert.equal(bindingGeneration, 9n);
+      return operation('unbind');
+    },
+    bindings() { return [binding]; },
+    sendToActor() { throw new Error('closed binding must not send'); }
+  };
+  const completions = {
+    async submit(work) {
+      const id = work();
+      const kind = operations.get(id.low);
+      if (kind === 'bind') await bindCanFinish;
+      return {
+        terminalResult: 0,
+        failureErrno: 0,
+        operationKind: 0,
+        kindData: kind === 'lookup'
+          ? { kind: 'actorLookupCompletion', location: { actor: {
+            actorId: 'actor-bind-closed', generation: 1n, nodeRid: 'node-a'
+          } } }
+          : null,
+        parts: []
+      };
+    }
+  };
+  const stream = new framework.ZLinkManagedStream(
+    { send() { return true; }, disconnectPeer() {}, recv() { return undefined; } },
+    'session-rid', undefined, service, completions
+  );
+
+  const bindingAttempt = stream.bindActor({
+    actorId: 'actor-bind-closed', objectGeneration: 1n, meshName: 'play', nodeRid: 'node-a'
+  }, 1000);
+  await new Promise((resolve) => setImmediate(resolve));
+  stream.markTransportClosed();
+  releaseBind();
+
+  await assert.rejects(bindingAttempt, (error) => {
+    assert.equal(
+      framework.internalFrameworkErrorKind(error),
+      framework.ZLinkFrameworkInternalErrorKind.RouteNotConnected
+    );
+    return true;
+  });
+  assert.equal(nativeUnbinds, 1);
+  await assert.rejects(() => stream.sendBoundActor('actor-bind-closed', []));
+});
+
 test('managed stream accepts an internal unbind result after the exact delivery is gone', async () => {
   const operations = new Map();
   let nextOperation = 1n;
@@ -2201,6 +2275,45 @@ test('remote bound session receiver completes a stale best-effort delivery witho
     'Notify',
     new Map()
   );
+});
+
+test('routed bound-session receive does not regress a newer ownership generation', async () => {
+  let releaseOldTargetUpdate;
+  const oldTargetUpdate = new Promise((resolve) => { releaseOldTargetUpdate = resolve; });
+  const rebound = [];
+  const delivered = [];
+  const relay = new ZLinkRemoteBoundSessionRelay({
+    async updateRemoteActorPacketTarget(_actorId, target) {
+      if (target === 'old') await oldTargetUpdate;
+    },
+    streamBindingRuntime() {
+      return {
+        async rebindActor(actorRef) { rebound.push(actorRef.ownershipGeneration); },
+        async sendLocalBoundSession(_actorId, message) {
+          delivered.push(message.marker);
+          return true;
+        }
+      };
+    },
+    actorManager: () => undefined,
+    boundSessionFactory() {
+      throw new Error('stale receive must not fall back');
+    }
+  });
+  const oldReceive = relay.receiveRoutedBoundSession(
+    'actor-generation-fence', { marker: 'old' }, 'Notify', new Map(),
+    { actorId: 'actor-generation-fence', ownershipGeneration: 1n }, 'old'
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  await relay.receiveRoutedBoundSession(
+    'actor-generation-fence', { marker: 'new' }, 'Notify', new Map(),
+    { actorId: 'actor-generation-fence', ownershipGeneration: 2n }, 'new'
+  );
+  releaseOldTargetUpdate();
+  await oldReceive;
+
+  assert.deepEqual(rebound, [2n]);
+  assert.deepEqual(delivered, ['new']);
 });
 
 test('routed target push refreshes a bound session to the transferred actor ref before delivery', async () => {
@@ -5023,6 +5136,36 @@ test('remote actor packet target refresh replaces the session actor cache after 
   });
 
   assert.equal(String(store.cachedTargetForActor(actor).spotId), 'zone-sw');
+});
+
+test('remote actor packet target rejects a reply captured for an older actor tenure', () => {
+  const actor = {
+    actorId: 'actor-target-tenure',
+    ref: {
+      nodeRid: 'session-node', actorId: 'actor-target-tenure', meshName: '', objectGeneration: 1n,
+      bindingGeneration: 3n, ownershipGeneration: 5n, ownerLeaseGeneration: 7n
+    }
+  };
+  const stateTargets = [];
+  const store = new ZLinkRemoteActorPacketTargetStore({
+    actorManager: () => ({
+      setRemoteActorPacketTarget(target) { stateTargets.push(target); }
+    }),
+    streamBindingRuntime: () => ({}),
+    meshRouters: {},
+    primaryNodeRid: () => 'session-node'
+  });
+  const expected = store.tenureKeyForActor(actor);
+  actor.ref = { ...actor.ref, ownershipGeneration: 6n, ownerLeaseGeneration: 8n };
+
+  store.rememberActorTarget(actor, {
+    routerChannelId: 'game.route', targetNodeRid: 'node-b', spotId: 'spot-b',
+    spotKind: framework.ZLinkSpotKind.User
+  }, expected);
+  store.clear(actor.actorId, expected, actor);
+
+  assert.equal(store.cachedTargetForActor(actor), undefined);
+  assert.deepEqual(stateTargets, []);
 });
 
 test('remote actor packet target wire preserves the complete Ready authority fence', async () => {

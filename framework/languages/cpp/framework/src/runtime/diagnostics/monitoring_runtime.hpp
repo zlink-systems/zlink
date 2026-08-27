@@ -7,11 +7,13 @@
 #include <zlink/framework/contracts/spots/spot.hpp>
 #include <zlink/framework/contracts/timers/timer.hpp>
 
+#include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/execution/state_lane.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -110,7 +112,8 @@ struct drain_event_t
 class monitoring_runtime_state_t
 {
   public:
-    mutable std::mutex mutex;
+    runtime::offload_executor_t lane_executor;
+    mutable runtime::state_lane_t lane{lane_executor};
     logger_t<> diagnostics_logger;
     std::vector<std::string> spot_sources;
     std::vector<spot_event_handler_t> spot_handlers;

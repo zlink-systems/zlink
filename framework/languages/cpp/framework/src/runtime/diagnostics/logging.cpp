@@ -2,13 +2,15 @@
 
 #include <zlink/framework/contracts/configuration/logging.hpp>
 
+#include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/execution/state_lane.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <mutex>
 #include <sstream>
 #include <utility>
 
@@ -33,7 +35,8 @@ class logging_state_t
     // never grows without limit in production. capture_records=false disables it.
     bool capture_records = true;
     std::size_t max_captured_records = 4096;
-    mutable std::mutex mutex;
+    runtime::offload_executor_t lane_executor;
+    mutable runtime::state_lane_t lane{lane_executor};
 };
 
 const char *log_level_name (log_level_t level) noexcept
@@ -134,10 +137,13 @@ void rotate_if_needed (const std::string &path, const rotating_file_options_t &o
 
 bool is_log_enabled (const std::shared_ptr<logging_state_t> &state, int level) noexcept
 {
-    if (!state || state->min_level == log_level_t::off) {
+    if (!state) {
         return false;
     }
-    return level >= static_cast<int> (state->min_level);
+    return state->lane.run ([&] {
+        return state->min_level != log_level_t::off
+               && level >= static_cast<int> (state->min_level);
+    }).get ();
 }
 
 void emit_log (const std::shared_ptr<logging_state_t> &state,
@@ -161,8 +167,7 @@ void emit_log (const std::shared_ptr<logging_state_t> &state,
     std::vector<std::string> files;
     std::vector<rotating_file_options_t> rotations;
     bool console = false;
-    {
-        std::lock_guard lock (state->mutex);
+    state->lane.run ([&] {
         if (state->capture_records) {
             // Bounded ring with amortized-O(1) bulk trim: keep the most recent half
             // when the cap is reached so steady-state logging does not pay O(n) per
@@ -180,7 +185,7 @@ void emit_log (const std::shared_ptr<logging_state_t> &state,
         files = state->file_paths;
         rotations = state->rotating_options;
         console = state->console_enabled;
-    }
+    }).get ();
 
     const auto line = format_record (record);
     if (console) {
@@ -233,81 +238,91 @@ logging_builder_t &logging_builder_t::operator= (logging_builder_t &&) noexcept 
 
 logging_builder_t &logging_builder_t::use_console ()
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     _state->console_enabled = true;
+    }).get ();
     return *this;
 }
 
 logging_builder_t &logging_builder_t::use_file (std::string path)
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     detail::ensure_parent_directory (path);
     _state->file_paths.push_back (std::move (path));
     _state->rotating_options.push_back ({});
+    }).get ();
     return *this;
 }
 
 logging_builder_t &logging_builder_t::use_rotating_file (std::string path,
                                                          rotating_file_options_t options)
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     detail::ensure_parent_directory (path);
     _state->file_paths.push_back (std::move (path));
     _state->rotating_options.push_back (options);
+    }).get ();
     return *this;
 }
 
 logging_builder_t &logging_builder_t::use_callback_sink (sink_t sink)
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     _state->callback_sinks.push_back (std::move (sink));
+    }).get ();
     return *this;
 }
 
 logging_builder_t &logging_builder_t::use_provider (std::string name, sink_t sink)
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     _state->provider_names.push_back (std::move (name));
     _state->callback_sinks.push_back (std::move (sink));
+    }).get ();
     return *this;
 }
 
 logging_builder_t &logging_builder_t::disable_record_capture ()
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     _state->capture_records = false;
     _state->captured_records.clear ();
     _state->captured_records.shrink_to_fit ();
+    }).get ();
     return *this;
 }
 
 logging_builder_t &logging_builder_t::set_max_captured_records (std::size_t max)
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     _state->max_captured_records = max;
+    }).get ();
     return *this;
 }
 
 logging_builder_t &logging_builder_t::use_async (logging_async_options_t options)
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     _state->async_enabled = true;
     _state->async_options = options;
+    }).get ();
     return *this;
 }
 
 logging_builder_t &logging_builder_t::use_backend (logging_backend_t backend)
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     _state->backend = backend;
+    }).get ();
     return *this;
 }
 
 logging_builder_t &logging_builder_t::set_min_level (log_level_t level)
 {
-    std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
     _state->min_level = level;
     _state->level_name = detail::log_level_name (level);
+    }).get ();
     return *this;
 }
 
@@ -318,49 +333,66 @@ logging_builder_t &logging_builder_t::set_level (std::string level)
 
 bool logging_builder_t::console_enabled () const noexcept
 {
-    return _state->console_enabled;
+    return _state->lane.run ([&] {
+        return _state->console_enabled;
+    }).get ();
 }
 
 bool logging_builder_t::has_output_sink () const noexcept
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->console_enabled || !_state->file_paths.empty ()
-           || !_state->callback_sinks.empty ();
+    return _state->lane.run ([&] {
+        return _state->console_enabled || !_state->file_paths.empty ()
+               || !_state->callback_sinks.empty ();
+    }).get ();
 }
 
 bool logging_builder_t::async_enabled () const noexcept
 {
-    return _state->async_enabled;
+    return _state->lane.run ([&] {
+        return _state->async_enabled;
+    }).get ();
 }
 
 logging_backend_t logging_builder_t::backend () const noexcept
 {
-    return _state->backend;
+    return _state->lane.run ([&] {
+        return _state->backend;
+    }).get ();
 }
 
 log_level_t logging_builder_t::min_level () const noexcept
 {
-    return _state->min_level;
+    return _state->lane.run ([&] {
+        return _state->min_level;
+    }).get ();
 }
 
 const std::string &logging_builder_t::level () const noexcept
 {
-    return _state->level_name;
+    return _state->lane.run ([&] -> const std::string & {
+        return _state->level_name;
+    }).get ();
 }
 
 const std::vector<std::string> &logging_builder_t::file_paths () const noexcept
 {
-    return _state->file_paths;
+    return _state->lane.run ([&] -> const std::vector<std::string> & {
+        return _state->file_paths;
+    }).get ();
 }
 
 const std::vector<std::string> &logging_builder_t::provider_names () const noexcept
 {
-    return _state->provider_names;
+    return _state->lane.run ([&] -> const std::vector<std::string> & {
+        return _state->provider_names;
+    }).get ();
 }
 
 const std::vector<log_record_t> &logging_builder_t::captured_records () const noexcept
 {
-    return _state->captured_records;
+    return _state->lane.run ([&] -> const std::vector<log_record_t> & {
+        return _state->captured_records;
+    }).get ();
 }
 
 logger_factory_t logging_builder_t::factory () const

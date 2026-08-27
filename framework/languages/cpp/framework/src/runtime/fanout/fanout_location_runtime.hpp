@@ -133,3 +133,4 @@ class fanout_location_runtime_t final : public fanout_runtime_t
 };
 
 } // namespace zlink::framework::runtime::fanout
+#include <mutex>

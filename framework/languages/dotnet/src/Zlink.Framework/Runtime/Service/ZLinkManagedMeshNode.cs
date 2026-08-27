@@ -9299,6 +9299,92 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        var retryDeadline = DateTimeOffset.UtcNow + timeout;
+        while (true)
+        {
+            var remaining = retryDeadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                CompleteNativeInfrastructureRequest(
+                    pending,
+                    RequestResult.TimedOut,
+                    Array.Empty<Message>());
+                return;
+            }
+
+            try
+            {
+                var replies = await RequestNativeInfrastructureOnceAsync(
+                        target,
+                        wire,
+                        remaining < ServiceTerminalRetryTimeout
+                            ? remaining
+                            : ServiceTerminalRetryTimeout,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                CompleteNativeInfrastructureRequest(
+                    pending,
+                    RequestResult.Ok,
+                    replies);
+                return;
+            }
+            catch (ZlinkRequestException exception)
+                when (exception.Result == ZlinkRequestException.ErrorCode.TimedOut
+                      && DateTimeOffset.UtcNow < retryDeadline)
+            {
+                // Commands 47-49 retain their durable terminal by the exact
+                // operation identity. A lost native request or reply therefore
+                // retries the same encoded operation until the caller's overall
+                // deadline instead of spending that whole deadline on one
+                // transport attempt.
+            }
+            catch (ZlinkRequestException exception)
+            {
+                CompleteNativeInfrastructureRequest(
+                    pending,
+                    NormalizeNativeRequestFailure(
+                        exception.Result,
+                        AcceptsApplicationOperations),
+                    Array.Empty<Message>());
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                CompleteNativeInfrastructureRequest(
+                    pending,
+                    RequestResult.Terminated,
+                    Array.Empty<Message>());
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                CompleteNativeInfrastructureRequest(
+                    pending,
+                    NormalizeNativeRequestFailure(
+                        ZlinkRequestException.ErrorCode.Terminated,
+                        AcceptsApplicationOperations),
+                    Array.Empty<Message>());
+                return;
+            }
+            catch (ZlinkException)
+            {
+                CompleteNativeInfrastructureRequest(
+                    pending,
+                    NormalizeNativeRequestFailure(
+                        ZlinkRequestException.ErrorCode.Terminated,
+                        AcceptsApplicationOperations),
+                    Array.Empty<Message>());
+                return;
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<Message>> RequestNativeInfrastructureOnceAsync(
+        RoutingId target,
+        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
         var messages = new Message[wire.Count];
         var created = 0;
         var ownershipTransferred = false;
@@ -9320,42 +9406,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ownershipTransferred = true;
             }
 
-            var replies = await request.ConfigureAwait(false);
-            CompleteNativeInfrastructureRequest(pending, RequestResult.Ok, replies);
-        }
-        catch (ZlinkRequestException exception)
-        {
-            CompleteNativeInfrastructureRequest(
-                pending,
-                NormalizeNativeRequestFailure(
-                    exception.Result,
-                    AcceptsApplicationOperations),
-                Array.Empty<Message>());
-        }
-        catch (OperationCanceledException)
-        {
-            CompleteNativeInfrastructureRequest(
-                pending,
-                RequestResult.Terminated,
-                Array.Empty<Message>());
-        }
-        catch (ObjectDisposedException)
-        {
-            CompleteNativeInfrastructureRequest(
-                pending,
-                NormalizeNativeRequestFailure(
-                    ZlinkRequestException.ErrorCode.Terminated,
-                    AcceptsApplicationOperations),
-                Array.Empty<Message>());
-        }
-        catch (ZlinkException)
-        {
-            CompleteNativeInfrastructureRequest(
-                pending,
-                NormalizeNativeRequestFailure(
-                    ZlinkRequestException.ErrorCode.Terminated,
-                    AcceptsApplicationOperations),
-                Array.Empty<Message>());
+            return await request.ConfigureAwait(false);
         }
         finally
         {

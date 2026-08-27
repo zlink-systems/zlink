@@ -5,6 +5,7 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/execution/state_lane.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -73,7 +74,8 @@ bool is_request_dispatch (handler_dispatch_kind_t kind)
 
 struct filter_next_state_t
 {
-    std::mutex mutex;
+    runtime::offload_executor_t lane_executor;
+    runtime::state_lane_t lane{lane_executor};
     bool called = false;
     bool duplicate = false;
     std::optional<result_t<zlink::message_t>> downstream;
@@ -104,8 +106,7 @@ continue_filter_chain (std::shared_ptr<filter_next_state_t> state,
                        handler_filter_context_t context,
                        std::shared_ptr<filter_terminal_t> terminal)
 {
-    {
-        std::lock_guard lock (state->mutex);
+    state->lane.run ([&] {
         if (state->called) {
             state->duplicate = true;
             throw framework_exception_t (
@@ -113,21 +114,23 @@ continue_filter_chain (std::shared_ptr<filter_next_state_t> state,
               "handler filter next may be invoked at most once");
         }
         state->called = true;
-    }
+    }).get ();
 
     try {
         auto message =
           co_await invoke_filter_level (
             filters, next_index, services, serializers, std::move (context),
             terminal);
-        std::lock_guard lock (state->mutex);
+        state->lane.run ([&] {
         state->downstream =
           result_t<zlink::message_t>::success (std::move (message));
+        }).get ();
     }
     catch (const framework_exception_t &error) {
-        std::lock_guard lock (state->mutex);
+        state->lane.run ([&] {
         state->downstream =
           detail::result_access_t::failure<zlink::message_t> (error);
+        }).get ();
         throw;
     }
     co_return;
@@ -154,29 +157,31 @@ invoke_filter_level (std::shared_ptr<const filter_list_t> filters,
                                         std::move (context), terminal);
       });
 
-    std::lock_guard lock (next_state->mutex);
-    if (next_state->duplicate) {
-        throw framework_exception_t (
-          framework_error_kind_t::invalid_operation,
-          "handler filter next may be invoked at most once");
-    }
-    if (!next_state->called) {
-        if (is_request_dispatch (context.dispatch_kind)) {
+    const auto downstream = next_state->lane.run ([&] {
+        if (next_state->duplicate) {
             throw framework_exception_t (
-              framework_error_kind_t::rejected,
-              "handler filter rejected the request without invoking next");
+              framework_error_kind_t::invalid_operation,
+              "handler filter next may be invoked at most once");
         }
-        co_return zlink::message_t{};
-    }
-    if (!next_state->downstream) {
-        throw framework_exception_t (
-          framework_error_kind_t::internal_failure,
-          "handler filter returned before its continuation completed");
-    }
-    if (!*next_state->downstream) {
-        throw *next_state->downstream->error ();
-    }
-    co_return next_state->downstream->value ();
+        if (!next_state->called) {
+            if (is_request_dispatch (context.dispatch_kind)) {
+                throw framework_exception_t (
+                  framework_error_kind_t::rejected,
+                  "handler filter rejected the request without invoking next");
+            }
+            return result_t<zlink::message_t>::success (zlink::message_t{});
+        }
+        if (!next_state->downstream) {
+            throw framework_exception_t (
+              framework_error_kind_t::internal_failure,
+              "handler filter returned before its continuation completed");
+        }
+        if (!*next_state->downstream) {
+            throw *next_state->downstream->error ();
+        }
+        return *next_state->downstream;
+    }).get ();
+    co_return downstream.value ();
 }
 
 } // namespace

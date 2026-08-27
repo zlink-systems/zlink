@@ -942,6 +942,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     framework/src/runtime/messaging/envelope_codec.cpp
     framework/src/runtime/codecs/serializer.cpp
     framework/src/runtime/diagnostics/flow_context.cpp
+    framework/src/runtime/dispatch/offload_executor.cpp
+    framework/src/runtime/execution/state_lane.cpp
     framework/src/runtime/mesh/service_topology_registry.cpp)
   target_compile_features(test_cpp_framework_service_wire_codec PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_service_wire_codec PRIVATE

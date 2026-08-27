@@ -138,3 +138,4 @@ std::vector<std::string> endpoint_connections_t::list_connections () const
 }
 
 } // namespace zlink::framework
+#include <mutex>

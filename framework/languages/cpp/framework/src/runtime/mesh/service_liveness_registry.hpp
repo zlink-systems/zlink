@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/execution/state_lane.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -68,9 +70,11 @@ class service_liveness_registry_t
 
     const std::chrono::milliseconds _probe_interval;
     const std::chrono::milliseconds _peer_timeout;
-    mutable std::mutex _mutex;
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
     std::map<std::vector<std::uint8_t>, peer_t, byte_vector_less_t> _peers;
     std::uint64_t _next_probe_id = 1;
 };
 
 } // namespace zlink::framework::runtime::mesh
+#include <mutex>

@@ -291,25 +291,38 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             + " correlation=" + header.correlationId()
             + " flow=" + header.flowId()
             + " origin=" + flowOriginName(header.flowOrigin()));
+        CompletableFuture<Void> previous;
+        CompletableFuture<Void> publication = new CompletableFuture<>();
         synchronized (this) {
-            sendChain = sendChain.thenCompose(ignored -> writeFrame(frame));
-            return sendChain.whenComplete((ignored, ex) -> {
-                if (ex == null) {
-                    trace("connector write-complete endpoint=" + configuration.endpoint()
-                        + " kind=" + header.kind()
-                        + " name=" + header.name()
-                        + " requestSeq=" + header.requestSeq()
-                        + " correlation=" + header.correlationId());
+            previous = sendChain;
+            //  Publish the new tail before a completed previous tail starts
+            //  writeFrame inline and synchronously submits another frame.
+            sendChain = publication;
+        }
+        previous.thenCompose(ignored -> writeFrame(frame))
+            .whenComplete((ignored, failure) -> {
+                if (failure == null) {
+                    publication.complete(null);
                 } else {
-                    trace("connector write-failed endpoint=" + configuration.endpoint()
-                        + " kind=" + header.kind()
-                        + " name=" + header.name()
-                        + " requestSeq=" + header.requestSeq()
-                        + " correlation=" + header.correlationId()
-                        + " error=" + ex);
+                    publication.completeExceptionally(failure);
                 }
             });
-        }
+        return publication.whenComplete((ignored, ex) -> {
+            if (ex == null) {
+                trace("connector write-complete endpoint=" + configuration.endpoint()
+                    + " kind=" + header.kind()
+                    + " name=" + header.name()
+                    + " requestSeq=" + header.requestSeq()
+                    + " correlation=" + header.correlationId());
+            } else {
+                trace("connector write-failed endpoint=" + configuration.endpoint()
+                    + " kind=" + header.kind()
+                    + " name=" + header.name()
+                    + " requestSeq=" + header.requestSeq()
+                    + " correlation=" + header.correlationId()
+                    + " error=" + ex);
+            }
+        });
     }
 
     private static String flowOriginName(int origin) {

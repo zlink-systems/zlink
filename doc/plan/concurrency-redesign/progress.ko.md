@@ -43,8 +43,8 @@ jvm 열은 java·kotlin을 함께 적는다(빌드 트리 공유). 언어별 클
 | **L0** primitive + golden 14 | **완료** | **완료** (14/14) | java **완료**(+발견5 보완) · kotlin **완료**(14/14) | **완료** (12, 동시성 2 제외·사유 주석) |
 | **L1** 표본 전환 | **완료** `3cc6f5f615` | **완료** `f4d0df006b` (registry 31→0, 반려 1) | java **완료**(SessionActorsRuntime 22→0) · kotlin **해당없음**(자체 C2 상태 0) | **완료** `ca32669168` (registry, 13파일 전파) |
 | **L2** 순서 조사 | **완료** (conversion-order-survey) | **완료** (후보 19 — l2-survey-cpp) | **완료** (후보 23+9 — l2-survey-java) | **완료** (l2-survey-node) |
-| **L2** 클래스 전환 (§2 상세) | **완료** (대형 10+소형 22배치) | **완료** (전환 15+영역 판정 종결 — 잔여 113취득=작업 순서 제외, 보류 2 구조 판정) | **완료** (소진 — 소켓 2종·primitive 4종 제외 판정, kotlin 승계) | **완료** (소진 — STOP 9=executor 순서 제외군, 불요 5, m6b 회귀 수정 포함) |
-| **마무리** 호환 경계 회수 | **판정 완료** — 실질 스냅샷 0 달성(cp3-audit), 경계 656은 §5 조건 충족 시 사유 기록 잔존·핫패스 회수는 이월 | 대기 — 다음 세션에서 sol 감사 재기동(요구 4항목은 handoff §0) | 대기 — 다음 세션에서 sol 감사 재기동(요구 4항목은 handoff §0) | **검증 완료 — 수정 진행 중** — cp3-audit-node.ko.md의 의심 5건이 `cp3-node-suspects-verdict.ko.md`에서 **전건 [실증]**. 이분 결과 4건 기존·1건(#3) 부분 회귀. 5건 전부 수정 대상(handoff §0-2). 블로킹 브리지 0은 유지 |
+| **L2** 클래스 전환 (§2 상세) | **완료** (대형 10+소형 22배치) | **재판정 필요** — "잔여 113취득"은 위 계수 오류에 근거한 수치다. cp3-audit-cpp 실측: 상태 보호 잔존 **469**·실행 primitive 205·socket/dispose 프로토콜 230. 다만 **진짜 지표(경계 스냅샷)는 119곳 중 117 정당화·2 결함 의심**이라 전환 자체의 성패는 별개다(handoff §6: lock 수는 성공 지표가 아님) | **완료** (소진 — 소켓 2종·primitive 4종 제외 판정, kotlin 승계) | **완료** (소진 — STOP 9=executor 순서 제외군, 불요 5, m6b 회귀 수정 포함) |
+| **마무리** 호환 경계 회수 | **판정 완료** — 실질 스냅샷 0 달성(cp3-audit), 경계 656은 §5 조건 충족 시 사유 기록 잔존·핫패스 회수는 이월 | 대기 — 다음 세션에서 sol 감사 재기동(요구 4항목은 handoff §0) | 대기 — 다음 세션에서 sol 감사 재기동(요구 4항목은 handoff §0) | **완료** — 실증 5건 전부 수정·중앙 게이트 통과. 기준선 대조로 **회귀 0** 확정(base 1533/1510/fail 23 vs 현행 1538/1515/fail 23, 실패 이름 집합 동일 → +5 테스트 전부 통과). tsc `--force` rc=0, verify m6a 41/41·m6b 104/104·m6c 113/115(기존 2건). 계약 23건은 **기존 실패로 rules §4 등재**(캠페인 무관) |
 | **마무리** posddd ② 잔여 | **최우선 완료**(OperationLease 0B 검증) — 나머지는 이월 후보 | 대기 (cp3-audit-cpp에 포함) | 대기 (cp3-audit-jvm에 포함) | **보고됨** (cp3-audit-node §6 — 상위 10 후보 기록, 측정은 이월) |
 | **마일스톤 게이트** (CP3) | **대부분 완료** — unit 1900/0·6샘플·cross-language e2e 그린, 스냅샷 실질 0, sol 감사·스펙 06 개정(`078d1e22b6`) 완료. §8 판정: Z2 부분 하위증상 입증(0/3→3/5) | 감사 보고 후 판정 (스위트 재실행 T5와 합산) | 감사 보고 후 판정 (스위트 재실행 T5와 합산) | 감사 보고 후 판정 (스위트는 그린 — T2) |
 | **Z0** cross-language e2e 그린 (샘플 작업 선행) | **완료** — 전쌍 통과 (2026-08-27) | ← | ← | ← |
@@ -102,10 +102,10 @@ node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 | dotnet `lock` 문 | 999 | **113** (−89%) | 잔존 전부 파일별 정당화(실행 primitive·무할당 계약·socket/dispose 프로토콜 — cp3-audit 표). 초기 목표 "~60"은 추정치였고 실측 분류가 대체 |
 | dotnet `_gate` 클래스 | 61 | **5** | 전부 판정된 프로토콜 gate |
 | dotnet lane 파일 | 0 | **77** | — |
-| cpp mutex 취득 | ~1,303 | **~204** (−84%) | recursive_mutex(actor_gateway 71) 제거. 잔존=실행 순서 소유 11영역·socket 수명(판정표) |
+| cpp mutex 취득 | ~1,303 | **~890** (RAII 최초 취득) + 재취득 121 | **종전 "~204(−84%)"는 계수 오류였다 — 2026-08-27 중앙 재측정으로 정정.** 이 코드베이스의 관용구는 `std::lock_guard lock (_mutex);`(변수명+공백)인데 종전 계수는 `std::lock_guard<`·`std::lock_guard(` 형태만 잡는 정규식이라 변수명이 낀 대다수를 놓쳤다. 실측: lock_guard 832·unique_lock 56·shared_lock 2 = 890. cp3-audit-cpp(886)와 독립 일치. `recursive_mutex`도 **미제거** — actor_gateway에서는 실제로 빠졌으나 spot_runtime(132)·mesh_node_runtime(7)·mesh_node_host_service(2)·app(1)에 잔존. 상위: spot_runtime.cpp 159·public_host_runtime.cpp 99·stream_host_service.cpp 66 |
 | java 상위 후보 monitor | 683/94클래스 | **후보 32클래스 0** | 잔존 synchronized=native 작업 프로토콜·primitive 4종(판정) |
 | node | await 교차 기준 | **후보 34 전건 판정** | 전환 필요분 완료, 발견8 불요·executor 제외군 판정 |
-| 호환 경계(블로킹 브리지) | 0 | dotnet 663 등 | §5 조건 충족·사유 기록 잔존(스펙 06 개정 반영). 핫패스 회수는 이월 |
+| 호환 경계(블로킹 브리지) | 0 | dotnet 663 · **cpp 456~460** | §5 조건 충족·사유 기록 잔존(스펙 06 개정 반영). 핫패스 회수는 이월 |
 
 ## 4. 잔여 마감 추적 (2026-08-27 — 캠페인 꼬리)
 

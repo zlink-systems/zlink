@@ -105,6 +105,13 @@ CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
 - **ZoneWorld**: cpp split-brain·dotnet mesh admission (Z1·Z2). CP3에서 판정, §3.1에서 수정.
 - **cpp `test_cpp_framework_layout_contract`**: ShoppingMall OrderWorkflow main.cpp L350·L446
   blocking `result()` 지문 — base `3cbfbde4f9`부터. 샘플 수정은 별도 작업.
+- **node `test/contract/*` 23건** (2026-08-27 기준선 대조로 확정): 계약 스위트 전수 실행 시
+  1533건 중 **23건 실패**. node 결함 5건 수정을 되돌린 base 상태와 **실패 이름 집합이 완전히 동일**
+  (기준선에만 있는 것 0·현행에만 있는 것 0, 수정 후에는 +5 테스트/+5 통과/실패 동수).
+  즉 전부 캠페인 이전부터 있던 기존 실패다. 계열: 샘플 게이트(Bingo·GameQuest·ShoppingMall·
+  ZoneWorld·run_samples 자체검사), stream/session teardown·통지, relocation seal, spot managed timer,
+  canonical spec 트리. **이 스위트를 캠페인 중 전수로 돌린 기록이 없어 그동안 계수되지 않았다.**
+  개별 판정·수정은 캠페인 범위 밖 — 별도 작업으로 이월.
 - **node `verify:m6c-runtime` 2건** (stash 대조로 baseline 동일 110/112 확인): ① legacy fence
   불완전 시 ProtocolError 기대 vs actorType 경로(m6c-actor-join-store-resolution L126 vs
   remote-actor-join-receiver L63) ② retain identity의 coordinator fence 기대 vs codec 의도적
@@ -112,6 +119,11 @@ CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
   별도 작업.
 - **java full-run flake**: `ZLinkJavaRawMeshNodeM6ATest.descriptorBackedPeerIntent…`,
   `ZLinkAsyncSerialQueueTest.queuedRelocationIntent…` — 단독 재실행 통과 확인 후 무시.
+  **`ZLinkJavaRawSpotNodeM6BTest.remoteSpotSendAndRequestUseTheExactRouteFence` 추가**
+  (2026-08-27 실증): jvm 결함 6건 수정 잡의 full-run에서 1회 실패(`ExecutionException:
+  ZlinkRequestException`, `ZLinkJavaRawMeshNode.requestSpot:1812`). 같은 트리에서 **단독 ×3
+  전부 통과 + 전체 core 스위트 ×2 전부 통과 = 5/5 그린**으로 재현 실패. 수정 6건의 호출
+  스택에도 없다. 위 두 건과 같은 full-run 부하 한정 flake로 판정.
 - **cpp TicTacToe `JoinGameNotify` 간헐 유실도 기존 결함이다** (2026-08-27 worktree 이분 실증 —
   배치9 이전 시점에서 6회 중 4회 동일 실패): detached one-way bound-session 전달이 remote
   submit 성공을 delivery로 간주, owner 측 stream write 미확인. 근본 수정은 owner-side delivery

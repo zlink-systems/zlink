@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/diagnostics/runtime_metrics.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
 
 #include <zlink/framework/contracts/locations/options.hpp>
@@ -40,8 +41,9 @@ class location_runtime_t
 
     std::optional<location_owner_token_t> current_owner_token () const
     {
-        std::lock_guard lock (_state_gate);
-        return _owner_token;
+        return _lane.run ([this] {
+            return _owner_token;
+        }).get ();
     }
 
     /* Draining marker (graceful-drain-handoff §3.1): peer rows written while
@@ -74,20 +76,23 @@ class location_runtime_t
 
     bool owner_lease_healthy () const noexcept
     {
-        std::lock_guard lock (_state_gate);
-        return _owner_lease_healthy;
+        return _lane.run ([this] {
+            return _owner_lease_healthy;
+        }).get ();
     }
 
     std::optional<std::chrono::system_clock::time_point> owner_lease_renewed_at () const
     {
-        std::lock_guard lock (_state_gate);
-        return _owner_lease_renewed_at;
+        return _lane.run ([this] {
+            return _owner_lease_renewed_at;
+        }).get ();
     }
 
     std::optional<std::string> last_error () const
     {
-        std::lock_guard lock (_state_gate);
-        return _last_error;
+        return _lane.run ([this] {
+            return _last_error;
+        }).get ();
     }
 
     void start (zlink::routing_id_t node_rid)
@@ -109,11 +114,12 @@ class location_runtime_t
             if (claimed == nullptr)
                 throw std::runtime_error (
                   "owner lease claim was rejected");
-            std::lock_guard lock (_state_gate);
-            _owner_token = claimed->token;
-            _owner_lease_healthy = true;
-            _owner_lease_renewed_at = claimed->store_now;
-            _last_error.reset ();
+            _lane.run ([&] {
+                _owner_token = claimed->token;
+                _owner_lease_healthy = true;
+                _owner_lease_renewed_at = claimed->store_now;
+                _last_error.reset ();
+            }).get ();
         }
         catch (...) {
             _started.store (false, std::memory_order_release);
@@ -142,8 +148,9 @@ class location_runtime_t
                 _store->release_owner_lease (*token)
                   .result ()
                   .value ();
-                std::lock_guard lock (_state_gate);
-                _owner_token.reset ();
+                _lane.run ([this] {
+                    _owner_token.reset ();
+                }).get ();
             }
         }
         catch (const std::exception &error) {
@@ -174,8 +181,9 @@ class location_runtime_t
                 _store->release_owner_lease (*token)
                   .result ()
                   .value ();
-                std::lock_guard lock (_state_gate);
-                _owner_token.reset ();
+                _lane.run ([this] {
+                    _owner_token.reset ();
+                }).get ();
             }
             return true;
         }
@@ -195,20 +203,24 @@ class location_runtime_t
         const auto metrics_enabled = metrics.enabled ();
         std::optional<std::chrono::steady_clock::time_point> due_at;
         if (metrics_enabled) {
-            std::lock_guard lock (_state_gate);
-            if (_last_renew_started_at) {
-                due_at = *_last_renew_started_at + _options.owner_lease_renew_interval;
-            }
+            due_at = _lane.run ([this] {
+                return _last_renew_started_at
+                         ? std::optional{
+                             *_last_renew_started_at
+                             + _options.owner_lease_renew_interval}
+                         : std::optional<std::chrono::steady_clock::time_point>{};
+            }).get ();
         }
         const auto started_at = std::chrono::steady_clock::now ();
         if (metrics_enabled) {
-            std::lock_guard lock (_state_gate);
-            _last_renew_started_at = started_at;
-            if (due_at && started_at > *due_at) {
-                metrics.histogram (
-                  "zlink.location.owner_lease.renew.lateness", "s",
-                  std::chrono::duration<double> (started_at - *due_at).count ());
-            }
+            _lane.run ([&] {
+                _last_renew_started_at = started_at;
+                if (due_at && started_at > *due_at) {
+                    metrics.histogram (
+                      "zlink.location.owner_lease.renew.lateness", "s",
+                      std::chrono::duration<double> (started_at - *due_at).count ());
+                }
+            }).get ();
         }
         bool stale_token = false;
         try {
@@ -244,10 +256,11 @@ class location_runtime_t
                           << " renewIntervalMs=" << _options.owner_lease_renew_interval.count ()
                           << " ttlMs=" << _options.owner_lease_ttl.count () << '\n';
             }
-            std::lock_guard lock (_state_gate);
-            _owner_lease_healthy = true;
-            _owner_lease_renewed_at = renewed->store_now;
-            _last_error.reset ();
+            _lane.run ([&] {
+                _owner_lease_healthy = true;
+                _owner_lease_renewed_at = renewed->store_now;
+                _last_error.reset ();
+            }).get ();
             return result;
         }
         catch (const std::exception &error) {
@@ -264,11 +277,12 @@ class location_runtime_t
                         .value ();
                     if (const auto *claimed =
                           std::get_if<owner_lease_claimed_t> (&claim)) {
-                        std::lock_guard lock (_state_gate);
-                        _owner_token = claimed->token;
-                        _owner_lease_healthy = true;
-                        _owner_lease_renewed_at = claimed->store_now;
-                        _last_error.reset ();
+                        _lane.run ([&] {
+                            _owner_token = claimed->token;
+                            _owner_lease_healthy = true;
+                            _owner_lease_renewed_at = claimed->store_now;
+                            _last_error.reset ();
+                        }).get ();
                         return owner_lease_renew_result_t{
                           owner_lease_renewed_t{
                             claimed->lease_expires_at, claimed->store_now}};
@@ -333,9 +347,10 @@ class location_runtime_t
 
     void record_failure (std::string message) const
     {
-        std::lock_guard lock (_state_gate);
-        _owner_lease_healthy = false;
-        _last_error = std::move (message);
+        _lane.run ([&] {
+            _owner_lease_healthy = false;
+            _last_error = std::move (message);
+        }).get ();
     }
 
     location_repository_t *_store;
@@ -349,7 +364,8 @@ class location_runtime_t
     std::thread _heartbeat;
     std::mutex _heartbeat_gate;
     std::condition_variable _heartbeat_wake;
-    mutable std::mutex _state_gate;
+    offload_executor_t _lane_executor;
+    mutable state_lane_t _lane{_lane_executor};
     mutable bool _owner_lease_healthy = false;
     mutable std::optional<std::chrono::system_clock::time_point> _owner_lease_renewed_at;
     mutable std::optional<location_owner_token_t> _owner_token;

@@ -2,10 +2,12 @@
 
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 
+#include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/execution/state_lane.hpp"
+
 #include <atomic>
 #include <limits>
 #include <map>
-#include <mutex>
 #include <set>
 #include <string_view>
 #include <utility>
@@ -31,7 +33,9 @@ class serializer_registry_state_t
     std::map<std::string, std::set<std::type_index>> types_by_content_type;
     std::shared_ptr<const resolved_serializer_cache_t> resolved_serializers =
       std::make_shared<const resolved_serializer_cache_t> ();
-    std::mutex resolved_serializers_mutex;
+    runtime::offload_executor_t resolved_serializers_lane_executor;
+    runtime::state_lane_t resolved_serializers_lane{
+      resolved_serializers_lane_executor};
     std::atomic_bool frozen{false};
     std::size_t next_registration = 1;
 };
@@ -184,7 +188,7 @@ serializer_registry_t::cache_serializer (
   std::type_index type,
   std::shared_ptr<const void> serializer) const
 {
-    std::lock_guard lock (_state->resolved_serializers_mutex);
+    return _state->resolved_serializers_lane.run ([&] {
     const auto current = std::atomic_load_explicit (
       &_state->resolved_serializers, std::memory_order_acquire);
     if (const auto found = current->find (type); found != current->end ())
@@ -203,12 +207,13 @@ serializer_registry_t::cache_serializer (
                                 published,
                                 std::memory_order_release);
     return resolved;
+    }).get ();
 }
 
 void serializer_registry_t::invalidate_cached_serializer (
   std::type_index type) noexcept
 {
-    std::lock_guard lock (_state->resolved_serializers_mutex);
+    _state->resolved_serializers_lane.run ([&] {
     const auto current = std::atomic_load_explicit (
       &_state->resolved_serializers, std::memory_order_acquire);
     if (current->find (type) == current->end ())
@@ -221,6 +226,7 @@ void serializer_registry_t::invalidate_cached_serializer (
     std::atomic_store_explicit (&_state->resolved_serializers,
                                 published,
                                 std::memory_order_release);
+    }).get ();
 }
 
 void serializer_registry_t::freeze () noexcept

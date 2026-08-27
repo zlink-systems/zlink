@@ -118,17 +118,29 @@ export class ZLinkRemoteBoundSessionRelay {
       currentGeneration !== undefined &&
       (ownershipGeneration === undefined || ownershipGeneration < currentGeneration)
     ) return;
-    await this.options.updateRemoteActorPacketTarget(actorId, actorPacketTarget);
-    if (actorRef !== undefined) {
-      await this.options.streamBindingRuntime().rebindActor(actorRef);
-    }
     if (ownershipGeneration !== undefined) {
       this.actorOwnershipGenerations.set(actorId, ownershipGeneration);
     }
+    await this.options.updateRemoteActorPacketTarget(actorId, actorPacketTarget);
+    if (
+      ownershipGeneration !== undefined
+      && this.actorOwnershipGenerations.get(actorId) !== ownershipGeneration
+    ) return;
+    if (actorRef !== undefined) {
+      await this.options.streamBindingRuntime().rebindActor(actorRef);
+    }
+    if (
+      ownershipGeneration !== undefined
+      && this.actorOwnershipGenerations.get(actorId) !== ownershipGeneration
+    ) return;
     const sent = await this.options.streamBindingRuntime().sendLocalBoundSession(actorId, message, packetName, metadata);
     if (sent) {
       return;
     }
+    if (
+      ownershipGeneration !== undefined
+      && this.actorOwnershipGenerations.get(actorId) !== ownershipGeneration
+    ) return;
     if (this.options.actorManager()?.getState(actorId)?.remoteBoundSessionTarget === undefined) {
       return;
     }
@@ -534,10 +546,16 @@ export class ZLinkRemoteBoundSessionRelay {
             confirmRemoteSessionBinding: 'send',
             releaseSeal: { sealId: key }
           });
-          this.actorOwnershipGenerations.set(
-            value.actor.actorId,
-            committedRoute.targetAuthorityOwnerGeneration
-          );
+          const currentGeneration = this.actorOwnershipGenerations.get(value.actor.actorId);
+          if (
+            currentGeneration === undefined
+            || currentGeneration < committedRoute.targetAuthorityOwnerGeneration
+          ) {
+            this.actorOwnershipGenerations.set(
+              value.actor.actorId,
+              committedRoute.targetAuthorityOwnerGeneration
+            );
+          }
         }
       );
     }

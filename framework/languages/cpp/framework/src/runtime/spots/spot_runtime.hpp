@@ -1369,6 +1369,8 @@ class spot_node_runtime_t
     }
 
   private:
+    std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
+
     void attach_native_spot_locked (const std::shared_ptr<spot_context_state_t> &state,
                                     bool relocation_restore = false);
 

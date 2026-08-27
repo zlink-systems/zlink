@@ -28,8 +28,7 @@ service_descriptor_publish_status_t service_descriptor_registry_t::publish (
 
     std::vector<watch_callback_t> callbacks;
     service_descriptor_event_t event{};
-    {
-        std::lock_guard lock (_mutex);
+    const auto status = _lane.run ([&] {
         const auto found = _records.find (record.key);
         if (found == _records.end ()) {
             if (expected_revision) {
@@ -66,10 +65,11 @@ service_descriptor_publish_status_t service_descriptor_registry_t::publish (
                 callbacks.push_back (watcher.callback);
             }
         }
-    }
+        return expected_revision ? service_descriptor_publish_status_t::updated
+                                 : service_descriptor_publish_status_t::inserted;
+    }).get ();
     notify (std::move (callbacks), std::move (event));
-    return expected_revision ? service_descriptor_publish_status_t::updated
-                             : service_descriptor_publish_status_t::inserted;
+    return status;
 }
 
 bool service_descriptor_registry_t::remove (
@@ -80,8 +80,7 @@ bool service_descriptor_registry_t::remove (
 {
     std::vector<watch_callback_t> callbacks;
     service_descriptor_event_t event{};
-    {
-        std::lock_guard lock (_mutex);
+    const auto removed = _lane.run ([&] {
         const auto found = _records.find (key);
         if (found == _records.end ()
             || found->second.descriptor_revision != expected_revision
@@ -101,23 +100,25 @@ bool service_descriptor_registry_t::remove (
                 callbacks.push_back (watcher.callback);
             }
         }
-    }
+        return true;
+    }).get ();
     notify (std::move (callbacks), std::move (event));
-    return true;
+    return removed;
 }
 
 service_descriptor_snapshot_t service_descriptor_registry_t::snapshot (
   service_descriptor_watch_filter_t filter) const
 {
-    std::lock_guard lock (_mutex);
-    service_descriptor_snapshot_t result{_change_stamp, {}};
-    for (const auto &[key, record] : _records) {
-        static_cast<void> (key);
-        if (matches (filter, record)) {
-            result.records.push_back (record);
+    return _lane.run ([&] {
+        service_descriptor_snapshot_t result{_change_stamp, {}};
+        for (const auto &[key, record] : _records) {
+            static_cast<void> (key);
+            if (matches (filter, record)) {
+                result.records.push_back (record);
+            }
         }
-    }
-    return result;
+        return result;
+    }).get ();
 }
 
 std::uint64_t service_descriptor_registry_t::watch (
@@ -127,20 +128,22 @@ std::uint64_t service_descriptor_registry_t::watch (
     if (!callback) {
         throw std::invalid_argument ("descriptor watch callback is required");
     }
-    std::lock_guard lock (_mutex);
-    if (_next_watch_id == 0) {
-        throw std::overflow_error ("descriptor watch id is exhausted");
-    }
-    const auto id = _next_watch_id++;
-    _watchers.emplace (
-      id, watcher_t{std::move (filter), std::move (callback)});
-    return id;
+    return _lane.run ([&] {
+        if (_next_watch_id == 0) {
+            throw std::overflow_error ("descriptor watch id is exhausted");
+        }
+        const auto id = _next_watch_id++;
+        _watchers.emplace (
+          id, watcher_t{std::move (filter), std::move (callback)});
+        return id;
+    }).get ();
 }
 
 bool service_descriptor_registry_t::unwatch (std::uint64_t watch_id)
 {
-    std::lock_guard lock (_mutex);
-    return _watchers.erase (watch_id) != 0;
+    return _lane.run ([&] {
+        return _watchers.erase (watch_id) != 0;
+    }).get ();
 }
 
 bool service_descriptor_registry_t::valid (

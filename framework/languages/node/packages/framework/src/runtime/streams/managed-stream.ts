@@ -193,6 +193,12 @@ export class ZLinkManagedStream implements ZLinkStream {
       }
       const nativeActor = toNativeActorRef(actor);
       await this.ensureNativeActorRoute(route, actor, timeoutMs, signal);
+      if (this.transportClosed) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          `Stream session '${this.sessionId}' is disconnected.`
+        );
+      }
       await this.requireSuccessfulCompletion(
         this.submitNativeSessionBind(
           route.service,
@@ -216,6 +222,31 @@ export class ZLinkManagedStream implements ZLinkStream {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
           `Actor '${actor.actorId}' native session bind completed without a binding snapshot.`
+        );
+      }
+      if (this.transportClosed) {
+        try {
+          await this.requireSuccessfulCompletion(
+            route.completions.submit(
+              () => route.service.unbindActor(
+                this.backendRoutingId(),
+                nativeActor as never,
+                binding.bindingGeneration,
+                timeoutMs
+              ),
+              signal
+            ),
+            `Actor '${actor.actorId}' native session unbind`,
+            IDEMPOTENT_UNBIND_TERMINAL_RESULTS
+          );
+        } catch (error) {
+          if (this.hasNativeBinding(route, actor.actorId, binding.bindingGeneration)) {
+            throw error;
+          }
+        }
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          `Stream session '${this.sessionId}' is disconnected.`
         );
       }
       this.nativeActorBindings.set(actor.actorId, {
@@ -317,6 +348,12 @@ export class ZLinkManagedStream implements ZLinkStream {
     parts: readonly Message[],
     flags?: ZLinkBackendSendFlags
   ): Promise<boolean> {
+    if (this.transportClosed) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+        `Stream session '${this.sessionId}' is disconnected.`
+      );
+    }
     const binding = this.nativeActorBindings.get(actorId);
     if (binding?.route !== undefined) {
       const nativeParts = parts.map((part) => NativeMessage.from(part.data()));

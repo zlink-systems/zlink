@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.internal.backend.*;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -117,6 +118,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final Map<String, SessionState> sessions = new HashMap<>();
     private final Map<String, CompletableFuture<SessionState>> pendingSessionCreations =
         new HashMap<>();
+    private final ThreadLocal<Set<CompletableFuture<SessionState>>>
+        sessionCreationProducers = ThreadLocal.withInitial(HashSet::new);
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final ScheduledExecutorService livenessExecutor;
     private final ScheduledExecutorService replyRetryExecutor;
@@ -1368,36 +1371,53 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return claim.state();
         }
         if (!claim.creator()) {
+            if (sessionCreationProducers.get().contains(claim.pending())) {
+                throw new IllegalStateException(
+                    "pending STREAM session creation reentered by its producer");
+            }
             return claim.pending().join();
         }
 
-        SessionState state;
+        Set<CompletableFuture<SessionState>> producers =
+            sessionCreationProducers.get();
+        if (!producers.add(claim.pending())) {
+            throw new IllegalStateException(
+                "pending STREAM session creation producer was already active");
+        }
         try {
-            // User session construction runs outside the state turn. The claim
-            // makes concurrent callers observe the same in-progress session,
-            // just as they did while waiting for the former monitor.
-            state = createSessionState(streamNode, stream, routingId);
-        } catch (RuntimeException | Error failure) {
+            SessionState state;
+            try {
+                // User session construction runs outside the state turn. The claim
+                // makes concurrent callers observe the same in-progress session,
+                // just as they did while waiting for the former monitor.
+                state = createSessionState(streamNode, stream, routingId);
+            } catch (RuntimeException | Error failure) {
+                inStateLane(() -> {
+                    pendingSessionCreations.remove(key, claim.pending());
+                    return null;
+                });
+                claim.pending().completeExceptionally(failure);
+                throw failure;
+            }
+            SessionState completed = state;
             inStateLane(() -> {
+                sessions.put(key, completed);
                 pendingSessionCreations.remove(key, claim.pending());
                 return null;
             });
-            claim.pending().completeExceptionally(failure);
-            throw failure;
+            // CompletableFuture's dependents may be inline; signal after the lane
+            // turn has returned so they cannot inherit its CURRENT ownership.
+            claim.pending().complete(state);
+            ZLinkRuntimeMetrics.add("zlink.stream.connections.active", 1, Map.of());
+            ZLinkRuntimeMetrics.increment("zlink.stream.connections.opened", Map.of());
+            dispatchConnected(state);
+            return state;
+        } finally {
+            producers.remove(claim.pending());
+            if (producers.isEmpty()) {
+                sessionCreationProducers.remove();
+            }
         }
-        SessionState completed = state;
-        inStateLane(() -> {
-            sessions.put(key, completed);
-            pendingSessionCreations.remove(key, claim.pending());
-            return null;
-        });
-        // CompletableFuture's dependents may be inline; signal after the lane
-        // turn has returned so they cannot inherit its CURRENT ownership.
-        claim.pending().complete(state);
-        ZLinkRuntimeMetrics.add("zlink.stream.connections.active", 1, Map.of());
-        ZLinkRuntimeMetrics.increment("zlink.stream.connections.opened", Map.of());
-        dispatchConnected(state);
-        return state;
     }
 
     private static void recordSessionClosed(SessionState state, String reason) {

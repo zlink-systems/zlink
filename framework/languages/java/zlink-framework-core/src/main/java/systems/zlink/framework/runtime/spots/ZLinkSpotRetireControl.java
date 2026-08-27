@@ -231,6 +231,7 @@ final class ZLinkSpotRetireControl {
         }
 
         private CompletionStage<byte[]> publish(Slot slot) {
+            CompletableFuture<byte[]> published;
             synchronized (slot) {
                 if (slot.aborted) {
                     return failed(new IllegalStateException(
@@ -239,11 +240,22 @@ final class ZLinkSpotRetireControl {
                 if (slot.published != null) {
                     return slot.published;
                 }
-                slot.published = slot.staged
-                    .thenCompose(ignored -> endpoint.publish(slot.request))
-                    .thenApply(ignored -> encodeAck(slot.request.fence()));
-                return slot.published;
+                published = new CompletableFuture<>();
+                slot.published = published;
             }
+            //  Install the exact slot claim before a completed stage invokes
+            //  endpoint.publish inline and reenters relocation control.
+            slot.staged
+                .thenCompose(ignored -> endpoint.publish(slot.request))
+                .thenApply(ignored -> encodeAck(slot.request.fence()))
+                .whenComplete((ack, failure) -> {
+                    if (failure == null) {
+                        published.complete(ack);
+                    } else {
+                        published.completeExceptionally(failure);
+                    }
+                });
+            return published;
         }
 
         private CompletionStage<byte[]> abort(Slot slot) {

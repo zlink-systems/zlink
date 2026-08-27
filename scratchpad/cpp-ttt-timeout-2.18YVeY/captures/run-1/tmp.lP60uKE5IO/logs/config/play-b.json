@@ -1,0 +1,33 @@
+{
+  "sample": {
+    "host": {
+      "keepRunning": true
+    },
+    "topology": {
+      "logDir": "/home/hep7/project/zlink/scratchpad/cpp-ttt-timeout-2.18YVeY/tmp.lP60uKE5IO/flow-logs",
+      "apiNode": "a",
+      "playNode": "b",
+      "apiEndpoint": "tcp://127.0.0.1:21854",
+      "apiAEndpoint": "tcp://127.0.0.1:21854",
+      "apiBEndpoint": "tcp://127.0.0.1:21675",
+      "apiHttpEndpoint": "http://127.0.0.1:21742",
+      "apiAHttpEndpoint": "http://127.0.0.1:21742",
+      "apiBHttpEndpoint": "http://127.0.0.1:20372",
+      "playEndpoint": "tcp://127.0.0.1:20753",
+      "playAEndpoint": "tcp://127.0.0.1:20753",
+      "playBEndpoint": "tcp://127.0.0.1:20375",
+      "playARouteEndpoint": "tcp://127.0.0.1:20612",
+      "playBRouteEndpoint": "tcp://127.0.0.1:20502",
+      "apiARouteEndpoint": "tcp://127.0.0.1:21926",
+      "apiBRouteEndpoint": "tcp://127.0.0.1:20600",
+      "playASpotEndpoint": "tcp://127.0.0.1:21651",
+      "playBSpotEndpoint": "tcp://127.0.0.1:21100",
+      "playASpotRouterEndpoint": "tcp://127.0.0.1:21992",
+      "playBSpotRouterEndpoint": "tcp://127.0.0.1:20400",
+      "playAStreamEndpoint": "tcp://127.0.0.1:20171",
+      "playBStreamEndpoint": "tcp://127.0.0.1:21406",
+      "redisEndpoint": "127.0.0.1:20048",
+      "redisKeyPrefix": "zlink:tictactoe-cpp:17699:1903936:room:"
+    }
+  }
+}

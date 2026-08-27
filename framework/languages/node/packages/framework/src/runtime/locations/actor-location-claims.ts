@@ -288,18 +288,22 @@ export class ZLinkActorLocationClaims {
       const key = { meshName: tracked.row.meshName, actorId: tracked.row.actorId };
       try {
         const current = await this.actorStore.resolveActor(key);
+        if (this.actors.get(canonical) !== tracked) continue;
         if (current === undefined
           || current.ownerId !== owner.ownerId
           || (current.leaseGeneration !== tracked.row.leaseGeneration
             && current.leaseGeneration !== owner.leaseGeneration)) {
+          if (this.actors.get(canonical) !== tracked) continue;
           this.actors.delete(canonical);
           await tracked.deactivate?.();
           continue;
         }
         if (current.leaseGeneration === owner.leaseGeneration) {
+          if (this.actors.get(canonical) !== tracked) continue;
           tracked.row = { ...current };
           continue;
         }
+        if (this.actors.get(canonical) !== tracked) continue;
         const result = await this.runtime.writeActor(
           current,
           ZLinkLocationWriteIntent.Takeover
@@ -310,6 +314,7 @@ export class ZLinkActorLocationClaims {
           ));
           continue;
         }
+        if (this.actors.get(canonical) !== tracked) continue;
         tracked.row = {
           ...current,
           ownerId: owner.ownerId,
