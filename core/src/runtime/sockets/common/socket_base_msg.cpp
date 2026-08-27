@@ -83,6 +83,17 @@ int zlink::socket_base_t::send (msg_t *msg_, int flags_)
     return send_scoped (msg_, flags_, send_scope);
 }
 
+int zlink::socket_base_t::send_complete_record (msg_t *msg_, int flags_)
+{
+    socket_public_send_scope_t send_scope (
+      lifecycle_coordinator (), true,
+      socket_send_admission_complete);
+    if (!send_scope.acquired ())
+        return -1;
+
+    return send_scoped (msg_, flags_, send_scope);
+}
+
 int zlink::socket_base_t::send_scoped (msg_t *msg_,
                                        int flags_,
                                        socket_public_send_scope_t &send_scope,
@@ -98,6 +109,17 @@ int zlink::socket_base_t::send_routed (const zlink_routing_id_t *target_rid_,
                                        int flags_)
 {
     socket_public_send_scope_t send_scope (lifecycle_coordinator (), true);
+    if (!send_scope.acquired ())
+        return -1;
+
+    return send_routed_scoped (target_rid_, msg_, flags_, send_scope);
+}
+
+int zlink::socket_base_t::send_routed_complete_record (
+  const zlink_routing_id_t *target_rid_, msg_t *msg_, int flags_)
+{
+    socket_public_send_scope_t send_scope (
+      lifecycle_coordinator (), true, socket_send_admission_complete);
     if (!send_scope.acquired ())
         return -1;
 
@@ -165,9 +187,33 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
 std::unique_ptr<zlink::socket_public_send_scope_t>
 zlink::socket_base_t::begin_public_send_scope (bool force_sync_)
 {
+    // Incremental multipart owns pipe-local staged state across public calls.
+    // PAIR normally omits the socket sync on complete-record sends, but this
+    // lease must serialize its active/cleanup rollback with async pipe
+    // termination just like every other multipart-capable socket.
+    const bool needs_sync = force_sync_ || direct_send_needs_public_api_sync ()
+                            || options.type == ZLINK_CORE_SOCKET_PAIR;
+    std::unique_ptr<socket_public_send_scope_t> send_scope (
+      new (std::nothrow) socket_public_send_scope_t (
+        lifecycle_coordinator (), needs_sync,
+        socket_send_admission_multipart));
+    if (!send_scope) {
+        errno = ENOMEM;
+        return std::unique_ptr<socket_public_send_scope_t> ();
+    }
+    if (!send_scope->acquired ())
+        return std::unique_ptr<socket_public_send_scope_t> ();
+    return send_scope;
+}
+
+std::unique_ptr<zlink::socket_public_send_scope_t>
+zlink::socket_base_t::begin_complete_send_scope (bool force_sync_)
+{
     const bool needs_sync = force_sync_ || direct_send_needs_public_api_sync ();
     std::unique_ptr<socket_public_send_scope_t> send_scope (
-      new (std::nothrow) socket_public_send_scope_t (lifecycle_coordinator (), needs_sync));
+      new (std::nothrow) socket_public_send_scope_t (
+        lifecycle_coordinator (), needs_sync,
+        socket_send_admission_complete));
     if (!send_scope) {
         errno = ENOMEM;
         return std::unique_ptr<socket_public_send_scope_t> ();
@@ -214,7 +260,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                                   pipe_t **pipe_out_,
                                                   uint64_t expected_transport_pair_id_,
                                                   uint64_t expected_transport_pair_generation_,
-                                                  bool record_context_admission_)
+                                                  bool record_context_admission_,
+                                                  bool commands_already_processed_)
 {
     zlink_assert (send_scope.acquired ());
     if (connection_id_out_)
@@ -257,10 +304,13 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         return -1;
     }
 
-    int rc = process_commands (0, true);
-    if (unlikely (rc != 0)) {
-        dispatch_runtime ().clear_send_recovery_pending ();
-        return -1;
+    int rc = 0;
+    if (!commands_already_processed_) {
+        rc = process_commands (0, true);
+        if (unlikely (rc != 0)) {
+            dispatch_runtime ().clear_send_recovery_pending ();
+            return -1;
+        }
     }
 
     prepare_direct_send_message (msg_, flags_);
@@ -469,7 +519,15 @@ int zlink::socket_base_t::rollback ()
 
 int zlink::socket_base_t::rollback_scoped (socket_public_send_scope_t &scope_)
 {
-    zlink_assert (scope_.acquired ());
+    zlink_assert (
+      scope_.acquired ()
+      || (lifecycle_coordinator ().public_close_requested ()
+          && scope_.close_cleanup_ready ()));
+    // A blocking send releases the lifecycle sync while its async command
+    // owner makes progress. process_commands() can then fail or time out
+    // before the retry path reacquires it. Rollback is socket-state mutation,
+    // so centralize the hand-back here rather than relying on every caller.
+    scope_.relock_sync ();
     const int rc = xrollback ();
     return rc;
 }

@@ -34,16 +34,16 @@ zlink_submit_result_t zlink_send_async (void *s_,
     if (!socket) {
         return zlink::submit_result_internal::from_errno (errno);
     }
-
-    //  Take the record side of the same transaction state used by part
-    //  sequences. The admission and a concurrent first PART_MORE are then
-    //  ordered by one state lock instead of a check-then-submit race.
-    zlink::part_helper_internal::complete_record_scope_t record_scope (socket);
-    if (!record_scope.acquired ())
+    if (!socket->begin_send_async_public_call ())
         return zlink::submit_result_internal::from_errno (errno);
 
-    return zlink::submit_result_internal::from_rc (
-      socket->send_async_submit (parts_, part_count_, options_, op_id_out_));
+    const int rc =
+      socket->send_async_submit (parts_, part_count_, options_, op_id_out_);
+    const int saved_errno = errno;
+    handle = socket_handle_t ();
+    socket->end_send_async_public_call ();
+    errno = saved_errno;
+    return zlink::submit_result_internal::from_rc (rc);
 }
 
 zlink_submit_result_t zlink_send_async_cancel (void *s_,
@@ -54,8 +54,14 @@ zlink_submit_result_t zlink_send_async_cancel (void *s_,
     if (!socket) {
         return zlink::submit_result_internal::from_errno (errno);
     }
+    if (!socket->begin_send_async_public_call ())
+        return zlink::submit_result_internal::from_errno (errno);
 
     const int rc = socket->send_async_cancel (op_id_);
+    const int saved_errno = errno;
+    handle = socket_handle_t ();
+    socket->end_send_async_public_call ();
+    errno = saved_errno;
     if (rc == 0)
         return ZLINK_SUBMIT_OK;
     //  EBUSY means another resolver already claimed the operation. It is no

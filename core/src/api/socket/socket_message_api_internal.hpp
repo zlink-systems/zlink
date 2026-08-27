@@ -6,6 +6,14 @@
 #include "zlink.h"
 
 #if defined(__cplusplus)
+class socket_handle_t;
+
+int zlink_socket_recv_handle_internal (const socket_handle_t &handle_,
+                                       zlink_routing_id_t *source_rid_out_,
+                                       zlink_msg_t **parts_out_,
+                                       size_t *part_count_out_,
+                                       zlink_send_flags_t flags_);
+
 extern "C" {
 #endif
 

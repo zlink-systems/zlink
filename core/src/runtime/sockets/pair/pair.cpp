@@ -89,11 +89,19 @@ int zlink::pair_t::xsend (
                               : _pipe->write_and_flush (msg_, &admission))
                       : false;
     if (!ok) {
+        const int failure_errno =
+          admission == pipe_message_admission_too_large ? errno : EAGAIN;
+        // A continuation failure must discard the prefix before the blocking
+        // retry path can release the socket lifecycle lock. Otherwise an
+        // independent complete send can be appended to that unfinished
+        // record. Query-and-rollback under the pipe lock avoids adding a
+        // multipart flag write to PAIR's successful single-message hot path.
+        const bool multipart_aborted =
+          _pipe && _pipe->rollback_incomplete ();
         if (admission_out_)
             *admission_out_ = admission;
-        if (admission != pipe_message_admission_too_large)
-            errno = EAGAIN;
-        return -1;
+        errno = failure_errno;
+        return multipart_aborted ? -2 : -1;
     }
 
     //  Detach the original message from the data buffer.

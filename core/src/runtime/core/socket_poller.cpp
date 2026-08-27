@@ -635,6 +635,17 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
     }
 
     if (unlikely (_pollset_size == 0)) {
+        //  A terminal socket can be omitted from the descriptor set during
+        //  rebuild(), while still having a final logical event to report.
+        //  Match the regular polling loops by checking socket state before
+        //  treating an empty descriptor set as a timeout.
+        const int socket_events = check_socket_events (events_, n_events_);
+        if (socket_events) {
+            if (socket_events > 0)
+                zero_trail_events (events_, n_events_, socket_events);
+            return socket_events;
+        }
+
         if (timeout_ < 0) {
             // Fail instead of trying to sleep forever
             errno = EFAULT;

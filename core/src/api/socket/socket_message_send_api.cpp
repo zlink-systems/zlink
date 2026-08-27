@@ -62,10 +62,11 @@ bool try_extract_router_target_rid (const zlink_msg_t *part_, zlink_routing_id_t
     return true;
 }
 
-int s_sendmsg (socket_handle_t handle_, zlink_msg_t *msg_, zlink_send_flags_t flags_)
+int s_sendmsg (const socket_handle_t &handle_, zlink_msg_t *msg_, zlink_send_flags_t flags_)
 {
     size_t sz = zlink_msg_size (msg_);
-    int rc = handle_.socket->send (reinterpret_cast<zlink::msg_t *> (msg_), flags_);
+    int rc = handle_.socket->send_complete_record (
+      reinterpret_cast<zlink::msg_t *> (msg_), flags_);
     if (unlikely (rc < 0))
         return -1;
 
@@ -87,7 +88,7 @@ bool is_singlepart_fast_socket_type (int type_)
     return type_ == ZLINK_CORE_SOCKET_PAIR || type_ == ZLINK_CORE_SOCKET_DEALER;
 }
 
-int send_socket_singlepart_fast (socket_handle_t handle_,
+int send_socket_singlepart_fast (const socket_handle_t &handle_,
                                  zlink_msg_t *msg_,
                                  zlink_send_flags_t flags_)
 {
@@ -104,7 +105,9 @@ int send_socket_singlepart_fast (socket_handle_t handle_,
         return -1;
     }
 
-    if (handle_.socket->send (core_msg, static_cast<int> (flags_ & ZLINK_DONTWAIT)) != 0)
+    if (handle_.socket->send_complete_record (
+          core_msg, static_cast<int> (flags_ & ZLINK_DONTWAIT))
+        != 0)
         return -1;
 
     errno = 0;
@@ -133,7 +136,7 @@ bool stream_routing_id_matches_value (const zlink_routing_id_t *rid_, uint32_t r
            && rid_->data[3] == static_cast<uint8_t> (routing_id_ & 0xFF);
 }
 
-int send_stream_message (socket_handle_t handle_,
+int send_stream_message (const socket_handle_t &handle_,
                          const zlink_routing_id_t *rid_,
                          zlink_msg_t *msg_,
                          zlink_send_flags_t flags_)
@@ -223,7 +226,7 @@ int send_stream_message (socket_handle_t handle_,
     return 0;
 }
 
-int validate_socket_send_request (socket_handle_t handle_,
+int validate_socket_send_request (const socket_handle_t &handle_,
                                   zlink_msg_t *parts_,
                                   size_t part_count_,
                                   zlink_send_flags_t flags_)
@@ -237,7 +240,7 @@ int validate_socket_send_request (socket_handle_t handle_,
     return validate_send_parts (parts_, part_count_);
 }
 
-int send_socket_unrouted_parts (socket_handle_t handle_,
+int send_socket_unrouted_parts (const socket_handle_t &handle_,
                                 zlink_msg_t *parts_,
                                 size_t part_count_,
                                 zlink_send_flags_t flags_)
@@ -264,7 +267,7 @@ int send_socket_unrouted_parts (socket_handle_t handle_,
     return zlink::logical_multipart_send (handle_.socket, parts_, part_count_, flags_);
 }
 
-int send_socket_routed_parts (socket_handle_t handle_,
+int send_socket_routed_parts (const socket_handle_t &handle_,
                               const zlink_routing_id_t *target_rid_,
                               zlink_msg_t *parts_,
                               size_t part_count_,
@@ -290,9 +293,9 @@ int send_socket_routed_parts (socket_handle_t handle_,
     }
 
     if (part_count_ == 1) {
-        const int rc =
-          handle_.socket->send_routed (target_rid_, reinterpret_cast<zlink::msg_t *> (&parts_[0]),
-                                       static_cast<int> (flags_ & ZLINK_DONTWAIT));
+        const int rc = handle_.socket->send_routed_complete_record (
+          target_rid_, reinterpret_cast<zlink::msg_t *> (&parts_[0]),
+          static_cast<int> (flags_ & ZLINK_DONTWAIT));
         if (rc != 0)
             return -1;
         errno = 0;
@@ -303,17 +306,13 @@ int send_socket_routed_parts (socket_handle_t handle_,
                                                  flags_);
 }
 
-int send_socket_parts (socket_handle_t handle_,
+int send_socket_parts (const socket_handle_t &handle_,
                        const zlink_routing_id_t *target_rid_,
                        zlink_msg_t *parts_,
                        size_t part_count_,
                        zlink_send_flags_t flags_)
 {
     if (validate_socket_send_request (handle_, parts_, part_count_, flags_) != 0)
-        return -1;
-
-    zlink::part_helper_internal::complete_record_scope_t record_scope (handle_.socket);
-    if (!record_scope.acquired ())
         return -1;
 
     if (!target_rid_) {
@@ -339,7 +338,7 @@ int send_socket_parts (socket_handle_t handle_,
     return send_socket_routed_parts (handle_, target_rid_, parts_, part_count_, flags_);
 }
 
-int publish_socket_parts (socket_handle_t handle_,
+int publish_socket_parts (const socket_handle_t &handle_,
                           const char *topic_id_,
                           zlink_msg_t *parts_,
                           size_t part_count_,
@@ -347,10 +346,6 @@ int publish_socket_parts (socket_handle_t handle_,
                           bool fallback_on_missing_sndtimeo_)
 {
     if (validate_socket_send_request (handle_, parts_, part_count_, flags_) != 0)
-        return -1;
-
-    zlink::part_helper_internal::complete_record_scope_t record_scope (handle_.socket);
-    if (!record_scope.acquired ())
         return -1;
 
     const int type = socket_type (handle_);
@@ -607,13 +602,8 @@ zlink_submit_result_t zlink_send_part (void *s_,
     }
     if (part_flag_ == ZLINK_PART_FINAL && is_singlepart_fast_socket_type (type)
         && !zlink::part_helper_internal::send_sequence_active (socket)) {
-        zlink::part_helper_internal::complete_record_scope_t record_scope (socket);
-        if (!record_scope.acquired ()) {
-            zlink::part_helper_internal::abort_current_non_publish_send_sequence (s_);
-            zlink::part_helper_internal::consume_send_part (part_);
-            return zlink::submit_result_internal::from_errno (errno);
-        }
-        const int rc = send_socket_singlepart_fast (make_socket_handle (socket), part_, flags_);
+        const int rc =
+          send_socket_singlepart_fast (make_socket_handle (socket), part_, flags_);
         const int saved_errno = errno;
         zlink::part_helper_internal::consume_send_part (part_);
         errno = saved_errno;
@@ -661,12 +651,6 @@ zlink_submit_result_t zlink_send_part_rid (void *s_,
             return zlink::submit_result_internal::from_errno (errno);
         }
 
-        zlink::part_helper_internal::complete_record_scope_t record_scope (socket);
-        if (!record_scope.acquired ()) {
-            zlink::part_helper_internal::abort_current_non_publish_send_sequence (s_);
-            zlink::part_helper_internal::consume_send_part (part_);
-            return zlink::submit_result_internal::from_errno (errno);
-        }
         socket_handle_t handle = make_socket_handle (socket);
         const int rc = send_stream_message (handle, target_rid_, part_, flags_);
         return zlink::submit_result_internal::from_rc (rc);
@@ -674,7 +658,7 @@ zlink_submit_result_t zlink_send_part_rid (void *s_,
 
     // Singlepart fast path for ROUTER+FINAL. Mirrors the DEALER fast path in
     // zlink_send_part: when the caller is sending a single FINAL part with
-    // no outstanding multipart sequence on this handle, skip the
+    // no competing multipart sequence on this socket, skip the
     // submit_simple_part scaffolding (handle_state shared_ptr lookup,
     // send_sequence_spec construction, copy_routing_id) and hand the part
     // straight to socket_base_t::send_routed.
@@ -686,16 +670,9 @@ zlink_submit_result_t zlink_send_part_rid (void *s_,
     // on RR/DR-server hot paths at 100-socket fan-in.
     if (part_flag_ == ZLINK_PART_FINAL && type == ZLINK_CORE_SOCKET_ROUTER
         && !zlink::part_helper_internal::send_sequence_active (socket)) {
-        zlink::part_helper_internal::complete_record_scope_t record_scope (socket);
-        if (!record_scope.acquired ()) {
-            zlink::part_helper_internal::abort_current_non_publish_send_sequence (s_);
-            zlink::part_helper_internal::consume_send_part (part_);
-            return zlink::submit_result_internal::from_errno (errno);
-        }
-        socket_handle_t handle = make_socket_handle (socket);
-        const int rc =
-          handle.socket->send_routed (target_rid_, reinterpret_cast<zlink::msg_t *> (part_),
-                                      static_cast<int> (flags_ & ZLINK_DONTWAIT));
+        const int rc = socket->send_routed_complete_record (
+          target_rid_, reinterpret_cast<zlink::msg_t *> (part_),
+          static_cast<int> (flags_ & ZLINK_DONTWAIT));
         const int saved_errno = errno;
         zlink::part_helper_internal::consume_send_part (part_);
         errno = saved_errno;

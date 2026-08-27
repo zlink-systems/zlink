@@ -20,8 +20,20 @@ void zlink::ctx_t::teardown_runtime ()
 void zlink::ctx_t::flush_pending_inproc_locked ()
 {
     std::vector<std::string> pending_addresses;
-    _inproc_registry.collect_pending_addresses (&pending_addresses);
     const bool saved_terminating = _terminating;
+
+    // Never nest the context slot mutex with the inproc registry mutex.  The
+    // pending bind path has to take socket-local locks, while socket teardown
+    // reaches this collector from the opposite direction.
+    _slot_sync.unlock ();
+    try {
+        _inproc_registry.collect_pending_addresses (&pending_addresses);
+    } catch (...) {
+        _slot_sync.lock ();
+        throw;
+    }
+
+    _slot_sync.lock ();
     _terminating = false;
     _slot_sync.unlock ();
     for (std::vector<std::string>::const_iterator it = pending_addresses.begin (),
@@ -70,14 +82,16 @@ bool zlink::ctx_t::begin_shutdown_locked (bool allow_fork_cleanup_)
     debug_dump_sockets_locked ("terminate-before-stop");
     std::vector<socket_base_t *> sockets;
     _socket_registry.collect_sockets (&sockets);
-
     // A raw monitor peer is a context-owned socket, but its delivery task is
     // owned by the source socket. Detach every source monitor before sending
     // stop commands to the socket set so the control runtime cannot pump a
-    // monitor runtime after its peer has begun teardown.
-    for (std::vector<socket_base_t *>::size_type i = 0, size = sockets.size (); i != size; ++i)
+    // monitor runtime after its peer has begun teardown. monitor() finishes
+    // all context operations before publishing the runtime, so taking the
+    // socket-local monitor lock while _slot_sync is held cannot invert the
+    // context lock order.
+    for (std::vector<socket_base_t *>::size_type i = 0, size = sockets.size ();
+         i != size; ++i)
         sockets[i]->stop_monitor (false);
-
     for (std::vector<socket_base_t *>::size_type i = 0, size = sockets.size (); i != size; ++i)
         sockets[i]->stop ();
     if (sockets.empty ())

@@ -15,7 +15,8 @@ struct multipart_send_facade_t
     {
         return socket_public_send_scope_t (socket_->lifecycle_coordinator (),
                                            force_sync_
-                                             || socket_->direct_send_needs_public_api_sync ());
+                                             || socket_->direct_send_needs_public_api_sync (),
+                                           socket_send_admission_complete);
     }
 
     static int send_scoped (socket_base_t *socket_,

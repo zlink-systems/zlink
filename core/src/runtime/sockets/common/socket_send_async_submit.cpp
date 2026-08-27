@@ -289,8 +289,11 @@ int zlink::socket_base_t::send_async_submit (
             pending.inline_attempts.erase (inline_reservation_key);
         }
     }
-    if (!attempt_inline)
-        admission.unlock_sync ();
+    // Physical admission has its own complete-record scope below. Release the
+    // boundary lock before taking it so an incremental multipart sequence can
+    // win this race and turn the async operation into pending work instead of
+    // being rejected at submit time.
+    admission.unlock_sync ();
     if (deferred_target_select && !attempt_inline) {
         zlink_routed_submit_target_t resolved;
         zlink_routing_id_t requested_rid;
@@ -356,23 +359,33 @@ int zlink::socket_base_t::send_async_submit (
         }
         inline_record_owns_copies = true;
         pipe_t *attempted_pipe = NULL;
-        const int inline_rc = deferred_target_select
-                                ? send_routed_scoped (
-                                    &options_->target->peer_rid,
-                                    reinterpret_cast<msg_t *> (
-                                      inline_record->parts.data ()),
-                                    ZLINK_DONTWAIT, admission, NULL, 0,
-                                    &attempted_pipe)
-                                : try_admit_send_parts_scoped (
-                                    inline_record->parts.data (),
-                                    inline_record->parts.size (), target,
-                                    has_target, admission);
+        socket_public_send_scope_t physical_admission (
+          lifecycle, true, socket_send_admission_complete);
+        int inline_rc = -1;
+        if (physical_admission.acquired ()) {
+            inline_rc = deferred_target_select
+                          ? send_routed_scoped (
+                              &options_->target->peer_rid,
+                              reinterpret_cast<msg_t *> (
+                                inline_record->parts.data ()),
+                              ZLINK_DONTWAIT, physical_admission, NULL, 0,
+                              &attempted_pipe)
+                          : try_admit_send_parts_scoped (
+                              inline_record->parts.data (),
+                              inline_record->parts.size (), target,
+                              has_target, physical_admission);
+        } else {
+            // An open incremental sequence is physical admission contention,
+            // not an invalid async submission. Preserve the record and let the
+            // pending driver retry it after the multipart marker is released.
+            errno = EAGAIN;
+        }
         const int inline_errno = errno;
         const uint64_t attempted_pair_id =
           attempted_pipe ? attempted_pipe->get_transport_pair_id () : 0;
         const uint64_t attempted_pair_generation =
           attempted_pipe ? attempted_pipe->get_transport_pair_generation () : 0;
-        admission.unlock_sync ();
+        physical_admission.unlock_sync ();
         if (inline_rc == 0) {
             pending.admission_gate.store (false, std::memory_order_release);
             {

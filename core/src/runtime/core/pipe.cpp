@@ -1566,6 +1566,18 @@ void zlink::pipe_t::rollback ()
     rollback_unlocked ();
 }
 
+bool zlink::pipe_t::rollback_incomplete ()
+{
+    scoped_optional_fast_lock_t lock (&_out_sync);
+    const bool incomplete =
+      _out_incomplete_bytes != 0 || _out_incomplete_payload_bytes != 0
+      || _out_multipart_started_empty || _out_owner_message_started
+      || _out_owner_message_start_pending;
+    if (incomplete)
+        rollback_unlocked ();
+    return incomplete;
+}
+
 void zlink::pipe_t::flush ()
 {
     // Hot path: single-part send flushes on every completed message.

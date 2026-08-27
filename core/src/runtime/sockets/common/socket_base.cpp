@@ -145,16 +145,22 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
 
 void zlink::socket_base_t::set_auto_hwm_role (auto_hwm_role_t role_)
 {
-    _auto_hwm_role = role_;
-    _auto_hwm_role_override = role_ != auto_hwm_role_none;
-    _auto_hwm_last_recalc_reason = ZLINK_AUTO_HWM_RECALC_REASON_ROLE_CHANGE;
+    {
+        scoped_lock_t lock (_auto_hwm_sync);
+        _auto_hwm_role = role_;
+        _auto_hwm_role_override = role_ != auto_hwm_role_none;
+        _auto_hwm_last_recalc_reason = ZLINK_AUTO_HWM_RECALC_REASON_ROLE_CHANGE;
+    }
     refresh_auto_hwm_policy ();
 }
 
 void zlink::socket_base_t::set_auto_hwm_policy_enabled (bool enabled_)
 {
-    _auto_hwm_policy_enabled = enabled_;
-    _auto_hwm_last_recalc_reason = ZLINK_AUTO_HWM_RECALC_REASON_POLICY_TOGGLE;
+    {
+        scoped_lock_t lock (_auto_hwm_sync);
+        _auto_hwm_policy_enabled = enabled_;
+        _auto_hwm_last_recalc_reason = ZLINK_AUTO_HWM_RECALC_REASON_POLICY_TOGGLE;
+    }
     refresh_auto_hwm_policy ();
 }
 
@@ -180,6 +186,14 @@ int zlink::socket_base_t::configure_internal_monitor_queue (
 
 zlink::auto_hwm_socket_plan_t
 zlink::socket_base_t::prepare_auto_hwm_socket_plan (const auto_hwm_context_plan_t &context_)
+{
+    scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
+    return prepare_auto_hwm_socket_plan_locked (context_);
+}
+
+zlink::auto_hwm_socket_plan_t
+zlink::socket_base_t::prepare_auto_hwm_socket_plan_locked (
+  const auto_hwm_context_plan_t &context_)
 {
     auto_hwm_role_t role = _auto_hwm_role_override ? _auto_hwm_role : auto_hwm_role_none;
     if (role == auto_hwm_role_none)
@@ -230,6 +244,7 @@ void zlink::socket_base_t::collect_auto_hwm_queue_policies (
 {
     if (!out_)
         return;
+    scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
     auto_hwm_role_t role =
       _auto_hwm_role_override ? _auto_hwm_role : auto_hwm_role_none;
     if (role == auto_hwm_role_none)
@@ -244,15 +259,23 @@ void zlink::socket_base_t::collect_auto_hwm_queue_policies (
             || pipe->get_transport_lane () == transport_lane_completion)
             continue;
 
-        out_->push_back (make_auto_hwm_queue_policy (
+        out_->push_back (make_auto_hwm_queue_policy_locked (
           pipe->out_physical_queue (), true));
-        out_->push_back (make_auto_hwm_queue_policy (
+        out_->push_back (make_auto_hwm_queue_policy_locked (
           pipe->in_physical_queue (), false));
     }
 }
 
 zlink::physical_queue_endpoint_policy_t
 zlink::socket_base_t::make_auto_hwm_queue_policy (
+  const std::shared_ptr<physical_queue_record_t> &queue_, bool writer_) const
+{
+    scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
+    return make_auto_hwm_queue_policy_locked (queue_, writer_);
+}
+
+zlink::physical_queue_endpoint_policy_t
+zlink::socket_base_t::make_auto_hwm_queue_policy_locked (
   const std::shared_ptr<physical_queue_record_t> &queue_, bool writer_) const
 {
     physical_queue_endpoint_policy_t policy;
@@ -270,8 +293,9 @@ zlink::socket_base_t::make_auto_hwm_queue_policy (
 void zlink::socket_base_t::apply_physical_auto_hwm_plan (
   const auto_hwm_context_plan_t &context_, uint32_t recalc_reason_)
 {
+    scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
     _auto_hwm_context_plan = context_;
-    _auto_hwm_socket_plan = prepare_auto_hwm_socket_plan (context_);
+    _auto_hwm_socket_plan = prepare_auto_hwm_socket_plan_locked (context_);
     _auto_hwm_socket_plan.minimum_hwm_bytes =
       auto_hwm_profile_minimum_bytes (context_.profile,
                                       _auto_hwm_socket_plan.role);

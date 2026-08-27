@@ -156,10 +156,21 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
             // sink. When the mailbox runs on an I/O thread, it can also attach
             // or detach a pipe while a public send uses socket-specific
             // distribution state (for example DEALER's load balancer).
-            // Serialize every socket whose direct send takes the public API
-            // lock; the blocking retry path releases that lock while waiting
-            // specifically so this command owner can make progress.
-            if (async_executor && direct_send_needs_public_api_sync ()) {
+            // Serialize socket-owned send-state mutation with active and
+            // close-time multipart rollback. Non-PAIR send state is touched by
+            // several command types and keeps the existing broad guard. PAIR
+            // owns only one raw pipe pointer: bind publishes it and a
+            // termination acknowledgement clears/deallocates it. Guard those
+            // two mutation commands unconditionally rather than checking a
+            // multipart marker, which would leave a check-then-admit race. The
+            // frequent PAIR activation/pending commands remain lock-free.
+            const bool pair_pipe_lifetime_command =
+              options.type == ZLINK_CORE_SOCKET_PAIR
+              && (cmd.type == command_t::bind
+                  || cmd.type == command_t::pipe_term_ack);
+            if (async_executor
+                && (direct_send_needs_public_api_sync ()
+                    || pair_pipe_lifetime_command)) {
                 socket_public_api_lock_scope_t api_owner (
                   lifecycle_coordinator ());
                 scoped_lock_t receive_owner (receive.sync);
@@ -520,7 +531,10 @@ void zlink::socket_base_t::check_destroy ()
     //  If the object was already marked as destroyed, finish the deallocation.
     if (lifecycle_coordinator ().is_destroyed ()) {
         lifecycle_coordinator ().mark_destroy_pending ();
-        if (lifecycle_coordinator ().mailbox_refcount () != 0)
+        // Seal and observe the last lifetime reference in one atomic step.
+        // Context snapshots may otherwise acquire a new pin after the zero
+        // check but before the posted finalizer runs.
+        if (!lifecycle_coordinator ().seal_mailbox_refs_if_zero ())
             return;
 
         if (_public_handle && !_public_handle->request_destroy ())
@@ -528,6 +542,11 @@ void zlink::socket_base_t::check_destroy ()
 
         schedule_finalize_destroy ();
     }
+}
+
+bool zlink::socket_base_t::try_inc_mailbox_ref ()
+{
+    return lifecycle_coordinator ().try_inc_mailbox_ref ();
 }
 
 void zlink::socket_base_t::inc_mailbox_ref ()
@@ -546,11 +565,9 @@ void zlink::socket_base_t::dec_mailbox_ref ()
 
 void zlink::socket_base_t::schedule_finalize_destroy ()
 {
-    inc_mailbox_ref ();
+    zlink_assert (lifecycle_coordinator ().mailbox_refs_sealed ());
+    zlink_assert (lifecycle_coordinator ().mailbox_refcount () == 0);
     const std::function<void ()> finalize = [this] () {
-        const bool has_remaining_refs =
-          this->lifecycle_coordinator ().dec_mailbox_ref ();
-        zlink_assert (!has_remaining_refs);
         this->finalize_destroy ();
     };
     if (lifecycle_coordinator ().reaper_poller ())

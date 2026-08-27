@@ -210,6 +210,8 @@ zlink_submit_result_t request_part_common (
             return zlink::submit_result_internal::from_errno (saved_errno);
         }
 
+        zlink::part_helper_internal::complete_send_step (state,
+                                                         ZLINK_PART_MORE);
         return ZLINK_SUBMIT_OK;
     }
 
@@ -317,6 +319,8 @@ zlink_submit_result_t request_part_common (
               request_state, pending_key, zlink::submit_result_internal::from_errno (saved_errno));
         }
 
+        zlink::part_helper_internal::complete_send_step (state,
+                                                         ZLINK_PART_MORE);
         return ZLINK_SUBMIT_OK;
     }
 
@@ -558,6 +562,8 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
             errno = saved_errno;
             return zlink::submit_result_internal::from_errno (saved_errno);
         }
+        zlink::part_helper_internal::complete_send_step (state,
+                                                         ZLINK_PART_MORE);
         return ZLINK_SUBMIT_OK;
     }
 
@@ -668,6 +674,8 @@ zlink_submit_result_t zlink_dealer_reply_part (void *dealer_,
             errno = saved_errno;
             return zlink::submit_result_internal::from_errno (saved_errno);
         }
+        zlink::part_helper_internal::complete_send_step (state,
+                                                         ZLINK_PART_MORE);
         return ZLINK_SUBMIT_OK;
     }
 

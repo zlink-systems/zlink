@@ -42,18 +42,24 @@ void zlink::ctx_t::auto_hwm_recalc_task_main (void *arg_)
 
 void zlink::ctx_t::ensure_auto_hwm_recalc_task_started ()
 {
-    //  The caller owns _slot_sync. Teardown seals task creation under that
-    //  same lock before it waits for an in-flight callback below.
-    if (_auto_hwm_recalc_stopped || _auto_hwm.recalc_task_id () != 0)
-        return;
+    {
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
+        if (_auto_hwm_recalc_stopped || _auto_hwm.recalc_task_id () != 0)
+            return;
+    }
 
+    // Runtime bootstrap may take _slot_sync, so it deliberately happens with
+    // no Auto-HWM state lock held. A second check below resolves concurrent
+    // task creation or teardown.
     control_runtime_t *runtime = control_runtime ();
     if (!runtime)
         return;
 
-    _auto_hwm.set_recalc_task_id (
-      runtime->add_periodic_task (&ctx_t::auto_hwm_recalc_task_main, this,
-                                  UINT_MAX, false));
+    scoped_lock_t state_lock (_auto_hwm_state_sync);
+    if (_auto_hwm_recalc_stopped || _auto_hwm.recalc_task_id () != 0)
+        return;
+    _auto_hwm.set_recalc_task_id (runtime->add_periodic_task (
+      &ctx_t::auto_hwm_recalc_task_main, this, UINT_MAX, false));
 }
 
 void zlink::ctx_t::stop_auto_hwm_recalc_task ()
@@ -61,7 +67,10 @@ void zlink::ctx_t::stop_auto_hwm_recalc_task ()
     uint64_t task_id = 0;
     control_runtime_t *runtime = NULL;
     {
-        scoped_lock_t lock (_slot_sync);
+        // Wait for an admitted replan before sealing task creation. No socket
+        // or slot mutex is held while waiting on this control-path lock.
+        scoped_lock_t recalc_lock (_auto_hwm_recalc_sync);
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
         _auto_hwm_recalc_stopped = true;
         task_id = _auto_hwm.clear_recalc_task_id ();
         runtime = _runtime_resources.control_runtime ();
@@ -84,23 +93,22 @@ void zlink::ctx_t::schedule_auto_hwm_recalculate ()
     }
 
     {
-        scoped_lock_t lock (_slot_sync);
-        //  Context shutdown removes control-runtime tasks while this lock is
-        //  held. Do not recreate the auto-HWM task from a pipe/monitor cleanup
-        //  that runs after termination has begun.
-        if (_terminating || _auto_hwm_recalc_stopped)
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
+        if (_auto_hwm_recalc_stopped)
             return;
         _auto_hwm.schedule (now_ms, debounce_ms);
+    }
 
-        if (debounce_ms > 0) {
-            ensure_auto_hwm_recalc_task_started ();
-            if (_auto_hwm.recalc_task_id () != 0) {
-                control_runtime_t *runtime = _runtime_resources.control_runtime ();
-                if (runtime)
-                    (void) runtime->schedule_task_after (
-                      _auto_hwm.recalc_task_id (),
-                      static_cast<uint32_t> (debounce_ms));
-            }
+    if (debounce_ms > 0) {
+        ensure_auto_hwm_recalc_task_started ();
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
+        if (!_auto_hwm_recalc_stopped
+            && _auto_hwm.recalc_task_id () != 0) {
+            control_runtime_t *runtime = _runtime_resources.control_runtime ();
+            if (runtime)
+                (void) runtime->schedule_task_after (
+                  _auto_hwm.recalc_task_id (),
+                  static_cast<uint32_t> (debounce_ms));
         }
     }
 
@@ -110,47 +118,96 @@ void zlink::ctx_t::schedule_auto_hwm_recalculate ()
 
 int zlink::ctx_t::auto_hwm_recalculate_now ()
 {
+    scoped_lock_t recalc_lock (_auto_hwm_recalc_sync);
+
+    std::vector<socket_base_t *> sockets;
+    uint64_t recalc_generation = 0;
+    {
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
+        if (_auto_hwm_recalc_stopped) {
+            errno = ETERM;
+            return -1;
+        }
+        recalc_generation = _auto_hwm.pending_generation ();
+    }
+    {
+        // Pin socket object lifetime under the registry lock, then release the
+        // context lock before taking any socket-local Auto-HWM/monitor lock.
+        // This removes the _slot_sync -> socket-lock half of the monitor-open
+        // and inproc teardown lock cycles.
+        scoped_lock_t runtime_lock (_slot_sync);
+        if (_terminating) {
+            errno = ETERM;
+            return -1;
+        }
+        // Capture the request generation before the input snapshot.  Setters
+        // publish their input under _opt_sync before scheduling this
+        // generation under _auto_hwm_state_sync, so this ordering can only pair an old
+        // generation with newer input.  The later schedule then remains
+        // pending; the unsafe inverse pairing (new generation, old input) is
+        // impossible.
+        _socket_registry.collect_sockets (&sockets);
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            if (sockets[i] && !sockets[i]->try_inc_mailbox_ref ())
+                sockets[i] = NULL;
+        }
+    }
+
     auto_hwm_budget_input_t input;
     {
         scoped_lock_t locker (_opt_sync);
         input = _auto_hwm.budget_input ();
     }
 
-    scoped_lock_t runtime_lock (_slot_sync);
+    int result = 0;
+    try {
+        auto_hwm_context_plan_t context_plan;
+        auto_hwm_context_plan_make (input, &context_plan);
 
-    std::vector<socket_base_t *> sockets;
-    _socket_registry.collect_sockets (&sockets);
+        std::vector<physical_queue_endpoint_policy_t> queue_policies;
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            socket_base_t *socket = sockets[i];
+            if (!socket)
+                continue;
+            socket->collect_auto_hwm_queue_policies (&queue_policies);
+        }
 
-    auto_hwm_context_plan_t context_plan;
-    auto_hwm_context_plan_make (input, &context_plan);
+        _physical_queue_registry.plan_application_queues (&context_plan,
+                                                           queue_policies);
 
-    std::vector<physical_queue_endpoint_policy_t> queue_policies;
-    for (size_t i = 0; i < sockets.size (); ++i) {
-        socket_base_t *socket = sockets[i];
-        if (!socket)
-            continue;
-        socket->collect_auto_hwm_queue_policies (&queue_policies);
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            if (!sockets[i])
+                continue;
+            sockets[i]->apply_physical_auto_hwm_plan (
+              context_plan, ZLINK_AUTO_HWM_RECALC_REASON_REFRESH);
+        }
+        {
+            scoped_lock_t state_lock (_auto_hwm_state_sync);
+            _auto_hwm.record_applied_plan (context_plan,
+                                           recalc_generation);
+        }
+    } catch (const std::bad_alloc &) {
+        errno = ENOMEM;
+        result = -1;
+    } catch (...) {
+        errno = EFAULT;
+        result = -1;
     }
 
-    _physical_queue_registry.plan_application_queues (&context_plan,
-                                                       queue_policies);
-
     for (size_t i = 0; i < sockets.size (); ++i) {
-        if (!sockets[i])
-            continue;
-        sockets[i]->apply_physical_auto_hwm_plan (
-          context_plan, ZLINK_AUTO_HWM_RECALC_REASON_REFRESH);
+        if (sockets[i])
+            sockets[i]->dec_mailbox_ref ();
     }
-    _auto_hwm.record_applied_plan (context_plan);
-    return 0;
+    return result;
 }
 
 void zlink::ctx_t::auto_hwm_recalc_task ()
 {
     bool should_run = false;
     {
-        scoped_lock_t lock (_slot_sync);
-        if (_auto_hwm.recalc_due (zlink::clock_t ().now_ms ()))
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
+        if (!_auto_hwm_recalc_stopped
+            && _auto_hwm.recalc_due (zlink::clock_t ().now_ms ()))
             should_run = true;
     }
 
@@ -194,16 +251,28 @@ void zlink::ctx_t::record_auto_hwm_admission_attempt (
 
 int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *out_)
 {
-    scoped_lock_t locker (_slot_sync);
-    if (_terminating) {
-        errno = ETERM;
+    std::vector<socket_base_t *> sockets;
+    try {
+        scoped_lock_t slot_lock (_slot_sync);
+        if (_terminating) {
+            errno = ETERM;
+            return -1;
+        }
+        _socket_registry.collect_sockets (&sockets);
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            if (sockets[i] && !sockets[i]->try_inc_mailbox_ref ())
+                sockets[i] = NULL;
+        }
+    } catch (const std::bad_alloc &) {
+        errno = ENOMEM;
         return -1;
     }
-    _auto_hwm.copy_budget_snapshot (out_);
+    {
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
+        _auto_hwm.copy_budget_snapshot (out_);
+    }
     physical_queue_registry_snapshot_t queues;
     _physical_queue_registry.snapshot (&queues);
-    std::vector<socket_base_t *> sockets;
-    _socket_registry.collect_sockets (&sockets);
     uint64_t sampled_oversize_count = 0;
     uint64_t sampled_oversize_max = 0;
     uint64_t attempts = 0;
@@ -211,6 +280,8 @@ int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *ou
     bool sampled_overflow = false;
     for (std::vector<socket_base_t *>::const_iterator it = sockets.begin ();
          it != sockets.end (); ++it) {
+        if (!*it)
+            continue;
         uint64_t socket_oversize_count = 0;
         uint64_t socket_oversize_max = 0;
         (*it)->auto_hwm_queue_counters (NULL,
@@ -285,22 +356,44 @@ int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *ou
     if (queues.aggregate_overflow || messaging_sum_overflow || instance_applied_sum_overflow
         || instance_accounted_sum_overflow || sampled_overflow)
         out_->flags |= ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW;
+    for (size_t i = 0; i < sockets.size (); ++i) {
+        if (sockets[i])
+            sockets[i]->dec_mailbox_ref ();
+    }
     return 0;
 }
 
 int zlink::ctx_t::reset_auto_hwm_budget_metrics ()
 {
-    scoped_lock_t locker (_slot_sync);
-    if (_terminating) {
-        errno = ETERM;
+    std::vector<socket_base_t *> sockets;
+    try {
+        scoped_lock_t slot_lock (_slot_sync);
+        if (_terminating) {
+            errno = ETERM;
+            return -1;
+        }
+        _socket_registry.collect_sockets (&sockets);
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            if (sockets[i] && !sockets[i]->try_inc_mailbox_ref ())
+                sockets[i] = NULL;
+        }
+    } catch (const std::bad_alloc &) {
+        errno = ENOMEM;
         return -1;
     }
-    _auto_hwm.reset_budget_metrics ();
+    {
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
+        _auto_hwm.reset_budget_metrics ();
+    }
     _physical_queue_registry.reset_metrics ();
-    std::vector<socket_base_t *> sockets;
-    _socket_registry.collect_sockets (&sockets);
     for (std::vector<socket_base_t *>::const_iterator it = sockets.begin ();
-         it != sockets.end (); ++it)
-        (*it)->reset_auto_hwm_admission_counters ();
+         it != sockets.end (); ++it) {
+        if (*it)
+            (*it)->reset_auto_hwm_admission_counters ();
+    }
+    for (size_t i = 0; i < sockets.size (); ++i) {
+        if (sockets[i])
+            sockets[i]->dec_mailbox_ref ();
+    }
     return 0;
 }

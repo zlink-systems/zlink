@@ -195,7 +195,7 @@ void queue_socket_pending_timeout_completion (
 }
 
 std::shared_ptr<socket_request_reply_state_t>
-find_or_create_request_reply_state (socket_handle_t handle_)
+find_or_create_request_reply_state (const socket_handle_t &handle_)
 {
     if (!handle_.socket) {
         errno = EFAULT;
@@ -216,7 +216,8 @@ find_or_create_request_reply_state (socket_handle_t handle_)
     return handle_.socket->set_request_reply_state (state);
 }
 
-std::shared_ptr<socket_request_reply_state_t> find_request_reply_state (socket_handle_t handle_)
+std::shared_ptr<socket_request_reply_state_t>
+find_request_reply_state (const socket_handle_t &handle_)
 {
     return handle_.socket && handle_.socket->has_request_reply_state ()
              ? handle_.socket->request_reply_state ()

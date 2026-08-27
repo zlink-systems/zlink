@@ -100,25 +100,8 @@ struct handle_state_t
 {
     std::mutex mutex;
     std::condition_variable cv;
-    size_t complete_records_active = 0;
     send_sequence_state_t send;
     recv_sequence_state_t recv;
-};
-
-class complete_record_scope_t
-{
-  public:
-    explicit complete_record_scope_t (void *handle_);
-    explicit complete_record_scope_t (zlink::socket_base_t *socket_);
-    ~complete_record_scope_t ();
-
-    bool acquired () const { return static_cast<bool> (_state); }
-
-  private:
-    complete_record_scope_t (const complete_record_scope_t &);
-    complete_record_scope_t &operator= (const complete_record_scope_t &);
-
-    std::shared_ptr<handle_state_t> _state;
 };
 
 int validate_send_flags (zlink_send_flags_t flags_);

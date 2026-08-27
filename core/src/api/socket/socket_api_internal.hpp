@@ -99,12 +99,12 @@ inline socket_handle_t as_socket_handle (void *s_)
     return socket_handle_t (socket, public_handle);
 }
 
-static inline bool is_stream_type (socket_handle_t handle_)
+static inline bool is_stream_type (const socket_handle_t &handle_)
 {
     return handle_.socket && handle_.socket->socket_type () == ZLINK_CORE_SOCKET_STREAM;
 }
 
-static inline int socket_type (socket_handle_t handle_)
+static inline int socket_type (const socket_handle_t &handle_)
 {
     return handle_.socket ? handle_.socket->socket_type () : -1;
 }
@@ -150,7 +150,7 @@ static inline bool is_send_only_socket_type (int type_)
 class stream_api_lock_t
 {
   public:
-    explicit stream_api_lock_t (socket_handle_t handle_) : _lock ()
+    explicit stream_api_lock_t (const socket_handle_t &handle_) : _lock ()
     {
         if (!handle_.socket)
             return;

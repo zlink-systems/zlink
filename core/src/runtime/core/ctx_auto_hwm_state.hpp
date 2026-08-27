@@ -34,7 +34,9 @@ class ctx_auto_hwm_state_t
     uint64_t clear_recalc_task_id ();
 
     void schedule (uint64_t now_ms_, int debounce_ms_);
-    void record_applied_plan (const auto_hwm_context_plan_t &plan_);
+    uint64_t pending_generation () const;
+    void record_applied_plan (const auto_hwm_context_plan_t &plan_,
+                              uint64_t applied_generation_);
     bool recalc_due (uint64_t now_ms_) const;
 
     void copy_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *out_) const;

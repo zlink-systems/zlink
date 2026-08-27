@@ -207,8 +207,17 @@ class ctx_t ZLINK_FINAL
     int _io_thread_count;
 
     ctx_auto_hwm_state_t _auto_hwm;
-    //  Protected by _slot_sync. Once set, teardown must never publish another
-    //  context-owned auto-HWM task.
+    // Scheduling generations, the applied budget snapshot and task identity
+    // are control-plane state. Keep them independent from the socket slot
+    // registry so pipe/monitor callbacks never need _slot_sync merely to
+    // request a replan.
+    mutable mutex_t _auto_hwm_state_sync;
+    // Serializes complete replans without holding _slot_sync across socket
+    // monitor/option locks. It is a control-path lock and never participates
+    // in message admission.
+    mutex_t _auto_hwm_recalc_sync;
+    // Protected by _auto_hwm_state_sync. Once set, teardown must never publish
+    // another context-owned auto-HWM task.
     bool _auto_hwm_recalc_stopped;
     ctx_physical_queue_registry_t _physical_queue_registry;
 

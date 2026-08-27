@@ -32,7 +32,7 @@ bool is_direct_public_recv_fast_type (int type_)
     return type_ == ZLINK_CORE_SOCKET_PAIR || type_ == ZLINK_CORE_SOCKET_DEALER;
 }
 
-int recv_socket_subscribe_parts (socket_handle_t handle_,
+int recv_socket_subscribe_parts (const socket_handle_t &handle_,
                                  zlink_routing_id_t *source_rid_out_,
                                  zlink_msg_t **parts_out_,
                                  size_t *part_count_out_,
@@ -101,7 +101,7 @@ int recv_socket_subscribe_parts (socket_handle_t handle_,
                                                          part_count_out_, false);
 }
 
-int recv_socket_parts (socket_handle_t handle_,
+int recv_socket_parts (const socket_handle_t &handle_,
                        zlink_routing_id_t *source_rid_out_,
                        zlink_msg_t **parts_out_,
                        size_t *part_count_out_,
@@ -214,6 +214,15 @@ int recv_socket_parts (socket_handle_t handle_,
 
 } // namespace
 
+int zlink_socket_recv_handle_internal (const socket_handle_t &handle_,
+                                       zlink_routing_id_t *source_rid_out_,
+                                       zlink_msg_t **parts_out_,
+                                       size_t *part_count_out_,
+                                       zlink_send_flags_t flags_)
+{
+    return recv_socket_parts (handle_, source_rid_out_, parts_out_, part_count_out_, flags_);
+}
+
 extern "C" int zlink_socket_xpub_recv_internal (void *socket_,
                                                 zlink_routing_id_t *source_rid_out_,
                                                 int *subscribed_out_,
@@ -311,7 +320,8 @@ extern "C" int zlink_socket_recv_internal (void *socket_,
     socket_handle_t handle = as_socket_handle (socket_);
     if (!handle.socket)
         return -1;
-    return recv_socket_parts (handle, source_rid_out_, parts_out_, part_count_out_, flags_);
+    return zlink_socket_recv_handle_internal (handle, source_rid_out_, parts_out_,
+                                              part_count_out_, flags_);
 }
 
 extern "C" int zlink_socket_subscribe_recv_internal (void *socket_,

@@ -249,8 +249,13 @@ void zlink::ctx_auto_hwm_state_t::schedule (uint64_t now_ms_, int debounce_ms_)
     }
 }
 
+uint64_t zlink::ctx_auto_hwm_state_t::pending_generation () const
+{
+    return _pending_generation;
+}
+
 void zlink::ctx_auto_hwm_state_t::record_applied_plan (
-  const auto_hwm_context_plan_t &plan_)
+  const auto_hwm_context_plan_t &plan_, uint64_t applied_generation_)
 {
     if (plan_.enabled) {
         _applied_plan = plan_;
@@ -268,9 +273,16 @@ void zlink::ctx_auto_hwm_state_t::record_applied_plan (
         _applied_plan.effective_core_budget_bytes =
           plan_.effective_core_budget_bytes;
     }
-    _recalc_pending = false;
-    _recalc_deadline_ms = 0;
-    _last_applied_generation = _pending_generation;
+    // A setter or topology change can schedule a newer plan while this one is
+    // being built outside the context Auto-HWM state lock. Publishing the
+    // completed snapshot is still useful, but it must not consume that newer
+    // request.
+    if (applied_generation_ == _pending_generation) {
+        _recalc_pending = false;
+        _recalc_deadline_ms = 0;
+    }
+    if (applied_generation_ > _last_applied_generation)
+        _last_applied_generation = applied_generation_;
     ++_budget_generation;
 }
 

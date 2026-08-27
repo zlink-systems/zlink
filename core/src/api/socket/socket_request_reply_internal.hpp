@@ -104,7 +104,7 @@ router_recv_metadata_tls_t &router_recv_metadata_tls ();
 
 int validate_request_parts (zlink_msg_t *parts_, size_t part_count_);
 uint64_t allocate_dealer_reply_token (socket_request_reply_state_t *state_);
-int recv_router_message_direct (socket_handle_t handle_,
+int recv_router_message_direct (const socket_handle_t &handle_,
                                 const zlink_routing_id_t **source_node_rid_out_,
                                 uint64_t *request_seq_out_,
                                 zlink_msg_t **parts_out_,
@@ -113,7 +113,7 @@ int recv_router_message_direct (socket_handle_t handle_,
                                 zlink_msg_t *terminal_part_out_ = NULL,
                                 bool *terminal_part_returned_out_ = NULL,
                                 zlink_routing_id_t *terminal_source_storage_ = NULL);
-int recv_dealer_message_direct (socket_handle_t handle_,
+int recv_dealer_message_direct (const socket_handle_t &handle_,
                                 const std::shared_ptr<socket_request_reply_state_t> &state_,
                                 uint8_t *message_type_out_,
                                 uint64_t *request_seq_out_,
@@ -161,8 +161,9 @@ int send_completion_frames_for_transport_pair (zlink::socket_base_t *socket_,
                                                 zlink_msg_t *parts_,
                                                 size_t part_count_);
 std::shared_ptr<socket_request_reply_state_t>
-find_or_create_request_reply_state (socket_handle_t handle_);
-std::shared_ptr<socket_request_reply_state_t> find_request_reply_state (socket_handle_t handle_);
+find_or_create_request_reply_state (const socket_handle_t &handle_);
+std::shared_ptr<socket_request_reply_state_t>
+find_request_reply_state (const socket_handle_t &handle_);
 int ensure_completion_queue_ready (const std::shared_ptr<socket_request_reply_state_t> &state_);
 int queue_reply_completion (const std::shared_ptr<socket_request_reply_state_t> &state_,
                             zlink_reply_handler_fn handler_,

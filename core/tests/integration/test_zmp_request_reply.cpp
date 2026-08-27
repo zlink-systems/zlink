@@ -800,7 +800,7 @@ void test_reply_callback_rejects_sync_and_async_submit_on_all_sockets ()
     TEST_ASSERT_EQUAL_INT (EDEADLK, probe.different_async_errno);
 
     test_context_socket_close_zero_linger (different_dealer);
-    test_context_socket_close_zero_linger (dealer);
+    close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
@@ -864,7 +864,7 @@ void test_dealer_to_router_request_reply_basic ()
                                       reply_probe.payload.size ());
     }
 
-    test_context_socket_close_zero_linger (dealer);
+    close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
@@ -920,7 +920,7 @@ void test_dealer_receives_unsolicited_message_after_request_reply ()
     TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
     TEST_ASSERT_EQUAL_STRING ("unsolicited", part_to_string_and_close (&received_part).c_str ());
 
-    test_context_socket_close_zero_linger (dealer);
+    close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
@@ -999,7 +999,7 @@ void test_concurrent_first_dealer_requests_share_dispatch_install ()
     TEST_ASSERT_TRUE (wait_for_reply (&reply_a));
     TEST_ASSERT_TRUE (wait_for_reply (&reply_b));
 
-    test_context_socket_close_zero_linger (dealer);
+    close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
@@ -1102,7 +1102,7 @@ void run_blocking_dealer_receive_ownership_transition (bool use_dealer_receive_)
         TEST_ASSERT_TRUE (generic_source_was_null);
     }
 
-    test_context_socket_close_zero_linger (dealer);
+    close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
@@ -1430,7 +1430,7 @@ void test_dealer_to_router_request_reply_over_tcp_with_explicit_routing_id ()
                                       reply_probe.payload.size ());
     }
 
-    test_context_socket_close_zero_linger (dealer);
+    close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
@@ -2059,7 +2059,7 @@ void test_application_only_poller_does_not_take_completion_ownership ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK, zlink_poller_remove (poller, dealer));
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
-    test_context_socket_close_zero_linger (dealer);
+    close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
@@ -2180,7 +2180,7 @@ void test_dealer_disconnect_fails_only_requests_on_that_pipe ()
         TEST_ASSERT_EQUAL_STRING ("reply-from-b", successful_reply->payload.c_str ());
     }
 
-    test_context_socket_close_zero_linger (dealer);
+    close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router_b);
     if (router_a)
         test_context_socket_close_zero_linger (router_a);
@@ -2287,7 +2287,7 @@ void test_router_to_router_request_reply_basic ()
                                       reply_probe.payload.size ());
     }
 
-    test_context_socket_close_zero_linger (client_router);
+    close_test_socket_after_reply_callback (client_router);
     test_context_socket_close_zero_linger (server_router);
 }
 
@@ -2572,7 +2572,7 @@ void test_connect_only_router_requester_receives_reply ()
                                       reply_probe.payload.size ());
     }
 
-    test_context_socket_close_zero_linger (client_router);
+    close_test_socket_after_reply_callback (client_router);
     test_context_socket_close_zero_linger (server_router);
 }
 

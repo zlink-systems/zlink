@@ -13,7 +13,17 @@ int reqrep::validate_socket_type (void *socket_, int expected_type_)
     if (!handle.socket)
         return -1;
 
-    if (socket_type (handle) != expected_type_) {
+    return validate_socket_type (handle, expected_type_);
+}
+
+int reqrep::validate_socket_type (const socket_handle_t &handle_, int expected_type_)
+{
+    if (!handle_.socket) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if (socket_type (handle_) != expected_type_) {
         errno = EINVAL;
         return -1;
     }

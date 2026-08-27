@@ -76,8 +76,8 @@ zlink_recv_result_t zlink_recv_part (void *s_,
         }
         if (terminal_part_returned_out_)
             *terminal_part_returned_out_ = false;
-        return zlink_socket_recv_internal (
-          s_, source_rid_, parts_, part_count_,
+        return zlink_socket_recv_handle_internal (
+          handle, source_rid_, parts_, part_count_,
           static_cast<zlink_send_flags_t> (recv_flags_));
     };
     if (type == ZLINK_CORE_SOCKET_PUB || type == ZLINK_CORE_SOCKET_XPUB

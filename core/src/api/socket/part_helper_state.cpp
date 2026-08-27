@@ -31,6 +31,16 @@ create_socket_owned_handle_state (void *handle_)
     return zlink::part_helper_internal::find_or_create_socket_state (handle.socket);
 }
 
+bool prepare_send_scope_for_cleanup (
+  zlink::part_helper_internal::send_sequence_state_t *send_)
+{
+    if (!send_ || !send_->send_scope)
+        return false;
+    return send_->send_scope->acquired ()
+           || send_->send_scope->resume_multipart_call ()
+           || send_->send_scope->lock_multipart_for_close_cleanup ();
+}
+
 }
 
 std::shared_ptr<zlink::part_helper_internal::handle_state_t>
@@ -125,41 +135,63 @@ zlink::part_helper_internal::find_handle_state (void *handle_)
 
 void zlink::part_helper_internal::cleanup_handle (void *handle_)
 {
+    const int saved_errno = errno;
     std::shared_ptr<handle_state_t> state;
     socket_handle_t handle = as_socket_handle (handle_);
     zlink::socket_base_t *socket = handle.socket;
     if (socket) {
         state = socket->part_helper_state ();
-        if (!state)
+        if (!state) {
+            errno = saved_errno;
             return;
+        }
         socket->clear_part_helper_state ();
     }
     if (!state) {
         std::lock_guard<std::mutex> lock (g_part_helper_mutex);
         std::unordered_map<void *, std::shared_ptr<handle_state_t>>::iterator it =
           g_part_helper_state.find (handle_);
-        if (it == g_part_helper_state.end ())
+        if (it == g_part_helper_state.end ()) {
+            errno = saved_errno;
             return;
+        }
         state = it->second;
         g_part_helper_state.erase (it);
     }
 
     std::lock_guard<std::mutex> lock (state->mutex);
+    if (state->send.active && state->send.sink_socket
+        && prepare_send_scope_for_cleanup (&state->send)) {
+        (void) state->send.sink_socket->rollback_scoped (
+          *state->send.send_scope);
+    }
     reset_send_sequence (&state->send);
     reset_recv_sequence (&state->recv);
+    errno = saved_errno;
 }
 
 void zlink::part_helper_internal::cleanup_socket (socket_base_t *socket_)
 {
-    if (!socket_)
+    const int saved_errno = errno;
+    if (!socket_) {
+        errno = saved_errno;
         return;
+    }
 
     std::shared_ptr<handle_state_t> state = socket_->part_helper_state ();
-    if (!state)
+    if (!state) {
+        errno = saved_errno;
         return;
+    }
     socket_->clear_part_helper_state ();
 
     std::lock_guard<std::mutex> lock (state->mutex);
+    if (state->send.active && state->send.sink_socket
+        && prepare_send_scope_for_cleanup (&state->send)) {
+        (void) state->send.sink_socket->rollback_scoped (
+          *state->send.send_scope);
+    }
     reset_send_sequence (&state->send);
     reset_recv_sequence (&state->recv);
+    errno = saved_errno;
 }
