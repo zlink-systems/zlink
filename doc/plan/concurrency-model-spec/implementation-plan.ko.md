@@ -27,7 +27,7 @@ cpp는 조율자를 신설해야 한다 — 신설할 때 볼 참조 구현이 P
 
 | 단계 | 내용 | 선행 | 병렬 |
 |---|---|---|---|
-| **P0** | cpp 핫패스 조회 묶기 · java binding wrapper 중복 lock · 큐 임계 구역 축소 | 없음 | P1~P4와 병행 가능 |
+| **P0** | cpp 핫패스 조회 묶기 · java binding wrapper 중복 lock · 큐 임계 구역 축소 · **byte-HWM 잔재 제거(§2.1)** | 없음 | P1~P4와 병행 가능 |
 | **P1** | dotnet을 스펙 이름으로 정렬한다 (개명 · `_laneGate` 제거 · `ownerTimeBudget` 추가) | 없음 | 단독 |
 | **P2** | java 세 계층 조율자 신설 | P1 | P3와 병렬 |
 | **P3** | cpp 세 계층 조율자 신설 | P1 | P2와 병렬 |
@@ -47,12 +47,48 @@ P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같�
 | P0-1 | Spot 핫패스에서 연속된 단순 조회를 한 turn으로 묶는다 | cpp `runtime/spots/spot_runtime.cpp` | 블로킹 브리지 send 11→4~5 · request 13→5~6 |
 | P0-2 | binding wrapper의 중복 lock 제거 | java `runtime/` binding wrapper 31곳 | hot path 7곳 |
 | P0-3 | 큐 임계 구역에서 `BigInteger` 할당을 걷어낸다 | java `execution/ZLinkAsyncSerialQueue.java` | enqueue마다 4할당 제거 |
-| P0-4 | java에서 payload 바이트 회계를 **제거**한다 — `applicationByteCapacity`·`lifecycleByteCapacity`·`fixedWorkByteCost`·`enqueueWithPayloadBytes`와 그 호출자 | `execution/ZLinkAsyncSerialQueue.java:32-38` · `runtime/spots/ZLinkSpotRuntime.java:4831` · `ZLinkDefaultSpotContext.java` | 건수 상한만 남고 게이트 그린 |
-| P0-5 | node scheduler에서 byte 축을 **제거**한다 — `payloadBytes`·`metadataBytes`·`byteCost`. `submitPreAdmitted` 우회도 함께 정리한다 | node `runtime/execution/serial-scheduler.ts` | 건수 상한만 남고 게이트 그린 |
 
 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에 있다. P0-1은
 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을 어긴 자리를
 되돌린다.
+
+---
+
+### 2.1 byte-HWM 잔재 제거 (P0-4 ~ P0-7)
+
+Framework 쪽 한도는 모두 건수다. byte로 재는 것은 **Core byte HWM**과 **소켓 수신 회전
+한도** 둘뿐이다(스펙 04 §9 · 07 §5). 각 언어 실행 큐에 있는 payload byte 회계는 예전 byte
+제어 설계의 잔재이며, 현재 `RootInboundDispatchOptions`에는 그 축을 설정할 수단이 없다.
+
+세 언어가 **같은 숫자**를 하드코딩하고 있다는 것이 같은 잔재라는 증거다.
+
+| 값 | java | cpp | node |
+|---|---|---|---|
+| application lane byte | 64 MiB | 64 MiB (`application_mailbox_bytes`) | scheduler 내부 |
+| lifecycle lane byte | 4 MiB | 4 MiB (`control_mailbox_bytes`) | scheduler 내부 |
+| 작업당 고정 byte | 256 | 256 (`fixed_work_byte_cost`) | scheduler 내부 |
+
+**건드리지 않는 것** — 잘못 걷어내면 계약 위반이다.
+
+| 유지 | 이유 |
+|---|---|
+| Core byte HWM 설정 전달 (`CoreHwmProfile` 등) | Core 소유. 04 §1 |
+| 소켓 수신 회전 한도의 byte 축 (`receive_batch_bytes` · `FrameworkReceiveBatch` · `ZLinkReceiveBatchBudget`) | 04 §4·§10이 건수·byte·경과 시간 셋을 계약으로 둔다 |
+| `MaxMessageSize` | 별도 wire guard. 04 §8 |
+| wire codec의 크기 계산 (join recovery codec, message parts 등) | 직렬화 크기이지 admission이 아니다 |
+
+| # | 작업 | 대상 | 완료 판정 |
+|---|---|---|---|
+| P0-4 | java 큐에서 byte 축과 `enqueueWithPayloadBytes`를 제거한다 | `execution/ZLinkAsyncSerialQueue.java:32-38` · 호출자 `runtime/spots/ZLinkDefaultSpotContext.java:171,183,198,625` · `runtime/actors/ZLinkActorDispatchSerials.java` · `runtime/spots/ZLinkSpotRuntime.java:4831` | 정책이 건수 넷만 남고 5모듈 그린 |
+| P0-5 | cpp 큐에서 byte 축을 제거한다 | `runtime/execution/serial_execution_queue.{hpp,cpp}` · `runtime/dispatch/dispatch_limits.hpp:11,13,21` · 호출자 `spots/spot_runtime.cpp` · `stateful/stateful_object_runtime.{hpp,cpp}` · `mesh/service_mailbox.cpp` | `receive_batch_bytes`만 남고 45 test 그린 |
+| P0-6 | node scheduler에서 byte 축을 제거한다. `serial-work-size.ts`의 `zlinkMetadataByteLength`도 함께 없앤다 | `runtime/execution/serial-scheduler.ts` · `runtime/execution/serial-work-size.ts` | 계약 테스트 그린 |
+| P0-7 | **조사** — dotnet `ZLinkBoundedIngressAdmission`·`ZLinkActorHandoffAdmissions`의 byte 축이 relocation hold 전용인지 판정한다 | `Runtime/ZLinkBoundedIngressAdmission.cs` · `Runtime/Actors/ZLinkActorHandoffAdmissions.cs` | relocation 전용이면 유지(상한이 `long.MaxValue`라 사실상 무제한), 아니면 제거 |
+
+**P0-6에는 hot path 이득이 붙는다.** node는 메시지마다 metadata의 모든 key·value에
+`Buffer.byteLength`를 돌려 예약 크기를 만든다. byte 축이 없어지면 그 순회 자체가 사라진다.
+
+**dotnet 실행 큐에는 byte 축이 없다.** `ZLinkSerialExecutionQueue`의 admission은 relocation
+seal과 stopping 상태만 본다 — 현재 계약에 맞는 상태이므로 신설하지 않는다.
 
 ---
 
@@ -75,8 +111,8 @@ byte로 재는 것은 Core byte HWM과 소켓 수신 회전 한도뿐이다(스�
 `applicationByteCapacity = 64 MiB` 같은 값은 예전 byte 제어 설계의 잔재이며, 현재
 `RootInboundDispatchOptions`에는 그 축을 설정할 수단이 아예 없다.
 
-따라서 **dotnet·cpp에 회계를 신설하지 않는다.** 없는 것이 현재 계약에 맞다. 대신 java와
-node에서 걷어낸다(P0-4·P0-5).
+대상은 java·cpp·node 셋이다(§2.1). dotnet 실행 큐에는 그 축이 없으므로 **신설하지 않는다** —
+없는 것이 현재 계약에 맞다.
 
 **`SpotWide` 2단 겹침은 걷어낸다(확정 2026-08-28).** 그 겹침이 사는 것이 없다 — 순서는 Spot
 큐 하나로 끝나고, 유입 제한은 이 계층 권한이 아니며, `SpotWide`는 Spot 전체가 한 줄이라 Actor를

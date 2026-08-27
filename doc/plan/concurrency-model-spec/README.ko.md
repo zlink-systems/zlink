@@ -115,4 +115,5 @@ Actor를 따로 세워도 어느 Actor가 먼저 돌지 않는다. node 현행(S
    현행 `ZLinkSpotSerialExecutor`는 직렬 단위 wrapper다(계약서 §7 · 플랜 §6)
 ⑥ ~~`SpotWide`에서 Actor 큐를 거칠 이유~~ → **확정: 없다. 걷어낸다.** 순서는 Spot 큐 하나로
    끝나고 유입 제한은 이 계층 권한이 아니다(04 소유). node 현행이 정본이고 나머지 셋이 맞춘다
-⑦ ~~java의 ingress byte 계상~~ → **확정: 잔재다. 제거한다.** java·node에서 byte 축을 걷어내고(P0-4·P0-5) .NET·cpp에는 신설하지 않는다. 스펙 04의 owner FIFO byte 축도 함께 정정했다
+⑦ ~~owner queue의 byte 계상~~ → **확정: 잔재다. 제거한다.** java·cpp·node가 같은 숫자를
+   하드코딩하고 있다. 제거 목록은 플랜 §2.1(P0-4~P0-7). 스펙 04의 owner FIFO byte 축도 함께 정정했다

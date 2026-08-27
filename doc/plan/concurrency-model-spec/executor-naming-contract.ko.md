@@ -209,9 +209,14 @@ Spot만 "Spot 1 + Actor N + Timer M"을 **소유**하므로 맵을 갖는다. Ac
 **R-N8c.** 건수 상한이 걸리는 단위는 그 mode가 만든 큐를 따라간다 — `PerActor`는 Actor별,
 `SpotWide`는 Spot별.
 
-**근거.** java의 byte 축은 예전 byte 제어 설계의 잔재다. archive 47 §6이 "정식 spec이 두 축을
+**근거.** byte 축은 예전 byte 제어 설계의 잔재다. archive 47 §6이 "정식 spec이 두 축을
 의무화했다(Framework API)"를 근거로 결정을 기록했으나, 현재 `RootInboundDispatchOptions`에는
-그 두 축을 설정할 수단이 없다. .NET·cpp에 없는 것이 현재 계약에 맞다.
+그 두 축을 설정할 수단이 없다.
+
+**java·cpp·node 셋 다 갖고 있고 숫자까지 같다** — application 64 MiB, lifecycle 4 MiB, 작업당
+고정 256 byte(java `ZLinkAsyncSerialQueue` · cpp `dispatch_limits.hpp`). 같은 설계에서 나온
+같은 잔재다. dotnet 실행 큐에만 없으며, 없는 것이 현재 계약에 맞다. 제거 대상과 유지 대상은
+[implementation-plan.ko.md §2.1](implementation-plan.ko.md)이 갖는다.
 
 ## 4. 상태 조회 — turn 경계 (고정)
 
