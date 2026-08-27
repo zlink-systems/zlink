@@ -42,6 +42,8 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     private final ZLinkClientServerRuntimeConfiguration clientServers;
     private final ZLinkFanoutRuntimeConfiguration fanout;
     private final List<ZLinkAutoConnectLoop> loops = new ArrayList<>();
+    private volatile boolean clientServersStarted;
+    private volatile boolean fanoutStarted;
 
     public ZLinkLocationAutoConnectHost(
         ZLinkLocationRuntime runtime,
@@ -178,10 +180,11 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         }
 
         CompletionStage<Void> chain = hasAutomaticClientServer
-            ? startClientServers()
+            ? startClientServers().thenRun(() -> clientServersStarted = true)
             : CompletableFuture.completedFuture(null);
         if (hasAutomaticFanout) {
-            chain = chain.thenCompose(ignored -> startFanout());
+            chain = chain.thenCompose(ignored -> startFanout()
+                .thenRun(() -> fanoutStarted = true));
         }
         for (ZLinkAutoConnectLoop loop : loops) {
             chain = chain.thenCompose(ignored -> loop.start());
@@ -223,10 +226,10 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     }
 
     public CompletionStage<Void> markDraining() {
-        CompletionStage<Void> chain = clientServers == null
+        CompletionStage<Void> chain = !clientServersStarted
             ? CompletableFuture.completedFuture(null)
             : clientServers.markDraining();
-        if (fanout != null) {
+        if (fanoutStarted) {
             chain = chain.thenCompose(ignored -> fanout.markDraining());
         }
         for (ZLinkAutoConnectLoop loop : loops) {
