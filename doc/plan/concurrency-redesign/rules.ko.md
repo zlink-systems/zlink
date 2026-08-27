@@ -117,6 +117,13 @@ CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
 ### 알려진 기존 실패 (게이트 판정 제외 — 회귀로 읽지 말 것)
 
 - **ZoneWorld**: cpp split-brain·dotnet mesh admission (Z1·Z2). CP3에서 판정, §3.1에서 수정.
+- **cpp `test_cpp_framework_host_lifecycle` 간헐 실패** (2026-08-27 이분 실증): 별도 worktree의
+  **기준선(커밋된 배치 상태)에서 ×3 중 1회 실패**했다. 즉 `public_host_runtime`·`spot_runtime`
+  전환이 만든 회귀가 아니라 원래 있던 flake다. 중앙 게이트 1차에서 실패해도 개별 재실행에서
+  통과하면 flake로 판정한다(실측: 18:03 1차 실패 → 재실행 rc=0).
+  **주의**: 이 항목은 세션 중 "격리 ①에서 실패 목록에 없었으니 이후 전환이 원인"으로 오판된
+  전례가 있다. 한 번 통과한 것은 flake가 아니라는 증거가 되지 못한다 — 기준선에서 반복 측정해야 한다.
+- **cpp `test_cpp_framework_m6b_runtime`**: Subprocess aborted(exit 86/134 계열). 재실행 통과 확인 후 무시.
 - **cpp `test_cpp_framework_layout_contract`**: ShoppingMall OrderWorkflow main.cpp L350·L446
   blocking `result()` 지문 — base `3cbfbde4f9`부터. 샘플 수정은 별도 작업.
 - **node `test/contract/*` 23건** (2026-08-27 기준선 대조로 확정): 계약 스위트 전수 실행 시
