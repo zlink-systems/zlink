@@ -479,3 +479,82 @@ java만 그 재료로 Spot 진입을 하나로 모았고 dotnet·cpp는 안 모�
 진입 경로 재설계는 그 범위를 넘기 때문**이다(위 정정 참조). 정본 정책상으로도 .NET 형태가 맞다.
 구현 패스에서 이 선택을 임의로 바꾸지 않는다 — **클래스 내부 lane 없이 "상위가 직렬
 보장한다"는 형태로 제출되면 반려**한다.
+
+---
+
+## 10. lane 전환 절차 (스펙 06에서 이관 2026-08-28)
+
+아래는 **전환 작업자용 절차**다. 스펙 06 §7·§8에 있던 것을 여기로 옮겼다 — 공개 계약이
+아니라 캠페인 작업 지시이고, 보고 형식까지 담고 있어 스펙에 둘 자리가 아니었다.
+
+영구 규칙은 스펙에 남겼다 — "반환 전 완료 보장을 보존한다"와 "공개 동기 계약을 lane 도입만을
+이유로 비동기로 바꾸지 않는다"는 [스펙 06 §5 「반환 전 완료 보장」](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#반환-전-완료-보장),
+교차 불변식이면 한 ownership region으로 합친다는 규칙은 [스펙 06 §4](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)가 갖는다.
+
+### 10.1 시그니처 전환 규칙
+
+상태 접근 메서드의 시그니처는 다음 규칙에 따라 전환한다.
+
+- **동기 반환을 비동기 반환으로 바꾸는 것을 허용한다.** 호출자가 그 값을 이미 비동기
+  경로 안에서 쓰고 있었다면 그 값은 애초에 스냅샷이었다 — 반환 방식을 비동기로 맞추는
+  것은 기존 관측 가능한 동작을 바꾸지 않는다.
+- **out 파라미터는 반환값으로 합친다.** 하나의 반환값에 성공 여부와 결과를 함께
+  담는다.
+- **실패 시에도 값을 돌려주던 out은 nullable scalar로 기계 치환하지 않는다.** 성공
+  여부와 값을 하나의 스칼라로 뭉치면, "실패했지만 그 실패에 딸린 값도 함께 필요한"
+  경우를 표현할 수 없다 — 예를 들어 거절되었더라도 그 시점의 현재 high-water 값을
+  호출자가 여전히 받아야 하는 경우, nullable scalar 하나로는 성공 값과 실패 시 부가
+  값을 동시에 담지 못한다. 이런 경우는 성공 여부와 값(그리고 실패 시 부가 값)을 함께
+  담는 결과 타입을 만들어 보존한다. 기계적인 nullable 치환은 관측 가능한 동작을
+  바꾸므로 허용하지 않는다.
+- **반환 전 완료 보장을 보존한다.** 원본 동기 메서드가 waiter 등록, epoch·generation
+  캡처, store 판독 또는 exact ownership claim을 반환 전에 완료했다면, 전환 뒤에도
+  caller가 반환을 관찰하기 전에 그 작업이 완료돼 있어야 한다. 비동기 fire-and-forget
+  게시로 바꾸지 않는다.
+- 이 보장을 유지하기 위해 동기 호환 경계가 필요하면 [스펙 06 §5 「완료 신호와 블로킹 호환 경계」](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#완료-신호와-블로킹-호환-경계) 조건을 확인하고 사유를 기록한다. 완료 신호를
+  기다리는 이후 단계는 비동기로 남길 수 있지만, 등록·캡처 자체를 반환 뒤로 미루지는
+  않는다.
+- 공개 또는 언어별 exact interface가 동기 계약이면, state lane 도입만을 이유로
+  Promise나 Task 반환으로 바꾸지 않는다. 내부 호출자가 이미 비동기이고 관측 계약이
+  변하지 않을 때만 async signature를 전파한다.
+
+### 10.2 전환 단위와 계수·보고
+
+- **전환 경계는 기존 gate가 소유하던 상태 영역을 그대로 쓴다.** 클래스 하나에 서로
+  독립적인 gate가 여러 개 있었다면, 각각을 별도 ownership region으로 옮길 수 있다. 이
+  경우 두 영역에 걸친 field·collection 불변식이 없고, 영역 사이의 호출 방향이
+  단방향임을 기록한다.
+- 교차 불변식이나 양방향 대기가 하나라도 있으면 여러 lane으로 나누지 않고 한
+  ownership region으로 합친다. "클래스 하나"는 기본 작업 단위일 뿐, 한 클래스 안에
+  근거 없이 여러 state lane을 만드는 허가가 아니다.
+- socket·completion·worker 같은 작업 프로토콜 gate는 [스펙 06 §4 「상태 보호와 작업 프로토콜 직렬화를 구분한다」](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#상태-보호와-작업-프로토콜-직렬화를-구분한다) 조건을 만족할
+  때만 state lane 전환 대상에서 제외한다. 제외 사유에는 ownership transfer,
+  generation fence, completion 방식과 lock-order를 기록한다.
+- **전환마다 검증을 통과해야 다음으로 간다.** 확인할 항목은
+  [스펙 06 §8 검증 요구](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#8-검증-요구)가 소유한다.
+- **성공 지표는 lock 개수가 아니다.** 배타적 접근 문의 개수가 줄어든 것은 증거가
+  아니다. 줄여야 하는 것은 "async 경계를 넘어 쓰이는 스냅샷"의 수이며, 이 수를 컴포넌트
+  단위로 전후 비교한다. 이 비교는 공개 표면이 아니라 내부 계측으로 확인하는 **내부
+  확인 조건**이며, 검증 요구 절에는 두지 않는다.
+
+Async 경계 snapshot의 계수 단위는 source의 배타적 접근 위치다. 단순 문자열 검색
+결과가 아니라 실제 언어 token을 센다. 각 위치에서 배타적 접근 안에서 산출한 값·참조·
+결정이 다음 중 하나를 넘어 쓰이는지 추적한다.
+
+- `await` 또는 Task·Promise·future 반환
+- detached task, queue, worker thread 또는 callback dispatcher 제출
+- 비동기 continuation을 실행하는 completion signal
+- nonblocking transport operation 제출
+
+그 경계를 넘더라도 immutable completion signal, exact token, reservation 또는 단독
+ownership transfer로 유효성이 고정되면, primitive/protocol 제외군으로 따로 센다.
+Mutable authorization을 그대로 넘겨 쓰면 잔존 결함이다. 최종 보고는 `전체 / 제외군 /
+잔존 결함` 세 값을 모두 적는다.
+
+### 10.3 전환 검증 (게이트)
+
+- 전환 전후 그 언어의 단위 테스트 전체가 그린이다.
+- 전환 전후 샘플 게이트가 유지된다.
+- 전환 전후 caller가 관측하는 순서·타임아웃·오류 코드가 바뀌지 않는다.
+- async 경계 snapshot 재측정에서 잔존 결함이 0이고, primitive/protocol 제외 위치에는 각각
+  유효성 보존 근거가 기록돼 있다.

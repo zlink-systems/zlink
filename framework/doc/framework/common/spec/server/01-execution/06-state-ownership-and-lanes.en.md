@@ -17,7 +17,7 @@ title: "State Ownership And State Lanes"
 A component owns mutable state — fields and collections. This document defines the rules
 for the mechanism that guarantees only one piece of code touches that state at a time: the
 criteria for classifying which state needs which primitive, the guarantees that primitive
-must provide, and the rules to follow when converting to it.
+must provide, and how to structure code so reentrancy cannot arise.
 
 What this document does not define — when a handler executes and when it yields its place to
 another handler is owned by [Handler Turn And Execution Gate](02-handler-turn-and-execution-gate.en.md);
@@ -77,6 +77,18 @@ A state lane removes this shape entirely. Because there is no release point insi
 turn — the code that reads the state and the code that acts on it stay in the same turn — no
 snapshot is ever produced.
 
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+await lane.Run(async () =>
+{
+    if (!entries.TryGetValue(key, out var entry)) return;   // a plain map. not locked
+    await SendAsync(entry.Route);                           // same turn — the value cannot go stale
+});
+```
+
+**The point is that the `await` sits inside the turn.** A lock cannot wrap an `await`; a lane
+turn can. So "read → release → act" becomes "read → act".
+
 ## 4. State Classifications And How To Tell Them Apart
 
 A component's mutable state falls into one of the following classifications. Once classified,
@@ -92,6 +104,32 @@ When a component mixes all three, **C2 wins** — the strongest requirement deci
 mechanism for the whole component. Moving only part of a component to a lane while leaving the
 rest on a concurrent map or a separate lock lets the cross-invariant violation C2 exists to
 prevent reappear at that boundary.
+
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+class RouteRegistry            // C1 — lookup/add/remove only, no invariant spanning anything
+{
+    ConcurrentMap<RouteKey, Route> routes;
+}
+
+class BindingTable             // C2 — the two maps reference each other. change one and it breaks
+{
+    ZLinkStateLane lane;
+    Map<ActorId, SessionId> actorToSession;   // plain map
+    Map<SessionId, ActorId> sessionToActor;   // the lane provides exclusivity
+
+    Task Bind(actorId, sessionId) => lane.Run(() =>
+    {
+        actorToSession[actorId]   = sessionId;   // both change in one turn
+        sessionToActor[sessionId] = actorId;
+    });
+}
+
+class SendCounter              // C3 — increments only
+{
+    Atomic<long> sent;
+}
+```
 
 **Do not replace C2 with a concurrent map.** A concurrent map makes only the individual
 operation on one map atomic. An invariant spanning multiple collections/fields is not
@@ -140,6 +178,21 @@ A state lane guarantees the following.
   stays an ordinary structure — it is the lane's single execution, not a lock, that provides
   exclusivity, so the collection itself has no need to be thread-safe.
 
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+interface ZLinkStateLane
+{
+    Lane Current { get; }        // the lane currently running, or null
+    bool IsOnLane { get; }       // is the caller on this lane's turn
+    Task<T> Run<T>(work);        // run in one turn of this lane and return the result
+    bool TryPost(work);          // enqueue without awaiting; false if closed
+    void ThrowIfReentrant();     // already on this lane → throw right here
+    Task Close();                // stop accepting, finish what was accepted
+}
+```
+
+These six carry the same name and the same meaning in all four languages (§7).
+
 **A reentrancy violation must be detected as an exception, not a deadlock.** Why reentrancy
 has no way to proceed shows up once the sequence is spelled out concretely.
 
@@ -173,16 +226,45 @@ compatibility boundary, and only when all of the following conditions hold.
 - Every completion signal the lane item raises runs its continuation asynchronously.
 - There is a contract requiring state registration/capture to complete before that
   synchronous surface returns, or a recorded reason why the public synchronous signature
-  cannot change as part of this conversion.
+  cannot change.
 
 If even one of these three conditions cannot be confirmed, do not wait for lane completion
 while holding a gate. Either propagate the call path asynchronously, or separate the gate's
 responsibility from the lane's again.
 
-## 6. Removing Reentrancy
+### Completion Before Return
 
-When converting a component classified as C2 to a lane, reentrancy is removed first. In
-practice a conversion encounters the following kinds of reentrancy.
+If the original synchronous method finished registering a waiter, capturing a generation,
+reading a store, or claiming ownership **before returning**, that work must still be finished
+before a caller can observe the return once it moves onto a lane. Do not turn it into an
+asynchronous fire-and-forget post.
+
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+Task<Reservation> Reserve(key)
+{
+    // a caller observing the return believes the reservation is already taken.
+    return lane.Run(() => reservations.Add(key));
+}
+
+Task<Reservation> Reserve_WRONG(key)
+{
+    lane.TryPost(() => reservations.Add(key));   // returns before it is taken
+    return pendingReservation;
+}
+```
+
+Later stages that wait on a completion signal may stay asynchronous. The registration or
+capture itself is not deferred past the return.
+
+**A synchronous public contract does not become asynchronous merely because a state lane was
+introduced.** Propagate an async signature only when the internal callers are already
+asynchronous and the observable contract does not change.
+
+## 6. Structuring So Reentrancy Cannot Arise
+
+Reentrancy does not happen by accident. It arises structurally in three places, and each place
+has a settled shape.
 
 **Kind ① — a spot where code inside the lane calls back into the same component's public
 surface.** If one public entry point, already inside a turn admitted to the lane, calls
@@ -190,6 +272,19 @@ another public method of the same component, that method also tries to enter the
 which is reentrancy. Split such a spot into a private method that does not enter the lane. The
 public entry point enters the lane exactly once, and code inside the lane calls the private
 method's body directly.
+
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+Task Bind(actorId, sessionId) => lane.Run(() => BindOnLane(actorId, sessionId));
+Task Rebind(actorId, sessionId) => lane.Run(() =>
+{
+    UnbindOnLane(actorId);              // calling Unbind() would enter the lane again
+    BindOnLane(actorId, sessionId);     // inside the lane, call the body directly
+});
+
+void BindOnLane(actorId, sessionId) { ... }    // does not enter the lane
+void UnbindOnLane(actorId) { ... }
+```
 
 **Kind ② — a long-running asynchronous operation started inside a lane turn inherits lane
 ownership.** If a turn starts an operation such as a timeout, a retry, or a background loop,
@@ -206,6 +301,22 @@ the synchronous prefix runs outside the original turn. Conversely, if the first 
 genuine asynchronous delay and there is no lane reentrancy before it, breaking the context
 flow alone is enough.
 
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+await lane.Run(() =>
+{
+    state.retrying = true;
+    StartRetryLoop(key);        // the context flow is broken inside here
+});
+
+void StartRetryLoop(key)
+{
+    using (SuppressLaneContext())           // do not hand down "currently on this lane"
+        RunDetached(() => RetryLoop(key));  // if the synchronous prefix can reach the lane,
+                                            //   post the start itself to a separate scheduler
+}
+```
+
 **Kind ③ — an external callback invoked from inside a former exclusive-access section.**
 Invoking a callback directly inside a lane turn, where that callback used to work by
 reentering a monitor, makes the callback re-enter the same component's public surface. Split
@@ -221,79 +332,7 @@ Do not defer to turn B a state transition the original code used to finish befor
 callback. A racing observer inside the callback's execution window must see the same state the
 original code showed "after the exclusive section ended."
 
-## 7. Signature Conversion Rules
-
-The signature of a state-accessing method converts under the following rules.
-
-- **Changing a synchronous return to an asynchronous return is allowed.** If the caller was
-  already consuming that value on an asynchronous path, the value was a snapshot to begin
-  with — matching the return style to asynchronous does not change existing observable
-  behavior.
-- **An out parameter is folded into the return value.** One return value carries both success
-  and result together.
-- **An out parameter that also returned a value on failure is not mechanically replaced with a
-  nullable scalar.** Collapsing success and value into one scalar can't express a case where a
-  failure also needs to carry a value alongside it — for example, when a caller must still
-  receive the current high-water value at the time of rejection even though the call was
-  rejected, a single nullable scalar cannot hold both the success value and the failure-side
-  extra value at once. Preserve such a case with a result type that carries success, the value,
-  and any failure-side extra value together. A mechanical nullable replacement changes
-  observable behavior and is not allowed.
-- **Preserve the before-return completion guarantee.** If the original synchronous method
-  finished registering a waiter, capturing an epoch/generation, reading a store, or claiming
-  exact ownership before it returned, that same work must still be finished before the caller
-  observes the return after conversion. Do not replace it with an asynchronous
-  fire-and-forget post.
-- If keeping that guarantee requires a synchronous compatibility boundary, confirm the
-  conditions in [§5 "Completion Signals And The Blocking-Compatible
-  Boundary"](#completion-signals-and-the-blocking-compatible-boundary) and record the reason.
-  Later steps that wait for a completion signal may stay asynchronous, but the registration or
-  capture itself is not deferred past the return.
-- If the public or per-language exact interface has a synchronous contract, do not switch it to
-  returning a Promise or Task solely because a state lane was introduced. Propagate an async
-  signature only when the internal caller is already asynchronous and the observable contract
-  does not change.
-
-## 8. Conversion Unit And Verification
-
-- **The conversion boundary reuses the state region the existing gate already owned.** If one
-  class held several mutually independent gates, each may move to its own ownership region.
-  Doing so requires no field/collection invariant spanning both regions, and the call
-  direction between the regions must be recorded as one-way.
-- If even one cross-region invariant or a two-way wait exists, do not split it into multiple
-  lanes — merge it into a single ownership region instead. "One class" is the default unit of
-  work, not permission to create several state lanes inside one class without justification.
-- An operation-protocol gate such as a socket, completion, or worker gate is excluded from
-  state-lane conversion only when it meets the conditions in [§4 "Distinguishing State
-  Protection From Serializing An Operation
-  Protocol"](#distinguishing-state-protection-from-serializing-an-operation-protocol). Record
-  the ownership transfer, generation fence, completion style, and lock order that justify the
-  exclusion.
-- **Every conversion must pass verification before moving to the next.** What to check is
-  owned by [Verification Requirements](#10-verification-requirements).
-- **The success metric is not the lock count.** A drop in the number of exclusive-access
-  statements is not evidence. What must shrink is the count of "snapshots used across an async
-  boundary," compared before and after per component. This comparison is an **internal
-  confirmation condition** measured by internal instrumentation rather than the public
-  surface, and is not carried into the verification requirements section.
-
-The counting unit for an async-boundary snapshot is a source exclusive-access location. Count
-actual language tokens, not plain-text search hits. At each location, trace whether a
-value/reference/decision produced inside the exclusive-access section is used past one of the
-following.
-
-- An `await`, or returning a Task/Promise/future
-- Submission to a detached task, a queue, a worker thread, or a callback dispatcher
-- A completion signal that runs an asynchronous continuation
-- Submission of a nonblocking transport operation
-
-Even when it crosses that boundary, if validity is pinned by an immutable completion signal, an
-exact token, a reservation, or a sole-ownership transfer, count it separately as part of the
-primitive/protocol exclusion group. Carrying a mutable authorization across as-is is a
-remaining defect. The final report states all three counts — `total / exclusion group /
-remaining defect`.
-
-## 9. Per-Language Mapping
+## 7. Per-Language Mapping
 
 In .NET, `Zlink.Framework.Runtime.Execution.ZLinkStateLane` is the reference implementation of
 the state lane this document defines. State access runs as work submitted to this lane, and
@@ -344,46 +383,48 @@ scheduler, such as `completeAsync`.
 
 A Node.js synchronous method never runs concurrently with another callback while it finishes
 inside one JavaScript turn. So a synchronous surface where state access does not split across
-an `await` and that needs no public-reentrancy detection is not converted to a Promise. The
-targets for a state-lane conversion are only the asynchronous paths where state splits across
+an `await` and that needs no public-reentrancy detection is not converted to a Promise. A state
+lane is needed only on the asynchronous paths where state splits across
 an `await`, and the surfaces that need reentrancy detection.
 
-## 10. Verification Requirements
+## 8. Verification Requirements
 
-The following is confirmed using only the public surface — the return value and exception of
-work submitted to a state lane, the error a reentrant call receives, and the converted
-language's unit test and sample gate results. Each item leads to one test.
+The following are checked using the public surface only (the return value and exceptions of
+work submitted to a state lane, the error a reentrant call receives, and the state observable
+at the moment a component method returns). Each item maps to one test.
 
-**Reentrancy And Execution Order**
+**Single execution and order**
 
-- If code already running on a lane's turn attempts to re-enter the same lane, this ends in an
-  exception raised immediately at the call site, not a hang.
-- If different callers submit work to the same lane concurrently, updates to the lane-owned,
-  unlocked plain collection are not lost.
-- Work submitted to the same lane executes in the order it was submitted.
-- Submitting a call that waits for a result to a closed lane ends immediately in an exception;
-  submitting work that does not wait for a result returns failure.
-- A long-running operation started in a lane turn enters the same lane normally once the
-  original turn has ended, and does not produce a false reentrancy exception.
-- A long-running operation with a synchronous prefix is also confirmed to start outside the
-  original turn.
-- The completion continuation runs outside the lane-current scope.
-- An external callback runs outside the turn, and the state it observes matches the state at
-  the point the original exclusive-access section ended.
-- For a permitted case of waiting for lane completion while holding an operation-protocol gate,
-  confirm the lane item does not reacquire that gate, and that every completion continuation is
-  asynchronous.
-- For a method with a before-return registration/capture contract, that registration/capture
-  has already completed by the time the caller observes the return.
-- A re-measurement of async-boundary snapshots shows zero remaining defects, and every
-  primitive/protocol exclusion location has a recorded validity-preservation justification.
+- When different callers submit work to the same lane concurrently, no update to the plain,
+  unlocked collection the lane owns is lost.
+- Work submitted to the same lane executes in submission order.
+- Submitting a result-awaiting call to a closed lane ends immediately with an exception, and a
+  submission that does not await a result returns a failure.
 
-**Conversion Verification**
+**Reentrancy**
 
-- Before and after a conversion, that language's full unit test suite is green.
-- Before and after a conversion, the sample gate holds.
-- Before and after a conversion, the ordering, timeouts, and error codes a caller observes do
-  not change.
+- Code already executing on that lane's turn that tries to enter the same lane again does not
+  hang; it ends immediately with an exception at that call site.
+- A long-running operation started from a lane turn enters the same lane normally once the
+  original turn has ended, and produces no false reentrancy exception. The same holds for a
+  long-running operation with a synchronous prefix.
+- External callbacks run outside the turn, and the state a callback observes reflects every
+  state transition the original code used to finish before the callback.
+
+**Completion boundary**
+
+- Completion continuations run outside the lane-current scope — signalling completion inside a
+  turn does not make that continuation re-enter the same lane.
+- A method with a register-or-capture-before-return contract has that registration or capture
+  already finished at the moment a caller observes the return.
+- Where a call waits for lane completion while holding an operation-protocol gate, that lane
+  item does not re-acquire the same gate and every completion continuation is asynchronous.
+
+**Cross-collection invariants**
+
+- When calls that change several collections participating in one invariant arrive
+  concurrently, reading two of those collections from outside never observes them disagreeing.
+
 
 ---
 
