@@ -1126,6 +1126,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::map<std::string, user_spot_terminal_record_t> _user_spot_terminals;
     std::function<void ()> _maintenance_started;
     std::function<void ()> _maintenance_closing;
+    runtime::offload_executor_t _relocation_session_terminal_lane_executor;
+    mutable runtime::state_lane_t
+      _relocation_session_terminal_lane{_relocation_session_terminal_lane_executor};
+    runtime::offload_executor_t _user_spot_terminal_lane_executor;
+    mutable runtime::state_lane_t _user_spot_terminal_lane{_user_spot_terminal_lane_executor};
     mutable std::mutex _mutex;
     runtime::offload_executor_t _lifecycle_configuration_lane_executor;
     mutable runtime::state_lane_t

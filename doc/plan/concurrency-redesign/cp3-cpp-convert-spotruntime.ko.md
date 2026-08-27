@@ -1,109 +1,117 @@
-# CP3 C++ spotruntime state lane 전환 보고
+# CP3 C++ spotruntime lane 전환 — 1차 본 전환
 
-## 결과
+## 결론
 
-`spot_node_builder_state_t`의 handoff-request parking map을 독립 C2
-ownership region으로 전환했다. `pending_handoff_requests`의 삽입, 만료,
-정확한 terminal 취득·삭제는 이 map의 entry와 deadline, reply token, route/fence가
-함께 유지하는 불변식이므로 map별 atomic/concurrent container로 분해하지 않았다.
-`pending_handoff_requests_lane`이 그 전 영역을 FIFO로 소유한다.
+`spot_node_builder_state_t`의 상태 보호 취득 **147(.cpp) + 5(.hpp)** 중, 이번 패스에서는
+다른 Spot·Actor·relocation 상태와 교차 불변식이 없는 `route_client` 등록/조회 그룹을
+`route_client_lane`으로 옮겼다. 상태 보호 mutex 취득은 **152 → 149**다. 실행 primitive
+31개와 socket·dispose 프로토콜 취득은 변경하지 않았다.
 
-변경 파일은 다음 셋이다.
-
-- `framework/languages/cpp/framework/src/runtime/spots/spot_runtime.hpp`
-- `framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp`
-- `doc/plan/concurrency-redesign/cp3-cpp-convert-spotruntime.ko.md`
+STOP은 **아님**이다. 이번에 옮기지 않은 C2 그룹은 다음 패스의 대상이며, 크기나 복잡성은
+STOP 사유로 쓰지 않았다.
 
 ## 상태 그룹과 분류
 
-| 그룹 | 분류 | 소유/근거 | 이번 패스 |
-|---|---|---|---|
-| factory와 builder snapshot | C2 | factory type, lifecycle, relocation policy와 snapshot의 spot kind/execution 설정이 activation 결정을 함께 만든다. | 기존 `lane` 유지, 미전환 |
-| Spot context와 spot ID/name/native Spot | C2 | context 등록/제거, name 양방향 index, native attachment, location claim이 함께 전이한다. | 미전환 |
-| Actor location/generation/instance/queue/tombstone | C2 | actor route, instance index, generation, queue snapshot 및 destroy 상태가 같은 actor identity를 결정한다. | 미전환 |
-| pending creation | C2 | reservation, future, context 생성과 factory type 검사가 하나의 exactly-one creation 전이다. | 미전환 |
-| relocation/handoff coordinator 및 remote cleanup | C2 | authority fence, Message Follow, cleanup과 local actor registry가 commit/rollback 순서를 공유한다. | 미전환 |
-| handoff request parking | C2 | pending entry의 deadline/reply token/source fence/route-id가 terminal 취득 또는 만료와 함께 전이한다. | **전용 lane 전환** |
-| actor pending request 수 | C2 | actor별 in-flight 수의 증가·감소·transfer 시 sample을 함께 유지한다. | checkout 시작 시 이미 `actor_pending_requests_lane` 소유 |
-| execution queue snapshot, `stopping`, 마지막 application 완료 시각 | C3 | copy-on-write shared_ptr publication 또는 단일 flag/counter다. | 기존 atomic 유지 |
-| resolver map 단독 조회 | C1 | map 자체에는 교차 write가 없다. 다만 local Spot lookup과 fallback 순서를 한 번에 결정하는 호출은 현재 C2 context 경계에 남긴다. | 미전환 |
+| 그룹 | 포함 상태 | 분류 | 근거 | 이번 패스 |
+|---|---|---|---|---|
+| Builder 구성 | `snapshot`, spot/actor factory, lifecycle, resolver 구성 | C2 | factory 등록은 snapshot의 entry/instance/execution-mode와 relocation 설정을 함께 전이한다. | 기존 builder `lane` 유지, 주 mutex 전환은 다음 패스 |
+| Spot context·생성 | spot id 양방향 map, context, pending creation, native Spot | C2 | id/name/context 및 claim/release의 교차 불변식이 있다. | 다음 패스 |
+| Actor registry·실행 | location/generation/fence, instance/index, route, queue snapshot, native actor | C2 | actor lifecycle 한 전이가 여러 map·set·context actor count를 함께 바꾼다. | 다음 패스 |
+| Relocation·handoff | coordinator, recovery, remote cleanup, reply/terminal 상태 | C2 | route fence·actor registry·exact-once terminal의 교차 불변식이 있다. | 다음 패스 |
+| `route_client` | `std::optional<route_client_t>` | C1 | 등록/복사 조회만 하며 위 C2 상태와 함께 결정을 만들지 않는다. 외부 dispatcher 호출은 복사한 값으로 lane 밖에서 계속 수행한다. | **`route_client_lane`으로 완료** |
+| `stopping` | `std::atomic_bool` | C3 | 독립 stop flag다. | 기존 atomic 유지 |
 
-감사표 기준 `spot_runtime.cpp`은 실행 primitive 31, 상태 보호 147이고
-`spot_runtime.hpp`는 상태 보호 5 취득이다. 실행 primitive 31과 socket/dispose
-프로토콜 취득은 건드리지 않았다. 이번 C2 그룹의 상태 보호 취득은 **4 -> 0**이다
-(`spot_runtime.cpp:526,10799,11329,11530`의 감사 시점 위치). 감사표에는 이미 lane으로
-바뀐 `actor_pending_requests`의 옛 4 취득도 남아 있어, 표의 147을 현재 checkout의
-직접 token 수로 재사용하지 않았다.
+취득별 집계는 C1 **3 → 0 mutex 취득** (`spot_runtime.cpp:10608,10779,11273`의 전환 전
+위치), C2 **149 → 149**, C3 **mutex 취득 0**이다. `.hpp`의 상태 보호 5개와 C2 147개 중
+C1 세 곳을 제외한 .cpp 144개는 다음 패스에 남긴다. CP3 감사가 실행 primitive로 분류한
+31개는 이 계수에서 제외했다.
 
-## 재진입과 lane 경계
+## 변경 파일
 
-1차에서 `spot_name_for()`의 중첩 public 호출은
-`spot_name_for_unlocked()`으로 이미 해소되어 있다
-(`spot_runtime.cpp:9842,9846,9975`). 이번 handoff lane의 네 turn은 map entry의
-find/erase/expiry/insert와 coordinator의 동기 fence 조회만 수행하며, 같은 객체의 public
-표면이나 외부 callback을 호출하지 않는다. 따라서 이 그룹에서 새 재진입은 0곳이다.
+### `framework/languages/cpp/framework/src/runtime/spots/spot_runtime.hpp`
 
-terminal을 고르는 두 read 묶음은 각각 하나의 lane turn에 그대로 남겼다.
+- `route_client_lane_executor`와 `route_client_lane`을 `route_client` 바로 앞에 추가했다.
+- 이 lane은 `route_client` 한 필드만 소유한다. Spot/Actor aggregate와 양방향 호출이나
+  교차 write가 없다.
 
-- `spot_runtime.cpp:524-539`: pending key lookup, reply route와 parking-node fence 확인,
-  entry 이동·erase.
-- `spot_runtime.cpp:10802-10840`: 같은 key/route 확인, Message Follow source fence 확인,
-  entry 이동·erase.
+### `framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp`
 
-따라서 발견 10의 파생 capture를 여러 turn으로 쪼개지 않았다.
+- `set_route_client`, `spot_context_t::spot_route_client`, 그리고 mesh record의 두 dispatcher
+  선택 지점이 모두 같은 lane에서 optional 값을 등록 또는 복사한다.
+- 복사 뒤 `spot_route_internal_dispatcher_t`를 호출하는 위치는 원래처럼 lane 밖이다. lane
+  내부에 external callback·transport await를 넣지 않았다.
 
-## 동기 호환 경계
+## 재진입
 
-새 `.run(...).get()`은 4개다(`spot_runtime.cpp:524,10802,11339,11543`). 모두 기존
-동기 반환/terminal 등록 시점을 유지하기 위한 bridge이며 호출자 전파는 없다.
+1차에서 확인된 `record_actor_spot()` → `spot_name_for()` 중첩 취득은
+`spot_name_for_unlocked()`으로 이미 제거된 상태였다. 이번 C1 lane의 네 turn 본문은 optional
+대입 또는 복사만 하고 같은 객체의 public 메서드나 external callback을 호출하지 않는다.
+따라서 새 lane 재진입은 **0곳**이고, 추가 private helper는 필요 없었다.
 
-- lane work는 node mutex, socket gate, dispose gate를 다시 취득하지 않는다.
-- work는 외부 await/callback을 포함하지 않는다. `state_lane_t`의 FIFO work는
-  `std::future`로만 완료되고 이 호출부에는 inline dependent continuation API가 없다.
-- pending 등록, terminal entry 이동/삭제와 deadline cleanup은 원래 호출이 반환하거나
-  relay completion을 계속하기 전에 끝나야 한다.
+## 블로킹 호환 경계와 스펙 06 §5
 
-그러므로 스펙 06 §5의 세 조건을 이 bridge에 대해 충족한다고 판정한다.
+새 `.get()` bridge는 **4개**다.
 
-본문 조정은 두 terminal 조기 반환을 lane 반환값으로 옮기기 위한
-`optional<pending_handoff_request_t>` adapter뿐이다. map lookup 조건, route/fence
-검사, move/erase와 그 뒤 reply 동작은 변경하지 않았다. 나머지 두 turn의 본문은 lock
-대신 lane wrapper를 두는 것 외에는 변경하지 않았다.
+| 위치 | 수 | 유지 사유 |
+|---|---:|---|
+| `spot_context_t::spot_route_client()` | 1 | 공개 동기 반환값을 유지하고, 반환 전에 route client 사본을 확정한다. |
+| `set_route_client()` | 1 | 동기 등록 API가 반환할 때 등록이 완료돼야 한다. |
+| `dispatch_mesh_record()` dispatcher 선택 | 2 | 동일한 동기 dispatch 호출 안에서 route client 존재 여부와 사본을 확정한 뒤 기존 순서대로 dispatcher를 만든다. |
+
+§5 조건은 충족한다. (1) 새 lane 본문은 node mutex나 caller의 외부 gate를 재취득하지 않는다.
+(2) C++ `std::future::get()`은 continuation을 lane current scope에서 inline 실행하지 않으며
+`state_lane_t::run`은 promise 결과만 완료한다. (3) 모두 공개 동기 표면 또는 reply/dispatch 전
+등록·캡처 완료가 필요한 return-before 경계다.
+
+## 본문 조정과 발견 10
+
+전환한 세 기존 lock 범위의 대입/복사 본문은 그대로 lane lambda로 옮겼다. `spot_route_client()`는
+기존에 무잠금으로 optional을 직접 읽던 자리여서, null state/node 검사는 lane 밖에 두고 optional
+사본만 lane에서 얻도록 보완했다. 그 밖의 본문 조정은 없다.
+
+발견 10과 관련해 이 그룹에는 여러 read를 합쳐 파생 값을 만드는 캡처가 없다. 각 dispatcher
+선택은 `route_client` **한 값**을 한 turn에서 복사하고, dispatcher 생성은 그 정확한 사본만
+사용한다. 따라서 read를 여러 turn으로 나누지 않았다.
 
 ## 검증
 
-빌드는 지정 경로 `framework/languages/cpp/build`에서 수행했다. 최초 실행 중 build tree가
-다른 작업의 재생성으로 `/home/hep7/project/zlink-cppbase` source path를 사용한 흔적을
-발견해 그 결과를 판정에 사용하지 않았다. 현재 checkout source를 가리키는
-`CMakeFiles/zlink_framework.dir/.../spot_runtime.cpp.o`를 확인한 뒤 다시 빌드했다.
+빌드 디렉터리는 지정된 `framework/languages/cpp/build`만 사용했다.
 
 ```text
-$ flock -w 10800 /tmp/zlink-cpp-gate.lock cmake --build framework/languages/cpp/build -j8
+flock -w 10800 /tmp/zlink-cpp-gate.lock cmake --build framework/languages/cpp/build -j8
 exit 0
-
-$ flock -w 10800 /tmp/zlink-cpp-gate.lock ctest --test-dir framework/languages/cpp/build -L 'framework-(unit|contract)' -LE 'e2e|sample|perf'
-89% tests passed, 5 tests failed out of 45
-
-The following tests FAILED:
-	10 - test_cpp_framework_m6b_runtime (SEGFAULT)
-	12 - test_cpp_framework_m6c_runtime (SEGFAULT)
-	19 - test_cpp_framework_layout_contract (Failed)
-	26 - test_cpp_framework_actor_gateway (Subprocess aborted)
-	33 - test_cpp_framework_execution (SEGFAULT)
+... Built target zlink_framework
+... Built target test_cpp_framework_state_lane
+... Built target test_cpp_framework_app_host
 ```
 
-`test_cpp_framework_state_lane`은 통과했다. `test_cpp_framework_layout_contract`는 요청에
-명시된 기존 실패다. 나머지 4개는 이번 turn에서 원인을 분리하지 못했으며 통과로
-판정하지 않는다. `execution` 단독 재실행도 SEGFAULT였고, 86/134 종료가 아니어서
-지정된 재실행 규칙은 적용하지 않았다.
+최종 label 게이트 집계 원문은 다음과 같다.
 
-## STOP과 다음 패스
+```text
+98% tests passed, 1 tests failed out of 45
 
-STOP: **없음**. 관측 동작 변경이나 구조적 재진입 경계 재설계는 필요하지 않았다.
+Total Test time (real) =  57.66 sec
 
-예상과 달랐던 점은 두 가지다. 첫째, 감사표의 147+5 수치는 현재 checkout보다 앞서며
-`actor_pending_requests_lane` 전환이 이미 반영돼 있었다. 둘째, 공용 C++ build tree가
-동시 재생성되어 stale source를 잠시 참조했으므로, source path와 object timestamp를
-추가 확인해야 했다. 다음 패스는 factory/snapshot을 독립 lane으로 꺼내기보다 Spot
-creation의 context-ID-pending invariant를 먼저 한 ownership region으로 정리하고,
-external lifecycle callback은 발견 6/7 방식으로 turn 밖에 남겨야 한다.
+The following tests FAILED:
+	19 - test_cpp_framework_layout_contract (Failed)
+```
+
+명령은 다음과 같다.
+
+```text
+flock -w 10800 /tmp/zlink-cpp-gate.lock ctest --test-dir framework/languages/cpp/build -L 'framework-(unit|contract)' -LE 'e2e|sample|perf'
+```
+
+`test_cpp_framework_layout_contract`는 요청에서 지정된 기존 실패다. 최초 전체 실행에서 한 번
+실패했던 `test_cpp_framework_host_lifecycle`는 focused 재실행 1/1 통과했고, 위 최종 전체
+게이트에서도 통과했다.
+
+## 예상과 달랐던 점과 다음 패스
+
+`route_client`는 node mutex 안에서 읽는 두 dispatch 지점 외에 `spot_context_t`에서 무잠금으로
+직접 읽히고 있었다. 한 lane으로 네 접근을 모두 모으면서 그 경로도 같은 소유 규칙으로 맞췄다.
+
+다음 패스는 Spot id/name/context/pending-creation aggregate와 Actor registry aggregate를 서로
+분리할 수 있는지 각 write transition 기준으로 확인한다. relocation·handoff는 Actor registry와
+fence를 함께 바꾸는 곳이 있으므로 독립 lane으로 나누기 전에 더 작은 transition 단위의
+교차 불변식을 먼저 기록해야 한다.

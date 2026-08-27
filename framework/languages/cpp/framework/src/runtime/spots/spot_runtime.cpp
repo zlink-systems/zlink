@@ -486,7 +486,8 @@ handoff_pending_key (const zlink::routing_id_t &source_node,
 void report_handoff_terminal_drop (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
                                    std::string_view reason)
 {
-    runtime::runtime_metrics_t metrics (state->monitoring);
+    auto monitoring = state->lane.run ([&] { return state->monitoring; }).get ();
+    runtime::runtime_metrics_t metrics (std::move (monitoring));
     metrics.counter ("zlink.actor.handoff_terminal.dropped", "{terminal}", 1,
                      {{"reason", std::string (reason)}});
     if (std::getenv ("ZLINK_CPP_HANDOFF_TRACE")) {
@@ -520,7 +521,10 @@ task_t<bool> send_handoff_terminal (const std::shared_ptr<detail::spot_node_buil
         report_handoff_terminal_drop (state, "missing_parking_node");
         co_return true;
     }
-    if (route->source_node.to_string () == detail::effective_spot_node_rid (state->snapshot)) {
+    const auto local_node_rid = state->lane.run ([&] {
+        return detail::effective_spot_node_rid (state->snapshot);
+    }).get ();
+    if (route->source_node.to_string () == local_node_rid) {
         const auto pending = state->pending_handoff_requests_lane
                                .run ([&] () -> std::optional<
                                  detail::spot_node_builder_state_t::pending_handoff_request_t> {
@@ -528,8 +532,7 @@ task_t<bool> send_handoff_terminal (const std::shared_ptr<detail::spot_node_buil
               route->source_owner_node, route->operation, route->source_fence));
             if (found == state->pending_handoff_requests.end ()
                 || found->second.reply_route_id != route->reply_route_id
-                || route->parking_node.to_string ()
-                     != detail::effective_spot_node_rid (state->snapshot)) {
+                || route->parking_node.to_string () != local_node_rid) {
                 return std::nullopt;
             }
             auto pending = std::move (found->second);
@@ -558,9 +561,12 @@ task_t<bool> send_handoff_terminal (const std::shared_ptr<detail::spot_node_buil
         (void) service::reply (pending->reply_token, terminal.items ());
         co_return true;
     }
-    if (!state->actor_handoff_terminal_sender)
+    const auto terminal_sender = state->lane.run ([&] {
+        return state->actor_handoff_terminal_sender;
+    }).get ();
+    if (!terminal_sender)
         co_return false;
-    co_return co_await state->actor_handoff_terminal_sender (
+    co_return co_await terminal_sender (
       route->source_node, route->source_owner_node, route->operation, route->reply_route_id,
       route->source_fence, completed);
 }
@@ -805,7 +811,7 @@ class spot_worker_scheduler_t final : public detail::worker_scheduler_t
 };
 
 std::shared_ptr<runtime::offload_executor_t>
-framework_worker_executor (const std::shared_ptr<detail::spot_node_builder_state_t> &node)
+framework_worker_executor_core (const std::shared_ptr<detail::spot_node_builder_state_t> &node)
 {
     if (node && node->worker_executor) {
         return node->worker_executor;
@@ -821,7 +827,13 @@ framework_worker_executor (const std::shared_ptr<detail::spot_node_builder_state
 }
 
 std::shared_ptr<runtime::offload_executor_t>
-framework_deadline_executor (const std::shared_ptr<detail::spot_node_builder_state_t> &node)
+framework_worker_executor (const std::shared_ptr<detail::spot_node_builder_state_t> &node)
+{
+    return node->lane.run ([&] { return framework_worker_executor_core (node); }).get ();
+}
+
+std::shared_ptr<runtime::offload_executor_t>
+framework_deadline_executor_core (const std::shared_ptr<detail::spot_node_builder_state_t> &node)
 {
     if (node && node->deadline_executor)
         return node->deadline_executor;
@@ -831,20 +843,21 @@ framework_deadline_executor (const std::shared_ptr<detail::spot_node_builder_sta
     return executor;
 }
 
-std::shared_ptr<detail::worker_scheduler_t>
-make_spot_worker_scheduler (const std::shared_ptr<detail::spot_context_state_t> &owner)
+std::shared_ptr<runtime::offload_executor_t>
+framework_deadline_executor (const std::shared_ptr<detail::spot_node_builder_state_t> &node)
 {
-    return std::make_shared<spot_worker_scheduler_t> (framework_worker_executor (owner->node),
-                                                      owner);
+    return node->lane.run ([&] { return framework_deadline_executor_core (node); }).get ();
 }
 
-void configure_spot_execution (const std::shared_ptr<detail::spot_context_state_t> &state)
+void configure_spot_execution (
+  const std::shared_ptr<detail::spot_context_state_t> &state,
+  const std::shared_ptr<runtime::offload_executor_t> &worker_executor)
 {
     /* The queue owns turn ordering. Execution resources are shared by the
      * node; a Spot must not allocate its own worker pool. A yielded turn is
      * resumed through this same queue, so it does not require a Spot-local
      * executor. */
-    state->serial_executor = framework_worker_executor (state->node);
+    state->serial_executor = worker_executor;
     state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *state->serial_executor, runtime::serial_execution_queue_options_t{},
       runtime::serial_execution_queue_t::error_handler_t{},
@@ -852,7 +865,8 @@ void configure_spot_execution (const std::shared_ptr<detail::spot_context_state_
       : state->execution_mode == user_spot_execution_mode_t::spot_wide
         ? runtime::serial_lane_policy_t::spot_wide ()
         : runtime::serial_lane_policy_t::per_actor_spot ());
-    state->worker_scheduler = make_spot_worker_scheduler (state);
+    state->worker_scheduler =
+      std::make_shared<spot_worker_scheduler_t> (worker_executor, state);
 }
 
 } // namespace
@@ -885,55 +899,87 @@ spot_node_builder_state_t::~spot_node_builder_state_t () = default;
 
 void drain_spot_node_executors (spot_node_builder_state_t &node)
 {
-    for (auto &[_, context] : node.spot_contexts_by_id) {
-        auto state = context._state;
-        if (state) {
-            for (auto &timer : state->timers) {
-                if (timer && timer->lane) {
-                    timer->lane->cancel_pending ();
-                }
+    struct drain_plan_t
+    {
+        struct context_t
+        {
+            std::shared_ptr<spot_context_state_t> state;
+            std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> timer_lanes;
+            std::shared_ptr<runtime::serial_execution_queue_t> serial_queue;
+        };
+        std::vector<context_t> contexts;
+        std::shared_ptr<runtime::offload_executor_t> deadline_executor;
+        std::shared_ptr<runtime::offload_executor_t> worker_executor;
+    };
+    const auto plan = node.lane.run ([&] {
+        drain_plan_t result;
+        result.contexts.reserve (node.spot_contexts_by_id.size ());
+        for (const auto &[_, context] : node.spot_contexts_by_id) {
+            const auto state = context._state;
+            if (!state)
+                continue;
+            result.contexts.push_back (drain_plan_t::context_t{state, {}, state->serial_queue});
+            auto &context_plan = result.contexts.back ();
+            for (const auto &timer : state->timers) {
+                if (timer && timer->lane)
+                    context_plan.timer_lanes.push_back (timer->lane);
             }
         }
-        if (state && state->serial_queue) {
-            state->serial_queue->cancel_pending ();
+        result.deadline_executor = node.deadline_executor;
+        result.worker_executor = node.worker_executor;
+        return result;
+    }).get ();
+
+    for (const auto &context : plan.contexts) {
+        for (const auto &timer_lane : context.timer_lanes)
+            if (timer_lane)
+                timer_lane->cancel_pending ();
+        if (context.serial_queue)
+            context.serial_queue->cancel_pending ();
+    }
+    for (const auto &context : plan.contexts) {
+        for (const auto &timer_lane : context.timer_lanes)
+            if (timer_lane)
+                timer_lane->drain ();
+        if (context.serial_queue) {
+            context.serial_queue->cancel_pending ();
+            context.serial_queue->drain ();
         }
     }
-    for (auto &[_, context] : node.spot_contexts_by_id) {
-        auto state = context._state;
-        if (state) {
-            for (auto &timer : state->timers) {
-                if (timer && timer->lane) {
-                    timer->lane->drain ();
+    if (plan.deadline_executor)
+        plan.deadline_executor->drain ();
+    if (plan.worker_executor)
+        plan.worker_executor->drain ();
+
+    node.lane.run ([&] {
+        for (const auto &context : plan.contexts) {
+            for (const auto &timer : context.state->timers) {
+                if (timer)
                     timer->lane.reset ();
-                }
             }
-            if (state->serial_queue) {
-                state->serial_queue->cancel_pending ();
-                state->serial_queue->drain ();
-                state->serial_queue.reset ();
-            }
-            state->serial_executor.reset ();
-            state->worker_scheduler.reset ();
+            context.state->serial_queue.reset ();
+            context.state->serial_executor.reset ();
+            context.state->worker_scheduler.reset ();
         }
-    }
-    if (node.deadline_executor) {
-        node.deadline_executor->drain ();
         node.deadline_executor.reset ();
-    }
-    if (node.worker_executor) {
-        node.worker_executor->drain ();
         node.worker_executor.reset ();
-    }
+    }).get ();
 }
 
 void cancel_spot_node_dispatch_queues (spot_node_builder_state_t &node)
 {
-    for (auto &[_, context] : node.spot_contexts_by_id) {
-        auto state = context._state;
-        if (state && state->serial_queue) {
-            state->serial_queue->cancel_pending ();
+    const auto queues = node.lane.run ([&] {
+        std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> result;
+        result.reserve (node.spot_contexts_by_id.size ());
+        for (const auto &[_, context] : node.spot_contexts_by_id) {
+            if (context._state && context._state->serial_queue)
+                result.push_back (context._state->serial_queue);
         }
-    }
+        return result;
+    }).get ();
+    for (const auto &queue : queues)
+        if (queue)
+            queue->cancel_pending ();
 }
 
 } // namespace detail
@@ -949,53 +995,96 @@ zlink::message_t framework_reply_or_empty (const std::optional<message_t> &reply
 
 } // namespace
 
-void detail::spot_node_runtime_t::attach_native_spot_locked (
-  const std::shared_ptr<detail::spot_context_state_t> &state, bool relocation_restore)
+std::shared_ptr<service::spot_t> detail::spot_node_runtime_t::attach_native_spot (
+  const std::shared_ptr<detail::spot_context_state_t> &state,
+  bool relocation_restore,
+  bool publish)
 {
     if (!state || !state->node) {
-        return;
+        return {};
     }
-    auto native_node = state->node->native_node.lock ();
-    if (!native_node) {
-        return;
-    }
-
-    const auto rid = std::string (state->spot_id);
-    auto native = state->native_spot.lock ();
-    if (!native) {
-        const auto found = state->node->native_spots_by_id.find (rid);
-        if (found == state->node->native_spots_by_id.end ()) {
-            if (state->node->snapshot.entry_spot_name
-                && *state->node->snapshot.entry_spot_name == state->spot_name) {
-                native = std::make_shared<service::spot_t> (native_node->entry_spot ());
-            } else {
-                try {
-                    auto spot =
-                      relocation_restore
-                        ? native_node->bind_relocation_spot (runtime::stateful::object_ref_t{
-                            state->is_instance_spot ()
-                              ? runtime::stateful::object_kind_t::instance_spot
-                              : runtime::stateful::object_kind_t::user_spot,
-                            rid, state->object_generation, state->authority_owner_generation,
-                            state->mesh_name, std::string (state->node_rid.value ())})
-                        : native_node->get_or_create_spot (rid);
-                    native = std::make_shared<service::spot_t> (std::move (spot));
-                }
-                catch (const std::exception &error) {
-                    throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                                 "native spot facade creation failed for '"
-                                                   + state->spot_name + "' (rid='" + rid
-                                                   + "'): " + error.what ());
-                }
-            }
-            state->node->native_spots_by_id.emplace (rid, native);
-        } else {
-            native = found->second;
+    struct attachment_plan_t
+    {
+        std::shared_ptr<service::mesh_node_t> native_node;
+        std::shared_ptr<service::spot_t> native;
+        std::string rid;
+        std::string spot_name;
+        std::string mesh_name;
+        std::string node_rid;
+        std::uint64_t object_generation = 0;
+        std::uint64_t authority_owner_generation = 0;
+        bool entry_spot = false;
+        bool instance_spot = false;
+        std::string subscription_channel;
+        std::vector<spot_handler_descriptor_t> handlers;
+    };
+    auto owner = state->node;
+    auto plan = owner->lane.run ([&] {
+        attachment_plan_t result;
+        result.native_node = owner->native_node.lock ();
+        result.rid = std::string (state->spot_id);
+        result.spot_name = state->spot_name;
+        result.mesh_name = state->mesh_name;
+        result.node_rid = std::string (state->node_rid.value ());
+        result.object_generation = state->object_generation;
+        result.authority_owner_generation = state->authority_owner_generation;
+        result.entry_spot = owner->snapshot.entry_spot_name
+                            && *owner->snapshot.entry_spot_name == state->spot_name;
+        result.instance_spot = state->is_instance_spot ();
+        result.subscription_channel =
+          owner->snapshot.discovery_channel_name.value_or (owner->snapshot.name);
+        result.handlers = state->handlers;
+        result.native = state->native_spot.lock ();
+        if (!result.native) {
+            const auto found = owner->native_spots_by_id.find (result.rid);
+            if (found != owner->native_spots_by_id.end ())
+                result.native = found->second;
         }
+        return result;
+    }).get ();
+    if (!plan.native_node)
+        return {};
+
+    auto native = plan.native;
+    if (!native) {
+        if (plan.entry_spot) {
+            native = std::make_shared<service::spot_t> (plan.native_node->entry_spot ());
+        } else {
+            try {
+                auto spot = relocation_restore
+                              ? plan.native_node->bind_relocation_spot (
+                                  runtime::stateful::object_ref_t{
+                                    plan.instance_spot
+                                      ? runtime::stateful::object_kind_t::instance_spot
+                                      : runtime::stateful::object_kind_t::user_spot,
+                                    plan.rid, plan.object_generation,
+                                    plan.authority_owner_generation, plan.mesh_name, plan.node_rid})
+                              : plan.native_node->get_or_create_spot (plan.rid);
+                native = std::make_shared<service::spot_t> (std::move (spot));
+            }
+            catch (const std::exception &error) {
+                throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                             "native spot facade creation failed for '"
+                                               + plan.spot_name + "' (rid='" + plan.rid
+                                               + "'): " + error.what ());
+            }
+        }
+    }
+    if (publish) {
+        native = owner->lane.run ([&] {
+            auto [found, inserted] = owner->native_spots_by_id.emplace (plan.rid, native);
+            if (!inserted)
+                native = found->second;
+            state->native_spot = native;
+            return native;
+        }).get ();
+    } else {
+        // A creating context is not published yet, so its facade can stay
+        // private until the activation and Location Store claim both succeed.
         state->native_spot = native;
     }
 
-    for (const auto &handler : state->handlers) {
+    for (const auto &handler : plan.handlers) {
         if (handler.kind == spot_handler_kind_t::subscription && !handler.topic.empty ()) {
             /* The node creates its subscription receiver lazily on the first
                subscription, and that creation waits a bounded time for the
@@ -1010,9 +1099,7 @@ void detail::spot_node_runtime_t::attach_native_spot_locked (
             for (int attempt = 0; attempt < activation_attempts && !activated; ++attempt) {
                 try {
                     native->set_subscription (
-                      state->node->snapshot.discovery_channel_name.value_or (
-                        state->node->snapshot.name),
-                      handler.topic);
+                      plan.subscription_channel, handler.topic);
                     activated = true;
                 }
                 catch (const std::exception &error) {
@@ -1023,11 +1110,12 @@ void detail::spot_node_runtime_t::attach_native_spot_locked (
             if (!activated) {
                 throw framework_exception_t (framework_error_kind_t::internal_failure,
                                              "native spot subscription activation failed for '"
-                                               + state->spot_name + "' (rid='" + rid + "', topic='"
+                                               + plan.spot_name + "' (rid='" + plan.rid + "', topic='"
                                                + handler.topic + "'): " + last_error);
             }
         }
     }
+    return native;
 }
 
 namespace
@@ -1324,8 +1412,7 @@ void deactivate_actor_location (std::weak_ptr<detail::spot_node_builder_state_t>
     const auto key =
       std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)) + ":"
       + std::string (actor.actor_id ().value ());
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (state->mutex);
+    const auto deactivated = state->lane.run ([&] {
         // A lost claim races with a completed transfer: after this node hands the
         // actor to another node it records the newer generation and Message
         // Message Follow route. A loss notification for an older generation is stale
@@ -1333,7 +1420,7 @@ void deactivate_actor_location (std::weak_ptr<detail::spot_node_builder_state_t>
         const auto recorded = state->actor_generations.find (key);
         if (recorded != state->actor_generations.end ()
             && recorded->second > actor.object_generation ()) {
-            return;
+            return false;
         }
         // ObjectGeneration alone cannot distinguish a returning incarnation
         // (A→B→A keeps the generation while the owner fences advance). While
@@ -1342,7 +1429,7 @@ void deactivate_actor_location (std::weak_ptr<detail::spot_node_builder_state_t>
         // owns the record lifecycle, so the stale loss must not erase the
         // admission being established.
         if (state->actor_transfer_coordinator.blocks_dispatch (key)) {
-            return;
+            return false;
         }
         erase_actor_route_unlocked (*state, key);
         state->actor_created_keys.erase (key);
@@ -1355,10 +1442,72 @@ void deactivate_actor_location (std::weak_ptr<detail::spot_node_builder_state_t>
             return request_key.starts_with (actor_request_dedup_prefix (key));
         });
         destroy_actor_registry = state->destroy_actor_registry;
-    }
+        return true;
+    }).get ();
+    if (!deactivated)
+        return;
     if (destroy_actor_registry) {
         (void) destroy_actor_registry (actor);
     }
+}
+
+struct actor_location_plan_t
+{
+    runtime::location_lifecycle_t *lifecycle = nullptr;
+    std::shared_ptr<service::mesh_node_t> native_node;
+    std::shared_ptr<service::spot_t> native_spot;
+    std::string mesh_name;
+    node_rid_t context_node_rid;
+    spot_id_t spot_id;
+    std::uint64_t membership_epoch = 0;
+    bool attached = false;
+};
+
+actor_location_plan_t capture_actor_location_plan (
+  const std::shared_ptr<detail::spot_node_builder_state_t> &state,
+  const actor_ref_t &actor,
+  const detail::spot_context_state_t &context)
+{
+    return state->lane.run ([&] {
+        actor_location_plan_t result;
+        result.lifecycle = state->location_lifecycle;
+        result.attached = context.node.get () == state.get ();
+        if (!result.attached)
+            return result;
+        result.native_node = state->native_node.lock ();
+        result.native_spot = context.native_spot.lock ();
+        result.mesh_name = state->snapshot.name;
+        result.context_node_rid = context.node_rid;
+        result.spot_id = context.spot_id;
+        const auto epoch = state->core_actor_membership_epochs.find (
+          std::string (actor.actor_id ().value ()));
+        if (epoch != state->core_actor_membership_epochs.end ())
+            result.membership_epoch = epoch->second;
+        return result;
+    }).get ();
+}
+
+actor_location_t materialize_actor_location (const actor_ref_t &actor,
+                                              const actor_location_plan_t &plan,
+                                              bool entry)
+{
+    return actor_location_t{
+      .mesh_name = plan.mesh_name,
+      .actor_id = std::string (actor.actor_id ().value ()),
+      .actor_type =
+        std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)),
+      .actor_ref = actor,
+      .owner_node_rid = entry
+                          ? zlink::routing_id_t::from (std::string (plan.context_node_rid.value ()))
+                          : zlink::routing_id_t::from (
+                              std::string (actor.node_rid ().value ())),
+      .owner_node_generation =
+        plan.native_node ? plan.native_node->status ().lifecycle_generation () : 0,
+      .spot_id = plan.spot_id,
+      .spot_generation =
+        plan.native_spot ? plan.native_spot->status ().lifecycle_generation () : 0,
+      .spot_kind = entry ? zlink::spot_kind::entry : zlink::spot_kind::user,
+      .membership_epoch = plan.membership_epoch};
 }
 
 result_t<void> claim_actor_location_before_activation (
@@ -1369,17 +1518,22 @@ result_t<void> claim_actor_location_before_activation (
   bool takeover = false)
 {
     claimed = false;
-    if (!state->location_lifecycle) {
+    const auto plan = capture_actor_location_plan (state, committed, context);
+    if (!plan.lifecycle) {
+        return result_t<void>::success ();
+    }
+    if (!plan.attached) {
+        return result_t<void>::failure (
+          framework_error_kind_t::unavailable,
+          "actor location claim raced Spot context teardown");
+    }
+    if (plan.lifecycle->owns_actor (actor_location_key_t{
+          plan.mesh_name, std::string (committed.actor_id ().value ())})) {
         return result_t<void>::success ();
     }
 
-    if (state->location_lifecycle->owns_actor (actor_location_key_t{
-          context.node->snapshot.name, std::string (committed.actor_id ().value ())})) {
-        return result_t<void>::success ();
-    }
-
-    auto location = make_actor_location (committed, context);
-    const auto claim_result = state->location_lifecycle->claim_actor (
+    auto location = materialize_actor_location (committed, plan, false);
+    const auto claim_result = plan.lifecycle->claim_actor (
       location,
       [weak_state = std::weak_ptr<detail::spot_node_builder_state_t> (state)] (
         const actor_location_t &lost) { deactivate_actor_location (weak_state, lost); },
@@ -1404,25 +1558,31 @@ result_t<void> claim_pending_actor_location_before_activation (
   bool &claimed)
 {
     claimed = false;
-    if (!state->location_lifecycle) {
+    const auto plan = capture_actor_location_plan (state, committed, target);
+    if (!plan.lifecycle) {
         return result_t<void>::success ();
+    }
+    if (!plan.attached) {
+        return result_t<void>::failure (
+          framework_error_kind_t::unavailable,
+          "pending actor location claim raced Spot context teardown");
     }
     const bool source_is_local =
       !source_actor.node_rid ().empty ()
-      && source_actor.node_rid ().value () == detail::effective_spot_node_rid (state->snapshot);
+      && source_actor.node_rid ().value () == plan.context_node_rid.value ();
     if (source_is_local
-        && state->location_lifecycle->owns_actor (actor_location_key_t{
-          target.node->snapshot.name, std::string (committed.actor_id ().value ())})) {
+        && plan.lifecycle->owns_actor (actor_location_key_t{
+          plan.mesh_name, std::string (committed.actor_id ().value ())})) {
         return result_t<void>::success ();
     }
-    auto location = make_actor_location (committed, target);
+    auto location = materialize_actor_location (committed, plan, false);
     location.actor_ref = source_actor;
     location.owner_node_rid =
       zlink::routing_id_t::from (std::string (source_actor.node_rid ().value ()));
     location.spot_id =
       source_spot_id.empty () ? std::string (source_actor.node_rid ().value ()) : source_spot_id;
     location.spot_kind = source_spot_id.empty () ? zlink::spot_kind::entry : zlink::spot_kind::user;
-    const auto result = state->location_lifecycle->claim_actor (
+    const auto result = plan.lifecycle->claim_actor (
       std::move (location),
       [weak_state = std::weak_ptr<detail::spot_node_builder_state_t> (state)] (
         const actor_location_t &lost) { deactivate_actor_location (weak_state, lost); },
@@ -1437,23 +1597,28 @@ result_t<void> claim_pending_actor_location_before_activation (
     return result_t<void>::success ();
 }
 
-void release_actor_location (detail::spot_node_builder_state_t &state, const actor_ref_t &actor)
+void release_actor_location (
+  const std::shared_ptr<detail::spot_node_builder_state_t> &state, const actor_ref_t &actor)
 {
-    if (!state.location_lifecycle
-        || ::zlink::framework::detail::actor_ref_access_t::empty (actor)) {
+    if (!state || ::zlink::framework::detail::actor_ref_access_t::empty (actor)) {
         return;
     }
-    (void) state.location_lifecycle->release_actor (
-      actor_location_key_t{state.snapshot.name, std::string (actor.actor_id ().value ())});
+    auto [lifecycle, mesh_name] = state->lane.run ([&] {
+        return std::make_pair (state->location_lifecycle, state->snapshot.name);
+    }).get ();
+    if (!lifecycle)
+        return;
+    (void) lifecycle->release_actor (
+      actor_location_key_t{std::move (mesh_name), std::string (actor.actor_id ().value ())});
 }
 
-result_t<void> update_actor_location_after_move (detail::spot_node_builder_state_t &state,
+result_t<void> update_actor_location_after_move (
+                                                 const std::shared_ptr<detail::spot_node_builder_state_t> &state,
                                                  const actor_ref_t &actor,
                                                  const detail::spot_context_state_t &context,
                                                  bool entry)
 {
-    if (!state.location_lifecycle
-        || ::zlink::framework::detail::actor_ref_access_t::empty (actor)) {
+    if (::zlink::framework::detail::actor_ref_access_t::empty (actor)) {
         return result_t<void>::success ();
     }
     //  Spot context teardown can detach `node` while a membership commit is
@@ -1461,16 +1626,18 @@ result_t<void> update_actor_location_after_move (detail::spot_node_builder_state
     //  dereference the detached pointer; report a typed lifecycle failure
     //  instead (spec 15 §3 — membership/lifecycle stay ordered on the Spot
     //  turn boundary; a detached context means that boundary has ended).
-    if (context.node == nullptr) {
+    const auto plan = capture_actor_location_plan (state, actor, context);
+    if (!plan.lifecycle)
+        return result_t<void>::success ();
+    if (!plan.attached) {
         return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "actor committed location update raced Spot context teardown");
     }
-    auto location =
-      entry ? make_entry_actor_location (actor, context) : make_actor_location (actor, context);
-    const auto tracked = state.location_lifecycle->owns_actor (
-      actor_location_key_t{state.snapshot.name, std::string (actor.actor_id ().value ())});
-    const auto updated = state.location_lifecycle->update_actor_location (std::move (location));
+    auto location = materialize_actor_location (actor, plan, entry);
+    const auto tracked = plan.lifecycle->owns_actor (
+      actor_location_key_t{plan.mesh_name, std::string (actor.actor_id ().value ())});
+    const auto updated = plan.lifecycle->update_actor_location (std::move (location));
     if (updated.status != location_write_status_t::stored) {
         return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                         "actor committed location update failed: status="
@@ -1494,23 +1661,38 @@ optional_spot_route_channel_name (const std::shared_ptr<detail::spot_context_sta
     if (!state || !state->node || !state->channel_runtime) {
         return std::nullopt;
     }
-    return state->channel_runtime->lane.run ([&] -> std::optional<std::string> {
-        if (state->node->snapshot.spot_route_channel_name) {
-            const auto &route_channel_name = *state->node->snapshot.spot_route_channel_name;
-            if (state->channel_runtime->route_channels.find (route_channel_name)
-                != state->channel_runtime->route_channels.end ()) {
-                return route_channel_name;
+    struct route_channel_projection_t
+    {
+        std::shared_ptr<detail::channel_runtime_state_t> channel_runtime;
+        std::optional<std::string> configured;
+        std::optional<std::string> accepted;
+    };
+    const auto projection = state->node->lane.run ([&] {
+        route_channel_projection_t result{.channel_runtime = state->channel_runtime,
+                                          .configured =
+                                            state->node->snapshot.spot_route_channel_name};
+        if (state->node->snapshot.accepted_route_channels.size () == 1) {
+            result.accepted =
+              state->node->snapshot.accepted_route_channels.front ().channel_name;
+        }
+        return result;
+    }).get ();
+    if (!projection.channel_runtime)
+        return std::nullopt;
+    return projection.channel_runtime->lane.run ([&] () -> std::optional<std::string> {
+        if (projection.configured) {
+            if (projection.channel_runtime->route_channels.find (*projection.configured)
+                != projection.channel_runtime->route_channels.end ()) {
+                return projection.configured;
             }
         }
-        if (state->channel_runtime->route_channels.size () == 1) {
-            return state->channel_runtime->route_channels.begin ()->first;
+        if (projection.channel_runtime->route_channels.size () == 1) {
+            return projection.channel_runtime->route_channels.begin ()->first;
         }
-        if (state->node->snapshot.accepted_route_channels.size () == 1) {
-            const auto &route_channel_name =
-              state->node->snapshot.accepted_route_channels.front ().channel_name;
-            if (state->channel_runtime->route_channels.find (route_channel_name)
-                != state->channel_runtime->route_channels.end ()) {
-                return route_channel_name;
+        if (projection.accepted) {
+            if (projection.channel_runtime->route_channels.find (*projection.accepted)
+                != projection.channel_runtime->route_channels.end ()) {
+                return projection.accepted;
             }
         }
         return std::nullopt;
@@ -1543,8 +1725,7 @@ resolve_target_spot_generation (const std::shared_ptr<detail::spot_node_builder_
     runtime::spot_address_resolver_t *resolver = nullptr;
     std::string mesh_name;
     std::shared_ptr<service::spot_t> local_spot;
-    {
-        std::lock_guard<std::recursive_mutex> lock (state->mutex);
+    state->lane.run ([&] {
         mesh_name = state->snapshot.name;
         resolver = state->spot_location_resolver;
         const auto local = state->native_spots_by_id.find (target_spot_id);
@@ -1552,7 +1733,7 @@ resolve_target_spot_generation (const std::shared_ptr<detail::spot_node_builder_
             && detail::effective_spot_node_rid (state->snapshot) == target_node_rid.to_string ()) {
             local_spot = local->second;
         }
-    }
+    }).get ();
     if (local_spot) {
         const auto generation = local_spot->status ().lifecycle_generation ();
         if (generation != 0) {
@@ -1769,15 +1950,30 @@ namespace detail
 
 bool spot_context_state_t::idle_quiescent () const
 {
-    if (actor_count != 0 || relocation_boundary_active || relocation_ready_deferred
-        || !queued_routed_packets.empty ()) {
+    auto owner = state_lane_owner ();
+    if (!owner)
+        return false;
+
+    struct snapshot_t
+    {
+        bool state_quiescent = false;
+        std::shared_ptr<runtime::serial_execution_queue_t> queue;
+        std::vector<std::shared_ptr<timer_state_t>> timers;
+    };
+    auto snapshot = owner->lane.run ([this] {
+        return snapshot_t{
+          actor_count == 0 && !relocation_boundary_active && !relocation_ready_deferred
+            && queued_routed_packets.empty (),
+          serial_queue,
+          timers};
+    }).get ();
+    if (!snapshot.state_quiescent || !snapshot.queue)
+        return false;
+    if (snapshot.queue->pending_count (runtime::serial_work_lane_t::application) != 0
+        || snapshot.queue->pending_count (runtime::serial_work_lane_t::lifecycle) != 0) {
         return false;
     }
-    if (!serial_queue || serial_queue->pending_count (runtime::serial_work_lane_t::application) != 0
-        || serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle) != 0) {
-        return false;
-    }
-    for (const auto &timer : timers) {
+    for (const auto &timer : snapshot.timers) {
         if (!timer)
             continue;
         std::lock_guard<std::mutex> timer_lock (timer->mutex);
@@ -1819,18 +2015,24 @@ void spot_context_state_t::leave_callback () noexcept
     if (should_close) {
         bool local_closed = false;
         try {
-            auto owner = node;
+            auto owner = state_lane_owner ();
             if (owner) {
-                std::lock_guard<std::recursive_mutex> node_lock (owner->mutex);
-                if (!closed && actor_count == 0) {
+                const auto token = owner->lane.run ([this, &owner] {
+                    if (close_reservation == 0 || close_reservation_is_idle
+                        || node.get () != owner.get () || closed || actor_count != 0) {
+                        return std::uint64_t{0};
+                    }
+                    closed = true;
+                    return close_reservation;
+                }).get ();
+                if (token != 0) {
                     callback_lane.run ([this] {
                         close_requested = false;
                         callback_admission_closed = true;
-                        closed = true;
                     }).get ();
                     try {
                         close_application_then_release_location (
-                          owner, spot_close_reason_t::explicit_close);
+                          owner, spot_close_reason_t::explicit_close, token);
                     }
                     catch (...) {
                     }
@@ -2480,13 +2682,7 @@ task_t<bool> spot_context_t::close_erased ()
     if (!_state || !_state->node) {
         co_return result_t<bool>::success (false);
     }
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->node->mutex);
-        if (_state->closed || _state->actor_count != 0) {
-            co_return result_t<bool>::success (false);
-        }
-        co_return result_t<bool>::success (_state->close_now ());
-    }
+    co_return result_t<bool>::success (_state->close_now ());
 }
 
 void detail::spot_context_state_t::cancel_timers () noexcept
@@ -2581,80 +2777,165 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
         }
         return task_t<actor_ref_t> (result_t<actor_ref_t>::success (actor_ref));
     }
-    /* on_leave_actor may close the source Spot, which detaches its context
-     * from the node while this operation has released the node lock. Keep the
-     * node owner independently of the source context for the whole move. */
+    /* Lifecycle callbacks may close the source Spot. Keep both the node and
+     * each selected callback target alive after its state-lane turn ends. */
     auto node = _state->node;
-    std::unique_lock<std::recursive_mutex> node_lock (node->mutex);
-    const auto key =
-      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)) + ":"
-      + std::string (actor_ref.actor_id ().value ());
-    const auto found_location = node->actor_spot_ids.find (key);
-    if (found_location == node->actor_spot_ids.end ()) {
+    const auto stable_actor_type =
+      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
+    const auto key = stable_actor_type + ":" + std::string (actor_ref.actor_id ().value ());
+
+    using entry_join_callback_t =
+      std::function<result_t<detail::actor_join_reply_t> (
+        const actor_ref_t &,
+        node_rid_t,
+        const zlink::message_t &,
+        const std::optional<zlink::message_t> &)>;
+    struct leave_plan_t
+    {
+        enum class destination_t
+        {
+            no_op,
+            remote_entry,
+            local_entry
+        };
+
+        destination_t destination = destination_t::no_op;
+        std::shared_ptr<detail::spot_context_state_t> source_state;
+        std::shared_ptr<detail::spot_context_state_t> entry_state;
+        std::shared_ptr<void> source_spot_instance;
+        std::function<task_t<void> (void *, void *)> source_leave;
+        entry_join_callback_t entry_join;
+    };
+
+    auto planned = node->lane.run ([&] () -> result_t<leave_plan_t> {
+        const auto found_location = node->actor_spot_ids.find (key);
+        if (found_location == node->actor_spot_ids.end ())
+            return result_t<leave_plan_t>::success (leave_plan_t{});
+        if (found_location->second != _state->spot_id) {
+            return result_t<leave_plan_t>::failure (framework_error_kind_t::not_found,
+                                                    "actor is not joined to this SPOT");
+        }
+
+        const auto found_generation = node->actor_generations.find (key);
+        if (found_generation != node->actor_generations.end ()
+            && found_generation->second != actor_ref.object_generation ()) {
+            return detail::boundary_failure<leave_plan_t> (
+              detail::boundary_error_t::stale_generation, "actor generation is stale");
+        }
+
+        leave_plan_t plan;
+        plan.source_state = _state;
+        const bool remote_entry =
+          _state->node_rid.empty ()
+          || actor_ref.node_rid ().value () != _state->node_rid.value ();
+        if (remote_entry) {
+            plan.destination = leave_plan_t::destination_t::remote_entry;
+            plan.entry_join = node->actor_entry_spot_join;
+        } else {
+            if (!node->snapshot.entry_spot_name) {
+                return result_t<leave_plan_t>::failure (framework_error_kind_t::not_found,
+                                                        "entry spot is not registered");
+            }
+            const auto entry_id = node->spot_ids_by_name.find (*node->snapshot.entry_spot_name);
+            if (entry_id == node->spot_ids_by_name.end ()) {
+                return result_t<leave_plan_t>::failure (framework_error_kind_t::not_found,
+                                                        "entry spot is not created");
+            }
+            const auto entry_context = node->spot_contexts_by_id.find (entry_id->second);
+            if (entry_context == node->spot_contexts_by_id.end ()
+                || !entry_context->second._state
+                || !entry_context->second._state->spot_instance) {
+                return result_t<leave_plan_t>::failure (
+                  framework_error_kind_t::not_found, "entry spot context is not registered");
+            }
+            plan.destination = leave_plan_t::destination_t::local_entry;
+            plan.entry_state = entry_context->second._state;
+        }
+
+        auto &source_state = *_state;
+        decrement_actor_count_unlocked (source_state);
+        erase_actor_route_unlocked (*node, key);
+        const auto source_admission = source_state.actor_admissions.find (actor_type);
+        if (source_admission != source_state.actor_admissions.end ()
+            && source_admission->second.on_leave_actor && source_state.spot_instance) {
+            plan.source_leave = source_admission->second.on_leave_actor;
+            plan.source_spot_instance = source_state.spot_instance;
+        } else if (!remote_entry) {
+            const auto source_left = source_state.on_leave_actor_callbacks.find (actor_type);
+            if (source_left != source_state.on_leave_actor_callbacks.end ()
+                && source_state.spot_instance) {
+                plan.source_leave = source_left->second;
+                plan.source_spot_instance = source_state.spot_instance;
+            }
+        }
+        return result_t<leave_plan_t>::success (std::move (plan));
+    }).get ();
+    if (!planned) {
+        return task_t<actor_ref_t> (
+          detail::propagate_failure<actor_ref_t> (planned, "actor leave state admission failed"));
+    }
+    auto plan = std::move (planned.value ());
+    if (plan.destination == leave_plan_t::destination_t::no_op) {
         report_spot_dispatch_trace (node, message_flow_outcome_t::replied,
                                     dispatch_error_surface_t::spot_actor,
                                     dispatch_message_kind_t::actor_request, "actor_leave_noop", {},
                                     _state->spot_id, actor_ref.actor_id ().value ());
         return task_t<actor_ref_t> (result_t<actor_ref_t>::success (actor_ref));
     }
-    if (found_location->second != _state->spot_id) {
-        return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-          framework_error_kind_t::not_found, "actor is not joined to this SPOT"));
-    }
 
-    const auto found_generation = node->actor_generations.find (key);
-    if (found_generation != node->actor_generations.end ()
-        && found_generation->second != actor_ref.object_generation ()) {
-        return task_t<actor_ref_t> (detail::boundary_failure<actor_ref_t> (
-          detail::boundary_error_t::stale_generation, "actor generation is stale"));
-    }
+    const auto run_source_leave = [&] {
+        if (!plan.source_leave)
+            return result_t<void>::success ();
+        return plan.source_state->run_serial_task ("spot-lifecycle-leave", [&] {
+            return plan.source_leave (plan.source_spot_instance.get (), actor);
+        });
+    };
 
-    if (_state->node_rid.empty () || actor_ref.node_rid ().value () != _state->node_rid.value ()) {
+    if (plan.destination == leave_plan_t::destination_t::remote_entry) {
         try {
-            auto entry_join = node->actor_entry_spot_join;
-            auto &source_state = *_state;
-            decrement_actor_count_unlocked (source_state);
-            erase_actor_route_unlocked (*node, key);
-            const auto source_admission = source_state.actor_admissions.find (actor_type);
-            if (source_admission != source_state.actor_admissions.end ()
-                && source_admission->second.on_leave_actor && source_state.spot_instance) {
-                node_lock.unlock ();
-                const auto completed = source_state.run_serial_task ("spot-lifecycle-leave", [&] {
-                    return source_admission->second.on_leave_actor (
-                      source_state.spot_instance.get (), actor);
-                });
-                node_lock.lock ();
-                if (!completed) {
-                    return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-                      completed.error_kind (), completed.error () != nullptr
-                                                 ? completed.error ()->what ()
-                                                 : "spot actor leave callback failed"));
-                }
+            const auto completed = run_source_leave ();
+            if (!completed) {
+                return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
+                  completed.error_kind (), completed.error () != nullptr
+                                             ? completed.error ()->what ()
+                                             : "spot actor leave callback failed"));
             }
-            if (!entry_join) {
+            if (!plan.entry_join)
                 return task_t<actor_ref_t> (result_t<actor_ref_t>::success (actor_ref));
-            }
+
+            struct snapshot_plan_t
+            {
+                std::function<std::optional<zlink::message_t> (void *, serializer_registry_t &)>
+                  serialize;
+                std::shared_ptr<detail::channel_runtime_state_t> channel_runtime;
+                serializer_registry_t *serializers = nullptr;
+            };
+            const auto snapshot_plan = node->lane.run ([&] {
+                snapshot_plan_t selected;
+                const auto actor_factory = node->actor_factories.find (stable_actor_type);
+                if (actor_factory != node->actor_factories.end ()
+                    && plan.source_state->channel_runtime
+                    && plan.source_state->channel_runtime->serializers) {
+                    selected.serialize = actor_factory->second.serialize_instance;
+                    selected.channel_runtime = plan.source_state->channel_runtime;
+                    selected.serializers = selected.channel_runtime->serializers;
+                }
+                return selected;
+            }).get ();
             std::optional<zlink::message_t> actor_snapshot;
-            const auto actor_factory = node->actor_factories.find (
-              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
-            if (actor_factory != node->actor_factories.end () && source_state.channel_runtime
-                && source_state.channel_runtime->serializers) {
-                actor_snapshot = actor_factory->second.serialize_instance (
-                  actor, *source_state.channel_runtime->serializers);
+            if (snapshot_plan.serializers) {
+                actor_snapshot = snapshot_plan.serialize (actor, *snapshot_plan.serializers);
             }
-            node_lock.unlock ();
-            auto joined =
-              entry_join (actor_ref, actor_ref.node_rid (), zlink::message_t{}, actor_snapshot);
-            node_lock.lock ();
+            auto joined = plan.entry_join (actor_ref, actor_ref.node_rid (), zlink::message_t{},
+                                           actor_snapshot);
             if (!joined) {
                 const auto *error = joined.error ();
                 return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
                   joined.error_kind (),
                   error != nullptr ? error->what () : "remote entry spot join failed"));
             }
-            if (update_actor_ref) {
+            if (update_actor_ref)
                 update_actor_ref (actor, joined.value ().actor);
-            }
             return task_t<actor_ref_t> (result_t<actor_ref_t>::success (joined.value ().actor));
         }
         catch (const framework_exception_t &error) {
@@ -2670,78 +2951,84 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
         }
     }
 
-    if (!node->snapshot.entry_spot_name) {
-        return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-          framework_error_kind_t::not_found, "entry spot is not registered"));
-    }
-
-    const auto entry_id = node->spot_ids_by_name.find (*node->snapshot.entry_spot_name);
-    if (entry_id == node->spot_ids_by_name.end ()) {
-        return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-          framework_error_kind_t::not_found, "entry spot is not created"));
-    }
-    const auto entry_context = node->spot_contexts_by_id.find (entry_id->second);
-    if (entry_context == node->spot_contexts_by_id.end ()
-        || !entry_context->second._state->spot_instance) {
-        return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-          framework_error_kind_t::not_found, "entry spot context is not registered"));
-    }
-    /* Lifecycle callbacks below temporarily release the node lock and may
-     * create or close Spot contexts. Keep the Entry Spot state itself alive;
-     * retaining an unordered_map iterator across that boundary is invalid. */
-    auto entry_state_owner = entry_context->second._state;
-
     try {
-        auto &source_state = *_state;
-        decrement_actor_count_unlocked (source_state);
-        erase_actor_route_unlocked (*node, key);
-        const auto source_admission = source_state.actor_admissions.find (actor_type);
-        if (source_admission != source_state.actor_admissions.end ()
-            && source_admission->second.on_leave_actor && source_state.spot_instance) {
-            node_lock.unlock ();
-            const auto completed = source_state.run_serial_task ("spot-lifecycle-leave", [&] {
-                return source_admission->second.on_leave_actor (source_state.spot_instance.get (),
-                                                                actor);
-            });
-            node_lock.lock ();
-            if (!completed) {
-                return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-                  completed.error_kind (), completed.error () != nullptr
-                                             ? completed.error ()->what ()
-                                             : "spot actor leave callback failed"));
-            }
-        } else {
-            const auto source_left = source_state.on_leave_actor_callbacks.find (actor_type);
-            if (source_left != source_state.on_leave_actor_callbacks.end ()
-                && source_state.spot_instance) {
-                node_lock.unlock ();
-                const auto completed = source_state.run_serial_task ("spot-lifecycle-leave", [&] {
-                    return source_left->second (source_state.spot_instance.get (), actor);
-                });
-                node_lock.lock ();
-                if (!completed) {
-                    return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-                      completed.error_kind (), completed.error () != nullptr
-                                                 ? completed.error ()->what ()
-                                                 : "spot actor leave callback failed"));
-                }
-            }
+        const auto completed = run_source_leave ();
+        if (!completed) {
+            return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
+              completed.error_kind (), completed.error () != nullptr
+                                         ? completed.error ()->what ()
+                                         : "spot actor leave callback failed"));
         }
 
-        auto &entry_state = *entry_state_owner;
-        const auto committed = ::zlink::framework::detail::actor_ref_access_t::make (
-          node_rid_t::from_string (std::string (_state->node_rid.value ())),
-          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-          std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
-        (void) update_actor_location_after_move (*node, committed, entry_state, true);
-        detail::record_actor_context_route_unlocked (*node, key,
-                                                     std::string (_state->node_rid.value ()),
-                                                     entry_state, committed.object_generation ());
-        if (update_actor_ref) {
-            update_actor_ref (actor, committed);
+        struct location_update_plan_t
+        {
+            actor_ref_t committed;
+            runtime::location_lifecycle_t *lifecycle = nullptr;
+            std::shared_ptr<service::mesh_node_t> native_node;
+            std::shared_ptr<service::spot_t> native_spot;
+            std::string mesh_name;
+            node_rid_t node_rid;
+            spot_id_t spot_id;
+            std::uint64_t membership_epoch = 0;
+            bool context_attached = false;
+        };
+        auto location_plan = node->lane.run ([&] {
+            location_update_plan_t selected{
+              .committed = ::zlink::framework::detail::actor_ref_access_t::make (
+                node_rid_t::from_string (std::string (_state->node_rid.value ())),
+                stable_actor_type, std::string (actor_ref.actor_id ().value ()),
+                actor_ref.object_generation ())};
+            selected.lifecycle = node->location_lifecycle;
+            selected.context_attached = plan.entry_state->node != nullptr;
+            if (selected.lifecycle && selected.context_attached) {
+                selected.native_node = node->native_node.lock ();
+                selected.native_spot = plan.entry_state->native_spot.lock ();
+                selected.mesh_name = node->snapshot.name;
+                selected.node_rid = plan.entry_state->node_rid;
+                selected.spot_id = plan.entry_state->spot_id;
+                const auto membership = node->core_actor_membership_epochs.find (
+                  std::string (actor_ref.actor_id ().value ()));
+                if (membership != node->core_actor_membership_epochs.end ())
+                    selected.membership_epoch = membership->second;
+            }
+            return selected;
+        }).get ();
+
+        if (location_plan.lifecycle && location_plan.context_attached) {
+            const auto owner_generation = location_plan.native_node
+                                            ? location_plan.native_node->status ().lifecycle_generation ()
+                                            : 0;
+            const auto spot_generation_value =
+              location_plan.native_spot
+                ? location_plan.native_spot->status ().lifecycle_generation ()
+                : 0;
+            auto location = actor_location_t{
+              .mesh_name = location_plan.mesh_name,
+              .actor_id = std::string (location_plan.committed.actor_id ().value ()),
+              .actor_type = stable_actor_type,
+              .actor_ref = location_plan.committed,
+              .owner_node_rid =
+                zlink::routing_id_t::from (std::string (location_plan.node_rid.value ())),
+              .owner_node_generation = owner_generation,
+              .spot_id = location_plan.spot_id,
+              .spot_generation = spot_generation_value,
+              .spot_kind = zlink::spot_kind::entry,
+              .membership_epoch = location_plan.membership_epoch};
+            (void) location_plan.lifecycle->owns_actor (actor_location_key_t{
+              location.mesh_name, std::string (location_plan.committed.actor_id ().value ())});
+            (void) location_plan.lifecycle->update_actor_location (std::move (location));
         }
-        if (node->update_actor_registry_ref) {
-            auto updated = node->update_actor_registry_ref (committed);
+
+        auto update_registry = node->lane.run ([&] {
+            detail::record_actor_context_route_unlocked (
+              *node, key, std::string (_state->node_rid.value ()), *plan.entry_state,
+              location_plan.committed.object_generation ());
+            return node->update_actor_registry_ref;
+        }).get ();
+        if (update_actor_ref)
+            update_actor_ref (actor, location_plan.committed);
+        if (update_registry) {
+            auto updated = update_registry (location_plan.committed);
             if (!updated) {
                 const auto *error = updated.error ();
                 return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
@@ -2750,39 +3037,42 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
             }
         }
 
-        const auto entry_admission = entry_state.actor_admissions.find (actor_type);
-        if (entry_admission != entry_state.actor_admissions.end ()
-            && entry_admission->second.on_actor_joined && entry_state.spot_instance) {
-            node_lock.unlock ();
-            const auto completed = entry_state.run_serial_task ("spot-lifecycle-join", [&] {
-                return entry_admission->second.on_actor_joined (entry_state.spot_instance.get (),
-                                                                actor);
-            });
-            node_lock.lock ();
-            if (!completed) {
-                return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-                  completed.error_kind (), completed.error () != nullptr
-                                             ? completed.error ()->what ()
-                                             : "spot actor joined callback failed"));
-            }
-        } else {
-            const auto entry_joined = entry_state.on_actor_joined_callbacks.find (actor_type);
-            if (entry_joined != entry_state.on_actor_joined_callbacks.end ()
-                && entry_state.spot_instance) {
-                node_lock.unlock ();
-                const auto completed = entry_state.run_serial_task ("spot-lifecycle-join", [&] {
-                    return entry_joined->second (entry_state.spot_instance.get (), actor);
-                });
-                node_lock.lock ();
-                if (!completed) {
-                    return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-                      completed.error_kind (), completed.error () != nullptr
-                                                 ? completed.error ()->what ()
-                                                 : "spot actor joined callback failed"));
+        struct joined_callback_plan_t
+        {
+            std::function<task_t<void> (void *, void *)> callback;
+            std::shared_ptr<void> spot_instance;
+        };
+        const auto joined_plan = node->lane.run ([&] {
+            joined_callback_plan_t selected;
+            const auto entry_admission = plan.entry_state->actor_admissions.find (actor_type);
+            if (entry_admission != plan.entry_state->actor_admissions.end ()
+                && entry_admission->second.on_actor_joined && plan.entry_state->spot_instance) {
+                selected.callback = entry_admission->second.on_actor_joined;
+                selected.spot_instance = plan.entry_state->spot_instance;
+            } else {
+                const auto entry_joined =
+                  plan.entry_state->on_actor_joined_callbacks.find (actor_type);
+                if (entry_joined != plan.entry_state->on_actor_joined_callbacks.end ()
+                    && plan.entry_state->spot_instance) {
+                    selected.callback = entry_joined->second;
+                    selected.spot_instance = plan.entry_state->spot_instance;
                 }
             }
+            return selected;
+        }).get ();
+        if (joined_plan.callback) {
+            const auto joined = plan.entry_state->run_serial_task ("spot-lifecycle-join", [&] {
+                return joined_plan.callback (joined_plan.spot_instance.get (), actor);
+            });
+            if (!joined) {
+                return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
+                  joined.error_kind (), joined.error () != nullptr
+                                           ? joined.error ()->what ()
+                                           : "spot actor joined callback failed"));
+            }
         }
-        return task_t<actor_ref_t> (result_t<actor_ref_t>::success (committed));
+        return task_t<actor_ref_t> (
+          result_t<actor_ref_t>::success (location_plan.committed));
     }
     catch (const framework_exception_t &error) {
         return task_t<actor_ref_t> (detail::result_access_t::failure<actor_ref_t> (error));
@@ -2803,21 +3093,26 @@ task_t<void> entry_spot_context_t::destroy_actor_instance_erased (const void *in
         return task_t<void> (result_t<void>::failure (framework_error_kind_t::not_found,
                                                       "actor instance is not registered"));
     }
-    /* Resolution and destruction stay under one node lock (the mutex is
-     * recursive), so a concurrent transfer cannot move the actor between
-     * the identity lookup and the location decision. */
-    std::lock_guard<std::recursive_mutex> node_lock (_state->node->mutex);
-    const auto found = _state->node->actor_instance_index.find (instance);
-    if (found == _state->node->actor_instance_index.end ()) {
+    /* Resolve one immutable ref in a state turn, then enter the public destroy
+     * surface after the turn has ended. */
+    const auto actor = _state->node->lane.run ([&] () -> std::optional<actor_ref_t> {
+        const auto found = _state->node->actor_instance_index.find (instance);
+        if (found == _state->node->actor_instance_index.end ()) {
+            return std::nullopt;
+        }
+        const auto key = found->second.first + ":" + found->second.second;
+        const auto found_generation = _state->node->actor_generations.find (key);
+        return ::zlink::framework::detail::actor_ref_access_t::make (
+          _state->node_rid, found->second.first, found->second.second,
+          found_generation != _state->node->actor_generations.end () ? found_generation->second
+                                                                     : 1);
+    }).get ();
+    if (!actor) {
         /* Instance not registered on this node: already destroyed or
          * superseded — duplicate destroy is a successful no-op. */
         return task_t<void> (result_t<void>::success ());
     }
-    const auto key = found->second.first + ":" + found->second.second;
-    const auto found_generation = _state->node->actor_generations.find (key);
-    return destroy_actor_erased (::zlink::framework::detail::actor_ref_access_t::make (
-      _state->node_rid, found->second.first, found->second.second,
-      found_generation != _state->node->actor_generations.end () ? found_generation->second : 1));
+    return destroy_actor_erased (*actor);
 }
 
 task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &actor)
@@ -2837,29 +3132,29 @@ task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &acto
         const auto key =
           std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)) + ":"
           + std::string (actor.actor_id ().value ());
-        {
-            std::lock_guard<std::recursive_mutex> node_lock (state->node->mutex);
+        const auto accepted = state->node->lane.run ([&] {
             const auto found_location = state->node->actor_spot_ids.find (key);
             const auto found_generation = state->node->actor_generations.find (key);
             if (found_location == state->node->actor_spot_ids.end ()
                 || (found_generation != state->node->actor_generations.end ()
                     && found_generation->second != actor.object_generation ())) {
-                return task_t<void> (result_t<void>::success ());
+                return false;
             }
             state->node->retiring_actor_keys.insert (key);
-        }
+            return true;
+        }).get ();
+        if (!accepted)
+            return task_t<void> (result_t<void>::success ());
         const auto posted = state->try_post_serial_after_current_turn (
           "entry-spot-actor-destroy-after-handler",
           [state, deferred_actor, key] {
               (void) entry_spot_context_t (state).destroy_actor_erased (deferred_actor).result ();
-              std::lock_guard<std::recursive_mutex> node_lock (state->node->mutex);
-              state->node->retiring_actor_keys.erase (key);
+              state->node->lane.run ([&] { state->node->retiring_actor_keys.erase (key); }).get ();
           },
           runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle,
                                          runtime::serial_execution_queue_t::fixed_work_byte_cost});
         if (!posted) {
-            std::lock_guard<std::recursive_mutex> node_lock (state->node->mutex);
-            state->node->retiring_actor_keys.erase (key);
+            state->node->lane.run ([&] { state->node->retiring_actor_keys.erase (key); }).get ();
             return task_t<void> (result_t<void>::failure (
               framework_error_kind_t::capacity_exceeded,
               "Actor destroy could not be scheduled after the current handler"));
@@ -2870,40 +3165,53 @@ task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &acto
     const auto key =
       std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)) + ":"
       + std::string (actor.actor_id ().value ());
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->node->mutex);
+    const auto selected = _state->node->lane.run ([&] {
         if (actor.node_rid ().empty () || actor.node_rid ().value () != _state->node_rid.value ()) {
-            return task_t<void> (result_t<void>::failure (framework_error_kind_t::not_found,
-                                                          "actor is not owned by this Entry SPOT"));
+            return result_t<bool>::failure (framework_error_kind_t::not_found,
+                                            "actor is not owned by this Entry SPOT");
         }
 
         const auto found_location = _state->node->actor_spot_ids.find (key);
         if (found_location != _state->node->actor_spot_ids.end ()
             && found_location->second != _state->spot_id) {
-            return task_t<void> (
-              result_t<void>::failure (framework_error_kind_t::not_found,
-                                       "actor must leave its current SPOT before destroy"));
+            return result_t<bool>::failure (framework_error_kind_t::not_found,
+                                            "actor must leave its current SPOT before destroy");
         }
 
         const auto found_generation = _state->node->actor_generations.find (key);
         if (found_generation != _state->node->actor_generations.end ()
             && found_generation->second != actor.object_generation ()) {
-            return task_t<void> (result_t<void>::success ());
+            return result_t<bool>::success (false);
         }
         if (_state->node->destroying_actors.contains (key)) {
-            return task_t<void> (result_t<void>::success ());
+            return result_t<bool>::success (false);
         }
         // A destroy scheduled for the retained entry-spot record must not
         // race a transfer that is re-admitting the same incarnation on this
         // node (A→B→A): the transfer commit owns the instance lifecycle.
         if (_state->node->actor_transfer_coordinator.blocks_dispatch (key)) {
-            return task_t<void> (result_t<void>::failure (framework_error_kind_t::unavailable,
-                                                          "Actor transfer is in progress"));
+            return result_t<bool>::failure (framework_error_kind_t::unavailable,
+                                            "Actor transfer is in progress");
         }
 
-        if (found_location != _state->node->actor_spot_ids.end ()) {
+        const auto destroys_local_actor = found_location != _state->node->actor_spot_ids.end ();
+        if (destroys_local_actor) {
             _state->node->destroying_actors.insert (key);
-            release_actor_location (*_state->node, actor);
+            destroy_registry = _state->node->destroy_actor_registry;
+        }
+        return result_t<bool>::success (destroys_local_actor);
+    }).get ();
+    if (!selected) {
+        return task_t<void> (result_t<void>::failure (
+          selected.error_kind (), selected.error () != nullptr ? selected.error ()->what ()
+                                                               : "actor destroy failed"));
+    }
+    if (!selected.value ())
+        return task_t<void> (result_t<void>::success ());
+
+    release_actor_location (_state->node, actor);
+    _state->node->lane.run ([&] {
+        if (_state->node->destroying_actors.contains (key)) {
             erase_actor_route_unlocked (*_state->node, key);
             _state->node->actor_created_keys.erase (key);
             _state->node->destroyed_actor_keys.insert (key);
@@ -2916,16 +3224,12 @@ task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &acto
                   return request_key.starts_with (actor_request_dedup_prefix (key));
               });
             decrement_actor_count_unlocked (*_state);
-            destroy_registry = _state->node->destroy_actor_registry;
         }
-    }
+    }).get ();
 
     if (destroy_registry) {
         auto cleanup = destroy_registry (actor);
-        {
-            std::lock_guard<std::recursive_mutex> node_lock (_state->node->mutex);
-            _state->node->destroying_actors.erase (key);
-        }
+        _state->node->lane.run ([&] { _state->node->destroying_actors.erase (key); }).get ();
         if (!cleanup) {
             const auto *error = cleanup.error ();
             return task_t<void> (result_t<void>::failure (
@@ -2933,8 +3237,7 @@ task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &acto
               error != nullptr ? error->what () : "actor registry cleanup failed"));
         }
     } else {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->node->mutex);
-        _state->node->destroying_actors.erase (key);
+        _state->node->lane.run ([&] { _state->node->destroying_actors.erase (key); }).get ();
     }
 
     return task_t<void> (result_t<void>::success ());
@@ -2975,7 +3278,27 @@ send_call_t spot_context_t::publish_erased (std::string topic,
         catch (const framework_exception_t &error) {
             return detail::result_access_t::failure<void> (error);
         }
-        auto native = state->native_spot.lock ();
+        struct publish_projection_t
+        {
+            std::shared_ptr<service::spot_t> native;
+            dispatch_options_t dispatch;
+            std::string mesh_name;
+            std::string discovery_channel_name;
+            std::shared_ptr<detail::channel_runtime_state_t> channel_runtime;
+        };
+        const auto projection = state->node
+                                  ? state->node->lane.run ([&] {
+                                        return publish_projection_t{
+                                          .native = state->native_spot.lock (),
+                                          .dispatch = state->node->dispatch,
+                                          .mesh_name = state->node->snapshot.name,
+                                          .discovery_channel_name =
+                                            state->node->snapshot.discovery_channel_name.value_or (
+                                              state->node->snapshot.name),
+                                          .channel_runtime = state->node->channel_runtime};
+                                    }).get ()
+                                  : publish_projection_t{};
+        auto native = projection.native;
         if (native) {
             try {
                 /* Fan-out wire envelope (flow-correlation §4.1, .NET
@@ -2983,8 +3306,7 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                    * ambient flow pair so every subscriber line shares one
                    * flow id across the tree. */
                 const auto diagnostics_mode =
-                  state->node ? detail::message_flow_tracer_t (state->node->dispatch).mode ()
-                              : message_flow_log_mode_t::off;
+                  detail::message_flow_tracer_t (projection.dispatch).mode ();
                 auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                   flow_origin_t::application, diagnostics_mode);
                 /* Self-delimited single frame: ['Z''L''F''E'][u32 BE
@@ -2996,10 +3318,8 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                    * legacy raw payload, so a validation failure after a
                    * magic match is definitively a corrupted framework frame. */
                 auto frame_part = encode_spot_publish_frame (
-                  state->node ? state->node->snapshot.name : std::string{}, submitted_packet_name,
-                  topic, content_type, payload);
-                if (!state->node || !state->node->channel_runtime
-                    || !state->node->channel_runtime->serializers) {
+                  projection.mesh_name, submitted_packet_name, topic, content_type, payload);
+                if (!projection.channel_runtime || !projection.channel_runtime->serializers) {
                     return result_t<void>::failure (
                       framework_error_kind_t::internal_failure,
                       "spot publish serializer registry is unavailable");
@@ -3011,11 +3331,9 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                 const auto route =
                   detail::spot_multicast_route_send_t{topic, frame_part.to_bytes ()};
                 const auto encoded = route_codec.encode_envelope_parts (
-                  route_header, route, *state->node->channel_runtime->serializers);
-                const auto submitted =
-                  native->publish (state->node->snapshot.discovery_channel_name.value_or (
-                                     state->node->snapshot.name),
-                                   topic, encoded.items ());
+                  route_header, route, *projection.channel_runtime->serializers);
+                const auto submitted = native->publish (
+                  projection.discovery_channel_name, topic, encoded.items ());
                 if (submitted != zlink::submit_result_t::ok) {
                     return result_t<void>::failure (
                       runtime::messaging::map_submit_result_error_kind (submitted),
@@ -3037,13 +3355,14 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                     //  PARAMETERS own copies for the frame's lifetime.
                     auto tail = run_spot_publish_fanout (
                       native, encoded.items (), detail::mesh_metadata_codec_t::encode ({}));
-                    detail::observe_task_completion (tail, [node = state->node, topic,
+                    detail::observe_task_completion (tail, [node = state->node,
+                                                            mesh_name = projection.mesh_name, topic,
                                                             packet = submitted_packet_name] (
                                                              const result_t<void> &fanout) {
                         if (fanout || !node)
                             return;
                         detail::report_logical_multicast_failure (
-                          node, node->snapshot.name, topic, packet,
+                          node, mesh_name, topic, packet,
                           fanout.error () != nullptr
                             ? framework_exception_t (fanout.error_kind (), fanout.error ()->what ())
                             : framework_exception_t (framework_error_kind_t::internal_failure,
@@ -3313,10 +3632,17 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
     _state->handler_invokers.push_back (std::move (invoker));
     const auto &descriptor = _state->handlers.back ();
     if (descriptor.kind == spot_handler_kind_t::subscription && !descriptor.topic.empty ()) {
-        if (auto native = _state->native_spot.lock ()) {
-            native->set_subscription (
-              _state->node->snapshot.discovery_channel_name.value_or (_state->node->snapshot.name),
-              descriptor.topic);
+        const auto topic = descriptor.topic;
+        const auto subscription = _state->node
+                                    ? _state->node->lane.run ([&] {
+                                          return std::pair{
+                                            _state->native_spot.lock (),
+                                            _state->node->snapshot.discovery_channel_name.value_or (
+                                              _state->node->snapshot.name)};
+                                      }).get ()
+                                    : std::pair<std::shared_ptr<service::spot_t>, std::string>{};
+        if (subscription.first) {
+            subscription.first->set_subscription (subscription.second, topic);
         }
     }
     return *this;
@@ -3421,17 +3747,18 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                         actor_serial_queue = found->second;
                 }
                 if (!actor_serial_queue) {
-                    std::lock_guard<std::recursive_mutex> node_lock (state->node->mutex);
-                    auto &slot = state->node->actor_execution_queues[actor_execution_key];
-                    if (!slot) {
-                        slot = std::make_shared<runtime::serial_execution_queue_t> (
-                          *framework_worker_executor (state->node),
-                          runtime::serial_execution_queue_options_t{},
-                          runtime::serial_execution_queue_t::error_handler_t{},
-                          runtime::serial_lane_policy_t::actor_delivery ());
-                    }
-                    publish_actor_execution_queue_snapshot_unlocked (*state->node);
-                    actor_serial_queue = slot;
+                    actor_serial_queue = state->node->lane.run ([&] {
+                        auto &slot = state->node->actor_execution_queues[actor_execution_key];
+                        if (!slot) {
+                            slot = std::make_shared<runtime::serial_execution_queue_t> (
+                              *framework_worker_executor_core (state->node),
+                              runtime::serial_execution_queue_options_t{},
+                              runtime::serial_execution_queue_t::error_handler_t{},
+                              runtime::serial_lane_policy_t::actor_delivery ());
+                        }
+                        publish_actor_execution_queue_snapshot_unlocked (*state->node);
+                        return slot;
+                    }).get ();
                 }
                 serial_dispatch = true;
             }
@@ -3977,13 +4304,16 @@ detail::local_spot_create_result_t spot_node_builder_t::create_spot_raw (std::st
 detail::local_spot_create_result_t spot_node_builder_t::create_spot (std::string spot_name,
                                                                      const message_t &request)
 {
-    if (!_state || !_state->channel_runtime || !_state->channel_runtime->serializers) {
+    const auto channel_runtime = _state ? _state->lane.run ([this] {
+        return _state->channel_runtime;
+    }).get () : std::shared_ptr<detail::channel_runtime_state_t>{};
+    if (!channel_runtime || !channel_runtime->serializers) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "spot create requires a serializer registry");
     }
     return create_spot_raw (
       std::move (spot_name),
-      detail::message_to_raw (request, *_state->channel_runtime->serializers));
+      detail::message_to_raw (request, *channel_runtime->serializers));
 }
 
 detail::local_spot_create_result_t spot_node_builder_t::get_or_create_spot (std::string spot_name,
@@ -4003,13 +4333,16 @@ detail::local_spot_create_result_t spot_node_builder_t::get_or_create_spot_raw (
 detail::local_spot_create_result_t spot_node_builder_t::get_or_create_spot (
   std::string spot_name, spot_id_t spot_id, const message_t &request)
 {
-    if (!_state || !_state->channel_runtime || !_state->channel_runtime->serializers) {
+    const auto channel_runtime = _state ? _state->lane.run ([this] {
+        return _state->channel_runtime;
+    }).get () : std::shared_ptr<detail::channel_runtime_state_t>{};
+    if (!channel_runtime || !channel_runtime->serializers) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "spot get or create requires a serializer registry");
     }
     return get_or_create_spot_raw (
       std::move (spot_name), std::move (spot_id),
-      detail::message_to_raw (request, *_state->channel_runtime->serializers));
+      detail::message_to_raw (request, *channel_runtime->serializers));
 }
 
 task_t<std::optional<spot_info_t>> spot_node_builder_t::find_spot (spot_id_t spot_id) const
@@ -4160,11 +4493,18 @@ task_t<spot_create_result_t> spot_create_call_t::submit ()
               detail::result_access_t::failure<spot_create_result_t> (error));
         }
     }
-    if (!_state->node || !_state->node->create_user_spot)
+    if (!_state->node)
         return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
           framework_error_kind_t::not_configured,
           "Spot manager is not connected to a Location runtime"));
-    auto task = _state->node->create_user_spot (
+    const auto create_user_spot = _state->node->lane.run ([&] {
+        return _state->node->create_user_spot;
+    }).get ();
+    if (!create_user_spot)
+        return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+          framework_error_kind_t::not_configured,
+          "Spot manager is not connected to a Location runtime"));
+    auto task = create_user_spot (
       _state->exclusive, _state->spot_id, std::move (_state->stable_type),
       std::move (_state->mesh_name), std::move (_state->request),
       _state->timeout.value_or (std::chrono::seconds (30)));
@@ -4218,11 +4558,16 @@ task_t<std::optional<spot_ref_t>> spot_manager_t::find (spot_id_t spot_id) const
               detail::result_access_t::failure<std::optional<spot_ref_t>> (error));
         }
     }
-    if (!_state || !_state->find_user_spot)
+    if (!_state)
         return task_t<std::optional<spot_ref_t>> (result_t<std::optional<spot_ref_t>>::failure (
           framework_error_kind_t::not_configured,
           "Spot manager is not connected to a Location runtime"));
-    return _state->find_user_spot (std::move (spot_id));
+    const auto find_user_spot = _state->lane.run ([&] { return _state->find_user_spot; }).get ();
+    if (!find_user_spot)
+        return task_t<std::optional<spot_ref_t>> (result_t<std::optional<spot_ref_t>>::failure (
+          framework_error_kind_t::not_configured,
+          "Spot manager is not connected to a Location runtime"));
+    return find_user_spot (std::move (spot_id));
 }
 
 task_t<bool> spot_manager_t::close (spot_ref_t spot)
@@ -4235,11 +4580,16 @@ task_t<bool> spot_manager_t::close (spot_ref_t spot)
             return task_t<bool> (detail::result_access_t::failure<bool> (error));
         }
     }
-    if (!_state || !_state->close_user_spot)
+    if (!_state)
         return task_t<bool> (
           result_t<bool>::failure (framework_error_kind_t::not_configured,
                                    "Spot manager is not connected to a Location runtime"));
-    return _state->close_user_spot (std::move (spot));
+    const auto close_user_spot = _state->lane.run ([&] { return _state->close_user_spot; }).get ();
+    if (!close_user_spot)
+        return task_t<bool> (
+          result_t<bool>::failure (framework_error_kind_t::not_configured,
+                                   "Spot manager is not connected to a Location runtime"));
+    return close_user_spot (std::move (spot));
 }
 
 std::optional<actor_ref_t> spot_manager_t::current_actor_ref (const actor_ref_t &actor_ref) const
@@ -4272,8 +4622,11 @@ task_t<std::optional<zlink::message_t>> spot_manager_t::relay_actor_packet (
   spot_inbound_message_t metadata,
   const runtime::protocol::actor_route_fence_t *admitted_message_follow_target)
 {
-    if (_state->actor_packet_relay) {
-        co_return co_await _state->actor_packet_relay (
+    const auto actor_packet_relay = _state->lane.run ([&] {
+        return _state->actor_packet_relay;
+    }).get ();
+    if (actor_packet_relay) {
+        co_return co_await actor_packet_relay (
           actor_ref, std::move (actor_context), message_kind, packet_name, message, services,
           serializers, std::move (metadata), admitted_message_follow_target);
     }
@@ -4316,11 +4669,9 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
           framework_error_kind_t::protocol_error, "logical multicast topic must not be empty"));
     }
 
-    std::shared_ptr<service::mesh_node_t> native_node;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_manager._state->mutex);
-        native_node = _manager._state->native_node.lock ();
-    }
+    auto native_node = _manager._state->lane.run ([&] {
+        return _manager._state->native_node.lock ();
+    }).get ();
     if (!native_node) {
         return publish_call_t (result_t<void>::failure (
           framework_error_kind_t::unavailable, "logical multicast route mesh is not connected"));
@@ -4385,116 +4736,103 @@ spot_manager_t spot_node_runtime_t::manager () const
 }
 
 result_t<spot_context_t>
-spot_node_runtime_t::actor_join_context_unlocked (spot_id_t spot_id,
-                                                  const zlink::message_t &request)
+spot_node_runtime_t::actor_join_context (spot_id_t spot_id,
+                                         const zlink::message_t &request)
 {
-    auto context = find_context (spot_id);
-    if (!context || !context->_state->spot_instance) {
+    struct selection_t
+    {
+        std::optional<spot_context_t> context;
         std::optional<std::string> dynamic_spot_name;
-        for (const auto &[spot_name, _] : _state->spot_factories) {
-            if (_state->snapshot.entry_spot_name
-                && spot_name == *_state->snapshot.entry_spot_name) {
-                continue;
+    };
+    auto select = [&] {
+        return _state->lane.run ([&] {
+            selection_t result;
+            auto context = find_context_core (spot_id);
+            if (context && context->_state->node.get () == _state.get ()
+                && !context->_state->closed && context->_state->close_reservation == 0
+                && context->_state->spot_instance) {
+                result.context.emplace (std::move (*context));
+                return result;
             }
-            if (dynamic_spot_name) {
-                dynamic_spot_name.reset ();
-                break;
+            for (const auto &[spot_name, _] : _state->spot_factories) {
+                if (_state->snapshot.entry_spot_name
+                    && spot_name == *_state->snapshot.entry_spot_name) {
+                    continue;
+                }
+                if (result.dynamic_spot_name) {
+                    result.dynamic_spot_name.reset ();
+                    break;
+                }
+                result.dynamic_spot_name = spot_name;
             }
-            dynamic_spot_name = spot_name;
-        }
-        if (dynamic_spot_name) {
-            (void) get_or_create_spot (*dynamic_spot_name, spot_id, request);
-            auto refreshed = find_context (spot_id);
-            context.reset ();
-            if (refreshed)
-                context.emplace (std::move (*refreshed));
-        }
+            return result;
+        }).get ();
+    };
+    auto selected = select ();
+    if (!selected.context && selected.dynamic_spot_name) {
+        (void) get_or_create_spot (*selected.dynamic_spot_name, spot_id, request);
+        auto refreshed = select ();
+        selected.context.reset ();
+        if (refreshed.context)
+            selected.context.emplace (std::move (*refreshed.context));
     }
-    if (!context || !context->_state->spot_instance) {
+    auto &context = selected.context;
+    if (!context) {
         return result_t<spot_context_t>::failure (framework_error_kind_t::not_found,
                                                   "target spot is not registered");
     }
     return result_t<spot_context_t>::success (std::move (*context));
 }
 
-result_t<std::reference_wrapper<spot_node_builder_state_t::actor_factory_registration_t>>
-spot_node_runtime_t::actor_factory_unlocked (const actor_ref_t &actor_ref) const
+result_t<spot_node_builder_state_t::actor_factory_registration_t>
+spot_node_runtime_t::actor_factory (const actor_ref_t &actor_ref) const
 {
-    const auto found = _state->actor_factories.find (
-      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
-    if (found == _state->actor_factories.end ()) {
-        return result_t<
-          std::reference_wrapper<spot_node_builder_state_t::actor_factory_registration_t>>::
-          failure (framework_error_kind_t::not_found, "actor factory is not registered");
+    std::optional<spot_node_builder_state_t::actor_factory_registration_t> registration;
+    _state->lane.run ([&] {
+        const auto found = _state->actor_factories.find (
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
+        if (found != _state->actor_factories.end ())
+            registration.emplace (found->second);
+    }).get ();
+    if (!registration) {
+        return result_t<spot_node_builder_state_t::actor_factory_registration_t>::failure (
+          framework_error_kind_t::not_found, "actor factory is not registered");
     }
-    return result_t<std::reference_wrapper<
-      spot_node_builder_state_t::actor_factory_registration_t>>::success (found->second);
+    return result_t<spot_node_builder_state_t::actor_factory_registration_t>::success (
+      std::move (*registration));
 }
 
-result_t<std::reference_wrapper<spot_actor_admission_callbacks_t>>
-spot_node_runtime_t::actor_admission_unlocked (spot_context_t &context,
-                                               std::type_index actor_type,
-                                               spot_id_t spot_id,
-                                               const actor_ref_t &actor_ref)
+result_t<spot_actor_admission_callbacks_t>
+spot_node_runtime_t::actor_admission (spot_context_t &context,
+                                      std::type_index actor_type,
+                                      spot_id_t spot_id,
+                                      const actor_ref_t &actor_ref)
 {
-    const auto admission = context._state->actor_admissions.find (actor_type);
-    if (admission == context._state->actor_admissions.end () || !admission->second.join) {
+    std::optional<spot_actor_admission_callbacks_t> selected;
+    _state->lane.run ([&] {
+        const auto current = find_context_core (context.spot_id ());
+        if (!current || current->_state.get () != context._state.get ()
+            || context._state->node.get () != _state.get () || context._state->closed
+            || context._state->close_reservation != 0 || !context._state->spot_instance) {
+            return;
+        }
+        const auto admission = context._state->actor_admissions.find (actor_type);
+        if (admission != context._state->actor_admissions.end () && admission->second.join)
+            selected.emplace (admission->second);
+    }).get ();
+    if (!selected) {
         report_spot_dispatch_error (
           _state, dispatch_error_surface_t::spot_actor, dispatch_message_kind_t::actor_request,
           dispatch_error_reason_t::handler_missing, dispatch_error_action_t::reply_error,
           "actor.join", std::nullopt, std::string (spot_id),
           std::string (actor_ref.actor_id ().value ()));
-        return result_t<std::reference_wrapper<spot_actor_admission_callbacks_t>>::failure (
+        return result_t<spot_actor_admission_callbacks_t>::failure (
           framework_error_kind_t::not_found, "spot actor join callback is not registered");
     }
-    return result_t<std::reference_wrapper<spot_actor_admission_callbacks_t>>::success (
-      admission->second);
+    return result_t<spot_actor_admission_callbacks_t>::success (std::move (*selected));
 }
 
-void spot_node_runtime_t::leave_previous_actor_route (
-  const std::string &key,
-  std::type_index actor_type,
-  void *actor,
-  std::unique_lock<std::recursive_mutex> &node_lock)
-{
-    const auto previous = _state->actor_spot_ids.find (key);
-    if (previous == _state->actor_spot_ids.end ()) {
-        return;
-    }
-    if (auto previous_context = find_context (previous->second)) {
-        auto &previous_state = *previous_context->_state;
-        if (const auto previous_admission = previous_state.actor_admissions.find (actor_type);
-            previous_admission != previous_state.actor_admissions.end ()
-            && previous_admission->second.on_leave_actor && previous_state.spot_instance) {
-            // The leave callback is user code on the spot serial queue. It may call back
-            // into the framework (sends, joins) that need the node mutex from the serial
-            // thread, so the node mutex must not be held across this wait.
-            node_lock.unlock ();
-            result_t<void> completed = result_t<void>::success ();
-            try {
-                completed = previous_state.run_serial_task ("spot-actor-leave", [&] {
-                    return previous_admission->second.on_leave_actor (
-                      previous_state.spot_instance.get (), actor);
-                });
-            }
-            catch (...) {
-                node_lock.lock ();
-                throw;
-            }
-            node_lock.lock ();
-            if (!completed) {
-                throw framework_exception_t (completed.error_kind (),
-                                             completed.error () != nullptr
-                                               ? completed.error ()->what ()
-                                               : "spot actor leave callback failed");
-            }
-        }
-        decrement_actor_count_unlocked (previous_state);
-    }
-    erase_actor_route_unlocked (*_state, key);
-}
-
-void spot_node_runtime_t::commit_accepted_actor_join_unlocked (
+void spot_node_runtime_t::commit_accepted_actor_join (
   const std::string &key,
   spot_context_t &context,
   const actor_ref_t &committed,
@@ -4507,32 +4845,74 @@ void spot_node_runtime_t::commit_accepted_actor_join_unlocked (
   bool &authority_committed)
 {
     authority_committed = false;
-    std::optional<spot_context_t> previous_context;
-    if (const auto previous = _state->actor_spot_ids.find (key);
-        previous != _state->actor_spot_ids.end ()) {
-        auto found_previous = find_context (previous->second);
-        if (found_previous)
-            previous_context.emplace (std::move (*found_previous));
+    struct commit_plan_t
+    {
+        std::optional<spot_context_t> previous_context;
+        std::shared_ptr<service::mesh_node_t> native_node;
+        std::shared_ptr<void> target_spot_instance;
+        serializer_registry_t *serializers = nullptr;
+        std::string node_rid;
+        spot_id_t target_spot_id;
+        bool create_entry_actor = false;
+        bool create_native_actor = false;
+        bool valid = false;
+    };
+    auto &target_state = *context._state;
+    const auto plan = _state->lane.run ([&] {
+        commit_plan_t result;
+        const auto target = find_context_core (context.spot_id ());
+        if (!target || target->_state.get () != context._state.get ()
+            || target_state.node.get () != _state.get () || target_state.closed
+            || target_state.close_reservation != 0 || !target_state.spot_instance) {
+            return result;
+        }
+        if (const auto previous = _state->actor_spot_ids.find (key);
+            previous != _state->actor_spot_ids.end ()) {
+            auto previous_context = find_context_core (previous->second);
+            if (previous_context)
+                result.previous_context.emplace (std::move (*previous_context));
+        }
+        result.native_node = _state->native_node.lock ();
+        result.target_spot_instance = target_state.spot_instance;
+        result.serializers =
+          target_state.channel_runtime ? target_state.channel_runtime->serializers : nullptr;
+        result.node_rid = detail::effective_spot_node_rid (_state->snapshot);
+        result.target_spot_id = target_state.spot_id;
+        result.create_entry_actor =
+          create_entry_actor && target_state.is_entry_spot ()
+          && !_state->actor_created_keys.contains (key) && admission.on_create_actor;
+        result.create_native_actor =
+          result.native_node && !_state->native_actors.contains (key)
+          && !_state->mesh_runtime_owned_native_actor_ids.contains (
+            std::string (committed.actor_id ().value ()));
+        result.valid = true;
+        return result;
+    }).get ();
+    if (!plan.valid) {
+        throw framework_exception_t (framework_error_kind_t::not_found,
+                                     "target spot is not registered");
     }
     const auto caller_owns_source_turn =
-      previous_context && previous_context->_state->owns_current_serial_turn ();
-    auto &target_state = *context._state;
+      plan.previous_context && plan.previous_context->_state->owns_current_serial_turn ();
     bool created_entry_actor = false;
-    if (create_entry_actor && target_state.is_entry_spot ()
-        && !_state->actor_created_keys.contains (key) && admission.on_create_actor) {
-        auto &serializers = *target_state.channel_runtime->serializers;
+    if (plan.create_entry_actor) {
+        if (!plan.serializers) {
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "spot create actor requires a serializer registry");
+        }
         result_t<actor_create_response_t> create_result =
           result_t<actor_create_response_t>::failure (
             framework_error_kind_t::internal_failure,
             "Entry Spot actor creation callback did not complete");
         auto create_actor = [&] {
             create_result = admission
-                              .on_create_actor (target_state.spot_instance.get (), actor,
-                                                create_request, serializers)
+                              .on_create_actor (plan.target_spot_instance.get (), actor,
+                                                create_request, *plan.serializers)
                               .result ();
         };
         const bool caller_owns_target_turn =
-          caller_owns_source_turn && previous_context->_state.get () == context._state.get ();
+          caller_owns_source_turn
+          && plan.previous_context->_state.get () == context._state.get ();
         if (caller_owns_target_turn) {
             create_actor ();
         } else if (!target_state.run_serial_sync ("spot-actor-create", create_actor)) {
@@ -4547,8 +4927,21 @@ void spot_node_runtime_t::commit_accepted_actor_join_unlocked (
         if (!create_result.value ().accepted)
             throw framework_exception_t (framework_error_kind_t::rejected,
                                          "Entry Spot rejected Actor creation");
-        _state->actor_created_keys.insert (key);
-        created_entry_actor = true;
+        created_entry_actor = _state->lane.run ([&] {
+            const auto target = find_context_core (plan.target_spot_id);
+            if (!target || target->_state.get () != context._state.get ()
+                || target_state.node.get () != _state.get () || target_state.closed
+                || target_state.close_reservation != 0
+                || target_state.spot_instance.get () != plan.target_spot_instance.get ()) {
+                return false;
+            }
+            _state->actor_created_keys.insert (key);
+            return true;
+        }).get ();
+        if (!created_entry_actor) {
+            throw framework_exception_t (framework_error_kind_t::not_found,
+                                         "target spot is not registered");
+        }
     }
     /*
      * Publish membership before lifecycle callbacks. Application callbacks
@@ -4556,7 +4949,7 @@ void spot_node_runtime_t::commit_accepted_actor_join_unlocked (
      * roll authority back to the previous owner.
      */
     const auto location_updated =
-      update_actor_location_after_move (*_state, committed, target_state, false);
+      update_actor_location_after_move (_state, committed, target_state, false);
     if (!location_updated) {
         throw framework_exception_t (location_updated.error_kind (),
                                      location_updated.error ()
@@ -4565,26 +4958,65 @@ void spot_node_runtime_t::commit_accepted_actor_join_unlocked (
     }
     authority_committed = true;
 
-    if (previous_context) {
-        decrement_actor_count_unlocked (*previous_context->_state);
+    std::unique_ptr<service::actor_t> native_actor;
+    if (plan.create_native_actor) {
+        native_actor = std::make_unique<service::actor_t> (plan.native_node->create_actor (
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (committed)),
+          std::string (committed.actor_id ().value ())));
     }
-    erase_actor_route_unlocked (*_state, key);
-    _state->destroyed_actor_keys.erase (key);
-    if (auto native = _state->native_node.lock ();
-        native && !_state->native_actors.contains (key)
-        && !_state->mesh_runtime_owned_native_actor_ids.contains (
-          std::string (committed.actor_id ().value ()))) {
-        _state->native_actors.emplace (
-          key,
-          std::make_unique<service::actor_t> (native->create_actor (
-            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (committed)),
-            std::string (committed.actor_id ().value ()))));
+    std::function<result_t<void> (const actor_ref_t &)> update_actor_registry_ref;
+    struct leave_projection_t
+    {
+        std::shared_ptr<spot_context_state_t> context;
+        std::shared_ptr<void> spot_instance;
+        std::function<task_t<void> (void *, void *)> callback;
+    } leave;
+    const auto route_committed = _state->lane.run ([&] {
+        const auto target = find_context_core (plan.target_spot_id);
+        if (!target || target->_state.get () != context._state.get ()
+            || target_state.node.get () != _state.get () || target_state.closed
+            || target_state.close_reservation != 0
+            || target_state.spot_instance.get () != plan.target_spot_instance.get ()) {
+            return false;
+        }
+        std::optional<spot_context_t> previous_context;
+        if (const auto previous = _state->actor_spot_ids.find (key);
+            previous != _state->actor_spot_ids.end ()) {
+            auto selected = find_context_core (previous->second);
+            if (selected)
+                previous_context.emplace (std::move (*selected));
+        }
+        if (previous_context)
+            decrement_actor_count_unlocked (*previous_context->_state);
+        erase_actor_route_unlocked (*_state, key);
+        _state->destroyed_actor_keys.erase (key);
+        if (native_actor && !_state->native_actors.contains (key)
+            && !_state->mesh_runtime_owned_native_actor_ids.contains (
+              std::string (committed.actor_id ().value ()))) {
+            _state->native_actors.emplace (key, std::move (native_actor));
+        }
+        detail::record_actor_context_route_unlocked (*_state, key, plan.node_rid, target_state,
+                                                     committed.object_generation ());
+        update_actor_registry_ref = _state->update_actor_registry_ref;
+        if (previous_context) {
+            const auto previous_admission =
+              previous_context->_state->actor_admissions.find (actor_type);
+            if (previous_admission != previous_context->_state->actor_admissions.end ()
+                && previous_admission->second.on_leave_actor
+                && previous_context->_state->spot_instance) {
+                leave.context = previous_context->_state;
+                leave.spot_instance = previous_context->_state->spot_instance;
+                leave.callback = previous_admission->second.on_leave_actor;
+            }
+        }
+        return true;
+    }).get ();
+    if (!route_committed) {
+        throw framework_exception_t (framework_error_kind_t::not_found,
+                                     "target spot is not registered");
     }
-    detail::record_actor_context_route_unlocked (*_state, key,
-                                                 detail::effective_spot_node_rid (_state->snapshot),
-                                                 target_state, committed.object_generation ());
-    if (_state->update_actor_registry_ref) {
-        const auto updated = _state->update_actor_registry_ref (committed);
+    if (update_actor_registry_ref) {
+        const auto updated = update_actor_registry_ref (committed);
         if (!updated) {
             throw framework_exception_t (updated.error_kind (), updated.error ()
                                                                   ? updated.error ()->what ()
@@ -4599,7 +5031,7 @@ void spot_node_runtime_t::commit_accepted_actor_join_unlocked (
 
     if (!created_entry_actor && admission.on_actor_joined) {
         const auto completed = target_state.run_serial_task ("spot-actor-joined", [&] {
-            return admission.on_actor_joined (target_state.spot_instance.get (), actor);
+            return admission.on_actor_joined (plan.target_spot_instance.get (), actor);
         });
         if (!completed) {
             throw framework_exception_t (completed.error_kind (),
@@ -4608,21 +5040,15 @@ void spot_node_runtime_t::commit_accepted_actor_join_unlocked (
                                            : "spot actor joined callback failed");
         }
     }
-    if (previous_context) {
-        auto &previous_state = *previous_context->_state;
-        if (const auto previous_admission = previous_state.actor_admissions.find (actor_type);
-            previous_admission != previous_state.actor_admissions.end ()
-            && previous_admission->second.on_leave_actor && previous_state.spot_instance) {
-            const auto completed = previous_state.run_serial_task ("spot-actor-leave", [&] {
-                return previous_admission->second.on_leave_actor (
-                  previous_state.spot_instance.get (), actor);
-            });
-            if (!completed) {
-                throw framework_exception_t (completed.error_kind (),
-                                             completed.error () != nullptr
-                                               ? completed.error ()->what ()
-                                               : "spot actor leave callback failed");
-            }
+    if (leave.callback) {
+        const auto completed = leave.context->run_serial_task ("spot-actor-leave", [&] {
+            return leave.callback (leave.spot_instance.get (), actor);
+        });
+        if (!completed) {
+            throw framework_exception_t (completed.error_kind (),
+                                         completed.error () != nullptr
+                                           ? completed.error ()->what ()
+                                           : "spot actor leave callback failed");
         }
     }
 }
@@ -4642,8 +5068,7 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
     std::shared_ptr<spot_context_state_t> context_state;
     std::shared_ptr<void> actor_instance;
     std::type_index actor_type{typeid (void)};
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    _state->lane.run ([&] {
         if (const auto local = _state->actor_spot_ids.find (key);
             local != _state->actor_spot_ids.end ()) {
             location = local->second;
@@ -4656,14 +5081,14 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
         const auto actor = _state->actor_instances.find (key);
         if (location && factory != _state->actor_factories.end ()
             && actor != _state->actor_instances.end () && actor->second) {
-            const auto context = find_context (*location);
+            const auto context = find_context_core (*location);
             if (context && context->_state->spot_instance) {
                 context_state = context->_state;
                 actor_instance = actor->second;
                 actor_type = factory->second.actor_type;
             }
         }
-    }
+    }).get ();
 
     auto terminal_failure = [node = _state, actor_ref,
                              transfer_id] (handoff_packet_t &packet, framework_error_kind_t kind,
@@ -4801,12 +5226,13 @@ void spot_node_runtime_t::replay_actor_handoff_until_move_closed (const actor_re
     const auto key = actor_key (actor_ref);
     const auto replay_id = _state->actor_transfer_coordinator.transfer_id (key).value_or (
       transfer_id.empty () ? key : transfer_id);
+    auto root_services = _state->lane.run ([&] { return _state->root_services; }).get ();
     for (;;) {
         auto replay = _state->actor_transfer_coordinator.finish_move_replay (key);
         if (!replay.backlog.empty ()) {
-            if (_state->root_services) {
+            if (root_services) {
                 enqueue_actor_handoff_replay (actor_ref, std::move (replay.backlog),
-                                              *_state->root_services, replay_id);
+                                              *root_services, replay_id);
             } else if (actor_transfer_marker_enabled ()) {
                 emit_actor_transfer_marker ("handoff_replay_unavailable", actor_ref, replay_id);
             }
@@ -4829,30 +5255,68 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                       "actor ref is empty");
     }
-    auto context = actor_join_context_unlocked (spot_id, request);
+    auto context = actor_join_context (spot_id, request);
     if (!context) {
         return detail::propagate_failure<actor_join_reply_t> (context,
                                                               "target spot is not registered");
     }
-    auto actor_factory = actor_factory_unlocked (actor_ref);
-    if (!actor_factory) {
-        return detail::propagate_failure<actor_join_reply_t> (actor_factory,
+    auto actor_factory_result = actor_factory (actor_ref);
+    if (!actor_factory_result) {
+        return detail::propagate_failure<actor_join_reply_t> (actor_factory_result,
                                                               "actor factory failed");
     }
+    auto &registration = actor_factory_result.value ();
     const auto key = actor_key (actor_ref);
+    struct join_projection_t
+    {
+        std::shared_ptr<void> spot_instance;
+        serializer_registry_t *serializers = nullptr;
+        std::string mesh_name;
+        std::string node_rid;
+        spot_id_t source_spot_id;
+        std::chrono::milliseconds message_follow_duration{0};
+        bool has_root_services = false;
+        bool valid = false;
+    };
+    const auto projection = _state->lane.run ([&] {
+        join_projection_t result;
+        const auto selected = find_context_core (spot_id);
+        if (!selected || selected->_state.get () != context.value ()._state.get ()
+            || selected->_state->node.get () != _state.get () || selected->_state->closed
+            || selected->_state->close_reservation != 0 || !selected->_state->spot_instance) {
+            return result;
+        }
+        result.spot_instance = selected->_state->spot_instance;
+        result.serializers = selected->_state->channel_runtime
+                               ? selected->_state->channel_runtime->serializers
+                               : nullptr;
+        result.mesh_name = selected->_state->mesh_name;
+        result.node_rid = detail::effective_spot_node_rid (_state->snapshot);
+        if (const auto source = _state->actor_spot_ids.find (key);
+            source != _state->actor_spot_ids.end ()) {
+            result.source_spot_id = source->second;
+        }
+        result.message_follow_duration = _state->message_follow_duration;
+        result.has_root_services = _state->root_services.has_value ();
+        result.valid = true;
+        return result;
+    }).get ();
+    if (!projection.valid) {
+        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                      "target spot is not registered");
+    }
     const auto committed = ::zlink::framework::detail::actor_ref_access_t::make (
-      node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
+      node_rid_t::from_string (projection.node_rid),
       std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
       std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
     /* Registration is double-checked: an already-registered actor is taken
-     * under the node mutex without touching the factory, and only a first
-     * registration constructs — outside the mutex, because the factory is user
-     * code and must not be able to invert lock order. The map entry and its
-     * identity index entry are then installed together under the mutex, so a
+     * in one node state turn without touching the factory, and only a first
+     * registration constructs outside the lane because the factory is user
+     * code. The map entry and its identity index entry are then installed
+     * together in one turn, so a
      * concurrent destroy never sees one without the other. */
     std::shared_ptr<void> actor_instance = registered_actor_instance (actor_ref, key);
     if (!actor_instance) {
-        auto &registration = actor_factory.value ().get ();
         std::shared_ptr<void> created_instance;
         if (registration.create_context_instance) {
             if (!actor_context._state) {
@@ -4866,7 +5330,7 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
                   "Actor materialization Context has no serializer registry");
             }
             auto committed_context = actor_context_t (actor_context._state, committed, 0,
-                                                      context.value ()._state->mesh_name);
+                                                      projection.mesh_name);
             created_instance = registration.create_context_instance (std::move (committed_context));
         } else {
             created_instance =
@@ -4883,23 +5347,20 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
         }
     }
     if (actor_snapshot) {
-        auto &serializers = *context.value ()._state->channel_runtime->serializers;
-        actor_factory.value ().get ().deserialize_instance (actor_instance.get (), *actor_snapshot,
-                                                            serializers);
+        registration.deserialize_instance (actor_instance.get (), *actor_snapshot,
+                                           *projection.serializers);
     }
-    auto admission = actor_admission_unlocked (
-      context.value (), actor_factory.value ().get ().actor_type, spot_id, actor_ref);
+    auto admission = actor_admission (
+      context.value (), registration.actor_type, spot_id, actor_ref);
     if (!admission) {
         return detail::propagate_failure<actor_join_reply_t> (admission, "actor admission failed");
     }
 
-    const auto source_spot = _state->actor_spot_ids.find (key);
-    const auto source_spot_id =
-      source_spot == _state->actor_spot_ids.end () ? spot_id_t{} : source_spot->second;
-    auto &serializers = *context.value ()._state->channel_runtime->serializers;
+    auto &admission_callbacks = admission.value ();
+    auto &serializers = *projection.serializers;
     const auto response =
-      admission.value ().get ().join (context.value ()._state->spot_instance.get (),
-                                      actor_ref.actor_id ().value (), request, serializers);
+      admission_callbacks.join (projection.spot_instance.get (), actor_ref.actor_id ().value (),
+                                request, serializers);
     if (!response.accepted) {
         return result_t<actor_join_reply_t>::success (
           actor_join_reply_t{1, actor_ref, framework_reply_or_empty (response.reply, serializers)});
@@ -4911,7 +5372,8 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
     }
     bool claimed_location = false;
     const auto location_claim = claim_pending_actor_location_before_activation (
-      _state, actor_ref, source_spot_id, committed, *context.value ()._state, claimed_location);
+      _state, actor_ref, projection.source_spot_id, committed, *context.value ()._state,
+      claimed_location);
     if (!location_claim) {
         replay_actor_handoff_until_move_closed (actor_ref, key);
         return result_t<actor_join_reply_t>::failure (
@@ -4920,32 +5382,32 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
     }
     bool authority_committed = false;
     auto fail_local_commit = [&] {
-        if (!authority_committed && (claimed_location || source_spot_id.empty ())) {
-            release_actor_location (*_state, committed);
+        if (!authority_committed
+            && (claimed_location || projection.source_spot_id.empty ())) {
+            release_actor_location (_state, committed);
         }
         if (authority_committed) {
             _state->actor_transfer_coordinator.mark_reconcile (key,
-                                                               _state->message_follow_duration);
+                                                               projection.message_follow_duration);
             replay_actor_handoff_until_move_closed (committed, key);
         } else {
             replay_actor_handoff_until_move_closed (actor_ref, key);
         }
     };
     try {
-        if (!actor_factory.value ().get ().create_context_instance) {
-            actor_factory.value ().get ().configure_instance (actor_instance.get (), committed,
-                                                              nullptr);
+        if (!registration.create_context_instance) {
+            registration.configure_instance (actor_instance.get (), committed, nullptr);
         }
-        commit_accepted_actor_join_unlocked (
-          key, context.value (), committed, actor_factory.value ().get ().actor_type,
-          actor_instance.get (), admission.value ().get (), true, request,
+        commit_accepted_actor_join (
+          key, context.value (), committed, registration.actor_type,
+          actor_instance.get (), admission_callbacks, true, request,
           /* The operation id string only feeds the actor-transfer marker —
            * do not assemble it when the marker gate is off (spec 26 §4). */
           !actor_transfer_marker_enabled () || (operation_id_high == 0 && operation_id_low == 0)
             ? std::string{}
             : std::to_string (operation_id_high) + ":" + std::to_string (operation_id_low),
           authority_committed);
-        if (_state->root_services) {
+        if (projection.has_root_services) {
             const auto state = _state;
             if (!framework_worker_executor (_state)->try_submit_internal ([state, committed, key] {
                     spot_node_runtime_t (state).replay_actor_handoff_until_move_closed (committed,
@@ -4988,7 +5450,8 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
-    if (_state->drain_flag && _state->drain_flag->load (std::memory_order_acquire)) {
+    auto drain_flag = _state->lane.run ([&] { return _state->drain_flag; }).get ();
+    if (drain_flag && drain_flag->load (std::memory_order_acquire)) {
         return result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::rejected, "spot node is draining and rejects new actor joins");
     }
@@ -4996,32 +5459,61 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                       "actor ref is empty");
     }
-    auto context = actor_join_context_unlocked (spot_id, request);
+    auto context = actor_join_context (spot_id, request);
     if (!context) {
         return detail::propagate_failure<actor_join_reply_t> (context,
                                                               "target spot is not registered");
     }
 
-    auto actor_factory = actor_factory_unlocked (actor_ref);
-    if (!actor_factory) {
-        return detail::propagate_failure<actor_join_reply_t> (actor_factory,
+    auto actor_factory_result = actor_factory (actor_ref);
+    if (!actor_factory_result) {
+        return detail::propagate_failure<actor_join_reply_t> (actor_factory_result,
                                                               "actor factory failed");
     }
 
+    auto &registration = actor_factory_result.value ();
     const auto key = actor_key (actor_ref);
+    struct remote_join_projection_t
+    {
+        std::shared_ptr<void> spot_instance;
+        serializer_registry_t *serializers = nullptr;
+        std::string mesh_name;
+        std::string node_rid;
+        bool valid = false;
+    };
+    const auto projection = _state->lane.run ([&] {
+        remote_join_projection_t result;
+        const auto selected = find_context_core (spot_id);
+        if (!selected || selected->_state.get () != context.value ()._state.get ()
+            || selected->_state->node.get () != _state.get () || selected->_state->closed
+            || selected->_state->close_reservation != 0 || !selected->_state->spot_instance) {
+            return result;
+        }
+        result.spot_instance = selected->_state->spot_instance;
+        result.serializers = selected->_state->channel_runtime
+                               ? selected->_state->channel_runtime->serializers
+                               : nullptr;
+        result.mesh_name = selected->_state->mesh_name;
+        result.node_rid = detail::effective_spot_node_rid (_state->snapshot);
+        result.valid = true;
+        return result;
+    }).get ();
+    if (!projection.valid) {
+        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                      "target spot is not registered");
+    }
     const auto committed = ::zlink::framework::detail::actor_ref_access_t::make (
-      node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
+      node_rid_t::from_string (projection.node_rid),
       std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
       std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
     /* Registration is double-checked: an already-registered actor is taken
-     * under the node mutex without touching the factory, and only a first
-     * registration constructs — outside the mutex, because the factory is user
-     * code and must not be able to invert lock order. The map entry and its
-     * identity index entry are then installed together under the mutex, so a
+     * in one node state turn without touching the factory, and only a first
+     * registration constructs outside the lane because the factory is user
+     * code. The map entry and its identity index entry are then installed
+     * together in one turn, so a
      * concurrent destroy never sees one without the other. */
     std::shared_ptr<void> actor_instance = registered_actor_instance (actor_ref, key);
     if (!actor_instance) {
-        auto &registration = actor_factory.value ().get ();
         std::shared_ptr<void> created_instance;
         if (registration.create_context_instance) {
             if (!actor_context._state) {
@@ -5030,7 +5522,7 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
                   "Actor factory requires a Framework Actor context");
             }
             auto committed_context = actor_context_t (actor_context._state, committed, 0,
-                                                      context.value ()._state->mesh_name);
+                                                      projection.mesh_name);
             created_instance = registration.create_context_instance (std::move (committed_context));
         } else {
             created_instance =
@@ -5046,27 +5538,26 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
                                                           "actor has been destroyed");
         }
     }
-    if (!actor_factory.value ().get ().create_context_instance) {
+    if (!registration.create_context_instance) {
         auto committed_context =
-          actor_context_t (actor_context._state, committed, 0, context.value ()._state->mesh_name);
-        actor_factory.value ().get ().configure_instance (actor_instance.get (), committed,
-                                                          &committed_context);
+          actor_context_t (actor_context._state, committed, 0, projection.mesh_name);
+        registration.configure_instance (actor_instance.get (), committed, &committed_context);
     }
 
-    auto admission = actor_admission_unlocked (
-      context.value (), actor_factory.value ().get ().actor_type, spot_id, actor_ref);
+    auto admission = actor_admission (
+      context.value (), registration.actor_type, spot_id, actor_ref);
     if (!admission) {
         return detail::propagate_failure<actor_join_reply_t> (admission, "actor admission failed");
     }
 
-    auto &serializers = *context.value ()._state->channel_runtime->serializers;
+    auto &admission_callbacks = admission.value ();
+    auto &serializers = *projection.serializers;
     const auto response =
-      admission.value ().get ().join (context.value ()._state->spot_instance.get (),
-                                      actor_ref.actor_id ().value (), request, serializers);
+      admission_callbacks.join (projection.spot_instance.get (), actor_ref.actor_id ().value (),
+                                request, serializers);
     if (!response.accepted) {
-        if (!actor_factory.value ().get ().create_context_instance) {
-            actor_factory.value ().get ().configure_instance (actor_instance.get (), actor_ref,
-                                                              &actor_context);
+        if (!registration.create_context_instance) {
+            registration.configure_instance (actor_instance.get (), actor_ref, &actor_context);
         }
         return result_t<actor_join_reply_t>::success (
           actor_join_reply_t{1, actor_ref, framework_reply_or_empty (response.reply, serializers)});
@@ -5082,14 +5573,13 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
     }
     bool authority_committed = false;
     try {
-        commit_accepted_actor_join_unlocked (key, context.value (), committed,
-                                             actor_factory.value ().get ().actor_type,
-                                             actor_instance.get (), admission.value ().get (),
-                                             false, request, key, authority_committed);
+        commit_accepted_actor_join (key, context.value (), committed, registration.actor_type,
+                                    actor_instance.get (), admission_callbacks, false, request, key,
+                                    authority_committed);
     }
     catch (...) {
         if (claimed_location && !authority_committed) {
-            release_actor_location (*_state, committed);
+            release_actor_location (_state, committed);
         }
         throw;
     }
@@ -5114,8 +5604,8 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
     }
     std::size_t removed = expired.size ();
     std::vector<spot_node_builder_state_t::pending_remote_source_cleanup_t> cleaned_sources;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    std::vector<actor_ref_t> released_sources;
+    _state->lane.run ([&] {
         for (auto found = _state->pending_remote_source_cleanups.begin ();
              found != _state->pending_remote_source_cleanups.end ();) {
             if (found->not_before > now) {
@@ -5156,7 +5646,7 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
                   *_state,
                   ::zlink::framework::detail::actor_ref_access_t::actor_type (found->source_actor),
                   found->source_actor.actor_id ().value ());
-                release_actor_location (*_state, found->source_actor);
+                released_sources.push_back (found->source_actor);
                 if (current_fence != _state->actor_authority_fences.end ()
                     && current_fence->second == found->source_fence) {
                     _state->actor_authority_fences.erase (current_fence);
@@ -5166,7 +5656,9 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
             found = _state->pending_remote_source_cleanups.erase (found);
             ++removed;
         }
-    }
+    }).get ();
+    for (const auto &actor : released_sources)
+        release_actor_location (_state, actor);
     if (actor_transfer_marker_enabled ()) {
         for (const auto &cleanup : cleaned_sources) {
             emit_actor_transfer_marker ("source_cleanup", cleanup.source_actor, cleanup.transfer_id,
@@ -5175,31 +5667,36 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
     }
     const auto removed_message_follow_routes =
       _state->actor_transfer_coordinator.remove_expired_message_follow (now);
+    std::vector<std::pair<actor_ref_t, std::string>> removed_route_markers;
     if (!removed_message_follow_routes.empty ()) {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-        for (const auto &entry : removed_message_follow_routes) {
-            const auto &key = entry.actor_key;
-            // Message Follow ended (§10.4-3): remove the retained route. The
-            // current local authority and any other retained source fences
-            // remain independent from this expired source route.
-            if (!_state->actor_authority_fences.contains (key)
-                && !_state->actor_transfer_coordinator.has_message_follow_route (key)) {
-                _state->actor_routes.erase (key);
-                _state->native_actors.erase (key);
-            }
-            const auto separator = key.find (':');
-            if (separator != std::string::npos) {
-                const auto actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
-                  node_rid (), key.substr (0, separator), key.substr (separator + 1),
-                  entry.source_fence.object_generation);
-                if (actor_transfer_marker_enabled ()) {
-                    emit_actor_transfer_marker ("message_follow_route_removed", actor_ref,
-                                                entry.transfer_id.empty () ? key
-                                                                           : entry.transfer_id);
+        _state->lane.run ([&] {
+            const auto local_node_rid =
+              node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot));
+            for (const auto &entry : removed_message_follow_routes) {
+                const auto &key = entry.actor_key;
+                // Message Follow ended (§10.4-3): remove the retained route. The
+                // current local authority and any other retained source fences
+                // remain independent from this expired source route.
+                if (!_state->actor_authority_fences.contains (key)
+                    && !_state->actor_transfer_coordinator.has_message_follow_route (key)) {
+                    _state->actor_routes.erase (key);
+                    _state->native_actors.erase (key);
                 }
+                const auto separator = key.find (':');
+                if (separator != std::string::npos) {
+                    removed_route_markers.emplace_back (
+                      ::zlink::framework::detail::actor_ref_access_t::make (
+                        local_node_rid, key.substr (0, separator), key.substr (separator + 1),
+                        entry.source_fence.object_generation),
+                      entry.transfer_id.empty () ? key : entry.transfer_id);
+                }
+                ++removed;
             }
-            ++removed;
-        }
+        }).get ();
+    }
+    if (actor_transfer_marker_enabled ()) {
+        for (const auto &[actor_ref, transfer_id] : removed_route_markers)
+            emit_actor_transfer_marker ("message_follow_route_removed", actor_ref, transfer_id);
     }
     // A reconcile-phase move (genuinely ambiguous FINALIZE outcome, spec 28)
     // is bounded by reconcile_deadline (move_state_t) so it cannot park
@@ -5217,16 +5714,17 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
         const auto separator = key.find (':');
         if (separator == std::string::npos)
             continue;
-        std::uint64_t generation = 0;
-        {
-            std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+        const auto [generation, local_node_rid] = _state->lane.run ([&] {
+            std::uint64_t value = 0;
             if (const auto found = _state->actor_generations.find (key);
                 found != _state->actor_generations.end ()) {
-                generation = found->second;
+                value = found->second;
             }
-        }
+            return std::make_pair (
+              value, node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)));
+        }).get ();
         const auto actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
-          node_rid (), key.substr (0, separator), key.substr (separator + 1), generation);
+          local_node_rid, key.substr (0, separator), key.substr (separator + 1), generation);
 
         if (!expired.context) {
             // No target identity was captured for this reconcile (a call
@@ -5247,11 +5745,13 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
         };
         auto outcome = reconcile_outcome_t::indeterminate;
         {
-            if (!_state->relocation_authority) {
+            const auto relocation_authority =
+              _state->lane.run ([&] { return _state->relocation_authority; }).get ();
+            if (!relocation_authority) {
                 outcome = reconcile_outcome_t::indeterminate;
             } else {
                 try {
-                    const auto current = _state->relocation_authority->read (
+                    const auto current = relocation_authority->read (
                       runtime::stateful::object_kind_t::actor, key.substr (separator + 1));
                     if (!current) {
                         outcome = reconcile_outcome_t::source_owns;
@@ -5291,7 +5791,9 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
             const auto ctx = *expired.context;
             const auto transfer_id = ctx.transfer_id.empty () ? key : ctx.transfer_id;
             bool submitted = false;
-            if (_state->root_services) {
+            const auto has_root_services =
+              _state->lane.run ([&] { return _state->root_services.has_value (); }).get ();
+            if (has_root_services) {
                 submitted = framework_worker_executor (_state)->try_submit_internal (
                   [state, actor_ref, ctx, transfer_id] {
                       auto owner = std::make_shared<spot_node_runtime_t> (state);
@@ -5349,27 +5851,28 @@ bool spot_node_runtime_t::adopt_committed_actor_relocation_authority (
         || target_owner_lease_generation == 0)
         return false;
 
-    const std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-    const auto type = _state->actor_types_by_id.find (target.key);
-    if (type == _state->actor_types_by_id.end ())
-        return false;
-    const auto fence = _state->actor_authority_fences.find (type->second + ":" + target.key);
-    if (fence == _state->actor_authority_fences.end ())
-        return false;
-    const auto target_node = zlink::routing_id_t::from (target.node_id).to_bytes ();
-    auto &current = fence->second;
-    if (current.actor_id != target.key || current.object_generation != target.object_generation
-        || current.target_node_routing_id != target_node
-        || current.target_node_generation != target_node_generation
-        || current.authority_owner_generation > target.authority_owner_generation
-        || (current.authority_owner_generation == target.authority_owner_generation
-            && current.owner_lease_generation != 0
-            && current.owner_lease_generation != target_owner_lease_generation)) {
-        return false;
-    }
-    current.authority_owner_generation = target.authority_owner_generation;
-    current.owner_lease_generation = target_owner_lease_generation;
-    return true;
+    return _state->lane.run ([&] {
+        const auto type = _state->actor_types_by_id.find (target.key);
+        if (type == _state->actor_types_by_id.end ())
+            return false;
+        const auto fence = _state->actor_authority_fences.find (type->second + ":" + target.key);
+        if (fence == _state->actor_authority_fences.end ())
+            return false;
+        const auto target_node = zlink::routing_id_t::from (target.node_id).to_bytes ();
+        auto &current = fence->second;
+        if (current.actor_id != target.key || current.object_generation != target.object_generation
+            || current.target_node_routing_id != target_node
+            || current.target_node_generation != target_node_generation
+            || current.authority_owner_generation > target.authority_owner_generation
+            || (current.authority_owner_generation == target.authority_owner_generation
+                && current.owner_lease_generation != 0
+                && current.owner_lease_generation != target_owner_lease_generation)) {
+            return false;
+        }
+        current.authority_owner_generation = target.authority_owner_generation;
+        current.owner_lease_generation = target_owner_lease_generation;
+        return true;
+    }).get ();
 }
 
 task_t<bool> spot_node_runtime_t::activate_session_relocation_route (const std::string &transfer_id)
@@ -5413,14 +5916,13 @@ bool spot_node_runtime_t::remove_actor_message_follow (
       _state->actor_transfer_coordinator.remove_message_follow (key, source_fence, target_fence);
     if (!removed)
         return true;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    _state->lane.run ([&] {
         if (!_state->actor_authority_fences.contains (key)
             && !_state->actor_transfer_coordinator.has_message_follow_route (key)) {
             _state->actor_routes.erase (key);
             _state->native_actors.erase (key);
         }
-    }
+    }).get ();
     if (actor_transfer_marker_enabled ()) {
         emit_actor_transfer_marker ("message_follow_route_removed", actor_ref,
                                     removed->transfer_id.empty () ? key : removed->transfer_id);
@@ -5442,31 +5944,34 @@ bool spot_node_runtime_t::actor_transfer_in_progress (const actor_ref_t &actor_r
 
 bool spot_node_runtime_t::actor_transfer_in_progress (std::string_view actor_id) const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto type = _state->actor_types_by_id.find (std::string (actor_id));
-    if (type == _state->actor_types_by_id.end ())
-        return false;
-    return _state->actor_transfer_coordinator.blocks_dispatch (type->second + ":"
-                                                               + std::string (actor_id));
+    return _state->lane.run ([&] {
+        const auto type = _state->actor_types_by_id.find (std::string (actor_id));
+        if (type == _state->actor_types_by_id.end ())
+            return false;
+        return _state->actor_transfer_coordinator.blocks_dispatch (type->second + ":"
+                                                                   + std::string (actor_id));
+    }).get ();
 }
 
 std::optional<std::string> spot_node_runtime_t::resolve_actor_type (std::string_view actor_id) const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto found = _state->actor_types_by_id.find (std::string (actor_id));
-    if (found == _state->actor_types_by_id.end ())
-        return std::nullopt;
-    return found->second;
+    return _state->lane.run ([&] () -> std::optional<std::string> {
+        const auto found = _state->actor_types_by_id.find (std::string (actor_id));
+        if (found == _state->actor_types_by_id.end ())
+            return std::nullopt;
+        return found->second;
+    }).get ();
 }
 
 std::optional<std::uint64_t>
 spot_node_runtime_t::resolve_actor_membership_epoch (std::string_view actor_id) const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto found = _state->core_actor_membership_epochs.find (std::string (actor_id));
-    if (found == _state->core_actor_membership_epochs.end ())
-        return std::nullopt;
-    return found->second;
+    return _state->lane.run ([&] () -> std::optional<std::uint64_t> {
+        const auto found = _state->core_actor_membership_epochs.find (std::string (actor_id));
+        if (found == _state->core_actor_membership_epochs.end ())
+            return std::nullopt;
+        return found->second;
+    }).get ();
 }
 
 actor_context_t spot_node_runtime_t::default_actor_context ()
@@ -5476,32 +5981,31 @@ actor_context_t spot_node_runtime_t::default_actor_context ()
 
 std::optional<spot_id_t> spot_node_runtime_t::resolve_entry_spot_id () const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    if (!_state->snapshot.entry_spot_name)
-        return std::nullopt;
-    const auto entry_id = _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
-    if (entry_id == _state->spot_ids_by_name.end ())
-        return std::nullopt;
-    return entry_id->second;
+    return _state->lane.run ([&] () -> std::optional<spot_id_t> {
+        if (!_state->snapshot.entry_spot_name)
+            return std::nullopt;
+        const auto entry_id = _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
+        if (entry_id == _state->spot_ids_by_name.end ())
+            return std::nullopt;
+        return entry_id->second;
+    }).get ();
 }
 
 void spot_node_runtime_t::set_message_follow_duration (std::chrono::milliseconds duration)
 {
-    _state->message_follow_duration = duration;
+    _state->lane.run ([&] { _state->message_follow_duration = duration; }).get ();
 }
 
 void spot_node_runtime_t::bind_relocation_store (
   std::shared_ptr<runtime::stateful::relocation_store_port_t> store)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    _state->relocation_store = std::move (store);
+    _state->lane.run ([&] { _state->relocation_store = std::move (store); }).get ();
 }
 
 void spot_node_runtime_t::bind_relocation_authority (
   std::shared_ptr<runtime::stateful::authority_relocation_port_t> authority)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    _state->relocation_authority = std::move (authority);
+    _state->lane.run ([&] { _state->relocation_authority = std::move (authority); }).get ();
 }
 
 std::vector<std::uint8_t>
@@ -5512,8 +6016,7 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
     if (spot.kind == runtime::stateful::object_kind_t::actor) {
         detail::spot_node_builder_state_t::actor_factory_registration_t factory;
         std::shared_ptr<void> instance;
-        {
-            std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+        _state->lane.run ([&] {
             const auto configured = _state->actor_factories.find (stable_type);
             const auto materialized = _state->actor_instances.find (stable_type + ":" + spot.key);
             if (configured == _state->actor_factories.end ()
@@ -5523,7 +6026,7 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
             }
             factory = configured->second;
             instance = materialized->second;
-        }
+        }).get ();
         if (factory.relocation.kind != detail::factory_relocation_kind_t::preserve_state)
             return {};
         const auto capture = factory.relocation.capture;
@@ -5552,8 +6055,7 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
 
     std::shared_ptr<spot_context_state_t> context;
     detail::factory_relocation_configuration_t relocation;
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    _state->lane.run ([&] {
         const auto found = _state->spot_contexts_by_id.find (spot.key);
         const auto configured = _state->spot_factory_relocations.find (stable_type);
         if (found == _state->spot_contexts_by_id.end ()
@@ -5565,7 +6067,7 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
         }
         context = found->second._state;
         relocation = configured->second;
-    }
+    }).get ();
     if (relocation.kind != detail::factory_relocation_kind_t::preserve_state)
         return {};
     const auto capture = relocation.capture;
@@ -5602,8 +6104,7 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
     std::shared_ptr<std::promise<void>> completion;
     try {
         detail::factory_relocation_configuration_t relocation;
-        {
-            std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+        const auto admitted = _state->lane.run ([&] {
             const auto configured = _state->spot_factory_relocations.find (frozen.stable_type);
             if (configured == _state->spot_factory_relocations.end ())
                 return false;
@@ -5619,7 +6120,10 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
             if (!inserted.second)
                 return false;
             relocation = configured->second;
-        }
+            return true;
+        }).get ();
+        if (!admitted)
+            return false;
         if (frozen.application_state.size () > max_spot_relocation_state_bytes)
             throw std::length_error ("Spot relocation state exceeds 64 MiB");
         std::function<task_t<void> (void *)> staged_restore;
@@ -5641,13 +6145,15 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
         } else {
             throw std::logic_error ("Spot relocation policy does not permit restore");
         }
-        std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
-        const auto owned = _state->pending_spot_creations_by_id.find (target.key);
-        if (owned == _state->pending_spot_creations_by_id.end ()
-            || owned->second.reservation != reservation)
+        const auto owned = _state->lane.run ([&] {
+            const auto found = _state->pending_spot_creations_by_id.find (target.key);
+            return found != _state->pending_spot_creations_by_id.end ()
+                   && found->second.reservation == reservation;
+        }).get ();
+        if (!owned)
             throw std::logic_error ("Relocation Spot reservation ownership was lost");
-        auto materialized = create_spot_context_unlocked (
-          frozen.stable_type, spot_id_t (target.key), zlink::message_t{}, node_lock,
+        auto materialized = create_spot_context (
+          frozen.stable_type, spot_id_t (target.key), zlink::message_t{},
           target.object_generation, target.mesh_name, std::move (staged_restore),
           target.authority_owner_generation);
         const auto created = materialized.state == spot_create_state_t::created;
@@ -5660,10 +6166,16 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
                 state->relocation_ready_deferred = true;
             }).get ();
         }
-        const auto current = _state->pending_spot_creations_by_id.find (target.key);
-        if (current != _state->pending_spot_creations_by_id.end ()
-            && current->second.reservation == reservation) {
+        const auto completed_reservation = _state->lane.run ([&] {
+            const auto current = _state->pending_spot_creations_by_id.find (target.key);
+            if (current == _state->pending_spot_creations_by_id.end ()
+                || current->second.reservation != reservation) {
+                return false;
+            }
             _state->pending_spot_creations_by_id.erase (current);
+            return true;
+        }).get ();
+        if (completed_reservation) {
             if (created)
                 completion->set_value ();
             else
@@ -5675,13 +6187,18 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
     }
     catch (...) {
         if (reservation != 0) {
-            std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-            const auto current = _state->pending_spot_creations_by_id.find (target.key);
-            if (current != _state->pending_spot_creations_by_id.end ()
-                && current->second.reservation == reservation) {
+            const auto error = std::current_exception ();
+            const auto owned = _state->lane.run ([&] {
+                const auto current = _state->pending_spot_creations_by_id.find (target.key);
+                if (current == _state->pending_spot_creations_by_id.end ()
+                    || current->second.reservation != reservation) {
+                    return false;
+                }
                 _state->pending_spot_creations_by_id.erase (current);
-                completion->set_exception (std::current_exception ());
-            }
+                return true;
+            }).get ();
+            if (owned)
+                completion->set_exception (error);
         }
     }
     return false;
@@ -5692,35 +6209,52 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
 {
     if (prepare.object.kind != runtime::protocol::relocation_object_kind_t::actor)
         return std::nullopt;
-    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
     const auto handoff_id = runtime::protocol::actor_join_handoff_id (prepare.relocation);
     const auto admission = _state->actor_transfer_coordinator.admission (handoff_id);
     if (!admission || !admission->canonical_user_spot_join)
         return std::nullopt;
-    const auto target_context =
-      _state->spot_contexts_by_id.find (std::string (admission->target_spot_id));
-    if (target_context == _state->spot_contexts_by_id.end () || !target_context->second._state)
+    struct validation_projection_t
+    {
+        std::shared_ptr<spot_context_state_t> target;
+        std::shared_ptr<service::mesh_node_t> native_node;
+        bool matches = false;
+    };
+    const auto projection = _state->lane.run ([&] {
+        validation_projection_t result;
+        const auto target_context =
+          _state->spot_contexts_by_id.find (std::string (admission->target_spot_id));
+        if (target_context == _state->spot_contexts_by_id.end () || !target_context->second._state)
+            return result;
+        const auto &target = *target_context->second._state;
+        result.target = target_context->second._state;
+        if (target.node)
+            result.native_node = target.node->native_node.lock ();
+        const auto source_node =
+          zlink::routing_id_t::from (std::string (admission->source_actor.node_rid ().value ()))
+            .to_bytes ();
+        const auto local_node = _state->snapshot.routing_id ? _state->snapshot.routing_id->to_bytes ()
+                                                            : std::vector<std::uint8_t>{};
+        result.matches =
+          !local_node.empty () && !target.is_entry_spot () && !target.is_instance_spot ()
+          && target.object_generation == admission->target_spot_generation
+          && prepare.object.object_id == admission->source_actor.actor_id ().value ()
+          && prepare.object.object_generation == admission->source_actor.object_generation ()
+          && prepare.object.expected_authority_owner_generation
+               == admission->source_actor_authority_owner_generation
+          && prepare.source_node_routing_id == source_node
+          && prepare.source_node_generation == admission->source_node_generation
+          && prepare.coordinator.node_routing_id == source_node
+          && prepare.coordinator.node_generation == admission->source_node_generation
+          && prepare.coordinator.lease_generation == admission->source_owner_lease_generation
+          && prepare.target.target_node_routing_id == local_node;
+        return result;
+    }).get ();
+    if (!projection.target || !projection.matches)
         return false;
-    const auto &target = *target_context->second._state;
-    const auto source_node =
-      zlink::routing_id_t::from (std::string (admission->source_actor.node_rid ().value ()))
-        .to_bytes ();
-    const auto local_node = _state->snapshot.routing_id ? _state->snapshot.routing_id->to_bytes ()
-                                                        : std::vector<std::uint8_t>{};
-    return !local_node.empty () && !target.is_entry_spot () && !target.is_instance_spot ()
-           && target.object_generation == admission->target_spot_generation
-           && prepare.object.object_id == admission->source_actor.actor_id ().value ()
-           && prepare.object.object_generation == admission->source_actor.object_generation ()
-           && prepare.object.expected_authority_owner_generation
-                == admission->source_actor_authority_owner_generation
-           && prepare.source_node_routing_id == source_node
-           && prepare.source_node_generation == admission->source_node_generation
-           && prepare.coordinator.node_routing_id == source_node
-           && prepare.coordinator.node_generation == admission->source_node_generation
-           && prepare.coordinator.lease_generation == admission->source_owner_lease_generation
-           && prepare.target.target_node_routing_id == local_node
-           && prepare.target.target_node_generation
-                == owner_node_generation (*target_context->second._state);
+    const auto target_node_generation = projection.native_node
+                                          ? projection.native_node->status ().lifecycle_generation ()
+                                          : 0;
+    return prepare.target.target_node_generation == target_node_generation;
 }
 
 bool spot_node_runtime_t::consume_actor_join_recovery (
@@ -5762,48 +6296,52 @@ bool spot_node_runtime_t::consume_actor_join_recovery (
         return !join_prepare || !*join_prepare;
     }
 
-    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-    const auto admission = _state->actor_transfer_coordinator.admission (recovery->handoff_id);
-    const auto local_node = _state->snapshot.routing_id ? _state->snapshot.routing_id->to_bytes ()
-                                                        : std::vector<std::uint8_t>{};
-    const auto valid =
-      admission && !local_node.empty () && recovery->relocation == prepare.relocation
-      && recovery->coordinator == prepare.coordinator
-      && recovery->handoff_id == runtime::protocol::actor_join_handoff_id (prepare.relocation)
-      && recovery->actor_id == frozen.owner.key && recovery->actor_type == frozen.stable_type
-      && recovery->actor_generation == frozen.owner.object_generation
-      && recovery->actor_authority_owner_generation == frozen.owner.authority_owner_generation
-      && recovery->actor_authority_owner_generation != std::numeric_limits<std::uint64_t>::max ()
-      && recovery->target_authority_owner_generation
-           == recovery->actor_authority_owner_generation + 1
-      && target.key == recovery->actor_id && target.object_generation == recovery->actor_generation
-      && target.authority_owner_generation == recovery->target_authority_owner_generation
-      && recovery->target_node_routing_id == local_node
-      && recovery->target_node_generation == prepare.target.target_node_generation
-      && recovery->target_spot_id == std::string (admission->target_spot_id)
-      && recovery->target_spot_generation == admission->target_spot_generation
-      && recovery->target_spot_authority_owner_generation
-           == admission->target_spot_authority_owner_generation
-      && recovery->reservation_token == admission->reservation_token
-      && recovery->reserved_payload_bytes == admission->reserved_payload_bytes
-      && recovery->actor_node_generation == admission->source_node_generation
-      && recovery->expected_owner_lease_generation == admission->source_owner_lease_generation;
-    if (!valid)
-        return false;
-    const auto key = actor_key (::zlink::framework::detail::actor_ref_access_t::make (
-      node_rid_t::from_string (target.node_id), frozen.stable_type, target.key,
-      target.object_generation));
-    if (!_state->actor_join_relocation_recoveries
-           .emplace (key,
-                     detail::spot_node_builder_state_t::actor_join_relocation_recovery_t{
-                       recovery->handoff_id, spot_id_t (recovery->source_spot_id),
-                       admission->target_spot_id, recovery->target_node_generation,
-                       recovery->target_spot_generation, admission->source_actor,
-                       recovery->operation.high, recovery->operation.low, recovery->reply})
-           .second)
-        return false;
-    frozen.pending_application.erase (recovery_record);
-    return true;
+    return _state->lane.run ([&] {
+        const auto admission = _state->actor_transfer_coordinator.admission (recovery->handoff_id);
+        const auto local_node =
+          _state->snapshot.routing_id ? _state->snapshot.routing_id->to_bytes ()
+                                      : std::vector<std::uint8_t>{};
+        const auto valid =
+          admission && !local_node.empty () && recovery->relocation == prepare.relocation
+          && recovery->coordinator == prepare.coordinator
+          && recovery->handoff_id == runtime::protocol::actor_join_handoff_id (prepare.relocation)
+          && recovery->actor_id == frozen.owner.key && recovery->actor_type == frozen.stable_type
+          && recovery->actor_generation == frozen.owner.object_generation
+          && recovery->actor_authority_owner_generation == frozen.owner.authority_owner_generation
+          && recovery->actor_authority_owner_generation
+               != std::numeric_limits<std::uint64_t>::max ()
+          && recovery->target_authority_owner_generation
+               == recovery->actor_authority_owner_generation + 1
+          && target.key == recovery->actor_id
+          && target.object_generation == recovery->actor_generation
+          && target.authority_owner_generation == recovery->target_authority_owner_generation
+          && recovery->target_node_routing_id == local_node
+          && recovery->target_node_generation == prepare.target.target_node_generation
+          && recovery->target_spot_id == std::string (admission->target_spot_id)
+          && recovery->target_spot_generation == admission->target_spot_generation
+          && recovery->target_spot_authority_owner_generation
+               == admission->target_spot_authority_owner_generation
+          && recovery->reservation_token == admission->reservation_token
+          && recovery->reserved_payload_bytes == admission->reserved_payload_bytes
+          && recovery->actor_node_generation == admission->source_node_generation
+          && recovery->expected_owner_lease_generation == admission->source_owner_lease_generation;
+        if (!valid)
+            return false;
+        const auto key = actor_key (::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid_t::from_string (target.node_id), frozen.stable_type, target.key,
+          target.object_generation));
+        if (!_state->actor_join_relocation_recoveries
+               .emplace (key,
+                         detail::spot_node_builder_state_t::actor_join_relocation_recovery_t{
+                           recovery->handoff_id, spot_id_t (recovery->source_spot_id),
+                           admission->target_spot_id, recovery->target_node_generation,
+                           recovery->target_spot_generation, admission->source_actor,
+                           recovery->operation.high, recovery->operation.low, recovery->reply})
+               .second)
+            return false;
+        frozen.pending_application.erase (recovery_record);
+        return true;
+    }).get ();
 }
 
 void spot_node_runtime_t::discard_actor_join_recovery (
@@ -5813,15 +6351,16 @@ void spot_node_runtime_t::discard_actor_join_recovery (
         || target.key.empty ())
         return;
     try {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-        const auto recovery =
-          _state->actor_join_relocation_recoveries.find (stable_type + ":" + target.key);
-        if (recovery == _state->actor_join_relocation_recoveries.end ())
-            return;
-        /* The admission is released with the entry so the coordinator does
-         * not keep the reservation alive for a Join that never landed. */
-        _state->actor_transfer_coordinator.fail_commit (recovery->second.handoff_id, false);
-        _state->actor_join_relocation_recoveries.erase (recovery);
+        _state->lane.run ([&] {
+            const auto recovery =
+              _state->actor_join_relocation_recoveries.find (stable_type + ":" + target.key);
+            if (recovery == _state->actor_join_relocation_recoveries.end ())
+                return;
+            /* The admission is released with the entry so the coordinator does
+             * not keep the reservation alive for a Join that never landed. */
+            _state->actor_transfer_coordinator.fail_commit (recovery->second.handoff_id, false);
+            _state->actor_join_relocation_recoveries.erase (recovery);
+        }).get ();
     }
     catch (...) {
     }
@@ -5833,27 +6372,30 @@ spot_node_runtime_t::actor_join_relocation_authority_spot (
 {
     if (target.kind != runtime::stateful::object_kind_t::actor)
         return std::nullopt;
-    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-    auto recovery = _state->actor_join_relocation_recoveries.end ();
-    const auto type = _state->actor_types_by_id.find (target.key);
-    if (type != _state->actor_types_by_id.end ()) {
-        recovery = _state->actor_join_relocation_recoveries.find (type->second + ":" + target.key);
-    }
-    if (recovery == _state->actor_join_relocation_recoveries.end ()) {
-        recovery = std::find_if (
-          _state->actor_join_relocation_recoveries.begin (),
-          _state->actor_join_relocation_recoveries.end (), [&target] (const auto &candidate) {
-              return candidate.second.source_actor.actor_id ().value () == target.key
-                     && candidate.second.source_actor.object_generation ()
-                          == target.object_generation;
-          });
-    }
-    if (recovery == _state->actor_join_relocation_recoveries.end ())
-        return std::nullopt;
-    return std::tuple{std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (
-                        recovery->second.source_actor)),
-                      std::string (recovery->second.target_spot_id),
-                      recovery->second.target_spot_generation};
+    return _state->lane.run ([&] ()
+                              -> std::optional<std::tuple<std::string, std::string, std::uint64_t>> {
+        auto recovery = _state->actor_join_relocation_recoveries.end ();
+        const auto type = _state->actor_types_by_id.find (target.key);
+        if (type != _state->actor_types_by_id.end ()) {
+            recovery =
+              _state->actor_join_relocation_recoveries.find (type->second + ":" + target.key);
+        }
+        if (recovery == _state->actor_join_relocation_recoveries.end ()) {
+            recovery = std::find_if (
+              _state->actor_join_relocation_recoveries.begin (),
+              _state->actor_join_relocation_recoveries.end (), [&target] (const auto &candidate) {
+                  return candidate.second.source_actor.actor_id ().value () == target.key
+                         && candidate.second.source_actor.object_generation ()
+                              == target.object_generation;
+              });
+        }
+        if (recovery == _state->actor_join_relocation_recoveries.end ())
+            return std::nullopt;
+        return std::tuple{std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (
+                            recovery->second.source_actor)),
+                          std::string (recovery->second.target_spot_id),
+                          recovery->second.target_spot_generation};
+    }).get ();
 }
 
 bool spot_node_runtime_t::materialize_relocation_state (
@@ -5871,8 +6413,8 @@ bool spot_node_runtime_t::materialize_relocation_state (
     detail::spot_actor_admission_callbacks_t admission;
     bool deferred_join_completion = false;
     runtime::stateful::object_ref_t resolved_target_spot;
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    std::optional<service_provider_t> root_services;
+    const auto preparation_result = _state->lane.run ([&] () -> std::optional<bool> {
         // A single-Actor relocation unit (e.g. an Entry Spot Actor moving
         // alone) never carries a Spot on the wire (spec 28: the Entry Spot
         // is already present on the target node). Resolve this node's own
@@ -5906,8 +6448,9 @@ bool spot_node_runtime_t::materialize_relocation_state (
                 // materialize. The stateful runtime already installed the
                 // generic Actor record; leave that import on its established
                 // path. A canonical routed Join may never take this branch.
-                return !deferred_join_completion
-                       && !_state->actor_factories.contains (frozen.stable_type);
+                return std::make_optional (!deferred_join_completion
+                                           && !_state->actor_factories.contains (
+                                             frozen.stable_type));
             }
             const auto entry_id = _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
             if (entry_id == _state->spot_ids_by_name.end ())
@@ -5946,10 +6489,13 @@ bool spot_node_runtime_t::materialize_relocation_state (
             return false;
         factory = configured->second;
         context = found_context->second._state;
-        if (_state->root_services) {
-            actor_gateway = &_state->root_services->get_required<actor_gateway_runtime_t> ();
-        }
-    }
+        root_services = _state->root_services;
+        return std::nullopt;
+    }).get ();
+    if (preparation_result)
+        return *preparation_result;
+    if (root_services)
+        actor_gateway = &root_services->get_required<actor_gateway_runtime_t> ();
 
     if (frozen.application_state.size () > max_spot_relocation_state_bytes)
         return false;
@@ -6007,8 +6553,7 @@ bool spot_node_runtime_t::materialize_relocation_state (
     std::function<result_t<void> (const actor_ref_t &)> update_registry;
     const auto key = actor_key (committed);
     std::optional<return_relocation_remnant_t> return_remnant;
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    const auto remnant_prepared = _state->lane.run ([&] {
         const auto existing_actor = _state->actor_instances.find (key);
         const auto existing_spot = _state->actor_spot_ids.find (key);
         if (existing_actor != _state->actor_instances.end ()
@@ -6118,7 +6663,10 @@ bool spot_node_runtime_t::materialize_relocation_state (
                 }
             }
         }
-    }
+        return true;
+    }).get ();
+    if (!remnant_prepared)
+        return false;
 
     if (return_remnant && !return_remnant->submitted_leave && return_remnant->leave_callback
         && return_remnant->context && return_remnant->actor) {
@@ -6126,19 +6674,26 @@ bool spot_node_runtime_t::materialize_relocation_state (
             return return_remnant->leave_callback (return_remnant->context->spot_instance.get (),
                                                    return_remnant->actor.get ());
         });
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-        const auto cleanup =
-          std::find_if (_state->pending_remote_source_cleanups.begin (),
-                        _state->pending_remote_source_cleanups.end (), [&] (const auto &candidate) {
-                            return candidate.transfer_id == return_remnant->transfer_id
-                                   && candidate.source_fence == return_remnant->source_fence;
-                        });
-        if (cleanup != _state->pending_remote_source_cleanups.end ())
-            cleanup->leave_completed = true;
+        _state->lane.run ([&] {
+            const auto cleanup = std::find_if (
+              _state->pending_remote_source_cleanups.begin (),
+              _state->pending_remote_source_cleanups.end (), [&] (const auto &candidate) {
+                  return candidate.transfer_id == return_remnant->transfer_id
+                         && candidate.source_fence == return_remnant->source_fence;
+              });
+            if (cleanup != _state->pending_remote_source_cleanups.end ())
+                cleanup->leave_completed = true;
+        }).get ();
     }
 
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    const auto target_native_node = _state->lane.run ([&] {
+        return context->node ? context->node->native_node.lock ()
+                             : std::shared_ptr<service::mesh_node_t>{};
+    }).get ();
+    const auto target_node_generation = target_native_node
+                                          ? target_native_node->status ().lifecycle_generation ()
+                                          : 0;
+    const auto installed = _state->lane.run ([&] {
         const auto found_context = _state->spot_contexts_by_id.find (resolved_target_spot.key);
         const auto existing_actor = _state->actor_instances.find (key);
         if (return_remnant) {
@@ -6180,7 +6735,7 @@ bool spot_node_runtime_t::materialize_relocation_state (
           target.key,
           target.object_generation,
           zlink::routing_id_t::from (target.node_id).to_bytes (),
-          owner_node_generation (*context),
+          target_node_generation,
           target.authority_owner_generation,
           0};
         const auto current_fence = _state->actor_authority_fences.find (key);
@@ -6200,13 +6755,16 @@ bool spot_node_runtime_t::materialize_relocation_state (
         auto &queue = _state->actor_execution_queues[key];
         if (!queue) {
             queue = std::make_shared<runtime::serial_execution_queue_t> (
-              *framework_worker_executor (_state), runtime::serial_execution_queue_options_t{},
+              *framework_worker_executor_core (_state), runtime::serial_execution_queue_options_t{},
               runtime::serial_execution_queue_t::error_handler_t{},
               runtime::serial_lane_policy_t::actor_delivery ());
             publish_actor_execution_queue_snapshot_unlocked (*_state);
         }
         update_registry = _state->update_actor_registry_ref;
-    }
+        return true;
+    }).get ();
+    if (!installed)
+        return false;
 
     try {
         if (update_registry) {
@@ -6264,8 +6822,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
     };
     std::vector<actor_join_completion_record_t> actor_join_completions;
     std::shared_ptr<runtime::stateful::authority_relocation_port_t> authority_store;
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    const auto prepared = _state->lane.run ([&] {
         authority_store = _state->relocation_authority;
         for (const auto &target : targets) {
             if (target.kind == runtime::stateful::object_kind_t::actor) {
@@ -6311,7 +6868,10 @@ bool spot_node_runtime_t::commit_relocation_materialization (
             if (context != _state->spot_contexts_by_id.end () && context->second._state)
                 ready.push_back (context->second._state);
         }
-    }
+        return true;
+    }).get ();
+    if (!prepared)
+        return false;
     if (!actor_fences.empty () && !authority_store)
         return false;
     for (const auto &[key, target] : actor_fences) {
@@ -6325,21 +6885,26 @@ bool spot_node_runtime_t::commit_relocation_materialization (
             || authority->target_owner.owner_id.empty ()
             || authority->target_owner.lease_generation <= 0)
             return false;
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-        const auto fence = _state->actor_authority_fences.find (key);
-        if (fence == _state->actor_authority_fences.end ())
-            return false;
-        fence->second.authority_owner_generation = authority->target.authority_owner_generation;
-        fence->second.owner_lease_generation = authority->target_owner.lease_generation;
-        for (auto &completion : actor_join_completions) {
-            if (completion.actor.actor_id ().value () == target.key
-                && completion.actor.object_generation () == target.object_generation) {
-                completion.target_authority_owner_generation =
-                  authority->target.authority_owner_generation;
-                completion.target_owner_lease_generation = authority->target_owner.lease_generation;
-                break;
+        const auto updated = _state->lane.run ([&] {
+            const auto fence = _state->actor_authority_fences.find (key);
+            if (fence == _state->actor_authority_fences.end ())
+                return false;
+            fence->second.authority_owner_generation = authority->target.authority_owner_generation;
+            fence->second.owner_lease_generation = authority->target_owner.lease_generation;
+            for (auto &completion : actor_join_completions) {
+                if (completion.actor.actor_id ().value () == target.key
+                    && completion.actor.object_generation () == target.object_generation) {
+                    completion.target_authority_owner_generation =
+                      authority->target.authority_owner_generation;
+                    completion.target_owner_lease_generation =
+                      authority->target_owner.lease_generation;
+                    break;
+                }
             }
-        }
+            return true;
+        }).get ();
+        if (!updated)
+            return false;
     }
     for (const auto &state : ready) {
         state->callback_lane.run ([state] {
@@ -6367,11 +6932,11 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                 }
             }
             serializer_registry_t *serializers = nullptr;
-            {
-                std::lock_guard<std::recursive_mutex> lock (node->mutex);
+            serializers = node->lane.run ([&] {
                 if (node->channel_runtime)
-                    serializers = node->channel_runtime->serializers;
-            }
+                    return node->channel_runtime->serializers;
+                return static_cast<serializer_registry_t *> (nullptr);
+            }).get ();
             if (serializers == nullptr) {
                 node->actor_transfer_coordinator.fail_commit (completion.handoff_id, true);
                 return;
@@ -6432,21 +6997,21 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                       node->actor_transfer_coordinator.fail_commit (completion_handoff_id, true);
                       return;
                   }
-                  std::optional<std::vector<handoff_packet_t>> replay;
-                  {
-                      std::lock_guard<std::recursive_mutex> lock (node->mutex);
-                      replay = node->actor_transfer_coordinator.complete_commit_and_take_backlog (
+                  auto [replay, replay_services] = node->lane.run ([&] {
+                      auto backlog =
+                        node->actor_transfer_coordinator.complete_commit_and_take_backlog (
                         completion_handoff_id, source_actor, target_spot_id);
-                      if (replay)
+                      if (backlog)
                           node->actor_join_relocation_recoveries.erase (key);
-                  }
+                      return std::make_pair (std::move (backlog), node->root_services);
+                  }).get ();
                   if (!replay) {
                       node->actor_transfer_coordinator.fail_commit (completion_handoff_id, true);
                       return;
                   }
                   if (replay->empty ())
                       return;
-                  if (!node->root_services) {
+                  if (!replay_services) {
                       auto runtime = spot_node_runtime_t (node);
                       if (runtime.actor_transfer_marker_enabled ()) {
                           runtime.emit_actor_transfer_marker ("handoff_replay_unavailable", actor,
@@ -6455,7 +7020,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                       return;
                   }
                   spot_node_runtime_t (node).enqueue_actor_handoff_replay (
-                    actor, std::move (*replay), *node->root_services, completion_handoff_id);
+                    actor, std::move (*replay), *replay_services, completion_handoff_id);
               });
         };
         complete_join ();
@@ -6468,41 +7033,44 @@ void spot_node_runtime_t::abort_relocation_materialization (
 {
     std::vector<std::shared_ptr<spot_context_state_t>> spots;
     try {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-        for (const auto &target : targets) {
-            if (target.kind != runtime::stateful::object_kind_t::actor)
-                continue;
-            const auto type = _state->actor_types_by_id.find (target.key);
-            if (type == _state->actor_types_by_id.end ())
-                continue;
-            const auto key = type->second + ":" + target.key;
-            const auto recovery = _state->actor_join_relocation_recoveries.find (key);
-            if (recovery != _state->actor_join_relocation_recoveries.end ()) {
-                _state->actor_transfer_coordinator.fail_commit (recovery->second.handoff_id, false);
-                _state->actor_join_relocation_recoveries.erase (recovery);
+        _state->lane.run ([&] {
+            for (const auto &target : targets) {
+                if (target.kind != runtime::stateful::object_kind_t::actor)
+                    continue;
+                const auto type = _state->actor_types_by_id.find (target.key);
+                if (type == _state->actor_types_by_id.end ())
+                    continue;
+                const auto key = type->second + ":" + target.key;
+                const auto recovery = _state->actor_join_relocation_recoveries.find (key);
+                if (recovery != _state->actor_join_relocation_recoveries.end ()) {
+                    _state->actor_transfer_coordinator.fail_commit (recovery->second.handoff_id,
+                                                                    false);
+                    _state->actor_join_relocation_recoveries.erase (recovery);
+                }
+                if (const auto spot = _state->actor_spot_ids.find (key);
+                    spot != _state->actor_spot_ids.end ()) {
+                    const auto context =
+                      _state->spot_contexts_by_id.find (std::string (spot->second));
+                    if (context != _state->spot_contexts_by_id.end () && context->second._state)
+                        decrement_actor_count_unlocked (*context->second._state);
+                }
+                erase_actor_route_unlocked (*_state, key);
+                _state->actor_instances.erase (key);
+                detail::erase_actor_instance_index_unlocked (*_state, type->second, target.key);
+                _state->actor_execution_queues.erase (key);
+                _state->actor_types_by_id.erase (type);
+                _state->destroyed_actor_keys.erase (key);
             }
-            if (const auto spot = _state->actor_spot_ids.find (key);
-                spot != _state->actor_spot_ids.end ()) {
-                const auto context = _state->spot_contexts_by_id.find (std::string (spot->second));
+            publish_actor_execution_queue_snapshot_unlocked (*_state);
+            for (const auto &target : targets) {
+                if (target.kind != runtime::stateful::object_kind_t::user_spot
+                    && target.kind != runtime::stateful::object_kind_t::instance_spot)
+                    continue;
+                const auto context = _state->spot_contexts_by_id.find (target.key);
                 if (context != _state->spot_contexts_by_id.end () && context->second._state)
-                    decrement_actor_count_unlocked (*context->second._state);
+                    spots.push_back (context->second._state);
             }
-            erase_actor_route_unlocked (*_state, key);
-            _state->actor_instances.erase (key);
-            detail::erase_actor_instance_index_unlocked (*_state, type->second, target.key);
-            _state->actor_execution_queues.erase (key);
-            _state->actor_types_by_id.erase (type);
-            _state->destroyed_actor_keys.erase (key);
-        }
-        publish_actor_execution_queue_snapshot_unlocked (*_state);
-        for (const auto &target : targets) {
-            if (target.kind != runtime::stateful::object_kind_t::user_spot
-                && target.kind != runtime::stateful::object_kind_t::instance_spot)
-                continue;
-            const auto context = _state->spot_contexts_by_id.find (target.key);
-            if (context != _state->spot_contexts_by_id.end () && context->second._state)
-                spots.push_back (context->second._state);
-        }
+        }).get ();
     }
     catch (...) {
         return;
@@ -6533,7 +7101,8 @@ result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_sp
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
-    if (_state->drain_flag && _state->drain_flag->load (std::memory_order_acquire)) {
+    auto drain_flag = _state->lane.run ([&] { return _state->drain_flag; }).get ();
+    if (drain_flag && drain_flag->load (std::memory_order_acquire)) {
         return result_t<spot_actor_join_result_t>::failure (
           framework_error_kind_t::rejected,
           "spot node is draining and rejects new actor admission");
@@ -6544,22 +7113,20 @@ result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_sp
           "remote actor admission requires transfer and actor identity");
     }
 
+    auto services = _state->lane.run ([&] { return _state->root_services; }).get ();
+    if (!services) {
+        return result_t<spot_actor_join_result_t>::failure (
+          framework_error_kind_t::unavailable,
+          "remote Actor Join Location Store is unavailable");
+    }
     runtime::live_location_reader_t *store = nullptr;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-        if (!_state->root_services) {
-            return result_t<spot_actor_join_result_t>::failure (
-              framework_error_kind_t::unavailable,
-              "remote Actor Join Location Store is unavailable");
-        }
-        try {
-            store = &_state->root_services->get_required<runtime::live_location_reader_t> ();
-        }
-        catch (const std::exception &) {
-            return result_t<spot_actor_join_result_t>::failure (
-              framework_error_kind_t::unavailable,
-              "remote Actor Join Location Store is unavailable");
-        }
+    try {
+        store = &services->get_required<runtime::live_location_reader_t> ();
+    }
+    catch (const std::exception &) {
+        return result_t<spot_actor_join_result_t>::failure (
+          framework_error_kind_t::unavailable,
+          "remote Actor Join Location Store is unavailable");
     }
     const auto stable_type = actor_type_from_authority (
       *store, actor_ref,
@@ -6575,38 +7142,92 @@ result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_sp
       node_rid_t::from_string (std::string (actor_ref.node_rid ().value ())), stable_type.value (),
       std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
 
-    std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
     cleanup_expired_actor_admissions ();
-    auto context = actor_join_context_unlocked (target_spot_id, request);
-    if (!context) {
-        return detail::propagate_failure<spot_actor_join_result_t> (
-          context, "target spot is not registered");
+    auto target_state = _state->lane.run ([&] {
+        const auto found = _state->spot_contexts_by_id.find (std::string (target_spot_id));
+        if (found == _state->spot_contexts_by_id.end () || !found->second._state
+            || !found->second._state->spot_instance) {
+            return std::shared_ptr<spot_context_state_t>{};
+        }
+        return found->second._state;
+    }).get ();
+    if (!target_state) {
+        const auto dynamic_spot_name = _state->lane.run ([&] {
+            std::optional<std::string> result;
+            for (const auto &[spot_name, _] : _state->spot_factories) {
+                if (_state->snapshot.entry_spot_name
+                    && spot_name == *_state->snapshot.entry_spot_name) {
+                    continue;
+                }
+                if (result) {
+                    result.reset ();
+                    break;
+                }
+                result = spot_name;
+            }
+            return result;
+        }).get ();
+        if (dynamic_spot_name) {
+            (void) get_or_create_spot (*dynamic_spot_name, target_spot_id, request);
+            target_state = _state->lane.run ([&] {
+                const auto found =
+                  _state->spot_contexts_by_id.find (std::string (target_spot_id));
+                if (found == _state->spot_contexts_by_id.end () || !found->second._state
+                    || !found->second._state->spot_instance) {
+                    return std::shared_ptr<spot_context_state_t>{};
+                }
+                return found->second._state;
+            }).get ();
+        }
     }
-    auto actor_factory = actor_factory_unlocked (store_actor);
+    if (!target_state) {
+        return result_t<spot_actor_join_result_t>::failure (
+          framework_error_kind_t::not_found,
+          "target spot is not registered");
+    }
+
+    std::optional<spot_node_builder_state_t::actor_factory_registration_t> actor_factory;
+    std::optional<spot_actor_admission_callbacks_t> admission;
+    std::chrono::milliseconds admission_timeout;
+    _state->lane.run ([&] {
+        const auto factory = _state->actor_factories.find (
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (store_actor)));
+        if (factory == _state->actor_factories.end ())
+            return;
+        actor_factory = factory->second;
+        const auto found_admission = target_state->actor_admissions.find (factory->second.actor_type);
+        if (found_admission != target_state->actor_admissions.end ()
+            && found_admission->second.join) {
+            admission = found_admission->second;
+        }
+        admission_timeout =
+          _state->channel_runtime
+            ? _state->channel_runtime->default_request_timeout
+            : std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::seconds (30));
+    }).get ();
     if (!actor_factory) {
         return result_t<spot_actor_join_result_t>::failure (
           framework_error_kind_t::rejected,
           "remote Actor Join Authority stable type is not registered locally");
     }
-    auto admission = actor_admission_unlocked (
-      context.value (), actor_factory.value ().get ().actor_type, target_spot_id, store_actor);
     if (!admission) {
-        return detail::propagate_failure<spot_actor_join_result_t> (admission,
-                                                                    "actor admission failed");
+        report_spot_dispatch_error (
+          _state, dispatch_error_surface_t::spot_actor, dispatch_message_kind_t::actor_request,
+          dispatch_error_reason_t::handler_missing, dispatch_error_action_t::reply_error,
+          "actor.join", std::nullopt, std::string (target_spot_id),
+          std::string (store_actor.actor_id ().value ()));
+        return result_t<spot_actor_join_result_t>::failure (
+          framework_error_kind_t::not_found,
+          "spot actor join callback is not registered");
     }
 
-    auto &target = *context.value ()._state;
+    auto &target = *target_state;
     auto &serializers = *target.channel_runtime->serializers;
     spot_actor_join_result_t response;
     bool admission_conflict = false;
-    const auto admission_timeout =
-      _state->channel_runtime
-        ? _state->channel_runtime->default_request_timeout
-        : std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::seconds (30));
     // The admission callback is user code on the spot serial queue. It may call back
-    // into the framework (sends, joins) that need the node mutex from the serial
-    // thread, so the node mutex must not be held across this wait.
-    node_lock.unlock ();
+    // into the framework (sends, joins), so the state lane must not be held
+    // across this wait.
     if (!target.run_serial_sync ("spot-actor-admission", [&] {
             const auto existing = _state->actor_transfer_coordinator.admission (transfer_id);
             if (existing) {
@@ -6619,7 +7240,7 @@ result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_sp
                 response = spot_actor_join_result_t{true, existing->admission_reply};
                 return;
             }
-            response = admission.value ().get ().join (
+            response = admission->join (
               target.spot_instance.get (), actor_ref.actor_id ().value (), request, serializers);
             if (response.accepted
                 && !_state->actor_transfer_coordinator.try_add_admission (
@@ -6637,7 +7258,7 @@ result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_sp
                     .completion_operation_id_low = completion_operation_id_low,
                     .reservation_token = transfer_id,
                     .reserved_payload_bytes = runtime::protocol::actor_join_reserved_payload_bytes (
-                      request.size (), actor_factory.value ().get ().relocation.kind
+                      request.size (), actor_factory->relocation.kind
                                            == detail::factory_relocation_kind_t::preserve_state
                                          ? runtime::protocol::actor_join_snapshot_content_type
                                          : runtime::protocol::actor_join_recreate_content_type),
@@ -6675,43 +7296,60 @@ result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_sp
 result_t<spot_node_runtime_t::remote_actor_transfer_t> spot_node_runtime_t::transfer_actor_out (
   const actor_ref_t &actor_ref, std::string transfer_id, bool capture_state)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto key = actor_key (actor_ref);
-    const auto factory = _state->actor_factories.find (
-      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
-    const auto actor = _state->actor_instances.find (key);
-    const auto source_spot = _state->actor_spot_ids.find (key);
-    if (actor == _state->actor_instances.end () || !actor->second
-        || source_spot == _state->actor_spot_ids.end ()) {
-        return result_t<remote_actor_transfer_t>::failure (
-          framework_error_kind_t::not_found, "source actor is not joined to a local spot");
+    struct transfer_plan_t
+    {
+        std::string key;
+        spot_id_t source_spot;
+        std::shared_ptr<void> actor;
+        spot_node_builder_state_t::actor_factory_registration_t factory;
+        std::shared_ptr<monitoring_runtime_state_t> monitoring;
+    };
+    auto plan = _state->lane.run ([&] () -> result_t<transfer_plan_t> {
+        const auto key = actor_key (actor_ref);
+        const auto factory = _state->actor_factories.find (
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
+        const auto actor = _state->actor_instances.find (key);
+        const auto source_spot = _state->actor_spot_ids.find (key);
+        if (actor == _state->actor_instances.end () || !actor->second
+            || source_spot == _state->actor_spot_ids.end ()) {
+            return result_t<transfer_plan_t>::failure (
+              framework_error_kind_t::not_found, "source actor is not joined to a local spot");
+        }
+        if (factory == _state->actor_factories.end ()) {
+            return result_t<transfer_plan_t>::failure (
+              framework_error_kind_t::not_found, "source actor factory is not registered");
+        }
+        if (factory->second.relocation.kind == detail::factory_relocation_kind_t::disabled) {
+            return result_t<transfer_plan_t>::failure (framework_error_kind_t::not_configured,
+                                                       "Actor relocation is disabled");
+        }
+        if (transfer_id.empty ()) {
+            transfer_id = key;
+        }
+        if (!_state->actor_transfer_coordinator.try_begin_source_remote (
+              key, std::move (transfer_id))) {
+            return result_t<transfer_plan_t>::failure (
+              framework_error_kind_t::rejected, "actor transfer is already in progress");
+        }
+        return result_t<transfer_plan_t>::success (
+          transfer_plan_t{key, source_spot->second, actor->second, factory->second,
+                          _state->monitoring});
+    }).get ();
+    if (!plan) {
+        return detail::propagate_failure<remote_actor_transfer_t> (plan,
+                                                                   "actor transfer-out failed");
     }
-    if (factory == _state->actor_factories.end ()) {
-        return result_t<remote_actor_transfer_t>::failure (
-          framework_error_kind_t::not_found, "source actor factory is not registered");
-    }
-    if (factory->second.relocation.kind == detail::factory_relocation_kind_t::disabled) {
-        return result_t<remote_actor_transfer_t>::failure (framework_error_kind_t::not_configured,
-                                                           "Actor relocation is disabled");
-    }
-    if (transfer_id.empty ()) {
-        transfer_id = key;
-    }
-    if (!_state->actor_transfer_coordinator.try_begin_source_remote (key,
-                                                                     std::move (transfer_id))) {
-        return result_t<remote_actor_transfer_t>::failure (framework_error_kind_t::rejected,
-                                                           "actor transfer is already in progress");
-    }
+    auto prepared = std::move (plan.value ());
     // One histogram sample per transfer, taken right at the moving transition
     // (runtime-metrics §4.3): the coordinator now blocks new dispatches, so the
     // counter is exactly the requests still in flight across the move.
     {
-        runtime::runtime_metrics_t metrics (_state->monitoring);
+        runtime::runtime_metrics_t metrics (prepared.monitoring);
         if (metrics.enabled ()) {
             const auto pending =
               _state->actor_pending_requests_lane
-                .run ([this, &key] {
-                const auto found = _state->actor_pending_requests.find (key);
+                .run ([this, &prepared] {
+                const auto found = _state->actor_pending_requests.find (prepared.key);
                 if (found != _state->actor_pending_requests.end ()) {
                     return found->second;
                 }
@@ -6724,18 +7362,18 @@ result_t<spot_node_runtime_t::remote_actor_transfer_t> spot_node_runtime_t::tran
     }
     if (!capture_state) {
         return result_t<remote_actor_transfer_t>::success (remote_actor_transfer_t{
-          source_spot->second, zlink::message_t{},
-          factory->second.relocation.kind == detail::factory_relocation_kind_t::preserve_state
+          prepared.source_spot, zlink::message_t{},
+          prepared.factory.relocation.kind == detail::factory_relocation_kind_t::preserve_state
             ? std::string (runtime::protocol::actor_join_snapshot_content_type)
             : std::string (runtime::protocol::actor_join_recreate_content_type)});
     }
-    if (factory->second.relocation.kind != detail::factory_relocation_kind_t::preserve_state) {
+    if (prepared.factory.relocation.kind != detail::factory_relocation_kind_t::preserve_state) {
         return result_t<remote_actor_transfer_t>::success (remote_actor_transfer_t{
-          source_spot->second, zlink::message_t{},
+          prepared.source_spot, zlink::message_t{},
           std::string (runtime::protocol::actor_join_recreate_content_type)});
     }
     try {
-        auto state = factory->second.capture (actor->second.get (), {}).result ();
+        auto state = prepared.factory.capture (prepared.actor.get (), {}).result ();
         if (!state) {
             replay_actor_handoff_until_move_closed (actor_ref, transfer_id);
             return detail::propagate_failure<remote_actor_transfer_t> (state,
@@ -6746,7 +7384,7 @@ result_t<spot_node_runtime_t::remote_actor_transfer_t> spot_node_runtime_t::tran
         std::transform (state.value ().begin (), state.value ().end (), payload.begin (),
                         [] (std::byte value) { return static_cast<char> (value); });
         return result_t<remote_actor_transfer_t>::success (remote_actor_transfer_t{
-          source_spot->second, zlink::message_t::from (payload),
+          prepared.source_spot, zlink::message_t::from (payload),
           std::string (runtime::protocol::actor_join_snapshot_content_type)});
     }
     catch (const framework_exception_t &error) {
@@ -6767,8 +7405,11 @@ result_t<spot_node_runtime_t::remote_actor_transfer_t> spot_node_runtime_t::tran
 
 std::string spot_node_runtime_t::next_actor_transfer_id ()
 {
+    const auto local_node_rid = _state->lane.run ([&] {
+        return detail::effective_spot_node_rid (_state->snapshot);
+    }).get ();
     return _state->actor_transfer_coordinator.next_transfer_id (
-      detail::effective_spot_node_rid (_state->snapshot));
+      local_node_rid);
 }
 
 std::optional<std::string>
@@ -6823,19 +7464,17 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
           framework_error_kind_t::rejected, "Actor join is already reserved or moving");
     }
 
-    std::shared_ptr<runtime::serial_execution_queue_t> queue;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    auto queue = _state->lane.run ([&] {
         auto &slot = _state->actor_execution_queues[key];
         if (!slot) {
             slot = std::make_shared<runtime::serial_execution_queue_t> (
-              *framework_worker_executor (_state), runtime::serial_execution_queue_options_t{},
+              *framework_worker_executor_core (_state), runtime::serial_execution_queue_options_t{},
               runtime::serial_execution_queue_t::error_handler_t{},
               runtime::serial_lane_policy_t::actor_delivery ());
         }
         publish_actor_execution_queue_snapshot_unlocked (*_state);
-        queue = slot;
-    }
+        return slot;
+    }).get ();
     auto reserved = queue->reserve_handoff_barrier ("deferred-actor-join");
     if (!reserved) {
         _state->actor_transfer_coordinator.cancel_move (key);
@@ -6850,7 +7489,9 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
         if (state->actor_transfer_coordinator.phase (key) != actor_move_phase_t::source_reserved) {
             return;
         }
-        if (!state->root_services) {
+        const auto has_root_services =
+          state->lane.run ([&] { return state->root_services.has_value (); }).get ();
+        if (!has_root_services) {
             const auto completed =
               state->actor_transfer_coordinator.complete_move_and_take_backlog (key);
             if (!completed.backlog.empty ()
@@ -6919,8 +7560,7 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
     actor_join_completion_callback_t callback;
     std::shared_ptr<void> actor;
     std::optional<result_t<void>> immediate;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    _state->lane.run ([&] {
         if (_state->delivered_join_completions.contains (operation)
             || _state->delivering_join_completions.contains (operation)) {
             immediate.emplace (result_t<void>::success ());
@@ -6948,7 +7588,7 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
                 }
             }
         }
-    }
+    }).get ();
     if (immediate) {
         completed (std::move (*immediate));
         return;
@@ -6956,9 +7596,10 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
 
     actor_gateway_runtime_t *actor_gateway = nullptr;
     std::shared_ptr<bound_session_delivery_fence_t> delivery_fence;
-    if (callback && _state->root_services) {
+    auto root_services = _state->lane.run ([&] { return _state->root_services; }).get ();
+    if (callback && root_services) {
         try {
-            actor_gateway = &_state->root_services->get_required<actor_gateway_runtime_t> ();
+            actor_gateway = &root_services->get_required<actor_gateway_runtime_t> ();
             delivery_fence = actor_gateway->begin_join_completion_delivery_fence (actor_ref);
         }
         catch (...) {
@@ -6969,12 +7610,11 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
 
     auto settle = [node = _state, operation,
                    completed = std::move (completed)] (result_t<void> result) mutable {
-        {
-            std::lock_guard<std::recursive_mutex> node_lock (node->mutex);
+        node->lane.run ([&] {
             node->delivering_join_completions.erase (operation);
             if (result)
                 node->delivered_join_completions.insert (operation);
-        }
+        }).get ();
         completed (std::move (result));
     };
     auto settle_after_delivery = [actor_gateway, delivery_fence, actor_ref,
@@ -7071,25 +7711,59 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
 
 result_t<void> spot_node_runtime_t::leave_actor_for_remote_transfer (const actor_ref_t &actor_ref)
 {
-    std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
     const auto key = actor_key (actor_ref);
-    const auto actor = _state->actor_instances.find (key);
-    const auto factory = _state->actor_factories.find (
-      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
-    if (actor == _state->actor_instances.end () || !actor->second
-        || factory == _state->actor_factories.end ()
-        || _state->actor_spot_ids.find (key) == _state->actor_spot_ids.end ()) {
-        return result_t<void>::failure (framework_error_kind_t::not_found,
-                                        "source actor is not joined to a local spot");
-    }
-    if (_state->actor_transfer_coordinator.phase (key)
-        != std::make_optional (actor_move_phase_t::source_remote)) {
-        return result_t<void>::failure (framework_error_kind_t::rejected,
-                                        "actor transfer has not been prepared");
-    }
+    std::shared_ptr<void> actor;
+    std::shared_ptr<spot_context_state_t> previous_state;
+    std::function<task_t<void> (void *, void *)> leave_callback;
+    const auto plan = _state->lane.run ([&] () -> result_t<void> {
+        const auto found_actor = _state->actor_instances.find (key);
+        const auto factory = _state->actor_factories.find (
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
+        const auto previous = _state->actor_spot_ids.find (key);
+        if (found_actor == _state->actor_instances.end () || !found_actor->second
+            || factory == _state->actor_factories.end ()
+            || previous == _state->actor_spot_ids.end ()) {
+            return result_t<void>::failure (framework_error_kind_t::not_found,
+                                            "source actor is not joined to a local spot");
+        }
+        if (_state->actor_transfer_coordinator.phase (key)
+            != std::make_optional (actor_move_phase_t::source_remote)) {
+            return result_t<void>::failure (framework_error_kind_t::rejected,
+                                            "actor transfer has not been prepared");
+        }
+        actor = found_actor->second;
+        const auto previous_context =
+          _state->spot_contexts_by_id.find (std::string (previous->second));
+        if (previous_context != _state->spot_contexts_by_id.end ()
+            && previous_context->second._state) {
+            previous_state = previous_context->second._state;
+            const auto admission = previous_state->actor_admissions.find (factory->second.actor_type);
+            if (admission != previous_state->actor_admissions.end ()
+                && admission->second.on_leave_actor && previous_state->spot_instance) {
+                leave_callback = admission->second.on_leave_actor;
+            }
+        }
+        return result_t<void>::success ();
+    }).get ();
+    if (!plan)
+        return plan;
     try {
-        leave_previous_actor_route (key, factory->second.actor_type, actor->second.get (),
-                                    node_lock);
+        if (leave_callback) {
+            const auto completed = previous_state->run_serial_task ("spot-actor-leave", [&] {
+                return leave_callback (previous_state->spot_instance.get (), actor.get ());
+            });
+            if (!completed) {
+                throw framework_exception_t (completed.error_kind (),
+                                             completed.error () != nullptr
+                                               ? completed.error ()->what ()
+                                               : "spot actor leave callback failed");
+            }
+        }
+        _state->lane.run ([&] {
+            if (previous_state)
+                decrement_actor_count_unlocked (*previous_state);
+            erase_actor_route_unlocked (*_state, key);
+        }).get ();
         return result_t<void>::success ();
     }
     catch (const framework_exception_t &error) {
@@ -7125,11 +7799,8 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
                                         "remote Actor leave command fence is invalid");
     }
 
-    std::shared_ptr<runtime::stateful::authority_relocation_port_t> authority;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-        authority = _state->relocation_authority;
-    }
+    const auto authority =
+      _state->lane.run ([&] { return _state->relocation_authority; }).get ();
     if (!authority) {
         return result_t<void>::failure (framework_error_kind_t::not_configured,
                                         "remote Actor leave command requires a Location Store");
@@ -7158,32 +7829,37 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
     std::shared_ptr<void> actor_instance;
     std::function<task_t<void> (void *, void *)> leave_callback;
     const auto key = actor_key (source_actor);
+    const auto requested_source_spot_generation = source_spot_generation;
+    const auto matches_cleanup = [&] (const auto &candidate) {
+        return candidate.transfer_id == transfer_id
+               && candidate.source_actor.actor_id () == source_actor.actor_id ()
+               && ::zlink::framework::detail::actor_ref_access_t::actor_type (
+                    candidate.source_actor)
+                    == ::zlink::framework::detail::actor_ref_access_t::actor_type (source_actor)
+               && candidate.source_actor.object_generation () == source_actor.object_generation ()
+               && candidate.source_actor.node_rid ().value () == source_actor.node_rid ().value ()
+               && candidate.target_spot_id == target_spot_id;
+    };
+    struct source_leave_projection_t
     {
-        std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
-        auto cleanup = std::find_if (
+        std::shared_ptr<spot_context_state_t> state;
+        std::shared_ptr<service::spot_t> native_spot;
+        std::uint64_t source_spot_generation = 0;
+    };
+    const auto projection = _state->lane.run ([&] () -> std::optional<source_leave_projection_t> {
+        const auto cleanup = std::find_if (
           _state->pending_remote_source_cleanups.begin (),
-          _state->pending_remote_source_cleanups.end (), [&] (const auto &candidate) {
-              return candidate.transfer_id == transfer_id
-                     && candidate.source_actor.actor_id () == source_actor.actor_id ()
-                     && ::zlink::framework::detail::actor_ref_access_t::actor_type (
-                          candidate.source_actor)
-                          == ::zlink::framework::detail::actor_ref_access_t::actor_type (
-                            source_actor)
-                     && candidate.source_actor.object_generation ()
-                          == source_actor.object_generation ()
-                     && candidate.source_actor.node_rid ().value ()
-                          == source_actor.node_rid ().value ()
-                     && candidate.target_spot_id == target_spot_id;
-          });
+          _state->pending_remote_source_cleanups.end (), matches_cleanup);
+        auto resolved_generation = requested_source_spot_generation;
         if (cleanup != _state->pending_remote_source_cleanups.end ()) {
             if (cleanup->source_spot_id != source_spot_id || cleanup->source_spot_generation == 0
-                || (source_spot_generation != 0
-                    && source_spot_generation != cleanup->source_spot_generation)) {
-                return result_t<void>::success ();
+                || (requested_source_spot_generation != 0
+                    && requested_source_spot_generation != cleanup->source_spot_generation)) {
+                return std::nullopt;
             }
-            source_spot_generation = cleanup->source_spot_generation;
-        } else if (source_spot_generation == 0) {
-            return result_t<void>::success ();
+            resolved_generation = cleanup->source_spot_generation;
+        } else if (resolved_generation == 0) {
+            return std::nullopt;
         }
         const auto context = _state->spot_contexts_by_id.find (std::string (source_spot_id));
         const auto actor = _state->actor_instances.find (key);
@@ -7192,14 +7868,49 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
         if (context == _state->spot_contexts_by_id.end () || !context->second._state
             || !context->second._state->spot_instance || actor == _state->actor_instances.end ()
             || !actor->second || factory == _state->actor_factories.end ()) {
-            return result_t<void>::success ();
+            return std::nullopt;
+        }
+        auto state = context->second._state;
+        auto native_spot = state->native_spot.lock ();
+        if (!native_spot)
+            return std::nullopt;
+        return source_leave_projection_t{std::move (state), std::move (native_spot),
+                                         resolved_generation};
+    }).get ();
+    if (!projection
+        || projection->native_spot->status ().lifecycle_generation ()
+             != projection->source_spot_generation) {
+        return result_t<void>::success ();
+    }
+
+    const auto committed_leave = _state->lane.run ([&] {
+        auto cleanup = std::find_if (
+          _state->pending_remote_source_cleanups.begin (),
+          _state->pending_remote_source_cleanups.end (), matches_cleanup);
+        auto resolved_generation = requested_source_spot_generation;
+        if (cleanup != _state->pending_remote_source_cleanups.end ()) {
+            if (cleanup->source_spot_id != source_spot_id || cleanup->source_spot_generation == 0
+                || (requested_source_spot_generation != 0
+                    && requested_source_spot_generation != cleanup->source_spot_generation)) {
+                return false;
+            }
+            resolved_generation = cleanup->source_spot_generation;
+        } else if (resolved_generation == 0) {
+            return false;
+        }
+        const auto context = _state->spot_contexts_by_id.find (std::string (source_spot_id));
+        const auto actor = _state->actor_instances.find (key);
+        const auto factory = _state->actor_factories.find (
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (source_actor)));
+        if (resolved_generation != projection->source_spot_generation
+            || context == _state->spot_contexts_by_id.end ()
+            || context->second._state != projection->state || !context->second._state->spot_instance
+            || context->second._state->native_spot.lock () != projection->native_spot
+            || actor == _state->actor_instances.end () || !actor->second
+            || factory == _state->actor_factories.end ()) {
+            return false;
         }
         source_state = context->second._state;
-        const auto native_source_spot = source_state->native_spot.lock ();
-        if (!native_source_spot
-            || native_source_spot->status ().lifecycle_generation () != source_spot_generation) {
-            return result_t<void>::success ();
-        }
         const auto admission = source_state->actor_admissions.find (factory->second.actor_type);
         if (admission != source_state->actor_admissions.end ())
             leave_callback = admission->second.on_leave_actor;
@@ -7209,16 +7920,15 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
               _state->actor_transfer_coordinator.message_follow_target (key, cleanup->source_fence);
             if (cleanup->leave_submitted || !target || target->target_fence != target_fence
                 || target->route.spot_id != target_spot_id) {
-                return result_t<void>::success ();
+                return false;
             }
             cleanup->leave_submitted = true;
             // No OnLeave handler registered: there is nothing to await, so
             // this transfer's source cleanup is already unblocked.
             if (!leave_callback)
                 cleanup->leave_completed = true;
-        } else if (!_state->actor_transfer_coordinator.try_submit_source_leave (key, transfer_id)) {
-            return result_t<void>::success ();
-        }
+        } else if (!_state->actor_transfer_coordinator.try_submit_source_leave (key, transfer_id))
+            return false;
 
         const auto local = _state->actor_spot_ids.find (key);
         if (local != _state->actor_spot_ids.end () && local->second == source_spot_id) {
@@ -7226,7 +7936,10 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
         }
         decrement_actor_count_unlocked (*source_state);
         actor_instance = actor->second;
-    }
+        return true;
+    }).get ();
+    if (!committed_leave)
+        return result_t<void>::success ();
 
     if (leave_callback) {
         auto state = _state;
@@ -7242,13 +7955,14 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
               // cleanup_expired_actor_admissions_at waits for this callback
               // to actually finish (leave_completed) before erasing the
               // local Actor instance the callback just ran against.
-              std::lock_guard<std::recursive_mutex> lock (state->mutex);
-              const auto found = std::find_if (
-                state->pending_remote_source_cleanups.begin (),
-                state->pending_remote_source_cleanups.end (),
-                [&] (const auto &candidate) { return candidate.transfer_id == transfer_id; });
-              if (found != state->pending_remote_source_cleanups.end ())
-                  found->leave_completed = true;
+              state->lane.run ([&] {
+                  const auto found = std::find_if (
+                    state->pending_remote_source_cleanups.begin (),
+                    state->pending_remote_source_cleanups.end (),
+                    [&] (const auto &candidate) { return candidate.transfer_id == transfer_id; });
+                  if (found != state->pending_remote_source_cleanups.end ())
+                      found->leave_completed = true;
+              }).get ();
           });
     }
     return result_t<void>::success ();
@@ -7268,7 +7982,9 @@ void spot_node_runtime_t::fail_remote_actor_transfer (
         // lets the deadline handler reconcile against Location Store
         // authority truth instead of blindly replaying locally (spec 28
         // relay-ready irreversibility).
-        _state->actor_transfer_coordinator.mark_reconcile (key, _state->message_follow_duration,
+        const auto message_follow_duration =
+          _state->lane.run ([&] { return _state->message_follow_duration; }).get ();
+        _state->actor_transfer_coordinator.mark_reconcile (key, message_follow_duration,
                                                            std::move (reconcile_context));
     } else {
         replay_actor_handoff_until_move_closed (actor_ref, key);
@@ -7318,61 +8034,68 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
       const runtime::protocol::actor_route_fence_t &, std::uint8_t,
       const runtime::protocol::wire_operation_id_t &, std::uint64_t)>
       late_handoff_relay;
-    std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
     const auto key = actor_key (source_actor);
     if (transfer_id.empty ()) {
         transfer_id = key;
     }
     const auto late_transfer_id = transfer_id;
     const auto target_spot_id = target_route.spot_id;
-    spot_id_t source_spot_id;
-    std::uint64_t source_spot_generation = 0;
-    if (const auto spot = _state->actor_spot_ids.find (key);
-        spot != _state->actor_spot_ids.end ()) {
-        source_spot_id = spot->second;
-        const auto context = _state->spot_contexts_by_id.find (std::string (source_spot_id));
-        if (context != _state->spot_contexts_by_id.end () && context->second._state) {
-            const auto native = context->second._state->native_spot.lock ();
-            if (native)
-                source_spot_generation = native->status ().lifecycle_generation ();
+    struct source_spot_projection_t
+    {
+        spot_id_t spot_id;
+        std::shared_ptr<service::spot_t> native;
+    };
+    auto source = _state->lane.run ([&] {
+        source_spot_projection_t result;
+        if (const auto spot = _state->actor_spot_ids.find (key);
+            spot != _state->actor_spot_ids.end ()) {
+            result.spot_id = spot->second;
+            const auto context = _state->spot_contexts_by_id.find (std::string (result.spot_id));
+            if (context != _state->spot_contexts_by_id.end () && context->second._state)
+                result.native = context->second._state->native_spot.lock ();
         }
-    }
-    // Keep the old-generation Message Follow route independent from the actor's
-    // A later relocation can return the same Actor incarnation to this node.
-    // Retain the committed source fence; the authority owner generation, node
-    // lifecycle, and owner lease distinguish it from the newer local target.
-    _state->actor_transfer_coordinator.activate_message_follow (
-      key, source_fence, target_actor, target_route, target_fence,
-      std::chrono::steady_clock::now () + _state->message_follow_duration, transfer_id);
-    if (const auto current = _state->actor_authority_fences.find (key);
-        current != _state->actor_authority_fences.end () && current->second == source_fence) {
-        _state->actor_authority_fences.erase (current);
-    }
-    detail::record_actor_route_unlocked (*_state, key, std::move (target_route),
-                                         target_actor.object_generation ());
-    // Commit acknowledgement fixes the new owner and Message Follow route first.
-    // Releasing stale source ownership is post-commit housekeeping: losing the
-    // source process now cannot roll back the accepted target generation.
-    const auto source_leave_submitted =
-      _state->actor_transfer_coordinator.source_leave_submitted (key, transfer_id);
-    _state->pending_remote_source_cleanups.push_back (
-      spot_node_builder_state_t::pending_remote_source_cleanup_t{
-        .source_actor = source_actor,
-        .source_fence = std::move (source_fence),
-        .transfer_id = std::move (transfer_id),
-        .source_spot_id = std::move (source_spot_id),
-        .source_spot_generation = source_spot_generation,
-        .target_spot_id = target_spot_id,
-        .not_before = std::chrono::steady_clock::now () + std::chrono::seconds (1),
-        .leave_submitted = source_leave_submitted,
-        .leave_completed = false,
-        .leave_deadline = std::chrono::steady_clock::now () + _state->message_follow_duration});
-    // Publish the Message Follow route before removing the moving state. A
-    // packet that already selected the source route can still reach the
-    // coordinator while this transition runs; finish_move_replay() removes the
-    // moving state only after an atomic empty-backlog observation.
-    late_handoff_relay = _state->actor_message_follow_relay;
-    node_lock.unlock ();
+        return result;
+    }).get ();
+    const auto source_spot_generation =
+      source.native ? source.native->status ().lifecycle_generation () : 0;
+    _state->lane.run ([&] {
+        // Keep the old-generation Message Follow route independent from the actor's
+        // A later relocation can return the same Actor incarnation to this node.
+        // Retain the committed source fence; the authority owner generation, node
+        // lifecycle, and owner lease distinguish it from the newer local target.
+        _state->actor_transfer_coordinator.activate_message_follow (
+          key, source_fence, target_actor, target_route, target_fence,
+          std::chrono::steady_clock::now () + _state->message_follow_duration, transfer_id);
+        if (const auto current = _state->actor_authority_fences.find (key);
+            current != _state->actor_authority_fences.end () && current->second == source_fence) {
+            _state->actor_authority_fences.erase (current);
+        }
+        detail::record_actor_route_unlocked (*_state, key, std::move (target_route),
+                                             target_actor.object_generation ());
+        // Commit acknowledgement fixes the new owner and Message Follow route first.
+        // Releasing stale source ownership is post-commit housekeeping: losing the
+        // source process now cannot roll back the accepted target generation.
+        const auto source_leave_submitted =
+          _state->actor_transfer_coordinator.source_leave_submitted (key, transfer_id);
+        _state->pending_remote_source_cleanups.push_back (
+          spot_node_builder_state_t::pending_remote_source_cleanup_t{
+            .source_actor = source_actor,
+            .source_fence = std::move (source_fence),
+            .transfer_id = std::move (transfer_id),
+            .source_spot_id = std::move (source.spot_id),
+            .source_spot_generation = source_spot_generation,
+            .target_spot_id = target_spot_id,
+            .not_before = std::chrono::steady_clock::now () + std::chrono::seconds (1),
+            .leave_submitted = source_leave_submitted,
+            .leave_completed = false,
+            .leave_deadline =
+              std::chrono::steady_clock::now () + _state->message_follow_duration});
+        // Publish the Message Follow route before removing the moving state. A
+        // packet that already selected the source route can still reach the
+        // coordinator while this transition runs; finish_move_replay() removes the
+        // moving state only after an atomic empty-backlog observation.
+        late_handoff_relay = _state->actor_message_follow_relay;
+    }).get ();
 
     std::optional<std::chrono::steady_clock::duration> transfer_elapsed;
     for (;;) {
@@ -7494,7 +8217,6 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
                                                    actor_context_t actor_context,
                                                    bool defer_joined_callback)
 {
-    std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
     cleanup_expired_actor_admissions ();
     const auto pending =
       _state->actor_transfer_coordinator.begin_commit (transfer_id, actor_ref, target_spot_id);
@@ -7502,23 +8224,88 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
         return result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::protocol_error, "remote actor commit has no matching admission");
     }
-    auto factory = actor_factory_unlocked (actor_ref);
-    auto context = find_context (target_spot_id);
-    if (!factory || !context || !context->_state->spot_instance) {
+    const auto key = actor_key (actor_ref);
+    struct prepare_plan_t
+    {
+        spot_node_builder_state_t::actor_factory_registration_t factory;
+        spot_actor_admission_callbacks_t admission;
+        std::shared_ptr<spot_context_state_t> context;
+        std::string node_rid;
+        bool available = false;
+        bool lifecycle_available = false;
+        bool context_reserved = false;
+    };
+    const auto plan = _state->lane.run ([&] {
+        prepare_plan_t result;
+        const auto factory = _state->actor_factories.find (
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
+        const auto context =
+          _state->spot_contexts_by_id.find (std::string (target_spot_id));
+        if (factory == _state->actor_factories.end ()
+            || context == _state->spot_contexts_by_id.end () || !context->second._state
+            || !context->second._state->spot_instance) {
+            return result;
+        }
+        result.factory = factory->second;
+        result.context = context->second._state;
+        result.node_rid = detail::effective_spot_node_rid (_state->snapshot);
+        result.available = true;
+        const auto admission = result.context->actor_admissions.find (result.factory.actor_type);
+        if (admission != result.context->actor_admissions.end ()) {
+            result.admission = admission->second;
+            result.lifecycle_available = true;
+        }
+        if (!result.lifecycle_available)
+            return result;
+        if (result.context->closed || result.context->close_reservation != 0
+            || _state->actor_instances.contains (key) || _state->actor_spot_ids.contains (key)
+            || _state->pending_actor_contexts.contains (key)) {
+            return result;
+        }
+        result.context->actor_count++;
+        _state->pending_actor_contexts.emplace (key, target_spot_id);
+        result.context_reserved = true;
+        return result;
+    }).get ();
+    if (!plan.available) {
         _state->actor_transfer_coordinator.fail_commit (transfer_id, false);
         return result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::not_found, "remote actor commit dependencies are not registered");
     }
+    if (!plan.lifecycle_available) {
+        _state->actor_transfer_coordinator.fail_commit (transfer_id, false);
+        return result_t<actor_join_reply_t>::failure (
+          framework_error_kind_t::not_found, "target spot actor lifecycle is not registered");
+    }
 
     const auto committed = ::zlink::framework::detail::actor_ref_access_t::make (
-      node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
+      node_rid_t::from_string (plan.node_rid),
       std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
       std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
+    if (!plan.context_reserved) {
+        _state->actor_transfer_coordinator.fail_commit (transfer_id, false);
+        return result_t<actor_join_reply_t>::failure (
+          framework_error_kind_t::unavailable,
+          "target Spot closed before the remote Actor could be prepared");
+    }
+
     bool claimed_location = false;
     auto location_claim = claim_pending_actor_location_before_activation (
-      _state, pending->source_actor, pending->source_spot_id, committed, *context->_state,
+      _state, pending->source_actor, pending->source_spot_id, committed, *plan.context,
       claimed_location);
+    auto release_context_reservation = [&] {
+        _state->lane.run ([&] {
+            const auto reservation = _state->pending_actor_contexts.find (key);
+            if (reservation == _state->pending_actor_contexts.end ()
+                || reservation->second != target_spot_id) {
+                return;
+            }
+            decrement_actor_count_unlocked (*plan.context);
+            _state->pending_actor_contexts.erase (reservation);
+        }).get ();
+    };
     if (!location_claim) {
+        release_context_reservation ();
         _state->actor_transfer_coordinator.fail_commit (transfer_id, false);
         return result_t<actor_join_reply_t>::failure (
           location_claim.error_kind (), location_claim.error () ? location_claim.error ()->what ()
@@ -7526,17 +8313,18 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
     }
 
     auto fail_target_commit = [&] (bool reconcile) {
+        release_context_reservation ();
         if (claimed_location) {
-            release_actor_location (*_state, committed);
+            release_actor_location (_state, committed);
         }
         _state->actor_transfer_coordinator.fail_commit (transfer_id, reconcile);
     };
 
     auto committed_context =
-      actor_context_t (actor_context._state, committed, 0, context->_state->mesh_name);
+      actor_context_t (actor_context._state, committed, 0, plan.context->mesh_name);
     std::shared_ptr<void> actor;
     try {
-        auto &registration = factory.value ().get ();
+        const auto &registration = plan.factory;
         actor = registration.create_context_instance
                   ? registration.create_context_instance (std::move (committed_context))
                   : registration.create_instance (std::string (actor_ref.actor_id ().value ()));
@@ -7579,21 +8367,9 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
                                                       "actor materialization returned no actor");
     }
 
-    const auto admission =
-      context->_state->actor_admissions.find (factory.value ().get ().actor_type);
-    if (admission == context->_state->actor_admissions.end ()) {
-        fail_target_commit (false);
-        return result_t<actor_join_reply_t>::failure (
-          framework_error_kind_t::not_found, "target spot actor lifecycle is not registered");
-    }
-
-    auto &target = *context->_state;
-    // The joined callback is user code on the spot serial queue. It may call back
-    // into the framework (sends, joins) that need the node mutex from the serial
-    // thread, so the node mutex must not be held across this wait.
-    node_lock.unlock ();
+    auto &target = *plan.context;
     try {
-        if (!defer_joined_callback && admission->second.on_actor_joined) {
+        if (!defer_joined_callback && plan.admission.on_actor_joined) {
             const auto completed =
               target.run_serial_task ("spot-actor-transfer-joined", [&] () -> task_t<void> {
                   const auto updated =
@@ -7604,11 +8380,9 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
                                                      ? updated.error ()->what ()
                                                      : "target actor gateway ref update failed");
                   }
-                  co_await admission->second.on_actor_joined (target.spot_instance.get (),
-                                                              actor.get ());
+                  co_await plan.admission.on_actor_joined (target.spot_instance.get (), actor.get ());
               });
             if (!completed) {
-                node_lock.lock ();
                 fail_target_commit (false);
                 return result_t<actor_join_reply_t>::failure (
                   completed.error_kind (), completed.error () != nullptr
@@ -7616,34 +8390,35 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
                                              : "spot actor joined callback failed");
             }
         }
-        node_lock.lock ();
     }
     catch (const framework_exception_t &error) {
-        node_lock.lock ();
-        detail::record_actor_instance_index_unlocked (*_state, committed, actor.get ());
-        _state->actor_instances[actor_key (committed)] = actor;
+        _state->lane.run ([&] {
+            detail::record_actor_instance_index_unlocked (*_state, committed, actor.get ());
+            _state->actor_instances[actor_key (committed)] = actor;
+        }).get ();
         fail_target_commit (true);
         return detail::result_access_t::failure<actor_join_reply_t> (error);
     }
     catch (const std::exception &error) {
-        node_lock.lock ();
-        detail::record_actor_instance_index_unlocked (*_state, committed, actor.get ());
-        _state->actor_instances[actor_key (committed)] = actor;
+        _state->lane.run ([&] {
+            detail::record_actor_instance_index_unlocked (*_state, committed, actor.get ());
+            _state->actor_instances[actor_key (committed)] = actor;
+        }).get ();
         fail_target_commit (true);
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
                                                       error.what ());
     }
     catch (...) {
-        node_lock.lock ();
-        detail::record_actor_instance_index_unlocked (*_state, committed, actor.get ());
-        _state->actor_instances[actor_key (committed)] = actor;
+        _state->lane.run ([&] {
+            detail::record_actor_instance_index_unlocked (*_state, committed, actor.get ());
+            _state->actor_instances[actor_key (committed)] = actor;
+        }).get ();
         fail_target_commit (true);
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
                                                       "target joined callback failed");
     }
 
-    const auto key = actor_key (committed);
-    // The node mutex was unlocked around the joined callback above — the
+    // The node lane was released around the joined callback above — the
     // only window in this synchronous PREPARE where a newer exact identity
     // for the same object can run try_add_admission's target_committing
     // eviction (spec 15 §4.2 newest-attempt-wins) concurrently. Re-check
@@ -7657,13 +8432,34 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
           framework_error_kind_t::rejected,
           "remote Actor Join admission was superseded by a newer attempt");
     }
-    detail::record_actor_instance_index_unlocked (*_state, committed, actor.get ());
-    _state->actor_instances[key] = std::move (actor);
-    _state->destroyed_actor_keys.erase (key);
-    // Core installs the target Actor during the finalize transfer fence.
-    detail::record_actor_context_route_unlocked (*_state, key,
-                                                 detail::effective_spot_node_rid (_state->snapshot),
-                                                 target, committed.object_generation ());
+    const auto installed = _state->lane.run ([&] {
+        const auto context = _state->spot_contexts_by_id.find (std::string (target_spot_id));
+        if (context == _state->spot_contexts_by_id.end ()
+            || context->second._state != plan.context || target.closed
+            || target.close_reservation != 0 || !target.spot_instance) {
+            return false;
+        }
+        const auto reservation = _state->pending_actor_contexts.find (key);
+        if (reservation == _state->pending_actor_contexts.end ()
+            || reservation->second != target_spot_id) {
+            return false;
+        }
+        detail::record_actor_instance_index_unlocked (*_state, committed, actor.get ());
+        _state->actor_instances[key] = std::move (actor);
+        _state->destroyed_actor_keys.erase (key);
+        // Core installs the target Actor during the finalize transfer fence.
+        decrement_actor_count_unlocked (target);
+        _state->pending_actor_contexts.erase (reservation);
+        detail::record_actor_context_route_unlocked (*_state, key, plan.node_rid, target,
+                                                     committed.object_generation ());
+        return true;
+    }).get ();
+    if (!installed) {
+        fail_target_commit (false);
+        return result_t<actor_join_reply_t>::failure (
+          framework_error_kind_t::unavailable,
+          "target Spot closed before the remote Actor could be staged");
+    }
     return result_t<actor_join_reply_t>::success (
       actor_join_reply_t{0, committed, zlink::message_t{}});
 }
@@ -7699,7 +8495,29 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "remote Actor authority commit has no pending admission");
     }
-    if (!_state->relocation_authority) {
+    struct authority_commit_plan_t
+    {
+        std::shared_ptr<runtime::stateful::authority_relocation_port_t> relocation_authority;
+        std::shared_ptr<service::mesh_node_t> native;
+        runtime::location_lifecycle_t *location_lifecycle = nullptr;
+        std::string target_node_id;
+        std::string local_mesh_name;
+        std::uint64_t membership_epoch = 0;
+    };
+    const auto plan = _state->lane.run ([&] {
+        authority_commit_plan_t result;
+        result.relocation_authority = _state->relocation_authority;
+        result.native = _state->native_node.lock ();
+        result.location_lifecycle = _state->location_lifecycle;
+        result.target_node_id = detail::effective_spot_node_rid (_state->snapshot);
+        result.local_mesh_name = _state->snapshot.name;
+        const auto epoch = _state->core_actor_membership_epochs.find (
+          std::string (actor_ref.actor_id ().value ()));
+        if (epoch != _state->core_actor_membership_epochs.end ())
+            result.membership_epoch = epoch->second;
+        return result;
+    }).get ();
+    if (!plan.relocation_authority) {
         return result_t<void>::failure (framework_error_kind_t::not_configured,
                                         "remote Actor authority commit requires a Location Store");
     }
@@ -7711,8 +8529,8 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
                                         "remote Actor authority commit fence is invalid");
     }
 
-    const auto native = native_node ();
-    const auto target_node_id = detail::effective_spot_node_rid (_state->snapshot);
+    const auto &native = plan.native;
+    const auto &target_node_id = plan.target_node_id;
     if (!native || native->status ().routing_id ().to_string () != target_node_id
         || native->status ().lifecycle_generation () != target_node_lifecycle_generation) {
         return result_t<void>::failure (framework_error_kind_t::unavailable,
@@ -7757,7 +8575,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
         const object_creation_target_t target_placement{
           target_mesh_name, node_rid_t::from_string (target_node_id),
           target_node_lifecycle_generation, target_owner};
-        published = _state->relocation_authority->publish (
+        published = plan.relocation_authority->publish (
           source, target, target_owner, target_placement, {}, 0, inventory_digest,
           runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
             .state = runtime::actor_authority_state_t::ready,
@@ -7774,7 +8592,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
             .node_generation = target_placement.node_lifecycle_generation}));
         if (published.status != runtime::stateful::authority_publish_status_t::published
             || !published.current) {
-            published.current = _state->relocation_authority->read (source.kind, source.key);
+            published.current = plan.relocation_authority->read (source.kind, source.key);
         }
     }
     catch (const std::exception &error) {
@@ -7832,32 +8650,27 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
       current->target.mesh_name,
       current->target.node_id};
     (void) native->advance_local_actor_authority (committed_target);
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    const auto local_node_routing_id = native->status ().routing_id ().to_bytes ();
+    _state->lane.run ([&] {
         _state->actor_authority_fences.insert_or_assign (
           actor_key (target_actor),
           runtime::protocol::actor_route_fence_t{
             std::string (target_actor.actor_id ().value ()), target_actor.object_generation (),
-            native->status ().routing_id ().to_bytes (), target_node_lifecycle_generation,
+            local_node_routing_id, target_node_lifecycle_generation,
             current->target.authority_owner_generation,
             static_cast<std::uint64_t> (target_owner.lease_generation)});
-    }
+    }).get ();
     //  Spec 28-relocation-flow §8: the cross-node Join moved the Actor owner
     //  to this target in the same CAS, and the staged transfer skips the
     //  ordinary local claim. Adopt the committed authority into this node's
     //  location lifecycle now — otherwise update_actor_location_after_move
     //  and a later Spot leave renew against an untracked entry.
-    if (_state->location_lifecycle
-        && !_state->location_lifecycle->owns_actor (actor_location_key_t{
-          _state->snapshot.name, std::string (target_actor.actor_id ().value ())})) {
-        std::uint64_t adopted_membership_epoch = 0;
-        const auto epoch = _state->core_actor_membership_epochs.find (
-          std::string (target_actor.actor_id ().value ()));
-        if (epoch != _state->core_actor_membership_epochs.end ())
-            adopted_membership_epoch = epoch->second;
-        const auto adopted = _state->location_lifecycle->claim_actor (
+    if (plan.location_lifecycle
+        && !plan.location_lifecycle->owns_actor (actor_location_key_t{
+          plan.local_mesh_name, std::string (target_actor.actor_id ().value ())})) {
+        const auto adopted = plan.location_lifecycle->claim_actor (
           actor_location_t{
-            .mesh_name = _state->snapshot.name,
+            .mesh_name = plan.local_mesh_name,
             .actor_id = std::string (target_actor.actor_id ().value ()),
             .actor_type = std::string (
               ::zlink::framework::detail::actor_ref_access_t::actor_type (target_actor)),
@@ -7867,7 +8680,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
             .spot_id = target_spot_id,
             .spot_generation = target_spot_generation,
             .spot_kind = zlink::spot_kind::user,
-            .membership_epoch = adopted_membership_epoch},
+            .membership_epoch = plan.membership_epoch},
           [weak_state = std::weak_ptr<detail::spot_node_builder_state_t> (_state)] (
             const actor_location_t &lost) { deactivate_actor_location (weak_state, lost); },
           true);
@@ -7973,78 +8786,96 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
         if (callback)
             callback (std::move (result));
     };
-    std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
     const auto pending =
       _state->actor_transfer_coordinator.pending_commit (transfer_id, actor_ref, target_spot_id);
     if (!pending) {
-        node_lock.unlock ();
         complete_result (result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::protocol_error,
           "remote actor finalize has no matching prepared commit"));
         return;
     }
-    if (!deadline) {
-        const auto timeout =
-          _state->channel_runtime
-            ? _state->channel_runtime->default_request_timeout
-            : std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::seconds (30));
-        deadline = std::chrono::steady_clock::now () + timeout;
-    }
-    const auto committed = ::zlink::framework::detail::actor_ref_access_t::make (
-      node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
-      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-      std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
-    const auto key = actor_key (committed);
-    auto context = find_context (target_spot_id);
-    auto factory = actor_factory_unlocked (committed);
-    const auto actor = _state->actor_instances.find (key);
-    if (!context || !context->_state->spot_instance || !factory
-        || actor == _state->actor_instances.end () || !actor->second) {
-        _state->actor_transfer_coordinator.fail_commit (transfer_id, true);
-        node_lock.unlock ();
-        complete_result (result_t<actor_join_reply_t>::failure (
-          framework_error_kind_t::not_found,
-          "prepared remote actor commit dependencies are unavailable"));
-        return;
-    }
-    const auto actor_instance = actor->second;
-
-    auto target_state = context->_state;
-    auto &target = *target_state;
-    std::optional<actor_gateway_runtime_t> actor_gateway_owner;
-    std::function<task_t<void> (void *, void *)> joined_callback;
-    if (actor_gateway != nullptr) {
-        const auto admission = target.actor_admissions.find (factory.value ().get ().actor_type);
-        if (admission == target.actor_admissions.end ()) {
-            _state->actor_transfer_coordinator.fail_commit (transfer_id, true);
-            node_lock.unlock ();
-            complete_result (result_t<actor_join_reply_t>::failure (
-              framework_error_kind_t::not_found, "target spot actor lifecycle is not registered"));
-            return;
-        }
-        actor_gateway_owner.emplace (*actor_gateway);
-        joined_callback = admission->second.on_actor_joined;
-    }
-
     if (pending->completion_operation_id_high == 0 && pending->completion_operation_id_low == 0) {
         _state->actor_transfer_coordinator.fail_commit (transfer_id, true);
-        node_lock.unlock ();
         complete_result (result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::protocol_error,
           "remote Actor Join completion OperationId is invalid"));
         return;
     }
-
-    std::shared_ptr<runtime::serial_execution_queue_t> actor_queue;
-    auto &slot = _state->actor_execution_queues[key];
-    if (!slot) {
-        slot = std::make_shared<runtime::serial_execution_queue_t> (
-          *framework_worker_executor (_state), runtime::serial_execution_queue_options_t{},
-          runtime::serial_execution_queue_t::error_handler_t{},
-          runtime::serial_lane_policy_t::actor_delivery ());
-        publish_actor_execution_queue_snapshot_unlocked (*_state);
+    const auto key = actor_key (actor_ref);
+    struct finalize_plan_t
+    {
+        std::shared_ptr<spot_context_state_t> target_state;
+        std::shared_ptr<void> actor_instance;
+        std::shared_ptr<runtime::serial_execution_queue_t> actor_queue;
+        std::shared_ptr<runtime::offload_executor_t> deadline_executor;
+        std::function<task_t<void> (void *, void *)> joined_callback;
+        std::string node_rid;
+        std::chrono::milliseconds request_timeout{
+          std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::seconds (30))};
+        bool dependencies_available = false;
+        bool lifecycle_available = true;
+    };
+    const auto plan = _state->lane.run ([&] {
+        finalize_plan_t result;
+        result.node_rid = detail::effective_spot_node_rid (_state->snapshot);
+        if (_state->channel_runtime)
+            result.request_timeout = _state->channel_runtime->default_request_timeout;
+        const auto context =
+          _state->spot_contexts_by_id.find (std::string (target_spot_id));
+        const auto factory = _state->actor_factories.find (
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
+        const auto actor = _state->actor_instances.find (key);
+        if (context == _state->spot_contexts_by_id.end () || !context->second._state
+            || !context->second._state->spot_instance || factory == _state->actor_factories.end ()
+            || actor == _state->actor_instances.end () || !actor->second) {
+            return result;
+        }
+        result.target_state = context->second._state;
+        result.actor_instance = actor->second;
+        if (actor_gateway != nullptr) {
+            const auto admission =
+              result.target_state->actor_admissions.find (factory->second.actor_type);
+            if (admission == result.target_state->actor_admissions.end ()) {
+                result.lifecycle_available = false;
+                return result;
+            }
+            result.joined_callback = admission->second.on_actor_joined;
+        }
+        auto &slot = _state->actor_execution_queues[key];
+        if (!slot) {
+            slot = std::make_shared<runtime::serial_execution_queue_t> (
+              *framework_worker_executor_core (_state), runtime::serial_execution_queue_options_t{},
+              runtime::serial_execution_queue_t::error_handler_t{},
+              runtime::serial_lane_policy_t::actor_delivery ());
+            publish_actor_execution_queue_snapshot_unlocked (*_state);
+        }
+        result.actor_queue = slot;
+        result.deadline_executor = framework_deadline_executor_core (_state);
+        result.dependencies_available = true;
+        return result;
+    }).get ();
+    if (!plan.dependencies_available) {
+        _state->actor_transfer_coordinator.fail_commit (transfer_id, true);
+        complete_result (result_t<actor_join_reply_t>::failure (
+          plan.lifecycle_available ? framework_error_kind_t::not_found
+                                   : framework_error_kind_t::not_found,
+          plan.lifecycle_available ? "prepared remote actor commit dependencies are unavailable"
+                                   : "target spot actor lifecycle is not registered"));
+        return;
     }
-    actor_queue = slot;
+    if (!deadline)
+        deadline = std::chrono::steady_clock::now () + plan.request_timeout;
+    const auto committed = ::zlink::framework::detail::actor_ref_access_t::make (
+      node_rid_t::from_string (plan.node_rid),
+      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
+      std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
+    const auto actor_instance = plan.actor_instance;
+    const auto target_state = plan.target_state;
+    const auto actor_queue = plan.actor_queue;
+    std::optional<actor_gateway_runtime_t> actor_gateway_owner;
+    if (actor_gateway != nullptr)
+        actor_gateway_owner.emplace (*actor_gateway);
+    auto joined_callback = plan.joined_callback;
     const auto *actor_queue_identity = actor_queue.get ();
     std::weak_ptr<spot_node_builder_state_t> node_owner = _state;
     std::weak_ptr<spot_context_state_t> target_state_owner = target_state;
@@ -8088,7 +8919,7 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
               (void) queue->cancel_submission (id);
       };
     auto deadline_state = std::make_shared<deadline_state_t> ();
-    auto deadline_executor = framework_deadline_executor (_state);
+    auto deadline_executor = plan.deadline_executor;
     std::weak_ptr<spot_node_builder_state_t> terminal_node = _state;
     commit_state->on_terminal (
       [terminal_node, transfer_id, committed, deadline_state,
@@ -8232,11 +9063,9 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                     remote_actor_commit_turn_state_t::outcome_t{false, kind, std::move (error)});
               };
               try {
-                  bool owner_fence_changed = false;
-                  {
-                      std::lock_guard<std::recursive_mutex> node_lock (node->mutex);
-                      const auto exact_pending = node->actor_transfer_coordinator.pending_commit (
-                        transfer_id, actor_ref, target_spot_id);
+                  const auto exact_pending = node->actor_transfer_coordinator.pending_commit (
+                    transfer_id, actor_ref, target_spot_id);
+                  const auto owner_fence_changed = !exact_pending || !node->lane.run ([&] {
                       const auto context =
                         node->spot_contexts_by_id.find (std::string (target_spot_id));
                       const auto actor = node->actor_instances.find (key);
@@ -8250,11 +9079,12 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                           || generation->second != committed.object_generation ()
                           || queue == node->actor_execution_queues.end ()
                           || queue->second.get () != actor_queue_identity) {
-                          node->actor_transfer_coordinator.fail_commit (transfer_id, true);
-                          owner_fence_changed = true;
+                          return false;
                       }
-                  }
+                      return true;
+                  }).get ();
                   if (owner_fence_changed) {
+                      node->actor_transfer_coordinator.fail_commit (transfer_id, true);
                       settle_turn (remote_actor_commit_turn_state_t::outcome_t{
                         false, framework_error_kind_t::invalid_operation,
                         "remote Actor handoff owner fence changed before activation"});
@@ -8327,11 +9157,16 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                             std::optional<std::vector<handoff_packet_t>> replay;
                             std::optional<remote_actor_commit_turn_state_t::outcome_t>
                               commit_failure;
+                            const auto exact_pending =
+                              node->actor_transfer_coordinator.pending_commit (
+                                transfer_id, actor_ref, target_spot_id);
+                            struct completion_plan_t
                             {
-                                std::lock_guard<std::recursive_mutex> node_lock (node->mutex);
-                                const auto exact_pending =
-                                  node->actor_transfer_coordinator.pending_commit (
-                                    transfer_id, actor_ref, target_spot_id);
+                                bool valid = false;
+                                std::function<result_t<void> (const actor_ref_t &)> update_actor_ref;
+                            };
+                            const auto plan = node->lane.run ([&] {
+                                completion_plan_t result;
                                 const auto context =
                                   node->spot_contexts_by_id.find (std::string (target_spot_id));
                                 const auto actor = node->actor_instances.find (key);
@@ -8346,40 +9181,68 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                                     || generation->second != committed.object_generation ()
                                     || queue == node->actor_execution_queues.end ()
                                     || queue->second.get () != actor_queue_identity) {
-                                    node->actor_transfer_coordinator.fail_commit (transfer_id,
-                                                                                  true);
+                                    return result;
+                                }
+                                result.valid = true;
+                                result.update_actor_ref = node->update_actor_registry_ref;
+                                return result;
+                            }).get ();
+                            if (!exact_pending || !plan.valid) {
+                                commit_failure.emplace (
+                                  false, framework_error_kind_t::invalid_operation,
+                                  "remote Actor handoff owner fence changed during completion");
+                            } else {
+                                const auto location_updated = update_actor_location_after_move (
+                                  node, committed, *target_state, false);
+                                if (!location_updated) {
+                                    commit_failure.emplace (
+                                      false, location_updated.error_kind (),
+                                      location_updated.error () != nullptr
+                                        ? location_updated.error ()->what ()
+                                        : "actor committed location update failed");
+                                } else if (plan.update_actor_ref) {
+                                    const auto updated = plan.update_actor_ref (committed);
+                                    if (!updated) {
+                                        commit_failure.emplace (
+                                          false, updated.error_kind (),
+                                          updated.error () != nullptr ? updated.error ()->what ()
+                                                                      : "actor ref update failed");
+                                    }
+                                }
+                            }
+                            if (!commit_failure) {
+                                const auto still_pending =
+                                  node->actor_transfer_coordinator.pending_commit (
+                                    transfer_id, actor_ref, target_spot_id);
+                                const auto still_owned = still_pending && node->lane.run ([&] {
+                                    const auto context = node->spot_contexts_by_id.find (
+                                      std::string (target_spot_id));
+                                    const auto actor = node->actor_instances.find (key);
+                                    const auto generation = node->actor_generations.find (key);
+                                    const auto queue = node->actor_execution_queues.find (key);
+                                    return context != node->spot_contexts_by_id.end ()
+                                           && context->second._state == target_state
+                                           && target_state->spot_instance
+                                           && actor != node->actor_instances.end ()
+                                           && actor->second == actor_instance
+                                           && generation != node->actor_generations.end ()
+                                           && generation->second
+                                                == committed.object_generation ()
+                                           && queue != node->actor_execution_queues.end ()
+                                           && queue->second.get () == actor_queue_identity;
+                                }).get ();
+                                if (still_owned) {
+                                    replay = node->actor_transfer_coordinator
+                                               .complete_commit_and_take_backlog (
+                                                 transfer_id, actor_ref, target_spot_id);
+                                } else {
                                     commit_failure.emplace (
                                       false, framework_error_kind_t::invalid_operation,
                                       "remote Actor handoff owner fence changed during completion");
-                                } else {
-                                    const auto location_updated = update_actor_location_after_move (
-                                      *node, committed, *target_state, false);
-                                    if (!location_updated) {
-                                        node->actor_transfer_coordinator.fail_commit (transfer_id,
-                                                                                      true);
-                                        commit_failure.emplace (
-                                          false, location_updated.error_kind (),
-                                          location_updated.error () != nullptr
-                                            ? location_updated.error ()->what ()
-                                            : "actor committed location update failed");
-                                    } else if (node->update_actor_registry_ref) {
-                                        const auto updated =
-                                          node->update_actor_registry_ref (committed);
-                                        if (!updated) {
-                                            node->actor_transfer_coordinator.fail_commit (
-                                              transfer_id, true);
-                                            commit_failure.emplace (false, updated.error_kind (),
-                                                                    updated.error () != nullptr
-                                                                      ? updated.error ()->what ()
-                                                                      : "actor ref update failed");
-                                        }
-                                    }
-                                    if (!commit_failure) {
-                                        replay = node->actor_transfer_coordinator
-                                                   .complete_commit_and_take_backlog (
-                                                     transfer_id, actor_ref, target_spot_id);
-                                    }
                                 }
+                            }
+                            if (commit_failure) {
+                                node->actor_transfer_coordinator.fail_commit (transfer_id, true);
                             }
                             if (commit_failure) {
                                 settle_turn (std::move (*commit_failure));
@@ -8464,7 +9327,6 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
         track_submission (actor_queue, submitted.value ());
     };
 
-    node_lock.unlock ();
     if (actor_gateway_owner) {
         const auto updated = actor_gateway_owner->update_actor_ref (committed);
         if (!updated) {
@@ -8530,34 +9392,68 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_entry_spot_erase
         return result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::rejected, "spot node is draining and rejects new actor joins");
     }
-    if (spot_node_rid.empty ()
-        || spot_node_rid.value () != detail::effective_spot_node_rid (_state->snapshot)) {
+    enum class entry_selection_t
+    {
+        selected,
+        node_mismatch,
+        not_registered,
+        not_created
+    };
+    struct entry_selection_result_t
+    {
+        entry_selection_t selection = entry_selection_t::not_created;
+        std::optional<spot_id_t> entry_id;
+    };
+    const auto entry = _state->lane.run ([&] {
+        entry_selection_result_t result;
+        if (spot_node_rid.empty ()
+            || spot_node_rid.value () != detail::effective_spot_node_rid (_state->snapshot)) {
+            result.selection = entry_selection_t::node_mismatch;
+            return result;
+        }
+        if (!_state->snapshot.entry_spot_name) {
+            result.selection = entry_selection_t::not_registered;
+            return result;
+        }
+        const auto entry_id = _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
+        if (entry_id == _state->spot_ids_by_name.end ()) {
+            result.selection = entry_selection_t::not_created;
+            return result;
+        }
+        result.selection = entry_selection_t::selected;
+        result.entry_id = entry_id->second;
+        return result;
+    }).get ();
+    if (entry.selection == entry_selection_t::node_mismatch) {
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                       "spot node rid does not match this node");
     }
-    if (!_state->snapshot.entry_spot_name) {
+    if (entry.selection == entry_selection_t::not_registered) {
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                       "entry spot is not registered");
     }
-    const auto entry_id = _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
-    if (entry_id == _state->spot_ids_by_name.end ()) {
+    if (!entry.entry_id) {
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                       "entry spot is not created");
     }
-    return join_actor_to_spot_erased (actor_ref, entry_id->second, request, actor_snapshot,
+    return join_actor_to_spot_erased (actor_ref, *entry.entry_id, request, actor_snapshot,
                                       std::move (actor_context));
 }
 
 void spot_node_runtime_t::on_destroy_actor (
   std::function<result_t<void> (const actor_ref_t &)> destroy_actor)
 {
-    _state->destroy_actor_registry = std::move (destroy_actor);
+    _state->lane.run ([&] {
+        _state->destroy_actor_registry = std::move (destroy_actor);
+    }).get ();
 }
 
 void spot_node_runtime_t::on_actor_ref_updated (
   std::function<result_t<void> (const actor_ref_t &)> update_actor)
 {
-    _state->update_actor_registry_ref = std::move (update_actor);
+    _state->lane.run ([&] {
+        _state->update_actor_registry_ref = std::move (update_actor);
+    }).get ();
 }
 
 void spot_node_runtime_t::on_actor_entry_spot_join (
@@ -8566,7 +9462,9 @@ void spot_node_runtime_t::on_actor_entry_spot_join (
                                               const zlink::message_t &,
                                               const std::optional<zlink::message_t> &)> join)
 {
-    _state->actor_entry_spot_join = std::move (join);
+    _state->lane.run ([&] {
+        _state->actor_entry_spot_join = std::move (join);
+    }).get ();
 }
 
 void spot_node_runtime_t::on_actor_packet_relay (
@@ -8581,7 +9479,9 @@ void spot_node_runtime_t::on_actor_packet_relay (
                                              spot_inbound_message_t,
                                              const runtime::protocol::actor_route_fence_t *)> relay)
 {
-    _state->actor_packet_relay = std::move (relay);
+    _state->lane.run ([&] {
+        _state->actor_packet_relay = std::move (relay);
+    }).get ();
 }
 
 void spot_node_runtime_t::on_actor_message_follow (
@@ -8596,7 +9496,9 @@ void spot_node_runtime_t::on_actor_message_follow (
                                              const runtime::protocol::wire_operation_id_t &,
                                              std::uint64_t)> relay)
 {
-    _state->actor_message_follow_relay = std::move (relay);
+    _state->lane.run ([&] {
+        _state->actor_message_follow_relay = std::move (relay);
+    }).get ();
 }
 
 void spot_node_runtime_t::on_actor_handoff_terminal (
@@ -8607,23 +9509,29 @@ void spot_node_runtime_t::on_actor_handoff_terminal (
                               const runtime::protocol::actor_route_fence_t &,
                               const result_t<zlink::message_t> &)> sender)
 {
-    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-    _state->actor_handoff_terminal_sender = std::move (sender);
+    _state->lane.run ([&] {
+        _state->actor_handoff_terminal_sender = std::move (sender);
+    }).get ();
 }
 
 void spot_node_runtime_t::on_actor_leave_notification (
   std::function<task_t<zlink::submit_result_t> (const zlink::routing_id_t &,
                                                 std::vector<zlink::message_t>)> sender)
 {
-    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-    _state->actor_leave_notification_sender = std::move (sender);
+    _state->lane.run ([&] {
+        _state->actor_leave_notification_sender = std::move (sender);
+    }).get ();
 }
 
 void spot_node_runtime_t::invalidate_message_follow_route (
   const runtime::protocol::message_follow_notice_t &notice)
 {
     const auto *source = std::get_if<runtime::protocol::spot_route_fence_t> (&notice.source);
-    if (!source || !_state->spot_location_resolver)
+    if (!source)
+        return;
+    auto *resolver =
+      _state->lane.run ([&] { return _state->spot_location_resolver; }).get ();
+    if (!resolver)
         return;
     runtime::spot_address_t expected;
     expected.spot_id = source->spot_id;
@@ -8632,8 +9540,7 @@ void spot_node_runtime_t::invalidate_message_follow_route (
     expected.object_generation = source->object_generation;
     expected.authority_owner_generation = source->authority_owner_generation;
     expected.owner.lease_generation = static_cast<std::int64_t> (source->owner_lease_generation);
-    (void) _state->spot_location_resolver->invalidate_spot_address_if_matches (source->spot_id,
-                                                                               expected);
+    (void) resolver->invalidate_spot_address_if_matches (source->spot_id, expected);
 }
 
 task_t<std::optional<zlink::message_t>>
@@ -8685,12 +9592,9 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
       _state, message_flow_outcome_t::received, dispatch_kind, packet_name, {},
       actor_ref.actor_id ().value (), "relay_actor_packet.enter",
       admitted_message_follow_target == nullptr ? "follow_fence=none" : "follow_fence=present");
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-        if (_state->retiring_actor_keys.contains (key)) {
-            co_return result_t<std::optional<zlink::message_t>>::failure (
-              framework_error_kind_t::not_found, "actor destruction is pending");
-        }
+    if (_state->lane.run ([&] { return _state->retiring_actor_keys.contains (key); }).get ()) {
+        co_return result_t<std::optional<zlink::message_t>>::failure (
+          framework_error_kind_t::not_found, "actor destruction is pending");
     }
     // A cold hit carries no follow fence (e.g. a client probing the actor's
     // former owner directly, unaware it already relocated). Relocation
@@ -8702,7 +9606,6 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     // can never resolve (the route points at the remote target's spot).
     runtime::protocol::actor_route_fence_t synthesized_follow_fence;
     if (admitted_message_follow_target == nullptr) {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
         if (const auto found =
               _state->actor_transfer_coordinator.message_follow_source_for_generation (
                 key, actor_ref.object_generation ())) {
@@ -8711,34 +9614,34 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         }
     }
     if (admitted_message_follow_target != nullptr) {
-        bool targets_current_authority = false;
-        {
-            std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+        const auto current_fence = _state->lane.run ([&] {
             const auto current = _state->actor_authority_fences.find (key);
-            // The exact adoption fence gates only when this node retains state
-            // that could be confused with an older incarnation: a recorded
-            // adoption fence or a retained Message Follow source route. A
-            // fenced packet the mesh route admission already accepted for an
-            // actor without either dispatches to the current local authority.
+            return current == _state->actor_authority_fences.end ()
+                     ? std::optional<runtime::protocol::actor_route_fence_t>{}
+                     : std::make_optional (current->second);
+        }).get ();
+        // The exact adoption fence gates only when this node retains state
+        // that could be confused with an older incarnation: a recorded
+        // adoption fence or a retained Message Follow source route. A
+        // fenced packet the mesh route admission already accepted for an
+        // actor without either dispatches to the current local authority.
+        bool targets_current_authority =
+          current_fence ? *current_fence == *admitted_message_follow_target
+                        : !_state->actor_transfer_coordinator.has_message_follow_route (key);
+        if (!targets_current_authority && current_fence) {
+            //  Spec 21 §6.3: a followed message is deliverable when the
+            //  new owner's AuthorityOwnerGeneration is greater than the
+            //  edge value the previous owner retained at move
+            //  completion — forwarding can traverse several moves, so
+            //  the final owner's fence is ordered against, not equal
+            //  to, the followed edge's fence. The object incarnation
+            //  and the fenced target node must still match exactly.
+            const auto &m = *admitted_message_follow_target;
             targets_current_authority =
-              current != _state->actor_authority_fences.end ()
-                ? current->second == *admitted_message_follow_target
-                : !_state->actor_transfer_coordinator.has_message_follow_route (key);
-            if (!targets_current_authority && current != _state->actor_authority_fences.end ()) {
-                //  Spec 21 §6.3: a followed message is deliverable when the
-                //  new owner's AuthorityOwnerGeneration is greater than the
-                //  edge value the previous owner retained at move
-                //  completion — forwarding can traverse several moves, so
-                //  the final owner's fence is ordered against, not equal
-                //  to, the followed edge's fence. The object incarnation
-                //  and the fenced target node must still match exactly.
-                const auto &m = *admitted_message_follow_target;
-                targets_current_authority =
-                  current->second.actor_id == m.actor_id
-                  && current->second.object_generation == m.object_generation
-                  && current->second.target_node_routing_id == m.target_node_routing_id
-                  && current->second.authority_owner_generation > m.authority_owner_generation;
-            }
+              current_fence->actor_id == m.actor_id
+              && current_fence->object_generation == m.object_generation
+              && current_fence->target_node_routing_id == m.target_node_routing_id
+              && current_fence->authority_owner_generation > m.authority_owner_generation;
         }
         if (!targets_current_authority
             && !matches_actor_message_follow_source (actor_ref, *admitted_message_follow_target)) {
@@ -8751,14 +9654,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                 //  tuples in the Detailed-only stage/result extension without
                 //  overloading any standard address attribute.
                 detail::message_flow_tracer_t (_state->dispatch)
-                  .trace (message_flow_outcome_t::dropped, [&] {
-                      std::optional<runtime::protocol::actor_route_fence_t> current_fence;
-                      {
-                          std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-                          const auto current = _state->actor_authority_fences.find (key);
-                          if (current != _state->actor_authority_fences.end ())
-                              current_fence = current->second;
-                      }
+                  .trace (message_flow_outcome_t::dropped, [&, current_fence] {
                       const auto describe = [] (
                                               const runtime::protocol::actor_route_fence_t &fence) {
                           return fence.actor_id + "/og=" + std::to_string (fence.object_generation)
@@ -8807,22 +9703,23 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     // those post-commit arrivals in the source backlog lets a continuous
     // producer prevent finish_move_replay() from ever observing it empty.
     bool targets_current_authority = admitted_message_follow_target == nullptr;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-        if (admitted_message_follow_target != nullptr) {
+    if (admitted_message_follow_target != nullptr) {
+        const auto current_fence = _state->lane.run ([&] {
             const auto current = _state->actor_authority_fences.find (key);
+            return current == _state->actor_authority_fences.end ()
+                     ? std::optional<runtime::protocol::actor_route_fence_t>{}
+                     : std::make_optional (current->second);
+        }).get ();
+        targets_current_authority =
+          current_fence ? *current_fence == *admitted_message_follow_target
+                        : !_state->actor_transfer_coordinator.has_message_follow_route (key);
+        if (!targets_current_authority && current_fence) {
+            const auto &m = *admitted_message_follow_target;
             targets_current_authority =
-              current != _state->actor_authority_fences.end ()
-                ? current->second == *admitted_message_follow_target
-                : !_state->actor_transfer_coordinator.has_message_follow_route (key);
-            if (!targets_current_authority && current != _state->actor_authority_fences.end ()) {
-                const auto &m = *admitted_message_follow_target;
-                targets_current_authority =
-                  current->second.actor_id == m.actor_id
-                  && current->second.object_generation == m.object_generation
-                  && current->second.target_node_routing_id == m.target_node_routing_id
-                  && current->second.authority_owner_generation > m.authority_owner_generation;
-            }
+              current_fence->actor_id == m.actor_id
+              && current_fence->object_generation == m.object_generation
+              && current_fence->target_node_routing_id == m.target_node_routing_id
+              && current_fence->authority_owner_generation > m.authority_owner_generation;
         }
     }
     const bool targets_committed_source =
@@ -8897,8 +9794,14 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
               framework_error_kind_t::unavailable,
               "Actor Message Follow target fence is no longer current");
         }
+        decltype (_state->actor_message_follow_relay) actor_message_follow_relay;
+        if (!targets_current_authority && targets_committed_source) {
+            actor_message_follow_relay = _state->lane.run ([&] {
+                return _state->actor_message_follow_relay;
+            }).get ();
+        }
         if (!targets_current_authority && targets_committed_source
-            && _state->actor_message_follow_relay) {
+            && actor_message_follow_relay) {
             std::uint8_t incoming_hop_count = 0;
             if (const auto hop = metadata.values.find ("__zlink.messageFollowHopCount");
                 hop != metadata.values.end ()) {
@@ -8923,95 +9826,165 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
             // follow fence, so preserve the deadline supplied by the route
             // dispatcher instead of manufacturing a new client deadline.
             header.deadline = std::move (inbound_deadline);
-            co_return co_await _state->actor_message_follow_relay (
+            co_return co_await actor_message_follow_relay (
               actor_ref, header, message, std::chrono::seconds (30), inbound_source_node_rid,
               *admitted_message_follow_target, incoming_hop_count, inbound_operation,
               inbound_reply_route_id);
         }
     }
 
-    const auto actor_type_key =
-      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
-    const auto found_factory = _state->actor_factories.find (actor_type_key);
-    if (found_factory == _state->actor_factories.end ()) {
-        co_return result_t<std::optional<zlink::message_t>>::failure (
-          framework_error_kind_t::not_found, "actor factory is not registered");
-    }
+    using actor_factory_registration_t =
+      detail::spot_node_builder_state_t::actor_factory_registration_t;
+    struct actor_materialization_plan_t
+    {
+        actor_factory_registration_t factory;
+        std::optional<spot_id_t> found_location;
+        std::shared_ptr<void> actor_instance;
+        std::string actor_mesh_name;
+    };
+    auto materialized = _state->lane.run ([&] () -> result_t<actor_materialization_plan_t> {
+        const auto actor_type_key =
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
+        const auto found_factory = _state->actor_factories.find (actor_type_key);
+        if (found_factory == _state->actor_factories.end ()) {
+            return result_t<actor_materialization_plan_t>::failure (
+              framework_error_kind_t::not_found, "actor factory is not registered");
+        }
 
-    auto found_location = _state->actor_spot_ids.find (key);
-    if (found_location == _state->actor_spot_ids.end ()
-        && _state->destroyed_actor_keys.contains (key)) {
-        co_return result_t<std::optional<zlink::message_t>>::failure (
-          framework_error_kind_t::not_found, "actor has been destroyed");
-    }
-    /* Same double-checked registration as the join paths. */
-    std::shared_ptr<void> actor_instance = registered_actor_instance (actor_ref, key);
-    if (!actor_instance) {
-        auto &registration = found_factory->second;
-        std::shared_ptr<void> created_instance;
-        if (registration.create_context_instance) {
-            auto actor_mesh_name = _state->snapshot.name;
-            if (found_location != _state->actor_spot_ids.end ()) {
-                const auto actor_spot_context = find_context (found_location->second);
-                if (actor_spot_context)
-                    actor_mesh_name = actor_spot_context->_state->mesh_name;
+        actor_materialization_plan_t plan;
+        plan.factory = found_factory->second;
+        const auto found_location = _state->actor_spot_ids.find (key);
+        if (found_location != _state->actor_spot_ids.end ()) {
+            plan.found_location = found_location->second;
+        } else if (_state->destroyed_actor_keys.contains (key)) {
+            return result_t<actor_materialization_plan_t>::failure (
+              framework_error_kind_t::not_found, "actor has been destroyed");
+        }
+
+        const auto found_instance = _state->actor_instances.find (key);
+        if (found_instance != _state->actor_instances.end () && found_instance->second) {
+            plan.actor_instance = found_instance->second;
+            detail::record_actor_instance_index_unlocked (*_state, actor_ref,
+                                                          plan.actor_instance.get ());
+        } else if (plan.factory.create_context_instance) {
+            plan.actor_mesh_name = _state->snapshot.name;
+            if (plan.found_location) {
+                const auto actor_spot_context =
+                  _state->spot_contexts_by_id.find (std::string (*plan.found_location));
+                if (actor_spot_context != _state->spot_contexts_by_id.end ()
+                    && actor_spot_context->second._state) {
+                    plan.actor_mesh_name = actor_spot_context->second._state->mesh_name;
+                }
             }
+        }
+        return result_t<actor_materialization_plan_t>::success (std::move (plan));
+    }).get ();
+    if (!materialized) {
+        co_return detail::propagate_failure<std::optional<zlink::message_t>> (
+          materialized, "actor materialization failed");
+    }
+    auto materialization = std::move (materialized.value ());
+    auto factory = std::move (materialization.factory);
+    const auto initial_location = materialization.found_location;
+
+    /* Same double-checked registration as the join paths. */
+    std::shared_ptr<void> actor_instance = std::move (materialization.actor_instance);
+    if (!actor_instance) {
+        std::shared_ptr<void> created_instance;
+        if (factory.create_context_instance) {
             auto materialization_context = actor_context_t (
               actor_context._state, actor_ref, actor_context._source_binding_generation,
-              std::move (actor_mesh_name));
+              std::move (materialization.actor_mesh_name));
             created_instance =
-              registration.create_context_instance (std::move (materialization_context));
+              factory.create_context_instance (std::move (materialization_context));
         } else {
             created_instance =
-              registration.create_instance (std::string (actor_ref.actor_id ().value ()));
+              factory.create_instance (std::string (actor_ref.actor_id ().value ()));
         }
         if (!created_instance) {
             co_return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::not_found, "actor factory returned null");
         }
-        actor_instance =
-          install_actor_instance (actor_ref, key, std::move (created_instance), true);
+        actor_instance = _state->lane.run ([&] {
+            auto &slot = _state->actor_instances[key];
+            if (!slot) {
+                if (_state->destroyed_actor_keys.contains (key)) {
+                    _state->actor_instances.erase (key);
+                    return std::shared_ptr<void>{};
+                }
+                slot = std::move (created_instance);
+            }
+            detail::record_actor_instance_index_unlocked (*_state, actor_ref, slot.get ());
+            return slot;
+        }).get ();
         if (!actor_instance) {
             co_return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::not_found, "actor has been destroyed");
         }
     }
 
-    if (found_location == _state->actor_spot_ids.end ()) {
-        if (!_state->snapshot.entry_spot_name) {
-            co_return result_t<std::optional<zlink::message_t>>::failure (
-              framework_error_kind_t::not_found, "entry spot is not registered");
+    if (!initial_location) {
+        struct entry_admission_plan_t
+        {
+            std::shared_ptr<detail::spot_context_state_t> context_state;
+            std::shared_ptr<void> spot_instance;
+            std::optional<spot_actor_admission_callbacks_t> admission;
+            bool creation_reserved = false;
+        };
+        auto entry_planned = _state->lane.run ([&] () -> result_t<entry_admission_plan_t> {
+            if (!_state->snapshot.entry_spot_name) {
+                return result_t<entry_admission_plan_t>::failure (
+                  framework_error_kind_t::not_found, "entry spot is not registered");
+            }
+            const auto entry_id =
+              _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
+            if (entry_id == _state->spot_ids_by_name.end ()) {
+                return result_t<entry_admission_plan_t>::failure (
+                  framework_error_kind_t::not_found, "entry spot is not created");
+            }
+            const auto entry_context =
+              _state->spot_contexts_by_id.find (std::string (entry_id->second));
+            if (entry_context == _state->spot_contexts_by_id.end ()
+                || !entry_context->second._state
+                || !entry_context->second._state->spot_instance) {
+                return result_t<entry_admission_plan_t>::failure (
+                  framework_error_kind_t::not_found, "entry spot context is not registered");
+            }
+
+            entry_admission_plan_t plan;
+            plan.context_state = entry_context->second._state;
+            plan.spot_instance = plan.context_state->spot_instance;
+            detail::record_actor_context_route_unlocked (
+              *_state, key, detail::effective_spot_node_rid (_state->snapshot),
+              *plan.context_state, actor_ref.object_generation ());
+            const auto admission = plan.context_state->actor_admissions.find (factory.actor_type);
+            if (admission != plan.context_state->actor_admissions.end ()) {
+                plan.admission = admission->second;
+                plan.creation_reserved = plan.admission->on_create_actor
+                                         && _state->actor_created_keys.insert (key).second;
+            }
+            return result_t<entry_admission_plan_t>::success (std::move (plan));
+        }).get ();
+        if (!entry_planned) {
+            co_return detail::propagate_failure<std::optional<zlink::message_t>> (
+              entry_planned, "entry spot admission failed");
         }
-        const auto entry_id = _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
-        if (entry_id == _state->spot_ids_by_name.end ()) {
-            co_return result_t<std::optional<zlink::message_t>>::failure (
-              framework_error_kind_t::not_found, "entry spot is not created");
-        }
-        auto entry_context = find_context (entry_id->second);
-        if (!entry_context || !entry_context->_state->spot_instance) {
-            co_return result_t<std::optional<zlink::message_t>>::failure (
-              framework_error_kind_t::not_found, "entry spot context is not registered");
-        }
-        auto &entry_state = *entry_context->_state;
-        detail::record_actor_context_route_unlocked (
-          *_state, key, detail::effective_spot_node_rid (_state->snapshot), entry_state,
-          actor_ref.object_generation ());
+        auto entry_plan = std::move (entry_planned.value ());
         bool created_entry_actor = false;
-        if (const auto admission =
-              entry_state.actor_admissions.find (found_factory->second.actor_type);
-            admission != entry_state.actor_admissions.end ()) {
-            if (admission->second.on_create_actor
-                && _state->actor_created_keys.insert (key).second) {
+        if (entry_plan.admission) {
+            if (entry_plan.creation_reserved) {
                 const auto create_request =
                   actor_context.create_payload ().value_or (zlink::message_t{});
                 const auto created =
-                  admission->second
-                    .on_create_actor (entry_state.spot_instance.get (), actor_instance.get (),
-                                      create_request, serializers)
+                  entry_plan.admission
+                    ->on_create_actor (entry_plan.spot_instance.get (), actor_instance.get (),
+                                       create_request, serializers)
                     .result ();
                 if (!created || !created.value ().accepted) {
-                    _state->actor_created_keys.erase (key);
-                    erase_actor_route_unlocked (*_state, key);
+                    _state->lane.run ([&] {
+                        _state->actor_created_keys.erase (key);
+                        erase_actor_route_unlocked (*_state, key);
+                    }).get ();
                     co_return result_t<std::optional<zlink::message_t>>::failure (
                       created ? framework_error_kind_t::rejected : created.error_kind (),
                       created && !created.value ().accepted
@@ -9021,10 +9994,11 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                 }
                 created_entry_actor = true;
             }
-            if (!created_entry_actor && admission->second.on_actor_joined) {
-                const auto completed = entry_state.run_serial_task ("spot-lifecycle-join", [&] {
-                    return admission->second.on_actor_joined (entry_state.spot_instance.get (),
-                                                              actor_instance.get ());
+            if (!created_entry_actor && entry_plan.admission->on_actor_joined) {
+                const auto completed =
+                  entry_plan.context_state->run_serial_task ("spot-lifecycle-join", [&] {
+                    return entry_plan.admission->on_actor_joined (
+                      entry_plan.spot_instance.get (), actor_instance.get ());
                 });
                 if (!completed) {
                     co_return result_t<std::optional<zlink::message_t>>::failure (
@@ -9034,20 +10008,80 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                 }
             }
         }
-        found_location = _state->actor_spot_ids.find (key);
     }
-    if (found_location == _state->actor_spot_ids.end ()) {
-        co_return result_t<std::optional<zlink::message_t>>::failure (
-          framework_error_kind_t::not_found, "actor spot route disappeared before dispatch");
-    }
-    // Actor movement can replace or erase the route while the handler is
-    // suspended. Keep a value snapshot; a map iterator must not cross the
-    // user callback boundary.
-    const auto current_spot_id = found_location->second;
 
-    const auto found_generation = _state->actor_generations.find (key);
-    if (found_generation != _state->actor_generations.end ()
-        && found_generation->second != actor_ref.object_generation ()) {
+    struct actor_dispatch_plan_t
+    {
+        spot_id_t current_spot_id;
+        std::uint64_t current_generation = 0;
+        bool stale_generation = false;
+        std::optional<actor_ref_t> current_actor_ref;
+        std::shared_ptr<detail::spot_context_state_t> context_state;
+        std::shared_ptr<void> spot_instance;
+        std::string mesh_name;
+        bool dispatch_on_spot_serial = true;
+    };
+    auto dispatch_planned = _state->lane.run ([&] () -> result_t<actor_dispatch_plan_t> {
+        const auto found_location = _state->actor_spot_ids.find (key);
+        if (found_location == _state->actor_spot_ids.end ()) {
+            return result_t<actor_dispatch_plan_t>::failure (
+              framework_error_kind_t::not_found,
+              "actor spot route disappeared before dispatch");
+        }
+
+        actor_dispatch_plan_t plan;
+        // Actor movement can replace or erase the route while a user callback
+        // is suspended. Keep the complete derived dispatch projection in this turn.
+        plan.current_spot_id = found_location->second;
+        const auto found_generation = _state->actor_generations.find (key);
+        plan.current_generation = found_generation != _state->actor_generations.end ()
+                                    ? found_generation->second
+                                    : actor_ref.object_generation ();
+        if (plan.current_generation != actor_ref.object_generation ()) {
+            plan.stale_generation = true;
+            return result_t<actor_dispatch_plan_t>::success (std::move (plan));
+        }
+
+        const auto current_actor_node_rid = actor_ref.node_rid ().empty ()
+                                              ? detail::effective_spot_node_rid (_state->snapshot)
+                                              : std::string (actor_ref.node_rid ().value ());
+        plan.current_actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid_t::from_string (current_actor_node_rid),
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
+          std::string (actor_ref.actor_id ().value ()), plan.current_generation);
+        const auto context =
+          _state->spot_contexts_by_id.find (std::string (plan.current_spot_id));
+        if (context == _state->spot_contexts_by_id.end () || !context->second._state
+            || !context->second._state->spot_instance) {
+            return result_t<actor_dispatch_plan_t>::failure (
+              framework_error_kind_t::not_found,
+              "actor spot context is not registered. node="
+                + detail::effective_spot_node_rid (_state->snapshot) + ", actor="
+                + std::string (actor_ref.actor_id ().value ()) + ", spot="
+                + plan.current_spot_id);
+        }
+        plan.context_state = context->second._state;
+        plan.spot_instance = plan.context_state->spot_instance;
+        plan.mesh_name = plan.context_state->mesh_name;
+        if (_state->snapshot.entry_spot_name) {
+            const auto entry_id =
+              _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
+            plan.dispatch_on_spot_serial =
+              entry_id == _state->spot_ids_by_name.end ()
+              || entry_id->second != plan.current_spot_id;
+        }
+        if (plan.context_state->execution_mode == user_spot_execution_mode_t::per_actor) {
+            plan.dispatch_on_spot_serial = false;
+        }
+        return result_t<actor_dispatch_plan_t>::success (std::move (plan));
+    }).get ();
+    if (!dispatch_planned) {
+        co_return detail::propagate_failure<std::optional<zlink::message_t>> (
+          dispatch_planned, "actor dispatch state projection failed");
+    }
+    auto dispatch_plan = std::move (dispatch_planned.value ());
+    const auto current_spot_id = dispatch_plan.current_spot_id;
+    if (dispatch_plan.stale_generation) {
         // The dispatched ref's generation does not match the actor's current
         // incarnation (§10.4-3). Retriable: for a still-committing local move the
         // published record lags and re-resolving lands the committed generation
@@ -9063,42 +10097,18 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         co_return result_t<std::optional<zlink::message_t>>::failure (
           framework_error_kind_t::unavailable,
           "actor generation is stale. actor=" + std::string (actor_ref.actor_id ().value ())
-            + ", current=" + std::to_string (found_generation->second)
+            + ", current=" + std::to_string (dispatch_plan.current_generation)
             + ", received=" + std::to_string (actor_ref.object_generation ()));
     }
-    const auto current_actor_node_rid = actor_ref.node_rid ().empty ()
-                                          ? detail::effective_spot_node_rid (_state->snapshot)
-                                          : std::string (actor_ref.node_rid ().value ());
-    const auto current_actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
-      node_rid_t::from_string (current_actor_node_rid),
-      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-      std::string (actor_ref.actor_id ().value ()),
-      found_generation != _state->actor_generations.end () ? found_generation->second
-                                                           : actor_ref.object_generation ());
-    auto context = find_context (current_spot_id);
-    if (!context || !context->_state->spot_instance) {
-        co_return result_t<std::optional<zlink::message_t>>::failure (
-          framework_error_kind_t::not_found,
-          "actor spot context is not registered. node="
-            + detail::effective_spot_node_rid (_state->snapshot) + ", actor="
-            + std::string (actor_ref.actor_id ().value ()) + ", spot=" + current_spot_id);
-    }
-    if (!found_factory->second.create_context_instance) {
+    const auto &current_actor_ref = *dispatch_plan.current_actor_ref;
+    if (!factory.create_context_instance) {
         auto current_actor_context =
           actor_context_t (actor_context._state, current_actor_ref,
-                           actor_context._source_binding_generation, context->_state->mesh_name);
-        found_factory->second.configure_instance (actor_instance.get (), current_actor_ref,
-                                                  &current_actor_context);
+                           actor_context._source_binding_generation, dispatch_plan.mesh_name);
+        factory.configure_instance (actor_instance.get (), current_actor_ref,
+                                    &current_actor_context);
     }
-    bool dispatch_on_spot_serial = true;
-    if (_state->snapshot.entry_spot_name) {
-        const auto entry_id = _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
-        dispatch_on_spot_serial =
-          entry_id == _state->spot_ids_by_name.end () || entry_id->second != current_spot_id;
-    }
-    if (context->_state->execution_mode == user_spot_execution_mode_t::per_actor) {
-        dispatch_on_spot_serial = false;
-    }
+    const bool dispatch_on_spot_serial = dispatch_plan.dispatch_on_spot_serial;
 
     const auto handler_kind = message_kind == stream_message_kind_t::send
                                 ? spot_handler_kind_t::actor_send
@@ -9174,9 +10184,9 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                                          : std::make_optional (*admitted_message_follow_target);
     zlink::message_t reply;
     try {
-        reply = co_await spot_handler_registry_t (context->_state)
-                  .invoke_erased (handler_kind, packet_name, {}, found_factory->second.actor_type,
-                                  context->_state->spot_instance.get (), actor_instance.get (),
+        reply = co_await spot_handler_registry_t (dispatch_plan.context_state)
+                  .invoke_erased (handler_kind, packet_name, {}, factory.actor_type,
+                                  dispatch_plan.spot_instance.get (), actor_instance.get (),
                                   services, serializers, message, std::move (metadata),
                                   dispatch_on_spot_serial, key, current_spot_id, {},
                                   spot_handler_registry_t::actor_queue_dispatch_t::acquire,
@@ -9213,81 +10223,101 @@ spot_node_runtime_t::notify_actor_disconnected_erased (const actor_ref_t &actor_
     }
 
     const auto key = actor_key (actor_ref);
-    std::shared_ptr<spot_context_state_t> context_state;
-    std::shared_ptr<void> actor_instance;
-    std::function<task_t<void> (void *, void *)> disconnect_callback;
-    std::shared_ptr<runtime::serial_execution_queue_t> actor_queue;
+    struct disconnect_plan_t
     {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+        std::shared_ptr<spot_context_state_t> context_state;
+        std::shared_ptr<void> spot_instance;
+        std::shared_ptr<void> actor_instance;
+        std::function<task_t<void> (void *, void *)> disconnect_callback;
+        std::shared_ptr<runtime::serial_execution_queue_t> actor_queue;
+    };
+    auto planned = _state->lane.run ([&] () -> result_t<std::optional<disconnect_plan_t>> {
         const auto found_generation = _state->actor_generations.find (key);
         if (found_generation != _state->actor_generations.end ()
             && found_generation->second != actor_ref.object_generation ()) {
-            return detail::boundary_failure<void> (detail::boundary_error_t::stale_generation,
-                                                   "actor generation is stale");
+            return detail::boundary_failure<std::optional<disconnect_plan_t>> (
+              detail::boundary_error_t::stale_generation, "actor generation is stale");
         }
 
         const auto found_location = _state->actor_spot_ids.find (key);
         if (found_location == _state->actor_spot_ids.end ())
-            return result_t<void>::success ();
-        auto context = find_context (found_location->second);
-        if (!context || !context->_state->spot_instance)
-            return result_t<void>::success ();
+            return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
+        const auto context =
+          _state->spot_contexts_by_id.find (std::string (found_location->second));
+        if (context == _state->spot_contexts_by_id.end () || !context->second._state
+            || !context->second._state->spot_instance) {
+            return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
+        }
 
-        const auto actor_factory = actor_factory_unlocked (actor_ref);
-        if (!actor_factory) {
-            return result_t<void>::failure (actor_factory.error_kind (),
-                                            actor_factory.error () ? actor_factory.error ()->what ()
-                                                                   : "actor factory failed");
+        const auto actor_type_key =
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
+        const auto actor_factory = _state->actor_factories.find (actor_type_key);
+        if (actor_factory == _state->actor_factories.end ()) {
+            return result_t<std::optional<disconnect_plan_t>>::failure (
+              framework_error_kind_t::not_found, "actor factory is not registered");
         }
         const auto actor = _state->actor_instances.find (key);
         if (actor == _state->actor_instances.end () || !actor->second)
-            return result_t<void>::success ();
+            return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
 
-        const auto admission =
-          context->_state->actor_admissions.find (actor_factory.value ().get ().actor_type);
-        if (admission == context->_state->actor_admissions.end ()
+        const auto context_state = context->second._state;
+        const auto admission = context_state->actor_admissions.find (actor_factory->second.actor_type);
+        if (admission == context_state->actor_admissions.end ()
             || !admission->second.on_disconnect_actor) {
-            return result_t<void>::success ();
+            return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
         }
 
-        context_state = context->_state;
-        actor_instance = actor->second;
-        disconnect_callback = admission->second.on_disconnect_actor;
+        disconnect_plan_t plan;
+        plan.context_state = context_state;
+        plan.spot_instance = context_state->spot_instance;
+        plan.actor_instance = actor->second;
+        plan.disconnect_callback = admission->second.on_disconnect_actor;
         auto &slot = _state->actor_execution_queues[key];
         if (!slot) {
             slot = std::make_shared<runtime::serial_execution_queue_t> (
-              *framework_worker_executor (_state), runtime::serial_execution_queue_options_t{},
+              *framework_worker_executor_core (_state), runtime::serial_execution_queue_options_t{},
               runtime::serial_execution_queue_t::error_handler_t{},
               runtime::serial_lane_policy_t::actor_delivery ());
             publish_actor_execution_queue_snapshot_unlocked (*_state);
         }
-        actor_queue = slot;
+        plan.actor_queue = slot;
+        return result_t<std::optional<disconnect_plan_t>>::success (
+          std::make_optional (std::move (plan)));
+    }).get ();
+    if (!planned) {
+        return detail::propagate_failure<void> (planned,
+                                                "actor disconnect state admission failed");
     }
+    if (!planned.value ())
+        return result_t<void>::success ();
+    auto plan = std::move (*planned.value ());
 
     // Spec 20: Session cleanup submits the exact disconnect notification to
     // the Actor FIFO, and that turn enters the current Spot lifecycle lane.
-    // Neither queue is waited while the node ownership mutex is held.
+    // Neither queue is dispatched or waited while the node state lane owns a turn.
     if (runtime::current_actor_execution.actor_key == key) {
-        return context_state->run_serial_task (
-          "spot-lifecycle-disconnect", [context_state, actor_instance, disconnect_callback] {
-              return disconnect_callback (context_state->spot_instance.get (),
-                                          actor_instance.get ());
+        return plan.context_state->run_serial_task (
+          "spot-lifecycle-disconnect",
+          [context_state = plan.context_state, spot_instance = plan.spot_instance,
+           actor_instance = plan.actor_instance, disconnect_callback = plan.disconnect_callback] {
+              return disconnect_callback (spot_instance.get (), actor_instance.get ());
           });
     }
     detail::task_completion_source_t<void> completion;
     auto result = completion.task ();
-    const auto posted = actor_queue->try_post_async (
+    const auto posted = plan.actor_queue->try_post_async (
       "actor-disconnected",
-      [key, context_state = std::move (context_state), actor_instance = std::move (actor_instance),
-       disconnect_callback = std::move (disconnect_callback),
+      [key, context_state = std::move (plan.context_state),
+       spot_instance = std::move (plan.spot_instance),
+       actor_instance = std::move (plan.actor_instance),
+       disconnect_callback = std::move (plan.disconnect_callback),
        completion] (auto actor_complete) mutable {
           context_state->run_serial_task_async (
             "spot-lifecycle-disconnect",
-            [key, context_state, actor_instance, disconnect_callback] {
+            [key, context_state, spot_instance, actor_instance, disconnect_callback] {
                 runtime::actor_execution_scope_t actor_execution (
                   key, std::string (context_state->spot_id));
-                return disconnect_callback (context_state->spot_instance.get (),
-                                            actor_instance.get ());
+                return disconnect_callback (spot_instance.get (), actor_instance.get ());
             },
             [actor_complete = std::move (actor_complete),
              completion] (result_t<void> callback_result) mutable {
@@ -9300,11 +10330,12 @@ spot_node_runtime_t::notify_actor_disconnected_erased (const actor_ref_t &actor_
       runtime::serial_work_options_t{runtime::serial_work_lane_t::application,
                                      runtime::serial_execution_queue_t::fixed_work_byte_cost});
     if (!posted) {
-        return result_t<void>::failure (actor_queue->closed ()
+        return result_t<void>::failure (plan.actor_queue->closed ()
                                           ? framework_error_kind_t::shutting_down
                                           : framework_error_kind_t::capacity_exceeded,
-                                        actor_queue->closed () ? "Actor disconnect queue is closed"
-                                                               : "Actor disconnect queue is full");
+                                        plan.actor_queue->closed ()
+                                          ? "Actor disconnect queue is closed"
+                                          : "Actor disconnect queue is full");
     }
     return result.result ();
 }
@@ -9348,90 +10379,118 @@ local_spot_create_result_t spot_node_runtime_t::create_spot (std::string spot_na
     return create_spot (std::move (spot_name), zlink::message_t{});
 }
 
-local_spot_create_result_t spot_node_runtime_t::create_spot_context_unlocked (
+local_spot_create_result_t spot_node_runtime_t::create_spot_context (
   std::string spot_name,
   spot_id_t spot_id,
   zlink::message_t request,
-  std::unique_lock<std::recursive_mutex> &node_lock,
   std::uint64_t object_generation,
   std::string mesh_name,
   std::function<task_t<void> (void *)> staged_restore,
   std::uint64_t authority_owner_generation)
 {
-    /* graceful-drain-handoff §4-2: a draining node blocks new spot creation.
-     * Existing spots (and in-progress transfer commits) keep running. */
-    if (_state->drain_flag && _state->drain_flag->load (std::memory_order_acquire)) {
-        throw framework_exception_t (framework_error_kind_t::rejected,
-                                     "spot node is draining and rejects new spot creation");
-    }
-    const auto found = _state->spot_factories.find (spot_name);
-    if (found == _state->spot_factories.end ()) {
-        throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                     "spot factory is not registered");
-    }
-    const auto lifecycle =
-      _state->spot_lifecycles.find (spot_name) != _state->spot_lifecycles.end ()
-        ? _state->spot_lifecycles.at (spot_name)
-        : spot_lifecycle_callbacks_t{};
-    const auto instance_spot = std::find (_state->snapshot.instance_spot_names.begin (),
-                                          _state->snapshot.instance_spot_names.end (), spot_name)
-                               != _state->snapshot.instance_spot_names.end ();
-
     auto context_state = std::make_shared<spot_context_state_t> ();
-    context_state->node = _state;
-    context_state->channel_runtime = _state->channel_runtime;
-    context_state->node_rid =
-      node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot));
-    context_state->mesh_name = mesh_name.empty () ? _state->snapshot.name : std::move (mesh_name);
-    context_state->spot_id = spot_id;
-    context_state->object_generation = object_generation;
-    context_state->authority_owner_generation = authority_owner_generation;
+    struct creation_plan_t
+    {
+        spot_lifecycle_callbacks_t lifecycle;
+        std::optional<service_provider_t> root_services;
+        std::shared_ptr<runtime::offload_executor_t> worker_executor;
+        runtime::location_lifecycle_t *location_lifecycle = nullptr;
+        std::shared_ptr<monitoring_runtime_state_t> monitoring;
+        std::optional<spot_location_t> location;
+        bool entry_spot = false;
+    };
+    auto plan = _state->lane.run ([&] {
+        /* graceful-drain-handoff §4-2: a draining node blocks new spot creation.
+         * Existing spots (and in-progress transfer commits) keep running. */
+        if (_state->drain_flag && _state->drain_flag->load (std::memory_order_acquire)) {
+            throw framework_exception_t (framework_error_kind_t::rejected,
+                                         "spot node is draining and rejects new spot creation");
+        }
+        const auto found = _state->spot_factories.find (spot_name);
+        if (found == _state->spot_factories.end ()) {
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "spot factory is not registered");
+        }
+
+        creation_plan_t result;
+        if (const auto lifecycle = _state->spot_lifecycles.find (spot_name);
+            lifecycle != _state->spot_lifecycles.end ()) {
+            result.lifecycle = lifecycle->second;
+        }
+        const auto instance_spot =
+          std::find (_state->snapshot.instance_spot_names.begin (),
+                     _state->snapshot.instance_spot_names.end (), spot_name)
+          != _state->snapshot.instance_spot_names.end ();
+        result.entry_spot =
+          _state->snapshot.entry_spot_name && *_state->snapshot.entry_spot_name == spot_name;
+        result.root_services = _state->root_services;
+        result.worker_executor = framework_worker_executor_core (_state);
+        result.location_lifecycle = _state->location_lifecycle;
+        result.monitoring = _state->monitoring;
+        if (result.location_lifecycle)
+            result.location.emplace (make_spot_location (*_state, spot_name, spot_id));
+
+        context_state->node = _state;
+        context_state->lane_owner = _state;
+        context_state->channel_runtime = _state->channel_runtime;
+        context_state->node_rid =
+          node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot));
+        context_state->mesh_name =
+          mesh_name.empty () ? _state->snapshot.name : std::move (mesh_name);
+        context_state->spot_id = spot_id;
+        context_state->object_generation = object_generation;
+        context_state->authority_owner_generation = authority_owner_generation;
+        context_state->spot_name = spot_name;
+        context_state->lifecycle_domain = result.entry_spot
+                                            ? spot_lifecycle_domain_t::entry ()
+                                        : instance_spot
+                                            ? spot_lifecycle_domain_t::instance ()
+                                            : spot_lifecycle_domain_t::user ();
+        if (const auto mode = _state->snapshot.spot_execution_modes.find (spot_name);
+            mode != _state->snapshot.spot_execution_modes.end ()) {
+            context_state->execution_mode = mode->second;
+        }
+        if (const auto mode = _state->spot_relocation_coordination_modes.find (spot_name);
+            mode != _state->spot_relocation_coordination_modes.end ()) {
+            context_state->relocation_coordination_mode = mode->second;
+        }
+        context_state->lifecycle = result.lifecycle;
+        return result;
+    }).get ();
+
     context_state->last_application_work_completed_ns.store (
       std::chrono::duration_cast<std::chrono::nanoseconds> (
         std::chrono::steady_clock::now ().time_since_epoch ())
         .count (),
       std::memory_order_relaxed);
-    context_state->spot_name = spot_name;
-    const auto entry_spot =
-      _state->snapshot.entry_spot_name && *_state->snapshot.entry_spot_name == spot_name;
-    context_state->lifecycle_domain = entry_spot      ? spot_lifecycle_domain_t::entry ()
-                                      : instance_spot ? spot_lifecycle_domain_t::instance ()
-                                                      : spot_lifecycle_domain_t::user ();
-    if (const auto mode = _state->snapshot.spot_execution_modes.find (spot_name);
-        mode != _state->snapshot.spot_execution_modes.end ()) {
-        context_state->execution_mode = mode->second;
-    }
-    if (const auto mode = _state->spot_relocation_coordination_modes.find (spot_name);
-        mode != _state->spot_relocation_coordination_modes.end ()) {
-        context_state->relocation_coordination_mode = mode->second;
-    }
-    context_state->lifecycle = lifecycle;
-    if (_state->root_services) {
+    if (plan.root_services) {
         context_state->activation_scope =
           std::make_shared<service_scope_t> (service_scope_t::create (
-            *_state->root_services, context_state->is_entry_spot ()
-                                      ? service_scope_kind_t::entry_spot
-                                      : service_scope_kind_t::spot_activation));
+            *plan.root_services, context_state->is_entry_spot ()
+                                   ? service_scope_kind_t::entry_spot
+                                   : service_scope_kind_t::spot_activation));
     }
-    configure_spot_execution (context_state);
+    configure_spot_execution (context_state, plan.worker_executor);
     spot_context_t context (context_state);
     std::optional<message_t> create_reply;
+    std::shared_ptr<service::spot_t> staged_native;
     const auto id_value = std::string (spot_id);
 
-    if (lifecycle.create_entry_context_instance || lifecycle.create_instance_context_instance
-        || lifecycle.create_spot_context_instance) {
+    if (plan.lifecycle.create_entry_context_instance
+        || plan.lifecycle.create_instance_context_instance
+        || plan.lifecycle.create_spot_context_instance) {
         service_provider_t empty_services;
         auto &activation_services = context_state->activation_scope
                                       ? context_state->activation_scope->provider ()
                                       : empty_services;
-        if (lifecycle.create_entry_context_instance) {
-            context_state->spot_instance = lifecycle.create_entry_context_instance (
+        if (plan.lifecycle.create_entry_context_instance) {
+            context_state->spot_instance = plan.lifecycle.create_entry_context_instance (
               entry_spot_context_t (context_state), activation_services);
-        } else if (lifecycle.create_instance_context_instance) {
-            context_state->spot_instance = lifecycle.create_instance_context_instance (
+        } else if (plan.lifecycle.create_instance_context_instance) {
+            context_state->spot_instance = plan.lifecycle.create_instance_context_instance (
               instance_spot_context_t (context_state), activation_services);
         } else {
-            context_state->spot_instance = lifecycle.create_spot_context_instance (
+            context_state->spot_instance = plan.lifecycle.create_spot_context_instance (
               spot_context_t (context_state), activation_services);
         }
         if (!context_state->spot_instance) {
@@ -9442,18 +10501,34 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context_unlocked (
 
     auto remove_activation = [&] {
         auto native = context_state->native_spot.lock ();
-        context_state->native_spot.reset ();
-        _state->native_spots_by_id.erase (id_value);
+        _state->lane.run ([&] {
+            context_state->native_spot.reset ();
+            if (const auto found = _state->native_spots_by_id.find (id_value);
+                found != _state->native_spots_by_id.end () && found->second == native) {
+                _state->native_spots_by_id.erase (found);
+            }
+            if (const auto found = _state->spot_contexts_by_id.find (id_value);
+                found != _state->spot_contexts_by_id.end ()
+                && found->second._state == context_state) {
+                _state->spot_contexts_by_id.erase (found);
+            }
+            if (const auto found = _state->spot_names_by_id.find (id_value);
+                found != _state->spot_names_by_id.end () && found->second == spot_name) {
+                _state->spot_names_by_id.erase (found);
+            }
+            if (const auto found = _state->spot_ids_by_name.find (spot_name);
+                found != _state->spot_ids_by_name.end () && found->second == spot_id) {
+                _state->spot_ids_by_name.erase (found);
+            }
+            context_state->closed = true;
+        }).get ();
         if (native) {
-            node_lock.unlock ();
             try {
                 native->close ();
             }
             catch (...) {
             }
-            node_lock.lock ();
         }
-        context_state->closed = true;
         context_state->detach_application_instance (false);
     };
 
@@ -9461,7 +10536,6 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context_unlocked (
         spot_create_response_t response;
         try {
             if (staged_restore) {
-                node_lock.unlock ();
                 auto restored = staged_restore (context_state->spot_instance.get ()).result ();
                 if (!restored) {
                     throw framework_exception_t (restored.error_kind (),
@@ -9469,26 +10543,20 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context_unlocked (
                                                    ? restored.error ()->what ()
                                                    : "Spot relocation restore failed");
                 }
-                node_lock.lock ();
                 response = spot_create_response_t::accept ();
             } else {
                 auto &serializers = *context_state->channel_runtime->serializers;
-                attach_native_spot_locked (context_state);
-                node_lock.unlock ();
+                staged_native = attach_native_spot (context_state, false, false);
                 response =
-                  !context_state->is_instance_spot () && lifecycle.on_create
-                    ? lifecycle
+                  !context_state->is_instance_spot () && plan.lifecycle.on_create
+                    ? plan.lifecycle
                         .on_create (context_state->spot_instance.get (), request, serializers)
                         .result ()
                         .value ()
                     : spot_create_response_t::accept ();
-                node_lock.lock ();
             }
         }
         catch (...) {
-            if (!node_lock.owns_lock ()) {
-                node_lock.lock ();
-            }
             remove_activation ();
             throw;
         }
@@ -9498,60 +10566,60 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context_unlocked (
                                               response.reply, std::move (context)};
         }
         create_reply = response.reply;
-        if (lifecycle.on_initialize) {
+        if (plan.lifecycle.on_initialize) {
             try {
-                node_lock.unlock ();
-                lifecycle.on_initialize (context_state->spot_instance.get ());
-                node_lock.lock ();
+                plan.lifecycle.on_initialize (context_state->spot_instance.get ());
             }
             catch (...) {
-                if (!node_lock.owns_lock ()) {
-                    node_lock.lock ();
-                }
                 remove_activation ();
                 throw;
             }
         }
         if (staged_restore)
-            attach_native_spot_locked (context_state, true);
+            staged_native = attach_native_spot (context_state, true, false);
     } else
-        attach_native_spot_locked (context_state);
+        staged_native = attach_native_spot (context_state, false, false);
 
-    const auto context_inserted =
-      _state->spot_contexts_by_id.emplace (id_value, spot_context_t (context_state));
-    if (!context_inserted.second) {
+    bool location_claimed = false;
+    if (plan.location_lifecycle && plan.location) {
+        auto location = std::move (*plan.location);
+        if (const auto native = context_state->native_spot.lock ())
+            location.spot_generation = native->status ().lifecycle_generation ();
+        const auto claimed = plan.location_lifecycle->claim_spot (std::move (location));
+        if (claimed.status != location_write_status_t::stored) {
+            remove_activation ();
+            return local_spot_create_result_t{spot_id, spot_create_state_t::rejected, std::nullopt,
+                                              std::move (context)};
+        }
+        location_claimed = true;
+    }
+
+    const auto native = staged_native ? staged_native : context_state->native_spot.lock ();
+    const auto published = _state->lane.run ([&] {
+        if (_state->spot_contexts_by_id.contains (id_value)
+            || (_state->native_spots_by_id.contains (id_value)
+                && _state->native_spots_by_id.at (id_value) != native)) {
+            return false;
+        }
+        _state->spot_contexts_by_id.emplace (id_value, spot_context_t (context_state));
+        _state->spot_ids_by_name[spot_name] = spot_id;
+        _state->spot_names_by_id[id_value] = spot_name;
+        if (native)
+            _state->native_spots_by_id[id_value] = native;
+        return true;
+    }).get ();
+    if (!published) {
+        if (location_claimed && plan.location_lifecycle)
+            (void) plan.location_lifecycle->release_spot (spot_location_key_t{id_value});
         remove_activation ();
         return local_spot_create_result_t{spot_id, spot_create_state_t::rejected, std::nullopt,
                                           std::move (context)};
     }
-    _state->spot_ids_by_name[spot_name] = spot_id;
-    _state->spot_names_by_id[id_value] = spot_name;
-    auto remove_ready_activation = [&] {
-        _state->spot_ids_by_name.erase (spot_name);
-        _state->spot_names_by_id.erase (id_value);
-        _state->spot_contexts_by_id.erase (id_value);
-        remove_activation ();
-    };
 
-    if (_state->location_lifecycle) {
-        auto location = make_spot_location (*_state, spot_name, spot_id);
-        if (const auto native = context_state->native_spot.lock ())
-            location.spot_generation = native->status ().lifecycle_generation ();
-        const auto claimed = _state->location_lifecycle->claim_spot (std::move (location));
-        if (claimed.status != location_write_status_t::stored) {
-            remove_ready_activation ();
-            return local_spot_create_result_t{spot_id, spot_create_state_t::rejected, std::nullopt,
-                                              std::move (context)};
-        }
-    }
-
-    if (_state->monitoring) {
-        runtime::runtime_metrics_t metrics (_state->monitoring);
+    if (plan.monitoring) {
+        runtime::runtime_metrics_t metrics (plan.monitoring);
         if (metrics.enabled ()) {
-            const auto kind =
-              _state->snapshot.entry_spot_name && *_state->snapshot.entry_spot_name == spot_name
-                ? "entry"
-                : "user";
+            const auto kind = plan.entry_spot ? "entry" : "user";
             metrics.counter ("zlink.spot.created", "{spot}", 1, {{"kind", kind}});
             metrics.updown ("zlink.spot.count", "{spot}", 1, {{"kind", kind}});
         }
@@ -9563,13 +10631,14 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context_unlocked (
 local_spot_create_result_t spot_node_runtime_t::create_spot (std::string spot_name,
                                                              zlink::message_t request)
 {
-    std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
-    const auto is_entry_spot =
-      _state->snapshot.entry_spot_name && *_state->snapshot.entry_spot_name == spot_name;
-    auto spot_id = is_entry_spot ? detail::new_entry_spot_id (_state->snapshot.name)
-                                 : detail::new_user_spot_id ();
-    return create_spot_context_unlocked (std::move (spot_name), std::move (spot_id),
-                                         std::move (request), node_lock);
+    auto spot_id = _state->lane.run ([&] {
+        const auto is_entry_spot =
+          _state->snapshot.entry_spot_name && *_state->snapshot.entry_spot_name == spot_name;
+        return is_entry_spot ? detail::new_entry_spot_id (_state->snapshot.name)
+                             : detail::new_user_spot_id ();
+    }).get ();
+    return create_spot_context (std::move (spot_name), std::move (spot_id),
+                                std::move (request));
 }
 
 local_spot_create_result_t spot_node_runtime_t::get_or_create_spot (std::string spot_name,
@@ -9586,79 +10655,113 @@ spot_node_runtime_t::get_or_create_spot (std::string spot_name,
                                          std::string mesh_name,
                                          std::uint64_t authority_owner_generation)
 {
-    std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
     const auto id_value = std::string (spot_id);
-    auto same_spot_type = [&] (const std::string &existing_name) {
-        const auto existing_factory = _state->spot_factories.find (existing_name);
-        const auto requested_factory = _state->spot_factories.find (spot_name);
-        return existing_factory == _state->spot_factories.end ()
-               || requested_factory == _state->spot_factories.end ()
-               || existing_factory->second == requested_factory->second;
+    struct creation_admission_t
+    {
+        std::optional<local_spot_create_result_t> existing;
+        std::shared_future<void> pending;
+        std::shared_ptr<std::promise<void>> promise;
+        std::uint64_t reservation = 0;
     };
-    if (const auto existing = _state->spot_contexts_by_id.find (id_value);
-        existing != _state->spot_contexts_by_id.end ()) {
-        const auto existing_name = _state->spot_names_by_id.find (id_value);
-        if (existing_name != _state->spot_names_by_id.end ()
-            && !same_spot_type (existing_name->second)) {
-            throw framework_exception_t (framework_error_kind_t::type_mismatch,
-                                         "spot id is already bound to a different spot type");
+    auto admission = _state->lane.run ([&] {
+        auto same_spot_type = [&] (const std::string &existing_name) {
+            const auto existing_factory = _state->spot_factories.find (existing_name);
+            const auto requested_factory = _state->spot_factories.find (spot_name);
+            return existing_factory == _state->spot_factories.end ()
+                   || requested_factory == _state->spot_factories.end ()
+                   || existing_factory->second == requested_factory->second;
+        };
+        creation_admission_t result;
+        if (const auto existing = _state->spot_contexts_by_id.find (id_value);
+            existing != _state->spot_contexts_by_id.end ()) {
+            const auto existing_name = _state->spot_names_by_id.find (id_value);
+            if (existing_name != _state->spot_names_by_id.end ()
+                && !same_spot_type (existing_name->second)) {
+                throw framework_exception_t (
+                  framework_error_kind_t::type_mismatch,
+                  "spot id is already bound to a different spot type");
+            }
+            result.existing.emplace (
+              local_spot_create_result_t{spot_id, spot_create_state_t::existing, std::nullopt,
+                                         spot_context_t (existing->second._state)});
+            return result;
         }
-        return local_spot_create_result_t{spot_id, spot_create_state_t::existing, std::nullopt,
-                                          spot_context_t (existing->second._state)};
-    }
-    if (const auto pending = _state->pending_spot_creations_by_id.find (id_value);
-        pending != _state->pending_spot_creations_by_id.end ()) {
-        if (!same_spot_type (pending->second.spot_name)) {
-            throw framework_exception_t (framework_error_kind_t::type_mismatch,
-                                         "spot id is already bound to a different spot type");
+        if (const auto pending = _state->pending_spot_creations_by_id.find (id_value);
+            pending != _state->pending_spot_creations_by_id.end ()) {
+            if (!same_spot_type (pending->second.spot_name)) {
+                throw framework_exception_t (
+                  framework_error_kind_t::type_mismatch,
+                  "spot id is already bound to a different spot type");
+            }
+            result.pending = pending->second.future;
+            return result;
         }
-        auto future = pending->second.future;
-        node_lock.unlock ();
-        future.get ();
-        node_lock.lock ();
-        const auto created = _state->spot_contexts_by_id.find (id_value);
-        if (created == _state->spot_contexts_by_id.end ()) {
+        result.promise = std::make_shared<std::promise<void>> ();
+        if (_state->next_pending_spot_creation_reservation == 0) {
             throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                         "concurrent spot creation completed without a context");
+                                         "spot creation reservation sequence is exhausted");
         }
-        return local_spot_create_result_t{spot_id_t (id_value), spot_create_state_t::existing,
-                                          std::nullopt, spot_context_t (created->second._state)};
+        result.reservation = _state->next_pending_spot_creation_reservation++;
+        const auto inserted = _state->pending_spot_creations_by_id.emplace (
+          id_value, detail::spot_node_builder_state_t::pending_spot_creation_t{
+                      spot_name, result.promise->get_future ().share (), result.reservation});
+        if (!inserted.second) {
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "spot creation reservation was not acquired");
+        }
+        return result;
+    }).get ();
+
+    if (admission.existing)
+        return std::move (*admission.existing);
+    if (admission.pending.valid ()) {
+        admission.pending.get ();
+        return _state->lane.run ([&] {
+            const auto created = _state->spot_contexts_by_id.find (id_value);
+            if (created == _state->spot_contexts_by_id.end ()) {
+                throw framework_exception_t (
+                  framework_error_kind_t::internal_failure,
+                  "concurrent spot creation completed without a context");
+            }
+            return local_spot_create_result_t{
+              spot_id_t (id_value), spot_create_state_t::existing, std::nullopt,
+              spot_context_t (created->second._state)};
+        }).get ();
     }
 
-    auto promise = std::make_shared<std::promise<void>> ();
-    if (_state->next_pending_spot_creation_reservation == 0)
-        throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                     "spot creation reservation sequence is exhausted");
-    const auto reservation = _state->next_pending_spot_creation_reservation++;
-    const auto pending_inserted = _state->pending_spot_creations_by_id.emplace (
-      id_value, detail::spot_node_builder_state_t::pending_spot_creation_t{
-                  spot_name, promise->get_future ().share (), reservation});
-    if (!pending_inserted.second)
-        throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                     "spot creation reservation was not acquired");
     try {
-        auto result = create_spot_context_unlocked (
-          std::move (spot_name), std::move (spot_id), std::move (request), node_lock,
-          object_generation, std::move (mesh_name), {}, authority_owner_generation);
-        const auto owned = _state->pending_spot_creations_by_id.find (id_value);
-        if (owned == _state->pending_spot_creations_by_id.end ()
-            || owned->second.reservation != reservation)
+        auto result = create_spot_context (
+          std::move (spot_name), std::move (spot_id), std::move (request), object_generation,
+          std::move (mesh_name), {}, authority_owner_generation);
+        const auto owned = _state->lane.run ([&] {
+            const auto found = _state->pending_spot_creations_by_id.find (id_value);
+            if (found == _state->pending_spot_creations_by_id.end ()
+                || found->second.reservation != admission.reservation) {
+                return false;
+            }
+            _state->pending_spot_creations_by_id.erase (found);
+            return true;
+        }).get ();
+        if (!owned) {
             throw framework_exception_t (framework_error_kind_t::internal_failure,
                                          "spot creation reservation ownership was lost");
-        _state->pending_spot_creations_by_id.erase (owned);
-        promise->set_value ();
+        }
+        admission.promise->set_value ();
         return std::move (result);
     }
     catch (...) {
-        if (!node_lock.owns_lock ()) {
-            node_lock.lock ();
-        }
-        const auto owned = _state->pending_spot_creations_by_id.find (id_value);
-        if (owned != _state->pending_spot_creations_by_id.end ()
-            && owned->second.reservation == reservation) {
-            _state->pending_spot_creations_by_id.erase (owned);
-            promise->set_exception (std::current_exception ());
-        }
+        const auto error = std::current_exception ();
+        const auto owned = _state->lane.run ([&] {
+            const auto found = _state->pending_spot_creations_by_id.find (id_value);
+            if (found == _state->pending_spot_creations_by_id.end ()
+                || found->second.reservation != admission.reservation) {
+                return false;
+            }
+            _state->pending_spot_creations_by_id.erase (found);
+            return true;
+        }).get ();
+        if (owned)
+            admission.promise->set_exception (error);
         throw;
     }
 }
@@ -9686,10 +10789,14 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
     auto flow_scope = runtime::flow_context_t::enter (std::move (flow_id), flow_origin,
                                                       diagnostics_mode, flow_origin_t::inbound);
     auto context = find_context (spot_id);
-    if (!context || !context->_state->spot_instance
-        || std::find (_state->snapshot.instance_spot_names.begin (),
-                      _state->snapshot.instance_spot_names.end (), context->_state->spot_name)
-             == _state->snapshot.instance_spot_names.end ()) {
+    const auto context_state = context ? context->_state : nullptr;
+    const auto materialized = _state->lane.run ([&] {
+        return context_state && context_state->spot_instance
+               && std::find (_state->snapshot.instance_spot_names.begin (),
+                             _state->snapshot.instance_spot_names.end (), context_state->spot_name)
+                    != _state->snapshot.instance_spot_names.end ();
+    }).get ();
+    if (!materialized) {
         const framework_exception_t error (framework_error_kind_t::not_found,
                                            "Instance Spot activation target is not materialized");
         report_spot_dispatch_error (
@@ -9702,7 +10809,7 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
         return task_t<zlink::message_t> (
           detail::result_access_t::failure<zlink::message_t> (error));
     }
-    auto state = context->_state;
+    auto state = context_state;
     const auto message_kind =
       request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send;
     report_spot_dispatch_trace (_state, message_flow_outcome_t::received,
@@ -9768,37 +10875,45 @@ std::optional<spot_info_t> spot_node_runtime_t::find_spot (spot_id_t spot_id) co
 
 std::vector<spot_info_t> spot_node_runtime_t::list_spots () const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    std::vector<spot_info_t> spots;
-    spots.reserve (_state->spot_names_by_id.size ());
-    for (const auto &[rid, name] : _state->spot_names_by_id) {
-        spots.push_back (spot_info_t{spot_id_t (rid), name});
-    }
-    return spots;
+    return _state->lane.run ([&] {
+        std::vector<spot_info_t> spots;
+        spots.reserve (_state->spot_names_by_id.size ());
+        for (const auto &[rid, name] : _state->spot_names_by_id) {
+            spots.push_back (spot_info_t{spot_id_t (rid), name});
+        }
+        return spots;
+    }).get ();
 }
 
 task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id)
 {
-    std::optional<spot_context_t> context;
+    struct close_plan_t
     {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+        std::optional<spot_context_t> context;
+        std::shared_ptr<monitoring_runtime_state_t> monitoring;
+        std::string kind;
+    };
+    auto plan = _state->lane.run ([&] {
+        close_plan_t result;
         const auto found = _state->spot_contexts_by_id.find (std::string (spot_id));
-        if (found == _state->spot_contexts_by_id.end ()) {
-            co_return result_t<bool>::success (false);
+        if (found != _state->spot_contexts_by_id.end ()) {
+            result.context.emplace (spot_context_t (found->second._state));
+            result.monitoring = _state->monitoring;
+            result.kind = found->second._state->is_entry_spot () ? "entry" : "user";
         }
-        context.emplace (spot_context_t (found->second._state));
+        return result;
+    }).get ();
+    if (!plan.context) {
+        co_return result_t<bool>::success (false);
     }
-    const bool closed = context->close ().result ().value ();
-    if (closed && _state->monitoring) {
-        runtime::runtime_metrics_t metrics (_state->monitoring);
+    const bool closed = plan.context->close ().result ().value ();
+    if (closed && plan.monitoring) {
+        runtime::runtime_metrics_t metrics (plan.monitoring);
         if (metrics.enabled ()) {
-            const auto spot_name = spot_name_for (spot_id);
-            const auto kind = _state->snapshot.entry_spot_name && spot_name
-                                  && *_state->snapshot.entry_spot_name == *spot_name
-                                ? "entry"
-                                : "user";
-            metrics.counter ("zlink.spot.closed", "{spot}", 1, {{"kind", kind}});
-            metrics.updown ("zlink.spot.count", "{spot}", -1, {{"kind", kind}});
+            metrics.counter ("zlink.spot.closed", "{spot}", 1,
+                             {{"kind", plan.kind}});
+            metrics.updown ("zlink.spot.count", "{spot}", -1,
+                            {{"kind", plan.kind}});
         }
     }
     co_return result_t<bool>::success (closed);
@@ -9807,8 +10922,7 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id)
 bool spot_node_runtime_t::close_all_user_spots ()
 {
     std::vector<spot_id_t> user_spots;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    _state->lane.run ([&] {
         user_spots.reserve (_state->spot_contexts_by_id.size ());
         for (const auto &[rid, context] : _state->spot_contexts_by_id) {
             if (!context._state || context._state->closed
@@ -9820,7 +10934,7 @@ bool spot_node_runtime_t::close_all_user_spots ()
             }
             user_spots.push_back (spot_id_t (rid));
         }
-    }
+    }).get ();
     for (auto &spot_id : user_spots) {
         try {
             if (!close_spot (std::move (spot_id)).result ().value ())
@@ -9835,14 +10949,14 @@ bool spot_node_runtime_t::close_all_user_spots ()
 
 node_rid_t spot_node_runtime_t::node_rid () const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    return node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot));
+    return _state->lane.run ([&] {
+        return node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot));
+    }).get ();
 }
 
 std::optional<std::string> spot_node_runtime_t::spot_name_for (spot_id_t spot_id) const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    return spot_name_for_unlocked (spot_id);
+    return _state->lane.run ([&] { return spot_name_for_unlocked (spot_id); }).get ();
 }
 
 std::optional<std::string>
@@ -9857,21 +10971,39 @@ spot_node_runtime_t::spot_name_for_unlocked (const spot_id_t &spot_id) const
 
 std::optional<spot_route_t> spot_node_runtime_t::resolve_spot (spot_id_t spot_id) const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto found = _state->spot_names_by_id.find (std::string (spot_id));
-    if (found != _state->spot_names_by_id.end ()) {
-        return spot_route_t{
-          node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
-          std::move (spot_id), found->second};
-    }
-    for (const auto &[_, resolver] : _state->resolvers) {
+    struct resolution_plan_t
+    {
+        std::optional<spot_route_t> local;
+        std::vector<std::function<std::optional<spot_route_t> (spot_id_t)>> resolvers;
+        runtime::spot_address_resolver_t *location_resolver = nullptr;
+        std::string mesh_name;
+    };
+    auto plan = _state->lane.run ([&] {
+        resolution_plan_t result;
+        const auto found = _state->spot_names_by_id.find (std::string (spot_id));
+        if (found != _state->spot_names_by_id.end ()) {
+            result.local = spot_route_t{
+              node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)), spot_id,
+              found->second};
+            return result;
+        }
+        result.resolvers.reserve (_state->resolvers.size ());
+        for (const auto &[_, resolver] : _state->resolvers)
+            result.resolvers.push_back (resolver);
+        result.location_resolver = _state->spot_location_resolver;
+        result.mesh_name = _state->snapshot.name;
+        return result;
+    }).get ();
+    if (plan.local)
+        return std::move (plan.local);
+    for (const auto &resolver : plan.resolvers) {
         if (auto route = resolver (spot_id)) {
             return route;
         }
     }
-    if (_state->spot_location_resolver) {
+    if (plan.location_resolver) {
         const auto address =
-          _state->spot_location_resolver->resolve_spot_address (_state->snapshot.name, spot_id)
+          plan.location_resolver->resolve_spot_address (std::move (plan.mesh_name), spot_id)
             .result ()
             .value ();
         if (address) {
@@ -9885,12 +11017,13 @@ std::optional<spot_route_t> spot_node_runtime_t::resolve_spot (spot_id_t spot_id
 
 std::optional<spot_id_t> spot_node_runtime_t::actor_spot (const actor_ref_t &actor_ref) const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto found = _state->actor_spot_ids.find (actor_key (actor_ref));
-    if (found == _state->actor_spot_ids.end ()) {
-        return std::nullopt;
-    }
-    return found->second;
+    return _state->lane.run ([&] () -> std::optional<spot_id_t> {
+        const auto found = _state->actor_spot_ids.find (actor_key (actor_ref));
+        if (found == _state->actor_spot_ids.end ()) {
+            return std::nullopt;
+        }
+        return found->second;
+    }).get ();
 }
 
 result_t<bool> spot_node_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
@@ -9900,7 +11033,9 @@ result_t<bool> spot_node_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
                                         "ActorRef must identify an actor to destroy");
     }
 
-    const auto local_node_rid = detail::effective_spot_node_rid (_state->snapshot);
+    const auto local_node_rid = _state->lane.run ([&] {
+        return detail::effective_spot_node_rid (_state->snapshot);
+    }).get ();
     if (actor_ref.node_rid ().empty () || actor_ref.node_rid ().value () != local_node_rid) {
         return result_t<bool>::failure (framework_error_kind_t::invalid_operation,
                                         "ActorRef does not identify an actor on this node");
@@ -9908,8 +11043,7 @@ result_t<bool> spot_node_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
 
     const auto key = actor_key (actor_ref);
     std::function<result_t<void> (const actor_ref_t &)> destroy_registry;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    const auto selected = _state->lane.run ([&] {
         if (_state->actor_transfer_coordinator.blocks_dispatch (key)) {
             return result_t<bool>::failure (framework_error_kind_t::unavailable,
                                             "Actor transfer is in progress");
@@ -9952,14 +11086,21 @@ result_t<bool> spot_node_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
         (void) _state->dispatched_request_replies.erase_if ([&] (const auto &request_key) {
             return request_key.starts_with (actor_request_dedup_prefix (key));
         });
-        _state->actor_pending_requests_lane.run ([this, &key] {
-            _state->actor_pending_requests.erase (key);
-        }).get ();
         destroy_registry = _state->destroy_actor_registry;
         _state->destroying_actors.erase (key);
-    }
+        return result_t<bool>::success (true);
+    }).get ();
+    if (!selected)
+        return result_t<bool>::failure (
+          selected.error_kind (), selected.error () != nullptr ? selected.error ()->what ()
+                                                               : "Actor destroy failed");
+    if (!selected.value ())
+        return result_t<bool>::success (false);
 
-    release_actor_location (*_state, actor_ref);
+    _state->actor_pending_requests_lane.run ([this, &key] {
+        _state->actor_pending_requests.erase (key);
+    }).get ();
+    release_actor_location (_state, actor_ref);
     if (destroy_registry) {
         auto destroyed = destroy_registry (actor_ref);
         if (!destroyed) {
@@ -9973,24 +11114,26 @@ result_t<bool> spot_node_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
 
 void spot_node_runtime_t::record_actor_spot (const actor_ref_t &actor_ref, spot_id_t spot_id)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto key = actor_key (actor_ref);
-    auto name = spot_name_for_unlocked (spot_id).value_or ("");
-    detail::record_actor_route_unlocked (
-      *_state, key,
-      spot_route_t{node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
-                   std::move (spot_id), std::move (name)},
-      actor_ref.object_generation ());
+    _state->lane.run ([&] {
+        const auto key = actor_key (actor_ref);
+        auto name = spot_name_for_unlocked (spot_id).value_or ("");
+        detail::record_actor_route_unlocked (
+          *_state, key,
+          spot_route_t{node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
+                       std::move (spot_id), std::move (name)},
+          actor_ref.object_generation ());
+    }).get ();
 }
 
 std::optional<spot_route_t> spot_node_runtime_t::actor_route (const actor_ref_t &actor_ref) const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto found = _state->actor_routes.find (actor_key (actor_ref));
-    if (found == _state->actor_routes.end ()) {
-        return std::nullopt;
-    }
-    return found->second;
+    return _state->lane.run ([&] () -> std::optional<spot_route_t> {
+        const auto found = _state->actor_routes.find (actor_key (actor_ref));
+        if (found == _state->actor_routes.end ()) {
+            return std::nullopt;
+        }
+        return found->second;
+    }).get ();
 }
 
 bool spot_node_runtime_t::matches_actor_message_follow_source (
@@ -10042,27 +11185,29 @@ bool spot_node_runtime_t::complete_actor_message_follow_notification (
 
 void spot_node_runtime_t::record_actor_route (const actor_ref_t &actor_ref, spot_route_t route)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto key = actor_key (actor_ref);
-    detail::record_actor_route_unlocked (*_state, key, std::move (route),
-                                         actor_ref.object_generation ());
+    _state->lane.run ([&] {
+        const auto key = actor_key (actor_ref);
+        detail::record_actor_route_unlocked (*_state, key, std::move (route),
+                                             actor_ref.object_generation ());
+    }).get ();
 }
 
 std::optional<std::string> spot_node_runtime_t::actor_route_transport_name () const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    if (_state->snapshot.spot_route_channel_name
-        && !_state->snapshot.spot_route_channel_name->empty ()) {
-        return _state->snapshot.spot_route_channel_name;
-    }
-    if (_state->snapshot.accepted_route_channels.size () == 1) {
-        return _state->snapshot.accepted_route_channels.front ().channel_name;
-    }
-    if (_state->snapshot.discovery_channel_name
-        && !_state->snapshot.discovery_channel_name->empty ()) {
-        return _state->snapshot.discovery_channel_name;
-    }
-    return std::nullopt;
+    return _state->lane.run ([&] () -> std::optional<std::string> {
+        if (_state->snapshot.spot_route_channel_name
+            && !_state->snapshot.spot_route_channel_name->empty ()) {
+            return _state->snapshot.spot_route_channel_name;
+        }
+        if (_state->snapshot.accepted_route_channels.size () == 1) {
+            return _state->snapshot.accepted_route_channels.front ().channel_name;
+        }
+        if (_state->snapshot.discovery_channel_name
+            && !_state->snapshot.discovery_channel_name->empty ()) {
+            return _state->snapshot.discovery_channel_name;
+        }
+        return std::nullopt;
+    }).get ();
 }
 
 void spot_node_runtime_t::cancel_pending_work () noexcept
@@ -10078,8 +11223,7 @@ void spot_node_runtime_t::release_native_handles () noexcept
 {
     std::vector<std::shared_ptr<detail::spot_context_state_t>> contexts;
     try {
-        {
-            std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+        _state->lane.run ([&] {
             contexts.reserve (_state->spot_contexts_by_id.size ());
             for (auto &[_, context] : _state->spot_contexts_by_id) {
                 if (context._state) {
@@ -10093,7 +11237,7 @@ void spot_node_runtime_t::release_native_handles () noexcept
             _state->native_actors.clear ();
             _state->native_spots_by_id.clear ();
             _state->routed_control_spot.reset ();
-        }
+        }).get ();
         for (auto &context : contexts) {
             try {
                 context->detach_application_instance (true, spot_close_reason_t::host_shutdown);
@@ -10109,19 +11253,20 @@ void spot_node_runtime_t::release_native_handles () noexcept
 void spot_node_runtime_t::request_stop () noexcept
 {
     _state->stopping.store (true, std::memory_order_release);
-    _state->worker_cancellation.request_stop ();
-    if (_state->worker_executor) {
-        _state->worker_executor->request_stop ();
-    }
-    if (_state->deadline_executor) {
-        _state->deadline_executor->request_stop ();
-    }
+    auto [cancellation, worker, deadline] = _state->lane.run ([&] {
+        return std::make_tuple (_state->worker_cancellation, _state->worker_executor,
+                                _state->deadline_executor);
+    }).get ();
+    cancellation.request_stop ();
+    if (worker)
+        worker->request_stop ();
+    if (deadline)
+        deadline->request_stop ();
 }
 
 void spot_node_runtime_t::bind_service_provider (service_provider_t &services)
 {
-    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-    _state->root_services = services;
+    _state->lane.run ([&] { _state->root_services = services; }).get ();
 }
 
 bool spot_node_runtime_t::stopping () const noexcept
@@ -10141,11 +11286,17 @@ void spot_node_runtime_t::cancel_pending_dispatch () noexcept
 void spot_node_runtime_t::cancel_timers () noexcept
 {
     try {
-        for (auto &[_, context] : _state->spot_contexts_by_id) {
-            if (context._state) {
-                detail::timer_runtime_t (context._state).cancel_all ();
+        const auto contexts = _state->lane.run ([&] {
+            std::vector<std::shared_ptr<spot_context_state_t>> result;
+            result.reserve (_state->spot_contexts_by_id.size ());
+            for (const auto &[_, context] : _state->spot_contexts_by_id) {
+                if (context._state)
+                    result.push_back (context._state);
             }
-        }
+            return result;
+        }).get ();
+        for (const auto &context : contexts)
+            detail::timer_runtime_t (context).cancel_all ();
     }
     catch (...) {
     }
@@ -10154,43 +11305,65 @@ void spot_node_runtime_t::cancel_timers () noexcept
 std::optional<actor_ref_t>
 spot_node_runtime_t::current_actor_ref (const actor_ref_t &actor_ref) const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto key = actor_key (actor_ref);
-    const auto found = _state->actor_generations.find (key);
-    if (found == _state->actor_generations.end ()) {
-        return std::nullopt;
-    }
-    // The recorded location can be this node's own local spot, or (after a
-    // relocation this node followed away, e.g. a Message Follow route) a
-    // route naming the remote current owner; report whichever this node
-    // actually knows rather than always claiming local ownership.
-    auto node_rid_value = detail::effective_spot_node_rid (_state->snapshot);
-    if (const auto routed = _state->actor_routes.find (key);
-        routed != _state->actor_routes.end ()) {
-        node_rid_value = std::string (routed->second.node_rid.value ());
-    }
-    return ::zlink::framework::detail::actor_ref_access_t::make (
-      node_rid_t::from_string (node_rid_value),
-      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-      std::string (actor_ref.actor_id ().value ()), found->second);
+    return _state->lane.run ([&] () -> std::optional<actor_ref_t> {
+        const auto key = actor_key (actor_ref);
+        const auto found = _state->actor_generations.find (key);
+        if (found == _state->actor_generations.end ()) {
+            return std::nullopt;
+        }
+        // The recorded location can be this node's own local spot, or (after a
+        // relocation this node followed away, e.g. a Message Follow route) a
+        // route naming the remote current owner; report whichever this node
+        // actually knows rather than always claiming local ownership.
+        auto node_rid_value = detail::effective_spot_node_rid (_state->snapshot);
+        if (const auto routed = _state->actor_routes.find (key);
+            routed != _state->actor_routes.end ()) {
+            node_rid_value = std::string (routed->second.node_rid.value ());
+        }
+        return ::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid_t::from_string (node_rid_value),
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
+          std::string (actor_ref.actor_id ().value ()), found->second);
+    }).get ();
 }
 
 void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node_t> node)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    _state->stopping.store (false, std::memory_order_release);
-    _state->worker_cancellation = std::stop_source{};
-    _state->native_node = std::move (node);
-    if (_state->spot_contexts_by_id.empty ()) {
-        if (auto native = _state->native_node.lock ()) {
-            _state->routed_control_spot = std::make_shared<service::spot_t> (native->entry_spot ());
+    struct attach_plan_t
+    {
+        std::vector<std::shared_ptr<spot_context_state_t>> contexts;
+        std::chrono::milliseconds idle_timeout{0};
+        bool create_control_spot = false;
+        bool create_idle_timer = false;
+    };
+    const auto native = node;
+    const auto plan = _state->lane.run ([&] {
+        attach_plan_t result;
+        _state->stopping.store (false, std::memory_order_release);
+        _state->worker_cancellation = std::stop_source{};
+        _state->native_node = node;
+        result.create_control_spot = _state->spot_contexts_by_id.empty ();
+        result.contexts.reserve (_state->spot_contexts_by_id.size ());
+        for (const auto &[_, context] : _state->spot_contexts_by_id) {
+            if (context._state)
+                result.contexts.push_back (context._state);
         }
+        result.idle_timeout = _state->instance_spot_idle_timeout;
+        result.create_idle_timer =
+          result.idle_timeout > std::chrono::milliseconds::zero ()
+          && !_state->instance_spot_idle_timer;
+        return result;
+    }).get ();
+    if (plan.create_control_spot && native) {
+        auto control = std::make_shared<service::spot_t> (native->entry_spot ());
+        _state->lane.run ([&] {
+            if (_state->spot_contexts_by_id.empty () && !_state->routed_control_spot)
+                _state->routed_control_spot = std::move (control);
+        }).get ();
     }
-    for (auto &[_, context] : _state->spot_contexts_by_id) {
-        attach_native_spot_locked (context._state);
-    }
-    if (_state->instance_spot_idle_timeout > std::chrono::milliseconds::zero ()
-        && !_state->instance_spot_idle_timer) {
+    for (const auto &context : plan.contexts)
+        attach_native_spot (context);
+    if (plan.create_idle_timer) {
         auto weak_state = std::weak_ptr<spot_node_builder_state_t> (_state);
         auto timer = std::make_unique<zlink::timer_t> ();
         timer->on_fire ([weak_state] (std::uint64_t) {
@@ -10199,35 +11372,39 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
                     spot_node_runtime_t (std::move (state)).evict_idle_spots ();
             }
         });
-        timer->start (_state->instance_spot_idle_timeout,
+        timer->start (plan.idle_timeout,
                       std::numeric_limits<std::uint64_t>::max ());
-        _state->instance_spot_idle_timer = std::move (timer);
+        _state->lane.run ([&] {
+            if (!_state->instance_spot_idle_timer)
+                _state->instance_spot_idle_timer = std::move (timer);
+        }).get ();
     }
 }
 
 void spot_node_runtime_t::detach_native_node ()
 {
-    std::vector<std::shared_ptr<service::spot_t>> native_spots;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-        if (_state->instance_spot_idle_timer) {
-            try {
-                _state->instance_spot_idle_timer->stop ();
-            }
-            catch (...) {
-            }
-        }
-        native_spots.reserve (_state->native_spots_by_id.size ());
+    zlink::timer_t *idle_timer = nullptr;
+    auto native_spots = _state->lane.run ([&] {
+        std::vector<std::shared_ptr<service::spot_t>> result;
+        idle_timer = _state->instance_spot_idle_timer.get ();
+        result.reserve (_state->native_spots_by_id.size ());
         for (const auto &[_, native] : _state->native_spots_by_id) {
-            if (native) {
-                native_spots.push_back (native);
-            }
+            if (native)
+                result.push_back (native);
         }
         _state->native_node.reset ();
         _state->native_spots_by_id.clear ();
         _state->routed_control_spot.reset ();
         for (auto &[_, context] : _state->spot_contexts_by_id) {
             context._state->native_spot.reset ();
+        }
+        return result;
+    }).get ();
+    if (idle_timer) {
+        try {
+            idle_timer->stop ();
+        }
+        catch (...) {
         }
     }
 
@@ -10250,8 +11427,18 @@ void spot_node_runtime_t::detach_native_node ()
 void spot_node_runtime_t::evict_idle_spots () noexcept
 {
     try {
-        if (_state->instance_spot_idle_timeout <= std::chrono::milliseconds::zero ()
-            || !_state->admit_instance_spot_idle_eviction
+        auto [idle_timeout, admit_eviction, initial_candidates] = _state->lane.run ([&] {
+            std::vector<std::shared_ptr<spot_context_state_t>> states;
+            states.reserve (_state->spot_contexts_by_id.size ());
+            for (const auto &[_, context] : _state->spot_contexts_by_id) {
+                if (context._state)
+                    states.push_back (context._state);
+            }
+            return std::make_tuple (_state->instance_spot_idle_timeout,
+                                    _state->admit_instance_spot_idle_eviction,
+                                    std::move (states));
+        }).get ();
+        if (idle_timeout <= std::chrono::milliseconds::zero () || !admit_eviction
             || _state->stopping.load (std::memory_order_acquire))
             return;
 
@@ -10259,51 +11446,32 @@ void spot_node_runtime_t::evict_idle_spots () noexcept
                               std::chrono::steady_clock::now ().time_since_epoch ())
                               .count ();
         const auto timeout_ns =
-          std::chrono::duration_cast<std::chrono::nanoseconds> (_state->instance_spot_idle_timeout)
+          std::chrono::duration_cast<std::chrono::nanoseconds> (idle_timeout)
             .count ();
-        std::vector<std::shared_ptr<spot_context_state_t>> candidates;
-        {
-            std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-            for (auto &[rid, context] : _state->spot_contexts_by_id) {
-                (void) rid;
-                auto state = context._state;
-                if (!state || state->closed || !state->is_instance_spot () || !state->spot_instance
-                    || state->actor_count != 0 || state->relocation_boundary_active
-                    || state->relocation_ready_deferred || state->queued_routed_packets.size () != 0
-                    || state->authority_owner_generation == 0)
+        std::vector<std::pair<std::shared_ptr<spot_context_state_t>, std::uint64_t>> candidates;
+        for (const auto &state : initial_candidates) {
+            if (!state->serial_queue
+                || state->serial_queue->pending_count (runtime::serial_work_lane_t::application) != 0
+                || state->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle) != 0)
+                continue;
+            bool timer_busy = false;
+            for (const auto &timer : state->timers) {
+                if (!timer)
                     continue;
-                const auto pending_creation =
-                  _state->pending_spot_creations_by_id.find (std::string (state->spot_id));
-                if (pending_creation != _state->pending_spot_creations_by_id.end ())
-                    continue;
-                if (!state->serial_queue
-                    || state->serial_queue->pending_count (runtime::serial_work_lane_t::application)
-                         != 0
-                    || state->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle)
-                         != 0)
-                    continue;
-                if (state->has_active_callback ())
-                    continue;
-                bool timer_busy = false;
-                for (const auto &timer : state->timers) {
-                    if (!timer)
-                        continue;
-                    std::lock_guard timer_lock (timer->mutex);
-                    if (!timer->disposed
-                        && (timer->running || timer->pending_fire
-                            || timer->pending_fire_count != 0)) {
-                        timer_busy = true;
-                        break;
-                    }
+                std::lock_guard timer_lock (timer->mutex);
+                if (!timer->disposed
+                    && (timer->running || timer->pending_fire || timer->pending_fire_count != 0)) {
+                    timer_busy = true;
+                    break;
                 }
-                if (timer_busy)
-                    continue;
-                const auto last_ns =
-                  state->last_application_work_completed_ns.load (std::memory_order_relaxed);
-                if (last_ns <= 0 || now_ns < last_ns || now_ns - last_ns < timeout_ns)
-                    continue;
-                {
-                    const auto sealed = state->callback_lane.run ([state] {
+            }
+            if (timer_busy)
+                continue;
+            const auto last_ns =
+              state->last_application_work_completed_ns.load (std::memory_order_relaxed);
+            if (last_ns <= 0 || now_ns < last_ns || now_ns - last_ns < timeout_ns)
+                continue;
+            const auto sealed = state->callback_lane.run ([state] {
                     if (state->callback_admission_closed || state->callback_depth != 0
                         || state->close_requested || state->idle_eviction_in_progress)
                         return false;
@@ -10312,27 +11480,54 @@ void spot_node_runtime_t::evict_idle_spots () noexcept
                      * checks after the Location Store transaction. */
                     state->idle_eviction_in_progress = true;
                     return true;
-                    }).get ();
-                    if (!sealed)
-                        continue;
-                    candidates.push_back (std::move (state));
-                }
+            }).get ();
+            if (!sealed)
+                continue;
+            const auto accepted = _state->lane.run ([&] {
+                const auto found = _state->spot_contexts_by_id.find (std::string (state->spot_id));
+                const auto last =
+                  state->last_application_work_completed_ns.load (std::memory_order_relaxed);
+                return found != _state->spot_contexts_by_id.end ()
+                       && found->second._state == state && !state->closed
+                       && state->is_instance_spot () && state->spot_instance
+                       && state->actor_count == 0 && !state->relocation_boundary_active
+                       && !state->relocation_ready_deferred && state->queued_routed_packets.empty ()
+                       && state->authority_owner_generation != 0
+                       && !_state->pending_spot_creations_by_id.contains (
+                         std::string (state->spot_id))
+                       && last > 0 && now_ns >= last && now_ns - last >= timeout_ns;
+            }).get ();
+            if (!accepted) {
+                state->callback_lane.run ([state] {
+                    state->idle_eviction_in_progress = false;
+                }).get ();
+                continue;
             }
+            const auto reservation = state->begin_idle_close_reservation ();
+            if (reservation == 0) {
+                state->callback_lane.run ([state] {
+                    state->idle_eviction_in_progress = false;
+                }).get ();
+                continue;
+            }
+            candidates.emplace_back (state, reservation);
         }
 
-        for (const auto &state : candidates) {
+        for (const auto &[state, reservation] : candidates) {
             bool evicted = false;
             try {
-                evicted = _state->admit_instance_spot_idle_eviction (
+                evicted = admit_eviction (
                   state->spot_id, state->spot_name, state->object_generation,
-                  state->authority_owner_generation, [state] { return state->try_close_idle (); });
+                  state->authority_owner_generation,
+                  [state, reservation] { return state->try_close_idle (reservation); });
             }
             catch (...) {
                 evicted = false;
             }
             if (!evicted) {
-                std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-                if (!state->closed) {
+                state->cancel_idle_close_reservation (reservation);
+                const auto reset = _state->lane.run ([&] { return !state->closed; }).get ();
+                if (reset) {
                     state->callback_lane.run ([state] {
                         state->idle_eviction_in_progress = false;
                     }).get ();
@@ -10347,22 +11542,31 @@ void spot_node_runtime_t::evict_idle_spots () noexcept
 void spot_node_runtime_t::record_core_actor_transfer_activation (std::string actor_id,
                                                                  std::uint64_t membership_epoch)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    _state->mesh_runtime_owned_native_actor_ids.insert (actor_id);
-    _state->core_actor_membership_epochs[std::move (actor_id)] = membership_epoch;
+    _state->lane.run ([&] {
+        _state->mesh_runtime_owned_native_actor_ids.insert (actor_id);
+        _state->core_actor_membership_epochs[std::move (actor_id)] = membership_epoch;
+    }).get ();
 }
 
 void spot_node_runtime_t::bind_location_lifecycle (runtime::location_lifecycle_t &lifecycle)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    _state->location_lifecycle = &lifecycle;
+    _state->lane.run ([&] { _state->location_lifecycle = &lifecycle; }).get ();
 }
 
 bool spot_node_runtime_t::has_active_callbacks () const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    for (const auto &[_, context] : _state->spot_contexts_by_id) {
-        if (context._state && context._state->has_active_callback ()) {
+    const auto contexts = _state->lane.run ([&] {
+        std::vector<std::shared_ptr<spot_context_state_t>> result;
+        result.reserve (_state->spot_contexts_by_id.size ());
+        for (const auto &[_, context] : _state->spot_contexts_by_id) {
+            if (context._state) {
+                result.push_back (context._state);
+            }
+        }
+        return result;
+    }).get ();
+    for (const auto &context : contexts) {
+        if (context->has_active_callback ()) {
             return true;
         }
     }
@@ -10371,58 +11575,69 @@ bool spot_node_runtime_t::has_active_callbacks () const
 
 std::vector<actor_ref_t> spot_node_runtime_t::local_actor_refs () const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    std::vector<actor_ref_t> refs;
-    refs.reserve (_state->actor_spot_ids.size ());
-    const auto node_rid = detail::effective_spot_node_rid (_state->snapshot);
-    for (const auto &[key, spot_id] : _state->actor_spot_ids) {
-        const auto split = key.find (':');
-        if (split == std::string::npos) {
-            continue;
+    return _state->lane.run ([&] {
+        std::vector<actor_ref_t> refs;
+        refs.reserve (_state->actor_spot_ids.size ());
+        const auto node_rid = detail::effective_spot_node_rid (_state->snapshot);
+        for (const auto &[key, spot_id] : _state->actor_spot_ids) {
+            const auto split = key.find (':');
+            if (split == std::string::npos) {
+                continue;
+            }
+            const auto generation = _state->actor_generations.find (key);
+            if (generation == _state->actor_generations.end () || generation->second == 0) {
+                continue;
+            }
+            refs.push_back (::zlink::framework::detail::actor_ref_access_t::make (
+              node_rid_t::from_string (node_rid), key.substr (0, split), key.substr (split + 1),
+              generation->second));
         }
-        const auto generation = _state->actor_generations.find (key);
-        if (generation == _state->actor_generations.end () || generation->second == 0) {
-            continue;
-        }
-        refs.push_back (::zlink::framework::detail::actor_ref_access_t::make (
-          node_rid_t::from_string (node_rid), key.substr (0, split), key.substr (split + 1),
-          generation->second));
-    }
-    return refs;
+        return refs;
+    }).get ();
 }
 
 std::optional<zlink::message_t>
 spot_node_runtime_t::serialize_actor_snapshot (const actor_ref_t &actor_ref) const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto actor = _state->actor_instances.find (actor_key (actor_ref));
-    const auto factory = _state->actor_factories.find (
-      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
-    if (actor == _state->actor_instances.end () || !actor->second
-        || factory == _state->actor_factories.end () || !_state->channel_runtime
-        || !_state->channel_runtime->serializers) {
+    struct snapshot_plan_t
+    {
+        std::shared_ptr<void> actor;
+        std::function<std::optional<zlink::message_t> (void *, serializer_registry_t &)> serialize;
+        serializer_registry_t *serializers = nullptr;
+    };
+    const auto plan = _state->lane.run ([&] {
+        snapshot_plan_t result;
+        const auto actor = _state->actor_instances.find (actor_key (actor_ref));
+        const auto factory = _state->actor_factories.find (
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
+        if (actor != _state->actor_instances.end () && actor->second
+            && factory != _state->actor_factories.end () && _state->channel_runtime
+            && _state->channel_runtime->serializers) {
+            result.actor = actor->second;
+            result.serialize = factory->second.serialize_instance;
+            result.serializers = _state->channel_runtime->serializers;
+        }
+        return result;
+    }).get ();
+    if (!plan.actor || !plan.serialize || !plan.serializers) {
         return std::nullopt;
     }
-    return factory->second.serialize_instance (actor->second.get (),
-                                               *_state->channel_runtime->serializers);
+    return plan.serialize (plan.actor.get (), *plan.serializers);
 }
 
 void spot_node_runtime_t::bind_drain_flag (std::shared_ptr<std::atomic_bool> flag)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    _state->drain_flag = std::move (flag);
+    _state->lane.run ([&] { _state->drain_flag = std::move (flag); }).get ();
 }
 
 void spot_node_runtime_t::bind_spot_location_resolver (runtime::spot_address_resolver_t &resolver)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    _state->spot_location_resolver = &resolver;
+    _state->lane.run ([&] { _state->spot_location_resolver = &resolver; }).get ();
 }
 
 std::shared_ptr<service::mesh_node_t> spot_node_runtime_t::native_node () const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    return _state->native_node.lock ();
+    return _state->lane.run ([&] { return _state->native_node.lock (); }).get ();
 }
 
 task_t<void>
@@ -10472,13 +11687,12 @@ spot_node_runtime_t::send_spot_mesh_parts_exact (const spot_id_t &source_spot_id
                                                  std::uint64_t target_spot_generation,
                                                  runtime::messaging::message_parts_t parts) const
 {
-    std::shared_ptr<service::spot_t> source;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    const auto source = _state->lane.run ([&] {
         const auto found = _state->native_spots_by_id.find (source_spot_id);
         if (found != _state->native_spots_by_id.end ())
-            source = found->second;
-    }
+            return found->second;
+        return std::shared_ptr<service::spot_t>{};
+    }).get ();
     if (!source || target_spot_generation == 0) {
         throw framework_exception_t (
           framework_error_kind_t::not_found,
@@ -10501,13 +11715,7 @@ task_t<zlink::submit_result_t>
 spot_node_runtime_t::send_actor_leave_notification (const zlink::routing_id_t &target_node_rid,
                                                     runtime::messaging::message_parts_t parts) const
 {
-    std::function<task_t<zlink::submit_result_t> (const zlink::routing_id_t &,
-                                                  std::vector<zlink::message_t>)>
-      sender;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-        sender = _state->actor_leave_notification_sender;
-    }
+    auto sender = _state->lane.run ([&] { return _state->actor_leave_notification_sender; }).get ();
     if (!sender) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "Actor OnLeave node notification transport is not configured");
@@ -10539,22 +11747,20 @@ result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
           "remote Actor Join target Spot fence is incomplete");
     }
 
+    auto services = _state->lane.run ([&] { return _state->root_services; }).get ();
+    if (!services) {
+        return result_t<std::uint64_t>::failure (
+          framework_error_kind_t::unavailable,
+          "remote Actor Join target Spot Authority Store is unavailable");
+    }
     runtime::live_location_reader_t *store = nullptr;
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-        if (!_state->root_services) {
-            return result_t<std::uint64_t>::failure (
-              framework_error_kind_t::unavailable,
-              "remote Actor Join target Spot Authority Store is unavailable");
-        }
-        try {
-            store = &_state->root_services->get_required<runtime::live_location_reader_t> ();
-        }
-        catch (const std::exception &) {
-            return result_t<std::uint64_t>::failure (
-              framework_error_kind_t::unavailable,
-              "remote Actor Join target Spot Authority Store is unavailable");
-        }
+    try {
+        store = &services->get_required<runtime::live_location_reader_t> ();
+    }
+    catch (const std::exception &) {
+        return result_t<std::uint64_t>::failure (
+          framework_error_kind_t::unavailable,
+          "remote Actor Join target Spot Authority Store is unavailable");
     }
 
     try {
@@ -10612,25 +11818,33 @@ void spot_node_runtime_t::set_route_client (route_client_t route_client)
 
 std::vector<spot_context_t> spot_node_runtime_t::active_contexts () const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    std::vector<spot_context_t> contexts;
-    contexts.reserve (_state->spot_contexts_by_id.size ());
-    for (const auto &[_, context] : _state->spot_contexts_by_id) {
-        if (!context._state->closed && !context._state->native_spot.expired ()) {
-            contexts.push_back (spot_context_t (context._state));
+    return _state->lane.run ([&] {
+        std::vector<spot_context_t> contexts;
+        contexts.reserve (_state->spot_contexts_by_id.size ());
+        for (const auto &[_, context] : _state->spot_contexts_by_id) {
+            if (!context._state->closed && !context._state->native_spot.expired ()) {
+                contexts.push_back (spot_context_t (context._state));
+            }
         }
-    }
-    return contexts;
+        return contexts;
+    }).get ();
 }
 
 std::vector<spot_id_t> spot_node_runtime_t::deferred_relocation_ready_spots () const
 {
+    const auto contexts = _state->lane.run ([&] {
+        std::vector<std::shared_ptr<spot_context_state_t>> result;
+        result.reserve (_state->spot_contexts_by_id.size ());
+        for (const auto &[_, context] : _state->spot_contexts_by_id) {
+            const auto state = context._state;
+            if (!state || state->is_entry_spot () || state->is_instance_spot ())
+                continue;
+            result.push_back (state);
+        }
+        return result;
+    }).get ();
     std::vector<spot_id_t> result;
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    for (const auto &[_, context] : _state->spot_contexts_by_id) {
-        const auto state = context._state;
-        if (!state || state->is_entry_spot () || state->is_instance_spot ())
-            continue;
+    for (const auto &state : contexts) {
         if (state->callback_lane.run ([state] {
               return state->relocation_ready_deferred;
             }).get ())
@@ -10642,34 +11856,43 @@ std::vector<spot_id_t> spot_node_runtime_t::deferred_relocation_ready_spots () c
 std::vector<spot_node_runtime_t::application_relocation_unit_t>
 spot_node_runtime_t::application_relocation_units () const
 {
+    auto plans = _state->lane.run ([&] {
+        std::vector<std::pair<application_relocation_unit_t,
+                              std::shared_ptr<spot_context_state_t>>>
+          result;
+        const auto node_rid = detail::effective_spot_node_rid (_state->snapshot);
+        for (const auto &[_, context] : _state->spot_contexts_by_id) {
+            const auto state = context._state;
+            if (!state || state->is_entry_spot () || state->is_instance_spot ()
+                || state->execution_mode != user_spot_execution_mode_t::spot_wide
+                || state->relocation_coordination_mode
+                     != spot_relocation_coordination_mode_t::application_signaled)
+                continue;
+            application_relocation_unit_t unit{state->spot_id, state->spot_name, false, {}};
+            for (const auto &[key, actor_spot_id] : _state->actor_spot_ids) {
+                if (actor_spot_id != state->spot_id)
+                    continue;
+                const auto split = key.find (':');
+                if (split == std::string::npos)
+                    continue;
+                const auto generation = _state->actor_generations.find (key);
+                if (generation == _state->actor_generations.end () || generation->second == 0) {
+                    continue;
+                }
+                unit.actors.push_back (::zlink::framework::detail::actor_ref_access_t::make (
+                  node_rid_t::from_string (node_rid), key.substr (0, split), key.substr (split + 1),
+                  generation->second));
+            }
+            result.emplace_back (std::move (unit), state);
+        }
+        return result;
+    }).get ();
     std::vector<application_relocation_unit_t> result;
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto node_rid = detail::effective_spot_node_rid (_state->snapshot);
-    for (const auto &[_, context] : _state->spot_contexts_by_id) {
-        const auto state = context._state;
-        if (!state || state->is_entry_spot () || state->is_instance_spot ()
-            || state->execution_mode != user_spot_execution_mode_t::spot_wide
-            || state->relocation_coordination_mode
-                 != spot_relocation_coordination_mode_t::application_signaled)
-            continue;
-        application_relocation_unit_t unit{state->spot_id, state->spot_name, false, {}};
+    result.reserve (plans.size ());
+    for (auto &[unit, state] : plans) {
         unit.ready = state->callback_lane.run ([state] {
             return state->relocation_ready_deferred;
         }).get ();
-        for (const auto &[key, actor_spot_id] : _state->actor_spot_ids) {
-            if (actor_spot_id != state->spot_id)
-                continue;
-            const auto split = key.find (':');
-            if (split == std::string::npos)
-                continue;
-            const auto generation = _state->actor_generations.find (key);
-            if (generation == _state->actor_generations.end () || generation->second == 0) {
-                continue;
-            }
-            unit.actors.push_back (::zlink::framework::detail::actor_ref_access_t::make (
-              node_rid_t::from_string (node_rid), key.substr (0, split), key.substr (split + 1),
-              generation->second));
-        }
         result.push_back (std::move (unit));
     }
     return result;
@@ -10677,14 +11900,20 @@ spot_node_runtime_t::application_relocation_units () const
 
 void spot_node_runtime_t::begin_relocation_readiness ()
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    for (const auto &[_, context] : _state->spot_contexts_by_id) {
-        const auto state = context._state;
-        if (!state || state->is_entry_spot () || state->is_instance_spot ()
-            || state->execution_mode != user_spot_execution_mode_t::spot_wide
-            || state->relocation_coordination_mode
-                 != spot_relocation_coordination_mode_t::application_signaled)
-            continue;
+    const auto states = _state->lane.run ([&] {
+        std::vector<std::shared_ptr<spot_context_state_t>> result;
+        for (const auto &[_, context] : _state->spot_contexts_by_id) {
+            const auto state = context._state;
+            if (!state || state->is_entry_spot () || state->is_instance_spot ()
+                || state->execution_mode != user_spot_execution_mode_t::spot_wide
+                || state->relocation_coordination_mode
+                     != spot_relocation_coordination_mode_t::application_signaled)
+                continue;
+            result.push_back (state);
+        }
+        return result;
+    }).get ();
+    for (const auto &state : states) {
         state->callback_lane.run ([state] {
             state->relocation_boundary_active = true;
         }).get ();
@@ -10693,23 +11922,27 @@ void spot_node_runtime_t::begin_relocation_readiness ()
 
 void spot_node_runtime_t::end_relocation_readiness (const std::vector<spot_id_t> &relocated_spots)
 {
-    std::vector<std::shared_ptr<spot_context_state_t>> states;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    const auto contexts = _state->lane.run ([&] {
+        std::vector<std::shared_ptr<spot_context_state_t>> result;
         for (const auto &[_, context] : _state->spot_contexts_by_id) {
             const auto state = context._state;
             if (!state)
                 continue;
-            const auto was_active = state->callback_lane.run ([state] {
+            result.push_back (state);
+        }
+        return result;
+    }).get ();
+    std::vector<std::shared_ptr<spot_context_state_t>> states;
+    for (const auto &state : contexts) {
+        const auto was_active = state->callback_lane.run ([state] {
                 if (!state->relocation_boundary_active)
                     return false;
                 state->relocation_boundary_active = false;
                 return true;
             }).get ();
-            if (!was_active)
-                continue;
-            states.push_back (state);
-        }
+        if (!was_active)
+            continue;
+        states.push_back (state);
     }
     for (const auto &state : states) {
         const auto relocated =
@@ -10723,14 +11956,12 @@ void spot_node_runtime_t::end_relocation_readiness (const std::vector<spot_id_t>
 bool spot_node_runtime_t::complete_relocation_ready (const spot_id_t &spot_id,
                                                      spot_relocation_ready_outcome_t outcome)
 {
-    std::shared_ptr<spot_context_state_t> state;
-    {
-        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    const auto state = _state->lane.run ([&] {
         const auto found = _state->spot_contexts_by_id.find (std::string (spot_id));
         if (found == _state->spot_contexts_by_id.end ())
-            return false;
-        state = found->second._state;
-    }
+            return std::shared_ptr<spot_context_state_t>{};
+        return found->second._state;
+    }).get ();
     if (!state)
         return false;
     state->complete_relocation_ready (outcome);
@@ -10739,15 +11970,16 @@ bool spot_node_runtime_t::complete_relocation_ready (const spot_id_t &spot_id,
 
 std::size_t spot_node_runtime_t::active_user_spot_count () const
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    return static_cast<std::size_t> (std::count_if (
-      _state->spot_contexts_by_id.begin (), _state->spot_contexts_by_id.end (),
-      [&] (const auto &entry) {
-          const auto &context = entry.second;
-          return !context._state->closed && !context._state->native_spot.expired ()
-                 && (!_state->snapshot.entry_spot_name
-                     || context._state->spot_name != *_state->snapshot.entry_spot_name);
-      }));
+    return _state->lane.run ([&] {
+        return static_cast<std::size_t> (std::count_if (
+          _state->spot_contexts_by_id.begin (), _state->spot_contexts_by_id.end (),
+          [&] (const auto &entry) {
+              const auto &context = entry.second;
+              return !context._state->closed && !context._state->native_spot.expired ()
+                     && (!_state->snapshot.entry_spot_name
+                         || context._state->spot_name != *_state->snapshot.entry_spot_name);
+          }));
+    }).get ();
 }
 
 bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &owner,
@@ -10800,6 +12032,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     report_handoff_terminal_drop (_state, "missing_parking_node");
                 return true;
             }
+            const auto local_node_rid = _state->lane.run ([&] {
+                return detail::effective_spot_node_rid (_state->snapshot);
+            }).get ();
             const auto pending = _state->pending_handoff_requests_lane
                                    .run ([&] () -> std::optional<
                                      spot_node_builder_state_t::pending_handoff_request_t> {
@@ -10809,7 +12044,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 if (found == _state->pending_handoff_requests.end ()
                     || found->second.reply_route_id != terminal_route->reply_route_id
                     || terminal_route->parking_node.to_string ()
-                         != detail::effective_spot_node_rid (_state->snapshot)) {
+                         != local_node_rid) {
                     return std::nullopt;
                 }
                 // The terminal must come from the node the parked request was
@@ -10990,7 +12225,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                   zlink::message_t::from (""));
                 (void) service::reply (record.reply_token, reply.items ());
             };
-            const auto context = find_context (spot_id_t (owner.spot_id));
+            const auto context = _state->lane.run ([&] {
+                return find_context_core (spot_id_t (owner.spot_id));
+            }).get ();
             if (!context || !context->_state || !context->_state->spot_instance) {
                 reply_error (detail::make_framework_origin_exception (
                   framework_error_kind_t::unavailable, "Spot route owner is no longer registered"));
@@ -10999,9 +12236,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             if (record.spot_route) {
                 const auto &target = *record.spot_route;
                 const auto &state = *context->_state;
+                const auto location_lifecycle = _state->lane.run ([&] {
+                    return state.node ? state.node->location_lifecycle : nullptr;
+                }).get ();
                 std::optional<location_owner_token_t> owner_token;
-                if (state.node && state.node->location_lifecycle)
-                    owner_token = state.node->location_lifecycle->current_owner_token ();
+                if (location_lifecycle)
+                    owner_token = location_lifecycle->current_owner_token ();
                 if (!state.accepts_route_fence (target, owner_token)) {
                     reply_error (detail::make_framework_origin_exception (
                       framework_error_kind_t::unavailable, "Spot route fence is stale"));
@@ -11084,22 +12324,21 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
     if (owner.owner_kind == service::owner_kind_t::actor
         && (record.kind == service::record_kind_t::actor_send
             || record.kind == service::record_kind_t::actor_request)) {
-        std::string actor_type;
-        {
-            std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+        auto actor_type = _state->lane.run ([&] {
+            std::string result;
             const auto found =
-              _state->actor_types_by_id.find (std::string (owner.actor->actor_id ().value ()));
+              _state->actor_types_by_id.find (std::string (owner.actor->actor_id ().value ())); 
             if (found != _state->actor_types_by_id.end ())
-                actor_type = found->second;
-        }
+                result = found->second;
+            return result;
+        }).get ();
         if (actor_type.empty ()) {
             const auto actor_id = std::string (owner.actor->actor_id ().value ());
             const auto located = actor_type_from_authority (
               services.get_required<runtime::live_location_reader_t> (), actor_id);
             if (located && !located->empty ()) {
                 actor_type = *located;
-                std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-                _state->actor_types_by_id[actor_id] = actor_type;
+                _state->lane.run ([&] { _state->actor_types_by_id[actor_id] = actor_type; }).get ();
             }
         }
         runtime::messaging::message_parts_t encoded (std::move (parts));
@@ -11143,12 +12382,18 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         std::optional<result_t<void>> session_relay_admission;
         bool targets_current_authority = false;
         bool targets_admitted_route = false;
+        auto [native_node, relocation_authority, actor_route_admission,
+              actor_message_follow_relay] = _state->lane.run ([&] {
+            return std::make_tuple (_state->native_node.lock (), _state->relocation_authority,
+                                    _state->actor_route_admission,
+                                    _state->actor_message_follow_relay);
+        }).get ();
         if (record.actor_route) {
             const auto &route = *record.actor_route;
-            const auto native = _state->native_node.lock ();
-            const auto local = native ? native->status () : runtime::host::node_status_t{};
+            const auto local =
+              native_node ? native_node->status () : runtime::host::node_status_t{};
             const bool targets_local_actor =
-              native && route.actor_id == actor.actor_id ().value ()
+              native_node && route.actor_id == actor.actor_id ().value ()
               && route.target_node_routing_id == local.routing_id ().to_bytes ()
               && route.target_node_generation == local.lifecycle_generation ();
             const bool targets_exact_incarnation =
@@ -11168,15 +12413,14 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             const bool targets_current_bound_route =
               session_relay_admission && *session_relay_admission;
             if (!has_bound_session_source) {
-                {
-                    const std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+                targets_current_authority = _state->lane.run ([&] {
                     const auto current = _state->actor_authority_fences.find (actor_key (actor));
-                    targets_current_authority =
-                      current != _state->actor_authority_fences.end () && current->second == route;
-                }
-                if (!targets_current_authority && _state->relocation_authority) {
+                    return current != _state->actor_authority_fences.end ()
+                           && current->second == route;
+                }).get ();
+                if (!targets_current_authority && relocation_authority) {
                     try {
-                        const auto committed = _state->relocation_authority->read (
+                        const auto committed = relocation_authority->read (
                           runtime::stateful::object_kind_t::actor, route.actor_id);
                         targets_current_authority =
                           committed
@@ -11196,8 +12440,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                         targets_current_authority = false;
                     }
                 }
-                if (!targets_current_authority && _state->actor_route_admission)
-                    targets_current_authority = _state->actor_route_admission (route);
+                if (!targets_current_authority && actor_route_admission)
+                    targets_current_authority = actor_route_admission (route);
             }
             targets_admitted_route = targets_current_authority || targets_current_bound_route;
             const bool admitted = targets_local_actor
@@ -11381,6 +12625,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 (*terminal_owner) ();
             };
         }
+        const auto relay_parking_node_rid = _state->lane.run ([&] {
+            return detail::effective_spot_node_rid (_state->snapshot);
+        }).get ();
         auto relayed = [&] {
             const bool actor_packet = record.kind == service::record_kind_t::actor_request
                                       || record.kind == service::record_kind_t::actor_send;
@@ -11395,7 +12642,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             const auto follows_in_flight_source =
               actor_packet && actor_transfer_in_progress (actor);
             if (follows_committed_source && !follows_in_flight_source
-                && _state->actor_message_follow_relay) {
+                && actor_message_follow_relay) {
                 //  The wire record kind is the authoritative send/request
                 //  semantic; the envelope header may carry a request kind
                 //  for a one-way relay. Stamp the relay-kind marker so the
@@ -11418,8 +12665,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                       record.source_node_rid.to_hex ());
                     follow_header.metadata.insert_or_assign (
                       std::string (detail::actor_handoff_parking_node_key),
-                      zlink::routing_id_t::from (detail::effective_spot_node_rid (_state->snapshot))
-                        .to_hex ());
+                      zlink::routing_id_t::from (relay_parking_node_rid).to_hex ());
                     follow_header.metadata.insert_or_assign (
                       std::string (detail::actor_handoff_operation_high_key),
                       std::to_string (record.operation_id.high));
@@ -11450,7 +12696,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                           std::to_string (route.owner_lease_generation));
                     }
                 }
-                return _state->actor_message_follow_relay (
+                return actor_message_follow_relay (
                   actor, follow_header, body.value (), std::chrono::seconds (30),
                   record.source_node_rid,
                   record.actor_route.value_or (runtime::protocol::actor_route_fence_t{}),
@@ -11475,8 +12721,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 relay_metadata.values[std::string (detail::actor_handoff_source_node_key)] =
                   record.source_node_rid.to_hex ();
                 relay_metadata.values[std::string (detail::actor_handoff_parking_node_key)] =
-                  zlink::routing_id_t::from (detail::effective_spot_node_rid (_state->snapshot))
-                    .to_hex ();
+                  zlink::routing_id_t::from (relay_parking_node_rid).to_hex ();
                 relay_metadata.values[std::string (detail::actor_handoff_operation_high_key)] =
                   std::to_string (record.operation_id.high);
                 relay_metadata.values[std::string (detail::actor_handoff_operation_low_key)] =
@@ -11592,22 +12837,21 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         return true;
     }
 
-    std::string actor_type;
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    auto actor_type = _state->lane.run ([&] {
+        std::string result;
         const auto found =
-          _state->actor_types_by_id.find (std::string (control.current_actor.actor_id ().value ()));
+          _state->actor_types_by_id.find (std::string (control.current_actor.actor_id ().value ())); 
         if (found != _state->actor_types_by_id.end ())
-            actor_type = found->second;
-    }
+            result = found->second;
+        return result;
+    }).get ();
     if (actor_type.empty ()) {
         const auto actor_id = std::string (control.current_actor.actor_id ().value ());
         const auto located = actor_type_from_authority (
           services.get_required<runtime::live_location_reader_t> (), actor_id);
         if (located && !located->empty ()) {
             actor_type = *located;
-            std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-            _state->actor_types_by_id[actor_id] = actor_type;
+            _state->lane.run ([&] { _state->actor_types_by_id[actor_id] = actor_type; }).get ();
         }
     }
     if (actor_type.empty ()) {
@@ -11621,18 +12865,20 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
       actor_type, std::string (control.current_actor.actor_id ().value ()),
       control.current_actor.object_generation ());
     const zlink::message_t request = parts.empty () ? zlink::message_t{} : parts.front ();
-    bool targets_entry_spot = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    const auto join_projection = _state->lane.run ([&] {
+        bool targets_entry_spot = false;
         if (_state->snapshot.entry_spot_name) {
             const auto entry = _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
             targets_entry_spot =
               entry != _state->spot_ids_by_name.end () && entry->second == owner.spot_id;
         }
-    }
+        return std::pair{targets_entry_spot,
+                         detail::effective_spot_node_rid (_state->snapshot)};
+    }).get ();
+    const auto targets_entry_spot = join_projection.first;
+    const auto &local_node_rid = join_projection.second;
     auto joined = [&] () -> result_t<actor_join_reply_t> {
-        if (parts.size () >= 10
-            && owner.spot_id != detail::effective_spot_node_rid (_state->snapshot)) {
+        if (parts.size () >= 10 && owner.spot_id != local_node_rid) {
             const auto target_spot = spot_id_t (owner.spot_id);
             const auto transfer_id = parts[2].to_string ();
             auto admitted = admit_remote_actor_to_spot (
@@ -11667,21 +12913,21 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                   framework_error_kind_t::internal_failure,
                   "target Framework Actor relocation prepare failed");
             }
-            {
-                std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+            _state->lane.run ([&] {
                 // Framework target prepare installed the transferred Actor with the
                 // source generation. Application materialization must reuse it.
                 _state->mesh_runtime_owned_native_actor_ids.insert (
                   std::string (actor.actor_id ().value ()));
-            }
+            }).get ();
             auto committed = commit_remote_actor_to_spot (
               transfer_id, actor, target_spot, parts[1],
               services.get_required<actor_gateway_runtime_t> ().actor_context (actor), {},
               &services);
             if (!committed) {
-                std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-                _state->mesh_runtime_owned_native_actor_ids.erase (
-                  std::string (actor.actor_id ().value ()));
+                _state->lane.run ([&] {
+                    _state->mesh_runtime_owned_native_actor_ids.erase (
+                      std::string (actor.actor_id ().value ()));
+                }).get ();
                 return committed;
             }
             const auto new_membership_epoch = transfer_result.membership_epoch + 1;
@@ -11707,9 +12953,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                              "Actor gateway Context has no serializer registry");
                        }
                        return join_actor_to_entry_spot_erased (
-                         actor,
-                         node_rid_t::from_string (
-                           detail::effective_spot_node_rid (_state->snapshot)),
+                         actor, node_rid_t::from_string (local_node_rid),
                          request, std::nullopt, std::move (actor_context));
                    }()
                  : join_actor_to_spot_erased (actor, spot_id_t (owner.spot_id), request);
