@@ -42,11 +42,18 @@ Spot·Actor·session 인스턴스마다 하나씩 있다.
 어느 작업이 어느 queue에서 도는지가 호출 지점마다 흩어져, 순서 보장을 코드에서 읽을 수
 없게 된다.
 
-| 계층 | 조율자 | 소유하는 직렬 실행 단위 |
-|---|---|---|
-| Spot | `ZLinkSpotSerialExecutor` | 자기 queue 하나 · Actor마다 queue 하나 · timer 이름마다 queue 하나 |
-| Actor | `ZLinkActorSerialExecutor` | 자기 queue 하나 |
-| STREAM session | `ZLinkSessionSerialExecutor` | 자기 queue 하나 |
+```text
+ZLinkSpotSerialExecutor          ← Spot 하나마다 조율자 하나
+ ├── Spot queue                     하나
+ ├── Actor queue                    Actor마다 하나    ─┐ 이 Spot이 사라질 때
+ └── timer queue                    timer 이름마다 하나 ─┘ 함께 사라진다
+
+ZLinkActorSerialExecutor         ← Actor 하나마다 조율자 하나
+ └── Actor queue                    하나              ← 맵이 없다
+
+ZLinkSessionSerialExecutor       ← session 하나마다 조율자 하나
+ └── session queue                  하나              ← 맵이 없다
+```
 
 - **하위 queue를 갖는 계층은 Spot뿐이다.** Actor queue와 timer queue의 수명이 Spot에
   묶여 있기 때문이다 — 그 Spot이 사라지면 그 Spot의 Actor queue와 timer queue도 함께
@@ -86,14 +93,44 @@ Spot·Actor·session 인스턴스마다 하나씩 있다.
 [User Spot execution mode](../00-foundation/02-glossary.ko.md#user-spot-execution-mode)에
 따라 Actor 작업과 timer 작업이 지나는 queue가 달라진다.
 
-| 진입점 | `PerActor`일 때 | `SpotWide`일 때 |
-|---|---|---|
-| `executeActor` | 그 Actor의 queue 하나 | 그 Actor의 queue → **Spot queue** 두 단계 |
-| `executeTimer` | 그 timer 이름의 queue 하나 | **Spot queue 하나** (timer queue를 만들지 않는다) |
-| `executeSpot` · `executeLifecycle` | Spot queue | Spot queue |
-
 `SpotWide`에서 Actor 작업만 queue 두 개를 지난다. 두 mode 모두 직렬 실행이 보장되며 지나는
 queue 수만 다르다.
+
+진입점이 어느 queue에 연결되는지를 mode별로 그리면 다음과 같다. Actor 둘(A·B)과 timer
+둘(`tick`·`beat`)이 있는 Spot을 예로 든다.
+
+**`PerActor`** — 진입점마다 자기 queue가 따로 있다.
+
+```text
+  executeSpot ──────────┐
+                        ├──▶ [  Spot queue   ] ──▶ 실행
+  executeLifecycle ─────┘
+
+  executeActor(A) ─────────▶ [ Actor A queue ] ──▶ 실행   ┐
+  executeActor(B) ─────────▶ [ Actor B queue ] ──▶ 실행   │ 다섯 queue가 서로 독립이다.
+  executeTimer("tick") ────▶ [  tick queue   ] ──▶ 실행   │ 동시에 다섯까지 진행된다.
+  executeTimer("beat") ────▶ [  beat queue   ] ──▶ 실행   ┘
+```
+
+**`SpotWide`** — 모든 작업이 마지막에 Spot queue 한 줄을 지난다.
+
+```text
+  executeSpot ──────────────────────────────────┐
+  executeLifecycle ─────────────────────────────┤
+  executeTimer("tick") ─────────────────────────┤ ← timer queue를 만들지 않는다
+  executeTimer("beat") ─────────────────────────┤
+                                                │
+  executeActor(A) ─▶ [ Actor A queue ] ─────────┤ ← Actor queue에서
+  executeActor(B) ─▶ [ Actor B queue ] ─────────┤   payload 바이트를 예약한다
+                                                ▼
+                                       [   Spot queue   ] ← 고정 비용만 예약한다
+                                                │
+                                                ▼
+                                          한 번에 하나 실행
+```
+
+Actor queue는 작업을 바로 실행하지 않고, 자기 turn이 오면 Spot queue로 넘긴다. 그래서 Actor
+작업만 queue 둘을 지나고, 실행 순서는 Spot queue 하나가 정한다.
 
 - **`SpotWide`에서 Actor 작업이 queue 두 개를 지나는 이유는 실행 순서가 아니라 Actor마다
   따로 세는 payload 바이트 때문이다.** 아래 Actor queue에서 그 Actor 몫의 바이트를 예약해야

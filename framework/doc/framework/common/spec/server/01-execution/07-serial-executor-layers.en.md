@@ -44,11 +44,18 @@ coordinator owns the lifetime of its own layer's queue together with any subordi
 created.** Without a coordinator, which work runs on which queue scatters across call sites, and
 the ordering guarantee can no longer be read off the code.
 
-| Layer | Coordinator | Serial execution units owned |
-|---|---|---|
-| Spot | `ZLinkSpotSerialExecutor` | one queue of its own · one queue per Actor · one queue per timer name |
-| Actor | `ZLinkActorSerialExecutor` | one queue of its own |
-| STREAM session | `ZLinkSessionSerialExecutor` | one queue of its own |
+```text
+ZLinkSpotSerialExecutor          ← one coordinator per Spot
+ ├── Spot queue                     one
+ ├── Actor queue                    one per Actor      ─┐ these go away when
+ └── timer queue                    one per timer name ─┘ this Spot goes away
+
+ZLinkActorSerialExecutor         ← one coordinator per Actor
+ └── Actor queue                    one                ← no map
+
+ZLinkSessionSerialExecutor       ← one coordinator per session
+ └── session queue                  one                ← no map
+```
 
 - **Spot is the only layer with subordinate queues.** The lifetime of an Actor queue and a timer
   queue is bound to the Spot — when that Spot goes away, that Spot's Actor and timer queues go
@@ -87,14 +94,45 @@ layer, the same call has to be looked up again every time work crosses a layer.
 Which queues Actor work and timer work pass through depends on the
 [User Spot execution mode](../00-foundation/02-glossary.en.md#user-spot-execution-mode).
 
-| Entry point | Under `PerActor` | Under `SpotWide` |
-|---|---|---|
-| `executeActor` | that Actor's queue only | that Actor's queue → **the Spot queue**, two stages |
-| `executeTimer` | that timer name's queue only | **the Spot queue only** (no timer queue is created) |
-| `executeSpot` · `executeLifecycle` | the Spot queue | the Spot queue |
-
 Only Actor work under `SpotWide` passes through two queues. Both modes guarantee serial
 execution; only the number of queues crossed differs.
+
+Which queue each entry point connects to, drawn per mode. The example Spot has two Actors
+(A and B) and two timers (`tick` and `beat`).
+
+**`PerActor`** — every entry point has its own queue.
+
+```text
+  executeSpot ──────────┐
+                        ├──▶ [  Spot queue   ] ──▶ run
+  executeLifecycle ─────┘
+
+  executeActor(A) ─────────▶ [ Actor A queue ] ──▶ run   ┐
+  executeActor(B) ─────────▶ [ Actor B queue ] ──▶ run   │ five independent queues.
+  executeTimer("tick") ────▶ [  tick queue   ] ──▶ run   │ up to five progress at once.
+  executeTimer("beat") ────▶ [  beat queue   ] ──▶ run   ┘
+```
+
+**`SpotWide`** — everything ends up passing through the single Spot queue.
+
+```text
+  executeSpot ──────────────────────────────────┐
+  executeLifecycle ─────────────────────────────┤
+  executeTimer("tick") ─────────────────────────┤ ← no timer queue is created
+  executeTimer("beat") ─────────────────────────┤
+                                                │
+  executeActor(A) ─▶ [ Actor A queue ] ─────────┤ ← the Actor queue is where
+  executeActor(B) ─▶ [ Actor B queue ] ─────────┤   payload bytes are reserved
+                                                ▼
+                                       [   Spot queue   ] ← reserves the fixed cost only
+                                                │
+                                                ▼
+                                            one at a time
+```
+
+An Actor queue does not run the work itself; on its own turn it hands the work to the Spot
+queue. That is why only Actor work passes through two queues, and why execution order is
+decided by the Spot queue alone.
 
 - **Actor work crosses two queues under `SpotWide` because of the payload bytes counted per
   Actor, not because of execution order.** Reserving that Actor's share of bytes on the lower
