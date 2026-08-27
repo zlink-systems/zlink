@@ -152,9 +152,9 @@ An Actor queue does not run the work itself; on its own turn it hands the work t
 queue. That is why only Actor work passes through two queues, and why execution order is
 decided by the Spot queue alone.
 
-- **Actor work crosses two queues under `SpotWide` because of admission, not order.** Order is
-  already settled by the upper Spot queue alone. What remains is **whose work gets rejected**
-  when volume piles up, and a single queue cannot split that per Actor (§5).
+- **Under `SpotWide`, execution order is already settled by the upper Spot queue alone.** Why
+  Actor work still goes through an Actor queue first is not something this document has settled
+  yet (§5).
 - **Timer work crosses one queue.** A timer callback carries no application payload, so it has
   no per-Actor bytes to count, and under `SpotWide` the Spot queue already puts everything in
   one line — so there is no reason to create a per-timer-name queue.
@@ -222,40 +222,57 @@ ExecuteTimer(timerName, work)
 }
 ```
 
-## 5. Why Each Actor Is Admitted Separately
+## 5. What The Actor Queue Counts — Where It Applies And Where It Does Not
 
-Under `SpotWide`, execution order is decided by the Spot queue alone. Actor work still goes
-through an Actor queue first because **lining work up and deciding whether to accept it are
-different problems.**
+First, an authority this document does not have. **Limiting the rate of inbound work is not
+decided here.** Ordinary ingress passes exactly two capacity authorities — the
+[Core byte HWM](../00-foundation/02-glossary.en.md#core-hwm-budget) and the
+[Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) permit — and
+their order and boundaries are owned by
+[Application Job Queue And Backpressure "1. Two Independent Capacity Authorities"](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities).
+That document forbids the Framework from re-implementing the Core HWM with a byte HWM of its own.
 
-An Actor queue is serial. The next work item waits in the Actor queue until that Actor's current
-item has gone up to the Spot queue and finished. So **at most one item of that Actor is ever on
-the Spot queue, and the whole backlog stays in that Actor's own queue.**
+**Work that came in through ordinary ingress reaches the owner queue already holding a permit** —
+step 3 of
+[04 "3. Ordinary Ingress Permit Order"](04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order)
+transfers the permit to the owner queue's handler turn. Counting that work again at the owner
+queue and rejecting it charges the same job twice, and becomes the "turning saturation into a
+reject" that 04 §3 forbids. **Work holding a permit is not counted again at the owner queue.**
 
-```text
-  when 100 items pile up on Actor A
+Where the Actor queue's count and byte ceilings do apply is **work newly submitted inside the
+same runtime.** That ceiling is owned by the owner FIFO in
+[04 "8. The Three Backpressure Stages And Kinds Of Limits"](04-application-job-queue-and-backpressure.en.md#8-the-three-backpressure-stages-and-kinds-of-limits) —
+measured per owner in count and bytes, ending in an owner isolation error when saturated. Its
+purpose is to stop local submissions piled on one Actor from blocking submissions to the other
+Actors in the same Spot.
 
-  [ Actor A queue ]  99 waiting ─┐        ← caught at A's own ceiling
-                                 ├─▶ [ Spot queue ]  1 of A · 1 of B · Spot work …
-  [ Actor B queue ]  0 ──────────┘        ← B is unaffected
-```
+Where that ceiling is measured, the two queues do not count the same thing twice. **The lower
+Actor queue counts that work's payload bytes, and the upper Spot queue counts only
+`fixedWorkByteCost`, a fixed cost independent of payload size.** Counting the payload again above
+means work that passed below is caught again there, and the per-owner ceiling stops being the
+real ceiling.
 
-Without the Actor queue, A's 100 items eat the Spot queue's ceiling directly. Then B's work and
-the Spot handler's work in the same Spot are rejected along with it — A is the one piling up,
-but everything is what gets blocked. A per-Actor ceiling would also stop being a real ceiling,
-because everyone shares the same single slot.
+**Internal check condition** — nothing reserves bytes at the owner queue for work that holds a
+permit. On the `SpotWide` Actor path, nothing passes payload bytes as an argument when submitting
+to the upper Spot queue.
 
-For this to hold, the two queues must not count the same thing. **The lower Actor queue reserves
-that work's actual payload bytes, and the upper Spot queue reserves only `fixedWorkByteCost`, a
-fixed cost independent of payload size.** Counting the payload again above means work that passed
-below is caught again there, making the per-Actor ceiling meaningless, and the Spot queue fills
-ahead of the real execution load.
+### Why Actor work goes through the Actor queue under `SpotWide` — not yet decided
 
-Under `PerActor` the Actor queue carries execution order as well. Admission is what the Actor
-queue does in both modes, and under `SpotWide` it is all that is left.
+Under `SpotWide`, execution order is decided by the Spot queue alone, and limiting inbound rate
+is, as above, not this layer's authority. What is left is the owner FIFO's isolation of local
+submissions, and whether that alone justifies nesting two queues has not been confirmed.
 
-**Internal check condition** — on the `SpotWide` Actor path, nothing passes payload bytes as an
-argument when submitting to the upper Spot queue.
+The four languages diverge in the measurements.
+
+| Language | byte accounting at the owner queue | applied to ordinary ingress |
+|---|---|---|
+| java | present (`ZLinkAsyncSerialQueue.enqueueWithPayloadBytes`) | **yes** — inbound Actor packets pass `payloadCopy.size()`. The work already holds a permit, so this is a suspected 04 §3 violation |
+| node | present (`ZLinkBoundedSerialScheduler`) | no — work holding a permit skips the reservation via `submitPreAdmitted` |
+| .NET | **absent** | — |
+| cpp | **absent** | — |
+
+Until this is decided, this document **does not require** the two-stage nesting under `SpotWide`.
+What remains contractual is the two internal check conditions above and §4's ordering guarantee.
 
 ## 6. The Serial Queue Primitive
 
@@ -268,6 +285,10 @@ guarantee — that latency is bounded under any load — can be stated.
 
 The following values are injected as a policy object, `ZLinkExecutionLanePolicy`. They are not
 baked into the queue as constants, because Spot, Actor, and session use different values.
+
+These set §5's owner FIFO ceilings; they are not values that limit the rate of inbound work.
+Admission for ordinary ingress is owned by
+[04](04-application-job-queue-and-backpressure.en.md).
 
 The following is contract pseudocode explaining the meaning; it is not the real API. The exact
 signature is defined by each language's exact interface.
@@ -519,11 +540,11 @@ and the exception a reentrant call receives). Each item maps to one test.
 
 **Capacity and backpressure**
 
-- Under `PerActor`, once one Actor fills `applicationByteCapacity`, only submissions to that
-  Actor are rejected, and submissions to other Actors in the same Spot are still accepted.
-- Under `SpotWide`, the point at which the Spot queue fills while Actor work keeps being
-  submitted is determined by the number of submissions, independent of payload size — submitting
-  large and small payloads at the same count begins rejecting at the same count.
+- Piling local submissions on one Actor inside the same runtime until it fills
+  `applicationByteCapacity` rejects only submissions to that Actor; submissions to other Actors
+  in the same Spot are still accepted.
+- Actor packets arriving from a remote node are still delivered to an Actor that has filled that
+  ceiling — ordinary ingress is not counted again at the owner queue (§5).
 - Work submitted with `enqueueLifecycle` runs ahead of already queued application work, and the
   consecutive overtaking stops at `lifecycleBurstLimit` so one application item runs.
 

@@ -109,5 +109,7 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
    `ZLinkActorDispatchMailboxSet` 세 맵이 조율자 밖에 흩어져 있다. `await`가 turn을 양보하므로
    Actor별 직렬 단위는 node에서도 필요하다. 그 맵을 담을 Spot 조율자도 node에는 없다 —
    현행 `ZLinkSpotSerialExecutor`는 직렬 단위 wrapper다(계약서 §7 · 플랜 §6)
-⑥ node `SpotWide`에서 Actor 작업이 Actor 큐를 거치지 않아 Actor별 payload 상한이 걸리지
-   않는다. 그 상한이 `SpotWide`에서 필요한 보장인지 판단 필요(스펙 07 §9)
+⑥ **`SpotWide`에서 Actor 큐를 거칠 이유가 있는가.** 순서는 Spot 큐 하나로 끝나고 유입 제한은
+   이 계층 권한이 아니다(스펙 04가 소유). 남는 것은 owner FIFO의 로컬 제출 격리뿐인데 그것만으로
+   2단 겹침을 요구할지 미정. 네 언어가 갈린다 — java만 ingress에 byte를 재고(04 §3 위반 의심),
+   node는 건너뛰고, .NET·cpp는 회계 자체가 없다(스펙 07 §5)

@@ -47,6 +47,7 @@ P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같�
 | P0-1 | Spot 핫패스에서 연속된 단순 조회를 한 turn으로 묶는다 | cpp `runtime/spots/spot_runtime.cpp` | 블로킹 브리지 send 11→4~5 · request 13→5~6 |
 | P0-2 | binding wrapper의 중복 lock 제거 | java `runtime/` binding wrapper 31곳 | hot path 7곳 |
 | P0-3 | 큐 임계 구역에서 `BigInteger` 할당을 걷어낸다 | java `execution/ZLinkAsyncSerialQueue.java` | enqueue마다 4할당 제거 |
+| P0-4 | **조사** — java가 ordinary ingress에 owner queue byte를 재는 것이 스펙 04 §3 위반인지 판정한다 | java `runtime/spots/ZLinkSpotRuntime.java:4831` · node `execution/serial-scheduler.ts:145` | 위반이면 permit 보유 작업의 예약을 건너뛴다 |
 
 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에 있다. P0-1은
 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을 어긴 자리를
@@ -66,14 +67,20 @@ primitive에는 채워야 할 것이 남아 있다.**
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
 | P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | 상수로 박힌 `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`을 정책 주입으로 바꾼다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs:7,8` | `ZLinkExecutionLanePolicy` 일곱 값이 주입된다 |
-| P1-6 | 큐에 payload 바이트 회계를 **신설**한다 — `enqueueWithPayloadBytes`와 두 lane의 byte 상한 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 첫 두 항목 통과 |
+| P1-6 | 큐에 owner FIFO의 count·byte 상한을 **신설**한다 — permit을 든 작업은 재지 않는다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 두 항목 통과 |
 
-**dotnet 큐에는 payload 바이트 상한이 없다(실측 2026-08-28).** `ZLinkSerialExecutionQueue`의
+**dotnet 큐에는 owner FIFO의 byte 상한이 없다(실측 2026-08-28).** `ZLinkSerialExecutionQueue`의
 admission은 relocation seal과 stopping 상태만 본다 — `applicationByteCapacity`에 해당하는 값이
 없고 제출 API도 바이트를 받지 않는다. 스펙 07 §5의 Actor별 admission은 현재 **java에만**
 있다(`ZLinkAsyncSerialQueue.enqueueWithPayloadBytes` · `ZLinkDefaultSpotContext:665`). node는
 `ZLinkBoundedSerialScheduler`에 바이트 회계가 있으나 `SpotWide`에서 Actor queue를 거치지 않아
 Actor별로 갈리지 않는다.
+
+**단, 이 상한은 유입 제한이 아니다.** ordinary ingress는 permit을 이미 들고 owner queue에
+도착하므로(스펙 04 §3의 3단계) owner queue가 다시 재면 안 된다. node는 `submitPreAdmitted`로
+건너뛰지만 **java는 inbound Actor packet에 `payloadCopy.size()`를 넘긴다**
+(`ZLinkSpotRuntime.java:4831`) — 04 §3이 금지한 이중 계상·reject 전환으로 보인다. P0에 조사
+항목을 추가한다.
 
 따라서 P1은 개명만이 아니다. **큐 primitive 정본은 java이고, dotnet은 그 회계를 새로
 받아야 한다(P1-6).** 앞서 "dotnet은 신설할 것이 없다"고 적었던 것은 조율자 계층만 보고 내린

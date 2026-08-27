@@ -150,9 +150,8 @@ queue 수만 다르다.
 Actor queue는 작업을 바로 실행하지 않고, 자기 turn이 오면 Spot queue로 넘긴다. 그래서 Actor
 작업만 queue 둘을 지나고, 실행 순서는 Spot queue 하나가 정한다.
 
-- **`SpotWide`에서 Actor 작업이 queue 두 개를 지나는 이유는 순서가 아니라 admission이다.**
-  순서는 위 Spot queue 하나로 이미 끝난다. 남는 문제는 물량이 몰렸을 때 **누구의 작업을
-  거절할 것인가**이고, 그것은 queue 하나로는 Actor별로 나눌 수 없다(§5).
+- **`SpotWide`에서 실행 순서는 위 Spot queue 하나로 이미 끝난다.** 그런데도 Actor 작업이
+  Actor queue를 먼저 거치는 이유는 이 문서가 아직 정하지 못했다(§5).
 - **timer 작업은 queue 하나만 지난다.** timer callback은 application payload를 나르지 않아
   Actor처럼 따로 셀 바이트가 없고, `SpotWide`의 Spot queue가 이미 전체를 한 줄로 세우므로
   timer 이름별 queue를 만들 이유가 없다.
@@ -219,37 +218,54 @@ ExecuteTimer(timerName, work)
 }
 ```
 
-## 5. Actor마다 따로 받아들이는 이유
+## 5. Actor queue가 재는 것 — 적용되는 자리와 적용되지 않는 자리
 
-`SpotWide`에서 실행 순서는 Spot queue 하나가 정한다. 그런데도 Actor 작업을 Actor queue에 먼저
-거치게 하는 것은 **줄을 세우는 일과 받아들일지 정하는 일이 다른 문제**이기 때문이다.
+먼저 이 문서에 없는 권한을 밝힌다. **유입 속도를 제한하는 권한은 여기에 없다.** Ordinary
+ingress가 통과하는 capacity authority는
+[Core byte HWM](../00-foundation/02-glossary.ko.md#core-hwm-budget)과
+[Application job queue](../00-foundation/02-glossary.ko.md#application-job-queue) permit 둘뿐이고,
+그 순서와 경계는
+[Application job queue와 backpressure 「1. 두 독립된 capacity authority」](04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)가
+소유한다. 그 문서는 Framework가 별도 byte-HWM을 만들어 Core HWM을 다시 구현하는 것을 금지한다.
 
-Actor queue는 직렬이다. 그 Actor의 작업 하나가 Spot queue로 올라가 끝날 때까지 다음 작업은
-Actor queue에서 기다린다. 그래서 **Spot queue에 올라와 있는 그 Actor의 작업은 언제나 최대
-한 건이고, 밀린 물량은 전부 그 Actor의 queue에 남는다.**
+**Ordinary ingress로 들어온 작업은 permit을 이미 들고 owner queue에 도착한다** —
+[04 「3. Ordinary ingress permit 순서」](04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)의
+3단계가 permit을 owner queue의 handler turn으로 이전한다. 그 작업을 owner queue가 다시 재서
+거절하면 같은 job을 두 번 재는 것이고, 04 §3이 금지한 "포화를 reject로 바꾸기"가 된다.
+**permit을 든 작업은 owner queue에서 다시 재지 않는다.**
 
-```text
-  Actor A에 100건이 몰렸을 때
+Actor queue의 count·byte 상한이 실제로 걸리는 자리는 **같은 runtime 안에서 새로 제출되는
+작업**이다. 이 상한은
+[04 「8. Backpressure 3단계와 한도 종류」](04-application-job-queue-and-backpressure.ko.md#8-backpressure-3단계와-한도-종류)의
+owner FIFO가 소유한다 — owner별 count와 byte로 재고, 포화하면 owner isolation 오류로 끝난다.
+한 Actor에 몰린 로컬 제출이 같은 Spot의 다른 Actor 제출까지 막지 않게 하는 것이 그 목적이다.
 
-  [ Actor A queue ]  99건 대기 ──┐        ← A의 상한에서 걸린다
-                                 ├─▶ [ Spot queue ]  A 1건 · B 1건 · Spot 작업 …
-  [ Actor B queue ]  0건 ────────┘        ← B는 영향을 받지 않는다
-```
+그 상한을 재는 자리에서 두 queue가 같은 것을 두 번 재지 않는다. **아래 Actor queue가 그
+작업의 payload 바이트를 재고, 위 Spot queue는 payload 크기와 무관한 고정 비용
+`fixedWorkByteCost`만 잰다.** 위에서 다시 재면 아래에서 통과한 작업이 위에서 또 걸려 owner별
+상한이 실제 상한이 아니게 된다.
 
-Actor queue가 없으면 A의 100건이 그대로 Spot queue의 상한을 먹는다. 그러면 같은 Spot의 B와
-Spot handler 작업까지 함께 거절된다 — 몰린 것은 A인데 막히는 것은 전부다. Actor마다 정한
-상한도 그때는 실제 상한이 아니게 된다. 모두가 같은 한 칸을 나눠 쓰기 때문이다.
+**내부 확인 조건** — permit을 든 작업이 owner queue에서 byte를 예약하는 자리가 없다.
+`SpotWide`의 Actor 경로에서 위 Spot queue에 제출할 때 payload 바이트를 인자로 넘기는 자리가
+없다.
 
-이 구조가 성립하려면 두 queue가 같은 것을 세면 안 된다. **아래 Actor queue가 그 작업의 실제
-payload 바이트를 예약하고, 위 Spot queue는 payload 크기와 무관한 고정 비용
-`fixedWorkByteCost`만 예약한다.** 위에서 payload를 다시 세면 아래에서 통과한 작업이 위에서
-또 걸려 Actor별 상한이 무의미해지고, Spot queue는 실제 실행 부하보다 이르게 가득 찬다.
+### `SpotWide`에서 Actor queue를 거치는 이유 — 아직 정하지 않았다
 
-`PerActor`에서는 Actor queue가 실행 순서도 함께 진다. 두 mode에서 Actor queue가 하는 일 중
-겹치는 것이 admission이고, `SpotWide`에서는 그것만 남는다.
+`SpotWide`에서 실행 순서는 Spot queue 하나가 정하고, 유입 제한은 위에서 보았듯 이 계층의
+권한이 아니다. 남는 것은 owner FIFO의 로컬 제출 격리뿐인데, 그것만으로 queue를 두 단계로
+겹칠 이유가 되는지는 확인되지 않았다.
 
-**내부 확인 조건** — `SpotWide`의 Actor 경로에서 위 Spot queue에 제출할 때 payload 바이트를
-인자로 넘기는 자리가 없다.
+실측에서 네 언어가 갈린다.
+
+| 언어 | owner queue의 byte 회계 | ordinary ingress에 적용되는가 |
+|---|---|---|
+| java | 있음 (`ZLinkAsyncSerialQueue.enqueueWithPayloadBytes`) | **적용된다** — inbound Actor packet이 `payloadCopy.size()`를 넘긴다. permit을 이미 든 작업이므로 04 §3 위반 의심 |
+| node | 있음 (`ZLinkBoundedSerialScheduler`) | 적용되지 않는다 — permit을 든 작업은 `submitPreAdmitted`로 예약을 건너뛴다 |
+| .NET | **없음** | — |
+| cpp | **없음** | — |
+
+정할 때까지 이 문서는 두 단계 겹침을 **`SpotWide`에서 요구하지 않는다.** 계약으로 남는 것은
+위의 두 "내부 확인 조건"과 §4의 실행 순서 보장이다.
 
 ## 6. 직렬 queue primitive
 
@@ -262,6 +278,9 @@ payload 바이트를 예약하고, 위 Spot queue는 payload 크기와 무관한
 
 다음 값은 정책 객체 `ZLinkExecutionLanePolicy`로 주입받는다. queue 안에 상수로 박지
 않는다 — Spot·Actor·session이 서로 다른 값을 쓰기 때문이다.
+
+이 값들은 §5의 owner FIFO 상한을 정하는 것이지 유입 속도를 제한하는 값이 아니다. Ordinary
+ingress의 admission은 [04](04-application-job-queue-and-backpressure.ko.md)가 소유한다.
 
 다음은 의미를 설명하는 contract pseudocode이며 실제 API가 아니다. 정확한 signature는 언어별
 exact interface가 정의한다.
@@ -500,11 +519,10 @@ node에서 만족하지 않는 것으로 읽는다.
 
 **수용량과 backpressure**
 
-- `PerActor`에서 Actor 하나가 `applicationByteCapacity`를 채우면 그 Actor에 대한 제출만
-  거절되고, 같은 Spot의 다른 Actor에 대한 제출은 계속 수락된다.
-- `SpotWide`에서 Actor 작업을 계속 제출할 때 Spot queue가 가득 차는 시점은 제출한 payload
-  크기와 무관하게 제출 건수로 결정된다 — 큰 payload와 작은 payload를 같은 건수만큼 제출하면
-  같은 건수에서 거절이 시작된다.
+- 같은 runtime 안에서 Actor 하나에 로컬 제출을 몰아 `applicationByteCapacity`를 채우면 그
+  Actor에 대한 제출만 거절되고, 같은 Spot의 다른 Actor에 대한 제출은 계속 수락된다.
+- 원격에서 들어온 Actor packet은 그 상한을 채운 Actor에게도 계속 전달된다 — ordinary ingress는
+  owner queue에서 다시 재지 않는다(§5).
 - `enqueueLifecycle`로 제출한 작업은 이미 줄 서 있는 application 작업보다 먼저 실행되고,
   연속으로 앞지르는 건수는 `lifecycleBurstLimit`에서 멈춰 application 작업이 한 건 실행된다.
 
