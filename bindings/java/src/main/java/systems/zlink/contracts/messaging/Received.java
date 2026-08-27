@@ -32,29 +32,6 @@ import java.util.function.BiFunction;
  * underlying part array. Closing the aggregate closes every owned part.
  */
 public final class Received implements AutoCloseable {
-    private static final ThreadLocal<ArrayList<ArrayList<Message>>>
-        PARTS_POOL = ThreadLocal.withInitial(ArrayList::new);
-    private static final int PARTS_POOL_CAPACITY = 16;
-
-    private static ArrayList<Message> acquirePartsList(int initialCapacity) {
-        ArrayList<ArrayList<Message>> pool = PARTS_POOL.get();
-        int n = pool.size();
-        if (n > 0) {
-            ArrayList<Message> list = pool.remove(n - 1);
-            return list;
-        }
-        return new ArrayList<>(Math.max(1, initialCapacity));
-    }
-
-    private static void releasePartsList(ArrayList<Message> list) {
-        if (list == null) return;
-        list.clear();
-        ArrayList<ArrayList<Message>> pool = PARTS_POOL.get();
-        if (pool.size() < PARTS_POOL_CAPACITY) {
-            pool.add(list);
-        }
-    }
-
     // Callers may pass the same Received instance to multiple recv calls. The
     // binding refills internal state via adoptFrom() in place, avoiding the
     // per-recv Received allocation.
@@ -296,7 +273,7 @@ public final class Received implements AutoCloseable {
         this.routedMultipartSendSender = null;
         this.onTerminalState = onTerminalState;
         if (this.realizedParts == null) {
-            this.realizedParts = acquirePartsList(1);
+            this.realizedParts = new ArrayList<>(1);
         }
         this.realizedParts.add(singlePart);
         this.partsView = null;
@@ -408,7 +385,7 @@ public final class Received implements AutoCloseable {
         Message[] ownedParts = Objects.requireNonNull(parts, "parts");
         Message[] safeParts = trustedParts ? ownedParts
             : Arrays.copyOf(ownedParts, ownedParts.length);
-        this.realizedParts = acquirePartsList(safeParts.length);
+        this.realizedParts = new ArrayList<>(Math.max(1, safeParts.length));
         Collections.addAll(this.realizedParts, safeParts);
         this.cursor = null;
     }
@@ -436,7 +413,7 @@ public final class Received implements AutoCloseable {
         Message[] ownedParts = Objects.requireNonNull(parts, "parts");
         Message[] safeParts = trustedParts ? ownedParts
             : Arrays.copyOf(ownedParts, ownedParts.length);
-        this.realizedParts = acquirePartsList(safeParts.length);
+        this.realizedParts = new ArrayList<>(Math.max(1, safeParts.length));
         Collections.addAll(this.realizedParts, safeParts);
         this.cursor = null;
     }
@@ -459,7 +436,7 @@ public final class Received implements AutoCloseable {
         this.replySender = replySender;
         this.sendSender = null;
         this.onTerminalState = onTerminalState;
-        this.realizedParts = acquirePartsList(1);
+        this.realizedParts = new ArrayList<>(1);
         this.realizedParts.add(Objects.requireNonNull(singlePart, "singlePart"));
         this.cursor = null;
     }
@@ -482,7 +459,7 @@ public final class Received implements AutoCloseable {
         this.replySender = replySender;
         this.sendSender = null;
         this.onTerminalState = onTerminalState;
-        this.realizedParts = acquirePartsList(1);
+        this.realizedParts = new ArrayList<>(1);
         this.realizedParts.add(Objects.requireNonNull(singlePart, "singlePart"));
         this.cursor = null;
     }
@@ -499,7 +476,7 @@ public final class Received implements AutoCloseable {
         this.replySender = replySender;
         this.sendSender = null;
         this.onTerminalState = onTerminalState;
-        this.realizedParts = acquirePartsList(4);
+        this.realizedParts = new ArrayList<>(4);
         this.realizedParts.add(Objects.requireNonNull(firstPart, "firstPart"));
         this.cursor = cursor;
     }
@@ -516,7 +493,7 @@ public final class Received implements AutoCloseable {
         this.replySender = replySender;
         this.sendSender = null;
         this.onTerminalState = onTerminalState;
-        this.realizedParts = acquirePartsList(4);
+        this.realizedParts = new ArrayList<>(4);
         this.realizedParts.add(Objects.requireNonNull(firstPart, "firstPart"));
         this.cursor = cursor;
     }
@@ -542,14 +519,12 @@ public final class Received implements AutoCloseable {
 
     /** Returns the owned parts as an immutable view without copying. */
     public List<Message> parts() {
-        synchronized (this) {
-            ensureOpen();
-            materializeAllLocked();
-            if (partsView == null) {
-                partsView = Collections.unmodifiableList(realizedParts);
-            }
-            return partsView;
+        ensureOpen();
+        materializeAll();
+        if (partsView == null) {
+            partsView = Collections.unmodifiableList(realizedParts);
         }
+        return partsView;
     }
 
     public Optional<Long> requestSeq() {
@@ -582,11 +557,9 @@ public final class Received implements AutoCloseable {
         if (!closed && cursor == null && parts != null) {
             return parts.size() == 1;
         }
-        synchronized (this) {
-            ensureOpen();
-            ensureRealizedThroughLocked(1);
-            return realizedParts.size() == 1 && cursor == null;
-        }
+        ensureOpen();
+        ensureRealizedThrough(1);
+        return realizedParts.size() == 1 && cursor == null;
     }
 
     /** Returns the first payload part. */
@@ -595,13 +568,11 @@ public final class Received implements AutoCloseable {
         if (!closed && cursor == null && parts != null && !parts.isEmpty()) {
             return parts.get(0);
         }
-        synchronized (this) {
-            ensureOpen();
-            ensureRealizedThroughLocked(0);
-            if (realizedParts.isEmpty())
-                throw new ZlinkRecvException(RecvResult.NO_DATA);
-            return realizedParts.get(0);
-        }
+        ensureOpen();
+        ensureRealizedThrough(0);
+        if (realizedParts.isEmpty())
+            throw new ZlinkRecvException(RecvResult.NO_DATA);
+        return realizedParts.get(0);
     }
 
     /** Returns the only payload part or throws when the result is multipart. */
@@ -610,13 +581,11 @@ public final class Received implements AutoCloseable {
         if (!closed && cursor == null && parts != null && parts.size() == 1) {
             return parts.get(0);
         }
-        synchronized (this) {
-            ensureOpen();
-            ensureRealizedThroughLocked(1);
-            if (realizedParts.size() != 1 || cursor != null)
-                throw new ZlinkRecvException(RecvResult.NOT_SUPPORTED);
-            return realizedParts.get(0);
-        }
+        ensureOpen();
+        ensureRealizedThrough(1);
+        if (realizedParts.size() != 1 || cursor != null)
+            throw new ZlinkRecvException(RecvResult.NOT_SUPPORTED);
+        return realizedParts.get(0);
     }
 
     public ReplyOperation reply() {
@@ -811,7 +780,6 @@ public final class Received implements AutoCloseable {
             closed = true;
             realizedParts = null;
             partsView = Collections.emptyList();
-            releasePartsList(fastParts);
             try {
                 part.closeFromOwner();
             } catch (RuntimeException ignored) {
@@ -822,31 +790,27 @@ public final class Received implements AutoCloseable {
         ContractAccess.ReceivedPartCursor pendingCursor;
         Message singleToClose = null;
         List<Message> toClose = null;
-        ArrayList<Message> partsToRelease = null;
-        synchronized (this) {
-            if (closed)
-                return;
-            closed = true;
-            pendingCursor = cursor;
-            cursor = null;
-            // realizedParts can be null when the caller closed a freshly
-            // constructed (no-arg) Received that was never populated by a
-            // recv. The no-arg ctor + canonical recv pattern allows this:
-            // an empty Received passed to socket.recv(received, DONT_WAIT)
-            // stays null on EAGAIN, and the caller may close() it without
-            // ever having observed a successful recv.
-            if (realizedParts != null) {
-                int n = realizedParts.size();
-                if (n == 1) {
-                    singleToClose = realizedParts.get(0);
-                } else if (n > 1) {
-                    toClose = new ArrayList<>(realizedParts);
-                }
-                partsToRelease = realizedParts;
-                realizedParts = null;
+        if (closed)
+            return;
+        closed = true;
+        pendingCursor = cursor;
+        cursor = null;
+        // realizedParts can be null when the caller closed a freshly
+        // constructed (no-arg) Received that was never populated by a
+        // recv. The no-arg ctor + canonical recv pattern allows this:
+        // an empty Received passed to socket.recv(received, DONT_WAIT)
+        // stays null on EAGAIN, and the caller may close() it without
+        // ever having observed a successful recv.
+        if (realizedParts != null) {
+            int n = realizedParts.size();
+            if (n == 1) {
+                singleToClose = realizedParts.get(0);
+            } else if (n > 1) {
+                toClose = new ArrayList<>(realizedParts);
             }
-            partsView = Collections.emptyList();
+            realizedParts = null;
         }
+        partsView = Collections.emptyList();
         if (singleToClose != null) {
             try {
                 singleToClose.closeFromOwner();
@@ -855,7 +819,6 @@ public final class Received implements AutoCloseable {
         } else if (toClose != null) {
             closeOwnedParts(toClose);
         }
-        releasePartsList(partsToRelease);
         closeCursorQuietly(pendingCursor);
         markTerminal();
     }
@@ -877,53 +840,42 @@ public final class Received implements AutoCloseable {
 
             @Override
             public boolean hasNext() {
-                synchronized (Received.this) {
-                    if (closed)
-                        return false;
-                    ensureRealizedThroughLocked(index);
-                    return index < realizedParts.size();
-                }
+                if (closed)
+                    return false;
+                ensureRealizedThrough(index);
+                return index < realizedParts.size();
             }
 
             @Override
             public Message next() {
-                synchronized (Received.this) {
-                    ensureOpen();
-                    ensureRealizedThroughLocked(index);
-                    if (index >= realizedParts.size())
-                        throw new NoSuchElementException();
-                    Message next = realizedParts.get(index);
-                    index++;
-                    return next;
-                }
+                ensureOpen();
+                ensureRealizedThrough(index);
+                if (index >= realizedParts.size())
+                    throw new NoSuchElementException();
+                Message next = realizedParts.get(index);
+                index++;
+                return next;
             }
         };
     }
 
     void forceMaterialize() {
-        synchronized (this) {
-            if (closed)
-                return;
-            materializeAllLocked();
-        }
+        if (closed)
+            return;
+        materializeAll();
     }
 
     List<Message> takeParts() {
         ContractAccess.ReceivedPartCursor pendingCursor;
         ArrayList<Message> detached;
-        ArrayList<Message> partsToRelease;
-        synchronized (this) {
-            ensureOpen();
-            materializeAllLocked();
-            detached = new ArrayList<>(realizedParts);
-            partsToRelease = realizedParts;
-            realizedParts = null;
-            partsView = Collections.emptyList();
-            pendingCursor = cursor;
-            cursor = null;
-            closed = true;
-        }
-        releasePartsList(partsToRelease);
+        ensureOpen();
+        materializeAll();
+        detached = new ArrayList<>(realizedParts);
+        realizedParts = null;
+        partsView = Collections.emptyList();
+        pendingCursor = cursor;
+        cursor = null;
+        closed = true;
         closeCursorQuietly(pendingCursor);
         markTerminal();
         return Collections.unmodifiableList(detached);
@@ -934,7 +886,7 @@ public final class Received implements AutoCloseable {
             throw new IllegalStateException("received is closed");
     }
 
-    private void ensureRealizedThroughLocked(int index) {
+    private void ensureRealizedThrough(int index) {
         while (!closed && realizedParts.size() <= index && cursor != null) {
             Message next = cursor.nextPartOrNull();
             if (next == null) {
@@ -946,7 +898,7 @@ public final class Received implements AutoCloseable {
         }
     }
 
-    private void materializeAllLocked() {
+    private void materializeAll() {
         while (!closed && cursor != null) {
             Message next = cursor.nextPartOrNull();
             if (next == null) {

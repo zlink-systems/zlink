@@ -6,7 +6,7 @@ namespace Systems.Zlink;
 
 public sealed partial class TopicMessage
 {
-    private int _closed;
+    private bool _closed;
     private MultipartMessageCollection? _parts;
     private RoutingId? _routingId;
     private RoutingIdSnapshot _routingIdSnapshot;
@@ -234,7 +234,7 @@ public sealed partial class TopicMessage
         }
 
         if (reopen)
-            Volatile.Write(ref _closed, 0);
+            _closed = false;
     }
 
     private void ResetForIncomingSinglePart(Message singlePart,
@@ -269,14 +269,15 @@ public sealed partial class TopicMessage
 
     private void EnsureOpen()
     {
-        if (Volatile.Read(ref _closed) != 0)
+        if (_closed)
             throw new ObjectDisposedException(nameof(TopicMessage));
     }
 
     private void DisposeCore()
     {
-        if (Interlocked.Exchange(ref _closed, 1) != 0)
+        if (_closed)
             return;
+        _closed = true;
 
         ResetForReuse(reopen: false);
         _topicBytes = null;

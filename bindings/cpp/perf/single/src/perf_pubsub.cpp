@@ -125,13 +125,21 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
         while (std::chrono::steady_clock::now () < active_deadline) {
             if (!perf_single_metric::stamp_payload (payload.data (), payload.size (), run_id,
                                                     perf_single_metric::phase_active, msg_size,
-                                                    seq++, perf_single_metric::now_ns ())
-                || !perf::single::publish_payload_blocking (publisher, k_topic, payload.data (),
-                                                            payload.size ())) {
+                                                    seq, perf_single_metric::now_ns ())) {
+                sender_ok.store (false, std::memory_order_release);
+                break;
+            }
+            if (!perf::single::publish_payload_blocking (publisher, k_topic, payload.data (),
+                                                         payload.size ())) {
+                if (perf::single::is_transient_send_errno (errno)) {
+                    std::this_thread::sleep_for (std::chrono::milliseconds (1));
+                    continue;
+                }
                 sender_ok.store (false, std::memory_order_release);
                 break;
             }
             sent_count.fetch_add (1, std::memory_order_relaxed);
+            ++seq;
         }
         // PERF_SINGLE_TEST_POLICY § 1.4: publish one wire-level blocking
         // stop token under k_topic.

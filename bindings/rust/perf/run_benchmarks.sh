@@ -244,6 +244,9 @@ prepare_core_runtime() {
     fi
     echo "Rust perf runtime: ${resolved_lib}"
     echo "Rust perf runtime sha256: $(sha256sum "${resolved_lib}" | awk '{print $1}')"
+    export PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE}"
+    export PERF_CORE_VERSION="${ZLINK_CORE_VERSION}"
+    export PERF_CORE_RUNTIME="${resolved_lib}"
     export ZLINK_RUST_NATIVE_DIR="${native_dir}"
     export LD_LIBRARY_PATH="${native_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 }

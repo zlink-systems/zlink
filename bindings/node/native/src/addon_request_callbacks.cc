@@ -5,16 +5,14 @@
 #include "addon_message_values.h"
 #include "addon_tsfn_slots.h"
 
-#include <atomic>
 #include <memory>
-#include <mutex>
 #include <unordered_map>
 #include <vector>
 
 struct request_completion_dispatcher_t
 {
     request_completion_dispatcher_t ()
-        : socket (NULL), env (NULL), tsfn (NULL), handler (NULL), active (0), closing (false)
+        : socket (NULL), env (NULL), tsfn (NULL), handler (NULL)
     {
     }
 
@@ -22,8 +20,6 @@ struct request_completion_dispatcher_t
     napi_env env;
     napi_threadsafe_function tsfn;
     napi_ref handler;
-    std::atomic<size_t> active;
-    std::atomic<bool> closing;
 };
 
 struct request_js_state_t
@@ -38,8 +34,8 @@ struct request_js_state_t
 namespace
 {
 
-std::mutex g_request_dispatchers_mu;
-std::unordered_map<void *, request_completion_dispatcher_t *> g_request_dispatchers;
+thread_local std::unordered_map<void *, request_completion_dispatcher_t *>
+  g_request_dispatchers;
 
 struct request_result_js_payload_t
 {
@@ -74,14 +70,13 @@ bool move_recv_parts_to_payload (zlink_msg_t *parts,
     return true;
 }
 
-void release_request_state (napi_env env, request_js_state_t *state)
+void release_request_state (request_js_state_t *state)
 {
     if (!state)
         return;
     request_completion_dispatcher_t *dispatcher = state->dispatcher;
     delete state;
-    if (dispatcher && dispatcher->active.fetch_sub (1) == 1
-        && dispatcher->closing.load ())
+    if (dispatcher)
         (void) napi_release_threadsafe_function (dispatcher->tsfn, napi_tsfn_release);
 }
 
@@ -109,7 +104,7 @@ void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *
 
     request_js_state_t *state = payload->state;
     if (!env || !state || !dispatcher->handler) {
-        release_request_state (NULL, state);
+        release_request_state (state);
         return;
     }
 
@@ -132,7 +127,7 @@ void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *
             napi_value part_buf = create_received_message_buffer (
               env, &payload->parts[part_index]);
             if (!part_buf) {
-                release_request_state (env, state);
+                release_request_state (state);
                 return;
             }
             napi_set_element (env, parts_array, static_cast<uint32_t> (part_index), part_buf);
@@ -146,12 +141,11 @@ void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *
     napi_get_reference_value (env, dispatcher->handler, &handler);
     napi_get_undefined (env, &this_arg);
     napi_call_function (env, this_arg, handler, 1, &completion, &recv);
-    release_request_state (env, state);
+    release_request_state (state);
 }
 
 request_completion_dispatcher_t *request_dispatcher (napi_env env, void *socket)
 {
-    std::lock_guard<std::mutex> lock (g_request_dispatchers_mu);
     std::unordered_map<void *, request_completion_dispatcher_t *>::iterator existing =
       g_request_dispatchers.find (socket);
     if (existing != g_request_dispatchers.end ())
@@ -186,10 +180,14 @@ create_core_request_js_state (napi_env env, void *socket, uint64_t token)
     if (!dispatcher)
         return NULL;
     request_js_state_t *state = new request_js_state_t ();
+    if (napi_acquire_threadsafe_function (dispatcher->tsfn) != napi_ok) {
+        delete state;
+        napi_throw_error (env, NULL, "request completion dispatcher is closing");
+        return NULL;
+    }
     state->env = env;
     state->dispatcher = dispatcher;
     state->token = token;
-    dispatcher->active.fetch_add (1);
     return state;
 }
 
@@ -211,24 +209,18 @@ void abort_request_js_state (request_js_state_t *state)
 {
     if (!state)
         return;
-    release_request_state (state->env, state);
+    release_request_state (state);
 }
 
 void release_socket_request_dispatcher (void *socket)
 {
-    request_completion_dispatcher_t *dispatcher = NULL;
-    {
-        std::lock_guard<std::mutex> lock (g_request_dispatchers_mu);
-        std::unordered_map<void *, request_completion_dispatcher_t *>::iterator entry =
-          g_request_dispatchers.find (socket);
-        if (entry == g_request_dispatchers.end ())
-            return;
-        dispatcher = entry->second;
-        g_request_dispatchers.erase (entry);
-    }
-    dispatcher->closing.store (true);
-    if (dispatcher->active.load () == 0)
-        (void) napi_release_threadsafe_function (dispatcher->tsfn, napi_tsfn_release);
+    std::unordered_map<void *, request_completion_dispatcher_t *>::iterator entry =
+      g_request_dispatchers.find (socket);
+    if (entry == g_request_dispatchers.end ())
+        return;
+    request_completion_dispatcher_t *dispatcher = entry->second;
+    g_request_dispatchers.erase (entry);
+    (void) napi_release_threadsafe_function (dispatcher->tsfn, napi_tsfn_release);
 }
 
 void request_reply_callback_trampoline (zlink_request_result_t errnum,
@@ -255,5 +247,5 @@ void request_reply_callback_trampoline (zlink_request_result_t errnum,
         == napi_ok)
         payload.release ();
     else
-        release_request_state (NULL, state);
+        release_request_state (state);
 }

@@ -42,7 +42,7 @@ public final class NativeTimer implements ZlinkTimer {
     private MemorySegment handle;
     private TimerHandler handler;
     private Arena handlerArena;
-    private volatile boolean closed;
+    private boolean closed;
 
     static {
         InternalAccess.register((InternalAccess.TimerAccess)

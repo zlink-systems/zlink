@@ -7,20 +7,13 @@ import systems.zlink.internal.ContractAccess;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
 /** Immutable binary-safe routing id value object. */
 public final class RoutingId {
     public static final int MAX_LENGTH = 255;
-    private static final int THREAD_CACHE_MAX_ENTRIES = 256;
-    private static final ThreadLocal<HashMap<RouteCacheKey, List<RouteCacheEntry>>>
-        TRUSTED_CACHE = ThreadLocal.withInitial(HashMap::new);
-
     private final byte[] value;
     private final int hash;
 
@@ -29,11 +22,6 @@ public final class RoutingId {
             @Override
             public RoutingId fromTrusted(byte[] value) {
                 return RoutingId.fromTrusted(value);
-            }
-
-            @Override
-            public RoutingId tryFromInlineCached(int size, long lo, long hi) {
-                return RoutingId.tryFromInlineCached(size, lo, hi);
             }
 
             @Override
@@ -51,76 +39,7 @@ public final class RoutingId {
     static RoutingId fromTrusted(byte[] value) {
         Objects.requireNonNull(value, "value");
         validateLength(value.length);
-        RouteCacheKey key = RouteCacheKey.create(value);
-        HashMap<RouteCacheKey, List<RouteCacheEntry>> cache = TRUSTED_CACHE.get();
-        List<RouteCacheEntry> entries = cache.get(key);
-        if (entries != null) {
-            for (int i = 0; i < entries.size(); i++) {
-                RouteCacheEntry entry = entries.get(i);
-                if (Arrays.equals(value, entry.bytes)) {
-                    return entry.routingId;
-                }
-            }
-        }
-
-        RoutingId created = new RoutingId(value);
-        if (cache.size() >= THREAD_CACHE_MAX_ENTRIES) {
-            cache.clear();
-        }
-        entries = cache.get(key);
-        if (entries == null) {
-            entries = new ArrayList<>(1);
-            cache.put(key, entries);
-        }
-        entries.add(new RouteCacheEntry(value, created));
-        return created;
-    }
-
-    // Inline-keyed cache lookup for the recv hot path. The caller already
-    // has the routing id bytes packed into (lo, hi, size); doing the hash and
-    // SequenceEqual against the cached entries directly off those words
-    // avoids the byte[] allocation that is otherwise discarded on cache hits.
-    // Returns null on miss; caller must fall back to allocating a byte[] and
-    // calling fromTrusted(byte[]).
-    static RoutingId tryFromInlineCached(int size, long lo, long hi) {
-        if (size <= 0 || size > 16) {
-            return null;
-        }
-        final long offset = 0xcbf29ce484222325L;
-        final long prime = 0x100000001b3L;
-        long hash = offset;
-        for (int i = 0; i < size && i < 8; i++) {
-            hash ^= ((lo >>> (i * 8)) & 0xFFL);
-            hash *= prime;
-        }
-        for (int i = 8; i < size; i++) {
-            hash ^= ((hi >>> ((i - 8) * 8)) & 0xFFL);
-            hash *= prime;
-        }
-        RouteCacheKey key = new RouteCacheKey(size, hash);
-        HashMap<RouteCacheKey, List<RouteCacheEntry>> cache = TRUSTED_CACHE.get();
-        List<RouteCacheEntry> entries = cache.get(key);
-        if (entries == null) {
-            return null;
-        }
-        for (int i = 0; i < entries.size(); i++) {
-            RouteCacheEntry entry = entries.get(i);
-            if (entry.bytes.length != size) continue;
-            if (!inlineMatchesBytes(size, lo, hi, entry.bytes)) continue;
-            return entry.routingId;
-        }
-        return null;
-    }
-
-    private static boolean inlineMatchesBytes(int size, long lo, long hi,
-                                              byte[] entryBytes) {
-        for (int i = 0; i < size && i < 8; i++) {
-            if (entryBytes[i] != (byte) (lo >>> (i * 8))) return false;
-        }
-        for (int i = 8; i < size; i++) {
-            if (entryBytes[i] != (byte) (hi >>> ((i - 8) * 8))) return false;
-        }
-        return true;
+        return new RoutingId(value);
     }
 
     /** Copies the full routing id byte array. */
@@ -282,22 +201,6 @@ public final class RoutingId {
     @Override
     public int hashCode() {
         return hash;
-    }
-
-    private record RouteCacheKey(int length, long hash) {
-        private static RouteCacheKey create(byte[] bytes) {
-            final long offset = 0xcbf29ce484222325L;
-            final long prime = 0x100000001b3L;
-            long hash = offset;
-            for (byte b : bytes) {
-                hash ^= (b & 0xFFL);
-                hash *= prime;
-            }
-            return new RouteCacheKey(bytes.length, hash);
-        }
-    }
-
-    private record RouteCacheEntry(byte[] bytes, RoutingId routingId) {
     }
 
 }

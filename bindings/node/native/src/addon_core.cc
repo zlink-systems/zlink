@@ -62,9 +62,9 @@ struct stream_js_state_t
     void *socket;
     napi_env env;
     napi_threadsafe_function tsfn;
+    std::mutex mutex;
     std::atomic<int> stop_requested;
     int body_materialization;
-    std::unordered_map<std::string, napi_ref> routing_id_cache;
 };
 
 static std::mutex g_stream_slots_mu;
@@ -78,6 +78,7 @@ struct socket_monitor_handler_js_state_t
     void *monitor;
     napi_env env;
     napi_threadsafe_function tsfn;
+    std::mutex mutex;
 };
 
 static std::mutex g_socket_monitor_handler_slots_mu;
@@ -198,13 +199,11 @@ struct stress_part_payload_t
 
 static const uint32_t k_stress_payload_magic = 0x5a4c4e4b;
 
-static std::mutex g_send_completion_states_mu;
-static std::unordered_map<void *, send_completion_state_t *>
+static thread_local std::unordered_map<void *, send_completion_state_t *>
   g_send_completion_states;
 
 send_completion_state_t *find_send_completion_state (void *socket)
 {
-    std::lock_guard<std::mutex> lock (g_send_completion_states_mu);
     std::unordered_map<void *, send_completion_state_t *>::iterator entry =
       g_send_completion_states.find (socket);
     return entry == g_send_completion_states.end () ? NULL : entry->second;
@@ -232,20 +231,6 @@ void reset_stream_slot_unsafe (stream_js_state_t *state)
     state->socket = NULL;
     state->stop_requested.store (0, std::memory_order_release);
     state->body_materialization = 0;
-}
-
-void clear_stream_routing_id_cache (napi_env env, stream_js_state_t *state)
-{
-    if (!state)
-        return;
-    if (env) {
-        for (std::unordered_map<std::string, napi_ref>::iterator it =
-               state->routing_id_cache.begin ();
-             it != state->routing_id_cache.end (); ++it) {
-            napi_delete_reference (env, it->second);
-        }
-    }
-    state->routing_id_cache.clear ();
 }
 
 void reset_socket_monitor_handler_slot_unsafe (socket_monitor_handler_js_state_t *state)
@@ -700,7 +685,7 @@ napi_value create_router_recv_message_value (napi_env env,
                                              zlink_msg_t *parts,
                                              size_t part_count,
                                              bool prefer_managed_single_part,
-                                             napi_value cached_routing_id)
+                                             napi_value routing_id_storage)
 {
     napi_value obj;
     if (part_count == 1 && !prefer_managed_single_part) {
@@ -714,7 +699,7 @@ napi_value create_router_recv_message_value (napi_env env,
             return NULL;
         napi_set_named_property (env, obj, "nativeMessage", native_message);
         napi_value rid = create_routing_id_value_reusing (
-          env, routing_id, cached_routing_id);
+          env, routing_id, routing_id_storage);
         napi_set_named_property (env, obj, "routingId", rid);
     } else {
         // HOT PATH: a stable terminal reader asked for managed storage. Copy
@@ -722,9 +707,9 @@ napi_value create_router_recv_message_value (napi_env env,
         // boundary instead of returning a frame handle and crossing again
         // from Message.data(). Multipart keeps its existing representation.
         obj = create_recv_message_value (env, routing_id, parts, part_count);
-        if (obj && routing_id.size > 0 && cached_routing_id != NULL) {
+        if (obj && routing_id.size > 0 && routing_id_storage != NULL) {
             napi_value rid = create_routing_id_value_reusing (
-              env, routing_id, cached_routing_id);
+              env, routing_id, routing_id_storage);
             napi_set_named_property (env, obj, "routingId", rid);
         }
     }
@@ -750,7 +735,7 @@ int router_recv_message_value (napi_env env,
                                void *router,
                                int32_t flags,
                                bool prefer_managed_single_part,
-                               napi_value cached_routing_id,
+                               napi_value routing_id_storage,
                                napi_value *out)
 {
     const zlink_routing_id_t *peer_rid_ptr = NULL;
@@ -779,7 +764,7 @@ int router_recv_message_value (napi_env env,
         // its JS owner; multipart receives retain the generic path below.
         *out = create_router_recv_message_value (
           env, peer_rid, request_seq, transport_pair_id, transport_pair_generation,
-          &first_part, 1, prefer_managed_single_part, cached_routing_id);
+          &first_part, 1, prefer_managed_single_part, routing_id_storage);
         zlink_msg_close (&first_part);
         return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
     }
@@ -818,7 +803,7 @@ int router_recv_message_value (napi_env env,
 
     *out = create_router_recv_message_value (
       env, peer_rid, request_seq, transport_pair_id, transport_pair_generation,
-      parts.data (), parts.size (), prefer_managed_single_part, cached_routing_id);
+      parts.data (), parts.size (), prefer_managed_single_part, routing_id_storage);
     close_msg_vector (parts);
     return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
 }
@@ -946,7 +931,7 @@ void stream_tsfn_finalize (napi_env env, void *finalize_data, void *finalize_hin
     if (!state)
         return;
     std::lock_guard<std::mutex> lock (g_stream_slots_mu);
-    clear_stream_routing_id_cache (env, state);
+    std::lock_guard<std::mutex> state_lock (state->mutex);
     reset_stream_slot_unsafe (state);
 }
 
@@ -959,6 +944,7 @@ void socket_monitor_handler_tsfn_finalize (napi_env env, void *finalize_data, vo
     if (!state)
         return;
     std::lock_guard<std::mutex> lock (g_socket_monitor_handler_slots_mu);
+    std::lock_guard<std::mutex> state_lock (state->mutex);
     reset_socket_monitor_handler_slot_unsafe (state);
 }
 
@@ -970,27 +956,11 @@ void stream_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *d
         return;
 
     napi_value argv[3];
-    const std::string routing_id_key (
-      reinterpret_cast<const char *> (payload->routing_id.data), payload->routing_id.size);
-    std::unordered_map<std::string, napi_ref>::iterator cached =
-      state->routing_id_cache.find (routing_id_key);
-    if (cached != state->routing_id_cache.end ()) {
-        if (napi_get_reference_value (env, cached->second, &argv[0]) != napi_ok)
-            return;
-    } else {
-        if (state->routing_id_cache.size () >= 16384)
-            clear_stream_routing_id_cache (env, state);
-        if (napi_create_buffer_copy (env, payload->routing_id.size,
-                                     payload->routing_id.size == 0 ? NULL : payload->routing_id.data,
-                                     NULL, &argv[0])
-            != napi_ok) {
-            return;
-        }
-        napi_ref reference = NULL;
-        if (napi_create_reference (env, argv[0], 1, &reference) != napi_ok)
-            return;
-        state->routing_id_cache.emplace (routing_id_key, reference);
-    }
+    if (napi_create_buffer_copy (env, payload->routing_id.size,
+                                 payload->routing_id.size == 0 ? NULL : payload->routing_id.data,
+                                 NULL, &argv[0])
+        != napi_ok)
+        return;
     // STREAM packet handlers often relay the header together with the body.
     // Move both frames to Message storage so a handler that only inspects
     // their sizes does not first copy the header into a JS-owned Buffer.
@@ -1057,10 +1027,30 @@ void stream_on_packet_slot (void *stream_,
     }
 
     stream_js_state_t *state = &g_stream_slots[Slot];
+    std::unique_ptr<stream_js_payload_t> payload (new stream_js_payload_t ());
+    copy_routing_id (&payload->routing_id, rid_);
+    if (zlink_msg_init (&payload->packets[0]) != 0) {
+        close_messages ();
+        return;
+    }
+    payload->packet_count = 1;
+    if (zlink_msg_move (&payload->packets[0], header_) != 0) {
+        close_messages ();
+        return;
+    }
+    if (zlink_msg_init (&payload->packets[1]) != 0) {
+        close_messages ();
+        return;
+    }
+    payload->packet_count = 2;
+    if (zlink_msg_move (&payload->packets[1], body_) != 0) {
+        close_messages ();
+        return;
+    }
+
     napi_threadsafe_function tsfn = NULL;
-    std::unique_ptr<stream_js_payload_t> payload;
     {
-        std::lock_guard<std::mutex> lock (g_stream_slots_mu);
+        std::lock_guard<std::mutex> lock (state->mutex);
         if (!state->used || !state->tsfn) {
             close_messages ();
             return;
@@ -1070,24 +1060,8 @@ void stream_on_packet_slot (void *stream_,
             return;
         }
         tsfn = state->tsfn;
-        payload.reset (new stream_js_payload_t ());
         payload->body_materialization = state->body_materialization;
-        copy_routing_id (&payload->routing_id, rid_);
-        if (zlink_msg_init (&payload->packets[0]) != 0) {
-            close_messages ();
-            return;
-        }
-        payload->packet_count = 1;
-        if (zlink_msg_move (&payload->packets[0], header_) != 0) {
-            close_messages ();
-            return;
-        }
-        if (zlink_msg_init (&payload->packets[1]) != 0) {
-            close_messages ();
-            return;
-        }
-        payload->packet_count = 2;
-        if (zlink_msg_move (&payload->packets[1], body_) != 0) {
+        if (napi_acquire_threadsafe_function (tsfn) != napi_ok) {
             close_messages ();
             return;
         }
@@ -1104,6 +1078,7 @@ void stream_on_packet_slot (void *stream_,
     if (napi_call_threadsafe_function (tsfn, payload.get (), napi_tsfn_nonblocking) == napi_ok) {
         payload.release ();
     }
+    (void) napi_release_threadsafe_function (tsfn, napi_tsfn_release);
 }
 
 typedef void (*stream_slot_packet_callback_t) (
@@ -1125,6 +1100,7 @@ void stream_release_slot (void *socket)
         stream_js_state_t *state = find_stream_slot_by_socket_unsafe (socket);
         if (!state)
             return;
+        std::lock_guard<std::mutex> state_lock (state->mutex);
         tsfn = state->tsfn;
         // The TSFN finalizer owns the transition back to an unused slot. If
         // close makes this slot reusable first, the old finalizer can reset a
@@ -1144,22 +1120,25 @@ void socket_monitor_handler_slot_callback (const zlink_monitor_event_t *event_, 
     (void) userdata_;
     std::unique_ptr<socket_monitor_handler_js_payload_t> payload (
       new socket_monitor_handler_js_payload_t ());
+    if (event_)
+        payload->event = *event_;
+    else
+        memset (&payload->event, 0, sizeof (payload->event));
     socket_monitor_handler_js_state_t *state = &g_socket_monitor_handler_slots[Slot];
     napi_threadsafe_function tsfn = NULL;
     {
-        std::lock_guard<std::mutex> lock (g_socket_monitor_handler_slots_mu);
+        std::lock_guard<std::mutex> lock (state->mutex);
         if (!state->used || !state->tsfn)
             return;
         tsfn = state->tsfn;
-        if (event_)
-            payload->event = *event_;
-        else
-            memset (&payload->event, 0, sizeof (payload->event));
+        if (napi_acquire_threadsafe_function (tsfn) != napi_ok)
+            return;
     }
 
     if (napi_call_threadsafe_function (tsfn, payload.get (), napi_tsfn_nonblocking) == napi_ok) {
         payload.release ();
     }
+    (void) napi_release_threadsafe_function (tsfn, napi_tsfn_release);
 }
 static socket_monitor_handler_slot_callback_t
   g_socket_monitor_handler_slot_callbacks[k_socket_monitor_handler_slot_count] = {
@@ -1180,13 +1159,10 @@ void send_completion_tsfn_finalize (napi_env env,
       static_cast<send_completion_state_t *> (finalize_data);
     if (!state)
         return;
-    {
-        std::lock_guard<std::mutex> lock (g_send_completion_states_mu);
-        std::unordered_map<void *, send_completion_state_t *>::iterator entry =
-          g_send_completion_states.find (state->socket);
-        if (entry != g_send_completion_states.end () && entry->second == state)
-            g_send_completion_states.erase (entry);
-    }
+    std::unordered_map<void *, send_completion_state_t *>::iterator entry =
+      g_send_completion_states.find (state->socket);
+    if (entry != g_send_completion_states.end () && entry->second == state)
+        g_send_completion_states.erase (entry);
     delete state;
 }
 
@@ -1279,15 +1255,12 @@ bool attach_send_completion_handler (napi_env env, void *socket, napi_value hand
     state->socket = socket;
     state->env = env;
 
-    {
-        std::lock_guard<std::mutex> lock (g_send_completion_states_mu);
-        if (g_send_completion_states.find (socket) != g_send_completion_states.end ()) {
-            delete state;
-            napi_throw_error (env, NULL, "send completion handler already attached");
-            return false;
-        }
-        g_send_completion_states[socket] = state;
+    if (g_send_completion_states.find (socket) != g_send_completion_states.end ()) {
+        delete state;
+        napi_throw_error (env, NULL, "send completion handler already attached");
+        return false;
     }
+    g_send_completion_states[socket] = state;
 
     napi_value resource_name;
     napi_create_string_utf8 (env, "zlink-send-completion", NAPI_AUTO_LENGTH, &resource_name);
@@ -1295,7 +1268,6 @@ bool attach_send_completion_handler (napi_env env, void *socket, napi_value hand
           env, handler, NULL, resource_name, 0, 1, state,
           send_completion_tsfn_finalize, state, send_completion_tsfn_call_js,
           &state->tsfn) != napi_ok) {
-        std::lock_guard<std::mutex> lock (g_send_completion_states_mu);
         g_send_completion_states.erase (socket);
         delete state;
         napi_throw_error (env, NULL, "send completion handler callback queue setup failed");
@@ -1306,10 +1278,7 @@ bool attach_send_completion_handler (napi_env env, void *socket, napi_value hand
     const zlink_handler_result_t result =
       zlink_send_complete_handler (socket, send_completion_callback, state);
     if (result != ZLINK_HANDLER_OK) {
-        {
-            std::lock_guard<std::mutex> lock (g_send_completion_states_mu);
-            g_send_completion_states.erase (socket);
-        }
+        g_send_completion_states.erase (socket);
         (void) napi_release_threadsafe_function (state->tsfn, napi_tsfn_abort);
         throw_last_error (env, "send completion handler failed");
         return false;
@@ -1336,6 +1305,7 @@ bool attach_socket_monitor_handler (napi_env env, void *monitor, napi_value hand
 
     {
         std::lock_guard<std::mutex> lock (g_socket_monitor_handler_slots_mu);
+        std::lock_guard<std::mutex> state_lock (slot->mutex);
         bind_tsfn_subject_slot_unsafe (slot, &socket_monitor_handler_js_state_t::monitor, monitor,
                                        env, tsfn);
     }
@@ -1355,26 +1325,23 @@ bool attach_socket_monitor_handler (napi_env env, void *monitor, napi_value hand
 void release_socket_send_completion_handler (void *socket)
 {
     napi_threadsafe_function tsfn = NULL;
-    {
-        std::lock_guard<std::mutex> lock (g_send_completion_states_mu);
-        std::unordered_map<void *, send_completion_state_t *>::iterator entry =
-          g_send_completion_states.find (socket);
-        if (entry == g_send_completion_states.end ())
-            return;
-        send_completion_state_t *state = entry->second;
-        tsfn = state->tsfn;
-        //  Runs on the JavaScript thread while the socket closes. Drop the
-        //  outstanding-operation reference here rather than leaving it to the
-        //  queued callbacks: a completion that never reaches the queue would
-        //  otherwise hold the event loop open for the life of the process.
-        //  Zeroing the counter first keeps the callbacks that do arrive from
-        //  releasing it a second time.
-        if (state->js_thread_outstanding > 0) {
-            state->js_thread_outstanding = 0;
-            (void) napi_unref_threadsafe_function (state->env, tsfn);
-        }
-        g_send_completion_states.erase (entry);
+    std::unordered_map<void *, send_completion_state_t *>::iterator entry =
+      g_send_completion_states.find (socket);
+    if (entry == g_send_completion_states.end ())
+        return;
+    send_completion_state_t *state = entry->second;
+    tsfn = state->tsfn;
+    //  Runs on the JavaScript thread while the socket closes. Drop the
+    //  outstanding-operation reference here rather than leaving it to the
+    //  queued callbacks: a completion that never reaches the queue would
+    //  otherwise hold the event loop open for the life of the process.
+    //  Zeroing the counter first keeps the callbacks that do arrive from
+    //  releasing it a second time.
+    if (state->js_thread_outstanding > 0) {
+        state->js_thread_outstanding = 0;
+        (void) napi_unref_threadsafe_function (state->env, tsfn);
     }
+    g_send_completion_states.erase (entry);
     if (tsfn)
         (void) napi_release_threadsafe_function (tsfn, napi_tsfn_release);
 }
@@ -1388,6 +1355,7 @@ void release_socket_monitor_handler_slot (void *monitor)
           find_socket_monitor_handler_slot_by_monitor_unsafe (monitor);
         if (!state)
             return;
+        std::lock_guard<std::mutex> state_lock (state->mutex);
         tsfn = state->tsfn;
         reset_socket_monitor_handler_slot_unsafe (state);
     }
@@ -3896,6 +3864,7 @@ napi_value socket_stream_attach (napi_env env, napi_callback_info info)
 
     {
         std::lock_guard<std::mutex> lock (g_stream_slots_mu);
+        std::lock_guard<std::mutex> state_lock (slot->mutex);
         bind_tsfn_subject_slot_unsafe (slot, &stream_js_state_t::socket, sock, env, tsfn);
         slot->stop_requested.store (0, std::memory_order_release);
         slot->body_materialization = body_materialization;
@@ -4151,11 +4120,11 @@ napi_value router_recv_message (napi_env env, napi_callback_info info)
     bool prefer_managed_single_part = false;
     if (argc >= 3)
         napi_get_value_bool (env, argv[2], &prefer_managed_single_part);
-    napi_value cached_routing_id = argc >= 4 ? argv[3] : NULL;
+    napi_value routing_id_storage = argc >= 4 ? argv[3] : NULL;
 
     napi_value out = NULL;
     const int rc = router_recv_message_value (
-      env, router, flags, prefer_managed_single_part, cached_routing_id, &out);
+      env, router, flags, prefer_managed_single_part, routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK)
         return throw_last_error (env, "routerRecvMessage failed");
     return out;
@@ -4171,12 +4140,12 @@ napi_value router_try_recv_message (napi_env env, napi_callback_info info)
     bool prefer_managed_single_part = false;
     if (argc >= 2)
         napi_get_value_bool (env, argv[1], &prefer_managed_single_part);
-    napi_value cached_routing_id = argc >= 3 ? argv[2] : NULL;
+    napi_value routing_id_storage = argc >= 3 ? argv[2] : NULL;
 
     napi_value out = NULL;
     const int rc = router_recv_message_value (
       env, router, ZLINK_RECV_FLAGS_DONTWAIT, prefer_managed_single_part,
-      cached_routing_id, &out);
+      routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK) {
         if (zlink_errno () == EAGAIN) {
             napi_value none;
@@ -4409,6 +4378,7 @@ struct timer_handler_js_state_t
     void *timer;
     napi_env env;
     napi_threadsafe_function tsfn;
+    std::mutex mutex;
 };
 
 static const size_t k_timer_handler_slot_count = 8;
@@ -4437,6 +4407,7 @@ static void timer_handler_tsfn_finalize (napi_env env, void *finalize_data, void
     if (!state)
         return;
     std::lock_guard<std::mutex> lock (g_timer_handler_slots_mu);
+    std::lock_guard<std::mutex> state_lock (state->mutex);
     reset_timer_handler_slot_unsafe (state);
 }
 
@@ -4463,6 +4434,7 @@ static void release_timer_handler_slot (void *timer)
         timer_handler_js_state_t *state = find_timer_handler_slot_by_timer_unsafe (timer);
         if (!state)
             return;
+        std::lock_guard<std::mutex> state_lock (state->mutex);
         tsfn = state->tsfn;
         reset_timer_handler_slot_unsafe (state);
     }
@@ -4477,19 +4449,23 @@ static void timer_handler_dispatch (void *timer_, uint64_t fire_count_, void *cl
     if (!state)
         return;
 
+    std::unique_ptr<uint64_t> payload (new uint64_t (fire_count_));
     napi_threadsafe_function tsfn = NULL;
     {
-        std::lock_guard<std::mutex> lock (g_timer_handler_slots_mu);
+        std::lock_guard<std::mutex> lock (state->mutex);
         if (!state->used || !state->tsfn)
             return;
         tsfn = state->tsfn;
+        if (napi_acquire_threadsafe_function (tsfn) != napi_ok)
+            return;
     }
 
-    std::unique_ptr<uint64_t> payload (new uint64_t (fire_count_));
     if (napi_call_threadsafe_function (tsfn, payload.get (), napi_tsfn_nonblocking) != napi_ok) {
+        (void) napi_release_threadsafe_function (tsfn, napi_tsfn_release);
         return;
     }
     (void) payload.release ();
+    (void) napi_release_threadsafe_function (tsfn, napi_tsfn_release);
 }
 
 static napi_value create_stopwatch_value (napi_env env, unsigned long value)
@@ -4932,6 +4908,7 @@ napi_value timer_handler (napi_env env, napi_callback_info info)
 
     {
         std::lock_guard<std::mutex> lock (g_timer_handler_slots_mu);
+        std::lock_guard<std::mutex> state_lock (slot->mutex);
         bind_tsfn_subject_slot_unsafe (slot, &timer_handler_js_state_t::timer, timer, env, tsfn);
     }
 

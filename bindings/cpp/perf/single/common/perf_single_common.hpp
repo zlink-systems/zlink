@@ -576,10 +576,12 @@ inline bool publish_payload_blocking (zlink::pub_socket_t &publisher_,
 inline bool publish_payload_blocking_retry (zlink::pub_socket_t &publisher_,
                                             const std::string &topic_,
                                             const void *data_,
-                                            size_t size_,
-                                            int max_retries_ = 100)
+                                            size_t size_)
 {
-    for (int retry = 0; retry < max_retries_; ++retry) {
+    const auto deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (resolve_single_stop_retry_timeout_ms ());
+    while (std::chrono::steady_clock::now () < deadline) {
         if (publish_payload_blocking (publisher_, topic_, data_, size_, false))
             return true;
         if (!is_transient_send_errno (errno))

@@ -52,7 +52,7 @@ internal static class RoutedRequestSubmitter
         }
 
         pending.AttachCancellation();
-        return RequestProgressPump.AttachSocket(handle, pending.Task);
+        return pending.Task;
     }
 
     private static unsafe ZlinkRoutedSubmitTarget SelectTarget(IntPtr handle,

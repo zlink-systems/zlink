@@ -30,7 +30,6 @@ internal sealed class SocketHandle : IDisposable
             var rc = NativeMethods.zlink_close(_handle);
             if (rc == 0)
             {
-                RequestProgressPump.StopSocket(_handle);
                 _handle = IntPtr.Zero;
                 GC.SuppressFinalize(this);
                 return;

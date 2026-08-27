@@ -426,6 +426,8 @@ prepare_core_runtime() {
   fi
   echo "Go package runtime: ${runtime}"
   echo "Go package runtime sha256: ${runtime_sha}"
+  PERF_CORE_RUNTIME_PATH="$(readlink -f "${runtime}" 2>/dev/null || printf '%s' "${runtime}")"
+  export PERF_CORE_RUNTIME_PATH
   export LD_LIBRARY_PATH="${native_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 }
 
@@ -644,6 +646,10 @@ render_tables() {
 }
 
 {
+  echo "META,commit,$(git -C "${REPO_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  echo "META,core_source,${ZLINK_CORE_SOURCE}"
+  echo "META,core_version,${CORE_VERSION}"
+  echo "META,core_runtime,${PERF_CORE_RUNTIME_PATH}"
   emit_effective_options_single "start"
 } > "${RESULTS_FILE}"
 exec 3>&1

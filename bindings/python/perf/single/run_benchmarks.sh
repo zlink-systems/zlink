@@ -87,6 +87,9 @@ else
   source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
   export ZLINK_LIBRARY_PATH="${ZLINK_LOCAL_CORE_RUNTIME}"
 fi
+export PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE:-explicit}"
+export PERF_CORE_VERSION="${ZLINK_CORE_VERSION:-$(awk -F= '/^LIBZLINK_VERSION=/{print $2}' "${REPO_DIR}/VERSION")}"
+export PERF_CORE_RUNTIME="$(readlink -f "${ZLINK_LIBRARY_PATH}" 2>/dev/null || printf '%s' "${ZLINK_LIBRARY_PATH}")"
 
 if [[ $show_help -eq 1 ]]; then
     echo "Note: --core-version VERSION downloads and uses a released Core runtime."

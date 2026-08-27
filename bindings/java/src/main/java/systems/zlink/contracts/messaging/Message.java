@@ -27,6 +27,8 @@ import sun.misc.Unsafe;
  */
 public final class Message implements AutoCloseable {
     private static final Unsafe UNSAFE = UnsafeAccess.get();
+    private static final long NATIVE_MESSAGE_LAYOUT_SIZE =
+        ContractAccess.nativeMessageLayoutSize();
     private static final long BYTE_ARRAY_BASE =
         UNSAFE.arrayBaseOffset(byte[].class);
     private static final boolean NATIVE_LITTLE_ENDIAN =
@@ -967,7 +969,7 @@ public final class Message implements AutoCloseable {
     }
 
     private void retireWrapperSlot() {
-        MessageSlotPool.release(ownedMsgSlotAddress);
+        UNSAFE.freeMemory(ownedMsgSlotAddress);
         closed = true;
     }
 
@@ -996,13 +998,16 @@ public final class Message implements AutoCloseable {
         if (scope != null && ContractAccess.nativeMessageScopeAlive(scope)) {
             ContractAccess.nativeMessageCloseScope(scope);
         } else if (ownedMsgSlotAddress != 0L) {
-            MessageSlotPool.release(ownedMsgSlotAddress);
+            UNSAFE.freeMemory(ownedMsgSlotAddress);
         }
         closed = true;
     }
 
     private static long allocateOwnedMsgSlot() {
-        return MessageSlotPool.acquire();
+        long address = UNSAFE.allocateMemory(
+            NATIVE_MESSAGE_LAYOUT_SIZE);
+        UNSAFE.setMemory(address, NATIVE_MESSAGE_LAYOUT_SIZE, (byte) 0);
+        return address;
     }
 
     private static void validateRange(int total, int offset, int length, String name) {
@@ -1033,50 +1038,6 @@ public final class Message implements AutoCloseable {
             } catch (ReflectiveOperationException ex) {
                 throw new IllegalStateException(
                     "Unable to access sun.misc.Unsafe", ex);
-            }
-        }
-    }
-
-    private static final class MessageSlotPool {
-        private static final long MESSAGE_LAYOUT_SIZE =
-            ContractAccess.nativeMessageLayoutSize();
-        private static final ThreadLocal<Pool> POOL =
-            ThreadLocal.withInitial(Pool::new);
-
-        private MessageSlotPool() {
-        }
-
-        static long acquire() {
-            return POOL.get().acquire();
-        }
-
-        static void release(long slot) {
-            POOL.get().release(slot);
-        }
-
-        private static final class Pool {
-            private static final int CAPACITY = 32;
-            private final long[] slots = new long[CAPACITY];
-            private int count;
-
-            long acquire() {
-                if (count > 0) {
-                    count--;
-                    long slot = slots[count];
-                    slots[count] = 0L;
-                    return slot;
-                }
-                long address = UNSAFE.allocateMemory(MESSAGE_LAYOUT_SIZE);
-                UNSAFE.setMemory(address, MESSAGE_LAYOUT_SIZE, (byte) 0);
-                return address;
-            }
-
-            void release(long slot) {
-                if (count < CAPACITY) {
-                    slots[count++] = slot;
-                } else {
-                    UNSAFE.freeMemory(slot);
-                }
             }
         }
     }

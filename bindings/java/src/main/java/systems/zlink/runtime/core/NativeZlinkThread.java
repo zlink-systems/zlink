@@ -36,7 +36,6 @@ final class NativeZlinkThread implements ZlinkThread {
     private final long token;
     private MemorySegment handle;
     private volatile Throwable failure;
-    private volatile boolean joined;
 
     NativeZlinkThread(Runnable task) {
         this.task = Objects.requireNonNull(task, "task");
@@ -52,7 +51,6 @@ final class NativeZlinkThread implements ZlinkThread {
     public void join() {
         ensureOpen();
         Native.threadJoin(handle);
-        joined = true;
         THREADS.remove(token, this);
         handle = MemorySegment.NULL;
         if (failure != null) {

@@ -169,3 +169,50 @@ edition 2024를 지원하는 Cargo/Rust 1.97.1을 사용했고, Python build/tes
 기존 미해결 이슈 7건과 최종 계약 감사에서 재현한 추가 결함을 모두 해결했다. Core
 public API나 반환 계약은 확장·완화하지 않았으며 `core/doc/spec/core/` 문서는 수정하지
 않았다. 생성된 local native/package artifact는 검증 입력이며 commit 대상이 아니다.
+
+## 6. 이후 작업에서 새로 발견한 항목 (2026-08-27, binding 동기화 제거 run)
+
+### 6.1 Core Boost.Asio allocator mismatch (미해결)
+
+C++ binding에서 불필요한 동기화를 제거한 뒤 ASAN/UBSAN 빌드로 경합 stress를 실행하자
+Core의 Boost.Asio operation 할당/해제 경로에서 allocator mismatch가 검출됐다.
+
+- `operator new` <-> `free`
+- 별도 실행에서는 `aligned_alloc` <-> `operator delete`
+
+stack은 `libzlink.so.0` 의 `io_context::run_for`, mailbox/finalize dispatch를 가리킨다.
+
+**영향**
+Release 빌드 경합 stress는 50,000회 통과했다
+(accepted 23,258 / multipart rejected 26,742 / received 23,258 /
+ ownership failure 0 / bad record 0 / unexpected 0 / close OK 5 / BUSY 5).
+그러나 ASAN 정식 통과를 받을 수 없어 **sanitizer 기반 경합 검증의 신뢰도가 제한된다.**
+mismatch 검사만 진단상 비활성화한 보조 실행은 47,516회 통과했으나 정식 통과로 간주하지 않았다.
+
+**처리**
+binding 문제가 아니므로 이번 run에서는 수정하지 않고 기록만 했다.
+
+### 6.2 C++ spec 충돌 — zero-thread 원칙 vs continuation dispatcher (감독관 정리 필요)
+
+`bindings/doc/spec/cpp/README.{ko,en}.md` 의 "binding 라이브러리는 스레드를 하나도 소유하지 않는다"와
+async 정책의 "pending slow path에서 continuation dispatcher를 거친다"가 현재 2-worker dispatcher
+구현과 충돌한다.
+
+dispatcher는 제거할 수 없다. Core completion callback 안에서의 send/request는 `EDEADLK`이며,
+C++ async 정책이 pending send continuation을 callback 밖에서 재개하도록 요구하기 때문이다.
+
+따라서 **spec 서술 쪽을 정리해야 한다.** "스레드를 하나도 소유하지 않는다"를
+"데이터 경로를 구동하는 스레드를 소유하지 않는다"처럼 실제 계약에 맞게 좁히거나,
+continuation dispatcher를 명시적 예외로 규정한다.
+
+### 6.3 binding 동기화 제거 결과 (C++)
+
+| 대상 | 판정 | 근거 |
+|---|---|---|
+| `message.cpp` large-message pool + process-wide mutex (128KiB~1MiB) | 제거 | 메시지 저장소 할당은 Core 책임(`zlink_msg_init_size`). 계획 문서가 binding pool 확장을 금지한다 |
+| `monitor.cpp` callback mutex | 제거 | Monitoring 계약: "handler·recv·close의 single consumer 직렬화는 caller의 의무이며 Core는 직렬화하지 않는다" |
+| send-completion 등록 mutex | 축소 | Core API는 교체 전용이라 최초 등록 경합에만 mutex를 유지하고, 이후 async send는 acquire atomic fast path로 우회 |
+| coroutine resume slot mutex | 축소 | atomic pointer 단일-claim으로 대체 |
+| completion anchor refcount, async result-state mutex, continuation dispatcher, blocking request condvar, `_open` atomic | 유지 | Core가 대신 보장할 수 없는 binding 고유 경합 (callback이 `zlink_send_async` 반환 전 실행 가능, terminal/cancel/consumer 등록 불변식, `EDEADLK` 회피, blocking 계약) |
+
+C++ 결과: 5개 파일 +29 / -157줄, contract 14/14, Release 경합 stress 50,000회 통과.

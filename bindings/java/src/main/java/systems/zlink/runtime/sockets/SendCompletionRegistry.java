@@ -48,9 +48,8 @@ final class SendCompletionRegistry implements AutoCloseable {
     private static final FunctionDescriptor CALLBACK_DESCRIPTOR =
         FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS,
             ValueLayout.ADDRESS);
-    private static final AtomicLong NEXT_TOKEN = new AtomicLong(1L);
-
     private final NativeSocketRuntime socket;
+    private final AtomicLong nextToken = new AtomicLong(1L);
     private final ConcurrentMap<Long, Pending> pending =
         new ConcurrentHashMap<>();
     private final ExecutorService completionExecutor =
@@ -236,10 +235,10 @@ final class SendCompletionRegistry implements AutoCloseable {
         RuntimeResources.shutdownExecutor(completionExecutor);
     }
 
-    private static long nextToken() {
+    private long nextToken() {
         long token;
         do {
-            token = NEXT_TOKEN.getAndIncrement();
+            token = nextToken.getAndIncrement();
         } while (token == 0L);
         return token;
     }

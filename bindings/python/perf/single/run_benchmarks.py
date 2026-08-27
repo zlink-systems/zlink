@@ -359,6 +359,18 @@ def main(argv=None):
     stop_early = False
     case_ordinal = 1
 
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", REPO_ROOT, "rev-parse", "--short", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        commit = "unknown"
+    _append_line(sections, f"META,commit,{commit}")
+    _append_line(sections, f"META,core_source,{os.environ.get('PERF_CORE_SOURCE', 'unknown')}")
+    _append_line(sections, f"META,core_version,{os.environ.get('PERF_CORE_VERSION', 'unknown')}")
+    _append_line(sections, f"META,core_runtime,{os.environ.get('PERF_CORE_RUNTIME', runtime_info.path)}")
     _append_line(sections, f"META,runtime_libzlink,{runtime_info.path}")
     _append_line(sections, f"META,runtime_libzlink_sha256,{runtime_info.sha256}")
     _append_line(sections)

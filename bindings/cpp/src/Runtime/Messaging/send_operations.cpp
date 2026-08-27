@@ -82,8 +82,13 @@ void ensure_send_completion_handler (detail::socket_callback_state_t &callbacks_
                                      void *socket_)
 {
     detail::ensure_async_continuation_dispatcher ();
+    if (callbacks_.send_completion_handler_registered.load (
+          std::memory_order_acquire))
+        return;
+
     std::lock_guard<std::mutex> lock (callbacks_.send_completion_mutex);
-    if (callbacks_.send_completion_handler_registered)
+    if (callbacks_.send_completion_handler_registered.load (
+          std::memory_order_relaxed))
         return;
 
     const zlink_handler_result_t result = zlink_send_complete_handler (
@@ -92,7 +97,8 @@ void ensure_send_completion_handler (detail::socket_callback_state_t &callbacks_
         const int error = zlink_errno ();
         throw handler_error_t (detail::handler_result_from_errno (error), error);
     }
-    callbacks_.send_completion_handler_registered = true;
+    callbacks_.send_completion_handler_registered.store (
+      true, std::memory_order_release);
 }
 
 async_result_t<void> submit_send_async (detail::operation_state_t &state_)

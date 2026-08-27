@@ -34,9 +34,7 @@ internal sealed class SendCompletionRegistry
 
     private readonly IntPtr _handle;
     private readonly SocketType _socketType;
-    private readonly object _sync = new();
-    private readonly Dictionary<ulong, PendingSend> _pending = new();
-    private readonly Dictionary<ulong, EarlyCompletion> _early = new();
+    private readonly object _handlerInstallSync = new();
 
     // Rooted for the socket lifetime; see the remarks above.
     private readonly NativeMethods.ZlinkSendCompleteHandlerDelegate
@@ -97,8 +95,12 @@ internal sealed class SendCompletionRegistry
 
         int rc;
         ulong opId;
+        PendingSend? pending = null;
+        GCHandle operationRoot = default;
         try
         {
+            pending = new PendingSend(cancellationToken);
+            operationRoot = GCHandle.Alloc(pending, GCHandleType.Normal);
             fixed (ZlinkMsg* nativeParts = native)
             {
                 var options = new ZlinkSendAsyncOptions
@@ -107,7 +109,7 @@ internal sealed class SendCompletionRegistry
                     // The per-operation deadline is a Core-side option. The
                     // binding owns no deadline timer of its own.
                     TimeoutMs = 0,
-                    Userdata = IntPtr.Zero,
+                    Userdata = GCHandle.ToIntPtr(operationRoot),
                     Target = hasTarget ? &target : null
                 };
                 rc = NativeMethods.zlink_send_async(_handle, nativeParts,
@@ -116,6 +118,8 @@ internal sealed class SendCompletionRegistry
         }
         catch
         {
+            if (operationRoot.IsAllocated)
+                operationRoot.Free();
             NativeMessageParts.RestoreManaged(source, native, 0, built);
             throw;
         }
@@ -124,6 +128,7 @@ internal sealed class SendCompletionRegistry
         {
             // No completion runs unless the submit returned OK, so the record
             // and its GC root are still owned here.
+            operationRoot.Free();
             NativeMessageParts.RestoreManaged(source, native, 0, built);
             throw ZlinkException.CreateSubmitException((SubmitResult)rc);
         }
@@ -131,13 +136,18 @@ internal sealed class SendCompletionRegistry
         // Ownership of every part has moved to Core. opId == 0 is the
         // immediate-admission disposition and deliberately has no callback.
         if (opId == 0)
+        {
+            operationRoot.Free();
             return Task.CompletedTask;
+        }
 
-        return RegisterPending(opId, cancellationToken);
+        pending!.AttachCancellation(this, opId);
+        return pending.Task;
     }
 
-    // Single-part hot path: use one stack native handle and create managed
-    // pending state only when Core returns a non-zero operation id.
+    // Single-part hot path: use one stack native handle. The managed pending
+    // state is passed to Core as userdata so an inline completion can resolve
+    // it even before zlink_send_async returns.
     internal unsafe Task SendSingleAsync(RoutingId? routerRoutingId,
         Message part, CancellationToken cancellationToken)
     {
@@ -157,13 +167,15 @@ internal sealed class SendCompletionRegistry
 
         int rc;
         ulong opId;
+        var pending = new PendingSend(cancellationToken);
+        var operationRoot = GCHandle.Alloc(pending, GCHandleType.Normal);
         try
         {
             var options = new ZlinkSendAsyncOptions
             {
                 StructSize = (uint)sizeof(ZlinkSendAsyncOptions),
                 TimeoutMs = 0,
-                Userdata = IntPtr.Zero,
+                Userdata = GCHandle.ToIntPtr(operationRoot),
                 Target = hasTarget ? &target : null
             };
             rc = NativeMethods.zlink_send_async(_handle, &native, 1,
@@ -171,18 +183,24 @@ internal sealed class SendCompletionRegistry
         }
         catch
         {
+            operationRoot.Free();
             part.RestoreFrom(ref native);
             throw;
         }
         if (rc != (int)SubmitResult.Ok)
         {
+            operationRoot.Free();
             part.RestoreFrom(ref native);
             throw ZlinkException.CreateSubmitException((SubmitResult)rc);
         }
 
         if (opId == 0)
+        {
+            operationRoot.Free();
             return Task.CompletedTask;
-        return RegisterPending(opId, cancellationToken);
+        }
+        pending.AttachCancellation(this, opId);
+        return pending.Task;
     }
 
     /// <summary>
@@ -192,8 +210,7 @@ internal sealed class SendCompletionRegistry
     /// </summary>
     internal void BeginClose()
     {
-        lock (_sync)
-            _closed = true;
+        Volatile.Write(ref _closed, true);
     }
 
     /// <summary>
@@ -202,23 +219,20 @@ internal sealed class SendCompletionRegistry
     /// </summary>
     internal void ReleaseAfterNativeClose()
     {
-        lock (_sync)
-        {
-            _closed = true;
-            if (_nativeHandlerRoot.IsAllocated)
-                _nativeHandlerRoot.Free();
-        }
+        Volatile.Write(ref _closed, true);
+        if (_nativeHandlerRoot.IsAllocated)
+            _nativeHandlerRoot.Free();
     }
 
     internal void EnsureHandlerInstalled()
     {
         if (Volatile.Read(ref _handlerInstalled))
             return;
-        lock (_sync)
+        lock (_handlerInstallSync)
         {
             if (_handlerInstalled)
                 return;
-            if (_closed)
+            if (Volatile.Read(ref _closed))
                 throw new ZlinkSubmitException(
                     ZlinkSubmitException.ErrorCode.Terminated);
 
@@ -234,15 +248,12 @@ internal sealed class SendCompletionRegistry
     {
         if (opId == 0)
             return;
-        lock (_sync)
-        {
-            if (_closed)
-                return;
-            // NOT_FOUND / INVALID_STATE are both benign: the operation either
-            // already completed or is past the cancellable point, and either
-            // way it still completes exactly once.
-            _ = NativeMethods.zlink_send_async_cancel(_handle, opId);
-        }
+        if (Volatile.Read(ref _closed))
+            return;
+        // NOT_FOUND / INVALID_STATE are both benign: the operation either
+        // already completed or is past the cancellable point, and either
+        // way it still completes exactly once.
+        _ = NativeMethods.zlink_send_async_cancel(_handle, opId);
     }
 
     private unsafe ZlinkRoutedSubmitTarget SelectTarget(
@@ -276,53 +287,21 @@ internal sealed class SendCompletionRegistry
         if (opId == 0)
             return;
 
-        PendingSend? pending = null;
+        var operationRoot = GCHandle.FromIntPtr(completion->Userdata);
         try
         {
-            lock (_sync)
-            {
-                if (_pending.Remove(opId, out pending))
-                {
-                    // Complete outside the registry lock.
-                }
-                else
-                {
-                    _early[opId] = new EarlyCompletion(result,
-                        terminalErrno);
-                }
-            }
-            pending?.Complete(result, terminalErrno);
+            if (operationRoot.Target is PendingSend pending)
+                pending.Complete(result, terminalErrno);
         }
         catch (Exception exception)
         {
             CallbackExceptionHub.Report(exception);
         }
-    }
-
-    private Task RegisterPending(ulong opId,
-        CancellationToken cancellationToken)
-    {
-        var pending = new PendingSend(cancellationToken) { OpId = opId };
-        EarlyCompletion early = default;
-        bool completedEarly;
-        lock (_sync)
+        finally
         {
-            completedEarly = _early.Remove(opId, out early);
-            if (!completedEarly)
-                _pending.Add(opId, pending);
+            operationRoot.Free();
         }
-
-        if (completedEarly)
-            pending.Complete(early.Result, early.TerminalErrno);
-        else if (cancellationToken.CanBeCanceled && !pending.IsCompleted)
-            pending.AttachCancellation(this);
-
-        var task = pending.Task;
-        return task.IsCompletedSuccessfully ? Task.CompletedTask : task;
     }
-
-    private readonly record struct EarlyCompletion(
-        ZlinkSendCompleteResult Result, int TerminalErrno);
 
     private static Exception MapTerminal(int terminalErrno)
     {
@@ -336,8 +315,8 @@ internal sealed class SendCompletionRegistry
     }
 
     /// <summary>
-    ///     One in-flight asynchronous send. The socket registry owns the state
-    ///     by operation id until its exactly-once completion arrives.
+    ///     One in-flight asynchronous send. Core returns this state unchanged in
+    ///     the completion event's userdata field.
     /// </summary>
     private sealed class PendingSend
     {
@@ -347,7 +326,7 @@ internal sealed class SendCompletionRegistry
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         private CancellationTokenRegistration _registration;
-        private int _completed;
+        private int _completionStarted;
 
         internal PendingSend(CancellationToken cancellationToken)
         {
@@ -355,12 +334,12 @@ internal sealed class SendCompletionRegistry
         }
 
         internal Task Task => _completion.Task;
-        internal ulong OpId;
-        internal bool IsCompleted => Volatile.Read(ref _completed) != 0;
+        internal bool IsCompleted => Volatile.Read(ref _completionStarted) != 0;
 
-        internal void AttachCancellation(SendCompletionRegistry owner)
+        internal void AttachCancellation(SendCompletionRegistry owner, ulong opId)
         {
-            var opId = OpId;
+            if (!_cancellationToken.CanBeCanceled || IsCompleted)
+                return;
             _registration = _cancellationToken.Register(static state =>
             {
                 var pair = ((SendCompletionRegistry Owner, ulong OpId))state!;
@@ -375,8 +354,10 @@ internal sealed class SendCompletionRegistry
         internal void Complete(ZlinkSendCompleteResult result,
             int terminalErrno)
         {
-            if (Interlocked.CompareExchange(ref _completed, 1, 0) != 0)
-                return;
+            // Core invokes exactly one callback for every nonzero operation id.
+            // This marker only coordinates callback completion with cancellation
+            // registration that may still be returning from SendAsync.
+            Volatile.Write(ref _completionStarted, 1);
 
             // Unregister, never Dispose: Core can dispatch this completion
             // inline on the thread running the cancellation callback, and a

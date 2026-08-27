@@ -12,23 +12,25 @@ internal sealed partial class SocketKernel : IDisposable
             SocketTypePolicy.SocketCapability.StreamAttach);
         if (handler == null)
             throw new ArgumentNullException(nameof(handler));
-        lock (_streamModeGate)
+        lock (_streamRegistrationSync)
         {
-            if (_streamAttached || Volatile.Read(ref _streamReceiveMode) != 0)
-                throw new ZlinkHandlerException(HandlerResult.Busy,
-                    (int)ErrorCode.EBusy);
-
             var context = SynchronizationContext.Current;
+            var previousFramed = _callbacks.StreamFramedPacketHandler;
+            var previousUInt32 = _callbacks.StreamUInt32FramedPacketHandler;
+            var previousContext = _callbacks.StreamPacketContext;
+            var previousNative = _callbacks.StreamPacketNative;
             _callbacks.StreamFramedPacketHandler = handler;
+            _callbacks.StreamUInt32FramedPacketHandler = null;
             _callbacks.StreamPacketContext = context;
             _callbacks.StreamPacketNative = OnStreamPacket;
             var rc = NativeMethods.zlink_stream_packet_handler(Handle,
                 _callbacks.StreamPacketNative, IntPtr.Zero);
             if (rc != 0)
             {
-                _callbacks.StreamFramedPacketHandler = null;
-                _callbacks.StreamPacketContext = null;
-                _callbacks.StreamPacketNative = null;
+                _callbacks.StreamFramedPacketHandler = previousFramed;
+                _callbacks.StreamUInt32FramedPacketHandler = previousUInt32;
+                _callbacks.StreamPacketContext = previousContext;
+                _callbacks.StreamPacketNative = previousNative;
                 throw ZlinkException.CreateHandlerException(
                     NativeMethods.zlink_errno());
             }
@@ -51,13 +53,14 @@ internal sealed partial class SocketKernel : IDisposable
             SocketTypePolicy.SocketCapability.StreamAttach);
         if (handler == null)
             throw new ArgumentNullException(nameof(handler));
-        lock (_streamModeGate)
+        lock (_streamRegistrationSync)
         {
-            if (_streamAttached || Volatile.Read(ref _streamReceiveMode) != 0)
-                throw new ZlinkHandlerException(HandlerResult.Busy,
-                    (int)ErrorCode.EBusy);
-
             var context = SynchronizationContext.Current;
+            var previousFramed = _callbacks.StreamFramedPacketHandler;
+            var previousUInt32 = _callbacks.StreamUInt32FramedPacketHandler;
+            var previousContext = _callbacks.StreamPacketContext;
+            var previousNative = _callbacks.StreamPacketNative;
+            _callbacks.StreamFramedPacketHandler = null;
             _callbacks.StreamUInt32FramedPacketHandler = handler;
             _callbacks.StreamPacketContext = context;
             _callbacks.StreamPacketNative = OnStreamPacketUInt32;
@@ -65,9 +68,10 @@ internal sealed partial class SocketKernel : IDisposable
                 _callbacks.StreamPacketNative, IntPtr.Zero);
             if (rc != 0)
             {
-                _callbacks.StreamUInt32FramedPacketHandler = null;
-                _callbacks.StreamPacketContext = null;
-                _callbacks.StreamPacketNative = null;
+                _callbacks.StreamFramedPacketHandler = previousFramed;
+                _callbacks.StreamUInt32FramedPacketHandler = previousUInt32;
+                _callbacks.StreamPacketContext = previousContext;
+                _callbacks.StreamPacketNative = previousNative;
                 throw ZlinkException.CreateHandlerException(
                     NativeMethods.zlink_errno());
             }
@@ -84,16 +88,6 @@ internal sealed partial class SocketKernel : IDisposable
     {
         EnsureSupports(nameof(ReceiveStreamPart),
             SocketTypePolicy.SocketCapability.RoutedReceive);
-        if (Volatile.Read(ref _streamReceiveMode) == 0)
-        {
-            lock (_streamModeGate)
-            {
-                if (_streamAttached)
-                    throw new ZlinkHandlerException(HandlerResult.Busy,
-                        (int)ErrorCode.EBusy);
-                Volatile.Write(ref _streamReceiveMode, 1);
-            }
-        }
         var received = new Message();
         try
         {

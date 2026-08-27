@@ -43,6 +43,7 @@ EXE_SUFFIX = ".exe" if IS_WINDOWS else ""
 
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
 PERF_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "..", ".."))
 
 DEFAULT_PATTERNS = [
     "PAIR",
@@ -142,6 +143,29 @@ def env_get(name: str) -> str:
 
 def env_flag_enabled(name: str) -> bool:
     return env_get(name) == "1"
+
+
+def build_meta_items(runs: int) -> List[Tuple[str, str]]:
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", REPO_ROOT, "rev-parse", "--short", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        commit = "unknown"
+    return [
+        ("os", f"{platform.system()} {platform.release()}".strip()),
+        ("cpu", platform.processor().strip() or "unknown"),
+        ("cores", str(os.cpu_count() or 0)),
+        ("build", env_get("PERF_CONFIGURATION") or "Release"),
+        ("commit", commit),
+        ("core_source", env_get("PERF_CORE_SOURCE") or "unknown"),
+        ("core_version", env_get("PERF_CORE_VERSION") or "unknown"),
+        ("core_runtime", env_get("PERF_CORE_RUNTIME") or "unknown"),
+        ("timestamp", datetime.datetime.now().astimezone().isoformat(timespec="seconds")),
+        ("runs", str(runs)),
+    ]
 
 
 def parse_env_list(name: str, cast_fn):
@@ -906,6 +930,8 @@ def main() -> int:
         pattern_transports,
         pattern_sizes,
     )
+    for key, value in build_meta_items(args.runs):
+        print(f"META,{key},{value}")
     print_effective_options("start", effective_options)
 
     all_failures: List[Tuple[str, str, int, str]] = []

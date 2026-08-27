@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-using System.Collections.Concurrent;
 using Systems.Zlink.Runtime.Native;
 
 namespace Systems.Zlink;
 
 internal sealed class Timer : NativeOwner, IZlinkTimer
 {
-    private static readonly ConcurrentDictionary<IntPtr, WeakReference<Timer>>
-        TimersByHandle = new();
-
     private readonly bool _ownsHandle;
     private Action<IZlinkTimer, ulong>? _handler;
     private SynchronizationContext? _handlerContext;
@@ -20,14 +16,11 @@ internal sealed class Timer : NativeOwner, IZlinkTimer
     public Timer() : base(CreateHandle())
     {
         _ownsHandle = true;
-        RegisterHandle();
     }
 
     private Timer(IntPtr handle, bool ownsHandle) : base(handle)
     {
         _ownsHandle = ownsHandle;
-        if (ownsHandle)
-            RegisterHandle();
     }
 
     internal IntPtr Handle
@@ -137,23 +130,7 @@ internal sealed class Timer : NativeOwner, IZlinkTimer
 
         DestroyRecvPoller(throwOnError);
         _ = DestroyHandle(NativeMethods.zlink_timer_destroy, throwOnError,
-            originalHandle =>
-        {
-            UnregisterHandle(originalHandle);
-            ClearHandler();
-        });
-    }
-
-    private void RegisterHandle()
-    {
-        if (_handle != IntPtr.Zero)
-            TimersByHandle[_handle] = new WeakReference<Timer>(this);
-    }
-
-    private static void UnregisterHandle(IntPtr handle)
-    {
-        if (handle != IntPtr.Zero)
-            TimersByHandle.TryRemove(handle, out _);
+            _ => ClearHandler());
     }
 
     private bool PollReadyNoWait()

@@ -4,6 +4,7 @@
 
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
+#include <atomic>
 #include <exception>
 #include <functional>
 #include <mutex>
@@ -21,31 +22,29 @@ class async_resume_slot_t
 {
   public:
     explicit async_resume_slot_t (std::coroutine_handle<> continuation_) :
-        _continuation (continuation_)
+        _continuation (continuation_.address ())
     {
     }
 
+    // Completion and coroutine destruction can race. The handle is a single
+    // claim token: exactly one side exchanges it for null and may act on it.
     void abandon (std::coroutine_handle<> continuation_) noexcept
     {
-        std::lock_guard<std::mutex> lock (_mutex);
-        if (_continuation == continuation_)
-            _continuation = {};
+        void *expected = continuation_.address ();
+        (void) _continuation.compare_exchange_strong (
+          expected, nullptr, std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
     void resume () noexcept
     {
-        std::coroutine_handle<> continuation;
-        {
-            std::lock_guard<std::mutex> lock (_mutex);
-            continuation = std::exchange (_continuation, {});
-        }
-        if (continuation)
-            continuation.resume ();
+        void *const address =
+          _continuation.exchange (nullptr, std::memory_order_acq_rel);
+        if (address)
+            std::coroutine_handle<>::from_address (address).resume ();
     }
 
   private:
-    std::mutex _mutex;
-    std::coroutine_handle<> _continuation{};
+    std::atomic<void *> _continuation;
 };
 
 template <typename T>

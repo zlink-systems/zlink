@@ -9,7 +9,7 @@ import {
   type MessageLike
 } from '../../contracts';
 import { hasObservedManagedReceiveData } from '../../contracts/messaging/message';
-import { routingIdFromOwnedBuffer } from '../core/routing_id';
+import { normalizeRoutingId, routingIdFromOwnedBuffer } from '../core/routing_id';
 import {
   messageFromOwnedBuffer,
   messageFromOwnedRoutedBuffer,
@@ -70,8 +70,6 @@ export interface RoutedReceiveOperations {
 interface RoutedReceiveContext {
   routingId: Buffer | null;
   requestSeq: bigint | null;
-  cachedRoutingBytes: Buffer | null;
-  cachedRoutingId: RoutingId | null;
   operations: RoutedReceiveOperations;
   sendContext: { beginSend(): ReturnType<typeof createReceivedSendOperation> };
   replyContext: { beginReply(): ReturnType<typeof createReceivedReplyOperation> };
@@ -89,8 +87,8 @@ export function routedReceivedPrefersManagedBuffer(target: Received): boolean {
     && hasObservedManagedReceiveData(parts[0]);
 }
 
-export function routedReceivedCachedRoutingBytes(target: Received): Buffer | null {
-  return routedReceiveContexts.get(target)?.cachedRoutingBytes ?? null;
+export function routedReceivedRoutingBytes(target: Received): Buffer | null {
+  return target.routingId === null ? null : normalizeRoutingId(target.routingId);
 }
 
 function envelopeOf(raw: NativeReceivedRaw): NativeReceivedEnvelope | null {
@@ -264,8 +262,6 @@ export function materializeRoutedReceivedInto(
     context = {
       routingId: null,
       requestSeq: null,
-      cachedRoutingBytes: null,
-      cachedRoutingId: null,
       operations,
       sendContext: {
         beginSend() {
@@ -294,19 +290,16 @@ export function materializeRoutedReceivedInto(
   context.routingId = envelope.routingId ?? null;
   context.requestSeq = envelope.requestSeq ?? null;
   context.operations = operations;
-  if (context.routingId === null) {
-    context.cachedRoutingBytes = null;
-    context.cachedRoutingId = null;
-  } else if (context.cachedRoutingBytes === null
-      || (context.cachedRoutingBytes !== context.routingId
-        && !context.cachedRoutingBytes.equals(context.routingId))) {
-    context.cachedRoutingBytes = context.routingId;
-    context.cachedRoutingId = wrapNativeRoutingId(context.routingId);
-  }
+  const routingId = context.routingId === null
+    ? null
+    : target.routingId !== null
+      && normalizeRoutingId(target.routingId).equals(context.routingId)
+      ? target.routingId
+      : wrapNativeRoutingId(context.routingId);
   replaceReceived(
       target,
       materializeReceivedParts(raw),
-      context.cachedRoutingId,
+      routingId,
       context.requestSeq,
       hasReplyableRequestSeq(context.requestSeq) ? context.replyContext : null,
       context.routingId == null ? null : context.sendContext

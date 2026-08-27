@@ -15,7 +15,6 @@ import java.lang.invoke.MethodType;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import systems.zlink.contracts.core.RoutingId;
@@ -77,9 +76,6 @@ final class SocketCore {
       new SocketCallbackSupport(this);
     private Arena receiveCallbackArena;
     private Arena streamPacketCallbackArena;
-    private final ConcurrentHashMap<Integer, RoutingId> routingIdCache =
-      new ConcurrentHashMap<>();
-
     SocketCore(NativeSocketRuntime socket) {
         this.socket = socket;
         SocketType type = socket.socketTypeHint();
@@ -559,22 +555,6 @@ final class SocketCore {
             NativeLayouts.ROUTING_ID_SIZE_OFFSET) & 0xFF;
         if (size == 0)
             return null;
-        if (size == Integer.BYTES) {
-            int key = 0;
-            for (int i = 0; i < Integer.BYTES; i++) {
-                key = (key << 8) | (routingId.get(ValueLayout.JAVA_BYTE,
-                    NativeLayouts.ROUTING_ID_DATA_OFFSET + i) & 0xFF);
-            }
-            final int routingKey = key;
-            return routingIdCache.computeIfAbsent(routingKey, unused -> {
-                byte[] cached = new byte[Integer.BYTES];
-                for (int i = 0; i < Integer.BYTES; i++) {
-                    cached[i] = routingId.get(ValueLayout.JAVA_BYTE,
-                        NativeLayouts.ROUTING_ID_DATA_OFFSET + i);
-                }
-                return InternalAccess.routingIdFromTrusted(cached);
-            });
-        }
         byte[] value = new byte[size];
         MemorySegment.copy(routingId, NativeLayouts.ROUTING_ID_DATA_OFFSET,
             MemorySegment.ofArray(value), 0, size);

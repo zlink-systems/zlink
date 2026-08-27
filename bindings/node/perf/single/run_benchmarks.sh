@@ -132,5 +132,8 @@ echo "Perf runtime libzlink: $(realpath "$CORE_RUNTIME")"
 echo "Perf Node runtime: ${NODE_VERSION}"
 export ZLINK_PERF_RUNTIME_LIBZLINK
 ZLINK_PERF_RUNTIME_LIBZLINK="$(realpath "$CORE_RUNTIME")"
+export PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE}"
+export PERF_CORE_VERSION="${ZLINK_CORE_VERSION}"
+export PERF_CORE_RUNTIME="${ZLINK_PERF_RUNTIME_LIBZLINK}"
 
 node dist-tools/perf/single/run_benchmarks.js "$@"

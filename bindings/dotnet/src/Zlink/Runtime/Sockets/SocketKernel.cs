@@ -9,14 +9,13 @@ internal sealed partial class SocketKernel : IDisposable
     private const int TopicBufferSize = 4096;
     private const int DontWaitFlag = 1;
     private readonly SocketCallbackRegistry _callbacks = new();
-    private readonly object _streamModeGate = new();
+    private readonly object _streamRegistrationSync = new();
 
     private readonly SocketHandle _handle;
     private readonly SocketOptionAccessor _options;
     private readonly SocketTypePolicy _policy;
     private readonly SendCompletionRegistry? _sendCompletion;
     private bool _streamAttached;
-    private int _streamReceiveMode;
 
     public SocketKernel(Context context, SocketType type)
     {
