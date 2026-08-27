@@ -55,6 +55,24 @@ ZLinkSessionSerialExecutor       ← session 하나마다 조율자 하나
  └── session queue                  하나              ← 맵이 없다
 ```
 
+```csharp
+// contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
+class ZLinkSpotSerialExecutor            // Spot 하나마다 하나
+{
+    ZLinkUserSpotExecutionMode executionMode;   // 등록 때 고정된다
+    ZLinkSerialExecutionQueue  spotQueue;
+    ZLinkStateLane             lane;            // 아래 두 map을 소유한다
+    Map<ZLinkActorId,   ZLinkSerialExecutionQueue> actorQueues;
+    Map<ZLinkTimerName, ZLinkSerialExecutionQueue> timerQueues;
+}
+
+class ZLinkActorSerialExecutor           // Actor 하나마다 하나
+{
+    ZLinkSerialExecutionQueue queue;     // 단수 — 하위 소유 대상이 없어 map이 없다
+    ZLinkStateLane            lane;
+}
+```
+
 - **하위 queue를 갖는 계층은 Spot뿐이다.** Actor queue와 timer queue의 수명이 Spot에
   묶여 있기 때문이다 — 그 Spot이 사라지면 그 Spot의 Actor queue와 timer queue도 함께
   사라진다. Actor와 session에는 수명이 자신에게 묶인 하위 대상이 없으므로 queue를 이름으로
@@ -164,6 +182,44 @@ sequenceDiagram
 정상 경로만 그렸다. 예약이 거절되는 backpressure 분기는 §5가, 한 소유자가 turn을 오래
 점유했을 때 양보하는 분기는 §6.4가 설명한다.
 
+위 두 그림을 코드로 옮기면 다음과 같다. 진입점 하나가 §4의 경로 판정을 전부 안고 있고,
+호출자에게는 queue가 보이지 않는다.
+
+```csharp
+// contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
+ExecuteActor(actorId, work, payloadBytes)
+{
+    // queue map은 state lane이 소유한다(§2). lock을 잡지 않는다.
+    actorQueue = lane.Run(() => GetOrCreateActorQueue(actorId));
+
+    if (executionMode == PerActor)
+    {
+        // Actor queue 하나에서 끝난다. 다른 Actor와 겹쳐 진행된다.
+        actorQueue.EnqueueWithPayloadBytes(work, payloadBytes);
+        return;
+    }
+
+    // SpotWide — Actor queue가 payload 바이트를 예약하고, 자기 turn이 오면
+    // 작업을 Spot queue로 넘긴다. 실행 순서는 Spot queue 하나가 정한다.
+    actorQueue.EnqueueWithPayloadBytes(
+        () => spotQueue.Enqueue(work),   // 같은 payload를 다시 예약하지 않는다(§5)
+        payloadBytes);
+}
+
+ExecuteTimer(timerName, work)
+{
+    if (executionMode == SpotWide)
+    {
+        // timer queue를 만들지 않는다. Spot queue가 이미 전체를 한 줄로 세운다.
+        spotQueue.Enqueue(work);
+        return;
+    }
+
+    timerQueue = lane.Run(() => GetOrCreateTimerQueue(timerName));
+    timerQueue.Enqueue(work);            // payload가 없어 fixedWorkByteCost로 회계한다
+}
+```
+
 ## 5. payload 바이트를 어느 queue가 세는가
 
 `SpotWide`에서 Actor 작업이 queue 두 개를 지날 때, **아래 Actor queue가 그 작업의 실제
@@ -239,18 +295,111 @@ close()                          // 새 제출을 받지 않고 이미 받은 �
 queue를 계속 차지할 수 있고, 그러면 같은 queue에 걸린 다른 작업이 언제 시작되는지 상한을
 말할 수 없다.
 
+### 6.5 turn을 구동하는 loop
+
+queue에 줄 선 작업을 실제로 실행하는 것은 **한 번에 하나만 들어가는 배출 loop**다. 이 loop가
+작업 하나를 꺼내 turn 위에서 돌리고, 끝나면 다음 작업으로 넘어간다. §6.4의 양보는 이 loop가
+slice를 끊는 것으로 구현된다.
+
+```csharp
+// contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
+Drain()
+{
+    // 이 gate가 "한 번에 하나"를 보장한다. 이미 다른 호출이 돌고 있으면 그냥 돌아간다.
+    if (!TryEnterDrain()) return;
+
+    sliceStartedAt = Now();
+    while (TryTakeNext(out work))      // lifecycle을 먼저 고르되 lifecycleBurstLimit을 지킨다(§6.1)
+    {
+        turn   = new Turn();
+        result = RunOnTurn(work, turn);          // §6.6
+
+        if (result == Completed) Release(work);
+        // Suspended면 작업이 turn을 반납한 것이다. 완료는 나중에 처리하고
+        // 이 loop는 바로 다음 작업으로 넘어간다.
+
+        if (Now() - sliceStartedAt >= policy.ownerTimeBudget)
+            break;                     // §6.4 — 여기서 소유자가 양보한다
+    }
+    ExitDrain();
+
+    // 끊고 나온 남은 작업은 새 slice에서 이어 돈다.
+    if (HasQueuedWork()) ScheduleDrain();
+}
+```
+
+### 6.6 작업 하나를 구동하는 방법과 turn 반납
+
+작업 하나는 첫 대기 지점에서 멈췄다가 이어서 도는 실행 단위다 — C#에서는 `async` 메서드를
+컴파일러가 그런 상태 기계로 만든다. **배출 loop는 그 상태 기계를 시작만 하고, 끝날 때까지
+기다릴지 중간에 turn을 돌려받을지를 판정한다.**
+
+turn을 반납할 수 있어야 하는 이유는 외부 호출 때문이다. 작업이 원격 응답을 기다리는 동안
+turn을 쥐고 있으면 그 queue 전체가 그 시간만큼 멈춘다. 무엇을 기다릴 때 반납하고 무엇을
+기다릴 때 유지하는지는
+[Handler turn과 execution gate 「3. `Yield` 시 gate와 claim」](02-handler-turn-and-execution-gate.ko.md#3-yield-시-gate와-claim)과
+[Async와 Yield](../00-foundation/02-glossary.ko.md#async-yield)가 소유한다. 여기서는 그 반납을
+어떻게 구동하는지만 보인다.
+
+```csharp
+// contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
+// 배출 loop 쪽 — 작업을 시작하고 두 결말 중 하나를 기다린다.
+RunOnTurn(work, turn)
+{
+    Turn.Current = turn;                   // 실행 중 "지금 이 turn"을 심는다
+    operation = work();                    // 상태 기계 시작 — 첫 대기 지점까지 동기 실행
+
+    if (operation.IsCompleted) return Completed;   // 한 번도 대기하지 않고 끝났다
+
+    // 먼저 오는 쪽이 결말을 정한다.
+    //   operation    — 작업이 끝났다
+    //   turn.Yielded — 작업이 외부 호출을 기다리며 turn을 반납했다
+    if (WaitAny(operation, turn.Yielded) == turn.Yielded)
+        return Suspended;                  // loop는 다음 작업으로 넘어간다
+
+    Await(operation);
+    return Completed;
+}
+```
+
+반납하는 쪽은 작업 안에서 외부 호출을 감싸는 자리다.
+
+```csharp
+// contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
+// 작업 쪽 — 외부 호출을 감싸는 자리.
+YieldFrameworkCall(submit)
+{
+    operation = submit();
+    if (operation.IsCompleted)
+        return operation.Result;      // 기다리지 않았으므로 반납할 이유가 없다
+
+    turn.SignalYielded();             // → 배출 loop가 다음 작업으로 넘어간다
+    result = Await(operation);
+
+    // 결과가 왔다고 바로 이어서 실행하지 않는다. 다시 줄을 서서 turn을 받아야
+    // 그 queue가 여전히 "한 번에 하나"로 남는다.
+    AwaitResumePermit();
+    return result;
+}
+```
+
+**반납한 turn은 다시 받아야 이어서 실행한다.** 결과가 도착했다고 그 자리에서 이어 실행하면
+그 순간 그 queue에서 두 작업이 함께 돌아 §6의 직렬 보장이 깨진다.
+
+**내부 확인 조건** — 반납 지점의 재개 경로가 queue 제출을 거치지 않고 바로 이어지는 자리가
+없다.
+
 ## 7. 상태 조회의 turn 경계
 
 한 메시지를 처리하는 동안 필요한 상태 값은 **state lane의 한 turn에서 함께 읽어 immutable
 snapshot으로 들고 다닌다.** 조회마다 별도 turn을 만들지 않는다.
 
-다음은 공통 동작을 설명하는 예시이며 다른 언어에 같은 signature를 요구하지 않는다.
-
-```java
-ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
-    actorRegistry.actor(actorId),       // 셋을 한 turn에서 함께 읽는다.
-    actorRegistry.context(actor),       // 따로 읽으면 그 사이에 Actor가 사라질 수 있다.
-    actorRegistry.actorType(actorId)));
+```csharp
+// contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
+snapshot = lane.Run(() => new ActorStateSnapshot(
+    registry.Actor(actorId),        // 셋을 한 turn에서 함께 읽는다.
+    registry.Context(actor),        // 따로 읽으면 그 사이에 Actor가 사라질 수 있다.
+    registry.ActorType(actorId)));
 ```
 
 조회를 각각 별개 turn으로 쪼개면 두 가지가 함께 나빠진다. 값들이 서로 다른 시점의 것이

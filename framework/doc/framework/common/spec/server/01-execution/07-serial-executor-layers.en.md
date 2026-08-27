@@ -57,6 +57,24 @@ ZLinkSessionSerialExecutor       ← one coordinator per session
  └── session queue                  one                ← no map
 ```
 
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+class ZLinkSpotSerialExecutor            // one per Spot
+{
+    ZLinkUserSpotExecutionMode executionMode;   // fixed at registration
+    ZLinkSerialExecutionQueue  spotQueue;
+    ZLinkStateLane             lane;            // owns the two maps below
+    Map<ZLinkActorId,   ZLinkSerialExecutionQueue> actorQueues;
+    Map<ZLinkTimerName, ZLinkSerialExecutionQueue> timerQueues;
+}
+
+class ZLinkActorSerialExecutor           // one per Actor
+{
+    ZLinkSerialExecutionQueue queue;     // singular — no subordinates, so no map
+    ZLinkStateLane            lane;
+}
+```
+
 - **Spot is the only layer with subordinate queues.** The lifetime of an Actor queue and a timer
   queue is bound to the Spot — when that Spot goes away, that Spot's Actor and timer queues go
   with it. Actor and session have no subordinate whose lifetime is bound to them, so they carry
@@ -167,6 +185,44 @@ Only the normal path is drawn. The backpressure branch where a reservation is re
 covered by §5, and the branch where an owner that has held a turn too long yields is covered by
 §6.4.
 
+The two diagrams above, as code. One entry point carries the whole §4 path decision, and the
+caller never sees a queue.
+
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+ExecuteActor(actorId, work, payloadBytes)
+{
+    // the queue map is owned by a state lane (§2). no lock is taken.
+    actorQueue = lane.Run(() => GetOrCreateActorQueue(actorId));
+
+    if (executionMode == PerActor)
+    {
+        // ends at the one Actor queue. progresses overlapped with other Actors.
+        actorQueue.EnqueueWithPayloadBytes(work, payloadBytes);
+        return;
+    }
+
+    // SpotWide — the Actor queue reserves the payload bytes, and on its own turn
+    // hands the work to the Spot queue. execution order is decided by the Spot queue.
+    actorQueue.EnqueueWithPayloadBytes(
+        () => spotQueue.Enqueue(work),   // the same payload is not reserved again (§5)
+        payloadBytes);
+}
+
+ExecuteTimer(timerName, work)
+{
+    if (executionMode == SpotWide)
+    {
+        // no timer queue is created. the Spot queue already puts everything in one line.
+        spotQueue.Enqueue(work);
+        return;
+    }
+
+    timerQueue = lane.Run(() => GetOrCreateTimerQueue(timerName));
+    timerQueue.Enqueue(work);            // no payload, so charged at fixedWorkByteCost
+}
+```
+
 ## 5. Which Queue Counts The Payload Bytes
 
 When Actor work crosses two queues under `SpotWide`, **the lower Actor queue reserves that
@@ -247,19 +303,115 @@ keep running; the queue moves to the next owner. Without this, one owner with a 
 up can hold the queue indefinitely, and then no bound can be stated for when other work on the
 same queue starts.
 
+### 6.5 The Loop That Drives Turns
+
+What actually runs the queued work is a **drain loop that only one caller is inside at a time.**
+The loop takes one work item, runs it on a turn, and moves to the next when it finishes. §6.4's
+yielding is implemented as this loop cutting its slice.
+
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+Drain()
+{
+    // this gate is what guarantees "one at a time". if another call is already
+    // inside, just return.
+    if (!TryEnterDrain()) return;
+
+    sliceStartedAt = Now();
+    while (TryTakeNext(out work))      // prefers lifecycle, but honors lifecycleBurstLimit (§6.1)
+    {
+        turn   = new Turn();
+        result = RunOnTurn(work, turn);          // §6.6
+
+        if (result == Completed) Release(work);
+        // Suspended means the work handed the turn back. its completion is handled
+        // later, and this loop moves straight on to the next work item.
+
+        if (Now() - sliceStartedAt >= policy.ownerTimeBudget)
+            break;                     // §6.4 — this is where the owner yields
+    }
+    ExitDrain();
+
+    // whatever was cut off resumes on a new slice.
+    if (HasQueuedWork()) ScheduleDrain();
+}
+```
+
+### 6.6 How One Work Item Is Driven, And Handing The Turn Back
+
+One work item is an execution unit that stops at its first waiting point and resumes afterwards —
+in C# the compiler turns an `async` method into exactly such a state machine. **The drain loop
+only starts that state machine, then decides whether to wait for it to finish or to take the turn
+back partway.**
+
+Being able to hand the turn back matters because of external calls. If work holds the turn while
+waiting for a remote reply, the whole queue stops for that long. What to hand the turn back for
+and what to hold it through is owned by
+[Handler Turn And Execution Gate "3. Gate And Claim On `Yield`"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield)
+and [Async And Yield](../00-foundation/02-glossary.en.md#async-yield). What is shown here is only
+how that hand-back is driven.
+
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+// drain loop side — start the work and wait for one of two endings.
+RunOnTurn(work, turn)
+{
+    Turn.Current = turn;                   // plant "the turn we are on" for the duration
+    operation = work();                    // start the state machine — runs synchronously
+                                           //   up to the first waiting point
+
+    if (operation.IsCompleted) return Completed;   // finished without ever waiting
+
+    // whichever arrives first decides the ending.
+    //   operation    — the work finished
+    //   turn.Yielded — the work handed the turn back to wait on an external call
+    if (WaitAny(operation, turn.Yielded) == turn.Yielded)
+        return Suspended;                  // the loop moves on to the next work item
+
+    Await(operation);
+    return Completed;
+}
+```
+
+The handing-back side is where work wraps an external call.
+
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+// work side — wrapping an external call.
+YieldFrameworkCall(submit)
+{
+    operation = submit();
+    if (operation.IsCompleted)
+        return operation.Result;      // never waited, so nothing to hand back
+
+    turn.SignalYielded();             // → the drain loop moves on to the next work item
+    result = Await(operation);
+
+    // arriving results do not resume execution on the spot. the work queues up again
+    // for a turn, which is what keeps that queue "one at a time".
+    AwaitResumePermit();
+    return result;
+}
+```
+
+**A handed-back turn must be taken again before execution resumes.** Resuming right where the
+result arrived would put two work items on that queue at the same moment, breaking §6's serial
+guarantee.
+
+**Internal check condition** — no resume path at a hand-back point continues directly without
+going through a queue submission.
+
 ## 7. The Turn Boundary For State Reads
 
 State values needed while handling one message are **read together in one state lane turn and
 carried as an immutable snapshot.** Do not create a separate turn per read.
 
-The following illustrates the common behavior; it does not require the same signature in other
-languages.
-
-```java
-ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
-    actorRegistry.actor(actorId),       // all three read in one turn.
-    actorRegistry.context(actor),       // read separately, the Actor can vanish in between.
-    actorRegistry.actorType(actorId)));
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+snapshot = lane.Run(() => new ActorStateSnapshot(
+    registry.Actor(actorId),        // all three read in one turn.
+    registry.Context(actor),        // read separately, the Actor can vanish in between.
+    registry.ActorType(actorId)));
 ```
 
 Splitting reads into separate turns degrades two things at once. The values come from different
