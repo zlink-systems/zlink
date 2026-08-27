@@ -292,6 +292,12 @@ LWM, or Core budget reservation. This function therefore does not return
 Connection, lifecycle, argument, state, and allocation failures
 terminate immediately with the corresponding `zlink_submit_result_t` at the call.
 
+When a reply has no target route, the result is `ZLINK_SUBMIT_NOT_CONNECTED` with `errno ==
+ENOTCONN`. The same rule applies both when no completion pipe is found for the target and when an
+already selected target disappears while the reply is being committed. This failure is not
+backpressure, so `ZLINK_POLLOUT` does not make a retry of this one-shot reply viable. In both cases
+the parts already handed in are consumed and are not returned to the caller.
+
 ## 10. Results and readiness
 
 Submit APIs return `zlink_submit_result_t`, receive APIs return `zlink_recv_result_t`, and option
@@ -401,7 +407,7 @@ and reply functions; ROUTER option set and get; return values and errno; the
 
 **Replies and the completion lane**
 - `zlink_router_reply_part()` uses the `peer_rid_` and `request_seq_` returned by the receive record without modification, and a successful `ZLINK_PART_FINAL` completes the reply.
-- Raw replies and error replies do not return `ZLINK_SUBMIT_BACKPRESSURED` because of completion-lane capacity; connection, lifecycle, argument, state, and allocation failures terminate immediately with the corresponding `zlink_submit_result_t` at the call.
+- Raw replies and error replies do not return `ZLINK_SUBMIT_BACKPRESSURED` because of completion-lane capacity; connection, lifecycle, argument, state, and allocation failures terminate immediately with the corresponding `zlink_submit_result_t` at the call. When there is no target route (no completion pipe found, or the target disappears mid-commit), the call returns `ZLINK_SUBMIT_NOT_CONNECTED` with `errno == ENOTCONN`; this is not backpressure, so `ZLINK_POLLOUT` does not make a retry viable.
 
 **Readiness**
 - `ZLINK_POLLIN` is set when a complete raw record can be received; `ZLINK_POLLOUT` indicates only that a retry after backpressure is worthwhile and does not guarantee that the next submit succeeds.

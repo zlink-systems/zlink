@@ -51,14 +51,12 @@ final class SendCompletionRegistry implements AutoCloseable {
     private static final AtomicLong NEXT_TOKEN = new AtomicLong(1L);
 
     private final NativeSocketRuntime socket;
-    private final Object lifecycle = new Object();
     private final ConcurrentMap<Long, Pending> pending =
         new ConcurrentHashMap<>();
     private final ExecutorService completionExecutor =
         RuntimeResources.daemonSingleThreadExecutor("zlink-send-completion");
     private final Arena callbackArena = Arena.ofShared();
     private final MemorySegment callback;
-    private boolean closed;
 
     SendCompletionRegistry(NativeSocketRuntime socket) {
         this.socket = Objects.requireNonNull(socket, "socket");
@@ -105,49 +103,53 @@ final class SendCompletionRegistry implements AutoCloseable {
         PendingFuture future = new PendingFuture(operation);
         operation.future = future;
 
-        synchronized (lifecycle) {
-            ensureOpen();
-            pending.put(token, operation);
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment nativeParts = materializer.transferToNativeArray(arena);
-                MemorySegment options = arena.allocate(
-                    NativeLayouts.SEND_ASYNC_OPTIONS_LAYOUT);
-                options.set(ValueLayout.JAVA_INT,
-                    NativeLayouts.SEND_ASYNC_OPTIONS_STRUCT_SIZE_OFFSET,
-                    (int) NativeLayouts.SEND_ASYNC_OPTIONS_LAYOUT.byteSize());
-                options.set(ValueLayout.JAVA_INT,
-                    NativeLayouts.SEND_ASYNC_OPTIONS_TIMEOUT_MS_OFFSET,
-                    DurationConversions.timeoutMillisOrZero(timeout));
-                options.set(ValueLayout.ADDRESS,
-                    NativeLayouts.SEND_ASYNC_OPTIONS_USERDATA_OFFSET,
-                    MemorySegment.ofAddress(token));
-                options.set(ValueLayout.ADDRESS,
-                    NativeLayouts.SEND_ASYNC_OPTIONS_TARGET_OFFSET,
-                    target == null ? MemorySegment.NULL : target);
-                MemorySegment opIdOut = arena.allocate(ValueLayout.JAVA_LONG);
-                opIdOut.set(ValueLayout.JAVA_LONG, 0L, 0L);
+        pending.put(token, operation);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment nativeParts = materializer.transferToNativeArray(arena);
+            MemorySegment options = arena.allocate(
+                NativeLayouts.SEND_ASYNC_OPTIONS_LAYOUT);
+            options.set(ValueLayout.JAVA_INT,
+                NativeLayouts.SEND_ASYNC_OPTIONS_STRUCT_SIZE_OFFSET,
+                (int) NativeLayouts.SEND_ASYNC_OPTIONS_LAYOUT.byteSize());
+            options.set(ValueLayout.JAVA_INT,
+                NativeLayouts.SEND_ASYNC_OPTIONS_TIMEOUT_MS_OFFSET,
+                DurationConversions.timeoutMillisOrZero(timeout));
+            options.set(ValueLayout.ADDRESS,
+                NativeLayouts.SEND_ASYNC_OPTIONS_USERDATA_OFFSET,
+                MemorySegment.ofAddress(token));
+            options.set(ValueLayout.ADDRESS,
+                NativeLayouts.SEND_ASYNC_OPTIONS_TARGET_OFFSET,
+                target == null ? MemorySegment.NULL : target);
+            MemorySegment opIdOut = arena.allocate(ValueLayout.JAVA_LONG);
+            opIdOut.set(ValueLayout.JAVA_LONG, 0L, 0L);
 
-                int result;
-                try {
-                    result = Native.sendAsync(socket.handle(), nativeParts,
-                        sourceParts.size(), options, opIdOut);
-                } catch (Throwable failure) {
-                    pending.remove(token, operation);
-                    materializer.restoreFromNativeArray(nativeParts,
-                        sourceParts.size());
-                    throw failure;
-                }
-                if (result != SubmitResult.OK.value()) {
-                    pending.remove(token, operation);
-                    materializer.restoreFromNativeArray(nativeParts,
-                        sourceParts.size());
-                    throw submitFailure(result, Native.errno());
-                }
+            int result;
+            try {
+                result = Native.sendAsync(socket.handle(), nativeParts,
+                    sourceParts.size(), options, opIdOut);
+            } catch (Throwable failure) {
+                pending.remove(token, operation);
+                materializer.restoreFromNativeArray(nativeParts,
+                    sourceParts.size());
+                throw failure;
+            }
+            if (result != SubmitResult.OK.value()) {
+                pending.remove(token, operation);
+                materializer.restoreFromNativeArray(nativeParts,
+                    sourceParts.size());
+                throw submitFailure(result, Native.errno());
+            }
 
-                operation.opId = opIdOut.get(ValueLayout.JAVA_LONG, 0L);
-                if (future.isCancelled() && pending.get(token) == operation) {
-                    cancel(operation);
+            operation.opId = opIdOut.get(ValueLayout.JAVA_LONG, 0L);
+            if (operation.opId == 0L) {
+                // Core admitted the record synchronously and deliberately
+                // does not emit a completion callback for this operation.
+                if (pending.remove(token, operation)) {
+                    future.complete(null);
                 }
+            } else if (future.isCancelled()
+                       && pending.get(token) == operation) {
+                cancel(operation);
             }
         }
         return future;
@@ -216,15 +218,15 @@ final class SendCompletionRegistry implements AutoCloseable {
 
     @Override
     public void close() {
+        // Native socket close succeeds before this cleanup runs, so Core
+        // rejects any submit that has not entered yet. Such submitters remove
+        // their own pending entry when that rejection is returned.
         List<Pending> abandoned = new ArrayList<>();
-        synchronized (lifecycle) {
-            if (closed) {
-                return;
+        pending.forEach((token, operation) -> {
+            if (pending.remove(token, operation)) {
+                abandoned.add(operation);
             }
-            closed = true;
-            abandoned.addAll(pending.values());
-            pending.clear();
-        }
+        });
         for (Pending operation : abandoned) {
             operation.future.completeExceptionally(
                 new ZlinkSubmitException(SubmitResult.TERMINATED,
@@ -232,13 +234,6 @@ final class SendCompletionRegistry implements AutoCloseable {
         }
         RuntimeResources.closeArena(callbackArena);
         RuntimeResources.shutdownExecutor(completionExecutor);
-    }
-
-    private void ensureOpen() {
-        if (closed) {
-            throw new ZlinkSubmitException(SubmitResult.TERMINATED,
-                NativeErrno.ECANCELED);
-        }
     }
 
     private static long nextToken() {

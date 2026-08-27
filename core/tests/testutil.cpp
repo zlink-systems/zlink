@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 #include "testutil.hpp"
+#include "../src/api/socket/socket_api_internal.hpp"
 #include "../src/runtime/core/recv_internal.hpp"
 #include "testutil_unity.hpp"
 #include "certs/test_certs.hpp"
@@ -63,13 +64,14 @@ static void recv_bounce_msg (void *socket_)
     zlink_msg_t msg;
     zlink_msg_init (&msg);
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::recv_msg_internal (socket_, &msg, 0));
+    socket_handle_t handle = as_socket_handle (socket_);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::recv_msg_internal (handle.socket, &msg, 0));
     TEST_ASSERT_EQUAL_STRING (bounce_content, static_cast<const char *> (zlink_msg_data (&msg)));
     TEST_ASSERT_TRUE (test_msg_has_more (&msg));
     zlink_msg_close (&msg);
 
     zlink_msg_init (&msg);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::recv_msg_internal (socket_, &msg, 0));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::recv_msg_internal (handle.socket, &msg, 0));
     TEST_ASSERT_EQUAL_STRING (bounce_content, static_cast<const char *> (zlink_msg_data (&msg)));
     TEST_ASSERT_FALSE (test_msg_has_more (&msg));
     zlink_msg_close (&msg);
@@ -105,7 +107,9 @@ static void send_bounce_msg_may_fail (void *socket_)
 static void recv_bounce_msg_fail (void *socket_)
 {
     int timeout = 250;
-    TEST_ASSERT_TRUE (zlink::wait_socket_events_internal (socket_, 1, timeout) <= 0);
+    socket_handle_t handle = as_socket_handle (socket_);
+    TEST_ASSERT_TRUE (
+      zlink::wait_socket_events_internal (handle.socket, 1, timeout) <= 0);
 }
 
 void expect_bounce_fail (void *server_, void *client_)
@@ -127,7 +131,8 @@ void expect_bounce_fail (void *server_, void *client_)
 char *s_recv (void *socket_)
 {
     char buffer[256];
-    int size = zlink::recv_buffer_internal (socket_, buffer, 255, 0);
+    socket_handle_t handle = as_socket_handle (socket_);
+    int size = zlink::recv_buffer_internal (handle.socket, buffer, 255, 0);
     if (size == -1)
         return NULL;
     if (size > 255)
@@ -171,7 +176,9 @@ void s_recv_seq (void *socket_, ...)
     const char *data = va_arg (ap, const char *);
 
     while (true) {
-        TEST_ASSERT_SUCCESS_ERRNO (zlink::recv_msg_internal (socket_, &msg, 0));
+        socket_handle_t handle = as_socket_handle (socket_);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink::recv_msg_internal (handle.socket, &msg, 0));
 
         if (!data)
             TEST_ASSERT_EQUAL_INT (0, zlink_msg_size (&msg));

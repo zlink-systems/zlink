@@ -19,8 +19,6 @@ import java.util.Objects;
 
 final class NativeRouterSocket extends NativeSocketBase implements RouterSocket {
     private final RouterSocketOptions options = ContractAccess.routerSocketOptions(this);
-    private final OutboundRecordAttemptGate outboundRecordAttempts =
-        new OutboundRecordAttemptGate();
     private final CoreRequestSupport requestSupport;
     private final Object routedRequests =
       InternalAccess.routerReceiveSupport(this, false);
@@ -32,8 +30,7 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     NativeRouterSocket(Context ctx) {
         super(ctx, SocketType.ROUTER);
         try {
-            requestSupport = new CoreRequestSupport(runtime(), false,
-                outboundRecordAttempts);
+            requestSupport = new CoreRequestSupport(runtime(), false);
         } catch (RuntimeException error) {
             try {
                 runtime().close();
@@ -77,17 +74,17 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     }
 
     private boolean sendInternal(RoutingId rid, Message part, SendFlags flags) {
-        return outboundRecordAttempts.call(() -> runtime().send(rid, part,
-            SendFlag.fromValue(flags.value())));
+        return runtime().send(rid, part,
+            SendFlag.fromValue(flags.value()));
     }
     private boolean sendInternal(RoutingId rid, List<Message> parts, SendFlags flags) {
-        return outboundRecordAttempts.call(() -> runtime().send(rid, parts,
-            SendFlag.fromValue(flags.value())));
+        return runtime().send(rid, parts,
+            SendFlag.fromValue(flags.value()));
     }
     private boolean sendReceivedSingle(byte[] routingIdBytes, Message part,
                                        SendFlags flags) {
-        return outboundRecordAttempts.call(() -> runtime().send(
-            routingIdBytes, part, SendFlag.fromValue(flags.value())));
+        return runtime().send(routingIdBytes, part,
+            SendFlag.fromValue(flags.value()));
     }
     private boolean sendReceivedMultipart(byte[] routingIdBytes,
                                           List<Message> parts,
@@ -151,23 +148,15 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
 
     void submitReply(RoutingId rid, long requestSequence,
                      List<Message> parts) {
-        outboundRecordAttempts.run(() -> InternalAccess.routerReply(this, rid,
-            requestSequence, parts));
+        InternalAccess.routerReply(this, rid, requestSequence, parts);
     }
 
     @Override
     public void close() {
-        boolean closed = false;
-        try {
-            outboundRecordAttempts.run(runtime()::close);
-            closed = true;
-        } finally {
-            requestSupport.close();
-            if (closed) {
-                InternalAccess.routerReceiveBeginClose(routedRequests);
-                InternalAccess.routerReceiveFinishClose(routedRequests);
-            }
-        }
+        runtime().close();
+        requestSupport.close();
+        InternalAccess.routerReceiveBeginClose(routedRequests);
+        InternalAccess.routerReceiveFinishClose(routedRequests);
     }
     @Override public RouterSocketOptions options() { return options; }
 

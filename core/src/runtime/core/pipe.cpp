@@ -770,7 +770,7 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
         return -1;
     }
 
-    const bool multipart_started_empty = track_multipart_
+    bool multipart_started_empty = track_multipart_
       && (_decoder_multipart_started_empty
           || (_out_incomplete_bytes == 0
               && _bytes_written <= _peers_bytes_read));
@@ -785,7 +785,7 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
         ? UINT64_MAX
         : _out_incomplete_bytes + frame_bytes;
     const bool more = (msg_flags_ & msg_t::more) != 0;
-    const bool allow_empty_exception =
+    bool allow_empty_exception =
       !more && multipart_started_empty;
     const bool byte_credit_ready =
       _hwm == 0 || allow_empty_exception
@@ -797,6 +797,12 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
                          <= _hwm - (_bytes_written - _peers_bytes_read)));
     if (!byte_credit_ready) {
         refresh_peer_credit_snapshot_unlocked ();
+        if (track_multipart_ && !multipart_started_empty
+            && _out_incomplete_bytes == 0
+            && _bytes_written <= _peers_bytes_read) {
+            multipart_started_empty = true;
+            allow_empty_exception = !more;
+        }
         const uint64_t in_flight =
           _bytes_written > _peers_bytes_read
             ? _bytes_written - _peers_bytes_read

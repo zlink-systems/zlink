@@ -86,9 +86,11 @@ int zlink::socket_base_t::send (msg_t *msg_, int flags_)
 int zlink::socket_base_t::send_scoped (msg_t *msg_,
                                        int flags_,
                                        socket_public_send_scope_t &send_scope,
-                                       pipe_t **pipe_out_)
+                                       pipe_t **pipe_out_,
+                                       bool report_multipart_abort_)
 {
-    return send_direct_with_retry (NULL, msg_, flags_, send_scope, NULL, 0, false, pipe_out_);
+    return send_direct_with_retry (NULL, msg_, flags_, send_scope, NULL, 0,
+                                   report_multipart_abort_, pipe_out_);
 }
 
 int zlink::socket_base_t::send_routed (const zlink_routing_id_t *target_rid_,
@@ -146,7 +148,8 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
                                               uint64_t expected_connection_id_,
                                               zlink::pipe_t **pipe_out_,
                                               uint64_t expected_transport_pair_id_,
-                                              uint64_t expected_transport_pair_generation_)
+                                              uint64_t expected_transport_pair_generation_,
+                                              bool report_multipart_abort_)
 {
     if (unlikely (!target_rid_)) {
         errno = EFAULT;
@@ -155,7 +158,7 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
 
     return send_direct_with_retry (
       target_rid_, msg_, flags_, send_scope, connection_id_out_,
-      expected_connection_id_, false, pipe_out_, expected_transport_pair_id_,
+      expected_connection_id_, report_multipart_abort_, pipe_out_, expected_transport_pair_id_,
       expected_transport_pair_generation_);
 }
 
@@ -228,6 +231,24 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         errno = EFAULT;
         return -1;
     }
+
+    const auto finish_multipart_abort = [&] () -> int {
+        // xsend has already rolled back the staged prefix. Never retry only
+        // the failed continuation. Preserve its cause (for example EMSGSIZE,
+        // EAGAIN or EHOSTUNREACH) for the public result mapper.
+        dispatch_runtime ().clear_send_recovery_pending ();
+        if (report_multipart_abort_ || (flags_ & ZLINK_DONTWAIT)
+            || options.sndtimeo == 0)
+            return -1;
+
+        // Legacy internal callers that do not request an abort report keep
+        // the historical blocking-drop behavior.
+        int abort_rc = msg_->close ();
+        errno_assert (abort_rc == 0);
+        abort_rc = msg_->init ();
+        errno_assert (abort_rc == 0);
+        return 0;
+    };
     if (unlikely (options.type != ZLINK_CORE_SOCKET_STREAM
                   && msg_->size ()
                        > static_cast<size_t> (
@@ -269,21 +290,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         dispatch_runtime ().clear_send_recovery_pending ();
         return 0;
     }
-    if (unlikely (rc == -2)) {
-        if (report_multipart_abort_) {
-            dispatch_runtime ().clear_send_recovery_pending ();
-            errno = EAGAIN;
-            return -1;
-        }
-        if (!((flags_ & ZLINK_DONTWAIT) || options.sndtimeo == 0)) {
-            rc = msg_->close ();
-            errno_assert (rc == 0);
-            rc = msg_->init ();
-            errno_assert (rc == 0);
-            dispatch_runtime ().clear_send_recovery_pending ();
-            return 0;
-        }
-    }
+    if (unlikely (rc == -2))
+        return finish_multipart_abort ();
     if (errno != EAGAIN && (flags_ & ZLINK_DONTWAIT) == 0
         && options.sndtimeo != 0 && !submit_retry_enabled (options, flags_)
         && is_submit_retry_errno (errno)
@@ -344,6 +352,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                        expected_transport_pair_id_,
                                        expected_transport_pair_generation_, NULL)
                        : xsend_pipe (msg_, pipe_out_, NULL);
+            if (unlikely (rc == -2))
+                return finish_multipart_abort ();
             if (rc == 0) {
                 dispatch_runtime ().clear_send_recovery_pending ();
                 return 0;
@@ -412,6 +422,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                expected_transport_pair_id_,
                                expected_transport_pair_generation_, NULL)
                : xsend_pipe (msg_, pipe_out_, NULL);
+        if (unlikely (rc == -2))
+            return finish_multipart_abort ();
         if (rc == 0) {
             dispatch_runtime ().clear_send_recovery_pending ();
             break;

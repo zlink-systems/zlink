@@ -12,6 +12,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "api/socket/request_completion_queue_internal.hpp"
@@ -49,6 +50,7 @@ struct pending_request_t
     pending_key_t key;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
+    uint32_t timeout_ms;
     zlink_reply_handler_fn handler;
     void *userdata;
     std::shared_ptr<zlink::request_timeout::task_t> timeout_task;
@@ -60,6 +62,15 @@ struct dealer_reply_target_t
 
     zlink::pipe_t *pipe;
     uint64_t request_seq;
+    bool checked_out;
+};
+
+struct router_reply_target_t
+{
+    router_reply_target_t ();
+
+    zlink::pipe_t *pipe;
+    bool checked_out;
 };
 
 struct socket_request_reply_state_t : public zlink::request_reply_runtime::sequence_state_t
@@ -72,7 +83,7 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
     std::unordered_map<pending_key_t, pending_request_t, pending_key_hash_t> pending_requests;
     std::unordered_map<uint64_t, pending_key_t> pending_request_keys_by_seq;
     std::unordered_map<uint64_t, dealer_reply_target_t> dealer_reply_targets;
-    std::unordered_map<pending_key_t, zlink::pipe_t *, pending_key_hash_t>
+    std::unordered_map<pending_key_t, router_reply_target_t, pending_key_hash_t>
       router_reply_targets;
     size_t reply_target_slots;
     size_t reply_target_reservations;
@@ -115,22 +126,24 @@ int take_dealer_reply_target (const std::shared_ptr<socket_request_reply_state_t
                               uint64_t request_token_,
                               dealer_reply_target_t *target_out_);
 void restore_dealer_reply_target (const std::shared_ptr<socket_request_reply_state_t> &state_,
-                                  uint64_t request_token_,
-                                  const dealer_reply_target_t &target_);
+                                  uint64_t request_token_);
+void commit_dealer_reply_target (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  uint64_t request_token_);
 bool take_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const pending_key_t &key_,
   zlink::pipe_t **application_pipe_out_);
 void restore_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const pending_key_t &key_,
-  zlink::pipe_t *application_pipe_);
+  const pending_key_t &key_);
+void commit_router_reply_target (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  const pending_key_t &key_);
 void forget_router_reply_targets_for_pipe (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   zlink::pipe_t *application_pipe_);
-void release_reply_target_slot (
-  const std::shared_ptr<socket_request_reply_state_t> &state_);
-int send_request_reply_message (void *socket_handle_,
+int send_request_reply_message (zlink::socket_base_t *socket_,
                                 const zlink_routing_id_t *peer_rid_,
                                 zlink_msg_t *parts_,
                                 size_t part_count_,
@@ -167,16 +180,49 @@ void claim_completion_owner (const std::shared_ptr<socket_request_reply_state_t>
 bool current_thread_is_completion_owner (
   const std::shared_ptr<socket_request_reply_state_t> &state_);
 bool in_socket_request_completion_callback (void *socket_);
-inline void add_socket_pending_request_locked (socket_request_reply_state_t *state_,
-                                               const pending_key_t &key_,
-                                               const pending_request_t &pending_)
+inline int add_socket_pending_request_locked (socket_request_reply_state_t *state_,
+                                              const pending_key_t &key_,
+                                              const pending_request_t &pending_)
 {
-    if (!state_)
-        return;
+    if (!state_) {
+        errno = EFAULT;
+        return -1;
+    }
 
-    state_->pending_sequences.insert (key_.request_seq);
-    state_->pending_requests[key_] = pending_;
-    state_->pending_request_keys_by_seq[key_.request_seq] = key_;
+    bool sequence_inserted = false;
+    bool pending_inserted = false;
+    bool sequence_key_inserted = false;
+    try {
+        sequence_inserted =
+          state_->pending_sequences.insert (key_.request_seq).second;
+        pending_inserted =
+          state_->pending_requests.emplace (key_, pending_).second;
+        sequence_key_inserted =
+          state_->pending_request_keys_by_seq
+            .emplace (key_.request_seq, key_)
+            .second;
+    } catch (...) {
+        if (sequence_key_inserted)
+            state_->pending_request_keys_by_seq.erase (key_.request_seq);
+        if (pending_inserted)
+            state_->pending_requests.erase (key_);
+        if (sequence_inserted)
+            state_->pending_sequences.erase (key_.request_seq);
+        errno = ENOMEM;
+        return -1;
+    }
+
+    if (!sequence_inserted || !pending_inserted || !sequence_key_inserted) {
+        if (sequence_key_inserted)
+            state_->pending_request_keys_by_seq.erase (key_.request_seq);
+        if (pending_inserted)
+            state_->pending_requests.erase (key_);
+        if (sequence_inserted)
+            state_->pending_sequences.erase (key_.request_seq);
+        errno = EALREADY;
+        return -1;
+    }
+    return 0;
 }
 
 inline bool remove_socket_pending_request_locked (socket_request_reply_state_t *state_,
@@ -192,7 +238,7 @@ inline bool remove_socket_pending_request_locked (socket_request_reply_state_t *
         return false;
 
     if (pending_out_)
-        *pending_out_ = it->second;
+        *pending_out_ = std::move (it->second);
     state_->pending_sequences.erase (it->first.request_seq);
     state_->pending_request_keys_by_seq.erase (it->first.request_seq);
     state_->pending_requests.erase (it);
@@ -243,6 +289,9 @@ int schedule_socket_pending_timeout (
   const pending_key_t &key_,
   uint32_t timeout_ms_,
   std::shared_ptr<zlink::request_timeout::task_t> *task_out_);
+int arm_socket_pending_request_timeout (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  const pending_key_t &key_);
 void queue_socket_pending_timeout_completion (
   const std::shared_ptr<socket_request_reply_state_t> &state_, const pending_request_t &pending_);
 bool has_pending_request_work (const std::shared_ptr<socket_request_reply_state_t> &state_);
@@ -255,6 +304,23 @@ void fail_disconnected_peer_requests (
   int errnum_);
 int drain_close_request_reply_socket (socket_handle_t handle_);
 void cleanup_request_reply_socket (socket_handle_t handle_);
+
+#ifdef ZLINK_BUILD_TESTS
+enum request_reply_allocation_failpoint_t
+{
+    request_reply_allocation_none = 0,
+    request_reply_allocation_stage_payload,
+    request_reply_allocation_dealer_combined,
+    request_reply_allocation_router_payload,
+    request_reply_allocation_runtime_combined,
+    request_reply_allocation_reply_key
+};
+
+void test_set_request_reply_allocation_failpoint (
+  request_reply_allocation_failpoint_t failpoint_);
+void test_throw_request_reply_allocation_failpoint (
+  request_reply_allocation_failpoint_t failpoint_);
+#endif
 }
 }
 

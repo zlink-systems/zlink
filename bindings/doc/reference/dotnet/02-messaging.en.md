@@ -193,8 +193,9 @@ received.Reply().Message(Message.From("ok")).Submit();
 | `ReplyOperation`/`ReplySubmitOperation` | mirrors `Send`, no flags stage | core reply function takes no send-flag argument |
 | `Messages(IReadOnlyList<Message>)` | `MessageOperations` extension | adds several parts in order at any stage of all four families; not an independent entry point |
 
-**Completion result.** All synchronous calls; parts are consumed on a successful submit only, and
-ownership returns to the caller on failure.
+**Completion result.** All calls submit binding-owned native staging parts. A successful submit
+consumes the public parts; on failure the public parts remain with the caller even though Core
+consumes each native staging part actually passed to a synchronous submit.
 
 | Terminal | Returns | Meaning |
 | --- | --- | --- |

@@ -5,6 +5,8 @@ mod test_support;
 
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Barrier};
+use std::thread;
 
 use zlink::{
     ConfigResult, Context, DealerSocket, Message, POLLCOMPLETION, POLLIN, Poller, Received,
@@ -252,6 +254,75 @@ fn request_reply_surface_exists() {
     let _router_reply = |socket: &RouterSocket, rid: &RoutingId, seq: u64, msg: Message| {
         socket.reply(rid, seq).message(msg).submit()
     };
+}
+
+#[test]
+fn concurrent_multipart_publish_exposes_core_rejection_and_releases_parts() {
+    const WORKERS: usize = 8;
+    const PER_WORKER: usize = 500;
+
+    let ctx = Context::new().unwrap();
+    let publisher = ctx.pub_socket().unwrap();
+
+    let mut work = (0..WORKERS).map(|_| Vec::new()).collect::<Vec<_>>();
+    for worker in 0..WORKERS {
+        for index in 0..PER_WORKER {
+            let first_bytes = format!("record-{worker}-{index:03}-a").into_bytes();
+            let second_bytes = format!("record-{worker}-{index:03}-b").into_bytes();
+            let first = Message::try_from(first_bytes.as_slice()).unwrap();
+            let second = Message::try_from(second_bytes.as_slice()).unwrap();
+            let first_owner = first.try_clone().unwrap();
+            let second_owner = second.try_clone().unwrap();
+            let publish = publisher
+                .publish("contract")
+                .message(first)
+                .message(second);
+            work[worker].push((publish, first_owner, second_owner, first_bytes, second_bytes));
+        }
+    }
+
+    let start = Arc::new(Barrier::new(WORKERS));
+    let handles = work
+        .into_iter()
+        .map(|requests| {
+            let start = Arc::clone(&start);
+            thread::spawn(move || {
+                let mut accepted = 0usize;
+                let mut rejected = 0usize;
+                start.wait();
+                for (publish, first, second, first_bytes, second_bytes) in requests {
+                    match publish.submit() {
+                        Err(error)
+                            if error.code() == SubmitResult::InvalidArgument
+                                && error.native_errno() == libc::EINVAL => {
+                            assert_eq!(first.as_bytes(), first_bytes);
+                            assert_eq!(second.as_bytes(), second_bytes);
+                            assert_eq!(first.ref_count(), 1);
+                            assert_eq!(second.ref_count(), 1);
+                            rejected += 1;
+                        }
+                        Ok(()) => accepted += 1,
+                        Err(error) => panic!("unexpected concurrent publish error: {error}"),
+                    }
+                }
+                (accepted, rejected)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let (accepted, rejected) = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .fold((0usize, 0usize), |total, result| {
+            (total.0 + result.0, total.1 + result.1)
+        });
+    assert!(accepted > 0, "Core accepted no multipart publish");
+    assert!(rejected > 0, "Core exposed no competing-attempt rejection");
+    assert_eq!(accepted + rejected, WORKERS * PER_WORKER);
+    eprintln!(
+        "concurrent multipart publishes: attempts={} accepted={accepted} rejected={rejected}",
+        WORKERS * PER_WORKER
+    );
 }
 
 #[test]

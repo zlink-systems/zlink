@@ -34,6 +34,7 @@ static const char *const stream_socket_smoke_cases[] = {
   "test_stream_callback_lifecycle",
   "test_stream_recv_api_dispatch_conflict",
   "test_stream_successful_recv_part_locks_raw_mode",
+  "test_stream_rejects_unrouted_send_without_poisoning_next_routed_send",
   "test_stream_notify_option_remains_available_with_dispatch",
   "test_stream_notify_records_and_bind_constraint",
   "test_stream_callback_echo_raw",
@@ -1337,6 +1338,78 @@ void test_stream_successful_recv_part_locks_raw_mode ()
 }
 #endif
 
+#if defined(ZLINK_HAVE_WINDOWS)
+void test_stream_rejects_unrouted_send_without_poisoning_next_routed_send ()
+{
+    TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
+}
+#else
+void test_stream_rejects_unrouted_send_without_poisoning_next_routed_send ()
+{
+    void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (stream);
+
+    const int recv_timeout_ms = 3000;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (stream, ZLINK_OPT_RCVTIMEO, &recv_timeout_ms,
+                        sizeof (recv_timeout_ms)));
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (stream, endpoint, sizeof (endpoint));
+    const int client_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (client_fd >= 0);
+    TEST_ASSERT_EQUAL_INT (0, set_raw_fd_timeout (client_fd, recv_timeout_ms));
+
+    const unsigned char hello[] = "hello";
+    TEST_ASSERT_EQUAL_INT (
+      0, send_stream_packet (client_fd, hello, sizeof (hello) - 1));
+
+    zlink_msg_t incoming;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&incoming));
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_recv_part (stream, &source_rid, &incoming, &has_more,
+                       ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, source_rid->size);
+    zlink_routing_id_t target = *source_rid;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&incoming));
+
+    zlink_msg_t unrouted;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&unrouted, 3));
+    memcpy (zlink_msg_data (&unrouted), "BAD", 3);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_NOT_SUPPORTED,
+      zlink_send_part (stream, &unrouted, ZLINK_SEND_FLAGS_NONE,
+                       ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&unrouted));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&unrouted));
+
+    const unsigned char expected[] = "GOOD";
+    zlink_msg_t routed;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_size (&routed, sizeof (expected) - 1));
+    memcpy (zlink_msg_data (&routed), expected, sizeof (expected) - 1);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part_rid (stream, &target, &routed, ZLINK_SEND_FLAGS_NONE,
+                           ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&routed));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&routed));
+
+    unsigned char received[sizeof (expected) - 1];
+    TEST_ASSERT_EQUAL_INT (
+      0, recv_exact (client_fd, received, sizeof (received)));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (expected, received, sizeof (received));
+
+    close_raw_fd (client_fd);
+    test_context_socket_close_zero_linger (stream);
+}
+#endif
+
 void test_stream_notify_option_remains_available_with_dispatch ()
 {
     void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
@@ -2448,6 +2521,10 @@ int main (void)
         RUN_TEST (test_stream_recv_api_dispatch_conflict);
     if (should_run_stream_socket_test ("test_stream_successful_recv_part_locks_raw_mode"))
         RUN_TEST (test_stream_successful_recv_part_locks_raw_mode);
+    if (should_run_stream_socket_test (
+          "test_stream_rejects_unrouted_send_without_poisoning_next_routed_send"))
+        RUN_TEST (
+          test_stream_rejects_unrouted_send_without_poisoning_next_routed_send);
     if (should_run_stream_socket_test ("test_stream_notify_option_remains_available_with_dispatch"))
         RUN_TEST (test_stream_notify_option_remains_available_with_dispatch);
     if (should_run_stream_socket_test ("test_stream_notify_records_and_bind_constraint"))

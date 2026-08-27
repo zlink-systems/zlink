@@ -14,7 +14,8 @@ internal interface INativeSinglePartSubmitter<TSubmit>
 internal static class SinglePartSubmit
 {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static int Submit<TSubmit>(Message message, ref TSubmit submitter)
+    internal static int Submit<TSubmit>(Message message, ref TSubmit submitter,
+        bool retainOnBackpressure = false)
         where TSubmit : struct, INativeSinglePartSubmitter<TSubmit>
     {
         // HOT PATH: zlink_msg_init inside MoveTo initializes all 64 opaque
@@ -26,13 +27,16 @@ internal static class SinglePartSubmit
             message.MoveTo(ref nativePart);
             shouldRestore = true;
             var rc = TSubmit.Submit(ref submitter, ref nativePart);
-            if (rc == 0)
-                shouldRestore = false;
-            else
+            // Synchronous Core submits consume the native part for ordinary
+            // failures. STREAM backpressure is the sole retry-owner exception.
+            if (retainOnBackpressure
+                && rc == (int)SubmitResult.Backpressured)
             {
-                message.RestoreFrom(ref nativePart);
                 shouldRestore = false;
+                message.RestoreFrom(ref nativePart);
             }
+            else
+                shouldRestore = false;
 
             return rc;
         }

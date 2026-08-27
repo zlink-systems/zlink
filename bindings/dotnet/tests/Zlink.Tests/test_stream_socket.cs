@@ -190,6 +190,86 @@ public sealed class test_stream_socket
     }
 
     [Fact]
+    public void stream_not_connected_failure_consumes_message()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var stream = ctx.CreateStreamSocket();
+        using Message payload = Message.From("not-connected");
+
+        ZlinkSubmitException error = Assert.Throws<ZlinkSubmitException>(() =>
+            stream.TrySend(RoutingId.From(0x01020304u))
+                .Message(payload).Submit());
+
+        Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected,
+            error.Result);
+        Assert.Throws<ObjectDisposedException>(() => _ = payload.Size);
+    }
+
+    [Fact]
+    public void stream_backpressure_retains_message_for_retry()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        const int payloadSize = 4096;
+        const ulong streamHwm = 10u * (payloadSize + 64u);
+        using var ctx = Zlink.CreateContext();
+        ctx.Options.AutoHwmEnabled = false;
+        using var stream = ctx.CreateStreamSocket();
+        stream.Options.Linger = TimeSpan.Zero;
+        stream.Options.SendHighWaterMark = streamHwm;
+        stream.Options.ReceiveHighWaterMark = streamHwm;
+        stream.Options.SendBufferSize = payloadSize;
+        stream.Options.ReceiveBufferSize = payloadSize;
+
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "tcp", "stream-backpressure-ownership");
+        int port = CoreTestSupport.ExtractPort(endpoint);
+        stream.Bind(endpoint);
+
+        using var client = ConnectRawClient(port);
+        client.ReceiveBufferSize = payloadSize;
+        SendAll(client.GetStream(), "route-probe"u8);
+        Assert.True(stream.RecvPart(out RoutingId? sourceRoutingId,
+            out Message? probe, out _, RecvFlags.None));
+        using (probe ?? throw new InvalidOperationException(
+            "missing route probe"))
+        {
+        }
+
+        RoutingId routingId = sourceRoutingId
+            ?? throw new InvalidOperationException("missing routing id");
+        byte[] expected = Enumerable.Repeat((byte)0x73, payloadSize).ToArray();
+        Message? retained = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            Message candidate = Message.From(expected);
+            if (!stream.TrySend(routingId).Message(candidate)
+                    .Flags(SendFlags.DontWait).Submit())
+            {
+                retained = candidate;
+                break;
+            }
+
+            candidate.Dispose();
+        }
+
+        Assert.NotNull(retained);
+        try
+        {
+            Assert.Equal(expected, retained!.ToArray());
+        }
+        finally
+        {
+            retained?.Dispose();
+        }
+    }
+
+    [Fact]
     public void stream_callback_echo_raw()
     {
         if (!CoreTestSupport.IsNativeAvailable())

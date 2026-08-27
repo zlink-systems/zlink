@@ -119,7 +119,20 @@ static int send_prefix_sequence_once (zlink::socket_base_t *socket_,
                                       zlink::multipart_pipe_selected_fn selected_fn_ = NULL,
                                       void *selected_userdata_ = NULL)
 {
-    std::vector<zlink_msg_t> prepared_prefixes (prefix_count_);
+    //  Every caller uses at most route + two protocol prefixes. Keeping the
+    //  preparation slots on the stack removes a bad_alloc boundary after a
+    //  routed multipart transaction has already started.
+    const size_t max_prefix_count = 3;
+    if (!prefixes_ || prefix_count_ == 0
+        || prefix_count_ > max_prefix_count) {
+        if (rollback_started_)
+            (void) zlink::multipart_send_facade_t::rollback_scoped (socket_,
+                                                                    scope_);
+        consume_frames_from (parts_, 0, part_count_);
+        errno = EINVAL;
+        return -1;
+    }
+    zlink_msg_t prepared_prefixes[max_prefix_count];
     size_t prepared_count = 0;
     for (; prepared_count < prefix_count_; ++prepared_count) {
         if (zlink_msg_init_size (&prepared_prefixes[prepared_count],
@@ -128,6 +141,10 @@ static int send_prefix_sequence_once (zlink::socket_base_t *socket_,
             const int err = errno;
             for (size_t i = 0; i < prepared_count; ++i)
                 (void) zlink_msg_close (&prepared_prefixes[i]);
+            if (rollback_started_)
+                (void) zlink::multipart_send_facade_t::rollback_scoped (
+                  socket_, scope_);
+            consume_frames_from (parts_, 0, part_count_);
             errno = err;
             return -1;
         }
@@ -152,6 +169,7 @@ static int send_prefix_sequence_once (zlink::socket_base_t *socket_,
                 (void) zlink::multipart_send_facade_t::rollback_scoped (socket_, scope_);
             for (size_t close_index = i; close_index < prefix_count_; ++close_index)
                 (void) zlink_msg_close (&prepared_prefixes[close_index]);
+            consume_frames_from (parts_, 0, part_count_);
             errno = err;
             return -1;
         }

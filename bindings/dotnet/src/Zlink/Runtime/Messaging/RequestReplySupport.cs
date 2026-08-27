@@ -63,21 +63,24 @@ internal static class RequestReplySupport
         {
             ZlinkMsg nativePart = default;
             parts[i].MoveTo(ref nativePart);
-            var submitted = false;
+            var submitReturned = false;
             try
             {
                 var rc = submit(ref nativePart, i + 1 < parts.Count
                     ? NativeMethods.ZlinkPartFlag.More
                     : NativeMethods.ZlinkPartFlag.Final);
-                submitted = true;
+                submitReturned = true;
                 if (rc != 0)
                     throw ZlinkException.CreateSubmitException(
                         NativeMethods.zlink_errno());
             }
             finally
             {
-                if (!submitted)
-                    NativeMethods.zlink_msg_close(ref nativePart);
+                // A returned Core submit result consumes this native part on
+                // both success and failure. Restore only when the managed
+                // delegate itself failed before returning a Core result.
+                if (!submitReturned)
+                    parts[i].RestoreFrom(ref nativePart);
             }
         }
     }
@@ -143,7 +146,7 @@ internal static class RequestReplySupport
         nativeParts = nativeParts[..sourceParts.Length];
 
         var built = 0;
-        var submitted = 0;
+        var consumed = 0;
         try
         {
             NativeMessageParts.MoveToNative(sourceParts, nativeParts,
@@ -153,7 +156,7 @@ internal static class RequestReplySupport
                 var rc = submit(ref nativeParts[i], i + 1 < built
                     ? NativeMethods.ZlinkPartFlag.More
                     : NativeMethods.ZlinkPartFlag.Final);
-                submitted = i + 1;
+                consumed = i + 1;
                 if (rc == 0)
                     continue;
 
@@ -164,7 +167,7 @@ internal static class RequestReplySupport
         catch
         {
             NativeMessageParts.RestoreManaged(sourceParts, nativeParts,
-                submitted, built - submitted);
+                consumed, built - consumed);
             throw;
         }
         finally

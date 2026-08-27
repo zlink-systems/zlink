@@ -1560,12 +1560,23 @@ readiness-callback retry, or deadline timer. Pending bounds default to
 unlimited; the application owns immediate overload policy only when it
 explicitly configures a non-zero bound.
 
-A binding that uses part-level Core APIs has a short complete-record attempt
-gate shared by every outbound path on the same native handle. Inside the gate
-it calls the existing exact-target part API from the first part through
-`FINAL`, then releases the gate immediately after that attempt, including any
-blocking wait Core performs inside it. It adds no multipart ABI or public
-transaction abstraction.
+A binding that uses part-level Core APIs adds **no lock or gate of its own on
+the send path.** A multipart record is all-or-nothing in Core. Core's
+per-socket transaction state keeps another sender's parts from being inserted
+into a sequence, and an attempt that races an already open sequence is
+rejected as a whole, leaving no partial record visible to the peer. Core still
+consumes every native part actually passed to a synchronous send call on both
+success and ordinary failure; only a STREAM backpressure result with `EAGAIN`
+preserves that native part. A binding whose public API preserves a message on
+failure does so by submitting an independently owned staging copy. Concurrent
+multipart submits on one socket are therefore **the application's
+responsibility**: the binding neither
+serializes, waits, nor retries, and reports Core's result unchanged — the same
+principle that governs backpressure policy. The race between close and an
+in-flight submit is likewise owned by Core's lifecycle gate: close returns
+`EBUSY` while another thread runs an admitted API on the same handle, and a
+new API entry after close is accepted returns `ESHUTDOWN`. A binding adds no
+multipart ABI or public transaction abstraction.
 
 **Request** is different: Core drives reply completion. A reply-handler callback
 takes the terminal exactly once. If a language future or promise can run user
@@ -1972,6 +1983,17 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
      `BACKPRESSURED`, `NOT_CONNECTED`, and `NOT_FOUND`, are delivered as
      exceptions. These are never return values. A raw terminal reply is the
      exception: its HWM-free completion lane does not admit `BACKPRESSURED`.
+   - When a terminal reply has no target route, the failure is
+     `NOT_CONNECTED` (`ENOTCONN`). The same rule applies both when no
+     completion pipe is found for the target and when an already selected
+     target disappears while the reply is being committed. This is not
+     backpressure, so readiness (`POLLOUT`) does not make a retry viable. A
+     binding never retains such a one-shot reply nor resubmits it
+     automatically, and it does not hand parts that were already consumed
+     back to the caller.
+     This meaning is identical across every language binding; only the
+     idiom differs (an exception carrying the code in exception languages, a
+     result value in return-based languages).
 2. **C / Go / Rust have no exceptions, so they follow a return-based
    contract.** A binding handles it in the style each language's idiom
    fits.
@@ -5375,7 +5397,8 @@ following criteria.
 ### Required: Ownership Tests
 - the ownership-transfer contract on send success (moves to native; the
   binding must not access it afterward)
-- the restore-or-caller-keeps-ownership contract on send failure
+- the language API's documented send-failure ownership contract, including
+  cleanup of native staging parts consumed or left untouched by Core
 - explicit close/release of a constructed-but-unsent message (native
   memory leaks without close)
 - the ownership contract of a recv result (the binding receives it and

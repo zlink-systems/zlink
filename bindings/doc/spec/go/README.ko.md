@@ -209,11 +209,14 @@ type ReplySubmitOp interface {
   request timeout option이 Core에 전달되고 만료는 `RequestTimedOut`으로
   통지된다. `ctx` 취소·deadline은 그와 별개로 caller의 completion channel을
   먼저 끝낸다. 그 뒤 도착하는 Core reply는 버려지고 parts는 해제된다.
-- 같은 native handle의 outbound 경로는 complete multipart의 첫 part부터
-  `FINAL`까지 한 record attempt만 보호하는 짧은 record-attempt gate(단순
-  mutex)를 공유한다. 이는 대기열이나 worker가 아니라 part sequence 교차와 close
-  경합만 막는 장치다. blocking submit이 이 gate를 쥐고 Core 안에서 기다리는
-  동안 같은 socket의 다른 target 제출은 그만큼 직렬화된다.
+- Go binding은 outbound 경로에 자체 lock이나 gate를 두지 않는다. Core는 socket별
+  transaction state로 이미 열린 sequence에 다른 sender의 part가 들어오지 않게 막는다.
+  열린 sequence와 경합하는 attempt는 peer에 부분 record를 남기지 않고 통째로 거부한다.
+  일반 실패에서도 동기 호출에 실제 전달된 native part는 Core가 소비하며, 공개 API가 호출자
+  message를 보존한다면 binding-owned staging storage로 구현한다. 같은 socket에 동시에
+  multipart를 제출할 때 직렬화할 책임은 어플리케이션에 있다. binding은 직렬화하거나
+  대기하거나 재시도하지 않는다. close와 in-flight 제출의 경합도 Core lifecycle gate가
+  담당한다.
 - Request channel은 reply 또는 submit 실패·timeout·disconnect·context
   cancellation 중 하나를 정확히 한 번 전달한 뒤 닫힌다. 성공 시 `Parts`는
   caller가 닫으며, 실패는 `Err`와 대응하는 `Result`에 담긴다.

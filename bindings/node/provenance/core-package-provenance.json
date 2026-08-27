@@ -5,16 +5,12 @@
   "abiMajor": 0,
   "runtime": {
     "path": "lib/libzlink.so.0.13.2",
-    "sha256": "48f4d928110614ef8edc6c421583828af1e31ee479bea0af50ee804634c90df7",
+    "sha256": "83414545f2455c2d7092b315d236251804ec5aa945f4528393bf70b744903a06",
     "soname": "libzlink.so.0"
   },
   "source": {
-    "revision": "9cff16f3a4a24624390bdc6e2d3623b70e364fc3",
-    "dirty": false
-  },
-  "release": {
-    "tag": "core/v0.13.2",
-    "checksumsSha256": "c9073d17f6aca263022a5b1c858e33179911bcfb3d11cd51074e29a84b9aa0d9"
+    "revision": "7361d8060727dc090f6224a9440872d8b56d5942",
+    "dirty": true
   },
   "files": [
     {
@@ -47,27 +43,39 @@
     },
     {
       "path": "include/zlink/socket/api.h",
-      "sha256": "a62cfb2e38e0c94ab7d5fcd2c3927a7c39594739ad3b6aa1acc45b2c5c5e1738"
+      "sha256": "319fe117ba6f225444605dcf2d1df00a28d4c0a04b4e3603c12fa3fb3832994b"
     },
     {
       "path": "lib/cmake/zlink/zlinkConfig.cmake",
-      "sha256": "20189f7052dcf44d8dc3bdccf7bc4c7860411a45ea4f4dea9ceef2136dccf5e7"
+      "sha256": "0b613155a60cb4b380adfd638d34b18836b758bbaa56cd4ca7300f537f719e37"
     },
     {
       "path": "lib/cmake/zlink/zlinkConfigVersion.cmake",
-      "sha256": "fd9d6f5c02ad7cd6d7707222e5d78c12a419ff12c1e80d83c7b898cd63d9ec55"
+      "sha256": "417ae49da69834ef573ae0549f0fe4c28bf9e61ec54790a2b67358ff5a7329fd"
+    },
+    {
+      "path": "lib/cmake/zlink/zlinkTargets-release.cmake",
+      "sha256": "57bf1af3e707ec4cfdddefae40e3b9cc292b228ed8d301cd98b26c021cb00994"
+    },
+    {
+      "path": "lib/cmake/zlink/zlinkTargets.cmake",
+      "sha256": "c5b966fb028dc2bceef05a54a4783dd9a64d54502e1a80b73c26cbb897b9e0ef"
+    },
+    {
+      "path": "lib/libzlink.a",
+      "sha256": "86c8a3bfdb9337d1fed58c6176c1c5b30dd4eb8305c547df2d9c725625471a95"
     },
     {
       "path": "lib/libzlink.so.0.13.2",
-      "sha256": "48f4d928110614ef8edc6c421583828af1e31ee479bea0af50ee804634c90df7"
+      "sha256": "83414545f2455c2d7092b315d236251804ec5aa945f4528393bf70b744903a06"
     },
     {
-      "path": "share/zlink/release-checksums.txt",
-      "sha256": "c9073d17f6aca263022a5b1c858e33179911bcfb3d11cd51074e29a84b9aa0d9"
+      "path": "lib/pkgconfig/libzlink.pc",
+      "sha256": "209e2446cbd95e57ff7e85e3f88aa4d0a5cc3cc295dc8f6bc5aa22d05078ad27"
     },
     {
-      "path": "share/zlink/release-provenance.txt",
-      "sha256": "ce9d9bb80b5908651a61a2204b8f2bafe6e8596aba431077279c9b28d84d1594"
+      "path": "share/zlink/LICENSE.txt",
+      "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
     }
   ]
 }

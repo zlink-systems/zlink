@@ -38,13 +38,6 @@ internal sealed class SendCompletionRegistry
     private readonly Dictionary<ulong, PendingSend> _pending = new();
     private readonly Dictionary<ulong, EarlyCompletion> _early = new();
 
-    // Core refuses `zlink_send_async` with EINVAL while a multipart part
-    // sequence is active on the same native handle, so the record submit
-    // shares the socket's short submit gate with the request and reply part
-    // loops. The gate is never held across a wait: `zlink_send_async` hands
-    // the record over and returns.
-    private readonly object _submitGate;
-
     // Rooted for the socket lifetime; see the remarks above.
     private readonly NativeMethods.ZlinkSendCompleteHandlerDelegate
         _nativeHandler;
@@ -53,13 +46,10 @@ internal sealed class SendCompletionRegistry
     private bool _handlerInstalled;
     private bool _closed;
 
-    internal SendCompletionRegistry(IntPtr handle, SocketType socketType,
-        object submitGate)
+    internal SendCompletionRegistry(IntPtr handle, SocketType socketType)
     {
         _handle = handle;
         _socketType = socketType;
-        _submitGate = submitGate
-            ?? throw new ArgumentNullException(nameof(submitGate));
         _nativeHandler = OnNativeSendComplete;
         _nativeHandlerRoot = GCHandle.Alloc(_nativeHandler,
             GCHandleType.Normal);
@@ -120,11 +110,8 @@ internal sealed class SendCompletionRegistry
                     Userdata = IntPtr.Zero,
                     Target = hasTarget ? &target : null
                 };
-                lock (_submitGate)
-                {
-                    rc = NativeMethods.zlink_send_async(_handle, nativeParts,
-                        (nuint)native.Length, &options, out opId);
-                }
+                rc = NativeMethods.zlink_send_async(_handle, nativeParts,
+                    (nuint)native.Length, &options, out opId);
             }
         }
         catch
@@ -179,11 +166,8 @@ internal sealed class SendCompletionRegistry
                 Userdata = IntPtr.Zero,
                 Target = hasTarget ? &target : null
             };
-            lock (_submitGate)
-            {
-                rc = NativeMethods.zlink_send_async(_handle, &native, 1,
-                    &options, out opId);
-            }
+            rc = NativeMethods.zlink_send_async(_handle, &native, 1,
+                &options, out opId);
         }
         catch
         {

@@ -1,6 +1,7 @@
 package zlink_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -447,6 +448,111 @@ func TestMoveMessageFailureConsumesMessagePayload(t *testing.T) {
 	if got := msg.Data(); got != nil {
 		t.Fatalf("message payload after MoveMessage failure = %q, want nil", string(got))
 	}
+}
+
+func TestStreamMoveMessageBackpressureRetainsMessagePayload(t *testing.T) {
+	tests := []struct {
+		name   string
+		submit func(*zlink.StreamSocket, *zlink.Received, zlink.RoutingID, *zlink.Message) (bool, error)
+	}{
+		{
+			name: "socket SendTo",
+			submit: func(stream *zlink.StreamSocket, _ *zlink.Received, target zlink.RoutingID, msg *zlink.Message) (bool, error) {
+				return stream.SendTo(target).
+					MoveMessage(msg).
+					Flags(zlink.SendFlagsDontWait).
+					Submit(context.Background())
+			},
+		},
+		{
+			name: "received Send",
+			submit: func(_ *zlink.StreamSocket, route *zlink.Received, _ zlink.RoutingID, msg *zlink.Message) (bool, error) {
+				return route.Send().
+					MoveMessage(msg).
+					Flags(zlink.SendFlagsDontWait).
+					Submit(context.Background())
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testStreamMoveMessageBackpressureRetainsMessagePayload(t, test.submit)
+		})
+	}
+}
+
+func testStreamMoveMessageBackpressureRetainsMessagePayload(
+	t *testing.T,
+	submit func(*zlink.StreamSocket, *zlink.Received, zlink.RoutingID, *zlink.Message) (bool, error),
+) {
+	t.Helper()
+	ctx := newContext(t)
+	defer ctx.Close()
+
+	stream, err := ctx.StreamSocket()
+	if err != nil {
+		t.Fatalf("StreamSocket() error = %v", err)
+	}
+	defer stream.Close()
+
+	const payloadSize = 4096
+	if err := stream.SetSendHighWaterMark(10 * (payloadSize + 64)); err != nil {
+		t.Fatalf("SetSendHighWaterMark() error = %v", err)
+	}
+	endpoint := tcpEndpoint(t)
+	if err := stream.Bind(endpoint); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+
+	conn, err := net.DialTimeout("tcp", strings.TrimPrefix(endpoint, "tcp://"), 5*time.Second)
+	if err != nil {
+		t.Fatalf("net.DialTimeout() error = %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("route")); err != nil {
+		t.Fatalf("route probe write error = %v", err)
+	}
+
+	var route zlink.Received
+	if _, err := stream.Recv(&route, zlink.RecvFlagsNone); err != nil {
+		t.Fatalf("STREAM route receive error = %v", err)
+	}
+	defer route.Close()
+	target := route.RoutingID()
+
+	payload := bytes.Repeat([]byte{0x73}, payloadSize)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		msg, err := zlink.NewMessage(payload)
+		if err != nil {
+			t.Fatalf("NewMessage() error = %v", err)
+		}
+		sent, err := submit(stream, &route, target, msg)
+		if err != nil {
+			_ = msg.Close()
+			t.Fatalf("STREAM MoveMessage submit error = %v", err)
+		}
+		if sent {
+			if got := msg.Data(); got != nil {
+				_ = msg.Close()
+				t.Fatalf("successful STREAM MoveMessage retained %d payload bytes", len(got))
+			}
+			_ = msg.Close()
+			continue
+		}
+
+		if msg.Size() != payloadSize || !bytes.Equal(msg.Data(), payload) {
+			_ = msg.Close()
+			t.Fatalf("backpressured STREAM MoveMessage did not retain the submitted payload")
+		}
+		if err := msg.Close(); err != nil {
+			t.Fatalf("retained message Close() error = %v", err)
+		}
+		return
+	}
+
+	t.Fatalf("STREAM send did not reach backpressure within 5s")
 }
 
 func TestSendDoesNotSwallowClosedSocketErrors(t *testing.T) {

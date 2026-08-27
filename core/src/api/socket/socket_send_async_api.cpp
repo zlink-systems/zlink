@@ -12,9 +12,6 @@
 #include "api/message/submit_result_internal.hpp"
 #include "api/socket/part_helper_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
-#include "core/msg.hpp"
-#include "utils/err.hpp"
-#include "utils/routing_id.hpp"
 
 zlink_submit_result_t zlink_send_async (void *s_,
                                         zlink_msg_t *parts_,
@@ -32,30 +29,18 @@ zlink_submit_result_t zlink_send_async (void *s_,
         return zlink::submit_result_internal::from_errno (errno);
     }
 
-    zlink::socket_base_t *socket = try_as_socket (s_);
+    socket_handle_t handle = as_socket_handle (s_);
+    zlink::socket_base_t *socket = handle.socket;
     if (!socket) {
-        errno = EFAULT;
         return zlink::submit_result_internal::from_errno (errno);
     }
 
-    //  A multipart sequence in flight on this handle owns the send gate. A
-    //  record submit cannot interleave with it.
-    if (zlink::part_helper_internal::send_sequence_active (s_)) {
-        errno = EINVAL;
+    //  Take the record side of the same transaction state used by part
+    //  sequences. The admission and a concurrent first PART_MORE are then
+    //  ordered by one state lock instead of a check-then-submit race.
+    zlink::part_helper_internal::complete_record_scope_t record_scope (socket);
+    if (!record_scope.acquired ())
         return zlink::submit_result_internal::from_errno (errno);
-    }
-
-    if (part_count_ == 1
-        && options_->struct_size == sizeof (zlink_send_async_options_t)
-        && socket->socket_type () == ZLINK_CORE_SOCKET_ROUTER
-        && options_->target
-        && options_->target->transport_pair_id == 0
-        && options_->target->transport_pair_generation == 0
-        && zlink::valid_routing_id (&options_->target->peer_rid)
-        && socket->send_complete_handler_active ()
-        && socket->try_send_async_routed_single_immediate (
-          &options_->target->peer_rid, parts_))
-        return ZLINK_SUBMIT_OK;
 
     return zlink::submit_result_internal::from_rc (
       socket->send_async_submit (parts_, part_count_, options_, op_id_out_));
@@ -64,9 +49,9 @@ zlink_submit_result_t zlink_send_async (void *s_,
 zlink_submit_result_t zlink_send_async_cancel (void *s_,
                                                 zlink_send_op_id_t op_id_)
 {
-    zlink::socket_base_t *socket = try_as_socket (s_);
+    socket_handle_t handle = as_socket_handle (s_);
+    zlink::socket_base_t *socket = handle.socket;
     if (!socket) {
-        errno = EFAULT;
         return zlink::submit_result_internal::from_errno (errno);
     }
 

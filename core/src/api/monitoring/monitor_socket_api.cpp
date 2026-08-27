@@ -28,7 +28,8 @@ int attach_socket_monitor_handler_state (void *monitor_,
     if (!handle.socket)
         return -1;
 
-    monitor_state_pin_t pin (handle.socket);
+    zlink::socket_base_t *socket = handle.socket;
+    monitor_state_pin_t pin (socket);
     monitor_handler_state_t *state = pin.get ();
     if (!state) {
         errno = EINVAL;
@@ -39,8 +40,14 @@ int attach_socket_monitor_handler_state (void *monitor_,
         return -1;
     }
 
+    //  The registry pin keeps both the handler state and its socket alive:
+    //  a concurrent close cannot pass unregister_monitor_handlers until this
+    //  function returns. Release the public-handle pin before arming the
+    //  immediate dispatch task, so a callback that self-closes does not see
+    //  this registration call's internal pin as a competing public API.
+    handle = socket_handle_t ();
     return set_monitor_handler_state (
-      handle.socket, state, handler_,
+      socket, state, handler_,
       state->snapshot_provider.load (std::memory_order_acquire),
       state->snapshot_subject.load (std::memory_order_acquire), userdata_);
 }
@@ -84,10 +91,19 @@ void *open_socket_monitor_with_handler_internal (void *s_,
 
     zlink::socket_base_t *monitor_socket_base =
       handle.socket->get_ctx ()->create_socket (ZLINK_CORE_SOCKET_PAIR);
-    void *monitor_socket = static_cast<void *> (monitor_socket_base);
-    if (!monitor_socket) {
+    if (!monitor_socket_base) {
         handle.socket->monitor (NULL, 0, event_version_,
                                 ZLINK_CORE_SOCKET_PAIR, 0);
+        return NULL;
+    }
+    void *monitor_socket =
+      handle.socket->get_ctx ()->register_public_socket_handle (monitor_socket_base);
+    if (!monitor_socket) {
+        const int saved_errno = errno;
+        monitor_socket_base->close ();
+        handle.socket->monitor (NULL, 0, event_version_,
+                                ZLINK_CORE_SOCKET_PAIR, 0);
+        errno = saved_errno;
         return NULL;
     }
     if (monitor_socket_base->configure_internal_monitor_queue (
@@ -110,7 +126,7 @@ void *open_socket_monitor_with_handler_internal (void *s_,
 
     if (set_monitor_handler_state (monitor_socket_base, NULL, effective_handler,
                                    &socket_monitor_snapshot_provider,
-                                   static_cast<void *> (handle.socket), userdata_)
+                                   handle.socket->public_handle (), userdata_)
         != 0) {
         const int err = errno;
         zlink_close (monitor_socket);

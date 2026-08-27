@@ -224,7 +224,22 @@ public sealed class test_flow_state
             Task closeTask = Task.Run(() =>
             {
                 barrier.SignalAndWait();
-                dealer.Close();
+                while (true)
+                {
+                    try
+                    {
+                        dealer.Close();
+                        return;
+                    }
+                    catch (ZlinkCloseException ex) when (
+                        ex.Result == ZlinkCloseException.ErrorCode.Busy)
+                    {
+                        // The flow-state call already entered Core and pinned
+                        // the socket. Close must preserve the handle and report
+                        // EBUSY until that public API entry leaves.
+                        Thread.Yield();
+                    }
+                }
             });
 
             await Task.WhenAll(setTask, closeTask)

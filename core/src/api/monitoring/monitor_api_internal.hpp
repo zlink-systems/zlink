@@ -7,7 +7,7 @@
 
 #include <atomic>
 
-#include "sockets/common/socket_base.hpp"
+#include "api/socket/socket_api_internal.hpp"
 #include "utils/mutex.hpp"
 
 typedef int (*monitor_snapshot_provider_fn) (void *subject_, zlink_monitor_status_t *out_);
@@ -127,7 +127,7 @@ class monitor_state_pin_t
     monitor_state_pin_t &operator= (const monitor_state_pin_t &);
 };
 
-zlink::socket_base_t *raw_monitor_snapshot_subject (monitor_handler_state_t *state_);
+socket_handle_t monitor_snapshot_subject_handle (monitor_handler_state_t *state_);
 void clear_raw_monitor_snapshot_subjects (zlink::socket_base_t *source_);
 void unregister_monitor_handlers (zlink::socket_base_t *socket_);
 

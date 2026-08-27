@@ -26,8 +26,13 @@ int zlink_poll (zlink_pollitem_t *items_,
         return 0;
     }
 
+    // Keep every public-handle pin until after the local poller releases its
+    // raw socket registrations. Declaration order is intentional: poller is
+    // destroyed first on every return path.
+    std::vector<socket_handle_t> socket_handles;
     zlink::socket_poller_t poller;
     try {
+        socket_handles.resize (static_cast<size_t> (nitems_));
         poller.reserve (static_cast<size_t> (nitems_));
     }
     catch (const std::bad_alloc &) {
@@ -43,7 +48,7 @@ int zlink_poll (zlink_pollitem_t *items_,
             socket_handle_t handle = as_socket_handle (items_[i].socket);
             if (!handle.socket) {
                 if (error_out_)
-                    *error_out_ = ZLINK_CONFIG_INVALID_HANDLE;
+                    *error_out_ = zlink::config_result_internal::from_errno (errno);
                 return -1;
             }
             if (validate_socket_poller_event_mask (items_[i].events, false) != 0) {
@@ -61,6 +66,7 @@ int zlink_poll (zlink_pollitem_t *items_,
                     *error_out_ = zlink::config_result_internal::from_errno (errno);
                 return -1;
             }
+            socket_handles[static_cast<size_t> (i)] = handle;
         } else {
             if (validate_fd_poller_event_mask (items_[i].events) != 0
                 || poller.add_fd (items_[i].fd, index_user_data,
@@ -107,7 +113,8 @@ int zlink_poll (zlink_pollitem_t *items_,
     for (int i = 0; i < nitems_; ++i) {
         if (items_[i].revents != 0) {
             if (items_[i].socket) {
-                socket_handle_t handle = as_socket_handle (items_[i].socket);
+                const socket_handle_t &handle =
+                  socket_handles[static_cast<size_t> (i)];
                 const short other_events =
                   static_cast<short> (items_[i].events & ~ZLINK_POLLIN);
                 uint32_t ready_events = 0;

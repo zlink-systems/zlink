@@ -852,7 +852,7 @@ int zlink::stream_t::stream_dispatch_packet_msg_from_io (const zlink_routing_id_
         state.reset ();
 
         _dispatch_inflight.fetch_add (1, std::memory_order_acq_rel);
-        handler (this, rid_, reinterpret_cast<zlink_msg_t *> (&header_out),
+        handler (public_handle (), rid_, reinterpret_cast<zlink_msg_t *> (&header_out),
                  reinterpret_cast<zlink_msg_t *> (&body_out),
                  _dispatch_packet_handler_userdata.load (std::memory_order_acquire));
         reset_dispatched_msg (&header_out);

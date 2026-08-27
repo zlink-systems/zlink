@@ -287,7 +287,12 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                     new_pipes[1]->hold_writes_until_transport_pair_ready ();
                 }
                 send_bind (peer.socket, new_pipes[1], false);
-                peer.socket->emit_inproc_connection_ready (new_pipes[1]);
+                // send_bind() transfers paired pipe admission to the peer's
+                // mailbox. Its attach path publishes pair readiness after
+                // both lanes are validated and Router RID adoption completes;
+                // reading the peer-owned RID here would race that admission.
+                if (!paired_transport)
+                    peer.socket->emit_inproc_connection_ready (new_pipes[1]);
                 connected_inproc_now = true;
             }
 

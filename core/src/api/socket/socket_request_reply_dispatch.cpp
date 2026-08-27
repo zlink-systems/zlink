@@ -197,32 +197,35 @@ void fail_disconnected_peer_requests (
 
     LIBZLINK_UNUSED (routing_id_);
     LIBZLINK_UNUSED (routing_id_size_);
-    std::vector<pending_request_t> failed;
-    {
-        std::lock_guard<std::mutex> lock (state_->mutex);
-        for (std::unordered_map<pending_key_t, pending_request_t,
-                                pending_key_hash_t>::iterator it =
-               state_->pending_requests.begin ();
-             it != state_->pending_requests.end ();) {
-            const bool matches =
-              it->second.transport_pair_id == transport_pair_id_
-              && it->second.transport_pair_generation
-                   == transport_pair_generation_;
-            if (!matches) {
-                ++it;
-                continue;
+    while (true) {
+        pending_request_t failed;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock (state_->mutex);
+            for (std::unordered_map<pending_key_t, pending_request_t,
+                                    pending_key_hash_t>::iterator it =
+                   state_->pending_requests.begin ();
+                 it != state_->pending_requests.end (); ++it) {
+                const bool matches =
+                  it->second.transport_pair_id == transport_pair_id_
+                  && it->second.transport_pair_generation
+                       == transport_pair_generation_;
+                if (!matches)
+                    continue;
+                failed = std::move (it->second);
+                state_->pending_sequences.erase (it->first.request_seq);
+                state_->pending_request_keys_by_seq.erase (
+                  it->first.request_seq);
+                state_->pending_requests.erase (it);
+                found = true;
+                break;
             }
-            failed.push_back (it->second);
-            state_->pending_sequences.erase (it->first.request_seq);
-            state_->pending_request_keys_by_seq.erase (it->first.request_seq);
-            it = state_->pending_requests.erase (it);
         }
-    }
-
-    for (size_t i = 0; i < failed.size (); ++i) {
-        zlink::request_timeout::cancel (failed[i].timeout_task);
+        if (!found)
+            break;
+        zlink::request_timeout::cancel (failed.timeout_task);
         (void) queue_reply_completion (
-          state_, failed[i].handler, failed[i].userdata, errnum_, NULL, 0);
+          state_, failed.handler, failed.userdata, errnum_, NULL, 0);
     }
 }
 
@@ -242,29 +245,40 @@ int drain_close_request_reply_socket (socket_handle_t handle_)
         state->closing = true;
     }
 
-    std::vector<pending_request_t> pending;
+    while (true) {
+        pending_request_t pending;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock (state->mutex);
+            if (!state->pending_requests.empty ()) {
+                std::unordered_map<pending_key_t, pending_request_t,
+                                   pending_key_hash_t>::iterator it =
+                  state->pending_requests.begin ();
+                pending = std::move (it->second);
+                state->pending_sequences.erase (it->first.request_seq);
+                state->pending_request_keys_by_seq.erase (
+                  it->first.request_seq);
+                state->pending_requests.erase (it);
+                found = true;
+            }
+        }
+        if (!found)
+            break;
+        zlink::request_timeout::cancel (pending.timeout_task);
+        if (queue_reply_completion (state, pending.handler, pending.userdata,
+                                    ETERM, NULL, 0)
+            != 0)
+            return -1;
+    }
+
     {
         std::lock_guard<std::mutex> lock (state->mutex);
-        for (std::unordered_map<pending_key_t, pending_request_t, pending_key_hash_t>::iterator it =
-               state->pending_requests.begin ();
-             it != state->pending_requests.end (); ++it) {
-            pending.push_back (it->second);
-        }
-        state->pending_requests.clear ();
         state->pending_request_keys_by_seq.clear ();
         state->pending_sequences.clear ();
         state->dealer_reply_targets.clear ();
         state->router_reply_targets.clear ();
         state->reply_target_slots =
           state->reply_target_reservations + state->reply_target_checkouts;
-    }
-
-    for (size_t i = 0; i < pending.size (); ++i) {
-        zlink::request_timeout::cancel (pending[i].timeout_task);
-        if (queue_reply_completion (state, pending[i].handler, pending[i].userdata, ETERM, NULL, 0)
-            != 0) {
-            return -1;
-        }
     }
 
     return drain_reply_completions_while_closing (state, handle_.socket);
@@ -275,19 +289,35 @@ void cleanup_request_reply_socket (socket_handle_t handle_)
     if (!handle_.socket)
         return;
 
-    std::vector<std::shared_ptr<zlink::request_timeout::task_t>> timeout_tasks;
     std::shared_ptr<socket_request_reply_state_t> state = handle_.socket->request_reply_state ();
     if (state) {
+        while (true) {
+            std::shared_ptr<zlink::request_timeout::task_t> timeout_task;
+            bool found = false;
+            {
+                std::lock_guard<std::mutex> state_lock (state->mutex);
+                state->closing = true;
+                if (!state->pending_requests.empty ()) {
+                    std::unordered_map<pending_key_t, pending_request_t,
+                                       pending_key_hash_t>::iterator it =
+                      state->pending_requests.begin ();
+                    timeout_task.swap (it->second.timeout_task);
+                    state->pending_sequences.erase (it->first.request_seq);
+                    state->pending_request_keys_by_seq.erase (
+                      it->first.request_seq);
+                    state->pending_requests.erase (it);
+                    found = true;
+                }
+            }
+            if (!found)
+                break;
+            zlink::request_timeout::cancel (timeout_task);
+            zlink::request_completion::release_reservation (
+              &state->completion);
+        }
         {
             std::lock_guard<std::mutex> state_lock (state->mutex);
             state->closing = true;
-            for (std::unordered_map<pending_key_t, pending_request_t,
-                                    pending_key_hash_t>::iterator it =
-                   state->pending_requests.begin ();
-                 it != state->pending_requests.end (); ++it) {
-                timeout_tasks.push_back (it->second.timeout_task);
-            }
-            state->pending_requests.clear ();
             state->pending_request_keys_by_seq.clear ();
             state->pending_sequences.clear ();
             state->dealer_reply_targets.clear ();
@@ -297,8 +327,6 @@ void cleanup_request_reply_socket (socket_handle_t handle_)
             zlink::request_completion::close (&state->completion);
         }
     }
-    for (size_t i = 0; i < timeout_tasks.size (); ++i)
-        zlink::request_timeout::cancel (timeout_tasks[i]);
     handle_.socket->clear_request_reply_state ();
 }
 }

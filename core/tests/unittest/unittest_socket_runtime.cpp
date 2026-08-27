@@ -267,7 +267,7 @@ void test_socket_lifecycle_coordinator_completes_deferred_close_without_async_ma
     TEST_ASSERT_TRUE (coordinator.public_close_requested ());
     TEST_ASSERT_TRUE (coordinator.leave_callback_api ());
 
-    coordinator.complete_deferred_close_handoff (&mailbox, 1);
+    coordinator.complete_deferred_close_handoff (&mailbox, NULL, 1);
 
     TEST_ASSERT_TRUE (coordinator.public_close_requested ());
     TEST_ASSERT_FALSE (coordinator.is_async_mailbox_active ());
@@ -284,7 +284,7 @@ void test_socket_lifecycle_coordinator_handoff_waits_pending_async_quiesce ()
     TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (true));
     TEST_ASSERT_TRUE (coordinator.leave_callback_api ());
 
-    coordinator.complete_deferred_close_handoff (&mailbox, 1);
+    coordinator.complete_deferred_close_handoff (&mailbox, NULL, 1);
 
     TEST_ASSERT_FALSE (coordinator.is_async_mailbox_active ());
     TEST_ASSERT_TRUE (coordinator.is_async_quiesce_pending ());
@@ -490,7 +490,8 @@ void test_socket_send_pending_runtime_starts_empty ()
     TEST_ASSERT_FALSE (pending.handler_installed.load (std::memory_order_acquire));
     TEST_ASSERT_TRUE (pending.queues.empty ());
     TEST_ASSERT_TRUE (pending.by_op.empty ());
-    TEST_ASSERT_TRUE (pending.completions.empty ());
+    TEST_ASSERT_NULL (pending.completion_head);
+    TEST_ASSERT_NULL (pending.completion_tail);
     TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_msgs);
     TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_bytes);
     TEST_ASSERT_FALSE (pending.failing);

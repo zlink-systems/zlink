@@ -16,15 +16,12 @@ import java.util.List;
 
 final class NativeDealerSocket extends NativeSocketBase implements DealerSocket {
     private final DealerSocketOptions options = ContractAccess.dealerSocketOptions(this);
-    private final OutboundRecordAttemptGate outboundRecordAttempts =
-        new OutboundRecordAttemptGate();
     private final CoreRequestSupport requestSupport;
 
     NativeDealerSocket(Context ctx) {
         super(ctx, SocketType.DEALER);
         try {
-            requestSupport = new CoreRequestSupport(runtime(), true,
-                outboundRecordAttempts);
+            requestSupport = new CoreRequestSupport(runtime(), true);
         } catch (RuntimeException error) {
             try {
                 runtime().close();
@@ -49,12 +46,10 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
             runtime().sendAsync(parts, timeout));
     }
     SendResult sendNoWaitResult(Message part) {
-        return outboundRecordAttempts.call(
-            () -> runtime().sendNoWaitResult(part));
+        return runtime().sendNoWaitResult(part);
     }
     SendResult sendNoWaitResult(List<Message> parts) {
-        return outboundRecordAttempts.call(
-            () -> runtime().sendNoWaitResult(parts));
+        return runtime().sendNoWaitResult(parts);
     }
     /**
      * Receives into caller-provided {@link Received} storage.
@@ -78,11 +73,8 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
     }
     @Override
     public void close() {
-        try {
-            outboundRecordAttempts.run(runtime()::close);
-        } finally {
-            requestSupport.close();
-        }
+        runtime().close();
+        requestSupport.close();
     }
     @Override public DealerSocketOptions options() { return options; }
 

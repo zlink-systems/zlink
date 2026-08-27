@@ -94,7 +94,7 @@ int poller_fill_public_event_from_registration (
 
     if (registration_->socket) {
         event_out_->source_kind = ZLINK_POLLER_SOURCE_SOCKET;
-        event_out_->socket = native_.socket;
+        event_out_->socket = registration_->subject;
         event_out_->fd = native_.fd;
         event_out_->timer = NULL;
         event_out_->user_data = registration_->user_data;

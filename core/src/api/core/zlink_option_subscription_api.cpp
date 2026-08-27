@@ -112,7 +112,8 @@ int raw_socket_subscription_at (zlink::socket_base_t *socket_,
 
 zlink_config_result_t zlink_set_subscription (void *handle_, const char *filter_)
 {
-    if (zlink::socket_base_t *socket = as_socket (handle_)) {
+    socket_handle_t handle = as_socket (handle_);
+    if (zlink::socket_base_t *socket = handle.socket) {
         if (!filter_) {
             errno = EINVAL;
             return ZLINK_CONFIG_INVALID_ARGUMENT;
@@ -134,7 +135,8 @@ zlink_config_result_t zlink_set_subscription (void *handle_, const char *filter_
 
 zlink_config_result_t zlink_unset_subscription (void *handle_, const char *filter_)
 {
-    if (zlink::socket_base_t *socket = as_socket (handle_)) {
+    socket_handle_t handle = as_socket (handle_);
+    if (zlink::socket_base_t *socket = handle.socket) {
         if (!filter_) {
             errno = EINVAL;
             return ZLINK_CONFIG_INVALID_ARGUMENT;
@@ -157,7 +159,8 @@ zlink_config_result_t zlink_unset_subscription (void *handle_, const char *filte
 zlink_config_result_t zlink_subscription_at (
   void *handle_, size_t index_, char *filter_out_, size_t *filter_len_inout_, int *is_pattern_out_)
 {
-    if (zlink::socket_base_t *socket = as_socket (handle_)) {
+    socket_handle_t handle = as_socket (handle_);
+    if (zlink::socket_base_t *socket = handle.socket) {
         const int type = socket_type_of (socket);
         if (type != ZLINK_CORE_SOCKET_SUB && type != ZLINK_CORE_SOCKET_XSUB) {
             errno = ENOTSUP;

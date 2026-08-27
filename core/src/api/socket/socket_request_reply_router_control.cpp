@@ -19,10 +19,8 @@ extern "C" int zlink_router_enable_request_reply_receive (void *router_)
         return -1;
 
     socket_handle_t handle = as_socket_handle (router_);
-    if (!handle.socket) {
-        errno = EFAULT;
+    if (!handle.socket)
         return -1;
-    }
 
     std::shared_ptr<reqrep::socket_request_reply_state_t> state =
       reqrep::find_or_create_request_reply_state (handle);
@@ -34,10 +32,8 @@ extern "C" int zlink_socket_request_reply_set_default_timeout (void *socket_,
                                                                size_t optvallen_)
 {
     const socket_handle_t handle = as_socket_handle (socket_);
-    if (!handle.socket) {
-        errno = EINVAL;
+    if (!handle.socket)
         return -1;
-    }
 
     const int type = socket_type (handle);
     if (type != ZLINK_CORE_SOCKET_ROUTER && type != ZLINK_CORE_SOCKET_DEALER) {
@@ -67,10 +63,8 @@ extern "C" int
 zlink_socket_request_reply_get_default_timeout (void *socket_, void *optval_, size_t *optvallen_)
 {
     const socket_handle_t handle = as_socket_handle (socket_);
-    if (!handle.socket) {
-        errno = EINVAL;
+    if (!handle.socket)
         return -1;
-    }
 
     const int type = socket_type (handle);
     if (type != ZLINK_CORE_SOCKET_ROUTER && type != ZLINK_CORE_SOCKET_DEALER) {

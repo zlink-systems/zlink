@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 #include "testutil_monitoring.hpp"
+#include "../src/api/socket/socket_api_internal.hpp"
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
 
@@ -222,7 +223,10 @@ static int64_t get_monitor_event_with_timeout_v2 (
         int timeout_step = 250;
         int wait_time = 0;
         while (true) {
-            if (zlink::wait_socket_events_internal (monitor_, 1, timeout_step) <= 0) {
+            socket_handle_t handle = as_socket_handle (monitor_);
+            if (!handle.socket
+                || zlink::wait_socket_events_internal (handle.socket, 1,
+                                                       timeout_step) <= 0) {
                 wait_time += timeout_step;
                 fprintf (stderr, "Still waiting for monitor event after %i ms\n", wait_time);
                 continue;
@@ -235,7 +239,9 @@ static int64_t get_monitor_event_with_timeout_v2 (
             fprintf (stderr, "Still waiting for monitor event after %i ms\n", wait_time);
         }
     } else {
-        if (zlink::wait_socket_events_internal (monitor_, 1, timeout_) <= 0) {
+        socket_handle_t handle = as_socket_handle (monitor_);
+        if (!handle.socket
+            || zlink::wait_socket_events_internal (handle.socket, 1, timeout_) <= 0) {
             errno = EAGAIN;
             return -1;
         }

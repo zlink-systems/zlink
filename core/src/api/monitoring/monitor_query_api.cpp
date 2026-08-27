@@ -39,12 +39,14 @@ bool copy_u64_frame (const zlink::scoped_msg_t &frame_, uint64_t *out_)
 
 int socket_monitor_snapshot_provider (void *subject_, zlink_monitor_status_t *out_)
 {
-    zlink::socket_base_t *socket = static_cast<zlink::socket_base_t *> (subject_);
-    if (!socket || !out_) {
+    if (!out_) {
         errno = EINVAL;
         return -1;
     }
-    return socket->monitor_snapshot (out_);
+    socket_handle_t handle = as_socket_handle (subject_);
+    if (!handle.socket)
+        return -1;
+    return handle.socket->monitor_snapshot (out_);
 }
 
 int recv_socket_monitor_event_internal (void *monitor_socket_,
@@ -160,8 +162,12 @@ zlink_recv_result_t zlink_socket_monitor_recv (void *monitor_,
 {
     if (require_monitor_recv_model (monitor_) != 0)
         return zlink::recv_result_internal::from_errno (errno);
+    socket_handle_t handle = as_socket_handle (monitor_);
+    if (!handle.socket)
+        return zlink::recv_result_internal::from_errno (errno);
     return zlink::recv_result_internal::from_rc (
-      recv_socket_monitor_event_unchecked (monitor_, out_, static_cast<int> (flags_)));
+      recv_socket_monitor_event_unchecked (handle.socket, out_,
+                                           static_cast<int> (flags_)));
 }
 
 zlink_config_result_t zlink_monitor_status (void *monitor_, zlink_monitor_status_t *out_)
@@ -173,7 +179,7 @@ zlink_config_result_t zlink_monitor_status (void *monitor_, zlink_monitor_status
 
     socket_handle_t handle = as_socket_handle (monitor_);
     if (!handle.socket)
-        return ZLINK_CONFIG_INVALID_HANDLE;
+        return zlink::config_result_internal::from_errno (errno);
 
     //  The pin keeps the registry state alive for the whole snapshot call:
     //  a concurrent monitor close waits for it before deleting the state.

@@ -7,6 +7,7 @@
 #include "core/io_thread.hpp"
 #include "core/mailbox.hpp"
 #include "sockets/common/socket_base.hpp"
+#include "sockets/common/socket_public_handle.hpp"
 
 namespace
 {
@@ -62,11 +63,7 @@ void zlink::socket_base_t::finish_deferred_close_after_async_quiesced ()
     if (!lifecycle_coordinator ().take_deferred_close ())
         return;
 
-    fail_all_send_pending (_ctx_terminated ? ETERM : ECANCELED);
-    dispatch_send_completions (true);
-    static_cast<mailbox_t *> (_mailbox)->clear_signalers ();
-    _tag = 0xdeadbeef;
-    send_reap (this);
+    finish_close_reap ();
 }
 
 void zlink::socket_base_t::start_reaping (poller_t *poller_)
@@ -156,13 +153,13 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
     while (rc == 0 || errno == EINTR) {
         if (rc == 0) {
             // Pipe commands mutate inbound state before reaching the socket
-            // sink.  When the monitor-owned mailbox runs on an I/O thread,
-            // it can also attach or detach a pipe while a public send uses a
-            // socket-specific distribution state.  Serialize that mutation
-            // with the public send scope as well as the receive state.
-            if (async_executor
-                && (options.type == ZLINK_CORE_SOCKET_PUB
-                    || options.type == ZLINK_CORE_SOCKET_XPUB)) {
+            // sink. When the mailbox runs on an I/O thread, it can also attach
+            // or detach a pipe while a public send uses socket-specific
+            // distribution state (for example DEALER's load balancer).
+            // Serialize every socket whose direct send takes the public API
+            // lock; the blocking retry path releases that lock while waiting
+            // specifically so this command owner can make progress.
+            if (async_executor && direct_send_needs_public_api_sync ()) {
                 socket_public_api_lock_scope_t api_owner (
                   lifecycle_coordinator ());
                 scoped_lock_t receive_owner (receive.sync);
@@ -526,13 +523,10 @@ void zlink::socket_base_t::check_destroy ()
         if (lifecycle_coordinator ().mailbox_refcount () != 0)
             return;
 
-        inc_mailbox_ref ();
-        if (lifecycle_coordinator ().reaper_poller ()) {
-            boost::asio::post (lifecycle_coordinator ().reaper_poller ()->get_io_context (),
-                               [this] () { this->dec_mailbox_ref (); });
-        } else {
-            dec_mailbox_ref ();
-        }
+        if (_public_handle && !_public_handle->request_destroy ())
+            return;
+
+        schedule_finalize_destroy ();
     }
 }
 
@@ -547,7 +541,23 @@ void zlink::socket_base_t::dec_mailbox_ref ()
         || !lifecycle_coordinator ().is_destroy_pending ())
         return;
 
-    finalize_destroy ();
+    check_destroy ();
+}
+
+void zlink::socket_base_t::schedule_finalize_destroy ()
+{
+    inc_mailbox_ref ();
+    const std::function<void ()> finalize = [this] () {
+        const bool has_remaining_refs =
+          this->lifecycle_coordinator ().dec_mailbox_ref ();
+        zlink_assert (!has_remaining_refs);
+        this->finalize_destroy ();
+    };
+    if (lifecycle_coordinator ().reaper_poller ())
+        boost::asio::post (lifecycle_coordinator ().reaper_poller ()->get_io_context (),
+                           finalize);
+    else
+        finalize ();
 }
 
 void zlink::socket_base_t::finalize_destroy ()
@@ -562,6 +572,11 @@ void zlink::socket_base_t::finalize_destroy ()
 
     //  Remove the socket from the context.
     destroy_socket (this);
+
+    if (_public_handle)
+        _public_handle->clear_socket ();
+
+    _tag.store (0xdeadbeef, std::memory_order_release);
 
     //  Deallocate.
     own_t::process_destroy ();

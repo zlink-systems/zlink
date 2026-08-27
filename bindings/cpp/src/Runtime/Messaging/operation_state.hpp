@@ -301,23 +301,9 @@ inline void restore_send_parts_to_sources (operation_state_t &state_,
     state_.message.part_sources.clear ();
 }
 
-inline void restore_send_parts_to_state (operation_state_t &state_,
-                                         std::vector<message_t> &parts_) noexcept
-{
-    const bool had_single_part_source = state_.message.single_part_source != nullptr;
-    restore_send_parts_to_sources (state_, parts_);
-    if (had_single_part_source || parts_.empty ())
-        return;
-    if (parts_.size () == 1u && state_.message.single_part.has_value ()) {
-        state_.message.single_part = std::move (parts_[0]);
-        return;
-    }
-    state_.message.parts = std::move (parts_);
-}
-
 // Thread-local pool of operation_state_t to avoid per-send heap alloc.
 // Each send/request/reply chain acquires one pooled state at the entry factory
-// and returns it on submit success. The pool keeps string/vector capacity so
+// and returns it when the builder chain ends. The pool keeps string/vector capacity so
 // repeated PAIR/DEALER/PUBSUB sends with empty topic or short topic do not
 // trigger malloc/free per call.
 inline void reset_for_reuse (operation_state_t &state_) noexcept

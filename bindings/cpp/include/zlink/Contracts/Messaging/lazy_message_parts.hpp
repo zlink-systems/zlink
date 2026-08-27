@@ -13,6 +13,8 @@ namespace zlink
 namespace detail
 {
 
+struct recv_envelope_t;
+
 class lazy_message_parts_t
 {
   public:
@@ -37,7 +39,13 @@ class lazy_message_parts_t
     void close ();
 
   private:
+    friend struct recv_envelope_t;
+
     void materialize_parts () const;
+    void prepare_receive () noexcept { close (); }
+    void receive_single_part (message_t part_) { _single_part.emplace (std::move (part_)); }
+    void reserve_receive_parts (size_t part_count_) { _parts.reserve (part_count_); }
+    void receive_part (message_t part_) { _parts.emplace_back (std::move (part_)); }
 
     mutable std::optional<message_t> _single_part;
     mutable std::vector<message_t> _parts;

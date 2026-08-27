@@ -11,6 +11,7 @@ import systems.zlink.contracts.sockets.StreamSocket;
 import systems.zlink.contracts.sockets.SubSocket;
 import systems.zlink.contracts.sockets.XPubSocket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -19,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class NativeContractTest {
     @Test
-    public void testRawMultipartSendRecvSinglePart() {
+    public void testRawMultipartSendRecvSinglePart() throws Exception {
         TestSupport.assumeNative();
 
         try (Context ctx = Zlink.createContext();
@@ -32,7 +33,9 @@ public class NativeContractTest {
             byte[] payload = "native".getBytes(StandardCharsets.UTF_8);
             try (Message outbound = Message.from(payload)) {
                 right.send().message(outbound).submit()
-                    .toCompletableFuture().join();
+                    .toCompletableFuture().get(
+                        TestSupport.DEFAULT_TIMEOUT_MS,
+                        TimeUnit.MILLISECONDS);
             }
 
             try (systems.zlink.contracts.messaging.Received inbound = new systems.zlink.contracts.messaging.Received()) {

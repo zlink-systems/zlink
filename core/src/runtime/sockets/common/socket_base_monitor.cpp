@@ -317,7 +317,7 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
         return -1;
     }
 
-    rc = zlink_bind (monitor.socket, endpoint_);
+    rc = monitor_socket->bind (endpoint_);
     if (rc == -1)
         stop_monitor (false);
     else {
@@ -748,7 +748,7 @@ void zlink::socket_base_t::stop_monitor (bool send_monitor_stopped_event_)
 {
     socket_base_t *monitor_socket = detach_monitor_socket (send_monitor_stopped_event_);
     if (monitor_socket)
-        zlink_close (monitor_socket);
+        monitor_socket->close ();
 }
 
 zlink::socket_base_t *

@@ -2,15 +2,13 @@
 #ifndef ZLINK_CPP_RUNTIME_NATIVE_RECEIVE_HPP_INCLUDED
 #define ZLINK_CPP_RUNTIME_NATIVE_RECEIVE_HPP_INCLUDED
 
-#include "native_message_guard.hpp"
 #include "native_message_parts.hpp"
 #include "../Core/routing_id_access.hpp"
 
+#include <zlink/Contracts/Messaging/lazy_message_parts.hpp>
 #include <zlink/Contracts/Sockets/results.hpp>
 
-#include <optional>
 #include <utility>
-#include <vector>
 
 namespace zlink
 {
@@ -22,24 +20,30 @@ struct recv_envelope_t
     routing_id_t source_rid;
     bool has_request_seq;
     uint64_t request_seq;
-    std::optional<message_t> single_part;
-    std::vector<message_t> parts;
+    lazy_message_parts_t *parts;
+
+    void bind (lazy_message_parts_t &parts_) noexcept { parts = &parts_; }
 
     void reset () noexcept
     {
         source_rid = zlink::detail::unchecked_empty_routing_id ();
         has_request_seq = false;
         request_seq = 0;
-        single_part.reset ();
-        parts.clear ();
+        if (parts)
+            parts->prepare_receive ();
     }
+
+    void receive_single_part (message_t part_) { parts->receive_single_part (std::move (part_)); }
+
+    void reserve_parts (size_t part_count_) { parts->reserve_receive_parts (part_count_); }
+
+    void receive_part (message_t part_) { parts->receive_part (std::move (part_)); }
 
     recv_envelope_t () :
         source_rid (zlink::detail::unchecked_empty_routing_id ()),
         has_request_seq (false),
         request_seq (0),
-        single_part (),
-        parts ()
+        parts (nullptr)
     {
     }
 };
@@ -100,12 +104,12 @@ inline int recv_envelope (void *socket_,
         }
 
         if (has_more == ZLINK_PART_FINAL) {
-            envelope_.single_part.emplace (std::move (first_msg));
+            envelope_.receive_single_part (std::move (first_msg));
             return 0;
         }
 
-        envelope_.parts.reserve (2);
-        envelope_.parts.emplace_back (std::move (first_msg));
+        envelope_.reserve_parts (2);
+        envelope_.receive_part (std::move (first_msg));
         for (;;) {
             message_t next_msg;
             if (!next_msg.valid ()) {
@@ -122,14 +126,14 @@ inline int recv_envelope (void *socket_,
             }
             refresh_payload_presence (next_msg);
 
-            envelope_.parts.emplace_back (std::move (next_msg));
+            envelope_.receive_part (std::move (next_msg));
             if (has_more == ZLINK_PART_FINAL)
                 return 0;
         }
     } else {
         const zlink_routing_id_t *source_rid = nullptr;
-        scoped_native_message_t first_part;
-        if (!first_part.init ())
+        message_t first_msg;
+        if (!first_msg.valid ())
             return -1;
 
         zlink_part_flag_t has_more = ZLINK_PART_FINAL;
@@ -137,42 +141,44 @@ inline int recv_envelope (void *socket_,
         uint64_t dealer_request_seq = 0;
         const int first_rc = recv_basic_part (
           socket_, use_dealer_recv_, &source_rid, &message_type,
-          &dealer_request_seq, first_part.get (), &has_more, flags_);
+          &dealer_request_seq, detail::native_handle (first_msg), &has_more, flags_);
         if (first_rc != ZLINK_RECV_OK) {
+            const int saved_errno = errno;
+            first_msg.close ();
+            errno = saved_errno;
             return first_rc;
         }
+        refresh_payload_presence (first_msg);
         if (dealer_request_seq != 0) {
             envelope_.has_request_seq = true;
             envelope_.request_seq = dealer_request_seq;
         }
 
-        message_t first_msg;
-        first_part.adopt_into (first_msg);
-
         if (has_more == ZLINK_PART_FINAL) {
-            envelope_.single_part.emplace (std::move (first_msg));
+            envelope_.receive_single_part (std::move (first_msg));
             if (source_rid && source_rid->size > 0)
                 envelope_.source_rid = zlink::detail::native_routing_id (*source_rid);
             return 0;
         }
 
-        envelope_.parts.reserve (2);
-        envelope_.parts.emplace_back (std::move (first_msg));
+        envelope_.reserve_parts (2);
+        envelope_.receive_part (std::move (first_msg));
         while (has_more != ZLINK_PART_FINAL) {
-            scoped_native_message_t next_part;
-            if (!next_part.init ())
+            message_t next_msg;
+            if (!next_msg.valid ())
                 return -1;
 
             const int rc = recv_basic_part (
               socket_, use_dealer_recv_, &source_rid, &message_type,
-              &dealer_request_seq, next_part.get (), &has_more, flags_);
+              &dealer_request_seq, detail::native_handle (next_msg), &has_more, flags_);
             if (rc != ZLINK_RECV_OK) {
+                const int saved_errno = errno;
+                next_msg.close ();
+                errno = saved_errno;
                 return rc;
             }
-
-            message_t next_msg;
-            next_part.adopt_into (next_msg);
-            envelope_.parts.emplace_back (std::move (next_msg));
+            refresh_payload_presence (next_msg);
+            envelope_.receive_part (std::move (next_msg));
         }
 
         if (source_rid && source_rid->size > 0)

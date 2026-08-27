@@ -27,7 +27,8 @@ const int k_paused = zlink::flow_state::receive_flow_paused;
 
 zlink::socket_base_t *as_socket (void *socket_)
 {
-    return static_cast<zlink::socket_base_t *> (socket_);
+    socket_handle_t handle = as_socket_handle (socket_);
+    return handle.socket;
 }
 
 bool deadline_expired (const std::chrono::steady_clock::time_point &deadline_)

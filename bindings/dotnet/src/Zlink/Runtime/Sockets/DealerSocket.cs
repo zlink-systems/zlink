@@ -184,20 +184,17 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
             throw new ArgumentNullException(nameof(parts));
 
         var cloned = RequestReplySupport.CloneParts(parts);
-        lock (SubmitGate)
+        try
         {
-            try
-            {
-                RequestReplySupport.SubmitClonedParts(cloned,
-                    (ref ZlinkMsg nativePart,
-                            NativeMethods.ZlinkPartFlag partFlag) =>
-                        NativeMethods.zlink_dealer_reply_part(Handle,
-                            requestSeq, ref nativePart, partFlag));
-            }
-            finally
-            {
-                RequestReplySupport.DisposeParts(cloned);
-            }
+            RequestReplySupport.SubmitClonedParts(cloned,
+                (ref ZlinkMsg nativePart,
+                        NativeMethods.ZlinkPartFlag partFlag) =>
+                    NativeMethods.zlink_dealer_reply_part(Handle,
+                        requestSeq, ref nativePart, partFlag));
+        }
+        finally
+        {
+            RequestReplySupport.DisposeParts(cloned);
         }
     }
 

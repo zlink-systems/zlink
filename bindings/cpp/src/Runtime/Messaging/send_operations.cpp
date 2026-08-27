@@ -107,7 +107,7 @@ async_result_t<void> submit_send_async (detail::operation_state_t &state_)
 
     const std::shared_ptr<detail::socket_callback_state_t> callbacks =
       detail::share_callback_state (state_.raw);
-    if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
+    if (!callbacks)
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
 
     zlink_routed_submit_target_t target{};
@@ -354,12 +354,18 @@ bool send_submit_operation_t::submit () &&
                 }
             }
             std::vector<message_t> parts = detail::take_send_parts (state);
-            const bool sent =
-              zlink::detail::received_access_t::submit_send (
-                *state.received.received, parts, state.flags);
-            if (!sent)
-                detail::restore_single_send_part_to_source (state, parts);
-            return sent;
+            try {
+                const bool sent =
+                  zlink::detail::received_access_t::submit_send (
+                    *state.received.received, parts, state.flags);
+                if (!sent)
+                    detail::restore_send_parts_to_sources (state, parts);
+                return sent;
+            }
+            catch (...) {
+                detail::restore_send_parts_to_sources (state, parts);
+                throw;
+            }
         }
         default:
             break;

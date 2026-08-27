@@ -23,7 +23,7 @@ zlink_bind_result_t zlink_bind (void *s_, const char *addr_)
 {
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
-        return zlink::bind_result_internal::from_errno (EFAULT);
+        return zlink::bind_result_internal::from_errno (errno);
     const int rc = handle.socket->bind (addr_);
     if (rc != 0)
         return zlink::bind_result_internal::from_rc (rc);
@@ -34,7 +34,7 @@ zlink_connect_result_t zlink_connect (void *s_, const char *addr_)
 {
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
-        return zlink::connect_result_internal::from_errno (EFAULT);
+        return zlink::connect_result_internal::from_errno (errno);
     const int rc = handle.socket->connect (addr_);
     if (rc != 0)
         return zlink::connect_result_internal::from_rc (rc);
@@ -45,7 +45,7 @@ zlink_connect_result_t zlink_unbind (void *s_, const char *addr_)
 {
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
-        return zlink::connect_result_internal::from_errno (EFAULT);
+        return zlink::connect_result_internal::from_errno (errno);
     return zlink::connect_result_internal::from_rc (handle.socket->term_endpoint (addr_));
 }
 
@@ -53,7 +53,7 @@ zlink_connect_result_t zlink_disconnect (void *s_, const char *addr_)
 {
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
-        return zlink::connect_result_internal::from_errno (EFAULT);
+        return zlink::connect_result_internal::from_errno (errno);
     return zlink::connect_result_internal::from_rc (handle.socket->term_endpoint (addr_));
 }
 
@@ -61,7 +61,7 @@ zlink_connect_result_t zlink_disconnect_rid (void *s_, const zlink_routing_id_t 
 {
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
-        return zlink::connect_result_internal::from_errno (EFAULT);
+        return zlink::connect_result_internal::from_errno (errno);
     return zlink::connect_result_internal::from_rc (handle.socket->term_peer_rid (peer_rid_));
 }
 
@@ -70,7 +70,7 @@ zlink_connect_result_t zlink_disconnect_transport_pair (
 {
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
-        return zlink::connect_result_internal::from_errno (EFAULT);
+        return zlink::connect_result_internal::from_errno (errno);
     return zlink::connect_result_internal::from_rc (
       handle.socket->term_transport_pair (transport_pair_id_, transport_pair_generation_));
 }
@@ -124,21 +124,20 @@ zlink_config_result_t zlink_proxy (void *frontend_, void *backend_, void *captur
 
     socket_handle_t frontend = as_socket_handle (frontend_);
     if (!frontend.socket)
-        return ZLINK_CONFIG_INVALID_HANDLE;
+        return zlink::config_result_internal::from_errno (errno);
     socket_handle_t backend = as_socket_handle (backend_);
     if (!backend.socket)
-        return ZLINK_CONFIG_INVALID_HANDLE;
+        return zlink::config_result_internal::from_errno (errno);
 
-    zlink::socket_base_t *capture_socket = NULL;
+    socket_handle_t capture;
     if (capture_) {
-        socket_handle_t capture = as_socket_handle (capture_);
+        capture = as_socket_handle (capture_);
         if (!capture.socket)
-            return ZLINK_CONFIG_INVALID_HANDLE;
-        capture_socket = capture.socket;
+            return zlink::config_result_internal::from_errno (errno);
     }
 
     return zlink::config_result_internal::from_rc (
-      zlink::proxy (frontend.socket, backend.socket, capture_socket));
+      zlink::proxy (frontend.socket, backend.socket, capture.socket));
 }
 
 bool zlink_has (const char *capability_)

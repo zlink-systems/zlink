@@ -292,7 +292,8 @@ class _ManagedSendOp:
             fallback.messages(*self._parts)
 
             async def submit_multipart():
-                return fallback.submit()
+                fallback.submit()
+                return None
 
             return submit_multipart()
         return self._socket._send_completion.submit(payload)
@@ -366,7 +367,8 @@ class _ManagedRoutedSendOp:
             fallback.messages(*self._parts)
 
             async def submit_multipart():
-                return fallback.submit()
+                fallback.submit()
+                return None
 
             return submit_multipart()
         return self._socket._routed_admission.submit_send(
@@ -598,7 +600,6 @@ class _RoutedAsyncSocket:
             admission = RoutedSendOwner(
                 self,
                 role,
-                self._outbound_record_attempt_gate,
                 read_request_timeout,
             )
         except Exception:
@@ -610,12 +611,7 @@ class _RoutedAsyncSocket:
         admission = getattr(self, "_routed_admission", None)
         if admission is None:
             return super().close()
-        try:
-            admission.begin_close()
-            super().close()
-        except Exception:
-            admission.rollback_close()
-            raise
+        super().close()
         admission.finish_close()
 
 

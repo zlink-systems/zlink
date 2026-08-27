@@ -44,6 +44,7 @@ class msg_t;
 class pipe_t;
 class io_thread_t;
 class socket_base_t;
+class socket_public_handle_t;
 
 namespace socket_reqrep_internal
 {
@@ -167,6 +168,7 @@ class socket_base_t : public own_t,
 {
     friend class reaper_t;
     friend class socket_callback_scope_t;
+    friend class socket_public_handle_t;
 #ifdef ZLINK_BUILD_TESTS
     friend class session_termination_test_access_t;
 #endif
@@ -175,6 +177,14 @@ class socket_base_t : public own_t,
     //  Returns false if object is not a socket.
     bool check_tag () const;
     int socket_type () const;
+    void set_public_handle (socket_public_handle_t *handle_)
+    {
+        _public_handle = handle_;
+    }
+    void *public_handle () const
+    {
+        return static_cast<void *> (_public_handle);
+    }
 
     //  Create a socket of a specified type.
     static socket_base_t *create (int type_, zlink::ctx_t *parent_, uint32_t tid_, int sid_);
@@ -204,7 +214,8 @@ class socket_base_t : public own_t,
     int send_scoped (zlink::msg_t *msg_,
                      int flags_,
                      socket_public_send_scope_t &scope_,
-                     zlink::pipe_t **pipe_out_ = NULL);
+                     zlink::pipe_t **pipe_out_ = NULL,
+                     bool report_multipart_abort_ = false);
     int send_routed (const zlink_routing_id_t *target_rid_, zlink::msg_t *msg_, int flags_);
     // Submit to the exact transport pair selected by
     // select_routed_submit_target(). A replacement peer with the same RID
@@ -222,7 +233,8 @@ class socket_base_t : public own_t,
                             uint64_t expected_connection_id_ = 0,
                             zlink::pipe_t **pipe_out_ = NULL,
                             uint64_t expected_transport_pair_id_ = 0,
-                            uint64_t expected_transport_pair_generation_ = 0);
+                            uint64_t expected_transport_pair_generation_ = 0,
+                            bool report_multipart_abort_ = false);
     int select_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);
@@ -352,8 +364,6 @@ class socket_base_t : public own_t,
                            size_t part_count_,
                            const zlink_send_async_options_t *options_,
                            zlink_send_op_id_t *op_id_out_);
-    bool try_send_async_routed_single_immediate (
-      const zlink_routing_id_t *target_rid_, zlink_msg_t *part_);
     int send_async_cancel (zlink_send_op_id_t op_id_);
     bool send_complete_handler_active () const;
     //  Admit whatever the current pipe state allows, then hand resolved
@@ -846,7 +856,8 @@ class socket_base_t : public own_t,
     void extract_flags (const msg_t *msg_);
 
     //  Used to check whether the object is a socket.
-    uint32_t _tag;
+    socket_public_handle_t *_public_handle;
+    std::atomic<uint32_t> _tag;
 
     //  If true, associated context was already terminated.
     std::atomic<bool> _ctx_terminated;
@@ -871,7 +882,10 @@ class socket_base_t : public own_t,
     int process_commands (int timeout_, bool throttle_);
     void inc_mailbox_ref ();
     void dec_mailbox_ref ();
+    void schedule_finalize_destroy ();
     void finalize_destroy ();
+    void finish_close_reap ();
+    void materialize_pending_inprocs_before_reap ();
     void process_async_mailbox ();
     void notify_receive_progress_locked ();
     void notify_receive_progress ();
@@ -897,7 +911,14 @@ class socket_base_t : public own_t,
     void test_set_send_pending_gate_release_hook (
       socket_send_pending_runtime_t::gate_release_hook_fn hook_,
       void *userdata_);
+    void test_set_send_inline_fallback_hook (
+      socket_send_pending_runtime_t::inline_fallback_hook_fn hook_,
+      void *userdata_);
+    void test_set_send_deadline_enqueue_hook (
+      socket_send_pending_runtime_t::deadline_enqueue_hook_fn hook_,
+      void *userdata_);
     void test_set_send_next_op_id (zlink_send_op_id_t next_op_id_);
+    void test_set_send_fail_after_queue_push (bool enabled_);
   private:
 #endif
     //  close / ctx term: fail every pending record fast. LINGER does not
@@ -935,6 +956,7 @@ class socket_base_t : public own_t,
     //  Handlers for incoming commands.
     void process_stop () ZLINK_FINAL;
     void process_bind (zlink::pipe_t *pipe_) ZLINK_FINAL;
+    void process_send_pending_timeout (uint64_t op_id_) ZLINK_FINAL;
     void process_term (int linger_) ZLINK_FINAL;
     void process_term_endpoint (std::string *endpoint_) ZLINK_FINAL;
 

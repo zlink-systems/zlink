@@ -174,7 +174,8 @@ int test_routed_send_without_credit_reports_backpressure ()
         std::fprintf (stderr, "SNDTIMEO was not the wait bound\n");
         return 4;
     }
-    // Ownership of a part Core refused stays with the caller.
+    // The C++ staging policy preserves the public lvalue even though Core
+    // consumes the native part used for the failed synchronous attempt.
     if (!payload.valid ()) {
         std::fprintf (stderr, "a refused submit must not consume the part\n");
         return 5;

@@ -11,6 +11,7 @@
 #include "../src/api/message/recv_result_internal.hpp"
 #include "../src/api/message/submit_result_internal.hpp"
 #include "../src/api/socket/socket_message_api_internal.hpp"
+#include "../src/api/socket/socket_api_internal.hpp"
 
 #include "testutil.hpp"
 
@@ -28,12 +29,20 @@
 #ifdef __cplusplus
 inline int test_send_single_msg (zlink_msg_t *msg_, void *s_, int flags_)
 {
-    return zlink::send_msg_internal (s_, msg_, static_cast<zlink_send_flags_t> (flags_));
+    socket_handle_t handle = as_socket_handle (s_);
+    return handle.socket
+             ? zlink::send_msg_internal (handle.socket, msg_,
+                                         static_cast<zlink_send_flags_t> (flags_))
+             : -1;
 }
 
 inline int test_recv_single_msg (zlink_msg_t *msg_, void *s_, int flags_)
 {
-    return zlink::recv_msg_internal (s_, msg_, static_cast<zlink_send_flags_t> (flags_));
+    socket_handle_t handle = as_socket_handle (s_);
+    return handle.socket
+             ? zlink::recv_msg_internal (handle.socket, msg_,
+                                         static_cast<zlink_send_flags_t> (flags_))
+             : -1;
 }
 
 inline int test_stream_send_bytes (
@@ -86,7 +95,10 @@ inline int zlink_send (void *s_, const void *buf_, size_t len_, int flags_)
     int type = 0;
     size_t type_size = sizeof (type);
     if (zlink_get_option (s_, ZLINK_OPT_TYPE, &type, &type_size) == ZLINK_CONFIG_OK) {
-        const int rc = zlink::send_msg_internal (s_, &msg, flags_);
+        socket_handle_t handle = as_socket_handle (s_);
+        const int rc = handle.socket
+                         ? zlink::send_msg_internal (handle.socket, &msg, flags_)
+                         : -1;
         if (rc < 0) {
             const int err = errno;
             zlink_msg_close (&msg);
@@ -135,15 +147,22 @@ inline void consume_parts (zlink_msg_t *parts_, size_t count_)
         consume_part (&parts_[i]);
 }
 
-inline bool should_consume_after_bulk_attempt (int rc_, int err_)
+inline bool should_consume_after_bulk_attempt (int rc_,
+                                               int err_,
+                                               bool preserve_stream_eagain_)
 {
-    return rc_ == 0 || err_ != EAGAIN;
+    return rc_ == 0 || err_ != EAGAIN || !preserve_stream_eagain_;
 }
 
 inline zlink_submit_result_t
-finish_bulk_attempt (int rc_, int err_, zlink_msg_t *parts_, size_t count_)
+finish_bulk_attempt (int rc_,
+                     int err_,
+                     zlink_msg_t *parts_,
+                     size_t count_,
+                     bool preserve_stream_eagain_ = false)
 {
-    if (should_consume_after_bulk_attempt (rc_, err_))
+    if (should_consume_after_bulk_attempt (rc_, err_,
+                                           preserve_stream_eagain_))
         consume_parts (parts_, count_);
     errno = err_;
     return zlink::submit_result_internal::from_rc (rc_);
@@ -174,8 +193,14 @@ inline zlink_submit_result_t send_parts_rid (void *s_,
         return ZLINK_SUBMIT_INVALID_HANDLE;
     }
 
+    socket_handle_t handle = as_socket_handle (s_);
+    const bool preserve_stream_eagain =
+      handle.socket && socket_type (handle) == ZLINK_CORE_SOCKET_STREAM;
     const int socket_rc = zlink_socket_send_rid_internal (s_, rid_, parts_, count_, flags_);
-    return finish_bulk_attempt (socket_rc, errno, parts_, count_);
+    const int saved_errno = errno;
+    handle = socket_handle_t ();
+    return finish_bulk_attempt (socket_rc, saved_errno, parts_, count_,
+                                preserve_stream_eagain);
 }
 
 inline zlink_submit_result_t publish_parts (void *subject_,
@@ -421,8 +446,12 @@ inline int zlink_recv (void *s_, void *buf_, size_t len_, int flags_)
 {
     int type = 0;
     size_t type_size = sizeof (type);
-    if (zlink_get_option (s_, ZLINK_OPT_TYPE, &type, &type_size) == ZLINK_CONFIG_OK)
-        return zlink::recv_buffer_internal (s_, buf_, len_, flags_);
+    if (zlink_get_option (s_, ZLINK_OPT_TYPE, &type, &type_size) == ZLINK_CONFIG_OK) {
+        socket_handle_t handle = as_socket_handle (s_);
+        return handle.socket
+                 ? zlink::recv_buffer_internal (handle.socket, buf_, len_, flags_)
+                 : -1;
+    }
 
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
@@ -700,8 +729,9 @@ void recv_array_expect_success (void *socket_, const uint8_t (&array_)[SIZE], in
                                        "used for strings longer than 255 "
                                        "characters");
 
+    socket_handle_t handle = as_socket_handle (socket_);
     const int rc = TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::recv_buffer_internal (socket_, buffer, sizeof (buffer), flags_));
+      zlink::recv_buffer_internal (handle.socket, buffer, sizeof (buffer), flags_));
     TEST_ASSERT_EQUAL_INT (static_cast<int> (SIZE), rc);
     TEST_ASSERT_EQUAL_UINT8_ARRAY (array_, buffer, SIZE);
 }

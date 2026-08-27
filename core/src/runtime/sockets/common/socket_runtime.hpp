@@ -107,6 +107,18 @@ class socket_inprocs_t
     int erase_pipes (const std::string &endpoint_uri_str_);
     void erase_pipe (const pipe_t *pipe_);
 
+    template <typename Visitor> void for_each_unique_endpoint (Visitor visitor_) const
+    {
+        for (map_t::const_iterator it = _inprocs.begin (), end = _inprocs.end (); it != end;) {
+            map_t::const_iterator next = it;
+            do {
+                ++next;
+            } while (next != end && next->first == it->first);
+            visitor_ (it->first);
+            it = next;
+        }
+    }
+
   private:
     typedef std::multimap<std::string, pipe_t *> map_t;
     map_t _inprocs;
@@ -358,7 +370,10 @@ struct send_pending_record_t
         has_target (false),
         charge_bytes (0),
         timeout_ms (0),
-        claimed (false)
+        claimed (false),
+        completion_result (ZLINK_SEND_ADMITTED),
+        completion_errno (0),
+        completion_next (NULL)
     {
     }
 
@@ -374,23 +389,12 @@ struct send_pending_record_t
     //  racing the physical submit.
     bool claimed;
     std::shared_ptr<zlink::request_timeout::task_t> deadline;
-};
-
-//  One resolved completion waiting for dispatch. Completions are never
-//  coalesced: exactly one record exists per operation.
-struct send_complete_record_t
-{
-    send_complete_record_t () :
-        op_id (0), userdata (NULL), result (ZLINK_SEND_ADMITTED),
-        terminal_errno (0)
-    {
-    }
-
-    zlink_send_op_id_t op_id;
-    void *userdata;
-    routed_send_target_key_t target;
-    zlink_send_complete_result_t result;
-    int terminal_errno;
+    //  Resolution reuses the already allocated pending record as an
+    //  intrusive completion node. Completion publication after submit
+    //  acceptance therefore performs no allocation.
+    zlink_send_complete_result_t completion_result;
+    int completion_errno;
+    send_pending_record_t *completion_next;
 };
 
 //  Per-socket asynchronous send admission state.
@@ -410,9 +414,14 @@ struct socket_send_pending_runtime_t
         pending_msgs (0),
         enqueue_epoch (0),
         pending_bytes (0),
+        completion_head (NULL),
+        completion_tail (NULL),
         failing (false)
 #ifdef ZLINK_BUILD_TESTS
-        , gate_release_hook (NULL), gate_release_hook_userdata (NULL)
+        , gate_release_hook (NULL), gate_release_hook_userdata (NULL),
+        inline_fallback_hook (NULL), inline_fallback_hook_userdata (NULL),
+        deadline_enqueue_hook (NULL), deadline_enqueue_hook_userdata (NULL),
+        fail_after_queue_push (false)
 #endif
     {
     }
@@ -440,7 +449,8 @@ struct socket_send_pending_runtime_t
     //  confusing an already blocked queue with newly published work.
     std::atomic<uint64_t> enqueue_epoch;
     uint64_t pending_bytes;
-    std::deque<send_complete_record_t> completions;
+    send_pending_record_t *completion_head;
+    send_pending_record_t *completion_tail;
     //  Set once close or context termination has failed every pending record.
     //  New submits are refused from that point on.
     bool failing;
@@ -448,6 +458,13 @@ struct socket_send_pending_runtime_t
     typedef void (*gate_release_hook_fn) (void *userdata_);
     gate_release_hook_fn gate_release_hook;
     void *gate_release_hook_userdata;
+    typedef void (*inline_fallback_hook_fn) (void *userdata_);
+    inline_fallback_hook_fn inline_fallback_hook;
+    void *inline_fallback_hook_userdata;
+    typedef void (*deadline_enqueue_hook_fn) (void *userdata_);
+    deadline_enqueue_hook_fn deadline_enqueue_hook;
+    void *deadline_enqueue_hook_userdata;
+    bool fail_after_queue_push;
 #endif
 };
 
@@ -526,7 +543,9 @@ class socket_lifecycle_coordinator_t
     void wait_async_quiesced (int timeout_ms_);
     bool is_async_mailbox_active () const;
     bool is_async_quiesce_pending () const;
-    void complete_deferred_close_handoff (mailbox_t *mailbox_, int timeout_ms_);
+    void complete_deferred_close_handoff (mailbox_t *mailbox_,
+                                          socket_base_t *socket_,
+                                          int timeout_ms_);
     void clear_deferred_close ();
     bool take_deferred_close ();
     void mark_destroy_pending ();
@@ -544,7 +563,7 @@ class socket_lifecycle_coordinator_t
     std::atomic<uint32_t> callback_api_depth;
     std::atomic<bool> close_deferred;
     atomic_counter_t mailbox_refcnt;
-    bool destroy_pending;
+    std::atomic<bool> destroy_pending;
     poller_t *reaper_poller_value;
     bool destroyed;
     std::atomic<bool> async_mailbox_active;

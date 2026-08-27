@@ -205,8 +205,9 @@ received.reply().message(Message.from("ok")).submit();
 | `RequestSubmitOperation.submit()` | `CompletionStage<List<Message>>` | the caller owns and must close the reply messages |
 | `submit(RequestCallback)` (`RequestSubmitOperation`/`RequestCallbackSubmitOperation`) | `boolean` | same `DONT_WAIT` convention; delivers the result and parts to the callback later — the callback owns the parts only when the result is `RequestResult.OK` |
 
-Every builder consumes its accumulated `Message` parts on a successful submit only; on failure
-ownership is restored to the caller.
+Every builder consumes its accumulated public `Message` parts on a successful submit only. On
+failure, binding-owned native staging preserves the public parts for the caller even though Core
+consumes each staging part actually passed to a synchronous call.
 
 **When to use.** `submit()`'s `CompletionStage` in ordinary async code; `await()` instead on a
 virtual thread for code that reads more naturally as a sequential call; `.flags(...).submit(callback)`

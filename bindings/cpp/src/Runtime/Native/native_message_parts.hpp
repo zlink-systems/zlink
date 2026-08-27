@@ -257,6 +257,33 @@ template <typename SubmitFn> inline int submit_one_message_part (message_t &part
     return rc;
 }
 
+template <typename SubmitFn>
+inline int submit_borrowed_message_part (message_t &part_, SubmitFn submit_)
+{
+    if (!part_.valid ()) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    zlink_msg_t native_view;
+    if (zlink_msg_init (&native_view) != 0)
+        return -1;
+    if (zlink_msg_copy (&native_view, detail::native_handle (part_)) != 0) {
+        const int saved_errno = errno;
+        (void) zlink_msg_close (&native_view);
+        errno = saved_errno;
+        return -1;
+    }
+
+    const int rc = submit_ (&native_view, ZLINK_PART_FINAL);
+    const int saved_errno = errno;
+    (void) zlink_msg_close (&native_view);
+    if (rc == ZLINK_SUBMIT_OK)
+        detail::message_access_t::close_noexcept (part_);
+    errno = saved_errno;
+    return rc;
+}
+
 template <typename BodyFn>
 inline int with_moved_native_parts (std::vector<message_t> &parts_, BodyFn body_)
 {
@@ -276,20 +303,6 @@ inline int with_moved_native_parts (std::vector<message_t> &parts_, BodyFn body_
 }
 
 template <typename SubmitFn>
-inline int submit_message_parts (std::vector<message_t> &parts_, SubmitFn submit_)
-{
-    return detail::with_moved_native_parts (
-      parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
-          size_t failed_index = 0;
-          const int rc = detail::submit_native_parts (native_parts_, part_count_, failed_index,
-                                                      std::move (submit_));
-          if (rc != 0)
-              detail::restore_parts_from_native (parts_, native_parts_, part_count_, failed_index);
-          return rc;
-      });
-}
-
-template <typename SubmitFn>
 inline int submit_message_parts_close_on_failure (std::vector<message_t> &parts_, SubmitFn submit_)
 {
     return detail::with_moved_native_parts (
@@ -305,13 +318,13 @@ inline int submit_message_parts_close_on_failure (std::vector<message_t> &parts_
 
 //  Builds a borrowed, zero-copy native view over @p parts_ and runs @p body_.
 //
-//  Send/request/reply operations carry parts as borrowed/read-only: Core
-//  keeps caller ownership on both success and failure and copies synchronously
-//  what it needs. Unlike the raw-socket move/consume path this adapter never
-//  moves, mutates, or invalidates the caller's messages. Each temporary native
-//  part shares the source message's reference-counted storage, so a Core copy
-//  remains valid after this adapter closes its temporary parts. The caller
-//  messages remain valid in every outcome.
+//  Send/request/reply operations expose borrowed/read-only C++ messages while
+//  submitting independent native views. Core consumes each native argument on
+//  success and ordinary failure, but that consumption affects only the view,
+//  not the public message. Each view shares the source message's
+//  reference-counted storage, so a Core copy remains valid after this adapter
+//  closes its temporary parts. The caller messages remain valid in every
+//  outcome.
 template <typename BodyFn>
 inline int with_borrowed_native_parts (const std::vector<message_t> &parts_, BodyFn body_)
 {
@@ -367,6 +380,27 @@ inline int submit_borrowed_message_array (const std::vector<message_t> &parts_, 
       parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
           return submit_ (native_parts_, part_count_);
       });
+}
+
+// Keep the public C++ messages separate from the per-call native arguments.
+// Core consumes an attempted native part even when it rejects the record, so
+// submit shallow native views and leave the public messages untouched on
+// failure. Close the public messages only after every part succeeds so the C++
+// consume-on-success contract is applied to the record as one unit.
+template <typename SubmitFn>
+inline int submit_message_parts (std::vector<message_t> &parts_, SubmitFn submit_)
+{
+    const int rc = detail::submit_borrowed_message_array (
+      parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
+          size_t failed_index = 0;
+          return detail::submit_native_parts (native_parts_, part_count_, failed_index,
+                                              std::move (submit_));
+      });
+    if (rc == ZLINK_SUBMIT_OK) {
+        for (message_t &part : parts_)
+            detail::message_access_t::close_noexcept (part);
+    }
+    return rc;
 }
 
 } // namespace detail

@@ -24,7 +24,7 @@
     },
     {
       "path": "include/zlink/socket/api.h",
-      "sha256": "a62cfb2e38e0c94ab7d5fcd2c3927a7c39594739ad3b6aa1acc45b2c5c5e1738"
+      "sha256": "319fe117ba6f225444605dcf2d1df00a28d4c0a04b4e3603c12fa3fb3832994b"
     },
     {
       "path": "include/zlink_enum.h",

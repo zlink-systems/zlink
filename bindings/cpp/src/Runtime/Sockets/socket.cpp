@@ -45,15 +45,8 @@ routing_id_t routing_id_from_native_pointer (const void *native_) noexcept
 
 socket_t::~socket_t ()
 {
-    if (_callbacks)
-        _callbacks->socket_closed.store (true, std::memory_order_release);
-    if (_socket && _callbacks) {
-        std::lock_guard<std::mutex> attempt_lock (
-          _callbacks->outbound_record_attempt_mutex);
+    if (_socket)
         (void) _socket->close ();
-    } else if (_socket) {
-        (void) _socket->close ();
-    }
 }
 
 socket_t::socket_t (socket_t &&) noexcept = default;
@@ -62,15 +55,8 @@ socket_t &socket_t::operator= (socket_t &&other_) noexcept
 {
     if (this == &other_)
         return *this;
-    if (_callbacks)
-        _callbacks->socket_closed.store (true, std::memory_order_release);
-    if (_socket && _callbacks) {
-        std::lock_guard<std::mutex> attempt_lock (
-          _callbacks->outbound_record_attempt_mutex);
+    if (_socket)
         (void) _socket->close ();
-    } else if (_socket) {
-        (void) _socket->close ();
-    }
     _socket = std::move (other_._socket);
     _callbacks = std::move (other_._callbacks);
     _receive_envelope = std::move (other_._receive_envelope);
@@ -87,25 +73,7 @@ void socket_t::close ()
 {
     if (!_socket || !_socket->valid ())
         return;
-    if (_callbacks
-        && _callbacks->socket_closed.load (std::memory_order_acquire))
-        throw close_error_t (close_result_t::busy, EBUSY);
-    int rc = 0;
-    if (_socket && _callbacks) {
-        // Publish the closing intent before contending for the submit gate.
-        // A hot send loop re-takes that gate immediately after every submit,
-        // so acquiring it first would let close starve indefinitely; with the
-        // flag already set, in-flight submits drain and new ones are rejected.
-        // The destructor path publishes the flag the same way.
-        _callbacks->socket_closed.store (true, std::memory_order_release);
-        std::lock_guard<std::mutex> attempt_lock (
-          _callbacks->outbound_record_attempt_mutex);
-        rc = _socket->close ();
-        if (rc != 0)
-            _callbacks->socket_closed.store (false, std::memory_order_release);
-    } else if (_socket) {
-        rc = _socket->close ();
-    }
+    const int rc = _socket->close ();
     if (rc != 0)
         throw close_error_t (static_cast<close_result_t> (rc), zlink_errno ());
 }
@@ -192,18 +160,7 @@ socket_t::socket_t (context_t &ctx_, socket_type type_) :
 
 int socket_t::send (message_t &part_, send_flags_t flags_)
 {
-    detail::socket_callback_state_t &callbacks = callback_state ();
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
-    std::lock_guard<std::mutex> attempt_lock (
-      callbacks.outbound_record_attempt_mutex);
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
-    return detail::submit_one_message_part (
+    return detail::submit_borrowed_message_part (
       part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
           return zlink_send_part (detail::native_handle (*this), part_out_,
                                   static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
@@ -213,17 +170,6 @@ int socket_t::send (message_t &part_, send_flags_t flags_)
 
 int socket_t::send (std::vector<message_t> &parts_, send_flags_t flags_)
 {
-    detail::socket_callback_state_t &callbacks = callback_state ();
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
-    std::lock_guard<std::mutex> attempt_lock (
-      callbacks.outbound_record_attempt_mutex);
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
     return detail::submit_message_parts (
       parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           return zlink_send_part (detail::native_handle (*this), part_out_,
@@ -235,18 +181,7 @@ int socket_t::send (std::vector<message_t> &parts_, send_flags_t flags_)
 int socket_t::send (const routing_id_t &target_rid_, message_t &part_, send_flags_t flags_)
 {
     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
-    detail::socket_callback_state_t &callbacks = callback_state ();
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
-    std::lock_guard<std::mutex> attempt_lock (
-      callbacks.outbound_record_attempt_mutex);
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
-    return detail::submit_one_message_part (
+    return detail::submit_borrowed_message_part (
       part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
           return zlink_send_part_rid (
             detail::native_handle (*this), &target_rid, part_out_,
@@ -259,17 +194,6 @@ int socket_t::send (const routing_id_t &target_rid_,
                     send_flags_t flags_)
 {
     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
-    detail::socket_callback_state_t &callbacks = callback_state ();
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
-    std::lock_guard<std::mutex> attempt_lock (
-      callbacks.outbound_record_attempt_mutex);
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
     return detail::submit_message_parts (
       parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           return zlink_send_part_rid (
@@ -291,12 +215,13 @@ int socket_t::receive (received_t &received_, recv_flags_t flags_, bool attach_r
 int socket_t::receive_impl (
   received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_)
 {
-    // Caller-provided storage is reusable. Release this copy's previous
-    // envelope credit before waiting for the next message.
-    received_.close ();
     if (!_receive_envelope)
         _receive_envelope = std::make_unique<detail::recv_envelope_t> ();
     auto &envelope = *_receive_envelope;
+    // The staging envelope carries only metadata. Physical parts are received
+    // directly into the caller-provided result so its vector capacity is the
+    // single reusable collection for this receive path.
+    envelope.bind (detail::received_access_t::prepare_receive (received_));
     const bool use_router_recv = _type == socket_type::router;
     const bool use_dealer_recv = _type == socket_type::dealer;
     int rc = -1;
@@ -319,24 +244,10 @@ int socket_t::receive_impl (
         return rc;
     }
 
-    const std::optional<routing_id_t> source_rid =
-      zlink::detail::routing_id_empty (envelope.source_rid)
-        ? std::nullopt
-        : std::optional<routing_id_t> (envelope.source_rid);
-    const std::optional<uint64_t> request_seq =
-      envelope.has_request_seq ? std::optional<uint64_t> (envelope.request_seq) : std::nullopt;
-
-    if (envelope.single_part.has_value ()) {
-        detail::received_access_t::assign (received_, source_rid, request_seq,
-                                           std::move (*envelope.single_part));
-    } else if (envelope.parts.size () == 1u) {
-        detail::received_access_t::assign (received_, source_rid, request_seq,
-                                           std::move (envelope.parts[0]));
-    } else {
-        detail::received_access_t::assign (received_, source_rid, request_seq,
-                                           envelope.parts);
-    }
-    if (attach_routed_send_context_ && source_rid.has_value ())
+    detail::received_access_t::commit_receive_metadata (
+      received_, std::move (envelope.source_rid), envelope.has_request_seq,
+      envelope.request_seq);
+    if (attach_routed_send_context_ && received_.routing_id ().has_value ())
         detail::received_access_t::set_socket_rid_send_context (received_,
                                                                 detail::native_handle (*this),
                                                                 _callbacks);
@@ -346,18 +257,7 @@ int socket_t::receive_impl (
 int socket_t::publish (const std::string &topic_id_, message_t &part_, send_flags_t flags_)
 {
     detail::validate_no_embedded_null (topic_id_, "topic");
-    detail::socket_callback_state_t &callbacks = callback_state ();
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
-    std::lock_guard<std::mutex> attempt_lock (
-      callbacks.outbound_record_attempt_mutex);
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
-    return detail::submit_one_message_part (
+    return detail::submit_borrowed_message_part (
       part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
           return zlink_publish_part (detail::native_handle (*this), topic_id_.c_str (), part_out_,
                                      static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
@@ -370,17 +270,6 @@ int socket_t::publish (const std::string &topic_id_,
                        send_flags_t flags_)
 {
     detail::validate_no_embedded_null (topic_id_, "topic");
-    detail::socket_callback_state_t &callbacks = callback_state ();
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
-    std::lock_guard<std::mutex> attempt_lock (
-      callbacks.outbound_record_attempt_mutex);
-    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
-        errno = ETERM;
-        return -1;
-    }
     return detail::submit_message_parts (
       parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           return zlink_publish_part (detail::native_handle (*this), topic_id_.c_str (), part_out_,

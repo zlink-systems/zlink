@@ -332,7 +332,8 @@ int test_detached_exact_request_is_terminal_without_reroute ()
           rerouted_to_b ? 1 : 0);
         return 1;
     }
-    // A refused submit leaves the request part with the caller.
+    // The C++ staging policy leaves the public request lvalue with the caller
+    // after Core consumes the failed synchronous attempt's native part.
     if (!request.valid ()) {
         std::fprintf (stderr, "refused request submit consumed the part\n");
         return 2;

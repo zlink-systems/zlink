@@ -62,12 +62,16 @@ void test_reservation_is_held_until_callback_returns ()
         TEST_ASSERT_TRUE (zlink::request_completion::try_reserve (&state));
 
     blocking_callback_t callback_state = {false, false};
-    zlink::request_completion::control_t control;
-    control.handler = &block_completion_callback;
-    control.userdata = &callback_state;
     {
         std::lock_guard<std::mutex> lock (state.mutex);
-        state.controls.push_back (control);
+        zlink::request_completion::control_t *control = state.reserved_head;
+        TEST_ASSERT_NOT_NULL (control);
+        state.reserved_head = control->next;
+        control->handler = &block_completion_callback;
+        control->userdata = &callback_state;
+        control->next = NULL;
+        state.ready_head = control;
+        state.ready_tail = control;
     }
 
     std::thread owner ([&] {

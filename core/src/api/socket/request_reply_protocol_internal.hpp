@@ -294,6 +294,7 @@ inline int send_envelope_control_frames (uint8_t message_type_,
 
 inline void consume_send_frame (zlink_msg_t *part_)
 {
+    const int saved_errno = errno;
     if (!part_)
         return;
 
@@ -305,6 +306,7 @@ inline void consume_send_frame (zlink_msg_t *part_)
     errno_assert (close_rc == 0);
     const int init_rc = msg->init ();
     errno_assert (init_rc == 0);
+    errno = saved_errno;
 }
 
 inline void consume_send_frames_from (zlink_msg_t *parts_, size_t start_index_, size_t part_count_)

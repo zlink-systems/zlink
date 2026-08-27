@@ -211,8 +211,9 @@ void recv_string_expect_success (void *socket_, const char *str_, int flags_)
                                        "used for strings longer than 255 "
                                        "characters");
 
+    socket_handle_t handle = as_socket_handle (socket_);
     const int rc = TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::recv_buffer_internal (socket_, buffer, sizeof (buffer), flags_));
+      zlink::recv_buffer_internal (handle.socket, buffer, sizeof (buffer), flags_));
     TEST_ASSERT_EQUAL_INT ((int) len, rc);
     if (str_)
         TEST_ASSERT_EQUAL_STRING_LEN (str_, buffer, len);

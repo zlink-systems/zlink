@@ -430,7 +430,7 @@ func (s *StreamSocket) RoutingID() (RoutingID, error) {
 func (s *StreamSocket) SendTo(target RoutingID) SendOp {
 	return newSendBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
 		rid := target.toC()
-		return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+		return submitStreamFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 			return submitErrorFromResult(C.zlink_send_part_rid(s.raw(), &rid, part, C.zlink_send_flags_t(flags), partFlag))
 		})
 	})
@@ -446,7 +446,7 @@ func (s *StreamSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	if out.routingID.Size() > 0 {
 		routingID := out.routingID
 		out.send = func(sendFlags SendFlags, builderParts []sendBuilderPart) (bool, error) {
-			return s.core.submitToBuilder(routingID, sendFlags, builderParts)
+			return s.core.submitStreamToBuilder(routingID, sendFlags, builderParts)
 		}
 	}
 	return true, nil

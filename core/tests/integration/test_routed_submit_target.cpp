@@ -5,12 +5,16 @@
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <future>
 #include <mutex>
 #include <string>
 #include <string.h>
+#include <thread>
+#include <vector>
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -564,6 +568,118 @@ void test_router_selects_exact_target_and_rejects_stale_generation ()
     test_context_socket_close_zero_linger (router);
 }
 
+void test_stable_router_route_never_returns_enoent_under_concurrent_send ()
+{
+    const int sender_count = 4;
+    const int sends_per_thread = 20000;
+    const int total_sends = sender_count * sends_per_thread;
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    const uint64_t unlimited = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_SNDHWM, &unlimited, sizeof (unlimited)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &unlimited, sizeof (unlimited)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "stable-route", 12));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://routed-submit-stable-stress"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://routed-submit-stable-stress"));
+
+    const zlink_routing_id_t dealer_rid = make_rid ("stable-route");
+    (void) select_router_target_eventually (router, &dealer_rid);
+
+    std::atomic<int> ready (0);
+    std::atomic<bool> go (false);
+    std::atomic<bool> senders_done (false);
+    std::atomic<int> submitted (0);
+    std::atomic<int> enoent (0);
+    std::atomic<int> other_failures (0);
+    std::atomic<int> received (0);
+    std::atomic<int> bad_records (0);
+
+    std::thread receiver ([&] {
+        const std::chrono::steady_clock::time_point deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (20);
+        while (std::chrono::steady_clock::now () < deadline) {
+            zlink_msg_t part;
+            zlink_msg_init (&part);
+            zlink_part_flag_t more = ZLINK_PART_FINAL;
+            const zlink_recv_result_t rc = zlink_recv_part (
+              dealer, NULL, &part, &more, ZLINK_RECV_FLAGS_DONTWAIT);
+            if (rc == ZLINK_RECV_OK) {
+                if (more != ZLINK_PART_FINAL || zlink_msg_size (&part) != 2 * sizeof (int))
+                    bad_records.fetch_add (1, std::memory_order_relaxed);
+                received.fetch_add (1, std::memory_order_relaxed);
+                zlink_msg_close (&part);
+                continue;
+            }
+            zlink_msg_close (&part);
+            if (senders_done.load (std::memory_order_acquire)
+                && received.load (std::memory_order_relaxed)
+                     >= submitted.load (std::memory_order_relaxed))
+                return;
+            std::this_thread::yield ();
+        }
+        bad_records.fetch_add (1, std::memory_order_relaxed);
+    });
+
+    std::vector<std::thread> senders;
+    senders.reserve (sender_count);
+    for (int sender_id = 0; sender_id < sender_count; ++sender_id) {
+        senders.emplace_back ([&, sender_id] {
+            ready.fetch_add (1, std::memory_order_release);
+            while (!go.load (std::memory_order_acquire))
+                std::this_thread::yield ();
+
+            for (int sequence = 0; sequence < sends_per_thread; ++sequence) {
+                zlink_msg_t part;
+                if (zlink_msg_init_size (&part, 2 * sizeof (int)) != ZLINK_CONFIG_OK) {
+                    other_failures.fetch_add (1, std::memory_order_relaxed);
+                    continue;
+                }
+                int payload[2] = {sender_id, sequence};
+                memcpy (zlink_msg_data (&part), payload, sizeof (payload));
+                const int rc = zlink_socket_send_rid_internal (
+                  router, &dealer_rid, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT);
+                const int err = zlink_errno ();
+                if (rc == 0)
+                    submitted.fetch_add (1, std::memory_order_relaxed);
+                else if (err == ENOENT)
+                    enoent.fetch_add (1, std::memory_order_relaxed);
+                else
+                    other_failures.fetch_add (1, std::memory_order_relaxed);
+                zlink_msg_close (&part);
+            }
+        });
+    }
+
+    while (ready.load (std::memory_order_acquire) != sender_count)
+        std::this_thread::yield ();
+    go.store (true, std::memory_order_release);
+    for (std::vector<std::thread>::iterator it = senders.begin (); it != senders.end (); ++it)
+        it->join ();
+    senders_done.store (true, std::memory_order_release);
+    receiver.join ();
+
+    std::printf ("stable_router_route attempts=%d submitted=%d enoent=%d other_failures=%d "
+                 "received=%d bad_records=%d\n",
+                 total_sends, submitted.load (std::memory_order_relaxed),
+                 enoent.load (std::memory_order_relaxed),
+                 other_failures.load (std::memory_order_relaxed),
+                 received.load (std::memory_order_relaxed),
+                 bad_records.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (total_sends, submitted.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (0, enoent.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (0, other_failures.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (total_sends, received.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (0, bad_records.load (std::memory_order_relaxed));
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 void test_router_exact_target_is_invalid_after_same_rid_handover ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -937,6 +1053,7 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (
       test_router_selects_exact_target_and_rejects_stale_generation);
+    RUN_TEST (test_stable_router_route_never_returns_enoent_under_concurrent_send);
     RUN_TEST (test_router_exact_target_is_invalid_after_same_rid_handover);
     RUN_TEST (
       test_router_exact_target_survives_unrelated_peer_churn);

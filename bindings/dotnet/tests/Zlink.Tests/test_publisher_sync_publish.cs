@@ -65,6 +65,7 @@ public sealed class test_publisher_sync_publish
 
         Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured,
             error.Result);
+        Assert.Throws<ObjectDisposedException>(() => _ = blocked.Size);
         // The publisher must not have waited for credit.
         Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
     }
@@ -91,6 +92,7 @@ public sealed class test_publisher_sync_publish
         started.Stop();
 
         Assert.False(accepted);
+        Assert.Throws<ObjectDisposedException>(() => _ = blocked.Size);
         Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
     }
 

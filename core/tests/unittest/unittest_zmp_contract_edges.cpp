@@ -116,6 +116,7 @@ void test_missing_completion_pipe_is_not_connected ()
       zlink::submit_result_internal::from_errno (errno));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&frame));
 
+    handle = socket_handle_t ();
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (dealer));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
 }

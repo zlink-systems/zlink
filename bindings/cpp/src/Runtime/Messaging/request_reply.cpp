@@ -318,7 +318,7 @@ void submit_raw_request (detail::operation_state_t &state_,
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     detail::socket_callback_state_t *const callbacks =
       detail::live_callback_state (state_.raw);
-    if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
+    if (!callbacks)
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
 
     const bool dealer = state_.kind == detail::operation_kind_t::raw_request;
@@ -330,11 +330,6 @@ void submit_raw_request (detail::operation_state_t &state_,
     submit_result_t result = submit_result_t::internal_error;
     int result_errno = EINVAL;
     {
-        std::lock_guard<std::mutex> attempt_lock (
-          callbacks->outbound_record_attempt_mutex);
-        if (callbacks->socket_closed.load (std::memory_order_acquire))
-            throw submit_error_t (submit_result_t::terminated, ETERM);
-
         const zlink_routed_submit_target_t target =
           select_routed_submit_target (state_.raw.socket, router_rid);
 

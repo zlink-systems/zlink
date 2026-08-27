@@ -4,8 +4,10 @@
 #include "testutil_unity.hpp"
 #include "sockets/common/socket_base.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -77,6 +79,22 @@ struct gate_release_probe_t
     bool release = false;
 };
 
+struct inline_fallback_probe_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered = false;
+    bool release = false;
+};
+
+struct deadline_enqueue_probe_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered = false;
+    bool release = false;
+};
+
 void block_first_gate_release (void *userdata_)
 {
     gate_release_probe_t *probe =
@@ -84,6 +102,26 @@ void block_first_gate_release (void *userdata_)
     std::unique_lock<std::mutex> lock (probe->mutex);
     if (probe->entered)
         return;
+    probe->entered = true;
+    probe->changed.notify_all ();
+    probe->changed.wait (lock, [probe] { return probe->release; });
+}
+
+void block_inline_fallback (void *userdata_)
+{
+    inline_fallback_probe_t *probe =
+      static_cast<inline_fallback_probe_t *> (userdata_);
+    std::unique_lock<std::mutex> lock (probe->mutex);
+    probe->entered = true;
+    probe->changed.notify_all ();
+    probe->changed.wait (lock, [probe] { return probe->release; });
+}
+
+void block_deadline_enqueue (void *userdata_)
+{
+    deadline_enqueue_probe_t *probe =
+      static_cast<deadline_enqueue_probe_t *> (userdata_);
+    std::unique_lock<std::mutex> lock (probe->mutex);
     probe->entered = true;
     probe->changed.notify_all ();
     probe->changed.wait (lock, [probe] { return probe->release; });
@@ -103,8 +141,8 @@ void capture_completion (void *, const zlink_send_complete_event_t *event_, void
         snapshot.result = event_->result;
         snapshot.terminal_errno = event_->terminal_errno;
         probe->events.push_back (snapshot);
+        probe->changed.notify_all ();
     }
-    probe->changed.notify_all ();
 }
 
 void ignore_reply (zlink_request_result_t, zlink_msg_t *, size_t, void *)
@@ -179,8 +217,8 @@ void capture_reentrant_completion (
     {
         std::lock_guard<std::mutex> lock (probe->mutex);
         probe->done = true;
+        probe->changed.notify_all ();
     }
-    probe->changed.notify_all ();
 }
 
 bool wait_for_completion_count (completion_probe_t *probe_, size_t count_, int timeout_ms_ = 3000)
@@ -222,6 +260,11 @@ void init_part (zlink_msg_t *part_, const std::string &payload_)
                            zlink_msg_init_size (part_, payload_.size ()));
     if (!payload_.empty ())
         memcpy (zlink_msg_data (part_), payload_.data (), payload_.size ());
+}
+
+void count_free (void *, void *hint_)
+{
+    ++*static_cast<int *> (hint_);
 }
 
 zlink_submit_result_t submit_record (void *socket_,
@@ -469,6 +512,47 @@ void test_send_pending_limits_default_to_unlimited_and_accept_zero ()
     }
 }
 
+void test_pair_immediate_async_admission_has_zero_op_id_and_no_callback ()
+{
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    completion_probe_t completion;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (sender, &capture_completion, &completion));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (receiver, "inproc://send-async-pair-immediate"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (sender, "inproc://send-async-pair-immediate"));
+    msleep (SETTLE_TIME);
+
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    zlink_send_op_id_t op_id = 99;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      submit_record (sender, {"pair-immediate"}, &options, &op_id));
+    msleep (25);
+
+    std::printf ("pair_immediate_async op_id=%llu completion_count=%zu\n",
+                 static_cast<unsigned long long> (op_id),
+                 completion_count (&completion));
+    TEST_ASSERT_EQUAL_UINT64 (0, op_id);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_count (&completion));
+
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_recv (receiver, NULL, &parts, &part_count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    TEST_ASSERT_EQUAL_STRING_LEN (
+      "pair-immediate", static_cast<const char *> (zlink_msg_data (&parts[0])),
+      zlink_msg_size (&parts[0]));
+    zlink_multipart_close (parts, part_count);
+}
+
 void test_send_pending_sequence_exhaustion_never_assigns_zero ()
 {
     void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -477,7 +561,9 @@ void test_send_pending_sequence_exhaustion_never_assigns_zero ()
       ZLINK_HANDLER_OK,
       zlink_send_complete_handler (sender, &capture_completion, &completion));
 
-    static_cast<zlink::socket_base_t *> (sender)->test_set_send_next_op_id (0);
+    socket_handle_t sender_handle = as_socket_handle (sender);
+    sender_handle.socket->test_set_send_next_op_id (0);
+    sender_handle = socket_handle_t ();
 
     zlink_msg_t part;
     init_part (&part, "sequence-exhausted");
@@ -493,6 +579,230 @@ void test_send_pending_sequence_exhaustion_never_assigns_zero ()
     TEST_ASSERT_EQUAL_UINT64 (0, op_id);
     TEST_ASSERT_EQUAL_UINT64 (0, completion_count (&completion));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+}
+
+void test_queue_index_allocation_failure_rolls_back_without_ownership_transfer ()
+{
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    completion_probe_t completion;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (sender, &capture_completion, &completion));
+
+    socket_handle_t sender_handle = as_socket_handle (sender);
+    TEST_ASSERT_NOT_NULL (sender_handle.socket);
+    sender_handle.socket->test_set_send_fail_after_queue_push (true);
+    sender_handle = socket_handle_t ();
+
+    char payload[] = "queue-index-transaction";
+    int free_count = 0;
+    zlink_msg_t part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_data (
+      &part, payload, sizeof (payload) - 1, &count_free, &free_count));
+    zlink::msg_t *native = reinterpret_cast<zlink::msg_t *> (&part);
+    native->set_flags (zlink::msg_t::more);
+
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    zlink_send_op_id_t op_id = 77;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OUT_OF_MEMORY,
+      zlink_send_async (sender, &part, 1, &options, &op_id));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, op_id);
+    TEST_ASSERT_EQUAL_INT (0, free_count);
+    TEST_ASSERT_EQUAL_UINT64 (sizeof (payload) - 1, zlink_msg_size (&part));
+    TEST_ASSERT_EQUAL_MEMORY (payload, zlink_msg_data (&part),
+                              sizeof (payload) - 1);
+    TEST_ASSERT_TRUE ((native->flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_count (&completion));
+
+    sender_handle = as_socket_handle (sender);
+    TEST_ASSERT_NOT_NULL (sender_handle.socket);
+    sender_handle.socket->test_set_send_fail_after_queue_push (false);
+    sender_handle = socket_handle_t ();
+
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_async (sender, &part, 1, &options, &op_id));
+    TEST_ASSERT_EQUAL_UINT64 (1, op_id);
+    TEST_ASSERT_EQUAL_INT (0, free_count);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
+                           zlink_send_async_cancel (sender, op_id));
+    TEST_ASSERT_TRUE (wait_for_completion_count (&completion, 1));
+    const completion_snapshot_t event = completion_at (&completion, 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TERMINAL, event.result);
+    TEST_ASSERT_EQUAL_INT (ECANCELED, event.terminal_errno);
+    TEST_ASSERT_EQUAL_INT (1, free_count);
+}
+
+void test_close_joins_firing_send_deadline_before_returning ()
+{
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    const uint64_t hwm = 65536u + sizeof (zlink_msg_t);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (sender, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (receiver, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (receiver, "inproc://send-deadline-close-join"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (sender, "inproc://send-deadline-close-join"));
+    msleep (SETTLE_TIME);
+
+    bool backpressured = false;
+    for (int i = 0; i != 32 && !backpressured; ++i) {
+        zlink_msg_t filler;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&filler, 65536));
+        const zlink_submit_result_t result = zlink_send_part (
+          sender, &filler, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
+        TEST_ASSERT_TRUE (result == ZLINK_SUBMIT_OK
+                          || result == ZLINK_SUBMIT_BACKPRESSURED);
+        backpressured = result == ZLINK_SUBMIT_BACKPRESSURED;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&filler));
+    }
+    TEST_ASSERT_TRUE (backpressured);
+
+    completion_probe_t completion;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (sender, &capture_completion, &completion));
+
+    deadline_enqueue_probe_t deadline;
+    socket_handle_t sender_handle = as_socket_handle (sender);
+    TEST_ASSERT_NOT_NULL (sender_handle.socket);
+    sender_handle.socket->test_set_send_deadline_enqueue_hook (
+      &block_deadline_enqueue, &deadline);
+    sender_handle = socket_handle_t ();
+
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    options.timeout_ms = 10;
+    zlink_send_op_id_t op_id = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      submit_record (sender, {std::string (65536, 'd')}, &options, &op_id));
+    TEST_ASSERT_TRUE (op_id != 0);
+
+    {
+        std::unique_lock<std::mutex> lock (deadline.mutex);
+        TEST_ASSERT_TRUE (deadline.changed.wait_for (
+          lock, std::chrono::seconds (3),
+          [&deadline] { return deadline.entered; }));
+    }
+
+    const int zero_linger = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      sender, ZLINK_OPT_LINGER, &zero_linger, sizeof (zero_linger)));
+    std::atomic<bool> close_done (false);
+    int close_rc = -1;
+    std::thread closer ([&] () {
+        close_rc = zlink_close (sender);
+        close_done.store (true, std::memory_order_release);
+    });
+
+    msleep (30);
+    const bool returned_before_deadline_released =
+      close_done.load (std::memory_order_acquire);
+    {
+        std::lock_guard<std::mutex> lock (deadline.mutex);
+        deadline.release = true;
+    }
+    deadline.changed.notify_all ();
+    closer.join ();
+    test_context_socket_mark_closed (sender);
+
+    TEST_ASSERT_FALSE_MESSAGE (
+      returned_before_deadline_released,
+      "close returned while the send deadline callback still owned its socket payload");
+    TEST_ASSERT_EQUAL_INT (0, close_rc);
+    TEST_ASSERT_EQUAL_UINT64 (1, completion_count (&completion));
+    const completion_snapshot_t event = completion_at (&completion, 0);
+    TEST_ASSERT_TRUE (event.result == ZLINK_SEND_TIMED_OUT
+                      || event.result == ZLINK_SEND_TERMINAL);
+    if (event.result == ZLINK_SEND_TIMED_OUT)
+        TEST_ASSERT_EQUAL_INT (ETIMEDOUT, event.terminal_errno);
+    else
+        TEST_ASSERT_EQUAL_INT (ECANCELED, event.terminal_errno);
+}
+
+void test_multipart_sequence_exhaustion_preserves_caller_after_inline_rollback ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    const uint64_t hwm = 1024;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_routing_id (dealer, "exhausted-peer", 14));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://send-async-exhausted-multipart"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://send-async-exhausted-multipart"));
+
+    const zlink_routing_id_t dealer_rid = make_rid ("exhausted-peer");
+    const zlink_routed_submit_target_t target =
+      select_router_target_eventually (router, &dealer_rid);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK, send_router_filler (router, target, 256));
+
+    completion_probe_t completion;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (router, &capture_completion, &completion));
+    socket_handle_t router_handle = as_socket_handle (router);
+    router_handle.socket->test_set_send_next_op_id (0);
+    router_handle = socket_handle_t ();
+
+    char first_payload[128];
+    memset (first_payload, 'a', sizeof (first_payload));
+    int free_count = 0;
+    zlink_msg_t parts[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_data (
+      &parts[0], first_payload, sizeof (first_payload), &count_free,
+      &free_count));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[1], 700));
+    memset (zlink_msg_data (&parts[1]), 'b', 700);
+
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    options.target = &target;
+    zlink_send_op_id_t op_id = 77;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_SEQ_EXHAUSTED,
+      zlink_send_async (router, parts, 2, &options, &op_id));
+    TEST_ASSERT_EQUAL_INT (EOVERFLOW, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, op_id);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_count (&completion));
+    TEST_ASSERT_EQUAL_INT (0, free_count);
+    TEST_ASSERT_EQUAL_UINT64 (sizeof (first_payload),
+                              zlink_msg_size (&parts[0]));
+    TEST_ASSERT_EQUAL_MEMORY (first_payload, zlink_msg_data (&parts[0]),
+                              sizeof (first_payload));
+    TEST_ASSERT_EQUAL_UINT64 (700, zlink_msg_size (&parts[1]));
+    TEST_ASSERT_EQUAL_INT ('b',
+                           static_cast<const char *> (
+                             zlink_msg_data (&parts[1]))[699]);
+
+    TEST_ASSERT_TRUE (recv_dealer_record_eventually (
+      dealer, std::vector<std::string> (1, std::string (256, 'O'))));
+    TEST_ASSERT_TRUE_MESSAGE (
+      dealer_has_no_part (dealer),
+      "a rejected async multipart record leaked a partial part");
+
+    zlink_multipart_close (parts, 2);
+    TEST_ASSERT_EQUAL_INT (1, free_count);
 }
 
 void test_completion_callback_rejects_all_reentrant_submit_entry_points ()
@@ -573,11 +883,6 @@ void test_completion_callback_rejects_all_reentrant_submit_entry_points ()
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.request);
     TEST_ASSERT_EQUAL_INT (EDEADLK, probe.request_errno);
 
-    // `done` is published from the final statements of the callback, just
-    // before the dispatch scope itself is released. Do not let the Unity
-    // context teardown race that final scope release and observe close as
-    // EBUSY on a slower scheduler.
-    msleep (10);
 }
 
 void test_router_send_async_fused_target_admits_single_and_multipart_records ()
@@ -737,7 +1042,8 @@ void test_pending_driver_rechecks_enqueue_racing_gate_release ()
       zlink_send_complete_handler (router, &capture_completion, &completion));
 
     gate_release_probe_t handoff;
-    zlink::socket_base_t *socket = static_cast<zlink::socket_base_t *> (router);
+    socket_handle_t router_handle = as_socket_handle (router);
+    zlink::socket_base_t *socket = router_handle.socket;
     socket->test_set_send_pending_gate_release_hook (
       &block_first_gate_release, &handoff);
 
@@ -788,7 +1094,7 @@ void test_pending_driver_rechecks_enqueue_racing_gate_release ()
     TEST_ASSERT_TRUE (wait_for_completion_count (&completion, 2));
 }
 
-void test_borrowed_single_rejection_restores_caller_more_flag ()
+void test_copied_single_probe_rejection_preserves_caller_more_flag ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -832,7 +1138,10 @@ void test_borrowed_single_rejection_restores_caller_more_flag ()
     zlink_send_async_options_t options;
     memset (&options, 0, sizeof (options));
     options.struct_size = sizeof (options);
-    options.target = &target;
+    zlink_routed_submit_target_t rid_only_target = target;
+    rid_only_target.transport_pair_id = 0;
+    rid_only_target.transport_pair_generation = 0;
+    options.target = &rid_only_target;
     zlink_send_op_id_t op_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
@@ -940,19 +1249,179 @@ void test_pending_multipart_admission_waits_for_sync_sequence_gate ()
     TEST_ASSERT_TRUE (recv_dealer_record_eventually (dealer_a, pending_record));
 }
 
+void test_peer_rid_single_fallback_reserves_fifo_before_queue_publication ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    const uint64_t hwm = 65536u + sizeof (zlink_msg_t);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_routing_id (dealer, "fifo-peer", 9));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://send-async-peer-rid-fifo"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://send-async-peer-rid-fifo"));
+
+    const zlink_routing_id_t rid = make_rid ("fifo-peer");
+    const zlink_routed_submit_target_t exact_target =
+      select_router_target_eventually (router, &rid);
+    zlink_routed_submit_target_t rid_only_target = exact_target;
+    rid_only_target.transport_pair_id = 0;
+    rid_only_target.transport_pair_generation = 0;
+
+    int filler_count = 0;
+    bool reached_backpressure = false;
+    for (int i = 0; i != 32 && !reached_backpressure; ++i) {
+        const zlink_submit_result_t result =
+          send_router_filler (router, exact_target, 65536);
+        if (result == ZLINK_SUBMIT_BACKPRESSURED)
+            reached_backpressure = true;
+        else {
+            TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
+            ++filler_count;
+        }
+    }
+    TEST_ASSERT_TRUE (reached_backpressure);
+    TEST_ASSERT_TRUE (filler_count > 0);
+
+    completion_probe_t completion;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (router, &capture_completion, &completion));
+
+    inline_fallback_probe_t fallback;
+    socket_handle_t router_handle = as_socket_handle (router);
+    TEST_ASSERT_NOT_NULL (router_handle.socket);
+    router_handle.socket->test_set_send_inline_fallback_hook (
+      &block_inline_fallback, &fallback);
+    router_handle = socket_handle_t ();
+
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    options.target = &rid_only_target;
+
+    zlink_msg_t first_part;
+    init_part (&first_part, "fifo-first");
+    zlink_submit_result_t first_result = ZLINK_SUBMIT_INTERNAL_ERROR;
+    zlink_send_op_id_t first_op_id = 0;
+    size_t first_size_after = static_cast<size_t> (-1);
+    std::thread first_submit ([&] () {
+        errno = 0;
+        first_result = zlink_send_async (
+          router, &first_part, 1, &options, &first_op_id);
+        first_size_after = zlink_msg_size (&first_part);
+    });
+
+    {
+        std::unique_lock<std::mutex> lock (fallback.mutex);
+        TEST_ASSERT_TRUE (fallback.changed.wait_for (
+          lock, std::chrono::seconds (3),
+          [&fallback] { return fallback.entered; }));
+    }
+
+    //  The later record is published while the earlier record is paused
+    //  after its physical EAGAIN but before its queue insertion. It must not
+    //  acquire the admission gate or become peer-visible first.
+    zlink_msg_t second_part;
+    init_part (&second_part, "fifo-second");
+    zlink_send_op_id_t second_op_id = 0;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_async (router, &second_part, 1, &options, &second_op_id));
+    TEST_ASSERT_TRUE (second_op_id != 0);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&second_part));
+
+    //  A rejected follower still owns its native part and never receives an
+    //  operation id. Temporarily cap the already-published pending queue,
+    //  then restore the normal unlimited policy before the first submit is
+    //  allowed to publish.
+    const uint64_t one_pending = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      router, ZLINK_OPT_SEND_PENDING_MAX_MSGS, &one_pending,
+      sizeof (one_pending)));
+    zlink_msg_t rejected_part;
+    init_part (&rejected_part, "fifo-rejected");
+    zlink_send_op_id_t rejected_op_id = 77;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_BACKPRESSURED,
+      zlink_send_async (
+        router, &rejected_part, 1, &options, &rejected_op_id));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, rejected_op_id);
+    TEST_ASSERT_EQUAL_UINT64 (strlen ("fifo-rejected"),
+                              zlink_msg_size (&rejected_part));
+    TEST_ASSERT_EQUAL_MEMORY (
+      "fifo-rejected", zlink_msg_data (&rejected_part),
+      strlen ("fifo-rejected"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&rejected_part));
+    const uint64_t unlimited_pending = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      router, ZLINK_OPT_SEND_PENDING_MAX_MSGS, &unlimited_pending,
+      sizeof (unlimited_pending)));
+
+    const std::vector<std::string> filler_record (
+      1, std::string (65536, 'O'));
+    for (int i = 0; i != filler_count; ++i)
+        TEST_ASSERT_TRUE (
+          recv_dealer_record_eventually (dealer, filler_record));
+
+    TEST_ASSERT_FALSE_MESSAGE (
+      wait_for_completion_count (&completion, 1, 100),
+      "later same-target record admitted before the earlier queue publication");
+    TEST_ASSERT_TRUE_MESSAGE (
+      dealer_has_no_part (dealer),
+      "later same-target record became visible before the earlier record");
+
+    {
+        std::lock_guard<std::mutex> lock (fallback.mutex);
+        fallback.release = true;
+    }
+    fallback.changed.notify_all ();
+    first_submit.join ();
+
+    router_handle = as_socket_handle (router);
+    TEST_ASSERT_NOT_NULL (router_handle.socket);
+    router_handle.socket->test_set_send_inline_fallback_hook (NULL, NULL);
+    router_handle = socket_handle_t ();
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, first_result);
+    TEST_ASSERT_TRUE (first_op_id != 0);
+    TEST_ASSERT_EQUAL_UINT64 (0, first_size_after);
+    TEST_ASSERT_TRUE (wait_for_completion_count (&completion, 2));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED,
+                           completion_at (&completion, 0).result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED,
+                           completion_at (&completion, 1).result);
+    TEST_ASSERT_TRUE (
+      recv_dealer_record_eventually (dealer, {"fifo-first"}));
+    TEST_ASSERT_TRUE (
+      recv_dealer_record_eventually (dealer, {"fifo-second"}));
+}
+
 int main ()
 {
     setup_test_environment (60);
 
     UNITY_BEGIN ();
     RUN_TEST (test_send_pending_limits_default_to_unlimited_and_accept_zero);
+    RUN_TEST (test_pair_immediate_async_admission_has_zero_op_id_and_no_callback);
     RUN_TEST (test_send_pending_sequence_exhaustion_never_assigns_zero);
+    RUN_TEST (test_queue_index_allocation_failure_rolls_back_without_ownership_transfer);
+    RUN_TEST (test_close_joins_firing_send_deadline_before_returning);
+    RUN_TEST (test_multipart_sequence_exhaustion_preserves_caller_after_inline_rollback);
     RUN_TEST (test_completion_callback_rejects_all_reentrant_submit_entry_points);
     RUN_TEST (test_router_send_async_fused_target_admits_single_and_multipart_records);
     RUN_TEST (test_dealer_generic_target_admits_multipart_after_connect);
     RUN_TEST (test_routed_multipart_async_rolls_back_when_later_part_hits_hwm);
     RUN_TEST (test_pending_driver_rechecks_enqueue_racing_gate_release);
-    RUN_TEST (test_borrowed_single_rejection_restores_caller_more_flag);
+    RUN_TEST (test_copied_single_probe_rejection_preserves_caller_more_flag);
     RUN_TEST (test_pending_multipart_admission_waits_for_sync_sequence_gate);
+    RUN_TEST (test_peer_rid_single_fallback_reserves_fifo_before_queue_publication);
     return UNITY_END ();
 }

@@ -343,11 +343,13 @@ class publish_operation_t : private detail::operation_builder_base_t<
 /**
  * @brief Builds a multipart send: add one or more parts, then submit().
  * @note Submitting consumes the added message_t parts; on success each part is
- *       moved into the transport and left invalid; on failure ownership returns to the caller.
- * @note "Returns to the caller" covers every part added from an lvalue, in a
- *       multipart sequence as well as a single-part one: each such message_t
- *       holds its payload again after a failed submit. A part added from an
- *       rvalue has no caller object left to return to and stays consumed.
+ *       moved into the transport and left invalid. On failure, the binding's
+ *       staging/restore policy returns ownership to an lvalue caller even though
+ *       Core consumes the native part passed to a synchronous submit.
+ * @note This binding-level restoration covers every part added from an lvalue,
+ *       in a multipart sequence as well as a single-part one: each such
+ *       message_t holds its payload again after a failed submit. A part added
+ *       from an rvalue has no caller object left to restore and stays consumed.
  */
 class send_operation_t : private detail::operation_builder_base_t<
                            detail::operation_state_t,

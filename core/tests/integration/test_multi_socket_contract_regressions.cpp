@@ -1155,8 +1155,10 @@ void test_pubsub_publish_rollback_preserves_next_topic_boundary ()
     TEST_ASSERT_EQUAL_INT (static_cast<int> (std::strlen (k_pubsub_topic)),
                            test_send_single_msg (&topic_part, pub, ZLINK_SNDMORE));
 
-    zlink::socket_base_t *pub_socket = static_cast<zlink::socket_base_t *> (pub);
+    socket_handle_t pub_handle = as_socket_handle (pub);
+    zlink::socket_base_t *pub_socket = pub_handle.socket;
     TEST_ASSERT_SUCCESS_ERRNO (pub_socket->rollback ());
+    pub_handle = socket_handle_t ();
 
     char topic[32];
     memset (topic, 0, sizeof (topic));

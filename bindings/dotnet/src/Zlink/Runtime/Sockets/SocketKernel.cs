@@ -9,16 +9,12 @@ internal sealed partial class SocketKernel : IDisposable
     private const int TopicBufferSize = 4096;
     private const int DontWaitFlag = 1;
     private readonly SocketCallbackRegistry _callbacks = new();
-    private readonly object _sendCompletionSync = new();
     private readonly object _streamModeGate = new();
 
     private readonly SocketHandle _handle;
     private readonly SocketOptionAccessor _options;
     private readonly SocketTypePolicy _policy;
-    private string? _publishTopicCacheKey;
-    private byte[]? _publishTopicCacheUtf8;
-    private SendCompletionRegistry? _sendCompletion;
-    private bool _sendCompletionClosing;
+    private readonly SendCompletionRegistry? _sendCompletion;
     private bool _streamAttached;
     private int _streamReceiveMode;
 
@@ -27,24 +23,15 @@ internal sealed partial class SocketKernel : IDisposable
         _handle = new SocketHandle(context, type);
         _options = new SocketOptionAccessor(_handle);
         _policy = new SocketTypePolicy(type);
-    }
-
-    public SocketKernel(IntPtr handle, bool own)
-    {
-        _handle = new SocketHandle(handle, own);
-        _options = new SocketOptionAccessor(_handle);
-        _policy = new SocketTypePolicy(
-            SocketOptionAccessor.ReadSocketType(_handle.DangerousGetHandle()));
+        _sendCompletion = CreateSendCompletion(type);
     }
 
     public IntPtr Handle => _handle.DangerousGetHandle();
     public SocketType Type => _policy.SocketType;
-    internal object SubmitGate { get; } = new();
-
     /// <summary>
-    ///     The socket's Core send-completion bridge. Created on first use so a
-    ///     socket that never calls an asynchronous send terminal never asks
-    ///     Core to start its async completion dispatch.
+    ///     The socket's Core send-completion bridge. The managed delegate is
+    ///     rooted with the socket so close cannot race lazy bridge creation;
+    ///     the Core completion handler itself is still installed on first use.
     /// </summary>
     internal SendCompletionRegistry SendCompletion
     {
@@ -55,22 +42,23 @@ internal sealed partial class SocketKernel : IDisposable
                 throw new NotSupportedException(
                     "Asynchronous send requires a PAIR, DEALER, ROUTER, or STREAM socket.");
 
-            lock (_sendCompletionSync)
-            {
-                if (_sendCompletionClosing)
-                    throw new ZlinkSubmitException(
-                        ZlinkSubmitException.ErrorCode.Terminated);
-                return _sendCompletion ??= new SendCompletionRegistry(Handle,
-                    Type, SubmitGate);
-            }
+            return _sendCompletion!;
         }
+    }
+
+    private SendCompletionRegistry? CreateSendCompletion(SocketType type)
+    {
+        return type is SocketType.Pair or SocketType.Dealer
+            or SocketType.Router or SocketType.Stream
+            ? new SendCompletionRegistry(Handle, type)
+            : null;
     }
 
     internal Task<IReadOnlyList<Message>> RequestAsync(
         RoutingId? routerRoutingId, IReadOnlyList<Message> parts,
         uint timeoutMs, CancellationToken cancellationToken)
     {
-        return RoutedRequestSubmitter.RequestAsync(Handle, Type, SubmitGate,
+        return RoutedRequestSubmitter.RequestAsync(Handle, Type,
             routerRoutingId, parts, timeoutMs, cancellationToken);
     }
 
@@ -91,15 +79,12 @@ internal sealed partial class SocketKernel : IDisposable
         var cloned = RequestReplySupport.CloneParts(parts);
         try
         {
-            lock (SubmitGate)
-            {
-                RequestReplySupport.SubmitClonedParts(cloned,
-                    (ref ZlinkMsg nativePart,
-                        NativeMethods.ZlinkPartFlag partFlag) =>
-                        NativeMethods.zlink_router_reply_part(Handle,
-                            ref nativeRoutingId, requestSeq, ref nativePart,
-                            partFlag));
-            }
+            RequestReplySupport.SubmitClonedParts(cloned,
+                (ref ZlinkMsg nativePart,
+                    NativeMethods.ZlinkPartFlag partFlag) =>
+                    NativeMethods.zlink_router_reply_part(Handle,
+                        ref nativeRoutingId, requestSeq, ref nativePart,
+                        partFlag));
         }
         catch
         {

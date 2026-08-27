@@ -17,8 +17,10 @@
 //   - callback delivery hops from native threads onto Go-managed dispatcher
 //     goroutines before invoking user handlers
 //
-// Message ownership follows the native contract. Message(...) preserves the
-// caller's message on submit failure and consumes it on success. MoveMessage(...)
+// Message ownership follows the native contract at the binding boundary.
+// Message(...) submits a binding-owned staging copy, preserving the caller's
+// message on submit failure and consuming it on success; Core still consumes
+// the staged native part on ordinary synchronous failure. MoveMessage(...)
 // transfers ownership to the operation at submit time and is intended for hot
 // paths that do not need to reuse a failed-send payload. Bytes(...) reads
 // caller-owned bytes during Submit and does not retain the slice after Submit

@@ -385,13 +385,25 @@ bool zlink::socket_lifecycle_coordinator_t::is_async_quiesce_pending () const
     return async_quiesce_pending.load (std::memory_order_acquire);
 }
 
-void zlink::socket_lifecycle_coordinator_t::complete_deferred_close_handoff (mailbox_t *mailbox_,
-                                                                             int timeout_ms_)
+void zlink::socket_lifecycle_coordinator_t::complete_deferred_close_handoff (
+  mailbox_t *mailbox_, socket_base_t *socket_, int timeout_ms_)
 {
     clear_deferred_close ();
 
     if (is_async_mailbox_active ()) {
         stop_async_mailbox_processing (mailbox_);
+        // schedule_if_needed() alone cannot close the running-handler race:
+        // it may observe _scheduled=true just before that handler performs its
+        // final active check and clears _scheduled on an empty command pipe.
+        // Queue a real no-op command so either that handler reschedules itself
+        // from visible data or a new handler is posted after it exits.
+        if (mailbox_ && socket_) {
+            command_t wake;
+            memset (&wake, 0, sizeof (wake));
+            wake.destination = socket_;
+            wake.type = command_t::request_completion;
+            mailbox_->send (wake);
+        }
         wait_async_quiesced (timeout_ms_);
     } else if (is_async_quiesce_pending ()) {
         wait_async_quiesced (timeout_ms_);
@@ -413,17 +425,17 @@ bool zlink::socket_lifecycle_coordinator_t::take_deferred_close ()
 
 void zlink::socket_lifecycle_coordinator_t::mark_destroy_pending ()
 {
-    destroy_pending = true;
+    destroy_pending.store (true, std::memory_order_release);
 }
 
 void zlink::socket_lifecycle_coordinator_t::clear_destroy_pending ()
 {
-    destroy_pending = false;
+    destroy_pending.store (false, std::memory_order_release);
 }
 
 bool zlink::socket_lifecycle_coordinator_t::is_destroy_pending () const
 {
-    return destroy_pending;
+    return destroy_pending.load (std::memory_order_acquire);
 }
 
 void zlink::socket_lifecycle_coordinator_t::set_reaper_poller (poller_t *poller_)

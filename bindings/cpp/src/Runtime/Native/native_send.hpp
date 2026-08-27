@@ -19,35 +19,10 @@ template <typename NativeSubmit>
 inline submit_result_t submit_received_parts_restore (std::vector<message_t> &parts_,
                                                       NativeSubmit submit_)
 {
-    if (parts_.size () <= native_part_stack_capacity) {
-        std::array<zlink_msg_t, native_part_stack_capacity> native_parts;
-        if (detail::move_parts_to_native (parts_, native_parts.data (), parts_.size ()) != 0)
-            throw last_error ();
-
-        size_t failed_index = 0;
-        const submit_result_t result = static_cast<submit_result_t> (detail::submit_native_parts (
-          native_parts.data (), parts_.size (), failed_index,
-          [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
-              return submit_ (part_out_, part_flag_, part_flag_ == ZLINK_PART_FINAL);
-          }));
-        if (result != submit_result_t::ok)
-            detail::restore_parts_from_native (parts_, native_parts.data (), parts_.size (),
-                                               failed_index);
-        return result;
-    }
-
-    std::vector<zlink_msg_t> native;
-    if (detail::move_parts_to_native (parts_, native) != 0)
-        throw last_error ();
-
-    size_t failed_index = 0;
-    const submit_result_t result = static_cast<submit_result_t> (detail::submit_native_parts (
-      native, failed_index, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
+    return static_cast<submit_result_t> (detail::submit_message_parts (
+      parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           return submit_ (part_out_, part_flag_, part_flag_ == ZLINK_PART_FINAL);
       }));
-    if (result != submit_result_t::ok)
-        detail::restore_parts_from_native (parts_, native, failed_index);
-    return result;
 }
 
 template <typename NativeSubmit>

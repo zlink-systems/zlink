@@ -7,6 +7,7 @@
 #include "core/ctx.hpp"
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
+#include "api/socket/socket_api_internal.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/internal/fq.hpp"
 #include "sockets/router/router.hpp"
@@ -609,7 +610,9 @@ void run_router_recv_serializes_fq_with_pipe_termination (bool routed_recv_)
       zlink_socket (get_test_context (), ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (router_handle);
 
-    zlink::router_t *router = static_cast<zlink::router_t *> (router_handle);
+    socket_handle_t router_pin = as_socket_handle (router_handle);
+    TEST_ASSERT_NOT_NULL (router_pin.socket);
+    zlink::router_t *router = static_cast<zlink::router_t *> (router_pin.socket);
     zlink::object_t *parents[2] = {router, router};
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     // This fixture exercises the recv/termination lock domain, not HWM.
@@ -732,6 +735,7 @@ void run_router_recv_serializes_fq_with_pipe_termination (bool routed_recv_)
     TEST_ASSERT_NOT_NULL (gate.observed_fq);
     TEST_ASSERT_EQUAL_UINT (0, gate.observed_fq->test_pipe_count ());
 
+    router_pin = socket_handle_t ();
     close_zero_linger (router_handle);
     zlink::ctx_t *ctx =
       static_cast<zlink::ctx_t *> (get_test_context ());

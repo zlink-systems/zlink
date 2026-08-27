@@ -81,6 +81,15 @@ export function submitNativeError(
 ): SubmitError {
   const message = nativeErrorMessage(error, fallbackMessage);
   const errno = readErrno();
+  const nativeResult = typeof error === 'object' && error !== null
+    ? (error as { nativeResult?: unknown }).nativeResult
+    : undefined;
+  if (typeof nativeResult === 'number') {
+    return withRuntimeErrorMessage(
+      new SubmitError(nativeResult as SubmitResult, errno),
+      message
+    );
+  }
   if ((flags & SendFlags.DontWait) !== 0 && isWouldBlock(errno)) {
     return withRuntimeErrorMessage(new SubmitError(SubmitResult.Backpressured, errno), message);
   }

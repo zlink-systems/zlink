@@ -30,24 +30,35 @@ int recv_pair_payload (zlink::pair_socket_t &socket_,
     }
 }
 
-bool record_pair_payload (const zlink::message_t &payload,
+bool record_pair_payload (zlink::received_t &received,
+                          const zlink::message_t &payload,
                           uint32_t run_id,
                           size_t msg_size,
                           size_t payload_size,
+                          const std::chrono::steady_clock::time_point &active_deadline,
                           std::atomic<unsigned long long> &received_count,
                           perf::single::latency_stats_builder_t &latency_builder)
 {
-    if (payload.size () != payload_size)
+    if (payload.size () != payload_size) {
+        received.close ();
         return true;
+    }
 
     perf_single_metric::header_t header;
     if (!perf_single_metric::decode_payload_header (payload.data (), payload.size (), &header)) {
+        received.close ();
         return true;
     }
+    // The C reference closes both raw parts before it checks the active window
+    // and records now - sent_ts. Release this envelope at the same endpoint;
+    // its vector capacity remains available for the next receive.
+    received.close ();
     if (!perf_single_metric::is_expected (header, run_id, perf_single_metric::phase_active,
                                           msg_size)) {
         return true;
     }
+    if (std::chrono::steady_clock::now () >= active_deadline)
+        return true;
 
     // The receiver thread is joined before this counter is read, matching the
     // C reference harness; no release operation is needed for synchronization.
@@ -117,6 +128,10 @@ bool run_pattern_pair (const std::string &transport, size_t msg_size, const std:
 
     std::thread receiver_thread ([&] () {
         zlink::poller_t poller;
+        // receive() reuses caller-provided envelope storage. Keep this object
+        // for the entire drain loop so the two-part measurement message does
+        // not allocate a new parts vector for every received message.
+        zlink::received_t received;
         try {
             poller.add (bind_socket, zlink::poll_event_flag_t::pollin, 0);
         }
@@ -137,7 +152,6 @@ bool run_pattern_pair (const std::string &transport, size_t msg_size, const std:
             }
 
             for (;;) {
-                zlink::received_t received;
                 const int recv_rc =
                   recv_pair_payload (bind_socket, received, zlink::recv_flags_t::dontwait);
                 if (recv_rc != 0) {
@@ -153,9 +167,8 @@ bool run_pattern_pair (const std::string &transport, size_t msg_size, const std:
                 const zlink::message_t *part = perf::single::measurement_payload_part (parts);
                 if (!part)
                     continue;
-                if (std::chrono::steady_clock::now () < active_deadline
-                    && !record_pair_payload (*part, run_id, msg_size, payload_size, received_count,
-                                             latency_builder)) {
+                if (!record_pair_payload (received, *part, run_id, msg_size, payload_size,
+                                          active_deadline, received_count, latency_builder)) {
                     sender_ok.store (false, std::memory_order_release);
                     return;
                 }

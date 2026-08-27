@@ -33,6 +33,76 @@ uint64_t record_charge_bytes (const zlink_msg_t *parts_, size_t part_count_)
     return total;
 }
 
+void close_owned_parts (std::vector<zlink_msg_t> *parts_)
+{
+    const int saved_errno = errno;
+    for (size_t i = 0; i != parts_->size (); ++i) {
+        zlink::msg_t *msg =
+          reinterpret_cast<zlink::msg_t *> (&(*parts_)[i]);
+        if (msg->check ()) {
+            const int rc = msg->close ();
+            errno_assert (rc == 0);
+        }
+    }
+    parts_->clear ();
+    errno = saved_errno;
+}
+
+int copy_owned_parts (zlink_msg_t *parts_,
+                      size_t part_count_,
+                      std::vector<zlink_msg_t> *copies_)
+{
+    try {
+        copies_->resize (part_count_);
+    } catch (...) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    size_t initialized = 0;
+    for (; initialized != part_count_; ++initialized) {
+        zlink::msg_t *copy =
+          reinterpret_cast<zlink::msg_t *> (&(*copies_)[initialized]);
+        if (copy->init () != 0)
+            break;
+    }
+    if (initialized != part_count_) {
+        const int saved_errno = errno;
+        copies_->resize (initialized);
+        close_owned_parts (copies_);
+        errno = saved_errno;
+        return -1;
+    }
+
+    for (size_t i = 0; i != part_count_; ++i) {
+        zlink::msg_t *copy =
+          reinterpret_cast<zlink::msg_t *> (&(*copies_)[i]);
+        zlink::msg_t *source = reinterpret_cast<zlink::msg_t *> (&parts_[i]);
+        if (copy->copy (*source) != 0) {
+            const int saved_errno = errno;
+            close_owned_parts (copies_);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+void consume_caller_parts (zlink_msg_t *parts_, size_t part_count_)
+{
+    const int saved_errno = errno;
+    for (size_t i = 0; i != part_count_; ++i) {
+        zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (&parts_[i]);
+        if (msg->check ()) {
+            const int close_rc = msg->close ();
+            errno_assert (close_rc == 0);
+        }
+        const int init_rc = msg->init ();
+        errno_assert (init_rc == 0);
+    }
+    errno = saved_errno;
+}
+
 void send_pending_deadline_cleanup (void *userdata_)
 {
     delete static_cast<
@@ -92,68 +162,81 @@ int zlink::socket_base_t::send_async_submit (
     routed_send_target_key_t target;
     bool has_target = false;
     bool deferred_target_select = false;
-    if (options.type == ZLINK_CORE_SOCKET_ROUTER
-        || options.type == ZLINK_CORE_SOCKET_STREAM
-        || options.type == ZLINK_CORE_SOCKET_DEALER) {
-        zlink_routed_submit_target_t resolved;
-        memset (&resolved, 0, sizeof (resolved));
-        if (options_->target) {
-            resolved = *options_->target;
-            //  A routed binding may provide only the peer id and let this
-            //  submit snapshot the exact transport pair. This folds target
-            //  selection into the same public API admission instead of
-            //  requiring a second Core boundary crossing per message.
-            if (resolved.transport_pair_id == 0
-                && resolved.transport_pair_generation == 0
-                && (options.type == ZLINK_CORE_SOCKET_ROUTER
-                    || options.type == ZLINK_CORE_SOCKET_STREAM)) {
-                if (!valid_routing_id (&resolved.peer_rid)) {
+    try {
+        if (options.type == ZLINK_CORE_SOCKET_ROUTER
+            || options.type == ZLINK_CORE_SOCKET_STREAM
+            || options.type == ZLINK_CORE_SOCKET_DEALER) {
+            zlink_routed_submit_target_t resolved;
+            memset (&resolved, 0, sizeof (resolved));
+            if (options_->target) {
+                resolved = *options_->target;
+                //  A routed binding may provide only the peer id and let this
+                //  submit snapshot the exact transport pair. This folds target
+                //  selection into the same public API admission instead of
+                //  requiring a second Core boundary crossing per message.
+                if (resolved.transport_pair_id == 0
+                    && resolved.transport_pair_generation == 0
+                    && (options.type == ZLINK_CORE_SOCKET_ROUTER
+                        || options.type == ZLINK_CORE_SOCKET_STREAM)) {
+                    if (!valid_routing_id (&resolved.peer_rid)) {
+                        errno = EINVAL;
+                        return -1;
+                    }
+                    if (options.type == ZLINK_CORE_SOCKET_ROUTER
+                        && part_count_ == 1) {
+                        deferred_target_select = true;
+                    } else {
+                        if (process_commands (0, true) != 0)
+                            return -1;
+                        const zlink_routing_id_t requested_rid = resolved.peer_rid;
+                        if (xselect_routed_submit_target (&requested_rid, &resolved)
+                            != 0)
+                            return -1;
+                    }
+                }
+            } else {
+                if (options.type != ZLINK_CORE_SOCKET_DEALER) {
                     errno = EINVAL;
                     return -1;
                 }
-                if (options.type == ZLINK_CORE_SOCKET_ROUTER
-                    && part_count_ == 1) {
-                    deferred_target_select = true;
-                } else {
-                    if (process_commands (0, true) != 0)
-                        return -1;
-                    const zlink_routing_id_t requested_rid = resolved.peer_rid;
-                    if (xselect_routed_submit_target (&requested_rid, &resolved)
-                        != 0)
-                        return -1;
-                }
+                if (process_commands (0, true) != 0)
+                    return -1;
+                if (xselect_routed_submit_target (NULL, &resolved) != 0)
+                    return -1;
             }
-        } else {
-            if (options.type != ZLINK_CORE_SOCKET_DEALER) {
+            if (!valid_routing_id (&resolved.peer_rid)
+                || (!deferred_target_select
+                    && (resolved.transport_pair_id == 0
+                        || resolved.transport_pair_generation == 0))) {
                 errno = EINVAL;
                 return -1;
             }
-            if (process_commands (0, true) != 0)
-                return -1;
-            if (xselect_routed_submit_target (NULL, &resolved) != 0)
-                return -1;
+            if (!deferred_target_select)
+                target = routed_send_target_key_t (
+                  resolved.peer_rid.data, resolved.peer_rid.size,
+                  resolved.transport_pair_id,
+                  resolved.transport_pair_generation);
+            else
+                target = routed_send_target_key_t (
+                  resolved.peer_rid.data, resolved.peer_rid.size, 0, 0);
+            has_target = true;
         }
-        if (!valid_routing_id (&resolved.peer_rid)
-            || (!deferred_target_select
-                && (resolved.transport_pair_id == 0
-                    || resolved.transport_pair_generation == 0))) {
-            errno = EINVAL;
-            return -1;
-        }
-        if (!deferred_target_select)
-            target = routed_send_target_key_t (
-              resolved.peer_rid.data, resolved.peer_rid.size,
-              resolved.transport_pair_id, resolved.transport_pair_generation);
-        else
-            target = routed_send_target_key_t (
-              resolved.peer_rid.data, resolved.peer_rid.size, 0, 0);
-        has_target = true;
+    } catch (...) {
+        errno = ENOMEM;
+        return -1;
     }
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
     bool attempt_inline = false;
     bool gate_acquired = false;
-    const routed_send_target_key_t inline_reservation_key = target;
+    routed_send_target_key_t inline_reservation_key;
+    try {
+        inline_reservation_key = target;
+    } catch (...) {
+        errno = ENOMEM;
+        return -1;
+    }
     bool target_reserved = false;
+    bool reservation_allocation_failed = false;
     {
         scoped_lock_t lock (pending.sync);
         if (pending.failing) {
@@ -179,9 +262,18 @@ int zlink::socket_base_t::send_async_submit (
             target_queue_empty =
               queue == pending.queues.end () || queue->second.empty ();
         }
-        if (target_queue_empty
-            && pending.inline_attempts.insert (inline_reservation_key).second)
-            target_reserved = true;
+        if (target_queue_empty) {
+            try {
+                if (pending.inline_attempts.insert (inline_reservation_key).second)
+                    target_reserved = true;
+            } catch (...) {
+                reservation_allocation_failed = true;
+            }
+        }
+    }
+    if (reservation_allocation_failed) {
+        errno = ENOMEM;
+        return -1;
     }
     if (target_reserved) {
         bool gate_expected = false;
@@ -207,9 +299,14 @@ int zlink::socket_base_t::send_async_submit (
         requested_rid = options_->target->peer_rid;
         if (select_routed_submit_target (&requested_rid, &resolved) != 0)
             return -1;
-        target = routed_send_target_key_t (
-          resolved.peer_rid.data, resolved.peer_rid.size,
-          resolved.transport_pair_id, resolved.transport_pair_generation);
+        try {
+            target = routed_send_target_key_t (
+              resolved.peer_rid.data, resolved.peer_rid.size,
+              resolved.transport_pair_id, resolved.transport_pair_generation);
+        } catch (...) {
+            errno = ENOMEM;
+            return -1;
+        }
         deferred_target_select = false;
     }
 
@@ -219,48 +316,57 @@ int zlink::socket_base_t::send_async_submit (
     //  a completion callback. The caller can therefore complete an awaitable
     //  locally without entering Core's callback dispatch scope.
     std::optional<send_pending_record_t> inline_record;
-    const bool borrowed_inline = attempt_inline && part_count_ == 1;
-    const unsigned char borrowed_original_flags =
-      borrowed_inline
-        ? reinterpret_cast<msg_t *> (parts_)->flags ()
-        : 0;
     int inline_terminal_errno = 0;
+    bool inline_record_owns_copies = false;
     if (attempt_inline) {
-        if (!borrowed_inline) {
+        //  The inline attempt must not borrow caller storage. A synchronous
+        //  send consumes its native part on every ordinary failure, while an
+        //  async submit that returns non-OK must preserve caller ownership.
+        //  A real msg_t copy keeps those two contracts compatible even when a
+        //  later queue/map allocation rejects the async operation.
+        try {
             inline_record.emplace ();
             inline_record->target = target;
-            inline_record->has_target = has_target;
-            try {
-                inline_record->parts.assign (parts_, parts_ + part_count_);
-            } catch (...) {
-                pending.admission_gate.store (false,
-                                              std::memory_order_release);
-                {
-                    scoped_lock_t lock (pending.sync);
-                    pending.inline_attempts.erase (inline_reservation_key);
-                }
-                admission.unlock_sync ();
-                drive_send_pending ();
-                dispatch_send_completions_if_local ();
-                errno = ENOMEM;
-                return -1;
+        } catch (...) {
+            pending.admission_gate.store (false,
+                                          std::memory_order_release);
+            {
+                scoped_lock_t lock (pending.sync);
+                pending.inline_attempts.erase (inline_reservation_key);
             }
+            admission.unlock_sync ();
+            drive_send_pending ();
+            dispatch_send_completions_if_local ();
+            errno = ENOMEM;
+            return -1;
         }
+        inline_record->has_target = has_target;
+        if (copy_owned_parts (parts_, part_count_, &inline_record->parts)
+            != 0) {
+            pending.admission_gate.store (false, std::memory_order_release);
+            {
+                scoped_lock_t lock (pending.sync);
+                pending.inline_attempts.erase (inline_reservation_key);
+            }
+            admission.unlock_sync ();
+            drive_send_pending ();
+            dispatch_send_completions_if_local ();
+            errno = ENOMEM;
+            return -1;
+        }
+        inline_record_owns_copies = true;
         pipe_t *attempted_pipe = NULL;
-        const int inline_rc = borrowed_inline && deferred_target_select
+        const int inline_rc = deferred_target_select
                                 ? send_routed_scoped (
                                     &options_->target->peer_rid,
-                                    reinterpret_cast<msg_t *> (parts_),
+                                    reinterpret_cast<msg_t *> (
+                                      inline_record->parts.data ()),
                                     ZLINK_DONTWAIT, admission, NULL, 0,
                                     &attempted_pipe)
-                                : borrowed_inline
-                                  ? try_admit_send_parts_scoped (
-                                      parts_, part_count_, target, has_target,
-                                      admission)
-                                  : try_admit_send_parts_scoped (
-                                      inline_record->parts.data (),
-                                      inline_record->parts.size (), target,
-                                      has_target, admission);
+                                : try_admit_send_parts_scoped (
+                                    inline_record->parts.data (),
+                                    inline_record->parts.size (), target,
+                                    has_target, admission);
         const int inline_errno = errno;
         const uint64_t attempted_pair_id =
           attempted_pipe ? attempted_pipe->get_transport_pair_id () : 0;
@@ -273,25 +379,12 @@ int zlink::socket_base_t::send_async_submit (
                 scoped_lock_t lock (pending.sync);
                 pending.inline_attempts.erase (inline_reservation_key);
             }
-            if (!borrowed_inline) {
-                //  The pipe now owns its frame references. Close Core's moved
-                //  handles and blank the caller's handles exactly as the
-                //  pending ownership-transfer path does.
-                for (size_t i = 0; i != inline_record->parts.size (); ++i) {
-                    msg_t *msg = reinterpret_cast<msg_t *> (
-                      &inline_record->parts[i]);
-                    if (msg->check ()) {
-                        const int rc = msg->close ();
-                        errno_assert (rc == 0);
-                    }
-                }
-                inline_record->parts.clear ();
-                for (size_t i = 0; i != part_count_; ++i) {
-                    const int rc =
-                      reinterpret_cast<msg_t *> (&parts_[i])->init ();
-                    errno_assert (rc == 0);
-                }
-            }
+            //  The pipe now owns its frame references. Close Core's moved
+            //  copies, then consume the caller's original references only
+            //  after the async submit has committed successfully.
+            close_owned_parts (&inline_record->parts);
+            inline_record_owns_copies = false;
+            consume_caller_parts (parts_, part_count_);
             //  Operations queued behind the direct attempt may also fit now.
             if (pending.pending_msgs.load (std::memory_order_acquire) != 0) {
                 drive_send_pending ();
@@ -308,17 +401,28 @@ int zlink::socket_base_t::send_async_submit (
                     scoped_lock_t lock (pending.sync);
                     pending.inline_attempts.erase (inline_reservation_key);
                 }
-                msg_t *borrowed = reinterpret_cast<msg_t *> (parts_);
-                borrowed->reset_flags (msg_t::more);
-                if (borrowed_original_flags & msg_t::more)
-                    borrowed->set_flags (msg_t::more);
+                close_owned_parts (&inline_record->parts);
+                inline_record_owns_copies = false;
                 errno = inline_errno;
                 return -1;
             }
-            target = routed_send_target_key_t (
-              options_->target->peer_rid.data,
-              options_->target->peer_rid.size, attempted_pair_id,
-              attempted_pair_generation);
+            try {
+                target = routed_send_target_key_t (
+                  options_->target->peer_rid.data,
+                  options_->target->peer_rid.size, attempted_pair_id,
+                  attempted_pair_generation);
+            } catch (...) {
+                pending.admission_gate.store (false,
+                                              std::memory_order_release);
+                {
+                    scoped_lock_t lock (pending.sync);
+                    pending.inline_attempts.erase (inline_reservation_key);
+                }
+                close_owned_parts (&inline_record->parts);
+                inline_record_owns_copies = false;
+                errno = ENOMEM;
+                return -1;
+            }
             deferred_target_select = false;
         }
 
@@ -327,32 +431,45 @@ int zlink::socket_base_t::send_async_submit (
             //  pipe and was rolled back. Preserve the accepted-operation
             //  ownership rule for every post-validation attempt: publish a
             //  non-zero operation id and report this terminal through the
-            //  completion channel instead of returning borrowed handles whose
-            //  internal state may already have participated in a send.
+            //  completion channel. The caller originals remain untouched
+            //  until the pending record and operation id both commit.
             inline_terminal_errno = inline_errno;
         }
+#ifdef ZLINK_BUILD_TESTS
+        else if (pending.inline_fallback_hook) {
+            //  Hold the exact EAGAIN-to-queue-publication window open for a
+            //  deterministic FIFO regression. The per-target reservation and
+            //  admission gate must remain owned while the hook runs.
+            pending.inline_fallback_hook (
+              pending.inline_fallback_hook_userdata);
+        }
+#endif
     }
 
     const uint64_t charge = record_charge_bytes (parts_, part_count_);
     send_pending_record_t *record =
       new (std::nothrow) send_pending_record_t ();
+    bool record_owns_copies = false;
     zlink_send_op_id_t op_id = 0;
     int pending_reject_errno = record ? 0 : ENOMEM;
     if (record) {
         record->userdata = options_->userdata;
-        record->target = target;
+        try {
+            record->target = target;
+            if (attempt_inline) {
+                record->parts.swap (inline_record->parts);
+                record_owns_copies = true;
+                inline_record_owns_copies = false;
+            } else {
+                record->parts.assign (parts_, parts_ + part_count_);
+            }
+        } catch (...) {
+            pending_reject_errno = ENOMEM;
+        }
         record->has_target = has_target;
         record->charge_bytes = charge;
         record->timeout_ms = options_->timeout_ms;
         record->claimed = inline_terminal_errno != 0;
-        try {
-            if (attempt_inline && !borrowed_inline)
-                record->parts.swap (inline_record->parts);
-            else
-                record->parts.assign (parts_, parts_ + part_count_);
-        } catch (...) {
-            pending_reject_errno = ENOMEM;
-        }
     }
 
     //  Reserve queue capacity only after the pending record is completely
@@ -384,21 +501,69 @@ int zlink::socket_base_t::send_async_submit (
                 //  operation that cannot be cancelled or correlated.
                 pending_reject_errno = EOVERFLOW;
             } else {
-                record->op_id = pending.next_op_id++;
-                //  Ownership transfer happens here and is irreversible: from
-                //  this point Core closes the parts, never the caller. Keep
-                //  the inline reservation until the original operation is at
-                //  the front, so a later submit cannot overtake it between
-                //  EAGAIN and queue insertion.
-                if (attempt_inline)
-                    pending.queues[target].push_front (record);
-                else
-                    pending.queues[target].push_back (record);
-                pending.by_op[record->op_id] = record;
-                pending.pending_msgs.fetch_add (1, std::memory_order_release);
-                pending.pending_bytes += charge;
-                pending.enqueue_epoch.fetch_add (1, std::memory_order_release);
-                op_id = record->op_id;
+                const zlink_send_op_id_t candidate_op_id = pending.next_op_id;
+                typedef std::map<routed_send_target_key_t,
+                                 std::deque<send_pending_record_t *> >
+                  queue_map_t;
+                queue_map_t::iterator queue = pending.queues.end ();
+                bool queue_created = false;
+                bool queued = false;
+                bool indexed = false;
+                try {
+                    const std::pair<queue_map_t::iterator, bool> inserted_queue =
+                      pending.queues.insert (
+                        std::make_pair (
+                          target, std::deque<send_pending_record_t *> ()));
+                    queue = inserted_queue.first;
+                    queue_created = inserted_queue.second;
+                    //  Keep the inline reservation until the original
+                    //  operation is at the front, so a later submit cannot
+                    //  overtake it between EAGAIN and queue insertion.
+                    if (attempt_inline)
+                        queue->second.push_front (record);
+                    else
+                        queue->second.push_back (record);
+                    queued = true;
+#ifdef ZLINK_BUILD_TESTS
+                    if (pending.fail_after_queue_push) {
+                        pending_reject_errno = ENOMEM;
+                    } else
+#endif
+                    {
+                        indexed = pending.by_op.insert (
+                          std::make_pair (candidate_op_id, record)).second;
+                    }
+                    if (!indexed)
+                        pending_reject_errno = pending_reject_errno != 0
+                                                  ? pending_reject_errno
+                                                  : EOVERFLOW;
+                } catch (...) {
+                    pending_reject_errno = ENOMEM;
+                }
+
+                if (pending_reject_errno != 0) {
+                    if (queued) {
+                        if (attempt_inline)
+                            queue->second.pop_front ();
+                        else
+                            queue->second.pop_back ();
+                    }
+                    if (queue_created && queue != pending.queues.end ()
+                        && queue->second.empty ())
+                        pending.queues.erase (queue);
+                } else {
+                    //  Publish the id and counters only after both container
+                    //  insertions commit. Until here a failure still returns
+                    //  caller ownership exactly as the async API promises.
+                    record->op_id = candidate_op_id;
+                    ++pending.next_op_id;
+                    pending.pending_msgs.fetch_add (
+                      1, std::memory_order_release);
+                    pending.pending_bytes += charge;
+                    pending.enqueue_epoch.fetch_add (
+                      1, std::memory_order_release);
+                    op_id = candidate_op_id;
+                }
             }
         }
         if (attempt_inline)
@@ -416,18 +581,17 @@ int zlink::socket_base_t::send_async_submit (
     if (pending_reject_errno != 0) {
         //  No ownership transfer occurred on rejection. Release the target
         //  reservation and let already-queued followers make progress.  The
-        //  borrowed fast attempt normalizes the native MORE flag, so restore
-        //  that flag before returning caller ownership.
-        if (borrowed_inline) {
-            msg_t *borrowed = reinterpret_cast<msg_t *> (parts_);
-            borrowed->reset_flags (msg_t::more);
-            if (borrowed_original_flags & msg_t::more)
-                borrowed->set_flags (msg_t::more);
+        if (inline_record) {
+            if (inline_record_owns_copies)
+                close_owned_parts (&inline_record->parts);
+            else
+                inline_record->parts.clear ();
         }
-        if (inline_record)
-            inline_record->parts.clear ();
         if (record) {
-            record->parts.clear ();
+            if (record_owns_copies)
+                close_owned_parts (&record->parts);
+            else
+                record->parts.clear ();
             delete record;
             record = NULL;
         }
@@ -441,11 +605,16 @@ int zlink::socket_base_t::send_async_submit (
     //  completed this operation and destroyed it. Everything below uses the
     //  op id, which is monotonic and never reused.
 
-    //  The caller's message handles are now Core's copies. Blank the caller's
-    //  array so a stray close on its side cannot double-free the frames.
-    for (size_t i = 0; i != part_count_; ++i) {
-        const int rc = reinterpret_cast<msg_t *> (&parts_[i])->init ();
-        errno_assert (rc == 0);
+    //  With an inline shadow record Core owns copied references, so release
+    //  the originals. The queued-only path transferred the original handles
+    //  structurally and only needs to blank the caller's array.
+    if (record_owns_copies)
+        consume_caller_parts (parts_, part_count_);
+    else {
+        for (size_t i = 0; i != part_count_; ++i) {
+            const int rc = reinterpret_cast<msg_t *> (&parts_[i])->init ();
+            errno_assert (rc == 0);
+        }
     }
     if (op_id_out_)
         *op_id_out_ = op_id;
@@ -457,24 +626,60 @@ int zlink::socket_base_t::send_async_submit (
         return 0;
     }
 
+    bool timeout_setup_failed = false;
     if (options_->timeout_ms > 0) {
         std::pair<socket_base_t *, zlink_send_op_id_t> *entry =
           new (std::nothrow)
             std::pair<socket_base_t *, zlink_send_op_id_t> (this, op_id);
-        if (entry) {
+        if (!entry) {
+            timeout_setup_failed = true;
+        } else {
             std::shared_ptr<request_timeout::task_t> task =
               request_timeout::schedule (options_->timeout_ms,
                                          &send_pending_deadline_trampoline,
                                          entry,
                                          &send_pending_deadline_cleanup);
+            if (!task) {
+                timeout_setup_failed = true;
+            } else {
+                bool cancel_task = false;
+                {
+                    scoped_lock_t lock (pending.sync);
+                    std::map<zlink_send_op_id_t,
+                             send_pending_record_t *>::iterator it =
+                      pending.by_op.find (op_id);
+                    if (it != pending.by_op.end ())
+                        it->second->deadline = task;
+                    else
+                        cancel_task = true;
+                }
+                //  cancel() can wait for a firing deadline whose handler
+                //  takes pending.sync, so it must run after releasing that
+                //  mutex.
+                if (cancel_task)
+                    request_timeout::cancel (task);
+            }
+        }
+    }
+
+    if (timeout_setup_failed) {
+        send_pending_record_t *failed = NULL;
+        {
             scoped_lock_t lock (pending.sync);
             std::map<zlink_send_op_id_t, send_pending_record_t *>::iterator it =
               pending.by_op.find (op_id);
-            if (it != pending.by_op.end ())
-                it->second->deadline = task;
-            else if (task)
-                request_timeout::cancel (task);
+            if (it != pending.by_op.end () && !it->second->claimed) {
+                failed = it->second;
+                failed->claimed = true;
+            }
         }
+        //  Submission has already transferred ownership and published its
+        //  operation id. Failure to create the requested deadline therefore
+        //  resolves that admitted operation through the normal completion
+        //  channel instead of silently creating an unbounded wait.
+        if (failed)
+            finish_send_pending (failed, ZLINK_SEND_TERMINAL, ENOMEM);
+        dispatch_send_completions_if_local ();
     }
 
     //  A non-zero operation id is the pending disposition. Core now owns the

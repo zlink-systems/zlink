@@ -19,14 +19,10 @@ void submit_raw_reply (detail::operation_state_t &state_)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     const std::shared_ptr<detail::socket_callback_state_t> callbacks =
       detail::share_callback_state (state_.raw);
-    if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
+    if (!callbacks)
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
 
     zlink::detail::throw_if_reply_flags_unsupported (state_.flags);
-    std::lock_guard<std::mutex> attempt_lock (
-      callbacks->outbound_record_attempt_mutex);
-    if (callbacks->socket_closed.load (std::memory_order_acquire))
-        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     const zlink_routing_id_t first_rid =
       zlink::detail::routing_id_native_value (*state_.raw.target.first_rid);
     const int rc = detail::submit_message_parts (
@@ -34,12 +30,16 @@ void submit_raw_reply (detail::operation_state_t &state_)
           return zlink_router_reply_part (state_.raw.socket, &first_rid,
                                           state_.reply.request_seq, part_out_, part_flag_);
       });
-    if (rc == -1)
+    if (rc == -1) {
+        detail::restore_send_parts_to_sources (state_, state_.message.parts);
         throw last_error ();
+    }
 
     const submit_result_t result = static_cast<submit_result_t> (rc);
-    if (result != submit_result_t::ok)
+    if (result != submit_result_t::ok) {
+        detail::restore_send_parts_to_sources (state_, state_.message.parts);
         throw submit_error_t (result, zlink_errno ());
+    }
 }
 
 } // namespace
@@ -99,8 +99,14 @@ void reply_submit_operation_t::submit () &&
             }
         }
         std::vector<message_t> parts = detail::take_send_parts (state);
-        zlink::detail::received_access_t::submit_reply (*state.received.received,
-                                                        parts, state.flags);
+        try {
+            zlink::detail::received_access_t::submit_reply (*state.received.received,
+                                                            parts, state.flags);
+        }
+        catch (...) {
+            detail::restore_send_parts_to_sources (state, parts);
+            throw;
+        }
         return;
     }
 

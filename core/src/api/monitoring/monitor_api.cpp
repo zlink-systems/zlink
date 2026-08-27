@@ -115,11 +115,11 @@ void finalize_monitor_handler_self_close (monitor_handler_state_t *state_)
       socket ? socket->get_ctx ()->control_runtime () : NULL;
     const uint64_t dispatch_task_id = state_->dispatch_task_id;
     state_->stop.store (true, std::memory_order_release);
-    zlink::socket_base_t *raw_monitor_source = raw_monitor_snapshot_subject (state_);
-    if (raw_monitor_source && raw_monitor_source != socket) {
+    socket_handle_t monitor_source = monitor_snapshot_subject_handle (state_);
+    if (monitor_source.socket && monitor_source.socket != socket) {
         state_->snapshot_subject.store (NULL, std::memory_order_release);
-        (void) raw_monitor_source->monitor (NULL, 0, 3,
-                                            ZLINK_CORE_SOCKET_PAIR, 0);
+        (void) monitor_source.socket->monitor (NULL, 0, 3,
+                                               ZLINK_CORE_SOCKET_PAIR, 0);
     } else {
         clear_raw_monitor_snapshot_subjects (socket);
     }
@@ -129,7 +129,7 @@ void finalize_monitor_handler_self_close (monitor_handler_state_t *state_)
     if (runtime && dispatch_task_id != 0)
         (void) runtime->remove_task (dispatch_task_id);
     if (socket) {
-        zlink::part_helper_internal::cleanup_handle (socket);
+        zlink::part_helper_internal::cleanup_socket (socket);
         socket->stop ();
         socket->close ();
     }
@@ -247,18 +247,23 @@ static bool monitor_state_registered (zlink::socket_base_t *socket_)
     return registry.handlers.find (socket_) != registry.handlers.end ();
 }
 
-zlink::socket_base_t *raw_monitor_snapshot_subject (monitor_handler_state_t *state_)
+socket_handle_t monitor_snapshot_subject_handle (monitor_handler_state_t *state_)
 {
     if (!state_)
-        return NULL;
+        return socket_handle_t ();
 
     monitor_snapshot_provider_fn provider =
       state_->snapshot_provider.load (std::memory_order_acquire);
     if (provider != &socket_monitor_snapshot_provider)
-        return NULL;
+        return socket_handle_t ();
 
-    return static_cast<zlink::socket_base_t *> (
-      state_->snapshot_subject.load (std::memory_order_acquire));
+    void *subject = state_->snapshot_subject.load (std::memory_order_acquire);
+    if (!subject)
+        return socket_handle_t ();
+    const int saved_errno = errno;
+    socket_handle_t handle = as_socket_handle (subject);
+    errno = saved_errno;
+    return handle;
 }
 
 void clear_raw_monitor_snapshot_subjects (zlink::socket_base_t *source_)
@@ -280,7 +285,8 @@ void clear_raw_monitor_snapshot_subjects (zlink::socket_base_t *source_)
         if (provider != &socket_monitor_snapshot_provider)
             continue;
 
-        if (state->snapshot_subject.load (std::memory_order_acquire) == source_)
+        if (state->snapshot_subject.load (std::memory_order_acquire)
+            == source_->public_handle ())
             state->snapshot_subject.store (NULL, std::memory_order_release);
     }
 }
@@ -409,7 +415,7 @@ zlink_close_result_t zlink_monitor_close (void **monitor_p_)
     void *monitor = *monitor_p_;
     socket_handle_t handle = as_socket_handle (monitor);
     if (!handle.socket)
-        return ZLINK_CLOSE_INVALID_HANDLE;
+        return zlink::close_result_internal::from_errno (errno);
 
     zlink::socket_base_t *socket = handle.socket;
     const int linger = 0;
@@ -417,7 +423,7 @@ zlink_close_result_t zlink_monitor_close (void **monitor_p_)
     //  The pin keeps the state alive while this close inspects and detaches
     //  it. It is released before any path that unregisters (and then waits
     //  for pins) runs, so self-deadlock is impossible.
-    zlink::socket_base_t *raw_monitor_source = NULL;
+    socket_handle_t monitor_source;
     zlink::socket_base_t *raw_source_monitor_socket = NULL;
     bool stop_socket_before_close = false;
     bool async_close_via_callback = false;
@@ -425,15 +431,15 @@ zlink_close_result_t zlink_monitor_close (void **monitor_p_)
     {
         monitor_state_pin_t monitor_pin (socket);
         monitor_handler_state_t *monitor_state = monitor_pin.get ();
-        raw_monitor_source = raw_monitor_snapshot_subject (monitor_state);
-        if (raw_monitor_source && raw_monitor_source != socket) {
+        monitor_source = monitor_snapshot_subject_handle (monitor_state);
+        if (monitor_source.socket && monitor_source.socket != socket) {
             if (monitor_state)
                 monitor_state->snapshot_subject.store (NULL, std::memory_order_release);
-            raw_source_monitor_socket = raw_monitor_source->detach_monitor_socket (false);
+            raw_source_monitor_socket = monitor_source.socket->detach_monitor_socket (false);
         }
         monitor_debug_logf ("monitor_sid=%d raw_source_sid=%d source_monitor_sid=%d\n",
                             socket ? socket->socket_id () : -1,
-                            raw_monitor_source ? raw_monitor_source->socket_id () : -1,
+                            monitor_source.socket ? monitor_source.socket->socket_id () : -1,
                             raw_source_monitor_socket ? raw_source_monitor_socket->socket_id ()
                                                       : -1);
         const bool had_dispatch_monitor =
@@ -465,6 +471,7 @@ zlink_close_result_t zlink_monitor_close (void **monitor_p_)
           monitor_state && zlink::current_monitor_handler_state () == monitor_state;
     }
     if (self_dispatch_close) {
+        handle = socket_handle_t ();
         const zlink_close_result_t rc = zlink_close (monitor);
         if (raw_source_monitor_socket)
             (void) zlink::socket_close_ops_t::request_close (raw_source_monitor_socket, 0);
@@ -475,7 +482,8 @@ zlink_close_result_t zlink_monitor_close (void **monitor_p_)
     if (async_close_via_callback) {
         if (stop_socket_before_close)
             socket->stop ();
-        zlink::part_helper_internal::cleanup_handle (monitor);
+        zlink::part_helper_internal::cleanup_socket (socket);
+        handle = socket_handle_t ();
         const uint64_t deadline_ms = zlink::clock_t ().now_ms () + 250;
         while (monitor_state_registered (socket)
                && zlink::clock_t ().now_ms () < deadline_ms) {
@@ -489,6 +497,7 @@ zlink_close_result_t zlink_monitor_close (void **monitor_p_)
     if (stop_socket_before_close) {
         socket->stop ();
     }
+    handle = socket_handle_t ();
     const zlink_close_result_t rc = zlink_close (monitor);
     if (raw_source_monitor_socket)
         (void) zlink::socket_close_ops_t::request_close (raw_source_monitor_socket, 0);

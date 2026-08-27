@@ -42,10 +42,7 @@ package="$out_dir/Systems.Zlink.$version.nupkg"
 [[ -f "$package" ]] || { echo "NuGet package is missing: $package" >&2; exit 1; }
 verify_package_entry() {
   local entry="$1"
-  if command -v unzip >/dev/null 2>&1; then
-    unzip -Z1 "$package" | grep -Fxq "$entry"
-  else
-    PACKAGE="$package" ENTRY="$entry" python3 - <<'PY'
+  PACKAGE="$package" ENTRY="$entry" python3 - <<'PY'
 import os
 import zipfile
 
@@ -55,7 +52,6 @@ with zipfile.ZipFile(package) as archive:
     if entry not in archive.namelist():
         raise SystemExit(f"NuGet package entry is missing: {entry}")
 PY
-  fi
 }
 
 verify_package_entry "runtimes/linux-x64/native/libzlink.so.0"

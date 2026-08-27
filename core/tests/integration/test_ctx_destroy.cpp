@@ -471,8 +471,9 @@ void test_engine_less_session_releases_socket_term_ack_with_pending_message ()
     TEST_ASSERT_NOT_NULL (socket_handle);
 
     zlink::ctx_t *ctx = static_cast<zlink::ctx_t *> (ctx_handle);
-    zlink::socket_base_t *socket =
-      static_cast<zlink::socket_base_t *> (socket_handle);
+    socket_handle_t public_handle = as_socket_handle (socket_handle);
+    zlink::socket_base_t *socket = public_handle.socket;
+    public_handle = socket_handle_t ();
     zlink::io_thread_t *io_thread = ctx->choose_io_thread (0);
     TEST_ASSERT_NOT_NULL (io_thread);
 
@@ -543,8 +544,9 @@ void test_reciprocal_pipe_ack_is_queued_before_local_completion ()
     TEST_ASSERT_NOT_NULL (ctx_handle);
     void *socket_handle = zlink_socket (ctx_handle, ZLINK_SOCKET_PAIR);
     TEST_ASSERT_NOT_NULL (socket_handle);
-    zlink::socket_base_t *socket =
-      static_cast<zlink::socket_base_t *> (socket_handle);
+    socket_handle_t public_handle = as_socket_handle (socket_handle);
+    zlink::socket_base_t *socket = public_handle.socket;
+    public_handle = socket_handle_t ();
 
     zlink::object_t *parents[2] = {socket, socket};
     zlink::pipe_t *pipes[2] = {NULL, NULL};

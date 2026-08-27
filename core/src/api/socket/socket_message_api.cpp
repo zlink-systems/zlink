@@ -34,10 +34,8 @@ zlink_recv_result_t zlink_recv_part (void *s_,
         return zlink::recv_result_internal::from_errno (errno);
 
     socket_handle_t handle = as_socket_handle (s_);
-    if (!handle.socket) {
-        errno = EFAULT;
+    if (!handle.socket)
         return zlink::recv_result_internal::from_errno (errno);
-    }
 
     const int type = socket_type (handle);
     const bool expose_source_rid = type == ZLINK_CORE_SOCKET_STREAM;
@@ -285,10 +283,8 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
         return zlink::recv_result_internal::from_errno (errno);
 
     socket_handle_t handle = as_socket_handle (subject_);
-    if (!handle.socket) {
-        errno = EFAULT;
+    if (!handle.socket)
         return zlink::recv_result_internal::from_errno (errno);
-    }
 
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
       zlink::part_helper_internal::find_or_create_handle_state (subject_);

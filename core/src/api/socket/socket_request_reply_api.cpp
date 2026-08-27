@@ -50,9 +50,9 @@ int reqrep::send_request_frame (zlink::socket_base_t *socket_,
                                 peer_rid_, &msg, flags_,
                                 *helper_state_->send.send_scope, NULL, 0,
                                 application_pipe_out_, transport_pair_id_,
-                                transport_pair_generation_)
+                                transport_pair_generation_, true)
                              : socket_->send_scoped (&msg, flags_, *helper_state_->send.send_scope,
-                                                    application_pipe_out_);
+                                                    application_pipe_out_, true);
     const int saved_errno = errno;
     (void) msg.close ();
     errno = saved_errno;
@@ -71,7 +71,7 @@ int reqrep::send_request_payload_part (zlink::socket_base_t *socket_,
     return socket_->send_scoped (reinterpret_cast<zlink::msg_t *> (part_),
                                  static_cast<int> (flags_ & ZLINK_DONTWAIT)
                                    | (part_flag_ == ZLINK_PART_MORE ? ZLINK_SNDMORE : 0),
-                                 *helper_state_->send.send_scope);
+                                 *helper_state_->send.send_scope, NULL, true);
 }
 
 int reqrep::stage_request_payload_part (
@@ -82,7 +82,17 @@ int reqrep::stage_request_payload_part (
         return -1;
     }
 
-    helper_state_->send.buffered_parts.resize (helper_state_->send.buffered_parts.size () + 1);
+    try {
+#ifdef ZLINK_BUILD_TESTS
+        reqrep::test_throw_request_reply_allocation_failpoint (
+          reqrep::request_reply_allocation_stage_payload);
+#endif
+        helper_state_->send.buffered_parts.resize (
+          helper_state_->send.buffered_parts.size () + 1);
+    } catch (...) {
+        errno = ENOMEM;
+        return -1;
+    }
     zlink_msg_t &slot = helper_state_->send.buffered_parts.back ();
     zlink_msg_init (&slot);
     if (zlink_msg_move (&slot, part_) != 0) {

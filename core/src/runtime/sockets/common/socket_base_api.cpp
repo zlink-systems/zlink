@@ -25,15 +25,32 @@ bool same_pair_peer_identity (const zlink::pipe_t *first_, const zlink::pipe_t *
 
 void zlink::socket_base_t::finish_close_handoff (int handoff_timeout_ms_)
 {
-    lifecycle_coordinator ().complete_deferred_close_handoff (static_cast<mailbox_t *> (_mailbox),
-                                                              handoff_timeout_ms_);
+    lifecycle_coordinator ().complete_deferred_close_handoff (
+      static_cast<mailbox_t *> (_mailbox), this, handoff_timeout_ms_);
 
+    finish_close_reap ();
+}
+
+void zlink::socket_base_t::finish_close_reap ()
+{
     fail_all_send_pending (_ctx_terminated ? ETERM : ECANCELED);
     dispatch_send_completions (true);
+    materialize_pending_inprocs_before_reap ();
     static_cast<mailbox_t *> (_mailbox)->clear_signalers ();
 
-    _tag = 0xdeadbeef;
     send_reap (this);
+}
+
+void zlink::socket_base_t::materialize_pending_inprocs_before_reap ()
+{
+    // Async command processing is quiesced before this helper runs, and the
+    // socket has not reached the reaper yet. Materialization therefore cannot
+    // erase this socket's inproc map while it is traversed. Iterate the
+    // existing keys directly so close does not add an allocation-failure path.
+    endpoint_runtime ().inprocs.for_each_unique_endpoint (
+      [this] (const std::string &endpoint_) {
+          (void) get_ctx ()->materialize_pending_inproc (endpoint_, this);
+      });
 }
 
 int zlink::socket_base_t::get_peer_state (const void *routing_id_, size_t routing_id_size_) const

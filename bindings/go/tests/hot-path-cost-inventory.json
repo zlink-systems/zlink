@@ -28,7 +28,7 @@
       "sources": [
         "internal/native/socket_multipart.go:164-191"
       ],
-      "reason": "Message submit preserves the caller handle when Core rejects a send, so the native submit frame is copied before submission.",
+      "reason": "Message submit preserves the public caller handle with a binding-owned native staging copy; Core consumes the staged native part on ordinary synchronous rejection.",
       "guardTest": "TestBlockingSendFailurePreservesMessagePayload"
     },
     {
@@ -77,15 +77,6 @@
       ],
       "reason": "One dispatcher worker per callback registration preserves callback ordering and gives socket close an explicit completion owner.",
       "guardTest": "TestReceiveCallbackPanicDoesNotCloseSocketOrStopFutureCallbacks"
-    },
-    {
-      "id": "routed-record-attempt-gate",
-      "classification": "required",
-      "sources": [
-        "internal/native/socket_core.go:134-148"
-      ],
-      "reason": "One plain mutex per handle keeps a multipart record contiguous and keeps close from racing an in-flight native submit. It is not a queue or a worker: the HWM wait itself belongs to Core.",
-      "guardTest": "TestRoutedSendConcurrentMultipartRecordsDoNotInterleave"
     },
     {
       "id": "cgo-package-runtime-rpath",

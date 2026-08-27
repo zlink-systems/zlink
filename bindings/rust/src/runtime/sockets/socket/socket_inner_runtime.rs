@@ -597,7 +597,7 @@ impl crate::internal::SocketStorage {
             callback.set_closing(true);
         }
         let close_rc = if let Some(routed) = &self.routed_handle {
-            routed.close_native(false)
+            routed.close_native()
         } else {
             unsafe { ffi::zlink_close(self.handle) }
         };
@@ -932,7 +932,7 @@ impl Drop for crate::internal::SocketStorage {
             callback.set_closing(true);
         }
         let rc = if let Some(routed) = &self.routed_handle {
-            routed.close_native(true)
+            routed.close_native()
         } else {
             unsafe { ffi::zlink_close(self.handle) }
         };

@@ -29,6 +29,30 @@
 namespace
 {
 
+void test_operation_state_pool_reuses_state_and_capacity ()
+{
+    auto first = zlink::detail::acquire_state ();
+    zlink::detail::operation_state_t *const first_address = first.get ();
+    first->message.parts.reserve (6);
+    first->message.part_sources.reserve (6);
+    first->raw.topic.reserve (32);
+    const size_t parts_capacity = first->message.parts.capacity ();
+    const size_t source_capacity = first->message.part_sources.capacity ();
+    const size_t topic_capacity = first->raw.topic.capacity ();
+    first->kind = zlink::detail::operation_kind_t::raw_send;
+    first->flags = zlink::send_flags_t::dontwait;
+    zlink::detail::release_state (std::move (first));
+
+    auto reused = zlink::detail::acquire_state ();
+    assert (reused.get () == first_address);
+    assert (reused->message.parts.capacity () == parts_capacity);
+    assert (reused->message.part_sources.capacity () == source_capacity);
+    assert (reused->raw.topic.capacity () == topic_capacity);
+    assert (reused->kind == zlink::detail::operation_kind_t::none);
+    assert (reused->flags == zlink::send_flags_t::none);
+    zlink::detail::release_state (std::move (reused));
+}
+
 zlink::message_t make_request_message (const std::string &text_)
 {
     return zlink_cpp_contract::make_message (text_);
@@ -960,11 +984,11 @@ void test_routed_builder_does_not_outlive_socket_anchor ()
     closed_dealer.close ();
     try {
         std::move (closed_builder).submit ();
-        assert (false && "builder must not submit through a closed socket anchor");
+        assert (false && "Core must reject a submit through a closed socket anchor");
     }
     catch (const zlink::submit_error_t &error) {
-        assert (error.result () == zlink::submit_result_t::invalid_state);
-        assert (error.internal_errno () == EINVAL);
+        assert (error.result () == zlink::submit_result_t::terminated);
+        assert (error.internal_errno () == ESHUTDOWN);
     }
     assert (closed_payload.valid ());
 }
@@ -1036,8 +1060,9 @@ void test_routed_send_reports_core_backpressure_without_poisoning_b ()
     assert (reported_backpressure);
     assert (waited >= std::chrono::milliseconds (50));
     assert (waited < std::chrono::seconds (2));
-    // The caller keeps the message handle Core refused. Core empties the part
-    // it inspected, so the handle is valid but no longer carries the payload.
+    // The binding preserves the public handle separately. Core consumes the
+    // native part it inspected, while this lvalue remains valid under the C++
+    // staging policy.
     assert (blocked.valid ());
 
     // SNDTIMEO(0) is the DONTWAIT contract: Core answers immediately.
@@ -1336,16 +1361,16 @@ void test_reply_submit_is_one_shot_without_ghost_retry ()
     zlink::message_t one_shot = make_request_message ("reply:one-shot");
     try {
         router.reply (dealer_rid, 41).message (one_shot).submit ();
-        assert (false && "reply without a route must report Core backpressure");
+        assert (false && "reply without a route must report Core not-connected");
     }
     catch (const zlink::submit_error_t &error) {
-        // Core's exact route reply path reports a missing writable pipe as
-        // backpressure. The binding forwards that submit verdict unchanged;
-        // it must not queue or retry this one-shot reply after a peer appears.
-        assert (error.result () == zlink::submit_result_t::backpressured);
-        assert (error.internal_errno () == EAGAIN);
+        // The completion lane has no current exact route. This is not HWM
+        // backpressure; the binding forwards Core's terminal verdict.
+        assert (error.result () == zlink::submit_result_t::not_connected);
+        assert (error.internal_errno () == ENOTCONN);
     }
-    assert (!one_shot.valid ());
+    assert (one_shot.valid ());
+    assert (one_shot.to_string () == "reply:one-shot");
 
     dealer.set_routing_id (dealer_rid);
     dealer.connect (endpoint);
@@ -1433,7 +1458,8 @@ void test_single_part_request_failure_returns_lvalue ()
 }
 
 // Later-error path: Core rejects the part sequence after the state handed its
-// parts to the submit adapter. Every lvalue part must come back valid.
+// native staging views to the submit adapter. The binding must restore every
+// public lvalue part as valid.
 void test_multipart_request_failure_returns_every_part ()
 {
     multipart_request_fixture_t fixture ("multipart-request-failure");
@@ -1597,6 +1623,7 @@ void test_raw_router_reply_maps_submit_result ()
 
 int main ()
 {
+    test_operation_state_pool_reuses_state_and_capacity ();
     test_direct_awaitable_fast_completion_and_abandon ();
     test_send_async_inline_completion ();
     test_routed_send_async_inline_completion ();

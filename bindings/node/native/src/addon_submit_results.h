@@ -6,8 +6,11 @@
 
 #include <errno.h>
 
-inline int classify_try_send_errno ()
+inline int preserve_try_send_result (int result)
 {
+    if (result >= ZLINK_SUBMIT_OK)
+        return result;
+
     switch (zlink_errno ()) {
         case EAGAIN:
             return ZLINK_SUBMIT_BACKPRESSURED;

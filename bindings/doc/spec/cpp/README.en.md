@@ -426,16 +426,21 @@ artifact. The finished binding therefore keeps the following build rules.
   inside Core and resumes on the Core signal, the socket `SNDTIMEO` is the wait
   bound, and `SNDTIMEO=0` returns `BACKPRESSURED` (`EAGAIN`) immediately.
   Backpressure policy belongs to the application; the binding never retries.
-  Failure is thrown as `submit_error_t`, and the handle of a part Core did not
-  accept stays with the caller.
+  Failure is thrown as `submit_error_t`. The public C++ message stays with the
+  caller because the binding submits a separate native view; Core consumes the
+  native part actually passed to a synchronous call on ordinary failure.
 - The routed send builder exposes no flags stage. Its `timeout(...)` stage sets
   the Core per-operation deadline used by `async()`; blocking `submit()` uses
   the socket `SNDTIMEO` bound.
-- Every C++ outbound path on the same native handle shares a binding-owned record-
-  attempt gate. One native attempt calls the existing part API from its first part
-  through `FINAL`, then immediately releases the gate. The gate only prevents two
-  threads from interleaving part sequences and a close from running underneath an
-  in-flight submit; it owns no retry or wait policy.
+- The C++ binding adds no lock or gate of its own to an outbound path. Core's
+  per-socket transaction state keeps another sender's parts out of an open
+  sequence and rejects a racing attempt as a whole, without exposing a partial
+  record to the peer. The rejected native part is still consumed under Core's
+  synchronous send contract; the binding's separate native view preserves the
+  public C++ message. Concurrent multipart submits on one socket are the
+  application's responsibility: the binding does not serialize, wait, or
+  retry. Core's lifecycle gate likewise owns races between close and an
+  in-flight submit.
 - The terminals for a routed **request** are `submit()` (blocking caller return),
   `submit(callback)` (immediate return), and `async()`
   (`async_result_t<std::vector<message_t>>`). It submits synchronously on the

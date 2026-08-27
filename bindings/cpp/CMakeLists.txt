@@ -528,6 +528,20 @@ if(ZLINK_CPP_BUILD_TESTS)
     ${CMAKE_CURRENT_LIST_DIR}/src
   )
 
+  add_cpp_binding_executable(
+    test_cpp_send_close_stress
+    tests/stress/test_cpp_send_close_stress.cpp
+  )
+  if(ZLINK_CPP_REGISTER_CTEST)
+    add_test(NAME test_cpp_send_close_stress
+      COMMAND /bin/bash -lc "$<TARGET_FILE:test_cpp_send_close_stress>")
+    set_tests_properties(test_cpp_send_close_stress PROPERTIES
+      LABELS "stress"
+      TIMEOUT 300
+    )
+    configure_cpp_binding_runtime(test_cpp_send_close_stress)
+  endif()
+
   add_executable(
     test_cpp_contract_common_header_version
     tests/contract/test_cpp_contract_common_header_version.cpp

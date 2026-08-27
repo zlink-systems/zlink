@@ -35,7 +35,7 @@ pub(crate) fn submit_reply(mut op: ReplyOpStorage) -> Result<(), SubmitError> {
     let rid = rid.as_raw() as *const ffi::zlink_routing_id_t;
     let rc = op
         .routed
-        .with_submit_gate(|handle| {
+        .with_live_handle(|handle| {
             submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
                 ffi::zlink_router_reply_part(handle, rid, *request_seq, part, part_flag)
             })

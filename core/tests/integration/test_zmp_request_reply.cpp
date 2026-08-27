@@ -3,6 +3,7 @@
 #include "testutil.hpp"
 #include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
+#include "api/socket/part_helper_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
@@ -1063,6 +1064,7 @@ void run_blocking_dealer_receive_ownership_transition (bool use_dealer_receive_)
             break;
         msleep (1);
     }
+    handle = socket_handle_t ();
 
     zlink_msg_t request;
     zlink_msg_init (&request);
@@ -1356,6 +1358,7 @@ void test_prefixed_multipart_second_prefix_allocation_failure_rolls_back ()
       zlink::logical_multipart_send_prefixed_frames (
         sender_handle.socket, &first_prefix, sizeof (first_prefix), 0, &second_prefix,
         oversized_prefix_size (), 0, &failed_payload, 1, 0));
+    sender_handle = socket_handle_t ();
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&failed_payload));
 
     zlink_msg_t after_failure;
@@ -1686,7 +1689,7 @@ void test_socket_poller_wakes_after_async_owner_applies_input ()
     TEST_ASSERT_EQUAL_INT (
       0, zlink_poller_wait (poller, &event, 1, 0, NULL));
 
-    const socket_handle_t router_handle = as_socket_handle (router);
+    socket_handle_t router_handle = as_socket_handle (router);
     TEST_ASSERT_NOT_NULL (router_handle.socket);
     uint64_t epoch_before = 0;
     uint64_t public_drains_before = 0;
@@ -1771,6 +1774,7 @@ void test_socket_poller_wakes_after_async_owner_applies_input ()
       0, zlink_poller_wait (poller, &event, 1, 0, NULL));
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_timer_destroy (&timer));
+    router_handle = socket_handle_t ();
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
 }
@@ -2477,7 +2481,7 @@ void test_close_drain_failure_still_completes_socket_handoff ()
     void *dealer = zlink_socket (ctx, ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (dealer);
 
-    const socket_handle_t handle = as_socket_handle (dealer);
+    socket_handle_t handle = as_socket_handle (dealer);
     std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t> state =
       zlink::socket_reqrep_internal::find_or_create_request_reply_state (handle);
     TEST_ASSERT_NOT_NULL (state.get ());
@@ -2496,6 +2500,7 @@ void test_close_drain_failure_still_completes_socket_handoff ()
           state.get (), key, pending);
     }
     zlink::request_completion::close (&state->completion);
+    handle = socket_handle_t ();
 
     const zlink_close_result_t close_result = zlink_close (dealer);
     const int close_errno = zlink_errno ();
@@ -2638,7 +2643,7 @@ void test_router_exact_request_to_dealer_completes_on_async_owner ()
         msleep (1);
     }
 
-    const socket_handle_t dealer_handle = as_socket_handle (dealer);
+    socket_handle_t dealer_handle = as_socket_handle (dealer);
     TEST_ASSERT_NOT_NULL (dealer_handle.socket);
     uint64_t epoch_before = 0;
     uint64_t public_drains_before = 0;
@@ -2740,6 +2745,7 @@ void test_router_exact_request_to_dealer_completes_on_async_owner ()
     TEST_ASSERT_EQUAL_STRING ("exact-reply", probe.payload.c_str ());
     lock.unlock ();
 
+    dealer_handle = socket_handle_t ();
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
 }
@@ -3102,6 +3108,287 @@ void test_dealer_to_dealer_multipart_reply_preserves_large_first_part ()
     test_context_socket_close (server_dealer);
 }
 
+void test_request_stage_allocation_failure_consumes_and_aborts_sequence ()
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (dealer);
+
+    zlink_msg_t first;
+    zlink_msg_t failed;
+    zlink_msg_init (&first);
+    zlink_msg_init (&failed);
+    init_string_part (&first, "staged-before-oom");
+    init_string_part (&failed, "stage-oom");
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request_part (dealer, &first, ZLINK_SEND_FLAGS_NONE,
+                                 ZLINK_PART_MORE, 0, NULL, NULL));
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_stage_payload);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OUT_OF_MEMORY,
+      zlink_dealer_request_part (dealer, &failed, ZLINK_SEND_FLAGS_NONE,
+                                 ZLINK_PART_MORE, 0, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&first));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&failed));
+    TEST_ASSERT_FALSE (
+      zlink::part_helper_internal::send_sequence_active (dealer));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&first));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&failed));
+
+    test_context_socket_close_zero_linger (dealer);
+}
+
+void test_dealer_reply_combined_allocation_failure_preserves_token ()
+{
+    void *server_dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *client_dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (server_dealer);
+    TEST_ASSERT_NOT_NULL (client_dealer);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (server_dealer, "inproc://zmp-dealer-reply-oom"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (client_dealer, "inproc://zmp-dealer-reply-oom"));
+    msleep (SETTLE_TIME);
+
+    zlink_msg_t request;
+    zlink_msg_init (&request);
+    init_string_part (&request, "dealer-oom-request");
+    reply_probe_t reply_probe;
+    reply_probe.progress_handle = client_dealer;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (client_dealer, &request, 1, &capture_reply,
+                            &reply_probe, ZLINK_SEND_FLAGS_NONE, 30000));
+
+    uint8_t message_type = 0;
+    uint64_t request_seq = 0;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    zlink_msg_t received;
+    zlink_msg_init (&received);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_dealer_part_with_retry (server_dealer, &message_type, &request_seq,
+                                   &received, &has_more));
+    TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_REQUEST, message_type);
+    TEST_ASSERT_TRUE (request_seq != 0);
+    TEST_ASSERT_EQUAL_STRING ("dealer-oom-request",
+                              part_to_string_and_close (&received).c_str ());
+
+    zlink_msg_t staged[4];
+    for (size_t i = 0; i < 4; ++i) {
+        zlink_msg_init (&staged[i]);
+        init_string_part (&staged[i], "discarded");
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_dealer_reply_part (server_dealer, request_seq, &staged[i],
+                                   ZLINK_PART_MORE));
+    }
+
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_dealer_combined);
+    zlink_msg_t failed_final;
+    zlink_msg_init (&failed_final);
+    init_string_part (&failed_final, "discarded-final");
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OUT_OF_MEMORY,
+      zlink_dealer_reply_part (server_dealer, request_seq, &failed_final,
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&failed_final));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&failed_final));
+    for (size_t i = 0; i < 4; ++i) {
+        TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&staged[i]));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&staged[i]));
+    }
+
+    zlink_msg_t fresh_reply;
+    zlink_msg_init (&fresh_reply);
+    init_string_part (&fresh_reply, "fresh-dealer-reply");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_reply_part (server_dealer, request_seq, &fresh_reply,
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_TRUE (wait_for_reply (&reply_probe));
+    {
+        std::lock_guard<std::mutex> lock (reply_probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, reply_probe.result);
+        TEST_ASSERT_EQUAL_UINT64 (1, reply_probe.callback_count);
+        TEST_ASSERT_EQUAL_UINT64 (1, reply_probe.part_count);
+        TEST_ASSERT_EQUAL_STRING ("fresh-dealer-reply",
+                                  reply_probe.payload.c_str ());
+    }
+
+    msleep (SETTLE_TIME);
+    test_context_socket_close (client_dealer);
+    test_context_socket_close (server_dealer);
+}
+
+void test_router_reply_allocations_preserve_target_until_fresh_reply ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://zmp-router-reply-oom"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://zmp-router-reply-oom"));
+    msleep (SETTLE_TIME);
+
+    zlink_msg_t request;
+    zlink_msg_init (&request);
+    init_string_part (&request, "router-oom-request");
+    reply_probe_t reply_probe;
+    reply_probe.progress_handle = dealer;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (dealer, &request, 1, &capture_reply, &reply_probe,
+                            ZLINK_SEND_FLAGS_NONE, 30000));
+
+    const zlink_routing_id_t *source_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_msg_t *request_parts = NULL;
+    size_t request_part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv (router, &source_rid, &request_seq, &request_parts,
+                         &request_part_count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_TRUE (request_seq != 0);
+    zlink_routing_id_t reply_rid = *source_rid;
+    zlink_multipart_close (request_parts, request_part_count);
+
+    zlink_msg_t null_final_head;
+    zlink_msg_init (&null_final_head);
+    init_string_part (&null_final_head, "discarded-null-final-head");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_router_reply_part (router, &reply_rid, request_seq, &null_final_head,
+                               ZLINK_PART_MORE));
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_INVALID_HANDLE,
+      zlink_router_reply_part (router, &reply_rid, request_seq, NULL,
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (EFAULT, errno);
+    TEST_ASSERT_FALSE (
+      zlink::part_helper_internal::send_sequence_active (router));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&null_final_head));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&null_final_head));
+
+    zlink_msg_t invalid_final_head;
+    zlink_msg_t invalid_final;
+    zlink_msg_init (&invalid_final_head);
+    zlink_msg_init (&invalid_final);
+    init_string_part (&invalid_final_head, "discarded-invalid-final-head");
+    init_string_part (&invalid_final, "invalid-final");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_router_reply_part (router, &reply_rid, request_seq,
+                               &invalid_final_head, ZLINK_PART_MORE));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&invalid_final));
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_INVALID_HANDLE,
+      zlink_router_reply_part (router, &reply_rid, request_seq, &invalid_final,
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (EFAULT, errno);
+    TEST_ASSERT_FALSE (
+      zlink::part_helper_internal::send_sequence_active (router));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&invalid_final_head));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&invalid_final_head));
+
+    zlink_msg_t outer_head;
+    zlink_msg_t outer_final;
+    zlink_msg_init (&outer_head);
+    zlink_msg_init (&outer_final);
+    init_string_part (&outer_head, "outer-head");
+    init_string_part (&outer_final, "outer-final");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_router_reply_part (router, &reply_rid, request_seq, &outer_head,
+                               ZLINK_PART_MORE));
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_router_payload);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OUT_OF_MEMORY,
+      zlink_router_reply_part (router, &reply_rid, request_seq, &outer_final,
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&outer_head));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&outer_final));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&outer_head));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&outer_final));
+
+    zlink_msg_t runtime_staged[4];
+    for (size_t i = 0; i < 4; ++i) {
+        zlink_msg_init (&runtime_staged[i]);
+        init_string_part (&runtime_staged[i], "runtime-discarded");
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_router_reply_part (router, &reply_rid, request_seq,
+                                   &runtime_staged[i], ZLINK_PART_MORE));
+    }
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_runtime_combined);
+    zlink_msg_t runtime_final;
+    zlink_msg_init (&runtime_final);
+    init_string_part (&runtime_final, "runtime-final");
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OUT_OF_MEMORY,
+      zlink_router_reply_part (router, &reply_rid, request_seq, &runtime_final,
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&runtime_final));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&runtime_final));
+    for (size_t i = 0; i < 4; ++i) {
+        TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&runtime_staged[i]));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&runtime_staged[i]));
+    }
+
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_reply_key);
+    zlink_msg_t key_failure;
+    zlink_msg_init (&key_failure);
+    init_string_part (&key_failure, "key-failure");
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OUT_OF_MEMORY,
+      zlink_router_reply_part (router, &reply_rid, request_seq, &key_failure,
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&key_failure));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&key_failure));
+
+    zlink_msg_t fresh_reply;
+    zlink_msg_init (&fresh_reply);
+    init_string_part (&fresh_reply, "fresh-router-reply");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_router_reply_part (router, &reply_rid, request_seq, &fresh_reply,
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_TRUE (wait_for_reply (&reply_probe));
+    {
+        std::lock_guard<std::mutex> lock (reply_probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, reply_probe.result);
+        TEST_ASSERT_EQUAL_UINT64 (1, reply_probe.callback_count);
+        TEST_ASSERT_EQUAL_UINT64 (1, reply_probe.part_count);
+        TEST_ASSERT_EQUAL_STRING ("fresh-router-reply",
+                                  reply_probe.payload.c_str ());
+    }
+
+    msleep (SETTLE_TIME);
+    test_context_socket_close (dealer);
+    test_context_socket_close (router);
+}
+
 void test_dealer_request_receive_without_reply_closes_cleanly ()
 {
     void *server_dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -3305,6 +3592,42 @@ void test_dealer_request_uses_socket_default_timeout_when_reply_is_missing ()
     test_context_socket_close_zero_linger (router);
 }
 
+void test_reply_timeout_does_not_turn_failed_request_admission_into_success ()
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (dealer);
+    const int send_timeout_ms = 100;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
+                        sizeof (send_timeout_ms)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://request-timeout-before-admission"));
+
+    zlink_msg_t request;
+    init_string_part (&request, "never-admitted-request");
+    reply_probe_t reply_probe;
+    reply_probe.progress_handle = dealer;
+    errno = 0;
+    const zlink_submit_result_t submit = zlink_dealer_request_part (
+      dealer, &request, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 10,
+      &capture_reply, &reply_probe);
+    const int submit_errno = errno;
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, submit);
+    TEST_ASSERT_EQUAL_INT (EAGAIN, submit_errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&request));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&request));
+    msleep (30);
+    (void) drain_completion_via_poller (dealer);
+    {
+        std::lock_guard<std::mutex> lock (reply_probe.mutex);
+        TEST_ASSERT_FALSE (reply_probe.done);
+        TEST_ASSERT_EQUAL_UINT64 (0, reply_probe.callback_count);
+    }
+
+    test_context_socket_close_zero_linger (dealer);
+}
+
 void test_router_reply_target_slots_are_bounded_and_released ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -3422,10 +3745,14 @@ int main ()
     RUN_SELECTED (test_extra_reply_is_dropped_after_first_completion);
     RUN_SELECTED (test_dealer_to_dealer_reply_routes_to_source_peer_and_closes);
     RUN_SELECTED (test_dealer_to_dealer_multipart_reply_preserves_large_first_part);
+    RUN_SELECTED (test_request_stage_allocation_failure_consumes_and_aborts_sequence);
+    RUN_SELECTED (test_dealer_reply_combined_allocation_failure_preserves_token);
+    RUN_SELECTED (test_router_reply_allocations_preserve_target_until_fresh_reply);
     RUN_SELECTED (test_dealer_request_receive_without_reply_closes_cleanly);
     RUN_SELECTED (test_dealer_close_drains_pending_request_completion);
     RUN_SELECTED (test_router_request_to_dealer_times_out_when_reply_is_missing);
     RUN_SELECTED (test_dealer_request_uses_socket_default_timeout_when_reply_is_missing);
+    RUN_SELECTED (test_reply_timeout_does_not_turn_failed_request_admission_into_success);
     RUN_SELECTED (test_router_reply_target_slots_are_bounded_and_released);
     RUN_SELECTED (test_request_reply_process_exits_cleanly_after_round_trip);
 #undef RUN_SELECTED

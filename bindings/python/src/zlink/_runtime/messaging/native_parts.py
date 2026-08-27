@@ -2,9 +2,10 @@
 """Materialize public payload parts into Core-owned message values.
 
 All send, request, and reply paths use this module as the ownership boundary.
-The caller keeps ownership of input buffers and ``Message`` objects; the
-returned native parts are consumed by the Core operation or must be closed by
-the caller on failure.
+The caller keeps ownership of input buffers and ``Message`` objects because
+the returned values are independent staging parts. A synchronous Core call
+consumes every staging part it actually attempts on success or ordinary
+failure; the binding closes any later part that was not attempted.
 """
 
 import ctypes

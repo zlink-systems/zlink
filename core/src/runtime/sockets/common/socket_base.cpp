@@ -49,7 +49,7 @@ static void generate_default_routing_id (unsigned char out_[16])
 
 bool zlink::socket_base_t::check_tag () const
 {
-    return _tag == 0xbaddecaf;
+    return _tag.load (std::memory_order_acquire) == 0xbaddecaf;
 }
 
 zlink::socket_base_t *
@@ -99,6 +99,7 @@ zlink::socket_base_t::create (int type_, class ctx_t *parent_, uint32_t tid_, in
 
 zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     own_t (parent_, tid_),
+    _public_handle (NULL),
     _tag (0xbaddecaf),
     _ctx_terminated (false),
     _runtime (),

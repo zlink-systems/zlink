@@ -6,7 +6,6 @@ namespace Systems.Zlink.Runtime.Sockets.Internal;
 
 internal sealed class SocketHandle : IDisposable
 {
-    private readonly bool _own;
     private IntPtr _handle;
 
     public SocketHandle(Context context, SocketType type)
@@ -18,16 +17,6 @@ internal sealed class SocketHandle : IDisposable
         if (_handle == IntPtr.Zero)
             throw ZlinkException.CreateConfigException(
                 NativeMethods.zlink_errno());
-        _own = true;
-    }
-
-    public SocketHandle(IntPtr handle, bool own)
-    {
-        if (handle == IntPtr.Zero)
-            throw new ArgumentException("Invalid socket handle.", nameof(handle));
-
-        _handle = handle;
-        _own = own;
     }
 
     public void Dispose()
@@ -35,31 +24,25 @@ internal sealed class SocketHandle : IDisposable
         if (_handle == IntPtr.Zero)
             return;
 
-        if (_own)
+        var lastErrno = 0;
+        while (true)
         {
-            RequestProgressPump.StopSocket(_handle);
-            var lastErrno = 0;
-            while (true)
+            var rc = NativeMethods.zlink_close(_handle);
+            if (rc == 0)
             {
-                var rc = NativeMethods.zlink_close(_handle);
-                if (rc == 0)
-                {
-                    _handle = IntPtr.Zero;
-                    GC.SuppressFinalize(this);
-                    return;
-                }
-
-                var errno = NativeMethods.zlink_errno();
-                lastErrno = errno;
-                var code = ZlinkException.MapErrorCode(errno);
-                if (code == ErrorCode.EIntr || errno == 4)
-                    continue;
-                throw ZlinkException.CreateCloseException(lastErrno);
+                RequestProgressPump.StopSocket(_handle);
+                _handle = IntPtr.Zero;
+                GC.SuppressFinalize(this);
+                return;
             }
-        }
 
-        _handle = IntPtr.Zero;
-        GC.SuppressFinalize(this);
+            var errno = NativeMethods.zlink_errno();
+            lastErrno = errno;
+            var code = ZlinkException.MapErrorCode(errno);
+            if (code == ErrorCode.EIntr || errno == 4)
+                continue;
+            throw ZlinkException.CreateCloseException(lastErrno);
+        }
     }
 
     public IntPtr DangerousGetHandle()
@@ -67,12 +50,6 @@ internal sealed class SocketHandle : IDisposable
         if (_handle == IntPtr.Zero)
             throw new ObjectDisposedException(nameof(SocketHandle));
         return _handle;
-    }
-
-    public void ReleaseWithoutClose()
-    {
-        _handle = IntPtr.Zero;
-        GC.SuppressFinalize(this);
     }
 
     ~SocketHandle()

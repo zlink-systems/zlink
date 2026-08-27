@@ -42,7 +42,9 @@ void zlink::ctx_t::auto_hwm_recalc_task_main (void *arg_)
 
 void zlink::ctx_t::ensure_auto_hwm_recalc_task_started ()
 {
-    if (_auto_hwm.recalc_task_id () != 0)
+    //  The caller owns _slot_sync. Teardown seals task creation under that
+    //  same lock before it waits for an in-flight callback below.
+    if (_auto_hwm_recalc_stopped || _auto_hwm.recalc_task_id () != 0)
         return;
 
     control_runtime_t *runtime = control_runtime ();
@@ -56,11 +58,18 @@ void zlink::ctx_t::ensure_auto_hwm_recalc_task_started ()
 
 void zlink::ctx_t::stop_auto_hwm_recalc_task ()
 {
-    const uint64_t task_id = _auto_hwm.clear_recalc_task_id ();
+    uint64_t task_id = 0;
+    control_runtime_t *runtime = NULL;
+    {
+        scoped_lock_t lock (_slot_sync);
+        _auto_hwm_recalc_stopped = true;
+        task_id = _auto_hwm.clear_recalc_task_id ();
+        runtime = _runtime_resources.control_runtime ();
+    }
+
     if (task_id == 0)
         return;
 
-    control_runtime_t *runtime = _runtime_resources.control_runtime ();
     if (runtime)
         (void) runtime->remove_task (task_id);
 }
@@ -79,7 +88,7 @@ void zlink::ctx_t::schedule_auto_hwm_recalculate ()
         //  Context shutdown removes control-runtime tasks while this lock is
         //  held. Do not recreate the auto-HWM task from a pipe/monitor cleanup
         //  that runs after termination has begun.
-        if (_terminating)
+        if (_terminating || _auto_hwm_recalc_stopped)
             return;
         _auto_hwm.schedule (now_ms, debounce_ms);
 
