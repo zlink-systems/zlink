@@ -90,7 +90,8 @@
 |---|---|---|---|
 | dotnet | `dotnet test tests/Zlink.Framework.UnitTests` | `framework/languages/dotnet/samples/run_samples.sh` | 기준 1893+ / 실패 0 |
 | cpp | `ctest --test-dir build -L 'framework-(unit\|contract)' -LE 'e2e\|sample\|perf'` | `framework/languages/cpp/samples/run_samples.sh` | flake: Bingo 후반 ~1/5, TTT teardown ~1/15. exit 86/134는 1회 재실행 |
-| java | `./gradlew :zlink-framework-core:test` | `framework/languages/java/samples/run_samples.sh` | 러너가 java→kotlin 순차 |
+| java | `./gradlew :zlink-framework-core:test` | `framework/languages/java/samples/run_samples.sh` | 러너가 java→kotlin 순차. **기준 1149/실패 0**(2026-08-27 cleanTest 실측) |
+| jvm 추가 모듈 | `:zlink-stream-connector:test`(123) · `:zlink-framework-locations-redis:test`(27) | — | **2026-08-27 캠페인 범위 편입** — jvm 결함 6건 수정이 이 두 모듈을 건드렸다. 종전 매트릭스에 없었다 |
 | kotlin | `./gradlew :zlink-framework-kotlin:test` | (같은 러너) | `ZLINK_SAMPLE_LANGUAGES`로 분리 가능 |
 | node | `npx tsc -b tsconfig.build.json --force` 후 `node --test test/contract/*.test.js` + verify:m6a/b/c | `framework/languages/node/samples/run_samples.sh` | **`--force` 필수** |
 
