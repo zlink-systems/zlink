@@ -2410,10 +2410,13 @@ spot_manager_t spot_context_t::manager () const
 
 route_client_t spot_context_t::spot_route_client () const
 {
-    if (!_state || !_state->node || !_state->node->route_client) {
+    if (!_state || !_state->node) {
         return route_client_t ();
     }
-    return *_state->node->route_client;
+    const auto route_client = _state->node->route_client_lane
+                                .run ([this] { return _state->node->route_client; })
+                                .get ();
+    return route_client.value_or (route_client_t ());
 }
 
 channel_client_t spot_context_t::outbound () const
@@ -10602,8 +10605,9 @@ result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
 
 void spot_node_runtime_t::set_route_client (route_client_t route_client)
 {
-    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    _state->route_client = std::move (route_client);
+    _state->route_client_lane
+      .run ([&] { _state->route_client = std::move (route_client); })
+      .get ();
 }
 
 std::vector<spot_context_t> spot_node_runtime_t::active_contexts () const
@@ -10773,11 +10777,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                              && (record.kind == service::record_kind_t::node_send
                                  || record.kind == service::record_kind_t::node_request);
     if (spot_record || node_record) {
-        std::optional<route_client_t> route_client;
-        {
-            std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-            route_client = _state->route_client;
-        }
+        const auto route_client =
+          _state->route_client_lane.run ([&] { return _state->route_client; }).get ();
         if (!route_client)
             return false;
 
@@ -11270,11 +11271,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             return true;
         }
         if (header.value ().message_name == actor_bound_session_bind_route_request_t::packet_name) {
-            std::optional<route_client_t> route_client;
-            {
-                std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-                route_client = _state->route_client;
-            }
+            const auto route_client =
+              _state->route_client_lane.run ([&] { return _state->route_client; }).get ();
             if (!route_client) {
                 reply_error (framework_exception_t (
                   framework_error_kind_t::unavailable,

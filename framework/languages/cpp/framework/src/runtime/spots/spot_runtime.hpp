@@ -312,6 +312,8 @@ class spot_node_builder_state_t
     std::map<std::string, std::uint64_t> core_actor_membership_epochs;
     std::map<std::string, std::shared_ptr<service::spot_t>> native_spots_by_id;
     std::shared_ptr<service::spot_t> routed_control_spot;
+    runtime::offload_executor_t route_client_lane_executor;
+    runtime::state_lane_t route_client_lane{route_client_lane_executor};
     std::optional<route_client_t> route_client;
     struct queued_actor_packet_t
     {
