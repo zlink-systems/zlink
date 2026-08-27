@@ -210,6 +210,17 @@ grep -rhoE 'AwaitStateLane' --include=*.cs . | wc -l                   # 호환 
   실측). 처방: 그런 표면은 동기 join(inStateLane/AwaitStateLane)으로 반환-전-완료를 보존하고,
   완료 신호 대기만 비동기로 남긴다. CP1 리뷰 체크리스트: "원본에서 반환 전에 보장되던 완료가
   전환 후에도 반환 전인가".
+- **(10, node CP3 이분 실측 — 캠페인이 새로 만든 결함 유형)** **연속된 동기 read가 하나의 파생
+  값을 만들 때, 그 read들을 각각 await로 바꾸면 캡처 블록 자체가 찢어진다.** node
+  `actor-packet-relay.ts relayRemoteActorPacket`이 실측이다. base에서
+  `captureBoundSessionResponseTarget`·`sessionRouteFence`·`committedRoute` 3콜이 전부 동기라
+  **한 JS turn에서 원자적으로** 잡혔고 `storedActorRef`는 정합한 스냅샷이었다. 전환이 셋을 모두
+  await로 바꾸면서 캡처 블록 **내부에** 경계 2개가 생겼고, `storedActorRef`가 서로 다른 시점의
+  값을 섞은 스냅샷이 될 수 있다. 발견 9가 "반환 전에 끝나야 할 완료"라면 이건 그 캡처 측 변형이다.
+  처방: N개 read가 한 파생 값을 만들면 그 묶음을 **하나의 turn/lane turn 안에서 함께** 잡거나,
+  exact identity로 캡처하고 경계 뒤 재검증한다. read를 하나씩 기계적으로 await로 올리지 않는다.
+  **CP1·감사 체크리스트 항목: "원본에서 한 turn에 함께 잡히던 read 묶음이 전환 후에도 함께 잡히는가."**
+
 - **(8, node L2 판정)** node에서 **동기 메서드는 이미 JS turn 원자성으로 lane turn과 동등**하다.
   따라서 동기 공개 계약(d.ts의 sync 시그니처)을 Promise로 바꾸면서까지 lane으로 감싸지 않는다.
   lane 적용 대상은 ① 메서드 내부 await로 상태 읽기·쓰기가 갈라지는 비동기 경로 ② 재진입 검출이
