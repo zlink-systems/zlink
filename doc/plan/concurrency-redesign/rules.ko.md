@@ -105,6 +105,12 @@ cross-language e2e: `framework/languages/cpp/cross-language/run_cross_language_s
   설치본(`build/install/.../bin/zlink-cross-language-host`)이 그 jar를 물고 있다. 발견 시점의
   설치본은 **2026-08-25자**였다. **`./gradlew publishToMavenLocal`을 선행하지 않으면 java
   스테이지가 수정 이전 코드로 통과 판정을 받는다.** cpp host도 타겟 재빌드가 필요하다.
+- **`MSBUILDDISABLENODEREUSE=1`을 반드시 설정한다** (2026-08-27 실증). "dotnet 무관 스테이지만
+  고르면 dotnet은 안 돈다"는 가정이 틀렸다 — `relocation` 등 일부 스테이지가 내부적으로 dotnet
+  테스트 호스트를 빌드하고, MSBuild 노드가 재사용을 위해 죽지 않고 **언어 락 3개를 계속 붙든다**.
+  실측: `relocation`이 rc=0으로 끝났는데 MSBuild 노드 6개가 cpp·jvm·node 락을 9분 넘게 쥐고 있어
+  다음 스테이지(`java-cross`)가 진입하지 못했다. 해당 PID를 kill하니 즉시 진입했다.
+  다른 세션이 dotnet을 쓰는 중이면 충돌 위험도 있다.
 - 스테이지는 `ZLINK_CPP_CROSS_LANGUAGE_STAGE`로 선택한다(기본 `all`). 전체 20개 중 **9개가
   dotnet을 상대**로 한다. dotnet 무관 10개:
   `spot-route` · `message-follow` · `relocation` · `java-cross` ·
