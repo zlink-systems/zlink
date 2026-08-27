@@ -102,7 +102,7 @@ node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 | dotnet `lock` 문 | 999 | **113** (−89%) | 잔존 전부 파일별 정당화(실행 primitive·무할당 계약·socket/dispose 프로토콜 — cp3-audit 표). 초기 목표 "~60"은 추정치였고 실측 분류가 대체 |
 | dotnet `_gate` 클래스 | 61 | **5** | 전부 판정된 프로토콜 gate |
 | dotnet lane 파일 | 0 | **77** | — |
-| cpp mutex 취득 | ~1,303 | **~890** (RAII 최초 취득) + 재취득 121 | **종전 "~204(−84%)"는 계수 오류였다 — 2026-08-27 중앙 재측정으로 정정.** 이 코드베이스의 관용구는 `std::lock_guard lock (_mutex);`(변수명+공백)인데 종전 계수는 `std::lock_guard<`·`std::lock_guard(` 형태만 잡는 정규식이라 변수명이 낀 대다수를 놓쳤다. 실측: lock_guard 832·unique_lock 56·shared_lock 2 = 890. cp3-audit-cpp(886)와 독립 일치. `recursive_mutex`도 **미제거** — actor_gateway에서는 실제로 빠졌으나 spot_runtime(132)·mesh_node_runtime(7)·mesh_node_host_service(2)·app(1)에 잔존. 상위: spot_runtime.cpp 159·public_host_runtime.cpp 99·stream_host_service.cpp 66 |
+| cpp mutex 취득 | ~1,303 | **673** (진행 중) | **종전 "~204(−84%)"는 계수 오류였다** — 관용구가 `std::lock_guard lock (_mutex);`(변수명+공백)인데 정규식이 `<`/`(` 형태만 잡았다. 정정된 명령은 rules §6. 2026-08-27 세션 시작 시 실측 **890** → 현재 **673**(−217, 전환 진행 중). 내역: 소형 배치 A~D 101 · channel_runtime 37(T7 "미해소 C2" 해소) · public_host_runtime 62(lane 5개 분리, 99→37) · spot_runtime 진행 중. `recursive_mutex` **135 잔존**(spot_runtime 중심 — 재진입 실재 신호). 상위: spot_runtime 151 · stream_host_service 66 · raw_mesh_node_owner 49 · mesh_node_runtime 38 · public_host_runtime 37 |
 | java 상위 후보 monitor | 683/94클래스 | **후보 32클래스 0** | 잔존 synchronized=native 작업 프로토콜·primitive 4종(판정) |
 | node | await 교차 기준 | **후보 34 전건 판정** | 전환 필요분 완료, 발견8 불요·executor 제외군 판정 |
 | 호환 경계(블로킹 브리지) | 0 | dotnet 663 · **cpp 456~460** | §5 조건 충족·사유 기록 잔존(스펙 06 개정 반영). 핫패스 회수는 이월 |
