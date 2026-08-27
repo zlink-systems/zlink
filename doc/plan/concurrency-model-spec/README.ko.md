@@ -1,0 +1,74 @@
+# 동시성 모델 스펙 — 작업 폴더
+
+**목표**: zlink는 고성능 실시간 메시징 프레임워크다. lock을 최대한 없애고,
+같은 프레임워크인 만큼 **동일한 동시성 메커니즘을 스펙으로 고정**한다.
+(2026-08-27 사용자 제기)
+
+이 폴더는 그 스펙 작업만 담는다. 앞선 lane 전환 캠페인의 실행 기록은
+[`../concurrency-redesign/`](../concurrency-redesign/)에 있고 여기서 섞지 않는다.
+
+---
+
+## 읽는 순서
+
+| # | 문서 | 무엇을 답하는가 |
+|---|---|---|
+| 1 | **[spec-draft-concurrency-model.ko.md](spec-draft-concurrency-model.ko.md)** | **스펙 초안 본문.** 고정할 규범 R1~R14, 즉시 조치 3건, 미결 5건 |
+| 2 | [executor-layer-survey.ko.md](executor-layer-survey.ko.md) | 4언어 실행기 계층이 어떻게 생겼나 |
+| 3 | [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md) | **메시지 1건이 블로킹 브리지를 몇 번 통과하나** |
+| 4 | [socket-lock-reclassification.ko.md](socket-lock-reclassification.ko.md) | socket lock 371개 중 무엇이 중복인가 |
+
+**초안(1)만 읽어도 결론은 다 있다.** 2~4는 그 근거다.
+
+---
+
+## 확정된 핵심 사실
+
+**state lane 계약은 이미 4언어 동일하다.** `current`·`isOnLane`·`run`·`tryPost`·
+`throwIfReentrant`·`close`가 1:1 대응한다. 재진입 검출도 네 언어 모두 갖고 있다 —
+새로 만들 것이 없고 **기술만 하면 된다.**
+
+**성능 병목은 lock 개수가 아니라 turn 경계다.** cpp에서 메시지 1건이 블로킹 브리지를
+**원격 Actor request 13회 · send 11회** 통과한다. 그중 **7~8개가 단순 조회**이고
+1개는 같은 fence를 두 번 읽는 중복이다.
+
+**java는 그 조회를 한 turn에 묶는다.**
+
+```java
+ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
+    actorRegistry.actor(actorId),
+    actorRegistry.context(actor),
+    actorRegistry.actorType(actorId)));   // 셋을 한 turn에서
+```
+
+즉 **"java 형태로 통일"의 실체는 진입 경로 재설계가 아니라 조회를 스냅샷으로 묶는 것**이고,
+이는 이미 성문화된 **발견 10**을 지키는 일이다. cpp가 lane 전환 중 그 규칙을 어겼다.
+
+**dotnet과 java의 Spot 실행 구조는 거의 같다.** Actor는 `SPOT_WIDE`에서 Actor 큐 → Spot 큐로
+2단, Timer는 Spot 큐로 직행 — 양 언어 동일하다. 그 비대칭의 이유는 순서가 아니라
+**용량 회계**다(Actor 큐가 payload admission을 소유하고 Timer는 payload가 없다).
+
+---
+
+## 다음 할 일
+
+**착수 순서는 초안 §7-1부터다.**
+
+| # | 작업 | 기대 효과 | 재설계 필요? |
+|---|---|---|---|
+| 1 | cpp Spot 핫패스 조회 묶기 | send 11→4~5 · request 13→5~6 | **아니오** — 발견 10 준수 |
+| 2 | java binding wrapper 중복 lock 31 제거 | hot path 7 | 아니오 |
+| 3 | `AsyncSerialQueue` 임계 구역 축소 | enqueue마다 `BigInteger` 4할당 제거 | 아니오 |
+
+**1번이 끝난 뒤 미결 ①(실행기 계층 통일 여부)을 판단한다.** 브리지가 절반 이하로 줄면
+재설계 필요성 자체가 달라지므로, 지금 결정할 이유가 없다.
+
+---
+
+## 미결 (사용자 판단)
+
+① 실행기 계층을 어디까지 고정할 것인가 — §7-1 이후 판단
+② 정본 언어 — lane primitive는 .NET, **turn 경계는 java**로 계층별 분리 권고
+③ 범위 — Spot·Actor·Session 함께 권고, Channel은 별도
+④ 호환 경계 회수(dotnet 664 · cpp 456) — §7-1 이후 재측정
+⑤ node의 Actor별·Timer별 큐 존재 여부 확인
