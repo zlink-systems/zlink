@@ -98,6 +98,19 @@
 cross-language e2e: `framework/languages/cpp/cross-language/run_cross_language_smoke.sh`
 (`ZLINK_CPP_BUILD_DIR=../build`) — 모든 언어 락을 잡고 단독으로. CP3/Z0 전용.
 
+**Z0 함정 (2026-08-27 발견 — 반드시 확인)**
+
+- **java cross-language Host는 소스가 아니라 발행된 maven 산출물에 의존한다.**
+  `cross-language/Host/build.gradle.kts`가 `systems.zlink:zlink-framework-core:0.10.0`을 쓰고,
+  설치본(`build/install/.../bin/zlink-cross-language-host`)이 그 jar를 물고 있다. 발견 시점의
+  설치본은 **2026-08-25자**였다. **`./gradlew publishToMavenLocal`을 선행하지 않으면 java
+  스테이지가 수정 이전 코드로 통과 판정을 받는다.** cpp host도 타겟 재빌드가 필요하다.
+- 스테이지는 `ZLINK_CPP_CROSS_LANGUAGE_STAGE`로 선택한다(기본 `all`). 전체 20개 중 **9개가
+  dotnet을 상대**로 한다. dotnet 무관 10개:
+  `spot-route` · `message-follow` · `relocation` · `java-cross` ·
+  `user-spot-join-{cpp-java, java-cpp, cpp-node, node-cpp, java-node, node-java}`.
+  dotnet이 다른 세션 소관이거나 락이 점유된 경우 이 10개로 cpp·node·jvm 간 wire 계약을 덮는다.
+
 체크포인트: CP1(요청 1건)=에이전트 집중 테스트, CP2(배치)=Claude 단위·계약+7샘플,
 CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
 
