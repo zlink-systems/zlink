@@ -56,8 +56,8 @@ P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같�
 
 ## 3. P1 — dotnet
 
-dotnet은 세 계층 조율자와 큐 primitive를 모두 갖고 있다. 신설할 것이 없고 **이름을 스펙에
-맞추고 빠진 계약 둘을 채운다.**
+dotnet은 세 계층 조율자를 모두 갖고 있다. 조율자는 이름을 스펙에 맞추면 되지만, **큐
+primitive에는 채워야 할 것이 남아 있다.**
 
 | # | 작업 | 파일 | 완료 판정 |
 |---|---|---|---|
@@ -66,6 +66,18 @@ dotnet은 세 계층 조율자와 큐 primitive를 모두 갖고 있다. 신설�
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
 | P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | 상수로 박힌 `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`을 정책 주입으로 바꾼다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs:7,8` | `ZLinkExecutionLanePolicy` 일곱 값이 주입된다 |
+| P1-6 | 큐에 payload 바이트 회계를 **신설**한다 — `enqueueWithPayloadBytes`와 두 lane의 byte 상한 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 첫 두 항목 통과 |
+
+**dotnet 큐에는 payload 바이트 상한이 없다(실측 2026-08-28).** `ZLinkSerialExecutionQueue`의
+admission은 relocation seal과 stopping 상태만 본다 — `applicationByteCapacity`에 해당하는 값이
+없고 제출 API도 바이트를 받지 않는다. 스펙 07 §5의 Actor별 admission은 현재 **java에만**
+있다(`ZLinkAsyncSerialQueue.enqueueWithPayloadBytes` · `ZLinkDefaultSpotContext:665`). node는
+`ZLinkBoundedSerialScheduler`에 바이트 회계가 있으나 `SpotWide`에서 Actor queue를 거치지 않아
+Actor별로 갈리지 않는다.
+
+따라서 P1은 개명만이 아니다. **큐 primitive 정본은 java이고, dotnet은 그 회계를 새로
+받아야 한다(P1-6).** 앞서 "dotnet은 신설할 것이 없다"고 적었던 것은 조율자 계층만 보고 내린
+판정이며 큐 primitive에는 해당하지 않는다.
 
 **양보 동작 자체는 dotnet에 이미 있다.** `DrainAsync`가 `OwnerTimeSliceMilliseconds`(10ms)마다
 slice를 끊고, `LifecycleTurnLimit`(8)로 lifecycle 연속 선점을 막는다. 빠진 것은 동작이 아니라

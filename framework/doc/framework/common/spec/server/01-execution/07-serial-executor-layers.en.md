@@ -152,10 +152,9 @@ An Actor queue does not run the work itself; on its own turn it hands the work t
 queue. That is why only Actor work passes through two queues, and why execution order is
 decided by the Spot queue alone.
 
-- **Actor work crosses two queues under `SpotWide` because of the payload bytes counted per
-  Actor, not because of execution order.** Reserving that Actor's share of bytes on the lower
-  Actor queue is what stops one Actor from filling the whole Spot's capacity by itself (§5).
-  Order is already guaranteed by the upper Spot queue alone.
+- **Actor work crosses two queues under `SpotWide` because of admission, not order.** Order is
+  already settled by the upper Spot queue alone. What remains is **whose work gets rejected**
+  when volume piles up, and a single queue cannot split that per Actor (§5).
 - **Timer work crosses one queue.** A timer callback carries no application payload, so it has
   no per-Actor bytes to count, and under `SpotWide` the Spot queue already puts everything in
   one line — so there is no reason to create a per-timer-name queue.
@@ -223,16 +222,37 @@ ExecuteTimer(timerName, work)
 }
 ```
 
-## 5. Which Queue Counts The Payload Bytes
+## 5. Why Each Actor Is Admitted Separately
 
-When Actor work crosses two queues under `SpotWide`, **the lower Actor queue reserves that
-work's actual payload bytes, and the upper Spot queue reserves only `fixedWorkByteCost`, a fixed
-cost independent of payload size.**
+Under `SpotWide`, execution order is decided by the Spot queue alone. Actor work still goes
+through an Actor queue first because **lining work up and deciding whether to accept it are
+different problems.**
 
-The same payload is not reserved on both queues. Reserving twice necessarily breaks one of the
-two — if work that passed below is caught again above, the per-Actor ceiling is no longer the
-real ceiling; and the upper Spot queue fills ahead of the real execution load, blocking the other
-Actors' work in the same Spot along with it.
+An Actor queue is serial. The next work item waits in the Actor queue until that Actor's current
+item has gone up to the Spot queue and finished. So **at most one item of that Actor is ever on
+the Spot queue, and the whole backlog stays in that Actor's own queue.**
+
+```text
+  when 100 items pile up on Actor A
+
+  [ Actor A queue ]  99 waiting ─┐        ← caught at A's own ceiling
+                                 ├─▶ [ Spot queue ]  1 of A · 1 of B · Spot work …
+  [ Actor B queue ]  0 ──────────┘        ← B is unaffected
+```
+
+Without the Actor queue, A's 100 items eat the Spot queue's ceiling directly. Then B's work and
+the Spot handler's work in the same Spot are rejected along with it — A is the one piling up,
+but everything is what gets blocked. A per-Actor ceiling would also stop being a real ceiling,
+because everyone shares the same single slot.
+
+For this to hold, the two queues must not count the same thing. **The lower Actor queue reserves
+that work's actual payload bytes, and the upper Spot queue reserves only `fixedWorkByteCost`, a
+fixed cost independent of payload size.** Counting the payload again above means work that passed
+below is caught again there, making the per-Actor ceiling meaningless, and the Spot queue fills
+ahead of the real execution load.
+
+Under `PerActor` the Actor queue carries execution order as well. Admission is what the Actor
+queue does in both modes, and under `SpotWide` it is all that is left.
 
 **Internal check condition** — on the `SpotWide` Actor path, nothing passes payload bytes as an
 argument when submitting to the upper Spot queue.

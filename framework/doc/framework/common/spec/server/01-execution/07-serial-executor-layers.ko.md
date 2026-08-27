@@ -150,10 +150,9 @@ queue 수만 다르다.
 Actor queue는 작업을 바로 실행하지 않고, 자기 turn이 오면 Spot queue로 넘긴다. 그래서 Actor
 작업만 queue 둘을 지나고, 실행 순서는 Spot queue 하나가 정한다.
 
-- **`SpotWide`에서 Actor 작업이 queue 두 개를 지나는 이유는 실행 순서가 아니라 Actor마다
-  따로 세는 payload 바이트 때문이다.** 아래 Actor queue에서 그 Actor 몫의 바이트를 예약해야
-  Actor 하나가 Spot 전체의 수용량을 혼자 채우는 것을 막을 수 있다(§5). 순서는 위 Spot
-  queue 하나만으로도 이미 보장된다.
+- **`SpotWide`에서 Actor 작업이 queue 두 개를 지나는 이유는 순서가 아니라 admission이다.**
+  순서는 위 Spot queue 하나로 이미 끝난다. 남는 문제는 물량이 몰렸을 때 **누구의 작업을
+  거절할 것인가**이고, 그것은 queue 하나로는 Actor별로 나눌 수 없다(§5).
 - **timer 작업은 queue 하나만 지난다.** timer callback은 application payload를 나르지 않아
   Actor처럼 따로 셀 바이트가 없고, `SpotWide`의 Spot queue가 이미 전체를 한 줄로 세우므로
   timer 이름별 queue를 만들 이유가 없다.
@@ -220,16 +219,34 @@ ExecuteTimer(timerName, work)
 }
 ```
 
-## 5. payload 바이트를 어느 queue가 세는가
+## 5. Actor마다 따로 받아들이는 이유
 
-`SpotWide`에서 Actor 작업이 queue 두 개를 지날 때, **아래 Actor queue가 그 작업의 실제
+`SpotWide`에서 실행 순서는 Spot queue 하나가 정한다. 그런데도 Actor 작업을 Actor queue에 먼저
+거치게 하는 것은 **줄을 세우는 일과 받아들일지 정하는 일이 다른 문제**이기 때문이다.
+
+Actor queue는 직렬이다. 그 Actor의 작업 하나가 Spot queue로 올라가 끝날 때까지 다음 작업은
+Actor queue에서 기다린다. 그래서 **Spot queue에 올라와 있는 그 Actor의 작업은 언제나 최대
+한 건이고, 밀린 물량은 전부 그 Actor의 queue에 남는다.**
+
+```text
+  Actor A에 100건이 몰렸을 때
+
+  [ Actor A queue ]  99건 대기 ──┐        ← A의 상한에서 걸린다
+                                 ├─▶ [ Spot queue ]  A 1건 · B 1건 · Spot 작업 …
+  [ Actor B queue ]  0건 ────────┘        ← B는 영향을 받지 않는다
+```
+
+Actor queue가 없으면 A의 100건이 그대로 Spot queue의 상한을 먹는다. 그러면 같은 Spot의 B와
+Spot handler 작업까지 함께 거절된다 — 몰린 것은 A인데 막히는 것은 전부다. Actor마다 정한
+상한도 그때는 실제 상한이 아니게 된다. 모두가 같은 한 칸을 나눠 쓰기 때문이다.
+
+이 구조가 성립하려면 두 queue가 같은 것을 세면 안 된다. **아래 Actor queue가 그 작업의 실제
 payload 바이트를 예약하고, 위 Spot queue는 payload 크기와 무관한 고정 비용
-`fixedWorkByteCost`만 예약한다.**
+`fixedWorkByteCost`만 예약한다.** 위에서 payload를 다시 세면 아래에서 통과한 작업이 위에서
+또 걸려 Actor별 상한이 무의미해지고, Spot queue는 실제 실행 부하보다 이르게 가득 찬다.
 
-같은 payload를 두 queue에서 모두 예약하지 않는다. 두 번 예약하면 둘 중 하나가 반드시
-망가진다 — 아래에서 통과한 작업이 위에서 다시 걸리면 Actor마다 정한 상한이 실제 상한이
-아니게 되고, 위 Spot queue는 실제 실행 부하보다 이르게 가득 차 같은 Spot의 다른 Actor
-작업까지 함께 막힌다.
+`PerActor`에서는 Actor queue가 실행 순서도 함께 진다. 두 mode에서 Actor queue가 하는 일 중
+겹치는 것이 admission이고, `SpotWide`에서는 그것만 남는다.
 
 **내부 확인 조건** — `SpotWide`의 Actor 경로에서 위 Spot queue에 제출할 때 payload 바이트를
 인자로 넘기는 자리가 없다.
