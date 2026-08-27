@@ -123,6 +123,12 @@ CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
 ### 알려진 기존 실패 (게이트 판정 제외 — 회귀로 읽지 말 것)
 
 - **ZoneWorld**: cpp split-brain·dotnet mesh admission (Z1·Z2). CP3에서 판정, §3.1에서 수정.
+- **cpp Bingo 샘플 `wait observer Entry Spot return` 정지** (2026-08-27 대조 실증):
+  후반 관측자 Entry Spot 복귀 대기에서 오류 없이 멈춘다(placement marker 미도달).
+  **전환 이전부터 있던 실패다** — 소형 배치 커밋 전 11:41 실행과 전환 250여 취득 완료 후
+  18:28 실행이 **정확히 같은 step에서 정지**했다. 오늘 4회 중 4회 실패로, rules가 종전에
+  적어 둔 "후반 ~1/5 flake"보다 나쁘다. flake가 아니라 결정적 실패로 성격을 재분류한다.
+  원인 조사·수정은 캠페인 범위 밖 — 별도 작업으로 이월.
 - **cpp `test_cpp_framework_host_lifecycle` 간헐 실패** (2026-08-27 이분 실증): 별도 worktree의
   **기준선(커밋된 배치 상태)에서 ×3 중 1회 실패**했다. 즉 `public_host_runtime`·`spot_runtime`
   전환이 만든 회귀가 아니라 원래 있던 flake다. 중앙 게이트 1차에서 실패해도 개별 재실행에서
