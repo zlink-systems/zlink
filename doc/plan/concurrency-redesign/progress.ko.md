@@ -87,11 +87,11 @@ node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 
 | # | 항목 | 상태 | 비고 |
 |---|---|---|---|
-| T1 | cpp actor_gateway 테스트 exit 172 (미변경 구간, batch 10 회귀 의심) | **진단 중** | ①런타임 회귀 ②테스트 추종 영향 격리 판별 잡 실행 중 |
-| T2 | node TicTacToe.Ts self-deadlock (오늘 handler-scope AsyncResource 분리가 Spot serial 문맥 절단) | **수정 완료·게이트 재검증 중** | 샘플 2/2 통과, m6a/b/c+contract 재실행 중 |
-| T3 | java 샘플 릴리스 게이트 지문 5건 (기존 드리프트 — 분류 확정) | **갱신 완료** | 22/22. 커밋 대기 |
+| T1 | cpp actor_gateway 회귀 | **종결** `49053b99a9` | batch 10 잠복 2건(closure 수명·stale disconnect) 수정 + 테스트 추종 잔여 정리 |
+| T2 | node TicTacToe self-deadlock | **종결** `d575cb4d0c` | 수정 후 m6a/b·stream-runtime 전부 그린, node 샘플 스위트 exit 0 |
+| T3 | java 샘플 릴리스 게이트 지문 5건 | **종결** | 기존 드리프트 확정·지문 갱신 22/22, 커밋됨 |
 | T4 | java FrameworkModuleBoundaryTest ReceiveFlowState import 1건 | 분류 필요 | 캠페인 원인 여부 미판정 |
-| T5 | 언어별 샘플 스위트 그린 (cpp·java·node — ZoneWorld 제외 판정 유지) | 재실행 대기 | T1~T3 해소 후 트리별 단독 실행 |
+| T5 | 언어별 샘플 스위트 | **node 그린(exit 0)** · cpp/java 진단 중 | cpp TTT connector timeout 간헐(재현 캡처 잡)·java Bingo matchmaking TEARDOWN_FAILED(임시 로깅 잡) — 둘 다 근본 미확정으로 추측 수정 반려 2회 |
 | T6 | Z4 — ZoneWorld 조용한 반복 측정(dotnet·cpp 각 8~30런) 후 게이트 복귀 | 대기 | Z1·Z2 수정 커밋됨. 부하 없는 상태에서 측정 |
 | T7 | 구조 보류 판정 (cpp channel_runtime_state·mesh_node_runtime, node STOP 9건, dotnet ChannelRuntimeManager 잔여 확인) | 마일스톤 기록 완료 | 필요 시 후속 캠페인 |
 | T8 | 기존 결함 이월 (cpp layout_contract 샘플 blocking result, node m6c 계약 2건, java module boundary?) | 이월 목록 | rules §4 |
