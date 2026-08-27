@@ -1166,9 +1166,12 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
         connected = _transport->connect_peer (endpoint);
     }
     if (connected) {
-        std::lock_guard lock (_mutex);
-        _peer_endpoints.insert_or_assign (endpoint,
-                                          expected ? expected->to_string () : std::string{});
+        _peer_endpoint_lane
+          .run ([&] {
+              _peer_endpoints.insert_or_assign (endpoint,
+                                                expected ? expected->to_string () : std::string{});
+          })
+          .get ();
     }
     return connected;
 }
@@ -1194,10 +1197,7 @@ void public_host_runtime_t::forget_peer (const std::string &endpoint,
 
 void public_host_runtime_t::disconnect_peer (const std::string &endpoint) noexcept
 {
-    {
-        std::lock_guard lock (_mutex);
-        _peer_endpoints.erase (endpoint);
-    }
+    _peer_endpoint_lane.run ([&] { _peer_endpoints.erase (endpoint); }).get ();
     _transport->disconnect_peer (endpoint);
 }
 
@@ -1208,8 +1208,7 @@ bool public_host_runtime_t::disconnect_peer (
     const auto endpoint_retained =
       _transport->disconnect_peer (expected_routing_id, endpoint);
     if (!endpoint_retained) {
-        std::lock_guard lock (_mutex);
-        _peer_endpoints.erase (endpoint);
+        _peer_endpoint_lane.run ([&] { _peer_endpoints.erase (endpoint); }).get ();
     }
     return endpoint_retained;
 }

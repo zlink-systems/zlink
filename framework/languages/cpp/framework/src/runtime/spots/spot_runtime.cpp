@@ -521,19 +521,24 @@ task_t<bool> send_handoff_terminal (const std::shared_ptr<detail::spot_node_buil
         co_return true;
     }
     if (route->source_node.to_string () == detail::effective_spot_node_rid (state->snapshot)) {
-        std::optional<detail::spot_node_builder_state_t::pending_handoff_request_t> pending;
-        {
-            std::lock_guard<std::recursive_mutex> lock (state->mutex);
+        const auto pending = state->pending_handoff_requests_lane
+                               .run ([&] () -> std::optional<
+                                 detail::spot_node_builder_state_t::pending_handoff_request_t> {
             const auto found = state->pending_handoff_requests.find (handoff_pending_key (
               route->source_owner_node, route->operation, route->source_fence));
             if (found == state->pending_handoff_requests.end ()
                 || found->second.reply_route_id != route->reply_route_id
                 || route->parking_node.to_string ()
                      != detail::effective_spot_node_rid (state->snapshot)) {
-                co_return true;
+                return std::nullopt;
             }
-            pending = std::move (found->second);
+            auto pending = std::move (found->second);
             state->pending_handoff_requests.erase (found);
+            return pending;
+        })
+                               .get ();
+        if (!pending) {
+            co_return true;
         }
         detail::channel_reply_writer_t replies;
         auto terminal =
@@ -1489,26 +1494,27 @@ optional_spot_route_channel_name (const std::shared_ptr<detail::spot_context_sta
     if (!state || !state->node || !state->channel_runtime) {
         return std::nullopt;
     }
-    std::lock_guard lock (state->channel_runtime->mutex);
-    if (state->node->snapshot.spot_route_channel_name) {
-        const auto &route_channel_name = *state->node->snapshot.spot_route_channel_name;
-        if (state->channel_runtime->route_channels.find (route_channel_name)
-            != state->channel_runtime->route_channels.end ()) {
-            return route_channel_name;
+    return state->channel_runtime->lane.run ([&] -> std::optional<std::string> {
+        if (state->node->snapshot.spot_route_channel_name) {
+            const auto &route_channel_name = *state->node->snapshot.spot_route_channel_name;
+            if (state->channel_runtime->route_channels.find (route_channel_name)
+                != state->channel_runtime->route_channels.end ()) {
+                return route_channel_name;
+            }
         }
-    }
-    if (state->channel_runtime->route_channels.size () == 1) {
-        return state->channel_runtime->route_channels.begin ()->first;
-    }
-    if (state->node->snapshot.accepted_route_channels.size () == 1) {
-        const auto &route_channel_name =
-          state->node->snapshot.accepted_route_channels.front ().channel_name;
-        if (state->channel_runtime->route_channels.find (route_channel_name)
-            != state->channel_runtime->route_channels.end ()) {
-            return route_channel_name;
+        if (state->channel_runtime->route_channels.size () == 1) {
+            return state->channel_runtime->route_channels.begin ()->first;
         }
-    }
-    return std::nullopt;
+        if (state->node->snapshot.accepted_route_channels.size () == 1) {
+            const auto &route_channel_name =
+              state->node->snapshot.accepted_route_channels.front ().channel_name;
+            if (state->channel_runtime->route_channels.find (route_channel_name)
+                != state->channel_runtime->route_channels.end ()) {
+                return route_channel_name;
+            }
+        }
+        return std::nullopt;
+    }).get ();
 }
 
 runtime::messaging::message_parts_t
@@ -10793,9 +10799,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     report_handoff_terminal_drop (_state, "missing_parking_node");
                 return true;
             }
-            std::optional<spot_node_builder_state_t::pending_handoff_request_t> pending;
-            {
-                std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+            const auto pending = _state->pending_handoff_requests_lane
+                                   .run ([&] () -> std::optional<
+                                     spot_node_builder_state_t::pending_handoff_request_t> {
                 const auto found = _state->pending_handoff_requests.find (
                   handoff_pending_key (terminal_route->source_owner_node, terminal_route->operation,
                                        terminal_route->source_fence));
@@ -10803,7 +10809,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     || found->second.reply_route_id != terminal_route->reply_route_id
                     || terminal_route->parking_node.to_string ()
                          != detail::effective_spot_node_rid (_state->snapshot)) {
-                    return true;
+                    return std::nullopt;
                 }
                 // The terminal must come from the node the parked request was
                 // handed to. A fenced pending entry names the exact followed
@@ -10825,10 +10831,15 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                            == record.source_node_rid.to_bytes ();
                 }
                 if (!terminal_source_admitted) {
-                    return true;
+                    return std::nullopt;
                 }
-                pending = std::move (found->second);
+                auto pending = std::move (found->second);
                 _state->pending_handoff_requests.erase (found);
+                return pending;
+            })
+                                   .get ();
+            if (!pending) {
+                return true;
             }
             detail::channel_reply_writer_t replies;
             runtime::messaging::message_parts_t terminal_parts;
@@ -11325,22 +11336,25 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             && !header.value ().metadata.contains (
               std::string (detail::actor_handoff_source_node_key))) {
             const auto now = std::chrono::steady_clock::now ();
-            std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-            for (auto pending = _state->pending_handoff_requests.begin ();
-                 pending != _state->pending_handoff_requests.end ();) {
-                if (pending->second.deadline <= now)
-                    pending = _state->pending_handoff_requests.erase (pending);
-                else
-                    ++pending;
-            }
-            if (_state->pending_handoff_requests.size () < 1024) {
-                const auto [_, inserted] = _state->pending_handoff_requests.emplace (
-                  handoff_pending,
-                  spot_node_builder_state_t::pending_handoff_request_t{
-                    actor, handoff_source_fence, record.reply_route_id, record.reply_token,
-                    header.value (), now + std::chrono::seconds (30)});
-                deferred_handoff_request = inserted;
-            }
+            _state->pending_handoff_requests_lane
+              .run ([&] {
+                  for (auto pending = _state->pending_handoff_requests.begin ();
+                       pending != _state->pending_handoff_requests.end ();) {
+                      if (pending->second.deadline <= now)
+                          pending = _state->pending_handoff_requests.erase (pending);
+                      else
+                          ++pending;
+                  }
+                  if (_state->pending_handoff_requests.size () < 1024) {
+                      const auto [_, inserted] = _state->pending_handoff_requests.emplace (
+                        handoff_pending,
+                        spot_node_builder_state_t::pending_handoff_request_t{
+                          actor, handoff_source_fence, record.reply_route_id, record.reply_token,
+                          header.value (), now + std::chrono::seconds (30)});
+                      deferred_handoff_request = inserted;
+                  }
+              })
+              .get ();
         }
         const auto request_header = header.value ();
         auto terminal_claimed = std::make_shared<std::atomic_bool> (false);
@@ -11526,8 +11540,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
               const bool parked = deferred_handoff_request && result && !result.value ();
               if (!parked && deferred_handoff_request) {
                   try {
-                      std::lock_guard<std::recursive_mutex> lock (state->mutex);
-                      state->pending_handoff_requests.erase (handoff_pending);
+                      state->pending_handoff_requests_lane
+                        .run ([&] { state->pending_handoff_requests.erase (handoff_pending); })
+                        .get ();
                   }
                   catch (...) {
                   }

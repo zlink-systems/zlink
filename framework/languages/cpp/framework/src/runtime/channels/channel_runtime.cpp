@@ -28,7 +28,6 @@
 
 #include <algorithm>
 #include <exception>
-#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -50,73 +49,80 @@ std::optional<channel_runtime_state_t::spot_mesh_send_t>
 spot_mesh_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                   const std::string &mesh_name)
 {
-    std::lock_guard lock (state->mutex);
-    const auto found = state->spot_mesh_senders.find (mesh_name);
-    return found == state->spot_mesh_senders.end ()
-             ? std::nullopt
-             : std::optional<channel_runtime_state_t::spot_mesh_send_t> (found->second);
+    return state->lane.run ([&] {
+        const auto found = state->spot_mesh_senders.find (mesh_name);
+        return found == state->spot_mesh_senders.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::spot_mesh_send_t> (found->second);
+    }).get ();
 }
 
 std::optional<channel_runtime_state_t::mesh_node_send_t>
 mesh_node_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                   const std::string &mesh_name)
 {
-    std::lock_guard lock (state->mutex);
-    const auto found = state->mesh_node_senders.find (mesh_name);
-    return found == state->mesh_node_senders.end ()
-             ? std::nullopt
-             : std::optional<channel_runtime_state_t::mesh_node_send_t> (found->second);
+    return state->lane.run ([&] {
+        const auto found = state->mesh_node_senders.find (mesh_name);
+        return found == state->mesh_node_senders.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::mesh_node_send_t> (found->second);
+    }).get ();
 }
 
 std::optional<channel_runtime_state_t::mesh_node_request_t>
 mesh_node_requester (const std::shared_ptr<channel_runtime_state_t> &state,
                      const std::string &mesh_name)
 {
-    std::lock_guard lock (state->mutex);
-    const auto found = state->mesh_node_requesters.find (mesh_name);
-    return found == state->mesh_node_requesters.end ()
-             ? std::nullopt
-             : std::optional<channel_runtime_state_t::mesh_node_request_t> (found->second);
+    return state->lane.run ([&] {
+        const auto found = state->mesh_node_requesters.find (mesh_name);
+        return found == state->mesh_node_requesters.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::mesh_node_request_t> (found->second);
+    }).get ();
 }
 
 std::optional<channel_runtime_state_t::mesh_channel_send_t>
 mesh_channel_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                      const std::string &channel_name)
 {
-    std::lock_guard lock (state->mutex);
-    const auto found = state->mesh_channel_senders.find (channel_name);
-    return found == state->mesh_channel_senders.end ()
-             ? std::nullopt
-             : std::optional<channel_runtime_state_t::mesh_channel_send_t> (found->second);
+    return state->lane.run ([&] {
+        const auto found = state->mesh_channel_senders.find (channel_name);
+        return found == state->mesh_channel_senders.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::mesh_channel_send_t> (found->second);
+    }).get ();
 }
 
 std::optional<channel_runtime_state_t::mesh_channel_request_t>
 mesh_channel_requester (const std::shared_ptr<channel_runtime_state_t> &state,
                         const std::string &channel_name)
 {
-    std::lock_guard lock (state->mutex);
-    const auto found = state->mesh_channel_requesters.find (channel_name);
-    return found == state->mesh_channel_requesters.end ()
-             ? std::nullopt
-             : std::optional<channel_runtime_state_t::mesh_channel_request_t> (found->second);
+    return state->lane.run ([&] {
+        const auto found = state->mesh_channel_requesters.find (channel_name);
+        return found == state->mesh_channel_requesters.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::mesh_channel_request_t> (found->second);
+    }).get ();
 }
 
 std::optional<channel_runtime_state_t::spot_mesh_request_t>
 spot_mesh_requester (const std::shared_ptr<channel_runtime_state_t> &state,
                      const std::string &mesh_name)
 {
-    std::lock_guard lock (state->mutex);
-    const auto found = state->spot_mesh_requesters.find (mesh_name);
-    return found == state->spot_mesh_requesters.end ()
-             ? std::nullopt
-             : std::optional<channel_runtime_state_t::spot_mesh_request_t> (found->second);
+    return state->lane.run ([&] {
+        const auto found = state->spot_mesh_requesters.find (mesh_name);
+        return found == state->spot_mesh_requesters.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::spot_mesh_request_t> (found->second);
+    }).get ();
 }
 
 bool has_route_channel (const std::shared_ptr<channel_runtime_state_t> &state,
                         const std::string &channel_name)
 {
-    std::lock_guard lock (state->mutex);
-    return state->route_channels.find (channel_name) != state->route_channels.end ();
+    return state->lane.run ([&] {
+        return state->route_channels.find (channel_name) != state->route_channels.end ();
+    }).get ();
 }
 
 using route_reply_result_t =
@@ -171,10 +177,9 @@ route_client_state_t::route_client_state_t (std::shared_ptr<channel_runtime_stat
       static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
     executor = std::make_shared<zlink::framework::runtime::offload_executor_t> (
       0, hardware_workers, 1024, std::chrono::milliseconds (100), "zlink-route-cli");
-    {
-        std::lock_guard lock (this->runtime->mutex);
+    this->runtime->lane.run ([&] {
         this->runtime->route_client_executors.push_back (executor);
-    }
+    }).get ();
 }
 
 route_client_state_t::~route_client_state_t ()
@@ -366,8 +371,7 @@ namespace
 void drain_route_client_executors (channel_runtime_state_t &state) noexcept
 {
     std::vector<std::shared_ptr<runtime::offload_executor_t>> route_client_executors;
-    {
-        std::lock_guard lock (state.mutex);
+    state.lane.run ([&] {
         for (auto it = state.route_client_executors.begin ();
              it != state.route_client_executors.end ();) {
             if (auto executor = it->lock ()) {
@@ -377,7 +381,7 @@ void drain_route_client_executors (channel_runtime_state_t &state) noexcept
                 it = state.route_client_executors.erase (it);
             }
         }
-    }
+    }).get ();
     for (auto &executor : route_client_executors) {
         executor->drain ();
     }
@@ -527,38 +531,40 @@ task_t<void> channel_runtime_t::dispatch_send_async (
 
 result_t<std::uint64_t> channel_runtime_t::reserve_outbound_request (std::string channel_name)
 {
-    std::lock_guard lock (_state->mutex);
-    const auto *client = client_capability (*_state, channel_name);
-    if (client == nullptr || !client->enabled) {
-        return result_t<std::uint64_t>::failure (
-          framework_error_kind_t::not_configured,
-          "ClientServer Client role is not registered for this channel");
-    }
-    if (!has_connection (client)) {
-        return detail::boundary_failure<std::uint64_t> (detail::boundary_error_t::disconnected,
-                                                 "channel client is not connected");
-    }
-    return outbound_request_controller_t (*_state).reserve_request (std::move (channel_name));
+    return _state->lane.run ([&] {
+        const auto *client = client_capability (*_state, channel_name);
+        if (client == nullptr || !client->enabled) {
+            return result_t<std::uint64_t>::failure (
+              framework_error_kind_t::not_configured,
+              "ClientServer Client role is not registered for this channel");
+        }
+        if (!has_connection (client)) {
+            return detail::boundary_failure<std::uint64_t> (detail::boundary_error_t::disconnected,
+                                                     "channel client is not connected");
+        }
+        return outbound_request_controller_t (*_state).reserve_request (std::move (channel_name));
+    }).get ();
 }
 
 result_t<void> channel_runtime_t::complete_outbound_reply (std::uint64_t request_seq)
 {
-    std::lock_guard lock (_state->mutex);
-    return outbound_request_controller_t (*_state).complete_request (request_seq);
+    return _state->lane.run ([&] {
+        return outbound_request_controller_t (*_state).complete_request (request_seq);
+    }).get ();
 }
 
 result_t<void> channel_runtime_t::cancel_outbound_request (std::uint64_t request_seq)
 {
-    std::lock_guard lock (_state->mutex);
-    return outbound_request_controller_t (*_state).cancel_request (request_seq);
+    return _state->lane.run ([&] {
+        return outbound_request_controller_t (*_state).cancel_request (request_seq);
+    }).get ();
 }
 
 void channel_runtime_t::close () noexcept
 {
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         _state->closed = true;
-    }
+    }).get ();
     close_native_channel_transports (_state);
     drain ();
 }
@@ -566,15 +572,14 @@ void channel_runtime_t::close () noexcept
 void channel_runtime_t::shutdown () noexcept
 {
     std::vector<std::shared_ptr<route_channel_runtime_t>> route_channels;
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         _state->shutdown = true;
         for (auto &[_, route_channel] : _state->route_channels) {
             if (route_channel) {
                 route_channels.push_back (route_channel);
             }
         }
-    }
+    }).get ();
     for (auto &route_channel : route_channels) {
         route_channel->stop ();
     }
@@ -585,8 +590,7 @@ void channel_runtime_t::shutdown () noexcept
 
 std::size_t channel_runtime_t::pending_count () const noexcept
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->pending;
+    return _state->lane.run ([&] { return _state->pending; }).get ();
 }
 
 std::size_t channel_runtime_t::pending_limit () const noexcept
@@ -597,8 +601,7 @@ std::size_t channel_runtime_t::pending_limit () const noexcept
 std::vector<channel_runtime_state_t::outbound_call_record_t>
 channel_runtime_t::outbound_calls () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->outbound_calls;
+    return _state->lane.run ([&] { return _state->outbound_calls; }).get ();
 }
 
 void channel_runtime_t::bind_serializers (serializer_registry_t &serializers) noexcept
@@ -609,8 +612,9 @@ void channel_runtime_t::bind_serializers (serializer_registry_t &serializers) no
 void channel_runtime_t::bind_listener_statuses (
   std::shared_ptr<runtime::listener_status_registry_t> statuses) noexcept
 {
-    std::lock_guard lock (_state->mutex);
-    _state->listener_statuses = std::move (statuses);
+    _state->lane.run ([&] {
+        _state->listener_statuses = std::move (statuses);
+    }).get ();
 }
 
 void channel_runtime_t::bind_core_context (std::shared_ptr<zlink::context_t> context)
@@ -618,24 +622,25 @@ void channel_runtime_t::bind_core_context (std::shared_ptr<zlink::context_t> con
     if (!context) {
         throw std::invalid_argument ("shared Core context is required");
     }
-    std::lock_guard lock (_state->mutex);
-    if (_state->core_context && _state->core_context != context) {
-        throw std::logic_error ("shared Core context is already configured");
-    }
-    _state->core_context = std::move (context);
+    _state->lane.run ([&] {
+        if (_state->core_context && _state->core_context != context) {
+            throw std::logic_error ("shared Core context is already configured");
+        }
+        _state->core_context = std::move (context);
+    }).get ();
 }
 
 std::shared_ptr<zlink::context_t> channel_runtime_t::core_context () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->core_context;
+    return _state->lane.run ([&] { return _state->core_context; }).get ();
 }
 
 void channel_runtime_t::bind_fanout_advertise_hosts (
   std::map<std::string, std::string> hosts) noexcept
 {
-    std::lock_guard lock (_state->mutex);
-    _state->fanout_publisher_advertise_hosts = std::move (hosts);
+    _state->lane.run ([&] {
+        _state->fanout_publisher_advertise_hosts = std::move (hosts);
+    }).get ();
 }
 
 void channel_runtime_t::initialize_manual_channel_publishers ()
@@ -653,25 +658,26 @@ void channel_runtime_t::bind_spot_mesh_transport (
   channel_runtime_state_t::spot_mesh_send_t send,
   channel_runtime_state_t::spot_mesh_request_t request)
 {
-    std::lock_guard lock (_state->mutex);
-    _state->spot_mesh_senders.insert_or_assign (mesh_name, std::move (send));
-    _state->spot_mesh_requesters.insert_or_assign (std::move (mesh_name), std::move (request));
+    _state->lane.run ([&] {
+        _state->spot_mesh_senders.insert_or_assign (mesh_name, std::move (send));
+        _state->spot_mesh_requesters.insert_or_assign (std::move (mesh_name), std::move (request));
+    }).get ();
 }
 
 void channel_runtime_t::bind_spot_address_resolver (
   runtime::spot_address_resolver_t &resolver) noexcept
 {
-    std::lock_guard lock (_state->mutex);
-    _state->spot_resolver = &resolver;
+    _state->lane.run ([&] { _state->spot_resolver = &resolver; }).get ();
 }
 
 void channel_runtime_t::bind_instance_spot_activator (
   channel_runtime_state_t::instance_spot_send_t send,
   channel_runtime_state_t::instance_spot_request_t request)
 {
-    std::lock_guard lock (_state->mutex);
-    _state->instance_spot_sender = std::move (send);
-    _state->instance_spot_requester = std::move (request);
+    _state->lane.run ([&] {
+        _state->instance_spot_sender = std::move (send);
+        _state->instance_spot_requester = std::move (request);
+    }).get ();
 }
 
 void channel_runtime_t::bind_mesh_node_transport (
@@ -679,10 +685,11 @@ void channel_runtime_t::bind_mesh_node_transport (
   channel_runtime_state_t::mesh_node_send_t send,
   channel_runtime_state_t::mesh_node_request_t request)
 {
-    std::lock_guard lock (_state->mutex);
-    _state->mesh_node_senders.insert_or_assign (mesh_name, std::move (send));
-    _state->mesh_node_requesters.insert_or_assign (std::move (mesh_name),
-                                                   std::move (request));
+    _state->lane.run ([&] {
+        _state->mesh_node_senders.insert_or_assign (mesh_name, std::move (send));
+        _state->mesh_node_requesters.insert_or_assign (std::move (mesh_name),
+                                                       std::move (request));
+    }).get ();
 }
 
 void channel_runtime_t::bind_mesh_channel_transport (
@@ -690,19 +697,20 @@ void channel_runtime_t::bind_mesh_channel_transport (
   channel_runtime_state_t::mesh_channel_send_t send,
   channel_runtime_state_t::mesh_channel_request_t request)
 {
-    std::lock_guard lock (_state->mutex);
-    if (_state->client_server_senders.contains (channel_name)) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "ChannelName is registered by both RouteMesh and ClientServer: " + channel_name);
-    }
-    if (_state->mesh_channel_senders.contains (channel_name)) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "RouteMesh ChannelName is registered by more than one MeshNode: " + channel_name);
-    }
-    _state->mesh_channel_senders.emplace (channel_name, std::move (send));
-    _state->mesh_channel_requesters.emplace (std::move (channel_name), std::move (request));
+    _state->lane.run ([&] {
+        if (_state->client_server_senders.contains (channel_name)) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "ChannelName is registered by both RouteMesh and ClientServer: " + channel_name);
+        }
+        if (_state->mesh_channel_senders.contains (channel_name)) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "RouteMesh ChannelName is registered by more than one MeshNode: " + channel_name);
+        }
+        _state->mesh_channel_senders.emplace (channel_name, std::move (send));
+        _state->mesh_channel_requesters.emplace (std::move (channel_name), std::move (request));
+    }).get ();
 }
 
 void channel_runtime_t::bind_client_server_transport (
@@ -710,49 +718,51 @@ void channel_runtime_t::bind_client_server_transport (
   channel_runtime_state_t::client_server_send_t send,
   channel_runtime_state_t::client_server_request_t request)
 {
-    std::lock_guard lock (_state->mutex);
-    if (_state->mesh_channel_senders.contains (channel_name)) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "ChannelName is registered by both ClientServer and RouteMesh: " + channel_name);
-    }
-    if (_state->client_server_senders.contains (channel_name)) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "ClientServer ChannelName is registered more than once: " + channel_name);
-    }
-    _state->client_server_senders.emplace (channel_name, std::move (send));
-    _state->client_server_requesters.emplace (std::move (channel_name), std::move (request));
+    _state->lane.run ([&] {
+        if (_state->mesh_channel_senders.contains (channel_name)) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "ChannelName is registered by both ClientServer and RouteMesh: " + channel_name);
+        }
+        if (_state->client_server_senders.contains (channel_name)) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "ClientServer ChannelName is registered more than once: " + channel_name);
+        }
+        _state->client_server_senders.emplace (channel_name, std::move (send));
+        _state->client_server_requesters.emplace (std::move (channel_name), std::move (request));
+    }).get ();
 }
 
 void channel_runtime_t::unbind_client_server_transport (
   const std::string &channel_name) noexcept
 {
-    std::lock_guard lock (_state->mutex);
-    _state->client_server_senders.erase (channel_name);
-    _state->client_server_requesters.erase (channel_name);
+    _state->lane.run ([&] {
+        _state->client_server_senders.erase (channel_name);
+        _state->client_server_requesters.erase (channel_name);
+    }).get ();
 }
 
 void channel_runtime_t::bind_fanout_transport (
   std::string channel_name,
   channel_runtime_state_t::fanout_publish_t publish)
 {
-    std::lock_guard lock (_state->mutex);
-    if (_state->fanout_publishers.contains (channel_name)) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "fanout ChannelName is registered more than once: "
-            + channel_name);
-    }
-    _state->fanout_publishers.emplace (
-      std::move (channel_name), std::move (publish));
+    _state->lane.run ([&] {
+        if (_state->fanout_publishers.contains (channel_name)) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "fanout ChannelName is registered more than once: "
+                + channel_name);
+        }
+        _state->fanout_publishers.emplace (
+          std::move (channel_name), std::move (publish));
+    }).get ();
 }
 
 void channel_runtime_t::unbind_fanout_transport (
   const std::string &channel_name) noexcept
 {
-    std::lock_guard lock (_state->mutex);
-    _state->fanout_publishers.erase (channel_name);
+    _state->lane.run ([&] { _state->fanout_publishers.erase (channel_name); }).get ();
 }
 
 dispatch_options_t channel_runtime_t::dispatch_options () const
@@ -762,20 +772,17 @@ dispatch_options_t channel_runtime_t::dispatch_options () const
 
 void channel_runtime_t::mark_auto_connect_active ()
 {
-    std::lock_guard lock (_state->mutex);
-    _state->auto_connect_active = true;
+    _state->lane.run ([&] { _state->auto_connect_active = true; }).get ();
 }
 
 bool channel_runtime_t::auto_connect_active () const
 {
-    std::lock_guard lock (_state->mutex);
-    return _state->auto_connect_active;
+    return _state->lane.run ([&] { return _state->auto_connect_active; }).get ();
 }
 
 void channel_runtime_t::drain () noexcept
 {
-    std::lock_guard lock (_state->mutex);
-    outbound_request_controller_t (*_state).drain ();
+    _state->lane.run ([&] { outbound_request_controller_t (*_state).drain (); }).get ();
 }
 
 void channel_runtime_t::publish_socket_event (const std::string &channel_name,
@@ -799,21 +806,21 @@ void channel_runtime_t::set_server_weight (const std::string &channel_name,
     if (value < 0 || value > 10000)
         throw std::invalid_argument (
           "service weight must be in range 0..10000");
-    {
-        std::lock_guard lock (_state->mutex);
+    _state->lane.run ([&] {
         _state->server_peer_weight_overrides.insert_or_assign (channel_name, value);
-    }
+    }).get ();
 }
 
 std::optional<int>
 channel_runtime_t::server_peer_weight_override (const std::string &channel_name) const
 {
-    std::lock_guard lock (_state->mutex);
-    const auto found = _state->server_peer_weight_overrides.find (channel_name);
-    if (found == _state->server_peer_weight_overrides.end ()) {
-        return std::nullopt;
-    }
-    return found->second;
+    return _state->lane.run ([&] {
+        const auto found = _state->server_peer_weight_overrides.find (channel_name);
+        if (found == _state->server_peer_weight_overrides.end ()) {
+            return std::optional<int> {};
+        }
+        return std::optional<int> {found->second};
+    }).get ();
 }
 
 channel_runtime_t channel_runtime_t::from (const message_bus_t &bus)
@@ -1096,12 +1103,13 @@ message_bus_t &message_bus_t::operator= (message_bus_t &&) noexcept = default;
 std::chrono::milliseconds
 message_bus_t::default_request_timeout (const std::string &channel_name) const
 {
-    std::lock_guard lock (_state->mutex);
-    const auto found = _state->channels.find (channel_name);
-    if (found != _state->channels.end () && found->second.default_request_timeout) {
-        return *found->second.default_request_timeout;
-    }
-    return _state->default_request_timeout;
+    return _state->lane.run ([&] {
+        const auto found = _state->channels.find (channel_name);
+        if (found != _state->channels.end () && found->second.default_request_timeout) {
+            return *found->second.default_request_timeout;
+        }
+        return _state->default_request_timeout;
+    }).get ();
 }
 
 serializer_registry_t *message_bus_t::serializers () const noexcept
@@ -2091,10 +2099,10 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
     auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
     if (!address && intent.instance) {
         detail::channel_runtime_state_t::instance_spot_send_t activate;
-        {
-            std::lock_guard lock (state->runtime->mutex);
+        activate = state->runtime->lane.run ([&] {
             activate = state->runtime->instance_spot_sender;
-        }
+            return activate;
+        }).get ();
         if (!activate) {
             co_return result_t<void>::failure (
               framework_error_kind_t::not_configured,
@@ -2142,10 +2150,10 @@ task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_er
     auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
     if (!address && intent.instance) {
         detail::channel_runtime_state_t::instance_spot_request_t activate;
-        {
-            std::lock_guard lock (state->runtime->mutex);
+        activate = state->runtime->lane.run ([&] {
             activate = state->runtime->instance_spot_requester;
-        }
+            return activate;
+        }).get ();
         if (!activate) {
             throw framework_exception_t (
               framework_error_kind_t::not_configured,

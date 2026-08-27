@@ -163,6 +163,9 @@ class spot_node_builder_state_t
         }
     };
     std::map<pending_handoff_request_key_t, pending_handoff_request_t> pending_handoff_requests;
+    runtime::offload_executor_t pending_handoff_requests_lane_executor;
+    runtime::state_lane_t pending_handoff_requests_lane{
+      pending_handoff_requests_lane_executor};
     std::function<task_t<bool> (const zlink::routing_id_t &,
                                 const zlink::routing_id_t &,
                                 const runtime::protocol::wire_operation_id_t &,

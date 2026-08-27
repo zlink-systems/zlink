@@ -1157,6 +1157,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::map<std::string, stateful::object_ref_t> _spots;
     std::map<std::string, std::pair<std::string, stateful::object_ref_t>> _actors;
     std::map<std::string, std::string> _peer_endpoints;
+    runtime::offload_executor_t _peer_endpoint_lane_executor;
+    runtime::state_lane_t _peer_endpoint_lane{_peer_endpoint_lane_executor};
     std::uint64_t _next_operation = 1;
     bool _started = false;
     bool _closing = false;
