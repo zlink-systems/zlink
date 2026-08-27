@@ -266,22 +266,23 @@ Use the names set in §2, §3, and §6; convert only the spelling to each langua
 Do not rename in a way that changes meaning. Writing `executeActor` as `execute_actor` in cpp is
 spelling conversion; writing it as `dispatch_actor` is inventing a different name.
 
-### node's `SpotWide` Actor path — **language discretion**
+### node's `SpotWide` Actor path — not yet decided
 
 Under `PerActor` the node runtime creates a serial unit per Actor and per timer name just like
 the other languages. One JavaScript turn is atomic, but it yields at `await`, so async handlers
 of two different Actors do make progress overlapped even on a single thread — a per-Actor serial
-unit is needed in node for the same reason as in §4.
+unit is needed in node for the same reason as in §4. Up to here the four languages agree.
 
-Only `SpotWide` differs. node sends Actor work **straight to the Spot queue** without going
-through an Actor queue. Order is still guaranteed — the Spot queue already puts everything in
-one line.
+Only `SpotWide` differs. node sends Actor work straight to the Spot queue without going through
+an Actor queue. Order is still guaranteed, but the per-Actor payload byte ceiling of §5 does not
+apply.
 
-There is exactly one point where the observable result diverges from the other languages: the
-per-Actor payload byte ceiling of §5 does not apply under `SpotWide`. The criterion for checking
-this is the first item under "Capacity and backpressure" in §10, and node does not satisfy that
-item under `SpotWide`. Whether to close this gap depends on whether the per-Actor ceiling is a
-guarantee that `SpotWide` needs, which is not yet decided.
+**This difference is not language discretion; it is undecided.** Calling it discretion would
+require being able to say why the observable result is the same, and here the first item under
+"Capacity and backpressure" in §10 genuinely diverges. Decide whether the per-Actor ceiling is a
+guarantee `SpotWide` needs; if it is, route node through the Actor queue like the others, and if
+it is not, drop it in the other languages too. Until that is decided, read this item as not
+satisfied in node.
 
 ## 10. Verification Requirements
 
@@ -337,8 +338,6 @@ and the exception a reentrant call receives). Each item maps to one test.
 
 - The items above produce the same result in .NET, java, cpp, and node. In node, "run
   overlapped" is observed as two async handlers making progress alternately across an `await`.
-- node satisfies the first item under "Capacity and backpressure" only under `PerActor` — that
-  the per-Actor ceiling does not apply under `SpotWide` is the current state (§9).
 
 ---
 

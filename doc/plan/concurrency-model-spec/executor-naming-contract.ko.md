@@ -82,7 +82,7 @@ Timer는 payload가 없어 회계할 것이 없으므로 `SpotWide`에서 큐를
 
 | 계층 | dotnet | java | cpp | node |
 |---|---|---|---|---|
-| Spot | `ZLinkSpotSerialExecutor` 1,320 | 없음 | 없음 | `spot-serial-executor` 314 |
+| Spot | `ZLinkSpotSerialExecutor` 1,320 | 없음 | 없음 | 없음 (`spot-serial-executor` 314는 직렬 단위 wrapper) |
 | Actor | `ZLinkActorDispatchMailbox` 341 | 없음 | 없음 | `actors/actor-mailbox.ts` 78 (조율자 밖에서 소유) |
 | Session | `ZLinkStreamSessionSerialExecutor` 111 | 없음 (`ZLinkStreamRuntime`의 `stateLane`) | 없음 (`stream_runtime.dispatch_queue`) | `session-serial-executor` 73 |
 
@@ -258,7 +258,7 @@ snapshot = stateLane.run(() -> new ActorStateSnapshot(
 | **dotnet** | **정본** 그대로 | **개명** `ActorDispatchMailbox`→`ActorSerialExecutor` | **개명** `StreamSessionSerialExecutor`→`SessionSerialExecutor` · 동사 `Enqueue*`→`Execute*` | `ownerTimeBudget` **추가**(R-N7) · 정책 주입(R-N5) | `_laneGate` lock → state lane(R-N2) |
 | **java** | **신설** — `ZLinkActorDispatchSerials.queues` 이관(R-N1) | **신설** | **신설** — `ZLinkStreamRuntime.stateLane`에서 분리 | 책임 **정본**. 클래스명만 `ZLinkSerialExecutionQueue`로 | 이미 state lane 소유 — 유지 |
 | **cpp** | **신설** — `spot_runtime` 이름 맵 이관(R-N1) | **신설** | **신설** — `stream_runtime.dispatch_queue`에서 분리 | 용량·우선순위·공정성 **추가**(R-N5·R-N7) | 조회 스냅샷 묶기(R-N9·R-N10) |
-| **node** | 있음 — **큐 맵 3개를 조율자로 이관**(§7) | **신설** — `ZLinkActorDispatchMailbox` 개명·이관 | 있음(`session-serial-executor` 73줄) | `ZLinkBoundedSerialScheduler` 정렬 | turn 경계·lock 문제 없음 · `SpotWide` Actor 상한은 미결 |
+| **node** | **신설** — 현행 `ZLinkSpotSerialExecutor`는 조율자가 아니라 직렬 단위다(§7) | **신설** — `ZLinkActorDispatchMailbox` 개명·이관 | 있음(`session-serial-executor` 73줄) — 개명만 | `ZLinkBoundedSerialScheduler` 개명·정책 정렬 | turn 경계·lock 문제 없음 · `SpotWide` Actor 상한은 미결 |
 
 ---
 
@@ -275,6 +275,11 @@ snapshot = stateLane.run(() -> new ActorStateSnapshot(
 
 **R-N13 (개정).** node도 Actor별·timer별 직렬 단위를 갖는다. 위 세 맵을 Spot 조율자 안으로
 옮긴다 — 지금은 세 곳에 흩어져 있어 R-N1을 어긴다.
+
+**그 조율자를 신설해야 한다.** 현행 `ZLinkSpotSerialExecutor`(314줄)는 조율자가 아니라
+`ZLinkBoundedSerialScheduler` 하나를 감싼 직렬 단위 wrapper이고, Spot·Actor·timer마다 각각
+생성된다. 스펙이 조율자에 주는 이름을 이 wrapper가 이미 쓰고 있으므로 개명이 선행한다
+(플랜 §6 P4-1).
 
 **남는 차이 하나.** `SpotWide`에서 node는 `actorSerial()`이 공용 `serial`을 그대로 돌려주어
 Actor 큐를 거치지 않는다(`spot-activation-state.ts:407`). 순서는 보장되지만 Actor별 payload

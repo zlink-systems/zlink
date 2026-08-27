@@ -70,7 +70,7 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 | dotnet | 있음 · **Actor·Session 조율자 개명 필요** | **공정성(owner time budget) 추가 필요** |
 | java | **3계층 모두 신설** — Actor 큐를 Spot 조율자로 이관 | 이미 있음 |
 | cpp | **3계층 모두 신설** — 이름 맵을 조율자로 | 용량·우선순위·공정성 **추가** |
-| node | Spot·Session 있음 · **Actor 큐 맵 3개를 조율자로 이관** | `BoundedSerialScheduler` 정렬 |
+| node | **Spot·Actor 조율자 신설** — 현행 `SpotSerialExecutor`는 직렬 단위다 · Session은 개명 | `BoundedSerialScheduler` 개명·정책 정렬 |
 
 **구현은 별도 세션에서 진행한다.** 계약은 정식 스펙
 [07. 직렬 실행기 계층](../../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md)이
@@ -107,6 +107,7 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 ④ 호환 경계 회수(dotnet 664 · cpp 456) — §7-1 이후 재측정
 ⑤ ~~node의 Actor별·Timer별 큐~~ → **정정: 있다.** `actorSerials`·`timerSerials`·
    `ZLinkActorDispatchMailboxSet` 세 맵이 조율자 밖에 흩어져 있다. `await`가 turn을 양보하므로
-   Actor별 직렬 단위는 node에서도 필요하다 — node도 이관 대상이다(계약서 §7)
+   Actor별 직렬 단위는 node에서도 필요하다. 그 맵을 담을 Spot 조율자도 node에는 없다 —
+   현행 `ZLinkSpotSerialExecutor`는 직렬 단위 wrapper다(계약서 §7 · 플랜 §6)
 ⑥ node `SpotWide`에서 Actor 작업이 Actor 큐를 거치지 않아 Actor별 payload 상한이 걸리지
    않는다. 그 상한이 `SpotWide`에서 필요한 보장인지 판단 필요(스펙 07 §9)

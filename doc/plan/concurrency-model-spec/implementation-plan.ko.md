@@ -31,7 +31,7 @@ cpp는 조율자를 신설해야 한다 — 신설할 때 볼 참조 구현이 P
 | **P1** | dotnet을 스펙 이름으로 정렬한다 (개명 · `_laneGate` 제거 · `ownerTimeBudget` 추가) | 없음 | 단독 |
 | **P2** | java 세 계층 조율자 신설 | P1 | P3와 병렬 |
 | **P3** | cpp 세 계층 조율자 신설 | P1 | P2와 병렬 |
-| **P4** | node 큐 맵 3개를 조율자로 이관 | P1 | P2·P3와 병렬 |
+| **P4** | node Spot 조율자 신설 · 흩어진 큐 맵 3개 이관 | P1 | P2·P3와 병렬 |
 | **P5** | 스펙 07 §10 검증 요구를 언어별 계약 test로 옮긴다 | P1~P4 | 언어별 병렬 |
 
 P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같은 빌드 트리에 두 작업을 붙이지
@@ -66,6 +66,10 @@ dotnet은 세 계층 조율자와 큐 primitive를 모두 갖고 있다. 신설�
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
 | P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | `ownerTimeBudget` 정책과 양보 동작을 추가한다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "공정성" test 통과 |
+
+**P1 착수 전에 dotnet 세션과 소유를 확인한다.** 사용자가 앞선 캠페인에서 dotnet을 다른
+세션에 맡겼고, P1-4가 건드리는 `ZLinkSpotSerialExecutor.cs`는 그 세션의 작업 대상일 수 있다.
+P2·P3가 P1에 걸려 있으므로 충돌하면 전체가 밀린다.
 
 **P1-4는 세 곳이 아니라 네 곳이다.** `_laneGate`는 queue map을 지키는 collection lock이므로
 스펙 06 §4의 C1이다 — 그대로 state lane 소유로 옮긴다. `close` 경로(`:87`)에서 map을 비우는
@@ -113,19 +117,40 @@ cpp도 조율자가 셋 다 없고, 큐 primitive에 수용량·우선순위·�
 
 ## 6. P4 — node
 
-node는 Spot·Session 조율자가 있다. **문제는 없는 것이 아니라 흩어져 있는 것이다.**
+**node에는 Spot 조율자가 없다.** 현행 `ZLinkSpotSerialExecutor`(314줄)는 조율자가 아니라
+`ZLinkBoundedSerialScheduler` 하나를 감싸 turn·yield·barrier 의미를 붙인 **직렬 단위
+wrapper**다 — 맵도 라우팅도 없고, Spot 하나(`spot-activation.ts:468`)·Actor
+하나(`spot-activation-state.ts:411`)·timer 하나(`spot-activation.ts:485`)마다 각각 생성된다.
+라우팅은 `actorSerial()`과 timer registry closure에 흩어져 있다.
+
+| 현행 클래스 | 실제 역할 | 스펙 07의 이름 |
+|---|---|---|
+| `ZLinkBoundedSerialScheduler` (374줄) | 수용량·lane을 가진 직렬 큐 | `ZLinkSerialExecutionQueue` |
+| `ZLinkSpotSerialExecutor` (314줄) | 직렬 단위 하나 + turn 의미 | 조율자가 아니다 — **개명 대상** |
+| 없음 | Spot 조율자 | `ZLinkSpotSerialExecutor` |
+| `ZLinkStreamSessionSerialExecutor` (73줄) | 큐 하나를 가진 session 실행기 | `ZLinkSessionSerialExecutor` — 개명만 |
+
+**이름이 충돌한다.** 스펙이 조율자에 주는 이름을 현행 wrapper가 이미 쓰고 있다. 먼저
+wrapper를 비우고(P4-1) 그 이름을 조율자에 준다 — 순서를 뒤집으면 같은 이름의 두 클래스가
+한동안 공존한다.
 
 | # | 작업 | 파일 | 완료 판정 |
 |---|---|---|---|
-| P4-1 | `actorSerials` 맵을 Spot 조율자로 옮긴다 | `runtime/spots/spot-activation-state.ts:93,406` | 조율자 밖 0건 |
-| P4-2 | `timerSerials` 맵을 Spot 조율자로 옮긴다 | `runtime/spots/spot-activation.ts:471` | closure로 잡는 자리 0건 |
-| P4-3 | `ZLinkActorDispatchMailboxSet`을 Spot 조율자로 옮기고 `ZLinkActorSerialExecutor`로 개명한다 | `runtime/actors/actor-mailbox.ts` · `spot-entry-activation.ts` · `spot-activation-state.ts` | 소유처가 조율자 하나 |
-| P4-4 | `ZLinkBoundedSerialScheduler`의 정책·진입점을 스펙 07 §6과 맞춘다 | `runtime/execution/serial-scheduler.ts` | 정책 이름 일곱이 스펙과 일치 |
+| P4-1 | 현행 `ZLinkSpotSerialExecutor`를 직렬 단위 이름으로 개명해 `ZLinkSpotSerialExecutor`를 비운다 | `runtime/spots/spot-serial-executor.ts` | 이 이름을 쓰는 클래스가 0건 |
+| P4-2 | Spot 조율자 `ZLinkSpotSerialExecutor` **신설** | `runtime/spots/` | 진입점 넷이 스펙 07 §3과 일치 |
+| P4-3 | `actorSerials` 맵을 조율자로 옮긴다 | `spots/spot-activation-state.ts:93,406` | 조율자 밖 0건 |
+| P4-4 | `timerSerials` 맵을 조율자로 옮긴다 | `spots/spot-activation.ts:471` | closure로 잡는 자리 0건 |
+| P4-5 | `ZLinkActorDispatchMailboxSet`을 조율자로 옮기고, `ZLinkActorDispatchMailbox`를 `ZLinkActorSerialExecutor`로 개명한다 | `actors/actor-mailbox.ts` · `spot-entry-activation.ts` · `spot-activation-state.ts` | 소유처가 조율자 하나 |
+| P4-6 | `ZLinkStreamSessionSerialExecutor` → `ZLinkSessionSerialExecutor` · 진입점 넷을 §3과 맞춘다 | `streams/session-serial-executor.ts` | 이전 이름 0건 |
+| P4-7 | `ZLinkBoundedSerialScheduler` → `ZLinkSerialExecutionQueue` · 정책 이름 일곱을 §6.1과 맞춘다 | `runtime/execution/serial-scheduler.ts` | 정책 이름 일곱이 스펙과 일치 |
+
+**P4는 java·cpp와 같은 규모다.** 앞서 "node는 조율자가 있으니 이관만"이라고 적었던 것은
+`spot-serial-executor.ts`의 클래스 이름만 보고 역할을 판정한 결과이며 틀렸다.
 
 **P4에 넣지 않는 것** — `SpotWide`에서 Actor 작업을 Actor 큐에 거치게 하는 변경. node는 지금
-공용 `serial`을 그대로 돌려주어(`spot-activation-state.ts:407`) Actor별 payload 상한이 걸리지
-않는다. 그 상한이 `SpotWide`에서 필요한 보장인지가 미결이므로(스펙 07 §9), 정해지기 전에는
-현행을 유지한다.
+공용 직렬 단위를 그대로 돌려주어(`spot-activation-state.ts:407`) Actor별 payload 상한이 걸리지
+않는다. 그 상한이 `SpotWide`에서 필요한 보장인지가 아직 정해지지 않았으므로(스펙 07 §9),
+정해지기 전에는 현행을 유지한다.
 
 ---
 
@@ -170,7 +195,7 @@ node는 Spot·Session 조율자가 있다. **문제는 없는 것이 아니라 �
 | # | 미결 | 막는 단계 |
 |---|---|---|
 | ① | node `SpotWide`에서 Actor별 payload 상한이 필요한 보장인가 | P4의 범위 |
-| ② | 계층별 정본 언어([[reference-first-porting-policy]]의 ".NET 단일 정본" 개정) | P2·P3의 참조 지정 |
+| ② | 계층별로 참조할 언어를 나눈다 — lane primitive·조율자는 .NET, 큐 primitive·turn 경계는 java. 지금까지의 ".NET 하나만 참조" 방침을 고쳐야 한다 | P2·P3의 참조 지정 |
 | ③ | 호환 경계 회수 — dotnet `AwaitStateLane` 664 · cpp `.get()` 456 | P0-1 후 재측정 |
 
 ①·②는 P1과 무관하므로 **P1은 지금 착수할 수 있다.**
