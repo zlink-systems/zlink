@@ -352,3 +352,6 @@ bindings/rust/native/
 # Python 빌드 산출물
 bindings/python/src/*.egg-info/
 bindings/python/src/zlink/_native/_zlink_perf_native.cpython-*.so
+
+# 세션 임시 조사물 (2026-08-27 — git add -A로 실수 유입된 이력 있음)
+scratchpad/

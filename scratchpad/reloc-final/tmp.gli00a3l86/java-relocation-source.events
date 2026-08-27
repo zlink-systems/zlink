@@ -1,7 +1,0 @@
-entry-spot-create|status=created
-entry-spot-owner-before|node=java-relocation-source
-relocate-attempt|attempt=0|outcome=BLOCKED|reason=DEADLINE_EXCEEDED
-relocate-attempt|attempt=1|outcome=BLOCKED|reason=DEADLINE_EXCEEDED
-relocate-attempt|attempt=2|outcome=BLOCKED|reason=DEADLINE_EXCEEDED
-relocate-attempt|attempt=3|outcome=BLOCKED|reason=DEADLINE_EXCEEDED
-relocate-attempt|attempt=4|outcome=BLOCKED|reason=SHUTDOWN_REQUESTED

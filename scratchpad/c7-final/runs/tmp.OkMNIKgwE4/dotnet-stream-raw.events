@@ -1,4 +1,0 @@
-connected|00000001|00000001|tcp://127.0.0.1:22039|tcp://127.0.0.1:19002
-raw|cpp-connector-to-dotnet
-error|TransportError
-disconnected|00000001
