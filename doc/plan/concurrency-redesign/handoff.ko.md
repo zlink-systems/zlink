@@ -15,21 +15,28 @@ Z0 cross-language e2e 전쌍 통과. **살아 있는 상태는 [progress.ko.md](
 
 ### 남은 일 (progress §4와 일치해야 한다)
 
-1. **T6/Z4 — dotnet ZoneWorld 조용한 반복 측정이 나쁘다. 최우선.**
-   조용한 환경 ×8 중 1~4런 전부 실패, **모드가 매런 다름**(ZW-B8/B4/G4/D1 — progress T6에
-   상세). "이전 2/8 실패=부하 오염" 가설은 기각됐다. 다음 순서:
-   - ×8 완주 후 실패 모드 집계 (`framework/languages/dotnet/samples`에서
-     `flock -w 7200 /tmp/zlink-dotnet-gate.lock timeout 420 bash run_samples.sh ZoneWorld` 반복)
-   - **worktree 이분으로 기존 결함 vs 캠페인 회귀 판정** — cpp TTT 때 쓴 절차(`d0bb9d95a3`):
-     `git worktree add <경로> <캠페인 이전 커밋>` → dotnet은 그 트리에서 그대로 빌드·같은 ×8 측정
-     → 이전에도 같은 비율로 실패하면 기존, 아니면 회귀(이분 계속)
-   - 원인 진단은 콘솔 계측 추가 말고 **기존 `.flow`(message tracking)부터 켜서 읽는다**.
-     임시 로깅은 add-then-delete.
+1. **T6/Z4 — dotnet ZoneWorld 이분 판정. 최우선.**
+   조용한 환경 ×8 측정 완료: **pass 1 / fail 7**, 모드 매런 상이(ZW-B8×2·D1×2·B4·G4·C2 —
+   progress T6 상세). "부하 오염" 가설 기각. **기준선 worktree가 준비돼 있다**:
+   `/home/hep7/project/zlink-z4base` = base `3cbfbde4f9` checkout + `.artifacts` 심링크 완료
+   (dotnet 샘플도 `.artifacts` 없으면 즉시 실패한다 — 심링크 필수).
+   - 기준선 트리의 `framework/languages/dotnet/samples`에서
+     `MSBUILDDISABLENODEREUSE=1 flock -w 14400 /tmp/zlink-dotnet-gate.lock timeout 1200 bash
+     run_samples.sh ZoneWorld` ×8 (첫 런은 빌드 포함 — timeout 1200 필요)
+   - 모드 분포를 현행(1/8)과 비교해 **기존 결함 vs 캠페인 회귀 판정**(TTT 판정 절차 `d0bb9d95a3`)
+   - 회귀로 나오면 콘솔 계측 추가 말고 **기존 `.flow`(message tracking)부터** 켜서 진단.
+     임시 로깅은 add-then-delete. 원인 확정 시 spec gap 3분류(스펙 근거/샘플 스펙/서버 spec gap) 기록.
    - dotnet 판정 후 cpp ZoneWorld ×8 동일 측정.
-2. **T5 — java·cpp 샘플 스위트 재실행.** java는 teardown 근본 수정(`e4944785a1`) 반영 확인,
+2. **T10 — CP3 감사 마무리.** node는 **보고 완료**(cp3-audit-node.ko.md — NOT CLEAN,
+   결함 의심 5건 H2·M3): 의심 5건을 codex로 검증(재현 또는 반박)하고 실증되면 수정+테스트.
+   **cpp·jvm 감사는 세션 종료로 미착수** — dotnet cp3-audit.ko.md와 같은 방법론으로 sol에 재요청
+   (요구 4항목: ①lock 취득 전수 계수 ②async 경계 스냅샷 전수 [정당화|결함 의심] 분류표
+   ③호환 경계 목록·잔존 사유 ④posddd ② 상위 10). 읽기 전용이라 Z4 측정과 병렬 가능.
+3. **T5 — java·cpp 샘플 스위트 재실행.** java는 teardown 근본 수정(`e4944785a1`) 반영 확인,
    cpp는 TTT 기존 간헐(rules §4)을 감안해 TTT 외 그린 판정.
-3. **T4 — java FrameworkModuleBoundaryTest ReceiveFlowState import 1건** 캠페인 원인 여부 분류.
-4. **T9 — 추적표·메모리 최종 정리 + `spec/` 트리 재잠금**(§8-4) 후 **main 병합 판단은 사용자**.
+4. **T4 — java FrameworkModuleBoundaryTest ReceiveFlowState import 1건** 캠페인 원인 여부 분류.
+5. **T9 — 추적표·메모리 최종 정리 + `spec/` 트리 재잠금**(§8-4) + worktree 정리
+   (`git worktree remove /home/hep7/project/zlink-z4base`) 후 **main 병합 판단은 사용자**.
 
 ### 세션 운영 규칙 (요약 — 정본은 rules.ko.md)
 
