@@ -264,11 +264,52 @@ close()                          // 새 제출을 받지 않고 이미 받은 �
 queue를 계속 차지할 수 있고, 그러면 같은 queue에 걸린 다른 작업이 언제 시작되는지 상한을
 말할 수 없다.
 
-### 6.5 turn을 구동하는 loop
+### 6.5 누가 loop를 시작하는가
 
-queue에 줄 선 작업을 실제로 실행하는 것은 **한 번에 하나만 들어가는 배출 loop**다. 이 loop가
-작업 하나를 꺼내 turn 위에서 돌리고, 끝나면 다음 작업으로 넘어간다. §6.4의 양보는 이 loop가
-slice를 끊는 것으로 구현된다.
+**owner마다 thread를 두지 않는다.** queue는 평소에 아무것도 돌리지 않고 있다가, 작업이
+들어오는 순간 그 제출자가 배출 loop를 깨운다. 이미 돌고 있으면 깨우지 않는다.
+
+이 판정이 제출 경로의 핵심이다.
+
+```csharp
+// contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
+Enqueue(work)
+{
+    bool startDrain;
+
+    lock (gate)                      // §6.3 — 자리 판정·번호 발급·삽입이 한 구간
+    {
+        if (!HasRoom(lane)) return Rejected;
+        queue.Add(work, nextSequence++);
+
+        // 이미 누가 이 queue를 돌리고 있으면 넣는 것으로 끝난다.
+        // 그 loop가 자기 차례에 이 작업을 집어간다.
+        startDrain = !draining && !drainScheduled;
+        if (startDrain) drainScheduled = true;
+    }
+
+    if (startDrain) ScheduleDrain();  // 구간 밖에서 깨운다. 안에서 시작하면
+                                      //   실행이 이 구간을 잡은 채로 시작된다
+    return Accepted;
+}
+```
+
+- **이미 돌고 있으면 시작하지 않는다.** 제출마다 loop를 시작하면 같은 queue를 두 곳에서
+  돌리게 되어 "한 번에 하나"가 깨진다.
+- **비어 있던 queue에 처음 넣은 쪽이 반드시 깨운다.** 아무도 깨우지 않으면 그 작업은
+  누군가 다음 제출을 할 때까지 실행되지 않는다.
+- **깨우는 호출은 임계 구간 밖에서 한다.** 구간 안에서 시작하면 그 구간을 잡은 채로 작업
+  실행이 시작될 수 있다.
+
+**loop를 어디서 돌릴지는 언어별 재량이다.** 별도 scheduler에 게시하든, event loop의 다음
+차례에 걸든, thread pool에 던지든 상관없다. 관찰 결과가 같은 이유는 어느 방식이든 그 queue를
+도는 주체가 한 번에 하나이고 꺼내는 순서가 제출 순서이기 때문이다. 확인 기준은 §10의
+"실행 mode별 동시 실행과 순서"다.
+
+### 6.6 turn을 구동하는 loop
+
+깨어난 loop는 **한 번에 하나만 들어간다.** 작업 하나를 꺼내 turn 위에서 돌리고, 끝나면 다음
+작업으로 넘어간다. §6.4의 양보는 이 loop가 slice를 끊는 것으로 구현된다.
 
 ```csharp
 // contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
@@ -281,7 +322,7 @@ Drain()
     while (TryTakeNext(out work))      // lifecycle을 먼저 고르되 lifecycleBurstLimit을 지킨다(§6.1)
     {
         turn   = new Turn();
-        result = RunOnTurn(work, turn);          // §6.6
+        result = RunOnTurn(work, turn);          // §6.7
 
         if (result == Completed) Release(work);
         // Suspended면 작업이 turn을 반납한 것이다. 완료는 나중에 처리하고
@@ -297,7 +338,7 @@ Drain()
 }
 ```
 
-### 6.6 작업 하나를 구동하는 방법과 turn 반납
+### 6.7 작업 하나를 구동하는 방법과 turn 반납
 
 작업 하나는 첫 대기 지점에서 멈췄다가 이어서 도는 실행 단위다 — C#에서는 `async` 메서드를
 컴파일러가 그런 상태 기계로 만든다. **배출 loop는 그 상태 기계를 시작만 하고, 끝날 때까지

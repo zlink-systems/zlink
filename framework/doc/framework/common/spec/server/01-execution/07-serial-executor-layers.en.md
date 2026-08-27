@@ -272,11 +272,54 @@ keep running; the queue moves to the next owner. Without this, one owner with a 
 up can hold the queue indefinitely, and then no bound can be stated for when other work on the
 same queue starts.
 
-### 6.5 The Loop That Drives Turns
+### 6.5 Who Starts The Loop
 
-What actually runs the queued work is a **drain loop that only one caller is inside at a time.**
-The loop takes one work item, runs it on a turn, and moves to the next when it finishes. §6.4's
-yielding is implemented as this loop cutting its slice.
+**There is no thread per owner.** A queue normally runs nothing at all; the moment work arrives,
+the submitter wakes the drain loop. If it is already running, nobody wakes it.
+
+That decision is the heart of the submit path.
+
+```csharp
+// contract pseudocode, not the real API — the real signatures are owned by each language interface.
+Enqueue(work)
+{
+    bool startDrain;
+
+    lock (gate)                      // §6.3 — room decision, sequence issue, insertion in one section
+    {
+        if (!HasRoom(lane)) return Rejected;
+        queue.Add(work, nextSequence++);
+
+        // if someone is already driving this queue, enqueuing is the whole job.
+        // that loop will pick this item up on its turn.
+        startDrain = !draining && !drainScheduled;
+        if (startDrain) drainScheduled = true;
+    }
+
+    if (startDrain) ScheduleDrain();  // wake it outside the section. starting inside means
+                                      //   execution begins while still holding the section
+    return Accepted;
+}
+```
+
+- **Do not start a loop that is already running.** Starting one per submission drives the same
+  queue from two places, and "one at a time" breaks.
+- **Whoever puts the first item into an empty queue must wake it.** If nobody does, that work
+  does not run until someone else happens to submit.
+- **The wake-up call happens outside the critical section.** Starting inside it can begin
+  executing work while that section is still held.
+
+**Where the loop runs is language discretion.** Post it to a separate scheduler, hang it on the
+event loop's next turn, or throw it at a thread pool — it does not matter. The observable result
+matches because under any of these exactly one party drives that queue at a time and items come
+out in submission order. The criterion for checking this is "Concurrency and order per execution
+mode" in §10.
+
+### 6.6 The Loop That Drives Turns
+
+Once woken, the loop **admits only one caller at a time.** It takes one work item, runs it on a
+turn, and moves to the next when it finishes. §6.4's yielding is implemented as this loop
+cutting its slice.
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
@@ -290,7 +333,7 @@ Drain()
     while (TryTakeNext(out work))      // prefers lifecycle, but honors lifecycleBurstLimit (§6.1)
     {
         turn   = new Turn();
-        result = RunOnTurn(work, turn);          // §6.6
+        result = RunOnTurn(work, turn);          // §6.7
 
         if (result == Completed) Release(work);
         // Suspended means the work handed the turn back. its completion is handled
@@ -306,7 +349,7 @@ Drain()
 }
 ```
 
-### 6.6 How One Work Item Is Driven, And Handing The Turn Back
+### 6.7 How One Work Item Is Driven, And Handing The Turn Back
 
 One work item is an execution unit that stops at its first waiting point and resumes afterwards —
 in C# the compiler turns an `async` method into exactly such a state machine. **The drain loop
