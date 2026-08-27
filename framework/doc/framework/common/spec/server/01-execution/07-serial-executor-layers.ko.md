@@ -158,7 +158,7 @@ Spot의 조율자에서 Actor queue map과 timer queue map이 비어 있다.
 
 ```csharp
 // contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
-ExecuteActor(actorId, work, payloadBytes)
+ExecuteActor(actorId, work)
 {
     if (executionMode == SpotWide)
     {
@@ -168,7 +168,7 @@ ExecuteActor(actorId, work, payloadBytes)
 
     // queue map은 state lane이 소유한다(§2). lock을 잡지 않는다.
     actorQueue = lane.Run(() => GetOrCreateActorQueue(actorId));
-    actorQueue.EnqueueWithPayloadBytes(work, payloadBytes);   // §5의 owner FIFO 상한
+    actorQueue.Enqueue(work);            // §5의 건수 상한
 }
 
 ExecuteTimer(timerName, work)
@@ -180,35 +180,30 @@ ExecuteTimer(timerName, work)
     }
 
     timerQueue = lane.Run(() => GetOrCreateTimerQueue(timerName));
-    timerQueue.Enqueue(work);            // payload가 없어 fixedWorkByteCost로 회계한다
+    timerQueue.Enqueue(work);
 }
 ```
 
-## 5. 유입 제한은 이 계층의 권한이 아니다
+## 5. 이 계층의 한도는 건수뿐이다
 
-**유입 속도를 제한하는 권한은 이 문서에 없다.** Ordinary ingress가 통과하는 capacity
-authority는 [Core byte HWM](../00-foundation/02-glossary.ko.md#core-hwm-budget)과
-[Application job queue](../00-foundation/02-glossary.ko.md#application-job-queue) permit
-둘뿐이고, 그 순서와 경계는
-[Application job queue와 backpressure 「1. 두 독립된 capacity authority」](04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)가
-소유한다. 그 문서는 Framework가 별도 byte-HWM을 만들어 Core HWM을 다시 구현하는 것을 금지한다.
+**유입 속도를 정하는 권한은 이 문서에 없다.** Ordinary ingress가 permit을 얻고 record를
+receive하는 순서는
+[Application job queue와 backpressure 「1. 두 독립된 capacity authority」](04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)와
+[「3. Ordinary ingress permit 순서」](04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)가
+소유한다. 여기서 다시 정의하지 않는다.
 
-**Ordinary ingress로 들어온 작업은 permit을 이미 들고 owner queue에 도착한다** —
-[04 「3. Ordinary ingress permit 순서」](04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)의
-3단계가 permit을 owner queue의 handler turn으로 이전한다. 그 작업을 owner queue가 다시 재서
-거절하면 같은 job을 두 번 재는 것이고, 04 §3이 금지한 "포화를 reject로 바꾸기"가 된다.
-**permit을 든 작업은 owner queue에서 다시 재지 않는다.**
+**queue는 payload 바이트를 세지 않는다.** Byte로 재는 것은 Core byte HWM과 소켓 수신 회전
+한도뿐이고, Framework 쪽 한도는 모두 건수다(04 §9). owner별로 payload 바이트를 따로 세면
+Core HWM을 다른 이름으로 다시 구현하는 것이 되고, 그렇게 세어도 owner 수만큼 곱해지므로
+process memory를 묶지도 못한다.
 
-owner queue의 count·byte 상한이 실제로 걸리는 자리는 **같은 runtime 안에서 새로 제출되는
-작업**이다. 이 상한은
-[04 「8. Backpressure 3단계와 한도 종류」](04-application-job-queue-and-backpressure.ko.md#8-backpressure-3단계와-한도-종류)의
-owner FIFO가 소유한다 — owner별 count와 byte로 재고, 포화하면 owner isolation 오류로 끝난다.
+queue가 갖는 건수 상한은 [04 §8](04-application-job-queue-and-backpressure.ko.md#8-backpressure-3단계와-한도-종류)의
+owner FIFO가 소유한다. 그 상한이 걸리는 단위는 §4가 만든 queue를 따라간다 — `PerActor`는
+Actor마다, `SpotWide`는 Spot 하나다.
 
-그 상한이 걸리는 단위는 §4가 만든 queue를 따라간다. `PerActor`에서는 Actor마다 queue가 있으므로
-Actor마다 걸리고, `SpotWide`에서는 queue가 Spot 하나뿐이므로 Spot 단위로 걸린다. `SpotWide`의
-전제가 "Spot 전체가 한 줄"이므로 수용량도 Spot 단위인 것이 그 전제와 맞는다.
-
-**내부 확인 조건** — permit을 든 작업이 owner queue에서 byte를 예약하는 자리가 없다.
+Application job queue permit은 작업이 이 queue에 줄 서 있는 동안에도 계속 잡혀 있다(04 §3의
+5단계). 따라서 모든 queue에 쌓인 총 건수는 이미 permit 수로 묶여 있고, 여기의 건수 상한은
+그 위에 얹는 owner별 분배 장치다.
 
 ## 6. 직렬 queue primitive
 
@@ -222,8 +217,9 @@ Actor마다 걸리고, `SpotWide`에서는 queue가 Spot 하나뿐이므로 Spot
 다음 값은 정책 객체 `ZLinkExecutionLanePolicy`로 주입받는다. queue 안에 상수로 박지
 않는다 — Spot·Actor·session이 서로 다른 값을 쓰기 때문이다.
 
-이 값들은 §5의 owner FIFO 상한을 정하는 것이지 유입 속도를 제한하는 값이 아니다. Ordinary
+이 값들은 §5의 건수 상한을 정하는 것이지 유입 속도를 제한하는 값이 아니다. Ordinary
 ingress의 admission은 [04](04-application-job-queue-and-backpressure.ko.md)가 소유한다.
+payload 바이트를 재는 값은 두지 않는다(§5).
 
 다음은 의미를 설명하는 contract pseudocode이며 실제 API가 아니다. 정확한 signature는 언어별
 exact interface가 정의한다.
@@ -231,12 +227,7 @@ exact interface가 정의한다.
 ```text
 ZLinkExecutionLanePolicy {
     applicationMessageCapacity   // application lane이 동시에 담는 작업 수 상한 (건, > 0)
-    applicationByteCapacity      // application lane이 동시에 예약하는 payload 크기 상한
-                                 //   (byte, > 0, encoded payload 기준)
     lifecycleMessageCapacity     // lifecycle lane이 동시에 담는 작업 수 상한 (건, > 0)
-    lifecycleByteCapacity        // lifecycle lane이 동시에 예약하는 크기 상한 (byte, > 0)
-    fixedWorkByteCost            // payload를 나르지 않는 작업 하나가 차지하는 고정 크기
-                                 //   (byte, >= 0). timer 작업과 lifecycle 작업이 쓴다
     lifecycleBurstLimit          // lifecycle 작업이 application 작업을 연속으로 앞지를 수 있는
                                  //   최대 건수 (건, > 0). 이 수를 넘기면 application 작업이
                                  //   한 건 실행된다
@@ -248,8 +239,7 @@ ZLinkExecutionLanePolicy {
 ### 6.2 진입점
 
 ```text
-enqueue(작업)                    // application lane. fixedWorkByteCost로 예약한다
-enqueueWithPayloadBytes(작업, n) // application lane. 실제 payload n byte로 예약한다
+enqueue(작업)                    // application lane. 한 건으로 센다
 enqueueLifecycle(작업)           // lifecycle lane. 대기 중인 application 작업을 앞지른다
 enqueueBarrierNext(작업)         // 현재 turn 직후, 줄 서 있는 application 작업보다 먼저
 isCurrent()                      // 호출한 thread가 이 queue의 turn을 점유하고 있는가
@@ -257,9 +247,9 @@ awaitQuiescence()                // 줄 선 작업이 모두 끝날 때까지 �
 close()                          // 새 제출을 받지 않고 이미 받은 작업을 끝낸다
 ```
 
-### 6.3 수용량 판정과 순서 발급의 원자적 범위
+### 6.3 자리 판정과 순서 발급의 원자적 범위
 
-수용량 판정·순서 번호 발급·queue 삽입 셋은 **전부 일어나거나 전혀 일어나지 않는다.**
+자리 판정·순서 번호 발급·queue 삽입 셋은 **전부 일어나거나 전혀 일어나지 않는다.**
 호출자 하나의 제출에서 이 셋이 쪼개지지 않는다.
 
 세 동작을 각각 별개로 처리하는 동시성 queue 자료구조로 치환하지 않는다. 쪼개면 두 호출자가
@@ -449,12 +439,14 @@ snapshot 타입 이름은 `<대상>StateSnapshot`으로 한다.
 
 **수용량과 backpressure**
 
-- `PerActor`에서 같은 runtime 안의 로컬 제출을 Actor 하나에 몰아 `applicationByteCapacity`를
-  채우면 그 Actor에 대한 제출만 거절되고, 같은 Spot의 다른 Actor에 대한 제출은 계속 수락된다.
-- `SpotWide`에서는 같은 상한이 Spot 단위로 걸린다 — 어느 Actor에 제출했든 같은 상한을 함께
-  쓴다(§5).
-- 원격에서 들어온 Actor packet은 그 상한을 채운 owner에게도 계속 전달된다 — ordinary ingress는
-  owner queue에서 다시 재지 않는다(§5).
+- `PerActor`에서 Actor 하나에 작업을 몰아 `applicationMessageCapacity`를 채우면 그 Actor에
+  대한 제출만 거절되고, 같은 Spot의 다른 Actor에 대한 제출은 계속 수락된다.
+- `SpotWide`에서는 같은 상한이 Spot 단위로 걸린다(§5).
+- 같은 건수를 제출하면 payload 크기와 무관하게 같은 지점에서 거절이 시작된다 — 이 계층은
+  payload 바이트를 세지 않는다(§5).
+- owner queue 포화로 인한 거절이 조용히 사라지지 않는다. 그 거절과 permit 대기를 구분해
+  관찰하는 계약은 [04 §10](04-application-job-queue-and-backpressure.ko.md#10-검증-요구)이
+  소유한다.
 - `enqueueLifecycle`로 제출한 작업은 이미 줄 서 있는 application 작업보다 먼저 실행되고,
   연속으로 앞지르는 건수는 `lifecycleBurstLimit`에서 멈춰 application 작업이 한 건 실행된다.
 

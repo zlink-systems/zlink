@@ -194,18 +194,24 @@ Spot만 "Spot 1 + Actor N + Timer M"을 **소유**하므로 맵을 갖는다. Ac
 
 ---
 
-## 3. 용량 회계 (개정 2026-08-28)
+## 3. 한도는 건수뿐이다 (개정 2026-08-28)
 
-**R-N8 (개정).** `SpotWide`에서 Actor 작업은 Spot 큐로 **직행한다.** Actor 큐를 거치지 않으므로
-"아래에서 payload, 위에서 고정 비용"이라는 이중 예약 금지 규칙 자체가 없어진다. 근거와 계약은
-스펙 07 §4가 소유한다.
+**R-N8 (개정).** 큐는 **payload 바이트를 세지 않는다.** byte로 재는 것은 Core byte HWM과
+소켓 수신 회전 한도뿐이고 Framework 쪽 한도는 모두 건수다(스펙 04 §9 · 07 §5).
 
-**R-N8a.** 큐의 count·byte 상한은 **로컬 제출에만** 걸린다. ordinary ingress는 permit을 들고
-owner 큐에 도착하므로(스펙 04 §3) 다시 재지 않는다. 이 상한의 소유 문서는 스펙 04 §8의
-owner FIFO다.
+**R-N8a.** 정책에서 `applicationByteCapacity`·`lifecycleByteCapacity`·`fixedWorkByteCost`를
+**뺀다.** 남는 것은 `applicationMessageCapacity`·`lifecycleMessageCapacity`·
+`lifecycleBurstLimit`·`ownerTimeBudget` 넷이다.
 
-**R-N8b.** 상한이 걸리는 단위는 그 mode가 만든 큐를 따라간다 — `PerActor`는 Actor별,
+**R-N8b.** `enqueueWithPayloadBytes`를 두지 않는다. 진입점은 `enqueue`·`enqueueLifecycle`·
+`enqueueBarrierNext` 셋이다.
+
+**R-N8c.** 건수 상한이 걸리는 단위는 그 mode가 만든 큐를 따라간다 — `PerActor`는 Actor별,
 `SpotWide`는 Spot별.
+
+**근거.** java의 byte 축은 예전 byte 제어 설계의 잔재다. archive 47 §6이 "정식 spec이 두 축을
+의무화했다(Framework API)"를 근거로 결정을 기록했으나, 현재 `RootInboundDispatchOptions`에는
+그 두 축을 설정할 수단이 없다. .NET·cpp에 없는 것이 현재 계약에 맞다.
 
 ## 4. 상태 조회 — turn 경계 (고정)
 
@@ -311,7 +317,7 @@ Actor 큐를 거치지 않는다(`spot-activation-state.ts:407`). 순서는 보�
 3. §1.2의 네 진입점 외 공개 API가 없는가 (R-N3)
 4. `ownerTimeBudget`이 4언어에 있는가 (R-N7)
 5. `SpotWide` Spot의 `actorQueues`·`timerQueues`가 **비어 있는가** (R-N4·R-N8)
-5a. permit을 든 작업이 owner 큐에서 byte를 예약하는 자리가 **0**인가 (R-N8a)
+5a. 큐가 payload 바이트를 세는 자리가 **0**인가 (R-N8·R-N8a)
 6. 한 메시지 경로에서 같은 값을 두 번 읽는 자리가 **0**인가 (R-N10)
 7. 상위 소유를 전제하는 자리에 단언이 있는가 (R-N11)
 

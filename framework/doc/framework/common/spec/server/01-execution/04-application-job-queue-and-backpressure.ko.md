@@ -167,7 +167,7 @@ node에 있는지, 자리가 있는지, 이동으로 봉인되지 않았는지.
 1. host와 topology가 지금 application 작업을 받는 상태인가
 2. 대상 객체가 이 node에 있고 owner 정보가 유효한가
 3. 이동 봉인·생성 대기·session 연결 대기 중이 아닌가
-4. 해당 lane의 건수와 byte를 함께 예약할 수 있는가
+4. 해당 lane에 이 작업을 받을 자리가 있는가
 5. 수락 순서를 나타내는 sequence를 확정하고 owner queue 뒤에 넣는다
 6. 비어 있던 queue가 채워졌으면 준비된 owner 집합에 그 owner를 넣고 실행 자원에 즉시
    알린다
@@ -175,7 +175,7 @@ node에 있는지, 자리가 있는지, 이동으로 봉인되지 않았는지.
 - **확인에 실패한 message는 대기열에 나타나지 않는다.** 일단 넣었다가 빼는 방식으로 만들지
   않는다 — 넣었다 빼면 그 사이에 실행될 수 있고, 뺐다는 사실을 관측에서 구분할 수도 없다.
   응답을 기다리는 호출은 실패 이유를 결과로 받는다. 예약이나 enqueue에 실패한 경우에도
-  건수·byte 사용량과 수락 sequence는 이전 값 그대로다. 실패한 시도가 다음 정상 작업의
+  건수 사용량과 수락 sequence는 이전 값 그대로다. 실패한 시도가 다음 정상 작업의
   순서나 admission 가능 여부를 바꾸지 않는다.
 
 **언어별 재량** — 이 구간을 잠금으로 만들지 다른 방법으로 만들지는 자유다. 판정 기준은 확인과
@@ -331,7 +331,7 @@ server→client outbound에는 적용하지 않는다.
 |---|---|---|
 | Core HWM | 방향별 queued/accounted byte | Core queue에서 sender까지 backpressure |
 | Application job queue | host instance의 reserved·queued·in-use permit | cancellable shared-cap wait |
-| [Owner](../00-foundation/02-glossary.ko.md#owner) FIFO — 현재 Actor·Spot을 실행하는 MeshNode별 대기열 | owner별 count와 byte | structural owner isolation error |
+| [Owner](../00-foundation/02-glossary.ko.md#owner) FIFO — 현재 Actor·Spot을 실행하는 MeshNode별 대기열 | owner별 건수 | structural owner isolation error |
 | Outbound admission waiter | operation family별 bounded waiter | 원래 send deadline/cancellation 결과 |
 
 어느 경로도 별도 unbounded backlog, polling, busy-spin이나 silent replay를 만들지 않는다.
@@ -341,6 +341,11 @@ server→client outbound에는 적용하지 않는다.
 - **Application job queue는 job count를 제한하지 payload byte를 가중하지 않는다.** 빈
   payload와 큰 payload는 각각 job 하나다. 따라서 Framework queue 상한은 process memory의
   byte hard cap이 아니다.
+- **Framework 쪽 한도는 모두 건수다. owner 대기열에도 payload byte 축을 두지 않는다.**
+  Byte로 재는 것은 Core byte HWM과, 한 회전에서 소켓을 얼마나 읽을지 정하는 수신 한도(§4)
+  뿐이다. Framework가 owner별로 payload byte를 따로 세면 Core HWM을 다른 이름으로 다시
+  구현하는 것이 되고([Framework API 「3. Core memory budget과 Application job queue 설정」](../00-foundation/06-framework-api.ko.md#3-core-memory-budget과-application-job-queue-설정)이
+  금지한다), 그렇게 세어도 owner 수만큼 곱해지므로 process memory를 묶지도 못한다.
 - 큰 payload를 오래 보유하는 workload는 production과 같은 payload 분포, permits in
   use, process memory, throughput과 latency를 함께 측정해 `MaxQueuedApplicationJobs`를
   낮춘다. 단일 message 크기는 `MaxMessageSize`로 별도 제한한다. 이 문제를 해결하려고
@@ -364,7 +369,7 @@ pressure 상태 조회, socket receive-flow 절대 상태, [Runtime metric](../0
 **Permit 획득과 순서**
 
 - Permit이 없으면 다음 ordinary record를 먼저 receive하지 않는다.
-- 확인에 실패한 send·request는 owner queue의 건수·byte·sequence 관측값을 바꾸지 않는다.
+- 확인에 실패한 send·request는 owner queue의 건수·sequence 관측값을 바꾸지 않는다.
 - Shared permit이 모두 예약되면 ordinary ingress가 cancellable wait하고, terminal
   reply·error completion은 계속 진행한다.
 - 한 연결이 계속 보내는 동안에도 다른 연결의 수신이 진행된다.

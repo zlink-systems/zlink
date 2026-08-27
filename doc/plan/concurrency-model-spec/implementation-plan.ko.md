@@ -47,7 +47,8 @@ P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같�
 | P0-1 | Spot 핫패스에서 연속된 단순 조회를 한 turn으로 묶는다 | cpp `runtime/spots/spot_runtime.cpp` | 블로킹 브리지 send 11→4~5 · request 13→5~6 |
 | P0-2 | binding wrapper의 중복 lock 제거 | java `runtime/` binding wrapper 31곳 | hot path 7곳 |
 | P0-3 | 큐 임계 구역에서 `BigInteger` 할당을 걷어낸다 | java `execution/ZLinkAsyncSerialQueue.java` | enqueue마다 4할당 제거 |
-| P0-4 | **조사** — java가 ordinary ingress에 owner queue byte를 재는 것이 스펙 04 §3 위반인지 판정한다 | java `runtime/spots/ZLinkSpotRuntime.java:4831` · node `execution/serial-scheduler.ts:145` | 위반이면 permit 보유 작업의 예약을 건너뛴다 |
+| P0-4 | java에서 payload 바이트 회계를 **제거**한다 — `applicationByteCapacity`·`lifecycleByteCapacity`·`fixedWorkByteCost`·`enqueueWithPayloadBytes`와 그 호출자 | `execution/ZLinkAsyncSerialQueue.java:32-38` · `runtime/spots/ZLinkSpotRuntime.java:4831` · `ZLinkDefaultSpotContext.java` | 건수 상한만 남고 게이트 그린 |
+| P0-5 | node scheduler에서 byte 축을 **제거**한다 — `payloadBytes`·`metadataBytes`·`byteCost`. `submitPreAdmitted` 우회도 함께 정리한다 | node `runtime/execution/serial-scheduler.ts` | 건수 상한만 남고 게이트 그린 |
 
 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에 있다. P0-1은
 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을 어긴 자리를
@@ -67,15 +68,15 @@ primitive에는 채워야 할 것이 남아 있다.**
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
 | P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | 상수로 박힌 `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`을 정책 주입으로 바꾼다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs:7,8` | `ZLinkExecutionLanePolicy` 일곱 값이 주입된다 |
-| P1-6 | 큐에 owner FIFO의 count·byte 상한을 **신설**한다 — permit을 든 작업은 재지 않는다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 세 항목 통과 |
 | P1-7 | **`SpotWide`에서 Actor lane 겹침을 없앤다** — `_queue`로 직행 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:109` | `SpotWide` Spot의 `_actorLanes`·`_timerLanes`가 빈다 |
 
-**dotnet 큐에는 owner FIFO의 byte 상한이 없다(실측 2026-08-28).** `ZLinkSerialExecutionQueue`의
-admission은 relocation seal과 stopping 상태만 본다 — `applicationByteCapacity`에 해당하는 값이
-없고 제출 API도 바이트를 받지 않는다. 스펙 07 §5의 Actor별 admission은 현재 **java에만**
-있다(`ZLinkAsyncSerialQueue.enqueueWithPayloadBytes` · `ZLinkDefaultSpotContext:665`). node는
-`ZLinkBoundedSerialScheduler`에 바이트 회계가 있으나 `SpotWide`에서 Actor queue를 거치지 않아
-Actor별로 갈리지 않는다.
+**payload 바이트 회계는 제거 대상이다(확정 2026-08-28).** Framework 쪽 한도는 모두 건수이고
+byte로 재는 것은 Core byte HWM과 소켓 수신 회전 한도뿐이다(스펙 04 §9 · 07 §5). java의
+`applicationByteCapacity = 64 MiB` 같은 값은 예전 byte 제어 설계의 잔재이며, 현재
+`RootInboundDispatchOptions`에는 그 축을 설정할 수단이 아예 없다.
+
+따라서 **dotnet·cpp에 회계를 신설하지 않는다.** 없는 것이 현재 계약에 맞다. 대신 java와
+node에서 걷어낸다(P0-4·P0-5).
 
 **`SpotWide` 2단 겹침은 걷어낸다(확정 2026-08-28).** 그 겹침이 사는 것이 없다 — 순서는 Spot
 큐 하나로 끝나고, 유입 제한은 이 계층 권한이 아니며, `SpotWide`는 Spot 전체가 한 줄이라 Actor를

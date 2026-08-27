@@ -161,7 +161,7 @@ One entry point carries this whole path decision, and the caller never sees a qu
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
-ExecuteActor(actorId, work, payloadBytes)
+ExecuteActor(actorId, work)
 {
     if (executionMode == SpotWide)
     {
@@ -171,7 +171,7 @@ ExecuteActor(actorId, work, payloadBytes)
 
     // the queue map is owned by a state lane (§2). no lock is taken.
     actorQueue = lane.Run(() => GetOrCreateActorQueue(actorId));
-    actorQueue.EnqueueWithPayloadBytes(work, payloadBytes);   // §5's owner FIFO ceiling
+    actorQueue.Enqueue(work);            // §5's item-count ceiling
 }
 
 ExecuteTimer(timerName, work)
@@ -183,38 +183,32 @@ ExecuteTimer(timerName, work)
     }
 
     timerQueue = lane.Run(() => GetOrCreateTimerQueue(timerName));
-    timerQueue.Enqueue(work);            // no payload, so charged at fixedWorkByteCost
+    timerQueue.Enqueue(work);
 }
 ```
 
-## 5. Limiting Inbound Work Is Not This Layer's Authority
+## 5. Every Limit At This Layer Is A Count
 
-**This document has no authority over the rate of inbound work.** Ordinary ingress passes exactly
-two capacity authorities — the [Core byte HWM](../00-foundation/02-glossary.en.md#core-hwm-budget)
-and the [Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) permit —
-and their order and boundaries are owned by
-[Application Job Queue And Backpressure "1. Two Independent Capacity Authorities"](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities).
-That document forbids the Framework from re-implementing the Core HWM with a byte HWM of its own.
+**This document has no authority over the rate of inbound work.** The order in which ordinary
+ingress acquires a permit and receives a record is owned by
+[Application Job Queue And Backpressure "1. Two Independent Capacity Authorities"](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)
+and
+[04 "3. Ordinary Ingress Permit Order"](04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order).
+It is not redefined here.
 
-**Work that came in through ordinary ingress reaches the owner queue already holding a permit** —
-step 3 of
-[04 "3. Ordinary Ingress Permit Order"](04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order)
-transfers the permit to the owner queue's handler turn. Counting that work again at the owner
-queue and rejecting it charges the same job twice, and becomes the "turning saturation into a
-reject" that 04 §3 forbids. **Work holding a permit is not counted again at the owner queue.**
+**Queues do not count payload bytes.** The only things measured in bytes are the Core byte HWM
+and the per-wakeup socket receive limit; every Framework-side limit is a count (04 §9). Counting
+payload bytes per owner would be re-implementing the Core HWM under another name, and it would
+not bound process memory anyway, since it multiplies by the number of owners.
 
-Where the owner queue's count and byte ceilings do apply is **work newly submitted inside the
-same runtime.** That ceiling is owned by the owner FIFO in
-[04 "8. The Three Backpressure Stages And Kinds Of Limits"](04-application-job-queue-and-backpressure.en.md#8-the-three-backpressure-stages-and-kinds-of-limits) —
-measured per owner in count and bytes, ending in an owner isolation error when saturated.
+The item-count ceiling a queue carries is owned by the owner FIFO in
+[04 §8](04-application-job-queue-and-backpressure.en.md#8-the-three-backpressure-stages-and-kinds-of-limits).
+The unit that ceiling applies to follows the queues §4 creates — per Actor under `PerActor`, and
+the one Spot queue under `SpotWide`.
 
-The unit that ceiling applies to follows the queues §4 creates. Under `PerActor` there is a queue
-per Actor, so it applies per Actor; under `SpotWide` there is only the Spot queue, so it applies
-per Spot. `SpotWide`'s premise is that the whole Spot is one line, and capacity being a Spot-wide
-figure matches that premise.
-
-**Internal check condition** — nothing reserves bytes at the owner queue for work that holds a
-permit.
+An Application job queue permit stays held while its work sits in this queue (04 §3, step 5). The
+total number of items queued across all queues is therefore already bounded by the permit count,
+and the ceiling here is a per-owner distribution device layered on top of that.
 
 ## 6. The Serial Queue Primitive
 
@@ -228,9 +222,9 @@ guarantee — that latency is bounded under any load — can be stated.
 The following values are injected as a policy object, `ZLinkExecutionLanePolicy`. They are not
 baked into the queue as constants, because Spot, Actor, and session use different values.
 
-These set §5's owner FIFO ceilings; they are not values that limit the rate of inbound work.
+These set §5's item-count ceilings; they are not values that limit the rate of inbound work.
 Admission for ordinary ingress is owned by
-[04](04-application-job-queue-and-backpressure.en.md).
+[04](04-application-job-queue-and-backpressure.en.md). No value here measures payload bytes (§5).
 
 The following is contract pseudocode explaining the meaning; it is not the real API. The exact
 signature is defined by each language's exact interface.
@@ -239,14 +233,8 @@ signature is defined by each language's exact interface.
 ZLinkExecutionLanePolicy {
     applicationMessageCapacity   // ceiling on work items the application lane holds at once
                                  //   (count, > 0)
-    applicationByteCapacity      // ceiling on payload the application lane reserves at once
-                                 //   (bytes, > 0, encoded payload)
     lifecycleMessageCapacity     // ceiling on work items the lifecycle lane holds at once
                                  //   (count, > 0)
-    lifecycleByteCapacity        // ceiling on size the lifecycle lane reserves at once
-                                 //   (bytes, > 0)
-    fixedWorkByteCost            // fixed size charged to one work item carrying no payload
-                                 //   (bytes, >= 0). used by timer work and lifecycle work
     lifecycleBurstLimit          // how many lifecycle items may consecutively overtake
                                  //   application work (count, > 0). past this count, one
                                  //   application item runs
@@ -258,8 +246,7 @@ ZLinkExecutionLanePolicy {
 ### 6.2 Entry Points
 
 ```text
-enqueue(work)                    // application lane; reserved at fixedWorkByteCost
-enqueueWithPayloadBytes(work, n) // application lane; reserved at the actual n payload bytes
+enqueue(work)                    // application lane; counted as one item
 enqueueLifecycle(work)           // lifecycle lane; overtakes queued application work
 enqueueBarrierNext(work)         // right after the current turn, ahead of queued application work
 isCurrent()                      // does the calling thread hold this queue's turn
@@ -267,9 +254,9 @@ awaitQuiescence()                // wait until all queued work has finished
 close()                          // accept no new submissions; finish what was already accepted
 ```
 
-### 6.3 The Atomic Extent Of Capacity Decision And Sequence Issue
+### 6.3 The Atomic Extent Of The Room Decision And Sequence Issue
 
-The capacity decision, the sequence-number issue, and the queue insertion **either all happen or
+The room decision, the sequence-number issue, and the queue insertion **either all happen or
 none happen.** For one caller's submission these three are not split apart.
 
 Do not substitute a concurrent queue data structure that handles the three separately. Split
@@ -467,13 +454,14 @@ and the exception a reentrant call receives). Each item maps to one test.
 
 **Capacity and backpressure**
 
-- Under `PerActor`, piling local submissions inside the same runtime on one Actor until it fills
-  `applicationByteCapacity` rejects only submissions to that Actor; submissions to other Actors
-  in the same Spot are still accepted.
-- Under `SpotWide` the same ceiling applies per Spot — submissions share it regardless of which
-  Actor they target (§5).
-- Actor packets arriving from a remote node are still delivered to an owner that has filled that
-  ceiling — ordinary ingress is not counted again at the owner queue (§5).
+- Under `PerActor`, piling work on one Actor until it fills `applicationMessageCapacity` rejects
+  only submissions to that Actor; submissions to other Actors in the same Spot are still accepted.
+- Under `SpotWide` the same ceiling applies per Spot (§5).
+- Submitting the same number of items begins rejecting at the same point regardless of payload
+  size — this layer does not count payload bytes (§5).
+- A rejection from a full owner queue does not vanish silently. Observing that rejection as
+  distinct from a permit wait is a contract owned by
+  [04 §10](04-application-job-queue-and-backpressure.en.md#10-verification-requirements).
 - Work submitted with `enqueueLifecycle` runs ahead of already queued application work, and the
   consecutive overtaking stops at `lifecycleBurstLimit` so one application item runs.
 

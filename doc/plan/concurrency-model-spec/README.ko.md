@@ -65,7 +65,7 @@ Actor를 따로 세워도 어느 Actor가 먼저 돌지 않는다. node 현행(S
 | **조율자** | **dotnet** | Spot마다 전용 조율자가 Spot 큐 · Actor별 큐 · Timer별 큐를 **모두 소유**. 진입점이 큐를 고르고 호출자는 모른다 |
 | **큐 primitive** | **java** | 실행뿐 아니라 **backpressure · lifecycle burst · owner time budget · 정책 주입**을 계약으로 |
 | 큐 경로 | **node** | `SpotWide`는 Spot 큐 직행. Actor·timer 큐는 `PerActor`에서만 만든다 (2026-08-28 확정) |
-| 용량 회계 | — | owner FIFO 상한은 로컬 제출에만. ordinary ingress는 permit을 들고 오므로 다시 재지 않는다(04 §3) |
+| 한도 | — | **건수뿐.** payload byte 회계는 예전 설계의 잔재로 제거 대상 (2026-08-28 확정) |
 
 **언어별 작업량**
 
@@ -115,4 +115,4 @@ Actor를 따로 세워도 어느 Actor가 먼저 돌지 않는다. node 현행(S
    현행 `ZLinkSpotSerialExecutor`는 직렬 단위 wrapper다(계약서 §7 · 플랜 §6)
 ⑥ ~~`SpotWide`에서 Actor 큐를 거칠 이유~~ → **확정: 없다. 걷어낸다.** 순서는 Spot 큐 하나로
    끝나고 유입 제한은 이 계층 권한이 아니다(04 소유). node 현행이 정본이고 나머지 셋이 맞춘다
-⑦ java가 ordinary ingress에 owner queue byte를 재는 것이 04 §3 위반인지 판정(플랜 P0-4)
+⑦ ~~java의 ingress byte 계상~~ → **확정: 잔재다. 제거한다.** java·node에서 byte 축을 걷어내고(P0-4·P0-5) .NET·cpp에는 신설하지 않는다. 스펙 04의 owner FIFO byte 축도 함께 정정했다
