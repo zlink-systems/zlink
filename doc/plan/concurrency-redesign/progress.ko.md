@@ -91,7 +91,7 @@ node = l2-survey-node.ko.md. kotlin은 java 승계로 상세 없음.
 | T2 | node TicTacToe self-deadlock | **종결** `d575cb4d0c` | 수정 후 m6a/b·stream-runtime 전부 그린, node 샘플 스위트 exit 0 |
 | T3 | java 샘플 릴리스 게이트 지문 5건 | **종결** | 기존 드리프트 확정·지문 갱신 22/22, 커밋됨 |
 | T4 | java FrameworkModuleBoundaryTest ReceiveFlowState import 1건 | 분류 필요 | 캠페인 원인 여부 미판정 |
-| T5 | 언어별 샘플 스위트 | **node 그린(exit 0)** · cpp/java 진단 중 | cpp TTT connector timeout 간헐(재현 캡처 잡)·java Bingo matchmaking TEARDOWN_FAILED(임시 로깅 잡) — 둘 다 근본 미확정으로 추측 수정 반려 2회 |
+| T5 | 언어별 샘플 스위트 | node **그린** · java **teardown 근본 수정 커밋**(재실행 대기) · cpp TTT는 **기존 결함 판정**(worktree 이분 실증 — 배치9 이전 4/6 동일 실패, rules §4 등재·이월) | cpp 스위트는 TTT 기존 간헐 감안해 재실행 판정 |
 | T6 | Z4 — ZoneWorld 조용한 반복 측정(dotnet·cpp 각 8~30런) 후 게이트 복귀 | 대기 | Z1·Z2 수정 커밋됨. 부하 없는 상태에서 측정 |
 | T7 | 구조 보류 판정 (cpp channel_runtime_state·mesh_node_runtime, node STOP 9건, dotnet ChannelRuntimeManager 잔여 확인) | 마일스톤 기록 완료 | 필요 시 후속 캠페인 |
 | T8 | 기존 결함 이월 (cpp layout_contract 샘플 blocking result, node m6c 계약 2건, java module boundary?) | 이월 목록 | rules §4 |

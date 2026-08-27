@@ -112,6 +112,10 @@ CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
   별도 작업.
 - **java full-run flake**: `ZLinkJavaRawMeshNodeM6ATest.descriptorBackedPeerIntent…`,
   `ZLinkAsyncSerialQueueTest.queuedRelocationIntent…` — 단독 재실행 통과 확인 후 무시.
+- **cpp TicTacToe `JoinGameNotify` 간헐 유실도 기존 결함이다** (2026-08-27 worktree 이분 실증 —
+  배치9 이전 시점에서 6회 중 4회 동일 실패): detached one-way bound-session 전달이 remote
+  submit 성공을 delivery로 간주, owner 측 stream write 미확인. 근본 수정은 owner-side delivery
+  계약 설계 필요(스펙 판정 대상) — 캠페인 범위 밖 이월. 가설 수정 2회는 실측 기각·원복.
 - 간헐 실패는 이 목록과 대조 전에는 회귀로도 flake로도 단정하지 않는다.
 
 ## 5. 작업 주기 — 요청 → 보고 → 리뷰
