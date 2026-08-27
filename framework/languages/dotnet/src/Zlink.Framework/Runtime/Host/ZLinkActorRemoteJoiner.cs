@@ -981,7 +981,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                     else
                         sourceCleanupCancellation.CancelAfter(sourceCleanupRemaining);
                     await ReconcileCommittedSourceHandoffAsync(
-                            actor,
                             actorState,
                             actorRef,
                             resultActorRef,
@@ -1185,7 +1184,6 @@ internal sealed class ZLinkActorRemoteJoiner(
     }
 
     private async ValueTask ReconcileCommittedSourceHandoffAsync(
-        IZLinkActor actor,
         ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
@@ -1195,7 +1193,6 @@ internal sealed class ZLinkActorRemoteJoiner(
         if (ZLinkBoundSessionDispatchScope.TryDefer(
             actorState.ActorId,
             ct => ReconcileCommittedSourceHandoffCoreAsync(
-                    actor,
                     actorState,
                     sourceActorRef,
                     targetActorRef,
@@ -1204,7 +1201,6 @@ internal sealed class ZLinkActorRemoteJoiner(
             return;
 
         await ReconcileCommittedSourceHandoffCoreAsync(
-                actor,
                 actorState,
                 sourceActorRef,
                 targetActorRef,
@@ -1214,7 +1210,6 @@ internal sealed class ZLinkActorRemoteJoiner(
     }
 
     private async ValueTask ReconcileCommittedSourceHandoffCoreAsync(
-        IZLinkActor actor,
         ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
@@ -1227,11 +1222,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                 {
                     if (!migrationApplied)
                     {
-                        await ReconcileCommittedSourceLeaveAsync(
-                                actor,
-                                actorState,
-                                token)
-                            .ConfigureAwait(false);
                         await ApplyRemoteActorMigrationCoreAsync(
                                 actorState,
                                 targetActorRef,

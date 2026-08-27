@@ -2082,7 +2082,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public async Task Managed_mesh_node_pauses_core_receive_while_shared_application_capacity_is_saturated()
+    public async Task Managed_mesh_pump_defers_application_dispatch_while_shared_capacity_is_saturated()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var applicationJobQueue = new ZLinkApplicationJobQueue(
@@ -2098,7 +2098,8 @@ public sealed class ServiceRuntimeFoundationTests
             applicationJobQueue: applicationJobQueue);
         await using var pump = new ZLinkMeshDispatchPump(
             target,
-            new ZLinkMeshCompletionTable());
+            new ZLinkMeshCompletionTable(),
+            applicationJobQueue);
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://orders-pre-receive-source-{suffix}";
         var targetEndpoint = $"inproc://orders-pre-receive-target-{suffix}";
@@ -2127,24 +2128,18 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
 
         await Task.Delay(100);
-        // Receive-flow state converges over Core's completion lane. One
-        // already-signalled ordinary record may therefore have reserved the
-        // source's single waiter before the peer observes PAUSED, but no
-        // application job may be published without the permit.
-        Assert.InRange(
-            applicationJobQueue.GetStatus().CapacityWaiters,
-            0UL,
-            1UL);
-        Assert.Equal(0UL, target.Status().PendingApplicationMessages);
+        await WaitUntilAsync(() =>
+            applicationJobQueue.GetStatus().CapacityWaiters == 1);
+        Assert.Equal(1UL, target.Status().PendingApplicationMessages);
 
         occupied.ReleaseForHandlerStart();
         await WaitUntilAsync(() =>
         {
             var status = applicationJobQueue.GetStatus();
-            return target.Status().PendingApplicationMessages == 1
-                || (status.PressureState
-                        == ZLinkApplicationJobQueuePressureState.Running
-                    && status.CapacityWaiters == 0);
+            return target.Status().PendingApplicationMessages == 0
+                && status.PressureState
+                   == ZLinkApplicationJobQueuePressureState.Running
+                && status.CapacityWaiters == 0;
         });
         Assert.Equal(
             0UL,
@@ -2210,7 +2205,7 @@ public sealed class ServiceRuntimeFoundationTests
             1UL);
         var ordinaryCapacityWaiters =
             applicationJobQueue.GetStatus().CapacityWaiters;
-        Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
+        Assert.Equal(1UL, requester.Status().PendingApplicationMessages);
 
         //  The saturated requester issues a request; the replier answers.
         using var requestPart = Message.From(new byte[] { 4, 5, 6 });
@@ -2257,7 +2252,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(
             ordinaryCapacityWaiters,
             applicationJobQueue.GetStatus().CapacityWaiters);
-        Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
+        Assert.Equal(1UL, requester.Status().PendingApplicationMessages);
         using var completionClaim = completionReady.TakeClaim(0);
         using var completionBatch = new MeshReceiveBatch();
         Assert.True(completionClaim.Receive(completionBatch, RecvFlags.DontWait));
@@ -2282,7 +2277,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public async Task Managed_mesh_node_releases_shared_permit_after_finite_control_and_malformed_records()
+    public async Task Managed_mesh_node_bypasses_shared_permit_for_control_and_malformed_records()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var applicationJobQueue = new ZLinkApplicationJobQueue(
@@ -2326,7 +2321,7 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(() =>
             applicationJobQueue.GetStatus().PermitsInUse == 0);
         var controlStatus = applicationJobQueue.GetStatus();
-        Assert.Equal(1UL, controlStatus.PeakPermitsInUse);
+        Assert.Equal(0UL, controlStatus.PeakPermitsInUse);
         Assert.Equal(0UL, controlStatus.ReservedSupplyPermits);
         Assert.Equal(0UL, controlStatus.QueuedApplicationJobs);
 
@@ -2341,7 +2336,7 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(() =>
             applicationJobQueue.GetStatus().PermitsInUse == 0);
         var malformedStatus = applicationJobQueue.GetStatus();
-        Assert.Equal(1UL, malformedStatus.PeakPermitsInUse);
+        Assert.Equal(0UL, malformedStatus.PeakPermitsInUse);
         Assert.Equal(0UL, malformedStatus.ReservedSupplyPermits);
         Assert.Equal(0UL, malformedStatus.QueuedApplicationJobs);
     }
@@ -2515,6 +2510,7 @@ public sealed class ServiceRuntimeFoundationTests
             applicationJobQueue.GetStatus().CapacityWaiters == 1);
         Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
 
+        await pump.DisposeAsync();
         await target.DisposeAsync();
 
         Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);

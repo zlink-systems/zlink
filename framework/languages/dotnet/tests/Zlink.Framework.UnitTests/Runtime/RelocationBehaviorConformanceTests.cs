@@ -1073,6 +1073,10 @@ public sealed class RelocationBehaviorConformanceTests
         Assert.Equal(
             ["saved", "temporary", "direct"],
             trace.DeliveredMarkers);
+        Assert.Equal(
+            1,
+            trace.Events.Count(static value =>
+                value == "sourceMembershipLeaveStarted"));
         Assert.Equal(trace.SourceObjectGeneration, trace.TargetObjectGeneration);
         Assert.True(trace.TargetOwnerGeneration > trace.SourceOwnerGeneration);
         Assert.False(

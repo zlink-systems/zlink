@@ -24,6 +24,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private const int MaxRemoteUserSpotOperations = 4_096;
     private const int MaxRemoteActorCreateOperations = 4_096;
     private const int MaxRelocationReplyTerminals = 65_536;
+    private const int MaxRoutedAdmissionWaiters = 8;
     private const int MaxInfrastructureControlParts = 64;
     private const long MaxInfrastructureControlBytes = 256 * 1024;
     private const long MaxInfrastructurePayloadBytes = 4_294_966_774L;
@@ -55,6 +56,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly ZLinkStateLane _remoteActorCreateLane = new();
     private readonly object _socketGate = new();
     private readonly object _disposeGate = new();
+    private readonly SemaphoreSlim _routedAdmissionWaiters = new(
+        MaxRoutedAdmissionWaiters,
+        MaxRoutedAdmissionWaiters);
+    private readonly ConcurrentExclusiveSchedulerPair _routedSubmitScheduler =
+        new(TaskScheduler.Default, maxConcurrencyLevel: 1);
     private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
     private readonly Dictionary<ulong, Peer> _peersByIntent = new();
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
@@ -105,6 +111,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _pendingNativeTerminalReplies = new();
     private readonly List<RawMeshMonitor> _monitors = new();
     private readonly HashSet<Task> _inboundOperations = [];
+    private readonly Dictionary<ControlSendKey, ControlSendState>
+        _controlSends = [];
     private readonly ulong _lifecycleGeneration = NewNonZeroToken();
 
     // Observation-only diagnostics gate (spec 27 §4). Wired by the framework
@@ -290,8 +298,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (SendTimeout is { } timeout)
                     socket.Options.SendTimeout = timeout;
                 socket.SetRoutingId(_routingId);
-                receiveFlowRegistration =
-                    _applicationJobQueue?.RegisterReceiveFlowSocket(socket);
                 var configuredBindEndpoint = _bindEndpoint;
                 socket.Bind(configuredBindEndpoint);
                 _bindEndpoint = socket.Options.LastEndpoint;
@@ -307,7 +313,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 poller = Systems.Zlink.Zlink.CreatePoller();
                 poller.Add(
                     socket,
-                    PollEventFlags.PollIn | PollEventFlags.PollErr,
+                    PollEventFlags.PollIn
+                    | PollEventFlags.PollErr
+                    | PollEventFlags.PollCompletion,
                     1);
                 _socket = socket;
                 _receiveFlowRegistration = receiveFlowRegistration;
@@ -2970,6 +2978,41 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return true;
     }
 
+    private bool RunRoutedOperation(Func<Task> operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        var task = RunInboundOperationState(() =>
+        {
+            if (_inboundOperationAdmissionClosed)
+                return (Task?)null;
+            Task task;
+            using (ExecutionContext.SuppressFlow())
+                task = Task.Factory.StartNew(
+                        operation,
+                        CancellationToken.None,
+                        TaskCreationOptions.DenyChildAttach,
+                        _routedSubmitScheduler.ExclusiveScheduler)
+                    .Unwrap();
+            _inboundOperations.Add(task);
+            return task;
+        });
+        if (task is null)
+            return false;
+
+        _ = task.ContinueWith(
+            static (completed, state) =>
+            {
+                var owner = (ZLinkManagedMeshNode)state!;
+                owner.RunInboundOperationState(() =>
+                    owner._inboundOperations.Remove(completed));
+            },
+            this,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return true;
+    }
+
     private async Task CloseInboundOperationAdmissionAsync(
         CancellationToken shutdownToken)
     {
@@ -4949,8 +4992,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 var count = _poller!.Wait(events, PollInterval);
                 if (count > 0)
-                    await DrainRawSocketAsync(cancellationToken)
-                        .ConfigureAwait(false);
+                    DrainRawSocket(cancellationToken);
                 ProcessInfrastructure(Stopwatch.GetTimestamp());
             }
             catch (OperationCanceledException)
@@ -4975,7 +5017,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private async ValueTask DrainRawSocketAsync(
+    private void DrainRawSocket(
         CancellationToken cancellationToken)
     {
         var startedAt = Stopwatch.GetTimestamp();
@@ -4988,13 +5030,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
                 return;
             Received? received = null;
-            ZLinkApplicationJobQueueLease? admission = null;
             try
             {
-                if (_applicationJobQueue is { } applicationJobQueue)
-                    admission = await applicationJobQueue
-                        .AcquireAsync(cancellationToken)
-                        .ConfigureAwait(false);
                 received = Received.Create();
                 bool available;
                 lock (_socketGate)
@@ -5006,18 +5043,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
                 using var ownership = new RawIngressOwnership(
                     received,
-                    admission);
+                    admission: null);
                 received = null;
-                admission = null;
-                await ProcessReceivedAsync(
-                        ownership,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                ProcessReceived(ownership);
             }
             finally
             {
                 received?.Dispose();
-                admission?.Dispose();
             }
         }
     }
@@ -5461,9 +5493,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
     }
 
-    private async ValueTask<bool> ProcessReceivedAsync(
-        RawIngressOwnership ownership,
-        CancellationToken cancellationToken)
+    private bool ProcessReceived(RawIngressOwnership ownership)
     {
         var received = ownership.Receipt;
         if (received.RoutingId is not { } sourceRid || received.Parts.Count == 0)
@@ -5640,13 +5670,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     IDisposable? childRecordOwner = null;
                     try
                     {
-                        childAdmission = index == 0
-                            ? ownership.TakeAdmission()
-                            : _applicationJobQueue is { } applicationJobQueue
-                                ? await applicationJobQueue
-                                    .AcquireAsync(cancellationToken)
-                                    .ConfigureAwait(false)
-                                : null;
+                        childAdmission = null;
                         childRecordOwner = AttachApplicationAdmission(
                             envelopeOwner.Retain(),
                             childAdmission);
@@ -10877,14 +10901,101 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             || !IsWithinInfrastructureControlBounds([head], command))
             return false;
 
-        return RunInboundOperation(() => SendControlAsync(
-            target,
-            connectionGeneration,
-            head,
-            _stop?.Token ?? CancellationToken.None));
+        var key = new ControlSendKey(target, connectionGeneration, command);
+        ControlSendState? state;
+        bool start;
+        try
+        {
+            (state, start) = RunInboundOperationState(() =>
+            {
+                if (_inboundOperationAdmissionClosed)
+                    return ((ControlSendState?)null, false);
+                if (_controlSends.TryGetValue(key, out var current))
+                {
+                    // Admission and liveness are retryable state signals. If a
+                    // previous attempt is still waiting for Core admission,
+                    // retain only the newest signal for this peer epoch and
+                    // command. This bounds temporal amplification without
+                    // moving retry or completion ownership out of Core.
+                    current.PendingHead = head;
+                    return (current, false);
+                }
+
+                var created = new ControlSendState();
+                _controlSends.Add(key, created);
+                return (created, true);
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+
+        if (state is null)
+            return false;
+        if (!start)
+            return true;
+
+        if (RunRoutedOperation(() => DrainControlSendAsync(
+                key,
+                state,
+                head,
+                _stop?.Token ?? CancellationToken.None)))
+            return true;
+
+        RunInboundOperationState(() =>
+        {
+            if (_controlSends.TryGetValue(key, out var current)
+                && ReferenceEquals(current, state))
+                _controlSends.Remove(key);
+        });
+        return false;
     }
 
-    private async Task SendControlAsync(
+    private async Task DrainControlSendAsync(
+        ControlSendKey key,
+        ControlSendState state,
+        byte[] head,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await SendControlAttemptAsync(
+                        key.Target,
+                        key.ConnectionGeneration,
+                        head,
+                        cancellationToken);
+
+                var next = RunInboundOperationState(() =>
+                {
+                    if (!_controlSends.TryGetValue(key, out var current)
+                        || !ReferenceEquals(current, state))
+                        return null;
+                    var pending = state.PendingHead;
+                    state.PendingHead = null;
+                    if (pending is null)
+                        _controlSends.Remove(key);
+                    return pending;
+                });
+                if (next is null)
+                    return;
+                head = next;
+            }
+        }
+        finally
+        {
+            RunInboundOperationState(() =>
+            {
+                if (_controlSends.TryGetValue(key, out var current)
+                    && ReferenceEquals(current, state))
+                    _controlSends.Remove(key);
+            });
+        }
+    }
+
+    private async Task SendControlAttemptAsync(
         RoutingId target,
         ulong connectionGeneration,
         byte[] head,
@@ -10960,6 +11071,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
+    private readonly record struct ControlSendKey(
+        RoutingId Target,
+        ulong ConnectionGeneration,
+        ServiceWireConstants.Command Command);
+
+    private sealed class ControlSendState
+    {
+        internal byte[]? PendingHead { get; set; }
+    }
+
     private void ClosePeerAfterControlSendFailure(
         RoutingId physicalRoutingId,
         ulong connectionGeneration)
@@ -11020,20 +11141,48 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> parts)
     {
+        // Spec 04-AJQ §8 requires outbound admission waiters to be bounded.
+        // Without this gate every rejected/slow Core admission created another
+        // Task.Run that blocked on the same socket submit gate. A normal timer
+        // workload could therefore manufacture dozens of blocked workers and
+        // starve unrelated ClientServer/session completions.
+        if (!_routedAdmissionWaiters.Wait(0))
+            return false;
         try
         {
-            return RunInboundOperation(() => SendRoutedBestEffortAsync(
-                target,
-                parts,
-                _stop?.Token ?? CancellationToken.None));
+            var scheduled = RunRoutedOperation(async () =>
+            {
+                try
+                {
+                    await SendRoutedBestEffortAsync(
+                            target,
+                            parts,
+                            _stop?.Token ?? CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    _routedAdmissionWaiters.Release();
+                }
+            });
+            if (!scheduled)
+                _routedAdmissionWaiters.Release();
+            return scheduled;
         }
         catch (ObjectDisposedException)
         {
+            _routedAdmissionWaiters.Release();
             return false;
         }
         catch (ZlinkException)
         {
+            _routedAdmissionWaiters.Release();
             return false;
+        }
+        catch
+        {
+            _routedAdmissionWaiters.Release();
+            throw;
         }
     }
 

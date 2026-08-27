@@ -36,6 +36,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     private readonly SemaphoreSlim _signal = new(0);
     private CancellationTokenSource? _stop;
     private Task? _loop;
+    private ZLinkApplicationJobQueueLease? _reservedApplicationAdmission;
+    private int _applicationAdmissionWaitActive;
     private MeshReadyDomains _pendingReadyDomains;
     private bool _started;
     private bool _disposed;
@@ -212,15 +214,14 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 return;
             }
 
-            await DrainResidueAsync(
-                    readyBatch,
-                    receiveBatch,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            DrainResidue(
+                readyBatch,
+                receiveBatch,
+                cancellationToken);
         }
     }
 
-    private async ValueTask DrainResidueAsync(
+    private void DrainResidue(
         MeshReadyBatch readyBatch,
         MeshReceiveBatch receiveBatch,
         CancellationToken cancellationToken)
@@ -250,12 +251,11 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             }
 
             for (var i = 0; i < readyBatch.Count; i++)
-                await DrainClaimAsync(
-                        readyBatch,
-                        i,
-                        receiveBatch,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                DrainClaim(
+                    readyBatch,
+                    i,
+                    receiveBatch,
+                    cancellationToken);
 
             requestedDomains = TakePendingReadyDomains();
             if (residue)
@@ -263,7 +263,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         }
     }
 
-    private async ValueTask DrainClaimAsync(
+    private void DrainClaim(
         MeshReadyBatch readyBatch,
         int index,
         MeshReceiveBatch receiveBatch,
@@ -277,6 +277,14 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         // SourceSpotId is the remote sender's spot (or empty for
         // session-relayed actor sends), so it cannot address the local consumer.
         var readyRecord = readyBatch[index];
+        ZLinkApplicationJobQueueLease? admission = null;
+        if (readyRecord.Domain == MeshReadyDomains.Application
+            && _applicationJobQueue is not null)
+        {
+            admission = TryTakeApplicationAdmission(cancellationToken);
+            if (admission is null)
+                return;
+        }
         var ownerSpotId = readyRecord.SpotId;
         if (string.IsNullOrEmpty(ownerSpotId)
             && readyRecord.OwnerKind == MeshOwnerKind.Actor
@@ -296,15 +304,17 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         }
         catch (ZlinkException)
         {
+            admission?.Dispose();
             return;
         }
 
         try
         {
             receiveBatch.Reset();
-            // Release every claim after one bounded turn. Raw ingress already
-            // carries its pre-receive admission; locally produced records use
-            // the fallback below after their mailbox claim is materialized.
+            // Release every claim after one bounded turn. Application-domain
+            // claims reserve admission without blocking this infrastructure
+            // pump; a record that already carries admission returns the extra
+            // reservation below.
             receiveBatch.MaximumRecords = 1;
             receiveBatch.MaximumBytes = ZLinkReceiveBatchBudget.MaximumBytes;
             receiveBatch.StartedAt = Stopwatch.GetTimestamp();
@@ -314,18 +324,17 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             var count = receiveBatch.Count;
             for (var record = 0; record < count; record++)
             {
-                ZLinkApplicationJobQueueLease? admission = null;
                 try
                 {
                     var embeddedAdmission = receiveBatch
                         .GetApplicationJobAdmission(record);
-                    if (embeddedAdmission is null
-                        && RequiresApplicationAdmission(
-                            receiveBatch[record].Kind)
-                        && _applicationJobQueue is { } applicationJobQueue)
-                        admission = await applicationJobQueue
-                            .AcquireAsync(cancellationToken)
-                            .ConfigureAwait(false);
+                    if (embeddedAdmission is not null
+                        || !RequiresApplicationAdmission(
+                            receiveBatch[record].Kind))
+                    {
+                        admission?.Dispose();
+                        admission = null;
+                    }
 
                     if (DispatchRecord(
                             receiveBatch,
@@ -363,6 +372,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         }
         finally
         {
+            admission?.Dispose();
             claim.Dispose();
         }
     }
@@ -371,6 +381,60 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         MeshRecordKind recordKind) =>
         recordKind is not MeshRecordKind.Completion
             and not MeshRecordKind.SendReady;
+
+    private ZLinkApplicationJobQueueLease? TryTakeApplicationAdmission(
+        CancellationToken cancellationToken)
+    {
+        var reserved = Interlocked.Exchange(
+            ref _reservedApplicationAdmission,
+            null);
+        if (reserved is not null)
+            return reserved;
+        var queue = _applicationJobQueue;
+        if (queue is not null && queue.TryAcquire(out var immediate))
+            return immediate;
+        if (queue is not null
+            && Interlocked.CompareExchange(
+                ref _applicationAdmissionWaitActive,
+                1,
+                0) == 0)
+        {
+            using (ExecutionContext.SuppressFlow())
+                _ = Task.Run(() => WaitForApplicationAdmissionAsync(
+                    queue,
+                    cancellationToken));
+        }
+        return null;
+    }
+
+    private async Task WaitForApplicationAdmissionAsync(
+        ZLinkApplicationJobQueue queue,
+        CancellationToken cancellationToken)
+    {
+        ZLinkApplicationJobQueueLease? admission = null;
+        try
+        {
+            admission = await queue.AcquireAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (cancellationToken.IsCancellationRequested)
+                return;
+            Interlocked.Exchange(
+                ref _reservedApplicationAdmission,
+                admission)?.Dispose();
+            admission = null;
+            Volatile.Write(ref _applicationAdmissionWaitActive, 0);
+            SignalReady(MeshReadyDomains.Application);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            admission?.Dispose();
+            Volatile.Write(ref _applicationAdmissionWaitActive, 0);
+        }
+    }
 
     private bool DispatchRecord(
         MeshReceiveBatch batch,
@@ -693,6 +757,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 new ValueTask(_completions.CompletionDrained))
             .ConfigureAwait(false);
         failures.Capture(() => stop?.Dispose());
+        failures.Capture(() => Interlocked.Exchange(
+            ref _reservedApplicationAdmission,
+            null)?.Dispose());
         failures.Capture(_signal.Dispose);
         failures.ThrowIfAny();
     }

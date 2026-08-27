@@ -228,6 +228,28 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         return new ValueTask<ZLinkApplicationJobQueueLease>(waiter.Completion.Task);
     }
 
+    internal bool TryAcquire(out ZLinkApplicationJobQueueLease? lease)
+    {
+        var acquired = AwaitStateLane(_lane.RunAsync(() =>
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_waiters.Count != 0
+                || PermitsInUseUnderLock()
+                   >= _capacity.EffectiveMaxQueuedApplicationJobs)
+                return new TryAcquireResult(null, false);
+
+            _reservedSupplyPermits = checked(_reservedSupplyPermits + 1);
+            ObservePeakUnderLock();
+            return new TryAcquireResult(
+                new ZLinkApplicationJobQueueLease(this),
+                UpdatePressureStateOnLane());
+        }));
+        if (acquired.PressureChanged)
+            _receiveFlowController.ApplyPending();
+        lease = acquired.Lease;
+        return lease is not null;
+    }
+
     internal ZLinkApplicationJobQueueStatus GetStatus()
     {
         return AwaitStateLane(_lane.RunAsync(GetStatusOnLane));
@@ -542,6 +564,10 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
     private readonly record struct AcquireResult(
         Waiter? Waiter,
         ZLinkApplicationJobQueueLease? ImmediateLease,
+        bool PressureChanged);
+
+    private readonly record struct TryAcquireResult(
+        ZLinkApplicationJobQueueLease? Lease,
         bool PressureChanged);
 
     private readonly record struct ReleaseResult(
