@@ -15,6 +15,9 @@ import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import javax.net.ssl.SSLHandshakeException;
 import java.net.URI;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -28,6 +31,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -245,6 +249,71 @@ final class ZLinkStreamConnectorTest {
                 reply.payload().close();
             }
         }
+    }
+
+    @Test
+    void completedSendTailReentryKeepsTheSecondFrameBehindTheFirstWrite()
+        throws Exception {
+        DefaultZLinkStreamConnector connector = new DefaultZLinkStreamConnector(
+            options(ZLinkStreamDispatchMode.IMMEDIATE));
+        Field lifecycleField = DefaultZLinkStreamConnector.class
+            .getDeclaredField("lifecycle");
+        lifecycleField.setAccessible(true);
+        Object lifecycle = lifecycleField.get(connector);
+        AtomicBoolean firstWriteReturned = new AtomicBoolean();
+        AtomicReference<Boolean> secondSawFirstReturn = new AtomicReference<>();
+        AtomicReference<CompletionStage<Void>> reentrantSend = new AtomicReference<>();
+        ZLinkStreamTransportConnection transport =
+            (ZLinkStreamTransportConnection) Proxy.newProxyInstance(
+                ZLinkStreamTransportConnection.class.getClassLoader(),
+                new Class<?>[] {ZLinkStreamTransportConnection.class},
+                (proxy, method, arguments) -> {
+                    if (!method.getName().equals("writeAsync")) {
+                        if (method.getName().equals("isOpen")) {
+                            return true;
+                        }
+                        return null;
+                    }
+                    String name = ZLinkStreamWireProtocol.decodeHeader(
+                        ZLinkStreamWireProtocol.decodeFrame(
+                            (byte[]) arguments[0]).header()).name();
+                    if (name.equals("first")) {
+                        reentrantSend.set(invokeSendFrame(connector, "second"));
+                        firstWriteReturned.set(true);
+                    } else {
+                        secondSawFirstReturn.set(firstWriteReturned.get());
+                    }
+                    return CompletableFuture.completedFuture(null);
+                });
+        setField(lifecycle, "connection", transport);
+        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+
+        CompletionStage<Void> first = invokeSendFrame(connector, "first");
+        first.toCompletableFuture().join();
+        reentrantSend.get().toCompletableFuture().join();
+
+        assertEquals(Boolean.TRUE, secondSawFirstReturn.get(),
+            "the reentered frame must start after the active write returns");
+    }
+
+    private static CompletionStage<Void> invokeSendFrame(
+        DefaultZLinkStreamConnector connector, String name) throws Exception {
+        Method method = DefaultZLinkStreamConnector.class.getDeclaredMethod(
+            "sendFrame", ZLinkStreamWireProtocol.Header.class, byte[].class);
+        method.setAccessible(true);
+        return (CompletionStage<Void>) method.invoke(connector,
+            new ZLinkStreamWireProtocol.Header(
+                ZLinkStreamWireProtocol.KIND_SEND,
+                ZLinkStreamWireProtocol.CODEC_RAW,
+                0, null, name, Map.of(), null),
+            new byte[0]);
+    }
+
+    private static void setField(Object target, String name, Object value)
+        throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
     }
 
     @Test

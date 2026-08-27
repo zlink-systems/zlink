@@ -12,6 +12,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindO
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -84,6 +85,7 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.replacementMode = ReplacementMode.NONE;
         TestSession.decodeWirePayload = false;
         TestSession.decodedWirePayload.set(null);
+        TestSession.constructionHook = null;
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
         runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
@@ -353,6 +355,29 @@ final class ZLinkStreamRuntimeIngressTest {
         stream.firstReceiveRelease.countDown();
         close.get(5, TimeUnit.SECONDS);
         assertEquals(1, stream.closeCalls.get());
+    }
+
+    @Test
+    void pendingSessionCreatorReentryFailsInsteadOfJoiningItsOwnPendingFuture()
+        throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+        Object streamNode = lastRegistration.streamNodes().getFirst();
+        AtomicReference<Throwable> reentryFailure = new AtomicReference<>();
+        TestSession.constructionHook = () -> {
+            try {
+                invokeGetOrCreateSession(runtime, streamNode, stream, PEER_A);
+            } catch (Throwable failure) {
+                reentryFailure.set(unwrapInvocationFailure(failure));
+            }
+        };
+
+        invokeGetOrCreateSession(runtime, streamNode, stream, PEER_A);
+
+        assertInstanceOf(IllegalStateException.class, reentryFailure.get());
+        assertEquals(1, TestSession.createdCount.get(),
+            "only the original creator may publish the Session");
     }
 
     @Test
@@ -877,6 +902,38 @@ final class ZLinkStreamRuntimeIngressTest {
             new byte[0]);
     }
 
+    private static Object invokeGetOrCreateSession(
+        ZLinkStreamRuntime runtime,
+        Object streamNode,
+        ZLinkBackendStreamSocket stream,
+        RoutingId routingId) throws Exception {
+        Method method = Arrays.stream(ZLinkStreamRuntime.class
+                .getDeclaredMethods())
+            .filter(candidate -> candidate.getName()
+                .equals("getOrCreateSessionState"))
+            .findFirst()
+            .orElseThrow();
+        method.setAccessible(true);
+        try {
+            return method.invoke(runtime, streamNode, stream, routingId);
+        } catch (java.lang.reflect.InvocationTargetException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof Exception exception) {
+                throw exception;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new AssertionError(cause);
+        }
+    }
+
+    private static Throwable unwrapInvocationFailure(Throwable failure) {
+        return failure instanceof java.lang.reflect.InvocationTargetException invocation
+            ? invocation.getCause()
+            : failure;
+    }
+
     public static final class TestSession implements ZLinkSession {
         private static final AtomicReference<TestSession> lastSession =
             new AtomicReference<>();
@@ -885,6 +942,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private static volatile boolean failNextConstruction;
         private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
         private static volatile boolean decodeWirePayload;
+        private static volatile Runnable constructionHook;
         private static final AtomicReference<WirePayload> decodedWirePayload =
             new AtomicReference<>();
         private final ZLinkSessionContext context;
@@ -905,6 +963,10 @@ final class ZLinkStreamRuntimeIngressTest {
                 throw new IllegalStateException("test session construction failure");
             }
             this.context = context;
+            Runnable hook = constructionHook;
+            if (hook != null) {
+                hook.run();
+            }
             createdCount.incrementAndGet();
             lastSession.set(this);
         }

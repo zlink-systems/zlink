@@ -3,11 +3,14 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Proxy;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
@@ -16,9 +19,12 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntConsumer;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
@@ -54,6 +60,8 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 final class ZLinkCanonicalRelocationStateMachineTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
+    private static final AtomicReference<IntConsumer> canonicalControlHook =
+        new AtomicReference<>();
 
     @Test
     void prepareReadyAndOneWayCutoverAreTheOnlyAttemptTransitions() {
@@ -256,6 +264,132 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     "relocation base payload checksum differs from the "
                         + "manifest"),
                 2));
+    }
+
+    @Test
+    void completedStagePublishReentrySubmitsTheRetireEndpointOnlyOnce()
+        throws Exception {
+        Fixture fixture = fixture();
+        AtomicReference<ZLinkSpotRetireControl.Target> target =
+            new AtomicReference<>();
+        AtomicInteger publishes = new AtomicInteger();
+        AtomicBoolean reentered = new AtomicBoolean();
+        AtomicReference<CompletionStage<byte[]>> reentrantPublication =
+            new AtomicReference<>();
+        ZLinkSpotRetireControl.StageRequest request = fixture.request(new byte[] {1});
+        byte[] publish = retireControlCodec("encodeFence", 2, request.fence());
+        ZLinkSpotRetireControl.TargetEndpoint endpoint =
+            new ZLinkSpotRetireControl.TargetEndpoint() {
+                @Override public CompletionStage<Void> stage(
+                    ZLinkSpotRetireControl.StageRequest request) {
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                @Override public CompletionStage<Void> publish(
+                    ZLinkSpotRetireControl.StageRequest request) {
+                    publishes.incrementAndGet();
+                    if (reentered.compareAndSet(false, true)) {
+                        reentrantPublication.set(target.get().handle(
+                            request.sourceNodeRid(),
+                            publish));
+                    }
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                @Override public CompletionStage<Void> stageRelayedRecord(
+                    ZLinkSpotRetireControl.StageRequest request,
+                    byte[] frozenRecord) {
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                @Override public CompletionStage<Void> abort(
+                    ZLinkSpotRetireControl.StageRequest request) {
+                    return CompletableFuture.completedFuture(null);
+                }
+        };
+        target.set(newRetireTarget(endpoint));
+
+        target.get().handle(
+                request.sourceNodeRid(),
+                retireControlCodec("encodeStage", request))
+            .toCompletableFuture().join();
+        CompletionStage<byte[]> firstPublication = target.get().handle(
+                request.sourceNodeRid(),
+                publish);
+        firstPublication.toCompletableFuture().join();
+        reentrantPublication.get().toCompletableFuture().join();
+
+        assertEquals(1, publishes.get(),
+            "the completed stage's inline publish callback must observe the"
+                + " already-claimed retire publication");
+        assertSame(firstPublication, reentrantPublication.get(),
+            "the reentry must share the exact retire publication stage");
+    }
+
+    @Test
+    void completedReadyPrefixReentryArmsOneReadyPublicationForTheFence()
+        throws Exception {
+        Fixture fixture = fixture();
+        var request = fixture.request(new byte[] {1});
+        AtomicBoolean reentered = new AtomicBoolean();
+        AtomicReference<Object> reentrantPublication = new AtomicReference<>();
+        CountDownLatch reenteredReady = new CountDownLatch(1);
+        canonicalControlHook.set(command -> {
+            if (command == ServiceWireConstants.COMMAND_RELOCATION_READY
+                && reentered.compareAndSet(false, true)) {
+                try {
+                    reentrantPublication.set(invokeCanonicalPublication(
+                        fixture.target, "publishReady", targetFence(fixture.target),
+                        targetAttempt(fixture.target, request.fence()),
+                        request.sourceNodeRid()));
+                    reenteredReady.countDown();
+                } catch (Exception failure) {
+                    throw new AssertionError(failure);
+                }
+            }
+        });
+        try {
+            fixture.source.stage(fixture.targetRid, request, Duration.ofSeconds(2))
+                .toCompletableFuture().join();
+            assertTrue(reenteredReady.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        } finally {
+            canonicalControlHook.set(null);
+        }
+
+        Object attempt = targetAttempt(fixture.target, request.fence());
+        assertSame(attemptMember(attempt, "readyPublication"),
+            reentrantPublication.get(),
+            "the completed ready prefix must share the exact READY publication");
+    }
+
+    @Test
+    void completedTargetPublishPrefixReentrySubmitsTheFenceOnlyOnce()
+        throws Exception {
+        Fixture fixture = fixture();
+        var request = fixture.request(new byte[] {1, 2, 3});
+        AtomicBoolean reentered = new AtomicBoolean();
+        fixture.endpoint.onPublish = () -> {
+            if (reentered.compareAndSet(false, true)) {
+                try {
+                    invokeCanonicalPublication(
+                        fixture.target, "publishTarget", targetFence(fixture.target),
+                        targetAttempt(fixture.target, request.fence()), false);
+                } catch (Exception failure) {
+                    throw new AssertionError(failure);
+                }
+            }
+        };
+
+        fixture.source.stage(fixture.targetRid, request, Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+        fixture.source.relay(fixture.targetRid, request.fence(),
+                new byte[] {1, 2, 3}, Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+        fixture.source.publish(fixture.targetRid, request.fence(), Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+
+        assertEquals(1, fixture.endpoint.published.get(),
+            "the completed target prefix must not submit the same fence twice");
     }
 
     @Test
@@ -537,6 +671,68 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             Instant.now());
     }
 
+    private static ZLinkSpotRetireControl.Target newRetireTarget(
+        ZLinkSpotRetireControl.TargetEndpoint endpoint) throws Exception {
+        var constructor = ZLinkSpotRetireControl.Target.class
+            .getDeclaredConstructor(ZLinkSpotRetireControl.TargetEndpoint.class);
+        constructor.setAccessible(true);
+        return constructor.newInstance(endpoint);
+    }
+
+    private static byte[] retireControlCodec(String name, Object... arguments)
+        throws Exception {
+        Method method = java.util.Arrays.stream(ZLinkSpotRetireControl.class
+                .getDeclaredMethods())
+            .filter(candidate -> candidate.getName().equals(name)
+                && candidate.getParameterCount() == arguments.length)
+            .findFirst()
+            .orElseThrow();
+        method.setAccessible(true);
+        return (byte[]) method.invoke(null, arguments);
+    }
+
+    private static Object targetAttempt(
+        ZLinkCanonicalRelocationStateMachine machine,
+        ZLinkSpotRetireControl.Fence fence) throws Exception {
+        Field field = ZLinkCanonicalRelocationStateMachine.class
+            .getDeclaredField("targets");
+        field.setAccessible(true);
+        Map<?, ?> targets = (Map<?, ?>) field.get(machine);
+        Object attempt = targets.get(fence);
+        return attempt != null ? attempt : targets.values().stream()
+            .findFirst().orElse(null);
+    }
+
+    private static Object targetFence(ZLinkCanonicalRelocationStateMachine machine)
+        throws Exception {
+        Field field = ZLinkCanonicalRelocationStateMachine.class
+            .getDeclaredField("targets");
+        field.setAccessible(true);
+        return ((Map<?, ?>) field.get(machine)).keySet().stream()
+            .findFirst().orElse(null);
+    }
+
+    private static Object invokeCanonicalPublication(
+        ZLinkCanonicalRelocationStateMachine machine,
+        String name,
+        Object... arguments) throws Exception {
+        Method method = java.util.Arrays.stream(
+                ZLinkCanonicalRelocationStateMachine.class.getDeclaredMethods())
+            .filter(candidate -> candidate.getName().equals(name)
+                && candidate.getParameterCount() == arguments.length)
+            .findFirst()
+            .orElseThrow();
+        method.setAccessible(true);
+        return method.invoke(machine, arguments);
+    }
+
+    private static Object attemptMember(Object attempt, String name)
+        throws Exception {
+        Method method = attempt.getClass().getDeclaredMethod(name);
+        method.setAccessible(true);
+        return method.invoke(attempt);
+    }
+
     private static ZLinkMeshNodeDescriptor descriptor(
         RoutingId rid,
         long generation,
@@ -589,6 +785,10 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     byte[] encoded = (byte[]) args[1];
                     int command = Byte.toUnsignedInt(encoded[3]);
                     commands.add(command);
+                    IntConsumer hook = canonicalControlHook.get();
+                    if (hook != null) {
+                        hook.accept(command);
+                    }
                     yield peer.get().apply(localRid, command, encoded);
                 }
                 default -> throw new UnsupportedOperationException(
@@ -603,6 +803,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         private final AtomicInteger relayed = new AtomicInteger();
         private final AtomicReference<ZLinkSpotRetireControl.StageRequest>
             lastStaged = new AtomicReference<>();
+        private Runnable onPublish;
 
         @Override
         public CompletionStage<Void> stage(
@@ -616,6 +817,9 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         public CompletionStage<Void> publish(
             ZLinkSpotRetireControl.StageRequest request) {
             published.incrementAndGet();
+            if (onPublish != null) {
+                onPublish.run();
+            }
             return CompletableFuture.completedFuture(null);
         }
 
