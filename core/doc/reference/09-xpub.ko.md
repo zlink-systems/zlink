@@ -43,6 +43,5 @@ view를 받으며, 이 socket에 대한 다음 호출까지 유효하다. `subsc
 ---
 
 전체 근거는 [XPUB 스펙](../spec/core/socket/04-xpub.ko.md)을 참고한다. 발행과 옵션은
-`zlink_publish_part`/`zlink_set_pub_option`/`zlink_get_pub_option`(PUB category)을 쓰고,
-send-ready 통지는 `zlink_send_ready_handler`(Socket lifecycle category)를 쓴다 — 여기서
-반복하지 않는다.
+`zlink_publish_part`/`zlink_set_pub_option`/`zlink_get_pub_option`(PUB category)을 쓴다 —
+여기서 반복하지 않는다.

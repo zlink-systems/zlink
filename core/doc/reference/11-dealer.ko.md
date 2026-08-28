@@ -183,7 +183,7 @@ Reply-sequence 실패 시, token은 성공적인 `ZLINK_PART_FINAL` 또는 reque
 
 **선택 기준.** `zlink_dealer_recv_part`가 `ZLINK_DEALER_MESSAGE_REQUEST`로 분류한
 record에 답할 때 쓴다. `ZLINK_POLLIN`(Polling and pollers category)은 raw나 request/reply
-record를 받을 수 있다는 뜻이고, `ZLINK_POLLOUT`/`zlink_send_ready_handler`(Socket
+record를 받을 수 있다는 뜻이고, `ZLINK_POLLOUT`/`zlink_send_complete_handler`(Socket
 lifecycle category)는 backpressure된 submit을 재시도할 가치가 있다는 뜻이지 성공을
 보장하지 않는다.
 

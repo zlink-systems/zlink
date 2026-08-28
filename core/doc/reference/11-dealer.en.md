@@ -182,7 +182,7 @@ termination, so a retained complete reply can be resubmitted from its first part
 
 **When to use.** Use this to answer a record classified as `ZLINK_DEALER_MESSAGE_REQUEST` by
 `zlink_dealer_recv_part`. `ZLINK_POLLIN` (Polling and pollers category) means a raw or
-request/reply record can be received; `ZLINK_POLLOUT`/`zlink_send_ready_handler` (Socket
+request/reply record can be received; `ZLINK_POLLOUT`/`zlink_send_complete_handler` (Socket
 lifecycle category) mean retrying a backpressured submit is worth attempting, not that it will
 succeed.
 

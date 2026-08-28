@@ -4,8 +4,7 @@
 # 07. PUB
 
 Topic 기반 fan-out만 하는 publish 전용 raw socket 타입이다. PUB은 send 전용이다 — 수신
-함수가 없다. 다른 socket 타입과 `zlink_send_ready_handler`(Socket lifecycle category)를
-공유한다. 정확한 signature는 [PUB 스펙](../spec/core/socket/02-pub.ko.md)이 소유한다.
+함수가 없다. 정확한 signature는 [PUB 스펙](../spec/core/socket/02-pub.ko.md)이 소유한다.
 
 ---
 
@@ -70,5 +69,4 @@ multipart sequence를 시작·계속·종료한다(sequence 도중 topic이나 f
 
 ---
 
-전체 근거는 [PUB 스펙](../spec/core/socket/02-pub.ko.md)을 참고한다. Send-ready 통지는
-`zlink_send_ready_handler`(Socket lifecycle category)를 쓴다 — 여기서 반복하지 않는다.
+전체 근거는 [PUB 스펙](../spec/core/socket/02-pub.ko.md)을 참고한다.

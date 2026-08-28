@@ -4,9 +4,9 @@
 # 06. PAIR
 
 A 1:1 bidirectional raw socket type. PAIR has no type-specific options and no dedicated receive
-function — it shares `zlink_recv_part` (Raw receive category) and `zlink_send_ready_handler`
-(Socket lifecycle category) with other socket types. Its one type-specific entry is the send
-side. The exact signatures are owned by the [PAIR specification](../spec/core/socket/01-pair.en.md).
+function — it shares `zlink_recv_part` (Raw receive category) and asynchronous send via
+`zlink_send_async`/`zlink_send_complete_handler` (Socket lifecycle category) with other socket
+types. Its one type-specific entry is the send side. The exact signatures are owned by the [PAIR specification](../spec/core/socket/01-pair.en.md).
 
 ---
 
@@ -41,5 +41,6 @@ switch flags partway through one sequence.
 ---
 
 See the [PAIR specification](../spec/core/socket/01-pair.en.md) for the full rationale. Receive
-uses `zlink_recv_part` (Raw receive category); send-ready notification uses
-`zlink_send_ready_handler` (Socket lifecycle category) — neither is repeated here.
+uses `zlink_recv_part` (Raw receive category); asynchronous send uses
+`zlink_send_async`/`zlink_send_complete_handler` (Socket lifecycle category) — neither is
+repeated here.
