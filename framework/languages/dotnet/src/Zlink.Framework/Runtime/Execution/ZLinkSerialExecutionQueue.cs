@@ -1,11 +1,10 @@
 using System.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.Runtime.Execution;
 
 internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 {
-    internal const int OwnerTimeSliceMilliseconds = 10;
-    internal const int LifecycleTurnLimit = 8;
     private const int RelocationJournalRecordHeaderBytes =
         sizeof(ulong) + sizeof(int);
     private readonly object _admissionGate = new();
@@ -18,6 +17,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly SemaphoreSlim _drainGate = new(1, 1);
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationToken _executionToken;
+    private readonly ZLinkExecutionLanePolicy _policy;
     // Instance method groups convert to a fresh delegate at every use site;
     // these run once per drained work item, so cache them.
     private readonly Func<ZLinkSerialTurn, Action, ZLinkSerialPostAdmission> _postResume;
@@ -35,6 +35,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private int _pendingCount;
     private int _applicationPendingCount;
     private int _lifecyclePendingCount;
+    private long _applicationPendingBytes;
+    private long _lifecyclePendingBytes;
     private int _consecutiveLifecycleTurns;
     private bool _lifecycleYieldDebt;
     private int _acceptedOperations;
@@ -63,6 +65,22 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
+    internal long ApplicationPendingBytes
+    {
+        get
+        {
+            lock (_admissionGate) return _applicationPendingBytes;
+        }
+    }
+
+    internal long LifecyclePendingBytes
+    {
+        get
+        {
+            lock (_admissionGate) return _lifecyclePendingBytes;
+        }
+    }
+
     internal Task ApplicationDrained
     {
         get
@@ -75,10 +93,27 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         ZLinkRuntimeTaskRunner taskRunner,
         IZLinkRuntimeFailureReporter errorSink,
         CancellationToken executionToken)
+        : this(
+            taskRunner,
+            errorSink,
+            executionToken,
+            ZLinkExecutionLanePolicy.Default)
     {
+    }
+
+    public ZLinkSerialExecutionQueue(
+        ZLinkRuntimeTaskRunner taskRunner,
+        IZLinkRuntimeFailureReporter errorSink,
+        CancellationToken executionToken,
+        ZLinkExecutionLanePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(taskRunner);
+        ArgumentNullException.ThrowIfNull(errorSink);
+        ArgumentNullException.ThrowIfNull(policy);
         _taskRunner = taskRunner;
         _errorSink = errorSink;
         _executionToken = executionToken;
+        _policy = policy;
         _postResume = PostResume;
         _tryPostCallback = TryPostCallback;
         _reportHandlerException = ReportHandlerException;
@@ -148,44 +183,38 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     public ValueTask<ZLinkSerialWorkItem> PostAsync(
         Func<CancellationToken, ValueTask> callback,
         CancellationToken cancellationToken)
+        => PostAsync(
+            callback,
+            payloadBytes: 0,
+            metadataBytes: 0,
+            ZLinkApplicationJobQueueInvocation.HasTransferableOwnerReservation(),
+            cancellationToken);
+
+    internal ValueTask<ZLinkSerialWorkItem> PostAsync(
+        Func<CancellationToken, ValueTask> callback,
+        long payloadBytes,
+        long metadataBytes,
+        bool transferred,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var admission = TryPostApplicationWithAdmission(callback, out var item);
+        var admission = TryPostApplicationWithAdmission(
+            callback,
+            payloadBytes,
+            metadataBytes,
+            transferred,
+            out var item);
         if (admission != ZLinkSerialPostAdmission.Accepted)
-            throw CreateClosedAdmissionException("execution");
+            throw CreateAdmissionException("execution", admission);
         return ValueTask.FromResult(item);
     }
 
     public bool TryPost(
         Func<CancellationToken, ValueTask> callback,
         out ZLinkSerialWorkItem item)
-    {
-        ArgumentNullException.ThrowIfNull(callback);
-        var candidate = new ZLinkSerialWorkItem(
-            callback,
-            lane: ZLinkSerialWorkLane.Application);
-        lock (_admissionGate)
-        {
-            if (Volatile.Read(ref _completed) != 0
-                || _applicationAdmissionClosed)
-            {
-                item = null!;
-                return false;
-            }
-            CommitWorkItemUnderLock(
-                _applicationQueue,
-                candidate,
-                ZLinkSerialWorkLane.Application);
-            item = candidate;
-        }
-
-        // Outside _admissionGate: the item is already visible in the queue,
-        // and DrainAsync re-checks HasQueuedWork after clearing the flag, so
-        // no wakeup can be lost.
-        ScheduleDrain();
-        return true;
-    }
+        => TryPostApplicationWithAdmission(callback, out item)
+            == ZLinkSerialPostAdmission.Accepted;
 
     public bool TryPostApplication(
         Func<CancellationToken, ValueTask> callback,
@@ -196,11 +225,34 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     internal ZLinkSerialPostAdmission TryPostApplicationWithAdmission(
         Func<CancellationToken, ValueTask> callback,
         out ZLinkSerialWorkItem item)
+        => TryPostApplicationWithAdmission(
+            callback,
+            payloadBytes: 0,
+            metadataBytes: 0,
+            ZLinkApplicationJobQueueInvocation.HasTransferableOwnerReservation(),
+            out item);
+
+    internal ZLinkSerialPostAdmission TryPostApplicationWithAdmission(
+        Func<CancellationToken, ValueTask> callback,
+        long payloadBytes,
+        long metadataBytes,
+        bool transferred,
+        out ZLinkSerialWorkItem item)
     {
         ArgumentNullException.ThrowIfNull(callback);
+        if (payloadBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(payloadBytes));
+        if (metadataBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(metadataBytes));
+        if (!TryGetByteCost(payloadBytes, metadataBytes, out var byteCost))
+        {
+            item = null!;
+            return ZLinkSerialPostAdmission.CapacityExceeded;
+        }
         var candidate = new ZLinkSerialWorkItem(
             callback,
-            lane: ZLinkSerialWorkLane.Application);
+            lane: ZLinkSerialWorkLane.Application,
+            byteCost: byteCost);
         lock (_admissionGate)
         {
             if (Volatile.Read(ref _completed) != 0
@@ -209,13 +261,20 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 item = null!;
                 return ZLinkSerialPostAdmission.Closed;
             }
-            CommitWorkItemUnderLock(
+            if (!CommitWorkItemUnderLock(
                 _applicationQueue,
                 candidate,
-                ZLinkSerialWorkLane.Application);
+                ZLinkSerialWorkLane.Application,
+                bypassCapacity: transferred))
+            {
+                item = null!;
+                return ZLinkSerialPostAdmission.CapacityExceeded;
+            }
             item = candidate;
         }
 
+        if (transferred)
+            _ = ZLinkApplicationJobQueueInvocation.TryTransferOwnerReservation();
         ScheduleDrain();
         return ZLinkSerialPostAdmission.Accepted;
     }
@@ -228,12 +287,35 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     internal ZLinkSerialPostAdmission TryPostNextWithAdmission(
         Func<CancellationToken, ValueTask> callback,
+        out ZLinkSerialWorkItem item) =>
+        TryPostNextWithAdmission(
+            callback,
+            payloadBytes: 0,
+            metadataBytes: 0,
+            ZLinkApplicationJobQueueInvocation.HasTransferableOwnerReservation(),
+            out item);
+
+    internal ZLinkSerialPostAdmission TryPostNextWithAdmission(
+        Func<CancellationToken, ValueTask> callback,
+        long payloadBytes,
+        long metadataBytes,
+        bool transferred,
         out ZLinkSerialWorkItem item)
     {
         ArgumentNullException.ThrowIfNull(callback);
+        if (payloadBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(payloadBytes));
+        if (metadataBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(metadataBytes));
+        if (!TryGetByteCost(payloadBytes, metadataBytes, out var byteCost))
+        {
+            item = null!;
+            return ZLinkSerialPostAdmission.CapacityExceeded;
+        }
         var candidate = new ZLinkSerialWorkItem(
             callback,
-            lane: ZLinkSerialWorkLane.Lifecycle);
+            lane: ZLinkSerialWorkLane.Lifecycle,
+            byteCost: byteCost);
         lock (_admissionGate)
         {
             if (Volatile.Read(ref _completed) != 0)
@@ -241,13 +323,20 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 item = null!;
                 return ZLinkSerialPostAdmission.Closed;
             }
-            CommitWorkItemUnderLock(
+            if (!CommitWorkItemUnderLock(
                 _lifecycleQueue,
                 candidate,
-                ZLinkSerialWorkLane.Lifecycle);
+                ZLinkSerialWorkLane.Lifecycle,
+                bypassCapacity: transferred))
+            {
+                item = null!;
+                return ZLinkSerialPostAdmission.CapacityExceeded;
+            }
             item = candidate;
         }
 
+        if (transferred)
+            _ = ZLinkApplicationJobQueueInvocation.TryTransferOwnerReservation();
         ScheduleDrain();
         return ZLinkSerialPostAdmission.Accepted;
     }
@@ -328,16 +417,19 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.RelocationMoving;
             }
-            TryCommitAcceptedWorkUnderLock(
+            if (!TryCommitAcceptedWorkUnderLock(
                 callback,
                 relocationRelease,
                 previousOwnerMessageFollow,
+                payloadLength,
                 payload,
                 payloadFactory,
                 out item,
-                out scheduleDrain);
+                out scheduleDrain))
+                return ZLinkAcceptedWorkAdmission.CapacityExceeded;
         }
 
+        _ = ZLinkApplicationJobQueueInvocation.TryTransferOwnerReservation();
         if (scheduleDrain) ScheduleDrain();
         return ZLinkAcceptedWorkAdmission.Accepted;
     }
@@ -356,7 +448,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         // those accepted turns.
         var candidate = new ZLinkSerialWorkItem(
             callback,
-            lane: ZLinkSerialWorkLane.Application);
+            lane: ZLinkSerialWorkLane.Application,
+            byteCost: _policy.FixedWorkByteCost);
         lock (_admissionGate)
         {
             if (Volatile.Read(ref _completed) != 0)
@@ -369,7 +462,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             CommitWorkItemUnderLock(
                 _applicationQueue,
                 candidate,
-                ZLinkSerialWorkLane.Application);
+                ZLinkSerialWorkLane.Application,
+                bypassCapacity: true);
             Volatile.Write(ref _completed, 1);
             item = candidate;
         }
@@ -590,10 +684,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
 
         foreach (var item in released)
-        {
             item.ReleaseForRelocation(ReportHandlerException);
-            CompletePendingItem(item);
-        }
         return true;
     }
 
@@ -623,28 +714,41 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                && _relocation.Serial == seal.Serial;
     }
 
-    private void CommitWorkItemUnderLock(
+    private bool CommitWorkItemUnderLock(
         ZLinkSerialWorkQueue destination,
         ZLinkSerialWorkItem item,
-        ZLinkSerialWorkLane lane)
+        ZLinkSerialWorkLane lane,
+        bool bypassCapacity)
     {
+        if (!item.ReservationHeld)
+        {
+            item.BindTerminalRelease(() => CompletePendingItem(item));
+            destination.Enqueue(item);
+            return true;
+        }
         ref var pendingCount = ref PendingCount(lane);
+        ref var pendingBytes = ref PendingBytes(lane);
+        if (!bypassCapacity && !CanReserveUnderLock(lane, item.ByteCost))
+            return false;
         if (pendingCount == int.MaxValue
-            || _pendingCount == int.MaxValue)
-            throw new OverflowException(
-                "ZLink serial execution queue count range is exhausted.");
+            || _pendingCount == int.MaxValue
+            || item.ByteCost > long.MaxValue - pendingBytes)
+            return false;
 
         // This queue owns ordering only. The queued callback retains the
         // actual Core receive owner until its terminal path disposes it.
         var applicationDrained = NewApplicationDrainedSignalUnderLock(lane);
+        item.BindTerminalRelease(() => CompletePendingItem(item));
         destination.Enqueue(item);
-        CommitReservationUnderLock(lane, applicationDrained);
+        CommitReservationUnderLock(lane, item.ByteCost, applicationDrained);
+        return true;
     }
 
-    private void TryCommitAcceptedWorkUnderLock(
+    private bool TryCommitAcceptedWorkUnderLock(
         Func<CancellationToken, ValueTask> callback,
         Action relocationRelease,
         bool previousOwnerMessageFollow,
+        int payloadLength,
         ReadOnlyMemory<byte> payload,
         Func<ReadOnlyMemory<byte>>? payloadFactory,
         out ZLinkSerialWorkItem item,
@@ -656,6 +760,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
         var acceptedSequence = _nextAcceptedSequence;
         var destination = _relocation?.Held ?? _applicationQueue;
+        if (!TryGetByteCost(payloadLength, 0, out var byteCost))
+        {
+            item = null!;
+            scheduleDrain = false;
+            return false;
+        }
         var candidate = new ZLinkSerialWorkItem(
             callback,
             relocationRelease,
@@ -663,26 +773,73 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             ZLinkSerialWorkLane.Application,
             acceptedSequence,
             payload,
-            payloadFactory);
+            payloadFactory,
+            byteCost: byteCost);
 
-        CommitWorkItemUnderLock(
+        if (!CommitWorkItemUnderLock(
             destination,
             candidate,
-            ZLinkSerialWorkLane.Application);
+            ZLinkSerialWorkLane.Application,
+            bypassCapacity: true))
+        {
+            item = null!;
+            scheduleDrain = false;
+            return false;
+        }
         _nextAcceptedSequence = acceptedSequence + 1;
 
         item = candidate;
         scheduleDrain = _relocation is null;
+        return true;
+    }
+
+    private bool CanReserveUnderLock(
+        ZLinkSerialWorkLane lane,
+        long byteCost)
+    {
+        var messageCapacity = lane == ZLinkSerialWorkLane.Application
+            ? _policy.ApplicationMessageCapacity
+            : _policy.LifecycleMessageCapacity;
+        var byteCapacity = lane == ZLinkSerialWorkLane.Application
+            ? _policy.ApplicationByteCapacity
+            : _policy.LifecycleByteCapacity;
+        ref var pendingCount = ref PendingCount(lane);
+        ref var pendingBytes = ref PendingBytes(lane);
+        return byteCost >= 0
+               && pendingCount < messageCapacity
+               && byteCost <= byteCapacity - pendingBytes;
+    }
+
+    private bool TryGetByteCost(
+        long payloadBytes,
+        long metadataBytes,
+        out long byteCost)
+    {
+        try
+        {
+            byteCost = checked(
+                checked(payloadBytes + metadataBytes)
+                + _policy.FixedWorkByteCost);
+            return payloadBytes >= 0 && metadataBytes >= 0;
+        }
+        catch (OverflowException)
+        {
+            byteCost = 0;
+            return false;
+        }
     }
 
     private void CommitReservationUnderLock(
         ZLinkSerialWorkLane lane,
+        long byteCost,
         TaskCompletionSource? applicationDrained = null)
     {
         ref var pendingCount = ref PendingCount(lane);
+        ref var pendingBytes = ref PendingBytes(lane);
         if (applicationDrained is not null)
             _applicationDrained = applicationDrained;
         pendingCount++;
+        pendingBytes = checked(pendingBytes + byteCost);
         _pendingCount++;
     }
 
@@ -695,10 +852,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             : null;
 
     private void ReleaseReservedSlotUnderLock(
-        ZLinkSerialWorkLane lane)
+        ZLinkSerialWorkLane lane,
+        long byteCost)
     {
         ref var pendingCount = ref PendingCount(lane);
+        ref var pendingBytes = ref PendingBytes(lane);
         pendingCount--;
+        pendingBytes = checked(pendingBytes - byteCost);
         _pendingCount--;
         if (lane == ZLinkSerialWorkLane.Application && pendingCount == 0)
             _applicationDrained.TrySetResult();
@@ -709,6 +869,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (lane == ZLinkSerialWorkLane.Application)
             return ref _applicationPendingCount;
         return ref _lifecyclePendingCount;
+    }
+
+    private ref long PendingBytes(ZLinkSerialWorkLane lane)
+    {
+        if (lane == ZLinkSerialWorkLane.Application)
+            return ref _applicationPendingBytes;
+        return ref _lifecyclePendingBytes;
     }
 
     private static TaskCompletionSource CompletedSignal()
@@ -734,12 +901,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
         var admission = TryPostNextWithAdmission(callback, out var item);
         if (admission != ZLinkSerialPostAdmission.Accepted)
-            throw CreateClosedAdmissionException("lifecycle");
+            throw CreateAdmissionException("lifecycle", admission);
         await item.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static ZLinkFrameworkException CreateClosedAdmissionException(string lane)
+    private static ZLinkFrameworkException CreateAdmissionException(
+        string lane,
+        ZLinkSerialPostAdmission admission)
     {
+        if (admission == ZLinkSerialPostAdmission.CapacityExceeded)
+            return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.CapacityExceeded,
+                $"The serial {lane} queue has reached its configured capacity.");
         return new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.ShuttingDown,
             $"The serial {lane} queue is closed.");
@@ -782,7 +955,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                     _tryPostCallback,
                     _reportHandlerException,
                     _executionToken);
-                var result = await item.InvokeAsync(
+                await item.InvokeAsync(
                     _reportHandlerException,
                     _executionToken,
                     turn).ConfigureAwait(false);
@@ -794,23 +967,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                         _active = null;
                         _activeClaimGeneration = 0;
                     }
+                    CompleteSealRequestUnderLock();
                 }
-                if (result == ZLinkSerialWorkItemResult.Completed)
-                    CompletePendingItem(item);
-                else
-                    _ = item.Completion.ContinueWith(
-                        static (task, state) =>
-                        {
-                            var completion = ((ZLinkSerialExecutionQueue Queue, ZLinkSerialWorkItem Item))state!;
-                            completion.Queue.CompletePendingItem(completion.Item);
-                        },
-                        (this, item),
-                        CancellationToken.None,
-                        TaskContinuationOptions.ExecuteSynchronously,
-                        TaskScheduler.Default);
-
-                if (ElapsedMilliseconds(sliceStartedAt)
-                    >= OwnerTimeSliceMilliseconds)
+                if (Stopwatch.GetElapsedTime(sliceStartedAt)
+                    >= _policy.OwnerTimeBudget)
                     break;
             }
         }
@@ -910,24 +1070,11 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (item.Lane != ZLinkSerialWorkLane.Lifecycle)
             throw new InvalidOperationException(
                 "A lifecycle queue item was submitted to the wrong lane.");
-        if (++_consecutiveLifecycleTurns >= LifecycleTurnLimit)
+        if (++_consecutiveLifecycleTurns >= _policy.LifecycleBurstLimit)
         {
             _consecutiveLifecycleTurns = 0;
             _lifecycleYieldDebt = true;
         }
-    }
-
-    private static long ElapsedMilliseconds(long startedAt)
-    {
-        var elapsedTicks = Stopwatch.GetTimestamp() - startedAt;
-        if (elapsedTicks <= 0)
-            return 0;
-        var threshold = Stopwatch.Frequency
-                        * (long)OwnerTimeSliceMilliseconds
-                        / 1000L;
-        return elapsedTicks >= threshold
-            ? OwnerTimeSliceMilliseconds
-            : elapsedTicks * 1000L / Stopwatch.Frequency;
     }
 
     private ZLinkSerialRelocationSeal SealUnderLock(
@@ -1029,7 +1176,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         {
             if (item.IsAccepted)
                 _acceptedOperations--;
-            ReleaseReservedSlotUnderLock(item.Lane);
+            if (item.ReservationHeld)
+                ReleaseReservedSlotUnderLock(item.Lane, item.ByteCost);
             CompleteSealRequestUnderLock();
         }
         TrySignalDrained();
@@ -1055,15 +1203,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             if (ownerTask is null || ownerTask.IsCompleted) return;
 
             await Task.WhenAny(ownerTask, turn.Suspended).ConfigureAwait(false);
-        });
+        }, reservationHeld: false);
         lock (_admissionGate)
         {
             if (Volatile.Read(ref _completed) != 0)
                 return ZLinkSerialPostAdmission.Closed;
-            CommitWorkItemUnderLock(
+            if (!CommitWorkItemUnderLock(
                 _applicationQueue,
                 item,
-                ZLinkSerialWorkLane.Application);
+                ZLinkSerialWorkLane.Application,
+                bypassCapacity: true))
+                throw new InvalidOperationException(
+                    "A suspended serial turn could not be resumed.");
         }
 
         ScheduleDrain();
@@ -1108,11 +1259,13 @@ internal enum ZLinkAcceptedWorkAdmission
 {
     Accepted = 0,
     Closed = 1,
-    RelocationMoving = 2
+    RelocationMoving = 2,
+    CapacityExceeded = 3
 }
 
 internal enum ZLinkSerialPostAdmission
 {
     Accepted = 0,
-    Closed = 1
+    Closed = 1,
+    CapacityExceeded = 2
 }

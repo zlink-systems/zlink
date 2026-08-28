@@ -287,7 +287,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         payload,
                         cancellationToken)
                     .ConfigureAwait(false);
-            });
+            },
+            Math.Max(payload.Size, 0),
+            Math.Max(header.Size, 0),
+            applicationJobAdmission is not null);
         if (admission == ZLinkSerialPostAdmission.Accepted)
             ApplyInboundLiveness(signal);
         return admission;
@@ -351,7 +354,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         payload,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
-            });
+            },
+            Math.Max(payload.Size, 0),
+            Math.Max(header.Size, 0),
+            applicationJobAdmission is not null);
         if (admission == ZLinkSerialPostAdmission.Accepted)
             ApplyInboundLiveness(signal);
         return admission;

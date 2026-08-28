@@ -18,6 +18,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private readonly CancellationToken _stopToken;
     private readonly object _executionOwner;
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
+    private readonly ZLinkExecutionLanePolicy _spotLanePolicy;
+    private readonly ZLinkExecutionLanePolicy _actorLanePolicy;
+    private readonly ZLinkExecutionLanePolicy _timerLanePolicy;
     private readonly object _barrierGate = new();
     private ZLinkExecutionBarrierState? _relocationBarrier;
     private bool _relocationAdmissionQueueOpened;
@@ -35,7 +38,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         IZLinkRuntimeFailureReporter errorSink,
         Func<bool>? flowCaptureEnabled = null,
         object? executionOwner = null,
-        ZLinkUserSpotExecutionMode executionMode = ZLinkUserSpotExecutionMode.SpotWide)
+        ZLinkUserSpotExecutionMode executionMode = ZLinkUserSpotExecutionMode.SpotWide,
+        ZLinkExecutionLanePolicy? spotLanePolicy = null,
+        ZLinkExecutionLanePolicy? actorLanePolicy = null,
+        ZLinkExecutionLanePolicy? timerLanePolicy = null)
     {
         _activation = activation;
         _isDisposed = isDisposed;
@@ -43,21 +49,26 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         _executionMode = executionMode;
         _errorSink = errorSink;
         _stopToken = stopToken;
+        _spotLanePolicy = spotLanePolicy ?? ZLinkExecutionLanePolicy.Default;
+        _actorLanePolicy = actorLanePolicy ?? ZLinkExecutionLanePolicy.Default;
+        _timerLanePolicy = timerLanePolicy ?? ZLinkExecutionLanePolicy.Default;
         _executionOwner = executionOwner ?? activation?.RuntimeExecutionOwner ?? new object();
         _taskRunner = new ZLinkRuntimeTaskRunner(
             _errorSink,
             _stopToken,
             _executionOwner);
-        _queue = CreateQueue();
+        _queue = CreateQueue(_spotLanePolicy);
         _lastApplicationWorkCompletedAt = Stopwatch.GetTimestamp();
     }
 
-    private ZLinkSerialExecutionQueue CreateQueue()
+    private ZLinkSerialExecutionQueue CreateQueue(
+        ZLinkExecutionLanePolicy policy)
     {
         return new ZLinkSerialExecutionQueue(
             _taskRunner,
             _errorSink,
-            _stopToken);
+            _stopToken,
+            policy);
     }
 
     private static bool AlwaysDisabled() => false;
@@ -103,6 +114,23 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         Func<ZLinkSpotActivation, TState, CancellationToken, ValueTask> operation,
         TState state,
         CancellationToken cancellationToken)
+        => ExecuteActorAsync(
+            actorId,
+            operation,
+            state,
+            payloadBytes: 0,
+            metadataBytes: 0,
+            transferred: false,
+            cancellationToken);
+
+    internal ValueTask ExecuteActorAsync<TState>(
+        string actorId,
+        Func<ZLinkSpotActivation, TState, CancellationToken, ValueTask> operation,
+        TState state,
+        long payloadBytes,
+        long metadataBytes,
+        bool transferred,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         if (Volatile.Read(ref _stopping) != 0 || _isDisposed())
@@ -110,20 +138,24 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         var claim = AcquireApplicationClaim(actorLane: true);
         var lane = GetLane(
             _actorLanes,
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            _actorLanePolicy);
         return RunClaimedAsync(
             lane,
             ct => _executionMode == ZLinkUserSpotExecutionMode.SpotWide
                 ? _queue.RunAsync(
                     innerCt => ExecuteActorOperationAsync(
                         actorId,
-                        operation,
-                        state,
-                        innerCt),
-                    ct)
+                    operation,
+                    state,
+                    innerCt),
+                ct)
                 : ExecuteActorOperationAsync(actorId, operation, state, ct),
             claim,
-            cancellationToken);
+            cancellationToken,
+            payloadBytes,
+            metadataBytes,
+            transferred);
     }
 
     internal ValueTask ExecuteRelocationActorAsync<TState>(
@@ -140,7 +172,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         var claim = AcquireRelocationReplayClaim(seal);
         var lane = GetLane(
             _actorLanes,
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            _actorLanePolicy);
         return RunClaimedAsync(
             lane,
             ct => _executionMode == ZLinkUserSpotExecutionMode.SpotWide
@@ -183,7 +216,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 ? _queue
                 : GetLane(
                     _actorLanes,
-                    ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+                    ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                    _actorLanePolicy);
             var execution = RunClaimedAsync(
                     lane,
                     reservation.RunAsync,
@@ -223,7 +257,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         return RunClaimedAsync(
             GetLane(
                 _timerLanes,
-                ZLinkTimerName.FromBoundary(timerName, nameof(timerName))),
+                ZLinkTimerName.FromBoundary(timerName, nameof(timerName)),
+                _timerLanePolicy),
             ct => ExecuteTimerOperationAsync(operation, state, ct),
             claim,
             cancellationToken);
@@ -499,8 +534,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         _errorSink.ReportRuntimeTaskException(
             "spot-lifecycle-admission",
             new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                "The SPOT lifecycle queue closed before admission."));
+                admission == ZLinkSerialPostAdmission.CapacityExceeded
+                    ? ZLinkFrameworkErrorKind.CapacityExceeded
+                    : ZLinkFrameworkErrorKind.ShuttingDown,
+                admission == ZLinkSerialPostAdmission.CapacityExceeded
+                    ? "The SPOT lifecycle queue capacity was exceeded."
+                    : "The SPOT lifecycle queue closed before admission."));
     }
 
     private void ReportApplicationAdmissionIfUnobserved(
@@ -515,8 +554,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         _errorSink.ReportRuntimeTaskException(
             operation,
             new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                "The SPOT application queue closed before admission."));
+                admission == ZLinkSerialPostAdmission.CapacityExceeded
+                    ? ZLinkFrameworkErrorKind.CapacityExceeded
+                    : ZLinkFrameworkErrorKind.ShuttingDown,
+                admission == ZLinkSerialPostAdmission.CapacityExceeded
+                    ? "The SPOT application queue capacity was exceeded."
+                    : "The SPOT application queue closed before admission."));
     }
 
     public ZLinkAcceptedWorkAdmission QueueAccepted(
@@ -1094,11 +1137,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     private ZLinkSerialExecutionQueue GetLane<TIdentifier>(
         Dictionary<TIdentifier, ZLinkSerialExecutionQueue> lanes,
-        TIdentifier key)
+        TIdentifier key,
+        ZLinkExecutionLanePolicy policy)
         where TIdentifier : notnull
     {
         _stateLane.ThrowIfReentrant();
-        return _stateLane.RunAsync(() => GetLaneOnStateLane(lanes, key))
+        return _stateLane.RunAsync(() => GetLaneOnStateLane(lanes, key, policy))
             .AsTask()
             .GetAwaiter()
             .GetResult();
@@ -1106,11 +1150,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     private ZLinkSerialExecutionQueue GetLaneOnStateLane<TIdentifier>(
         Dictionary<TIdentifier, ZLinkSerialExecutionQueue> lanes,
-        TIdentifier key)
+        TIdentifier key,
+        ZLinkExecutionLanePolicy policy)
         where TIdentifier : notnull
     {
         if (lanes.TryGetValue(key, out var lane)) return lane;
-        lane = CreateQueue();
+        lane = CreateQueue(policy);
         lanes.Add(key, lane);
         return lane;
     }
@@ -1144,7 +1189,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         ZLinkSerialExecutionQueue lane,
         Func<CancellationToken, ValueTask> operation,
         ZLinkExecutionClaim claim,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long payloadBytes = 0,
+        long metadataBytes = 0,
+        bool transferred = false)
     {
         ZLinkSerialWorkItem item;
         try
@@ -1161,6 +1209,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                             claim.Release();
                         }
                     },
+                    payloadBytes,
+                    metadataBytes,
+                    transferred,
                     cancellationToken)
                 .ConfigureAwait(false);
         }

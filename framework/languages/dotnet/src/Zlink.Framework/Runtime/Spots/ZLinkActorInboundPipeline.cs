@@ -126,6 +126,9 @@ internal sealed class ZLinkActorInboundPipeline(
                                 .ConfigureAwait(false);
                     },
                     new ScheduledFrame(this, frame),
+                    frame.Body.Size,
+                    frame.ApplicationMetadata.Length,
+                    i == 0 && frames.ApplicationJobAdmission is not null,
                     cancellationToken).AsTask();
             }
 

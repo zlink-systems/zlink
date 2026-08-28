@@ -14,12 +14,14 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
 
     public ZLinkSessionSerialExecutor(
         object executionOwner,
-        IZLinkRuntimeFailureReporter errorSink)
+        IZLinkRuntimeFailureReporter errorSink,
+        ZLinkExecutionLanePolicy? lanePolicy = null)
     {
         _queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errorSink, _stopSource.Token, executionOwner),
             errorSink,
-            _stopSource.Token);
+            _stopSource.Token,
+            lanePolicy ?? ZLinkExecutionLanePolicy.Default);
     }
 
     public ValueTask DisposeAsync()
@@ -92,10 +94,38 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
         return _queue.TryPostApplicationWithAdmission(work, out _);
     }
 
+    internal ZLinkSerialPostAdmission ExecuteApplication(
+        Func<CancellationToken, ValueTask> work,
+        long payloadBytes,
+        long metadataBytes,
+        bool transferred)
+    {
+        return _queue.TryPostApplicationWithAdmission(
+            work,
+            payloadBytes,
+            metadataBytes,
+            transferred,
+            out _);
+    }
+
     public ZLinkSerialPostAdmission ExecuteControl(
         Func<CancellationToken, ValueTask> work)
     {
         return _queue.TryPostNextWithAdmission(work, out _);
+    }
+
+    internal ZLinkSerialPostAdmission ExecuteControl(
+        Func<CancellationToken, ValueTask> work,
+        long payloadBytes,
+        long metadataBytes,
+        bool transferred)
+    {
+        return _queue.TryPostNextWithAdmission(
+            work,
+            payloadBytes,
+            metadataBytes,
+            transferred,
+            out _);
     }
 
     public bool ExecuteFinal(Func<ValueTask> work)

@@ -15,13 +15,15 @@ internal sealed class ZLinkActorSerialExecutor
     private int _acceptedWaiters;
     private int _pendingRequests;
 
-    public ZLinkActorSerialExecutor()
+    public ZLinkActorSerialExecutor(
+        ZLinkExecutionLanePolicy? lanePolicy = null)
     {
         var reporter = MailboxFailureReporter.Instance;
         _queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(reporter, CancellationToken.None, this),
             reporter,
-            CancellationToken.None);
+            CancellationToken.None,
+            lanePolicy ?? ZLinkExecutionLanePolicy.Default);
     }
 
     public int PendingRequestCount
@@ -157,8 +159,12 @@ internal sealed class ZLinkActorSerialExecutor
         if (countAsPendingRequest) _pendingRequests--;
         waiter.Dispose();
         throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.ShuttingDown,
-            "Actor dispatch queue is closed.");
+            admission == ZLinkSerialPostAdmission.CapacityExceeded
+                ? ZLinkFrameworkErrorKind.CapacityExceeded
+                : ZLinkFrameworkErrorKind.ShuttingDown,
+            admission == ZLinkSerialPostAdmission.CapacityExceeded
+                ? "Actor dispatch queue capacity was exceeded."
+                : "Actor dispatch queue is closed.");
     }
 
     private ValueTask OnWaiterStartedAsync(Waiter waiter) =>
