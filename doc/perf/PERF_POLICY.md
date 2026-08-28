@@ -129,6 +129,14 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   같은 stdout/stdin token, 같은 전송 방향, 같은 start/stop 의미, 같은 timeout
   실패 의미를 사용해야 한다. 언어별 runner가 편의를 위해 별도 token을 추가하거나
   C runner가 요구하지 않는 보정 phase를 측정 조건으로 만들면 안 된다.
+- **bindings ↔ C 성능 비교는 multi suite로 한정한다.** single suite는
+  sender와 receiver를 한 프로세스의 스레드로 구동하므로, coroutine/event-loop
+  기반 async 런타임 바인딩(Node·Python 등)에서는 측정 아티팩트(예: reqrep
+  latency가 큐 깊이/타이머에 지배됨)를 유발한다. 따라서 **C 기준 대비 bindings
+  성능 비교(회귀 검증)는 multi로만** 수행한다. 단, **single·multi runner는 둘
+  다 유지**한다 — single은 C 기준 자체의 single+multi 검증과 각 바인딩 스모크에
+  계속 쓰되, bindings-vs-C 비교 대상에서는 제외한다. **C reference는 single과
+  multi를 모두** 측정한다.
 - bindings perf는 아래 비교 가능성 체크리스트를 함께 만족해야 한다.
   - 같은 pattern/transport 의미를 측정한다.
   - 같은 metric header / wire protocol contract를 사용한다.
@@ -799,36 +807,45 @@ bindings/cpp/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM
 
 ### 3.2 Smoke 테스트
 
-perf smoke 테스트는 전체 패턴과 전체 transport를 대상으로 하되,
-메시지 크기를 64B 하나로 고정하여 빠르게 전 경로의 정상 동작을 검증하는
-실행이다. 성능 수치 자체보다 **모든 패턴/transport 조합이 fail 없이
-통과하는지**를 확인하는 것이 목적이다.
+perf smoke 테스트는 **대표 패턴 하나(ROUTER_ROUTER 계열)를 지원하는 모든
+transport에 대해** 실행하여, 각 runner가 전 transport에서 crash/fail 없이
+끝까지 도는지 빠르게 검증하는 실행이다. 성능 수치가 아니라 **transport별
+정상 동작(fail 없이 `status=complete`)**을 확인하는 것이 목적이다. 전 패턴을
+도는 것이 아니라 **transport 축**을 커버하는 것이 핵심이다.
 
+- **스모크 정의 (고정)**:
+  - **패턴**: `ROUTER_ROUTER`(single) / `MULTI_ROUTER_ROUTER`(multi). router-to-router 대표 패턴만.
+  - **메시지 크기**: **1024B** 하나.
+  - **transport**: 각 suite가 지원하는 **전 transport**(single: tcp·ws·wss·tls·inproc·ipc, multi: tcp·ws·wss·tls·ipc — inproc은 프로세스 내부 transport라 multi 대상 아님).
+  - **CCU**: multi는 **100 clients**.
 - perf 코드나 실행 스크립트, 정책 문서를 수정한 뒤에는 **single + multi
-  smoke 테스트를 모두 실행해야 한다**.
+  smoke 테스트를 모두 실행해야 한다**(single·multi runner 둘 다 유지·검증한다).
 - smoke 실행은 반드시 각 suite의 공식 entrypoint를 사용한다.
   - single: `run_benchmarks.sh` / `.ps1`
   - multi: `run_benchmarks_multi.sh` / `.ps1`
-- perf 문맥에서 smoke 테스트는 "`--pattern ALL` + `--msg-sizes 64`로 해당
-  suite의 전체 패턴을 64B 크기 하나로 실행하는 검증"을 뜻한다.
 
 ```bash
-# C 기준 smoke (single)
-bindings/c/perf/run_benchmarks.sh --pattern ALL --msg-sizes 64
+# C 기준 smoke (single) — ROUTER_ROUTER, 1024B, 전 transport
+PERF_TRANSPORTS=tcp,ws,wss,tls,inproc,ipc \
+  bindings/c/perf/run_benchmarks.sh --pattern ROUTER_ROUTER --msg-sizes 1024
 
-# C 기준 smoke (multi)
-bindings/c/perf/run_benchmarks_multi.sh --pattern ALL --msg-sizes 64
+# C 기준 smoke (multi) — MULTI_ROUTER_ROUTER, 1024B, 100 CCU, 전 transport
+PERF_TRANSPORTS=tcp,ws,wss,tls,ipc \
+  bindings/c/perf/run_benchmarks_multi.sh --pattern MULTI_ROUTER_ROUTER --msg-sizes 1024 --clients 100
 
-# bindings smoke (예: cpp)
-bindings/cpp/perf/run_benchmarks.sh --pattern ALL --msg-sizes 64
-bindings/cpp/perf/run_benchmarks_multi.sh --pattern ALL --msg-sizes 64
+# bindings smoke (예: cpp) — 동일 정의
+PERF_TRANSPORTS=tcp,ws,wss,tls,inproc,ipc \
+  bindings/cpp/perf/run_benchmarks.sh --pattern ROUTER_ROUTER --msg-sizes 1024
+PERF_TRANSPORTS=tcp,ws,wss,tls,ipc \
+  bindings/cpp/perf/run_benchmarks_multi.sh --pattern MULTI_ROUTER_ROUTER --msg-sizes 1024 --clients 100
 ```
 
 - single과 multi 각각 실행한다.
-- `--msg-sizes 64`로 64B 단일 크기만 측정한다.
-- `--pattern ALL`로 해당 suite의 전체 패턴을 순회한다.
-- transport는 기본값(전체)을 사용한다.
-- smoke 통과 기준: 전 조합이 `fail` 없이 완료 (`status=complete`).
+- 크기는 **1024B 하나**, 패턴은 **ROUTER_ROUTER 계열 하나**만.
+- transport는 **지원하는 전부**를 명시적으로 순회한다(이게 스모크의 핵심 축).
+- 어떤 (transport)를 특정 바인딩이 지원하지 않으면 `unsupported`로 스킵하고 사유를 남긴다(억지 통과 금지).
+- smoke 통과 기준: 지원하는 전 transport가 `fail` 없이 완료 (`status=complete`), 유효 RESULT.
+- smoke는 측정(격리 필요)과 달리 **crash/fail 확인**이 목적이라 부하 격리가 필수는 아니나, 진짜 실패와 일시적 포트 충돌을 구분한다.
 - 리팩토링 단계마다 single/multi smoke를 실행하여 기본 경로를 검증한다.
 - 모든 리팩토링이 마무리된 뒤 최종 성능 검증 단계에서 full perf를 실행한다.
 - 신규 바인딩 추가, CI 검증 시에도 full perf 전에 smoke를 먼저 실행한다.
