@@ -1305,7 +1305,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             ZLinkClientServerControlProtocol.EncodeLivenessAck(
                                 probeId);
                         if (received.RequestSeq is not null)
-                            ReplyOwned(received, ack);
+                            await ReplyOwnedAsync(
+                                    received,
+                                    ack,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
                         else
                             await SendOwnedAsync(ack, cancellationToken)
                                 .ConfigureAwait(false);
@@ -1656,21 +1660,22 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
         }
 
-        private void ReplyOwned(
+        private static async ValueTask ReplyOwnedAsync(
             Received received,
-            Message message)
+            Message message,
+            CancellationToken cancellationToken)
         {
             try
             {
-                if (received.Send()
+                await received.Send()
                     .Message(message)
-                    .Submit())
-                    return;
+                    .Async(cancellationToken)
+                    .ConfigureAwait(false);
             }
-            catch
+            finally
             {
+                message.Dispose();
             }
-            message.Dispose();
         }
 
         private ulong AllocateProbeId()
