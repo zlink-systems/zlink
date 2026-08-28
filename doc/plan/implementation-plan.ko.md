@@ -99,11 +99,11 @@ bindings 0.14.0 전환 완료(릴리스·로컬 패키지·참조 모두). 아�
 | P0-2 java wrapper lock | **보류** | 에이전트 [의심] 승인 — wrapper lock 39곳(31 아님), 상위 배타성 증거 없음(receive/transport lock 병행 경로). 별도 sol 조사로 이월 |
 | P0-3 java BigInteger | **완료** `33410f2172` | long 포화 검사로 대체, §11 표현 범위 초과 거절 계약 보존 + 회귀 test |
 | P0-4 두 축 회계 조사 | **완료** | §2.1 — 판정은 04 §8로 스펙 확정, 잔여는 P1-6·P2-6·P3-6·P4-8 |
-| P1 dotnet | P1-1~3 **완료** `e877bfff37` · P1-4 **완료(판정 정정)** `72d7def878` · P1-5·P1-6 진행 중 | P1-4 완료 판정은 "_laneGate 0건 + queue map lane 소유"로 정정 — `_barrierGate` 16곳은 relocation C2로 **캠페인 밖 이월**(06 §6 유형 ③ callback 재설계 필요: SpotRetire:1006이 barrier 보유 중 동일 executor 재진입, queue-open→replay-reservation→ingress-open 원자성) |
-| P2 java | P2-4 `fc44a59d32` · P2-6·2-7 `849a0b233e` · P2-2·2-3·2-5+P2-1 부분 `79a5be276d` **완료** · P2-1b 진행 중 | P2-1b = Actor 맵 노드 전역→Spot 조율자 소유 이동(ingress Spot 해석 선행) |
-| P3 cpp | P3-1 부분(미커밋) · P3-1b 진행 중 | P3-1b = 조율자 map의 state lane 강제(timer fire race 해소)+콜사이트 §3 수렴. 참조: 조율자=dotnet·큐/turn=java (§9 ② 채택) |
+| P1 dotnet | **전체 완료** — P1-1~3 `e877bfff37` · P1-4 `72d7def878`(판정 정정) · P1-5·P1-6 `51325d6c4f` | `_barrierGate` 16곳은 relocation C2로 **캠페인 밖 이월**(06 §6 유형 ③ callback 재설계 필요: SpotRetire:1006 재진입, queue-open→replay-reservation→ingress-open 원자성). P1-6 이관 판별 = ZLinkApplicationJobQueueInvocation의 이관 가능 owner 예약 |
+| P2 java | **전체 완료** — P2-4 `fc44a59d32` · P2-6·2-7 `849a0b233e` · 조율자 3종+P2-5 `79a5be276d` · P2-1b `0126030c28` | Spot 미해석 경계의 legacy fallback은 동작 보존 수용 — "미소속 순간의 큐 소유"는 spec-gap 이월 |
+| P3 cpp | **전체 완료** — P3-1(+1b lane 강제) `b5cab18d17` · P3-2·3-3 `859da93dd9` · P3-5·3-6 `be88350b98` | P3-6에서 이탈 2건 발견·수정(transferred 재판정 제거·mailbox→queue claim 이관 계상). timer running 미복원(timer_runtime.cpp:339)은 기존 결함 후보 이월 |
 | P4 node | **전체 완료** — 개명 3종 `bd83b30db5` · 조율자 `50c6d586af` · P4-8 `a50e1ffd3f` | |
-| P5 계약 test | **node 완료** `76545cc342` (⑪ 기존 test·⑫ 구조적 만족 판정) — 나머지 언어 대기 | node ⑨가 executeLifecycle lane 결함을 잡아 수정 포함 |
+| P5 계약 test | **node 완료** `76545cc342` · **java 완료** `fe848a0074` · dotnet·cpp 진행 중 | node ⑨가 executeLifecycle lane 결함을 잡아 수정. java ⑬은 공개 표면 guard 충족 판정, 오류 kind 발산은 spec-gap 이월 |
 | 마감 게이트 (unit·cross-language e2e·샘플 6종 ZoneWorld 제외) | 대기 | §1.1 |
 
 §9 ② 판정(2026-08-28 감독관): 계층별 참조 분리 채택 — lane primitive·조율자는 dotnet,
