@@ -78,7 +78,8 @@ zlink_poller_remove(poller, s);
 **Parameters.** `source` is the socket handle. `user_data` (add only) is the borrowed pointer
 delivered back in matching `zlink_poller_event_t` entries. `events` is the same
 `zlink_poller_event_mask_t` bits as `zlink_pollitem_t`, plus `ZLINK_POLLCOMPLETION` (valid only
-when adding a raw DEALER or ROUTER — see below).
+when adding a raw `PAIR`, `DEALER`, `ROUTER`, or `STREAM` that owns a completion channel — see
+below).
 
 **Return and errno.** All three return `zlink_config_result_t` — `ZLINK_CONFIG_OK` on success.
 Adding an already-registered source returns `ZLINK_CONFIG_CONFLICT` with `EEXIST`. Modifying or
@@ -87,9 +88,13 @@ returns `ZLINK_CONFIG_INVALID_ARGUMENT` with `EINVAL`; an event unsupported by t
 `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`.
 
 **When to use.** A poller only borrows the source handle — remove a source before destroying it.
-Set `ZLINK_POLLCOMPLETION` (alone, or OR-ed with `ZLINK_POLLIN`/`ZLINK_POLLOUT`) when adding a
-DEALER or ROUTER to let one poller own receive, send, and request-completion progress together;
-using it on any other source, in a `zlink_poll` item, or in `zlink_poller_modify` returns
+Set `ZLINK_POLLCOMPLETION` (alone, or OR-ed with `ZLINK_POLLIN`/`ZLINK_POLLOUT`) to let one
+poller own receive, send, and completion progress for the same socket together. `DEALER` and
+`ROUTER` use it for reply completion (DEALER/ROUTER categories); any socket that supports
+asynchronous send — `PAIR`, `DEALER`, `ROUTER`, `STREAM` — uses it for the send-completion
+channel installed with `zlink_send_complete_handler` (Socket lifecycle category), which this
+registration moves from the Core async mailbox thread to the calling `zlink_poller_wait` thread.
+Using it on any other source, in a `zlink_poll` item, or in `zlink_poller_modify` returns
 `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`. A registered source that closes produces `POLLERR`
 once and stays registered until explicitly removed.
 
@@ -154,10 +159,11 @@ int ready = zlink_poller_wait(poller, events, 16, /*timeout_ms=*/1000, &err);
 `user_data` (the borrowed pointer from registration), and `events`.
 
 **When to use.** The returned array is caller-owned and contains no pointer into Core storage.
-When only a `ZLINK_POLLCOMPLETION` signal was processed internally (DEALER/ROUTER request
-completion, Socket lifecycle category and DEALER/ROUTER categories), `wait` may return `0` with
-no public event produced — the caller can inspect state the reply callback already changed and
-continue; the `recv_part` families never drain this completion signal themselves.
+A wait that dispatches a `ZLINK_POLLCOMPLETION` signal — DEALER/ROUTER reply completion, or the
+send completion installed with `zlink_send_complete_handler` (Socket lifecycle category) — still
+writes a public event with the `ZLINK_POLLCOMPLETION` bit and counts it in the returned total, so
+`wait` does not return `0` for that reason; the caller can inspect state the dispatched callback
+already changed. The `recv_part` families never drain this completion signal themselves.
 
 ---
 

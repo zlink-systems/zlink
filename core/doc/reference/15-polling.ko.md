@@ -77,7 +77,8 @@ zlink_poller_remove(poller, s);
 **Parameters.** `source`는 socket handle이다. `user_data`(add에만)는 일치하는
 `zlink_poller_event_t` 항목으로 되돌려받는 borrowed pointer다. `events`는
 `zlink_pollitem_t`와 같은 `zlink_poller_event_mask_t` bit에 더해
-`ZLINK_POLLCOMPLETION`(raw DEALER나 ROUTER를 추가할 때만 유효 — 아래 참고)을 받는다.
+`ZLINK_POLLCOMPLETION`(completion channel을 가진 raw `PAIR`·`DEALER`·`ROUTER`·`STREAM`을
+추가할 때만 유효 — 아래 참고)을 받는다.
 
 **Return과 errno.** 셋 다 `zlink_config_result_t`를 반환한다 — 성공하면
 `ZLINK_CONFIG_OK`. 이미 등록된 source를 추가하면 `ZLINK_CONFIG_CONFLICT`와
@@ -86,11 +87,15 @@ event bit면 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`. Source가 지원하지
 event면 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`.
 
 **선택 기준.** Poller는 source handle을 빌릴 뿐이다 — 파괴하기 전에 source를 제거한다.
-DEALER나 ROUTER를 추가할 때 `ZLINK_POLLCOMPLETION`을(단독으로, 또는
-`ZLINK_POLLIN`/`ZLINK_POLLOUT`과 OR로) 설정하면 하나의 poller가 수신·송신·request 완료
-진행을 함께 소유한다 — 다른 source, `zlink_poll` item, `zlink_poller_modify`에 쓰면
-`ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`을 반환한다. 등록된 source가 닫히면
-`POLLERR`를 한 번 만들며 명시적으로 제거될 때까지 등록 상태로 남는다.
+`ZLINK_POLLCOMPLETION`을(단독으로, 또는 `ZLINK_POLLIN`/`ZLINK_POLLOUT`과 OR로) 설정하면
+하나의 poller가 같은 socket의 수신·송신·완료 진행을 함께 소유한다. `DEALER`와 `ROUTER`는
+이를 reply completion에 쓰고(DEALER/ROUTER category), 비동기 send를 지원하는 socket —
+`PAIR`·`DEALER`·`ROUTER`·`STREAM` — 은 `zlink_send_complete_handler`(Socket lifecycle
+category)로 설치한 send-completion channel에 쓴다. 이 등록은 그 callback의 dispatch를
+Core async mailbox 스레드에서 `zlink_poller_wait`를 호출하는 스레드로 옮긴다. 다른 source,
+`zlink_poll` item, `zlink_poller_modify`에 쓰면 `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`을
+반환한다. 등록된 source가 닫히면 `POLLERR`를 한 번 만들며 명시적으로 제거될 때까지 등록
+상태로 남는다.
 
 ---
 
@@ -153,10 +158,11 @@ int ready = zlink_poller_wait(poller, events, 16, /*timeout_ms=*/1000, &err);
 유효), `user_data`(등록 시의 borrowed pointer), `events`를 보고한다.
 
 **선택 기준.** 반환된 배열은 caller 소유이며 Core storage에 대한 pointer를 담지
-않는다. `ZLINK_POLLCOMPLETION` 신호만 내부적으로 처리됐으면(DEALER/ROUTER request 완료,
-Socket lifecycle category와 DEALER/ROUTER category) `wait`는 공개 이벤트 없이 `0`을
-반환할 수 있다 — caller는 reply callback이 이미 바꾼 상태를 살펴보고 계속 진행할 수
-있다 — `recv_part` family는 이 완료 신호를 스스로 소진하지 않는다.
+않는다. `ZLINK_POLLCOMPLETION` 신호를 처리한 wait — DEALER/ROUTER reply completion이든,
+`zlink_send_complete_handler`(Socket lifecycle category)로 설치한 send completion이든 —
+는 여전히 `ZLINK_POLLCOMPLETION` bit가 설정된 공개 이벤트를 쓰고 반환된 총 개수에 포함시킨다.
+따라서 `wait`가 그 이유로 `0`을 반환하는 일은 없다 — caller는 이미 실행된 callback이 바꾼
+상태를 살펴보면 된다. `recv_part` family는 이 완료 신호를 스스로 소진하지 않는다.
 
 ---
 
