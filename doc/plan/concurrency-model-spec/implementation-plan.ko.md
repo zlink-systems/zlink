@@ -53,6 +53,49 @@ P0-1~P0-3의 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-su
 있다. P0-1은 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을
 어긴 자리를 되돌린다.
 
+### 2.1 P0-4 — mailbox 두 축 회계 (자체 조사 2026-08-28, 부분 완료)
+
+**계약.** owner mailbox는 건수·byte 두 축을 하나의 작업으로 예약하고, **반환은 handler가
+끝난 뒤**다([Framework API §11](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명) ·
+[02 §7](../../../framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)).
+`mailboxMessageBudget`·`mailboxByteBudget`은 **MeshNode socket 설정**이다(4언어 exact
+interface 공통).
+
+**실측 — 회계는 두 계층에 있다.** 앞선 "dotnet 미구현" 표는 serial queue 계층만 보고 내린
+판정이라 틀렸다.
+
+| 계층 | dotnet | java | cpp | node |
+|---|---|---|---|---|
+| **mesh/service mailbox** (owner별 admission, socket 설정이 여기로 감) | `ZLinkManagedMeshNode.EnqueueOwned` → `OwnedMailbox.TryEnqueue(…, MailboxMessageBudget, MailboxByteBudget)` (`:10530`) | `ZLinkServiceMailbox.tryEnqueue` (`:39`, 고정비 record 96+part 16) | `service_mailbox_t::try_enqueue` (`service_mailbox.cpp:46`, 4개 budget 필수) | `service-mailbox.ts` enqueue에서 `queue.bytes += retainedBytes` (`:102-124`) |
+| **owner serial queue** (02 §7의 application·lifecycle lane, 기본값 1,024/64 MiB·128/4 MiB·고정 256) | **없음** — admission이 seal·stopping만 본다 | `ZLinkAsyncSerialQueue` 두 축 | `serial_execution_queue` 두 축 (`hpp:119-130`) | `ZLinkBoundedSerialScheduler` 두 축 |
+
+**반환 시점 실측** — 02 §7은 "handler terminal completion에서만 반환"을 요구한다.
+
+| 언어 | serial queue 계층 | mesh mailbox 계층 |
+|---|---|---|
+| java | **handler 종료 시** — `finish(entry)`→`release(entry)` (`:670-679`), javadoc "released when the turn reaches its terminal boundary" (`:370`) | 확인 필요 |
+| node | **handler 종료 시** — record settle에서 `release()` (`serial-scheduler.ts:226,237`) | **dequeue 시** — drain에서 `queue.bytes -= nextBytes` (`service-mailbox.ts:158`) |
+| cpp | 완료 경로에서 `lane.bytes -= _active_bytes` (`:1094`) — terminal 의미 **확인 필요** | 확인 필요 |
+| dotnet | 계층 자체가 없음 | **dequeue 시** — `TryDequeue`→`onRecordDequeued(PendingBytes)` (`ZLinkMeshOwnedMailbox.cs:122`) |
+
+**남은 판정 (구현 세션 몫)**
+
+1. **dotnet 이탈 의심** — serial queue 계층에 회계가 없고 mesh mailbox는 dequeue에서
+   반환하므로, dequeue와 handler 종료 사이의 in-flight byte가 dotnet 어디에서도 계상되지
+   않는 것으로 보인다. 02 §7 위반인지, 다른 자리(Application job permit 등)가 그 구간을
+   지는지 판정.
+2. **node의 `submitPreAdmitted` 건너뛰기** — `service-mailbox.ts:87` 주석("second mailbox
+   cap would reject already-admitted work")이 두 계층 사이 이중 상한 회피를 명시한다. 위반이
+   아니라 계층 분담 설계일 가능성이 높아졌다. mesh 계층이 dequeue에서 반환하므로 in-flight
+   구간을 serial queue가 이어받는지가 판정 기준.
+3. cpp mesh mailbox·java service mailbox의 반환 시점 확인.
+4. 02 §7의 owner FIFO가 두 계층 중 어느 쪽을 가리키는지 — 기본값(1,024/64 MiB)은 serial
+   queue 계층과 일치한다. 스펙에 계층 구분이 없으면 spec-gap으로 올린다.
+
+P0-1~P0-3의 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에
+있다. P0-1은 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을
+어긴 자리를 되돌린다.
+
 ### 2.1 P0-4 조사 대상 — mailbox 두 축 회계
 
 **계약.** owner mailbox는 **건수와 대기 중 byte 합계 두 축을 모두** 강제하고, 두 축을 하나의
