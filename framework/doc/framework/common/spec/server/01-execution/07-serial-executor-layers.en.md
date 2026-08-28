@@ -251,6 +251,10 @@ that contract is owned by
 [Framework API "11. Handler Execution Objects And Dependency Lifetime"](../00-foundation/06-framework-api.en.md).
 It is not redefined here; only the two things that bear on this document's queue layout are.
 
+When a record is claimed from the receive mailbox into this queue, its reservation **transfers
+without a gap**, and the transfer is not a re-decision — that rule is owned by
+[04 §8 "Transferring The Owner Reservation"](04-application-job-queue-and-backpressure.en.md#transferring-the-owner-reservation--two-stages-join-without-a-gap).
+
 **Its accounting boundary differs from the
 [Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) permit.** The
 permit is returned right before the callback's first instruction, while the mailbox reservation

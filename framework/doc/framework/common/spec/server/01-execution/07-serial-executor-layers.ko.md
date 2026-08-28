@@ -244,6 +244,11 @@ owner queue(mailbox)의 한도는 **건수와 대기 중 byte 합계 두 축**�
 [Framework API 「11. Handler 실행 객체와 dependency 수명」](../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)가
 소유한다. 여기서 다시 정의하지 않고, 이 문서의 queue 배치에 걸리는 두 가지만 밝힌다.
 
+수신 mailbox에서 이 queue로 record가 claim될 때 예약이 **끊기지 않고 이관**되며, 이관은
+재판정이 아니다 — 그 규칙은
+[04 §8 「Owner 예약의 이관」](04-application-job-queue-and-backpressure.ko.md#owner-예약의-이관--두-단계가-빈틈없이-잇는다)이
+소유한다.
+
 **계상 경계가 [Application job queue](../00-foundation/02-glossary.ko.md#application-job-queue)
 permit과 다르다.** permit은 callback의 첫 instruction 직전에 반환되지만, mailbox 예약은
 handler가 끝난 뒤에 반환된다 — 실행 중인 작업이 점유한 memory가 아직 해제되지 않았기

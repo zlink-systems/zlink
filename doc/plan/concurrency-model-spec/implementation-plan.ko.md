@@ -78,6 +78,50 @@ interface 공통).
 | cpp | 완료 경로에서 `lane.bytes -= _active_bytes` (`:1094`) — terminal 의미 **확인 필요** | 확인 필요 |
 | dotnet | 계층 자체가 없음 | **dequeue 시** — `TryDequeue`→`onRecordDequeued(PendingBytes)` (`ZLinkMeshOwnedMailbox.cs:122`) |
 
+**확정 (2026-08-28, 스펙 04 §8 「Owner 예약의 이관」).** 한 record의 예약은 receive 수락부터
+handler terminal completion까지 끊기지 않는다 — mailbox가 claim까지, 실행 queue가 claim부터
+terminal까지 지고, claim 경계에서 이관한다. 이관은 재판정이 아니다(용량 거절은 로컬 제출에만).
+이 계약 기준으로 언어별 정합 작업은:
+
+| 언어 | 판정 | 작업 |
+|---|---|---|
+| dotnet | **이탈** — 실행 queue에 회계가 없어 dequeue~terminal 구간이 계상되지 않는다 | P1-6: `ZLinkSerialExecutionQueue`에 두 축 계상 신설, claim 이관은 계상만(재판정 금지) |
+| node | **이탈** — `submitPreAdmitted`가 계상까지 건너뛴다(재판정 회피는 옳았으나 이관 계상이 빠짐) | P4-8: preAdmitted 경로를 "계상하되 거절하지 않는" 이관으로 바꾼다 (`serial-scheduler.ts:145`) |
+| java | serial 쪽 반환 시점은 정합(terminal). **이관 record를 용량 거절하는지** 확인 | P2-6: `enqueueWithPayloadBytes`의 ingress 경로가 capacity 거절을 하면 이관 계상으로 바꾼다 |
+| cpp | 두 축 있음. 반환 시점(`:1094`)과 이관 의미 확인 | P3-6: terminal 반환·이관 계상 검증, 어긋나면 정합 |
+
+02 §7이 두 계층 중 실행 queue 쪽의 반환 시점을 소유한다는 것도 04 §8에 명시했다 —
+spec-gap이 아니라 확정이다.
+
+P0-1~P0-3의 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에
+있다. P0-1은 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을
+어긴 자리를 되돌린다.
+
+### 2.1 P0-4 — mailbox 두 축 회계 (자체 조사 2026-08-28, 부분 완료)
+
+**계약.** owner mailbox는 건수·byte 두 축을 하나의 작업으로 예약하고, **반환은 handler가
+끝난 뒤**다([Framework API §11](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명) ·
+[02 §7](../../../framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)).
+`mailboxMessageBudget`·`mailboxByteBudget`은 **MeshNode socket 설정**이다(4언어 exact
+interface 공통).
+
+**실측 — 회계는 두 계층에 있다.** 앞선 "dotnet 미구현" 표는 serial queue 계층만 보고 내린
+판정이라 틀렸다.
+
+| 계층 | dotnet | java | cpp | node |
+|---|---|---|---|---|
+| **mesh/service mailbox** (owner별 admission, socket 설정이 여기로 감) | `ZLinkManagedMeshNode.EnqueueOwned` → `OwnedMailbox.TryEnqueue(…, MailboxMessageBudget, MailboxByteBudget)` (`:10530`) | `ZLinkServiceMailbox.tryEnqueue` (`:39`, 고정비 record 96+part 16) | `service_mailbox_t::try_enqueue` (`service_mailbox.cpp:46`, 4개 budget 필수) | `service-mailbox.ts` enqueue에서 `queue.bytes += retainedBytes` (`:102-124`) |
+| **owner serial queue** (02 §7의 application·lifecycle lane, 기본값 1,024/64 MiB·128/4 MiB·고정 256) | **없음** — admission이 seal·stopping만 본다 | `ZLinkAsyncSerialQueue` 두 축 | `serial_execution_queue` 두 축 (`hpp:119-130`) | `ZLinkBoundedSerialScheduler` 두 축 |
+
+**반환 시점 실측** — 02 §7은 "handler terminal completion에서만 반환"을 요구한다.
+
+| 언어 | serial queue 계층 | mesh mailbox 계층 |
+|---|---|---|
+| java | **handler 종료 시** — `finish(entry)`→`release(entry)` (`:670-679`), javadoc "released when the turn reaches its terminal boundary" (`:370`) | 확인 필요 |
+| node | **handler 종료 시** — record settle에서 `release()` (`serial-scheduler.ts:226,237`) | **dequeue 시** — drain에서 `queue.bytes -= nextBytes` (`service-mailbox.ts:158`) |
+| cpp | 완료 경로에서 `lane.bytes -= _active_bytes` (`:1094`) — terminal 의미 **확인 필요** | 확인 필요 |
+| dotnet | 계층 자체가 없음 | **dequeue 시** — `TryDequeue`→`onRecordDequeued(PendingBytes)` (`ZLinkMeshOwnedMailbox.cs:122`) |
+
 **남은 판정 (구현 세션 몫)**
 
 1. **dotnet 이탈 의심** — serial queue 계층에 회계가 없고 mesh mailbox는 dequeue에서
@@ -139,7 +183,7 @@ relocation seal과 stopping 상태만 본다. java·cpp·node는 두 축을 갖�
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
 | P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | 상수로 박힌 `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`을 정책 주입으로 바꾼다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs:7,8` | `ZLinkExecutionLanePolicy` 일곱 값이 주입된다 |
-| P1-6 | **(P0-4 판정 후)** 큐에 mailbox count·byte 두 축을 신설한다 — P0-4가 "미구현"으로 판정한 경우에만. 다른 자리(`SetMailboxBudgets` 경로)가 이미 만족하면 생략 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 항목 통과 |
+| P1-6 | 큐에 count·byte 두 축 계상을 신설한다 — claim 이관 record는 계상만 하고 재판정하지 않는다(04 §8) | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" + 04 §8 내부 확인 조건 |
 
 **양보 동작 자체는 dotnet에 이미 있다.** `DrainAsync`가 `OwnerTimeSliceMilliseconds`(10ms)마다
 slice를 끊고, `LifecycleTurnLimit`(8)로 lifecycle 연속 선점을 막는다. 빠진 것은 동작이 아니라

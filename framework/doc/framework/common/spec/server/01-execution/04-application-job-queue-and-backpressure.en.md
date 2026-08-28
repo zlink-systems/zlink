@@ -381,6 +381,31 @@ defaults to `64 KiB`, and does not apply to server-to-client outbound.
 
 No path creates a separate unbounded backlog, polling, busy-spin, or silent replay.
 
+### Transferring The Owner Reservation — Two Stages Join Without A Gap
+
+The owner FIFO's count and byte reservation is not carried by one component. The receive
+mailbox carries it from receive acceptance until the record is claimed into the owner's
+execution queue, and the execution queue carries it from that claim until handler terminal
+completion ([02 §7](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation)
+owns the release timing on the execution-queue side).
+
+- **One record's reservation is unbroken from receive acceptance to handler terminal
+  completion.** At the claim boundary, the mailbox return and the execution-queue charge happen
+  together. If there is an uncounted stretch in between, in-flight payload that has been
+  dequeued but whose handler has not finished is caught by no limit at all — and the more
+  handlers hold large payloads for long, the more that stretch's memory grows without bound.
+- **The transfer at claim is not a re-decision.** If the execution queue rejects an
+  already-accepted record on capacity grounds, that is the "turning saturation into a reject"
+  that §3 forbids. The execution queue only accounts the transferred reservation; capacity
+  rejection applies only to new local submissions inside the same runtime.
+- **The two stages never count the same record at the same time.** Double counting saturates
+  the owner limit ahead of the real backlog, and the limit's value stops meaning anything.
+
+Internal check condition — on the claim path there is no moment at which the record's bytes are
+counted by neither side between the mailbox return and the execution-queue charge, and no site
+where a record transferred with its permit receives a capacity rejection from the execution
+queue.
+
 ## 9. Large Payloads And Operational Values
 
 - **The Application job queue limits job count; it does not weight jobs by payload

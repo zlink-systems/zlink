@@ -336,6 +336,28 @@ server→client outbound에는 적용하지 않는다.
 
 어느 경로도 별도 unbounded backlog, polling, busy-spin이나 silent replay를 만들지 않는다.
 
+### Owner 예약의 이관 — 두 단계가 빈틈없이 잇는다
+
+Owner FIFO의 count·byte 예약은 한 컴포넌트가 지지 않는다. 수신 mailbox가 receive 수락부터
+owner 실행 queue로 claim될 때까지를, 실행 queue가 claim부터 handler terminal completion까지를
+각각 진다([02 §7](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)이
+실행 queue 쪽의 반환 시점을 소유한다).
+
+- **한 record의 예약은 receive 수락부터 handler terminal completion까지 끊기지 않는다.**
+  claim 경계에서 mailbox 반환과 실행 queue 계상이 함께 일어난다. 사이에 계상되지 않는
+  구간이 있으면, dequeue된 뒤 아직 handler가 끝나지 않은 in-flight payload가 어떤 한도에도
+  잡히지 않는다 — 큰 payload를 오래 보유하는 handler가 많을수록 그 구간의 memory가
+  무한정 자란다.
+- **Claim 시점의 이관은 재판정이 아니다.** 이미 수락된 record를 실행 queue가 용량을 이유로
+  거절하면 §3이 금지한 "포화를 reject로 바꾸기"가 된다. 실행 queue는 이관받은 예약을
+  계상만 하고, 용량 거절 판정은 같은 runtime 안의 새 로컬 제출에만 적용한다.
+- **같은 record를 두 단계가 동시에 계상하지 않는다.** 이중 계상하면 owner 한도가 실제
+  적체보다 이르게 포화되어, 한도 값이 뜻하는 것이 사라진다.
+
+내부 확인 조건 — claim 경로에서 mailbox 반환과 실행 queue 계상 사이에 record byte가 어느
+쪽에도 계상되지 않는 순간이 없고, permit을 들고 이관된 record가 실행 queue에서 용량 거절을
+받는 자리가 없다.
+
 ## 9. 큰 payload와 운영값
 
 - **Application job queue는 job count를 제한하지 payload byte를 가중하지 않는다.** 빈
