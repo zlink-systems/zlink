@@ -259,9 +259,9 @@ snapshot = stateLane.run(() -> new ActorStateSnapshot(
 
 | 언어 | Spot 조율자 | Actor 조율자 | Session 조율자 | 큐 primitive | 기타 |
 |---|---|---|---|---|---|
-| **dotnet** | **정본** 그대로 | **개명** `ActorDispatchMailbox`→`ActorSerialExecutor` | **개명** `StreamSessionSerialExecutor`→`SessionSerialExecutor` · 동사 `Enqueue*`→`Execute*` | payload 바이트 회계 **신설** · 정책 주입(R-N5). 양보 동작은 이미 있음(상수 → 주입) | `_laneGate` lock → state lane(R-N2) |
+| **dotnet** | **정본** 그대로 | **개명** `ActorDispatchMailbox`→`ActorSerialExecutor` | **개명** `StreamSessionSerialExecutor`→`SessionSerialExecutor` · 동사 `Enqueue*`→`Execute*` | 정책 주입(R-N5) — `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`이 `internal const`다. 두 축 회계를 어디서 만족하는지 조사(플랜 P0-4) | `_laneGate` lock → state lane(R-N2) |
 | **java** | **신설** — `ZLinkActorDispatchSerials.queues` 이관(R-N1) | **신설** | **신설** — `ZLinkStreamRuntime.stateLane`에서 분리 | 책임 **정본**. 클래스명만 `ZLinkSerialExecutionQueue`로 | 이미 state lane 소유 — 유지 |
-| **cpp** | **신설** — `spot_runtime` 이름 맵 이관(R-N1) | **신설** | **신설** — `stream_runtime.dispatch_queue`에서 분리 | 용량·우선순위·공정성 **추가**(R-N5·R-N7) | 조회 스냅샷 묶기(R-N9·R-N10) |
+| **cpp** | **신설** — `spot_runtime` 이름 맵 이관(R-N1) | **신설** | **신설** — `stream_runtime.dispatch_queue`에서 분리 | **이미 완성** — 정책 일곱·우선순위·lifecycle debt 모두 있음 | 조회 스냅샷 묶기(R-N9·R-N10) |
 | **node** | **신설** — 현행 `ZLinkSpotSerialExecutor`는 조율자가 아니라 직렬 단위다(§7) | **신설** — `ZLinkActorDispatchMailbox` 개명·이관 | 있음(`session-serial-executor` 73줄) — 개명만 | `ZLinkBoundedSerialScheduler` 개명·정책 정렬 | turn 경계·lock 문제 없음 · `SpotWide` Actor 상한은 미결 |
 
 ---

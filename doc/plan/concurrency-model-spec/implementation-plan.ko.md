@@ -120,18 +120,17 @@ java는 큐 primitive가 정본이고 **조율자가 셋 다 없다.** 런타임
 
 ## 5. P3 — cpp
 
-cpp도 조율자가 셋 다 없고, 큐 primitive에 수용량·우선순위·공정성이 없다. **P2보다 크다.**
+cpp는 조율자가 셋 다 없다. **큐 primitive는 이미 완성돼 있다(실측 2026-08-28)** —
+`serial_execution_queue.hpp:119-130`에 정책 일곱(건수·byte 두 축 × application·lifecycle,
+`owner_time_budget`, `lifecycle_burst_limit`)이 모두 있고 우선순위와 lifecycle debt도
+구현돼 있다. 따라서 P3는 **조율자 신설이 전부**다.
 
 | # | 작업 | 파일 | 완료 판정 |
 |---|---|---|---|
 | P3-1 | `spot_serial_executor_t` 신설 · `spot_runtime`의 이름 맵을 그 안으로 옮긴다 | `runtime/spots/spot_runtime.{hpp,cpp}` | 조율자 밖에서 Actor·timer 큐를 드는 곳 0건 |
 | P3-2 | `actor_serial_executor_t` 신설 | `runtime/actors/` | 큐 맵 없이 인스턴스당 큐 하나 |
 | P3-3 | `session_serial_executor_t` 신설 · `stream_runtime.dispatch_queue`에서 분리 | `runtime/streams/stream_runtime.{hpp,cpp}` | 진입점 넷이 스펙 07 §3과 일치 |
-| P3-4 | 큐 primitive에 정책 주입 · lifecycle lane · `ownerTimeBudget`을 추가한다 | `runtime/execution/` | 스펙 07 §10 "수용량과 backpressure"·"공정성" test 통과 |
 | P3-5 | 조회 스냅샷 묶기 (P0-1과 같은 작업 — 먼저 끝났으면 생략) | `runtime/spots/spot_runtime.cpp` | 같은 값을 두 번 읽는 자리 0건 |
-
-**P3-4를 P3-1보다 먼저 한다.** 조율자가 큐를 소유하려면 그 큐가 정책을 받을 수 있어야 한다.
-순서를 뒤집으면 조율자를 만든 뒤 큐 시그니처를 다시 바꾸게 된다.
 
 **참조 구현을 반드시 명시해 맡긴다.** cpp `spot_runtime` 작업은 이번 캠페인에서 참조 없이
 맡겼을 때 네 번 실패했고, dotnet·java 구현을 참조로 지정한 뒤에야 통과했다.
