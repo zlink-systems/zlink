@@ -57,6 +57,8 @@ interface ZLinkSerialAdmissionLane {
   byteCount: number;
 }
 
+type ZLinkSerialReservationMode = 'enforce-capacity' | 'transferred' | 'none';
+
 /**
  * One event-loop serial execution queue per Spot, Actor mailbox, or Stream session.
  * Its reservations are owner-local and span queued plus running work until the
@@ -135,7 +137,7 @@ export class ZLinkSerialExecutionQueue {
     context?: unknown
   ): Promise<T> {
     try {
-      return this.admit(operation, { lane: 'application' }, context, false);
+      return this.admit(operation, { lane: 'application' }, context, 'none');
     } catch (error) {
       return Promise.reject(error);
     }
@@ -143,15 +145,15 @@ export class ZLinkSerialExecutionQueue {
 
   /**
    * Enqueues work that already owns the host-wide application job permit.
-   * The shared permit is the capacity authority, so an owner-local reservation
-   * must not reject or double-charge the same job before its handler starts.
+   * Its owner-local reservation transfers from the mailbox without a second
+   * capacity decision and remains held through handler terminal completion.
    */
   submitPreAdmitted<T>(
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions = {},
     context?: unknown
   ): Promise<T> {
-    return this.admit(operation, options, context, false);
+    return this.admit(operation, options, context, 'transferred');
   }
 
   snapshot(): {
@@ -189,13 +191,17 @@ export class ZLinkSerialExecutionQueue {
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions,
     context?: unknown,
-    reserveCapacity = true
+    reservationMode: ZLinkSerialReservationMode = 'enforce-capacity'
   ): Promise<T> {
     if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options.lane ?? 'application';
-    const byteCost = reserveCapacity ? this.byteCost(options) : 0;
+    const reservationHeld = reservationMode !== 'none';
+    const byteCost = reservationHeld ? this.byteCost(options) : 0;
     const target = lane === 'application' ? this.application : this.lifecycle;
-    if (reserveCapacity && !reserve(target, byteCost)) throw this.capacityError(lane);
+    if (reservationMode === 'enforce-capacity' && !reserve(target, byteCost)) {
+      throw this.capacityError(lane);
+    }
+    if (reservationMode === 'transferred') reserveTransferred(target, byteCost);
 
     let settled = false;
     let released = false;
@@ -208,7 +214,7 @@ export class ZLinkSerialExecutionQueue {
     const release = (): void => {
       if (released) return;
       released = true;
-      if (reserveCapacity) releaseReservation(target, byteCost);
+      if (reservationHeld) releaseReservation(target, byteCost);
     };
     const resolve = (value: T): void => {
       if (settled) return;
@@ -358,6 +364,11 @@ function reserve(lane: ZLinkSerialAdmissionLane, byteCost: number): boolean {
   lane.messageCount += 1;
   lane.byteCount += byteCost;
   return true;
+}
+
+function reserveTransferred(lane: ZLinkSerialAdmissionLane, byteCost: number): void {
+  lane.messageCount += 1;
+  lane.byteCount += byteCost;
 }
 
 function releaseReservation(lane: ZLinkSerialAdmissionLane, byteCost: number): void {

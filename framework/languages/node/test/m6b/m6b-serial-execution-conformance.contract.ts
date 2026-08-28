@@ -86,6 +86,57 @@ test('owner-local reservations survive terminal work and do not block another ow
   assert.equal(await serial.submit(() => 'following'), 'following');
 });
 
+test('a transferred record is accounted without capacity rejection until terminal completion', async () => {
+  const serial = scheduler([], {
+    applicationMessageCapacity: 1,
+    applicationByteCapacity: 128,
+    lifecycleMessageCapacity: 1,
+    lifecycleByteCapacity: 128,
+    ownerTimeBudget: 0,
+    lifecycleBurstLimit: 1,
+    fixedWorkByteCost: 32
+  });
+  const localStarted = deferred<void>();
+  const localTerminal = deferred<void>();
+  const transferredStarted = deferred<void>();
+  const transferredTerminal = deferred<void>();
+  const local = serial.submit(async () => {
+    localStarted.resolve();
+    await localTerminal.promise;
+  }, { payloadBytes: 32, metadataBytes: 16 });
+  await localStarted.promise;
+
+  const transferred = serial.submitPreAdmitted(async () => {
+    transferredStarted.resolve();
+    await transferredTerminal.promise;
+  }, { payloadBytes: 48, metadataBytes: 16 });
+  assert.deepEqual(serial.snapshot(), {
+    applicationMessages: 2,
+    applicationBytes: 176,
+    lifecycleMessages: 0,
+    lifecycleBytes: 0
+  });
+  await assert.rejects(serial.submit(() => undefined), /queue is full/u);
+
+  localTerminal.resolve();
+  await local;
+  await transferredStarted.promise;
+  assert.deepEqual(serial.snapshot(), {
+    applicationMessages: 1,
+    applicationBytes: 96,
+    lifecycleMessages: 0,
+    lifecycleBytes: 0
+  });
+  transferredTerminal.resolve();
+  await transferred;
+  assert.deepEqual(serial.snapshot(), {
+    applicationMessages: 0,
+    applicationBytes: 0,
+    lifecycleMessages: 0,
+    lifecycleBytes: 0
+  });
+});
+
 test('a yielded Spot owner retains its reservation until the actual owner terminal', async () => {
   const serial = new ZLinkSpotSerialTurnExecutor(true, undefined, {
     applicationMessageCapacity: 1,
