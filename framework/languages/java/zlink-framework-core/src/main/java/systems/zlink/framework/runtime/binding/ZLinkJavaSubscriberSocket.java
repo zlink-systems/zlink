@@ -23,8 +23,8 @@ final class ZLinkJavaSubscriberSocket
     @Override public synchronized void bind(String endpoint) { socket.bind(endpoint); }
     @Override public synchronized void connect(String endpoint) { socket.connect(endpoint); }
     @Override public synchronized void disconnect(String endpoint) { socket.disconnect(endpoint); }
-    @Override public synchronized void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
-    @Override public synchronized void setSubscription(String topic) { socket.setSubscription(topic); }
+    @Override public void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
+    @Override public void setSubscription(String topic) { socket.setSubscription(topic); }
     @Override public boolean waitForReadable(Duration timeout) {
         return receivePoller.waitForReadable(timeout);
     }
