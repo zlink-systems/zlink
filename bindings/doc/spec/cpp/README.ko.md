@@ -481,7 +481,9 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   가지다. Core가 선택한 정확한 `(RID, transport pair id, generation)` target에 호출
   thread에서 동기 제출하고, reply completion은 Core가 구동한다. `async()` 재개와 callback
   호출은 그 완료가 발생한 컨텍스트에서 일어난다. 제출 자체의 HWM 계약은 routed send와
-  같다(Core 소유, `SNDTIMEO`가 상한). binding은 이 표면을 위해 재시도 큐, 타이머,
+  같다(Core 소유, `SNDTIMEO`가 상한). 두 sync terminal의 `flags(int)` 단계는
+  `NONE`이면 admission을 기다리고 `DONTWAIT`면 즉시 backpressure를 반환한다.
+  binding은 이 표면을 위해 재시도 큐, 타이머,
   전용 스레드를 두지 않는다.
 - request timeout은 Core 소유다(`ZLINK_REQUEST_TIMED_OUT`). builder의 `timeout(...)`은 그
   Core-owned reply deadline을 지정한다. 제출 실패는 `submit_error_t`로 던지고, 수용 후에는

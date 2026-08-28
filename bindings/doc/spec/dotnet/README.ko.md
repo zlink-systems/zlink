@@ -345,10 +345,12 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   (`Result == Backpressured`)을 발생시킨다. PAIR send와 `Received.Send()`도
   같은 두 terminal을 제공한다.
 - `IDealerSocket.Request()`와 `IRouterSocket.Request(RoutingId)`의
-  `RequestSubmitOperation` terminal은
-  `Task<IReadOnlyList<Message>> Async(CancellationToken)`뿐이다. 이 두 routed
-  builder에는 blocking submit, polling 결과, `Flags(...)`, callback
-  `Submit(...)`을 추가하지 않는다.
+  `RequestSubmitOperation`은 세 완료 표면을 제공한다. `Submit(SendFlags)`는
+  admission과 reply를 동기 대기해 reply를 직접 반환한다.
+  `Submit(SendFlags, callback)`은 admission 결과가 결정되면 즉시 반환하고 reply는
+  callback으로 전달한다. `Async(CancellationToken)`은 await 가능한 `Task`를 반환한다.
+  request 제출도 send와 같은 HWM admission을 지나며 두 sync terminal은
+  `SendFlags.None`/`SendFlags.DontWait`로 admission 대기 여부를 정한다.
 - multipart는 반복 `Message(...)` 또는 `Messages(...)`로 누적하고 마지막에
   한 번 `Async(...)`를 호출한다. `Async(...)`는 payload ownership을 operation으로
   옮기고, 호출자 thread를 blocking하지 않은 채 Task를 반환한다.

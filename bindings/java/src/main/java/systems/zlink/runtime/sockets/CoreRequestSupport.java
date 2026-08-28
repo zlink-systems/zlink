@@ -15,6 +15,7 @@ import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
@@ -24,7 +25,6 @@ import systems.zlink.runtime.nativeapi.RequestReplySupport;
 
 /** Core reply completion handed to the socket's existing completion dispatcher. */
 final class CoreRequestSupport implements AutoCloseable {
-    private static final int DONT_WAIT = 1;
 
     private final NativeSocketRuntime socket;
     private final boolean dealer;
@@ -54,7 +54,9 @@ final class CoreRequestSupport implements AutoCloseable {
 
     CompletionStage<List<Message>> submit(List<Message> sourceParts,
                                           Duration timeout,
-                                          MemorySegment target) {
+                                          MemorySegment target,
+                                          SendFlags flags,
+                                          boolean throwAdmissionFailure) {
         Objects.requireNonNull(sourceParts, "sourceParts");
         if (sourceParts.isEmpty()) {
             throw new IllegalArgumentException("parts must not be empty");
@@ -91,7 +93,8 @@ final class CoreRequestSupport implements AutoCloseable {
                             index * stride, stride);
                         int rc = dealer
                             ? Native.dealerRequestTransportPairPart(
-                                socket.handle(), target, nativePart, DONT_WAIT,
+                                socket.handle(), target, nativePart,
+                                flags.value(),
                                 partFlag,
                                 partFlag == Native.PART_FINAL ? timeoutMs : 0,
                                 partFlag == Native.PART_FINAL
@@ -106,7 +109,7 @@ final class CoreRequestSupport implements AutoCloseable {
                                     NativeLayouts.ROUTED_SUBMIT_TARGET_PAIR_ID_OFFSET),
                                 target.get(ValueLayout.JAVA_LONG,
                                     NativeLayouts.ROUTED_SUBMIT_TARGET_GENERATION_OFFSET),
-                                nativePart, DONT_WAIT, partFlag,
+                                nativePart, flags.value(), partFlag,
                                 partFlag == Native.PART_FINAL ? timeoutMs : 0,
                                 partFlag == Native.PART_FINAL
                                     ? requests.replyCallback()
@@ -135,8 +138,12 @@ final class CoreRequestSupport implements AutoCloseable {
             if (result != SubmitResult.OK.value()) {
                 int errno = Native.errno();
                 requests.removeRoutedPending(requestId);
-                future.completeExceptionally(new ZlinkSubmitException(
-                    submitResult(result), errno));
+                ZlinkSubmitException failure = new ZlinkSubmitException(
+                    submitResult(result), errno);
+                if (throwAdmissionFailure) {
+                    throw failure;
+                }
+                future.completeExceptionally(failure);
                 return future;
             }
             // Core has accepted ownership of the request copies. The public

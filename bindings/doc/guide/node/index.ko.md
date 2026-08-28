@@ -100,15 +100,21 @@ const text = data.toString('utf8');
 received.close();
 ```
 
-HWM 대기 가능 send는 비동기 `submit()`과 동기 `submit(SendFlags)` overload를
+HWM 대기 가능 send는 비동기 `submit()`과 동기 `submit_sync(SendFlags)` overload를
 제공합니다. Node 이벤트 루프에서는 Promise를 반환하는 flag 없는 `submit()`을
 기본으로 사용합니다. 즉시 backpressure가 필요할 때만
-`submit(zlink.SendFlags.DontWait)`을 사용합니다.
+`submit_sync(zlink.SendFlags.DontWait)`을 사용합니다.
 
 ```javascript
 await socket.send().message(Buffer.from('data')).submit(); // 비동기
-socket.send().message(Buffer.from('data')).submit(zlink.SendFlags.DontWait); // 동기 non-blocking
+socket.send().message(Buffer.from('data')).submit_sync(zlink.SendFlags.DontWait); // 동기 non-blocking
 ```
+
+Request도 같은 HWM admission을 지나며 세 완료 표면을 제공합니다.
+`submit_sync(flags)`는 admission과 reply를 동기 대기해 reply를 직접 반환하고,
+`submit_sync(flags, callback)`은 admission 결과가 결정되면 즉시 반환한 뒤 reply를
+callback으로 전달하며, `submit()`은 Promise를 반환합니다. Sync flag의
+`None`/`DontWait`가 admission 대기 여부를 정합니다.
 
 ### Received — 수신 봉투
 
@@ -160,7 +166,7 @@ Node 바인딩은 작업별 에러 클래스를 던집니다.
 
 ```javascript
 try {
-  socket.send().message(Buffer.from('data')).submit(zlink.SendFlags.DontWait);
+  socket.send().message(Buffer.from('data')).submit_sync(zlink.SendFlags.DontWait);
 } catch (error) {
   if (error instanceof zlink.SubmitError) {
     if (error.result === zlink.SubmitResult.Backpressured) {
@@ -187,7 +193,7 @@ try {
 | `zlink_socket(ctx, type)` | `zlink.createPairSocket(ctx)` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(buf).submit(flags)` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(buf).submit_sync(flags)` |
 | `zlink_send_async(...)` | `await socket.send().message(buf).submit()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` (Buffer) |
@@ -214,12 +220,12 @@ console.log(`zlink ${major}.${minor}.${patch}`);
 |------|------|
 | `Context`·소켓 | 메인 이벤트 루프에서 사용 |
 | 블로킹 `recv()` | 이벤트 루프를 막으므로 짧게 사용하거나 논블로킹 + 폴러 권장 |
-| 동기 `submit(SendFlags.None)` | HWM 대기 시 이벤트 루프 전체를 멈춰 런타임 진행이 정지함 — 사용하지 않음 |
-| 동기 `submit(SendFlags.DontWait)` | 즉시 반환하므로 이벤트 루프를 막지 않음 |
+| 동기 `submit_sync(SendFlags.None)` | HWM 대기 시 이벤트 루프 전체를 멈춰 런타임 진행이 정지함 — 사용하지 않음 |
+| 동기 `submit_sync(SendFlags.DontWait)` | 즉시 반환하므로 이벤트 루프를 막지 않음 |
 | 비동기 `submit()` | Promise 기반 — 이벤트 루프를 막지 않음 |
 
 Node에서는 blocking send를 이벤트 루프에서 실행하지 않습니다. `DONTWAIT`가 필요한
-즉시 제출에는 `submit(zlink.SendFlags.DontWait)`을 사용하고, HWM admission을
+즉시 제출에는 `submit_sync(zlink.SendFlags.DontWait)`을 사용하고, HWM admission을
 기다려야 하면 비동기 `submit()`을 `await`합니다.
 
 ---

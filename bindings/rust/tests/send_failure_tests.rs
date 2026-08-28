@@ -22,7 +22,7 @@ fn sync_blocking_terminal_admits_a_send() {
     sender
         .send()
         .message(Message::try_from(b"sync-admitted").unwrap())
-        .submit_blocking(SendFlags::NONE)
+        .submit_sync(SendFlags::NONE)
         .unwrap();
 
     receiver
@@ -62,7 +62,7 @@ fn sync_dont_wait_reports_hwm_backpressure_immediately() {
             sender
                 .send()
                 .message(Message::try_from(vec![b'x'; 65_536].as_slice()).unwrap())
-                .submit_blocking(SendFlags::DONT_WAIT)
+                .submit_sync(SendFlags::DONT_WAIT)
                 .err()
         })
         .expect("the undrained outbound lane did not reach HWM");

@@ -61,6 +61,21 @@ internal sealed partial class SocketKernel : IDisposable
             routerRoutingId, parts, timeoutMs, cancellationToken);
     }
 
+    internal IReadOnlyList<Message> Request(RoutingId? routerRoutingId,
+        IReadOnlyList<Message> parts, uint timeoutMs, SendFlags flags)
+    {
+        return RoutedRequestSubmitter.Request(Handle, Type, routerRoutingId,
+            parts, timeoutMs, flags);
+    }
+
+    internal void Request(RoutingId? routerRoutingId,
+        IReadOnlyList<Message> parts, uint timeoutMs, SendFlags flags,
+        RequestCallback callback)
+    {
+        RoutedRequestSubmitter.Request(Handle, Type, routerRoutingId, parts,
+            timeoutMs, flags, callback);
+    }
+
     public bool ReceiveSubscriptionEvent(SubscriptionEvent result,
         RecvFlags flags = RecvFlags.None)
     {

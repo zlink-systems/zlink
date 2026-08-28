@@ -154,6 +154,12 @@ a PAIR send. Go send has no separate asynchronous terminal.
 err := dealer.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(ctx)
 ```
 
+Request passes through the same HWM admission, but Go does not split it into a
+separate callback or three methods. `Flags(SendFlags).Submit(ctx)` immediately
+returns the admission result and delivers the reply on the accompanying
+completion channel. `SendFlagsNone` waits for admission and
+`SendFlagsDontWait` reports immediate back-pressure.
+
 ### 3. Received — the receive envelope
 
 Holds a received message envelope. Carries a routing ID, part list, and an

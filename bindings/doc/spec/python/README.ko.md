@@ -142,8 +142,12 @@ routed request completion callback을 등록하는 별도 public method는 제�
   awaitable은 없다.
 - HWM-managed send — PAIR `send()`와 DEALER/ROUTER routed `send()` — 와 `request()`는
   둘 다 Core HWM admission queue를 지날 수 있으므로 ASYNC다. Send builder에는 async
-  `submit()`과 sync `submit_blocking(*, flags=0) -> None` 종결자가 있고, request
-  builder에는 async `submit()`만 있다. Async send는
+  `submit()`과 sync `submit_sync(*, flags=0) -> None` 종결자가 있다. Request
+  builder는 세 완료 표면을 제공한다. `submit_sync(*, flags)`는 admission과 reply를
+  동기 대기해 reply를 직접 반환하고, `submit_sync(*, flags, callback)`은 admission
+  결과가 결정되면 즉시 반환한 뒤 reply를 callback으로 전달하며, `submit()`은 await
+  가능한 coroutine object를 반환한다. Request 제출도 send와 같은 HWM admission을
+  지나며 sync flag의 `NONE`/`DONT_WAIT`가 admission 대기 여부를 정한다. Async send는
   `await pair.send().message(message).submit()`,
   `await dealer.send().message(message).submit()`,
   `reply = await dealer.request().message(request).submit()`처럼 사용하며, `submit()`은
@@ -174,7 +178,7 @@ routed request completion callback을 등록하는 별도 public method는 제�
   - Coroutine cancellation은 pending operation을 정확히 한 번 종료한다. 한 target의
     send나 request 대기는 다른 target의 submit도 Python event loop도 막지 않는다 —
     admission 순서는 Python 쪽 대기가 아니라 Core 자신의 target별 queue가 정한다.
-    Sync `submit_blocking(*, flags=0)`은 `zlink_send_part(_rid)`를 호출한다. Flag가
+    Sync `submit_sync(*, flags=0)`은 `zlink_send_part(_rid)`를 호출한다. Flag가
     없거나 `SendFlags.NONE`이면 Core 안에서 admit까지 blocking하고,
     `SendFlags.DONT_WAIT`이면 backpressure를 즉시 `SubmitError`로 전달한다. Callback이나
     `submit_async()` compatibility terminal은 제공하지 않는다.

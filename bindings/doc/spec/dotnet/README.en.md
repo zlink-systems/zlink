@@ -286,11 +286,14 @@ behavior are defined only by the immutable byte value.
   for admission; `SendFlags.DontWait` immediately throws
   `ZlinkSubmitException` (`Result == Backpressured`) when HWM is full. PAIR send
   and `Received.Send()` provide the same terminal pair.
-- The only terminal on the `RequestSubmitOperation` returned from
-  `IDealerSocket.Request()` or `IRouterSocket.Request(RoutingId)` is
-  `Task<IReadOnlyList<Message>> Async(CancellationToken)`. These routed builders
-  do not add a blocking submit, polling result, `Flags(...)`, or callback
-  `Submit(...)` terminal.
+- The `RequestSubmitOperation` returned from `IDealerSocket.Request()` or
+  `IRouterSocket.Request(RoutingId)` provides three completion surfaces.
+  `Submit(SendFlags)` waits synchronously for admission and reply and returns
+  the reply directly. `Submit(SendFlags, callback)` returns as soon as the
+  admission result is known and delivers the reply through the callback.
+  `Async(CancellationToken)` returns an awaitable `Task`. Request submission
+  passes through the same HWM admission as send, and both synchronous terminals
+  use `SendFlags.None`/`SendFlags.DontWait` to select admission waiting.
 - Multipart payloads accumulate through repeated `Message(...)` calls or
   `Messages(...)`, followed by one `Async(...)`. `Async(...)` transfers payload
   ownership to the operation and returns a Task without blocking the caller

@@ -361,13 +361,16 @@ void submit_raw_request (detail::operation_state_t &state_,
                     if (dealer) {
                         raw_rc = zlink_dealer_request_transport_pair_part (
                           state_.raw.socket, &target, &native_view,
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, timeout,
+                          static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                          ZLINK_PART_FINAL, timeout,
                           reply_handler_, reply_userdata_);
                     } else {
                         raw_rc = zlink_router_request_transport_pair_part (
                           state_.raw.socket, &target.peer_rid,
                           target.transport_pair_id, target.transport_pair_generation,
-                          &native_view, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, timeout,
+                          &native_view,
+                          static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                          ZLINK_PART_FINAL, timeout,
                           reply_handler_, reply_userdata_);
                     }
                     (void) zlink_msg_close (&native_view);
@@ -392,14 +395,16 @@ void submit_raw_request (detail::operation_state_t &state_,
                             if (dealer) {
                                 return zlink_dealer_request_transport_pair_part (
                                   state_.raw.socket, &target, part_,
-                                  ZLINK_SEND_FLAGS_NONE, part_flag_,
+                                  static_cast<zlink_send_flags_t> (
+                                    static_cast<int> (state_.flags)), part_flag_,
                                   is_final_ ? timeout : 0u, handler, userdata);
                             }
                             return zlink_router_request_transport_pair_part (
                               state_.raw.socket, &target.peer_rid,
                               target.transport_pair_id,
                               target.transport_pair_generation, part_,
-                              ZLINK_SEND_FLAGS_NONE, part_flag_,
+                              static_cast<zlink_send_flags_t> (
+                                static_cast<int> (state_.flags)), part_flag_,
                               is_final_ ? timeout : 0u, handler, userdata);
                         });
                   });
@@ -494,10 +499,18 @@ request_submit_operation_t request_operation_t::message (message_t &&part_) &&
     return request_submit_operation_t (release_state_ptr ());
 }
 
+request_submit_operation_t &&request_submit_operation_t::flags (int flags_) &&
+{
+    state ().flags = send_flags_t (flags_);
+    return std::move (*this);
+}
+
 async_result_t<std::vector<message_t>> request_submit_operation_t::async () &&
 {
     auto &state = this->state ();
     if (!detail::has_send_parts (state))
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+    if (state.flags != send_flags_t::none)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
 
     if (is_raw_request_kind (state.kind))

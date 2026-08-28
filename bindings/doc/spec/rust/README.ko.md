@@ -396,10 +396,14 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   HWM-managed **send**(PAIR `send()`, STREAM `send(target)`, `Received::send()`,
   DEALER/ROUTER routed send)는 두 terminal을 제공한다. 비동기 `submit()`은
   runtime 비종속 `Future<Output = Result<(), SubmitError>>`를 반환하고, 동기
-  `submit_blocking(SendFlags) -> Result<(), SubmitError>`는 `SendFlags::NONE`에서
+  `submit_sync(SendFlags) -> Result<(), SubmitError>`는 `SendFlags::NONE`에서
   Core 내부 admission을 blocking 대기하며 `SendFlags::DONT_WAIT`에서 즉시
-  `Backpressured`를 반환한다. request `submit()`은
-  `Future<Output = Result<Vec<Message>, ZlinkError>>`를 반환한다. **publish**는
+  `Backpressured`를 반환한다. Request는 세 완료 표면을 제공한다.
+  `submit_sync(SendFlags)`는 admission과 reply를 동기 대기해 reply를 직접 반환하고,
+  `on_reply(cb).submit_sync(SendFlags)`는 admission 결과를 즉시 반환한 뒤 reply를
+  callback으로 전달하며, `submit()`은
+  `Future<Output = Result<Vec<Message>, ZlinkError>>`를 반환한다. Request 제출도 같은
+  HWM admission을 지나며 sync flag가 대기 여부를 정한다. **publish**는
   이 분류에 포함되지 않으며 동기 `submit() -> Result<(), SubmitError>`가
   terminal이다(lossy PUB 의미론, `ZLINK_PUB_OPT_NODROP`에서는 즉시
   `Backpressured` 오류).
@@ -415,8 +419,9 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   바인딩은 park queue, WRITABLE 재시도, deadline timer, dispatcher thread를
   두지 않는다. 공개 `on_send_ready`는 없고 send completion은 Future로만 전달한다.
 - Routed send builder는 send 계약에 따라 `submit()`과
-  `submit_blocking(SendFlags)`를 함께 제공한다. Request builder에는 callback,
-  blocking wait, progress polling terminal을 함께 제공하지 않는다. PUB/XPUB
+  `submit_sync(SendFlags)`를 함께 제공한다. Request callback은 Rust의 overload 부재에
+  맞춰 `on_reply(cb).submit_sync(SendFlags)` 빌더로 표현하고 별도 progress polling
+  terminal은 제공하지 않는다. PUB/XPUB
   `publish`와 ROUTER reply는 별도의 동기
   operation 계약을 유지한다. Raw ROUTER/`Received` reply의 terminal은
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`인 one-shot이다. Native reply를

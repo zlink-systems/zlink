@@ -12,7 +12,8 @@ use std::thread;
 use std::time::Duration;
 
 use zlink::{
-    Context, Message, Received, RecvFlags, RequestResult, RoutingId, SubmitResult, ZlinkError,
+    Context, Message, Received, RecvFlags, RequestResult, RoutingId, SendFlags, SubmitResult,
+    ZlinkError,
 };
 
 const RECORD_HWM: u64 = 65_536 + 64;
@@ -345,4 +346,101 @@ fn request_timeout_is_owned_by_core() {
         error,
         ZlinkError::Request(request) if request.code() == RequestResult::TimedOut
     ));
+}
+
+#[test]
+fn request_sync_return_waits_for_reply() {
+    let ctx = Context::new().unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    router.bind("inproc://rust-request-sync-return").unwrap();
+    dealer.connect("inproc://rust-request-sync-return").unwrap();
+    thread::sleep(Duration::from_millis(75));
+
+    let replier = thread::spawn(move || {
+        let mut request = Received::empty();
+        assert!(router.recv(&mut request, RecvFlags::NONE).unwrap());
+        request
+            .reply()
+            .message(Message::try_from(b"sync-reply").unwrap())
+            .submit()
+            .unwrap();
+    });
+    let reply = dealer
+        .request()
+        .message(Message::try_from(b"sync-request").unwrap())
+        .timeout(Duration::from_secs(2))
+        .submit_sync(SendFlags::NONE)
+        .unwrap();
+    assert_eq!(reply[0].as_bytes(), b"sync-reply");
+    replier.join().unwrap();
+}
+
+#[test]
+fn request_sync_callback_returns_after_admission_and_delivers_reply() {
+    let ctx = Context::new().unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    router.bind("inproc://rust-request-sync-callback").unwrap();
+    dealer.connect("inproc://rust-request-sync-callback").unwrap();
+    thread::sleep(Duration::from_millis(75));
+
+    let replier = thread::spawn(move || {
+        let mut request = Received::empty();
+        assert!(router.recv(&mut request, RecvFlags::NONE).unwrap());
+        request
+            .reply()
+            .message(Message::try_from(b"callback-reply").unwrap())
+            .submit()
+            .unwrap();
+    });
+    let (reply_tx, reply_rx) = mpsc::channel();
+    dealer
+        .request()
+        .message(Message::try_from(b"callback-request").unwrap())
+        .timeout(Duration::from_secs(2))
+        .on_reply(move |outcome| reply_tx.send(outcome).unwrap())
+        .submit_sync(SendFlags::DONT_WAIT)
+        .unwrap();
+    let reply = reply_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+    assert_eq!(reply[0].as_bytes(), b"callback-reply");
+    replier.join().unwrap();
+}
+
+#[test]
+fn request_sync_callback_dont_wait_reports_admission_backpressure() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    dealer
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .bind("inproc://rust-request-sync-callback-backpressure")
+        .unwrap();
+    dealer
+        .connect("inproc://rust-request-sync-callback-backpressure")
+        .unwrap();
+    thread::sleep(Duration::from_millis(75));
+
+    let started = std::time::Instant::now();
+    let error = (0..256)
+        .find_map(|_| {
+            dealer
+                .request()
+                .message(large_filler(b'r'))
+                .timeout(Duration::from_secs(5))
+                .on_reply(|_| {})
+                .submit_sync(SendFlags::DONT_WAIT)
+                .err()
+        })
+        .expect("the undrained request lane did not reach HWM");
+    assert_eq!(error.code(), SubmitResult::Backpressured);
+    assert!(started.elapsed() < Duration::from_secs(2));
 }

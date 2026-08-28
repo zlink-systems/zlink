@@ -172,6 +172,22 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
         return Kernel.RequestAsync(null, parts, timeoutMs, ct);
     }
 
+    internal IReadOnlyList<Message> RequestCore(IReadOnlyList<Message> parts,
+        TimeSpan timeout, SendFlags flags)
+    {
+        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
+            DefaultRequestTimeout);
+        return Kernel.Request(null, parts, timeoutMs, flags);
+    }
+
+    internal void RequestCore(IReadOnlyList<Message> parts, TimeSpan timeout,
+        SendFlags flags, RequestCallback callback)
+    {
+        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
+            DefaultRequestTimeout);
+        Kernel.Request(null, parts, timeoutMs, flags, callback);
+    }
+
     private ReceivedReplyHandler CreateReplyHandler(ulong requestSeq)
     {
         return replyParts => ReplyCore(requestSeq, replyParts);

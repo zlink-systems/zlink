@@ -40,8 +40,11 @@ export interface SocketNativeBinding {
     socket: NativeHandle,
     parts: unknown,
     token: bigint,
-    timeoutMs: number
+    timeoutMs: number,
+    flags?: number
   ) => { result: number; nativeErrno: number };
+  dealerRequestSync: (socket: NativeHandle, parts: unknown, timeoutMs: number, flags: number) =>
+    { result: number; nativeErrno: number; requestResult?: number; parts?: Buffer[] };
   dealerReply: (
     socket: NativeHandle,
     requestSeq: bigint,
@@ -59,8 +62,12 @@ export interface SocketNativeBinding {
     token: bigint,
     timeoutMs: number,
     transportPairId?: bigint,
-    transportPairGeneration?: bigint
+    transportPairGeneration?: bigint,
+    flags?: number
   ) => { result: number; nativeErrno: number };
+  routerRequestSync: (socket: NativeHandle, peerRid: Buffer, parts: unknown, timeoutMs: number,
+    transportPairId: bigint, transportPairGeneration: bigint, flags: number) =>
+    { result: number; nativeErrno: number; requestResult?: number; parts?: Buffer[] };
   socketRequestCompletionHandler: (socket: NativeHandle, handler: unknown) => void;
   handleGetRoutingId: (handle: NativeHandle) => Buffer;
   handleSetRoutingId: (handle: NativeHandle, routingId: Buffer) => void;

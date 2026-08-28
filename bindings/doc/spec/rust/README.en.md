@@ -347,10 +347,15 @@ public crate items and re-exports.
   `Received::send()`, and DEALER/ROUTER routed send) provides two terminals.
   Asynchronous `submit()` returns a runtime-independent
   `Future<Output = Result<(), SubmitError>>`. Synchronous
-  `submit_blocking(SendFlags) -> Result<(), SubmitError>` blocks inside Core
+  `submit_sync(SendFlags) -> Result<(), SubmitError>` blocks inside Core
   for admission with `SendFlags::NONE` and immediately returns
-  `Backpressured` with `SendFlags::DONT_WAIT`. Request `submit()` returns
-  `Future<Output = Result<Vec<Message>, ZlinkError>>`. **publish** is not in
+  `Backpressured` with `SendFlags::DONT_WAIT`. Request provides three completion
+  surfaces. `submit_sync(SendFlags)` waits synchronously for admission and reply
+  and returns the reply directly; `on_reply(cb).submit_sync(SendFlags)` returns
+  the admission result immediately and delivers the reply through the callback;
+  `submit()` returns `Future<Output = Result<Vec<Message>, ZlinkError>>`.
+  Request submission passes through the same HWM admission and its synchronous
+  flag selects admission waiting. **publish** is not in
   that classification: its terminal is the synchronous
   `submit() -> Result<(), SubmitError>` (lossy PUB semantics; with
   `ZLINK_PUB_OPT_NODROP` a full subscriber surfaces `Backpressured`
@@ -369,9 +374,10 @@ public crate items and re-exports.
   dispatcher thread. There is no public `on_send_ready`; send completion is
   delivered only through the Future.
 - Routed send builders expose both `submit()` and
-  `submit_blocking(SendFlags)` as required by the send contract. Request
-  builders do not also expose callback, blocking-wait, or progress-polling
-  terminals. PUB/XPUB `publish` and ROUTER reply remain
+  `submit_sync(SendFlags)` as required by the send contract. Because Rust has
+  no overloads, request callback completion uses the
+  `on_reply(cb).submit_sync(SendFlags)` builder; no separate progress-polling
+  terminal is exposed. PUB/XPUB `publish` and ROUTER reply remain
   separate synchronous operation contracts. The raw
   ROUTER/`Received` reply terminal is the one-shot
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal

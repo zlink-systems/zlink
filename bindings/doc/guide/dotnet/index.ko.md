@@ -128,6 +128,12 @@ socket.Send().Message(message).Submit(SendFlags.DontWait); // 동기 non-blockin
 await socket.Send().Message(message).Async();              // 비동기 완료
 ```
 
+Request도 같은 HWM admission을 지나며 세 완료 표면을 제공합니다.
+`Submit(SendFlags)`은 admission과 reply를 동기 대기해 reply를 직접 반환하고,
+`Submit(SendFlags, callback)`은 admission 결과가 결정되면 즉시 반환한 뒤 reply를
+callback으로 전달하며, `Async()`는 awaitable을 반환합니다. Sync terminal의 flag가
+`None`(대기)과 `DontWait`(즉시 backpressure)를 선택합니다.
+
 ### 3. 수신 (Received)
 
 수신 결과를 담는 **재사용 가능한 봉투**입니다. 핫 패스에서 한 번 만들어

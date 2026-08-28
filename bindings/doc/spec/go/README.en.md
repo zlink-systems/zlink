@@ -166,12 +166,23 @@ type RoutedSendSubmitOp interface {
     Submit(context.Context) error
 }
 
-// The single DEALER/ROUTER request terminal returns a completion channel.
+// DEALER/ROUTER request provides a flag-free asynchronous completion channel
+// and a synchronous (+flags) terminal returning admission plus that channel.
+// There is no separate callback.
 type RequestSubmitOp interface {
     Message(*Message) RequestSubmitOp
     Bytes([]byte) RequestSubmitOp
     Timeout(time.Duration) RequestSubmitOp
+    Flags(SendFlags) RequestSyncSubmitOp
     Submit(context.Context) <-chan RequestReplyCompletion
+}
+
+type RequestSyncSubmitOp interface {
+    Message(*Message) RequestSyncSubmitOp
+    Bytes([]byte) RequestSyncSubmitOp
+    Timeout(time.Duration) RequestSyncSubmitOp
+    Flags(SendFlags) RequestSyncSubmitOp
+    Submit(context.Context) (<-chan RequestReplyCompletion, error)
 }
 
 type RequestReplyCompletion struct {
@@ -201,9 +212,11 @@ type ReplySubmitOp interface {
 - Managed DEALER `Send` and ROUTER `SendTo` builders expose
   `Flags(SendFlags)`. With no flag or `SendFlagsNone`, Core blocks; with
   `SendFlagsDontWait`, Core immediately returns
-  `SubmitBackpressured`/`EAGAIN` through `error`. DEALER/ROUTER `Request`
-  builders have no flags, and the send family exposes no callback or
-  `SubmitAsync` compatibility terminal.
+  `SubmitBackpressured`/`EAGAIN` through `error`. DEALER/ROUTER `Request` also
+  passes through the same HWM admission with `Flags(SendFlags).Submit(ctx)`:
+  it reports admission immediately through `error` and delivers the reply on
+  the completion channel. There is no separate callback. The send family also
+  exposes no callback or `SubmitAsync` compatibility terminal.
 - **The binding owns no thread, no queue, and no retry.** A routed send's
   `Submit(ctx)` is a synchronous terminal that hands the complete record to a
   blocking Core call (`zlink_send_part` for DEALER, `zlink_send_part_rid` for
@@ -219,10 +232,12 @@ type ReplySubmitOp interface {
   or already-expired `ctx` fails with `context.Canceled` /
   `context.DeadlineExceeded` and nothing reaches the wire. Once Core has taken
   the record, Core owns the wait and cancelling `ctx` does not interrupt it.
-- A request's `Submit(ctx)` is a **synchronous submit with an asynchronous
-  completion**. It snapshots one exact `(RID, transport pair, generation)`
+- A request's flag-free `Submit(ctx)` returns an asynchronous completion
+  channel. `Flags(SendFlags).Submit(ctx)` is a **synchronous submit with an
+  asynchronous completion**. It snapshots one exact `(RID, transport pair, generation)`
   target (a policy-free value snapshot, not a credit reservation), submits
-  through a blocking Core call, and returns the completion channel. The
+  through Core admission, and returns its `error` result plus the completion
+  channel. The
   selected target does not change during the operation and detaching does not
   re-select another connection. The completion is driven by Core's reply
   handler callback — the binding adds no retry queue and no dedicated thread.

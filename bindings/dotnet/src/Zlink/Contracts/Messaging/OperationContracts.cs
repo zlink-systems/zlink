@@ -168,6 +168,16 @@ public interface RequestSubmitOperation
     RequestSubmitOperation Timeout(TimeSpan timeout);
 
     /// <summary>
+    ///     Blocks until Core completes the request and returns the reply parts.
+    /// </summary>
+    IReadOnlyList<Message> Submit(SendFlags flags);
+
+    /// <summary>
+    ///     Returns after admission and delivers request completion by callback.
+    /// </summary>
+    void Submit(SendFlags flags, RequestCallback callback);
+
+    /// <summary>
     ///     Transfers the request parts to the operation, asynchronously waits for
     ///     exact-target admission, and returns the reply parts.
     /// </summary>
@@ -178,6 +188,11 @@ public interface RequestSubmitOperation
     /// </remarks>
     Task<IReadOnlyList<Message>> Async(CancellationToken ct = default);
 }
+
+/// <summary>Receives a request completion and its reply parts.</summary>
+/// <remarks>On success, the callback owns and must dispose the reply parts.</remarks>
+public delegate void RequestCallback(RequestResult result,
+    IReadOnlyList<Message> reply);
 
 /// <summary>
 ///     Builds a reply to a received request: add the reply parts, then submit.

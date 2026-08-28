@@ -22,7 +22,11 @@ import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BiConsumer;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.sockets.RequestResult;
 
 public final class MessageOperations {
     private static final long DEFAULT_TIMEOUT_MS = 5_000L;
@@ -55,8 +59,9 @@ public final class MessageOperations {
         return new PublishBuilder(invoker);
     }
 
-    public static RequestOperation request(RequestAsyncInvoker asyncInvoker) {
-        return new RequestBuilder(asyncInvoker);
+    public static RequestOperation request(RequestAsyncInvoker asyncInvoker,
+                                           RequestSyncInvoker syncInvoker) {
+        return new RequestBuilder(asyncInvoker, syncInvoker);
     }
 
     public static ReplyOperation reply(ReplyInvoker invoker) {
@@ -132,7 +137,7 @@ public final class MessageOperations {
         }
 
         @Override
-        public void submit(SendFlags flags) {
+        public void submit_sync(SendFlags flags) {
             markSubmitted();
             if (!syncInvoker.submit(parts.asList(), Objects.requireNonNull(
                 flags, "flags"))) {
@@ -157,6 +162,13 @@ public final class MessageOperations {
     public interface RequestAsyncInvoker {
         CompletionStage<List<Message>> submit(List<Message> parts,
                                               Duration timeout);
+    }
+
+    @FunctionalInterface
+    public interface RequestSyncInvoker {
+        CompletionStage<List<Message>> submit(List<Message> parts,
+                                              Duration timeout,
+                                              SendFlags flags);
     }
 
     private static final class RoutedSendBuilder
@@ -198,7 +210,7 @@ public final class MessageOperations {
         }
 
         @Override
-        public void submit(SendFlags flags) {
+        public void submit_sync(SendFlags flags) {
             ensureNotSubmitted();
             if (parts.isEmpty())
                 throw new IllegalArgumentException("at least one message required");
@@ -328,15 +340,19 @@ public final class MessageOperations {
     private static final class RequestBuilder
       implements RequestOperation, RequestSubmitOperation {
         private final RequestAsyncInvoker asyncInvoker;
+        private final RequestSyncInvoker syncInvoker;
         private Message singlePart;
         private MessagePartsBuffer parts;
         private int partCount;
         private Duration timeout = Duration.ofMillis(DEFAULT_TIMEOUT_MS);
         private boolean submitted;
 
-        private RequestBuilder(RequestAsyncInvoker asyncInvoker) {
+        private RequestBuilder(RequestAsyncInvoker asyncInvoker,
+                               RequestSyncInvoker syncInvoker) {
             this.asyncInvoker = Objects.requireNonNull(asyncInvoker,
                 "asyncInvoker");
+            this.syncInvoker = Objects.requireNonNull(syncInvoker,
+                "syncInvoker");
         }
 
         @Override
@@ -356,6 +372,40 @@ public final class MessageOperations {
         public CompletionStage<List<Message>> submit() {
             markSubmitted();
             return asyncInvoker.submit(requestParts(), timeout);
+        }
+
+        @Override
+        public List<Message> submit_sync(SendFlags flags) {
+            markSubmitted();
+            try {
+                return syncInvoker.submit(requestParts(), timeout,
+                    Objects.requireNonNull(flags, "flags"))
+                    .toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                throw rethrowCompletion(failure);
+            }
+        }
+
+        @Override
+        public void submit_sync(
+                SendFlags flags,
+                BiConsumer<RequestResult, List<Message>> callback) {
+            markSubmitted();
+            Objects.requireNonNull(callback, "callback");
+            syncInvoker.submit(requestParts(), timeout,
+                Objects.requireNonNull(flags, "flags"))
+                .whenComplete((reply, failure) -> {
+                    if (failure == null) {
+                        callback.accept(RequestResult.OK, reply);
+                        return;
+                    }
+                    Throwable cause = completionCause(failure);
+                    if (cause instanceof ZlinkRequestException request) {
+                        callback.accept(request.getResult(), List.of());
+                        return;
+                    }
+                    callback.accept(RequestResult.INTERNAL_ERROR, List.of());
+                });
         }
 
         private void addMessage(Message part) {
@@ -389,6 +439,24 @@ public final class MessageOperations {
             if (submitted)
                 throw new IllegalStateException("operation already submitted");
         }
+    }
+
+    private static RuntimeException rethrowCompletion(
+            CompletionException failure) {
+        Throwable cause = completionCause(failure);
+        if (cause instanceof RuntimeException runtime) {
+            return runtime;
+        }
+        return failure;
+    }
+
+    private static Throwable completionCause(Throwable failure) {
+        Throwable cause = failure;
+        while (cause instanceof CompletionException
+               && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 
     private static final class ReplyBuilder

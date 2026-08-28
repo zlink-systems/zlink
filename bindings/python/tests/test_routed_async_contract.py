@@ -152,7 +152,7 @@ def test_sync_blocking_terminal_admits_and_returns_none():
 
                 for _ in range(200):
                     try:
-                        result = left.send().message(b"sync").submit_blocking()
+                        result = left.send().message(b"sync").submit_sync()
                         break
                     except zlink.SubmitError as error:
                         if error.result != zlink.SubmitResult.NOT_CONNECTED:
@@ -184,7 +184,7 @@ def test_sync_dontwait_immediately_raises_when_hwm_is_full():
                     await _send_when_connected(dealer, payload)
                     started = time.monotonic()
                     try:
-                        dealer.send().message(payload).submit_blocking(
+                        dealer.send().message(payload).submit_sync(
                             flags=zlink.SendFlags.DONT_WAIT
                         )
                     except zlink.SubmitError as error:
@@ -198,7 +198,7 @@ def test_sync_dontwait_immediately_raises_when_hwm_is_full():
                     assert (
                         received.send()
                         .message(b"received-send")
-                        .submit_blocking()
+                        .submit_sync()
                         is None
                     )
                     received.close()
@@ -210,7 +210,7 @@ def test_sync_dontwait_immediately_raises_when_hwm_is_full():
 
 
 def test_async_submit_remains_a_coroutine_terminal():
-    operation = zlink.RoutedSendOp.submit_blocking
+    operation = zlink.RoutedSendOp.submit_sync
     signature = inspect.signature(operation)
     assert str(signature) == "(self, *, flags=0) -> None"
 
@@ -222,6 +222,124 @@ def test_async_submit_remains_a_coroutine_terminal():
                 coroutine.close()
 
     asyncio.run(scenario())
+
+
+def test_request_sync_return_and_callback_terminals():
+    with zlink.create_context() as context:
+        with zlink.create_dealer_socket(context) as dealer:
+            with zlink.create_router_socket(context) as router:
+                dealer.options.linger_ms = 0
+                router.options.linger_ms = 0
+                endpoint = _endpoint("request-sync-terminals")
+                router.bind(endpoint)
+                dealer.connect(endpoint)
+
+                received = zlink.create_received()
+
+                def reply_once(expected, reply):
+                    for _ in range(200):
+                        try:
+                            if router.recv_into(received):
+                                break
+                        except zlink.RecvError as error:
+                            if error.result != zlink.RecvResult.NO_DATA:
+                                raise
+                        time.sleep(0.001)
+                    else:
+                        raise AssertionError("request did not reach responder")
+                    assert received.to_bytes_list() == [expected]
+                    received.reply().message(reply).submit()
+                    received.close()
+
+                reply_thread = threading.Thread(
+                    target=reply_once, args=(b"sync-return", b"return-reply")
+                )
+                reply_thread.start()
+                reply = (
+                    dealer.request()
+                    .message(b"sync-return")
+                    .timeout(1)
+                    .submit_sync(flags=zlink.SendFlags.NONE)
+                )
+                reply_thread.join(timeout=2)
+                assert not reply_thread.is_alive()
+                try:
+                    assert [part.to_bytes() for part in reply] == [b"return-reply"]
+                finally:
+                    for part in reply:
+                        part.close()
+
+                callback_done = threading.Event()
+                callback_result = {}
+
+                def on_reply(parts, error):
+                    callback_result["error"] = error
+                    callback_result["parts"] = parts
+                    callback_done.set()
+
+                assert (
+                    dealer.request()
+                    .message(b"sync-callback")
+                    .timeout(1)
+                    .submit_sync(flags=zlink.SendFlags.NONE, callback=on_reply)
+                    is None
+                )
+                reply_once(b"sync-callback", b"callback-reply")
+                assert callback_done.wait(2)
+                assert callback_result["error"] is None
+                parts = callback_result["parts"]
+                try:
+                    assert [part.to_bytes() for part in parts] == [b"callback-reply"]
+                finally:
+                    for part in parts:
+                        part.close()
+
+
+def test_request_sync_callback_dontwait_surfaces_admission_backpressure():
+    with zlink.create_context() as context:
+        with zlink.create_dealer_socket(context) as dealer:
+            with zlink.create_router_socket(context) as router:
+                dealer.options.linger_ms = 0
+                router.options.linger_ms = 0
+                dealer.options.send_high_water_mark = 2048
+                endpoint = _endpoint("request-sync-callback-backpressure")
+                router.bind(endpoint)
+                dealer.connect(endpoint)
+
+                payload = b"q" * 65536
+                callbacks = []
+
+                def on_reply(parts, error):
+                    callbacks.append((parts, error))
+                    if parts is not None:
+                        for part in parts:
+                            part.close()
+
+                admitted = 0
+                for _ in range(200):
+                    try:
+                        (
+                            dealer.request()
+                            .message(payload)
+                            .timeout(0.05)
+                            .submit_sync(
+                                flags=zlink.SendFlags.DONT_WAIT,
+                                callback=on_reply,
+                            )
+                        )
+                        admitted += 1
+                    except zlink.SubmitError as error:
+                        if error.result in (
+                            zlink.SubmitResult.NOT_CONNECTED,
+                            zlink.SubmitResult.NOT_FOUND,
+                        ):
+                            time.sleep(0.001)
+                            continue
+                        assert error.result == zlink.SubmitResult.BACKPRESSURED
+                        break
+                else:
+                    raise AssertionError("request admission did not backpressure")
+                assert admitted > 0
 
 
 def test_exact_target_wait_does_not_block_an_unrelated_routing_id():

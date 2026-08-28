@@ -56,6 +56,46 @@ export interface NativeRequestRegistration {
   fail(error: unknown): boolean;
 }
 
+export interface NativeRequestCallbackRegistration {
+  readonly token: bigint;
+  fail(error: unknown): boolean;
+  cancel(): void;
+}
+
+export function registerNativeRequestCallback(
+  handle: unknown,
+  callback: (error: Error | null, reply: Message[] | null) => void,
+  requestErrorMessage: string
+): NativeRequestCallbackRegistration {
+  const state = dispatcher(handle);
+  const token = state.next++;
+  let settled = false;
+  state.callbacks.set(token, (result, replyParts) => {
+    if (settled) return;
+    settled = true;
+    if (result !== RequestResult.Ok) {
+      callback(requestErrorFromResult(result as RequestResult, requestErrorMessage), null);
+      return;
+    }
+    callback(null, messagesFromNativeBuffers(replyParts));
+  });
+  return {
+    token,
+    fail(error: unknown): boolean {
+      if (settled) return false;
+      settled = true;
+      state.callbacks.delete(token);
+      callback(error instanceof Error ? error : new Error(String(error)), null);
+      return true;
+    },
+    cancel(): void {
+      if (settled) return;
+      settled = true;
+      state.callbacks.delete(token);
+    },
+  };
+}
+
 export function registerNativeRequest(
   handle: unknown,
   requestErrorMessage: string

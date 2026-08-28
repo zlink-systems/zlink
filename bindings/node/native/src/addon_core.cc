@@ -2834,15 +2834,16 @@ static napi_value create_request_submit_result (napi_env env,
 static int dealer_request_parts (void *dealer,
                                  std::vector<zlink_msg_t> *parts,
                                  uint32_t timeout_ms,
+                                 zlink_send_flags_t flags,
                                  request_js_state_t *state)
 {
     return submit_msg_parts (
       parts->data (), parts->size (),
-      [dealer, timeout_ms, state] (zlink_msg_t *part,
+      [dealer, timeout_ms, flags, state] (zlink_msg_t *part,
                                    zlink_part_flag_t part_flag,
                                    bool is_final) {
           return zlink_dealer_request_part (
-            dealer, part, ZLINK_SEND_FLAGS_DONTWAIT, part_flag,
+            dealer, part, flags, part_flag,
             is_final ? timeout_ms : 0u,
             is_final ? request_reply_callback_trampoline : NULL,
             is_final ? state : NULL);
@@ -2854,23 +2855,24 @@ static int router_request_parts (void *router,
                                  const zlink_routed_submit_target_t *target,
                                  std::vector<zlink_msg_t> *parts,
                                  uint32_t timeout_ms,
+                                 zlink_send_flags_t flags,
                                  request_js_state_t *state)
 {
     return submit_msg_parts (
       parts->data (), parts->size (),
-      [router, peer_rid, target, timeout_ms, state] (
+      [router, peer_rid, target, timeout_ms, flags, state] (
         zlink_msg_t *part, zlink_part_flag_t part_flag, bool is_final) {
           if (target) {
               return zlink_router_request_transport_pair_part (
                 router, &target->peer_rid, target->transport_pair_id,
                 target->transport_pair_generation, part,
-                ZLINK_SEND_FLAGS_DONTWAIT, part_flag,
+                flags, part_flag,
                 is_final ? timeout_ms : 0u,
                 is_final ? request_reply_callback_trampoline : NULL,
                 is_final ? state : NULL);
           }
           return zlink_router_request_part (
-            router, peer_rid, part, ZLINK_SEND_FLAGS_DONTWAIT, part_flag,
+            router, peer_rid, part, flags, part_flag,
             is_final ? timeout_ms : 0u,
             is_final ? request_reply_callback_trampoline : NULL,
             is_final ? state : NULL);
@@ -2879,12 +2881,12 @@ static int router_request_parts (void *router,
 
 napi_value dealer_request (napi_env env, napi_callback_info info)
 {
-    napi_value argv[4];
-    size_t argc = 4;
+    napi_value argv[5];
+    size_t argc = 5;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     if (argc < 4) {
         napi_throw_type_error (
-          env, NULL, "dealerRequest requires (socket, parts, token, timeoutMs)");
+          env, NULL, "dealerRequest requires (socket, parts, token, timeoutMs, flags?)");
         return NULL;
     }
 
@@ -2911,8 +2913,12 @@ napi_value dealer_request (napi_env env, napi_callback_info info)
         close_msg_vector (parts);
         return NULL;
     }
+    int32_t flags = ZLINK_SEND_FLAGS_DONTWAIT;
+    if (argc >= 5)
+        napi_get_value_int32 (env, argv[4], &flags);
     const int result = dealer_request_parts (
-      dealer, &parts, static_cast<uint32_t> (timeout_ms), state);
+      dealer, &parts, static_cast<uint32_t> (timeout_ms),
+      static_cast<zlink_send_flags_t> (flags), state);
     parts.clear ();
     const int native_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
     if (result == ZLINK_SUBMIT_OK)
@@ -2924,8 +2930,8 @@ napi_value dealer_request (napi_env env, napi_callback_info info)
 
 napi_value router_request (napi_env env, napi_callback_info info)
 {
-    napi_value argv[7];
-    size_t argc = 7;
+    napi_value argv[8];
+    size_t argc = 8;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     if (argc < 5) {
         napi_throw_type_error (
@@ -2984,9 +2990,12 @@ napi_value router_request (napi_env env, napi_callback_info info)
         close_msg_vector (parts);
         return NULL;
     }
+    int32_t flags = ZLINK_SEND_FLAGS_DONTWAIT;
+    if (argc >= 8)
+        napi_get_value_int32 (env, argv[7], &flags);
     const int result = router_request_parts (
       router, &peer_rid, target_ptr, &parts,
-      static_cast<uint32_t> (timeout_ms), state);
+      static_cast<uint32_t> (timeout_ms), static_cast<zlink_send_flags_t> (flags), state);
     parts.clear ();
     const int native_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
     if (result == ZLINK_SUBMIT_OK)
@@ -2994,6 +3003,104 @@ napi_value router_request (napi_env env, napi_callback_info info)
     if (result != ZLINK_SUBMIT_OK)
         abort_request_js_state (state);
     return create_request_submit_result (env, result, native_errno);
+}
+
+struct blocking_request_state_t
+{
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool completed = false;
+    int result = ZLINK_REQUEST_INTERNAL_ERROR;
+    std::vector<zlink_msg_t> parts;
+    ~blocking_request_state_t () { close_msg_vector (parts); }
+};
+
+static void blocking_request_callback (zlink_request_result_t result,
+                                       zlink_msg_t *parts,
+                                       size_t part_count,
+                                       void *userdata)
+{
+    blocking_request_state_t *state = static_cast<blocking_request_state_t *> (userdata);
+    std::lock_guard<std::mutex> lock (state->mutex);
+    state->result = result;
+    if (result == ZLINK_REQUEST_OK) {
+        state->parts.resize (part_count);
+        for (size_t i = 0; i < part_count; ++i) {
+            zlink_msg_init (&state->parts[i]);
+            zlink_msg_move (&state->parts[i], &parts[i]);
+        }
+    }
+    close_recv_parts (parts, part_count);
+    state->completed = true;
+    state->condition.notify_one ();
+}
+
+static napi_value create_blocking_request_result (napi_env env,
+                                                   int submit_result,
+                                                   int native_errno,
+                                                   blocking_request_state_t *state)
+{
+    napi_value out = create_request_submit_result (env, submit_result, native_errno);
+    if (submit_result != ZLINK_SUBMIT_OK)
+        return out;
+    std::unique_lock<std::mutex> lock (state->mutex);
+    state->condition.wait (lock, [state] { return state->completed; });
+    set_int64_property (env, out, "requestResult", state->result);
+    if (state->result == ZLINK_REQUEST_OK) {
+        napi_value array;
+        napi_create_array_with_length (env, state->parts.size (), &array);
+        for (size_t i = 0; i < state->parts.size (); ++i) {
+            napi_value part = create_received_message_buffer (env, &state->parts[i]);
+            napi_set_element (env, array, static_cast<uint32_t> (i), part);
+        }
+        napi_set_named_property (env, out, "parts", array);
+    }
+    return out;
+}
+
+napi_value dealer_request_sync (napi_env env, napi_callback_info info)
+{
+    napi_value argv[4]; size_t argc = 4;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 4) { napi_throw_type_error (env, NULL, "dealerRequestSync requires (socket, parts, timeoutMs, flags)"); return NULL; }
+    void *dealer = NULL; napi_get_value_external (env, argv[0], &dealer);
+    int32_t timeout_ms = 0, flags = 0;
+    napi_get_value_int32 (env, argv[2], &timeout_ms); napi_get_value_int32 (env, argv[3], &flags);
+    std::vector<zlink_msg_t> parts;
+    if (!build_msg_vector_or_single (env, argv[1], &parts)) return NULL;
+    blocking_request_state_t state;
+    const int result = submit_msg_parts (parts.data (), parts.size (),
+      [dealer, timeout_ms, flags, &state] (zlink_msg_t *part, zlink_part_flag_t part_flag, bool final) {
+        return zlink_dealer_request_part (dealer, part, static_cast<zlink_send_flags_t> (flags), part_flag,
+          final ? static_cast<uint32_t> (timeout_ms) : 0u, final ? blocking_request_callback : NULL, final ? &state : NULL);
+      });
+    parts.clear (); const int native_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
+    if (result == ZLINK_SUBMIT_OK) consume_native_message_value (env, argv[1]);
+    return create_blocking_request_result (env, result, native_errno, &state);
+}
+
+napi_value router_request_sync (napi_env env, napi_callback_info info)
+{
+    napi_value argv[7]; size_t argc = 7;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 7) { napi_throw_type_error (env, NULL, "routerRequestSync requires seven arguments"); return NULL; }
+    void *router = NULL; napi_get_value_external (env, argv[0], &router);
+    zlink_routing_id_t peer; if (!parse_routing_id_value (env, argv[1], &peer)) return NULL;
+    int32_t timeout_ms = 0, flags = 0; napi_get_value_int32 (env, argv[3], &timeout_ms); napi_get_value_int32 (env, argv[6], &flags);
+    uint64_t pair_id = 0, pair_generation = 0; get_uint64_like (env, argv[4], &pair_id); get_uint64_like (env, argv[5], &pair_generation);
+    std::vector<zlink_msg_t> parts; if (!build_msg_vector_or_single (env, argv[2], &parts)) return NULL;
+    blocking_request_state_t state;
+    const int result = submit_msg_parts (parts.data (), parts.size (),
+      [router, &peer, pair_id, pair_generation, timeout_ms, flags, &state] (zlink_msg_t *part, zlink_part_flag_t part_flag, bool final) {
+        if (pair_id != 0) return zlink_router_request_transport_pair_part (router, &peer, pair_id, pair_generation, part,
+          static_cast<zlink_send_flags_t> (flags), part_flag, final ? static_cast<uint32_t> (timeout_ms) : 0u,
+          final ? blocking_request_callback : NULL, final ? &state : NULL);
+        return zlink_router_request_part (router, &peer, part, static_cast<zlink_send_flags_t> (flags), part_flag,
+          final ? static_cast<uint32_t> (timeout_ms) : 0u, final ? blocking_request_callback : NULL, final ? &state : NULL);
+      });
+    parts.clear (); const int native_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
+    if (result == ZLINK_SUBMIT_OK) consume_native_message_value (env, argv[2]);
+    return create_blocking_request_result (env, result, native_errno, &state);
 }
 
 napi_value socket_publish (napi_env env, napi_callback_info info)

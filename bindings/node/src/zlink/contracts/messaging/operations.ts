@@ -2,6 +2,7 @@
 
 import type { SendFlags } from '../sockets/socket_constants';
 import type { Message, MessageLike } from './message';
+import type { RequestError } from '../errors/errors';
 
 /** Builder stage that accepts one message part and returns the next stage. */
 export interface PartBuilder<TNext> {
@@ -30,7 +31,7 @@ export interface SendSubmitOperation
   /** Resolve when Core reports send completion; reject on timeout or terminal failure. */
   submit(): Promise<void>;
   /** Submit synchronously with the requested blocking or non-blocking send flags. */
-  submit(flags: SendFlags): void;
+  submit_sync(flags: SendFlags): void;
 }
 
 /** Builds a DEALER/ROUTER/STREAM routed send. */
@@ -42,7 +43,7 @@ export interface RoutedSendSubmitOperation
   /** Resolve after Core accepts the complete record; reject on terminal failure. */
   submit(): Promise<void>;
   /** Submit synchronously with the requested blocking or non-blocking send flags. */
-  submit(flags: SendFlags): void;
+  submit_sync(flags: SendFlags): void;
 }
 
 /** Immediate raw send retained for STREAM relay/try-send surfaces. */
@@ -65,11 +66,15 @@ export interface PublishSubmitOperation extends PartBuilder<PublishSubmitOperati
 /** Builds a request: add the request parts, then submit and await a reply. */
 export interface RequestOperation extends PartBuilder<RequestSubmitOperation> {}
 
-/** Accepts further parts, timeout, and the sole managed terminal of a request. */
+export type RequestCallback = (error: RequestError | null, reply: Message[] | null) => void;
+
+/** Accepts further parts, timeout, and all managed terminals of a request. */
 export interface RequestSubmitOperation
   extends PartBuilder<RequestSubmitOperation>, Timeoutable<RequestSubmitOperation> {
   /** Submit the request and return the reply parts, which the caller owns. */
   submit(): Promise<Message[]>;
+  submit_sync(flags: SendFlags): Message[];
+  submit_sync(flags: SendFlags, callback: RequestCallback): void;
 }
 
 /** Builds a reply to a received request: add the reply parts, then submit. */

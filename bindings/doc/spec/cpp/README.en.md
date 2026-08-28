@@ -450,7 +450,9 @@ artifact. The finished binding therefore keeps the following build rules.
   target. Reply completion is Core-driven: the Core reply handler callback
   completes the async suspension and invokes the callback in the context that
   delivered that completion. The submit itself follows the same Core-owned HWM
-  contract as a routed send (`SNDTIMEO` is the bound). The binding keeps no retry
+  contract as a routed send (`SNDTIMEO` is the bound). The `flags(int)` stage
+  on both synchronous terminals waits for admission with `NONE` and reports
+  immediate back-pressure with `DONTWAIT`. The binding keeps no retry
   queue, timer, or dedicated thread for this surface.
 - The request timeout is Core-owned (`ZLINK_REQUEST_TIMED_OUT`); the builder's
   `timeout(...)` sets that Core-owned reply deadline. A submit failure is thrown as

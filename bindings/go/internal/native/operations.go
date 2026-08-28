@@ -51,7 +51,20 @@ type RequestSubmitOp interface {
 	Message(message *Message) RequestSubmitOp
 	Bytes(data []byte) RequestSubmitOp
 	Timeout(timeout time.Duration) RequestSubmitOp
+	Flags(flags SendFlags) RequestSyncSubmitOp
 	Submit(ctx context.Context) <-chan RequestReplyCompletion
+}
+
+// RequestSyncSubmitOp is the synchronous admission terminal for a request.
+// Submit returns after Core admits the request (or rejects it immediately with
+// SendFlagsDontWait); the reply is still delivered through the completion
+// channel so callers can submit continuously and collect later.
+type RequestSyncSubmitOp interface {
+	Message(message *Message) RequestSyncSubmitOp
+	Bytes(data []byte) RequestSyncSubmitOp
+	Timeout(timeout time.Duration) RequestSyncSubmitOp
+	Flags(flags SendFlags) RequestSyncSubmitOp
+	Submit(ctx context.Context) (<-chan RequestReplyCompletion, error)
 }
 
 type ReplyOp interface {
@@ -187,11 +200,16 @@ func (b *routedSendBuilder) Submit(ctx context.Context) error {
 type requestBuilderState struct {
 	parts   []requestBuilderPart
 	timeout time.Duration
+	flags   SendFlags
 	submitOnce
-	submit func(context.Context, []requestBuilderPart, time.Duration) <-chan RequestReplyCompletion
+	submit func(context.Context, SendFlags, []requestBuilderPart, time.Duration) (<-chan RequestReplyCompletion, error)
 }
 
 type requestBuilder struct {
+	state *requestBuilderState
+}
+
+type requestSyncBuilder struct {
 	state *requestBuilderState
 }
 
@@ -201,7 +219,7 @@ type requestBuilderPart struct {
 	bytes   bool
 }
 
-func newRequestBuilder(submit func(context.Context, []requestBuilderPart, time.Duration) <-chan RequestReplyCompletion) RequestOp {
+func newRequestBuilder(submit func(context.Context, SendFlags, []requestBuilderPart, time.Duration) (<-chan RequestReplyCompletion, error)) RequestOp {
 	return &requestBuilder{state: &requestBuilderState{submit: submit}}
 }
 
@@ -220,14 +238,54 @@ func (b *requestBuilder) Timeout(timeout time.Duration) RequestSubmitOp {
 	return b
 }
 
-func (b *requestBuilder) Submit(ctx context.Context) <-chan RequestReplyCompletion {
+func (b *requestBuilder) Flags(flags SendFlags) RequestSyncSubmitOp {
+	b.state.flags = flags
+	return &requestSyncBuilder{state: b.state}
+}
+
+func (b *requestBuilder) submit(ctx context.Context) (<-chan RequestReplyCompletion, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
 	if len(b.state.parts) == 0 {
-		return completedRequest(configInvalidArgumentError())
+		return nil, configInvalidArgumentError()
 	}
 	if err := b.state.markSubmitted(); err != nil {
+		return nil, err
+	}
+	return b.state.submit(ctx, b.state.flags, b.state.parts, b.state.timeout)
+}
+
+func (b *requestBuilder) Submit(ctx context.Context) <-chan RequestReplyCompletion {
+	completion, err := b.submit(ctx)
+	if err != nil {
 		return completedRequest(err)
 	}
-	return b.state.submit(ctx, b.state.parts, b.state.timeout)
+	return completion
+}
+
+func (b *requestSyncBuilder) Message(message *Message) RequestSyncSubmitOp {
+	b.state.parts = append(b.state.parts, requestBuilderPart{message: message})
+	return b
+}
+
+func (b *requestSyncBuilder) Bytes(data []byte) RequestSyncSubmitOp {
+	b.state.parts = append(b.state.parts, requestBuilderPart{data: data, bytes: true})
+	return b
+}
+
+func (b *requestSyncBuilder) Timeout(timeout time.Duration) RequestSyncSubmitOp {
+	b.state.timeout = timeout
+	return b
+}
+
+func (b *requestSyncBuilder) Flags(flags SendFlags) RequestSyncSubmitOp {
+	b.state.flags = flags
+	return b
+}
+
+func (b *requestSyncBuilder) Submit(ctx context.Context) (<-chan RequestReplyCompletion, error) {
+	return (&requestBuilder{state: b.state}).submit(ctx)
 }
 
 type replyBuilder struct {

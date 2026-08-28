@@ -119,8 +119,8 @@ func (s *RouterSocket) SendTo(target RoutingID) RoutedSendOp {
 }
 
 func (s *RouterSocket) Request(peerRID RoutingID) RequestOp {
-	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) <-chan RequestReplyCompletion {
-		return submitRoutedRequest(ctx, s.socketCore, routedRouter, &peerRID, timeout, parts)
+	return newRequestBuilder(func(ctx context.Context, flags SendFlags, parts []requestBuilderPart, timeout time.Duration) (<-chan RequestReplyCompletion, error) {
+		return submitRoutedRequest(ctx, s.socketCore, routedRouter, &peerRID, flags, timeout, parts)
 	})
 }
 

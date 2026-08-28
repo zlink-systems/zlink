@@ -19,7 +19,7 @@ import systems.zlink.contracts.sockets.SendFlags;
 
 class RoutedCompletionSurfaceContractTest {
     @Test
-    void routedSendExposesAsyncAndFlaggedSyncSubmitWhileRequestStaysAsyncOnly()
+    void routedSendAndRequestExposeCanonicalTerminals()
         throws NoSuchMethodException {
         assertEquals(RoutedSendOperation.class,
             DealerSocket.class.getMethod("send").getReturnType());
@@ -29,14 +29,14 @@ class RoutedCompletionSurfaceContractTest {
                 .getReturnType());
 
         assertRoutedSendTerminals();
-        assertRequestAsyncTerminal();
+        assertRequestTerminals();
     }
 
     private static void assertRoutedSendTerminals()
         throws NoSuchMethodException {
         assertNoLegacyTerminals(RoutedSendSubmitOperation.class);
         Method[] submits = submitMethods(RoutedSendSubmitOperation.class);
-        assertEquals(2, submits.length);
+        assertEquals(1, submits.length);
 
         Method asyncSubmit = RoutedSendSubmitOperation.class
             .getMethod("submit");
@@ -44,11 +44,11 @@ class RoutedCompletionSurfaceContractTest {
             asyncSubmit.getReturnType()));
 
         Method syncSubmit = RoutedSendSubmitOperation.class
-            .getMethod("submit", SendFlags.class);
+            .getMethod("submit_sync", SendFlags.class);
         assertEquals(void.class, syncSubmit.getReturnType());
     }
 
-    private static void assertRequestAsyncTerminal()
+    private static void assertRequestTerminals()
         throws NoSuchMethodException {
         assertNoLegacyTerminals(RequestSubmitOperation.class);
         Method[] submits = submitMethods(RequestSubmitOperation.class);
@@ -57,6 +57,14 @@ class RoutedCompletionSurfaceContractTest {
         Method asyncSubmit = RequestSubmitOperation.class.getMethod("submit");
         assertTrue(CompletionStage.class.isAssignableFrom(
             asyncSubmit.getReturnType()));
+
+        Method syncReturn = RequestSubmitOperation.class
+            .getMethod("submit_sync", SendFlags.class);
+        assertEquals(java.util.List.class, syncReturn.getReturnType());
+
+        Method syncCallback = RequestSubmitOperation.class.getMethod(
+            "submit_sync", SendFlags.class, java.util.function.BiConsumer.class);
+        assertEquals(void.class, syncCallback.getReturnType());
     }
 
     private static void assertNoLegacyTerminals(Class<?> type) {

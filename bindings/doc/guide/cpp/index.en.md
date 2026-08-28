@@ -118,6 +118,12 @@ bool sent = socket.send ().message (msg).flags (ZLINK_DONTWAIT).submit ();
 co_await socket.send ().message (msg).async (); // async; does not block the caller thread
 ```
 
+Request also passes through HWM admission and provides three completion
+surfaces. `submit()` waits synchronously for admission and reply and returns the
+reply directly; `submit(callback)` returns once admission is decided and
+delivers the reply through the callback; `async()` returns an awaitable. Both
+synchronous terminals use `flags(NONE/DONTWAIT)` to select admission waiting.
+
 Reading a received message:
 
 ```cpp

@@ -546,8 +546,9 @@ using TypeScript spelling.
 - Do not create operation-start variants such as `sendNoWait`,
   `publishWithFlags`, or `requestAsync`. Keep a single operation name. Put
   operation-specific flags or timeouts on the builder. Managed sends use the
-  synchronous `submit(SendFlags)` and asynchronous `submit()` terminals defined
-  below, while requests use the Promise-returning `submit()` terminal.
+  synchronous `submit_sync(SendFlags)` and asynchronous `submit()` terminals defined
+  below. Requests use three completion surfaces: `submit_sync(flags)`,
+  `submit_sync(flags, callback)`, and Promise-returning `submit()`.
 
 ## Canonical Interface Rules
 
@@ -592,7 +593,7 @@ using TypeScript spelling.
   name.
 - Pair `send().message(...)`, DEALER/ROUTER routed
   `send(...).message(...)`, and `Received.send().message(...)` provide two terminals. Synchronous
-  `submit(SendFlags): void` submits through `zlink_send_part(_rid)` and throws
+  `submit_sync(SendFlags): void` submits through `zlink_send_part(_rid)` and throws
   `SubmitError` on failure. Asynchronous `submit(): Promise<void>` completes
   through Core's send-completion callback. The async operation timeout is
   passed to Core. `ADMITTED` resolves the Promise; `TIMED_OUT` and `TERMINAL`
@@ -604,9 +605,14 @@ using TypeScript spelling.
   Stream `trySend` and raw one-shot operations such as public ROUTER
   `sendTransportPair(...)` retain their synchronous `void`/`boolean` contracts
   and are not managed HWM-wait terminals.
-- DEALER/ROUTER `request(...).message(...).submit()` returns
-  `Promise<Message[]>` completed only through Core's reply callback, not by
-  binding admission. Raw ROUTER reply is a synchronous one-shot. The
+- DEALER/ROUTER request provides three completion surfaces.
+  `submit_sync(flags)` waits synchronously for admission and reply and returns
+  `Message[]` directly. `submit_sync(flags, callback)` returns once the
+  admission result is known and delivers the reply through the callback.
+  `submit()` returns `Promise<Message[]>`, completed through Core's reply
+  callback. Request submission passes through the same HWM admission as send;
+  synchronous flags `None`/`DontWait` select admission waiting. Raw ROUTER reply
+  is a synchronous one-shot. The
   request/reply path adds no binding-owned retry, pending-admission queue, or
   progress timer.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot

@@ -31,7 +31,7 @@ class SendTerminalContractTest {
             sender.connect(endpoint);
 
             sender.send().message(Message.from("sync"))
-                .submit(SendFlags.NONE);
+                .submit_sync(SendFlags.NONE);
             try (Received received = new Received()) {
                 receiver.recv(received, RecvFlags.NONE);
                 assertEquals("sync",
@@ -58,7 +58,7 @@ class SendTerminalContractTest {
                  attempt++) {
                 try {
                     sender.send().message(Message.from("fill-" + attempt))
-                        .submit(SendFlags.DONT_WAIT);
+                        .submit_sync(SendFlags.DONT_WAIT);
                 } catch (ZlinkSubmitException error) {
                     failure = error;
                 }

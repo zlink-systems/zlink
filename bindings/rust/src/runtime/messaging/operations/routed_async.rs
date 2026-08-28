@@ -25,6 +25,8 @@ use crate::messaging_operations::{
 };
 use crate::native_errors::{request_error_from_result, submit_error_from_errno};
 
+type RequestCallback = Box<dyn FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static>;
+
 pub(crate) fn dealer_request_op(routed: Arc<RoutedHandle>) -> RequestOp<Empty> {
     RequestOp {
         inner: RequestOpStorage {
@@ -56,6 +58,31 @@ pub(crate) fn submit_routed_request(
     operation: RequestOpStorage,
 ) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send {
     RoutedRequestFuture::new(operation)
+}
+
+pub(crate) fn submit_routed_request_sync(
+    operation: RequestOpStorage,
+    flags: crate::flags::SendFlags,
+) -> Result<Vec<Message>, ZlinkError> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    submit_routed_request_callback(operation, flags, move |outcome| {
+        let _ = sender.send(outcome);
+    })?;
+    receiver.recv().map_err(|_| ZlinkError::Request(RequestError::new(
+        RequestResult::Terminated,
+        libc::ECANCELED,
+    )))?
+}
+
+pub(crate) fn submit_routed_request_callback<F>(
+    operation: RequestOpStorage,
+    flags: crate::flags::SendFlags,
+    callback: F,
+) -> Result<(), SubmitError>
+where
+    F: FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static,
+{
+    submit_request_callback(operation, flags.bits(), Box::new(callback))
 }
 
 struct RequestCompletionState {
@@ -264,6 +291,86 @@ unsafe extern "C" fn routed_reply_callback(
     completion.complete(outcome);
 }
 
+unsafe extern "C" fn routed_reply_callback_fn(
+    result: ffi::zlink_request_result_t,
+    parts: *mut ffi::zlink_msg_t,
+    part_count: usize,
+    userdata: *mut c_void,
+) {
+    if userdata.is_null() {
+        if !parts.is_null() {
+            unsafe { ffi::zlink_multipart_close(parts, part_count) };
+        }
+        return;
+    }
+    let callback = unsafe { Box::from_raw(userdata.cast::<RequestCallback>()) };
+    let received = crate::socket::take_parts(parts, part_count);
+    let outcome = if result == ffi::zlink_request_result_t::ZLINK_REQUEST_RESULT_OK {
+        Ok(received)
+    } else {
+        drop(received);
+        Err(request_error_from_result(request_result_from_native(result)).into())
+    };
+    callback(outcome);
+}
+
+fn submit_request_callback(
+    operation: RequestOpStorage,
+    flags: u32,
+    callback: RequestCallback,
+) -> Result<(), SubmitError> {
+    if operation.parts.is_empty() {
+        return Err(SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL));
+    }
+    let timeout = if operation.timeout.is_zero() {
+        operation.routed.request_timeout()?
+    } else {
+        operation.timeout
+    };
+    let role = operation.routed.role();
+    let router_rid = match role {
+        RoutedRole::Dealer => None,
+        RoutedRole::Router => Some(operation.peer_rid.as_ref().ok_or_else(|| {
+            SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL)
+        })?),
+    };
+    let (rc, target) = operation.routed.select_target(router_rid);
+    if rc != 0 {
+        return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }));
+    }
+
+    let mut parts = operation.parts.into_vec();
+    let callback_owner = Box::into_raw(Box::new(callback)).cast::<c_void>();
+    let result = operation.routed.with_live_handle(|handle| {
+        submit_exact_request_with(
+            handle,
+            role,
+            operation.peer_rid.as_ref(),
+            &target,
+            &mut parts,
+            flags,
+            duration_to_timeout_ms(timeout),
+            routed_reply_callback_fn,
+            callback_owner,
+        )
+    });
+    let rc = result.unwrap_or_else(|| {
+        unsafe { drop(Box::from_raw(callback_owner.cast::<RequestCallback>())) };
+        SubmitResult::Terminated as i32
+    });
+    if rc != SubmitResult::Ok as i32 {
+        if result.is_some() {
+            unsafe { drop(Box::from_raw(callback_owner.cast::<RequestCallback>())) };
+        }
+        return Err(submit_error_from_errno(if result.is_some() {
+            unsafe { ffi::zlink_errno() }
+        } else {
+            libc::ECANCELED
+        }));
+    }
+    Ok(())
+}
+
 fn submit_exact_request(
     handle: *mut c_void,
     role: RoutedRole,
@@ -271,6 +378,30 @@ fn submit_exact_request(
     target: &ffi::zlink_routed_submit_target_t,
     parts: &mut [Message],
     timeout_ms: u32,
+    userdata: *mut c_void,
+) -> i32 {
+    submit_exact_request_with(
+        handle,
+        role,
+        router_rid,
+        target,
+        parts,
+        0,
+        timeout_ms,
+        routed_reply_callback,
+        userdata,
+    )
+}
+
+fn submit_exact_request_with(
+    handle: *mut c_void,
+    role: RoutedRole,
+    router_rid: Option<&RoutingId>,
+    target: &ffi::zlink_routed_submit_target_t,
+    parts: &mut [Message],
+    flags: u32,
+    timeout_ms: u32,
+    callback: ffi::zlink_reply_handler_fn,
     userdata: *mut c_void,
 ) -> i32 {
     let count = parts.len();
@@ -281,7 +412,7 @@ fn submit_exact_request(
         } else {
             ffi::zlink_part_flag_t::ZLINK_PART_MORE
         };
-        let handler = final_part.then_some(routed_reply_callback as ffi::zlink_reply_handler_fn);
+        let handler = final_part.then_some(callback);
         let callback_data = if final_part {
             userdata
         } else {
@@ -295,7 +426,7 @@ fn submit_exact_request(
                     handle,
                     target,
                     part.raw_mut(),
-                    0,
+                    flags,
                     flag,
                     if final_part { timeout_ms } else { 0 },
                     handler,
@@ -307,7 +438,7 @@ fn submit_exact_request(
                     target.transport_pair_id,
                     target.transport_pair_generation,
                     part.raw_mut(),
-                    0,
+                    flags,
                     flag,
                     if final_part { timeout_ms } else { 0 },
                     handler,

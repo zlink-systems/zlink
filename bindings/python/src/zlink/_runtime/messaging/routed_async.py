@@ -229,27 +229,68 @@ class SendCompletionOwner:
 
 
 class _RequestCompletion:
-    """One armed request awaiting its Core reply callback."""
+    """One armed request completed by a Future, callback, or blocking waiter."""
 
-    __slots__ = ("token", "loop", "future")
+    __slots__ = (
+        "token",
+        "loop",
+        "future",
+        "callback",
+        "condition",
+        "value",
+        "error",
+        "done",
+    )
 
-    def __init__(self, token, loop):
+    def __init__(self, token, loop=None, callback=None):
         self.token = token
         self.loop = loop
-        self.future = loop.create_future()
+        self.future = None if loop is None else loop.create_future()
+        self.callback = callback
+        self.condition = (
+            None
+            if loop is not None or callback is not None
+            else threading.Condition()
+        )
+        self.value = None
+        self.error = None
+        self.done = False
 
     def resolve(self, value=None, error=None):
-        if self.future.done():
-            if error is None and isinstance(value, list):
-                for message in value:
-                    message.close()
+        if self.future is not None:
+            if self.future.done():
+                if error is None and isinstance(value, list):
+                    for message in value:
+                        message.close()
+                return
+            _schedule_future(
+                self.loop,
+                self.future,
+                error if error is not None else value,
+                is_error=error is not None,
+            )
             return
-        _schedule_future(
-            self.loop,
-            self.future,
-            error if error is not None else value,
-            is_error=error is not None,
-        )
+        if self.callback is not None:
+            self.callback(None if error is not None else value, error)
+            return
+        with self.condition:
+            if self.done:
+                if error is None and isinstance(value, list):
+                    for message in value:
+                        message.close()
+                return
+            self.value = value
+            self.error = error
+            self.done = True
+            self.condition.notify()
+
+    def wait(self):
+        with self.condition:
+            while not self.done:
+                self.condition.wait()
+            if self.error is not None:
+                raise self.error
+            return self.value
 
 
 class RoutedSendOwner:
@@ -337,16 +378,16 @@ class RoutedSendOwner:
     # -- request: submitted once, completed purely by the Core reply
     # callback. No admission ticket, no retry on backpressure. ----------
 
-    def _new_request_completion(self, loop):
+    def _new_request_completion(self, loop=None, callback=None):
         with self._state_lock:
             token = self._next_request_token
             self._next_request_token += 1
-        completion = _RequestCompletion(token, loop)
+        completion = _RequestCompletion(token, loop, callback)
         with self._state_lock:
             self._request_completions[token] = completion
         return completion
 
-    def _attempt_request(self, target, native_parts, timeout_ms, completion):
+    def _attempt_request(self, target, native_parts, timeout_ms, completion, flags):
         def attempt(handle):
             if self._role == SocketType.DEALER:
                 return self._submit_parts(
@@ -355,7 +396,7 @@ class RoutedSendOwner:
                         handle,
                         ctypes.byref(target),
                         part,
-                        ZLINK_DONTWAIT,
+                        flags,
                         flag,
                         timeout_ms if final else 0,
                         self._reply_handler if final else None,
@@ -370,7 +411,7 @@ class RoutedSendOwner:
                     target.transport_pair_id,
                     target.transport_pair_generation,
                     part,
-                    ZLINK_DONTWAIT,
+                    flags,
                     flag,
                     timeout_ms if final else 0,
                     self._reply_handler if final else None,
@@ -394,7 +435,7 @@ class RoutedSendOwner:
         completion = self._new_request_completion(loop)
         try:
             rc, native_errno = self._attempt_request(
-                target, native_parts, timeout_ms, completion
+                target, native_parts, timeout_ms, completion, ZLINK_DONTWAIT
             )
         except Exception:
             with self._state_lock:
@@ -405,6 +446,32 @@ class RoutedSendOwner:
                 self._request_completions.pop(completion.token, None)
             _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
         return await completion.future
+
+    def submit_request_sync(
+        self, router_rid, payload, timeout_ms, *, flags=0, callback=None
+    ):
+        native_parts = _materialize_native_parts(payload)
+        target = self._select_target(router_rid)
+        if timeout_ms == 0:
+            timeout_ms = int(self._read_request_timeout_ms())
+            if timeout_ms <= 0:
+                timeout_ms = 5000
+        completion = self._new_request_completion(callback=callback)
+        try:
+            rc, native_errno = self._attempt_request(
+                target, native_parts, timeout_ms, completion, int(flags)
+            )
+        except Exception:
+            with self._state_lock:
+                self._request_completions.pop(completion.token, None)
+            raise
+        if rc != int(SubmitResult.OK):
+            with self._state_lock:
+                self._request_completions.pop(completion.token, None)
+            _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
+        if callback is not None:
+            return None
+        return completion.wait()
 
     def _on_request_reply(self, result_code, parts, part_count, userdata):
         token = ctypes.cast(userdata, ctypes.c_void_p).value

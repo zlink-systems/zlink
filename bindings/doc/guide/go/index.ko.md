@@ -151,6 +151,11 @@ HWM 대기 가능 send의 동기 종결자는 `Flags(SendFlags).Submit(ctx)`입�
 err := dealer.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(ctx)
 ```
 
+Request도 같은 HWM admission을 지나지만 Go에서는 별도 callback이나 세 메서드로
+나누지 않습니다. `Flags(SendFlags).Submit(ctx)`가 admission 결과를 즉시 반환하고,
+reply는 함께 받은 completion channel로 전달합니다. `SendFlagsNone`은 admission을
+기다리고 `SendFlagsDontWait`은 즉시 backpressure를 반환합니다.
+
 ### 3. Received — 수신 봉투
 
 메시지를 받은 봉투입니다. 라우팅 ID, 파트 목록, 회신 컨텍스트(선택)를 담습니다.

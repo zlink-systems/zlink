@@ -102,14 +102,21 @@ received.close();
 ```
 
 HWM-managed sends provide asynchronous `submit()` and synchronous
-`submit(SendFlags)` overloads. On Node's event loop, use the flag-free,
+`submit_sync(SendFlags)` overloads. On Node's event loop, use the flag-free,
 Promise-returning `submit()` by default. Use
-`submit(zlink.SendFlags.DontWait)` only when immediate back-pressure is needed.
+`submit_sync(zlink.SendFlags.DontWait)` only when immediate back-pressure is needed.
 
 ```javascript
 await socket.send().message(Buffer.from('data')).submit(); // asynchronous
-socket.send().message(Buffer.from('data')).submit(zlink.SendFlags.DontWait); // sync, non-blocking
+socket.send().message(Buffer.from('data')).submit_sync(zlink.SendFlags.DontWait); // sync, non-blocking
 ```
+
+Request also passes through HWM admission and provides three completion
+surfaces. `submit_sync(flags)` waits synchronously for admission and reply and
+returns the reply directly; `submit_sync(flags, callback)` returns once
+admission is decided and delivers the reply through the callback; `submit()`
+returns a Promise. `None`/`DontWait` select admission waiting for the synchronous
+terminals.
 
 ### Received — the receive envelope
 
@@ -161,7 +168,7 @@ The Node binding throws per-operation error classes.
 
 ```javascript
 try {
-  socket.send().message(Buffer.from('data')).submit(zlink.SendFlags.DontWait);
+  socket.send().message(Buffer.from('data')).submit_sync(zlink.SendFlags.DontWait);
 } catch (error) {
   if (error instanceof zlink.SubmitError) {
     if (error.result === zlink.SubmitResult.Backpressured) {
@@ -188,7 +195,7 @@ Each exposes the result code via a `.result` property.
 | `zlink_socket(ctx, type)` | `zlink.createPairSocket(ctx)`, etc. |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(buf).submit(flags)` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(buf).submit_sync(flags)` |
 | `zlink_send_async(...)` | `await socket.send().message(buf).submit()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` (Buffer) |
@@ -215,12 +222,12 @@ console.log(`zlink ${major}.${minor}.${patch}`);
 |------|------|
 | `Context` / sockets | used on the main event loop |
 | Blocking `recv()` | blocks the event loop, so keep it short or prefer non-blocking + poller |
-| Synchronous `submit(SendFlags.None)` | stops the entire event loop while waiting for HWM admission, halting runtime progress — do not use it |
-| Synchronous `submit(SendFlags.DontWait)` | returns immediately and does not block the event loop |
+| Synchronous `submit_sync(SendFlags.None)` | stops the entire event loop while waiting for HWM admission, halting runtime progress — do not use it |
+| Synchronous `submit_sync(SendFlags.DontWait)` | returns immediately and does not block the event loop |
 | Async `submit()` | Promise-based — doesn't block the event loop |
 
 Do not run a blocking send on Node's event loop. For an immediate attempt, use
-`submit(zlink.SendFlags.DontWait)`; to wait for HWM admission, `await` the
+`submit_sync(zlink.SendFlags.DontWait)`; to wait for HWM admission, `await` the
 asynchronous `submit()` terminal.
 
 ---

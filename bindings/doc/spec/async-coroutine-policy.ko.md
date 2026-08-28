@@ -17,7 +17,7 @@ title: "바인딩 routed 전송 계약과 비동기 완료 표면 정책"
 |---|---|
 | **HWM-managed send** (PAIR send, DEALER/ROUTER routed send, `Received.send()`) | async terminal **과** sync(+flags) terminal (Go는 관례상 sync만) |
 | **publish** (PUB/XPUB) | 동기 `submit()` |
-| **request** | Core-구동 비동기 완료 (C++만 예외적으로 `submit()`/`submit(callback)`/`async()` 세 terminal) |
+| **request** | 세 terminal — sync 반환 / sync callback(+flags) / async. 모든 바인딩 |
 | **raw reply** (ROUTER/`Received`) | HWM-free 동기 one-shot |
 
 bindings 라이브러리는 core C API 위에 언어별 완료 경계를 제공한다. 실행 환경 연결(OS 스레드·가상 스레드·코루틴·이벤트 루프)과 handler dispatcher 연결은
@@ -58,7 +58,7 @@ framework가 맡는다.
 | [분류 원칙](#분류-원칙) | HWM 대기 가능 여부로 send/request를 ASYNC로, publish/raw reply를 SYNC로 가르는 기준 |
 | [공통 원칙](#공통-원칙) | operation 시작점 이름·builder·submit 실패 표현에 대한 공통 규칙 |
 | [HWM-managed send 완료 계약](#hwm-managed-send-완료-계약) | HWM-managed send(routed send 포함)의 async 완료와 PUB/XPUB publish 동기 제출 계약 |
-| [Request 완료 표면과 C++ 세 terminal](#request-완료-표면과-c-세-terminal) | HWM-managed request의 언어별 완료 표면과 C++의 세 terminal |
+| [Request 완료 표면과 세 terminal](#request-완료-표면과-세-terminal) | HWM-managed request의 세 terminal(sync 반환/sync callback/async)과 언어별 표면 |
 | [Send·Publish·Request·Raw reply 언어별 정규 표](#sendpublishrequestraw-reply-언어별-정규-표) | 네 operation 유형 각각의 언어별 terminal과 반환 타입 |
 | [Raw reply 동기 one-shot](#raw-reply-동기-one-shot) | 일곱 binding의 reply 종결자와 즉시 실패 계약 |
 | [Framework typed Session reply](#framework-typed-session-reply) | raw binding reply와 별개인 awaitable Framework 계약 |
@@ -85,7 +85,7 @@ framework가 맡는다.
   ASYNC/SYNC가 갈린다 — framework가 별도의 완화된 규칙을 갖지 않는다.
   publish는 위의 lossy 계약에 따라 별도로 synchronous다.
 - 이 원칙이 아래 모든 절의 근거다: C++가 send에 `submit()`/`async()`(또는
-  request의 세 terminal)를 함께 노출하는 것도, 다른 언어가 send에서 awaitable을
+  request의 세 terminal)를 노출하는 것도, 다른 언어가 send·request에서 sync/async terminal을
   반환하는 것도, publish와 raw reply가 순수 동기로 남는 것도 모두 이 분류
   원칙에서 도출된다.
 
@@ -123,20 +123,32 @@ framework가 맡는다.
   자신의 Async 접미사 관례를 따르는 `Async()` terminal을, synchronous
   publish와 raw reply에는 `Submit()` terminal을 둔다. 그 외 모든 언어는
   operation마다 단일 `submit()`(Go는 `Submit(ctx)`) terminal을 유지한다.
-  (예외: HWM-managed send는 send flag 계약을 노출하기 위해 sync/async 두
-  terminal을 갖는다 — 이름을 늘린 것이 아니라 flag 있는 SYNC 경로와 flag 없는
-  ASYNC 경로를 나눈 것이다. [정규 표](#sendpublishrequestraw-reply-언어별-정규-표) 참조.)
+  (예외: HWM-managed **send**와 **request**는 admission flag 계약을 노출하기 위해
+  sync/async terminal을 함께 갖는다 — 이름을 늘린 것이 아니라 flag 있는 SYNC 경로와
+  flag 없는 ASYNC 경로를 나눈 것이다. [정규 표](#sendpublishrequestraw-reply-언어별-정규-표) 참조.)
+
+  **sync 종결자 naming 통일** — async 종결자가 `submit()`인 언어(Java·Node·Python·Rust)는
+  그 sync 종결자를 **`submit_sync`**로 통일한다. Java는 반환 타입만 다른 overload가
+  불가능하므로 어차피 이름을 나눠야 하고, 나머지도 대칭을 위해 맞춘다. **`submit_sync`는
+  sync/async 축의 이름**이며([async-execution-model](async-execution-model.ko.md): sync/async는
+  blocking/non-blocking과 다른 축), 실제 blocking 여부는 flag(`NONE`/`DONTWAIT`)가 정한다 —
+  그래서 `submit_blocking`이 아니라 `submit_sync`다(DONTWAIT이면 non-blocking이므로).
+  C++(`async()`/`submit()`)·.NET(`Async()`/`Submit()`)·Go(`Submit(ctx)`)는 async가 `submit()`이
+  아니므로 각자 관례를 유지한다.
   async-classified operation의 terminal이 반환하는 awaitable은 각 언어가
   관용적인 방식(await / join / block_on / channel recv)으로 소비하고,
   synchronous publish와 raw reply의 terminal은 호출 즉시 소비한다. 같은
   원칙에 따라 Go의 send `Submit(ctx)`는 `error`를 반환하는 동기형이다.
   goroutine 안에서의 blocking 호출이 Go의 관용적 대기 방식이고
   `context.Context`는 제출 전 취소와 시한을 확인한다.
-- C++ request builder는 `submit()`(blocking) · `submit(callback)`(completion
-  전달 전용) · `async()`(coroutine) 세 terminal을 함께 노출한다 — 위 이름
-  구분 원칙에 따라 C++만 이 세 terminal이 필요하기 때문이다. 다른 언어는
-  단일 terminal만 유지한다 — 그 terminal이 반환하는 awaitable이 이미 모든
-  소비 방식을 지원하므로 별도 terminal을 늘릴 이유가 없다.
+- **request builder는 모든 바인딩에서 세 terminal을 노출한다** — sync 반환(blocking,
+  reply 직접 반환) · sync callback(즉시 admission 결과 + reply는 callback) · async(awaitable).
+  request 제출이 send처럼 HWM admission을 지나므로, C의 `DONTWAIT` 연속 제출 모델을 각
+  바인딩이 공개 표면으로 표현하려면 admission을 reply와 분리하는 sync callback 표면이
+  필요하다(0.14.0). 이름은 위 naming 통일을 따른다: C++ `submit()`/`submit(callback)`/`async()`,
+  .NET `Submit(SendFlags)`/`Submit(SendFlags, callback)`/`Async()`, Java·Node·Python·Rust
+  `submit_sync(flags)`/`submit_sync(flags, callback)`/`submit()`, Go는 `Submit(ctx)`(+Flags)와
+  completion channel로 fire-and-collect(별도 callback 없음). [정규 표](#sendpublishrequestraw-reply-언어별-정규-표) 참조.
 
 ## HWM-managed send 완료 계약
 
@@ -223,31 +235,45 @@ PUB/XPUB의 `publish`는 HWM에서 대기하지 않으므로 ASYNC 분류에 포
   terminal에서 의미가 없으므로 C++ `async()`는 non-zero flags를
   `EINVAL`로 거부한다.
 
-## Request 완료 표면과 C++ 세 terminal
+## Request 완료 표면과 세 terminal
 
 DEALER/ROUTER **request**도 [분류 원칙](#분류-원칙)에 따라 ASYNC로 분류한다.
 같은 operation entrypoint가 반환하는 builder에서 terminal을 호출한다.
 `requestCoroutine`, `request_async`, `submit_async` 같은 별도 이름은 만들지
 않는다.
 
-### C++ request의 세 terminal
+**request 제출은 send와 동일하게 HWM admission을 지난다.** request 메시지 자체가
+send 경로로 전송되므로, request 제출도 admission 대기(HWM)를 만날 수 있다. 따라서
+request의 sync terminal도 send와 **동일한 admission flag 계약**을 갖는다 —
+`NONE`이면 admission까지 대기, `DONTWAIT`이면 즉시 `BACKPRESSURED`/`EAGAIN`. reply
+완료는 admission과 별개로 Core가 구동한다(`ZLINK_REQUEST_TIMED_OUT`).
 
-C++ request builder는 세 개의 terminal을 노출한다.
+### 세 terminal (모든 바인딩)
 
-1. **`submit()`** — blocking. Core-owned 대기 끝에 reply
-   (`std::vector<message_t>`)를 직접 반환한다. timeout 만료는
-   `ZLINK_REQUEST_TIMED_OUT`으로 알린다.
-2. **`submit(callback)`** — 즉시 반환한다. Core의 reply callback이 app
-   callback을 구동한다 — completion 전달만 담당하며, 바인딩은 재시도나
-   스케줄링을 하지 않는다.
-3. **`async()`** — coroutine용. move-only `async_result_t<T>`를 반환한다.
-   framework canonical terminal이다 — framework는 비동기 실행 전용이므로
-   오직 이 terminal만 사용한다.
+request builder는 세 완료 표면을 노출한다. 이름은 [naming 규칙](#공통-원칙)을 따른다 —
+async 종결자가 `submit()`인 언어(Java·Node·Python·Rust)는 sync를 `submit_sync`로,
+C++는 `submit()`/`submit(callback)`·`async()`, .NET은 `Submit(...)`·`Async(...)`,
+Go는 `Submit(ctx)`를 쓴다.
 
-다른 언어는 단일 terminal(`submit()`, .NET은 `Async(...)`)만 유지한다 —
-이름 구분 원칙에 따라 C++만 이 세 terminal이 필요하고, 다른 언어는 그
-terminal이 반환하는 awaitable이 이미 모든 소비 방식(await/join/block_on/
-channel recv)을 지원하므로 별도 terminal을 늘릴 이유가 없다.
+1. **sync 반환** — blocking. admission flag를 받고, Core-owned 대기 끝에 reply를
+   **직접 반환**한다. `NONE`이면 admission까지 대기 후 reply를 기다린다. timeout 만료는
+   `ZLINK_REQUEST_TIMED_OUT`으로 알린다. 이름: Java·Node·Python·Rust `submit_sync(flags)`,
+   C++ `submit()`, .NET `Submit(SendFlags)`, Go `Submit(ctx)`(+Flags).
+2. **sync callback** — 제출 즉시 **admission 결과를 동기로 반환**하고(`DONTWAIT`이면
+   즉시 `BACKPRESSURED`) reply는 나중에 **callback**으로 전달한다. reqrep을 직렬화 없이
+   연속 제출할 때 쓰는 표면이다. 바인딩은 재시도·스케줄링을 하지 않는다. 이름:
+   Java·Node·Python·Rust `submit_sync(flags, callback)`, C++ `submit(callback)`,
+   .NET `Submit(SendFlags, callback)`. Go는 관용적으로 `Submit(ctx)`가 돌려주는
+   completion channel로 fire-and-collect한다(별도 callback 메서드 없음).
+3. **async** — coroutine/awaitable용. 언어 awaitable(C++ `async_result_t<T>`, .NET
+   `Task`, Java `CompletionStage`, Node `Promise`, Python coroutine object, Rust
+   `Future`, Go completion channel)을 반환한다. framework canonical terminal이다 —
+   framework는 비동기 실행 전용이므로 오직 이 terminal만 사용한다. flag를 받지 않는다.
+
+sync 반환과 sync callback은 **admission flag를 받고**, async는 받지 않는다(send와
+동일). request 제출의 admission backpressure는 sync callback(또는 Go channel)으로
+표현하고, reqrep의 outstanding 깊이는 코드 상한이 아니라 이 admission backpressure(HWM)가
+결정한다.
 
 reply 완료는 Core가 구동한다. Reply handler callback은 terminal과 payload를 한 번만
 인수한다. 언어 future·promise가 완료 호출 thread에서 user continuation을 inline으로
@@ -259,10 +285,10 @@ operation별 executor나 timer를 추가하지 않는다.
 | 구분 | bindings 완료 표면 |
 |---|---|
 | 분류 | ASYNC (HWM 대기 가능) |
-| C++ terminal | `submit()`(blocking, reply 직접 반환) / `submit(callback)`(completion 전달) / `async()`(coroutine, framework canonical) |
-| 다른 언어 terminal | 단일 `submit()`(또는 .NET `Async(...)`) — 언어 관용 awaitable 또는 completion channel 반환 |
-| reply 전달 | suspension의 성공 값, callback 인자, 또는 channel completion |
-| submit flags | request managed terminal은 받지 않는다 |
+| terminal (모든 바인딩) | **sync 반환**(blocking, reply 직접 반환) / **sync callback**(즉시 admission 결과, reply는 callback) / **async**(awaitable, framework canonical) |
+| 언어별 이름 | C++ `submit()`/`submit(callback)`/`async()` · .NET `Submit(SendFlags)`/`Submit(SendFlags, cb)`/`Async()` · Java·Node·Python·Rust `submit_sync(flags)`/`submit_sync(flags, cb)`/`submit()` · Go `Submit(ctx)`(+Flags)+channel |
+| reply 전달 | sync 반환의 반환값, callback 인자, suspension 성공 값, 또는 channel completion |
+| submit flags | **sync 반환·sync callback은 admission flag를 받는다**(`NONE` admission 대기 / `DONTWAIT` 즉시 backpressure, send와 동일). async terminal은 받지 않는다 |
 | timeout | builder의 `timeout(...)` 단계. 만료는 Core가 `ZLINK_REQUEST_TIMED_OUT`으로 통지한다 |
 | submit 실패 | failed task/future/promise, error result, 예외 (C++ `submit()`은 던지는 예외) |
 | reply 실패 | 같은 완료 표면의 실패 |
@@ -298,12 +324,12 @@ lane으로 전송되므로 raw reply 열의 동기 terminal 하나만 가지며 
 |---|---|---|---|---|
 | C | 해당 없음 — C ABI는 builder 정책을 적용하지 않으며 `core/include/zlink.h`의 함수형 계약을 따른다 | 해당 없음 | 해당 없음 | 해당 없음 |
 | C++ | sync `submit()`+`flags(int)` → PAIR/STREAM `bool`, routed `void`. async `async()` → `async_result_t<T>` | `submit()` → 동기 `bool`, 실패 시 `submit_error_t`를 던진다 | `submit()`(blocking) → reply, 실패 시 예외. `submit(callback)` → 즉시 반환, completion은 callback으로 전달. `async()` → `async_result_t<T>`(framework canonical) | `submit()` → `void`, 실패 시 `submit_error_t`를 던진다 |
-| .NET | sync `Submit(SendFlags)` → `void`. async `Async()` → `Task`/`ValueTask`(`<T>`) | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 | `Async(...)` → 위와 동일 | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 |
-| Java, Kotlin | sync `submit(SendFlags)` → `void`. async `submit()` → `CompletionStage<T>`. flag 파라미터로 overload가 성립해 이름을 나누지 않는다 | `submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 | `submit()` → `CompletionStage<T>` (위와 동일) | `submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 |
-| Node | sync `submit(SendFlags)` → `void`. async `submit()` → `Promise<T>`(또는 `Promise<void>`) | `submit()` → 동기 `void`, 실패 시 `SubmitError`를 던진다 | `submit()` → `Promise<T>` (위와 동일) | `submit()` → 동기 `void`, 실패 시 `SubmitError`를 던진다 |
-| Python | sync `submit_blocking(*, flags)` → `None`. async `submit()` → await 가능한 coroutine object | `submit()` → 동기 `None`, 실패 시 `SubmitError`를 발생시킨다 | `submit()` → 위와 동일 | `submit()` → 동기 `None`, 실패 시 `SubmitError`를 발생시킨다 |
-| Go | sync `Submit(ctx)`+builder flag → `error`(`nil` 성공). async terminal 없음(Go 관례) | `Submit(ctx)` → 동기 `error`(`nil` 성공) | `Submit(ctx)` → completion channel | `Submit(ctx)` → 동기 `error`(`nil` 성공) |
-| Rust | sync `submit_blocking(SendFlags)` → `Result<(), SubmitError>`. async `submit()` → `Future<Output = Result<(), SubmitError>>`. overload 없고 `async`가 예약어라 이름을 나눈다 | `submit()` → 동기 `Result<(), SubmitError>` | `submit()` → runtime 비종속 `Future<Output = Result<Vec<message_t>, ZlinkError>>` | `submit()` → 동기 `Result<(), SubmitError>` |
+| .NET | sync `Submit(SendFlags)` → `void`. async `Async()` → `Task`/`ValueTask`(`<T>`) | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 | sync 반환 `Submit(SendFlags)` → reply. sync callback `Submit(SendFlags, callback)` → 즉시 admission. async `Async(ct)` → `Task`(framework canonical). 실패 시 `ZlinkSubmitException` | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 |
+| Java, Kotlin | sync `submit_sync(SendFlags)` → `void`. async `submit()` → `CompletionStage<T>` | `submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 | sync 반환 `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → 즉시 admission. async `submit()` → `CompletionStage<T>`. 실패 시 `ZlinkSubmitException` | `submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 |
+| Node | sync `submit_sync(SendFlags)` → `void`. async `submit()` → `Promise<T>`(또는 `Promise<void>`) | `submit()` → 동기 `void`, 실패 시 `SubmitError`를 던진다 | sync 반환 `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → 즉시 admission. async `submit()` → `Promise<T>`. 실패 시 `SubmitError` | `submit()` → 동기 `void`, 실패 시 `SubmitError`를 던진다 |
+| Python | sync `submit_sync(*, flags)` → `None`. async `submit()` → await 가능한 coroutine object | `submit()` → 동기 `None`, 실패 시 `SubmitError`를 발생시킨다 | sync 반환 `submit_sync(*, flags)` → reply. sync callback `submit_sync(*, flags, callback)` → 즉시 admission. async `submit()` → coroutine object. 실패 시 `SubmitError` | `submit()` → 동기 `None`, 실패 시 `SubmitError`를 발생시킨다 |
+| Go | sync `Submit(ctx)`+builder `Flags` → `error`(`nil` 성공). async terminal 없음(Go 관례) | `Submit(ctx)` → 동기 `error`(`nil` 성공) | `Flags(...).Submit(ctx)` → admission 결과(`error`) + reply는 completion channel. channel로 fire-and-collect(별도 callback 없음) | `Submit(ctx)` → 동기 `error`(`nil` 성공) |
+| Rust | sync `submit_sync(SendFlags)` → `Result<(), SubmitError>`. async `submit()` → `Future<Output = Result<(), SubmitError>>` | `submit()` → 동기 `Result<(), SubmitError>` | sync 반환 `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → 즉시 admission. async `submit()` → runtime 비종속 `Future<Output = Result<Vec<message_t>, ZlinkError>>` | `submit()` → 동기 `Result<(), SubmitError>` |
 
 Kotlin이 Java binding을 직접 사용할 때도 위 Java 열의 계약을 그대로 따른다.
 Kotlin Framework 표면(`.reply(...).await()` 등)은 [Framework typed Session

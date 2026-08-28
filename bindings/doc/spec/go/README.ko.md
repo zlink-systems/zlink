@@ -153,12 +153,23 @@ type RoutedSendSubmitOp interface {
     Submit(context.Context) error
 }
 
-// DEALER/ROUTER request의 단일 terminal은 completion channel을 반환한다.
+// DEALER/ROUTER request는 flag 없는 async completion channel과, admission
+// 결과 + reply completion channel을 돌려주는 sync(+flags) terminal을 제공한다.
+// 별도 callback은 없다.
 type RequestSubmitOp interface {
     Message(*Message) RequestSubmitOp
     Bytes([]byte) RequestSubmitOp
     Timeout(time.Duration) RequestSubmitOp
+    Flags(SendFlags) RequestSyncSubmitOp
     Submit(context.Context) <-chan RequestReplyCompletion
+}
+
+type RequestSyncSubmitOp interface {
+    Message(*Message) RequestSyncSubmitOp
+    Bytes([]byte) RequestSyncSubmitOp
+    Timeout(time.Duration) RequestSyncSubmitOp
+    Flags(SendFlags) RequestSyncSubmitOp
+    Submit(context.Context) (<-chan RequestReplyCompletion, error)
 }
 
 type RequestReplyCompletion struct {
@@ -187,8 +198,10 @@ type ReplySubmitOp interface {
 - DEALER `Send`와 ROUTER `SendTo`의 managed routed builder는
   `Flags(SendFlags)`를 제공한다. flag가 없거나 `SendFlagsNone`이면 Core 안에서
   blocking하고, `SendFlagsDontWait`이면 Core가 즉시
-  `SubmitBackpressured`/`EAGAIN`을 `error`로 반환한다. DEALER/ROUTER `Request`
-  builder에는 flags가 없고, send 계열에 callback이나 `SubmitAsync` 호환 terminal은 없다.
+  `SubmitBackpressured`/`EAGAIN`을 `error`로 반환한다. DEALER/ROUTER `Request`도
+  `Flags(SendFlags).Submit(ctx)`로 같은 HWM admission을 지나며, admission 결과는
+  즉시 `error`로, reply는 completion channel로 전달한다. 별도 callback은 없다.
+  send 계열에도 callback이나 `SubmitAsync` 호환 terminal은 없다.
 - **바인딩은 스레드·대기열·재시도를 하나도 소유하지 않는다.** routed send의
   `Submit(ctx)`는 동기 종결자이며 complete record를 blocking Core 호출
   (DEALER는 `zlink_send_part`, ROUTER는 `zlink_send_part_rid`)로 그대로
@@ -203,9 +216,10 @@ type ReplySubmitOp interface {
   deadline이 지난 `ctx`는 wire에 아무것도 내보내지 않고 `context.Canceled` /
   `context.DeadlineExceeded`로 실패한다. Core가 record를 받아 대기에 들어간
   뒤에는 그 대기의 소유자가 Core이므로 `ctx` 취소가 그것을 중단시키지 않는다.
-- request의 `Submit(ctx)`는 **제출은 동기, 완료는 비동기**다. 정확한
+- request의 flag 없는 `Submit(ctx)`는 async completion channel을 반환한다.
+  `Flags(SendFlags).Submit(ctx)`는 **제출은 동기, 완료는 비동기**다. 정확한
   `(RID, transport pair, generation)` target을 한 번 스냅샷하고(정책 없는
-  값 스냅샷이며 credit 예약이 아니다) blocking Core 호출로 제출한 뒤 completion
+  값 스냅샷이며 credit 예약이 아니다) Core admission 결과(`error`)와 completion
   channel을 반환한다. 선택한 target은 operation 동안 바꾸지 않으며 해당 연결이
   detach되면 다른 연결로 재선택하지 않는다. 완료는 Core의 reply handler
   callback이 구동한다 — 바인딩은 재시도 큐도 전용 스레드도 두지 않는다.

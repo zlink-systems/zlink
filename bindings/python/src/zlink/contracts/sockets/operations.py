@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
-from typing import Awaitable, Protocol, runtime_checkable
+from typing import Awaitable, Callable, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -40,7 +40,7 @@ class RoutedSendOp(_FluentMessageOp, Protocol):
         """Return the coroutine Core's send-completion notification resolves."""
         ...
 
-    def submit_blocking(self, *, flags=0) -> None:
+    def submit_sync(self, *, flags=0) -> None:
         """Submit synchronously, blocking unless DONT_WAIT is set."""
         ...
 
@@ -55,6 +55,17 @@ class RequestOp(_FluentMessageOp, Protocol):
 
     def submit(self) -> Awaitable[list]:
         """Return the coroutine that completes with the reply parts."""
+        ...
+
+    def submit_sync(
+        self,
+        *,
+        flags=0,
+        callback: Optional[
+            Callable[[Optional[list], Optional[BaseException]], None]
+        ] = None,
+    ):
+        """Return a reply, or deliver it to callback after synchronous admission."""
         ...
 
 

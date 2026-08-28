@@ -116,6 +116,11 @@ bool sent = socket.send ().message (msg).flags (ZLINK_DONTWAIT).submit ();
 co_await socket.send ().message (msg).async (); // 비동기, 호출 thread를 막지 않음
 ```
 
+Request도 같은 HWM admission을 지나며 세 완료 표면을 제공합니다. `submit()`은
+admission과 reply를 동기 대기해 reply를 직접 반환하고, `submit(callback)`은 admission
+결과가 결정되면 즉시 반환한 뒤 reply를 callback으로 전달하며, `async()`는 awaitable을
+반환합니다. 두 sync terminal은 `flags(NONE/DONTWAIT)`로 admission 대기 여부를 정합니다.
+
 수신된 메시지 읽기:
 
 ```cpp

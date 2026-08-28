@@ -21,14 +21,14 @@ test('pair sockets send and receive multipart through canonical api', () => {
     left.close();
     ctx.close();
 });
-test('concurrent routed multipart rejection exposes Core result while binding staging preserves public parts', async () => {
+test('concurrent routed multipart is safely admitted and sent after the held record without mixing', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);
     const inbound = new zlink.Received();
     const heldInbound = new zlink.Received();
-    const first = zlink.Message.from('rejected-first');
-    const second = zlink.Message.from('rejected-second');
+    const first = zlink.Message.from('queued-first');
+    const second = zlink.Message.from('queued-second');
     let held;
     try {
         router.bind('inproc://node-concurrent-multipart-contract');
@@ -38,25 +38,21 @@ test('concurrent routed multipart rejection exposes Core result while binding st
         assert.ok(inbound.routingId);
         held = nativeTestHooks.testBeginHeldRoutedMultipart(getNativeHandle(router), inbound.routingId.toBytes());
         assert.equal(held.openResult, zlink.SubmitResult.Ok, `open errno=${held.openErrno}`);
-        let rejection;
-        try {
-            inbound.send()
-                .message(first)
-                .message(second)
-                .submit();
-        }
-        catch (error) {
-            rejection = error;
-        }
-        assert.ok(rejection instanceof zlink.SubmitError);
-        assert.equal(rejection.result, zlink.SubmitResult.InvalidArgument);
-        assert.equal(first.toString(), 'rejected-first');
-        assert.equal(second.toString(), 'rejected-second');
+        // Core admits this record as pending while the native thread owns an open
+        // multipart record; submit must return normally with its completion Promise.
+        const pendingSend = inbound.send()
+            .message(first)
+            .message(second)
+            .submit();
+        assert.ok(pendingSend instanceof Promise);
         const completed = nativeTestHooks.testEndHeldRoutedMultipart(held.state);
         held = undefined;
         assert.equal(completed.finalResult, zlink.SubmitResult.Ok, `final errno=${completed.finalErrno}`);
+        await pendingSend;
         assert.equal(dealer.recv(heldInbound), true);
         assert.deepEqual(heldInbound.parts.map((part) => part.toString()), ['held-first', 'held-final']);
+        assert.equal(dealer.recv(heldInbound), true);
+        assert.deepEqual(heldInbound.parts.map((part) => part.toString()), ['queued-first', 'queued-second']);
     }
     finally {
         if (held)

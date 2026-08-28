@@ -1243,6 +1243,46 @@ void test_routed_send_and_request_honor_core_sndtimeo ()
             < std::chrono::seconds (2));
     assert (send.valid ());
 
+    std::atomic<int> callback_count (0);
+    zlink::message_t callback_request = make_request_message ("dontwait-callback-request");
+    const auto callback_started = std::chrono::steady_clock::now ();
+    try {
+        (void) dealer.request ()
+          .message (callback_request)
+          .flags (zlink::send_flags_t::dontwait)
+          .timeout (std::chrono::seconds (1))
+          .submit ([&] (zlink::request_result_t, std::vector<zlink::message_t>) {
+              callback_count.fetch_add (1, std::memory_order_relaxed);
+          });
+        assert (false && "DONTWAIT callback request must report admission backpressure");
+    }
+    catch (const zlink::submit_error_t &error) {
+        assert (error.result () == zlink::submit_result_t::backpressured);
+        assert (error.internal_errno () == EAGAIN);
+    }
+    assert (std::chrono::steady_clock::now () - callback_started
+            < std::chrono::seconds (1));
+    assert (callback_count.load (std::memory_order_relaxed) == 0);
+    assert (callback_request.valid ());
+
+    zlink::message_t sync_request = make_request_message ("dontwait-sync-request");
+    const auto sync_started = std::chrono::steady_clock::now ();
+    try {
+        (void) dealer.request ()
+          .message (sync_request)
+          .flags (zlink::send_flags_t::dontwait)
+          .timeout (std::chrono::seconds (1))
+          .submit ();
+        assert (false && "DONTWAIT blocking request must report admission backpressure");
+    }
+    catch (const zlink::submit_error_t &error) {
+        assert (error.result () == zlink::submit_result_t::backpressured);
+        assert (error.internal_errno () == EAGAIN);
+    }
+    assert (std::chrono::steady_clock::now () - sync_started
+            < std::chrono::seconds (1));
+    assert (sync_request.valid ());
+
     // The request terminal submits through the same Core send contract before
     // it hands back a suspension, so a send that never gets credit fails at
     // submit time instead of parking in a binding-owned queue.

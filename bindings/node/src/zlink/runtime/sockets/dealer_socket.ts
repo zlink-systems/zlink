@@ -12,6 +12,9 @@ import {
 import { SendCompletionOwner, consumeSubmittedMessages } from '../messaging/send_completion';
 import {
   registerNativeRequest,
+  registerNativeRequestCallback,
+  messagesFromNativeBuffers,
+  requestErrorFromResult,
   releaseNativeRequestDispatcher,
 } from '../messaging/request_executor';
 import type { RuntimeContext as Context } from '../core/context';
@@ -71,19 +74,26 @@ export class DealerSocket extends ReceiveSocket {
     );
   }
   request(): RequestOperation {
-    return new RuntimeRequestOperation((parts, timeoutMs) => {
+    return new RuntimeRequestOperation(
+      (parts, timeoutMs) => this.submitRequest(parts, timeoutMs),
+      (parts, timeoutMs, flags) => this.submitRequestSync(parts, timeoutMs, flags),
+      (parts, timeoutMs, flags, callback) => this.submitRequestCallback(parts, timeoutMs, flags, callback)
+    );
+  }
+  private resolvedRequestTimeout(timeoutMs: number): number {
+    return timeoutMs === 0 ? (this.options.requestTimeout === 0 ? 5_000 : this.options.requestTimeout) : timeoutMs;
+  }
+  private submitRequest(parts: any, timeoutMs: number): Promise<import('../../contracts').Message[]> {
       const handle = getNativeHandle(this);
       const registration = registerNativeRequest(handle, 'request failed');
-      const resolvedTimeout = timeoutMs === 0
-        ? (this.options.requestTimeout === 0 ? 5_000 : this.options.requestTimeout)
-        : timeoutMs;
+      const resolvedTimeout = this.resolvedRequestTimeout(timeoutMs);
       let result: { result: number; nativeErrno: number };
       try {
         result = native.dealerRequest(
           handle,
           normalizeOperationPayload(parts),
           registration.token,
-          resolvedTimeout
+          resolvedTimeout, SendFlags.DontWait
         );
       } catch (error) {
         registration.fail(submitNativeError(error, SendFlags.DontWait, 'request submit failed'));
@@ -99,7 +109,28 @@ export class DealerSocket extends ReceiveSocket {
       }
       consumeSubmittedMessages(parts);
       return registration.promise;
-    });
+  }
+  private submitRequestSync(parts: any, timeoutMs: number, flags: SendFlags): import('../../contracts').Message[] {
+    const result = native.dealerRequestSync(getNativeHandle(this), normalizeOperationPayload(parts),
+      this.resolvedRequestTimeout(timeoutMs), flags | 0);
+    if (result.result !== SubmitResult.Ok) throw submitErrorFromNativeResult(result.result, result.nativeErrno, 'request submit failed');
+    consumeSubmittedMessages(parts);
+    if (result.requestResult !== 0) throw requestErrorFromResult(result.requestResult as any, 'request failed');
+    return messagesFromNativeBuffers(result.parts);
+  }
+  private submitRequestCallback(parts: any, timeoutMs: number, flags: SendFlags,
+    callback: (error: Error | null, reply: import('../../contracts').Message[] | null) => void): void {
+    const handle = getNativeHandle(this);
+    const registration = registerNativeRequestCallback(handle, callback, 'request failed');
+    let result;
+    try { result = native.dealerRequest(handle, normalizeOperationPayload(parts), registration.token,
+      this.resolvedRequestTimeout(timeoutMs), flags | 0); }
+    catch (error) { registration.cancel(); throw submitNativeError(error, flags, 'request submit failed'); }
+    if (result.result !== SubmitResult.Ok) {
+      registration.cancel();
+      throw submitErrorFromNativeResult(result.result, result.nativeErrno, 'request submit failed');
+    }
+    consumeSubmittedMessages(parts);
   }
   recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
     let raw;

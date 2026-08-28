@@ -557,19 +557,29 @@ func TestRoutedRequestWaitsForCreditAndReplies(t *testing.T) {
 		t.Fatalf("router SetSendTimeout() error = %v", err)
 	}
 
-	submitted := make(chan (<-chan zlink.RequestReplyCompletion), 1)
+	type requestAdmission struct {
+		completion <-chan zlink.RequestReplyCompletion
+		err        error
+	}
+	submitted := make(chan requestAdmission, 1)
 	go func() {
-		submitted <- f.router.Request(f.ridA).
+		completion, err := f.router.Request(f.ridA).
 			Bytes([]byte("request-after-credit")).
 			Timeout(5 * time.Second).
+			Flags(zlink.SendFlagsNone).
 			Submit(context.Background())
+		submitted <- requestAdmission{completion: completion, err: err}
 	}()
 
 	drainRoutedAsync(t, f.dealerA, admitted)
 
 	var request <-chan zlink.RequestReplyCompletion
 	select {
-	case request = <-submitted:
+	case admission := <-submitted:
+		if admission.err != nil {
+			t.Fatalf("request admission error = %v", admission.err)
+		}
+		request = admission.completion
 	case <-time.After(5 * time.Second):
 		t.Fatal("request submit did not return after its credit came back")
 	}
@@ -602,6 +612,32 @@ func TestRoutedRequestWaitsForCreditAndReplies(t *testing.T) {
 	}
 	if len(completion.Parts) != 1 || string(completion.Parts[0].Data()) != "request-reply" {
 		t.Fatalf("request reply payload was not preserved")
+	}
+}
+
+func TestRoutedRequestDontWaitReturnsAdmissionBackpressure(t *testing.T) {
+	f := newRoutedAsyncFixture(t, false)
+	defer f.close()
+
+	fillRoutedTargetUntilBackpressured(t, f.router, f.ridA)
+	started := time.Now()
+	completion, err := f.router.Request(f.ridA).
+		Bytes([]byte("request-dontwait-backpressure")).
+		Timeout(5 * time.Second).
+		Flags(zlink.SendFlagsDontWait).
+		Submit(context.Background())
+	if err == nil {
+		t.Fatal("request admission succeeded with a full HWM")
+	}
+	var submitErr *zlink.SubmitError
+	if !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitBackpressured {
+		t.Fatalf("request admission error = %T %v, want SubmitBackpressured", err, err)
+	}
+	if completion != nil {
+		t.Fatal("rejected request returned a completion channel")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("DONTWAIT admission took %v", elapsed)
 	}
 }
 

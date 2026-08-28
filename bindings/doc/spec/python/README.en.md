@@ -155,8 +155,13 @@ The bindings own zero threads, queues, or retry anywhere in this surface
 - HWM-managed send — PAIR `send()` and DEALER/ROUTER routed `send()` — and
   `request()` are ASYNC because both can pass through Core's HWM admission
   queue. A send builder has the async `submit()` terminal and the synchronous
-  `submit_blocking(*, flags=0) -> None` terminal; a request builder has only
-  async `submit()`. For asynchronous sends, use
+  `submit_sync(*, flags=0) -> None` terminal. A request builder provides three
+  completion surfaces: `submit_sync(*, flags)` waits synchronously for
+  admission and reply and returns the reply directly;
+  `submit_sync(*, flags, callback)` returns when the admission result is known
+  and delivers the reply through the callback; `submit()` returns an awaitable
+  coroutine object. Request submission passes through the same HWM admission
+  as send, and `NONE`/`DONT_WAIT` select admission waiting. For asynchronous sends, use
   `await pair.send().message(message).submit()`,
   `await dealer.send().message(message).submit()`, and
   `reply = await dealer.request().message(request).submit()`. `submit()`
@@ -192,7 +197,7 @@ The bindings own zero threads, queues, or retry anywhere in this surface
     once. Waiting on one target's send or request blocks neither another
     target's submit nor the Python event loop — Core's own per-target queue
     orders admission, not a Python-side wait. Synchronous
-    `submit_blocking(*, flags=0)` calls `zlink_send_part(_rid)`: omitted flags
+    `submit_sync(*, flags=0)` calls `zlink_send_part(_rid)`: omitted flags
     or `SendFlags.NONE` blocks inside Core until admission, while
     `SendFlags.DONT_WAIT` immediately raises `SubmitError` on backpressure.
     There is no callback or `submit_async()` compatibility terminal.

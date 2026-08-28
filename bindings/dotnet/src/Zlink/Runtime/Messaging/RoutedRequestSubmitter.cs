@@ -41,7 +41,7 @@ internal static class RoutedRequestSubmitter
         {
             var target = SelectTarget(handle, routerRoutingId);
             SubmitParts(handle, socketType, ref target, parts, timeoutMs,
-                userData);
+                (int)SendFlags.DontWait, userData);
         }
         catch
         {
@@ -53,6 +53,45 @@ internal static class RoutedRequestSubmitter
 
         pending.AttachCancellation();
         return pending.Task;
+    }
+
+    internal static IReadOnlyList<Message> Request(IntPtr handle,
+        SocketType socketType, RoutingId? routerRoutingId,
+        IReadOnlyList<Message> parts, uint timeoutMs, SendFlags flags)
+    {
+        var pending = new BlockingRequest();
+        Submit(handle, socketType, routerRoutingId, parts, timeoutMs, flags,
+            pending);
+        return pending.Wait();
+    }
+
+    internal static void Request(IntPtr handle, SocketType socketType,
+        RoutingId? routerRoutingId, IReadOnlyList<Message> parts,
+        uint timeoutMs, SendFlags flags, RequestCallback callback)
+    {
+        if (callback == null)
+            throw new ArgumentNullException(nameof(callback));
+        Submit(handle, socketType, routerRoutingId, parts, timeoutMs, flags,
+            new CallbackRequest(callback));
+    }
+
+    private static void Submit(IntPtr handle, SocketType socketType,
+        RoutingId? routerRoutingId, IReadOnlyList<Message> parts,
+        uint timeoutMs, SendFlags flags, IRequestCompletion completion)
+    {
+        RequestReplySupport.EnsureParts(parts, nameof(parts));
+        var self = GCHandle.Alloc(completion, GCHandleType.Normal);
+        try
+        {
+            var target = SelectTarget(handle, routerRoutingId);
+            SubmitParts(handle, socketType, ref target, parts, timeoutMs,
+                (int)flags, GCHandle.ToIntPtr(self));
+        }
+        catch
+        {
+            self.Free();
+            throw;
+        }
     }
 
     private static unsafe ZlinkRoutedSubmitTarget SelectTarget(IntPtr handle,
@@ -75,13 +114,8 @@ internal static class RoutedRequestSubmitter
 
     private static void SubmitParts(IntPtr handle, SocketType socketType,
         ref ZlinkRoutedSubmitTarget target, IReadOnlyList<Message> parts,
-        uint timeoutMs, IntPtr userData)
+        uint timeoutMs, int flags, IntPtr userData)
     {
-        // DONTWAIT: the .NET terminal is `Async(...)`, so the submit must not
-        // occupy the caller thread waiting for HWM credit. Core reports the
-        // refusal immediately and the back-pressure policy belongs to the
-        // application — the binding neither waits nor retries.
-        const int blockingFlags = 1;
         var routedTarget = target;
         RequestReplySupport.SubmitOwnedParts(parts,
             (ref ZlinkMsg nativePart, NativeMethods.ZlinkPartFlag partFlag) =>
@@ -93,13 +127,13 @@ internal static class RoutedRequestSubmitter
                 return socketType == SocketType.Dealer
                     ? NativeMethods.zlink_dealer_request_transport_pair_part(
                         handle, ref routedTarget, ref nativePart,
-                        blockingFlags, partFlag, partTimeout, partHandler,
+                        flags, partFlag, partTimeout, partHandler,
                         partUserData)
                     : NativeMethods.zlink_router_request_transport_pair_part(
                         handle, ref routedTarget.PeerRoutingId,
                         routedTarget.TransportPairId,
                         routedTarget.TransportPairGeneration, ref nativePart,
-                        blockingFlags, partFlag, partTimeout, partHandler,
+                        flags, partFlag, partTimeout, partHandler,
                         partUserData);
             });
     }
@@ -117,8 +151,8 @@ internal static class RoutedRequestSubmitter
         var state = GCHandle.FromIntPtr(userData);
         try
         {
-            if (state.Target is PendingRequest pending)
-                pending.CompleteNativeReply(result, ref parts, ref partCount);
+            if (state.Target is IRequestCompletion pending)
+                pending.Complete(result, ref parts, ref partCount);
         }
         catch (Exception exception)
         {
@@ -132,7 +166,59 @@ internal static class RoutedRequestSubmitter
         }
     }
 
-    private sealed class PendingRequest
+    private interface IRequestCompletion
+    {
+        void Complete(int result, ref IntPtr parts, ref nuint partCount);
+    }
+
+    private sealed class BlockingRequest : IRequestCompletion
+    {
+        private readonly TaskCompletionSource<IReadOnlyList<Message>>
+            _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Complete(int result, ref IntPtr parts, ref nuint partCount)
+        {
+            if (result != 0)
+            {
+                _completed.TrySetException(new ZlinkRequestException(
+                    (RequestResult)result));
+                return;
+            }
+            var reply = Message.FromNativeVector(parts, partCount);
+            parts = IntPtr.Zero;
+            partCount = 0;
+            _completed.TrySetResult(reply);
+        }
+
+        internal IReadOnlyList<Message> Wait()
+        {
+            return _completed.Task.GetAwaiter().GetResult();
+        }
+    }
+
+    private sealed class CallbackRequest : IRequestCompletion
+    {
+        private readonly RequestCallback _callback;
+
+        internal CallbackRequest(RequestCallback callback)
+        {
+            _callback = callback;
+        }
+
+        public void Complete(int result, ref IntPtr parts, ref nuint partCount)
+        {
+            IReadOnlyList<Message> reply = Array.Empty<Message>();
+            if (result == 0)
+            {
+                reply = Message.FromNativeVector(parts, partCount);
+                parts = IntPtr.Zero;
+                partCount = 0;
+            }
+            _callback((RequestResult)result, reply);
+        }
+    }
+
+    private sealed class PendingRequest : IRequestCompletion
     {
         private readonly CancellationToken _cancellationToken;
 
@@ -166,7 +252,7 @@ internal static class RoutedRequestSubmitter
             }, this);
         }
 
-        internal void CompleteNativeReply(int result, ref IntPtr parts,
+        public void Complete(int result, ref IntPtr parts,
             ref nuint partCount)
         {
             if (result != 0)

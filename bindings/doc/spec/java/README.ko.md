@@ -645,10 +645,13 @@ physical transport pair만 종료 대상으로 지정한다. 같은 peer routing
 identity가 필요한 Framework connection replacement와 같은 runtime 제어에
 사용하며, 임의의 pair identity를 새로 만들어 전달하지 않는다.
 
-PAIR send와 DEALER/ROUTER routed send builder에는 두 `submit` overload가 있다.
-비동기 `submit()`은 `CompletionStage<Void>`를 반환하고, 동기
-`submit(SendFlags)`는 `void`를 반환한다. request builder의 terminal은 인자 없는
-`submit()` 하나이며 `CompletionStage<List<Message>>`를 반환한다.
+PAIR send와 DEALER/ROUTER routed send builder에는 비동기 `submit()`과 동기
+`submit_sync(SendFlags)`가 있다. Request builder는 세 완료 표면을 제공한다.
+`submit_sync(SendFlags)`는 admission과 reply를 동기 대기해 reply를 직접 반환하고,
+`submit_sync(SendFlags, callback)`은 admission 결과가 결정되면 즉시 반환한 뒤 reply를
+callback으로 전달하며, `submit()`은 `CompletionStage<List<Message>>`를 반환한다.
+Request 제출도 send와 같은 HWM admission을 지나며 sync terminal의 flag가
+`NONE`(대기)과 `DONT_WAIT`(즉시 backpressure)를 선택한다.
 PUB/XPUB publish도 같은 staged message builder를 사용하지만 `submit()`은
 동기 `void`이며, 성공하지 못하면 즉시 `ZlinkSubmitException`을 던진다.
 
@@ -657,26 +660,29 @@ public interface AsyncSendSubmitOperation {
     AsyncSendSubmitOperation message(Message part);
     AsyncSendSubmitOperation timeout(Duration timeout);
     CompletionStage<Void> submit();
-    void submit(SendFlags flags);
+    void submit_sync(SendFlags flags);
 }
 
 public interface RoutedSendSubmitOperation {
     RoutedSendSubmitOperation message(Message part);
     RoutedSendSubmitOperation timeout(Duration timeout);
     CompletionStage<Void> submit();
-    void submit(SendFlags flags);
+    void submit_sync(SendFlags flags);
 }
 
 public interface RequestSubmitOperation {
     RequestSubmitOperation message(Message part);
     RequestSubmitOperation timeout(Duration timeout);
     CompletionStage<List<Message>> submit();
+    List<Message> submit_sync(SendFlags flags);
+    void submit_sync(SendFlags flags,
+                     BiConsumer<RequestResult, List<Message>> callback);
 }
 ```
 
 send builder는 별도 `await()`, `submit(callback)`, `flags(...)`, boolean one-shot
-terminal을 제공하지 않는다. 대신 `submit(SendFlags.NONE)`은 Core가 admit할 때까지
-동기 대기하고, `submit(SendFlags.DONT_WAIT)`은 HWM이 가득 차면 즉시
+terminal을 제공하지 않는다. 대신 `submit_sync(SendFlags.NONE)`은 Core가 admit할 때까지
+동기 대기하고, `submit_sync(SendFlags.DONT_WAIT)`은 HWM이 가득 차면 즉시
 `ZlinkSubmitException(BACKPRESSURED)`을 던진다. 인자 없는 `submit()`은 호출 thread를
 막지 않는다. Framework와 Kotlin framework는 동기 overload를 사용하지 않고 반환된
 `CompletionStage`를 직접 completion/await 경계에 연결하며, Kotlin framework의 사용은

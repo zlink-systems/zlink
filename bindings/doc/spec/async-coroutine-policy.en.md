@@ -18,7 +18,7 @@ The four operation types and their completion surfaces covered here:
 |---|---|
 | **HWM-managed send** (PAIR send, DEALER/ROUTER routed send, `Received.send()`) | async terminal **and** sync(+flags) terminal (Go, by convention, sync only) |
 | **publish** (PUB/XPUB) | synchronous `submit()` |
-| **request** | Core-driven async completion (only C++ exceptionally has three terminals: `submit()`/`submit(callback)`/`async()`) |
+| **request** | three terminals — sync return / sync callback (+flags) / async, in every binding |
 | **raw reply** (ROUTER/`Received`) | HWM-free synchronous one-shot |
 
 The bindings library provides a per-language completion boundary over the core C
@@ -66,7 +66,7 @@ type as follows.
 | [Classification principle](#classification-principle) | the criterion that classifies send/request as ASYNC and publish/raw reply as SYNC, based on whether HWM waiting is possible |
 | [Common principles](#common-principles) | shared rules for operation-entrypoint names, builders, and how submit failure is expressed |
 | [HWM-managed send completion contract](#hwm-managed-send-completion-contract) | the async completion of HWM-managed send (including routed send) and the synchronous PUB/XPUB publish submission contract |
-| [Request completion surface and C++'s three terminals](#request-completion-surface-and-cs-three-terminals) | the per-language completion surface of HWM-managed request and C++'s three terminals |
+| [Request completion surface and three terminals](#request-completion-surface-and-three-terminals) | the three terminals of HWM-managed request (sync return/sync callback/async) and their per-language surfaces |
 | [Per-language normative table for send/publish/request/raw reply](#per-language-normative-table-for-sendpublishrequestraw-reply) | per-language terminal and return type for each of the four operation types |
 | [Raw reply synchronous one-shot](#raw-reply-synchronous-one-shot) | the reply terminal and immediate-failure contract across the seven bindings |
 | [Framework typed Session reply](#framework-typed-session-reply) | the awaitable Framework contract, distinct from the raw binding reply |
@@ -98,8 +98,9 @@ type as follows.
   contract above.
 - This principle is the basis for every section below: C++ exposing both
   `submit()`/`async()` on send (or the three terminals on request), other
-  languages returning an awaitable on send, and publish and raw reply staying
-  purely synchronous all derive from this classification principle.
+  languages exposing sync/async terminals on send and request, and publish and
+  raw reply staying purely synchronous all derive from this classification
+  principle.
 
 ## Common principles
 
@@ -136,21 +137,37 @@ type as follows.
   convention on async-classified operations, and a `Submit()` terminal on
   synchronous publish and raw reply. Every other language keeps a single
   `submit()` (Go: `Submit(ctx)`) terminal per operation. (Exception: HWM-managed
-  send has two terminals, sync/async, to expose the send-flag contract — this is
-  not name proliferation but a split between the flag-bearing SYNC path and the
-  flagless ASYNC path. See the [normative table](#per-language-normative-table-for-sendpublishrequestraw-reply).)
+  **send and request** have both sync and async terminals to expose the admission-
+  flag contract — this is not name proliferation but a split between the flag-
+  bearing SYNC path and the flagless ASYNC path. See the [normative table](#per-language-normative-table-for-sendpublishrequestraw-reply).)
+
+  **Unified sync-terminal naming** — in languages whose async terminal is
+  `submit()` (Java, Node, Python, and Rust), the sync terminal is consistently
+  named **`submit_sync`**. Java must use a distinct name because it cannot overload
+  on return type alone, and the others follow it for symmetry. **`submit_sync`
+  names the sync/async axis** ([async-execution-model](async-execution-model.en.md));
+  whether it actually blocks is selected by the flag (`NONE`/`DONTWAIT`). This is
+  why the name is `submit_sync`, not `submit_blocking`: with `DONTWAIT` it is
+  non-blocking. C++ (`async()`/`submit()`), .NET (`Async()`/`Submit()`), and Go
+  (`Submit(ctx)`) retain their own conventions because their async terminal is not
+  `submit()`.
   The awaitable returned by an async-classified operation's terminal is consumed
   the idiomatic way of each language (await / join / block_on / channel recv),
   while synchronous publish and raw-reply terminals are consumed the moment they
   are called. By the same principle Go's send `Submit(ctx)` is a synchronous form
   returning `error`. A blocking call inside a goroutine is Go's idiomatic way to
   wait, and `context.Context` checks for pre-submit cancellation and deadline.
-- The C++ request builder exposes three terminals together —
-  `submit()` (blocking) · `submit(callback)` (completion delivery only) ·
-  `async()` (coroutine) — because, by the name-distinction principle above, only
-  C++ needs these three. Other languages keep a single terminal — the awaitable
-  it returns already supports every consumption mode, so there is no reason to add
-  more terminals.
+- **The request builder exposes three terminals in every binding** — sync return
+  (blocking and returns the reply directly), sync callback (immediate admission
+  result, with the reply delivered by callback), and async (awaitable). Because a
+  request passes through HWM admission just like send, the sync callback surface
+  is needed to express C's consecutive `DONTWAIT` submission model as a public
+  binding surface (0.14.0). Names follow the rule above: C++
+  `submit()`/`submit(callback)`/`async()`, .NET
+  `Submit(SendFlags)`/`Submit(SendFlags, callback)`/`Async()`, Java, Node, Python,
+  and Rust `submit_sync(flags)`/`submit_sync(flags, callback)`/`submit()`. Go uses
+  `Submit(ctx)` (+Flags) and a completion channel for fire-and-collect, with no
+  separate callback method. See the [normative table](#per-language-normative-table-for-sendpublishrequestraw-reply).
 
 ## HWM-managed send completion contract
 
@@ -251,31 +268,52 @@ and provides **only a synchronous `submit()`**. The rules are:
   are meaningless on an async terminal, so C++ `async()` rejects non-zero flags
   with `EINVAL`.
 
-## Request completion surface and C++'s three terminals
+## Request completion surface and three terminals
 
 DEALER/ROUTER **request** is also classified ASYNC per the
 [classification principle](#classification-principle). The terminal is called on
 the builder returned by the same operation entry point. Separate names like
 `requestCoroutine`, `request_async`, or `submit_async` are not created.
 
-### C++ request's three terminals
+**Request submission passes through HWM admission just like send.** The request
+message itself travels over the send path, so submitting a request can encounter
+an admission wait (HWM). Therefore the request sync terminals have the **same
+admission-flag contract** as send: `NONE` waits for admission, while `DONTWAIT`
+immediately returns `BACKPRESSURED`/`EAGAIN`. Reply completion is driven
+separately by Core (`ZLINK_REQUEST_TIMED_OUT`).
 
-The C++ request builder exposes three terminals.
+### Three terminals (every binding)
 
-1. **`submit()`** — blocking. At the end of a Core-owned wait it returns the reply
-   (`std::vector<message_t>`) directly. Timeout expiry is signaled via
-   `ZLINK_REQUEST_TIMED_OUT`.
-2. **`submit(callback)`** — returns immediately. Core's reply callback drives the
-   app callback — it handles completion delivery only, and the binding performs no
-   retry or scheduling.
-3. **`async()`** — for coroutines. Returns a move-only `async_result_t<T>`. It is
-   the framework canonical terminal — since the framework is async-execution-only,
-   it uses this terminal exclusively.
+The request builder exposes three completion surfaces. Names follow the
+[naming rule](#common-principles): languages whose async terminal is `submit()`
+(Java, Node, Python, and Rust) call the sync terminal `submit_sync`; C++ uses
+`submit()`/`submit(callback)` and `async()`, .NET uses `Submit(...)` and
+`Async(...)`, and Go uses `Submit(ctx)`.
 
-Other languages keep a single terminal (`submit()`, .NET `Async(...)`) — by the
-name-distinction principle only C++ needs these three, and for other languages
-the awaitable that terminal returns already supports every consumption mode
-(await/join/block_on/channel recv), so there is no reason to add more terminals.
+1. **sync return** — blocking. It takes an admission flag and, at the end of a
+   Core-owned wait, **returns the reply directly**. With `NONE` it waits for
+   admission and then for the reply. Timeout expiry is signaled via
+   `ZLINK_REQUEST_TIMED_OUT`. Names: Java, Node, Python, and Rust
+   `submit_sync(flags)`; C++ `submit()`; .NET `Submit(SendFlags)`; Go
+   `Submit(ctx)` (+Flags).
+2. **sync callback** — synchronously returns the **admission result** as soon as
+   the request is submitted (`DONTWAIT` immediately returns `BACKPRESSURED`), and
+   delivers the reply later by **callback**. This is the key surface for
+   submitting consecutive reqrep operations without serializing them. The binding
+   performs no retry or scheduling. Names: Java, Node, Python, and Rust
+   `submit_sync(flags, callback)`; C++ `submit(callback)`; .NET
+   `Submit(SendFlags, callback)`. Idiomatic Go uses the completion channel returned
+   by `Submit(ctx)` for fire-and-collect and has no separate callback method.
+3. **async** — for coroutines/awaitables. It returns the language awaitable (C++
+   `async_result_t<T>`, .NET `Task`, Java `CompletionStage`, Node `Promise`, Python
+   coroutine object, Rust `Future`, or Go completion channel). It is the framework
+   canonical terminal — since the framework is async-execution-only, it uses this
+   terminal exclusively. It takes no flag.
+
+The sync-return and sync-callback terminals **take an admission flag**; the async
+terminal does not, just as with send. The sync callback (or Go channel) expresses
+request admission backpressure, and admission backpressure (HWM), rather than a
+hard-coded limit, determines the outstanding reqrep depth.
 
 Reply completion is driven by Core. The reply handler callback takes the terminal
 and payload exactly once. If a language future/promise can run the user
@@ -288,10 +326,10 @@ admission·retry queue, per-operation executor, or timer.
 | Aspect | bindings completion surface |
 |---|---|
 | classification | ASYNC (HWM waiting possible) |
-| C++ terminal | `submit()` (blocking, returns reply directly) / `submit(callback)` (completion delivery) / `async()` (coroutine, framework canonical) |
-| other-language terminal | single `submit()` (or .NET `Async(...)`) — returns an idiomatic language awaitable or a completion channel |
-| reply delivery | the suspension's success value, a callback argument, or channel completion |
-| submit flags | the request managed terminal takes none |
+| terminal (every binding) | **sync return** (blocking, returns reply directly) / **sync callback** (immediate admission result, reply via callback) / **async** (awaitable, framework canonical) |
+| per-language names | C++ `submit()`/`submit(callback)`/`async()` · .NET `Submit(SendFlags)`/`Submit(SendFlags, cb)`/`Async()` · Java/Node/Python/Rust `submit_sync(flags)`/`submit_sync(flags, cb)`/`submit()` · Go `Submit(ctx)` (+Flags) + channel |
+| reply delivery | sync return value, callback argument, suspension success value, or channel completion |
+| submit flags | **sync return and sync callback take an admission flag** (`NONE` waits for admission / `DONTWAIT` returns immediate backpressure, as with send). The async terminal takes none |
 | timeout | the builder's `timeout(...)` stage. Expiry is notified by Core via `ZLINK_REQUEST_TIMED_OUT` |
 | submit failure | failed task/future/promise, an error result, or an exception (C++ `submit()` throws) |
 | reply failure | a failure of the same completion surface |
@@ -332,12 +370,12 @@ the single synchronous terminal of the raw-reply column and no send flag.
 |---|---|---|---|---|
 | C | not applicable — the C ABI applies no builder policy and follows the functional contract in `core/include/zlink.h` | not applicable | not applicable | not applicable |
 | C++ | sync `submit()`+`flags(int)` → PAIR/STREAM `bool`, routed `void`. async `async()` → `async_result_t<T>` | `submit()` → synchronous `bool`, throws `submit_error_t` on failure | `submit()` (blocking) → reply, throws on failure. `submit(callback)` → returns immediately, completion via callback. `async()` → `async_result_t<T>` (framework canonical) | `submit()` → `void`, throws `submit_error_t` on failure |
-| .NET | sync `Submit(SendFlags)` → `void`. async `Async()` → `Task`/`ValueTask`(`<T>`) | `Submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure | `Async(...)` → same as above | `Submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure |
-| Java, Kotlin | sync `submit(SendFlags)` → `void`. async `submit()` → `CompletionStage<T>`. the flag parameter makes it an overload, so the name is not split | `submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure | `submit()` → `CompletionStage<T>` (same as above) | `submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure |
-| Node | sync `submit(SendFlags)` → `void`. async `submit()` → `Promise<T>` (or `Promise<void>`) | `submit()` → synchronous `void`, throws `SubmitError` on failure | `submit()` → `Promise<T>` (same as above) | `submit()` → synchronous `void`, throws `SubmitError` on failure |
-| Python | sync `submit_blocking(*, flags)` → `None`. async `submit()` → an `await`-able coroutine object | `submit()` → synchronous `None`, raises `SubmitError` on failure | `submit()` → same as above | `submit()` → synchronous `None`, raises `SubmitError` on failure |
-| Go | sync `Submit(ctx)`+builder flag → `error` (`nil` on success). no async terminal (Go convention) | `Submit(ctx)` → synchronous `error` (`nil` on success) | `Submit(ctx)` → completion channel | `Submit(ctx)` → synchronous `error` (`nil` on success) |
-| Rust | sync `submit_blocking(SendFlags)` → `Result<(), SubmitError>`. async `submit()` → `Future<Output = Result<(), SubmitError>>`. no overload and `async` is a reserved word, so the name is split | `submit()` → synchronous `Result<(), SubmitError>` | `submit()` → runtime-agnostic `Future<Output = Result<Vec<message_t>, ZlinkError>>` | `submit()` → synchronous `Result<(), SubmitError>` |
+| .NET | sync `Submit(SendFlags)` → `void`. async `Async()` → `Task`/`ValueTask`(`<T>`) | `Submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure | sync return `Submit(SendFlags)` → reply. sync callback `Submit(SendFlags, callback)` → immediate admission. async `Async(ct)` → `Task` (framework canonical). Throws `ZlinkSubmitException` on failure | `Submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure |
+| Java, Kotlin | sync `submit_sync(SendFlags)` → `void`. async `submit()` → `CompletionStage<T>` | `submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure | sync return `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → immediate admission. async `submit()` → `CompletionStage<T>`. Throws `ZlinkSubmitException` on failure | `submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure |
+| Node | sync `submit_sync(SendFlags)` → `void`. async `submit()` → `Promise<T>` (or `Promise<void>`) | `submit()` → synchronous `void`, throws `SubmitError` on failure | sync return `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → immediate admission. async `submit()` → `Promise<T>`. Throws `SubmitError` on failure | `submit()` → synchronous `void`, throws `SubmitError` on failure |
+| Python | sync `submit_sync(*, flags)` → `None`. async `submit()` → an `await`-able coroutine object | `submit()` → synchronous `None`, raises `SubmitError` on failure | sync return `submit_sync(*, flags)` → reply. sync callback `submit_sync(*, flags, callback)` → immediate admission. async `submit()` → coroutine object. Raises `SubmitError` on failure | `submit()` → synchronous `None`, raises `SubmitError` on failure |
+| Go | sync `Submit(ctx)`+builder `Flags` → `error` (`nil` on success). no async terminal (Go convention) | `Submit(ctx)` → synchronous `error` (`nil` on success) | `Flags(...).Submit(ctx)` → admission result (`error`) + reply via completion channel. The channel supports fire-and-collect (no separate callback) | `Submit(ctx)` → synchronous `error` (`nil` on success) |
+| Rust | sync `submit_sync(SendFlags)` → `Result<(), SubmitError>`. async `submit()` → `Future<Output = Result<(), SubmitError>>` | `submit()` → synchronous `Result<(), SubmitError>` | sync return `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → immediate admission. async `submit()` → runtime-agnostic `Future<Output = Result<Vec<message_t>, ZlinkError>>` | `submit()` → synchronous `Result<(), SubmitError>` |
 
 When Kotlin uses the Java binding directly it follows the Java column's contract
 as-is. The Kotlin Framework surface (`.reply(...).await()`, etc.) is covered

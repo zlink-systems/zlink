@@ -299,7 +299,7 @@ class _ManagedSendOp:
             return submit_multipart()
         return self._socket._send_completion.submit(payload)
 
-    def submit_blocking(self, *, flags=0) -> None:
+    def submit_sync(self, *, flags=0) -> None:
         if self._submitted:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         self._payload_or_raise()
@@ -390,7 +390,7 @@ class _ManagedRoutedSendOp:
             self._routing_id, payload
         )
 
-    def submit_blocking(self, *, flags=0) -> None:
+    def submit_sync(self, *, flags=0) -> None:
         if self._submitted:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         self._payload_or_raise()
@@ -543,12 +543,19 @@ class _NativePublisherSendOp(_SocketSendOp):
 
 
 class _RequestOp:
-    """Canonical coroutine builder for one routed request."""
+    """Builder exposing async, sync-return, and sync-callback request terminals."""
 
-    __slots__ = ("_op_submit", "_parts", "_timeout", "_submitted")
+    __slots__ = (
+        "_op_submit",
+        "_op_submit_sync",
+        "_parts",
+        "_timeout",
+        "_submitted",
+    )
 
-    def __init__(self, op_submit):
+    def __init__(self, op_submit, op_submit_sync):
         self._op_submit = op_submit
+        self._op_submit_sync = op_submit_sync
         self._parts = []
         self._timeout = 0
         self._submitted = False
@@ -580,6 +587,21 @@ class _RequestOp:
         return self._op_submit(
             self._parts,
             _timeout_to_ms(self._timeout),
+        )
+
+    def submit_sync(self, *, flags=0, callback=None):
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        if not self._parts:
+            raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
+        if callback is not None and not callable(callback):
+            raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
+        self._submitted = True
+        return self._op_submit_sync(
+            self._parts,
+            _timeout_to_ms(self._timeout),
+            flags=int(flags),
+            callback=callback,
         )
 
 
@@ -683,7 +705,12 @@ class DealerSocket(
         return _RequestOp(
             lambda parts, timeout_ms: self._routed_admission.submit_request(
                 None, parts, timeout_ms
-            )
+            ),
+            lambda parts, timeout_ms, **kwargs: (
+                self._routed_admission.submit_request_sync(
+                    None, parts, timeout_ms, **kwargs
+                )
+            ),
         )
 
     def recv_into(self, received, *, flags=0):
@@ -770,7 +797,12 @@ class RouterSocket(
         return _RequestOp(
             lambda parts, timeout_ms: self._routed_admission.submit_request(
                 peer_rid, parts, timeout_ms
-            )
+            ),
+            lambda parts, timeout_ms, **kwargs: (
+                self._routed_admission.submit_request_sync(
+                    peer_rid, parts, timeout_ms, **kwargs
+                )
+            ),
         )
 
     def reply(self, routing_id, request_seq):

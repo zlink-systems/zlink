@@ -166,7 +166,8 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 func TestSurfaceManagedRoutedTerminalHasSyncSubmitAndSendFlags(t *testing.T) {
 	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
 	// Routed send is synchronous: Submit(ctx) error plus builder flags. Request
-	// keeps its Core-driven completion channel and has no send flags.
+	// keeps its async completion-channel terminal and narrows through Flags to
+	// the synchronous admission terminal.
 	sendCompletionType := reflect.TypeOf((*error)(nil)).Elem()
 	requestCompletionType := reflect.TypeOf((<-chan zlink.RequestReplyCompletion)(nil))
 	sendFlagsType := reflect.TypeOf(zlink.SendFlagsNone)
@@ -193,8 +194,14 @@ func TestSurfaceManagedRoutedTerminalHasSyncSubmitAndSendFlags(t *testing.T) {
 
 	requestType := reflect.TypeOf((*zlink.RequestSubmitOp)(nil)).Elem()
 	assertTerminal(requestType, requestCompletionType)
-	if _, ok := requestType.MethodByName("Flags"); ok {
-		t.Fatalf("%v should not expose send flags", requestType)
+	requestSyncType := reflect.TypeOf((*zlink.RequestSyncSubmitOp)(nil)).Elem()
+	flagsMethod, ok = requestType.MethodByName("Flags")
+	if !ok || flagsMethod.Type.NumIn() != 1 || flagsMethod.Type.In(0) != sendFlagsType || flagsMethod.Type.NumOut() != 1 || flagsMethod.Type.Out(0) != requestSyncType {
+		t.Fatalf("%v.Flags signature = %v", requestType, flagsMethod.Type)
+	}
+	syncSubmit, ok := requestSyncType.MethodByName("Submit")
+	if !ok || syncSubmit.Type.NumIn() != 1 || syncSubmit.Type.In(0) != contextType || syncSubmit.Type.NumOut() != 2 || syncSubmit.Type.Out(0) != requestCompletionType || syncSubmit.Type.Out(1) != sendCompletionType {
+		t.Fatalf("%v.Submit signature = %v", requestSyncType, syncSubmit.Type)
 	}
 }
 

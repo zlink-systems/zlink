@@ -16,12 +16,12 @@ const events = zlink.createPollEvents(8);
 const timer = zlink.createTimer();
 
 const pairSend: Promise<void> = pair.send().message('one').message(Buffer.from('two')).submit();
-const pairSyncSend: void = pair.send().message('sync').submit(zlink.SendFlags.None);
+const pairSyncSend: void = pair.send().message('sync').submit_sync(zlink.SendFlags.None);
 const received = new zlink.Received();
 pair.recv(received, zlink.RecvFlags.DontWait);
 received.parts;
 const receivedSendAsync: Promise<void> = received.send().message('async').submit();
-const receivedSendSync: void = received.send().message('sync').submit(zlink.SendFlags.DontWait);
+const receivedSendSync: void = received.send().message('sync').submit_sync(zlink.SendFlags.DontWait);
 void receivedSendAsync;
 void receivedSendSync;
 
@@ -32,15 +32,22 @@ sub.subscribe(topicMessage, zlink.RecvFlags.DontWait);
 
 dealer.setRoutingId(routingId);
 const dealerSend: Promise<void> = dealer.send().message('dealer-send').submit();
-const dealerSyncSend: void = dealer.send().message('dealer-sync').submit(zlink.SendFlags.DontWait);
+const dealerSyncSend: void = dealer.send().message('dealer-sync').submit_sync(zlink.SendFlags.DontWait);
 const dealerRequest: Promise<zlink.Message[]> = dealer.request()
   .message('request')
   .timeout(1000)
   .submit();
+const dealerRequestSync: zlink.Message[] = dealer.request().message('request')
+  .submit_sync(zlink.SendFlags.None);
+const dealerRequestCallback: void = dealer.request().message('request')
+  .submit_sync(zlink.SendFlags.DontWait, (error, reply) => {
+    if (error) error.message;
+    reply?.forEach((part) => part.size());
+  });
 dealer.setReceiveFlowState(zlink.ReceiveFlowState.RUNNING);
 router.setReceiveFlowState(zlink.ReceiveFlowState.PAUSED);
 const routerSend: Promise<void> = router.send(routingId).message('routed').submit();
-const routerSyncSend: void = router.send(routingId).message('routed-sync').submit(zlink.SendFlags.None);
+const routerSyncSend: void = router.send(routingId).message('routed-sync').submit_sync(zlink.SendFlags.None);
 const routerRequest: Promise<zlink.Message[]> = router.request(routingId)
   .message('request')
   .timeout(1000)
@@ -63,6 +70,8 @@ void pubSend;
 void dealerSend;
 void dealerSyncSend;
 void dealerRequest;
+void dealerRequestSync;
+void dealerRequestCallback;
 void routerSend;
 void routerSyncSend;
 void routerRequest;
@@ -74,13 +83,13 @@ dealer.send().message('legacy').flags(zlink.SendFlags.DontWait);
 dealer.send().message('legacy').submit((_result: unknown) => {});
 // @ts-expect-error managed requests do not expose compatibility flags
 dealer.request().message('legacy').flags(zlink.SendFlags.DontWait);
-// @ts-expect-error Promise submit is the sole managed request terminal
+// @ts-expect-error async submit does not accept a callback
 dealer.request().message('legacy').submit((_result, _parts) => {});
 router.reply(routingId, 1n).message('reply').submit();
 
 stream.setRoutingId(routingId);
 const streamSend: Promise<void> = stream.send(routingId).message('packet').timeout(1).submit();
-const streamSyncSend: void = stream.send(routingId).message('packet').submit(zlink.SendFlags.DontWait);
+const streamSyncSend: void = stream.send(routingId).message('packet').submit_sync(zlink.SendFlags.DontWait);
 const streamTrySend: boolean = stream.trySend(routingId).message('packet').submit();
 void streamTrySend;
 void streamSend;

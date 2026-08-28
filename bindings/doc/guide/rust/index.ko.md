@@ -49,7 +49,7 @@ server.recv(&mut received, RecvFlags::NONE).unwrap();
 println!("{}", received.parts()[0].as_str().unwrap()); // PING
 
 let ack = Message::try_from(b"ACK").unwrap();
-server.send().message(ack).submit_blocking(SendFlags::NONE).unwrap();
+server.send().message(ack).submit_sync(SendFlags::NONE).unwrap();
 ```
 
 ```rust
@@ -59,7 +59,7 @@ let client = ctx.pair_socket().unwrap();
 client.connect("tcp://127.0.0.1:5555").unwrap();
 
 let ping = Message::try_from(b"PING").unwrap();
-client.send().message(ping).submit_blocking(SendFlags::NONE).unwrap();
+client.send().message(ping).submit_sync(SendFlags::NONE).unwrap();
 
 let mut received = Received::empty();
 client.recv(&mut received, RecvFlags::NONE).unwrap();
@@ -91,15 +91,21 @@ let mut msg = Message::with_size(256).unwrap();
 msg.data_mut().copy_from_slice(&data);
 
 // 전송 — msg는 여기서 move됨
-socket.send().message(msg).submit_blocking(SendFlags::NONE).unwrap();
+socket.send().message(msg).submit_sync(SendFlags::NONE).unwrap();
 // msg를 다시 쓰면 컴파일 에러 → 소유권 안전성을 타입으로 보장
 ```
 
 HWM 대기 가능 send는 비동기 `submit()` Future와 동기
-`submit_blocking(SendFlags)`를 제공합니다. async 실행 흐름에서는
+`submit_sync(SendFlags)`를 제공합니다. async 실행 흐름에서는
 `socket.send().message(msg).submit().await?`를 사용합니다. plain thread에서는
-`submit_blocking(SendFlags::NONE)`을 사용할 수 있고, 즉시 backpressure가 필요하면
+`submit_sync(SendFlags::NONE)`을 사용할 수 있고, 즉시 backpressure가 필요하면
 `SendFlags::DONT_WAIT`을 지정합니다.
+
+Request도 같은 HWM admission을 지나며 세 완료 표면을 제공합니다.
+`submit_sync(SendFlags)`는 admission과 reply를 동기 대기해 reply를 직접 반환하고,
+`on_reply(cb).submit_sync(SendFlags)`는 admission 결과를 즉시 반환한 뒤 reply를
+callback으로 전달하며, `submit()`은 Future를 반환합니다. Sync flag가 admission 대기
+여부를 정합니다.
 
 수신된 메시지 읽기:
 
@@ -144,7 +150,7 @@ Rust의 소유권 시스템이 대부분을 컴파일 타임에 강제합니다.
 ```rust
 // 에러 처리 패턴
 let msg = Message::try_from(b"data").unwrap();
-match socket.send().message(msg).submit_blocking(SendFlags::NONE) {
+match socket.send().message(msg).submit_sync(SendFlags::NONE) {
     Ok(_) => { /* 전송됨 */ }
     Err(e) => eprintln!("send failed: {e}"),
 }
@@ -157,7 +163,7 @@ match socket.send().message(msg).submit_blocking(SendFlags::NONE) {
 Rust 바인딩은 작업별 에러 타입을 `Result`로 돌려줍니다.
 
 ```rust
-match socket.send().message(msg).submit_blocking(SendFlags::DONT_WAIT) {
+match socket.send().message(msg).submit_sync(SendFlags::DONT_WAIT) {
     Ok(_) => {}
     Err(e) => match e.code() {
         zlink::SubmitResult::Backpressured => { /* 재시도 */ }
@@ -182,7 +188,7 @@ match socket.send().message(msg).submit_blocking(SendFlags::DONT_WAIT) {
 | `zlink_socket(ctx, type)` | `ctx.pair_socket()` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit_blocking(flags)` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit_sync(flags)` |
 | `zlink_send_async(...)` | `socket.send().message(m).submit().await` |
 | `zlink_recv_part(...)` | `socket.recv(&mut received, flags)` |
 | `zlink_msg_data(msg)` | `part.as_bytes()` |
@@ -210,10 +216,10 @@ println!("zlink {major}.{minor}.{patch}");
 | 소켓 | `Send`이지만 한 스레드에서만 사용. 동시 접근 금지 |
 | `Message::as_bytes()` | 메시지 수명 동안만 유효 |
 
-`submit_blocking(SendFlags::NONE)`은 HWM admission을 기다리는 동안 호출 thread를
+`submit_sync(SendFlags::NONE)`은 HWM admission을 기다리는 동안 호출 thread를
 멈춥니다. plain thread에서는 그 thread만 대기합니다. async executor에서 다른 task를
 계속 실행해야 하면 `submit().await`를 사용하고, 즉시 backpressure가 필요하면
-`submit_blocking(SendFlags::DONT_WAIT)`을 사용합니다.
+`submit_sync(SendFlags::DONT_WAIT)`을 사용합니다.
 
 ```rust
 use std::sync::Arc;

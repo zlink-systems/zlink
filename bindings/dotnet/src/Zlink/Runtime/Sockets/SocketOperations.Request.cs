@@ -42,6 +42,25 @@ internal sealed class DealerRequestOperation : RequestOperation,
         return _socket.RequestCore(_parts.Parts, _timeout, ct);
     }
 
+    public IReadOnlyList<Message> Submit(SendFlags flags)
+    {
+        EnsureReadyToSubmit();
+        return _socket.RequestCore(_parts.Parts, _timeout, flags);
+    }
+
+    public void Submit(SendFlags flags, RequestCallback callback)
+    {
+        EnsureReadyToSubmit();
+        _socket.RequestCore(_parts.Parts, _timeout, flags, callback);
+    }
+
+    private void EnsureReadyToSubmit()
+    {
+        EnsureNotSubmitted();
+        _parts.EnsureNotEmpty();
+        _submission.MarkSubmittedAfterValidation();
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureNotSubmitted()
     {
@@ -88,6 +107,25 @@ internal sealed class RouterPeerRequestOperation : RequestOperation,
         _parts.EnsureNotEmpty();
         _submission.MarkSubmittedAfterValidation();
         return _socket.RequestCore(_peerRid, _parts.Parts, _timeout, ct);
+    }
+
+    public IReadOnlyList<Message> Submit(SendFlags flags)
+    {
+        EnsureReadyToSubmit();
+        return _socket.RequestCore(_peerRid, _parts.Parts, _timeout, flags);
+    }
+
+    public void Submit(SendFlags flags, RequestCallback callback)
+    {
+        EnsureReadyToSubmit();
+        _socket.RequestCore(_peerRid, _parts.Parts, _timeout, flags, callback);
+    }
+
+    private void EnsureReadyToSubmit()
+    {
+        EnsureNotSubmitted();
+        _parts.EnsureNotEmpty();
+        _submission.MarkSubmittedAfterValidation();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

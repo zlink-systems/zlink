@@ -396,6 +396,7 @@ class request_submit_operation_t : private detail::operation_builder_base_t<
 
     request_submit_operation_t &&message (message_t &part_) &&;
     request_submit_operation_t &&message (message_t &&part_) &&;
+    request_submit_operation_t &&flags (int flags_) &&;
     request_submit_operation_t &&timeout (std::chrono::milliseconds timeout_) &&;
     /// Submits the request to one exact target on the calling thread and
     /// returns a suspension that Core completes from its reply handler

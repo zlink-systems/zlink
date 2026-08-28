@@ -154,13 +154,14 @@ func (r *requestCompletion) fail(err error) {
 	r.deliver(requestCompletionFromError(err))
 }
 
-// submitRoutedRequest keeps the request terminal asynchronous
-// (`Submit(ctx) -> <-chan RequestReplyCompletion`) while the submit itself is
-// synchronous, exactly like the C++ reference realignment:
+// submitRoutedRequest performs synchronous admission and returns the request's
+// completion channel separately. The unflagged public terminal adapts an
+// admission error back into that channel to preserve its asynchronous API:
 //
 //  1. snapshot one exact routed target (a value snapshot, not a credit
 //     reservation) so the request and its reply stay on one physical peer,
-//  2. hand the record to Core with blocking flags — Core owns the HWM wait,
+//  2. hand the record to Core with the selected admission flags — Core owns
+//     the HWM wait for NONE and returns immediately for DONTWAIT,
 //  3. arm the reply bridge; Core's reply handler (or its
 //     ZLINK_REQUEST_TIMED_OUT) completes the channel.
 //
@@ -172,39 +173,35 @@ func submitRoutedRequest(
 	core *socketCore,
 	role routedRole,
 	routerRID *RoutingID,
+	flags SendFlags,
 	timeout time.Duration,
 	parts []requestBuilderPart,
-) <-chan RequestReplyCompletion {
+) (<-chan RequestReplyCompletion, error) {
 	result := make(chan RequestReplyCompletion, 1)
 	completion := &requestCompletion{result: result}
 
 	if err := contextError(ctx); err != nil {
-		completion.fail(err)
-		return result
+		return nil, err
 	}
 	if core == nil {
-		completion.fail(&SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)})
-		return result
+		return nil, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	if role == routedRouter && routerRID == nil {
-		completion.fail(&SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)})
-		return result
+		return nil, &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 
 	timeoutMillis, err := requestTimeoutMillis(core, role, timeout)
 	if err != nil {
-		completion.fail(err)
-		return result
+		return nil, err
 	}
 
 	target, err := selectRoutedTarget(core, routerRID)
 	if err == nil {
 		err = submitExactRoutedRequest(
-			core.raw(), role, routerRID, &target, parts, timeoutMillis, completion.onReply)
+			core.raw(), role, routerRID, &target, flags, parts, timeoutMillis, completion.onReply)
 	}
 	if err != nil {
-		completion.fail(err)
-		return result
+		return nil, err
 	}
 
 	if ctx != nil && ctx.Done() != nil {
@@ -212,7 +209,7 @@ func submitRoutedRequest(
 			completion.fail(ctx.Err())
 		}))
 	}
-	return result
+	return result, nil
 }
 
 func selectRoutedTarget(core *socketCore, routerRID *RoutingID) (C.zlink_routed_submit_target_t, error) {
@@ -232,7 +229,7 @@ func selectRoutedTarget(core *socketCore, routerRID *RoutingID) (C.zlink_routed_
 	return target, nil
 }
 
-// submitExactRoutedRequest hands the record to Core with blocking flags. The
+// submitExactRoutedRequest hands the record to Core with admission flags. The
 // reply handle is armed on the final part only, and is released here when the
 // submit fails — otherwise the reply trampoline owns it.
 func submitExactRoutedRequest(
@@ -240,6 +237,7 @@ func submitExactRoutedRequest(
 	role routedRole,
 	routerRID *RoutingID,
 	target *C.zlink_routed_submit_target_t,
+	flags SendFlags,
 	parts []requestBuilderPart,
 	timeoutMillis uint32,
 	onReply func(requestResult),
@@ -268,13 +266,13 @@ func submitExactRoutedRequest(
 		}
 		if role == routedDealer {
 			return submitErrorFromResult(C.zlink_dealer_request_transport_pair_part_go_local(
-				handle, target, part, C.ZLINK_SEND_FLAGS_NONE, partFlag,
+				handle, target, part, C.zlink_send_flags_t(flags), partFlag,
 				C.uint32_t(partTimeout), userdata))
 		}
 		return submitErrorFromResult(C.zlink_router_request_transport_pair_part_go_local(
 			handle, &rid,
 			target.transport_pair_id, target.transport_pair_generation,
-			part, C.ZLINK_SEND_FLAGS_NONE, partFlag,
+			part, C.zlink_send_flags_t(flags), partFlag,
 			C.uint32_t(partTimeout), userdata))
 	})
 	accepted = err == nil

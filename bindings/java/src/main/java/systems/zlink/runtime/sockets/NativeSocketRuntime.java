@@ -343,7 +343,36 @@ final class NativeSocketRuntime implements AutoCloseable {
                 ? allocateExactTarget(arena, routingId, transportPairId,
                     transportPairGeneration)
                 : selectRoutedTarget(arena, routingId);
-            return support.submit(parts, timeout, target);
+            return support.submit(parts, timeout, target,
+                systems.zlink.contracts.sockets.SendFlags.DONT_WAIT, false);
+        }
+    }
+
+    CompletionStage<List<Message>> requestSync(CoreRequestSupport support,
+                                               RoutingId routingId,
+                                               long transportPairId,
+                                               long transportPairGeneration,
+                                               List<Message> parts,
+                                               Duration timeout,
+                                               systems.zlink.contracts.sockets.SendFlags flags) {
+        Objects.requireNonNull(support, "support");
+        Objects.requireNonNull(parts, "parts");
+        Objects.requireNonNull(flags, "flags");
+        ensureOpen();
+        if (socketTypeHint == SocketType.ROUTER && routingId == null) {
+            throw new IllegalArgumentException("routingId is required");
+        }
+        boolean exact = transportPairId != 0L || transportPairGeneration != 0L;
+        if (exact && (transportPairId == 0L || transportPairGeneration == 0L)) {
+            throw new IllegalArgumentException(
+                "transport pair identity must be non-zero");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment target = exact
+                ? allocateExactTarget(arena, routingId, transportPairId,
+                    transportPairGeneration)
+                : selectRoutedTarget(arena, routingId);
+            return support.submit(parts, timeout, target, flags, true);
         }
     }
 

@@ -507,8 +507,9 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - `sendNoWait`, `publishWithFlags`, `requestAsync` 같은 operation-start 변형을
   만들지 않는다. operation 이름은 하나로 유지한다. 각 operation이 지원하는 flag나
   timeout은 빌더에 둔다. 관리형 send는 아래에서 정의하는 sync
-  `submit(SendFlags)`와 async `submit()` 종단을 사용하고, request는 Promise
-  `submit()` 종단을 사용한다.
+  `submit_sync(SendFlags)`와 async `submit()` 종단을 사용한다. Request는
+  `submit_sync(flags)`, `submit_sync(flags, callback)`, Promise `submit()`의 세
+  완료 표면을 사용한다.
 
 ## 정식 인터페이스 규칙
 
@@ -546,7 +547,7 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   별도 종단 이름을 추가하지 않는다.
 - Pair의 `send().message(...)`, DEALER/ROUTER의 routed
   `send(...).message(...)`, `Received.send().message(...)`는 두 종결자를 제공한다. sync
-  `submit(SendFlags): void`는 `zlink_send_part(_rid)`로 제출하고 실패 시
+  `submit_sync(SendFlags): void`는 `zlink_send_part(_rid)`로 제출하고 실패 시
   `SubmitError`를 발생시킨다. async `submit(): Promise<void>`는 Core
   send-complete callback으로 완료된다. timeout은 async operation의 option으로
   Core에 전달하며, `ADMITTED`면 Promise를 resolve하고 `TIMED_OUT`/`TERMINAL`이면
@@ -558,8 +559,12 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   Stream의 `trySend`와 공개 ROUTER `sendTransportPair(...)` 같은 raw one-shot
   operation은 기존 동기 `void`/`boolean` 계약을 유지하며 managed HWM 대기 종단으로
   해석하지 않는다.
-- DEALER/ROUTER `request(...).message(...).submit()`은 binding admission이 아닌
-  Core reply callback 경로로만 완료되는 `Promise<Message[]>`를 반환한다. raw
+- DEALER/ROUTER request는 세 완료 표면을 제공한다. `submit_sync(flags)`는 admission과
+  reply를 동기 대기해 `Message[]`를 직접 반환한다. `submit_sync(flags, callback)`은
+  admission 결과가 결정되면 즉시 반환하고 reply는 callback으로 전달한다.
+  `submit()`은 Core reply callback으로 완료되는 `Promise<Message[]>`를 반환한다.
+  Request 제출도 send와 같은 HWM admission을 지나며 sync flag의 `None`/`DontWait`가
+  admission 대기 여부를 정한다. raw
   ROUTER reply는 동기 one-shot이다. request/reply 경로에는 binding-owned retry,
   pending queue 또는 progress timer를 추가하지 않는다.
 - Raw ROUTER/`Received` reply의 terminal은

@@ -63,7 +63,7 @@ impl MessageParts {
 ///
 /// HWM-managed send has two terminals. [`submit`](SendOp::submit) returns a
 /// runtime-independent [`Future`](std::future::Future) whose completion is
-/// driven by the Core send-completion callback. [`submit_blocking`](SendOp::submit_blocking)
+/// driven by the Core send-completion callback. [`submit_sync`](SendOp::submit_sync)
 /// completes synchronously and accepts [`SendFlags`]: [`SendFlags::NONE`]
 /// blocks for admission and [`SendFlags::DONT_WAIT`] reports backpressure
 /// immediately.
@@ -133,6 +133,17 @@ pub(crate) struct RoutedSendOpStorage {
 pub struct RequestOp<State> {
     pub(crate) inner: RequestOpStorage,
     pub(crate) _state: PhantomData<State>,
+}
+
+/// A request builder whose reply is delivered to a callback.
+///
+/// Create this form with [`RequestOp::on_reply`], then call
+/// [`submit_sync`](RequestCallbackOp::submit_sync) to obtain the admission
+/// result synchronously. The callback receives the eventual reply or request
+/// failure.
+pub struct RequestCallbackOp<F> {
+    pub(crate) inner: RequestOpStorage,
+    pub(crate) callback: F,
 }
 
 pub(crate) struct RequestOpStorage {
@@ -208,7 +219,7 @@ impl SendOp<Ready> {
     /// [`SendFlags::NONE`] blocks until Core admits the record (subject to the
     /// socket's `SNDTIMEO`). [`SendFlags::DONT_WAIT`] returns an immediate
     /// [`SubmitError`] when the outbound HWM is full.
-    pub fn submit_blocking(self, flags: SendFlags) -> Result<(), SubmitError> {
+    pub fn submit_sync(self, flags: SendFlags) -> Result<(), SubmitError> {
         crate::operations::submit_send_blocking(self.inner, flags)
     }
 }
@@ -292,7 +303,7 @@ impl RoutedSendOp<Ready> {
     /// [`SendFlags::NONE`] blocks until Core admits the record (subject to the
     /// socket's `SNDTIMEO`). [`SendFlags::DONT_WAIT`] returns an immediate
     /// [`SubmitError`] when the outbound HWM is full.
-    pub fn submit_blocking(self, flags: SendFlags) -> Result<(), SubmitError> {
+    pub fn submit_sync(self, flags: SendFlags) -> Result<(), SubmitError> {
         crate::operations::submit_routed_send_blocking(self.inner, flags)
     }
 }
@@ -333,6 +344,42 @@ impl RequestOp<Ready> {
         self,
     ) -> impl std::future::Future<Output = Result<Vec<Message>, ZlinkError>> + Send {
         crate::operations::submit_routed_request(self.inner)
+    }
+
+    /// Submits the request synchronously and waits for its reply.
+    ///
+    /// [`SendFlags::NONE`] waits for HWM admission; [`SendFlags::DONT_WAIT`]
+    /// reports admission backpressure immediately. Once admitted, this call
+    /// waits for Core to deliver the reply or request timeout.
+    pub fn submit_sync(self, flags: SendFlags) -> Result<Vec<Message>, ZlinkError> {
+        crate::operations::submit_routed_request_sync(self.inner, flags)
+    }
+
+    /// Selects the synchronous callback completion surface.
+    ///
+    /// Rust does not support method overloading, so the callback is attached
+    /// as a builder step and the terminal remains `submit_sync(flags)`.
+    pub fn on_reply<F>(self, callback: F) -> RequestCallbackOp<F>
+    where
+        F: FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static,
+    {
+        RequestCallbackOp {
+            inner: self.inner,
+            callback,
+        }
+    }
+}
+
+impl<F> RequestCallbackOp<F>
+where
+    F: FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static,
+{
+    /// Submits immediately and returns only the HWM admission result.
+    ///
+    /// The reply or request failure is delivered exactly once to the callback
+    /// supplied to [`RequestOp::on_reply`].
+    pub fn submit_sync(self, flags: SendFlags) -> Result<(), SubmitError> {
+        crate::operations::submit_routed_request_callback(self.inner, flags, self.callback)
     }
 }
 

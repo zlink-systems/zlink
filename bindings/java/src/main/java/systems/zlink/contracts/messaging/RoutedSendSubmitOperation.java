@@ -29,5 +29,5 @@ public interface RoutedSendSubmitOperation
      *              {@link SendFlags#DONT_WAIT} to report backpressure
      *              immediately
      */
-    void submit(SendFlags flags);
+    void submit_sync(SendFlags flags);
 }

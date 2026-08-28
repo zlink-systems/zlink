@@ -133,6 +133,13 @@ socket.Send().Message(message).Submit(SendFlags.DontWait); // synchronous, non-b
 await socket.Send().Message(message).Async();              // asynchronous completion
 ```
 
+Request also passes through HWM admission and provides three completion
+surfaces. `Submit(SendFlags)` waits synchronously for admission and reply and
+returns the reply directly; `Submit(SendFlags, callback)` returns once admission
+is decided and delivers the reply through the callback; `Async()` returns an
+awaitable. The synchronous flag selects `None` (wait) or `DontWait` (immediate
+back-pressure).
+
 ### 3. Received
 
 A **reusable envelope** that holds a receive result. Build it once on the hot

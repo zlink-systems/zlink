@@ -6,14 +6,15 @@ package zlink
 import impl "zlink.systems/zlink/contracts"
 
 type (
-	SendOp             = impl.SendOp
-	SendSubmitOp       = impl.SendSubmitOp
-	RoutedSendOp       = impl.RoutedSendOp
-	RoutedSendSubmitOp = impl.RoutedSendSubmitOp
-	RequestOp          = impl.RequestOp
-	RequestSubmitOp    = impl.RequestSubmitOp
-	ReplyOp            = impl.ReplyOp
-	ReplySubmitOp      = impl.ReplySubmitOp
+	SendOp              = impl.SendOp
+	SendSubmitOp        = impl.SendSubmitOp
+	RoutedSendOp        = impl.RoutedSendOp
+	RoutedSendSubmitOp  = impl.RoutedSendSubmitOp
+	RequestOp           = impl.RequestOp
+	RequestSubmitOp     = impl.RequestSubmitOp
+	RequestSyncSubmitOp = impl.RequestSyncSubmitOp
+	ReplyOp             = impl.ReplyOp
+	ReplySubmitOp       = impl.ReplySubmitOp
 
 	MonitorEventMask     = impl.MonitorEventMask
 	MonitorSourceKind    = impl.MonitorSourceKind

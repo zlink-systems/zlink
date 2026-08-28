@@ -35,11 +35,12 @@ class RuntimeReceivedSendOperation
     return this;
   }
 
-  submit(): Promise<void>;
-  submit(flags: SendFlags): void;
-  submit(flags?: SendFlags): Promise<void> | void {
+  submit(): Promise<void> {
+    return this._invokeAsync(this.consumeParts(), this._timeoutMs);
+  }
+
+  submit_sync(flags: SendFlags): void {
     const parts = this.consumeParts();
-    if (flags === undefined) return this._invokeAsync(parts, this._timeoutMs);
     this._invoke(parts, flags);
     for (const part of parts) consumeSubmittedMessage(part);
   }

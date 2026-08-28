@@ -45,6 +45,8 @@ type (
 	RequestOp = impl.RequestOp
 	// RequestSubmitOp accepts further parts, a timeout, and the completion-channel terminal.
 	RequestSubmitOp = impl.RequestSubmitOp
+	// RequestSyncSubmitOp returns synchronous admission and a completion channel.
+	RequestSyncSubmitOp = impl.RequestSyncSubmitOp
 	// ReplyOp builds a reply; submitting consumes the parts.
 	ReplyOp = impl.ReplyOp
 	// ReplySubmitOp accepts further parts, flags, and the terminal submit of a reply.

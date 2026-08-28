@@ -71,6 +71,23 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
         return Kernel.RequestAsync(peerRid, parts, timeoutMs, ct);
     }
 
+    internal IReadOnlyList<Message> RequestCore(RoutingId peerRid,
+        IReadOnlyList<Message> parts, TimeSpan timeout, SendFlags flags)
+    {
+        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
+            DefaultRequestTimeout);
+        return Kernel.Request(peerRid, parts, timeoutMs, flags);
+    }
+
+    internal void RequestCore(RoutingId peerRid,
+        IReadOnlyList<Message> parts, TimeSpan timeout, SendFlags flags,
+        RequestCallback callback)
+    {
+        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
+            DefaultRequestTimeout);
+        Kernel.Request(peerRid, parts, timeoutMs, flags, callback);
+    }
+
     internal void ReplyCore(RoutingId peerRid, ulong requestSeq,
         IReadOnlyList<Message> parts)
     {

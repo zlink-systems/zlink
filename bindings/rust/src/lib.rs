@@ -101,7 +101,7 @@ pub use message::Message;
 pub use message_socket_contracts::{DealerSocket, PairSocket};
 pub use messaging_operation_contracts::SendResult;
 pub use messaging_operations::{
-    Empty, PublishOp, Ready, ReplyOp, RequestOp, RoutedSendOp, SendOp,
+    Empty, PublishOp, Ready, ReplyOp, RequestCallbackOp, RequestOp, RoutedSendOp, SendOp,
 };
 pub use messaging_subscription_event::SubscriptionEvent;
 pub use monitor_contracts::{

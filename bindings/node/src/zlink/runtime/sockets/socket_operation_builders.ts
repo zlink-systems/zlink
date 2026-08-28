@@ -9,6 +9,7 @@ import type {
   PublishOperation as PublishOperationContract,
   PublishSubmitOperation,
   RequestOperation,
+  RequestCallback,
   RequestSubmitOperation,
   ReplyOperation,
   ReplySubmitOperation,
@@ -39,6 +40,13 @@ export type RequestInvoker = (
   parts: OperationPayloadValue<MessageLike>,
   timeoutMs: number
 ) => Promise<Message[]>;
+export type SyncRequestInvoker = (
+  parts: OperationPayloadValue<MessageLike>, timeoutMs: number, flags: SendFlags
+) => Message[];
+export type CallbackRequestInvoker = (
+  parts: OperationPayloadValue<MessageLike>, timeoutMs: number, flags: SendFlags,
+  callback: RequestCallback
+) => void;
 export type ReplyInvoker = (parts: OperationPayloadValue<MessageLike>, flags: SendFlags) => void;
 export type ImmediateSendInvoker = (
   routingId: Buffer,
@@ -92,11 +100,9 @@ export class RuntimeSendOperation
     return this;
   }
 
-  submit(): Promise<void>;
-  submit(flags: SendFlags): void;
-  submit(flags?: SendFlags): Promise<void> | void {
+  submit(): Promise<void> { return this._invoke(this.consumePayload(), this._timeoutMs); }
+  submit_sync(flags: SendFlags): void {
     const payload = this.consumePayload();
-    if (flags === undefined) return this._invoke(payload, this._timeoutMs);
     this._invokeSync(payload, flags);
     consumeSubmittedMessages(payload);
   }
@@ -142,11 +148,9 @@ export class ManagedRoutedRuntimeSendOperation
     return this;
   }
 
-  submit(): Promise<void>;
-  submit(flags: SendFlags): void;
-  submit(flags?: SendFlags): Promise<void> | void {
+  submit(): Promise<void> { return this._invoke(this._routingId, this.consumePayload(), this._timeoutMs); }
+  submit_sync(flags: SendFlags): void {
     const payload = this.consumePayload();
-    if (flags === undefined) return this._invoke(this._routingId, payload, this._timeoutMs);
     this._invokeSync(this._routingId, payload, flags);
     consumeSubmittedMessages(payload);
   }
@@ -173,7 +177,11 @@ export class RuntimeRequestOperation
   implements RequestOperation, RequestSubmitOperation {
   private _timeoutMs = 0;
 
-  constructor(private readonly _invoke: RequestInvoker) { super(); }
+  constructor(
+    private readonly _invoke: RequestInvoker,
+    private readonly _invokeSync: SyncRequestInvoker,
+    private readonly _invokeCallback: CallbackRequestInvoker
+  ) { super(); }
 
   timeout(timeoutMs: number): this {
     this.ensureOpen();
@@ -189,6 +197,14 @@ export class RuntimeRequestOperation
 
   submit(): Promise<Message[]> {
     return this._invoke(this.consumePayload(), this._timeoutMs);
+  }
+
+  submit_sync(flags: SendFlags): Message[];
+  submit_sync(flags: SendFlags, callback: RequestCallback): void;
+  submit_sync(flags: SendFlags, callback?: RequestCallback): Message[] | void {
+    const payload = this.consumePayload();
+    if (callback) return this._invokeCallback(payload, this._timeoutMs, flags, callback);
+    return this._invokeSync(payload, this._timeoutMs, flags);
   }
 }
 

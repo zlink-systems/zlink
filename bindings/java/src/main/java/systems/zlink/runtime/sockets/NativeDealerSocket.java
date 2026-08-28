@@ -71,7 +71,9 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
     public RequestOperation request() {
         return MessageOperations.request((parts, timeout) ->
             runtime().requestAsync(requestSupport, null, 0L, 0L, parts,
-                timeout));
+                timeout),
+            (parts, timeout, flags) -> runtime().requestSync(requestSupport,
+                null, 0L, 0L, parts, timeout, flags));
     }
     @Override
     public void close() {

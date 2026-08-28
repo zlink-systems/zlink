@@ -12,6 +12,9 @@ import {
 import { SendCompletionOwner, consumeSubmittedMessages } from '../messaging/send_completion';
 import {
   registerNativeRequest,
+  registerNativeRequestCallback,
+  messagesFromNativeBuffers,
+  requestErrorFromResult,
   releaseNativeRequestDispatcher,
 } from '../messaging/request_executor';
 import { normalizeReplyFlags } from './socket_submit_errors';
@@ -75,9 +78,7 @@ export class RouterSocket extends RoutedMessageSocket {
   }
   request(peerRid: RoutingId): RequestOperation {
     const peer = normalizeRoutingId(peerRid, 'peerRid');
-    return new RuntimeRequestOperation((parts, timeoutMs) =>
-      this.submitRequest(peer, parts, timeoutMs)
-    );
+    return this.createRequestOperation(peer);
   }
   requestTransportPair(
     peerRid: RoutingId,
@@ -90,14 +91,13 @@ export class RouterSocket extends RoutedMessageSocket {
       transportPairId,
       transportPairGeneration,
     };
-    return new RuntimeRequestOperation((parts, timeoutMs) =>
-      this.submitRequest(
-        peer,
-        parts,
-        timeoutMs,
-        exactTarget.transportPairId,
-        exactTarget.transportPairGeneration
-      )
+    return this.createRequestOperation(peer, exactTarget.transportPairId, exactTarget.transportPairGeneration);
+  }
+  private createRequestOperation(peer: Buffer, pairId = 0n, pairGeneration = 0n): RequestOperation {
+    return new RuntimeRequestOperation(
+      (parts, timeoutMs) => this.submitRequest(peer, parts, timeoutMs, pairId, pairGeneration),
+      (parts, timeoutMs, flags) => this.submitRequestSync(peer, parts, timeoutMs, flags, pairId, pairGeneration),
+      (parts, timeoutMs, flags, callback) => this.submitRequestCallback(peer, parts, timeoutMs, flags, callback, pairId, pairGeneration)
     );
   }
   sendTransportPair(
@@ -177,6 +177,7 @@ export class RouterSocket extends RoutedMessageSocket {
         resolvedTimeout,
         transportPairId,
         transportPairGeneration
+        , SendFlags.DontWait
       );
     } catch (error) {
       registration.fail(submitNativeError(error, SendFlags.DontWait, 'request submit failed'));
@@ -192,6 +193,32 @@ export class RouterSocket extends RoutedMessageSocket {
     }
     consumeSubmittedMessages(parts);
     return registration.promise;
+  }
+  private submitRequestSync(peer: Buffer, parts: any, timeoutMs: number, flags: SendFlags,
+    pairId = 0n, pairGeneration = 0n): import('../../contracts').Message[] {
+    const resolved = timeoutMs === 0 ? (this.options.requestTimeout === 0 ? 5_000 : this.options.requestTimeout) : timeoutMs;
+    const result = native.routerRequestSync(getNativeHandle(this), peer, normalizeOperationPayload(parts), resolved,
+      pairId, pairGeneration, flags | 0);
+    if (result.result !== SubmitResult.Ok) throw submitErrorFromNativeResult(result.result, result.nativeErrno, 'request submit failed');
+    consumeSubmittedMessages(parts);
+    if (result.requestResult !== 0) throw requestErrorFromResult(result.requestResult as any, 'request failed');
+    return messagesFromNativeBuffers(result.parts);
+  }
+  private submitRequestCallback(peer: Buffer, parts: any, timeoutMs: number, flags: SendFlags,
+    callback: (error: Error | null, reply: import('../../contracts').Message[] | null) => void,
+    pairId = 0n, pairGeneration = 0n): void {
+    const handle = getNativeHandle(this);
+    const registration = registerNativeRequestCallback(handle, callback, 'request failed');
+    const resolved = timeoutMs === 0 ? (this.options.requestTimeout === 0 ? 5_000 : this.options.requestTimeout) : timeoutMs;
+    let result;
+    try { result = native.routerRequest(handle, peer, normalizeOperationPayload(parts), registration.token,
+      resolved, pairId, pairGeneration, flags | 0); }
+    catch (error) { registration.cancel(); throw submitNativeError(error, flags, 'request submit failed'); }
+    if (result.result !== SubmitResult.Ok) {
+      const error = submitErrorFromNativeResult(result.result, result.nativeErrno, 'request submit failed');
+      registration.cancel(); throw error;
+    }
+    consumeSubmittedMessages(parts);
   }
 
   close(): void {

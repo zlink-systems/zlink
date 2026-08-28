@@ -9,6 +9,63 @@ namespace Systems.Zlink.Tests;
 public sealed class test_request_reply
 {
     [Fact]
+    public async Task request_sync_return_terminal_returns_reply()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var router = ctx.CreateRouterSocket();
+        using var dealer = ctx.CreateDealerSocket();
+        string endpoint = CoreTestSupport.NewEndpoint("inproc", "request-sync");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        Thread.Sleep(50);
+
+        Task server = Task.Run(() => ReplyOnce(router, "sync-pong"));
+        using Message request = Message.From("sync-ping");
+        IReadOnlyList<Message> reply = dealer.Request().Message(request)
+            .Timeout(TimeSpan.FromSeconds(2)).Submit(SendFlags.None);
+        Assert.Equal("sync-pong", reply[0].GetString());
+        Zlink.MultipartClose(reply);
+        await server;
+    }
+
+    [Fact]
+    public async Task request_sync_callback_terminal_delivers_reply()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var router = ctx.CreateRouterSocket();
+        using var dealer = ctx.CreateDealerSocket();
+        string endpoint = CoreTestSupport.NewEndpoint("inproc", "request-callback");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        Thread.Sleep(50);
+
+        Task server = Task.Run(() => ReplyOnce(router, "callback-pong"));
+        using var completed = new ManualResetEventSlim(false);
+        RequestResult result = RequestResult.InternalError;
+        IReadOnlyList<Message>? reply = null;
+        using Message request = Message.From("callback-ping");
+        dealer.Request().Message(request).Timeout(TimeSpan.FromSeconds(2))
+            .Submit(SendFlags.None, (value, parts) =>
+            {
+                result = value;
+                reply = parts;
+                completed.Set();
+            });
+
+        Assert.True(completed.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Equal(RequestResult.Ok, result);
+        Assert.Equal("callback-pong", Assert.Single(reply!).GetString());
+        Zlink.MultipartClose(reply!);
+        await server;
+    }
+
+    [Fact]
     public void router_poller_can_own_receive_and_completion_after_bind()
     {
         if (!CoreTestSupport.IsNativeAvailable())
@@ -685,6 +742,14 @@ public sealed class test_request_reply
         }
 
         throw new TimeoutException("Timed out waiting for router message.");
+    }
+
+    private static void ReplyOnce(IRouterSocket router, string payload)
+    {
+        using Received received = RecvWithRetry(router);
+        using Message reply = Message.From(payload);
+        router.Reply(received.RoutingId!.Value, received.RequestSeq!.Value)
+            .Message(reply).Submit();
     }
 
     private static Received RecvWithRetry(IDealerSocket socket)

@@ -131,7 +131,9 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
         Objects.requireNonNull(rid, "rid");
         return MessageOperations.request((parts, timeout) ->
             runtime().requestAsync(requestSupport, rid, 0L, 0L, parts,
-                timeout));
+                timeout),
+            (parts, timeout, flags) -> runtime().requestSync(requestSupport,
+                rid, 0L, 0L, parts, timeout, flags));
     }
 
     public RequestOperation request(RoutingId rid,
@@ -143,7 +145,10 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
         }
         return MessageOperations.request((parts, timeout) ->
             runtime().requestAsync(requestSupport, rid, transportPairId,
-                transportPairGeneration, parts, timeout));
+                transportPairGeneration, parts, timeout),
+            (parts, timeout, flags) -> runtime().requestSync(requestSupport,
+                rid, transportPairId, transportPairGeneration, parts,
+                timeout, flags));
     }
 
     public ReplyOperation reply(RoutingId rid, long requestSequence) {

@@ -37,8 +37,8 @@ relationship clear.
 
 | | **blocking** (park if it cannot proceed) | **non-blocking** (fail immediately if it cannot proceed) |
 |---|---|---|
-| **synchronous** (completion in place) | `submit()` (`NONE`) — park until admitted, then result | `submit(DONTWAIT)` — immediate `BACKPRESSURED`/`EAGAIN` |
-| **asynchronous** (completion later) | (unused — we do not block *and* defer) | `async()`/awaitable — return immediately, completion notified later |
+| **synchronous** (completion in place) | `submit_sync(NONE)` — park until admitted, then result | `submit_sync(DONTWAIT)` — immediate `BACKPRESSURED`/`EAGAIN` |
+| **asynchronous** (completion later) | (unused — we do not block *and* defer) | `submit()`/`async()` awaitable — return immediately, completion notified later |
 
 - Therefore a **sync terminal selects blocking/non-blocking via a flag**
   (`NONE` = blocking, `DONTWAIT` = non-blocking). An async terminal is
@@ -77,15 +77,15 @@ below are the combinations commonly used in practice.
 | **Event loop** | callbacks/Promises are queued, single-threaded loop | `await` or callback | Node.js, Python asyncio, browser JS |
 
 Default execution model per language (bindings targeted by this project):
-> **Note.** As of 0.14.0 the send family (PAIR/routed/`Received.send()`) has both an async and a sync(+flags) terminal in every binding (owned by the [normative table](async-coroutine-policy.en.md)). The "Completion surface shape" below shows only each language's default/representative surface — Node/Rust/Python have a sync terminal too.
+> **Note.** As of 0.14.0 the send family and **request** have both async and sync terminals in every binding (owned by the [normative table](async-coroutine-policy.en.md)). In languages whose async terminal is `submit()` (Java, Node, Python, and Rust), the sync terminal is consistently named **`submit_sync`** (it names the sync/async axis; the flag selects whether it blocks). The "Completion surface shape" below shows only each language's default/representative surface.
 
 
 | Language | Default execution model | Completion surface shape | Notes |
 |---|---|---|---|
 | **C** | OS thread | blocking | core C API |
 | **C++** | OS thread + coroutine | blocking `submit()` / `co_await async()` | C++20 coroutine optional |
-| **.NET** | coroutine (async/await) + thread pool | send: async `Async(ct)`→`Task` · sync `Submit(SendFlags)`→`void` | send has both async/sync terminals (0.14.0). **request stays async-only** |
-| **Java** | no coroutine (`CompletionStage`) · recv on OS/virtual thread | send: async `submit()`→`CompletionStage` · sync `submit(SendFlags)`→`void` | send gains a sync overload (0.14.0); request stays async-only; virtual thread is **optional** |
+| **.NET** | coroutine (async/await) + thread pool | send·request: async `Async(ct)` · sync `Submit(SendFlags)`/`Submit(SendFlags, cb)` | both send and request have async/sync terminals (0.14.0) |
+| **Java** | no coroutine (`CompletionStage`) · recv on OS/virtual thread | send·request: async `submit()`→`CompletionStage` · sync `submit_sync(...)` | send and request gain sync terminals (0.14.0); virtual thread is **optional** |
 | **Kotlin** | coroutine | `suspend` / `await()` | `kotlinx-coroutines` |
 | **Node** | event loop | `Promise` / `await` | single-threaded |
 | **Python** | coroutine + event loop (asyncio) · OS thread | `await` coroutine object / blocking | GIL, `async def` |

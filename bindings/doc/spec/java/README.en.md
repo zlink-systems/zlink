@@ -665,10 +665,15 @@ another pair using the same peer routing id. This operation is used for
 runtime connection control such as Framework connection replacement; callers
 must not invent a pair identity.
 
-PAIR send and DEALER/ROUTER routed send builders have two `submit` overloads.
-Asynchronous `submit()` returns `CompletionStage<Void>`, while synchronous
-`submit(SendFlags)` returns `void`. The request builder has only the no-argument
-`submit()` terminal and returns `CompletionStage<List<Message>>`. PUB/XPUB publish uses the same staged message
+PAIR send and DEALER/ROUTER routed send builders provide asynchronous
+`submit()` and synchronous `submit_sync(SendFlags)`. A request builder provides
+three completion surfaces. `submit_sync(SendFlags)` waits synchronously for
+admission and reply and returns the reply directly;
+`submit_sync(SendFlags, callback)` returns when the admission result is known
+and delivers the reply through the callback; `submit()` returns
+`CompletionStage<List<Message>>`. Request submission passes through the same
+HWM admission as send, and the synchronous terminals use `NONE` (wait) or
+`DONT_WAIT` (immediate back-pressure). PUB/XPUB publish uses the same staged message
 builder shape, but its `submit()` is synchronous `void` and immediately throws
 `ZlinkSubmitException` on failure.
 
@@ -677,27 +682,30 @@ public interface AsyncSendSubmitOperation {
     AsyncSendSubmitOperation message(Message part);
     AsyncSendSubmitOperation timeout(Duration timeout);
     CompletionStage<Void> submit();
-    void submit(SendFlags flags);
+    void submit_sync(SendFlags flags);
 }
 
 public interface RoutedSendSubmitOperation {
     RoutedSendSubmitOperation message(Message part);
     RoutedSendSubmitOperation timeout(Duration timeout);
     CompletionStage<Void> submit();
-    void submit(SendFlags flags);
+    void submit_sync(SendFlags flags);
 }
 
 public interface RequestSubmitOperation {
     RequestSubmitOperation message(Message part);
     RequestSubmitOperation timeout(Duration timeout);
     CompletionStage<List<Message>> submit();
+    List<Message> submit_sync(SendFlags flags);
+    void submit_sync(SendFlags flags,
+                     BiConsumer<RequestResult, List<Message>> callback);
 }
 ```
 
 Send builders do not expose a separate `await()`, `submit(callback)`,
 `flags(...)`, or a boolean one-shot terminal. Instead,
-`submit(SendFlags.NONE)` waits synchronously for Core admission, while
-`submit(SendFlags.DONT_WAIT)` immediately throws
+`submit_sync(SendFlags.NONE)` waits synchronously for Core admission, while
+`submit_sync(SendFlags.DONT_WAIT)` immediately throws
 `ZlinkSubmitException(BACKPRESSURED)` when the HWM is full. The no-argument
 `submit()` does not block the calling thread. Framework and Kotlin framework do
 not use the synchronous overload; they continue to connect the returned

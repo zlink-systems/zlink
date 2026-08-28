@@ -163,12 +163,14 @@ public sealed class test_socket_surface
         Assert.True(HasPublicInstanceMethod(typeof(RequestSubmitOperation),
             nameof(RequestSubmitOperation.Async),
             typeof(System.Threading.CancellationToken)));
+        Assert.True(HasPublicInstanceMethod(typeof(RequestSubmitOperation),
+            nameof(RequestSubmitOperation.Submit), typeof(SendFlags)));
+        Assert.True(HasPublicInstanceMethod(typeof(RequestSubmitOperation),
+            nameof(RequestSubmitOperation.Submit), typeof(SendFlags),
+            typeof(RequestCallback)));
         Assert.DoesNotContain(PublicInstanceMethods(
                 typeof(RequestSubmitOperation)),
-            method => method.Name is "Submit" or "Flags");
-        Assert.DoesNotContain(typeof(Zlink).Assembly.GetExportedTypes(),
-            type => type.Name is "RequestCallback"
-                or "RequestCallbackSubmitOperation");
+            method => method.Name == "Flags");
         Assert.DoesNotContain(typeof(Zlink).Assembly.GetTypes(),
             type => type.Name == "LegacyRoutedSendOperation");
         Assert.False(HasPublicSinglePartRoutedSendShortcut());

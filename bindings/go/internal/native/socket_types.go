@@ -193,8 +193,8 @@ func (s *DealerSocket) Send() RoutedSendOp {
 }
 
 func (s *DealerSocket) Request() RequestOp {
-	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) <-chan RequestReplyCompletion {
-		return submitRoutedRequest(ctx, s.socketCore, routedDealer, nil, timeout, parts)
+	return newRequestBuilder(func(ctx context.Context, flags SendFlags, parts []requestBuilderPart, timeout time.Duration) (<-chan RequestReplyCompletion, error) {
+		return submitRoutedRequest(ctx, s.socketCore, routedDealer, nil, flags, timeout, parts)
 	})
 }
 

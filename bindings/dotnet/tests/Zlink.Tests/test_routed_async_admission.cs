@@ -70,6 +70,39 @@ public sealed class test_routed_async_admission
     }
 
     [Fact]
+    public void request_callback_terminal_reports_immediate_backpressure()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var context = Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        using var dealer = context.CreateDealerSocket();
+        using var router = context.CreateRouterSocket();
+        dealer.Options.SendHighWaterMark = RecordHwm;
+        router.Options.ReceiveHighWaterMark = RecordHwm;
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "dotnet-request-callback-dontwait");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        Thread.Sleep(100);
+        _ = FillDealerTarget(dealer, out List<Task> filler);
+
+        using Message payload = Message.From("request-backpressured");
+        bool callbackCalled = false;
+        var started = Stopwatch.StartNew();
+        ZlinkSubmitException error = Assert.Throws<ZlinkSubmitException>(() =>
+            dealer.Request().Message(payload).Timeout(TimeSpan.FromSeconds(1))
+                .Submit(SendFlags.DontWait, (_, _) => callbackCalled = true));
+        started.Stop();
+
+        Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured, error.Result);
+        Assert.False(callbackCalled);
+        Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
+        SwallowAll(filler);
+    }
+
+    [Fact]
     public async Task admitted_send_completes_without_occupying_the_caller()
     {
         if (!CoreTestSupport.IsNativeAvailable())

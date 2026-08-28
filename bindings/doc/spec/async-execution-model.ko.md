@@ -31,8 +31,8 @@
 
 | | **blocking** (진행 불가 시 park) | **non-blocking** (진행 불가 시 즉시 실패) |
 |---|---|---|
-| **동기** (완료를 그 자리에서) | `submit()`(`NONE`) — admit될 때까지 park 후 결과 | `submit(DONTWAIT)` — 즉시 `BACKPRESSURED`/`EAGAIN` |
-| **비동기** (완료는 나중에) | (안 씀 — 막으면서 미루지 않는다) | `async()`/awaitable — 시작 즉시 반환, 완료는 나중에 통지 |
+| **동기** (완료를 그 자리에서) | `submit_sync(NONE)` — admit될 때까지 park 후 결과 | `submit_sync(DONTWAIT)` — 즉시 `BACKPRESSURED`/`EAGAIN` |
+| **비동기** (완료는 나중에) | (안 씀 — 막으면서 미루지 않는다) | `submit()`/`async()` awaitable — 시작 즉시 반환, 완료는 나중에 통지 |
 
 - 따라서 **sync terminal은 flag로 blocking/non-blocking을 고른다**(`NONE`=blocking, `DONTWAIT`=non-blocking).
   async terminal은 **항상 non-blocking**(시작 즉시 반환)이고 완료만 나중이다.
@@ -64,15 +64,15 @@ executor / 직접 continuation)` 두 하위 축의 조합이다. 실무에서 �
 | **이벤트 루프 (event loop)** | 콜백/Promise를 큐에 등록, 단일 스레드 순환 | `await` 또는 콜백 | Node.js, Python asyncio, 브라우저 JS |
 
 언어별 기본 실행 환경 (이 프로젝트 bindings 대상):
-> **참고.** 0.14.0부터 send 계열(PAIR/routed/`Received.send()`)은 모든 바인딩에서 async·sync(+flags) 두 terminal을 가진다([정규 표](async-coroutine-policy.ko.md) 소유). 아래 '완료 표면 형태'는 각 언어의 기본/대표 표면만 보인다 — Node/Rust/Python도 sync 종결자가 있다.
+> **참고.** 0.14.0부터 send 계열과 **request**는 모든 바인딩에서 async·sync terminal을 가진다([정규 표](async-coroutine-policy.ko.md) 소유). async가 `submit()`인 언어(Java·Node·Python·Rust)의 sync 종결자 이름은 **`submit_sync`**로 통일한다(sync/async 축의 이름이며 blocking 여부는 flag가 정함). 아래 '완료 표면 형태'는 각 언어의 기본/대표 표면만 보인다.
 
 
 | 언어 | 기본 실행 환경 | 완료 표면 형태 | 비고 |
 |---|---|---|---|
 | **C** | OS 스레드 | blocking | core C API |
 | **C++** | OS 스레드 + 코루틴 | blocking `submit()` / `co_await async()` | C++20 coroutine 선택 |
-| **.NET** | 코루틴(async/await) + 스레드 풀 | send: async `Async(ct)`→`Task` · sync `Submit(SendFlags)`→`void` | send는 async/sync 두 terminal(0.14.0). **request는 여전히 async 전용** |
-| **Java** | 코루틴 없음(`CompletionStage`) · recv는 OS/가상 스레드 | send: async `submit()`→`CompletionStage` · sync `submit(SendFlags)`→`void` | send에 sync overload 추가(0.14.0). request는 async 전용; 가상 스레드는 **선택** |
+| **.NET** | 코루틴(async/await) + 스레드 풀 | send·request: async `Async(ct)` · sync `Submit(SendFlags)`/`Submit(SendFlags, cb)` | send·request 모두 async/sync terminal(0.14.0) |
+| **Java** | 코루틴 없음(`CompletionStage`) · recv는 OS/가상 스레드 | send·request: async `submit()`→`CompletionStage` · sync `submit_sync(...)` | send·request에 sync terminal 추가(0.14.0); 가상 스레드는 **선택** |
 | **Kotlin** | 코루틴 | `suspend` / `await()` | `kotlinx-coroutines` |
 | **Node** | 이벤트 루프 | `Promise` / `await` | 단일 스레드 |
 | **Python** | 코루틴 + 이벤트 루프(asyncio) · OS 스레드 | `await` coroutine object / blocking | GIL, `async def` |

@@ -119,6 +119,7 @@ static_assert (!has_blocking_wait_t<zlink::async_result_t<void>>);
 static_assert (!has_blocking_wait_for_t<zlink::async_result_t<void>>);
 static_assert (!has_managed_send_callback_t<zlink::send_submit_operation_t>);
 static_assert (has_managed_request_callback_t<zlink::request_submit_operation_t>);
+static_assert (has_flags_t<zlink::request_submit_operation_t>);
 template <typename T>
 concept has_async_t = requires (T &&operation) { std::move (operation).async (); };
 
