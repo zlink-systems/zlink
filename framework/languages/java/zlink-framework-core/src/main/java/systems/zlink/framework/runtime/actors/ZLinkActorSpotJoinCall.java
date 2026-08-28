@@ -2,7 +2,7 @@ package systems.zlink.framework.runtime.actors;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.logging.Logger;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkSpotKind;
 
@@ -76,7 +76,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         new AtomicBoolean();
     //  Set only on the bounded call executing a deferred Join: the handle to
     //  the mailbox-barrier turn that is active while the Join runs.
-    private ZLinkAsyncSerialQueue.ActiveTurnSealHandle deferredActiveTurnSeal;
+    private ZLinkSerialExecutionQueue.ActiveTurnSealHandle deferredActiveTurnSeal;
 
     ZLinkActorSpotJoinCall(
         ZLinkActorRuntime.DefaultActorContext context,
@@ -458,7 +458,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private static <T> CompletionStage<T> manage(CompletionStage<T> stage) {
-        return ZLinkAsyncSerialQueue.manageCurrent(stage);
+        return ZLinkSerialExecutionQueue.manageCurrent(stage);
     }
 
     private void rejectSameGateWait() {

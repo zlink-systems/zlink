@@ -3,7 +3,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.BooleanSupplier;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 
 import java.time.Duration;
@@ -150,7 +150,7 @@ final class ZLinkActorSpotAdmission {
                 ? CompletableFuture.completedFuture(null)
                 : joinEntrySpotAfterLeave(runtime, actor, entryNodeRid, timeout)
                     .thenCompose(joined -> entryJoined));
-        return ZLinkAsyncSerialQueue.yieldCurrent(leaving);
+        return ZLinkSerialExecutionQueue.yieldCurrent(leaving);
     }
 
     private static CompletionStage<Void> joinEntrySpotAfterLeave(

@@ -1,7 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 import java.util.Arrays;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import java.util.List;
 import java.util.Optional;
@@ -70,27 +70,27 @@ final class ZLinkActorSessionCoordinator {
             : actors.actorIdsInSpot(spotId);
     }
 
-    Optional<ZLinkAsyncSerialQueue.RelocationSeal>
+    Optional<ZLinkSerialExecutionQueue.RelocationSeal>
         trySealActorRelocation(String actorId) {
         return requireActors().trySealActorRelocation(actorId);
     }
 
-    ZLinkAsyncSerialQueue
+    ZLinkSerialExecutionQueue
         actorRelocationLane(String actorId) {
         return requireActors().actorRelocationLane(actorId);
     }
 
     boolean abortActorRelocation(
         String actorId,
-        ZLinkAsyncSerialQueue.RelocationSeal
+        ZLinkSerialExecutionQueue.RelocationSeal
             seal) {
         return requireActors().abortActorRelocation(actorId, seal);
     }
 
-    Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>>
+    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>
         commitActorRelocation(
             String actorId,
-            ZLinkAsyncSerialQueue.RelocationSeal
+            ZLinkSerialExecutionQueue.RelocationSeal
                 seal) {
         return requireActors().commitActorRelocation(actorId, seal);
     }
@@ -99,14 +99,14 @@ final class ZLinkActorSessionCoordinator {
         .ZLinkRetainedSerialQueueCommit.Commit>
         retainActorRelocationCommit(
             String actorId,
-            ZLinkAsyncSerialQueue.RelocationSeal seal) {
+            ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return requireActors().retainActorRelocationCommit(actorId, seal);
     }
 
-    Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>>
+    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>
         freezeActorRelocationIngress(
             String actorId,
-            ZLinkAsyncSerialQueue.RelocationSeal
+            ZLinkSerialExecutionQueue.RelocationSeal
                 seal) {
         return requireActors().freezeActorRelocationIngress(actorId, seal);
     }

@@ -8,7 +8,7 @@ import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 
@@ -16,7 +16,7 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
     @Test
     void reservationCrossesSerialBacklogAndReturnsBeforeFirstApplicationInstruction() {
         ZLinkApplicationJobQueue queue = queue(1);
-        ZLinkAsyncSerialQueue serial = new ZLinkAsyncSerialQueue(
+        ZLinkSerialExecutionQueue serial = new ZLinkSerialExecutionQueue(
             Runnable::run, ZLinkExecutionLanePolicy.generic());
         CompletableFuture<Void> handlerContinuation = new CompletableFuture<>();
         ZLinkApplicationJobQueue.Permit first = queue.acquire().toCompletableFuture().join();

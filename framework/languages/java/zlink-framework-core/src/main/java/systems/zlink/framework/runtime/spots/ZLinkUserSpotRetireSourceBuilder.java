@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations
@@ -531,7 +531,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         Inventory inventory,
         List<ZLinkMeshNodeDescriptor> descriptors,
         Map<String, List<systems.zlink.framework.execution
-            .ZLinkAsyncSerialQueue.QueuedRecord>> acceptedRecords) {
+            .ZLinkSerialExecutionQueue.QueuedRecord>> acceptedRecords) {
         List<ZLinkSpotRetireControl.SessionRouteFence> routes =
             new ArrayList<>();
         for (Owned actor : inventory.actors()) {
@@ -560,7 +560,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         for (byte[] encoded : acceptedRecords.values().stream()
             .flatMap(List::stream)
             .map(systems.zlink.framework.execution
-                .ZLinkAsyncSerialQueue.QueuedRecord::payload)
+                .ZLinkSerialExecutionQueue.QueuedRecord::payload)
             .toList()) {
             ZLinkActorAcceptedJournal.Record record;
             try {
@@ -1093,7 +1093,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         private final UnresolvedPreparations unresolved;
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
-        private Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+        private Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
             finalJournal = Map.of();
         private ZLinkUserSpotRelocationBarrier.RelocationCommit
             relocationCommit;
@@ -1223,7 +1223,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             do {
                 cut = retained.cut();
             } while (!retained.tryEstablishAndFinishCapture(cut));
-            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> relayed =
+            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> relayed =
                 cut.committed().heldIngress();
             inStateLane(() -> {
                 finalJournal = relayed;
@@ -1232,9 +1232,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
             });
             CompletionStage<Void> chain =
                 CompletableFuture.completedFuture(null);
-            for (List<ZLinkAsyncSerialQueue.QueuedRecord> lane
+            for (List<ZLinkSerialExecutionQueue.QueuedRecord> lane
                     : relayed.values()) {
-                for (ZLinkAsyncSerialQueue.QueuedRecord record : lane) {
+                for (ZLinkSerialExecutionQueue.QueuedRecord record : lane) {
                     chain = chain.thenCompose(ignored -> client.relay(
                         stageRequest.targetNodeRid(),
                         stageRequest.fence(),
@@ -1341,7 +1341,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 throw new IllegalStateException(
                     "relocation reply runtime is unavailable");
             }
-            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
+            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal =
                 inStateLane(() -> finalJournal);
             relocationReplies.bindCanonicalRelocationReplies(
                 journal,

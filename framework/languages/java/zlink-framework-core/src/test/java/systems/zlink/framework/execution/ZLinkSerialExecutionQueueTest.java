@@ -22,11 +22,11 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
-final class ZLinkAsyncSerialQueueTest {
+final class ZLinkSerialExecutionQueueTest {
     @Test
     void lazyRelocationRecordIsNotMaterializedDuringNormalDispatch()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> active = new CompletableFuture<>();
         CompletableFuture<Void> started = new CompletableFuture<>();
         AtomicInteger materializations = new AtomicInteger();
@@ -52,10 +52,10 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void relocationSealMaterializesLazyRecordExactlyOnce() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> sealNow = new CompletableFuture<>();
         CompletableFuture<Void> activeStarted = new CompletableFuture<>();
-        CompletableFuture<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
+        CompletableFuture<ZLinkSerialExecutionQueue.RelocationSeal> sealed =
             new CompletableFuture<>();
         AtomicInteger materializations = new AtomicInteger();
         queue.enqueue(() -> {
@@ -75,7 +75,7 @@ final class ZLinkAsyncSerialQueueTest {
             () -> { });
 
         sealNow.complete(null);
-        ZLinkAsyncSerialQueue.RelocationSeal seal =
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
             sealed.get(3, TimeUnit.SECONDS);
 
         assertEquals(1, materializations.get());
@@ -87,7 +87,7 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void lifecycleBarrierRunsAfterActiveTurnAndBeforeQueuedApplicationTurns()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> activeGate = new CompletableFuture<>();
         CompletableFuture<Void> activeStarted = new CompletableFuture<>();
         List<String> order = new CopyOnWriteArrayList<>();
@@ -117,8 +117,8 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void spotWideYieldReleasesSpotGateButRetainsActorClaim() throws Exception {
-        ZLinkAsyncSerialQueue actorLane = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue spotGate = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue actorLane = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue spotGate = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> remote = new CompletableFuture<>();
         CompletableFuture<Void> actorStarted = new CompletableFuture<>();
         CompletableFuture<Void> spotProbe = new CompletableFuture<>();
@@ -134,7 +134,7 @@ final class ZLinkAsyncSerialQueueTest {
                          .ZLinkSuspendInvocationContext.enterApplicationExecution(execution)) {
                     events.add("actor-start");
                     actorStarted.complete(null);
-                    return ZLinkAsyncSerialQueue.yieldCurrent(remote)
+                    return ZLinkSerialExecutionQueue.yieldCurrent(remote)
                         .thenRun(() -> events.add("actor-resume"));
                 }
             })).toCompletableFuture();
@@ -165,11 +165,11 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void perActorSpotAndTimerLanesRunIndependentlyAndKeepOwnFifo() throws Exception {
-        ZLinkAsyncSerialQueue actorA = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue actorB = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue spot = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue timerA = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue timerB = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue actorA = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue actorB = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue timerA = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue timerB = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> actorAGate = new CompletableFuture<>();
         CompletableFuture<Void> timerAGate = new CompletableFuture<>();
         CompletableFuture<Void> actorAStarted = new CompletableFuture<>();
@@ -207,7 +207,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void submitKeepsTurnUntilIncompleteStageCompletes() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> firstGate = new CompletableFuture<>();
         CompletableFuture<Void> firstStarted = new CompletableFuture<>();
         List<String> events = new ArrayList<>();
@@ -238,7 +238,7 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void ownerByteReservationRejectsLargeRecordAndReturnsAfterCompletion()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
             4,
@@ -266,7 +266,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void relocationByteAccountingRejectsAnUnrepresentableAggregate() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
             4,
@@ -276,7 +276,7 @@ final class ZLinkAsyncSerialQueueTest {
             1,
             2,
             Duration.ofSeconds(1));
-        ZLinkAsyncSerialQueue.RelocationSeal seal =
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
             queue.trySealRelocation().orElseThrow();
 
         CompletableFuture<Void> first = queue.enqueueWithPayloadBytes(
@@ -299,7 +299,7 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void ownerReservationChargesPayloadAndCountsEmptyTurns()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
             2,
@@ -326,7 +326,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void lifecycleOwnerReservationIsSeparateAndStillBounded() {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
             4,
@@ -350,7 +350,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void lifecycleBurstYieldsToApplicationLane() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
             16,
@@ -395,7 +395,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void yieldReleasesWaitingTurnAndReentersContinuationInQueueOrder() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> firstGate = new CompletableFuture<>();
         CompletableFuture<Void> firstStarted = new CompletableFuture<>();
         List<String> events = new ArrayList<>();
@@ -403,7 +403,7 @@ final class ZLinkAsyncSerialQueueTest {
         CompletableFuture<Void> first = queue.enqueue(() -> {
             events.add("first-start");
             firstStarted.complete(null);
-            return ZLinkAsyncSerialQueue.yieldCurrent(firstGate)
+            return ZLinkSerialExecutionQueue.yieldCurrent(firstGate)
                 .thenRun(() -> events.add("first-complete"));
         }).toCompletableFuture();
         CompletableFuture<Void> second = queue.enqueue(() -> {
@@ -424,16 +424,16 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void yieldRetainsTurnContextAcrossHandlerExecutor() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> remote = new CompletableFuture<>();
         CompletableFuture<Void> handlerStarted = new CompletableFuture<>();
         CompletableFuture<Void> probeStarted = new CompletableFuture<>();
         try (var handlerExecutor = Executors.newSingleThreadExecutor()) {
             CompletableFuture<Void> first = queue.enqueue(() -> {
                 CompletableFuture<Void> result = new CompletableFuture<>();
-                ZLinkAsyncSerialQueue.propagateCurrent(handlerExecutor).execute(() -> {
+                ZLinkSerialExecutionQueue.propagateCurrent(handlerExecutor).execute(() -> {
                     handlerStarted.complete(null);
-                    ZLinkAsyncSerialQueue.yieldCurrent(remote)
+                    ZLinkSerialExecutionQueue.yieldCurrent(remote)
                         .whenComplete((ignored, error) -> result.complete(null));
                 });
                 return result;
@@ -453,7 +453,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void continuesAfterPreviousFailure() {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         List<String> events = new ArrayList<>();
 
         queue.enqueue(() -> {
@@ -470,7 +470,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void reentersManagedContinuationWithItsCapturedFlow() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> gate = new CompletableFuture<>();
         CompletableFuture<Void> started = new CompletableFuture<>();
         CompletableFuture<String> observed = new CompletableFuture<>();
@@ -479,7 +479,7 @@ final class ZLinkAsyncSerialQueueTest {
         queue.enqueue(() -> {
             try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(flow)) {
                 started.complete(null);
-                return ZLinkAsyncSerialQueue.yieldCurrent(gate)
+                return ZLinkSerialExecutionQueue.yieldCurrent(gate)
                     .thenRun(() -> observed.complete(ZLinkFlowContext.current().flowId()));
             }
         });
@@ -492,7 +492,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void startsQueuedOperationWithFlowCapturedAtEnqueue() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<String> observed = new CompletableFuture<>();
         ZLinkFlowContext.State flow = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
 
@@ -508,7 +508,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void retainedTurnContinuationCanExplicitlyYield() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> remote = new CompletableFuture<>();
         CompletableFuture<Void> afterYield = new CompletableFuture<>();
         CompletableFuture<Void> firstStarted = new CompletableFuture<>();
@@ -516,8 +516,8 @@ final class ZLinkAsyncSerialQueueTest {
 
         CompletableFuture<Void> first = queue.enqueue(() -> {
             firstStarted.complete(null);
-            return ZLinkAsyncSerialQueue.manageCurrent(remote)
-                .thenCompose(ignored -> ZLinkAsyncSerialQueue.yieldCurrent(afterYield));
+            return ZLinkSerialExecutionQueue.manageCurrent(remote)
+                .thenCompose(ignored -> ZLinkSerialExecutionQueue.yieldCurrent(afterYield));
         }).toCompletableFuture();
         queue.enqueue(() -> {
             secondStarted.complete(null);
@@ -535,10 +535,10 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void relocationSealHoldsIngressAndAbortRestoresArrivalOrder()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> sealNow = new CompletableFuture<>();
         CompletableFuture<Void> intentStarted = new CompletableFuture<>();
-        CompletableFuture<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
+        CompletableFuture<ZLinkSerialExecutionQueue.RelocationSeal> sealed =
             new CompletableFuture<>();
         List<String> handled =
             new CopyOnWriteArrayList<>();
@@ -563,7 +563,7 @@ final class ZLinkAsyncSerialQueueTest {
                 return CompletableFuture.completedFuture(null);
         });
         sealNow.complete(null);
-        ZLinkAsyncSerialQueue.RelocationSeal seal =
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
             sealed.get(3, TimeUnit.SECONDS);
 
         queue.enqueueRelocatable(
@@ -590,10 +590,10 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void relocationCommitReturnsOnlyHeldIngressAndRejectsNewOwnerWork()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> sealNow = new CompletableFuture<>();
         CompletableFuture<Void> intentStarted = new CompletableFuture<>();
-        CompletableFuture<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
+        CompletableFuture<ZLinkSerialExecutionQueue.RelocationSeal> sealed =
             new CompletableFuture<>();
         AtomicReference<Boolean> ran = new AtomicReference<>(false);
 
@@ -611,7 +611,7 @@ final class ZLinkAsyncSerialQueueTest {
                 return CompletableFuture.completedFuture(null);
         }).toCompletableFuture();
         sealNow.complete(null);
-        ZLinkAsyncSerialQueue.RelocationSeal seal =
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
             sealed.get(3, TimeUnit.SECONDS);
         CompletableFuture<Void> held = queue.enqueueRelocatable(
             new byte[] {2},
@@ -620,7 +620,7 @@ final class ZLinkAsyncSerialQueueTest {
                 return CompletableFuture.completedFuture(null);
             }).toCompletableFuture();
 
-        List<ZLinkAsyncSerialQueue.QueuedRecord> relay =
+        List<ZLinkSerialExecutionQueue.QueuedRecord> relay =
             queue.commitRelocation(seal).orElseThrow();
         captured.get(3, TimeUnit.SECONDS);
         held.get(3, TimeUnit.SECONDS);
@@ -642,10 +642,10 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void relocationCommitReleasesSourceResourcesAndFencesSourceOwner()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         AtomicInteger releases = new AtomicInteger();
         AtomicReference<Boolean> ran = new AtomicReference<>(false);
-        ZLinkAsyncSerialQueue.RelocationSeal seal =
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
             queue.trySealRelocation().orElseThrow();
         CompletableFuture<Void> held = queue.enqueueRelocatable(
             new byte[] {7},
@@ -670,8 +670,8 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void relocationIngressContinuesHoldingAfterFreezeUntilTargetAck()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue.RelocationSeal seal =
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
             queue.trySealRelocation().orElseThrow();
         CompletableFuture<Void> held = queue.enqueueRelocatable(
             new byte[] {7},
@@ -721,8 +721,8 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void relocationHoldReleasesRecordsAndMakesPostReleaseProgress()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue.RelocationSeal seal =
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
             queue.trySealRelocation().orElseThrow();
         List<String> handled = new CopyOnWriteArrayList<>();
 
@@ -766,7 +766,7 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void relocationSealWaitsForYieldedContinuationToQuiesce()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> remote = new CompletableFuture<>();
         CompletableFuture<Void> yieldRegistered = new CompletableFuture<>();
         CompletableFuture<Void> continuationFinished =
@@ -774,7 +774,7 @@ final class ZLinkAsyncSerialQueueTest {
 
         CompletableFuture<Void> dispatch = queue.enqueue(() -> {
             CompletionStage<Void> yielded =
-                ZLinkAsyncSerialQueue.yieldCurrent(remote);
+                ZLinkSerialExecutionQueue.yieldCurrent(remote);
             yieldRegistered.complete(null);
             return yielded.thenRun(() -> continuationFinished.complete(null));
         })
@@ -794,13 +794,13 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void quiescenceBarrierWaitsForYieldedTerminalContinuation()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> remote = new CompletableFuture<>();
         CompletableFuture<Void> yielded = new CompletableFuture<>();
 
         CompletableFuture<Void> dispatch = queue.enqueue(() -> {
             CompletionStage<Void> continuation =
-                ZLinkAsyncSerialQueue.yieldCurrent(remote);
+                ZLinkSerialExecutionQueue.yieldCurrent(remote);
             yielded.complete(null);
             return continuation;
         }).toCompletableFuture();
@@ -817,7 +817,7 @@ final class ZLinkAsyncSerialQueueTest {
 
     @Test
     void quiescenceBarrierWaitsForEveryAcceptedTurn() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> active = new CompletableFuture<>();
         CompletableFuture<Void> started = new CompletableFuture<>();
 
@@ -842,13 +842,13 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void queuedRelocationIntentCannotRacePastYieldRegistration()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> remote = new CompletableFuture<>();
         CompletableFuture<Boolean> sealed =
             new CompletableFuture<>();
 
         CompletableFuture<Void> dispatch = queue.enqueue(() ->
-            ZLinkAsyncSerialQueue.yieldCurrent(remote))
+            ZLinkSerialExecutionQueue.yieldCurrent(remote))
             .toCompletableFuture();
         queue.enqueue(() -> {
             sealed.complete(queue.trySealRelocation().isPresent());
@@ -867,17 +867,17 @@ final class ZLinkAsyncSerialQueueTest {
     @Test
     void relocationAbortRequiresTheExactSealReferenceAndGeneration()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue.RelocationSeal first =
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue.RelocationSeal first =
             queue.trySealRelocation().orElseThrow();
-        var forged = new ZLinkAsyncSerialQueue.RelocationSeal(
+        var forged = new ZLinkSerialExecutionQueue.RelocationSeal(
             first.serial(),
             first.captured());
 
         assertFalse(queue.abortRelocation(forged));
         assertTrue(queue.abortRelocation(first));
 
-        ZLinkAsyncSerialQueue.RelocationSeal second =
+        ZLinkSerialExecutionQueue.RelocationSeal second =
             queue.trySealRelocation().orElseThrow();
         assertFalse(queue.abortRelocation(first));
         assertTrue(queue.abortRelocation(second));

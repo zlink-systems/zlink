@@ -23,7 +23,7 @@ import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -52,8 +52,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     private final RoutingId nodeRid;
     private final ZLinkBackendSpot backendSpot;
     private final DefaultSpotOutbound outbound;
-    private final ZLinkAsyncSerialQueue dispatchQueue;
-    private final ZLinkAsyncSerialQueue infrastructureQueue;
+    private final ZLinkSerialExecutionQueue dispatchQueue;
+    private final ZLinkSerialExecutionQueue infrastructureQueue;
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final List<DefaultSpotContext> timerContexts = new ArrayList<>();
     private final Map<String, ZLinkSpotTimerRegistry> actorTimers =
@@ -73,9 +73,9 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         this.handlerLoader = handlerLoader;
         this.nodeRid = nodeRid;
         this.backendSpot = backendSpot;
-        this.dispatchQueue = new ZLinkAsyncSerialQueue(
+        this.dispatchQueue = new ZLinkSerialExecutionQueue(
             host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
-        this.infrastructureQueue = new ZLinkAsyncSerialQueue(
+        this.infrastructureQueue = new ZLinkSerialExecutionQueue(
             host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);
         this.handlerInstances = host.createHandlerInstances();
@@ -349,10 +349,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private final DefaultSpotOutbound outbound;
     private final ZLinkSpotTimerRegistry timers;
     private final ZLinkHandlerInstanceOwner handlerInstances;
-    private final ZLinkAsyncSerialQueue dispatchQueue;
-    private final ZLinkAsyncSerialQueue infrastructureQueue;
+    private final ZLinkSerialExecutionQueue dispatchQueue;
+    private final ZLinkSerialExecutionQueue infrastructureQueue;
     private final ConcurrentHashMap<
-        String, ZLinkAsyncSerialQueue> timerQueues =
+        String, ZLinkSerialExecutionQueue> timerQueues =
             new ConcurrentHashMap<>();
     private final Map<String, ZLinkSpotTimerRegistry> actorTimers =
         new ConcurrentHashMap<>();
@@ -381,7 +381,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             handlerLoader,
             nodeRid,
             backendSpot,
-            new ZLinkAsyncSerialQueue(
+            new ZLinkSerialExecutionQueue(
                 host.serialExecutor(), ZLinkExecutionLanePolicy.spot()),
             ZLinkUserSpotExecutionMode.SPOT_WIDE,
             false);
@@ -393,7 +393,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         ZLinkSpotHandlerLoader handlerLoader,
         RoutingId nodeRid,
         ZLinkBackendSpot backendSpot,
-        ZLinkAsyncSerialQueue dispatchQueue) {
+        ZLinkSerialExecutionQueue dispatchQueue) {
         this(
             host,
             workerPool,
@@ -411,7 +411,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         ZLinkSpotHandlerLoader handlerLoader,
         RoutingId nodeRid,
         ZLinkBackendSpot backendSpot,
-        ZLinkAsyncSerialQueue dispatchQueue,
+        ZLinkSerialExecutionQueue dispatchQueue,
         ZLinkUserSpotExecutionMode executionMode,
         boolean instanceSpot) {
         this(
@@ -433,7 +433,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         ZLinkSpotHandlerLoader handlerLoader,
         RoutingId nodeRid,
         ZLinkBackendSpot backendSpot,
-        ZLinkAsyncSerialQueue dispatchQueue,
+        ZLinkSerialExecutionQueue dispatchQueue,
         ZLinkUserSpotExecutionMode executionMode,
         boolean instanceSpot,
         ZLinkHandlerInstanceOwner sharedHandlerInstances) {
@@ -456,7 +456,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         ZLinkSpotHandlerLoader handlerLoader,
         RoutingId nodeRid,
         ZLinkBackendSpot backendSpot,
-        ZLinkAsyncSerialQueue dispatchQueue,
+        ZLinkSerialExecutionQueue dispatchQueue,
         ZLinkUserSpotExecutionMode executionMode,
         boolean instanceSpot,
         ZLinkHandlerInstanceOwner sharedHandlerInstances,
@@ -467,7 +467,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         this.nodeRid = nodeRid;
         this.backendSpot = backendSpot;
         this.dispatchQueue = dispatchQueue;
-        this.infrastructureQueue = new ZLinkAsyncSerialQueue(
+        this.infrastructureQueue = new ZLinkSerialExecutionQueue(
             host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
         this.executionMode = Objects.requireNonNull(executionMode, "executionMode");
         this.relocationCoordinationMode = Objects.requireNonNull(
@@ -677,7 +677,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         // the current turn while that Actor turn acquires the gate; otherwise
         // the Actor queue would wait for the turn that is waiting for it.
         return sharedSpotGate() && dispatchQueue.isCurrent()
-            ? ZLinkAsyncSerialQueue.yieldCurrent(queued)
+            ? ZLinkSerialExecutionQueue.yieldCurrent(queued)
             : queued;
     }
 
@@ -701,7 +701,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 : runActorApplication(actorId, false, operation),
             relocationRelease);
         return sharedSpotGate() && dispatchQueue.isCurrent()
-            ? ZLinkAsyncSerialQueue.yieldCurrent(queued)
+            ? ZLinkSerialExecutionQueue.yieldCurrent(queued)
             : queued;
     }
 
@@ -776,7 +776,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         // The Kotlin coroutine adapter restores the serial-turn carrier but
         // not the queue's thread-local owner.  yieldCurrent() handles both
         // representations and is a no-op when no current turn exists.
-        return ZLinkAsyncSerialQueue.yieldCurrent(queued);
+        return ZLinkSerialExecutionQueue.yieldCurrent(queued);
     }
 
     @Override
@@ -796,8 +796,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 .toArray(CompletableFuture[]::new));
     }
 
-    Map<String, ZLinkAsyncSerialQueue> relocationLanes() {
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes =
+    Map<String, ZLinkSerialExecutionQueue> relocationLanes() {
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes =
             new LinkedHashMap<>();
         lanes.put("spot", dispatchQueue);
         timerQueues.entrySet().stream()
@@ -842,16 +842,16 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         }
     }
 
-    Optional<ZLinkAsyncSerialQueue.RelocationSeal> trySealRelocation() {
+    Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealRelocation() {
         return dispatchQueue.trySealRelocation();
     }
 
-    boolean abortRelocation(ZLinkAsyncSerialQueue.RelocationSeal seal) {
+    boolean abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatchQueue.abortRelocation(seal);
     }
 
-    Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>> commitRelocation(
-        ZLinkAsyncSerialQueue.RelocationSeal seal) {
+    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitRelocation(
+        ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatchQueue.commitRelocation(seal);
     }
 
@@ -931,9 +931,9 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         if (sharedSpotGate()) {
             return enqueueDispatch(operation);
         }
-        ZLinkAsyncSerialQueue queue = timerQueues.computeIfAbsent(
+        ZLinkSerialExecutionQueue queue = timerQueues.computeIfAbsent(
             Objects.requireNonNull(timerName, "timerName"),
-            ignored -> new ZLinkAsyncSerialQueue(
+            ignored -> new ZLinkSerialExecutionQueue(
                 host.serialExecutor(), ZLinkExecutionLanePolicy.spot()));
         return queue.enqueue(() -> runApplicationExecution(
             null,

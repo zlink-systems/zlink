@@ -24,7 +24,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -468,7 +468,7 @@ final class ZLinkDefaultSpotContextTest {
                         assertTrue(execution.sharedSpotGate());
                         assertTrue(execution.yieldAllowed());
                         firstStarted.complete(null);
-                        return ZLinkAsyncSerialQueue.yieldCurrent(firstRelease);
+                        return ZLinkSerialExecutionQueue.yieldCurrent(firstRelease);
                     }));
             firstStarted.get(2, TimeUnit.SECONDS);
 
@@ -534,7 +534,7 @@ final class ZLinkDefaultSpotContextTest {
                 ZLinkUserSpotExecutionMode.PER_ACTOR);
             CompletableFuture<Void> activeRelease = new CompletableFuture<>();
             CompletableFuture<Void> activeStarted = new CompletableFuture<>();
-            AtomicReference<ZLinkAsyncSerialQueue.ActiveTurnSealHandle> handle =
+            AtomicReference<ZLinkSerialExecutionQueue.ActiveTurnSealHandle> handle =
                 new AtomicReference<>();
             byte[] acceptedRecord = new byte[] {7, 8, 9};
 
@@ -555,8 +555,8 @@ final class ZLinkDefaultSpotContextTest {
                 () -> CompletableFuture.completedFuture(null),
                 () -> { });
 
-            ZLinkAsyncSerialQueue queue = host.actorQueue("actor-a");
-            ZLinkAsyncSerialQueue.RelocationSeal seal = queue
+            ZLinkSerialExecutionQueue queue = host.actorQueue("actor-a");
+            ZLinkSerialExecutionQueue.RelocationSeal seal = queue
                 .trySealRelocation(handle.get())
                 .orElseThrow();
             assertEquals(1, seal.captured().size());
@@ -612,7 +612,7 @@ final class ZLinkDefaultSpotContextTest {
 
     private static final class TestHost extends ZLinkSpotContextHost {
         private final Executor executor;
-        private final Map<String, ZLinkAsyncSerialQueue> actorQueues =
+        private final Map<String, ZLinkSerialExecutionQueue> actorQueues =
             new ConcurrentHashMap<>();
         private final AtomicInteger actorDispatchSubmissions =
             new AtomicInteger();
@@ -642,7 +642,7 @@ final class ZLinkDefaultSpotContextTest {
                 null,
                 RoutingId.from("node-a"),
                 backendSpot,
-                new ZLinkAsyncSerialQueue(
+                new ZLinkSerialExecutionQueue(
                     executor, ZLinkExecutionLanePolicy.spot()),
                 executionMode,
                 false,
@@ -808,10 +808,10 @@ final class ZLinkDefaultSpotContextTest {
                 relocationRelease);
         }
 
-        private ZLinkAsyncSerialQueue actorQueue(String actorId) {
+        private ZLinkSerialExecutionQueue actorQueue(String actorId) {
             return actorQueues.computeIfAbsent(
                 actorId,
-                ignored -> new ZLinkAsyncSerialQueue(
+                ignored -> new ZLinkSerialExecutionQueue(
                     executor, ZLinkExecutionLanePolicy.spot()));
         }
 

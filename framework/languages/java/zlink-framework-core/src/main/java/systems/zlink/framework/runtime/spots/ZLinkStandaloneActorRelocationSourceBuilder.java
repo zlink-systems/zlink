@@ -17,7 +17,7 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -244,7 +244,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     return failed(new IllegalStateException(
                         "Actor relocation queue cannot be sealed"));
                 }
-                ZLinkAsyncSerialQueue.RelocationSeal seal = sealed.orElseThrow();
+                ZLinkSerialExecutionQueue.RelocationSeal seal = sealed.orElseThrow();
                 byte[] timerEnvelope =
                     relocationReplies.freezeActorTimerRelocationEnvelope(
                         admission.owned().actorId());
@@ -380,12 +380,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             });
     }
 
-    private CompletionStage<Optional<ZLinkAsyncSerialQueue.RelocationSeal>>
+    private CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>>
         sealAtTurnBoundary(
             String actorId,
-            ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal,
+            ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurnSeal,
             ZLinkStoreCancellation cancellation) {
-        ZLinkAsyncSerialQueue queue = actors.actorRelocationLane(actorId);
+        ZLinkSerialExecutionQueue queue = actors.actorRelocationLane(actorId);
         if (activeTurnSeal != null) {
             //  A deferred Join holds this queue's active turn (its mailbox
             //  barrier). Reserving a lifecycle boundary here would queue it
@@ -398,15 +398,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     ? Optional.empty()
                     : queue.trySealRelocation(activeTurnSeal));
         }
-        Optional<ZLinkAsyncSerialQueue.RelocationBoundary> reserved =
+        Optional<ZLinkSerialExecutionQueue.RelocationBoundary> reserved =
             queue.reserveRelocationTurnBoundary();
         if (reserved.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        ZLinkAsyncSerialQueue.RelocationBoundary boundary =
+        ZLinkSerialExecutionQueue.RelocationBoundary boundary =
             reserved.orElseThrow();
         return boundary.reached().thenCompose(ignored -> {
-            Optional<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
+            Optional<ZLinkSerialExecutionQueue.RelocationSeal> sealed =
                 cancellation.isCancellationRequested()
                     ? Optional.empty()
                     : queue.trySealRelocation(boundary);
@@ -789,8 +789,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     private Optional<ZLinkSpotRetireControl.SessionRouteFence>
         capturedSessionRoute(
             Owned actor,
-            List<ZLinkAsyncSerialQueue.QueuedRecord> captured) {
-        for (ZLinkAsyncSerialQueue.QueuedRecord queued : captured) {
+            List<ZLinkSerialExecutionQueue.QueuedRecord> captured) {
+        for (ZLinkSerialExecutionQueue.QueuedRecord queued : captured) {
             ZLinkActorAcceptedJournal.Record record;
             try {
                 record = ZLinkActorAcceptedJournal.decode(queued.payload());
@@ -857,7 +857,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private final ZLinkSpotRuntime relocationReplies;
         private final ZLinkSessionRelocationPeerClient sessionSealer;
         private final Optional<SealedSessionRoute> sealedSessionRoute;
-        private final ZLinkAsyncSerialQueue.RelocationSeal seal;
+        private final ZLinkSerialExecutionQueue.RelocationSeal seal;
         private final Owned owned;
         private final ZLinkMeshNodeDescriptor target;
         private final UUID relocationId;
@@ -866,7 +866,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
         private final String targetSpotId;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
-        private List<ZLinkAsyncSerialQueue.QueuedRecord> finalJournal =
+        private List<ZLinkSerialExecutionQueue.QueuedRecord> finalJournal =
             List.of();
         private systems.zlink.framework.runtime.internal.relocation
             .ZLinkRetainedSerialQueueCommit.Commit relocationCommit;
@@ -880,7 +880,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             ZLinkSpotRuntime relocationReplies,
             ZLinkSessionRelocationPeerClient sessionSealer,
             Optional<SealedSessionRoute> sealedSessionRoute,
-            ZLinkAsyncSerialQueue.RelocationSeal seal,
+            ZLinkSerialExecutionQueue.RelocationSeal seal,
             Owned owned,
             ZLinkMeshNodeDescriptor target,
             UUID relocationId,
@@ -1006,7 +1006,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             do {
                 cut = retained.cut();
             } while (!retained.tryEstablishAndFinishCapture(cut));
-            List<ZLinkAsyncSerialQueue.QueuedRecord> relayed =
+            List<ZLinkSerialExecutionQueue.QueuedRecord> relayed =
                 cut.records().stream()
                     .sorted((left, right) -> Long.compareUnsigned(
                         left.sequence(), right.sequence()))
@@ -1026,7 +1026,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     sealed,
                     timeout));
             }
-            for (ZLinkAsyncSerialQueue.QueuedRecord record : relayed) {
+            for (ZLinkSerialExecutionQueue.QueuedRecord record : relayed) {
                 chain = chain.thenCompose(ignored -> client.relay(
                     stageRequest.targetNodeRid(),
                     stageRequest.fence(),

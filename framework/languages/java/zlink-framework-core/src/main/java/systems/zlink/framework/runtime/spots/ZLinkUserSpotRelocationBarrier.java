@@ -14,7 +14,7 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkCompositeRelocationBarrier;
@@ -68,7 +68,7 @@ final class ZLinkUserSpotRelocationBarrier {
         List<String> participantActorIds;
         Optional<ZLinkCompositeRelocationBarrier.Seal> localSeal =
             Optional.empty();
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> captured;
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> captured;
         boolean begin = inStateLane(() -> {
             if (active != null || sealing || committing) {
                 return false;
@@ -84,7 +84,7 @@ final class ZLinkUserSpotRelocationBarrier {
             timerEnvelope = context.freezeTimerRelocationEnvelope();
             timerFrozen = true;
             participantActorIds = actors.actorIdsInSpot(context.spotId());
-            LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes =
+            LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes =
                 relocationLanes(participantActorIds);
             localSeal = barrier.trySeal(lanes);
             if (localSeal.isEmpty()) {
@@ -166,7 +166,7 @@ final class ZLinkUserSpotRelocationBarrier {
         }
         List<String> participantActorIds =
             actors.actorIdsInSpot(context.spotId());
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes =
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes =
             relocationLanes(participantActorIds);
         return barrier.sealAtTurnBoundary(lanes, cancelled)
             .thenApply(sealed -> finishTurnBoundarySeal(
@@ -230,7 +230,7 @@ final class ZLinkUserSpotRelocationBarrier {
             byte[] timerEnvelope =
                 context.freezeTimerRelocationEnvelope();
             timerFrozen = true;
-            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> captured =
+            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> captured =
                 captureRecords(composite);
             boolean admitted;
             admitted = admission.test(new Preview(
@@ -407,7 +407,7 @@ final class ZLinkUserSpotRelocationBarrier {
         if (!retainedActive) {
             return Optional.empty();
         }
-        LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+        LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
             heldIngress = new LinkedHashMap<>(committed.records());
         return Optional.of(new RelocationCommit(
             new Committed(
@@ -419,7 +419,7 @@ final class ZLinkUserSpotRelocationBarrier {
     }
 
     Optional<Map<String, List<
-        ZLinkAsyncSerialQueue.QueuedRecord>>> freezeIngress(Seal seal) {
+        ZLinkSerialExecutionQueue.QueuedRecord>>> freezeIngress(Seal seal) {
         ZLinkCompositeRelocationBarrier.Seal composite = inStateLane(() -> {
             if (committing || seal == null || seal != active) {
                 return null;
@@ -432,7 +432,7 @@ final class ZLinkUserSpotRelocationBarrier {
         if (composite == null) {
             return Optional.empty();
         }
-        LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> held =
+        LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> held =
             new LinkedHashMap<>();
         held.putAll(barrier.freezeIngress(composite)
             .orElseThrow(() -> new IllegalStateException(
@@ -461,16 +461,16 @@ final class ZLinkUserSpotRelocationBarrier {
         }
     }
 
-    private Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+    private Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
         captureRecords(ZLinkCompositeRelocationBarrier.Seal seal) {
         return new LinkedHashMap<>(barrier.captured(seal)
                 .orElseThrow(() -> new IllegalStateException(
                     "User Spot relocation seal is not active")));
     }
 
-    private LinkedHashMap<String, ZLinkAsyncSerialQueue> relocationLanes(
+    private LinkedHashMap<String, ZLinkSerialExecutionQueue> relocationLanes(
         List<String> participantActorIds) {
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes =
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes =
             new LinkedHashMap<>(context.relocationLanes());
         for (String actorId : participantActorIds) {
             if (lanes.putIfAbsent(
@@ -488,7 +488,7 @@ final class ZLinkUserSpotRelocationBarrier {
         private final ZLinkCompositeRelocationBarrier.Seal composite;
         private final byte[] timerEnvelope;
         private final List<String> participantActorIds;
-        private final Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+        private final Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
             capturedRecords;
         private boolean applicationSignaled;
         private boolean completionScheduled;
@@ -498,7 +498,7 @@ final class ZLinkUserSpotRelocationBarrier {
             ZLinkCompositeRelocationBarrier.Seal composite,
             byte[] timerEnvelope,
             List<String> participantActorIds,
-            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
                 capturedRecords) {
             this.composite = composite;
             this.timerEnvelope = timerEnvelope;
@@ -519,7 +519,7 @@ final class ZLinkUserSpotRelocationBarrier {
             return participantActorIds;
         }
 
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
             capturedRecords() {
             return capturedRecords;
         }
@@ -556,7 +556,7 @@ final class ZLinkUserSpotRelocationBarrier {
     record Preview(
         byte[] timerEnvelope,
         List<String> participantActorIds,
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> capturedRecords) {
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> capturedRecords) {
         Preview {
             timerEnvelope = timerEnvelope.clone();
             participantActorIds = List.copyOf(participantActorIds);
@@ -572,7 +572,7 @@ final class ZLinkUserSpotRelocationBarrier {
         long generation,
         byte[] timerEnvelope,
         List<String> participantActorIds,
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> heldIngress) {
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> heldIngress) {
         Committed {
             timerEnvelope = timerEnvelope.clone();
             participantActorIds = List.copyOf(participantActorIds);

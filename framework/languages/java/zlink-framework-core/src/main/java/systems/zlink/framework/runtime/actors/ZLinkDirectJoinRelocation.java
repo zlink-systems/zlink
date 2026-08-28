@@ -17,7 +17,7 @@ import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkDirectJoinRelocationAuthority;
@@ -44,7 +44,7 @@ final class ZLinkDirectJoinRelocation {
         RoutingId targetNodeRid,
         boolean restoreSnapshot,
         byte[] applicationState,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> acceptedJournal,
+        List<ZLinkSerialExecutionQueue.QueuedRecord> acceptedJournal,
         byte[] rawReply) {
         return relocationAuthority.prepareRelocation(
                 relocationId,
@@ -215,7 +215,7 @@ final class ZLinkDirectJoinRelocation {
 
     record PreparedRoot(
         byte[] applicationState,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> acceptedJournal) {
+        List<ZLinkSerialExecutionQueue.QueuedRecord> acceptedJournal) {
         PreparedRoot {
             applicationState = applicationState.clone();
             acceptedJournal = List.copyOf(acceptedJournal);

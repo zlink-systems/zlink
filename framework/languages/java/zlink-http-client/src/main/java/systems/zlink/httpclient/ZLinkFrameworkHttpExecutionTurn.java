@@ -2,16 +2,16 @@
 package systems.zlink.httpclient;
 
 import java.util.concurrent.CompletionStage;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 public final class ZLinkFrameworkHttpExecutionTurn implements ZLinkHttpExecutionTurn {
     @Override
     public <T> CompletionStage<T> async(CompletionStage<T> operation) {
-        return ZLinkAsyncSerialQueue.manageCurrent(operation);
+        return ZLinkSerialExecutionQueue.manageCurrent(operation);
     }
 
     @Override
     public <T> CompletionStage<T> yield(CompletionStage<T> operation) {
-        return ZLinkAsyncSerialQueue.yieldCurrent(operation);
+        return ZLinkSerialExecutionQueue.yieldCurrent(operation);
     }
 }

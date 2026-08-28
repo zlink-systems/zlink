@@ -20,7 +20,7 @@ import java.util.concurrent.Executor;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -288,7 +288,7 @@ final class ZLinkSpotLifecycle {
         Object ingressHold) {
         requireNewPrepared(prepared);
         if (!(ingressHold
-                instanceof ZLinkAsyncSerialQueue.RelocationSeal seal)
+                instanceof ZLinkSerialExecutionQueue.RelocationSeal seal)
             || !prepared.created().activation().context
                 .abortRelocation(seal)) {
             throw new IllegalStateException(

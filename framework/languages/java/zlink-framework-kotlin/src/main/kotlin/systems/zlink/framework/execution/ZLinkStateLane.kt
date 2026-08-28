@@ -18,7 +18,7 @@ import kotlin.coroutines.CoroutineContext
  *
  * State owned by this lane stays in ordinary, unsynchronized collections. The lane, rather than a
  * collection-level lock, makes each state turn exclusive. This is deliberately separate from
- * [ZLinkAsyncSerialQueue], which owns Spot and Actor execution concerns such as relocation and
+ * [ZLinkSerialExecutionQueue], which owns Spot and Actor execution concerns such as relocation and
  * lifecycle admission.
  */
 internal class ZLinkStateLane {

@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 /**
  * Framework-private access to the serial queue's two-phase relocation
@@ -18,8 +18,8 @@ public final class ZLinkRetainedSerialQueueCommit {
     }
 
     public static Optional<Commit> retain(
-        ZLinkAsyncSerialQueue queue,
-        ZLinkAsyncSerialQueue.RelocationSeal seal) {
+        ZLinkSerialExecutionQueue queue,
+        ZLinkSerialExecutionQueue.RelocationSeal seal) {
         Objects.requireNonNull(queue, "queue");
         if (CURRENT.get() != null) {
             throw new IllegalStateException(
@@ -27,7 +27,7 @@ public final class ZLinkRetainedSerialQueueCommit {
         }
         Capture capture = new Capture();
         CURRENT.set(capture);
-        Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>> records;
+        Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> records;
         try {
             records = queue.commitRelocation(seal);
         } finally {
@@ -49,9 +49,9 @@ public final class ZLinkRetainedSerialQueueCommit {
             records.orElseThrow(), capture.owner));
     }
 
-    /** Called only by {@link ZLinkAsyncSerialQueue#commitRelocation}. */
+    /** Called only by {@link ZLinkSerialExecutionQueue#commitRelocation}. */
     public static boolean capture(
-        List<ZLinkAsyncSerialQueue.QueuedRecord> records,
+        List<ZLinkSerialExecutionQueue.QueuedRecord> records,
         Owner owner) {
         Capture current = CURRENT.get();
         if (current == null) {
@@ -81,12 +81,12 @@ public final class ZLinkRetainedSerialQueueCommit {
     public static final class Cut {
         private final Object owner;
         private final long epoch;
-        private final List<ZLinkAsyncSerialQueue.QueuedRecord> records;
+        private final List<ZLinkSerialExecutionQueue.QueuedRecord> records;
 
         private Cut(
             Object owner,
             long epoch,
-            List<ZLinkAsyncSerialQueue.QueuedRecord> records) {
+            List<ZLinkSerialExecutionQueue.QueuedRecord> records) {
             this.owner = Objects.requireNonNull(owner, "owner");
             if (epoch < 0) {
                 throw new IllegalArgumentException(
@@ -96,7 +96,7 @@ public final class ZLinkRetainedSerialQueueCommit {
             this.records = List.copyOf(records);
         }
 
-        public List<ZLinkAsyncSerialQueue.QueuedRecord> records() {
+        public List<ZLinkSerialExecutionQueue.QueuedRecord> records() {
             return records;
         }
 
@@ -112,23 +112,23 @@ public final class ZLinkRetainedSerialQueueCommit {
     public static Cut cut(
         Object owner,
         long epoch,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> records) {
+        List<ZLinkSerialExecutionQueue.QueuedRecord> records) {
         return new Cut(owner, epoch, records);
     }
 
     public static final class Commit {
-        private final List<ZLinkAsyncSerialQueue.QueuedRecord> records;
+        private final List<ZLinkSerialExecutionQueue.QueuedRecord> records;
         private final Owner owner;
         private final AtomicBoolean completed = new AtomicBoolean();
 
         private Commit(
-            List<ZLinkAsyncSerialQueue.QueuedRecord> records,
+            List<ZLinkSerialExecutionQueue.QueuedRecord> records,
             Owner owner) {
             this.records = List.copyOf(records);
             this.owner = owner;
         }
 
-        public List<ZLinkAsyncSerialQueue.QueuedRecord> records() {
+        public List<ZLinkSerialExecutionQueue.QueuedRecord> records() {
             return records;
         }
 
@@ -272,7 +272,7 @@ public final class ZLinkRetainedSerialQueueCommit {
     }
 
     private static final class Capture {
-        private List<ZLinkAsyncSerialQueue.QueuedRecord> records;
+        private List<ZLinkSerialExecutionQueue.QueuedRecord> records;
         private Owner owner;
     }
 }

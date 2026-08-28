@@ -5,7 +5,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 /**
  * Decodes Framework-owned accepted records and dispatches them through the
@@ -33,7 +33,7 @@ final class ZLinkAcceptedJournalReplayer
     @Override
     public CompletionStage<Void> replay(
         String laneId,
-        ZLinkAsyncSerialQueue.QueuedRecord queued) {
+        ZLinkSerialExecutionQueue.QueuedRecord queued) {
         Objects.requireNonNull(laneId, "laneId");
         Objects.requireNonNull(queued, "queued");
         if (laneId.equals("spot") || laneId.startsWith("timer:")) {

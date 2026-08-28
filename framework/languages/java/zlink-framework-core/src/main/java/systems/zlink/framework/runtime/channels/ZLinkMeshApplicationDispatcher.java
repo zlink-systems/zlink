@@ -27,7 +27,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.ReplyToken;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
@@ -778,13 +778,13 @@ public final class ZLinkMeshApplicationDispatcher
             new HashMap<>();
         private final Map<String, ChannelRequestHandlerRegistration> channelRequests =
             new HashMap<>();
-        private final ZLinkAsyncSerialQueue sendQueue;
-        private final ZLinkAsyncSerialQueue requestQueue;
+        private final ZLinkSerialExecutionQueue sendQueue;
+        private final ZLinkSerialExecutionQueue requestQueue;
 
         Namespace(Executor executor) {
-            sendQueue = new ZLinkAsyncSerialQueue(
+            sendQueue = new ZLinkSerialExecutionQueue(
                 executor, ZLinkExecutionLanePolicy.generic());
-            requestQueue = new ZLinkAsyncSerialQueue(
+            requestQueue = new ZLinkSerialExecutionQueue(
                 executor, ZLinkExecutionLanePolicy.generic());
         }
     }

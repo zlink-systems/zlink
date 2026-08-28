@@ -14,7 +14,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkServiceRelocationEnvelopeCodec;
@@ -223,7 +223,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         if (spotState == null) {
             throw invalid("canonical Spot participant is missing");
         }
-        LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
+        LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal =
             new LinkedHashMap<>();
         for (var entry : root.savedWork()) {
             String lane = lanes.get(entry.participantId());
@@ -231,7 +231,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
                 throw invalid("canonical journal participant is unknown");
             }
             journal.computeIfAbsent(lane, ignored -> new ArrayList<>())
-                .add(new ZLinkAsyncSerialQueue.QueuedRecord(
+                .add(new ZLinkSerialExecutionQueue.QueuedRecord(
                     entry.sequence(), entry.frozenRecord()));
         }
         Map<TimerKey, ZLinkServiceRelocationEnvelopeCodec.PendingTimerTick>
@@ -296,7 +296,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         if (spotType == null) {
             throw invalid("target does not register User Spot stable type");
         }
-        LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> frozen =
+        LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> frozen =
             new LinkedHashMap<>();
         journal.forEach((lane, records) -> frozen.put(lane, List.copyOf(records)));
         return new ZLinkUserSpotAggregateStagingOwner.Request(

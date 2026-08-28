@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
@@ -41,7 +41,7 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         router.inbound.add(received("one"));
         router.inbound.add(received("two"));
         var handlerExecutor = Executors.newSingleThreadExecutor();
-        ZLinkAsyncSerialQueue serial = new ZLinkAsyncSerialQueue(
+        ZLinkSerialExecutionQueue serial = new ZLinkSerialExecutionQueue(
             handlerExecutor, ZLinkExecutionLanePolicy.generic());
         CountDownLatch allowFirstInstruction = new CountDownLatch(1);
         CountDownLatch bothDispatched = new CountDownLatch(2);

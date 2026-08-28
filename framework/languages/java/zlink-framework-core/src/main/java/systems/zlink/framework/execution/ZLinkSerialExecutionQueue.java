@@ -27,7 +27,7 @@ import systems.zlink.framework.runtime.internal.relocation
  * claimed records. These reservations are independent from Core byte HWM and
  * from the host-wide application-job supply authority.
  */
-public final class ZLinkAsyncSerialQueue {
+public final class ZLinkSerialExecutionQueue {
     public static final int DEFAULT_APPLICATION_MESSAGE_CAPACITY = 1024;
     public static final int DEFAULT_LIFECYCLE_MESSAGE_CAPACITY = 128;
     public static final long DEFAULT_APPLICATION_BYTE_CAPACITY = 64L * 1024 * 1024;
@@ -35,7 +35,7 @@ public final class ZLinkAsyncSerialQueue {
     public static final long DEFAULT_FIXED_WORK_BYTE_COST = 256;
     public static final int DEFAULT_LIFECYCLE_BURST_LIMIT = 8;
     public static final Duration DEFAULT_OWNER_TIME_BUDGET = Duration.ofMillis(10);
-    private static final ThreadLocal<ZLinkAsyncSerialQueue> CURRENT = new ThreadLocal<>();
+    private static final ThreadLocal<ZLinkSerialExecutionQueue> CURRENT = new ThreadLocal<>();
     private static final ThreadLocal<CompletableFuture<Void>> CURRENT_GATE = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> CURRENT_RELEASE_DEFERRED = new ThreadLocal<>();
 
@@ -74,11 +74,11 @@ public final class ZLinkAsyncSerialQueue {
     private final List<CompletableFuture<Void>> quiescenceWaiters =
         new ArrayList<>();
 
-    public ZLinkAsyncSerialQueue() {
+    public ZLinkSerialExecutionQueue() {
         this(ZLinkExecutionLanePolicy.generic());
     }
 
-    public ZLinkAsyncSerialQueue(ZLinkExecutionLanePolicy lanePolicy) {
+    public ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy lanePolicy) {
         this(
             null,
             lanePolicy,
@@ -91,7 +91,7 @@ public final class ZLinkAsyncSerialQueue {
             DEFAULT_OWNER_TIME_BUDGET);
     }
 
-    public ZLinkAsyncSerialQueue(
+    public ZLinkSerialExecutionQueue(
         Executor executor,
         ZLinkExecutionLanePolicy lanePolicy) {
         this(
@@ -106,7 +106,7 @@ public final class ZLinkAsyncSerialQueue {
             DEFAULT_OWNER_TIME_BUDGET);
     }
 
-    public ZLinkAsyncSerialQueue(
+    public ZLinkSerialExecutionQueue(
         ZLinkExecutionLanePolicy lanePolicy,
         int pendingCapacity) {
         this(
@@ -121,7 +121,7 @@ public final class ZLinkAsyncSerialQueue {
             DEFAULT_OWNER_TIME_BUDGET);
     }
 
-    public ZLinkAsyncSerialQueue(
+    public ZLinkSerialExecutionQueue(
         Executor executor,
         ZLinkExecutionLanePolicy lanePolicy,
         int pendingCapacity) {
@@ -137,7 +137,7 @@ public final class ZLinkAsyncSerialQueue {
             DEFAULT_OWNER_TIME_BUDGET);
     }
 
-    public ZLinkAsyncSerialQueue(
+    public ZLinkSerialExecutionQueue(
         Executor executor,
         ZLinkExecutionLanePolicy lanePolicy,
         int applicationMessageCapacity,
@@ -837,10 +837,10 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public static final class ActiveTurnSealHandle {
-        private final ZLinkAsyncSerialQueue owner;
+        private final ZLinkSerialExecutionQueue owner;
         private final Entry entry;
 
-        private ActiveTurnSealHandle(ZLinkAsyncSerialQueue owner, Entry entry) {
+        private ActiveTurnSealHandle(ZLinkSerialExecutionQueue owner, Entry entry) {
             this.owner = owner;
             this.entry = entry;
         }
@@ -989,7 +989,7 @@ public final class ZLinkAsyncSerialQueue {
         CompletableFuture<Void> gate = new CompletableFuture<>();
         try {
             executor.execute(() -> {
-                ZLinkAsyncSerialQueue previous = CURRENT.get();
+                ZLinkSerialExecutionQueue previous = CURRENT.get();
                 CompletableFuture<Void> previousGate = CURRENT_GATE.get();
                 Boolean previousDeferred = CURRENT_RELEASE_DEFERRED.get();
                 CURRENT.set(this);
@@ -1051,7 +1051,7 @@ public final class ZLinkAsyncSerialQueue {
     public static <T> CompletionStage<T> manageCurrent(CompletionStage<T> stage) {
         Objects.requireNonNull(stage, "stage");
         SerialTurn turn = currentTurn();
-        ZLinkAsyncSerialQueue queue = turn == null ? null : turn.queue;
+        ZLinkSerialExecutionQueue queue = turn == null ? null : turn.queue;
         if (queue == null) {
             return stage;
         }
@@ -1073,7 +1073,7 @@ public final class ZLinkAsyncSerialQueue {
             stage.whenComplete((value, error) -> {
                 try {
                     queue.executor.execute(() -> {
-                        ZLinkAsyncSerialQueue previous = CURRENT.get();
+                        ZLinkSerialExecutionQueue previous = CURRENT.get();
                         CompletableFuture<Void> previousGate = CURRENT_GATE.get();
                         CURRENT.set(queue);
                         if (gate == null) {
@@ -1166,7 +1166,7 @@ public final class ZLinkAsyncSerialQueue {
     public static <T> CompletionStage<T> yieldCurrent(CompletionStage<T> stage) {
         Objects.requireNonNull(stage, "stage");
         SerialTurn turn = currentTurn();
-        ZLinkAsyncSerialQueue queue = turn == null ? null : turn.queue;
+        ZLinkSerialExecutionQueue queue = turn == null ? null : turn.queue;
         CompletableFuture<Void> gate = turn == null ? null : turn.gate;
         if (queue == null || gate == null || stage.toCompletableFuture().isDone()) {
             return stage;
@@ -1291,7 +1291,7 @@ public final class ZLinkAsyncSerialQueue {
     public static Executor propagateCurrent(Executor executor) {
         Objects.requireNonNull(executor, "executor");
         return command -> {
-            ZLinkAsyncSerialQueue queue = CURRENT.get();
+            ZLinkSerialExecutionQueue queue = CURRENT.get();
             CompletableFuture<Void> gate = CURRENT_GATE.get();
             Boolean deferred = CURRENT_RELEASE_DEFERRED.get();
             Object serialTurn = systems.zlink.framework.runtime.internal.handlers
@@ -1312,7 +1312,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     private static void runWithContext(
-        ZLinkAsyncSerialQueue queue,
+        ZLinkSerialExecutionQueue queue,
         CompletableFuture<Void> gate,
         Boolean deferred,
         Object serialTurn,
@@ -1320,7 +1320,7 @@ public final class ZLinkAsyncSerialQueue {
             .ZLinkSuspendInvocationContext.ApplicationExecution application,
         String actorDispatch,
         Runnable command) {
-        ZLinkAsyncSerialQueue previous = CURRENT.get();
+        ZLinkSerialExecutionQueue previous = CURRENT.get();
         CompletableFuture<Void> previousGate = CURRENT_GATE.get();
         Boolean previousDeferred = CURRENT_RELEASE_DEFERRED.get();
         setOrRemove(CURRENT, queue);
@@ -1361,7 +1361,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     private static SerialTurn currentTurn() {
-        ZLinkAsyncSerialQueue queue = CURRENT.get();
+        ZLinkSerialExecutionQueue queue = CURRENT.get();
         CompletableFuture<Void> gate = CURRENT_GATE.get();
         if (queue != null && gate != null) {
             return new SerialTurn(queue, gate);
@@ -1385,7 +1385,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     private record SerialTurn(
-        ZLinkAsyncSerialQueue queue,
+        ZLinkSerialExecutionQueue queue,
         CompletableFuture<Void> gate) {
     }
 
@@ -1399,13 +1399,13 @@ public final class ZLinkAsyncSerialQueue {
 
     private static final class RetainedCommit
         implements ZLinkRetainedSerialQueueCommit.Owner {
-        private final ZLinkAsyncSerialQueue owner;
+        private final ZLinkSerialExecutionQueue owner;
         private final List<QueuedRecord> records;
         private List<Entry> entries;
         private final AtomicBoolean completed = new AtomicBoolean();
 
         private RetainedCommit(
-            ZLinkAsyncSerialQueue owner,
+            ZLinkSerialExecutionQueue owner,
             List<QueuedRecord> records) {
             this.owner = owner;
             this.records = List.copyOf(records);
@@ -1567,7 +1567,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public static final class RelocationBoundary {
-        private final ZLinkAsyncSerialQueue owner;
+        private final ZLinkSerialExecutionQueue owner;
         private final CompletableFuture<Void> reached =
             new CompletableFuture<>();
         private final CompletableFuture<Void> released =
@@ -1576,7 +1576,7 @@ public final class ZLinkAsyncSerialQueue {
             new CompletableFuture<>();
         private Entry entry;
 
-        private RelocationBoundary(ZLinkAsyncSerialQueue owner) {
+        private RelocationBoundary(ZLinkSerialExecutionQueue owner) {
             this.owner = owner;
         }
 

@@ -13,7 +13,7 @@ import java.util.function.Supplier;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -587,7 +587,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
 
     static final class DurableBacklog {
         private final Staged staged;
-        private final List<ZLinkAsyncSerialQueue.QueuedRecord> saved;
+        private final List<ZLinkSerialExecutionQueue.QueuedRecord> saved;
         private final List<PendingIngress> relayed;
         private final List<PendingIngress> temporary;
         private final ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer;
@@ -595,7 +595,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
 
         private DurableBacklog(
             Staged staged,
-            List<ZLinkAsyncSerialQueue.QueuedRecord> saved,
+            List<ZLinkSerialExecutionQueue.QueuedRecord> saved,
             List<PendingIngress> relayed,
             List<PendingIngress> temporary,
             ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer) {
@@ -609,14 +609,14 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
 
     static final class DirectJoinReplay {
         private final Staged staged;
-        private final List<ZLinkAsyncSerialQueue.QueuedRecord> saved;
+        private final List<ZLinkSerialExecutionQueue.QueuedRecord> saved;
         private final List<PendingIngress> relayed;
         private final List<PendingIngress> temporary;
         private boolean replayed;
 
         private DirectJoinReplay(
             Staged staged,
-            List<ZLinkAsyncSerialQueue.QueuedRecord> saved,
+            List<ZLinkSerialExecutionQueue.QueuedRecord> saved,
             List<PendingIngress> relayed,
             List<PendingIngress> temporary) {
             this.staged = staged;
@@ -629,7 +629,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             return staged;
         }
 
-        private List<ZLinkAsyncSerialQueue.QueuedRecord> saved() {
+        private List<ZLinkSerialExecutionQueue.QueuedRecord> saved() {
             return saved;
         }
 

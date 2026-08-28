@@ -13,7 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -24,19 +24,19 @@ final class ZLinkUserSpotRelocationEnvelopeTest {
     void canonicalEnvelopeRoundTripsParticipantsTimersAndJournal() {
         RoutingId source = RoutingId.from("source-node");
         RoutingId target = RoutingId.from("target-node");
-        LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
+        LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal =
             new LinkedHashMap<>();
         journal.put("spot", List.of(
-            new ZLinkAsyncSerialQueue.QueuedRecord(3,
+            new ZLinkSerialExecutionQueue.QueuedRecord(3,
                 ZLinkAcceptedJournalTestRecords.spot(
                     "source", "room-a", 0, "first", Map.of(),
                     new byte[] {3})),
-            new ZLinkAsyncSerialQueue.QueuedRecord(4,
+            new ZLinkSerialExecutionQueue.QueuedRecord(4,
                 ZLinkAcceptedJournalTestRecords.spot(
                     "source", "room-a", 0, "second", Map.of(),
                     new byte[] {4}))));
         journal.put("actor:actor-a", List.of(
-            new ZLinkAsyncSerialQueue.QueuedRecord(7,
+            new ZLinkSerialExecutionQueue.QueuedRecord(7,
                 ZLinkAcceptedJournalTestRecords.actor(
                     "actor-a", 0, "actor", Map.of(), new byte[] {7}))));
         byte[] timerEnvelope = ZLinkSpotTimerRelocationEnvelope.encodeCanonical(

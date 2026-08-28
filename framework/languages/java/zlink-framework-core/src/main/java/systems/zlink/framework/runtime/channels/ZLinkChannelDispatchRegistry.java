@@ -5,7 +5,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 
 final class ZLinkChannelDispatchRegistry {
@@ -22,11 +22,11 @@ final class ZLinkChannelDispatchRegistry {
         new HashMap<>();
     private final Map<String, ZLinkChannelRuntime.RouteInternalRequestHandler> internalRequests =
         new HashMap<>();
-    private final Map<String, ZLinkAsyncSerialQueue> sendQueues = new HashMap<>();
-    private final Map<String, ZLinkAsyncSerialQueue> requestQueues = new HashMap<>();
-    private final Map<String, ZLinkAsyncSerialQueue> publishQueues = new HashMap<>();
-    private final Map<String, ZLinkAsyncSerialQueue> routeRequestQueues = new HashMap<>();
-    private final Map<String, ZLinkAsyncSerialQueue> routeSendQueues = new HashMap<>();
+    private final Map<String, ZLinkSerialExecutionQueue> sendQueues = new HashMap<>();
+    private final Map<String, ZLinkSerialExecutionQueue> requestQueues = new HashMap<>();
+    private final Map<String, ZLinkSerialExecutionQueue> publishQueues = new HashMap<>();
+    private final Map<String, ZLinkSerialExecutionQueue> routeRequestQueues = new HashMap<>();
+    private final Map<String, ZLinkSerialExecutionQueue> routeSendQueues = new HashMap<>();
 
     ZLinkChannelDispatchRegistry(Executor executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
@@ -38,9 +38,9 @@ final class ZLinkChannelDispatchRegistry {
         Map<String, ChannelRequestHandlerRegistration> requests) {
         sendHandlers.put(channelName, sends);
         requestHandlers.put(channelName, requests);
-        sendQueues.put(channelName, new ZLinkAsyncSerialQueue(
+        sendQueues.put(channelName, new ZLinkSerialExecutionQueue(
             executor, ZLinkExecutionLanePolicy.generic()));
-        requestQueues.put(channelName, new ZLinkAsyncSerialQueue(
+        requestQueues.put(channelName, new ZLinkSerialExecutionQueue(
             executor, ZLinkExecutionLanePolicy.generic()));
     }
 
@@ -48,7 +48,7 @@ final class ZLinkChannelDispatchRegistry {
         String channelName,
         Map<String, ChannelPublishHandlerRegistration> publishes) {
         publishHandlers.put(channelName, publishes);
-        publishQueues.put(channelName, new ZLinkAsyncSerialQueue(
+        publishQueues.put(channelName, new ZLinkSerialExecutionQueue(
             executor, ZLinkExecutionLanePolicy.generic()));
     }
 
@@ -58,9 +58,9 @@ final class ZLinkChannelDispatchRegistry {
         Map<String, ChannelRouteRequestHandlerRegistration> requests) {
         routeSendHandlers.put(channelName, sends);
         routeRequestHandlers.put(channelName, requests);
-        routeSendQueues.put(channelName, new ZLinkAsyncSerialQueue(
+        routeSendQueues.put(channelName, new ZLinkSerialExecutionQueue(
             executor, ZLinkExecutionLanePolicy.generic()));
-        routeRequestQueues.put(channelName, new ZLinkAsyncSerialQueue(
+        routeRequestQueues.put(channelName, new ZLinkSerialExecutionQueue(
             executor, ZLinkExecutionLanePolicy.generic()));
     }
 
@@ -101,23 +101,23 @@ final class ZLinkChannelDispatchRegistry {
         return internalRequests.get(packetName);
     }
 
-    ZLinkAsyncSerialQueue requestQueue(String channelName) {
+    ZLinkSerialExecutionQueue requestQueue(String channelName) {
         return requestQueues.get(channelName);
     }
 
-    ZLinkAsyncSerialQueue sendQueue(String channelName) {
+    ZLinkSerialExecutionQueue sendQueue(String channelName) {
         return sendQueues.get(channelName);
     }
 
-    ZLinkAsyncSerialQueue publishQueue(String channelName) {
+    ZLinkSerialExecutionQueue publishQueue(String channelName) {
         return publishQueues.get(channelName);
     }
 
-    ZLinkAsyncSerialQueue routeRequestQueue(String channelName) {
+    ZLinkSerialExecutionQueue routeRequestQueue(String channelName) {
         return routeRequestQueues.get(channelName);
     }
 
-    ZLinkAsyncSerialQueue routeSendQueue(String channelName) {
+    ZLinkSerialExecutionQueue routeSendQueue(String channelName) {
         return routeSendQueues.get(channelName);
     }
 }

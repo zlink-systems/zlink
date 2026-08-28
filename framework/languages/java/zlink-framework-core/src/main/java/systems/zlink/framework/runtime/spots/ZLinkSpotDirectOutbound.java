@@ -1,5 +1,5 @@
 package systems.zlink.framework.runtime.spots;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -640,7 +640,7 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
         }
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.rejectSameSpotWait(spotId);
-        return ZLinkAsyncSerialQueue.manageCurrent(
+        return ZLinkSerialExecutionQueue.manageCurrent(
             outbound.submitRequest(
             spot,
             targetNodeRid,
@@ -658,7 +658,7 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("Spot request");
-        return ZLinkAsyncSerialQueue
+        return ZLinkSerialExecutionQueue
             .yieldCurrent(submit(replyType));
     }
 

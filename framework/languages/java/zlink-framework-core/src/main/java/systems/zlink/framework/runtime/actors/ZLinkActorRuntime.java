@@ -76,7 +76,7 @@ import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -457,7 +457,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             boolean restoreSnapshot,
             byte[] applicationState,
             List<
-                ZLinkAsyncSerialQueue.QueuedRecord>
+                ZLinkSerialExecutionQueue.QueuedRecord>
                 acceptedJournal,
             byte[] rawReply) {
         ZLinkDirectJoinRelocation relocation =
@@ -539,7 +539,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public record DeferredJoinRelocationRoot(
         byte[] applicationState,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> acceptedJournal) {
+        List<ZLinkSerialExecutionQueue.QueuedRecord> acceptedJournal) {
         public DeferredJoinRelocationRoot {
             applicationState = applicationState.clone();
             acceptedJournal = List.copyOf(acceptedJournal);
@@ -2639,7 +2639,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.requireYieldAllowed(
                     "Actor creation");
-            return ZLinkAsyncSerialQueue
+            return ZLinkSerialExecutionQueue
                 .yieldCurrent(submitOperation());
         }
     }
@@ -4018,7 +4018,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 turn, payloadBytes, operation, relocationRelease);
     }
 
-    public Optional<ZLinkAsyncSerialQueue.RelocationSeal> trySealActorRelocation(
+    public Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealActorRelocation(
         String actorId) {
         return dispatches.trySeal(actorId);
     }
@@ -4027,20 +4027,20 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
      * Returns the Framework-owned serial lane used to coordinate an Actor as
      * part of a User Spot aggregate relocation barrier.
      */
-    public ZLinkAsyncSerialQueue actorRelocationLane(String actorId) {
+    public ZLinkSerialExecutionQueue actorRelocationLane(String actorId) {
         Objects.requireNonNull(actorId, "actorId");
         return dispatches.relocationLane(actorId);
     }
 
     public boolean abortActorRelocation(
         String actorId,
-        ZLinkAsyncSerialQueue.RelocationSeal seal) {
+        ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatches.abort(actorId, seal);
     }
 
-    public Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>> commitActorRelocation(
+    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitActorRelocation(
         String actorId,
-        ZLinkAsyncSerialQueue.RelocationSeal seal) {
+        ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatches.commit(actorId, seal);
     }
 
@@ -4048,14 +4048,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         .ZLinkRetainedSerialQueueCommit.Commit>
         retainActorRelocationCommit(
             String actorId,
-            ZLinkAsyncSerialQueue.RelocationSeal seal) {
+            ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatches.retainCommit(actorId, seal);
     }
 
-    public Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>>
+    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>
         freezeActorRelocationIngress(
             String actorId,
-            ZLinkAsyncSerialQueue.RelocationSeal seal) {
+            ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatches.freezeIngress(actorId, seal);
     }
 
@@ -4135,7 +4135,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             () -> dispatches.prepare(actor.context().actorId()));
         dispatches.enqueue(
             turn,
-            () -> ZLinkAsyncSerialQueue.yieldCurrent(operation.get()))
+            () -> ZLinkSerialExecutionQueue.yieldCurrent(operation.get()))
             .whenComplete((ignored, error) -> {
                 if (error != null) {
                     failRemoteMove(actor, error);

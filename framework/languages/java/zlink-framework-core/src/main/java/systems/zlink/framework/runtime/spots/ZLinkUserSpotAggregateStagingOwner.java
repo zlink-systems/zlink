@@ -18,7 +18,7 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -368,9 +368,9 @@ final class ZLinkUserSpotAggregateStagingOwner {
             return CompletableFuture.failedFuture(consumed);
         }
         CompletionStage<Void> replay = CompletableFuture.completedFuture(null);
-        for (Map.Entry<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> lane
+        for (Map.Entry<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> lane
             : backlog.finalRequest.acceptedJournal().entrySet()) {
-            for (ZLinkAsyncSerialQueue.QueuedRecord record : lane.getValue()) {
+            for (ZLinkSerialExecutionQueue.QueuedRecord record : lane.getValue()) {
                 replay = replay.thenCompose(ignored -> admitBacklogTurn(
                     () -> backlog.replayer.replay(lane.getKey(), record)));
             }
@@ -519,10 +519,10 @@ final class ZLinkUserSpotAggregateStagingOwner {
     }
 
     private static boolean journalIsPrefix(
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> initial,
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> finalJournal) {
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> initial,
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> finalJournal) {
         for (var lane : initial.entrySet()) {
-            List<ZLinkAsyncSerialQueue.QueuedRecord> completed =
+            List<ZLinkSerialExecutionQueue.QueuedRecord> completed =
                 finalJournal.get(lane.getKey());
             if (completed == null
                 || completed.size() < lane.getValue().size()) {
@@ -540,8 +540,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
     }
 
     private static boolean sameRecord(
-        ZLinkAsyncSerialQueue.QueuedRecord left,
-        ZLinkAsyncSerialQueue.QueuedRecord right) {
+        ZLinkSerialExecutionQueue.QueuedRecord left,
+        ZLinkSerialExecutionQueue.QueuedRecord right) {
         return left.sequence() == right.sequence()
             && Arrays.equals(left.payload(), right.payload());
     }
@@ -598,15 +598,15 @@ final class ZLinkUserSpotAggregateStagingOwner {
     }
 
     private static void validateJournal(
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal) {
-        for (Map.Entry<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> lane
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal) {
+        for (Map.Entry<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> lane
             : journal.entrySet()) {
             if (lane.getKey() == null || lane.getKey().isBlank()) {
                 throw new IllegalArgumentException(
                     "accepted journal lane id is required");
             }
             long previous = 0;
-            for (ZLinkAsyncSerialQueue.QueuedRecord record : lane.getValue()) {
+            for (ZLinkSerialExecutionQueue.QueuedRecord record : lane.getValue()) {
                 if (record.sequence() <= previous) {
                     throw new IllegalArgumentException(
                         "accepted journal sequence must be strictly increasing");
@@ -629,14 +629,14 @@ final class ZLinkUserSpotAggregateStagingOwner {
     interface JournalReplayer {
         CompletionStage<Void> replay(
             String laneId,
-            ZLinkAsyncSerialQueue.QueuedRecord record);
+            ZLinkSerialExecutionQueue.QueuedRecord record);
 
         default CompletionStage<Void> replayFrozen(
             String laneId,
             byte[] frozenRecord) {
             return replay(
                 laneId,
-                new ZLinkAsyncSerialQueue.QueuedRecord(1, frozenRecord));
+                new ZLinkSerialExecutionQueue.QueuedRecord(1, frozenRecord));
         }
     }
 
@@ -789,7 +789,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         boolean restoreSpotSnapshot,
         byte[] timerEnvelope,
         List<ActorParticipant> actors,
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> acceptedJournal) {
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> acceptedJournal) {
         Request {
             Objects.requireNonNull(spotType, "spotType");
             // objectGeneration is spec-bounded to `1..long.MaxValue`
@@ -809,7 +809,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 "timerEnvelope").clone();
             actors = List.copyOf(Objects.requireNonNull(actors, "actors"));
             LinkedHashMap<String, List<
-                ZLinkAsyncSerialQueue.QueuedRecord>> journalCopy =
+                ZLinkSerialExecutionQueue.QueuedRecord>> journalCopy =
                     new LinkedHashMap<>();
             Objects.requireNonNull(acceptedJournal, "acceptedJournal")
                 .forEach((lane, records) -> journalCopy.put(

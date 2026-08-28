@@ -9,7 +9,7 @@ import java.util.function.Supplier;
 import java.util.function.BooleanSupplier;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
@@ -626,7 +626,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             try (var flowScope = enterApplicationFlow()) {
                 systems.zlink.framework.runtime.internal.handlers
                     .ZLinkSuspendInvocationContext.rejectSameActorWait(actorId);
-                return ZLinkAsyncSerialQueue.manageCurrent(
+                return ZLinkSerialExecutionQueue.manageCurrent(
                     requestAsync(
                         actorId, packetName, request, metadata, timeout, replyType));
             }
@@ -636,7 +636,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.requireYieldAllowed("Actor request");
-            return ZLinkAsyncSerialQueue
+            return ZLinkSerialExecutionQueue
                 .yieldCurrent(submit(replyType));
         }
     }

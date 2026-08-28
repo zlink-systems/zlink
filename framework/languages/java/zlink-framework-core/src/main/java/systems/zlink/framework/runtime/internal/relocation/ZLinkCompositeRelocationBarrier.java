@@ -13,7 +13,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
@@ -64,7 +64,7 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     public Optional<Seal> trySeal(
-        Map<String, ZLinkAsyncSerialQueue> lanes) {
+        Map<String, ZLinkSerialExecutionQueue> lanes) {
         while (true) {
             SealStart start = inStateLane(() -> {
                 if (transition != null) {
@@ -81,7 +81,7 @@ public final class ZLinkCompositeRelocationBarrier {
                     throw new IllegalStateException(
                         "composite relocation generation exhausted");
                 }
-                LinkedHashMap<String, ZLinkAsyncSerialQueue> snapshot =
+                LinkedHashMap<String, ZLinkSerialExecutionQueue> snapshot =
                     validateLanes(lanes);
                 CompletableFuture<Void> pending = new CompletableFuture<>();
                 transition = pending;
@@ -99,15 +99,15 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     private Optional<Seal> sealOutsideTurn(
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> laneSnapshot,
-        Map<String, ZLinkAsyncSerialQueue.RelocationBoundary> boundaries,
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> laneSnapshot,
+        Map<String, ZLinkSerialExecutionQueue.RelocationBoundary> boundaries,
         CompletableFuture<Void> pending) {
-        LinkedHashMap<String, ZLinkAsyncSerialQueue.RelocationSeal> seals =
+        LinkedHashMap<String, ZLinkSerialExecutionQueue.RelocationSeal> seals =
             new LinkedHashMap<>();
         try {
-            for (Map.Entry<String, ZLinkAsyncSerialQueue> lane
+            for (Map.Entry<String, ZLinkSerialExecutionQueue> lane
                 : laneSnapshot.entrySet()) {
-                Optional<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
+                Optional<ZLinkSerialExecutionQueue.RelocationSeal> sealed =
                     boundaries == null
                         ? lane.getValue().trySealRelocation()
                         : lane.getValue().trySealRelocation(
@@ -151,25 +151,25 @@ public final class ZLinkCompositeRelocationBarrier {
      * not run while the boundary is being acquired.
      */
     public CompletionStage<Optional<Seal>> sealAtTurnBoundary(
-        Map<String, ZLinkAsyncSerialQueue> lanes,
+        Map<String, ZLinkSerialExecutionQueue> lanes,
         BooleanSupplier cancelled) {
         Objects.requireNonNull(cancelled, "cancelled");
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> snapshot =
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> snapshot =
             validateLanes(lanes);
         return attemptTurnBoundary(snapshot, cancelled);
     }
 
     private CompletionStage<Optional<Seal>> attemptTurnBoundary(
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes,
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes,
         BooleanSupplier cancelled) {
         if (cancelled.getAsBoolean()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        LinkedHashMap<String, ZLinkAsyncSerialQueue.RelocationBoundary>
+        LinkedHashMap<String, ZLinkSerialExecutionQueue.RelocationBoundary>
             boundaries = new LinkedHashMap<>();
-        for (Map.Entry<String, ZLinkAsyncSerialQueue> lane
+        for (Map.Entry<String, ZLinkSerialExecutionQueue> lane
             : lanes.entrySet()) {
-            Optional<ZLinkAsyncSerialQueue.RelocationBoundary> boundary =
+            Optional<ZLinkSerialExecutionQueue.RelocationBoundary> boundary =
                 lane.getValue().reserveRelocationTurnBoundary();
             if (boundary.isEmpty()) {
                 release(boundaries);
@@ -200,8 +200,8 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     private Optional<Seal> trySealAtReservedBoundaries(
-        Map<String, ZLinkAsyncSerialQueue> lanes,
-        Map<String, ZLinkAsyncSerialQueue.RelocationBoundary> boundaries) {
+        Map<String, ZLinkSerialExecutionQueue> lanes,
+        Map<String, ZLinkSerialExecutionQueue.RelocationBoundary> boundaries) {
         while (true) {
             SealStart start = inStateLane(() -> {
                 if (transition != null) {
@@ -274,7 +274,7 @@ public final class ZLinkCompositeRelocationBarrier {
         }
     }
 
-    public Optional<Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>>
+    public Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>>
         commit(Seal seal) {
         Optional<RelocationCommit> retained = retainCommit(seal);
         if (retained.isEmpty()) {
@@ -290,7 +290,7 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     public Optional<RelocationCommit> retainCommit(Seal seal) {
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes;
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes;
         while (true) {
             RetainStart start = inStateLane(() -> {
                 if (transition != null) {
@@ -311,12 +311,12 @@ public final class ZLinkCompositeRelocationBarrier {
             }
             awaitTransition(start.pending());
         }
-        LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+        LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
             held = new LinkedHashMap<>();
         List<ZLinkRetainedSerialQueueCommit.Commit> retained =
             new ArrayList<>();
         try {
-            for (Map.Entry<String, ZLinkAsyncSerialQueue> lane
+            for (Map.Entry<String, ZLinkSerialExecutionQueue> lane
                 : lanes.entrySet()) {
                 ZLinkRetainedSerialQueueCommit.Commit committed =
                     ZLinkRetainedSerialQueueCommit.retain(
@@ -349,7 +349,7 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     public Optional<Map<String, List<
-        ZLinkAsyncSerialQueue.QueuedRecord>>> freezeIngress(Seal seal) {
+        ZLinkSerialExecutionQueue.QueuedRecord>>> freezeIngress(Seal seal) {
         while (true) {
             FreezeStart start = inStateLane(() -> {
                 if (transition != null) {
@@ -370,9 +370,9 @@ public final class ZLinkCompositeRelocationBarrier {
                 continue;
             }
             try {
-                LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> held =
+                LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> held =
                     new LinkedHashMap<>();
-                for (Map.Entry<String, ZLinkAsyncSerialQueue> lane
+                for (Map.Entry<String, ZLinkSerialExecutionQueue> lane
                     : start.seal().lanes.entrySet()) {
                     held.put(lane.getKey(), lane.getValue().freezeRelocationIngress(
                         start.seal().seals.get(lane.getKey())).orElseThrow(() ->
@@ -411,8 +411,8 @@ public final class ZLinkCompositeRelocationBarrier {
 
     /** Returns the immutable accepted journal fixed by this active seal. */
     public Optional<Map<String, List<
-        ZLinkAsyncSerialQueue.QueuedRecord>>> captured(Seal seal) {
-        List<Map.Entry<String, ZLinkAsyncSerialQueue.RelocationSeal>> seals;
+        ZLinkSerialExecutionQueue.QueuedRecord>>> captured(Seal seal) {
+        List<Map.Entry<String, ZLinkSerialExecutionQueue.RelocationSeal>> seals;
         while (true) {
             CapturedState state = inStateLane(() -> {
                 if (transition != null) {
@@ -433,17 +433,17 @@ public final class ZLinkCompositeRelocationBarrier {
             }
             awaitTransition(state.pending());
         }
-        LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+        LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
             captured = new LinkedHashMap<>();
-        for (Map.Entry<String, ZLinkAsyncSerialQueue.RelocationSeal> entry : seals) {
+        for (Map.Entry<String, ZLinkSerialExecutionQueue.RelocationSeal> entry : seals) {
             captured.put(entry.getKey(), entry.getValue().captured());
         }
         return Optional.of(Collections.unmodifiableMap(captured));
     }
 
     private static void rollback(
-        Map<String, ZLinkAsyncSerialQueue> lanes,
-        Map<String, ZLinkAsyncSerialQueue.RelocationSeal> seals) {
+        Map<String, ZLinkSerialExecutionQueue> lanes,
+        Map<String, ZLinkSerialExecutionQueue.RelocationSeal> seals) {
         List<String> laneIds = new ArrayList<>(seals.keySet());
         Collections.reverse(laneIds);
         for (String laneId : laneIds) {
@@ -454,13 +454,13 @@ public final class ZLinkCompositeRelocationBarrier {
         }
     }
 
-    private static LinkedHashMap<String, ZLinkAsyncSerialQueue>
-        validateLanes(Map<String, ZLinkAsyncSerialQueue> lanes) {
+    private static LinkedHashMap<String, ZLinkSerialExecutionQueue>
+        validateLanes(Map<String, ZLinkSerialExecutionQueue> lanes) {
         if (lanes == null || lanes.isEmpty()) {
             throw new IllegalArgumentException(
                 "at least one relocation lane is required");
         }
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> snapshot =
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> snapshot =
             new LinkedHashMap<>();
         lanes.forEach((laneId, queue) -> {
             String required = requireLaneId(laneId);
@@ -476,13 +476,13 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     private static void release(
-        Map<String, ZLinkAsyncSerialQueue.RelocationBoundary> boundaries) {
+        Map<String, ZLinkSerialExecutionQueue.RelocationBoundary> boundaries) {
         boundaries.values().forEach(
-            ZLinkAsyncSerialQueue.RelocationBoundary::release);
+            ZLinkSerialExecutionQueue.RelocationBoundary::release);
     }
 
     private static CompletionStage<Void> awaitFinished(
-        Map<String, ZLinkAsyncSerialQueue.RelocationBoundary> boundaries) {
+        Map<String, ZLinkSerialExecutionQueue.RelocationBoundary> boundaries) {
         CompletableFuture<?>[] finished = boundaries.values().stream()
             .map(boundary -> boundary.finished().toCompletableFuture())
             .toArray(CompletableFuture[]::new);
@@ -498,7 +498,7 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     private record SealStart(
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes,
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes,
         CompletableFuture<Void> pending) {
     }
 
@@ -509,12 +509,12 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     private record RetainStart(
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes,
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes,
         CompletableFuture<Void> pending) {
     }
 
     private record CapturedState(
-        List<Map.Entry<String, ZLinkAsyncSerialQueue.RelocationSeal>> seals,
+        List<Map.Entry<String, ZLinkSerialExecutionQueue.RelocationSeal>> seals,
         CompletableFuture<Void> pending) {
     }
 
@@ -523,13 +523,13 @@ public final class ZLinkCompositeRelocationBarrier {
 
     public static final class Seal {
         private final long generation;
-        private final Map<String, ZLinkAsyncSerialQueue> lanes;
-        private final Map<String, ZLinkAsyncSerialQueue.RelocationSeal> seals;
+        private final Map<String, ZLinkSerialExecutionQueue> lanes;
+        private final Map<String, ZLinkSerialExecutionQueue.RelocationSeal> seals;
 
         private Seal(
             long generation,
-            Map<String, ZLinkAsyncSerialQueue> lanes,
-            Map<String, ZLinkAsyncSerialQueue.RelocationSeal> seals) {
+            Map<String, ZLinkSerialExecutionQueue> lanes,
+            Map<String, ZLinkSerialExecutionQueue.RelocationSeal> seals) {
             this.generation = generation;
             this.lanes = lanes;
             this.seals = seals;
@@ -545,13 +545,13 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     public static final class RelocationCommit {
-        private final Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> records;
+        private final Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> records;
         private final List<ZLinkRetainedSerialQueueCommit.Commit> lanes;
         private final List<String> laneIds;
         private final AtomicBoolean completed = new AtomicBoolean();
 
         private RelocationCommit(
-            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> records,
+            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> records,
             List<ZLinkRetainedSerialQueueCommit.Commit> lanes) {
             this.records = Collections.unmodifiableMap(
                 new LinkedHashMap<>(records));
@@ -559,13 +559,13 @@ public final class ZLinkCompositeRelocationBarrier {
             this.laneIds = List.copyOf(records.keySet());
         }
 
-        public Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> records() {
+        public Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> records() {
             return records;
         }
 
         /** Captures one sequence-stable suffix cut across every lane. */
         public Cut cut() {
-            LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+            LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
                 current = new LinkedHashMap<>();
             List<ZLinkRetainedSerialQueueCommit.Cut> cuts = new ArrayList<>();
             for (int index = 0; index < lanes.size(); index++) {
@@ -611,17 +611,17 @@ public final class ZLinkCompositeRelocationBarrier {
 
         public static final class Cut {
             private final Map<String, List<
-                ZLinkAsyncSerialQueue.QueuedRecord>> records;
+                ZLinkSerialExecutionQueue.QueuedRecord>> records;
             private final List<ZLinkRetainedSerialQueueCommit.Cut> lanes;
 
             private Cut(
-                Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> records,
+                Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> records,
                 List<ZLinkRetainedSerialQueueCommit.Cut> lanes) {
                 this.records = records;
                 this.lanes = lanes;
             }
 
-            public Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+            public Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>
                 records() {
                 return records;
             }

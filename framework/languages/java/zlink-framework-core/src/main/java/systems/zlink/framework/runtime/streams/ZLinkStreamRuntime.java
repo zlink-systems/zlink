@@ -45,7 +45,7 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -1624,7 +1624,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 "stream session must expose the context provided by the runtime: "
                     + streamNode.sessionType().getName());
         }
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             serialExecutor, ZLinkExecutionLanePolicy.session());
         return new SessionState(
             session,
@@ -1903,7 +1903,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     private static final class SessionState {
         private final ZLinkSession session;
-        private final ZLinkAsyncSerialQueue queue;
+        private final ZLinkSerialExecutionQueue queue;
         private final ZLinkStreamSessionContextState context;
         private final ZLinkBackendStreamSocket stream;
         private final RoutingId routingId;
@@ -1922,7 +1922,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
         SessionState(
             ZLinkSession session,
-            ZLinkAsyncSerialQueue queue,
+            ZLinkSerialExecutionQueue queue,
             ZLinkStreamSessionContextState context,
             ZLinkBackendStreamSocket stream,
             RoutingId routingId,
@@ -1944,7 +1944,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         ZLinkSession session() { return session; }
-        ZLinkAsyncSerialQueue queue() { return queue; }
+        ZLinkSerialExecutionQueue queue() { return queue; }
         ZLinkStreamSessionContextState context() { return context; }
         ZLinkBackendStreamSocket stream() { return stream; }
         RoutingId routingId() { return routingId; }
