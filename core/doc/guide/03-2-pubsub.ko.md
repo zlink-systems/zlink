@@ -2,8 +2,6 @@
 title: "PUB/SUB/XPUB/XSUB 발행-구독"
 ---
 
-[English](03-2-pubsub.ko.md)
-
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: PAIR](03-1-pair.ko.md) | [다음: DEALER](03-3-dealer.ko.md)
 <!-- zlink-nav:end -->

@@ -1,4 +1,3 @@
-한국어 | [English](https://zlink-systems.github.io/zlink/reference/09-xpub/)
 
 [레퍼런스 목차](README.ko.md)
 

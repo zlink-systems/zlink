@@ -1,4 +1,3 @@
-[한국어](03-0-socket-patterns.en.md)
 
 # Choosing a socket pattern
 

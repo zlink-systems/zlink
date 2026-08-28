@@ -2,8 +2,6 @@
 title: "zlink 개요"
 ---
 
-[English](01-overview.ko.md)
-
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [다음: Socket pattern 선택](03-0-socket-patterns.ko.md)
 <!-- zlink-nav:end -->

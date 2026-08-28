@@ -1,4 +1,3 @@
-[한국어](05-tls-security.en.md)
 
 # TLS and WSS
 

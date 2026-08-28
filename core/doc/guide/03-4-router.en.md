@@ -1,4 +1,3 @@
-[한국어](03-4-router.en.md)
 
 # ROUTER
 

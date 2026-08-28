@@ -1,4 +1,3 @@
-[한국어](design-rationale.en.md)
 
 # Design Rationale — Why It Was Built This Way
 

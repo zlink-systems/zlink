@@ -1,4 +1,3 @@
-[한국어](../spec/core/06-monitoring.en.md)
 
 # Monitoring raw sockets
 

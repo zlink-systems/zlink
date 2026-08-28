@@ -1,4 +1,3 @@
-[English](03-5-stream.en.md) | [한국어](03-5-stream.en.md)
 
 <!-- zlink-nav:start -->
 [← ROUTER](03-4-router.en.md) | [Proxy →](03-6-proxy.en.md)
@@ -261,7 +260,6 @@ These tests use STREAM server + raw client paths.
 
 ---
 [← ROUTER](03-4-router.en.md) | [Proxy →](03-6-proxy.en.md) | [Transport →](04-transports.en.md)
-
 
 ## Full language examples
 

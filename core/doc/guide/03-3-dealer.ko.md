@@ -2,8 +2,6 @@
 title: "DEALER 소켓"
 ---
 
-[English](03-3-dealer.ko.md)
-
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: PUB/SUB](03-2-pubsub.ko.md) | [다음: ROUTER](03-4-router.ko.md)
 <!-- zlink-nav:end -->

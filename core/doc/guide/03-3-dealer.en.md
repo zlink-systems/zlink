@@ -1,4 +1,3 @@
-[English](03-3-dealer.en.md) | [한국어](03-3-dealer.en.md)
 
 <!-- zlink-nav:start -->
 [← PUB/SUB](03-2-pubsub.en.md) | [ROUTER →](03-4-router.en.md)
@@ -393,7 +392,6 @@ zlink_connect(dealer, endpoint);  /* identified as D1 */
 
 ---
 [← PUB/SUB](03-2-pubsub.en.md) | [ROUTER →](03-4-router.en.md)
-
 
 ## Full language examples
 

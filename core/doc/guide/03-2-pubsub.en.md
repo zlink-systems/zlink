@@ -1,4 +1,3 @@
-[English](03-2-pubsub.en.md) | [한국어](03-2-pubsub.en.md)
 
 <!-- zlink-nav:start -->
 [← PAIR](03-1-pair.en.md) | [DEALER →](03-3-dealer.en.md)
@@ -661,7 +660,6 @@ When multiple SUBs subscribe to the same topic, the XPUB subscription is maintai
 
 ---
 [← PAIR](03-1-pair.en.md) | [DEALER →](03-3-dealer.en.md)
-
 
 ## Full language examples
 
