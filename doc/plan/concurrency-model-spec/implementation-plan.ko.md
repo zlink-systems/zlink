@@ -49,6 +49,10 @@ P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같�
 | P0-3 | 큐 임계 구역에서 `BigInteger` 할당을 걷어낸다 | java `execution/ZLinkAsyncSerialQueue.java` | enqueue마다 4할당 제거 |
 | P0-4 | **조사** — mailbox 두 축 계약(Framework API §11)을 네 언어가 어디서 만족하는지 확인한다 | 아래 §2.1 | 언어별로 "만족 / 이탈 / 미구현" 판정과 근거 |
 
+P0-1~P0-3의 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에
+있다. P0-1은 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을
+어긴 자리를 되돌린다.
+
 ### 2.1 P0-4 조사 대상 — mailbox 두 축 회계
 
 **계약.** owner mailbox는 **건수와 대기 중 byte 합계 두 축을 모두** 강제하고, 두 축을 하나의
@@ -74,12 +78,6 @@ permit과는 계상 경계가 다르다 — permit은 callback 첫 instruction �
 
 ---
 
-근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에 있다. P0-1은
-새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을 어긴 자리를
-되돌린다.
-
----
-
 ## 3. P1 — dotnet
 
 dotnet은 세 계층 조율자를 모두 갖고 있다. **조율자는 이름을 스펙에 맞추고, 큐 primitive에는
@@ -98,17 +96,7 @@ relocation seal과 stopping 상태만 본다. java·cpp·node는 두 축을 갖�
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
 | P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | 상수로 박힌 `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`을 정책 주입으로 바꾼다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs:7,8` | `ZLinkExecutionLanePolicy` 일곱 값이 주입된다 |
-| P1-6 | 큐에 owner FIFO의 count·byte 상한을 **신설**한다 — permit을 든 작업은 재지 않는다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 두 항목 통과 |
-
-**단, 이 상한은 유입 제한이 아니다.** ordinary ingress는 permit을 이미 들고 owner queue에
-도착하므로(스펙 04 §3의 3단계) owner queue가 다시 재면 안 된다. node는 `submitPreAdmitted`로
-건너뛰지만 **java는 inbound Actor packet에 `payloadCopy.size()`를 넘긴다**
-(`ZLinkSpotRuntime.java:4831`) — 04 §3이 금지한 이중 계상·reject 전환으로 보인다. P0에 조사
-항목을 추가한다.
-
-따라서 P1은 개명만이 아니다. **큐 primitive 정본은 java이고, dotnet은 그 회계를 새로
-받아야 한다(P1-6).** 앞서 "dotnet은 신설할 것이 없다"고 적었던 것은 조율자 계층만 보고 내린
-판정이며 큐 primitive에는 해당하지 않는다.
+| P1-6 | **(P0-4 판정 후)** 큐에 mailbox count·byte 두 축을 신설한다 — P0-4가 "미구현"으로 판정한 경우에만. 다른 자리(`SetMailboxBudgets` 경로)가 이미 만족하면 생략 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 항목 통과 |
 
 **양보 동작 자체는 dotnet에 이미 있다.** `DrainAsync`가 `OwnerTimeSliceMilliseconds`(10ms)마다
 slice를 끊고, `LifecycleTurnLimit`(8)로 lifecycle 연속 선점을 막는다. 빠진 것은 동작이 아니라
@@ -119,9 +107,10 @@ slice를 끊고, `LifecycleTurnLimit`(8)로 lifecycle 연속 선점을 막는다
 세션에 맡겼고, P1-4가 건드리는 `ZLinkSpotSerialExecutor.cs`는 그 세션의 작업 대상일 수 있다.
 P2·P3가 P1에 걸려 있으므로 충돌하면 전체가 밀린다.
 
-**P1-4는 세 곳이 아니라 네 곳이다.** `_laneGate`는 queue map을 지키는 collection lock이므로
-스펙 06 §4의 C1이다 — 그대로 state lane 소유로 옮긴다. `close` 경로(`:87`)에서 map을 비우는
-자리가 함께 움직여야 하는 값을 다루면 C2이므로, 그 turn 안에서 원자적으로 처리한다.
+**P1-4는 세 곳이 아니라 네 곳이다.** `_laneGate`가 지키는 queue map은 스펙 07 §2가 **C2**로
+판정한다 — 조율자를 닫을 때 map 비우기와 그 안의 queue 완료가 함께 움직이기 때문이다.
+state lane 소유로 옮기고, `close` 경로(`:87`)의 그 두 동작은 한 turn 안에서 원자적으로
+처리한다.
 
 ---
 

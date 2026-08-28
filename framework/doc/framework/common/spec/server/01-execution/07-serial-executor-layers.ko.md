@@ -112,6 +112,12 @@ class ZLinkActorSerialExecutor           // Actor 하나마다 하나
 [User Spot execution mode](../00-foundation/02-glossary.ko.md#user-spot-execution-mode)에
 따라 Actor 작업과 timer 작업이 지나는 queue가 달라진다.
 
+이 mode 옵션은 **User Spot 전용**이다. 다른 Spot 종류의 배선은 이미 정해져 있어 여기의 두
+그림 중 하나를 그대로 따른다 — [Entry Spot](../00-foundation/02-glossary.ko.md#spot-turn)은
+Spot lane과 Actor별 lane을 분리하므로 `PerActor` 그림의 Actor 경로와 같고(단 `Yield`를
+제공하지 않는다 — [02 §2](02-handler-turn-and-execution-gate.ko.md#2-execution-gate--owner-처리-순서)),
+Instance Spot은 Spot 전체가 gate 하나이므로 `SpotWide` 그림과 같다.
+
 `SpotWide`에서 Actor 작업만 queue 두 개를 지난다. 두 mode 모두 직렬 실행이 보장되며 지나는
 queue 수만 다르다.
 
@@ -148,8 +154,12 @@ queue 수만 다르다.
                                           한 번에 하나 실행
 ```
 
-Actor queue는 작업을 바로 실행하지 않고, 자기 turn이 오면 Spot queue로 넘긴다. 그래서 Actor
-작업만 queue 둘을 지나고, 실행 순서는 Spot queue 하나가 정한다.
+여기서 Spot queue를 지나는 것은 **payload가 아니라 실행 turn**이다. Actor payload는 그
+Actor의 queue에 남는다 — [Actor 모델 「3. Actor queue」](../03-spot-actor/04-actor-model.ko.md#3-actor-queue)가
+"Actor payload를 Spot application queue에 넣지 않는다"를 못박고 있다. Actor queue의 head가
+자기 차례에 [02 §1](02-handler-turn-and-execution-gate.ko.md#1-queue와-gate-분리-원칙)의 공유
+실행 권한(gate)을 얻는 것이고, 현재 네 구현은 그 획득을 Spot queue에 실행 turn 하나를 세우는
+방식으로 만든다. 그래서 실행 순서는 Spot queue 하나가 정한다.
 
 - **`SpotWide`에서 Actor 작업이 Actor queue를 먼저 지나는 이유는 순서가 아니라 claim이다.**
   실행 순서는 위 Spot queue 하나로 이미 끝난다. Actor queue가 하는 일은 **`Yield`한 Actor의
@@ -180,7 +190,7 @@ sequenceDiagram
     Coord->>AQ: 그 Actor의 queue를 찾거나 만든다
     AQ->>AQ: 이 작업의 payload 바이트를 예약한다
     Note over AQ: 그 Actor 몫이 가득 차 있으면<br/>여기서 backpressure로 거절한다
-    AQ->>SQ: 자기 turn이 오면 Spot queue에 넣는다
+    AQ->>SQ: 자기 turn이 오면 실행 turn을 세운다 (payload는 AQ에 남는다)
     SQ->>SQ: fixedWorkByteCost만 예약한다
     Note over SQ: 같은 payload를 다시 예약하지 않는다
     SQ->>H: Spot turn 하나를 점유해 실행한다
@@ -207,8 +217,8 @@ ExecuteActor(actorId, work, payloadBytes)
         return;
     }
 
-    // SpotWide — Actor queue가 payload 바이트를 예약하고, 자기 turn이 오면
-    // 작업을 Spot queue로 넘긴다. 실행 순서는 Spot queue 하나가 정한다.
+    // SpotWide — Actor queue가 payload를 보관·예약하고, 자기 turn이 오면
+    // 실행 turn을 Spot queue에 세운다. 실행 순서는 Spot queue 하나가 정한다.
     actorQueue.EnqueueWithPayloadBytes(
         () => spotQueue.Enqueue(work),   // 같은 payload를 다시 예약하지 않는다(§5)
         payloadBytes);
@@ -263,18 +273,24 @@ handler가 끝난 뒤에 반환된다 — 실행 중인 작업이 점유한 memo
 이 값들은 §5의 owner FIFO 상한을 정하는 것이지 유입 속도를 제한하는 값이 아니다. Ordinary
 ingress의 admission은 [04](04-application-job-queue-and-backpressure.ko.md)가 소유한다.
 
+각 값의 **기본값**(application 1,024건·64 MiB, lifecycle 128건·4 MiB, 고정 비용 256 byte,
+점유 10 ms, 연속 8 turn)과 byte 회계의 구성, 양보 부채 메커니즘은
+[02 「7. Lane 분리와 우선순위」](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)가
+소유한다. 이 문서는 주입되는 이름만 고정한다.
+
 다음은 의미를 설명하는 contract pseudocode이며 실제 API가 아니다. 정확한 signature는 언어별
 exact interface가 정의한다.
 
 ```text
 ZLinkExecutionLanePolicy {
     applicationMessageCapacity   // application lane이 동시에 담는 작업 수 상한 (건, > 0)
-    applicationByteCapacity      // application lane이 동시에 예약하는 payload 크기 상한
-                                 //   (byte, > 0, encoded payload 기준)
+    applicationByteCapacity      // application lane이 동시에 예약하는 크기 상한 (byte, > 0)
+                                 //   예약 = payload + metadata + fixedWorkByteCost (02 §7)
     lifecycleMessageCapacity     // lifecycle lane이 동시에 담는 작업 수 상한 (건, > 0)
     lifecycleByteCapacity        // lifecycle lane이 동시에 예약하는 크기 상한 (byte, > 0)
-    fixedWorkByteCost            // payload를 나르지 않는 작업 하나가 차지하는 고정 크기
-                                 //   (byte, >= 0). timer 작업과 §5의 위 Spot queue가 쓴다
+    fixedWorkByteCost            // 작업 하나가 payload와 별개로 차지하는 고정 retained
+                                 //   크기 (byte, >= 0). 모든 작업에 더해지며, payload가 없는
+                                 //   작업(timer 등)과 §5의 위 Spot queue는 이 값만 예약한다
     lifecycleBurstLimit          // lifecycle 작업이 application 작업을 연속으로 앞지를 수 있는
                                  //   최대 건수 (건, > 0). 이 수를 넘기면 application 작업이
                                  //   한 건 실행된다

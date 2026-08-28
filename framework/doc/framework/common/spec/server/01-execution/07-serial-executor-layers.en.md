@@ -114,6 +114,13 @@ layer, the same call has to be looked up again every time work crosses a layer.
 Which queues Actor work and timer work pass through depends on the
 [User Spot execution mode](../00-foundation/02-glossary.en.md#user-spot-execution-mode).
 
+The mode option is **User-Spot only.** The wiring for the other Spot kinds is already settled
+and follows one of the two diagrams here as-is — an
+[Entry Spot](../00-foundation/02-glossary.en.md#spot-turn) separates the Spot lane from
+per-Actor lanes, so it matches the Actor path of the `PerActor` diagram (except that it does not
+offer `Yield` — [02 §2](02-handler-turn-and-execution-gate.en.md#2-execution-gate--the-owners-processing-order)),
+and an Instance Spot uses one gate for the whole Spot, so it matches the `SpotWide` diagram.
+
 Only Actor work under `SpotWide` passes through two queues. Both modes guarantee serial
 execution; only the number of queues crossed differs.
 
@@ -150,9 +157,14 @@ Which queue each entry point connects to, drawn per mode. The example Spot has t
                                             one at a time
 ```
 
-An Actor queue does not run the work itself; on its own turn it hands the work to the Spot
-queue. That is why only Actor work passes through two queues, and why execution order is
-decided by the Spot queue alone.
+What crosses into the Spot queue here is **the execution turn, not the payload.** The Actor
+payload stays in that Actor's queue —
+[Actor Model "3. Actor Queue"](../03-spot-actor/04-actor-model.en.md#3-actor-queue) pins down
+that Actor payload is never put into the Spot application queue. The head of the Actor queue,
+on its own turn, acquires the shared execution authority (the gate) of
+[02 §1](02-handler-turn-and-execution-gate.en.md#1-separating-queue-from-gate), and the four
+current implementations realize that acquisition by placing one execution turn on the Spot
+queue. That is why execution order is decided by the Spot queue alone.
 
 - **Under `SpotWide`, Actor work goes through the Actor queue first because of the claim, not
   the order.** Execution order is already settled by the upper Spot queue alone. What the Actor
@@ -183,7 +195,7 @@ sequenceDiagram
     Coord->>AQ: find or create that Actor's queue
     AQ->>AQ: reserve this work's payload bytes
     Note over AQ: if that Actor's share is full,<br/>it is rejected here as backpressure
-    AQ->>SQ: on its own turn, put it on the Spot queue
+    AQ->>SQ: on its own turn, place an execution turn (payload stays in AQ)
     SQ->>SQ: reserve fixedWorkByteCost only
     Note over SQ: the same payload is not reserved again
     SQ->>Handler: hold one Spot turn and run
@@ -211,8 +223,8 @@ ExecuteActor(actorId, work, payloadBytes)
         return;
     }
 
-    // SpotWide — the Actor queue reserves the payload bytes, and on its own turn
-    // hands the work to the Spot queue. execution order is decided by the Spot queue.
+    // SpotWide — the Actor queue holds and reserves the payload, and on its own turn
+    // places an execution turn on the Spot queue. execution order is decided by the Spot queue.
     actorQueue.EnqueueWithPayloadBytes(
         () => spotQueue.Enqueue(work),   // the same payload is not reserved again (§5)
         payloadBytes);
@@ -270,6 +282,12 @@ These set §5's owner FIFO ceilings; they are not values that limit the rate of 
 Admission for ordinary ingress is owned by
 [04](04-application-job-queue-and-backpressure.en.md).
 
+The **defaults** of these values (application 1,024 items / 64 MiB, lifecycle 128 items / 4 MiB,
+fixed cost 256 bytes, 10 ms hold, 8 consecutive turns), the composition of the byte accounting,
+and the yield-debt mechanism are owned by
+[02 "7. Lane Separation And Priority"](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation).
+This document fixes only the injected names.
+
 The following is contract pseudocode explaining the meaning; it is not the real API. The exact
 signature is defined by each language's exact interface.
 
@@ -277,15 +295,16 @@ signature is defined by each language's exact interface.
 ZLinkExecutionLanePolicy {
     applicationMessageCapacity   // ceiling on work items the application lane holds at once
                                  //   (count, > 0)
-    applicationByteCapacity      // ceiling on payload the application lane reserves at once
-                                 //   (bytes, > 0, encoded payload)
+    applicationByteCapacity      // ceiling on what the application lane reserves at once
+                                 //   (bytes, > 0); reservation = payload + metadata
+                                 //   + fixedWorkByteCost (02 §7)
     lifecycleMessageCapacity     // ceiling on work items the lifecycle lane holds at once
                                  //   (count, > 0)
     lifecycleByteCapacity        // ceiling on size the lifecycle lane reserves at once
                                  //   (bytes, > 0)
-    fixedWorkByteCost            // fixed size charged to one work item carrying no payload
-                                 //   (bytes, >= 0). used by timer work and by §5's upper
-                                 //   Spot queue
+    fixedWorkByteCost            // fixed retained size one work item occupies besides its
+                                 //   payload (bytes, >= 0). added to every item; payload-less
+                                 //   work (timers) and §5's upper Spot queue reserve only this
     lifecycleBurstLimit          // how many lifecycle items may consecutively overtake
                                  //   application work (count, > 0). past this count, one
                                  //   application item runs
