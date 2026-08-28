@@ -349,11 +349,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private final DefaultSpotOutbound outbound;
     private final ZLinkSpotTimerRegistry timers;
     private final ZLinkHandlerInstanceOwner handlerInstances;
-    private final ZLinkSerialExecutionQueue dispatchQueue;
-    private final ZLinkSerialExecutionQueue infrastructureQueue;
-    private final ConcurrentHashMap<
-        String, ZLinkSerialExecutionQueue> timerQueues =
-            new ConcurrentHashMap<>();
+    private final ZLinkSpotSerialExecutor serials;
     private final Map<String, ZLinkSpotTimerRegistry> actorTimers =
         new ConcurrentHashMap<>();
     private final ZLinkUserSpotExecutionMode executionMode;
@@ -466,13 +462,16 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         this.handlerLoader = handlerLoader;
         this.nodeRid = nodeRid;
         this.backendSpot = backendSpot;
-        this.dispatchQueue = dispatchQueue;
-        this.infrastructureQueue = new ZLinkSerialExecutionQueue(
-            host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
         this.executionMode = Objects.requireNonNull(executionMode, "executionMode");
         this.relocationCoordinationMode = Objects.requireNonNull(
             relocationCoordinationMode, "relocationCoordinationMode");
         this.instanceSpot = instanceSpot;
+        this.serials = new ZLinkSpotSerialExecutor(
+            dispatchQueue,
+            host.infrastructureExecutor(),
+            host.serialExecutor(),
+            executionMode,
+            instanceSpot);
         this.handlerInstances = sharedHandlerInstances == null
             ? host.createHandlerInstances()
             : sharedHandlerInstances;
@@ -625,11 +624,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
         streamTrace(STREAM_TRACE ? "dispatch-enqueue spot=" + spotId() : null);
-        return dispatchQueue.enqueueWithPayloadBytes(payloadBytes, () -> {
+        return serials.executeSpot(payloadBytes, () -> {
             streamTrace(STREAM_TRACE ? "dispatch-start spot=" + spotId() : null);
             CompletionStage<Void> stage = runApplicationExecution(
                 null,
-                sharedSpotGate(),
+                serials.usesSharedExecutionGate(),
                 operation);
             stage.whenComplete((ignored, error) -> streamTrace(STREAM_TRACE ?
                 "dispatch-complete spot=" + spotId()
@@ -642,9 +641,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     public CompletionStage<Void> enqueueInfrastructureDispatch(
         Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(operation, "operation");
-        return infrastructureQueue.enqueueWithPayloadBytes(
-            0,
-            operation);
+        return serials.executeInfrastructure(operation);
     }
 
     @Override
@@ -661,24 +658,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(actorId, "actorId");
         streamTrace(STREAM_TRACE ? "actor-enqueue spot=" + spotId() + " actor=" + actorId
-            + " shared=" + sharedSpotGate() : null);
-        CompletionStage<Void> queued = host.enqueueActorDispatch(
-            actorId,
-            payloadBytes,
-            () -> {
-                // The Actor queue owns payload admission. The shared Spot
-                // gate reserves only its fixed turn cost here.
-                return sharedSpotGate()
-                    ? dispatchQueue.enqueue(
-                        () -> runActorApplication(actorId, true, operation))
-                    : runActorApplication(actorId, false, operation);
-            });
-        // A shared Spot turn may submit an Actor turn to the same gate. Yield
-        // the current turn while that Actor turn acquires the gate; otherwise
-        // the Actor queue would wait for the turn that is waiting for it.
-        return sharedSpotGate() && dispatchQueue.isCurrent()
-            ? ZLinkSerialExecutionQueue.yieldCurrent(queued)
-            : queued;
+            + " shared=" + serials.usesSharedExecutionGate() : null);
+        return serials.executeActor(
+            turn -> host.enqueueActorDispatch(actorId, payloadBytes, turn),
+            yieldAllowed -> runActorApplication(actorId, yieldAllowed, operation));
     }
 
     @Override
@@ -691,18 +674,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         Objects.requireNonNull(actorId, "actorId");
         Objects.requireNonNull(acceptedJournalRecord, "acceptedJournalRecord");
         Objects.requireNonNull(relocationRelease, "relocationRelease");
-        CompletionStage<Void> queued = host.enqueueActorDispatch(
-            actorId,
-            acceptedJournalRecord,
-            acceptedJournalRecordSizeHint,
-            () -> sharedSpotGate()
-                ? dispatchQueue.enqueue(
-                    () -> runActorApplication(actorId, true, operation))
-                : runActorApplication(actorId, false, operation),
-            relocationRelease);
-        return sharedSpotGate() && dispatchQueue.isCurrent()
-            ? ZLinkSerialExecutionQueue.yieldCurrent(queued)
-            : queued;
+        return serials.executeActor(
+            turn -> host.enqueueActorDispatch(
+                actorId,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                turn,
+                relocationRelease),
+            yieldAllowed -> runActorApplication(actorId, yieldAllowed, operation));
     }
 
     private CompletionStage<Void> runActorApplication(
@@ -729,12 +708,9 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         byte[] acceptedJournalRecord,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
-        return dispatchQueue.enqueueRelocatable(
+        return serials.executeAcceptedSpot(
             acceptedJournalRecord,
-            () -> runApplicationExecution(
-                null,
-                sharedSpotGate(),
-                operation),
+            yieldAllowed -> runApplicationExecution(null, yieldAllowed, operation),
             relocationRelease);
     }
 
@@ -743,68 +719,29 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         long acceptedJournalRecordSizeHint,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
-        return dispatchQueue.enqueueRelocatableLazyRecord(
+        return serials.executeAcceptedSpotLazyRecord(
             acceptedJournalRecord,
             acceptedJournalRecordSizeHint,
-            () -> runApplicationExecution(
-                null,
-                sharedSpotGate(),
-                operation),
+            yieldAllowed -> runApplicationExecution(null, yieldAllowed, operation),
             relocationRelease);
     }
 
     CompletionStage<Void> enqueueLifecycle(
         Supplier<CompletionStage<Void>> operation) {
-        CompletionStage<Void> barrier;
-        if (sharedSpotGate() || timerQueues.isEmpty()) {
-            barrier = CompletableFuture.completedFuture(null);
-        } else {
-            barrier = CompletableFuture.allOf(
-                timerQueues.values().stream()
-                    .map(queue -> queue.enqueue(() ->
-                        CompletableFuture.completedFuture(null))
-                        .toCompletableFuture())
-                    .toArray(CompletableFuture[]::new));
-        }
-        CompletionStage<Void> queued = barrier.thenCompose(ignored ->
-            dispatchQueue.enqueueLifecycleBarrier(() ->
-                runLifecycleExecution(operation)));
-        // Lifecycle dispatch can be requested while the current Spot turn is
-        // still composing its event. Yield that turn before waiting for the
-        // lifecycle entry, otherwise the queued entry cannot acquire the
-        // shared gate that the current turn is holding.
-        // The Kotlin coroutine adapter restores the serial-turn carrier but
-        // not the queue's thread-local owner.  yieldCurrent() handles both
-        // representations and is a no-op when no current turn exists.
-        return ZLinkSerialExecutionQueue.yieldCurrent(queued);
+        return serials.executeLifecycle(() -> runLifecycleExecution(operation));
     }
 
     @Override
     public boolean usesSharedExecutionGate() {
-        return sharedSpotGate();
+        return serials.usesSharedExecutionGate();
     }
 
     CompletionStage<Void> awaitAllLanes() {
-        List<CompletionStage<Void>> lanes = new ArrayList<>();
-        lanes.add(dispatchQueue.awaitQuiescence());
-        lanes.add(infrastructureQueue.awaitQuiescence());
-        timerQueues.values().forEach(
-            queue -> lanes.add(queue.awaitQuiescence()));
-        return CompletableFuture.allOf(
-            lanes.stream()
-                .map(CompletionStage::toCompletableFuture)
-                .toArray(CompletableFuture[]::new));
+        return serials.awaitAllLanes();
     }
 
     Map<String, ZLinkSerialExecutionQueue> relocationLanes() {
-        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes =
-            new LinkedHashMap<>();
-        lanes.put("spot", dispatchQueue);
-        timerQueues.entrySet().stream()
-            .sorted(Map.Entry.comparingByKey())
-            .forEach(entry -> lanes.put(
-                "timer:" + entry.getKey(), entry.getValue()));
-        return Collections.unmodifiableMap(lanes);
+        return serials.relocationLanes();
     }
 
     ZLinkUserSpotRelocationBarrier relocationBarrier(
@@ -824,7 +761,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             .ZLinkSuspendInvocationContext.ApplicationExecution(
                 spotId(),
                 null,
-                sharedSpotGate(),
+                serials.usesSharedExecutionGate(),
                 lifecycleYieldAllowed(),
                 relocationReadyAllowed(),
                 candidate -> host.isActorMember(spotId(), candidate));
@@ -843,16 +780,16 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealRelocation() {
-        return dispatchQueue.trySealRelocation();
+        return serials.trySealRelocation();
     }
 
     boolean abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return dispatchQueue.abortRelocation(seal);
+        return serials.abortRelocation(seal);
     }
 
     Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitRelocation(
         ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return dispatchQueue.commitRelocation(seal);
+        return serials.commitRelocation(seal);
     }
 
     @Override
@@ -928,17 +865,9 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private CompletionStage<Void> enqueueTimerDispatch(
         String timerName,
         Supplier<CompletionStage<Void>> operation) {
-        if (sharedSpotGate()) {
-            return enqueueDispatch(operation);
-        }
-        ZLinkSerialExecutionQueue queue = timerQueues.computeIfAbsent(
-            Objects.requireNonNull(timerName, "timerName"),
-            ignored -> new ZLinkSerialExecutionQueue(
-                host.serialExecutor(), ZLinkExecutionLanePolicy.spot()));
-        return queue.enqueue(() -> runApplicationExecution(
-            null,
-            false,
-            operation));
+        return serials.executeTimer(
+            timerName,
+            yieldAllowed -> runApplicationExecution(null, yieldAllowed, operation));
     }
 
     private ZLinkSpotTimerRegistry actorTimer(String actorId) {
@@ -957,11 +886,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             }
             return timer;
         });
-    }
-
-    private boolean sharedSpotGate() {
-        return instanceSpot
-            || executionMode == ZLinkUserSpotExecutionMode.SPOT_WIDE;
     }
 
     private boolean lifecycleYieldAllowed() {
@@ -1000,7 +924,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             .ZLinkSuspendInvocationContext.ApplicationExecution(
                 spotId(),
                 actorId,
-                sharedSpotGate(),
+                serials.usesSharedExecutionGate(),
                 yieldAllowed,
                 relocationReadyAllowed(),
                 candidate -> host.isActorMember(spotId(), candidate));
@@ -1060,7 +984,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 "relocationReady().defer() can be called once per Spot turn");
         }
         streamTrace(STREAM_TRACE ? "relocation-ready-deferred spot=" + spotId() : null);
-        dispatchQueue.enqueueBarrierNext(this::reachRelocationReadyBoundary);
+        serials.enqueueSpotBarrierNext(this::reachRelocationReadyBoundary);
     }
 
     private CompletionStage<Void> reachRelocationReadyBoundary() {

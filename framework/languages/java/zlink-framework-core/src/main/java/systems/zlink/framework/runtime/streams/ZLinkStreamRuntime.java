@@ -45,8 +45,6 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
-import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
@@ -575,7 +573,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             // admitted while still preserving the active turn's completion
             // boundary.  New application ingress is closed above, so this
             // is the only queued lifecycle callback for this exact identity.
-            CompletionStage<Void> queued = state.queue().enqueueBarrierNext(() -> {
+            CompletionStage<Void> queued = state.serials().executeLifecycleNext(() -> {
                 ScheduledFuture<?> deadline = scheduleReplacementClose(
                     state,
                     identity,
@@ -1041,7 +1039,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             if (session != null) {
                 recordSessionClosed(session, "protocol_error");
                 try {
-                    session.queue().enqueue(() -> executeHandler(() ->
+                    session.serials().executeInfrastructure(() -> executeHandler(() ->
                         transportErrorDisconnectSessionStage(
                             session,
                             nativeCode,
@@ -1341,7 +1339,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             + " name=" + dispatchHeader.packetName()
             + " requestSeq=" + dispatchHeader.requestSequence().orElse(null)
             + " correlation=" + dispatchHeader.correlationId().orElse(null) : null);
-        CompletionStage<Void> completion = state.queue().enqueue(
+        CompletionStage<Void> completion = state.serials().executeApplication(
             () -> {
             traceStreamPhase(
                 dispatchHeader, incomingFlow, ZLinkMessageFlowOutcome.ADMITTED);
@@ -1434,7 +1432,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return;
         }
         recordSessionClosed(state, "client_close");
-        state.queue().enqueue(() -> executeHandler(() -> disconnectSessionStage(state)));
+        state.serials().executeInfrastructure(() -> executeHandler(() -> disconnectSessionStage(state)));
     }
 
     private SessionState removeSessionState(
@@ -1460,10 +1458,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             state,
             nativeCode == 0 ? "transport_error" : "protocol_error");
         if (nativeCode == 0 && "DISCONNECTED".equals(message)) {
-            state.queue().enqueue(() -> executeHandler(() -> disconnectSessionStage(state)));
+            state.serials().executeInfrastructure(() -> executeHandler(() -> disconnectSessionStage(state)));
             return;
         }
-        state.queue().enqueue(() -> executeHandler(() ->
+        state.serials().executeInfrastructure(() -> executeHandler(() ->
             transportErrorDisconnectSessionStage(state, nativeCode, message)));
     }
 
@@ -1624,11 +1622,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 "stream session must expose the context provided by the runtime: "
                     + streamNode.sessionType().getName());
         }
-        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
-            serialExecutor, ZLinkExecutionLanePolicy.session());
+        ZLinkSessionSerialExecutor serials = new ZLinkSessionSerialExecutor(
+            serialExecutor);
         return new SessionState(
             session,
-            queue,
+            serials,
             context,
             stream,
             routingId,
@@ -1640,7 +1638,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private void dispatchConnected(SessionState state) {
-        state.queue().enqueue(() -> executeHandler(() ->
+        state.serials().executeControl(() -> executeHandler(() ->
             ZLinkHandlerStages.fromStageSupplier(state.session()::onConnected)));
     }
 
@@ -1658,7 +1656,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             () -> List.copyOf(sessions.values()));
         sessionContexts.forEach(ZLinkStreamSessionContextState::closeReplyRetries);
         return CompletableFuture.allOf(activeSessions.stream()
-            .map(state -> state.queue().enqueue(
+            .map(state -> state.serials().executeFinal(
                 () -> executeHandler(() -> disconnectSessionStage(state)))
                 .toCompletableFuture())
             .toArray(CompletableFuture[]::new))
@@ -1736,7 +1734,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         List<SessionState> activeSessions = inStateLane(
             () -> List.copyOf(sessions.values()));
         CompletableFuture<?>[] barriers = activeSessions.stream()
-            .map(state -> state.queue().enqueue(
+            .map(state -> state.serials().executeFinal(
                 () -> CompletableFuture.completedFuture(null)))
             .map(CompletionStage::toCompletableFuture)
             .toArray(CompletableFuture[]::new);
@@ -1819,7 +1817,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 reason == ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT
                     ? "heartbeat_timeout"
                     : "idle_timeout");
-            state.queue().enqueue(() -> executeHandler(() -> disconnectSessionStage(state)));
+            state.serials().executeInfrastructure(() -> executeHandler(() -> disconnectSessionStage(state)));
         }
     }
 
@@ -1903,7 +1901,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     private static final class SessionState {
         private final ZLinkSession session;
-        private final ZLinkSerialExecutionQueue queue;
+        private final ZLinkSessionSerialExecutor serials;
         private final ZLinkStreamSessionContextState context;
         private final ZLinkBackendStreamSocket stream;
         private final RoutingId routingId;
@@ -1922,7 +1920,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
         SessionState(
             ZLinkSession session,
-            ZLinkSerialExecutionQueue queue,
+            ZLinkSessionSerialExecutor serials,
             ZLinkStreamSessionContextState context,
             ZLinkBackendStreamSocket stream,
             RoutingId routingId,
@@ -1932,7 +1930,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             long ownerLeaseGeneration,
             ZLinkSessionActorsRuntime actorRuntime) {
             this.session = session;
-            this.queue = queue;
+            this.serials = serials;
             this.context = context;
             this.stream = stream;
             this.routingId = routingId;
@@ -1944,7 +1942,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         ZLinkSession session() { return session; }
-        ZLinkSerialExecutionQueue queue() { return queue; }
+        ZLinkSessionSerialExecutor serials() { return serials; }
         ZLinkStreamSessionContextState context() { return context; }
         ZLinkBackendStreamSocket stream() { return stream; }
         RoutingId routingId() { return routingId; }
