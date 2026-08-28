@@ -1,15 +1,49 @@
 
-# ROUTER
+<!-- zlink-nav:start -->
+[← DEALER](03-3-dealer.en.md) | [STREAM →](03-5-stream.en.md)
+<!-- zlink-nav:end -->
 
-ROUTER receives a routing id with each inbound message and uses that id to
-select a peer for outbound messages. Use it when one socket must communicate
-with multiple DEALER or ROUTER peers.
+# ROUTER Socket
 
-## Receive a message
+> **This chapter's contract-owning document** — the [ROUTER socket spec](../spec/core/socket/07-router.en.md)
+> owns the contract. This chapter shows that contract through language examples.
 
-`zlink_router_recv_part()` returns one payload part at a time. The routing-id
-view remains valid until the next receive-like call on the same thread. Copy it
-when it must outlive that call.
+## 1. Overview
+
+ROUTER is an asynchronous raw socket that manages connections (pipes) to multiple peers on one
+socket. Every inbound message carries the sender's routing id, and every outbound message must
+name a target routing id. Use it when one socket must address multiple DEALER or ROUTER peers
+individually, rather than round-robin like DEALER.
+
+**Key characteristics:**
+- Receive: every record carries the sender's routing id and a request sequence
+- Send: directed only — the caller selects the peer by routing id
+- Two traffic shapes on one socket: ordinary raw messages (`request_seq == 0`) and request
+  records that expect a reply (`request_seq != 0`)
+
+**Valid socket combinations:** ROUTER ↔ DEALER, ROUTER ↔ ROUTER
+
+```mermaid
+flowchart LR
+    R[ROUTER] -->|by routing id| D1[DEALER 1]
+    R -->|by routing id| D2[DEALER 2]
+    D1 -->|fair-queue| R
+    D2 -->|fair-queue| R
+```
+
+## 2. Basic Usage
+
+### Creation and Binding
+
+```c
+void *router = zlink_socket(ctx, ZLINK_SOCKET_ROUTER);
+zlink_bind(router, "tcp://*:5558");
+```
+
+### Receiving a Message
+
+`zlink_router_recv_part()` returns one payload part at a time. The routing-id view remains valid
+until the next receive-like call on the same thread. Copy it when it must outlive that call.
 
 ```c
 const zlink_routing_id_t *source_rid = NULL;
@@ -19,27 +53,313 @@ zlink_part_flag_t more;
 
 zlink_msg_init(&part);
 zlink_recv_result_t rc = zlink_router_recv_part(
-    router, &source_rid, &request_seq, &part, &more, 0);
-/* source_rid selects the peer; more describes multipart continuation. */
+    router, &source_rid, &request_seq, &part, &more, ZLINK_RECV_FLAGS_NONE);
+if (rc == ZLINK_RECV_OK) {
+    /* source_rid selects the peer; more == ZLINK_PART_MORE means another
+       part of the same record follows. */
+    zlink_msg_close(&part);
+}
+/* other rc values: ZLINK_RECV_NO_DATA (EAGAIN), TERMINATED, INVALID_HANDLE */
 ```
 
-For ordinary routed traffic, `request_seq` is zero. A positive sequence
-identifies a request that can be answered with `zlink_router_reply_part()`.
+For ordinary routed traffic, `request_seq` is zero. A positive sequence identifies a request that
+must be answered with `zlink_router_reply_part()` (see [§4](#4-request-and-reply)) rather than
+`zlink_send_part_rid()`.
 
-## Send routed data
+### Sending Routed Data
 
-Use `zlink_send_part_rid()` and pass the peer routing id. Every part except the
-last uses `ZLINK_PART_MORE`; the last uses `ZLINK_PART_FINAL`.
+`zlink_send_part_rid()` sends one part to the peer identified by `target_rid_`. Every part except
+the last uses `ZLINK_PART_MORE`; the last uses `ZLINK_PART_FINAL`. All parts of one record must
+use the same target.
 
-## Request and reply
+```c
+zlink_msg_t header, body;
+zlink_msg_init_size(&header, 6);
+memcpy(zlink_msg_data(&header), "header", 6);
+zlink_msg_init_size(&body, 4);
+memcpy(zlink_msg_data(&body), "body", 4);
 
-`zlink_router_request_part()` submits a routed request and completes through a
-reply callback. A received request is answered with
-`zlink_router_reply_part()`, using the source routing id and request sequence
-returned by the receive call.
+zlink_submit_result_t rc = zlink_send_part_rid(
+    router, source_rid, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+if (rc == ZLINK_SUBMIT_OK)
+    rc = zlink_send_part_rid(
+        router, source_rid, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+```
 
-ROUTER mandatory and handover behavior is configured with the typed router
-options described in [Socket Options](12-socket-options.en.md).
+## 3. Options
+
+| Option | Type | Default | Description |
+|------|------|--------|------|
+| `ZLINK_ROUTER_OPT_MANDATORY` | int | `1` | `0`=off, positive=on. When on, a directed submit to an unconnected routing id fails with `ZLINK_SUBMIT_NOT_CONNECTED` instead of being silently dropped |
+| `ZLINK_ROUTER_OPT_PROBE` | int | `0` | `0`=off, positive=on. Sends an empty raw message on connect so the peer observes the connection and this ROUTER's routing id |
+| `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID` | binary, set-only | — | Local alias for the pipe created by the next `zlink_connect()`. Set before each connect |
+| `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` | int (ms) | `5000` | Default timeout used when a request's `timeout_ms_ == 0` |
+| `ZLINK_ROUTER_OPT_WEIGHT` | int | `100`, range `0..10000` | Weight this ROUTER advertises to connected peers |
+| `ZLINK_OPT_SNDHWM` | `uint64_t` bytes | automatic | Manual settings take precedence; `0` is unlimited |
+| `ZLINK_OPT_RCVHWM` | `uint64_t` bytes | automatic | Manual settings take precedence; `0` is unlimited |
+| `ZLINK_OPT_LINGER` | int | `-1` | Wait time on close (ms) |
+| `ZLINK_OPT_SNDTIMEO` | int | `1000` | Send timeout (ms); set `-1` explicitly for infinite wait |
+| `ZLINK_OPT_RCVTIMEO` | int | `1000` | Receive timeout (ms); set `-1` explicitly for infinite wait |
+
+Set and get ROUTER-specific options with the typed accessors:
+
+```c
+ZLINK_EXPORT zlink_config_result_t zlink_set_router_option(
+  void *handle_, zlink_router_option_t option_, const void *optval_, size_t optvallen_);
+
+ZLINK_EXPORT zlink_config_result_t zlink_get_router_option(
+  void *handle_, zlink_router_option_t option_, void *optval_, size_t *optvallen_);
+```
+
+`zlink_get_router_option()` treats `*optvallen_` as the input capacity of `optval_`; on success it
+is updated to the number of bytes actually written.
+
+### `ZLINK_ROUTER_OPT_MANDATORY`
+
+```c
+void *router = zlink_socket(ctx, ZLINK_SOCKET_ROUTER);
+int mandatory = 1;
+zlink_set_router_option(router, ZLINK_ROUTER_OPT_MANDATORY, &mandatory, sizeof(mandatory));
+
+/* target_rid names a routing id with no connected pipe */
+zlink_msg_t part;
+zlink_msg_init_size(&part, 4);
+memcpy(zlink_msg_data(&part), "data", 4);
+zlink_submit_result_t rc = zlink_send_part_rid(
+    router, target_rid, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+/* rc == ZLINK_SUBMIT_NOT_CONNECTED because MANDATORY is on */
+```
+
+> Reference: `core/tests/integration/test_router_mandatory.cpp`
+
+### `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID`
+
+Set this before each `zlink_connect()` call to choose the local alias for the pipe that call
+creates — useful when a ROUTER connects out to peers instead of only accepting inbound
+connections.
+
+```c
+zlink_set_router_option(
+    router, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, "peer-a", 6);
+zlink_connect(router, "tcp://127.0.0.1:5559");
+```
+
+## 4. Request and Reply
+
+`zlink_router_request_part()` submits a routed request and completes through a reply callback
+instead of an ordinary receive record. A received request (`request_seq != 0`) is answered with
+`zlink_router_reply_part()`, using the source routing id and request sequence returned by the
+receive call.
+
+```c
+static void on_reply(zlink_request_result_t result,
+                     zlink_msg_t *parts,
+                     size_t part_count,
+                     void *userdata)
+{
+    if (result != ZLINK_REQUEST_OK) {
+        /* result values: ZLINK_REQUEST_TIMED_OUT, ZLINK_REQUEST_NOT_FOUND,
+           ZLINK_REQUEST_TERMINATED, ZLINK_REQUEST_PROTOCOL_ERROR, ... */
+        return;
+    }
+    /* parts_ ownership moves to this callback; close exactly once. */
+    zlink_multipart_close(parts, part_count);
+}
+
+zlink_msg_t req;
+zlink_msg_init_size(&req, 4);
+memcpy(zlink_msg_data(&req), "ping", 4);
+
+zlink_submit_result_t rc = zlink_router_request_part(
+    router, peer_rid, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+    0 /* timeout_ms: 0 uses ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS */,
+    on_reply, NULL);
+if (rc != ZLINK_SUBMIT_OK) { /* handler is not called; handle submit failure */ }
+```
+
+On the receiving side, answer with the routing id and request sequence the receive call returned:
+
+```c
+const zlink_routing_id_t *source_rid = NULL;
+uint64_t request_seq = 0;
+zlink_msg_t part;
+zlink_part_flag_t more;
+
+zlink_msg_init(&part);
+zlink_router_recv_part(router, &source_rid, &request_seq, &part, &more, ZLINK_RECV_FLAGS_NONE);
+
+if (request_seq != 0) {
+    /* This record expects a reply, not a directed send. */
+    zlink_msg_t reply;
+    zlink_msg_init_size(&reply, 5);
+    memcpy(zlink_msg_data(&reply), "World", 5);
+    zlink_router_reply_part(router, source_rid, request_seq, &reply, ZLINK_PART_FINAL);
+}
+zlink_msg_close(&part);
+```
+
+A reply submit that fails is not backpressure: raw and error replies travel on a separate
+completion progress lane that is not subject to HWM. A missing reply path returns
+`ZLINK_SUBMIT_NOT_CONNECTED` (`errno == ENOTCONN`) immediately, and `ZLINK_POLLOUT` does not make
+that one-shot reply retryable.
+
+> Reference: `core/tests/integration/test_zmp_request_reply.cpp` and
+> `core/tests/integration/test_zmp_request_reply_router_recv_surface.cpp`
+
+## 5. Usage Patterns
+
+### Pattern 1: ROUTER ← Multiple DEALERs
+
+The most common shape. Each DEALER connects with a routing id; ROUTER distinguishes senders by
+`source_rid` and replies to the same id.
+
+```c
+void *router = zlink_socket(ctx, ZLINK_SOCKET_ROUTER);
+zlink_bind(router, "tcp://127.0.0.1:*");
+
+char endpoint[256];
+size_t len = sizeof(endpoint);
+zlink_get_option(router, ZLINK_OPT_LAST_ENDPOINT, endpoint, &len);
+
+void *dealer1 = zlink_socket(ctx, ZLINK_SOCKET_DEALER);
+zlink_set_routing_id(dealer1, "D1", 2);
+zlink_connect(dealer1, endpoint);
+
+void *dealer2 = zlink_socket(ctx, ZLINK_SOCKET_DEALER);
+zlink_set_routing_id(dealer2, "D2", 2);
+zlink_connect(dealer2, endpoint);
+
+/* router.recv distinguishes "D1" and "D2" by source_rid, and
+   zlink_send_part_rid(router, source_rid, ...) replies to the right one. */
+```
+
+> Reference: `core/tests/integration/test_router_multiple_dealers.cpp`
+
+### Pattern 2: Request-Reply with Correlation
+
+Use `zlink_router_request_part()` / `zlink_router_reply_part()` (see [§4](#4-request-and-reply))
+when the caller needs delivery confirmation and a correlated answer instead of free-form
+send/recv. `request_seq` correlates one reply to one request; it is `0` for ordinary directed
+traffic and non-zero only for records that must go through `zlink_router_reply_part()`.
+
+### Pattern 3: Enforcing Reachability with MANDATORY
+
+By default, a directed send to a routing id with no connected pipe is dropped without error. Set
+`ZLINK_ROUTER_OPT_MANDATORY` to surface that as `ZLINK_SUBMIT_NOT_CONNECTED` so the caller can
+detect stale routing ids instead of silently losing messages.
+
+```c
+int mandatory = 1;
+zlink_set_router_option(router, ZLINK_ROUTER_OPT_MANDATORY, &mandatory, sizeof(mandatory));
+```
+
+> Reference: `core/tests/integration/test_router_mandatory.cpp`,
+> `core/tests/integration/test_router_mandatory_hwm.cpp`
+
+### Pattern 4: Proxy (ROUTER-DEALER)
+
+ROUTER as a frontend and DEALER as a backend build a multi-threaded server. See
+[DEALER §5 Pattern 3](03-3-dealer.en.md#pattern-3-proxy-pattern-router-dealer) for the full
+proxy example; the ROUTER side there is a plain `zlink_socket(ctx, ZLINK_SOCKET_ROUTER)` bound
+as the frontend.
+
+## 6. Caveats
+
+### Routing ID Lifetime
+
+`source_rid` returned by `zlink_router_recv_part()` is a thread-local view owned by Core. It stays
+valid only until the next receive-like call on the same thread; copy the bytes if the id must
+outlive that call. All parts of one multipart record return the same routing id and request
+sequence. See [Routing IDs](08-routing-id.en.md) for the full lifetime and copy contract.
+
+### No Peer Connected vs. HWM Backpressure
+
+These are two distinct results, same as on DEALER. With `ZLINK_ROUTER_OPT_MANDATORY` on, a send to
+an unconnected routing id returns `ZLINK_SUBMIT_NOT_CONNECTED` — nothing is queued. A send to a
+connected peer whose queue is at HWM blocks (default) or returns `ZLINK_SUBMIT_BACKPRESSURED` with
+`ZLINK_SEND_FLAGS_DONTWAIT`.
+
+### Exact-Pipe Targeting
+
+`zlink_send_part_rid()` and `zlink_router_request_part()` select among a routing id's current
+pipes at submit time. When a caller has already snapshotted one exact pipe (for example from a
+monitor event or `zlink_select_routed_submit_target()`), use
+`zlink_send_part_transport_pair()` / `zlink_router_request_transport_pair_part()` instead: they
+submit only to that exact `(routing id, pair id, generation)` and never reroute to a different
+pipe with the same routing id. A stale generation or detached pipe fails with
+`ZLINK_SUBMIT_NOT_CONNECTED`; HWM on that exact pipe fails with `ZLINK_SUBMIT_BACKPRESSURED`.
+
+### Concurrency
+
+ROUTER's public handle follows the tiered concurrency contract described in
+[Thread Safety](../spec/core/systems/04-thread-safety.en.md): send/publish paths allow same-handle
+concurrent use, while option changes and close serialize for correctness. Only one open multipart
+send sequence (`ZLINK_PART_MORE` ... `ZLINK_PART_FINAL`) may be in flight per handle at a time, and
+it must complete with the same routing id family before another sequence starts.
+
+---
+[← DEALER](03-3-dealer.en.md) | [STREAM →](03-5-stream.en.md)
+
+## Full language examples
+
+=== "C++"
+
+    ```cpp
+    --8<-- "bindings/cpp/samples/dealer_router_recv_sample.cpp:doc"
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "bindings/dotnet/samples/DealerRouterRecv/Program.cs:doc"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "bindings/java/samples/Zlink.Samples/src/main/java/systems/zlink/samples/DealerRouterRecvSample.java:doc"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "bindings/kotlin/samples/src/main/kotlin/systems/zlink/samples/DealerRouterRecvSample.kt:doc"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "bindings/python/samples/dealer_router_recv_sample.py:doc"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    --8<-- "bindings/node/samples/dealer_router_recv_sample.ts:doc"
+    ```
+
+=== "JavaScript"
+
+    ```javascript
+    --8<-- "bindings/javascript/samples/dealer_router_recv_sample.js:doc"
+    ```
+
+=== "Go"
+
+    ```go
+    --8<-- "bindings/go/samples/dealer_router_recv_sample/main.go:doc"
+    ```
+
+=== "Rust"
+
+    ```rust
+    --8<-- "bindings/rust/samples/dealer_router_recv_sample.rs:doc"
+    ```
 
 See [Routing IDs](08-routing-id.en.md) for lifetime and copy rules and
 [Thread Safety](../spec/core/systems/04-thread-safety.en.md) for same-handle concurrency.
+
+---
+<!-- zlink-nav:bottom:start -->
+[← DEALER](03-3-dealer.en.md) | [STREAM →](03-5-stream.en.md)
+<!-- zlink-nav:bottom:end -->
