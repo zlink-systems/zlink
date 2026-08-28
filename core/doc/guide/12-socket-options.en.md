@@ -1,4 +1,3 @@
-[한국어](12-socket-options.en.md)
 
 # Socket options
 

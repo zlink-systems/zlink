@@ -1,4 +1,3 @@
-[한국어](EXAMPLES.ko.md)
 
 [가이드 목록](README.ko.md) · [스타일 규약](STYLE.ko.md)
 

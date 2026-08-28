@@ -1,4 +1,3 @@
-[한국어](10-performance.en.md)
 
 # Core performance
 

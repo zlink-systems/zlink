@@ -2,8 +2,6 @@
 title: "STREAM 소켓"
 ---
 
-[English](03-5-stream.ko.md)
-
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: ROUTER](03-4-router.ko.md) | [다음: 프록시 패턴](03-6-proxy.ko.md)
 <!-- zlink-nav:end -->
@@ -22,7 +20,9 @@ STREAM 소켓은 **외부 RAW 클라이언트**와 통신하기 위한 **서버 
 - `ZLINK_SOCKET_STREAM`에 `zlink_connect()`를 호출하면 `EOPNOTSUPP`를 반환한다.
 - 클라이언트는 zlink STREAM 소켓이 아니라 OS/Asio/WebSocket 등의 **raw client**를 사용해야 한다.
 - STREAM은 raw 바이트 스트림을 그대로 전달한다. **framing(패킷 경계)은 사용자가 정의**해야 한다.
-- zlink API에서 수신/송신 시 `source_rid`(서버가 자동 할당한 4B 연결 식별자)로 클라이언트를 구분한다([Routing ID](08-routing-id.ko.md) 참고).
+- zlink API 수준에서: raw `zlink_recv_part()`는 발신 클라이언트의 4바이트
+  `routing_id`를 자체 `source_rid_out_` out-parameter로 노출하며, raw/패킷
+  콜백도 `source_rid`를 별도의 콜백 인자로 넘긴다는 점은 동일하다.
 
 유효 조합:
 
@@ -56,8 +56,9 @@ zlink_bind(stream, "tcp://0.0.0.0:8080");
 STREAM은 기반 소켓 계열(raw socket family)에서 유일한 예외 타입이다. 한 핸들에서 세
 가지 수신 모델 중 정확히 하나를 고른다.
 
-- **직접 수신(raw recv)**: `zlink_recv()`로 transport 조각을 직접 가져온다. poller의
-  `ZLINK_POLLIN`과 함께 사용한다.
+- **직접 수신(raw recv)**: `zlink_recv_part()`로 transport 조각을 part 단위로
+  직접 가져온다. 소스 routing id는 `source_rid_out_` out-parameter로
+  받는다. poller의 `ZLINK_POLLIN`과 함께 사용한다.
 - **콜백 수신(raw callback)**: `zlink_recv_handler()`로 수신 조각을 콜백으로 받는다.
   이벤트 기반(event-driven) 서버에 적합하다.
 - **패킷 콜백(packet callback)**: `zlink_stream_packet_handler()`로 고정 framing(framing,
@@ -98,7 +99,7 @@ void on_message(const zlink_routing_id_t *source_rid,
         zlink_msg_t reply;
         zlink_msg_init_size(&reply, size);
         memcpy(zlink_msg_data(&reply), data, size);
-        zlink_send_rid(stream, source_rid, &reply, 1, 0);
+        zlink_send_part_rid(stream, source_rid, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 
         zlink_msg_close(&parts[i]);
     }
@@ -116,9 +117,9 @@ zlink_recv_handler(stream, on_message, NULL);
 | 콜백 | `zlink_socket_msg_handler_fn` |
 | 수명 | 콜백 밖에서 dispatch 해제 가능. 콜백 실행 중 detach/close는 `EBUSY` |
 | framing | transport에서 수신된 raw 바이트 |
-| 전송 | `zlink_send_rid()` |
+| 전송 | `zlink_send_part_rid()` |
 
-> 송신 큐가 가득 차면(HWM, 고수위 표시) `zlink_send_rid()`는 블록(기본) 또는
+> 송신 큐가 가득 차면(HWM, 고수위 표시) `zlink_send_part_rid()`는 블록(기본) 또는
 > `ZLINK_DONTWAIT` 로 `ZLINK_SUBMIT_BACKPRESSURED` 를 반환한다.
 > 배압(backpressure) 패턴은 [성능 가이드](10-performance.ko.md)를 참고.
 
@@ -165,7 +166,7 @@ zlink_stream_packet_handler(stream, on_packet, NULL);
   유효한 객체로 전달된다.
 - `header` 와 `body` 의 소유권은 콜백으로 이전된다. 콜백은 두 msg_t 를 각각
   정확히 한 번 close 하거나 소비해야 한다.
-- 같은 핸들에서 직접 수신 모드(`zlink_recv()`), 콜백 수신 모드
+- 같은 핸들에서 직접 수신 모드(`zlink_recv_part()`), 콜백 수신 모드
   (`zlink_recv_handler()`), 데이터 경로 `ZLINK_POLLIN` 등록은 모두
   `EBUSY` 로 실패한다. 두 번째 패킷 핸들러 등록도 마찬가지다.
 - framing 규약을 지키지 않는 비정형 패킷(malformed packet)(길이 제한 초과, 조립 실패,

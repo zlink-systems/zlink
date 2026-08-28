@@ -2,8 +2,6 @@
 title: "TLS와 WSS"
 ---
 
-[English](05-tls-security.ko.md)
-
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: Transport 가이드](04-transports.ko.md) | [다음: Raw socket monitoring](../spec/core/06-monitoring.ko.md)
 <!-- zlink-nav:end -->

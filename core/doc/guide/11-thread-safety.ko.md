@@ -2,8 +2,6 @@
 title: "Thread safety"
 ---
 
-[English](../spec/core/systems/04-thread-safety.ko.md)
-
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: Message API와 ownership](09-message-api.ko.md) | [다음: Routing ID](08-routing-id.ko.md)
 <!-- zlink-nav:end -->

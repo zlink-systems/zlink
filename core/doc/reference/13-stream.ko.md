@@ -1,4 +1,3 @@
-한국어 | [English](https://zlink-systems.github.io/zlink/reference/13-stream/)
 
 [레퍼런스 목차](README.ko.md)
 
@@ -9,9 +8,10 @@ routed TCP나 WebSocket으로 byte record나 고정 framing packet을 주고받�
 `zlink_connect`를 지원하지 않으며 application payload를 해석하지 않는다.
 `zlink_socket`/`zlink_bind`/`zlink_close`(Socket lifecycle category),
 `zlink_recv_part`/`zlink_recv_handler`(Raw receive category — STREAM은 `source_rid_out_`가
-`NULL` 대신 실제 view를 반환하는 유일한 타입이다), `zlink_send_ready_handler`(Socket
-lifecycle category)를 변경 없이 재사용한다 — 이 category는 STREAM 고유의 옵션, 자신만의
-directed send 버전, 그리고 STREAM에만 있는 packet-framing 수신 모드를 다룬다. 정확한
+`NULL` 대신 실제 view를 반환하는 유일한 타입이다), `zlink_send_async`/
+`zlink_send_complete_handler`(Socket lifecycle category)를 통한 비동기 send를 변경 없이
+재사용한다 — 이 category는 STREAM 고유의 옵션, 자신만의 directed send 버전, 그리고
+STREAM에만 있는 packet-framing 수신 모드를 다룬다. 정확한
 signature는 [STREAM 스펙](../spec/core/socket/08-stream.ko.md)이 소유한다.
 
 ---

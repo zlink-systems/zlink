@@ -1,4 +1,3 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/reference/13-stream/) | English
 
 [Reference index](README.en.md)
 
@@ -9,9 +8,10 @@ exchanges byte records or fixed-framing packets over routed TCP or WebSocket. ST
 support `zlink_connect` and does not interpret application payloads. It reuses
 `zlink_socket`/`zlink_bind`/`zlink_close` (Socket lifecycle category), `zlink_recv_part`/
 `zlink_recv_handler` (Raw receive category — STREAM is the one type where `source_rid_out_`
-returns a real view instead of `NULL`), and `zlink_send_ready_handler` (Socket lifecycle
-category) unchanged; this category covers STREAM's own option, its version of directed send, and
-the packet-framing receive mode unique to it. The exact signatures are owned by the
+returns a real view instead of `NULL`), and asynchronous send via
+`zlink_send_async`/`zlink_send_complete_handler` (Socket lifecycle category) unchanged; this
+category covers STREAM's own option, its version of directed send, and the packet-framing
+receive mode unique to it. The exact signatures are owned by the
 [STREAM specification](../spec/core/socket/08-stream.en.md).
 
 ---

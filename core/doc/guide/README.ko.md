@@ -1,4 +1,3 @@
-[English](../../../README.md) | [한국어](README.ko.md)
 
 # zlink Core 가이드
 

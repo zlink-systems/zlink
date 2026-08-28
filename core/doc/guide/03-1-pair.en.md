@@ -1,4 +1,3 @@
-[English](03-1-pair.en.md) | [한국어](03-1-pair.en.md)
 
 <!-- zlink-nav:start -->
 [← Socket Patterns](03-0-socket-patterns.en.md) | [PUB/SUB →](03-2-pubsub.en.md)
@@ -40,48 +39,58 @@ zlink_connect(client, "tcp://127.0.0.1:5555");
 
 ### Message Exchange
 
-PAIR is a recv-only type: receive is performed with `zlink_recv()`,
-typically inside a poller loop. Both peers can send and receive freely.
+PAIR's public receive API is recv/poller-only: receive one part at a time with
+`zlink_recv_part()`, typically inside a poller loop. Both peers can send and
+receive freely. PAIR has exactly one peer, so there is no routing id to
+select — pass `NULL` for `source_rid_out_`.
 
 ```c
 /* Client → Server */
 zlink_msg_t msg;
 zlink_msg_init_size(&msg, 5);
 memcpy(zlink_msg_data(&msg), "Hello", 5);
-zlink_send(client, &msg, 1, 0);
+zlink_send_part(client, &msg, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 
-/* Server receives with zlink_recv() (typically inside a poller loop) */
-zlink_routing_id_t source_rid;
-zlink_msg_t *parts = NULL;
-size_t part_count = 0;
-if (zlink_recv(server, &source_rid, &parts, &part_count, 0) == ZLINK_RECV_OK) {
+/* Server receives with zlink_recv_part() (typically inside a poller loop) */
+zlink_msg_t part;
+zlink_part_flag_t more;
+zlink_msg_init(&part);
+if (zlink_recv_part(server, NULL, &part, &more, ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
     printf("Received: %.*s\n",
-           (int)zlink_msg_size(&parts[0]),
-           (char *)zlink_msg_data(&parts[0]));
-    zlink_multipart_close(parts, part_count);
+           (int)zlink_msg_size(&part),
+           (char *)zlink_msg_data(&part));
+    zlink_msg_close(&part);
 }
 
 /* Server → Client (bidirectional; client uses the same recv+poller pattern) */
 zlink_msg_t reply;
 zlink_msg_init_size(&reply, 5);
 memcpy(zlink_msg_data(&reply), "World", 5);
-zlink_send(server, &reply, 1, 0);
+zlink_send_part(server, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 ```
 
 ### Sending Multipart Data
 
-Multipart data is sent as a parts array in a single `zlink_send` call.
+Multipart data is sent one part per `zlink_send_part()` call: every part
+except the last uses `ZLINK_PART_MORE`, and the last uses `ZLINK_PART_FINAL`.
+Core stages the intermediate parts as one record until the final part
+succeeds.
 
 ```c
-zlink_msg_t parts[2];
-zlink_msg_init_size(&parts[0], 3);
-memcpy(zlink_msg_data(&parts[0]), "foo", 3);
-zlink_msg_init_size(&parts[1], 6);
-memcpy(zlink_msg_data(&parts[1]), "foobar", 6);
-zlink_send(server, parts, 2, 0);
+zlink_msg_t part0, part1;
+zlink_msg_init_size(&part0, 3);
+memcpy(zlink_msg_data(&part0), "foo", 3);
+zlink_msg_init_size(&part1, 6);
+memcpy(zlink_msg_data(&part1), "foobar", 6);
 
-/* Receiver pulls both frames from one zlink_recv() call:
-   parts[0] = "foo", parts[1] = "foobar", part_count = 2 */
+zlink_submit_result_t rc = zlink_send_part(
+    server, &part0, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+if (rc == ZLINK_SUBMIT_OK)
+    rc = zlink_send_part(server, &part1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+
+/* Receiver pulls each frame with its own zlink_recv_part() call, looping
+   until has_more_out_ == ZLINK_PART_FINAL:
+   part 1 = "foo" (more == ZLINK_PART_MORE), part 2 = "foobar" (more == ZLINK_PART_FINAL) */
 ```
 
 > Reference: `core/tests/integration/test_pair_inproc.cpp` -- `test_zlink_send_multipart()` test
@@ -89,24 +98,25 @@ zlink_send(server, parts, 2, 0);
 ### Receive Modes
 
 PAIR is recv/poller-only in the public API.
-Use `zlink_recv()` to receive synchronously.
+Use `zlink_recv_part()` to receive one part synchronously.
 
 ```c
 void *pair = zlink_socket(ctx, ZLINK_SOCKET_PAIR);
 zlink_bind(pair, "tcp://*:5556");
 
-zlink_routing_id_t source_rid;
-zlink_msg_t *parts = NULL;
-size_t part_count = 0;
-zlink_recv_result_t rc = zlink_recv(
-    pair, &source_rid, &parts, &part_count, 0 /* flags */);
+zlink_msg_t part;
+zlink_part_flag_t more;
+zlink_msg_init(&part);
+zlink_recv_result_t rc = zlink_recv_part(
+    pair, NULL, &part, &more, ZLINK_RECV_FLAGS_NONE);
 if (rc == ZLINK_RECV_OK) {
-    /* process parts[0..part_count-1] */
-    zlink_multipart_close(parts, part_count);
+    /* process part; more == ZLINK_PART_MORE means another part of the
+       same record follows */
+    zlink_msg_close(&part);
 }
 ```
 
-> When HWM is reached, `zlink_send()` blocks (default) or returns
+> When HWM is reached, `zlink_send_part()` blocks (default) or returns
 > `ZLINK_SUBMIT_BACKPRESSURED` with `ZLINK_DONTWAIT`. For advanced
 > backpressure patterns,
 > see [Performance Guide](10-performance.en.md).
@@ -126,12 +136,16 @@ Multipart frame:  [frame1][frame2]...[frameN]
 Multipart send:
 
 ```c
-zlink_msg_t parts[2];
-zlink_msg_init_size(&parts[0], 6);
-memcpy(zlink_msg_data(&parts[0]), "header", 6);
-zlink_msg_init_size(&parts[1], 4);
-memcpy(zlink_msg_data(&parts[1]), "body", 4);
-zlink_send(server, parts, 2, 0);
+zlink_msg_t header, body;
+zlink_msg_init_size(&header, 6);
+memcpy(zlink_msg_data(&header), "header", 6);
+zlink_msg_init_size(&body, 4);
+memcpy(zlink_msg_data(&body), "body", 4);
+
+zlink_submit_result_t rc = zlink_send_part(
+    server, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+if (rc == ZLINK_SUBMIT_OK)
+    rc = zlink_send_part(server, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 ```
 
 ## 4. Socket Options
@@ -171,9 +185,9 @@ zlink_connect(worker_signal, "inproc://signal");
 zlink_msg_t msg;
 zlink_msg_init_size(&msg, 4);
 memcpy(zlink_msg_data(&msg), "DONE", 4);
-zlink_send(worker_signal, &msg, 1, 0);
+zlink_send_part(worker_signal, &msg, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 
-/* Main: receives "DONE" via its poller loop (zlink_recv) */
+/* Main: receives "DONE" via its poller loop (zlink_recv_part) */
 ```
 
 > Reference: `core/tests/integration/test_pair_inproc.cpp` -- bind → connect → bounce pattern
@@ -265,7 +279,7 @@ zlink_bind(socket, "ipc:///very/long/path/.../endpoint.ipc");
 
 ### HWM Behavior
 
-When there is no peer or the peer is slow, outgoing messages are queued up to the HWM. When the HWM is exceeded, `zlink_send()` blocks (default) or returns `ZLINK_SUBMIT_BACKPRESSURED` (`ZLINK_DONTWAIT`).
+When there is no peer or the peer is slow, outgoing messages are queued up to the HWM. When the HWM is exceeded, `zlink_send_part()` blocks (default) or returns `ZLINK_SUBMIT_BACKPRESSURED` (`ZLINK_DONTWAIT`).
 
 ### LINGER Setting
 
@@ -278,7 +292,6 @@ zlink_set_option(socket, ZLINK_OPT_LINGER, &linger, sizeof(linger));
 
 ---
 [← Socket Patterns](03-0-socket-patterns.en.md) | [PUB/SUB →](03-2-pubsub.en.md)
-
 
 ## Full language examples
 

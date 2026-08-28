@@ -2,8 +2,6 @@
 title: "Socket option"
 ---
 
-[English](12-socket-options.ko.md)
-
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: Core C API](02-core-api.ko.md) | [다음: ZMP protocol](zmp-protocol.ko.md)
 <!-- zlink-nav:end -->

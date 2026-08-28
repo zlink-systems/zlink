@@ -2,8 +2,6 @@
 title: "Core C API"
 ---
 
-[English](02-core-api.ko.md)
-
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: Core 성능](10-performance.ko.md) | [다음: Socket option](12-socket-options.ko.md)
 <!-- zlink-nav:end -->

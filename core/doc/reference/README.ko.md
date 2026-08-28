@@ -1,4 +1,3 @@
-한국어 | [English](https://zlink-systems.github.io/zlink/reference/)
 
 [Core 스펙](../spec/core/README.ko.md) · [Core 가이드](../guide/01-overview.ko.md)
 

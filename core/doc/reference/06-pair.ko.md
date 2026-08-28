@@ -1,12 +1,12 @@
-한국어 | [English](https://zlink-systems.github.io/zlink/reference/06-pair/)
 
 [레퍼런스 목차](README.ko.md)
 
 # 06. PAIR
 
 1:1 양방향 raw socket 타입이다. PAIR에는 타입 전용 옵션도, 전용 수신 함수도 없다 — 다른
-socket 타입과 `zlink_recv_part`(Raw receive category), `zlink_send_ready_handler`(Socket
-lifecycle category)를 공유한다. 타입 전용 항목은 send 쪽 하나뿐이다. 정확한 signature는
+socket 타입과 `zlink_recv_part`(Raw receive category), `zlink_send_async`/
+`zlink_send_complete_handler`(Socket lifecycle category)를 통한 비동기 send를 공유한다.
+타입 전용 항목은 send 쪽 하나뿐이다. 정확한 signature는
 [PAIR 스펙](../spec/core/socket/01-pair.ko.md)이 소유한다.
 
 ---
@@ -42,5 +42,6 @@ sequence를 시작하려면 `ZLINK_PART_MORE`를 쓴 뒤 같은 스레드에서 
 ---
 
 전체 근거는 [PAIR 스펙](../spec/core/socket/01-pair.ko.md)을 참고한다. 수신은
-`zlink_recv_part`(Raw receive category), send-ready 통지는
-`zlink_send_ready_handler`(Socket lifecycle category)를 쓴다 — 여기서 반복하지 않는다.
+`zlink_recv_part`(Raw receive category), 비동기 send는
+`zlink_send_async`/`zlink_send_complete_handler`(Socket lifecycle category)를 쓴다 — 여기서
+반복하지 않는다.

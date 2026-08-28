@@ -1,4 +1,3 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/reference/14-socket-monitor/) | English
 
 [Reference index](README.en.md)
 
