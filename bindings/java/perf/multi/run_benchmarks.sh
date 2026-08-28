@@ -994,6 +994,7 @@ run_stream_case() {
   "${stream_client_prefix[@]}" "${STREAM_CLIENT}" --transport "${transport}" --pattern STREAM \
     --sizes "${size}" --runs 1 --duration "${DURATION}" \
     --ccu "${stream_clients}" --io-threads "${pattern_client_io_threads}" \
+    --completion-wait-ms "${LAT_TIMEOUT_MS}" \
     --send-stop-token 1 --endpoint "${endpoint}" \
     >"${client_log}" 2>&1 || stream_client_rc=$?
   printf 'STOP\n' >&3

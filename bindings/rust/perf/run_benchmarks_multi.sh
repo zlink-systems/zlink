@@ -964,6 +964,7 @@ for run in $(seq 1 "${RUNS}"); do
                         --sizes "${size}" \
                         --runs 1 \
                         --duration "${DURATION}" \
+                        --completion-wait-ms "${SERVER_SHUTDOWN_TIMEOUT_MS}" \
                         --ccu "${CASE_CLIENTS}" \
                         --io-threads "${PERF_MULTI_CLIENT_IO_THREADS}" \
                         --print-perf-result 1 \

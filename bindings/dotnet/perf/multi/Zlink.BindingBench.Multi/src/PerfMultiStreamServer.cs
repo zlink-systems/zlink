@@ -27,7 +27,6 @@ internal static class PerfMultiStreamServer
 
         int ioTimeoutMs = Math.Max(ResolveMultiSndTimeoutMs(options),
             ResolveMultiRcvTimeoutMs(options));
-        int pendingCapacity = ResolvePendingCapacity(options);
         string endpoint = MultiEndpointFor(options.Transport, "multi-stream",
             options);
 
@@ -47,7 +46,7 @@ internal static class PerfMultiStreamServer
         RecalculateAutoHwm(ctx);
         WriteStdoutLine($"READY,{endpoint}");
 
-        var pending = new Queue<PendingStreamMessage>(pendingCapacity);
+        var pending = new Queue<PendingStreamMessage>();
         object pendingLock = new();
         using var pendingSignal = new ManualResetEventSlim(false);
         var control = new ControlState();
@@ -87,13 +86,6 @@ internal static class PerfMultiStreamServer
             request.Assign(routingId, packet);
             lock (pendingLock)
             {
-                if (pending.Count >= pendingCapacity)
-                {
-                    request.Clear();
-                    Interlocked.Exchange(ref control.StopRequested, 1);
-                    return;
-                }
-
                 pending.Enqueue(request);
                 pendingSignal.Set();
             }
@@ -188,17 +180,6 @@ internal static class PerfMultiStreamServer
         watcher.Start();
     }
 
-    private static int ResolvePendingCapacity(PerfOptions options)
-    {
-        int clients = options.Clients;
-        ulong hwm = options.MultiHwm;
-        ulong basis = Math.Max(64UL,
-            Math.Max((ulong)Math.Max(1, clients), Math.Max(1UL, hwm)));
-        if (basis > (ulong)int.MaxValue / 2UL)
-            return int.MaxValue;
-        return (int)(basis * 2UL);
-    }
-
     private static bool FlushPendingMessages(ISocket server,
         Queue<PendingStreamMessage> pending, object pendingLock,
         ManualResetEventSlim pendingSignal, ref int rc)
@@ -270,48 +251,46 @@ internal static class PerfMultiStreamServer
     private static SendStatus TrySendMessageNow(ISocket server,
         RoutingId routingId, Message payload)
     {
-        while (true)
+        try
         {
-            try
-            {
-                if (((IStreamSocket)server).TrySend(routingId).Message(payload)
-                        .Flags(SendFlags.DontWait).Submit())
-                    return SendStatus.Done;
-            }
-            catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
-                                            || IsInterrupted(ex.NativeErrno))
-            {
-                return SendStatus.Blocked;
-            }
+            return ((IStreamSocket)server).TrySend(routingId).Message(payload)
+                    .Flags(SendFlags.DontWait).Submit()
+                ? SendStatus.Done
+                : SendStatus.Blocked;
+        }
+        catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
+                                        || IsInterrupted(ex.NativeErrno))
+        {
+            return SendStatus.Blocked;
         }
     }
 
     private static SendStatus TrySendPendingMessage(ISocket server,
         PendingStreamMessage message)
     {
-        while (message.Pending)
-        {
-            try
-            {
-                if (message.Payload == null)
-                    return SendStatus.Fatal;
+        if (!message.Pending)
+            return SendStatus.Done;
 
-                if (((IStreamSocket)server).TrySend(message.RoutingId)
-                        .Message(message.Payload).Flags(SendFlags.DontWait)
-                        .Submit())
-                {
-                    message.Clear();
-                    return SendStatus.Done;
-                }
-            }
-            catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
-                                            || IsInterrupted(ex.NativeErrno))
+        try
+        {
+            if (message.Payload == null)
+                return SendStatus.Fatal;
+
+            if (((IStreamSocket)server).TrySend(message.RoutingId)
+                    .Message(message.Payload).Flags(SendFlags.DontWait)
+                    .Submit())
             {
-                return SendStatus.Blocked;
+                message.Clear();
+                return SendStatus.Done;
             }
         }
+        catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
+                                        || IsInterrupted(ex.NativeErrno))
+        {
+            return SendStatus.Blocked;
+        }
 
-        return SendStatus.Done;
+        return SendStatus.Blocked;
     }
 
     private sealed class PendingStreamMessage

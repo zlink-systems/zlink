@@ -68,22 +68,24 @@ async def main(argv=None):
                         )
 
                     while time.perf_counter() < active_deadline:
+                        submitted = False
                         for index, current_sock in enumerate(sockets):
                             if send_pending[index]:
                                 continue
-                            while time.perf_counter() < active_deadline:
-                                next_seq = seq + 1
-                                payload = stamp_payload(
-                                    payloads[index], phase=1, run_id=run_id, seq=next_seq
-                                )
-                                if not send_nonblocking(current_sock, payload):
-                                    send_pending[index] = True
-                                    break
-                                seq = next_seq
+                            next_seq = seq + 1
+                            payload = stamp_payload(
+                                payloads[index], phase=1, run_id=run_id, seq=next_seq
+                            )
+                            if not send_nonblocking(current_sock, payload):
+                                send_pending[index] = True
+                                continue
+                            seq = next_seq
+                            submitted = True
                         remaining_ms = int((active_deadline - time.perf_counter()) * 1000)
                         if remaining_ms <= 0:
                             break
-                        ready_count = safe_poll(poller, poll_events, max(1, remaining_ms))
+                        wait_ms = 0 if submitted else min(50, max(1, remaining_ms))
+                        ready_count = safe_poll(poller, poll_events, wait_ms)
                         if not ready_count:
                             continue
                         for offset in range(ready_count):

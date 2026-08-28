@@ -70,28 +70,40 @@ internal static class PerfMultiRouterRouterServer
             if ((readyMask & PollEventFlags.PollIn) == 0)
                 continue;
 
-            while (true)
+            if (!TryRecvNoWait(server, receivedBuffer))
             {
-                if (!TryRecvNoWait(server, receivedBuffer))
-                {
-                    break;
-                }
+                continue;
+            }
 
-                if (receivedBuffer.Parts.Count == 1
-                    && IsStopTokenPayload(receivedBuffer.FirstPart().AsReadOnlySpan()))
-                {
-                    stop = true;
-                    break;
-                }
-                if (!PerfSocketIo.TryMeasurementPayload(receivedBuffer.Parts,
-                        out Message bodyMessage))
-                {
-                    continue;
-                }
+            if (receivedBuffer.Parts.Count == 1
+                && IsStopTokenPayload(receivedBuffer.FirstPart().AsReadOnlySpan()))
+            {
+                stop = true;
+                continue;
+            }
+            if (!PerfSocketIo.TryMeasurementPayload(receivedBuffer.Parts,
+                    out Message bodyMessage))
+            {
+                continue;
+            }
 
-                RoutingId? maybeRoutingId = receivedBuffer.RoutingId;
-                if (maybeRoutingId == null)
-                    return 2;
+            RoutingId? maybeRoutingId = receivedBuffer.RoutingId;
+            if (maybeRoutingId == null)
+                return 2;
+            bool sent;
+            try
+            {
+                sent = PerfSocketIo.SendMeasurement(server, maybeRoutingId.Value,
+                    bodyMessage.AsReadOnlySpan(), SendFlags.DontWait) > 0;
+            }
+            catch (ZlinkSubmitException ex)
+                when (ex.Result == ZlinkSubmitException.ErrorCode.NotConnected
+                      || ex.Result == ZlinkSubmitException.ErrorCode.NotFound)
+            {
+                continue;
+            }
+            if (!sent)
+            {
                 Message reply = bodyMessage.Copy();
                 pendingReplies.Enqueue(new PendingReply(maybeRoutingId.Value,
                     reply));
@@ -104,18 +116,26 @@ internal static class PerfMultiRouterRouterServer
     private static async Task<bool> FlushPendingRepliesAsync(IRouterSocket server,
         Queue<PendingReply> pendingReplies)
     {
-        while (pendingReplies.Count > 0)
-        {
-            PendingReply pending = pendingReplies.Peek();
-            if (PerfSocketIo.SendMeasurement(server, pending.RoutingId,
-                    pending.Message.AsReadOnlySpan(), SendFlags.DontWait) > 0)
-            {
-                pendingReplies.Dequeue();
-                pending.Dispose();
-                continue;
-            }
-
+        if (pendingReplies.Count == 0)
             return true;
+
+        PendingReply pending = pendingReplies.Peek();
+        bool sent;
+        try
+        {
+            sent = PerfSocketIo.SendMeasurement(server, pending.RoutingId,
+                pending.Message.AsReadOnlySpan(), SendFlags.DontWait) > 0;
+        }
+        catch (ZlinkSubmitException ex)
+            when (ex.Result == ZlinkSubmitException.ErrorCode.NotConnected
+                  || ex.Result == ZlinkSubmitException.ErrorCode.NotFound)
+        {
+            sent = true;
+        }
+        if (sent)
+        {
+            pendingReplies.Dequeue();
+            pending.Dispose();
         }
 
         return true;

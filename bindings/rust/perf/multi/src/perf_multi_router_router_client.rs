@@ -90,42 +90,44 @@ fn main() {
     while Instant::now() < deadline {
         let mut progressed = false;
         for index in 0..sockets.len() {
-            progressed |= drain_socket(
-                &sockets[index],
-                args.msg_size,
-                &mut latency,
-            );
-            while !send_pending[index] && Instant::now() < deadline {
+            progressed |= drain_socket(&sockets[index], args.msg_size, &mut latency);
+            if !send_pending[index] && Instant::now() < deadline {
                 let payload = pending_messages[index].take().unwrap_or_else(|| {
                     let mut payload = vec![0u8; payload_size];
-                    common::encode_header(&mut payload, common::PHASE_ACTIVE, args.msg_size as u32, seqs[index]);
+                    common::encode_header(
+                        &mut payload,
+                        common::PHASE_ACTIVE,
+                        args.msg_size as u32,
+                        seqs[index],
+                    );
                     payload
                 });
                 let msg = Message::try_from(payload.as_slice()).expect("msg");
                 match perf_submit_measurement!(sockets[index].send(&server_rid), msg) {
-                Ok(()) => {
-                    send_pending[index] = false;
-                    seqs[index] += 1;
-                    progressed = true;
-                }
-                Err(err) if err.code() == SubmitResult::Backpressured => {
-                    send_pending[index] = true;
-                    pending_messages[index] = Some(payload);
-                }
-                Err(err) => panic!("send failed: {err}"),
+                    Ok(()) => {
+                        send_pending[index] = false;
+                        seqs[index] += 1;
+                        progressed = true;
+                    }
+                    Err(err) if err.code() == SubmitResult::Backpressured => {
+                        send_pending[index] = true;
+                        pending_messages[index] = Some(payload);
+                    }
+                    Err(err) => panic!("send failed: {err}"),
                 }
             }
-        }
-        if progressed {
-            continue;
         }
         if Instant::now() >= deadline {
             break;
         }
-        let remaining_ms = deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis()
-            .max(1) as i64;
+        let remaining_ms = if progressed {
+            0
+        } else {
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .clamp(1, 50) as i64
+        };
         match poller.wait(&mut poll_events, remaining_ms) {
             Ok(event_count) => for event in &poll_events[..event_count] {
                 if event.revents & POLLOUT != 0 && event.slot < send_pending.len() {

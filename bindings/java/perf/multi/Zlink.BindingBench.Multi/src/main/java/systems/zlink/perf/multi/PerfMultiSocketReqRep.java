@@ -193,29 +193,39 @@ final class PerfMultiSocketReqRep {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean progress = false;
                 for (Socket client : clients) {
-                    while (System.nanoTime() < activeEnd) {
-                        try (Message payload = PerfUtil.payload(config.size(),
-                                 (byte) PerfUtil.PHASE_ACTIVE,
-                                 System.nanoTime())) {
-                            outstanding.incrementAndGet();
-                            try {
-                                submit(client, routedClients, payload, timeout,
-                                    completion);
-                                progress = true;
-                            } catch (ZlinkSubmitException ex) {
-                                outstanding.decrementAndGet();
-                                if (ex.getResult() != SubmitResult.BACKPRESSURED
-                                    && ex.getResult()
-                                        != SubmitResult.NOT_CONNECTED) {
-                                    throw ex;
-                                }
-                                break;
+                    if (System.nanoTime() >= activeEnd) {
+                        break;
+                    }
+                    // Submit at most one request per socket in a round. A
+                    // per-socket inner loop can keep the first socket busy
+                    // until the active deadline when its HWM is large, which
+                    // starves POLLCOMPLETION dispatch and records no replies.
+                    try (Message payload = PerfUtil.payload(config.size(),
+                             (byte) PerfUtil.PHASE_ACTIVE,
+                             System.nanoTime())) {
+                        outstanding.incrementAndGet();
+                        try {
+                            submit(client, routedClients, payload, timeout,
+                                completion);
+                            progress = true;
+                        } catch (ZlinkSubmitException ex) {
+                            outstanding.decrementAndGet();
+                            if (ex.getResult() != SubmitResult.BACKPRESSURED
+                                && ex.getResult()
+                                    != SubmitResult.NOT_CONNECTED) {
+                                throw ex;
                             }
                         }
                     }
                 }
+
+                // Completion callbacks are dispatched only by this poller.
+                // Drain it non-blocking after every submission round, and
+                // wait briefly only when every socket was backpressured.
+                completionPoller.poll(0);
                 if (!progress && System.nanoTime() < activeEnd) {
-                    completionPoller.poll(remainingTimeoutMs(activeEnd));
+                    completionPoller.poll(Math.min(50,
+                        remainingTimeoutMs(activeEnd)));
                 }
             }
             long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(

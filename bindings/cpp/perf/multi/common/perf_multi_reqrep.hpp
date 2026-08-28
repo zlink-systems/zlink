@@ -110,25 +110,21 @@ template <typename SocketT> class client_bench_t
 
         while (std::chrono::steady_clock::now () < deadline
                && !_completion->fatal.load (std::memory_order_acquire)) {
-            bool backpressured = false;
+            bool submitted = false;
             for (size_t i = 0; i < _slots.size (); ++i) {
-                while (std::chrono::steady_clock::now () < deadline) {
-                    bool admitted = false;
-                    if (!submit (*_slots[i], admitted))
-                        return false;
-                    if (!admitted) {
-                        backpressured = true;
-                        break;
-                    }
-                }
+                bool admitted = false;
+                if (!submit (*_slots[i], admitted))
+                    return false;
+                if (admitted)
+                    submitted = true;
             }
-            if (backpressured || _completion->outstanding.load (std::memory_order_acquire) > 0) {
-                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-                  deadline - std::chrono::steady_clock::now ());
-                const auto wait = std::chrono::milliseconds (
-                  std::max<int64_t> (1, std::min<int64_t> (50, remaining.count ())));
-                (void) _poller.wait (_poll_events.data (), _poll_events.size (), wait);
-            }
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+              deadline - std::chrono::steady_clock::now ());
+            const auto wait = submitted
+                                ? std::chrono::milliseconds (0)
+                                : std::chrono::milliseconds (std::max<int64_t> (
+                                    1, std::min<int64_t> (50, remaining.count ())));
+            (void) _poller.wait (_poll_events.data (), _poll_events.size (), wait);
         }
 
         const auto drain_deadline =

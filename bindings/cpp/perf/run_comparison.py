@@ -1812,6 +1812,8 @@ def run_sizes_test_stream_shared(
         "1",
         "--duration",
         str(duration_seconds),
+        "--completion-wait-ms",
+        str(max(1000, shutdown_timeout_ms)),
         "--ccu",
         str(clients_int),
         "--io-threads",

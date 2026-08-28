@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	zlink "zlink.systems/zlink"
 	"zlink.systems/zlink/perf/internal/perfcommon"
@@ -26,26 +28,58 @@ func runMultiStreamServer(cfg multiConfig) {
 	perfcommon.ApplyMultiHWM(server, cfg.pattern)
 	perfcommon.ApplyMultiBenchmarkSocketOptions(server, cfg.transport)
 	endpoint := perfcommon.BindAndResolveEndpoint(server, cfg.transport, "perf-multi-stream")
-	startMultiStreamEchoServer(server)
+	stopSender := startMultiStreamEchoServer(server)
 	flushControlLine("READY,%s", endpoint)
 	waitForStopToken()
+	stopSender()
 }
 
-func startMultiStreamEchoServer(server *zlink.StreamSocket) {
+type pendingStreamPacket struct {
+	source zlink.RoutingID
+	packet *zlink.Message
+}
+
+func startMultiStreamEchoServer(server *zlink.StreamSocket) func() {
+	pending := make(chan pendingStreamPacket, 65536)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			case item := <-pending:
+				for {
+					_, sendErr := server.SendTo(item.source).Message(item.packet).Submit(context.Background())
+					if sendErr == nil {
+						break
+					}
+					if perfcommon.IsSubmitNotConnected(sendErr) {
+						_ = item.packet.Close()
+						break
+					}
+					if !perfcommon.IsTransient(sendErr) {
+						perfcommon.Must(fmt.Errorf("multi stream server send: %w", sendErr))
+					}
+					perfcommon.PollIdle(time.Millisecond)
+				}
+			}
+		}
+	}()
+
 	perfcommon.Must(server.OnPacket(func(source zlink.RoutingID, header, body *zlink.Message) {
 		packet := perfcommon.FrameStreamPacketMessage(header, body)
 		_ = header.Close()
 		_ = body.Close()
-		_, sendErr := server.SendTo(source).Message(packet).Submit(context.Background())
-		if sendErr != nil {
-			// The shared C client sends its stop token and closes the route
-			// immediately after the final result. A late echo for that route
-			// therefore reports SubmitNotConnected, which is normal teardown.
+		select {
+		case pending <- pendingStreamPacket{source: source, packet: packet}:
+		case <-stop:
 			_ = packet.Close()
-			if perfcommon.IsSubmitNotConnected(sendErr) {
-				return
-			}
-			perfcommon.Must(sendErr)
 		}
 	}))
+	return func() {
+		close(stop)
+		<-done
+	}
 }

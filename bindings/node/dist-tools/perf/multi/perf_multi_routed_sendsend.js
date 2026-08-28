@@ -28,6 +28,19 @@ function sendPayload(socket, routerClient, payload, control = false) {
         ? tryRoutedSocketSend(socket, SERVER_ROUTING_ID, frames)
         : tryRoutedSocketSend(socket, frames);
 }
+function tryServerReply(router, routingId, parts) {
+    try {
+        return tryRoutedSocketSend(router, routingId, parts);
+    }
+    catch (error) {
+        if (error instanceof zlink.SubmitError
+            && (error.result === zlink.SubmitResult.NotConnected
+                || error.result === zlink.SubmitResult.NotFound)) {
+            return true;
+        }
+        throw error;
+    }
+}
 async function sendStopTokenWithRetry(socket, routerClient, poller, pollBuffer) {
     const deadline = Date.now() + 5000;
     while (!sendPayload(socket, routerClient, STOP_TOKEN_BYTES, true)) {
@@ -185,7 +198,7 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
     const drainPending = async () => {
         while (pending.length > 0) {
             const reply = pending[0];
-            if (!tryRoutedSocketSend(router, reply.routingId, reply.parts)) {
+            if (!tryServerReply(router, reply.routingId, reply.parts)) {
                 return;
             }
             pending.shift();
@@ -238,7 +251,7 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
                                 throw new Error('invalid multipart echo request');
                             }
                             if (pending.length === 0
-                                && tryRoutedSocketSend(router, received.routingId, received.parts)) {
+                                && tryServerReply(router, received.routingId, received.parts)) {
                                 continue;
                             }
                             pending.push({

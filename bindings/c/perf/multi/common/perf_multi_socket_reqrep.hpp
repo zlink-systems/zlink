@@ -326,24 +326,21 @@ inline bool run_active_window (const endpoint_config_t &config,
       static_cast<uint32_t> (bench_timeout_ms_from_env ("PERF_MULTI_REQREP_TIMEOUT_MS", 200));
 
     while (std::chrono::steady_clock::now () < deadline && !state->fatal) {
+        bool submitted = false;
         for (size_t i = 0; i < state->slots.size (); ++i) {
             client_slot_t &slot = state->slots[i];
-            while (std::chrono::steady_clock::now () < deadline) {
-                bool blocked = false;
-                if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
-                                     request_timeout_ms, &blocked)) {
-                    state->fatal = true;
-                    break;
-                }
-                if (blocked)
-                    break;
-            }
-            if (state->fatal)
+            bool blocked = false;
+            if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
+                                 request_timeout_ms, &blocked)) {
+                state->fatal = true;
                 break;
+            }
+            if (!blocked)
+                submitted = true;
         }
-        const int wait_ms = poll_timeout_until (deadline, 50);
-        if (wait_ms <= 0)
+        if (state->fatal)
             break;
+        const int wait_ms = submitted ? 0 : poll_timeout_until (deadline, 50);
         const int event_count =
           zlink_poller_wait (state->poller, state->events.empty () ? NULL : &state->events[0],
                              static_cast<int> (state->events.size ()), wait_ms, NULL);

@@ -238,19 +238,16 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     })();
 
     while (currentEpochNs() < activeStopNs && !failure && !replierFailure) {
-      while (currentEpochNs() < activeStopNs) {
-        const payload = createPayload(msgSize);
-        stampPayload(payload, { phase: 1, runId, msgSize, seq });
-        try {
-          const operation = routedClient ? client.request(SERVER_RID) : client.request();
-          appendMeasurement(operation, payload).timeout(requestTimeoutMs)
-            .submit_sync(zlink.SendFlags.DontWait, observe);
-          outstanding += 1;
-          seq += 1n;
-        } catch (error) {
-          if (!transientSubmit(error)) throw error;
-          break;
-        }
+      const payload = createPayload(msgSize);
+      stampPayload(payload, { phase: 1, runId, msgSize, seq });
+      try {
+        const operation = routedClient ? client.request(SERVER_RID) : client.request();
+        appendMeasurement(operation, payload).timeout(requestTimeoutMs)
+          .submit_sync(zlink.SendFlags.DontWait, observe);
+        outstanding += 1;
+        seq += 1n;
+      } catch (error) {
+        if (!transientSubmit(error)) throw error;
       }
       // Let native request completions and admission failures dispatch. The
       // request surface owns its pending limit; the runner does not impose an

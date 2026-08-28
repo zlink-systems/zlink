@@ -123,7 +123,9 @@ bool try_send_packet (stream_handler_context_t &ctx_,
     }
     catch (const zlink::submit_error_t &err) {
         errno = err.internal_errno ();
-        request_stop ();
+        if (err.result () != zlink::submit_result_t::backpressured
+            && errno != EAGAIN && errno != EWOULDBLOCK && errno != ETIMEDOUT)
+            request_stop ();
         return false;
     }
 }

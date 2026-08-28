@@ -97,14 +97,15 @@ func runMultiDealerRouterEchoWindow(
 	}
 
 	for time.Now().Before(window.StopAt) {
+		blocked := 0
 		for i := range dealers {
 			if sendPending[i] {
+				blocked++
 				continue
 			}
-			for time.Now().Before(window.StopAt) && sendMultiDealerRouterRequest(dealers[i].socket, payloads[i], msgSize, window) {
-			}
-			if time.Now().Before(window.StopAt) {
+			if !sendMultiDealerRouterRequest(dealers[i].socket, payloads[i], msgSize, window) {
 				sendPending[i] = true
+				blocked++
 				perfcommon.Must(poller.ModifySocket(dealers[i].socket, perfcommon.ZLinkPollIn|perfcommon.ZLinkPollOut))
 			}
 		}
@@ -112,9 +113,12 @@ func runMultiDealerRouterEchoWindow(
 		if !time.Now().Before(window.StopAt) {
 			break
 		}
-		wait := time.Until(window.StopAt)
-		if wait <= 0 {
-			break
+		wait := time.Duration(0)
+		if blocked == len(dealers) {
+			wait = time.Until(window.StopAt)
+			if wait > 50*time.Millisecond {
+				wait = 50 * time.Millisecond
+			}
 		}
 		n, waitErr := poller.Wait(events, wait)
 		if waitErr != nil {
@@ -135,12 +139,6 @@ func runMultiDealerRouterEchoWindow(
 			if events[i].Revents&perfcommon.ZLinkPollOut != 0 && sendPending[idx] {
 				sendPending[idx] = false
 				perfcommon.Must(poller.ModifySocket(socket, perfcommon.ZLinkPollIn))
-				for time.Now().Before(window.StopAt) && sendMultiDealerRouterRequest(socket, payloads[idx], msgSize, window) {
-				}
-				if time.Now().Before(window.StopAt) {
-					sendPending[idx] = true
-					perfcommon.Must(poller.ModifySocket(socket, perfcommon.ZLinkPollIn|perfcommon.ZLinkPollOut))
-				}
 			}
 		}
 	}

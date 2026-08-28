@@ -66,8 +66,8 @@ function drainPending(stream, pending) {
     }
     compactPending(pending);
 }
-function sleepMillis(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+function sleepImmediate() {
+    return new Promise((resolve) => setImmediate(resolve));
 }
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
@@ -123,7 +123,7 @@ async function main() {
         })();
         while (!stop) {
             if (pendingLength(pending) === 0) {
-                await sleepMillis(50);
+                await sleepImmediate();
                 continue;
             }
             const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);

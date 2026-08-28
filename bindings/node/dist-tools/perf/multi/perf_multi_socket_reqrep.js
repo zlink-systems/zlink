@@ -103,23 +103,20 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
             for (let i = 0; i < sockets.length && currentEpochNs() < activeStopNs; i += 1) {
                 if (blocked[i])
                     continue;
-                while (currentEpochNs() < activeStopNs) {
-                    const payload = createPayload(options.msgSize);
-                    stampPayload(payload, { phase: 1, runId, msgSize: options.msgSize, seq });
-                    const operation = routerClient ? sockets[i].request(serverRoutingId) : sockets[i].request();
-                    try {
-                        appendMeasurement(operation, payload).timeout(requestTimeoutMs)
-                            .submit_sync(zlink.SendFlags.DontWait, (error, parts) => observe(i, error, parts));
-                        outstanding[i] += 1;
-                        submitted = true;
-                        seq += 1n;
-                    }
-                    catch (error) {
-                        if (!transientRequest(error))
-                            throw error;
-                        blocked[i] = true;
-                        break;
-                    }
+                const payload = createPayload(options.msgSize);
+                stampPayload(payload, { phase: 1, runId, msgSize: options.msgSize, seq });
+                const operation = routerClient ? sockets[i].request(serverRoutingId) : sockets[i].request();
+                try {
+                    appendMeasurement(operation, payload).timeout(requestTimeoutMs)
+                        .submit_sync(zlink.SendFlags.DontWait, (error, parts) => observe(i, error, parts));
+                    outstanding[i] += 1;
+                    submitted = true;
+                    seq += 1n;
+                }
+                catch (error) {
+                    if (!transientRequest(error))
+                        throw error;
+                    blocked[i] = true;
                 }
             }
             // The external completion poller owns native completion progress. Node

@@ -674,30 +674,30 @@ where
     let mut sequence = 1u64;
 
     while Instant::now() < active_deadline {
-        while Instant::now() < active_deadline {
-            let mut payload = Message::with_size(payload_size).map_err(|error| error.to_string())?;
-            encode_header(
-                payload.data_mut(),
-                PHASE_ACTIVE,
-                config.size as u32,
-                sequence,
-            );
-            let callback_tx = completion_tx.clone();
-            match submit(
-                payload,
-                request_timeout,
-                Box::new(move |outcome| {
-                    let _ = callback_tx.send(outcome);
-                }),
-            ) {
-                Ok(()) => {
-                    outstanding += 1;
-                    sequence = sequence.wrapping_add(1);
-                }
-                Err(error) if error.code() == SubmitResult::Backpressured => break,
-                Err(error) => {
-                    return Err(format!("request admission failed: {error}"));
-                }
+        let mut submitted = false;
+        let mut payload = Message::with_size(payload_size).map_err(|error| error.to_string())?;
+        encode_header(
+            payload.data_mut(),
+            PHASE_ACTIVE,
+            config.size as u32,
+            sequence,
+        );
+        let callback_tx = completion_tx.clone();
+        match submit(
+            payload,
+            request_timeout,
+            Box::new(move |outcome| {
+                let _ = callback_tx.send(outcome);
+            }),
+        ) {
+            Ok(()) => {
+                outstanding += 1;
+                sequence = sequence.wrapping_add(1);
+                submitted = true;
+            }
+            Err(error) if error.code() == SubmitResult::Backpressured => {}
+            Err(error) => {
+                return Err(format!("request admission failed: {error}"));
             }
         }
 
@@ -708,11 +708,15 @@ where
             &mut stats,
             true,
         )?;
-        if outstanding != 0 && Instant::now() < active_deadline {
-            let remaining_ms = active_deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis()
-                .clamp(1, i64::MAX as u128) as i64;
+        if Instant::now() < active_deadline {
+            let remaining_ms = if submitted {
+                0
+            } else {
+                active_deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .clamp(1, 50) as i64
+            };
             poller
                 .wait(&mut poll_events, remaining_ms)
                 .map_err(|error| error.to_string())?;

@@ -110,14 +110,15 @@ func runMultiRouterRouterEchoWindow(
 	}
 
 	for time.Now().Before(window.StopAt) {
+		blocked := 0
 		for i := range clients {
 			if sendPending[i] {
+				blocked++
 				continue
 			}
-			for time.Now().Before(window.StopAt) && sendMultiRouterRouterRequest(clients[i].socket, serverID, payloads[i], cfg.msgSize, window) {
-			}
-			if time.Now().Before(window.StopAt) {
+			if !sendMultiRouterRouterRequest(clients[i].socket, serverID, payloads[i], cfg.msgSize, window) {
 				sendPending[i] = true
+				blocked++
 				perfcommon.Must(poller.ModifySocket(clients[i].socket, perfcommon.ZLinkPollIn|perfcommon.ZLinkPollOut))
 			}
 		}
@@ -126,9 +127,12 @@ func runMultiRouterRouterEchoWindow(
 			break
 		}
 
-		wait := time.Until(window.StopAt)
-		if wait <= 0 {
-			break
+		wait := time.Duration(0)
+		if blocked == len(clients) {
+			wait = time.Until(window.StopAt)
+			if wait > 50*time.Millisecond {
+				wait = 50 * time.Millisecond
+			}
 		}
 		n, waitErr := poller.Wait(events, wait)
 		if waitErr != nil {
@@ -149,12 +153,6 @@ func runMultiRouterRouterEchoWindow(
 			if events[i].Revents&perfcommon.ZLinkPollOut != 0 && sendPending[idx] {
 				sendPending[idx] = false
 				perfcommon.Must(poller.ModifySocket(socket, perfcommon.ZLinkPollIn))
-				for time.Now().Before(window.StopAt) && sendMultiRouterRouterRequest(socket, serverID, payloads[idx], cfg.msgSize, window) {
-				}
-				if time.Now().Before(window.StopAt) {
-					sendPending[idx] = true
-					perfcommon.Must(poller.ModifySocket(socket, perfcommon.ZLinkPollIn|perfcommon.ZLinkPollOut))
-				}
 			}
 		}
 	}
@@ -193,19 +191,25 @@ func recvMultiRouterRouterReply(
 
 func validateMultiRouterRoutes(serverID zlink.RoutingID, clients []multiRouterClient, msgSize int) {
 	for index, client := range clients {
-		payload := perfcommon.PreparePayload(msgSize)
-		perfcommon.StampProbePayload(payload)
-		_, sendErr := perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) error {
-			return client.socket.SendTo(serverID).MoveMessage(message).Submit(context.Background())
-		})
-		perfcommon.Must(sendErr)
-
 		poller := perfcommon.NewSocketPoller(client.socket, perfcommon.ZLinkPollIn)
 		events := make([]zlink.PollEvent, 1)
 		deadline := time.Now().Add(perfcommon.MultiReadyTimeout())
 		validated := false
 		for time.Now().Before(deadline) {
-			event, err := perfcommon.WaitPollerOne(poller, events, time.Until(deadline))
+			payload := perfcommon.PreparePayload(msgSize)
+			perfcommon.StampProbePayload(payload)
+			message := perfcommon.NewMessage(payload)
+			sendErr := perfcommon.SubmitMeasurementRoutedFlags(
+				client.socket.SendTo(serverID), message, zlink.SendFlagsDontWait)
+			if sendErr != nil && !perfcommon.IsReadyProbeTransient(sendErr) {
+				perfcommon.Must(fmt.Errorf("multi router/router route probe[%d] send: %w", index, sendErr))
+			}
+
+			wait := time.Until(deadline)
+			if wait > 50*time.Millisecond {
+				wait = 50 * time.Millisecond
+			}
+			event, err := perfcommon.WaitPollerOne(poller, events, wait)
 			if err != nil {
 				if perfcommon.IsTransient(err) {
 					continue
@@ -393,5 +397,8 @@ func drainRouterReplies(
 func tryRouterSend(socket *zlink.RouterSocket, target zlink.RoutingID, payload []byte) (bool, error) {
 	message := perfcommon.NewMessage(payload)
 	err := perfcommon.SubmitMeasurementRoutedFlags(socket.SendTo(target), message, zlink.SendFlagsDontWait)
+	if perfcommon.IsTransient(err) {
+		return false, nil
+	}
 	return err == nil, err
 }

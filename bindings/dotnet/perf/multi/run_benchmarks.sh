@@ -1736,6 +1736,7 @@ run_external_stream_client() {
     "${STREAM_CLIENT}" --transport "${transport}" --pattern STREAM
     --sizes "${size}" --runs 1 --duration "${DURATION}"
     --ccu "${stream_clients}" --send-stop-token 1 --endpoint "${endpoint}"
+    --completion-wait-ms "${SERVER_SHUTDOWN_TIMEOUT_MS}"
     --io-threads "${CLIENT_IO_THREADS:-${COMMON_IO_THREADS:-${EFFECTIVE_DEFAULT_IO_THREADS:-4}}}"
   )
   if [[ "${PIN_CPU}" -eq 1 && "$(uname -s)" == Linux* ]] \

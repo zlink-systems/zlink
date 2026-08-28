@@ -113,6 +113,7 @@ run_external_stream_client() {
     "${STREAM_CLIENT}" --transport "${transport}" --pattern STREAM \
     --sizes "${size}" --runs 1 --duration "${duration}" \
     --ccu "${stream_clients}" --io-threads "${stream_client_io_threads}" \
+    --completion-wait-ms "${SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}}" \
     --send-stop-token 1 --endpoint "${endpoint}" \
     > "${client_out}" 2> "${client_err}"
 }

@@ -353,21 +353,21 @@ class router_router_client_bench_t
             }
 
             while (std::chrono::steady_clock::now () < deadline) {
+                bool submitted = false;
                 const size_t send_start = rr;
                 for (size_t attempt = 0; attempt < _socket_states.size (); ++attempt) {
                     socket_state_t &state =
                       _socket_states[(send_start + attempt) % _socket_states.size ()];
                     if (!state.sock || state.send_pending)
                         continue;
-                    while (std::chrono::steady_clock::now () < deadline) {
-                        const int send_rc = try_send_request (state, phase);
-                        if (send_rc < 0)
+                    const int send_rc = try_send_request (state, phase);
+                    if (send_rc < 0)
+                        co_return false;
+                    if (send_rc == 0) {
+                        if (!update_poll_interest (state))
                             co_return false;
-                        if (send_rc == 0) {
-                            if (!update_poll_interest (state))
-                                co_return false;
-                            break;
-                        }
+                    } else {
+                        submitted = true;
                     }
                 }
 
@@ -387,9 +387,12 @@ class router_router_client_bench_t
 
                 const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
                   deadline - std::chrono::steady_clock::now ());
+                const auto wait = submitted
+                                    ? std::chrono::milliseconds (0)
+                                    : std::chrono::milliseconds (std::max<int64_t> (
+                                        1, std::min<int64_t> (50, remaining.count ())));
                 const size_t ready_count = _poller.wait (
-                  _poll_events.data (), _poll_events.size (),
-                  std::chrono::milliseconds (std::max<int64_t> (1, remaining.count ())));
+                  _poll_events.data (), _poll_events.size (), wait);
                 if (ready_count == 0) {
                     for (size_t i = 0; i < _socket_states.size (); ++i) {
                         if (!_socket_states[i].send_pending)

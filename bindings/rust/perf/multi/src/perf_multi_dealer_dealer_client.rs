@@ -72,63 +72,57 @@ fn main() {
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
     let mut send_pending = vec![false; sockets.len()];
     let mut seq: u64 = 1;
-    let burst_until_blocked = args.msg_size <= 1024;
     while Instant::now() < deadline {
         let mut progressed = false;
         for (index, socket) in sockets.iter().enumerate() {
-            if burst_until_blocked && send_pending[index] {
+            if send_pending[index] {
                 continue;
             }
             if Instant::now() >= deadline {
                 break;
             }
 
-            while Instant::now() < deadline {
-                let mut msg = Message::with_size(payload_size).expect("msg");
-                common::encode_header(
-                    msg.data_mut(),
-                    common::PHASE_ACTIVE,
-                    args.msg_size as u32,
-                    seq,
-                );
-                match perf_submit_measurement!(socket.send(), msg) {
-                    Ok(()) => {
-                        seq += 1;
-                        progressed = true;
-                    }
-                    Err(err) if err.code() == SubmitResult::Backpressured => {
-                        send_pending[index] = true;
-                        break;
-                    }
-                    Err(err) if err.code() == SubmitResult::NotConnected => {
-                        send_pending[index] = true;
-                        break;
-                    }
-                    Err(err) => panic!("send failed: {err}"),
+            let mut msg = Message::with_size(payload_size).expect("msg");
+            common::encode_header(
+                msg.data_mut(),
+                common::PHASE_ACTIVE,
+                args.msg_size as u32,
+                seq,
+            );
+            match perf_submit_measurement!(socket.send(), msg) {
+                Ok(()) => {
+                    seq += 1;
+                    progressed = true;
                 }
-                if !burst_until_blocked {
-                    break;
+                Err(err) if err.code() == SubmitResult::Backpressured => {
+                    send_pending[index] = true;
                 }
+                Err(err) if err.code() == SubmitResult::NotConnected => {
+                    send_pending[index] = true;
+                }
+                Err(err) => panic!("send failed: {err}"),
             }
         }
-        if !progressed {
-            if Instant::now() >= deadline {
-                break;
-            }
-            let remaining_ms = deadline
+        if Instant::now() >= deadline {
+            break;
+        }
+        let remaining_ms = if progressed {
+            0
+        } else {
+            deadline
                 .saturating_duration_since(Instant::now())
                 .as_millis()
-                .max(1) as i64;
-            match poller.wait(&mut poll_events, remaining_ms) {
-                Ok(event_count) => {
-                    for event in &poll_events[..event_count] {
-                        if event.revents & POLLOUT != 0 && event.slot < send_pending.len() {
-                            send_pending[event.slot] = false;
-                        }
+                .clamp(1, 50) as i64
+        };
+        match poller.wait(&mut poll_events, remaining_ms) {
+            Ok(event_count) => {
+                for event in &poll_events[..event_count] {
+                    if event.revents & POLLOUT != 0 && event.slot < send_pending.len() {
+                        send_pending[event.slot] = false;
                     }
                 }
-                Err(err) => panic!("poller wait failed: {err}"),
             }
+            Err(err) => panic!("poller wait failed: {err}"),
         }
     }
 

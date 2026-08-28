@@ -118,15 +118,18 @@ internal static class PerfMultiDealerRouterClient
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
-            (seq, rrIndex) = TryScheduleSendsUntilBackpressured(slots,
+            (seq, rrIndex, bool submittedAny) =
+                TryScheduleSendRound(slots,
                 eventMasks, msgSize, runId, PerfPhase.Active, seq, rrIndex,
                 benchDeadlineTicks);
 
             // C echo requesters own the active deadline. Bound each wait by
             // the remaining active interval so a quiet peer cannot extend the
             // configured phase.
-            int pollTimeoutMs = RemainingMilliseconds(benchDeadlineTicks);
-            if (pollTimeoutMs <= 0)
+            int pollTimeoutMs = submittedAny
+                ? 0
+                : Math.Min(50, RemainingMilliseconds(benchDeadlineTicks));
+            if (!submittedAny && pollTimeoutMs <= 0)
                 break;
             int readyCount = PollSocketEvents(pollManager, sockets, eventMasks,
                 pollTimeoutMs);
@@ -161,11 +164,12 @@ internal static class PerfMultiDealerRouterClient
             metrics.MeasureCount);
     }
 
-    private static (ulong Seq, int RrIndex)
-        TryScheduleSendsUntilBackpressured(DealerRouterClientSlot[] slots,
+    private static (ulong Seq, int RrIndex, bool SubmittedAny)
+        TryScheduleSendRound(DealerRouterClientSlot[] slots,
             PollEventFlags[] eventMasks, int msgSize, uint runId,
             PerfPhase phase, ulong seq, int rrIndex, long activeDeadlineTicks)
     {
+        bool submittedAny = false;
         int startIndex = rrIndex;
         for (int i = 0; i < slots.Length; i++)
         {
@@ -176,21 +180,19 @@ internal static class PerfMultiDealerRouterClient
             if (slot.WaitingForWritable)
                 continue;
 
-            while (Stopwatch.GetTimestamp() < activeDeadlineTicks)
+            if (!TrySend(slot, msgSize, runId, phase, seq))
             {
-                if (!TrySend(slot, msgSize, runId, phase, seq))
-                {
-                    slot.WaitingForWritable = true;
-                    UpdatePollMask(slot, eventMasks, slotIndex);
-                    break;
-                }
-                seq++;
+                slot.WaitingForWritable = true;
+                UpdatePollMask(slot, eventMasks, slotIndex);
+                continue;
             }
+            seq++;
+            submittedAny = true;
         }
 
         if (slots.Length > 0)
             rrIndex = (startIndex + 1) % slots.Length;
-        return (seq, rrIndex);
+        return (seq, rrIndex, submittedAny);
     }
 
     private static ulong HandleClientEvent(
@@ -209,10 +211,8 @@ internal static class PerfMultiDealerRouterClient
             && (readyMask & PollEventFlags.PollOut) != 0
             && slot.WaitingForWritable)
         {
-            while (Stopwatch.GetTimestamp() < activeDeadlineTicks)
+            if (TrySend(slot, msgSize, runId, phase, seq))
             {
-                if (!TrySend(slot, msgSize, runId, phase, seq))
-                    break;
                 seq++;
                 slot.WaitingForWritable = false;
             }

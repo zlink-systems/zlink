@@ -12,7 +12,6 @@ from perf_multi_common import (
     parse_server_args,
     perf_server_context,
     safe_poll,
-    send_nonblocking,
 )
 from perf_stop_token import STOP_TOKEN
 
@@ -65,7 +64,12 @@ def main(argv=None):
                         return
                     routing_id, frame = item
                     try:
-                        sent = send_nonblocking(server, frame, routing_id=routing_id)
+                        sent = bool(
+                            server.send(routing_id)
+                            .message(frame)
+                            .flags(zlink.SendFlags.DONT_WAIT)
+                            .submit()
+                        )
                     except zlink.SubmitError as exc:
                         if exc.native_errno not in {
                             errno.EHOSTUNREACH,

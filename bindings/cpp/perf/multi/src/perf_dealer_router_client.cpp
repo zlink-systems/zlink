@@ -293,31 +293,34 @@ class dealer_router_client_bench_t
             const auto deadline =
               std::chrono::steady_clock::now () + std::chrono::seconds (seconds);
 
-            for (size_t attempt = 0; attempt < _socket_states.size (); ++attempt) {
-                socket_state_t &state = _socket_states[attempt];
-                if (!state.sock)
-                    continue;
-                while (!state.send_pending && std::chrono::steady_clock::now () < deadline) {
+            while (std::chrono::steady_clock::now () < deadline) {
+                bool submitted = false;
+                for (size_t attempt = 0; attempt < _socket_states.size (); ++attempt) {
+                    socket_state_t &state = _socket_states[attempt];
+                    if (!state.sock || state.send_pending)
+                        continue;
                     const int send_rc = try_send_request (state, phase);
                     if (send_rc < 0)
                         co_return false;
                     if (send_rc == 0) {
                         if (!set_pollout (state, true))
                             co_return false;
-                        break;
+                    } else {
+                        submitted = true;
                     }
                 }
-            }
 
-            while (std::chrono::steady_clock::now () < deadline) {
                 const size_t capacity = _socket_states.size () + 1;
                 if (_poll_events.size () < capacity)
                     _poll_events.resize (capacity);
                 const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
                   deadline - std::chrono::steady_clock::now ());
+                const auto wait = submitted
+                                    ? std::chrono::milliseconds (0)
+                                    : std::chrono::milliseconds (std::max<int64_t> (
+                                        1, std::min<int64_t> (50, remaining.count ())));
                 const size_t ready_count = _poller.wait (
-                  _poll_events.data (), capacity,
-                  std::chrono::milliseconds (std::max<int64_t> (1, remaining.count ())));
+                  _poll_events.data (), capacity, wait);
                 if (ready_count == 0)
                     continue;
 
@@ -364,16 +367,6 @@ class dealer_router_client_bench_t
                         state->send_pending = false;
                         if (!set_pollout (*state, false))
                             co_return false;
-                        while (std::chrono::steady_clock::now () < deadline) {
-                            const int send_rc = try_send_request (*state, phase);
-                            if (send_rc < 0)
-                                co_return false;
-                            if (send_rc == 0) {
-                                if (!set_pollout (*state, true))
-                                    co_return false;
-                                break;
-                            }
-                        }
                     }
                 }
             }

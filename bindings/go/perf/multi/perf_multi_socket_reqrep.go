@@ -189,24 +189,27 @@ func runMultiReqRepClients(cfg multiConfig, clients []multiReqRepClient) perfcom
 	window := activeDeadline(cfg.duration)
 	requestTimeout := multiReqRepDurationFromEnv("PERF_MULTI_REQREP_TIMEOUT_MS", 200*time.Millisecond)
 	for time.Now().Before(window.StopAt) {
+		blocked := 0
 		for i := range clients {
-			for time.Now().Before(window.StopAt) {
-				completion, submitErr := submitMultiReqRep(clients[i].request(), cfg.msgSize, window.ActiveAt, requestTimeout)
-				if submitErr != nil {
-					if multiReqRepTransient(submitErr) {
-						break
-					}
-					perfcommon.Must(fmt.Errorf("multi reqrep submit: %w", submitErr))
+			completion, submitErr := submitMultiReqRep(clients[i].request(), cfg.msgSize, window.ActiveAt, requestTimeout)
+			if submitErr != nil {
+				if multiReqRepTransient(submitErr) {
+					blocked++
+					continue
 				}
-				clients[i].completion = append(clients[i].completion, completion)
+				perfcommon.Must(fmt.Errorf("multi reqrep submit: %w", submitErr))
 			}
+			clients[i].completion = append(clients[i].completion, completion)
 		}
 		if !time.Now().Before(window.StopAt) {
 			break
 		}
-		wait := time.Until(window.StopAt)
-		if wait > 50*time.Millisecond {
-			wait = 50 * time.Millisecond
+		wait := time.Duration(0)
+		if blocked == len(clients) {
+			wait = time.Until(window.StopAt)
+			if wait > 50*time.Millisecond {
+				wait = 50 * time.Millisecond
+			}
 		}
 		if _, waitErr := poller.Wait(events, wait); waitErr != nil && !multiReqRepTransient(waitErr) {
 			perfcommon.Must(fmt.Errorf("multi reqrep completion poll: %w", waitErr))

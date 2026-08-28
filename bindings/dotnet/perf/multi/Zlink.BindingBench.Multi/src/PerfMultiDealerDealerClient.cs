@@ -112,25 +112,21 @@ internal static class PerfMultiDealerDealerClient
                     continue;
 
                 IDealerSocket socket = (IDealerSocket)activeClients[i];
-                while (!controlState.StopRequested
-                       && Stopwatch.GetTimestamp() < activeDeadlineTicks)
+                Message message = Message.Allocate(payloadSize);
+                StampMetricHeader(message.AsSpan(), runId,
+                    PerfPhase.Active, msgSize, seq, EpochNs());
+                bool sent = PerfSocketIo.SendMeasurement(socket,
+                    message.AsReadOnlySpan(), SendFlags.DontWait) > 0;
+                message.Dispose();
+                if (!sent)
                 {
-                    Message message = Message.Allocate(payloadSize);
-                    StampMetricHeader(message.AsSpan(), runId,
-                        PerfPhase.Active, msgSize, seq, EpochNs());
-                    bool sent = PerfSocketIo.SendMeasurement(socket,
-                        message.AsReadOnlySpan(), SendFlags.DontWait) > 0;
-                    message.Dispose();
-                    if (!sent)
-                    {
-                        pending[i] = true;
-                        pendingCount++;
-                        break;
-                    }
-
-                    seq++;
-                    progressed = true;
+                    pending[i] = true;
+                    pendingCount++;
+                    continue;
                 }
+
+                seq++;
+                progressed = true;
             }
 
             if (!progressed && pendingCount > 0
