@@ -17,9 +17,10 @@ Core rules:
   stream (the encoder/decoder pass bytes through unchanged). For
   length-delimited packets, use the packet handler, which frames as
   2-byte BE header size + 4-byte BE body size + header + body.
-- At the zlink API level: raw `zlink_recv()` exposes the 4-byte
-  `routing_id` then the payload frame, while the raw/packet callbacks
-  pass `source_rid` as a separate callback argument.
+- At the zlink API level: raw `zlink_recv_part()` exposes the source
+  client's 4-byte `routing_id` through its own `source_rid_out_`
+  out-parameter, and the raw/packet callbacks pass `source_rid` as a
+  separate callback argument the same way.
 
 Valid combination:
 
@@ -53,8 +54,10 @@ Supported server transports:
 STREAM is the only exception type in the raw socket family. Exactly one of
 three receive models may be active on a given handle.
 
-- **raw recv**: `zlink_recv()` pulls transport fragments directly. Pair it
-  with a poller watching `ZLINK_POLLIN`.
+- **raw recv**: `zlink_recv_part()` pulls transport fragments directly, one
+  part at a time, with the source routing id returned through its
+  `source_rid_out_` out-parameter. Pair it with a poller watching
+  `ZLINK_POLLIN`.
 - **raw callback**: `zlink_recv_handler()` delivers raw fragments through
   a callback. Useful for event-driven servers.
 - **packet callback**: `zlink_stream_packet_handler()` delivers packets
@@ -97,7 +100,7 @@ void on_message(const zlink_routing_id_t *source_rid,
         zlink_msg_t reply;
         zlink_msg_init_size(&reply, size);
         memcpy(zlink_msg_data(&reply), data, size);
-        zlink_send_rid(stream, source_rid, &reply, 1, 0);
+        zlink_send_part_rid(stream, source_rid, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 
         zlink_msg_close(&parts[i]);
     }
@@ -116,9 +119,9 @@ zlink_recv_handler(stream, on_message, NULL);
 | Callback | `zlink_socket_msg_handler_fn` |
 | Lifetime | Detachable outside the callback; detach/close from inside the callback returns `EBUSY` |
 | Framing | Raw bytes as received from the transport |
-| Send | `zlink_send_rid()` |
+| Send | `zlink_send_part_rid()` |
 
-> When the send queue is full (HWM), `zlink_send_rid()` blocks
+> When the send queue is full (HWM), `zlink_send_part_rid()` blocks
 > (default) or returns `ZLINK_SUBMIT_BACKPRESSURED` with `ZLINK_DONTWAIT`. For advanced
 > backpressure patterns, see [Performance Guide](10-performance.en.md).
 
@@ -166,7 +169,7 @@ Rules for packet callback mode:
   still delivered as valid `zlink_msg_t` objects.
 - Ownership of `header` and `body` is transferred to the callback. The
   callback must close or consume each `msg_t` exactly once.
-- With packet handler attached, raw recv (`zlink_recv()`), raw callback
+- With packet handler attached, raw recv (`zlink_recv_part()`), raw callback
   (`zlink_recv_handler()`), and data-plane `ZLINK_POLLIN` registration on
   the same handle all fail with `EBUSY`. A second
   `zlink_stream_packet_handler()` attach also fails with `EBUSY`.

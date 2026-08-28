@@ -45,48 +45,58 @@ zlink_connect(client, "tcp://127.0.0.1:5555");
 
 ### 메시지 교환
 
-PAIR의 수신 API는 recv/poller 전용이다. 수신은 `zlink_recv()`와 poller를 조합해서
-처리한다. 양쪽 모두 send와 recv를 자유롭게 호출할 수 있다.
+PAIR의 공개 수신 API는 recv/poller 전용이다. `zlink_recv_part()`로 한 번에 part
+하나씩 수신하며, 보통 poller 루프 안에서 호출한다. 양쪽 모두 send와 recv를
+자유롭게 호출할 수 있다. PAIR는 peer가 정확히 하나이므로 선택할 routing id가
+없다 — `source_rid_out_`에는 `NULL`을 넘긴다.
 
 ```c
 /* Client → Server */
 zlink_msg_t msg;
 zlink_msg_init_size(&msg, 5);
 memcpy(zlink_msg_data(&msg), "Hello", 5);
-zlink_send(client, &msg, 1, 0);
+zlink_send_part(client, &msg, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 
-/* Server receives with zlink_recv() (typically inside a poller loop) */
-zlink_routing_id_t source_rid;
-zlink_msg_t *parts = NULL;
-size_t part_count = 0;
-if (zlink_recv(server, &source_rid, &parts, &part_count, 0) == ZLINK_RECV_OK) {
+/* Server receives with zlink_recv_part() (typically inside a poller loop) */
+zlink_msg_t part;
+zlink_part_flag_t more;
+zlink_msg_init(&part);
+if (zlink_recv_part(server, NULL, &part, &more, ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
     printf("Received: %.*s\n",
-           (int)zlink_msg_size(&parts[0]),
-           (char *)zlink_msg_data(&parts[0]));
-    zlink_multipart_close(parts, part_count);
+           (int)zlink_msg_size(&part),
+           (char *)zlink_msg_data(&part));
+    zlink_msg_close(&part);
 }
 
 /* Server → Client (bidirectional; client uses the same recv+poller pattern) */
 zlink_msg_t reply;
 zlink_msg_init_size(&reply, 5);
 memcpy(zlink_msg_data(&reply), "World", 5);
-zlink_send(server, &reply, 1, 0);
+zlink_send_part(server, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 ```
 
 ### 멀티파트 데이터 전송
 
-멀티파트 데이터는 단일 `zlink_send` 호출로 parts 배열을 전송한다.
+멀티파트 데이터는 `zlink_send_part()`를 part마다 한 번씩 호출해서 전송한다.
+마지막 part를 제외한 모든 part는 `ZLINK_PART_MORE`를, 마지막 part는
+`ZLINK_PART_FINAL`을 사용한다. core는 최종 part가 성공할 때까지 중간 part들을
+하나의 record로 스테이징한다.
 
 ```c
-zlink_msg_t parts[2];
-zlink_msg_init_size(&parts[0], 3);
-memcpy(zlink_msg_data(&parts[0]), "foo", 3);
-zlink_msg_init_size(&parts[1], 6);
-memcpy(zlink_msg_data(&parts[1]), "foobar", 6);
-zlink_send(server, parts, 2, 0);
+zlink_msg_t part0, part1;
+zlink_msg_init_size(&part0, 3);
+memcpy(zlink_msg_data(&part0), "foo", 3);
+zlink_msg_init_size(&part1, 6);
+memcpy(zlink_msg_data(&part1), "foobar", 6);
 
-/* Receiver pulls both frames from one zlink_recv() call:
-   parts[0] = "foo", parts[1] = "foobar", part_count = 2 */
+zlink_submit_result_t rc = zlink_send_part(
+    server, &part0, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+if (rc == ZLINK_SUBMIT_OK)
+    rc = zlink_send_part(server, &part1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+
+/* 수신자는 zlink_recv_part()를 개별 호출로 반복하며 프레임을 하나씩 받는다.
+   has_more_out_ == ZLINK_PART_FINAL이 될 때까지 반복:
+   part 1 = "foo" (more == ZLINK_PART_MORE), part 2 = "foobar" (more == ZLINK_PART_FINAL) */
 ```
 
 > 참고: `core/tests/integration/test_public_inproc_multipart_send.cpp` — `test_public_inproc_pair_send_multipart_blocking()` 테스트
@@ -94,24 +104,25 @@ zlink_send(server, parts, 2, 0);
 ### 수신 모드
 
 PAIR의 공개 수신 API는 recv/poller 전용이다.
-`zlink_recv()`로 동기 수신한다.
+`zlink_recv_part()`로 part 하나를 동기 수신한다.
 
 ```c
 void *pair = zlink_socket(ctx, ZLINK_SOCKET_PAIR);
 zlink_bind(pair, "tcp://*:5556");
 
-zlink_routing_id_t source_rid;
-zlink_msg_t *parts = NULL;
-size_t part_count = 0;
-zlink_recv_result_t rc = zlink_recv(
-    pair, &source_rid, &parts, &part_count, 0 /* flags */);
+zlink_msg_t part;
+zlink_part_flag_t more;
+zlink_msg_init(&part);
+zlink_recv_result_t rc = zlink_recv_part(
+    pair, NULL, &part, &more, ZLINK_RECV_FLAGS_NONE);
 if (rc == ZLINK_RECV_OK) {
-    /* process parts[0..part_count-1] */
-    zlink_multipart_close(parts, part_count);
+    /* part를 처리한다; more == ZLINK_PART_MORE면 같은 record의
+       다음 part가 이어진다 */
+    zlink_msg_close(&part);
 }
 ```
 
-> HWM(High-Water Mark, queue가 보관할 수 있는 accounted byte 상한) 도달 시 `zlink_send()`는 대기(기본) 또는 `ZLINK_DONTWAIT`로
+> HWM(High-Water Mark, queue가 보관할 수 있는 accounted byte 상한) 도달 시 `zlink_send_part()`는 대기(기본) 또는 `ZLINK_DONTWAIT`로
 > `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다. 고급 배압(backpressure) 패턴은
 > [socket option 가이드](12-socket-options.ko.md)를 참고.
 
@@ -130,12 +141,16 @@ Multipart frame:  [frame1][frame2]...[frameN]
 멀티파트 전송:
 
 ```c
-zlink_msg_t parts[2];
-zlink_msg_init_size(&parts[0], 6);
-memcpy(zlink_msg_data(&parts[0]), "header", 6);
-zlink_msg_init_size(&parts[1], 4);
-memcpy(zlink_msg_data(&parts[1]), "body", 4);
-zlink_send(server, parts, 2, 0);
+zlink_msg_t header, body;
+zlink_msg_init_size(&header, 6);
+memcpy(zlink_msg_data(&header), "header", 6);
+zlink_msg_init_size(&body, 4);
+memcpy(zlink_msg_data(&body), "body", 4);
+
+zlink_submit_result_t rc = zlink_send_part(
+    server, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+if (rc == ZLINK_SUBMIT_OK)
+    rc = zlink_send_part(server, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 ```
 
 ## 4. 소켓 옵션
@@ -175,9 +190,9 @@ zlink_connect(worker_signal, "inproc://signal");
 zlink_msg_t msg;
 zlink_msg_init_size(&msg, 4);
 memcpy(zlink_msg_data(&msg), "DONE", 4);
-zlink_send(worker_signal, &msg, 1, 0);
+zlink_send_part(worker_signal, &msg, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 
-/* Main: poller 루프(zlink_recv)로 "DONE" 수신 */
+/* Main: poller 루프(zlink_recv_part)로 "DONE" 수신 */
 ```
 
 > 참고: `core/tests/integration/test_pair_inproc.cpp` — bind → connect → bounce 패턴
@@ -270,7 +285,7 @@ zlink_bind(socket, "ipc:///very/long/path/.../endpoint.ipc");
 
 ### HWM 동작
 
-peer가 연결되지 않았으면 PAIR 송신은 queue에 쌓이지 않고 곧바로 backpressure로 처리된다(`ZLINK_DONTWAIT`면 `ZLINK_SUBMIT_BACKPRESSURED`, 아니면 sndtimeo까지 대기). peer가 연결돼 있고 느릴 때는 HWM까지 queue에 쌓이고, HWM을 넘으면 `zlink_send()`가 대기(기본) 또는 `ZLINK_SUBMIT_BACKPRESSURED`(`ZLINK_DONTWAIT`)를 반환한다.
+peer가 연결되지 않았으면 PAIR 송신은 queue에 쌓이지 않고 곧바로 backpressure로 처리된다(`ZLINK_DONTWAIT`면 `ZLINK_SUBMIT_BACKPRESSURED`, 아니면 sndtimeo까지 대기). peer가 연결돼 있고 느릴 때는 HWM까지 queue에 쌓이고, HWM을 넘으면 `zlink_send_part()`가 대기(기본) 또는 `ZLINK_SUBMIT_BACKPRESSURED`(`ZLINK_DONTWAIT`)를 반환한다.
 
 ### LINGER 설정
 
