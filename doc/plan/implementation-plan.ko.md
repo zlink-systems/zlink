@@ -96,7 +96,7 @@ bindings 0.14.0 전환 완료(릴리스·로컬 패키지·참조 모두). 아�
 | 항목 | 상태 | 비고 |
 |---|---|---|
 | P0-1 cpp 조회 묶기 | **부분 완료** `4681eb7931` | warm 경로 materialization·dispatch projection 통합. **fence 이중 조회(:9618·:9708)는 유지 판정** — backlog 선택 직전의 의도된 재판정(finish_move_replay liveness, 02 §3). 병합 시 host_lifecycle 실패 실증 |
-| P0-2 java wrapper lock | **보류** | 에이전트 [의심] 승인 — wrapper lock 39곳(31 아님), 상위 배타성 증거 없음(receive/transport lock 병행 경로). 별도 sol 조사로 이월 |
+| P0-2 java wrapper lock | **완료** | 39곳 전수 호출자 추적 — 증명된 잉여 9곳 제거·30곳 유지(지점별 근거 표), 게이트 1485 그린. DEALER·SUB bind는 단일 owner 계약 부재로 유지 |
 | P0-3 java BigInteger | **완료** `33410f2172` | long 포화 검사로 대체, §11 표현 범위 초과 거절 계약 보존 + 회귀 test |
 | P0-4 두 축 회계 조사 | **완료** | §2.1 — 판정은 04 §8로 스펙 확정, 잔여는 P1-6·P2-6·P3-6·P4-8 |
 | P1 dotnet | **전체 완료** — P1-1~3 `e877bfff37` · P1-4 `72d7def878`(판정 정정) · P1-5·P1-6 `51325d6c4f` | `_barrierGate` 16곳은 relocation C2로 **캠페인 밖 이월**(06 §6 유형 ③ callback 재설계 필요: SpotRetire:1006 재진입, queue-open→replay-reservation→ingress-open 원자성). P1-6 이관 판별 = ZLinkApplicationJobQueueInvocation의 이관 가능 owner 예약 |
@@ -104,7 +104,8 @@ bindings 0.14.0 전환 완료(릴리스·로컬 패키지·참조 모두). 아�
 | P3 cpp | **전체 완료** — P3-1(+1b lane 강제) `b5cab18d17` · P3-2·3-3 `859da93dd9` · P3-5·3-6 `be88350b98` | P3-6에서 이탈 2건 발견·수정(transferred 재판정 제거·mailbox→queue claim 이관 계상). timer running 미복원(timer_runtime.cpp:339)은 기존 결함 후보 이월 |
 | P4 node | **전체 완료** — 개명 3종 `bd83b30db5` · 조율자 `50c6d586af` · P4-8 `a50e1ffd3f` | |
 | P5 계약 test | **node 완료** `76545cc342` · **java 완료** `fe848a0074` · dotnet·cpp 진행 중 | node ⑨가 executeLifecycle lane 결함을 잡아 수정. java ⑬은 공개 표면 guard 충족 판정, 오류 kind 발산은 spec-gap 이월 |
-| 마감 게이트 (unit·cross-language e2e·샘플 6종 ZoneWorld 제외) | 대기 | §1.1 |
+| 마감 게이트 (unit·cross-language e2e·샘플 6종 ZoneWorld 제외) | **완료** | ① unit 전부 그린(dotnet 1913·java 1485·cpp 44/45·node) ② e2e 32/32 ③ 샘플: dotnet·node·kotlin 6/6, java 5/6+Bingo(기존 간헐), cpp 4/6+TicTacToe·Bingo(기존 — 부록 B 등재, 이분 실증) |
+| 후속(캠페인 중 완결) | **완료** | P1-4c `_barrierGate` 16곳 state lane 통합(유형 ③, 1913/1913) · java 재진입 의존 전수 감사(결함 0, withLocks self-call은 허용 판정) · 스펙 고정 2건(06 §6 재진입 의존 금지·relocation §4.6 선형화점) — sol 리뷰 후 반영 |
 
 §9 ② 판정(2026-08-28 감독관): 계층별 참조 분리 채택 — lane primitive·조율자는 dotnet,
 큐 primitive·turn 경계는 java. §9 ①은 P4 범위 제외 유지(현행 보존).
@@ -703,6 +704,14 @@ CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
   ZlinkRequestException`, `ZLinkJavaRawMeshNode.requestSpot:1812`). 같은 트리에서 **단독 ×3
   전부 통과 + 전체 core 스위트 ×2 전부 통과 = 5/5 그린**으로 재현 실패. 수정 6건의 호출
   스택에도 없다. 위 두 건과 같은 full-run 부하 한정 flake로 판정.
+- **Bingo record-report 미관측은 java·cpp 모두 기존 결함이다** (2026-08-28 마감 게이트 이분 실증):
+  지문 = 시나리오 검사 `bingo-record reported`(java, 간헐 — 기준선 재현·동일 코드 tree에서
+  통과/실패 혼재, 실패 시 `ReportBingoResultReq` 전송 자체 0건) ·
+  `Expected player-2 record report exactly 1 time(s), found 0.`(cpp, 결정적 — 기준선
+  `3933334d46`부터 HEAD까지 전 시점 2/2 동일, exact 검사를 추가한 `3cbfbde4f9a`가 잠복
+  결함을 드러냄. 이 실행들에서 종전 "후반 정지" 지문은 재현되지 않음). 원인 후보 =
+  one-way source-leave의 실패 삼킴(`ZLinkActorRuntime.java:2031` 계열) — TicTacToe
+  JoinGameNotify와 같은 owner-side delivery 계약 설계 대상, 캠페인 범위 밖 이월.
 - **cpp TicTacToe `JoinGameNotify` 간헐 유실도 기존 결함이다** (2026-08-27 worktree 이분 실증 —
   배치9 이전 시점에서 6회 중 4회 동일 실패): detached one-way bound-session 전달이 remote
   submit 성공을 delivery로 간주, owner 측 stream write 미확인. 근본 수정은 owner-side delivery
