@@ -183,60 +183,34 @@ Actor가 session에 보내는 push는 `boundSessionSend(36)` record로 session o
 `AuthorityOwnerGeneration`과 expected binding generation이 모두 current일 때만 실제
 STREAM connection에 제출한다.
 
-**Push의 예약은 source에서 끊기지 않고 session owner로 이관되며, 어느 쪽도 조용히
-폐기하지 않는다.** 이 계약의 경계는 다음과 같다.
+**Binding의 완료와 그 인지는 해석의 여지가 없는 두 선형화점으로 정의한다. push의
+current 판정에 그 선형화점 밖의 사본을 쓰지 않는다.**
 
-1. **공개 완료는 source-local 수락이다.** Caller가 관찰하는 push 성공은 source Actor
-   owner의 relay 수락이며, client delivery 보장이 아니다. 공개 완료 의미와 시점은 이
-   계약으로 바뀌지 않고, 공개 성공 뒤의 결과가 caller의 두 번째 terminal이 되지 않는다.
-   공개 성공 전에 source는 retained payload의 count·byte를 자기 owner FIFO 예약으로
-   확보한다 — 이 예약은 아래 3의 책임 해제 또는 내부 실패 정산에서만 반환된다.
-2. **식별과 deadline.** Source Actor owner는 push마다 0이 아닌 128-bit relay ID와,
-   public call 시작 시
-   [제출 규칙](../01-execution/01-submit-and-completion.ko.md)의 send deadline으로부터
-   고정한 absolute relay deadline을 `boundSessionSend(36)` record에 싣는다. 예약의
-   dedupe key는 (session identity, expected binding generation, relay ID)이고, relay
-   ID의 유일성 범위는 그 binding generation 안이다 — key가 다르면 다른 예약이다.
-   Deadline은 재시작·연장하지 않는다 — owner lease 갱신이 이 deadline을 늘리지 않는다.
-3. **인수 확인 전에는 source가 책임을 보유하며, binding당 미확인 relay는 하나다.**
-   원격 제출 성공은 이관이 아니다 — session owner가 예약을 claim했다는 **인수
-   확인**(owner→source control record, 같은 dedupe key)을 받은 뒤에만 source가 책임을
-   해제한다. 같은 binding의 다음 push는 앞선 relay의 인수 확인 뒤에 원격 제출한다
-   (stop-and-wait) — 재전송이 후속 push를 앞지르는 일이 구조적으로 없다. 인수 확인을
-   받지 못한 재전송은 owner 연결 재수립 또는 유한한 확인 timeout에서만 같은 relay
-   ID·같은 record로 보낸다(busy-loop·주기 polling 금지). Relay deadline이 다하면
-   source는 그 예약을 **caller terminal이 아닌 내부 실패로** 정산하고 예약을 반환한다.
-   인수 확인 전 재전송은
-   [04 §8](../01-execution/04-application-job-queue-and-backpressure.ko.md#8-backpressure-3단계와-한도-종류)이
-   금지하는 자동 재시도가 아니다 — 아직 이관되지 않은 자기 예약의 제출이다.
-4. **인수 뒤에는 session owner가 정확히 한 번 정산한다.** 예약 상태는
-   `Absent → Claimed → Settled` 로만 전이한다.
-   - 모든 수신 record는 상태 판정보다 먼저 absolute relay deadline을 검사한다 —
-     만료된 record는 어떤 상태에서도 claim하지 않고 거부한다(source는 이미 deadline
-     정산을 마친 뒤다).
-   - `Absent`에서 만료 전 record를 받으면 원자적으로 `Claimed`로 전이하고 인수 확인을
-     보낸다.
-   - `Claimed`·`Settled` 상태에서 같은 dedupe key의 중복 record를 받으면 outbound에
-     다시 넣지 않고 같은 인수 확인만 재전송한다 — 인수 확인 유실을 이렇게 복구한다.
-   - 같은 dedupe key인데 immutable field(payload·relay deadline·source lifecycle
-     fence)가 다르면 `ProtocolError`다.
-   - Owner는 generation 검증, route 판정과 STREAM connection의 outbound queue
-     admission까지를 책임지고, admission 성공 또는 분류된 실패(route 무효
-     `Unavailable`, relay deadline `DeadlineExceeded`, 종료 `ShuttingDown`)로
-     내부적으로 한 번 `Settled`를 확정한다. `Settled` 항목은 terminal 결과를 보관해
-     중복 record의 확인 재전송에 쓰고, relay deadline 경과 후 제거한다.
-   - 이 보장은 정상 실행과 orderly shutdown에서 성립한다. Owner process가 비정상
-     종료하면 기존 계약대로 연결을 복구하지 않으며, 미인수 예약은 3의 source deadline
-     규칙이 정산하고 인수된 예약의 durable 보장은 요구하지 않는다.
-5. **정산 결과는 조용히 사라지지 않는다.** 실패·만료 정산의 관측 기록 여부·형식·
-   `reason`/`action` token은
-   [flow tracing](../06-observability/03-message-flow-tracing.ko.md)의 닫힌 vocabulary와
-   기록 규칙이 소유한다 — 이 계약은 정산이 관측 불가능하게 소실되지 않아야 한다는
-   것만 요구한다.
+1. **Actor owner 측 완료 — terminal reply 반환 전.** Actor owner는 위 검증을 통과한
+   binding 등록을 — 그 노드에서 Actor→session 송신 경로가 참조하는 상태까지 포함해 —
+   **terminal reply를 반환하기 전에 하나의 소유 turn 안에서** 끝낸다. reply가 관찰된
+   뒤에는 그 노드의 어떤 구성요소도 이 binding을 모르는 상태로 남지 않는다. 따라서
+   binding 성립 이후 실행되는 Actor handler(join callback 포함)가 보내는 push는 그
+   노드에서 항상 등록된 binding으로 관찰된다.
+2. **Session owner 측 완료 = binding 완료의 인지 시점.** Session owner는 reply를 받은 뒤
+   registry의 binding commit과, push 판정·STREAM 제출 경로가 참조하는 **모든 파생
+   상태(projection·route 사본)를 하나의 선형화점에서 함께 공개한다.** 이 선형화점이
+   "binding이 완료되었다"를 인지하는 시점이며, bind caller의 성공 완료는 이 선형화점
+   뒤에만 관찰된다. commit이 관찰 가능해진 뒤 도착한 record가 아직 갱신되지 않은 파생
+   상태와 대조되는 창을 만들지 않는다.
+3. **판정 권위는 하나다.** push의 current 판정은 [§8.1](#81-seal-held-message와-route-전환)이
+   열거한 Session owner 검증 항목(위의 네 generation 값)만 사용한다. 파생 사본의
+   미갱신·불일치를 binding이 stale하다는 근거로 쓰지 않는다. Source 측도 전송 조건으로
+   binding 정체성(SessionRid·binding generation)과 위 열거 항목 외의 field 일치를
+   요구하지 않는다 — binding 성립 후 owner lifecycle field가 갱신되어도 같은 binding의
+   push는 현행 등록 route로 전송된다.
+4. **거절은 조용히 사라지지 않는다.** current가 아니어서 제출을 거절한 push는
+   [flow tracing](../06-observability/03-message-flow-tracing.ko.md)의 기존 닫힌
+   vocabulary로 기록한다.
 
-이 계약이 요구하지 않는 것 — client read ACK, client 소비 확인, exactly-once client
-delivery. wire 표현(record 36의 relay ID·deadline field와 인수 확인 record)은 service
-wire schema가 소유한다.
+이 계약이 요구하지 않는 것 — 전달 확인 응답(ack), 재전송, client delivery 보장.
+one-way push의 공개 완료 의미는 [제출과 완료](../01-execution/01-submit-and-completion.ko.md)의
+one-way 계약을 그대로 따른다.
 
 정상 경로를 한 그림으로 보면 다음과 같다. 이 그림은 bind·relay·push의 논리 순서와 각
 단계의 검증 주체만 보여준다. Node 경계와 physical socket의 위치는
