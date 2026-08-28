@@ -6015,6 +6015,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                                    + " parts=" + std::to_string (mailbox_record.parts.size ()));
                 record.release_mailbox_reservation = release_mailbox_reservation;
                 record.retain_mailbox_reservation = retain_mailbox_reservation;
+                record.transferred_owner_byte_cost = claim_holder->claimed_bytes;
                 dispatch (owner, record, decode_application (payload));
                 ++count;
                 application_dispatch_started = true;

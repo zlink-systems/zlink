@@ -342,13 +342,16 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
         co_return result_t<timer_tick_t>::failure (framework_error_kind_t::protocol_error,
                                                    "SPOT timer handler is not configured");
     }
-    if (!context || !context->spot_instance || !context->channel_runtime
-        || !context->channel_runtime->serializers) {
+    if (!context) {
         co_return result_t<timer_tick_t>::failure (framework_error_kind_t::protocol_error,
                                                    "SPOT timer context is not configured");
     }
-
-    if (!context->enter_callback ()) {
+    const auto fire_snapshot = context->enter_timer_callback ();
+    if (!fire_snapshot.configured) {
+        co_return result_t<timer_tick_t>::failure (framework_error_kind_t::protocol_error,
+                                                   "SPOT timer context is not configured");
+    }
+    if (!fire_snapshot.admitted) {
         std::lock_guard lock (state->mutex);
         state->running = false;
         co_return detail::boundary_failure<timer_tick_t> (
@@ -375,12 +378,11 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
 
     try {
         auto ticks = make_ticks (*state, fire_count);
-        auto spot_keep_alive = context->spot_instance;
         /* Timer callbacks have no inbound message: they start a new flow with
          * origin=timer when tracing capture is enabled (flow-correlation §4.2). */
         auto timer_flow = framework::runtime::flow_context_t::enter_current_or_create (
           flow_origin_t::timer,
-          message_flow_tracer_t (context->channel_runtime->dispatch).mode ());
+          message_flow_tracer_t (fire_snapshot.channel_runtime->dispatch).mode ());
         auto handler_instance = state->handler_instance.lock ();
         if (!handler_instance) {
             throw framework_exception_t (
@@ -389,8 +391,8 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
         }
         for (const auto &tick : ticks) {
             auto handler_task = state->handler_invoker (
-              spot_keep_alive.get (), handler_instance.get (),
-              *context->channel_runtime->serializers, tick);
+              fire_snapshot.spot_instance.get (), handler_instance.get (),
+              *fire_snapshot.channel_runtime->serializers, tick);
             (void) co_await handler_task;
         }
         reset_running ();

@@ -610,6 +610,7 @@ class spot_serial_executor_t
 
         auto spot_options = options;
         spot_options.byte_cost = queue_t::fixed_work_byte_cost;
+        spot_options.transfer_owner_reservation = {};
         return executor->execute_actor (
           std::move (name),
           [this, work = std::move (work), spot_options,
@@ -1015,7 +1016,16 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         return completion ? (*completion) (true) : true;
     }
 
+    struct timer_fire_state_snapshot_t
+    {
+        std::shared_ptr<void> spot_instance;
+        std::shared_ptr<channel_runtime_state_t> channel_runtime;
+        bool configured = false;
+        bool admitted = false;
+    };
+
     bool enter_callback ();
+    timer_fire_state_snapshot_t enter_timer_callback ();
     void leave_callback () noexcept;
     bool is_current_callback_thread () const;
     bool admission_blocked () const noexcept
@@ -1667,7 +1677,9 @@ class spot_node_runtime_t
                            const std::vector<zlink::message_t> &parts,
                            service_provider_t &services,
                            serializer_registry_t &serializers,
-                           std::function<void ()> before_application_handler = {}) const;
+                           std::function<void ()> before_application_handler = {},
+                           std::function<void ()> transfer_owner_reservation = {},
+                           std::size_t transferred_owner_byte_cost = 0) const;
     result_t<std::size_t> dispatch_multicast (std::string topic,
                                               const std::vector<zlink::message_t> &parts,
                                               service_provider_t &services,
@@ -1963,7 +1975,9 @@ class spot_node_runtime_t
       zlink::routing_id_t inbound_source_node_rid = zlink::routing_id_t::from (std::uint32_t{0}),
       runtime::protocol::wire_operation_id_t inbound_operation = {},
       std::uint64_t inbound_reply_route_id = 0,
-      std::optional<std::string> inbound_deadline = std::nullopt);
+      std::optional<std::string> inbound_deadline = std::nullopt,
+      std::function<void ()> transfer_owner_reservation = {},
+      std::size_t transferred_owner_byte_cost = 0);
     result_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
 
     template <typename TActor>
@@ -2283,23 +2297,6 @@ class spot_node_runtime_t
                + ":" + std::string (actor_ref.actor_id ().value ());
     }
 
-    /* Registration of a factory-owned actor instance. The lookup and the
-     * install both run on the node state lane and keep the registry and its
-     * identity index in step; the factory itself stays outside the lane, so
-     * the caller constructs only after the lookup misses. */
-    std::shared_ptr<void> registered_actor_instance (const actor_ref_t &actor_ref,
-                                                     const std::string &key) const
-    {
-        return _state->lane.run ([&] {
-            const auto found = _state->actor_instances.find (key);
-            if (found == _state->actor_instances.end () || !found->second) {
-                return std::shared_ptr<void>{};
-            }
-            detail::record_actor_instance_index_unlocked (*_state, actor_ref, found->second.get ());
-            return found->second;
-        }).get ();
-    }
-
     /* `refuse_destroyed` re-checks the destroy tombstone in the same lane turn
      * that installs, so a destroy landing inside the factory window cannot be
      * resurrected by a late install; the caller then reports the actor as
@@ -2551,10 +2548,25 @@ class spot_node_runtime_t
                          std::string mesh_name = {},
                          std::function<task_t<void> (void *)> staged_restore = {},
                          std::uint64_t authority_owner_generation = 1);
-    result_t<spot_context_t> actor_join_context (spot_id_t spot_id,
-                                                 const zlink::message_t &request);
-    result_t<spot_node_builder_state_t::actor_factory_registration_t>
-    actor_factory (const actor_ref_t &actor_ref) const;
+    struct actor_join_state_snapshot_t
+    {
+        std::optional<spot_context_t> context;
+        std::optional<spot_node_builder_state_t::actor_factory_registration_t> registration;
+        std::optional<spot_actor_admission_callbacks_t> admission;
+        std::shared_ptr<void> actor_instance;
+        std::shared_ptr<void> spot_instance;
+        serializer_registry_t *serializers = nullptr;
+        std::string mesh_name;
+        std::string node_rid;
+        spot_id_t source_spot_id;
+        std::chrono::milliseconds message_follow_duration{0};
+        bool has_root_services = false;
+    };
+
+    actor_join_state_snapshot_t actor_join_state_snapshot (
+      const actor_ref_t &actor_ref,
+      spot_id_t spot_id,
+      const zlink::message_t &request);
     result_t<spot_actor_admission_callbacks_t>
     actor_admission (spot_context_t &context,
                      std::type_index actor_type,

@@ -289,11 +289,12 @@ struct receive_record_t
     std::optional<actor_join_completion_t> join_completion;
     std::optional<actor_control_t> actor_control;
     std::optional<send_ready_data_t> send_ready;
-    /* An application mailbox claim remains reserved until the framework
-     * handler reaches a terminal result. A callback that submits the record
-     * asynchronously calls retain_mailbox_reservation before returning and
-     * calls release_mailbox_reservation at that terminal boundary.
-     * Infrastructure and local records leave both callbacks empty. */
+    /* An application mailbox claim remains reserved until it transfers into
+     * the owner execution queue. The queue accounts this exact byte cost
+     * without a second capacity decision, then invokes the release callback.
+     * The terminal path retains the callback only as a failure fallback.
+     * Infrastructure and local records leave these fields empty. */
+    std::size_t transferred_owner_byte_cost = 0;
     std::function<void ()> retain_mailbox_reservation;
     std::function<void ()> release_mailbox_reservation;
     std::function<void ()> complete_stateful_dispatch;

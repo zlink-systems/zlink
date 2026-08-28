@@ -19,6 +19,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -767,9 +768,10 @@ bool verify_serial_queue_lanes_and_byte_budget ()
            && queue.pending_bytes () == 0;
 }
 
-bool verify_host_reserved_application_bypasses_owner_capacity ()
+bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
 {
     using namespace zlink::framework::runtime;
+    using namespace zlink::framework::runtime::mesh;
 
     offload_executor_t executor (1);
     serial_execution_queue_options_t options;
@@ -782,8 +784,10 @@ bool verify_host_reserved_application_bypasses_owner_capacity ()
     std::condition_variable changed;
     std::optional<serial_execution_queue_t::async_completion_t>
       complete_active;
+    std::optional<serial_execution_queue_t::async_completion_t>
+      complete_transferred;
     bool active_entered = false;
-    bool reserved_follower_ran = false;
+    bool transferred_entered = false;
     if (!queue.try_post_async (
           "owner-cap-active",
           [&] (auto complete) {
@@ -802,23 +806,82 @@ bool verify_host_reserved_application_bypasses_owner_capacity ()
         }
     }
 
-    const serial_work_options_t host_reserved{
+    service_mailbox_t mailbox (2, 4096, 1, 1024);
+    service_mailbox_record_t record;
+    record.owner = "transferred-owner";
+    record.domain = service_mailbox_domain_t::application;
+    record.parts.emplace_back (512, std::uint8_t{0x2a});
+    if (!mailbox.try_enqueue (std::move (record))) {
+        (*complete_active) ([] {});
+        queue.drain ();
+        return false;
+    }
+    auto claim = mailbox.try_claim_owner (
+      service_mailbox_domain_t::application, "transferred-owner", 1, 4096);
+    if (!claim || claim->claimed_messages != 1
+        || claim->claimed_bytes <= serial_execution_queue_t::fixed_work_byte_cost) {
+        (*complete_active) ([] {});
+        queue.drain ();
+        return false;
+    }
+    std::atomic_int transfer_count{0};
+    std::atomic_bool transfer_released{false};
+    const serial_work_options_t transferred{
       serial_work_lane_t::application,
-      serial_execution_queue_t::fixed_work_byte_cost,
-      true};
-    if (!queue.try_post (
-          "host-capacity-reserved",
-          [&] { reserved_follower_ran = true; }, host_reserved)
-        || queue.pending_count (serial_work_lane_t::application) != 2) {
-        if (complete_active) {
-            (*complete_active) ([] {});
+      claim->claimed_bytes,
+      [&mailbox, claim, &transfer_count, &transfer_released] {
+          transfer_count.fetch_add (1, std::memory_order_relaxed);
+          transfer_released.store (mailbox.release (*claim), std::memory_order_release);
+      }};
+    const auto transferred_posted = queue.try_post_async (
+      "transferred-owner-reservation",
+      [&] (auto complete) {
+          std::lock_guard lock (gate);
+          complete_transferred.emplace (std::move (complete));
+          transferred_entered = true;
+          changed.notify_all ();
+      },
+      transferred);
+    if (!transferred_posted) {
+        (*complete_active) ([] {});
+        queue.drain ();
+        return false;
+    }
+    if (transfer_count.load (std::memory_order_relaxed) != 1
+        || !transfer_released.load (std::memory_order_acquire)
+        || mailbox.release (*claim)
+        || queue.pending_count (serial_work_lane_t::application) != 2
+        || queue.pending_bytes ()
+             != serial_execution_queue_t::fixed_work_byte_cost + claim->claimed_bytes) {
+        (*complete_active) ([] {});
+        {
+            std::unique_lock lock (gate);
+            (void) changed.wait_for (lock, std::chrono::seconds (1),
+                                     [&] { return transferred_entered; });
         }
+        if (complete_transferred)
+            (*complete_transferred) ([] {});
         queue.drain ();
         return false;
     }
     (*complete_active) ([] {});
+    {
+        std::unique_lock lock (gate);
+        if (!changed.wait_for (lock, std::chrono::seconds (1),
+                              [&] { return transferred_entered; })) {
+            return false;
+        }
+    }
+    if (queue.pending_count (serial_work_lane_t::application) != 1
+        || queue.pending_bytes () != claim->claimed_bytes) {
+        (*complete_transferred) ([] {});
+        queue.drain ();
+        return false;
+    }
+    (*complete_transferred) ([] {});
     queue.drain ();
-    return reserved_follower_ran && queue.pending_count () == 0;
+    return transfer_count.load (std::memory_order_relaxed) == 1
+           && queue.pending_count () == 0 && queue.pending_bytes () == 0;
 }
 
 bool verify_serial_queue_owner_time_budget ()
@@ -5389,7 +5452,7 @@ int main ()
     if (!verify_serial_queue_lanes_and_byte_budget ()) {
         return 50;
     }
-    if (!verify_host_reserved_application_bypasses_owner_capacity ()) {
+    if (!verify_transferred_owner_reservation_is_continuous_until_terminal ()) {
         return 112;
     }
     if (!verify_serial_queue_owner_time_budget ()) {
