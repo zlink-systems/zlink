@@ -293,15 +293,9 @@ wait_log_total_at_least "gamequest-api event-routed player=" 4 \
   "$LOG_DIR/api-a.log" "$LOG_DIR/api-b.log"
 wait_log_total_at_least "gamequest-mission processed player=" 4 \
   "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
-wait_log_count "$LOG_DIR/mission-a.log" \
-  "gamequest-mission reconciled player=player-alice quest=first-hunt" 1 || \
-  wait_log_count "$LOG_DIR/mission-b.log" \
-    "gamequest-mission reconciled player=player-alice quest=first-hunt" 1
-if [[ "$(log_count "gamequest-mission reconciled player=player-alice quest=first-hunt" \
-  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")" != "1" ]]; then
-  echo "Expected one reconcile evidence row for player-alice." >&2
-  exit 1
-fi
+wait_log_total_count \
+  "gamequest-mission reconciled player=player-alice quest=first-hunt" 1 \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
 
 curl --fail --silent --request POST \
   "$mission_a_http/self-check/owner/player-alice/close" \
@@ -312,15 +306,9 @@ alice_events="$(curl --fail --silent "$mission_a_http/self-check/events")"
 grep -q '"questId":"first-hunt"' <<<"$alice_events"
 grep -q '"eventType":"QuestProgressReconciledEvent"' <<<"$alice_events"
 grep -q '"currentCount":5' <<<"$alice_events"
-wait_log_count "$LOG_DIR/mission-a.log" \
-  "gamequest-mission replayed player=player-alice generation=" 1 || \
-  wait_log_count "$LOG_DIR/mission-b.log" \
-    "gamequest-mission replayed player=player-alice generation=" 1
-if [[ "$(log_count "gamequest-mission replayed player=player-alice generation=" \
-  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")" != "1" ]]; then
-  echo "Expected one replay evidence row for player-alice." >&2
-  exit 1
-fi
+wait_log_total_count \
+  "gamequest-mission replayed player=player-alice generation=" 1 \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
 
 "$(app_bin Client Client)" --config "$owner_unavailable_client_config" \
   >"$LOG_DIR/owner-unavailable-client.log" 2>&1 &

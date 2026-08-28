@@ -174,6 +174,25 @@ final class JvmE2eRunnerIsolationContractTest {
     }
 
     @Test
+    void javaGameQuestPollsMissionEvidenceAcrossAllEligibleOwners() throws IOException {
+        Path path = javaRoot().resolve("samples/java/GameQuest/run_sample.sh");
+        String runner = Files.readString(path)
+            .replace("\\\n", " ")
+            .replaceAll("\\s+", " ");
+        for (String evidence : List.of(
+                "gamequest-mission reconciled player=player-alice quest=first-hunt",
+                "gamequest-mission replayed player=player-alice generation=")) {
+            String collectiveWait = "wait_log_total_count \"" + evidence + "\" 1 "
+                + "\"$LOG_DIR/mission-a.log\" \"$LOG_DIR/mission-b.log\"";
+            assertTrue(runner.contains(collectiveWait),
+                path + " must poll both eligible mission owners together for " + evidence);
+            assertFalse(runner.contains(
+                    "wait_log_count \"$LOG_DIR/mission-a.log\" \"" + evidence + "\""),
+                path + " must not wait for mission-a before checking mission-b for " + evidence);
+        }
+    }
+
+    @Test
     void aggregateRunnersLeaveWholeRunLocksToChildren() throws IOException {
         for (Path aggregate : List.of(
                 e2eRoot().resolve("run_e2e_all.sh"),
