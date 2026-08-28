@@ -1,6 +1,6 @@
 # 구현 플랜 — 직렬 실행기 계층 정렬
 
-[계약: 스펙 07](../../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) · 이 폴더의 유일한 문서다 — 이전 조사·초안은 git 이력(`e5c38ff111` 이전)에 있다
+[계약: 스펙 07](../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) · 이 폴더의 유일한 문서다 — 이전 조사·초안은 git 이력(`e5c38ff111` 이전)에 있다
 
 이 문서는 **네 언어 runtime의 실행기 코드를 스펙 07에 맞추는 순서**를 정한다. 무엇이 옳은지는
 스펙 07이 소유한다 — 이 문서는 그것을 여기에 다시 적지 않고, 어떤 순서로 어느 파일을 고치고
@@ -10,8 +10,8 @@
 
 | # | 문서 | 역할 |
 |---|---|---|
-| 1 | [스펙 07 직렬 실행기 계층](../../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) | **계약.** 코드가 여기에 맞춰진다 |
-| 2 | [스펙 06 상태 소유와 state lane](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md) | queue map을 무엇으로 지키는가(C1·C2 판별) |
+| 1 | [스펙 07 직렬 실행기 계층](../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) | **계약.** 코드가 여기에 맞춰진다 |
+| 2 | [스펙 06 상태 소유와 state lane](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md) | queue map을 무엇으로 지키는가(C1·C2 판별) |
 | 3 | 스펙 07 | 현행 코드 실측과 언어별 대비 작업 |
 
 ---
@@ -35,7 +35,7 @@
 | 4 | 같은 트리 `02-handler-turn-and-execution-gate.ko.md` §1·§3·§7·§10 | queue/gate 분리, `Yield` claim, lane 기본값, 공유 실행 자원 |
 | 5 | `00-foundation/06-framework-api.ko.md` §11 | mailbox 두 축·반환 시점·scheduler |
 | 6 | `03-spot-actor/04-actor-model.ko.md` §3 | Actor queue 불변 — "Actor payload는 항상 그 Actor queue에, Spot application queue에 넣지 않는다" |
-| 7 | [`../concurrency-redesign/rules.ko.md`](../concurrency-redesign/rules.ko.md) §4·§5.2·§10 | 게이트 매트릭스와 알려진 기존 실패, 빌드 트리 규칙, **lane 전환 절차**(P1-4가 따른다) |
+| 7 | 이 플랜 **부록 B·C** | 게이트 매트릭스와 알려진 기존 실패(B), **lane 전환 절차**(C — P1-4가 따른다) |
 
 
 용어집(`00-foundation/02-glossary.ko.md`)의 `User Spot execution mode`·`Spot turn`·`Owner`는
@@ -89,7 +89,7 @@ bindings 0.14.0 전환 완료(릴리스·로컬 패키지·참조 모두). 아�
 | dotnet | `dotnet test tests/Zlink.Framework.UnitTests -c Release` | **1901/1901** |
 | java | `./gradlew cleanTest test` (`cleanTest` 필수 — UP-TO-DATE 함정) | 전체 그린. full-run 한정 flake: `ZLinkMicrometerMetricSinkTest`·`RawMeshNodeM6ATest`·`AsyncSerialQueueTest…YieldRegistration` — 단독 재실행으로 판정 |
 | cpp | `cmake --build build -j 14` 후 `ctest --test-dir build -L 'framework-(unit\|contract)' -LE 'e2e\|sample\|perf'` | **44/45** — `layout_contract` 1건은 기존 샘플 결함(`OrderWorkflow` blocking `result()`). exit 86/134는 1회 재실행 |
-| node | `npx tsc -b tsconfig.build.json` 후 `npm test` | contract 기존 실패 23건 등재(`../concurrency-redesign/rules.ko.md` §4) — 회귀 판정은 실패 이름 집합 대조로. lint 157건(0.14.0 타입 적응)은 별도 수정 진행 중 |
+| node | `npx tsc -b tsconfig.build.json` 후 `npm test` | contract 기존 실패 23건 등재(부록 B) — 회귀 판정은 실패 이름 집합 대조로. lint 157건(0.14.0 타입 적응)은 별도 수정 진행 중 |
 
 ### 0.5 진행표 — 새 세션이 이 표를 갱신한다
 
@@ -132,8 +132,7 @@ P1~P5가 끝나면 다음 세 가지를 이 순서로 확인해야 캠페인이 
 2. **cross-language e2e**
 3. **샘플 6종 동작 확인 — ZoneWorld 제외**
 
-명령과 판정 기준은 [`../concurrency-redesign/rules.ko.md`](../concurrency-redesign/rules.ko.md)
-§4 게이트 매트릭스를 그대로 쓴다(알려진 기존 실패 목록 포함). 샘플·harness 실행은 codex
+명령과 판정 기준은 **부록 B**를 그대로 쓴다(알려진 기존 실패 목록 포함). 샘플·harness 실행은 codex
 sandbox가 loopback bind를 막으므로 **감독관이 직접 실행**한다(§0.2).
 
 ## 2. P0 — 구조와 독립인 선행 작업
@@ -151,8 +150,8 @@ P0-1의 근거는 부록 A에 있다. P0-1은 새 설계가 아니라 스펙 07 
 ### 2.1 P0-4 — mailbox 두 축 회계 (자체 조사 2026-08-28, 부분 완료)
 
 **계약.** owner mailbox는 건수·byte 두 축을 하나의 작업으로 예약하고, **반환은 handler가
-끝난 뒤**다([Framework API §11](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명) ·
-[02 §7](../../../framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)).
+끝난 뒤**다([Framework API §11](../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명) ·
+[02 §7](../../framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)).
 `mailboxMessageBudget`·`mailboxByteBudget`은 **MeshNode socket 설정**이다(4언어 exact
 interface 공통).
 
@@ -198,7 +197,7 @@ dotnet은 세 계층 조율자를 모두 갖고 있다. **조율자는 이름을
 
 **dotnet 실행 큐에는 mailbox의 count·byte 회계가 없다(실측 2026-08-28).** admission이
 relocation seal과 stopping 상태만 본다. java·cpp·node는 두 축을 갖고 있으므로
-[Framework API §11](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)의
+[Framework API §11](../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)의
 두 축 계약을 dotnet이 어디서 만족하는지 확인이 필요하다 — `ZLinkManagedMeshNode`의
 `SetMailboxBudgets` 경로가 그 자리일 수 있다. **P0-4로 조사한 뒤 P1 범위를 정한다.**
 
@@ -207,7 +206,7 @@ relocation seal과 stopping 상태만 본다. java·cpp·node는 두 축을 갖�
 | P1-1 | `ZLinkActorDispatchMailbox` → `ZLinkActorSerialExecutor` | `Runtime/Actors/ZLinkActorDispatchMailbox.cs` | 이전 이름이 저장소에서 0건 |
 | P1-2 | `ZLinkStreamSessionSerialExecutor` → `ZLinkSessionSerialExecutor` | `Runtime/Streams/ZLinkStreamSessionSerialExecutor.cs` | 이전 이름 0건 |
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
-| P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 — 절차는 [`../concurrency-redesign/rules.ko.md`](../concurrency-redesign/rules.ko.md) §10 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
+| P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 — 절차는 **부록 C** | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | 상수로 박힌 `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`을 정책 주입으로 바꾼다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs:7,8` | `ZLinkExecutionLanePolicy` 일곱 값이 주입된다 |
 | P1-6 | 큐에 count·byte 두 축 계상을 신설한다 — claim 이관 record는 계상만 하고 재판정하지 않는다(04 §8) | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" + 04 §8 내부 확인 조건 |
 
@@ -323,7 +322,7 @@ wrapper를 비우고(P4-1) 그 이름을 조율자에 준다 — 순서를 뒤�
 | 소유 전제 단언 | `isOnLane`·`throwIfReentrant` 호출 위치 | 전제 자리마다 1 |
 
 게이트는 언어별 unit·계약 + Z0 + 6샘플이다
-([`../concurrency-redesign/rules.ko.md`](../concurrency-redesign/rules.ko.md) §4).
+(부록 B).
 
 ---
 
@@ -358,7 +357,7 @@ wrapper를 비우고(P4-1) 그 이름을 조율자에 준다 — 순서를 뒤�
 
 ---
 
-[계약: 스펙 07](../../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) · 이 폴더의 유일한 문서다 — 이전 조사·초안은 git 이력(`e5c38ff111` 이전)에 있다
+[계약: 스펙 07](../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) · 이 폴더의 유일한 문서다 — 이전 조사·초안은 git 이력(`e5c38ff111` 이전)에 있다
 
 ---
 
@@ -604,3 +603,175 @@ thread가 lane B 완료까지 함께 묶이는” 두 state lane 동기 대기�
 회수의 첫 목표는 bridge primitive 자체를 바꾸는 것이 아니라, 이미 같은 메시지에서 반복하는
 node-state projection을 한 turn으로 합치고 callback admission을 상위 serial 실행 단위가
 소유하게 만드는 것이다. 새 lock이나 별도 cache를 추가하면 경로 비용만 다른 형태로 옮길 수 있다.
+
+---
+
+## 부록 B — 게이트 매트릭스와 알려진 기존 실패 (concurrency-redesign/rules §4에서 이관)
+
+회귀 판정의 기준선이다. 여기 등재된 실패는 회귀로 읽지 않는다.
+
+**게이트는 언제나 Claude가 중앙에서 돌린다.** 에이전트 보고가 여러 번 사실과 달랐다.
+
+| 언어 | 단위·계약 | 7샘플 일괄 | 비고 |
+|---|---|---|---|
+| dotnet | `dotnet test tests/Zlink.Framework.UnitTests` | `framework/languages/dotnet/samples/run_samples.sh` | 기준 1893+ / 실패 0 |
+| cpp | `ctest --test-dir build -L 'framework-(unit\|contract)' -LE 'e2e\|sample\|perf'` | `framework/languages/cpp/samples/run_samples.sh` | flake: Bingo 후반 ~1/5, TTT teardown ~1/15. exit 86/134는 1회 재실행 |
+| jvm spring | `:zlink-framework-spring-boot-starter:test`(39) | — | **2026-08-27 캠페인 범위 편입** — jvm R 전환이 `ZLinkRouteMeshRuntimeService`를 건드렸다 |
+| java | `./gradlew :zlink-framework-core:test` | `framework/languages/java/samples/run_samples.sh` | 러너가 java→kotlin 순차. **기준 1149/실패 0**(2026-08-27 cleanTest 실측) |
+| jvm 추가 모듈 | `:zlink-stream-connector:test`(123) · `:zlink-framework-locations-redis:test`(27) | — | **2026-08-27 캠페인 범위 편입** — jvm 결함 6건 수정이 이 두 모듈을 건드렸다. 종전 매트릭스에 없었다 |
+| kotlin | `./gradlew :zlink-framework-kotlin:test` | (같은 러너) | `ZLINK_SAMPLE_LANGUAGES`로 분리 가능 |
+| node | `npx tsc -b tsconfig.build.json --force` 후 `node --test test/contract/*.test.js` + verify:m6a/b/c | `framework/languages/node/samples/run_samples.sh` | **`--force` 필수** |
+
+cross-language e2e: `framework/languages/cpp/cross-language/run_cross_language_smoke.sh`
+(`ZLINK_CPP_BUILD_DIR=../build`) — 모든 언어 락을 잡고 단독으로. CP3/Z0 전용.
+
+**Z0 함정 (2026-08-27 발견 — 반드시 확인)**
+
+- **java cross-language Host는 소스가 아니라 발행된 maven 산출물에 의존한다.**
+  `cross-language/Host/build.gradle.kts`가 `systems.zlink:zlink-framework-core:0.10.0`을 쓰고,
+  설치본(`build/install/.../bin/zlink-cross-language-host`)이 그 jar를 물고 있다. 발견 시점의
+  설치본은 **2026-08-25자**였다. **`./gradlew publishToMavenLocal`을 선행하지 않으면 java
+  스테이지가 수정 이전 코드로 통과 판정을 받는다.** cpp host도 타겟 재빌드가 필요하다.
+- **`MSBUILDDISABLENODEREUSE=1`을 반드시 설정한다** (2026-08-27 실증). "dotnet 무관 스테이지만
+  고르면 dotnet은 안 돈다"는 가정이 틀렸다 — `relocation` 등 일부 스테이지가 내부적으로 dotnet
+  테스트 호스트를 빌드하고, MSBuild 노드가 재사용을 위해 죽지 않고 **언어 락 3개를 계속 붙든다**.
+  실측: `relocation`이 rc=0으로 끝났는데 MSBuild 노드 6개가 cpp·jvm·node 락을 9분 넘게 쥐고 있어
+  다음 스테이지(`java-cross`)가 진입하지 못했다. 해당 PID를 kill하니 즉시 진입했다.
+  다른 세션이 dotnet을 쓰는 중이면 충돌 위험도 있다.
+- 스테이지는 `ZLINK_CPP_CROSS_LANGUAGE_STAGE`로 선택한다(기본 `all`). 전체 20개 중 **9개가
+  dotnet을 상대**로 한다. dotnet 무관 10개:
+  `spot-route` · `message-follow` · `relocation` · `java-cross` ·
+  `user-spot-join-{cpp-java, java-cpp, cpp-node, node-cpp, java-node, node-java}`.
+  dotnet이 다른 세션 소관이거나 락이 점유된 경우 이 10개로 cpp·node·jvm 간 wire 계약을 덮는다.
+
+체크포인트: CP1(요청 1건)=에이전트 집중 테스트, CP2(배치)=Claude 단위·계약+7샘플,
+CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
+
+#### 알려진 기존 실패 (게이트 판정 제외 — 회귀로 읽지 말 것)
+
+- **ZoneWorld**: cpp split-brain·dotnet mesh admission (Z1·Z2). CP3에서 판정, §3.1에서 수정.
+- **jvm `ZLinkMicrometerMetricSinkTest.exportsExactHostCapacityCatalogFromTheSingleStatusProjection`**
+  (2026-08-27 이분 실증): `expected: <5.0> but was: <NaN>`로 간헐 실패한다. 메트릭 집계 타이밍
+  의존이다. **전환분을 되돌린 기준선에서 실패하고 적용 상태에서 통과**했으며, 적용 상태 3회
+  반복도 전부 통과했다. 전환과 무관한 flake다.
+- **cpp Bingo 샘플 `wait observer Entry Spot return` 정지** (2026-08-27 대조 실증):
+  후반 관측자 Entry Spot 복귀 대기에서 오류 없이 멈춘다(placement marker 미도달).
+  **전환 이전부터 있던 실패다** — 소형 배치 커밋 전 11:41 실행과 전환 250여 취득 완료 후
+  18:28 실행이 **정확히 같은 step에서 정지**했다. 오늘 4회 중 4회 실패로, rules가 종전에
+  적어 둔 "후반 ~1/5 flake"보다 나쁘다. flake가 아니라 결정적 실패로 성격을 재분류한다.
+  원인 조사·수정은 캠페인 범위 밖 — 별도 작업으로 이월.
+- **cpp `test_cpp_framework_host_lifecycle` 간헐 실패** (2026-08-27 이분 실증): 별도 worktree의
+  **기준선(커밋된 배치 상태)에서 ×3 중 1회 실패**했다. 즉 `public_host_runtime`·`spot_runtime`
+  전환이 만든 회귀가 아니라 원래 있던 flake다. 중앙 게이트 1차에서 실패해도 개별 재실행에서
+  통과하면 flake로 판정한다(실측: 18:03 1차 실패 → 재실행 rc=0).
+  **주의**: 이 항목은 세션 중 "격리 ①에서 실패 목록에 없었으니 이후 전환이 원인"으로 오판된
+  전례가 있다. 한 번 통과한 것은 flake가 아니라는 증거가 되지 못한다 — 기준선에서 반복 측정해야 한다.
+- **cpp `test_cpp_framework_m6b_runtime`**: Subprocess aborted(exit 86/134 계열). 재실행 통과 확인 후 무시.
+- **cpp `test_cpp_framework_layout_contract`**: ShoppingMall OrderWorkflow main.cpp L350·L446
+  blocking `result()` 지문 — base `3cbfbde4f9`부터. 샘플 수정은 별도 작업.
+- **node `test/contract/*` 23건** (2026-08-27 기준선 대조로 확정): 계약 스위트 전수 실행 시
+  1533건 중 **23건 실패**. node 결함 5건 수정을 되돌린 base 상태와 **실패 이름 집합이 완전히 동일**
+  (기준선에만 있는 것 0·현행에만 있는 것 0, 수정 후에는 +5 테스트/+5 통과/실패 동수).
+  즉 전부 캠페인 이전부터 있던 기존 실패다. 계열: 샘플 게이트(Bingo·GameQuest·ShoppingMall·
+  ZoneWorld·run_samples 자체검사), stream/session teardown·통지, relocation seal, spot managed timer,
+  canonical spec 트리. **이 스위트를 캠페인 중 전수로 돌린 기록이 없어 그동안 계수되지 않았다.**
+  개별 판정·수정은 캠페인 범위 밖 — 별도 작업으로 이월.
+- **node `verify:m6c-runtime` 2건** (stash 대조로 baseline 동일 110/112 확인): ① legacy fence
+  불완전 시 ProtocolError 기대 vs actorType 경로(m6c-actor-join-store-resolution L126 vs
+  remote-actor-join-receiver L63) ② retain identity의 coordinator fence 기대 vs codec 의도적
+  제외(m6c-relocation-wire-codec L415 vs service-stateful-wire-codec L354). 계약 판정 필요 —
+  별도 작업.
+- **java full-run flake**: `ZLinkJavaRawMeshNodeM6ATest.descriptorBackedPeerIntent…`,
+  `ZLinkAsyncSerialQueueTest.queuedRelocationIntent…` — 단독 재실행 통과 확인 후 무시.
+  **`ZLinkJavaRawSpotNodeM6BTest.remoteSpotSendAndRequestUseTheExactRouteFence` 추가**
+  (2026-08-27 실증): jvm 결함 6건 수정 잡의 full-run에서 1회 실패(`ExecutionException:
+  ZlinkRequestException`, `ZLinkJavaRawMeshNode.requestSpot:1812`). 같은 트리에서 **단독 ×3
+  전부 통과 + 전체 core 스위트 ×2 전부 통과 = 5/5 그린**으로 재현 실패. 수정 6건의 호출
+  스택에도 없다. 위 두 건과 같은 full-run 부하 한정 flake로 판정.
+- **cpp TicTacToe `JoinGameNotify` 간헐 유실도 기존 결함이다** (2026-08-27 worktree 이분 실증 —
+  배치9 이전 시점에서 6회 중 4회 동일 실패): detached one-way bound-session 전달이 remote
+  submit 성공을 delivery로 간주, owner 측 stream write 미확인. 근본 수정은 owner-side delivery
+  계약 설계 필요(스펙 판정 대상) — 캠페인 범위 밖 이월. 가설 수정 2회는 실측 기각·원복.
+- 간헐 실패는 이 목록과 대조 전에는 회귀로도 flake로도 단정하지 않는다.
+
+---
+
+## 부록 C — lane 전환 절차 (스펙 06 → rules §10 → 여기로 이관)
+
+P1-4처럼 lock을 state lane으로 옮기는 작업이 따르는 절차다. 공개 계약이 아니라 작업
+지시이므로 스펙이 아닌 이 플랜이 소유한다.
+
+아래는 **전환 작업자용 절차**다. 스펙 06 §7·§8에 있던 것을 여기로 옮겼다 — 공개 계약이
+아니라 캠페인 작업 지시이고, 보고 형식까지 담고 있어 스펙에 둘 자리가 아니었다.
+
+영구 규칙은 스펙에 남겼다 — "반환 전 완료 보장을 보존한다"와 "공개 동기 계약을 lane 도입만을
+이유로 비동기로 바꾸지 않는다"는 [스펙 06 §5 「반환 전 완료 보장」](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#반환-전-완료-보장),
+교차 불변식이면 한 ownership region으로 합친다는 규칙은 [스펙 06 §4](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)가 갖는다.
+
+#### C.1.1 시그니처 전환 규칙
+
+상태 접근 메서드의 시그니처는 다음 규칙에 따라 전환한다.
+
+- **동기 반환을 비동기 반환으로 바꾸는 것을 허용한다.** 호출자가 그 값을 이미 비동기
+  경로 안에서 쓰고 있었다면 그 값은 애초에 스냅샷이었다 — 반환 방식을 비동기로 맞추는
+  것은 기존 관측 가능한 동작을 바꾸지 않는다.
+- **out 파라미터는 반환값으로 합친다.** 하나의 반환값에 성공 여부와 결과를 함께
+  담는다.
+- **실패 시에도 값을 돌려주던 out은 nullable scalar로 기계 치환하지 않는다.** 성공
+  여부와 값을 하나의 스칼라로 뭉치면, "실패했지만 그 실패에 딸린 값도 함께 필요한"
+  경우를 표현할 수 없다 — 예를 들어 거절되었더라도 그 시점의 현재 high-water 값을
+  호출자가 여전히 받아야 하는 경우, nullable scalar 하나로는 성공 값과 실패 시 부가
+  값을 동시에 담지 못한다. 이런 경우는 성공 여부와 값(그리고 실패 시 부가 값)을 함께
+  담는 결과 타입을 만들어 보존한다. 기계적인 nullable 치환은 관측 가능한 동작을
+  바꾸므로 허용하지 않는다.
+- **반환 전 완료 보장을 보존한다.** 원본 동기 메서드가 waiter 등록, epoch·generation
+  캡처, store 판독 또는 exact ownership claim을 반환 전에 완료했다면, 전환 뒤에도
+  caller가 반환을 관찰하기 전에 그 작업이 완료돼 있어야 한다. 비동기 fire-and-forget
+  게시로 바꾸지 않는다.
+- 이 보장을 유지하기 위해 동기 호환 경계가 필요하면 [스펙 06 §5 「완료 신호와 블로킹 호환 경계」](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#완료-신호와-블로킹-호환-경계) 조건을 확인하고 사유를 기록한다. 완료 신호를
+  기다리는 이후 단계는 비동기로 남길 수 있지만, 등록·캡처 자체를 반환 뒤로 미루지는
+  않는다.
+- 공개 또는 언어별 exact interface가 동기 계약이면, state lane 도입만을 이유로
+  Promise나 Task 반환으로 바꾸지 않는다. 내부 호출자가 이미 비동기이고 관측 계약이
+  변하지 않을 때만 async signature를 전파한다.
+
+#### C.1.2 전환 단위와 계수·보고
+
+- **전환 경계는 기존 gate가 소유하던 상태 영역을 그대로 쓴다.** 클래스 하나에 서로
+  독립적인 gate가 여러 개 있었다면, 각각을 별도 ownership region으로 옮길 수 있다. 이
+  경우 두 영역에 걸친 field·collection 불변식이 없고, 영역 사이의 호출 방향이
+  단방향임을 기록한다.
+- 교차 불변식이나 양방향 대기가 하나라도 있으면 여러 lane으로 나누지 않고 한
+  ownership region으로 합친다. "클래스 하나"는 기본 작업 단위일 뿐, 한 클래스 안에
+  근거 없이 여러 state lane을 만드는 허가가 아니다.
+- socket·completion·worker 같은 작업 프로토콜 gate는 [스펙 06 §4 「상태 보호와 작업 프로토콜 직렬화를 구분한다」](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#상태-보호와-작업-프로토콜-직렬화를-구분한다) 조건을 만족할
+  때만 state lane 전환 대상에서 제외한다. 제외 사유에는 ownership transfer,
+  generation fence, completion 방식과 lock-order를 기록한다.
+- **전환마다 검증을 통과해야 다음으로 간다.** 확인할 항목은
+  [스펙 06 §8 검증 요구](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#8-검증-요구)가 소유한다.
+- **성공 지표는 lock 개수가 아니다.** 배타적 접근 문의 개수가 줄어든 것은 증거가
+  아니다. 줄여야 하는 것은 "async 경계를 넘어 쓰이는 스냅샷"의 수이며, 이 수를 컴포넌트
+  단위로 전후 비교한다. 이 비교는 공개 표면이 아니라 내부 계측으로 확인하는 **내부
+  확인 조건**이며, 검증 요구 절에는 두지 않는다.
+
+Async 경계 snapshot의 계수 단위는 source의 배타적 접근 위치다. 단순 문자열 검색
+결과가 아니라 실제 언어 token을 센다. 각 위치에서 배타적 접근 안에서 산출한 값·참조·
+결정이 다음 중 하나를 넘어 쓰이는지 추적한다.
+
+- `await` 또는 Task·Promise·future 반환
+- detached task, queue, worker thread 또는 callback dispatcher 제출
+- 비동기 continuation을 실행하는 completion signal
+- nonblocking transport operation 제출
+
+그 경계를 넘더라도 immutable completion signal, exact token, reservation 또는 단독
+ownership transfer로 유효성이 고정되면, primitive/protocol 제외군으로 따로 센다.
+Mutable authorization을 그대로 넘겨 쓰면 잔존 결함이다. 최종 보고는 `전체 / 제외군 /
+잔존 결함` 세 값을 모두 적는다.
+
+#### C.1.3 전환 검증 (게이트)
+
+- 전환 전후 그 언어의 단위 테스트 전체가 그린이다.
+- 전환 전후 샘플 게이트가 유지된다.
+- 전환 전후 caller가 관측하는 순서·타임아웃·오류 코드가 바뀌지 않는다.
+- async 경계 snapshot 재측정에서 잔존 결함이 0이고, primitive/protocol 제외 위치에는 각각
+  유효성 보존 근거가 기록돼 있다.
