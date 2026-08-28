@@ -16,6 +16,10 @@ export interface ZLinkMultipartSubmitOperation extends ZLinkMultipartOperation<Z
   submit(): unknown;
 }
 
+export interface ZLinkMultipartAsyncSubmitOperation extends ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation> {
+  submit(): Promise<void>;
+}
+
 export type ZLinkMultipartReplyOperation = ZLinkMultipartSubmitOperation;
 
 export function appendParts<TNext extends ZLinkMultipartOperation<TNext>>(

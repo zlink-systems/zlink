@@ -5,18 +5,22 @@ import {
   isBindingNotFound,
   isContextTerminatedError,
   isRouteRecvRetryable,
+  submitBindingImmediateSend,
   submitBindingRequest,
   submitBindingPublish,
+  submitBindingReply,
   submitBindingRoutedSend,
-  submitBindingSend,
   submitBindingAsyncSend,
+  submitBindingSyncRoutedSend,
+  submitBindingSyncSend,
   toNativeRoutingId,
   zlink,
   type ZLinkBindingRequestOperation,
   type ZLinkBindingPublishOperation,
+  type ZLinkBindingReplyOperation,
   type ZLinkBindingAsyncSendOperation,
   type ZLinkBindingRoutedSendOperation,
-  type ZLinkBindingSendOperation
+  type ZLinkBindingImmediateSendOperation
 } from './node-backend-adapter-support';
 
 
@@ -135,8 +139,8 @@ export function wrapSocket<T extends { close(): void }>(
       if (hasStream) {
         const [routingId, payload, flags] = args as [unknown, unknown, number | undefined];
         peerRoutingIds.add(routingId);
-        return submitBindingSend(
-          (nativeInstance as T & { trySend(routingId: unknown): ZLinkBindingSendOperation })
+        return submitBindingImmediateSend(
+          (nativeInstance as T & { trySend(routingId: unknown): ZLinkBindingImmediateSendOperation })
             .trySend(toNativeRoutingId(routingId)),
           payload,
           flags ?? 0
@@ -158,11 +162,13 @@ export function wrapSocket<T extends { close(): void }>(
           payload
         );
       }
-      return submitBindingSend(
-        (nativeInstance as T & { send(): ZLinkBindingSendOperation }).send(),
-        payload,
-        flags ?? 0
-      );
+      const operation = (nativeInstance as T & {
+        send(): ZLinkBindingAsyncSendOperation;
+      }).send();
+      if ((flags ?? zlink.SendFlags.None) === zlink.SendFlags.DontWait) {
+        return submitBindingSyncSend(operation, payload, zlink.SendFlags.DontWait);
+      }
+      return submitBindingAsyncSend(operation, payload);
     },
     sendAsync(routingId: unknown, payload: unknown, timeoutMs?: number): Promise<void> {
       if (!hasStream) throw new TypeError('Async stream send requires a STREAM socket.');
@@ -199,9 +205,9 @@ export function wrapSocket<T extends { close(): void }>(
       const [routingId, requestSeq, payload] = args as [unknown, bigint, unknown];
       peerRoutingIds.add(routingId);
       const operation = (nativeInstance as T & {
-        reply(routingId: unknown, requestSeq: bigint): ZLinkBindingSendOperation;
+        reply(routingId: unknown, requestSeq: bigint): ZLinkBindingReplyOperation;
       }).reply(toNativeRoutingId(routingId), requestSeq);
-      return args.length < 3 ? operation : submitBindingSend(operation, payload, 0);
+      return args.length < 3 ? operation : submitBindingReply(operation, payload);
     },
     recv(flags?: number): unknown {
       const received = new zlink.Received();
@@ -234,13 +240,20 @@ export function wrapSocket<T extends { close(): void }>(
       }
       throw new TypeError('Backend publish requires a topic and payload.');
     },
-    sendToSpot(targetRid: unknown, targetSpot: unknown, payload: unknown): Promise<void> {
-      return submitBindingRoutedSend(
-        (nativeInstance as T & {
-          sendToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingRoutedSendOperation;
-        }).sendToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot)),
-        payload
-      );
+    async sendToSpot(
+      targetRid: unknown,
+      targetSpot: unknown,
+      payload: unknown,
+      flags?: number
+    ): Promise<void> {
+      const operation = (nativeInstance as T & {
+        sendToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingRoutedSendOperation;
+      }).sendToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot));
+      if ((flags ?? zlink.SendFlags.None) === zlink.SendFlags.DontWait) {
+        submitBindingSyncRoutedSend(operation, payload, zlink.SendFlags.DontWait);
+        return;
+      }
+      await submitBindingRoutedSend(operation, payload);
     },
     requestToSpot(
       targetRid: unknown,

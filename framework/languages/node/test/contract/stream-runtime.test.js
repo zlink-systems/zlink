@@ -76,6 +76,32 @@ test('stream runtime is exported from framework root surface', () => {
   assert.equal(typeof framework.DefaultZLinkSessionContext, 'function');
 });
 
+test('managed stream synchronous writes preserve blocking defaults and explicit DontWait', () => {
+  const socket = new FakeStreamSocket();
+  const stream = new framework.ZLinkManagedStream(socket, 'session-rid', 'public-session');
+  const raw = zlink.Message.from('raw');
+  try {
+    assert.equal(
+      stream.write(framework.ZLinkMessage.fromEncoded(
+        framework.ZLinkEncodedPayload.from(Buffer.from('typed'))
+      )),
+      true
+    );
+    assert.equal(stream.writeRaw(raw), true);
+    assert.equal(stream.writeRaw(raw, zlink.SendFlags.DontWait), true);
+    assert.equal(stream.writeControl('heartbeat'), true);
+  } finally {
+    raw.close();
+  }
+
+  assert.deepEqual(socket.sends.map((args) => args[2]), [
+    0,
+    0,
+    zlink.SendFlags.DontWait,
+    0
+  ]);
+});
+
 test('clearing an Actor packet target preserves Session relocation terminal ownership', () => {
   const relay = new ZLinkBoundSessionRelay({
     routeTransport: {},

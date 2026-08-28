@@ -552,7 +552,8 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
   sendToSpot(
     targetNodeRid: RoutingId,
     targetSpotId: RoutingId,
-    parts: readonly Message[]
+    parts: readonly Message[],
+    flags?: ZLinkBackendSendFlags
   ): Promise<void>;
   requestToSpot(
     targetNodeRid: RoutingId,

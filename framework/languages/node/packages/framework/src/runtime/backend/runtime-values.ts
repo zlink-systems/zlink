@@ -71,11 +71,20 @@ export function isBackendNotConnectedError(error: unknown): boolean {
 export type ZLinkBackendMessageLike = Message | Buffer | Uint8Array | string;
 export interface ZLinkBackendSendSubmitBuilder {
   message(message: ZLinkBackendMessageLike): ZLinkBackendSendSubmitBuilder;
-  submit(): unknown;
+  submit(): Promise<void>;
 }
 
 export interface ZLinkBackendSendBuilder {
   message(message: ZLinkBackendMessageLike): ZLinkBackendSendSubmitBuilder;
+}
+
+export interface ZLinkBackendReplySubmitBuilder {
+  message(message: ZLinkBackendMessageLike): ZLinkBackendReplySubmitBuilder;
+  submit(): void;
+}
+
+export interface ZLinkBackendReplyBuilder {
+  message(message: ZLinkBackendMessageLike): ZLinkBackendReplySubmitBuilder;
 }
 
 export interface ZLinkBackendReceived {
@@ -84,7 +93,7 @@ export interface ZLinkBackendReceived {
   readonly spotId?: unknown;
   readonly requestSeq: bigint | null;
   send?(): ZLinkBackendSendBuilder;
-  reply(): ZLinkBackendSendBuilder;
+  reply(): ZLinkBackendReplyBuilder;
   close(): void;
 }
 

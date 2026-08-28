@@ -167,7 +167,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     this.markTransportClosed();
     const closing = NativeMessage.from(encodeSessionClosingFrame(diagnostic, reason));
     try {
-      this.socket.send(this.backendRoutingId(), closing, 0);
+      await this.socket.sendAsync(this.backendRoutingId(), closing);
     } finally {
       closing.close();
     }

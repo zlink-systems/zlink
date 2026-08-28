@@ -1316,7 +1316,7 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
     assert.equal(envelope.header.messageName, 'Ping');
     assert.deepEqual(envelope.body, { value: 'ping' });
     assert.equal(typeof request.requestSeq, 'bigint');
-    submitMultipart(
+    submitRawReplyMultipart(
       router.reply(request.routingId, request.requestSeq),
       encodeDotnetEnvelope({
         ...envelope.header,
@@ -3382,7 +3382,7 @@ test('ZLinkRoutePacketDispatcher invokes routed send and request handlers', asyn
       ]
     });
 
-    submitMultipart(
+    await submitAsyncMultipart(
       remoteDealer.send(),
       encodeDotnetEnvelope({
         kind: 3,
@@ -3488,6 +3488,10 @@ test('ZLinkRoutePacketDispatcher drops route requests without reply sequence wit
 
 test('ZLinkRoutePacketDispatcher forwards SPOT-addressed route frames to local SPOT delivery', async () => {
   const forwarded = [];
+  let releaseSubmit;
+  const submitted = new Promise((resolve) => {
+    releaseSubmit = resolve;
+  });
   const dispatcher = new framework.ZLinkRoutePacketDispatcher({
     routerChannelId: 'mesh',
     dispatchErrors: noDispatchErrorReporter(),
@@ -3498,13 +3502,13 @@ test('ZLinkRoutePacketDispatcher forwards SPOT-addressed route frames to local S
     fakeMessagePart(Buffer.from('spot-body'))
   ];
 
-  const consumed = await dispatcher.dispatch({
+  const consumed = dispatcher.dispatch({
     parts,
     routingId: 'node-b',
     spotId: 'room-1',
     requestSeq: null,
     send() {
-      return captureRawMultipart(forwarded);
+      return captureRawMultipart(forwarded, () => submitted);
     }
   }, {
     reply() {
@@ -3512,10 +3516,43 @@ test('ZLinkRoutePacketDispatcher forwards SPOT-addressed route frames to local S
     }
   });
 
+  let settled = false;
+  void consumed.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  releaseSubmit();
+
   assert.equal(forwarded.length, 2);
   assert.equal(forwarded[0].data().toString(), 'spot-header');
   assert.equal(forwarded[1].data().toString(), 'spot-body');
-  assert.equal(consumed, true);
+  assert.equal(await consumed, true);
+});
+
+test('ZLinkChannelRequestDispatcher propagates SPOT delivery submit failure', async () => {
+  const failure = new Error('spot delivery failed');
+  const dispatcher = new framework.ZLinkChannelRequestDispatcher({
+    channelName: 'api',
+    dispatchErrors: noDispatchErrorReporter(),
+    handlers: new Map()
+  });
+
+  await assert.rejects(dispatcher.dispatch({
+    parts: [fakeMessagePart(Buffer.from('spot-frame'))],
+    routingId: 'node-b',
+    spotId: 'room-1',
+    requestSeq: null,
+    send() {
+      return captureRawMultipart([], async () => {
+        throw failure;
+      });
+    }
+  }, {
+    reply() {
+      throw new Error('reply path must not be used for SPOT-addressed frame');
+    }
+  }), failure);
 });
 
 test('ZLinkRoutePacketDispatcher lets route bridge handle SPOT-addressed bridge frames first', async () => {
@@ -4946,12 +4983,20 @@ function encodeDotnetEnvelope(header, body) {
   ];
 }
 
-function submitMultipart(operation, parts) {
+function appendMultipart(operation, parts) {
   let current = operation.message(parts[0]);
   for (let index = 1; index < parts.length; index++) {
     current = current.message(parts[index]);
   }
-  current.submit();
+  return current;
+}
+
+function submitRawReplyMultipart(operation, parts) {
+  appendMultipart(operation, parts).submit();
+}
+
+async function submitAsyncMultipart(operation, parts) {
+  await appendMultipart(operation, parts).submit();
 }
 
 function noDispatchErrorReporter() {
@@ -4989,13 +5034,13 @@ function captureMultipart(parts) {
   };
 }
 
-function captureRawMultipart(parts) {
+function captureRawMultipart(parts, submit = async () => undefined) {
   return {
     message(part) {
       parts.push(part);
       return this;
     },
-    submit() {}
+    submit
   };
 }
 

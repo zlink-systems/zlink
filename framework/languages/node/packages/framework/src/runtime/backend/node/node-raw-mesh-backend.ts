@@ -3,6 +3,7 @@ import {
   Message,
   RoutingId as BindingRoutingId,
   RequestResult,
+  SendFlags,
   SubmitResult,
   type RequestResult as RequestResultValue,
   type StreamSocket,
@@ -1998,8 +1999,7 @@ class RawStreamSessionService implements StreamSessionService {
       for (let index = 1; index < parts.length; index++) {
         submit = submit.message(parts[index]!);
       }
-      const delivered = submit.submit();
-      if (!delivered) this.sessionTargets.delete(sessionRid);
+      const delivered = submit.flags(SendFlags.DontWait).submit();
       return delivered;
     } catch {
       // A client may close its STREAM between the binding lookup and this

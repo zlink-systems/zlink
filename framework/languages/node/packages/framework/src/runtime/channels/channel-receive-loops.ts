@@ -39,6 +39,10 @@ interface ZLinkMultipartSubmitOperation extends ZLinkMultipartOperation<ZLinkMul
   submit(): unknown;
 }
 
+interface ZLinkMultipartAsyncSubmitOperation extends ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation> {
+  submit(): Promise<void>;
+}
+
 type ZLinkMultipartReplyOperation = ZLinkMultipartSubmitOperation;
 
 interface ZLinkChannelRequestDispatchLoop {
@@ -50,7 +54,7 @@ interface ZLinkChannelRequestDispatchLoop {
       readonly routingId: unknown;
       readonly spotId?: unknown;
       readonly requestSeq: bigint | null;
-      readonly send?: () => ZLinkMultipartOperation<ZLinkMultipartSubmitOperation>;
+      readonly send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
     },
     router: ZLinkBackendRouterSocket & {
       reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
@@ -81,8 +85,8 @@ interface ZLinkRoutePacketDispatchLoop {
     readonly routingId: unknown;
     readonly spotId?: unknown;
     readonly requestSeq: bigint | null;
-    readonly send?: () => ZLinkMultipartOperation<ZLinkMultipartSubmitOperation>;
-  }): boolean;
+    readonly send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
+  }): Promise<boolean>;
   dispatch(
     received: {
       readonly parts: readonly Message[];
@@ -358,7 +362,7 @@ export class ZLinkChannelReceiveLoop {
     routingId: unknown;
     spotId?: unknown;
     requestSeq: bigint | null;
-    send?: () => ZLinkMultipartOperation<ZLinkMultipartSubmitOperation>;
+    send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
     close(): void;
   }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader, infrastructureChecked = false, releaseRawReceive?: () => void): Promise<void> {
     let closeReceived = true;
@@ -710,7 +714,7 @@ export class ZLinkRouteReceiveLoop {
       const receivedBytes = messageBytes(received.parts);
       let infrastructureConsumed: boolean;
       try {
-        infrastructureConsumed = this.dispatcher.dispatchInfrastructure?.(received) === true;
+        infrastructureConsumed = await this.dispatcher.dispatchInfrastructure?.(received) === true;
       } catch (error) {
         releaseRawReceive();
         received.close();

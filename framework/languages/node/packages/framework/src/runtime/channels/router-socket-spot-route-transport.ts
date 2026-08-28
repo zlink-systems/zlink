@@ -20,9 +20,8 @@ export class ZLinkRouterSocketSpotRouteTransport {
   ): Promise<void> {
     const router = this.sockets.routeRouter(target.routerChannelId);
     try {
-      void flags;
       await awaitWithAbort(
-        router.sendToSpot(target.targetNodeRid, target.spotId, parts),
+        router.sendToSpot(target.targetNodeRid, target.spotId, parts, flags),
         signal
       );
     } finally {

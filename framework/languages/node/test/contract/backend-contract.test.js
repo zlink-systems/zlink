@@ -12,7 +12,10 @@ const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
-const { isPollerInterruptedError } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+const {
+  isPollerInterruptedError,
+  submitBindingImmediateSend
+} = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
 const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
 const {
   ZLinkMeshCompletionTable,
@@ -110,6 +113,38 @@ test('poller interruption is treated as an empty progress turn', () => {
     isPollerInterruptedError(new zlink.RecvError(zlink.RecvResult.NoData, 11)),
     false
   );
+});
+
+test('binding immediate send preserves blocking None for public synchronous stream writes', () => {
+  const appliedFlags = [];
+  const submittedParts = [];
+  const submit = {
+    message(part) {
+      submittedParts.push(Buffer.from(part));
+      return this;
+    },
+    flags(flags) {
+      appliedFlags.push(flags);
+      return this;
+    },
+    submit() {
+      return true;
+    }
+  };
+  const operation = {
+    message(part) {
+      submittedParts.push(Buffer.from(part));
+      return submit;
+    }
+  };
+
+  assert.equal(submitBindingImmediateSend(operation, Buffer.from('blocking'), 0), true);
+  assert.equal(
+    submitBindingImmediateSend(operation, Buffer.from('nonblocking'), zlink.SendFlags.DontWait),
+    true
+  );
+  assert.deepEqual(appliedFlags, [0, zlink.SendFlags.DontWait]);
+  assert.deepEqual(submittedParts.map((part) => part.toString()), ['blocking', 'nonblocking']);
 });
 
 test('RouteMesh runtime weight changes reject invalid values as configuration errors', () => {

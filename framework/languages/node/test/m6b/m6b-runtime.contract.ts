@@ -5184,7 +5184,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     closeParts(instanceCompletion);
 
     const delivered: Buffer[] = [];
-    const streamState = { disconnected: false };
+    const streamState = { disconnected: false, backpressured: false };
     const sessionService = backend.createStreamSessionService(createFakeStream(delivered, streamState));
     sessionService.start();
     const bindOperation = sessionService.bindActor('session-a', actor, 2_000);
@@ -5208,6 +5208,33 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       SubmitResult.Ok
     );
     assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
+    streamState.backpressured = true;
+    assert.equal(
+      await backend.sendActorBoundSession(
+        actor,
+        binding.bindingGeneration,
+        Buffer.from('backpressured-session-message'),
+        undefined,
+        actorFence
+      ),
+      SubmitResult.InvalidState
+    );
+    assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
+    streamState.backpressured = false;
+    assert.equal(
+      await backend.sendActorBoundSession(
+        actor,
+        binding.bindingGeneration,
+        Buffer.from('resumed-session-message'),
+        undefined,
+        actorFence
+      ),
+      SubmitResult.Ok
+    );
+    assert.deepEqual(
+      delivered.map(value => value.toString()),
+      ['session-message', 'resumed-session-message']
+    );
     streamState.disconnected = true;
     assert.equal(
         await backend.sendActorBoundSession(
@@ -6264,16 +6291,22 @@ function closeParts(record: ReceiveRecord): void {
 
 function createFakeStream(
   delivered: Buffer[],
-  state: { disconnected: boolean }
+  state: { disconnected: boolean; backpressured: boolean }
 ): unknown {
   const createSubmit = () => {
+    const pending: Buffer[] = [];
     const submit = {
       message(part: Uint8Array) {
-        delivered.push(Buffer.from(part));
+        pending.push(Buffer.from(part));
+        return submit;
+      },
+      flags() {
         return submit;
       },
       submit() {
         if (state.disconnected) throw new Error('stream route is disconnected');
+        if (state.backpressured) return false;
+        delivered.push(...pending);
         return true;
       }
     };
