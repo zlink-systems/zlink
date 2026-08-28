@@ -522,7 +522,8 @@ client_server_location_runtime_t::observe (
           .channel_name = channel_name,
           .reason = std::string ("initial_snapshot")};
     }).get ();
-    value->enqueue (initial.channel_name, std::move (initial));
+    const auto source_key = initial.channel_name;
+    value->enqueue (source_key, std::move (initial));
     return std::make_unique<client_server_observation_t> (std::move (value));
 }
 
@@ -573,10 +574,12 @@ void client_server_location_runtime_t::publish_snapshot_changes ()
         }
         return result;
     }).get ();
-    for (auto &notification : notifications)
+    for (auto &notification : notifications) {
+        const auto source_key = notification.second.channel_name;
         notification.first->enqueue (
-          notification.second.channel_name,
+          source_key,
           std::move (notification.second));
+    }
 }
 
 void client_server_location_runtime_t::start ()
