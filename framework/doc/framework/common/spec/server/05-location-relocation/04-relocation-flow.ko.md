@@ -302,6 +302,19 @@ CAS가 성공하면 target은 다음 순서의 ordered durable backlog를 확정
 3. 그 뒤 temporary queue가 수락한 작업
 
 그다음 temporary route를 기존 dispatch route로 전환하고 필요한 lifecycle callback을 끝낸다.
+
+**Backlog가 ordinary ingress보다 먼저 handler turn의 queue 순서를 확보하며, 이 보장을
+배타적 접근을 쥔 채 callback을 실행하는 방식으로 구현하지 않는다.** 그 방식은 외부
+callback이 같은 배타적 접근 primitive를 다시 획득하는 구조가 되기 쉬우며
+[상태 소유와 state lane §6](../01-execution/06-state-ownership-and-lanes.ko.md#6-재진입을-만들지-않는-구조)이
+금지한다. 이 보장은 다음 두 형태 중 하나의 선형화점으로 만든다.
+
+- dispatch 개방 전에 backlog 몫의 placeholder ownership claim을 소유 turn 안에서
+  확정하고, 개별 execution claim은 배타적 접근 밖에서 채운 뒤 같은 소유 turn에서
+  placeholder를 정산하면서 ordinary admission을 연다.
+- 또는 backlog가 비었음을 원자적으로 관측한 시점에만 ordinary dispatch로 전환한다 —
+  관측 전에 게시된 backlog turn보다 ordinary ingress가 앞설 수 없다.
+
 Application dispatch가 runnable해지면 backlog의 application handler turn마다 shared
 queued-job permit을 순서대로 하나씩 얻어 live execution queue에 넣는다. Actual handler
 start가 permit을 반환하면 다음 item이 같은 방식으로 진행한다. Target은 backlog 전체의

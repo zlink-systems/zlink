@@ -319,6 +319,14 @@ public 표면에 재진입한다. 다음 세 단계로 나눈다.
 원본이 callback 전에 끝내던 상태 전이를 turn B로 미루지 않는다. Callback 실행 창의
 경쟁 관측자는 원본의 "배타적 접근이 끝난 뒤"와 같은 상태를 봐야 한다.
 
+**배타적 접근 primitive의 재진입 허용에 기대지 않는다.** 일부 언어의 배타적 접근
+primitive(C#의 Monitor, Java의 `synchronized`)는 같은 thread의 중첩 획득을 허용한다.
+배타적 접근 안에서 호출한 외부 callback·listener가 같은 primitive를 다시 획득하는 구조는
+그 허용 덕에만 동작하는 잠재 재진입이다 — state lane으로 옮기는 순간 재진입 예외가 되고,
+옮기지 않더라도 그 접근이 보장하려던 원자성이 밖으로 나간 제어의 행동에 의존하게 된다.
+이런 자리는 유형 ③으로 분리한다. 같은 컴포넌트 안에서 제어가 밖으로 나가지 않는 private
+중첩 획득(self-call)은 이 금지의 대상이 아니다.
+
 ## 7. 언어별 매핑
 
 .NET에서는 `Zlink.Framework.Runtime.Execution.ZLinkStateLane`이 이 문서가 정의하는
