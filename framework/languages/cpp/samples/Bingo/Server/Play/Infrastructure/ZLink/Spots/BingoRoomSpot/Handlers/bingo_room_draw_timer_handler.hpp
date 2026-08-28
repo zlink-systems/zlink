@@ -21,9 +21,9 @@ inline task_t<void> bingo_room_spot_t::handle_draw_tick (const timer_tick_t &)
         publish_reward (*drawn);
         _draw_timer.cancel ();
         co_await leave_finished_actors ();
-        // All completed-round work has been submitted. Framework may relocate
-        // the room after this serial turn finishes.
-        _context->relocation_ready ().defer ();
+        if (!actors.empty () || !observers.empty ()) {
+            _context->relocation_ready ().defer ();
+        }
     }
 }
 

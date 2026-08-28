@@ -13,19 +13,67 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
 
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 final class ZLinkSpotPublisherRuntimeTest {
+    @Test
+    void publishContinuationRetainsSubmittingSerialTurn() throws Exception {
+        CountDownLatch firstCoreStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirstCore = new CountDownLatch(1);
+        CountDownLatch secondSubmitted = new CountDownLatch(1);
+        AtomicInteger coreCalls = new AtomicInteger();
+        AtomicBoolean secondWasPending = new AtomicBoolean();
+        AtomicBoolean continuationIsCurrent = new AtomicBoolean();
+        ZLinkSpotPublisherRuntime runtime = runtime(() -> {
+            if (coreCalls.incrementAndGet() == 1) {
+                firstCoreStarted.countDown();
+                await(releaseFirstCore);
+            }
+        }, 1, Duration.ofSeconds(3));
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
+            Runnable::run, ZLinkExecutionLanePolicy.spot());
+        try (runtime) {
+            runtime.publish("mesh", "channel", "topic", "occupied")
+                .submit();
+            assertTrue(firstCoreStarted.await(1, TimeUnit.SECONDS));
+
+            CompletionStage<Void> dispatch = queue.enqueue(() ->
+                {
+                    CompletionStage<Void> publish = runtime.publish(
+                        "mesh", "channel", "topic", "payload").submit();
+                    secondWasPending.set(!publish.toCompletableFuture().isDone());
+                    secondSubmitted.countDown();
+                    return publish.thenRun(() ->
+                        continuationIsCurrent.set(queue.isCurrent()));
+                });
+
+            assertTrue(secondSubmitted.await(1, TimeUnit.SECONDS));
+            assertTrue(secondWasPending.get());
+            releaseFirstCore.countDown();
+
+            dispatch.toCompletableFuture().get(3, TimeUnit.SECONDS);
+
+            assertTrue(continuationIsCurrent.get());
+        } finally {
+            releaseFirstCore.countDown();
+            queue.close();
+        }
+    }
+
     @Test
     void committedPublishCompletesNormallyWithoutPublishMonitoring()
         throws Exception {
@@ -243,12 +291,19 @@ final class ZLinkSpotPublisherRuntimeTest {
     private static ZLinkSpotPublisherRuntime runtime(
         Runnable publish,
         int parallelism) {
+        return runtime(publish, parallelism, Duration.ofMillis(100));
+    }
+
+    private static ZLinkSpotPublisherRuntime runtime(
+        Runnable publish,
+        int parallelism,
+        Duration admissionTimeout) {
         ZLinkStringMessageSerializer serializer = new ZLinkStringMessageSerializer();
         ZLinkSpotPublisherRuntime runtime = new ZLinkSpotPublisherRuntime(
             serializer,
             new ZLinkSpotRouteMessages(serializer),
             parallelism,
-            ignored -> Duration.ofMillis(100));
+            ignored -> admissionTimeout);
         AtomicInteger proxyClose = new AtomicInteger();
         ZLinkInternalSpotNode node = (ZLinkInternalSpotNode) Proxy.newProxyInstance(
             ZLinkInternalSpotNode.class.getClassLoader(),

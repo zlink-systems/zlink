@@ -2050,6 +2050,81 @@ bool verify_cancellable_serial_submission_lifecycle ()
     return true;
 }
 
+bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    auto executor = std::make_shared<runtime::offload_executor_t> (
+      2, 8, "released-spot-turn");
+    auto owner = std::make_shared<spot_context_state_t> ();
+    owner->serial_executor = executor;
+    owner->serial_queue =
+      std::make_shared<runtime::serial_execution_queue_t> (
+        *executor, runtime::serial_execution_queue_options_t{},
+        runtime::serial_execution_queue_t::error_handler_t{},
+        runtime::serial_lane_policy_t::spot_wide ());
+    auto queue = owner->serial_queue;
+
+    std::atomic_bool release_succeeded{false};
+    std::atomic_bool released_turn_kept_queue_affiliation{false};
+    std::atomic_bool released_stack_had_callback_context{true};
+    std::atomic_bool lifecycle_had_fresh_turn{false};
+    std::atomic_bool lifecycle_allowed_yield{false};
+    std::atomic_bool lifecycle_succeeded{false};
+    std::atomic_bool completed{false};
+    if (!queue->try_post_async (
+          "release-spot-handler-turn",
+          [&] (auto complete) {
+              const auto released_turn = capture_current_serial_turn ();
+              const auto released = released_turn && released_turn->release ();
+              release_succeeded.store (released, std::memory_order_release);
+              if (!released) {
+                  complete ([] {});
+                  completed.store (true, std::memory_order_release);
+                  return;
+              }
+
+              released_turn_kept_queue_affiliation.store (
+                owner->owns_current_serial_turn (), std::memory_order_release);
+              released_stack_had_callback_context.store (
+                owner->is_current_callback_thread (), std::memory_order_release);
+              const auto result = owner->run_serial_task (
+                "lifecycle-after-released-handler-turn",
+                [&, released_turn] () -> task_t<void> {
+                    const auto lifecycle_turn = capture_current_serial_turn ();
+                    lifecycle_had_fresh_turn.store (
+                      lifecycle_turn && lifecycle_turn != released_turn
+                        && !lifecycle_turn->released ()
+                        && owner->owns_current_serial_turn (),
+                      std::memory_order_release);
+                    lifecycle_allowed_yield.store (
+                      current_serial_turn_allows_yield (),
+                      std::memory_order_release);
+                    co_return;
+                });
+              lifecycle_succeeded.store (static_cast<bool> (result),
+                                         std::memory_order_release);
+              completed.store (true, std::memory_order_release);
+          })) {
+        return false;
+    }
+
+    if (!wait_until (
+          [&] { return completed.load (std::memory_order_acquire); })) {
+        queue->cancel_pending ();
+        return false;
+    }
+    queue->drain ();
+    return release_succeeded.load (std::memory_order_acquire)
+           && released_turn_kept_queue_affiliation.load (std::memory_order_acquire)
+           && !released_stack_had_callback_context.load (std::memory_order_acquire)
+           && lifecycle_had_fresh_turn.load (std::memory_order_acquire)
+           && lifecycle_allowed_yield.load (std::memory_order_acquire)
+           && lifecycle_succeeded.load (std::memory_order_acquire);
+}
+
 bool verify_spot_serial_task_async_shutdown_settlement ()
 {
     using namespace zlink::framework;
@@ -6185,6 +6260,9 @@ int main ()
     }
     if (!verify_cancellable_serial_submission_lifecycle ()) {
         return 92;
+    }
+    if (!verify_released_spot_turn_does_not_inline_lifecycle_task ()) {
+        return 129;
     }
     if (!verify_spot_serial_task_async_shutdown_settlement ()) {
         return 93;

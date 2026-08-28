@@ -26,6 +26,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.channels.ZLinkPublishCall;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
@@ -222,10 +223,9 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
      * flow or a new APPLICATION flow for a first outbound started outside
      * framework callbacks — is captured as a value on the submitting thread
      * and handed to the encoder explicitly. The multicast executor hop
-     * receives the value; no scope is installed and the admission future the
-     * publish turn returns stays bare, so the spot dispatch lane's
-     * release/drain chain gains no completion hop that can be lost during
-     * teardown. At Off nothing is captured or allocated.
+     * receives the value and no flow scope is installed. The terminal layer
+     * separately restores an active serial turn only when admission is
+     * pending. At Off nothing is captured or allocated.
      */
     private ZLinkFlowContext.State captureOutboundFlow() {
         if (flow == null || !flow.captureEnabled()) {
@@ -747,9 +747,13 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
         if (duplicate != null) {
             return duplicate;
         }
-        return publishers.submitAsync(
+        CompletionStage<Void> result = publishers.submitAsync(
                 meshName, channelName, topic, payload, packetName, contentType, metadata)
-            .thenCompose(result -> ZLinkOneWayCalls.oneWayStatus(result.status()));
+            .thenCompose(admission ->
+                ZLinkOneWayCalls.oneWayStatus(admission.status()));
+        return result.toCompletableFuture().isDone()
+            ? result
+            : ZLinkSerialExecutionQueue.manageCurrent(result);
     }
 }
 

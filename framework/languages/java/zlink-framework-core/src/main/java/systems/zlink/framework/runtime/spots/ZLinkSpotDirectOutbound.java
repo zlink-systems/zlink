@@ -143,10 +143,9 @@ final class ZLinkSpotDirectOutbound {
      * R1 value-passing (spec 27 §4): the ambient callback flow — or a new
      * APPLICATION flow for a first outbound started outside framework
      * callbacks — is captured as a value at submit time and passed to the
-     * encoder explicitly. No scope is installed and no completion hop is added
-     * to the returned stage, so the spot dispatch lane's turn stage stays the
-     * bare admission future teardown relies on. At Off nothing is captured or
-     * allocated.
+     * encoder explicitly and no flow scope is installed. The terminal layer
+     * separately restores an active serial turn only when admission is
+     * pending. At Off nothing is captured or allocated.
      */
     private ZLinkFlowContext.State captureOutboundFlow() {
         if (!flow.captureEnabled()) {
@@ -773,7 +772,10 @@ final class ZLinkSpotDirectPublishCall implements ZLinkPublishCall {
         if (duplicate != null) {
             return duplicate;
         }
-        return outbound.submitPublish(
+        CompletionStage<Void> result = outbound.submitPublish(
             spot, channelName, topic, payload, packetName, contentType, metadata);
+        return result.toCompletableFuture().isDone()
+            ? result
+            : ZLinkSerialExecutionQueue.manageCurrent(result);
     }
 }

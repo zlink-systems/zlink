@@ -240,14 +240,22 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
 
     CompletionStage<Void> executeLifecycle(
         Supplier<CompletionStage<Void>> operation) {
+        List<ZLinkSerialExecutionQueue> timerQueues = sharedSpotGate
+            ? List.of()
+            : timerSnapshot();
         CompletionStage<Void> timers = sharedSpotGate
             ? CompletableFuture.completedFuture(null)
-            : CompletableFuture.allOf(timerSnapshot().stream()
+            : CompletableFuture.allOf(timerQueues.stream()
                 .map(queue -> queue.enqueue(() -> CompletableFuture.completedFuture(null))
                     .toCompletableFuture())
                 .toArray(CompletableFuture[]::new));
-        return ZLinkSerialExecutionQueue.yieldCurrent(timers.thenCompose(
-            ignored -> spotQueue.enqueueLifecycleBarrier(operation)));
+        CompletionStage<Void> lifecycle = timers.thenCompose(
+            ignored -> spotQueue.enqueueLifecycleBarrier(operation));
+        boolean ownsDependencyTurn = spotQueue.isCurrent()
+            || timerQueues.stream().anyMatch(ZLinkSerialExecutionQueue::isCurrent);
+        return ownsDependencyTurn
+            ? ZLinkSerialExecutionQueue.yieldCurrent(lifecycle)
+            : lifecycle;
     }
 
     CompletionStage<Void> executeAcceptedSpot(

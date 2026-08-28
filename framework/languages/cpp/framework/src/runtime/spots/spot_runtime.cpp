@@ -2171,7 +2171,14 @@ void spot_context_state_t::run_serial_task_async (
                                              "spot is closing for idle eviction"));
         return;
     }
-    const bool run_inline = !queue || is_current_callback_thread () || owns_current_serial_turn ();
+    const auto current_turn = detail::capture_current_serial_turn ();
+    const bool released_current_turn =
+      queue && current_turn && current_turn->released ()
+      && current_turn->belongs_to (queue.get ());
+    const bool run_inline =
+      !queue
+      || (!released_current_turn
+          && (is_current_callback_thread () || owns_current_serial_turn ()));
     if (run_inline) {
         try {
             if (activation_callback)

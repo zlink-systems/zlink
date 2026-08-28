@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -16,6 +17,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
@@ -56,6 +58,59 @@ final class ZLinkSerialExecutorLayersContractTest {
                 ZLinkSessionSerialExecutorContractProbe
                     .executeEverySubmissionPath(fixture.executor)
                     .stream().sorted().toList());
+        }
+    }
+
+    @Test
+    void lifecycleSubmissionDoesNotReleaseAForeignSpotTurn()
+        throws Exception {
+        try (Fixture owner = fixture(ZLinkUserSpotExecutionMode.SPOT_WIDE);
+             Fixture lifecycle = fixture(ZLinkUserSpotExecutionMode.SPOT_WIDE)) {
+            CompletableFuture<Void> ownerStarted = new CompletableFuture<>();
+            CompletableFuture<Void> lifecycleStarted = new CompletableFuture<>();
+            CompletableFuture<Void> lifecycleRelease = new CompletableFuture<>();
+            AtomicBoolean ownerNextStarted = new AtomicBoolean();
+
+            CompletionStage<Void> ownerTurn = owner.serial.executeSpot(0, () -> {
+                ownerStarted.complete(null);
+                return lifecycle.serial.executeLifecycle(() -> {
+                    lifecycleStarted.complete(null);
+                    return lifecycleRelease;
+                });
+            });
+            ownerStarted.get(3, TimeUnit.SECONDS);
+            lifecycleStarted.get(3, TimeUnit.SECONDS);
+
+            CompletionStage<Void> ownerNext = owner.serial.executeSpot(0, () -> {
+                ownerNextStarted.set(true);
+                return CompletableFuture.completedFuture(null);
+            });
+
+            assertThrows(
+                TimeoutException.class,
+                () -> ownerNext.toCompletableFuture().get(250, TimeUnit.MILLISECONDS));
+            assertFalse(ownerNextStarted.get());
+            lifecycleRelease.complete(null);
+            await(ownerTurn, ownerNext);
+            assertTrue(ownerNextStarted.get());
+        }
+    }
+
+    @Test
+    void lifecycleSubmissionReleasesItsCurrentPerActorTimerTurn()
+        throws Exception {
+        try (Fixture fixture = fixture(ZLinkUserSpotExecutionMode.PER_ACTOR)) {
+            CompletableFuture<Void> lifecycleStarted = new CompletableFuture<>();
+
+            CompletionStage<Void> timer = fixture.serial.executeTimer(
+                "tick",
+                ignored -> fixture.serial.executeLifecycle(() -> {
+                    lifecycleStarted.complete(null);
+                    return CompletableFuture.completedFuture(null);
+                }));
+
+            timer.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertTrue(lifecycleStarted.isDone());
         }
     }
 

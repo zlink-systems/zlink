@@ -227,7 +227,21 @@ public final class ZLinkSerialExecutionQueue {
      * was enqueued behind the operation currently executing on this queue.
      */
     public boolean isCurrent() {
-        return CURRENT.get() == this;
+        ZLinkSerialExecutionQueue queue = CURRENT.get();
+        CompletableFuture<Void> gate = CURRENT_GATE.get();
+        if (queue != null || gate != null) {
+            return queue == this && gate != null && !gate.isDone();
+        }
+        Object propagated = systems.zlink.framework.runtime.internal.handlers
+            .ZLinkSuspendInvocationContext.currentSerialExecutionTurn();
+        if (!(propagated instanceof SerialTurnCarrier carrier)) {
+            return false;
+        }
+        SerialTurn turn = carrier.turn;
+        return turn != null
+            && turn.queue() == this
+            && turn.gate() != null
+            && !turn.gate().isDone();
     }
 
     /**

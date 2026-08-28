@@ -442,6 +442,40 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
+    void releasedTurnIsNotCurrentUntilItsContinuationReenters() throws Exception {
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
+        CompletableFuture<Void> firstRemote = new CompletableFuture<>();
+        CompletableFuture<Void> secondRemote = new CompletableFuture<>();
+        CompletableFuture<Void> started = new CompletableFuture<>();
+        AtomicBoolean currentAfterRelease = new AtomicBoolean(true);
+        AtomicBoolean secondYieldWasManaged = new AtomicBoolean();
+        AtomicBoolean continuationIsCurrent = new AtomicBoolean();
+
+        CompletableFuture<Void> dispatch = queue.enqueue(() -> {
+            CompletionStage<Void> firstYield =
+                ZLinkSerialExecutionQueue.yieldCurrent(firstRemote);
+            currentAfterRelease.set(queue.isCurrent());
+            CompletionStage<Void> secondYield =
+                ZLinkSerialExecutionQueue.yieldCurrent(secondRemote);
+            secondYieldWasManaged.set(secondYield != secondRemote);
+            started.complete(null);
+            return firstYield.thenRun(() ->
+                continuationIsCurrent.set(queue.isCurrent()));
+        }).toCompletableFuture();
+
+        started.get(3, TimeUnit.SECONDS);
+        firstRemote.complete(null);
+        dispatch.get(3, TimeUnit.SECONDS);
+        secondRemote.complete(null);
+        queue.awaitQuiescence().toCompletableFuture()
+            .get(3, TimeUnit.SECONDS);
+
+        assertFalse(currentAfterRelease.get());
+        assertTrue(secondYieldWasManaged.get());
+        assertTrue(continuationIsCurrent.get());
+    }
+
+    @Test
     void yieldRetainsTurnContextAcrossHandlerExecutor() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> remote = new CompletableFuture<>();
