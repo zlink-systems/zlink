@@ -1,4 +1,3 @@
-한국어 | [English](https://zlink-systems.github.io/zlink/reference/)
 
 [Core 스펙](../spec/core/README.ko.md) · [Core 가이드](../guide/01-overview.ko.md)
 
@@ -38,7 +37,7 @@ Framework의 interface 파일과 달리, Core spec 문서는 전부 en·ko 둘 �
 ## Category
 
 Core의 공개 표면은 framework의 정제된 8개 category보다 훨씬 세분화되어 있다 — 9개 공통 계약 챕터와
-8개 socket 타입에 걸쳐 exported 함수가 약 90개인 raw C ABI다. Spec 챕터 중 둘은 자체 entry point가
+8개 socket 타입에 걸쳐 exported 함수가 약 114개인 raw C ABI다. Spec 챕터 중 둘은 자체 entry point가
 없어 레퍼런스 category가 아니다:
 [공개 계약 거버넌스](../spec/core/00-public-contract-governance.ko.md)(문서 정책이지 API가
 아님)와 [Runtime boundary](../spec/core/08-runtime-boundary.ko.md)(범위 선언 — 역할 경계가
@@ -49,24 +48,24 @@ Core의 공개 표면은 framework의 정제된 8개 category보다 훨씬 세�
 
 | Category | 상태 | 대응 spec |
 |---|---|---|
-| [Context](../spec/core/01-context.ko.md) | 작성 완료 | 01-context |
-| [Message](../spec/core/02-message.ko.md) | 작성 완료 | 02-message |
+| [Context](01-context.ko.md) | 작성 완료 | 01-context |
+| [Message](02-message.ko.md) | 작성 완료 | 02-message |
 | [Socket lifecycle](03-socket-lifecycle.ko.md) | 작성 완료 | socket/README §Functions(create/bind/connect/disconnect/close) |
 | [Socket options and identity](04-socket-options.ko.md) | 작성 완료 | socket/README §Socket Options, §Dedicated Functions |
 | [Raw receive](05-raw-receive.ko.md) | 작성 완료 | socket/README §Receive Model Summary, 03-errors §4 |
-| [PAIR](../spec/core/socket/01-pair.ko.md) | 작성 완료 | socket/01-pair |
-| [PUB](../spec/core/socket/02-pub.ko.md) | 작성 완료 | socket/02-pub |
-| [SUB](../spec/core/socket/03-sub.ko.md) | 작성 완료 | socket/03-sub |
-| [XPUB](../spec/core/socket/04-xpub.ko.md) | 작성 완료 | socket/04-xpub |
-| [XSUB](../spec/core/socket/05-xsub.ko.md) | 작성 완료 | socket/05-xsub |
-| [DEALER](../spec/core/socket/06-dealer.ko.md) | 작성 완료 | socket/06-dealer |
-| [ROUTER](../spec/core/socket/07-router.ko.md) | 작성 완료 | socket/07-router |
-| [STREAM](../spec/core/socket/08-stream.ko.md) | 작성 완료 | socket/08-stream |
+| [PAIR](06-pair.ko.md) | 작성 완료 | socket/01-pair |
+| [PUB](07-pub.ko.md) | 작성 완료 | socket/02-pub |
+| [SUB](08-sub.ko.md) | 작성 완료 | socket/03-sub |
+| [XPUB](09-xpub.ko.md) | 작성 완료 | socket/04-xpub |
+| [XSUB](10-xsub.ko.md) | 작성 완료 | socket/05-xsub |
+| [DEALER](11-dealer.ko.md) | 작성 완료 | socket/06-dealer |
+| [ROUTER](12-router.ko.md) | 작성 완료 | socket/07-router |
+| [STREAM](13-stream.ko.md) | 작성 완료 | socket/08-stream |
 | [Socket monitor](14-socket-monitor.ko.md) | 작성 완료 | 07-monitoring, 05-events |
-| [Polling and pollers](../spec/core/05-polling.ko.md) | 작성 완료 | 06-polling, 05-events |
+| [Polling and pollers](15-polling.ko.md) | 작성 완료 | 06-polling, 05-events |
 | [Timers](16-timers.ko.md) | 작성 완료 | 08-utilities §Timers |
-| [Utilities](../spec/core/07-utilities.ko.md) | 작성 완료 | 08-utilities §Atomic Counter, §Stopwatch, §Miscellaneous |
-| [Errors, results, and version](../spec/core/03-errors.ko.md) | 작성 완료 | 03-errors, 04-errno-map |
+| [Utilities](17-utilities.ko.md) | 작성 완료 | 08-utilities §Atomic Counter, §Stopwatch, §Miscellaneous |
+| [Errors, results, and version](18-errors.ko.md) | 작성 완료 | 03-errors, 04-errno-map |
 
 파일명은 작성되는 순서대로 위 번호의 `NN-slug.en.md`/`NN-slug.ko.md`를 따른다 — 이 표는 파일이
 실제로 있을 때만 링크를 걸어서 끊어진 링크를 만들지 않는다.

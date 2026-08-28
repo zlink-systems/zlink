@@ -12,6 +12,7 @@ import {
 import { ZLinkConfigurationException } from '../../packages/framework/src/runtime/configuration';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
 import { DefaultZLinkWorkerCall } from '../../packages/framework/src/runtime/workers';
 import {
@@ -33,7 +34,7 @@ function deferred<T>(): Deferred<T> {
 }
 
 function activation(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   executionMode: ZLinkUserSpotExecutionMode
 ): ZLinkSpotActivation {
   return new ZLinkSpotActivation({
@@ -68,7 +69,7 @@ test('128-bit operation identity retries zero entropy and has one canonical key'
 });
 
 test('same-owner nested execute rejects instead of running inside the active turn', async () => {
-  const serial = new ZLinkSpotSerialExecutor(true, 'spot-1' as never);
+  const serial = new ZLinkSpotSerialTurnExecutor(true, 'spot-1' as never);
   const events: string[] = [];
 
   await serial.execute(() => {
@@ -86,7 +87,7 @@ test('same-owner nested execute rejects instead of running inside the active tur
 });
 
 test('SpotWide Yield releases the Spot gate but retains the Actor claim', async () => {
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialTurnExecutor(true);
   const state = activation(serial, ZLinkUserSpotExecutionMode.SpotWide);
   const response = deferred<string>();
   const events: string[] = [];
@@ -123,7 +124,7 @@ test('SpotWide Yield releases the Spot gate but retains the Actor claim', async 
 });
 
 test('PerActor keeps Actor continuations ordered while Actor and Spot lanes run independently', async () => {
-  const spotSerial = new ZLinkSpotSerialExecutor(false);
+  const spotSerial = new ZLinkSpotSerialTurnExecutor(false);
   const state = activation(spotSerial, ZLinkUserSpotExecutionMode.PerActor);
   const response = deferred<string>();
   const events: string[] = [];
@@ -162,7 +163,7 @@ test('PerActor keeps Actor continuations ordered while Actor and Spot lanes run 
 test('Yield rejects outside an allowed gate before worker admission', async () => {
   let scheduled = 0;
   const outsideCall = new DefaultZLinkWorkerCall(
-    new ZLinkSpotSerialExecutor(),
+    new ZLinkSpotSerialTurnExecutor(),
     async () => {
       scheduled += 1;
       return 'outside';
@@ -174,7 +175,7 @@ test('Yield rejects outside an allowed gate before worker admission', async () =
   );
   assert.equal(scheduled, 0);
 
-  const perActorSerial = new ZLinkSpotSerialExecutor(false);
+  const perActorSerial = new ZLinkSpotSerialTurnExecutor(false);
   await perActorSerial.execute(() => {
     const call = new DefaultZLinkWorkerCall(
       perActorSerial,
@@ -192,19 +193,19 @@ test('Yield rejects outside an allowed gate before worker admission', async () =
 });
 
 test('PerActor timer registrations select an independent lane per timer name', async () => {
-  const spotSerial = new ZLinkSpotSerialExecutor(false);
-  const timerSerials = new Map<string, ZLinkSpotSerialExecutor>();
+  const spotSerial = new ZLinkSpotSerialTurnExecutor(false);
+  const serialExecutor = new ZLinkSpotSerialExecutor(
+    spotSerial,
+    ZLinkUserSpotExecutionMode.PerActor,
+    'spot-a'
+  );
   const registry = new ZLinkSpotTimerRegistry(
     undefined,
     () => false,
-    (name) => {
-      let serial = timerSerials.get(name);
-      if (serial === undefined) {
-        serial = new ZLinkSpotSerialExecutor(false);
-        timerSerials.set(name, serial);
-      }
-      return serial;
-    }
+    undefined,
+    undefined,
+    (name, operation) => serialExecutor.executeTimer(name, operation),
+    (name) => serialExecutor.isTimerExecuting(name)
   );
   class TimerHandler {
     handle(): void {}
@@ -227,15 +228,24 @@ test('PerActor timer registrations select an independent lane per timer name', a
     {} as never
   );
 
-  assert.notEqual(timerSerials.get('heartbeat'), timerSerials.get('expiry'));
-  assert.notEqual(timerSerials.get('heartbeat'), spotSerial);
-  assert.notEqual(timerSerials.get('expiry'), spotSerial);
+  const heartbeatStarted = deferred<void>();
+  const heartbeatDone = deferred<void>();
+  const expiryStarted = deferred<void>();
+  const heartbeat = serialExecutor.executeTimer('heartbeat', async () => {
+    heartbeatStarted.resolve();
+    await heartbeatDone.promise;
+  });
+  await heartbeatStarted.promise;
+  const expiry = serialExecutor.executeTimer('expiry', () => expiryStarted.resolve());
+  await expiryStarted.promise;
+  heartbeatDone.resolve();
+  await Promise.all([heartbeat, expiry]);
   await registry.dispose();
 });
 
 test('Spot execution reserves message and byte capacity as one bounded admission', async () => {
-  const serial = new ZLinkSpotSerialExecutor(false, undefined, {
-    ownerTimeBudgetMs: 50,
+  const serial = new ZLinkSpotSerialTurnExecutor(false, undefined, {
+    ownerTimeBudget: 50,
     lifecycleBurstLimit: 8,
   });
   const startedSignal = deferred<void>();
@@ -253,7 +263,7 @@ test('Spot execution reserves message and byte capacity as one bounded admission
 });
 
 test('Spot execution includes metadata bytes in the same atomic reservation', async () => {
-  const serial = new ZLinkSpotSerialExecutor(false, undefined, {
+  const serial = new ZLinkSpotSerialTurnExecutor(false, undefined, {
   });
   const started = deferred<void>();
   const finished = deferred<void>();
@@ -269,8 +279,8 @@ test('Spot execution includes metadata bytes in the same atomic reservation', as
 });
 
 test('Spot barrier turns remain in application FIFO order and scheduler yields at its time budget', async () => {
-  const serial = new ZLinkSpotSerialExecutor(false, undefined, {
-    ownerTimeBudgetMs: 1,
+  const serial = new ZLinkSpotSerialTurnExecutor(false, undefined, {
+    ownerTimeBudget: 1,
     lifecycleBurstLimit: 8,
   });
   const events: string[] = [];
@@ -293,7 +303,7 @@ test('Spot barrier turns remain in application FIFO order and scheduler yields a
 });
 
 test('yield continuation re-enters behind earlier application turns', async () => {
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialTurnExecutor(true);
   const response = deferred<void>();
   const blockerStarted = deferred<void>();
   const blockerFinished = deferred<void>();

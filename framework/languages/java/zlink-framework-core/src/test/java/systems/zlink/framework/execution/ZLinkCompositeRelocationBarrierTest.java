@@ -19,9 +19,9 @@ import systems.zlink.framework.runtime.internal.relocation
 final class ZLinkCompositeRelocationBarrierTest {
     @Test
     void sealsSpotActorAndTimerAsOneGeneration() throws Exception {
-        ZLinkAsyncSerialQueue spot = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue actor = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue timer = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
         ZLinkCompositeRelocationBarrier barrier =
             new ZLinkCompositeRelocationBarrier();
 
@@ -67,9 +67,9 @@ final class ZLinkCompositeRelocationBarrierTest {
 
     @Test
     void failedLaneRollsBackEveryEarlierSeal() throws Exception {
-        ZLinkAsyncSerialQueue spot = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue actor = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue timer = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
         ZLinkCompositeRelocationBarrier barrier =
             new ZLinkCompositeRelocationBarrier();
         CompletableFuture<Void> actorActive = new CompletableFuture<>();
@@ -99,9 +99,9 @@ final class ZLinkCompositeRelocationBarrierTest {
     @Test
     void yieldedActorContinuationPreventsPartialAggregateSeal()
         throws Exception {
-        ZLinkAsyncSerialQueue spot = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue actor = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue timer = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
         ZLinkCompositeRelocationBarrier barrier =
             new ZLinkCompositeRelocationBarrier();
         CompletableFuture<Void> remote = new CompletableFuture<>();
@@ -109,7 +109,7 @@ final class ZLinkCompositeRelocationBarrierTest {
 
         CompletableFuture<Void> dispatch = actor.enqueue(() -> {
             var continuation =
-                ZLinkAsyncSerialQueue.yieldCurrent(remote);
+                ZLinkSerialExecutionQueue.yieldCurrent(remote);
             yielded.complete(null);
             return continuation;
         }).toCompletableFuture();
@@ -134,9 +134,9 @@ final class ZLinkCompositeRelocationBarrierTest {
     @Test
     void turnBoundarySealWaitsForActiveTurnAndCapturesAcceptedQueue()
         throws Exception {
-        ZLinkAsyncSerialQueue spot = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue actor = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue timer = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
         ZLinkCompositeRelocationBarrier barrier =
             new ZLinkCompositeRelocationBarrier();
         CompletableFuture<Void> active = new CompletableFuture<>();
@@ -179,9 +179,9 @@ final class ZLinkCompositeRelocationBarrierTest {
     @Test
     void cancelledTurnBoundaryRestoresAcceptedQueueWithoutPartialSeal()
         throws Exception {
-        ZLinkAsyncSerialQueue spot = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue actor = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue timer = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
         ZLinkCompositeRelocationBarrier barrier =
             new ZLinkCompositeRelocationBarrier();
         CompletableFuture<Void> active = new CompletableFuture<>();
@@ -214,10 +214,10 @@ final class ZLinkCompositeRelocationBarrierTest {
     @Test
     void turnBoundarySealWaitsForYieldedTerminalContinuation()
         throws Exception {
-        ZLinkAsyncSerialQueue spot = new ZLinkAsyncSerialQueue();
-        ZLinkAsyncSerialQueue actor = new ZLinkAsyncSerialQueue(
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
+        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue(
             ZLinkExecutionLanePolicy.spotReturningGate());
-        ZLinkAsyncSerialQueue timer = new ZLinkAsyncSerialQueue();
+        ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
         ZLinkCompositeRelocationBarrier barrier =
             new ZLinkCompositeRelocationBarrier();
         CompletableFuture<Void> remote = new CompletableFuture<>();
@@ -225,7 +225,7 @@ final class ZLinkCompositeRelocationBarrierTest {
 
         CompletableFuture<Void> dispatch = actor.enqueue(() -> {
             CompletionStage<Void> continuation =
-                ZLinkAsyncSerialQueue.yieldCurrent(remote);
+                ZLinkSerialExecutionQueue.yieldCurrent(remote);
             yielded.complete(null);
             return continuation;
         }).toCompletableFuture();
@@ -245,11 +245,11 @@ final class ZLinkCompositeRelocationBarrierTest {
         assertTrue(barrier.abort(seal));
     }
 
-    private static LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes(
-        ZLinkAsyncSerialQueue spot,
-        ZLinkAsyncSerialQueue actor,
-        ZLinkAsyncSerialQueue timer) {
-        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes =
+    private static LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes(
+        ZLinkSerialExecutionQueue spot,
+        ZLinkSerialExecutionQueue actor,
+        ZLinkSerialExecutionQueue timer) {
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes =
             new LinkedHashMap<>();
         lanes.put("spot", spot);
         lanes.put("actor:a", actor);

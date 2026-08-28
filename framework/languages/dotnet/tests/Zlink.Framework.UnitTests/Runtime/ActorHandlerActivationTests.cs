@@ -287,7 +287,7 @@ public sealed class ActorHandlerActivationTests
     [Fact]
     public async Task Terminal_Barrier_Runs_After_Already_Accepted_Turns_And_Closes_Admission()
     {
-        var mailbox = new ZLinkActorDispatchMailbox();
+        var mailbox = new ZLinkActorSerialExecutor();
         var current = await mailbox.EnterAsync(CancellationToken.None);
         var accepted = mailbox.EnterAsync(CancellationToken.None).AsTask();
         var terminal = mailbox.CloseAdmissionAndReserveLifecycleBarrier();

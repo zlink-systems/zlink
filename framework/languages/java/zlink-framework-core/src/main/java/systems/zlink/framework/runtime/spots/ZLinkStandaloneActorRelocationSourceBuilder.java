@@ -17,7 +17,7 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -30,6 +30,7 @@ import systems.zlink.framework.runtime.internal.locations
     .ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRelocationAdapterRegistry;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
@@ -243,7 +244,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     return failed(new IllegalStateException(
                         "Actor relocation queue cannot be sealed"));
                 }
-                ZLinkAsyncSerialQueue.RelocationSeal seal = sealed.orElseThrow();
+                ZLinkSerialExecutionQueue.RelocationSeal seal = sealed.orElseThrow();
                 byte[] timerEnvelope =
                     relocationReplies.freezeActorTimerRelocationEnvelope(
                         admission.owned().actorId());
@@ -379,12 +380,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             });
     }
 
-    private CompletionStage<Optional<ZLinkAsyncSerialQueue.RelocationSeal>>
+    private CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>>
         sealAtTurnBoundary(
             String actorId,
-            ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal,
+            ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurnSeal,
             ZLinkStoreCancellation cancellation) {
-        ZLinkAsyncSerialQueue queue = actors.actorRelocationLane(actorId);
+        ZLinkSerialExecutionQueue queue = actors.actorRelocationLane(actorId);
         if (activeTurnSeal != null) {
             //  A deferred Join holds this queue's active turn (its mailbox
             //  barrier). Reserving a lifecycle boundary here would queue it
@@ -397,15 +398,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     ? Optional.empty()
                     : queue.trySealRelocation(activeTurnSeal));
         }
-        Optional<ZLinkAsyncSerialQueue.RelocationBoundary> reserved =
+        Optional<ZLinkSerialExecutionQueue.RelocationBoundary> reserved =
             queue.reserveRelocationTurnBoundary();
         if (reserved.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        ZLinkAsyncSerialQueue.RelocationBoundary boundary =
+        ZLinkSerialExecutionQueue.RelocationBoundary boundary =
             reserved.orElseThrow();
         return boundary.reached().thenCompose(ignored -> {
-            Optional<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
+            Optional<ZLinkSerialExecutionQueue.RelocationSeal> sealed =
                 cancellation.isCancellationRequested()
                     ? Optional.empty()
                     : queue.trySealRelocation(boundary);
@@ -788,8 +789,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     private Optional<ZLinkSpotRetireControl.SessionRouteFence>
         capturedSessionRoute(
             Owned actor,
-            List<ZLinkAsyncSerialQueue.QueuedRecord> captured) {
-        for (ZLinkAsyncSerialQueue.QueuedRecord queued : captured) {
+            List<ZLinkSerialExecutionQueue.QueuedRecord> captured) {
+        for (ZLinkSerialExecutionQueue.QueuedRecord queued : captured) {
             ZLinkActorAcceptedJournal.Record record;
             try {
                 record = ZLinkActorAcceptedJournal.decode(queued.payload());
@@ -856,7 +857,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private final ZLinkSpotRuntime relocationReplies;
         private final ZLinkSessionRelocationPeerClient sessionSealer;
         private final Optional<SealedSessionRoute> sealedSessionRoute;
-        private final ZLinkAsyncSerialQueue.RelocationSeal seal;
+        private final ZLinkSerialExecutionQueue.RelocationSeal seal;
         private final Owned owned;
         private final ZLinkMeshNodeDescriptor target;
         private final UUID relocationId;
@@ -864,7 +865,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private final byte[] timerEnvelope;
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
         private final String targetSpotId;
-        private List<ZLinkAsyncSerialQueue.QueuedRecord> finalJournal =
+        private final ZLinkStateLane stateLane = new ZLinkStateLane();
+        private List<ZLinkSerialExecutionQueue.QueuedRecord> finalJournal =
             List.of();
         private systems.zlink.framework.runtime.internal.relocation
             .ZLinkRetainedSerialQueueCommit.Commit relocationCommit;
@@ -878,7 +880,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             ZLinkSpotRuntime relocationReplies,
             ZLinkSessionRelocationPeerClient sessionSealer,
             Optional<SealedSessionRoute> sealedSessionRoute,
-            ZLinkAsyncSerialQueue.RelocationSeal seal,
+            ZLinkSerialExecutionQueue.RelocationSeal seal,
             Owned owned,
             ZLinkMeshNodeDescriptor target,
             UUID relocationId,
@@ -960,15 +962,18 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 });
         }
 
-        synchronized void acceptTargetAuthorityOwnerGeneration(
+        void acceptTargetAuthorityOwnerGeneration(
             long targetAuthorityOwnerGeneration) {
-            if (!committed
-                || targetAuthorityOwnerGeneration
-                    <= sourceAuthorityOwnerGeneration()) {
-                throw new IllegalStateException(
-                    "Actor relocation target owner generation is invalid");
-            }
-            installRelocationForward(targetAuthorityOwnerGeneration);
+            inStateLane(() -> {
+                if (!committed
+                    || targetAuthorityOwnerGeneration
+                        <= sourceAuthorityOwnerGeneration()) {
+                    throw new IllegalStateException(
+                        "Actor relocation target owner generation is invalid");
+                }
+                installRelocationForward(targetAuthorityOwnerGeneration);
+                return null;
+            });
         }
 
         CompletionStage<Void> relayCapturedIngress(
@@ -978,10 +983,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             Objects.requireNonNull(timeout, "timeout");
             systems.zlink.framework.runtime.internal.relocation
                 .ZLinkRetainedSerialQueueCommit.Commit retained;
-            synchronized (this) {
+            try {
+                retained = inStateLane(() -> {
                 if (terminal || committed) {
-                    return failed(new IllegalStateException(
-                        "Actor relocation relay boundary is terminal"));
+                    throw new IllegalStateException(
+                        "Actor relocation relay boundary is terminal");
                 }
                 if (relocationCommit == null) {
                     relocationCommit = actors.retainActorRelocationCommit(
@@ -990,22 +996,26 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             "Actor relocation source queue was lost"));
                     installExpectedRelocationForward();
                 }
-                retained = relocationCommit;
+                    return relocationCommit;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             systems.zlink.framework.runtime.internal.relocation
                 .ZLinkRetainedSerialQueueCommit.Cut cut;
             do {
                 cut = retained.cut();
             } while (!retained.tryEstablishAndFinishCapture(cut));
-            List<ZLinkAsyncSerialQueue.QueuedRecord> relayed =
+            List<ZLinkSerialExecutionQueue.QueuedRecord> relayed =
                 cut.records().stream()
                     .sorted((left, right) -> Long.compareUnsigned(
                         left.sequence(), right.sequence()))
                     .toList();
-            synchronized (this) {
+            inStateLane(() -> {
                 finalJournal = relayed;
                 captureFinished = true;
-            }
+                return null;
+            });
             CompletionStage<Void> chain =
                 CompletableFuture.completedFuture(null);
             if (sealedSessionRoute.isPresent()) {
@@ -1016,7 +1026,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     sealed,
                     timeout));
             }
-            for (ZLinkAsyncSerialQueue.QueuedRecord record : relayed) {
+            for (ZLinkSerialExecutionQueue.QueuedRecord record : relayed) {
                 chain = chain.thenCompose(ignored -> client.relay(
                     stageRequest.targetNodeRid(),
                     stageRequest.fence(),
@@ -1079,35 +1089,51 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         stageRequest.fence().aggregateGeneration())));
         }
 
-        synchronized void completeSourceQueueCommit() {
-            if (relocationCommit == null
-                || !committed && !captureFinished) {
-                throw new IllegalStateException(
-                    "Actor relocation source queue is not durably committed");
-            }
-            committed = true;
-            relocationCommit.complete();
+        void completeSourceQueueCommit() {
+            systems.zlink.framework.runtime.internal.relocation
+                .ZLinkRetainedSerialQueueCommit.Commit retained = inStateLane(() -> {
+                    if (relocationCommit == null
+                        || !committed && !captureFinished) {
+                        throw new IllegalStateException(
+                            "Actor relocation source queue is not durably committed");
+                    }
+                    committed = true;
+                    return relocationCommit;
+                });
+            retained.complete();
         }
 
-        synchronized boolean relayBoundaryCommitted() {
-            return committed;
+        boolean relayBoundaryCommitted() {
+            return inStateLane(() -> committed);
         }
 
         CompletionStage<Void> discardInitialAfterCommit() {
-            synchronized (this) {
+            try {
+                inStateLane(() -> {
                 if (!committed || terminal) {
-                    return failed(new IllegalStateException(
-                        "Actor relocation source is not committed"));
+                    throw new IllegalStateException(
+                        "Actor relocation source is not committed");
                 }
+                    return null;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             finish();
             return CompletableFuture.completedFuture(null);
         }
 
         CompletionStage<Void> cleanupLocal() {
-            if (!committed || terminal) {
-                return failed(new IllegalStateException(
-                    "Actor relocation source is not committed"));
+            try {
+                inStateLane(() -> {
+                    if (!committed || terminal) {
+                        throw new IllegalStateException(
+                            "Actor relocation source is not committed");
+                    }
+                    return null;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             relocationReplies.closeActorTimersAfterRelocation(
                 owned.actorId());
@@ -1115,10 +1141,17 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 List.of(owned.actorId()));
         }
 
-        synchronized CompletionStage<Void> abort() {
-            if (terminal || committed) {
-                return failed(new IllegalStateException(
-                    "committed Actor relocation cannot be aborted"));
+        CompletionStage<Void> abort() {
+            try {
+                inStateLane(() -> {
+                    if (terminal || committed) {
+                        throw new IllegalStateException(
+                            "committed Actor relocation cannot be aborted");
+                    }
+                    return null;
+                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
             }
             return abortSessionRoute(sessionSealer, sealedSessionRoute)
                 .thenRun(() -> {
@@ -1135,9 +1168,27 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 });
         }
 
-        private synchronized void finish() {
-            if (!terminal) {
-                terminal = true;
+        private void finish() {
+            inStateLane(() -> {
+                if (!terminal) {
+                    terminal = true;
+                }
+                return null;
+            });
+        }
+
+        private <T> T inStateLane(java.util.function.Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
             }
         }
     }

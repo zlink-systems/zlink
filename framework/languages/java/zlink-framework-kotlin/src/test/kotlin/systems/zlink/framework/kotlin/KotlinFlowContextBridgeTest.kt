@@ -23,13 +23,13 @@ import systems.zlink.framework.actors.ZLinkActorJoinCall
 import systems.zlink.framework.actors.ZLinkBoundSession
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
 
 class KotlinFlowContextBridgeTest {
     @Test
     fun `all lane barrier waits for yielded coroutine continuation`() {
-        val queue = ZLinkAsyncSerialQueue()
+        val queue = ZLinkSerialExecutionQueue()
         val remote = CompletableFuture<Void>()
         val yielded = CompletableFuture<Void>()
 
@@ -39,7 +39,7 @@ class KotlinFlowContextBridgeTest {
                 ZLinkCoroutineInvocationContext.capture(Dispatchers.Default),
             ).launch {
                 yielded.complete(null)
-                ZLinkAsyncSerialQueue.yieldCurrent(remote).await()
+                ZLinkSerialExecutionQueue.yieldCurrent(remote).await()
                 completed.complete(null)
             }
             completed
@@ -56,7 +56,7 @@ class KotlinFlowContextBridgeTest {
 
     @Test
     fun `suspending handler preserves application execution and serial claim`() {
-        val queue = ZLinkAsyncSerialQueue()
+        val queue = ZLinkSerialExecutionQueue()
         val beforeTurn = AtomicReference<Any>()
         val afterTurn = AtomicReference<Any>()
         val firstRemote = CompletableFuture<Void>()
@@ -78,7 +78,7 @@ class KotlinFlowContextBridgeTest {
                     ZLinkCoroutineInvocationContext.capture(Dispatchers.Default),
                 ).launch {
                     firstYieldStarted.complete(null)
-                    ZLinkAsyncSerialQueue.yieldCurrent(firstRemote).await()
+                    ZLinkSerialExecutionQueue.yieldCurrent(firstRemote).await()
                     assertSame(
                         execution,
                         ZLinkSuspendInvocationContext.currentApplicationExecution(),
@@ -87,7 +87,7 @@ class KotlinFlowContextBridgeTest {
                         ZLinkSuspendInvocationContext.currentSerialExecutionTurn(),
                     )
                     secondYieldStarted.complete(null)
-                    ZLinkAsyncSerialQueue.yieldCurrent(secondRemote).await()
+                    ZLinkSerialExecutionQueue.yieldCurrent(secondRemote).await()
                     completed.complete(null)
                 }
                 completed

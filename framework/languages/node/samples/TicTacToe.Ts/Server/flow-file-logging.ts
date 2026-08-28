@@ -41,10 +41,11 @@ class FlowFileExporter implements LogRecordExporter {
 
 function enableFlowFileLogging(role: string): void {
   const flagIndex = process.argv.indexOf('--config');
-  if (flagIndex < 0 || process.argv[flagIndex + 1] === undefined) return;
+  if (flagIndex < 0 || !Object.hasOwn(process.argv, flagIndex + 1)) return;
+  const configPath = process.argv[flagIndex + 1]!;
   try {
     const document = JSON.parse(
-      fs.readFileSync(process.argv[flagIndex + 1], 'utf8')
+      fs.readFileSync(configPath, 'utf8')
     ) as { sample?: { logDir?: string } };
     const logDir = document.sample?.logDir;
     if (logDir === undefined) return;

@@ -441,11 +441,23 @@ bool serial_execution_queue_t::try_post_async (std::string name,
     if (!work) {
         throw std::invalid_argument ("serial execution queue work is empty");
     }
-    std::lock_guard<std::mutex> lock (_mutex);
-    if (_closed || !can_enqueue_locked (options)) {
-        return false;
+    const auto transfer_owner_reservation = options.transfer_owner_reservation;
+    bool accepted = false;
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_closed || !can_enqueue_locked (options)) {
+            return false;
+        }
+        accepted = enqueue_locked (std::move (name), std::move (work), std::move (options));
     }
-    return enqueue_locked (std::move (name), std::move (work), std::move (options));
+    if (accepted && transfer_owner_reservation) {
+        try {
+            transfer_owner_reservation ();
+        }
+        catch (...) {
+        }
+    }
+    return accepted;
 }
 
 result_t<serial_submission_id_t>
@@ -463,30 +475,41 @@ serial_execution_queue_t::try_post_cancellable_async (
           "serial execution queue cancellation is empty");
     }
 
-    std::lock_guard<std::mutex> lock (_mutex);
-    if (_closed) {
-        return result_t<serial_submission_id_t>::failure (
-          framework_error_kind_t::shutting_down,
-          "serial execution queue is closed");
-    }
-    if (!can_enqueue_locked (options)) {
-        return result_t<serial_submission_id_t>::failure (
-          framework_error_kind_t::capacity_exceeded,
-          "serial execution queue is full");
-    }
-    if (_next_submission_id == 0) {
-        return result_t<serial_submission_id_t>::failure (
-          framework_error_kind_t::internal_failure,
-          "serial execution queue submission identifiers are exhausted");
-    }
+    const auto transfer_owner_reservation = options.transfer_owner_reservation;
+    serial_submission_id_t submission_id = 0;
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_closed) {
+            return result_t<serial_submission_id_t>::failure (
+              framework_error_kind_t::shutting_down,
+              "serial execution queue is closed");
+        }
+        if (!can_enqueue_locked (options)) {
+            return result_t<serial_submission_id_t>::failure (
+              framework_error_kind_t::capacity_exceeded,
+              "serial execution queue is full");
+        }
+        if (_next_submission_id == 0) {
+            return result_t<serial_submission_id_t>::failure (
+              framework_error_kind_t::internal_failure,
+              "serial execution queue submission identifiers are exhausted");
+        }
 
-    const auto submission_id = _next_submission_id++;
-    if (!enqueue_locked (std::move (name), std::move (work),
-                         std::move (options), submission_id,
-                         std::move (cancel))) {
-        return result_t<serial_submission_id_t>::failure (
-          framework_error_kind_t::shutting_down,
-          "serial execution queue executor is stopping");
+        submission_id = _next_submission_id++;
+        if (!enqueue_locked (std::move (name), std::move (work),
+                             std::move (options), submission_id,
+                             std::move (cancel))) {
+            return result_t<serial_submission_id_t>::failure (
+              framework_error_kind_t::shutting_down,
+              "serial execution queue executor is stopping");
+        }
+    }
+    if (transfer_owner_reservation) {
+        try {
+            transfer_owner_reservation ();
+        }
+        catch (...) {
+        }
     }
     return result_t<serial_submission_id_t>::success (submission_id);
 }
@@ -576,15 +599,27 @@ bool serial_execution_queue_t::post_async_wait (
     if (!work) {
         throw std::invalid_argument ("serial execution queue work is empty");
     }
-    std::unique_lock lock (_mutex);
-    _capacity_changed.wait (lock, [&] {
-        return _closed || can_enqueue_locked (options)
-               || (stop_requested && stop_requested ());
-    });
-    if (_closed || (stop_requested && stop_requested ())) {
-        return false;
+    const auto transfer_owner_reservation = options.transfer_owner_reservation;
+    bool accepted = false;
+    {
+        std::unique_lock lock (_mutex);
+        _capacity_changed.wait (lock, [&] {
+            return _closed || can_enqueue_locked (options)
+                   || (stop_requested && stop_requested ());
+        });
+        if (_closed || (stop_requested && stop_requested ())) {
+            return false;
+        }
+        accepted = enqueue_locked (std::move (name), std::move (work), std::move (options));
     }
-    return enqueue_locked (std::move (name), std::move (work), std::move (options));
+    if (accepted && transfer_owner_reservation) {
+        try {
+            transfer_owner_reservation ();
+        }
+        catch (...) {
+        }
+    }
+    return accepted;
 }
 
 bool serial_execution_queue_t::try_post_deferred (
@@ -829,7 +864,7 @@ bool serial_execution_queue_t::can_enqueue_locked (
   const serial_work_options_t &options) const noexcept
 {
     if (options.lane == serial_work_lane_t::application
-        && options.host_application_capacity_reserved) {
+        && options.transfer_owner_reservation) {
         return true;
     }
     const auto &lane = lane_locked (options.lane);

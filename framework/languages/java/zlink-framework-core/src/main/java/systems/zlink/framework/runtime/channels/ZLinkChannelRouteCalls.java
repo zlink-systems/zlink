@@ -61,7 +61,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -303,7 +303,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
                         reply.close();
                     }
             });
-        return ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
     }
 
@@ -663,7 +663,7 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
                     + " status=" + classified.orElseThrow() : null);
             result.completeExceptionally(
                 ZLinkOneWayCalls.failureForStatus(classified.orElseThrow()));
-            return ZLinkAsyncSerialQueue
+            return ZLinkSerialExecutionQueue
                 .manageCurrent(result);
         }
         result.whenComplete((ignored, failure) -> payload.close());
@@ -693,7 +693,7 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
                     reply.close();
                 }
             });
-        return ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
     }
 
@@ -701,7 +701,7 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("Channel request");
-        return ZLinkAsyncSerialQueue
+        return ZLinkSerialExecutionQueue
             .yieldCurrent(submit(replyType));
     }
 
@@ -860,7 +860,7 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
                             + status);
                 });
                 return systems.zlink.framework.execution
-                    .ZLinkAsyncSerialQueue.manageCurrent(result);
+                    .ZLinkSerialExecutionQueue.manageCurrent(result);
             }
             node.requestToNode(
                     target,
@@ -885,7 +885,7 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
         } finally {
             requestParts.forEach(Message::close);
         }
-        return ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
     }
 

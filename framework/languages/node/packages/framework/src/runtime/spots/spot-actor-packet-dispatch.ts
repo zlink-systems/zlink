@@ -34,8 +34,8 @@ import {
 } from '../streams/protocol';
 import { decodeFrameworkTypedPayloadMessage } from '../messaging/payload-codec';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
-import type { ZLinkSerialWorkOptions } from '../execution/serial-scheduler';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
+import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue';
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 
@@ -88,7 +88,7 @@ interface ZLinkSpotActorPacketDispatchOptions {
   readonly spot: ZLinkSpot | (() => ZLinkSpot);
   readonly spotId: () => string;
   readonly registry: ZLinkSpotActorHandlerRegistryRuntime;
-  readonly serial?: ZLinkSpotSerialExecutor;
+  readonly serial?: ZLinkSpotSerialTurnExecutor;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly actorLeft?: (actorId: string) => boolean;
   readonly routeBeforeLocal?: (

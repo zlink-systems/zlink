@@ -28,6 +28,8 @@ reply·timeout·cancellation·shutdown 가운데 먼저 확정된 결과로 완�
   handler에 이르는 동안의 소유권과 복사를 다룬다.
 - [상태 소유와 state lane](06-state-ownership-and-lanes.ko.md)은 컴포넌트가 자신의 mutable
   상태를 어떤 메커니즘으로 지키는지를 다룬다.
+- [직렬 실행기 계층](07-serial-executor-layers.ko.md)은 Spot·Actor·Session이 각자의 작업을
+  어떤 직렬 단위에서 실행하고 누가 그 수명을 소유하는지를 다룬다.
 
 이 주제가 다루지 않는 것 — Spot이 등록하는 반복 callback은
 [Spot timer](../03-spot-actor/10-spot-timer.ko.md)가, Actor·Spot 모델 자체와 queue 구조는
@@ -89,6 +91,8 @@ flowchart LR
 | message가 socket에서 handler까지 가는 동안 byte를 몇 번 복사하는가 | [Payload ownership과 codec](05-payload-ownership-and-codec.ko.md) |
 | 응답·timeout·취소·종료가 동시에 오면 무엇이 이기는가 | [Submit과 완료 「9. Request completion — 완료 경쟁과 timeout budget」](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget) |
 | 제한은 무엇인가 (`MaxQueuedApplicationJobs`, pause/resume %, lane 상한, dispatcher 4,096) | [§6](#6-수치-요약표) |
+| Spot의 Actor·Timer 작업은 어느 queue에서 도는가 | [직렬 실행기 계층 「4. Spot 실행 mode와 queue 경로」](07-serial-executor-layers.ko.md#4-spot-실행-mode와-queue-경로) |
+| 한 소유자가 queue를 오래 점유하면 무엇이 막아 주는가 | [직렬 실행기 계층 「6.4 공정성」](07-serial-executor-layers.ko.md#64-공정성) |
 | 컴포넌트 상태는 왜 lock 대신 state lane으로 지키는가 | [상태 소유와 state lane 「3. 금지되는 형태」](06-state-ownership-and-lanes.ko.md#3-금지되는-형태) |
 | state lane과 Application lane은 무엇이 다른가 | [상태 소유와 state lane 「2. 용어 구분 — state lane과 Application/lifecycle lane」](06-state-ownership-and-lanes.ko.md#2-용어-구분--state-lane과-applicationlifecycle-lane) |
 

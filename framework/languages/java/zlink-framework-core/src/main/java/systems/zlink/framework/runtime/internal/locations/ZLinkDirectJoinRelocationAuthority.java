@@ -7,7 +7,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -64,7 +64,7 @@ public final class ZLinkDirectJoinRelocationAuthority {
         RoutingId targetNodeRid,
         boolean restoreSnapshot,
         byte[] applicationState,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> acceptedJournal) {
+        List<ZLinkSerialExecutionQueue.QueuedRecord> acceptedJournal) {
         String actorKey = ZLinkAuthorityKeyCodec.actor(actor.actorId());
         String spotKey = ZLinkAuthorityKeyCodec.spot(targetSpotId);
         return authority.read(actorKey, NEVER).thenCompose(actorRead -> {
@@ -103,7 +103,7 @@ public final class ZLinkDirectJoinRelocationAuthority {
                         new IllegalStateException(
                             "target Spot authority changed before relocation"));
                 }
-                List<ZLinkAsyncSerialQueue.QueuedRecord> journal =
+                List<ZLinkSerialExecutionQueue.QueuedRecord> journal =
                     List.copyOf(acceptedJournal);
                 byte[] initial =
                     ZLinkCanonicalActorRelocationEnvelope.encode(
@@ -426,14 +426,14 @@ public final class ZLinkDirectJoinRelocationAuthority {
                 throw new IllegalStateException(
                     "direct Join relocation state policy differs");
             }
-            List<ZLinkAsyncSerialQueue.QueuedRecord> journal =
+            List<ZLinkSerialExecutionQueue.QueuedRecord> journal =
                 root.savedWork().stream()
                     .map(value -> {
                         if (value.participantId() != 1) {
                             throw new IllegalStateException(
                                 "direct Join journal references another participant");
                         }
-                        return new ZLinkAsyncSerialQueue.QueuedRecord(
+                        return new ZLinkSerialExecutionQueue.QueuedRecord(
                             value.sequence(),
                             value.rawEntry());
                     })
@@ -501,7 +501,7 @@ public final class ZLinkDirectJoinRelocationAuthority {
 
     public record PreparedRoot(
         byte[] applicationState,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> acceptedJournal) {
+        List<ZLinkSerialExecutionQueue.QueuedRecord> acceptedJournal) {
         public PreparedRoot {
             applicationState =
                 Objects.requireNonNull(applicationState, "applicationState")

@@ -9,14 +9,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 /**
  * Single-owner execution lane for a component's mutable state.
  *
  * <p>Every read and write of a component's state runs through one lane turn. The lane runs at
  * most one turn at a time, so its state can use ordinary, unsynchronized collections. This is
- * intentionally separate from {@link ZLinkAsyncSerialQueue}, which owns application execution,
+ * intentionally separate from {@link ZLinkSerialExecutionQueue}, which owns application execution,
  * relocation, and lifecycle admission.</p>
  *
  * <p>A lane is not reentrant. Reentering it from one of its turns would wait behind that turn and

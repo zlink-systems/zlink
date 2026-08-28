@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCursor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanExpired;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
@@ -44,6 +45,9 @@ public final class ZLinkStatefulAuthorityRouteRuntime
                 .name("zlink-jvm-authority-routes")
                 .factory());
     private final AtomicBoolean inFlight = new AtomicBoolean();
+    // Applied routes are a C2 set: remove, add, and replacement must remain
+    // one ordered transition.
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, Applied> applied = new HashMap<>();
     private volatile boolean started;
     private volatile boolean closed;
@@ -82,7 +86,10 @@ public final class ZLinkStatefulAuthorityRouteRuntime
 
     public CompletionStage<Void> reconcile() {
         return scan(Optional.empty(), new HashMap<>())
-            .thenAccept(this::apply);
+            .thenAccept(next -> inStateLane(() -> {
+                applyCore(next);
+                return null;
+            }));
     }
 
     private CompletionStage<Map<String, Applied>> scan(
@@ -176,7 +183,7 @@ public final class ZLinkStatefulAuthorityRouteRuntime
             });
     }
 
-    private synchronized void apply(Map<String, Applied> next) {
+    private void applyCore(Map<String, Applied> next) {
         for (Map.Entry<String, Applied> old : applied.entrySet()) {
             Applied current = next.get(old.getKey());
             if (!old.getValue().equals(current)) {
@@ -235,11 +242,29 @@ public final class ZLinkStatefulAuthorityRouteRuntime
     }
 
     @Override
-    public synchronized void close() {
-        closed = true;
-        executor.shutdownNow();
-        applied.values().forEach(this::forget);
-        applied.clear();
+    public void close() {
+        inStateLane(() -> {
+            closed = true;
+            executor.shutdownNow();
+            applied.values().forEach(this::forget);
+            applied.clear();
+            return null;
+        });
+    }
+
+    private <T> T inStateLane(java.util.function.Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
 
     private static Throwable unwrap(Throwable failure) {

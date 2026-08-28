@@ -9,6 +9,7 @@
 #include "runtime/diagnostics/runtime_observation.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -19,12 +20,14 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
+#include "runtime/streams/session_serial_executor.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 
 #include <zlink/framework/contracts/spots/spot.hpp>
@@ -495,6 +498,172 @@ bool wait_until (const std::function<bool ()> &predicate)
     return false;
 }
 
+class serial_test_signal_t
+{
+  public:
+    void set ()
+    {
+        {
+            std::lock_guard lock (_mutex);
+            _set = true;
+        }
+        _changed.notify_all ();
+    }
+
+    bool wait_for (std::chrono::milliseconds timeout = std::chrono::seconds (1))
+    {
+        std::unique_lock lock (_mutex);
+        return _changed.wait_for (lock, timeout, [this] { return _set; });
+    }
+
+    bool is_set () const
+    {
+        std::lock_guard lock (_mutex);
+        return _set;
+    }
+
+  private:
+    mutable std::mutex _mutex;
+    std::condition_variable _changed;
+    bool _set = false;
+};
+
+class serial_test_blocker_t
+{
+  public:
+    using queue_t = zlink::framework::runtime::serial_execution_queue_t;
+
+    ~serial_test_blocker_t () { release (); }
+
+    queue_t::async_work_t work (std::function<void ()> entered = {})
+    {
+        return [this, entered = std::move (entered)] (auto complete) mutable {
+            std::optional<queue_t::async_completion_t> release_now;
+            std::function<void ()> finish;
+            {
+                std::lock_guard lock (_mutex);
+                _entered = true;
+                if (_release_requested) {
+                    release_now.emplace (std::move (complete));
+                    finish = std::move (_finish);
+                }
+                else {
+                    _completion.emplace (std::move (complete));
+                }
+            }
+            if (entered)
+                entered ();
+            _changed.notify_all ();
+            if (release_now)
+                (*release_now) (std::move (finish));
+        };
+    }
+
+    bool wait_for_entry (
+      std::chrono::milliseconds timeout = std::chrono::seconds (1))
+    {
+        std::unique_lock lock (_mutex);
+        return _changed.wait_for (lock, timeout, [this] { return _entered; });
+    }
+
+    void release (std::function<void ()> finish = {})
+    {
+        std::optional<queue_t::async_completion_t> completion;
+        {
+            std::lock_guard lock (_mutex);
+            if (_release_requested)
+                return;
+            _release_requested = true;
+            _finish = std::move (finish);
+            if (_completion) {
+                completion.emplace (std::move (*_completion));
+                _completion.reset ();
+                finish = std::move (_finish);
+            }
+        }
+        if (completion)
+            (*completion) (std::move (finish));
+    }
+
+  private:
+    std::mutex _mutex;
+    std::condition_variable _changed;
+    std::optional<queue_t::async_completion_t> _completion;
+    std::function<void ()> _finish;
+    bool _entered = false;
+    bool _release_requested = false;
+};
+
+class serial_executor_test_fixture_t
+{
+  public:
+    using queue_t = zlink::framework::runtime::serial_execution_queue_t;
+
+    serial_executor_test_fixture_t (
+      zlink::framework::runtime::serial_lane_policy_t policy,
+      zlink::framework::runtime::serial_execution_queue_options_t spot_options = {},
+      std::size_t workers = 4) :
+        worker (std::make_shared<zlink::framework::runtime::offload_executor_t> (
+          workers)),
+        lane (*worker),
+        spot_queue (std::make_shared<queue_t> (
+          *worker, spot_options, queue_t::error_handler_t{}, policy)),
+        serial (worker, lane, std::move (policy), spot_queue)
+    {
+    }
+
+    ~serial_executor_test_fixture_t ()
+    {
+        serial.close ();
+        spot_queue->drain ();
+    }
+
+    std::shared_ptr<zlink::framework::runtime::offload_executor_t> worker;
+    zlink::framework::runtime::state_lane_t lane;
+    std::shared_ptr<queue_t> spot_queue;
+    zlink::framework::detail::spot_serial_executor_t serial;
+};
+
+class reentry_probe_actor_client_t final : public zlink::framework::actor_client_t
+{
+  public:
+    std::atomic_int request_calls{0};
+
+  protected:
+    zlink::framework::task_t<void>
+    send_erased (zlink::framework::actor_id_t,
+                 std::string,
+                 zlink::framework::message_t,
+                 const zlink::framework::actor_send_call_t::metadata_map_t &) override
+    {
+        return zlink::framework::task_t<void> (
+          zlink::framework::result_t<void>::success ());
+    }
+
+    zlink::framework::task_t<zlink::framework::message_t>
+    request_erased (
+      zlink::framework::actor_id_t,
+      std::string,
+      zlink::framework::message_t,
+      std::optional<std::chrono::milliseconds>,
+      const zlink::framework::actor_request_call_t::metadata_map_t &) override
+    {
+        ++request_calls;
+        return zlink::framework::task_t<zlink::framework::message_t> (
+          zlink::framework::result_t<zlink::framework::message_t>::failure (
+            zlink::framework::framework_error_kind_t::internal_failure,
+            "same-Actor request reached transport"));
+    }
+
+    zlink::framework::serializer_registry_t &actor_client_serializers () override
+    {
+        return serializers;
+    }
+
+  private:
+    zlink::framework::serializer_registry_t serializers;
+};
+
 zlink::framework::task_t<void> run_request_turn_probe (
   std::shared_ptr<zlink::framework::detail::task_completion_source_t<int>> reply,
   std::shared_ptr<std::vector<int>> order,
@@ -767,9 +936,10 @@ bool verify_serial_queue_lanes_and_byte_budget ()
            && queue.pending_bytes () == 0;
 }
 
-bool verify_host_reserved_application_bypasses_owner_capacity ()
+bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
 {
     using namespace zlink::framework::runtime;
+    using namespace zlink::framework::runtime::mesh;
 
     offload_executor_t executor (1);
     serial_execution_queue_options_t options;
@@ -782,8 +952,10 @@ bool verify_host_reserved_application_bypasses_owner_capacity ()
     std::condition_variable changed;
     std::optional<serial_execution_queue_t::async_completion_t>
       complete_active;
+    std::optional<serial_execution_queue_t::async_completion_t>
+      complete_transferred;
     bool active_entered = false;
-    bool reserved_follower_ran = false;
+    bool transferred_entered = false;
     if (!queue.try_post_async (
           "owner-cap-active",
           [&] (auto complete) {
@@ -802,23 +974,82 @@ bool verify_host_reserved_application_bypasses_owner_capacity ()
         }
     }
 
-    const serial_work_options_t host_reserved{
+    service_mailbox_t mailbox (2, 4096, 1, 1024);
+    service_mailbox_record_t record;
+    record.owner = "transferred-owner";
+    record.domain = service_mailbox_domain_t::application;
+    record.parts.emplace_back (512, std::uint8_t{0x2a});
+    if (!mailbox.try_enqueue (std::move (record))) {
+        (*complete_active) ([] {});
+        queue.drain ();
+        return false;
+    }
+    auto claim = mailbox.try_claim_owner (
+      service_mailbox_domain_t::application, "transferred-owner", 1, 4096);
+    if (!claim || claim->claimed_messages != 1
+        || claim->claimed_bytes <= serial_execution_queue_t::fixed_work_byte_cost) {
+        (*complete_active) ([] {});
+        queue.drain ();
+        return false;
+    }
+    std::atomic_int transfer_count{0};
+    std::atomic_bool transfer_released{false};
+    const serial_work_options_t transferred{
       serial_work_lane_t::application,
-      serial_execution_queue_t::fixed_work_byte_cost,
-      true};
-    if (!queue.try_post (
-          "host-capacity-reserved",
-          [&] { reserved_follower_ran = true; }, host_reserved)
-        || queue.pending_count (serial_work_lane_t::application) != 2) {
-        if (complete_active) {
-            (*complete_active) ([] {});
+      claim->claimed_bytes,
+      [&mailbox, claim, &transfer_count, &transfer_released] {
+          transfer_count.fetch_add (1, std::memory_order_relaxed);
+          transfer_released.store (mailbox.release (*claim), std::memory_order_release);
+      }};
+    const auto transferred_posted = queue.try_post_async (
+      "transferred-owner-reservation",
+      [&] (auto complete) {
+          std::lock_guard lock (gate);
+          complete_transferred.emplace (std::move (complete));
+          transferred_entered = true;
+          changed.notify_all ();
+      },
+      transferred);
+    if (!transferred_posted) {
+        (*complete_active) ([] {});
+        queue.drain ();
+        return false;
+    }
+    if (transfer_count.load (std::memory_order_relaxed) != 1
+        || !transfer_released.load (std::memory_order_acquire)
+        || mailbox.release (*claim)
+        || queue.pending_count (serial_work_lane_t::application) != 2
+        || queue.pending_bytes ()
+             != serial_execution_queue_t::fixed_work_byte_cost + claim->claimed_bytes) {
+        (*complete_active) ([] {});
+        {
+            std::unique_lock lock (gate);
+            (void) changed.wait_for (lock, std::chrono::seconds (1),
+                                     [&] { return transferred_entered; });
         }
+        if (complete_transferred)
+            (*complete_transferred) ([] {});
         queue.drain ();
         return false;
     }
     (*complete_active) ([] {});
+    {
+        std::unique_lock lock (gate);
+        if (!changed.wait_for (lock, std::chrono::seconds (1),
+                              [&] { return transferred_entered; })) {
+            return false;
+        }
+    }
+    if (queue.pending_count (serial_work_lane_t::application) != 1
+        || queue.pending_bytes () != claim->claimed_bytes) {
+        (*complete_transferred) ([] {});
+        queue.drain ();
+        return false;
+    }
+    (*complete_transferred) ([] {});
     queue.drain ();
-    return reserved_follower_ran && queue.pending_count () == 0;
+    return transfer_count.load (std::memory_order_relaxed) == 1
+           && queue.pending_count () == 0 && queue.pending_bytes () == 0;
 }
 
 bool verify_serial_queue_owner_time_budget ()
@@ -849,20 +1080,547 @@ bool verify_serial_queue_owner_time_budget ()
     }
 
     options.owner_time_budget = std::chrono::milliseconds (1);
-    serial_execution_queue_t expiring_queue (executor, options);
-    std::vector<int> expiring_order;
-    if (!expiring_queue.try_post ("budget-expired", [&expiring_order] {
-            std::this_thread::sleep_for (std::chrono::milliseconds (3));
-            expiring_order.push_back (1);
-        })
-        || !expiring_queue.try_post ("budget-after-expiry", [&expiring_order] {
-               expiring_order.push_back (2);
-           })) {
+    serial_execution_queue_t overloaded_owner (executor, options);
+    serial_execution_queue_t other_owner (executor, options);
+    std::mutex gate;
+    std::condition_variable changed;
+    bool first_entered = false;
+    bool release_first = false;
+    std::vector<std::string> order;
+
+    if (!overloaded_owner.try_post ("overloaded-0", [&] {
+            std::unique_lock lock (gate);
+            first_entered = true;
+            changed.notify_all ();
+            changed.wait (lock, [&] { return release_first; });
+            order.push_back ("overloaded-0");
+        })) {
         return false;
     }
-    expiring_queue.drain ();
-    return expiring_order == std::vector<int>{1, 2}
-           && expiring_queue.pending_count () == 0;
+    {
+        std::unique_lock lock (gate);
+        if (!changed.wait_for (
+              lock, std::chrono::seconds (1), [&] { return first_entered; })) {
+            release_first = true;
+            changed.notify_all ();
+            return false;
+        }
+    }
+    for (int index = 1; index < 8; ++index) {
+        if (!overloaded_owner.try_post (
+              "overloaded-rest", [&, index] {
+                  std::lock_guard lock (gate);
+                  order.push_back ("overloaded-" + std::to_string (index));
+              })) {
+            std::lock_guard lock (gate);
+            release_first = true;
+            changed.notify_all ();
+            return false;
+        }
+    }
+    if (!other_owner.try_post ("other-owner", [&] {
+            std::lock_guard lock (gate);
+            order.push_back ("other");
+        })) {
+        std::lock_guard lock (gate);
+        release_first = true;
+        changed.notify_all ();
+        return false;
+    }
+    std::this_thread::sleep_for (std::chrono::milliseconds (3));
+    {
+        std::lock_guard lock (gate);
+        release_first = true;
+    }
+    changed.notify_all ();
+    overloaded_owner.drain ();
+    other_owner.drain ();
+
+    std::lock_guard lock (gate);
+    const auto other = std::find (order.begin (), order.end (), "other");
+    const auto last = std::find (order.begin (), order.end (), "overloaded-7");
+    return other != order.end () && last != order.end () && other < last
+           && overloaded_owner.pending_count () == 0
+           && other_owner.pending_count () == 0;
+}
+
+bool verify_serial_executor_submission_paths_select_queues ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (
+      serial_lane_policy_t::per_actor_spot ());
+    session_serial_executor_t session (fixture.worker);
+    std::atomic_uint observed{0};
+    const auto mark = [&observed] (unsigned bit) {
+        observed.fetch_or (bit, std::memory_order_release);
+    };
+
+    const auto spot = fixture.serial.execute_spot (
+      "submission-spot", [&] { mark (1U); });
+    const auto actor = fixture.serial.execute_actor (
+      "actor-a", "submission-actor", [&] (auto complete) {
+          mark (2U);
+          complete ([] {});
+      });
+    const auto timer = fixture.serial.execute_timer (
+      "tick", "submission-timer", [&] (auto complete) {
+          mark (4U);
+          complete ([] {});
+      });
+    const auto lifecycle = fixture.serial.execute_lifecycle (
+      "submission-lifecycle", [&] { mark (8U); });
+    const auto application = session.execute_application (
+      "submission-session", [&] (auto complete) {
+          mark (16U);
+          complete ([] {});
+      });
+
+    const auto ran = wait_until ([&] {
+        return observed.load (std::memory_order_acquire) == 31U;
+    });
+    fixture.spot_queue->drain ();
+    fixture.serial.actor_executor ("actor-a")->queue ()->drain ();
+    fixture.serial.timer_queue ("tick")->drain ();
+    session.drain ();
+    return spot && actor && timer && lifecycle && application && ran;
+}
+
+bool verify_per_actor_two_actors_overlap ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (
+      serial_lane_policy_t::per_actor_spot ());
+    serial_test_blocker_t actor_a;
+    serial_test_blocker_t actor_b;
+    const auto accepted_a = fixture.serial.execute_actor (
+      "actor-a", "overlap-a", actor_a.work ());
+    const auto accepted_b = fixture.serial.execute_actor (
+      "actor-b", "overlap-b", actor_b.work ());
+    const auto overlapped = actor_a.wait_for_entry ()
+                            && actor_b.wait_for_entry ();
+    actor_a.release ();
+    actor_b.release ();
+    fixture.serial.actor_executor ("actor-a")->queue ()->drain ();
+    fixture.serial.actor_executor ("actor-b")->queue ()->drain ();
+    return accepted_a && accepted_b && overlapped;
+}
+
+bool verify_spot_wide_two_actors_are_serial ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (
+      serial_lane_policy_t::spot_wide ());
+    serial_test_blocker_t actor_a;
+    serial_test_signal_t actor_b_started;
+    const auto accepted_a = fixture.serial.execute_actor (
+      "actor-a", "wide-a", actor_a.work ());
+    if (!accepted_a || !actor_a.wait_for_entry ())
+        return false;
+
+    const auto accepted_b = fixture.serial.execute_actor (
+      "actor-b", "wide-b", [&] (auto complete) {
+          actor_b_started.set ();
+          complete ([] {});
+      });
+    const auto ran_too_early =
+      actor_b_started.wait_for (std::chrono::milliseconds (50));
+    actor_a.release ();
+    const auto ran_after_release = actor_b_started.wait_for ();
+    fixture.spot_queue->drain ();
+    fixture.serial.actor_executor ("actor-a")->queue ()->drain ();
+    fixture.serial.actor_executor ("actor-b")->queue ()->drain ();
+    return accepted_b && !ran_too_early && ran_after_release;
+}
+
+bool verify_same_actor_fifo_in_both_modes ()
+{
+    using namespace zlink::framework::runtime;
+
+    for (const auto execution : {spot_lane_execution_t::per_actor,
+                                 spot_lane_execution_t::spot_wide}) {
+        const auto policy = execution == spot_lane_execution_t::per_actor
+          ? serial_lane_policy_t::per_actor_spot ()
+          : serial_lane_policy_t::spot_wide ();
+        serial_executor_test_fixture_t fixture (policy);
+        serial_test_blocker_t first;
+        serial_test_signal_t second_started;
+        std::mutex order_gate;
+        std::vector<std::string> order;
+        const auto record = [&] (std::string event) {
+            std::lock_guard lock (order_gate);
+            order.push_back (std::move (event));
+        };
+
+        const auto accepted_first = fixture.serial.execute_actor (
+          "actor-a", "fifo-first", first.work ([&] {
+              record ("first:start");
+          }));
+        if (!accepted_first || !first.wait_for_entry ())
+            return false;
+        const auto accepted_second = fixture.serial.execute_actor (
+          "actor-a", "fifo-second", [&] (auto complete) {
+              record ("second");
+              second_started.set ();
+              complete ([] {});
+          });
+        const auto ran_too_early =
+          second_started.wait_for (std::chrono::milliseconds (50));
+        first.release ([&] { record ("first:end"); });
+        const auto ran_after_release = second_started.wait_for ();
+        fixture.spot_queue->drain ();
+        fixture.serial.actor_executor ("actor-a")->queue ()->drain ();
+        std::lock_guard lock (order_gate);
+        if (!accepted_second || ran_too_early || !ran_after_release
+            || order != std::vector<std::string>{
+                          "first:start", "first:end", "second"}) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool verify_per_actor_timer_names_overlap_and_keep_fifo ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (
+      serial_lane_policy_t::per_actor_spot ());
+    serial_test_blocker_t first_tick;
+    serial_test_signal_t second_tick_started;
+    serial_test_signal_t beat_started;
+    std::mutex order_gate;
+    std::vector<std::string> order;
+    const auto record = [&] (std::string event) {
+        std::lock_guard lock (order_gate);
+        order.push_back (std::move (event));
+    };
+
+    const auto accepted_first = fixture.serial.execute_timer (
+      "tick", "tick-first", first_tick.work ([&] {
+          record ("tick:first:start");
+      }));
+    if (!accepted_first || !first_tick.wait_for_entry ())
+        return false;
+    const auto accepted_second = fixture.serial.execute_timer (
+      "tick", "tick-second", [&] (auto complete) {
+          record ("tick:second");
+          second_tick_started.set ();
+          complete ([] {});
+      });
+    const auto accepted_beat = fixture.serial.execute_timer (
+      "beat", "beat", [&] (auto complete) {
+          record ("beat");
+          beat_started.set ();
+          complete ([] {});
+      });
+    const auto beat_overlapped = beat_started.wait_for ();
+    const auto same_name_ran_early = second_tick_started.is_set ();
+    first_tick.release ([&] { record ("tick:first:end"); });
+    const auto second_ran = second_tick_started.wait_for ();
+    fixture.serial.timer_queue ("tick")->drain ();
+    fixture.serial.timer_queue ("beat")->drain ();
+
+    std::lock_guard lock (order_gate);
+    return accepted_second && accepted_beat && beat_overlapped
+           && !same_name_ran_early && second_ran
+           && order == std::vector<std::string>{
+                        "tick:first:start", "beat", "tick:first:end",
+                        "tick:second"};
+}
+
+bool verify_actor_mailbox_capacity_isolated_in_both_modes ()
+{
+    using namespace zlink::framework::runtime;
+
+    for (const auto execution : {spot_lane_execution_t::per_actor,
+                                 spot_lane_execution_t::spot_wide}) {
+        const auto policy = execution == spot_lane_execution_t::per_actor
+          ? serial_lane_policy_t::per_actor_spot ()
+          : serial_lane_policy_t::spot_wide ();
+        serial_executor_test_fixture_t fixture (policy);
+        serial_execution_queue_options_t actor_options;
+        actor_options.application_message_capacity = 1;
+        actor_options.application_byte_capacity = 1024;
+        auto full_actor_queue = std::make_shared<serial_execution_queue_t> (
+          *fixture.worker, actor_options,
+          serial_execution_queue_t::error_handler_t{},
+          serial_lane_policy_t::actor_delivery ());
+        fixture.serial.replace_actor_queue ("actor-full", full_actor_queue);
+
+        serial_test_blocker_t first;
+        serial_test_signal_t other_ran;
+        const auto accepted_first = fixture.serial.execute_actor (
+          "actor-full", "capacity-first", first.work ());
+        if (!accepted_first || !first.wait_for_entry ())
+            return false;
+        const auto same_actor_accepted = fixture.serial.execute_actor (
+          "actor-full", "capacity-rejected", [] (auto complete) {
+              complete ([] {});
+          });
+        const auto other_actor_accepted = fixture.serial.execute_actor (
+          "actor-open", "capacity-other", [&] (auto complete) {
+              other_ran.set ();
+              complete ([] {});
+          });
+        first.release ();
+        const auto other_completed = other_ran.wait_for ();
+        full_actor_queue->drain ();
+        fixture.spot_queue->drain ();
+        fixture.serial.actor_executor ("actor-open")->queue ()->drain ();
+        if (same_actor_accepted || !other_actor_accepted || !other_completed)
+            return false;
+    }
+    return true;
+}
+
+bool verify_spot_wide_large_payload_rejects_before_small_payload ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (
+      serial_lane_policy_t::spot_wide ());
+    serial_execution_queue_options_t actor_options;
+    actor_options.application_message_capacity = 8;
+    actor_options.application_byte_capacity = 100;
+    auto actor_queue = std::make_shared<serial_execution_queue_t> (
+      *fixture.worker, actor_options,
+      serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::actor_delivery ());
+    fixture.serial.replace_actor_queue ("actor-a", actor_queue);
+
+    serial_test_blocker_t first;
+    serial_test_signal_t small_ran;
+    const serial_work_options_t large{serial_work_lane_t::application, 60};
+    const serial_work_options_t small{serial_work_lane_t::application, 10};
+    const auto accepted_first = fixture.serial.execute_actor (
+      "actor-a", "large-first", first.work (), large);
+    if (!accepted_first || !first.wait_for_entry ())
+        return false;
+    const auto second_large_accepted = fixture.serial.execute_actor (
+      "actor-a", "large-second", [] (auto complete) {
+          complete ([] {});
+      }, large);
+    const auto small_accepted = fixture.serial.execute_actor (
+      "actor-a", "small", [&] (auto complete) {
+          small_ran.set ();
+          complete ([] {});
+      }, small);
+    first.release ();
+    const auto small_completed = small_ran.wait_for ();
+    actor_queue->drain ();
+    fixture.spot_queue->drain ();
+    return !second_large_accepted && small_accepted && small_completed;
+}
+
+bool verify_spot_wide_upper_queue_saturates_by_count ()
+{
+    using namespace zlink::framework::runtime;
+
+    const auto second_submission_rejected = [] (std::size_t payload_bytes) {
+        serial_execution_queue_options_t spot_options;
+        spot_options.application_message_capacity = 1;
+        spot_options.application_byte_capacity =
+          serial_execution_queue_t::fixed_work_byte_cost;
+        serial_executor_test_fixture_t fixture (
+          serial_lane_policy_t::spot_wide (), spot_options);
+
+        serial_execution_queue_options_t actor_options;
+        actor_options.application_message_capacity = 8;
+        actor_options.application_byte_capacity = 1'000'000;
+        for (const auto *actor_id : {"actor-a", "actor-b"}) {
+            fixture.serial.replace_actor_queue (
+              actor_id,
+              std::make_shared<serial_execution_queue_t> (
+                *fixture.worker, actor_options,
+                serial_execution_queue_t::error_handler_t{},
+                serial_lane_policy_t::actor_delivery ()));
+        }
+
+        serial_test_blocker_t first;
+        serial_test_signal_t rejected;
+        const auto accepted_first = fixture.serial.execute_actor (
+          "actor-a", "upper-first", first.work (),
+          serial_work_options_t{serial_work_lane_t::application, 1});
+        if (!accepted_first || !first.wait_for_entry ())
+            return false;
+        const auto admitted_to_actor_queue = fixture.serial.execute_actor (
+          "actor-b", "upper-second", [] (auto complete) {
+              complete ([] {});
+          },
+          serial_work_options_t{serial_work_lane_t::application,
+                                payload_bytes},
+          false,
+          [&] { rejected.set (); });
+        const auto upper_rejected = rejected.wait_for ();
+        first.release ();
+        fixture.spot_queue->drain ();
+        fixture.serial.actor_executor ("actor-a")->queue ()->drain ();
+        fixture.serial.actor_executor ("actor-b")->queue ()->drain ();
+        return admitted_to_actor_queue && upper_rejected;
+    };
+
+    return second_submission_rejected (1)
+           && second_submission_rejected (10'000);
+}
+
+struct spot_wide_yield_probe_state_t
+{
+    void record (std::string event)
+    {
+        std::lock_guard lock (mutex);
+        events.push_back (std::move (event));
+    }
+
+    std::mutex mutex;
+    std::vector<std::string> events;
+    serial_test_signal_t first_started;
+    serial_test_signal_t first_finished;
+    serial_test_signal_t same_actor_next;
+    serial_test_signal_t other_actor;
+    serial_test_signal_t spot;
+    serial_test_signal_t timer;
+    std::atomic_bool failed{false};
+};
+
+zlink::framework::task_t<void> run_spot_wide_actor_yield_probe (
+  std::shared_ptr<zlink::framework::detail::task_completion_source_t<int>> reply,
+  std::shared_ptr<spot_wide_yield_probe_state_t> state)
+{
+    state->record ("actor-a:start");
+    state->first_started.set ();
+    zlink::framework::request_call_t<int> call (
+      "YieldProbe",
+      [reply] (const auto &, auto, const auto &) { return reply->task (); });
+    const auto value = co_await call.yield ();
+    if (value != 7)
+        throw std::runtime_error ("yield probe reply mismatch");
+    state->record ("actor-a:resume");
+    co_return;
+}
+
+bool verify_spot_wide_yield_retains_actor_claim ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+
+    auto fixture = std::make_unique<serial_executor_test_fixture_t> (
+      serial_lane_policy_t::spot_wide ());
+    auto reply =
+      std::make_shared<detail::task_completion_source_t<int>> ();
+    auto state = std::make_shared<spot_wide_yield_probe_state_t> ();
+
+    const auto first_accepted = fixture->serial.execute_actor (
+      "actor-a", "yield-first", [reply, state] (auto complete) mutable {
+          auto task = std::make_shared<task_t<void>> (
+            run_spot_wide_actor_yield_probe (reply, state));
+          observe_task_completion (
+            *task,
+            [task, state,
+             complete = std::move (complete)] (const auto &result) mutable {
+                if (!result)
+                    state->failed.store (true, std::memory_order_release);
+                state->first_finished.set ();
+                complete ([result] { result.value (); });
+            });
+      });
+    if (!first_accepted || !state->first_started.wait_for ())
+        return false;
+
+    const auto same_actor_accepted = fixture->serial.execute_actor (
+      "actor-a", "yield-same-actor-next", [state] (auto complete) {
+          state->record ("actor-a:next");
+          state->same_actor_next.set ();
+          complete ([] {});
+      });
+    const auto other_actor_accepted = fixture->serial.execute_actor (
+      "actor-b", "yield-other-actor", [state] (auto complete) {
+          state->record ("actor-b");
+          state->other_actor.set ();
+          complete ([] {});
+      });
+    const auto spot_accepted = fixture->serial.execute_spot (
+      "yield-spot", [state] {
+          state->record ("spot");
+          state->spot.set ();
+      });
+    const auto timer_accepted = fixture->serial.execute_timer (
+      "tick", "yield-timer", [state] (auto complete) {
+          state->record ("timer");
+          state->timer.set ();
+          complete ([] {});
+      });
+    const auto others_progressed = state->other_actor.wait_for ()
+                                   && state->spot.wait_for ()
+                                   && state->timer.wait_for ();
+    const auto same_actor_ran_while_yielded = state->same_actor_next.is_set ();
+
+    reply->complete (result_t<int>::success (7));
+    const auto first_finished = state->first_finished.wait_for ();
+    const auto same_actor_resumed = state->same_actor_next.wait_for (
+      std::chrono::milliseconds (250));
+    if (!first_finished || !same_actor_resumed) {
+        // A failed claim-release assertion leaves the tested Actor queue
+        // intentionally active. Let process teardown reclaim this failed-test
+        // fixture instead of blocking the test at its destructor.
+        (void) fixture.release ();
+        return false;
+    }
+
+    fixture->spot_queue->drain ();
+    fixture->serial.actor_executor ("actor-a")->queue ()->drain ();
+    fixture->serial.actor_executor ("actor-b")->queue ()->drain ();
+    fixture->serial.timer_queue ("tick")->drain ();
+    std::lock_guard lock (state->mutex);
+    const auto resume = std::find (
+      state->events.begin (), state->events.end (), "actor-a:resume");
+    const auto next = std::find (
+      state->events.begin (), state->events.end (), "actor-a:next");
+    return same_actor_accepted && other_actor_accepted && spot_accepted
+           && timer_accepted && others_progressed
+           && !same_actor_ran_while_yielded
+           && !state->failed.load (std::memory_order_acquire)
+           && resume != state->events.end () && next != state->events.end ()
+           && resume < next;
+}
+
+bool verify_same_actor_synchronous_reentry_is_immediate ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (
+      serial_lane_policy_t::per_actor_spot ());
+    reentry_probe_actor_client_t client;
+    serial_test_signal_t completed;
+    std::atomic_bool immediate_invalid_operation{false};
+    const auto accepted = fixture.serial.execute_actor (
+      "actor-a", "same-actor-reentry", [&] (auto complete) {
+          actor_execution_scope_t actor_scope ("probe:actor-a", "spot-a");
+          actor_request_call_t request (
+            client, actor_id_t ("actor-a"), "ReentryProbe", message_t{});
+          const auto started = std::chrono::steady_clock::now ();
+          const auto result = request.submit_message ().result ();
+          const auto elapsed = std::chrono::steady_clock::now () - started;
+          try {
+              result.value ();
+          }
+          catch (const framework_exception_t &error) {
+              immediate_invalid_operation.store (
+                error.kind () == framework_error_kind_t::invalid_operation
+                  && elapsed < std::chrono::milliseconds (250),
+                std::memory_order_release);
+          }
+          completed.set ();
+          complete ([] {});
+      });
+    const auto observed = completed.wait_for ();
+    fixture.serial.actor_executor ("actor-a")->queue ()->drain ();
+    return accepted && observed
+           && immediate_invalid_operation.load (std::memory_order_acquire)
+           && client.request_calls.load (std::memory_order_acquire) == 0;
 }
 
 bool verify_cancellable_serial_submission_lifecycle ()
@@ -1290,6 +2048,81 @@ bool verify_cancellable_serial_submission_lifecycle ()
     }
 
     return true;
+}
+
+bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    auto executor = std::make_shared<runtime::offload_executor_t> (
+      2, 8, "released-spot-turn");
+    auto owner = std::make_shared<spot_context_state_t> ();
+    owner->serial_executor = executor;
+    owner->serial_queue =
+      std::make_shared<runtime::serial_execution_queue_t> (
+        *executor, runtime::serial_execution_queue_options_t{},
+        runtime::serial_execution_queue_t::error_handler_t{},
+        runtime::serial_lane_policy_t::spot_wide ());
+    auto queue = owner->serial_queue;
+
+    std::atomic_bool release_succeeded{false};
+    std::atomic_bool released_turn_kept_queue_affiliation{false};
+    std::atomic_bool released_stack_had_callback_context{true};
+    std::atomic_bool lifecycle_had_fresh_turn{false};
+    std::atomic_bool lifecycle_allowed_yield{false};
+    std::atomic_bool lifecycle_succeeded{false};
+    std::atomic_bool completed{false};
+    if (!queue->try_post_async (
+          "release-spot-handler-turn",
+          [&] (auto complete) {
+              const auto released_turn = capture_current_serial_turn ();
+              const auto released = released_turn && released_turn->release ();
+              release_succeeded.store (released, std::memory_order_release);
+              if (!released) {
+                  complete ([] {});
+                  completed.store (true, std::memory_order_release);
+                  return;
+              }
+
+              released_turn_kept_queue_affiliation.store (
+                owner->owns_current_serial_turn (), std::memory_order_release);
+              released_stack_had_callback_context.store (
+                owner->is_current_callback_thread (), std::memory_order_release);
+              const auto result = owner->run_serial_task (
+                "lifecycle-after-released-handler-turn",
+                [&, released_turn] () -> task_t<void> {
+                    const auto lifecycle_turn = capture_current_serial_turn ();
+                    lifecycle_had_fresh_turn.store (
+                      lifecycle_turn && lifecycle_turn != released_turn
+                        && !lifecycle_turn->released ()
+                        && owner->owns_current_serial_turn (),
+                      std::memory_order_release);
+                    lifecycle_allowed_yield.store (
+                      current_serial_turn_allows_yield (),
+                      std::memory_order_release);
+                    co_return;
+                });
+              lifecycle_succeeded.store (static_cast<bool> (result),
+                                         std::memory_order_release);
+              completed.store (true, std::memory_order_release);
+          })) {
+        return false;
+    }
+
+    if (!wait_until (
+          [&] { return completed.load (std::memory_order_acquire); })) {
+        queue->cancel_pending ();
+        return false;
+    }
+    queue->drain ();
+    return release_succeeded.load (std::memory_order_acquire)
+           && released_turn_kept_queue_affiliation.load (std::memory_order_acquire)
+           && !released_stack_had_callback_context.load (std::memory_order_acquire)
+           && lifecycle_had_fresh_turn.load (std::memory_order_acquire)
+           && lifecycle_allowed_yield.load (std::memory_order_acquire)
+           && lifecycle_succeeded.load (std::memory_order_acquire);
 }
 
 bool verify_spot_serial_task_async_shutdown_settlement ()
@@ -3763,8 +4596,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         *node->worker_executor, queued_options,
         runtime::serial_execution_queue_t::error_handler_t{},
         runtime::serial_lane_policy_t::actor_delivery ());
-    node->actor_execution_queues[queued_key] = queued_actor_queue;
-    publish_actor_execution_queue_snapshot_unlocked (*node);
+    target->spot_serial_executor->replace_actor_queue (queued_key, queued_actor_queue);
     std::mutex queued_gate;
     std::condition_variable queued_changed;
     std::optional<runtime::serial_execution_queue_t::async_completion_t>
@@ -3830,8 +4662,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     std::weak_ptr<runtime::serial_execution_queue_t> cancelled_queue_owner =
       queued_actor_queue;
-    node->actor_execution_queues.erase (queued_key);
-    publish_actor_execution_queue_snapshot_unlocked (*node);
+    target->spot_serial_executor->erase_actor_queue (queued_key);
     queued_actor_queue.reset ();
     if (!cancelled_queue_owner.expired ()) {
         return false;
@@ -5391,14 +6222,47 @@ int main ()
     if (!verify_serial_queue_lanes_and_byte_budget ()) {
         return 50;
     }
-    if (!verify_host_reserved_application_bypasses_owner_capacity ()) {
+    if (!verify_transferred_owner_reservation_is_continuous_until_terminal ()) {
         return 112;
     }
     if (!verify_serial_queue_owner_time_budget ()) {
         return 56;
     }
+    if (!verify_serial_executor_submission_paths_select_queues ()) {
+        return 118;
+    }
+    if (!verify_per_actor_two_actors_overlap ()) {
+        return 119;
+    }
+    if (!verify_spot_wide_two_actors_are_serial ()) {
+        return 120;
+    }
+    if (!verify_same_actor_fifo_in_both_modes ()) {
+        return 121;
+    }
+    if (!verify_per_actor_timer_names_overlap_and_keep_fifo ()) {
+        return 122;
+    }
+    if (!verify_actor_mailbox_capacity_isolated_in_both_modes ()) {
+        return 123;
+    }
+    if (!verify_spot_wide_large_payload_rejects_before_small_payload ()) {
+        return 124;
+    }
+    if (!verify_spot_wide_upper_queue_saturates_by_count ()) {
+        return 125;
+    }
+    if (!verify_same_actor_synchronous_reentry_is_immediate ()) {
+        return 127;
+    }
+    if (!verify_spot_wide_yield_retains_actor_claim ()) {
+        return 126;
+    }
     if (!verify_cancellable_serial_submission_lifecycle ()) {
         return 92;
+    }
+    if (!verify_released_spot_turn_does_not_inline_lifecycle_task ()) {
+        return 129;
     }
     if (!verify_spot_serial_task_async_shutdown_settlement ()) {
         return 93;

@@ -1,4 +1,3 @@
-[한국어](02-core-api.en.md)
 
 # Core C API
 

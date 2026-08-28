@@ -27,7 +27,7 @@ final class ZLinkJavaDealerSocket
     @Override public synchronized void bind(String endpoint) { socket.bind(endpoint); }
     @Override public synchronized void connect(String endpoint) { socket.connect(endpoint); }
     @Override public synchronized void disconnect(String endpoint) { socket.disconnect(endpoint); }
-    @Override public synchronized void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
+    @Override public void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
     @Override public synchronized void setReceiveFlowState(ReceiveFlowState state) {
         socket.options().receiveFlowState(state);
     }
@@ -37,38 +37,30 @@ final class ZLinkJavaDealerSocket
 
     @Override
     public synchronized CompletionStage<Void> send(List<Message> parts) {
-        synchronized (socket) {
-            return ZLinkJavaSocketSupport.submit(socket.send(), parts);
-        }
+        return ZLinkJavaSocketSupport.submit(socket.send(), parts);
     }
 
     @Override
     public synchronized CompletionStage<ZLinkBackendReceived> request(
         List<Message> parts,
         Duration timeout) {
-        synchronized (socket) {
-            return ZLinkJavaSocketSupport.submitRequest(
-                socket.request(), parts, timeout);
-        }
+        return ZLinkJavaSocketSupport.submitRequest(
+            socket.request(), parts, timeout);
     }
 
     @Override
     public synchronized ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
-        synchronized (socket) {
-            try (Received result = new Received()) {
-                return ZLinkJavaSocketSupport.recvOrNoData(
-                        () -> socket.recv(result, ZLinkJavaSocketSupport.map(mode)))
-                    ? ZLinkJavaSocketSupport.fromReceived(result)
-                    : null;
-            }
+        try (Received result = new Received()) {
+            return ZLinkJavaSocketSupport.recvOrNoData(
+                    () -> socket.recv(result, ZLinkJavaSocketSupport.map(mode)))
+                ? ZLinkJavaSocketSupport.fromReceived(result)
+                : null;
         }
     }
 
     @Override
     public synchronized void close() {
-        synchronized (socket) {
-            receivePoller.close();
-            socket.close();
-        }
+        receivePoller.close();
+        socket.close();
     }
 }

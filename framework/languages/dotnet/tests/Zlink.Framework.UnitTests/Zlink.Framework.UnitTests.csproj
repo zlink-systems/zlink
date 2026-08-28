@@ -131,6 +131,7 @@
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>
+        <Compile Include="Runtime/SerialExecutorLayerContractTests.cs"/>
         <Compile Include="Runtime/SerialExecutorTests.cs"/>
         <Compile Include="Runtime/ServiceRuntimeFoundationTests.cs"/>
         <Compile Include="Runtime/ZLinkObservationQueueTests.cs"/>

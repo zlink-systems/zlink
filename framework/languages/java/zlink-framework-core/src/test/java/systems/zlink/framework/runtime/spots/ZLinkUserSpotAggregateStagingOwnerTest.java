@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
@@ -213,13 +213,13 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
     }
 
     private static ZLinkUserSpotAggregateStagingOwner.Request request() {
-        LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
+        LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal =
             new LinkedHashMap<>();
         journal.put("spot", List.of(
-            new ZLinkAsyncSerialQueue.QueuedRecord(1, new byte[] {1}),
-            new ZLinkAsyncSerialQueue.QueuedRecord(2, new byte[] {2})));
+            new ZLinkSerialExecutionQueue.QueuedRecord(1, new byte[] {1}),
+            new ZLinkSerialExecutionQueue.QueuedRecord(2, new byte[] {2})));
         journal.put("actor:actor-a", List.of(
-            new ZLinkAsyncSerialQueue.QueuedRecord(3, new byte[] {3})));
+            new ZLinkSerialExecutionQueue.QueuedRecord(3, new byte[] {3})));
         return new ZLinkUserSpotAggregateStagingOwner.Request(
             TestSpot.class,
             "room",

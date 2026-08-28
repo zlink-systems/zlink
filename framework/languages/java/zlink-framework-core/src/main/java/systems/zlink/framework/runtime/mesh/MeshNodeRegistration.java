@@ -13,7 +13,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -32,6 +34,7 @@ import systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig;
 import systems.zlink.framework.configuration.ZLinkActorFactoryBuilder;
 import systems.zlink.framework.configuration.ZLinkInstanceSpotFactoryBuilder;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
@@ -78,6 +81,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     private String bindHost;
     private String advertiseHost;
     private Integer listenPort;
+    // The lazy routing ID and its prefix invalidation form one C2 state group.
+    private final ZLinkStateLane routingIdStateLane = new ZLinkStateLane();
     private RoutingId routingId;
     private String routingIdPrefix;
     private String entrySpotId;
@@ -113,12 +118,31 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         return advertiseHost;
     }
 
-    public synchronized RoutingId routingId() {
+    public RoutingId routingId() {
+        return inRoutingIdStateLane(this::routingIdCore);
+    }
+
+    private RoutingId routingIdCore() {
         if (routingId == null) {
             routingId = RoutingId.from(
-                routingIdPrefix() + "-" + UUID.randomUUID());
+                routingIdPrefixCore() + "-" + UUID.randomUUID());
         }
         return routingId;
+    }
+
+    private <T> T inRoutingIdStateLane(Supplier<T> work) {
+        try {
+            return routingIdStateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
     }
 
     public int placementWeight() {
@@ -142,11 +166,11 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     public String routingIdPrefix() {
-        return routingIdPrefix == null ? meshName : routingIdPrefix;
+        return inRoutingIdStateLane(this::routingIdPrefixCore);
     }
 
     public String entrySpotId() {
-        return ensureEntrySpotId();
+        return inRoutingIdStateLane(this::ensureEntrySpotIdCore);
     }
 
     public List<String> channelNames() {
@@ -317,7 +341,11 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
     @Override
     public ZLinkMeshNodeBuilder setRoutingId(RoutingId value) {
-        routingId = Objects.requireNonNull(value, "routingId");
+        RoutingId next = Objects.requireNonNull(value, "routingId");
+        inRoutingIdStateLane(() -> {
+            routingId = next;
+            return null;
+        });
         return this;
     }
 
@@ -340,9 +368,13 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
     @Override
     public ZLinkMeshNodeBuilder setRoutingIdPrefix(String value) {
-        routingIdPrefix = requireText(value, "routing ID prefix");
-        routingId = null;
-        entrySpotId = null;
+        String next = requireText(value, "routing ID prefix");
+        inRoutingIdStateLane(() -> {
+            routingIdPrefix = next;
+            routingId = null;
+            entrySpotId = null;
+            return null;
+        });
         return this;
     }
 
@@ -543,7 +575,7 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         public ZLinkMeshObjectServerBuilder server() {
             client = true;
             server = true;
-            ensureEntrySpotId();
+            entrySpotId();
             return this;
         }
 
@@ -620,9 +652,13 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         }
     }
 
-    private String ensureEntrySpotId() {
+    private String routingIdPrefixCore() {
+        return routingIdPrefix == null ? meshName : routingIdPrefix;
+    }
+
+    private String ensureEntrySpotIdCore() {
         if (entrySpotId == null) {
-            entrySpotId = routingIdPrefix()
+            entrySpotId = routingIdPrefixCore()
                 + "-entry-"
                 + UUID.randomUUID().toString()
                     .toLowerCase(Locale.ROOT);

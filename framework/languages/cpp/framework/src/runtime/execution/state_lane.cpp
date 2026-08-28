@@ -60,6 +60,13 @@ void state_lane_t::close ()
 {
     throw_if_reentrant ();
     _closed.store (true, std::memory_order_release);
+    {
+        std::lock_guard lock (_mailbox_mutex);
+        if (_mailbox.empty () && !_scheduled.load (std::memory_order_acquire)) {
+            _drained.notify_all ();
+            return;
+        }
+    }
     schedule_drain ();
 
     std::unique_lock lock (_mailbox_mutex);

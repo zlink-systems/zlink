@@ -37,20 +37,31 @@ C++, .NET, Go, Java, Node.js, Python, Rust binding을 차례로 package한다.
 scripts/local-package/build-wsl.sh dotnet java node
 ```
 
-진행 중인 Core source 변경을 함께 검증해야 할 때만 local source mode를
-명시한다.
+**Core release가 선행 조건이다 — 우회 경로는 없다(2026-08-28 확정).** Core source
+변경을 검증할 때도 로컬 빌드로 대신하지 않고, 먼저 release를 만든 뒤 이 경로로
+패키징한다. 절차는 다음으로 고정한다.
 
 ```bash
-scripts/local-package/build-wsl.sh --core-source local
+# ① root VERSION 확정 후 동기화·검증
+scripts/local-package/build-wsl.sh --sync-versions
+scripts/local-package/build-wsl.sh --verify-versions
+
+# ② release 커밋에 태그를 만들어 푸시한다
+git tag core/v0.14.0 <release-commit> && git push origin core/v0.14.0
+
+# ③ 태그 ref로 빌드 워크플로를 dispatch한다 — build.yml은 태그 push로는 돌지 않는다
+GH_REPO=zlink-systems/zlink gh workflow run build.yml --ref core/v0.14.0
+
+# ④ release asset 생성을 확인한다
+GH_REPO=zlink-systems/zlink gh release view core/v0.14.0
+
+# ⑤ local package를 생성한다 (release 다운로드 + checksum·provenance 검증)
+scripts/local-package/build-wsl.sh cpp dotnet java node
 ```
 
-local Core package를 직접 만들거나 별도 출력 위치를 사용할 때는 다음처럼
-실행한다.
-
-```bash
-scripts/local-package/core/build-wsl.sh \
-  --output-root /absolute/path/.artifacts/wsl
-```
+release가 아직 없으면 ⑤가 404로 실패하는 것이 정상이다 — 그때는 ②~④를 먼저
+끝낸다. 이전에 있던 `--core-source local`·`--core-prefix` 우회와
+`core/build-wsl.sh` 로컬 core 빌더는 제거했다.
 
 Core local package는 다음 구조를 사용한다.
 

@@ -13,7 +13,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.Flow;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -490,10 +497,10 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         private final String meshName;
         private final ZLinkInternalMeshNode node;
         private final ZLinkMeshNodeMonitoringProjection initialPlacement;
-        private final Object gate = new Object();
+        private final StateLane stateLane = new StateLane();
         private final List<ObserverSubscription> observers = new ArrayList<>();
         private final List<Runnable> signals = new ArrayList<>();
-        private volatile boolean stopped;
+        private boolean stopped;
         private Thread pump;
 
         MonitorHub(String meshName, ZLinkInternalMeshNode node) {
@@ -507,49 +514,33 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         void subscribe(Flow.Subscriber<? super ZLinkMeshRuntimeEvent> subscriber, int capacity) {
             ObserverSubscription observer =
                 new ObserverSubscription(this, subscriber, capacity);
-            synchronized (gate) {
-                if (stopped) {
-                    subscriber.onSubscribe(observer);
-                    observer.fail(new IllegalStateException("RouteMesh monitor is closed"));
-                    return;
-                }
-                observers.add(observer);
+            if (!inStateLane(() -> subscribeCore(observer))) {
                 subscriber.onSubscribe(observer);
+                observer.fail(new IllegalStateException("RouteMesh monitor is closed"));
+                return;
+            }
+            subscriber.onSubscribe(observer);
+            if (!isStopped()) {
                 var status = node.status();
                 observer.enqueue(event(
                     "zlink.runtime.mesh_node.state_changed",
                     meshName,
                     status.routingId(),
                     Optional.of(mapNodeState(status.state()))));
-                if (pump == null) {
-                    pump = Thread.ofVirtual()
-                        .name("zlink-mesh-monitor-" + meshName)
-                        .start(this::pump);
-                }
             }
+            startPumpIfNecessary();
         }
 
         void registerSignal(Runnable signal) {
-            synchronized (gate) {
-                if (stopped) {
-                    return;
-                }
-                signals.add(signal);
-                signal.run();
-                if (pump == null) {
-                    pump = Thread.ofVirtual()
-                        .name("zlink-mesh-monitor-" + meshName)
-                        .start(this::pump);
-                }
+            if (!inStateLane(() -> registerSignalCore(signal))) {
+                return;
             }
+            signal.run();
+            startPumpIfNecessary();
         }
 
         void remove(ObserverSubscription observer) {
-            boolean empty;
-            synchronized (gate) {
-                observers.remove(observer);
-                empty = observers.isEmpty();
-            }
+            boolean empty = inStateLane(() -> removeCore(observer));
             if (empty) {
                 close();
                 monitorHubs.remove(meshName, this);
@@ -571,7 +562,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                 String previousLocationState = locationSnapshot().state();
                 ZLinkMeshNodeMonitoringProjection previousPlacement = initialPlacement;
                 long nextDescriptorPoll = System.nanoTime() + DESCRIPTOR_POLL_NANOS;
-                while (!stopped) {
+                while (!isStopped()) {
                     MeshMonitorEvent nativeEvent = null;
                     if (monitor != null) {
                         try {
@@ -649,12 +640,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                     previousLocationState = locationSnapshot().state();
                 }
             } catch (RuntimeException failure) {
-                ObserverSubscription[] current;
-                synchronized (gate) {
-                    stopped = true;
-                    current = observers.toArray(ObserverSubscription[]::new);
-                    observers.clear();
-                }
+                ObserverSubscription[] current = inStateLane(this::failCore);
                 for (ObserverSubscription observer : current) {
                     observer.fail(failure);
                 }
@@ -671,10 +657,9 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             }
             ObserverSubscription[] current;
             Runnable[] currentSignals;
-            synchronized (gate) {
-                current = observers.toArray(ObserverSubscription[]::new);
-                currentSignals = signals.toArray(Runnable[]::new);
-            }
+            MonitorHubSnapshot snapshot = inStateLane(this::snapshotCore);
+            current = snapshot.observers();
+            currentSignals = snapshot.signals();
             for (Runnable signal : currentSignals) {
                 signal.run();
             }
@@ -687,28 +672,114 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
 
         @Override
         public void close() {
-            ObserverSubscription[] currentObservers;
-            Runnable[] currentSignals;
-            synchronized (gate) {
-                if (stopped) {
-                    return;
-                }
-                stopped = true;
-                currentObservers = observers.toArray(ObserverSubscription[]::new);
-                observers.clear();
-                currentSignals = signals.toArray(Runnable[]::new);
-                signals.clear();
+            MonitorHubCloseState closeState = inStateLane(this::closeCore);
+            if (closeState == null) {
+                return;
             }
-            Thread current = pump;
+            Thread current = closeState.pump();
             if (current != null) {
                 current.interrupt();
             }
-            for (ObserverSubscription observer : currentObservers) {
+            for (ObserverSubscription observer : closeState.observers()) {
                 observer.complete();
             }
-            for (Runnable signal : currentSignals) {
+            for (Runnable signal : closeState.signals()) {
                 signal.run();
             }
+        }
+
+        private boolean subscribeCore(ObserverSubscription observer) {
+            if (stopped) {
+                return false;
+            }
+            observers.add(observer);
+            return true;
+        }
+
+        private boolean registerSignalCore(Runnable signal) {
+            if (stopped) {
+                return false;
+            }
+            signals.add(signal);
+            return true;
+        }
+
+        private boolean removeCore(ObserverSubscription observer) {
+            observers.remove(observer);
+            return observers.isEmpty();
+        }
+
+        private boolean isStopped() {
+            return inStateLane(() -> stopped);
+        }
+
+        private void startPumpIfNecessary() {
+            Thread candidate = Thread.ofVirtual()
+                .name("zlink-mesh-monitor-" + meshName)
+                .unstarted(this::pump);
+            if (inStateLane(() -> installPumpCore(candidate))) {
+                candidate.start();
+            }
+        }
+
+        private boolean installPumpCore(Thread candidate) {
+            if (stopped || pump != null) {
+                return false;
+            }
+            pump = candidate;
+            return true;
+        }
+
+        private ObserverSubscription[] failCore() {
+            stopped = true;
+            ObserverSubscription[] current = observers.toArray(ObserverSubscription[]::new);
+            observers.clear();
+            return current;
+        }
+
+        private MonitorHubSnapshot snapshotCore() {
+            return new MonitorHubSnapshot(
+                observers.toArray(ObserverSubscription[]::new),
+                signals.toArray(Runnable[]::new));
+        }
+
+        private MonitorHubCloseState closeCore() {
+            if (stopped) {
+                return null;
+            }
+            stopped = true;
+            ObserverSubscription[] currentObservers =
+                observers.toArray(ObserverSubscription[]::new);
+            observers.clear();
+            Runnable[] currentSignals = signals.toArray(Runnable[]::new);
+            signals.clear();
+            return new MonitorHubCloseState(pump, currentObservers, currentSignals);
+        }
+
+        private <T> T inStateLane(Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (java.util.concurrent.CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
+            }
+        }
+
+        private record MonitorHubSnapshot(
+            ObserverSubscription[] observers,
+            Runnable[] signals) {
+        }
+
+        private record MonitorHubCloseState(
+            Thread pump,
+            ObserverSubscription[] observers,
+            Runnable[] signals) {
         }
     }
 
@@ -848,9 +919,10 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         private final Flow.Subscriber<? super ZLinkMeshRuntimeEvent> subscriber;
         private final int capacity;
         private final ArrayDeque<ZLinkMeshRuntimeEvent> pending = new ArrayDeque<>();
+        private final StateLane stateLane = new StateLane();
         private final AtomicLong demand = new AtomicLong();
         private final AtomicInteger draining = new AtomicInteger();
-        private volatile boolean cancelled;
+        private boolean cancelled;
 
         ObserverSubscription(
             MonitorHub hub,
@@ -876,36 +948,21 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
 
         @Override
         public void cancel() {
-            if (!cancelled) {
-                cancelled = true;
-                synchronized (pending) {
-                    pending.clear();
-                }
+            if (inStateLane(this::cancelCore)) {
                 hub.remove(this);
             }
         }
 
         void enqueue(ZLinkMeshRuntimeEvent event) {
-            if (cancelled) {
+            if (!inStateLane(() -> enqueueCore(event))) {
                 return;
-            }
-            synchronized (pending) {
-                if (pending.size() == capacity) {
-                    coalesceOrReplace(event);
-                } else {
-                    pending.addLast(event);
-                }
             }
             scheduleDrain();
         }
 
         void fail(Throwable failure) {
-            if (cancelled) {
+            if (!inStateLane(this::failCore)) {
                 return;
-            }
-            cancelled = true;
-            synchronized (pending) {
-                pending.clear();
             }
             try {
                 subscriber.onError(failure);
@@ -915,29 +972,24 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         }
 
         void complete() {
-            if (cancelled) {
+            if (!inStateLane(this::completeCore)) {
                 return;
-            }
-            cancelled = true;
-            synchronized (pending) {
-                pending.clear();
             }
             subscriber.onComplete();
         }
 
         private void scheduleDrain() {
-            if (!cancelled && draining.compareAndSet(0, 1)) {
+            if (inStateLane(() -> !cancelled)
+                && draining.compareAndSet(0, 1)) {
                 ForkJoinPool.commonPool().execute(this::drain);
             }
         }
 
         private void drain() {
             try {
-                while (!cancelled && demand.get() > 0) {
-                    ZLinkMeshRuntimeEvent event;
-                    synchronized (pending) {
-                        event = pending.pollFirst();
-                    }
+                while (true) {
+                    ZLinkMeshRuntimeEvent event = inStateLane(
+                        () -> takePendingCore(demand.get()));
                     if (event == null) {
                         return;
                     }
@@ -950,11 +1002,62 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                 fail(failure);
             } finally {
                 draining.set(0);
-                synchronized (pending) {
-                    if (!pending.isEmpty() && demand.get() > 0 && !cancelled) {
-                        scheduleDrain();
-                    }
+                if (inStateLane(() -> !pending.isEmpty()
+                    && demand.get() > 0
+                    && !cancelled)) {
+                    scheduleDrain();
                 }
+            }
+        }
+
+        private boolean cancelCore() {
+            if (cancelled) {
+                return false;
+            }
+            cancelled = true;
+            pending.clear();
+            return true;
+        }
+
+        private boolean enqueueCore(ZLinkMeshRuntimeEvent event) {
+            if (cancelled) {
+                return false;
+            }
+            if (pending.size() == capacity) {
+                coalesceOrReplace(event);
+            } else {
+                pending.addLast(event);
+            }
+            return true;
+        }
+
+        private boolean failCore() {
+            return cancelCore();
+        }
+
+        private boolean completeCore() {
+            return cancelCore();
+        }
+
+        private ZLinkMeshRuntimeEvent takePendingCore(long currentDemand) {
+            if (cancelled || currentDemand <= 0) {
+                return null;
+            }
+            return pending.pollFirst();
+        }
+
+        private <T> T inStateLane(Supplier<T> work) {
+            try {
+                return stateLane.runAsync(work).toCompletableFuture().join();
+            } catch (java.util.concurrent.CompletionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof RuntimeException runtimeFailure) {
+                    throw runtimeFailure;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw failure;
             }
         }
 
@@ -989,6 +1092,71 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             };
         }
 
+    }
+
+    private static final class StateLane {
+        private static final ThreadLocal<StateLane> CURRENT = new ThreadLocal<>();
+
+        private final Queue<Runnable> mailbox = new ConcurrentLinkedQueue<>();
+        private final AtomicBoolean draining = new AtomicBoolean();
+        private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+
+        <T> CompletionStage<T> runAsync(Supplier<T> work) {
+            Objects.requireNonNull(work, "work");
+            if (CURRENT.get() == this) {
+                throw new IllegalStateException(
+                    "This code already runs on the state lane it is trying to enter. Call the "
+                        + "component's private state method directly instead of re-entering its "
+                        + "public surface.");
+            }
+            CompletableFuture<T> result = new CompletableFuture<>();
+            mailbox.add(() -> runWithCurrent(() -> {
+                try {
+                    T value = work.get();
+                    result.completeAsync(() -> value);
+                } catch (RuntimeException | Error error) {
+                    result.completeAsync(() -> {
+                        throw error;
+                    });
+                }
+            }));
+            scheduleDrain();
+            return result;
+        }
+
+        private void scheduleDrain() {
+            if (draining.compareAndSet(false, true)) {
+                executor.execute(this::drain);
+            }
+        }
+
+        private void drain() {
+            while (true) {
+                Runnable work = mailbox.poll();
+                if (work == null) {
+                    draining.set(false);
+                    if (!mailbox.isEmpty()) {
+                        scheduleDrain();
+                    }
+                    return;
+                }
+                work.run();
+            }
+        }
+
+        private void runWithCurrent(Runnable work) {
+            StateLane previous = CURRENT.get();
+            CURRENT.set(this);
+            try {
+                work.run();
+            } finally {
+                if (previous == null) {
+                    CURRENT.remove();
+                } else {
+                    CURRENT.set(previous);
+                }
+            }
+        }
     }
 }
 

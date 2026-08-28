@@ -34,7 +34,7 @@ import {
   ZLinkSpotSubscriptionDispatch
 } from './spot-subscription-dispatch';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
 import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
@@ -99,7 +99,7 @@ interface ZLinkSpotActorJoinDispatchOptions {
   readonly nativeSpot: ZLinkBackendSpot;
   readonly createReceived: () => ZLinkBackendReceived;
   readonly createTopicMessage: () => ZLinkBackendTopicMessage;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly actors: ZLinkSpotActorAdmissionRuntime;
   readonly packets?: ZLinkSpotActorPacketRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
@@ -276,11 +276,14 @@ export class ZLinkSpotActorJoinDispatch {
       do {
         this.redrainRequested = false;
         await this.drainAvailableActorJoins();
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-      } while (this.redrainRequested);
+      } while (this.redrainWasRequested());
     } finally {
       this.draining = false;
     }
+  }
+
+  private redrainWasRequested(): boolean {
+    return this.redrainRequested;
   }
 
   private async drainAvailableActorJoins(): Promise<void> {

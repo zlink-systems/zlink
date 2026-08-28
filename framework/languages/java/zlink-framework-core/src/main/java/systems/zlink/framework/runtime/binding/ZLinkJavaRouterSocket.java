@@ -28,11 +28,11 @@ final class ZLinkJavaRouterSocket
     @Override public synchronized void bind(String endpoint) { socket.bind(endpoint); }
     @Override public synchronized void connect(String endpoint) { socket.connect(endpoint); }
     @Override public synchronized void disconnect(String endpoint) { socket.disconnect(endpoint); }
-    @Override public synchronized void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
+    @Override public void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
     @Override public synchronized void setReceiveFlowState(ReceiveFlowState state) {
         socket.options().receiveFlowState(state);
     }
-    @Override public synchronized void setRoutingId(RoutingId routingId) { socket.setRoutingId(routingId); }
+    @Override public void setRoutingId(RoutingId routingId) { socket.setRoutingId(routingId); }
     @Override public synchronized void setConnectRoutingId(RoutingId routingId) { socket.options().setConnectRoutingId(routingId); }
     @Override public synchronized void setProbe(boolean enabled) { socket.options().probe(enabled); }
     @Override public synchronized long maxMessageSize() { return Math.max(0, socket.options().maxMessageSize()); }

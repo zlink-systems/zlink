@@ -25,7 +25,7 @@ import {
   createTimerDiagnostics,
   type ZLinkSpotTimerRegistry
 } from './spot-timer';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
 interface ZLinkEntrySpotContextOptions {
   readonly spotId: SpotId;
@@ -34,7 +34,7 @@ interface ZLinkEntrySpotContextOptions {
   readonly handlers: ZLinkSpotHandlerRegistry;
   readonly outbound: ZLinkSpotOutbound;
   readonly timers: ZLinkSpotTimerRegistry;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly getEntrySpot: () => ZLinkEntrySpot;
   readonly spotNodeName: string;
   readonly providerResolver?: ZLinkProviderResolver;
@@ -54,7 +54,7 @@ interface ZLinkSpotContextOptions {
   readonly handlers: ZLinkSpotHandlerRegistry;
   readonly outbound: ZLinkSpotOutbound;
   readonly timers: ZLinkSpotTimerRegistry;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly getSpot: () => ZLinkSpot | undefined;
   readonly nodeRid?: RoutingId;
   readonly nodeRidProvider?: () => RoutingId | undefined;

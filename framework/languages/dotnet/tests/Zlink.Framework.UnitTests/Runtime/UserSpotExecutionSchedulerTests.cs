@@ -635,6 +635,67 @@ public sealed class UserSpotExecutionSchedulerTests
     }
 
     [Fact]
+    public async Task RelocationAdmissionOpen_ReservesReplayBeforeWaitingDirectIngress()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(
+            errorSink,
+            ZLinkUserSpotExecutionMode.SpotWide);
+        var seal = await executor.SealRelocationAsync(
+            CancellationToken.None);
+        var callbackEntered = NewSignal();
+        var directStarted = NewSignal();
+        using var allowReservation = new ManualResetEventSlim();
+        var order = new ConcurrentQueue<string>();
+        ZLinkSpotRelocationActorQueueReservation? reservation = null;
+
+        var opening = Task.Run(() =>
+            executor.TryOpenRelocationAfterMessageFollow(
+                seal,
+                () =>
+                {
+                    callbackEntered.TrySetResult();
+                    Assert.True(allowReservation.Wait(TimeSpan.FromSeconds(5)));
+                    reservation = executor.ReserveRelocationActorQueue(
+                        seal,
+                        "actor-1");
+                }));
+        await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var direct = Task.Run(async () =>
+        {
+            directStarted.TrySetResult();
+            await executor.ExecuteActorAsync(
+                    "actor-1",
+                    static (_, queued, _) =>
+                    {
+                        queued.Enqueue("direct");
+                        return ValueTask.CompletedTask;
+                    },
+                    order,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        });
+        await directStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(direct.IsCompleted);
+
+        allowReservation.Set();
+        Assert.True(await opening.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.NotNull(reservation);
+        var replay = reservation.ExecuteAsync(
+            "actor-1",
+            _ =>
+            {
+                order.Enqueue("replay");
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None).AsTask();
+
+        await Task.WhenAll(replay, direct).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(new[] { "replay", "direct" }, order.ToArray());
+    }
+
+    [Fact]
     public async Task SpotWideRelocationReplay_ReservesSharedQueueBeforeDirectIngress()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();

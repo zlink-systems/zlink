@@ -10,7 +10,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 final class ZLinkActorDispatchSerialsTest {
     @Test
@@ -153,7 +153,7 @@ final class ZLinkActorDispatchSerialsTest {
             dispatches.prepare("actor-1"),
             () -> {
                 firstStarted.complete(null);
-                return ZLinkAsyncSerialQueue.yieldCurrent(remote);
+                return ZLinkSerialExecutionQueue.yieldCurrent(remote);
             });
         CompletionStage<Void> second = dispatches.enqueue(
             dispatches.prepare("actor-1"),

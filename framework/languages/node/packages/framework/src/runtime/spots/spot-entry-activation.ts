@@ -15,7 +15,7 @@ import type {
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
-import { ZLinkSpotCloseReason } from '../../contracts';
+import { ZLinkSpotCloseReason, ZLinkUserSpotExecutionMode } from '../../contracts';
 import type {
   ZLinkEntrySpotActorRequestHandlerRegistration,
   ZLinkEntrySpotActorSendHandlerRegistration,
@@ -27,7 +27,6 @@ import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import { routingIdsEqual } from '../routing-id';
 import {
-  ZLinkActorDispatchMailboxSet,
   ZLinkSpotActorHandlerRegistryRuntime
 } from '../actors';
 import type {
@@ -58,6 +57,7 @@ import {
   type ZLinkSpotRoutedTransport
 } from './spot-outbound';
 import { createProviderInstance } from './spot-provider';
+import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import { invokeSpotClosing } from './spot-closing';
 import {
@@ -113,8 +113,8 @@ interface ZLinkEntrySpotActivationOptions {
 }
 
 export class ZLinkEntrySpotActivation {
-  private readonly serial: ZLinkSpotSerialExecutor;
-  private readonly actorPacketMailboxes: ZLinkActorDispatchMailboxSet;
+  private readonly serial: ZLinkSpotSerialTurnExecutor;
+  private readonly spotSerialExecutor: ZLinkSpotSerialExecutor;
   private readonly timers: ZLinkSpotTimerRegistry;
   private readonly actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
   private readonly handlers = new DefaultZLinkSpotHandlerRegistry(this.actorHandlers);
@@ -131,8 +131,10 @@ export class ZLinkEntrySpotActivation {
   readonly context: ZLinkEntrySpotContext;
 
   constructor(private readonly options: ZLinkEntrySpotActivationOptions) {
-    this.serial = new ZLinkSpotSerialExecutor(false, options.nativeSpot.routingId);
-    this.actorPacketMailboxes = new ZLinkActorDispatchMailboxSet(
+    this.serial = new ZLinkSpotSerialTurnExecutor(false, options.nativeSpot.routingId);
+    this.spotSerialExecutor = new ZLinkSpotSerialExecutor(
+      this.serial,
+      ZLinkUserSpotExecutionMode.PerActor,
       options.nativeSpot.routingId
     );
     // Entry Spot lifecycle, timers and detached continuations use this serial
@@ -221,7 +223,7 @@ export class ZLinkEntrySpotActivation {
    * lifecycle, timers, request continuations and worker completions. Actor
    * packets use the target actor mailbox instead.
    */
-  get serialExecutor(): ZLinkSpotSerialExecutor {
+  get serialExecutor(): ZLinkSpotSerialTurnExecutor {
     return this.serial;
   }
 
@@ -321,6 +323,7 @@ export class ZLinkEntrySpotActivation {
     }
     await cleanup(() => this.actorDispatch?.dispose());
     await cleanup(() => this.timers.dispose());
+    await cleanup(() => this.spotSerialExecutor.close());
     await cleanup(() => disposeLifecycleHandlers(this.entrySpot));
     await cleanup(() => this.options.nativeSpot.dispose());
     if (this.initialized) {
@@ -468,7 +471,7 @@ export class ZLinkEntrySpotActivation {
       undefined,
       messageFollowOrigin,
       (replayedParts, replayReturnResponse, replayRemoteBoundSessionTarget, replayFallbackActorRef) =>
-        this.actorPacketMailboxes.submit(actorId, () =>
+        this.spotSerialExecutor.executeActor(actorId, () =>
           this.dispatchActorPacketInsideMailbox({
             actorId,
             parts: replayedParts,
@@ -478,7 +481,7 @@ export class ZLinkEntrySpotActivation {
           }))
     );
     if (handoff !== undefined) return await handoff;
-    return this.actorPacketMailboxes.submit(actorId, () =>
+    return this.spotSerialExecutor.executeActor(actorId, () =>
       this.dispatchActorPacketInsideMailbox(delivery));
   }
 
@@ -489,7 +492,7 @@ export class ZLinkEntrySpotActivation {
     return await replayActorHandoffBacklog(
       backlog,
       (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
-        this.actorPacketMailboxes.submit(actor.context.actorId, () =>
+        this.spotSerialExecutor.executeActor(actor.context.actorId, () =>
           this.dispatchActorPacketInsideMailbox({
             actorId: actor.context.actorId,
             parts,

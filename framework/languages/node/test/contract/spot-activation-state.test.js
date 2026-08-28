@@ -19,7 +19,7 @@ function createActivation(externalActorCount = () => 0) {
     // SpotWide execution mode drives every actor operation through this
     // shared serial, so the constructor always installs the activation's
     // execution barrier on it (spot-activation-state.ts). Production always
-    // passes a real ZLinkSpotSerialExecutor; the fake only needs the one
+    // passes a real ZLinkSpotSerialTurnExecutor; the fake only needs the one
     // method the constructor calls.
     serial: { setExecutionBarrier: () => {} },
     timers: {},

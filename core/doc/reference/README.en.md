@@ -1,4 +1,3 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/reference/) | English
 
 [Core specification](../spec/core/README.en.md) · [Core guide](../guide/01-overview.en.md)
 
@@ -41,7 +40,7 @@ reverse of the framework interface convention. So:
 ## Category
 
 Core's public surface is far more granular than framework's curated 8 categories — it is a raw
-C ABI with ~90 exported functions across 9 common-contract chapters and 8 socket types. Two spec
+C ABI with ~114 exported functions across 9 common-contract chapters and 8 socket types. Two spec
 chapters have no entry points of their own and are not reference categories:
 [Public-contract governance](../spec/core/00-public-contract-governance.en.md) (documentation
 policy, not API) and [Runtime boundary](../spec/core/08-runtime-boundary.en.md) (a scope
@@ -52,24 +51,24 @@ the "When to use" prose of Polling and Socket monitor below instead of becoming 
 
 | Category | Status | Corresponding spec |
 |---|---|---|
-| [Context](../spec/core/01-context.en.md) | Drafted | 01-context |
-| [Message](../spec/core/02-message.en.md) | Drafted | 02-message |
+| [Context](01-context.en.md) | Drafted | 01-context |
+| [Message](02-message.en.md) | Drafted | 02-message |
 | [Socket lifecycle](03-socket-lifecycle.en.md) | Drafted | socket/README §Functions (create/bind/connect/disconnect/close) |
 | [Socket options and identity](04-socket-options.en.md) | Drafted | socket/README §Socket Options, §Dedicated Functions |
 | [Raw receive](05-raw-receive.en.md) | Drafted | socket/README §Receive Model Summary, 03-errors §4 |
-| [PAIR](../spec/core/socket/01-pair.en.md) | Drafted | socket/01-pair |
-| [PUB](../spec/core/socket/02-pub.en.md) | Drafted | socket/02-pub |
-| [SUB](../spec/core/socket/03-sub.en.md) | Drafted | socket/03-sub |
-| [XPUB](../spec/core/socket/04-xpub.en.md) | Drafted | socket/04-xpub |
-| [XSUB](../spec/core/socket/05-xsub.en.md) | Drafted | socket/05-xsub |
-| [DEALER](../spec/core/socket/06-dealer.en.md) | Drafted | socket/06-dealer |
-| [ROUTER](../spec/core/socket/07-router.en.md) | Drafted | socket/07-router |
-| [STREAM](../spec/core/socket/08-stream.en.md) | Drafted | socket/08-stream |
+| [PAIR](06-pair.en.md) | Drafted | socket/01-pair |
+| [PUB](07-pub.en.md) | Drafted | socket/02-pub |
+| [SUB](08-sub.en.md) | Drafted | socket/03-sub |
+| [XPUB](09-xpub.en.md) | Drafted | socket/04-xpub |
+| [XSUB](10-xsub.en.md) | Drafted | socket/05-xsub |
+| [DEALER](11-dealer.en.md) | Drafted | socket/06-dealer |
+| [ROUTER](12-router.en.md) | Drafted | socket/07-router |
+| [STREAM](13-stream.en.md) | Drafted | socket/08-stream |
 | [Socket monitor](14-socket-monitor.en.md) | Drafted | 07-monitoring, 05-events |
-| [Polling and pollers](../spec/core/05-polling.en.md) | Drafted | 06-polling, 05-events |
+| [Polling and pollers](15-polling.en.md) | Drafted | 06-polling, 05-events |
 | [Timers](16-timers.en.md) | Drafted | 08-utilities §Timers |
-| [Utilities](../spec/core/07-utilities.en.md) | Drafted | 08-utilities §Atomic Counter, §Stopwatch, §Miscellaneous |
-| [Errors, results, and version](../spec/core/03-errors.en.md) | Drafted | 03-errors, 04-errno-map |
+| [Utilities](17-utilities.en.md) | Drafted | 08-utilities §Atomic Counter, §Stopwatch, §Miscellaneous |
+| [Errors, results, and version](18-errors.en.md) | Drafted | 03-errors, 04-errno-map |
 
 Filenames follow `NN-slug.en.md`/`NN-slug.ko.md` in the numbering above once drafted; the table
 only links a category once its file exists, so this table never carries a dangling link.

@@ -9,7 +9,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.service
@@ -27,7 +27,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         long expectedAuthorityOwnerGeneration,
         boolean restoreSnapshot,
         byte[] state,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> journal) {
+        List<ZLinkSerialExecutionQueue.QueuedRecord> journal) {
         return encode(
             relocationId,
             actorId,
@@ -47,7 +47,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         long expectedAuthorityOwnerGeneration,
         boolean restoreSnapshot,
         byte[] state,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> journal,
+        List<ZLinkSerialExecutionQueue.QueuedRecord> journal,
         byte[] timerEnvelope) {
         return encode(
             relocationId,
@@ -68,7 +68,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         long expectedAuthorityOwnerGeneration,
         boolean restoreSnapshot,
         byte[] state,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> journal,
+        List<ZLinkSerialExecutionQueue.QueuedRecord> journal,
         byte[] timerEnvelope,
         byte[] actorJoinRecovery) {
         return encode(
@@ -92,16 +92,16 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         long applicationVersion,
         boolean restoreSnapshot,
         byte[] state,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> journal,
+        List<ZLinkSerialExecutionQueue.QueuedRecord> journal,
         byte[] timerEnvelope,
         byte[] actorJoinRecovery) {
         Objects.requireNonNull(relocationId, "relocationId");
         Objects.requireNonNull(actorId, "actorId");
         byte[] applicationState = Objects.requireNonNull(state, "state").clone();
-        List<ZLinkAsyncSerialQueue.QueuedRecord> records =
+        List<ZLinkSerialExecutionQueue.QueuedRecord> records =
             new ArrayList<>(Objects.requireNonNull(journal, "journal"));
         records.sort(Comparator.comparingLong(
-            ZLinkAsyncSerialQueue.QueuedRecord::sequence));
+            ZLinkSerialExecutionQueue.QueuedRecord::sequence));
         long previous = 0;
         for (var record : records) {
             if (Long.compareUnsigned(record.sequence(), previous) <= 0) {
@@ -169,7 +169,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         //  the whole envelope with "journal record kind". The accepted
         //  boundary above still counts those turns; only the encoded journal
         //  drops them.
-        List<ZLinkAsyncSerialQueue.QueuedRecord> encodedRecords =
+        List<ZLinkSerialExecutionQueue.QueuedRecord> encodedRecords =
             records.stream()
                 .filter(record -> systems.zlink.framework.runtime.internal
                     .service.ZLinkServiceFrozenRecordCodec.isCanonical(
@@ -236,7 +236,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
             throw new IllegalArgumentException(
                 "canonical Actor relocation state policy differs");
         }
-        List<ZLinkAsyncSerialQueue.QueuedRecord> journal =
+        List<ZLinkSerialExecutionQueue.QueuedRecord> journal =
             root.savedWork().stream()
                 .filter(value -> !ZLinkActorJoinRecoveryCodec
                     .isRecoverySavedWork(value.frozenRecord()))
@@ -245,7 +245,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
                         throw new IllegalArgumentException(
                             "Actor journal references another participant");
                     }
-                    return new ZLinkAsyncSerialQueue.QueuedRecord(
+                    return new ZLinkSerialExecutionQueue.QueuedRecord(
                         value.sequence(), value.frozenRecord());
                 })
                 .toList();
@@ -292,7 +292,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         long objectGeneration,
         long expectedAuthorityOwnerGeneration,
         byte[] state,
-        List<ZLinkAsyncSerialQueue.QueuedRecord> journal,
+        List<ZLinkSerialExecutionQueue.QueuedRecord> journal,
         byte[] timerEnvelope) {
         Decoded {
             state = state.clone();

@@ -627,13 +627,17 @@ class mesh_node_runtime_t
     std::chrono::milliseconds _session_relocation_seal_timeout =
       location_options_t{}.session_relocation_seal_timeout;
     host::actor_create_operation_target_t _actor_create_target;
-    mutable std::mutex _observed_spot_authority_mutex;
+    runtime::offload_executor_t _observed_spot_authority_lane_executor;
+    mutable runtime::state_lane_t
+      _observed_spot_authority_lane{_observed_spot_authority_lane_executor};
     std::map<std::string, observed_spot_authority_t> _observed_spot_authorities;
     void record_negotiated_receive_chunk_limit (const actor_ref_t &actor,
                                                 std::uint32_t limit_bytes);
     std::uint64_t negotiated_receive_chunk_limit_bytes (
       const std::vector<runtime::stateful::object_ref_t> &sources) const;
-    mutable std::mutex _negotiated_receive_chunk_limit_mutex;
+    runtime::offload_executor_t _negotiated_receive_chunk_limit_lane_executor;
+    mutable runtime::state_lane_t
+      _negotiated_receive_chunk_limit_lane{_negotiated_receive_chunk_limit_lane_executor};
     std::map<std::string, std::uint32_t> _negotiated_receive_chunk_limits;
     host::instance_spot_activation_materializer_t _instance_spot_materializer;
     std::shared_ptr<runtime::stateful::relocation_store_port_t> _instance_spot_relocations;
@@ -655,14 +659,18 @@ class mesh_node_runtime_t
     std::shared_ptr<host::public_host_runtime_t> _node;
     std::shared_ptr<peer_callback_gate_t> _peer_callback_gate =
       std::make_shared<peer_callback_gate_t> ();
-    std::mutex _message_follow_mutex;
+    runtime::offload_executor_t _message_follow_subscription_lane_executor;
+    runtime::state_lane_t
+      _message_follow_subscription_lane{_message_follow_subscription_lane_executor};
     message_follow_subscription_id_t _next_message_follow_subscription_id = 1;
     std::map<message_follow_subscription_id_t,
              std::shared_ptr<message_follow_subscription_state_t>>
       _message_follow_subscriptions;
     std::map<std::string, host::spot_handle_t> _spots;
     std::map<std::string, host::actor_handle_t> _actors;
-    std::mutex _peer_mutex;
+    runtime::offload_executor_t _peer_connection_intent_lane_executor;
+    runtime::state_lane_t
+      _peer_connection_intent_lane{_peer_connection_intent_lane_executor};
     std::atomic_uint64_t _pending_application_callbacks{0};
     std::atomic_uint64_t _active_application_callbacks{0};
     std::atomic_uint64_t _active_completion_waiters{0};

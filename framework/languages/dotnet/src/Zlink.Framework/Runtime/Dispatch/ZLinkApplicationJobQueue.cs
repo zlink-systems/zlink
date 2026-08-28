@@ -947,6 +947,29 @@ internal static class ZLinkApplicationJobQueueInvocation
             Interlocked.Exchange(ref scope.Lease, null)?.ReleaseForHandlerStart();
     }
 
+    // A mesh mailbox claim may cross exactly one owner-queue admission
+    // boundary without another capacity decision. Consuming this marker does
+    // not release the host-wide permit; the invocation boundary still returns
+    // that permit immediately before the handler's first instruction.
+    internal static bool HasTransferableOwnerReservation()
+    {
+        var scope = Current.Value;
+        return scope is not null
+               && Volatile.Read(ref scope.Lease) is { IsReleased: false }
+               && Volatile.Read(ref scope.OwnerReservationTransferred) == 0;
+    }
+
+    internal static bool TryTransferOwnerReservation()
+    {
+        var scope = Current.Value;
+        return scope is not null
+               && Volatile.Read(ref scope.Lease) is { IsReleased: false }
+               && Interlocked.CompareExchange(
+                   ref scope.OwnerReservationTransferred,
+                   1,
+                   0) == 0;
+    }
+
     internal static async ValueTask EnsureQueuedPermitAsync(
         CancellationToken cancellationToken)
     {
@@ -985,6 +1008,7 @@ internal static class ZLinkApplicationJobQueueInvocation
         private readonly Scope? _previous = previous;
         internal readonly ZLinkApplicationJobQueue Owner = lease.Owner;
         internal ZLinkApplicationJobQueueLease? Lease = lease;
+        internal int OwnerReservationTransferred;
         private int _disposed;
 
         public void Dispose()

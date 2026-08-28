@@ -579,17 +579,26 @@ const nodeJs = `"use strict";\nObject.defineProperty(exports, "__esModule", { va
 
 const nodeDeclarations = `export declare const SERVICE_WIRE_MAGIC: readonly [${schema.protocol.magic.join(", ")}];\nexport declare const SERVICE_WIRE_MAJOR: ${schema.protocol.wireMajor};\nexport declare const SERVICE_WIRE_REQUIRED_CAPABILITY: "${schema.protocol.requiredCapability}";\nexport declare const SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME: "${frameworkMultipartV1Profile.packetName}";\nexport declare const SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE: "${frameworkMultipartV1Profile.contentType}";\nexport declare const ServiceWireCommand: {\n${commands.map((entry) => `    readonly ${entry.name}: ${entry.id};`).join("\n")}\n};\nexport declare const ServiceWireFlag: {\n${flags.map((entry) => `    readonly ${entry.name}: ${entry.bit};`).join("\n")}\n};\nexport declare const ServiceWireFrameworkErrorCode: {\n${frameworkErrors.map((entry) => `    readonly ${entry.name}: ${entry.value};`).join("\n")}\n};\nexport declare const ServiceWireBoundaryTerminalResults: readonly [${boundaryTerminalValues.join(", ")}];\nexport declare const ServiceWireExactTerminalByFailureCode: {\n${nodeExactPairEntries.map((entry) => `    readonly ${entry.value}: ${entry.terminalValue};`).join("\n")}\n};\nexport declare const isValidServiceWireTerminalFailure: (terminal: number, failureCode: number) => boolean;\n`;
 
+const nodeTypeScript = node.replace(
+  `  const expected = (ServiceWireExactTerminalByFailureCode as Record<number, number>)[failureCode];
+  return expected !== undefined && expected === terminal;`,
+  `  if (!Object.hasOwn(ServiceWireExactTerminalByFailureCode, failureCode)) {
+    return false;
+  }
+  return ServiceWireExactTerminalByFailureCode[failureCode as keyof typeof ServiceWireExactTerminalByFailureCode] === terminal;`,
+);
+
 const outputs = new Map([
   [path.join(root, "generated/cpp/service_wire_constants.hpp"), cpp],
   [path.join(root, "generated/dotnet/ServiceWireConstants.g.cs"), dotnet],
   [path.join(root, "generated/jvm/ServiceWireConstants.java"), java],
-  [path.join(root, "generated/node/service_wire_constants.ts"), node],
+  [path.join(root, "generated/node/service_wire_constants.ts"), nodeTypeScript],
   [path.join(root, "generated/node/service_wire_constants.js"), nodeJs],
   [path.join(root, "generated/node/service_wire_constants.d.ts"), nodeDeclarations],
   [path.join(
     root,
     "../../languages/node/packages/framework/src/runtime/foundation/service-wire-constants.generated.ts",
-  ), node],
+  ), nodeTypeScript],
   [path.join(root, "golden/service-decoder-fixtures-v1.json"), `${JSON.stringify(fixtures, null, 2)}\n`],
   [path.join(root, "golden/bound-session-replaced-v1.json"), `${JSON.stringify(replacedFixture, null, 2)}\n`],
   [path.join(root, "golden/user-spot-create-v1.json"), `${JSON.stringify(userSpotCreateFixture, null, 2)}\n`],

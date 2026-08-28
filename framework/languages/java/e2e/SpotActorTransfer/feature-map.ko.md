@@ -5,7 +5,7 @@
 - `ZLinkDeferredActorJoinScopeTest`는 User·Entry Spot handler 한 번에서 서로 다른
   member Actor의 intent를 여러 개 등록하고, handler 정상 terminal 뒤 등록 순서대로
   barrier가 활성화되는지 확인한다.
-- `ZLinkAsyncSerialQueueTest.lifecycleBarrierRunsAfterActiveTurnAndBeforeQueuedApplicationTurns`
+- `ZLinkSerialExecutionQueueTest.lifecycleBarrierRunsAfterActiveTurnAndBeforeQueuedApplicationTurns`
   는 각 Actor barrier가 현재 실행 중인 turn 다음, 이미 대기 중인 application turn
   앞에서 실행되는지 확인한다.
 - `ZLinkDeferredJoinAcceptedRecoveryTest`는 cross-node Accepted completion의

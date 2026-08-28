@@ -139,7 +139,8 @@ internal sealed partial class ZLinkEntrySpotActivation :
                 _stopSource.Token,
                 _runtime.ExecutionOwner),
             errorSink,
-            _stopSource.Token);
+            _stopSource.Token,
+            ZLinkExecutionLanePolicy.Default);
     }
 
     public ValueTask DisposeAsync()

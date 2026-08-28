@@ -44,7 +44,7 @@ import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
@@ -113,11 +113,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 false,
                 new ZLinkBackendActorRef(targetRid, actorId, 4))),
             Map.of("spot", List.of(
-                new ZLinkAsyncSerialQueue.QueuedRecord(
+                new ZLinkSerialExecutionQueue.QueuedRecord(
                     1, acceptedSpotRecord(spotId, 1)),
-                new ZLinkAsyncSerialQueue.QueuedRecord(
+                new ZLinkSerialExecutionQueue.QueuedRecord(
                     2, acceptedSpotRecord(spotId, 2)),
-                new ZLinkAsyncSerialQueue.QueuedRecord(
+                new ZLinkSerialExecutionQueue.QueuedRecord(
                     3, acceptedSpotRecord(spotId, 3)))));
         UUID aggregateId = UUID.randomUUID();
         var participants = List.of(
@@ -370,7 +370,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 false,
                 new ZLinkBackendActorRef(targetRid, actorId, 4))),
             Map.of("spot", List.of(
-                new ZLinkAsyncSerialQueue.QueuedRecord(
+                new ZLinkSerialExecutionQueue.QueuedRecord(
                     1, acceptedSpotRequest(spotId, 2)))));
         var storeParticipants = List.of(
             new ZLinkAggregateRelocationCoordinator.Participant(

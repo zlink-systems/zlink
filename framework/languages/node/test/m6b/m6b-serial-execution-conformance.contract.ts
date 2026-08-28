@@ -4,11 +4,11 @@ import { test } from 'node:test';
 import { ZLinkExecutionBarrier } from '../../packages/framework/src/runtime/execution';
 import {
   ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS,
-  ZLinkBoundedSerialScheduler,
+  ZLinkSerialExecutionQueue,
   type ZLinkSerialSchedulerOptions,
   type ZLinkSerialWorkRecord
-} from '../../packages/framework/src/runtime/execution/serial-scheduler';
-import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
+} from '../../packages/framework/src/runtime/execution/serial-execution-queue';
+import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -24,8 +24,8 @@ function deferred<T>(): Deferred<T> {
 function scheduler(
   sequences: bigint[] = [],
   options: ZLinkSerialSchedulerOptions = {}
-): ZLinkBoundedSerialScheduler {
-  return new ZLinkBoundedSerialScheduler(async (record: ZLinkSerialWorkRecord<unknown>) => {
+): ZLinkSerialExecutionQueue {
+  return new ZLinkSerialExecutionQueue(async (record: ZLinkSerialWorkRecord<unknown>) => {
     sequences.push(record.acceptedSequence);
     try {
       record.resolve(await record.operation());
@@ -39,7 +39,7 @@ function scheduler(
 }
 
 test('serial defaults include bounded owner-local reservations', () => {
-  assert.equal(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.ownerTimeBudgetMs, 10);
+  assert.equal(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.ownerTimeBudget, 10);
   assert.equal(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.lifecycleBurstLimit, 8);
   assert.ok(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.applicationMessageCapacity > 0);
   assert.ok(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.applicationByteCapacity > 0);
@@ -54,7 +54,7 @@ test('owner-local reservations survive terminal work and do not block another ow
     applicationByteCapacity: 256,
     lifecycleMessageCapacity: 1,
     lifecycleByteCapacity: 256,
-    ownerTimeBudgetMs: 0,
+    ownerTimeBudget: 0,
     lifecycleBurstLimit: 1,
     fixedWorkByteCost: 64
   } as const;
@@ -86,13 +86,64 @@ test('owner-local reservations survive terminal work and do not block another ow
   assert.equal(await serial.submit(() => 'following'), 'following');
 });
 
+test('a transferred record is accounted without capacity rejection until terminal completion', async () => {
+  const serial = scheduler([], {
+    applicationMessageCapacity: 1,
+    applicationByteCapacity: 128,
+    lifecycleMessageCapacity: 1,
+    lifecycleByteCapacity: 128,
+    ownerTimeBudget: 0,
+    lifecycleBurstLimit: 1,
+    fixedWorkByteCost: 32
+  });
+  const localStarted = deferred<void>();
+  const localTerminal = deferred<void>();
+  const transferredStarted = deferred<void>();
+  const transferredTerminal = deferred<void>();
+  const local = serial.submit(async () => {
+    localStarted.resolve();
+    await localTerminal.promise;
+  }, { payloadBytes: 32, metadataBytes: 16 });
+  await localStarted.promise;
+
+  const transferred = serial.submitPreAdmitted(async () => {
+    transferredStarted.resolve();
+    await transferredTerminal.promise;
+  }, { payloadBytes: 48, metadataBytes: 16 });
+  assert.deepEqual(serial.snapshot(), {
+    applicationMessages: 2,
+    applicationBytes: 176,
+    lifecycleMessages: 0,
+    lifecycleBytes: 0
+  });
+  await assert.rejects(serial.submit(() => undefined), /queue is full/u);
+
+  localTerminal.resolve();
+  await local;
+  await transferredStarted.promise;
+  assert.deepEqual(serial.snapshot(), {
+    applicationMessages: 1,
+    applicationBytes: 96,
+    lifecycleMessages: 0,
+    lifecycleBytes: 0
+  });
+  transferredTerminal.resolve();
+  await transferred;
+  assert.deepEqual(serial.snapshot(), {
+    applicationMessages: 0,
+    applicationBytes: 0,
+    lifecycleMessages: 0,
+    lifecycleBytes: 0
+  });
+});
+
 test('a yielded Spot owner retains its reservation until the actual owner terminal', async () => {
-  const serial = new ZLinkSpotSerialExecutor(true, undefined, {
+  const serial = new ZLinkSpotSerialTurnExecutor(true, undefined, {
     applicationMessageCapacity: 1,
     applicationByteCapacity: 256,
     lifecycleMessageCapacity: 2,
     lifecycleByteCapacity: 256,
-    ownerTimeBudgetMs: 0,
+    ownerTimeBudget: 0,
     lifecycleBurstLimit: 1,
     fixedWorkByteCost: 64
   });
@@ -176,7 +227,7 @@ test('accepted sequences stay monotonic across terminal records', async () => {
 
 test('execution barriers quiesce after queued terminal work', async () => {
   const barrier = new ZLinkExecutionBarrier();
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialTurnExecutor(true);
   serial.setExecutionBarrier(barrier);
   await serial.post(() => undefined);
   const seal = barrier.seal();
@@ -185,7 +236,7 @@ test('execution barriers quiesce after queued terminal work', async () => {
 });
 
 test('Spot one-way turns report the terminal handler error and continue', async () => {
-  const serial = new ZLinkSpotSerialExecutor(false);
+  const serial = new ZLinkSpotSerialTurnExecutor(false);
   const reported = deferred<unknown>();
   await serial.postOneWay(
     () => { throw new Error('terminal'); },

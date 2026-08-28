@@ -18,11 +18,11 @@ const {
   ZLinkActorRuntimeState
 } = require('../../packages/framework/dist/runtime/actors/actor-runtime-state');
 const {
-  ZLinkActorDispatchMailbox
+  ZLinkActorSerialExecutor
 } = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
 const {
-  ZLinkSpotSerialExecutor
-} = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+  ZLinkSpotSerialTurnExecutor
+} = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
 const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
@@ -326,13 +326,13 @@ test('deferred Actor Join starts admission before the original reply but complet
 
 test('deferred Actor Join barrier keeps the next Actor mailbox turn behind completion', async () => {
   const events = [];
-  const mailbox = new ZLinkActorDispatchMailbox();
+  const mailbox = new ZLinkActorSerialExecutor('alice', 'spot-a');
   let releaseJoin;
   const joinGate = new Promise(resolve => {
     releaseJoin = resolve;
   });
 
-  const first = mailbox.submit(() => runActorHandlerWithDeferredJoins(() => {
+  const first = mailbox.execute(() => runActorHandlerWithDeferredJoins(() => {
     events.push('handler:first');
     deferActorJoin({
       requestBytes: 0,
@@ -346,7 +346,7 @@ test('deferred Actor Join barrier keeps the next Actor mailbox turn behind compl
       }
     });
   }));
-  const second = mailbox.submit(async () => {
+  const second = mailbox.execute(async () => {
     events.push('handler:second');
   });
 
@@ -365,8 +365,12 @@ test('deferred Actor Join barrier keeps the next Actor mailbox turn behind compl
 test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait policy', async () => {
   const events = [];
   const { actor, context } = actorHarness(events);
-  const serial = new ZLinkSpotSerialExecutor(true, 'spot-a');
-  const mailboxes = new framework.ZLinkActorDispatchMailboxSet('spot-a');
+  const serial = new ZLinkSpotSerialTurnExecutor(true, 'spot-a');
+  const mailboxes = new framework.ZLinkSpotSerialExecutor(
+    serial,
+    framework.ZLinkUserSpotExecutionMode.PerActor,
+    'spot-a'
+  );
   let routeResolutions = 0;
   let transportAdmissions = 0;
   let handoffCaptures = 0;
@@ -414,7 +418,7 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
     handoffCapture: (_meshName, actorId) => {
       handoffCaptures += 1;
       return actorId === 'bob'
-        ? mailboxes.submit('bob', () => serial.execute(() => {
+        ? mailboxes.executeActor('bob', () => serial.execute(() => {
             events.push('target:bob');
             return 'pong';
           }))
@@ -444,12 +448,12 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
     events.push(`completion:resume:${reply}`);
   };
 
-  const first = mailboxes.submit('alice', () => serial.execute(() =>
+  const first = mailboxes.executeActor('alice', () => serial.execute(() =>
     runActorHandlerWithDeferredJoins(() => {
       events.push('handler');
       context.joinSpot('room-a').defer();
     })));
-  const next = mailboxes.submit('alice', () => {
+  const next = mailboxes.executeActor('alice', () => {
     events.push('alice:next');
   });
 
@@ -468,7 +472,7 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
 
 test('rejected deferred Join yields its completion turn while source backlog replays', async () => {
   const events = [];
-  const serial = new ZLinkSpotSerialExecutor(true, 'spot-a');
+  const serial = new ZLinkSpotSerialTurnExecutor(true, 'spot-a');
   const completionResult = {
     accepted: false,
     async finalizeDeferredJoin() {
@@ -543,7 +547,7 @@ test('SpotWide deferred Actor Join yields the shared Spot gate while waiting for
     }
   };
   state.bindActor(actor, context);
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialTurnExecutor(true);
 
   const first = serial.execute(() => runActorHandlerWithDeferredJoins(() => {
     events.push('handler:first');

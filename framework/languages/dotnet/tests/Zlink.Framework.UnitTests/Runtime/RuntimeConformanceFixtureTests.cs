@@ -15,11 +15,18 @@ public sealed class RuntimeConformanceFixtureTests
         var limits = document.RootElement.GetProperty("limits");
 
         Assert.Equal(
-            ZLinkSerialExecutionQueue.OwnerTimeSliceMilliseconds,
+            ZLinkExecutionLanePolicy.Default.OwnerTimeBudget.TotalMilliseconds,
             limits.GetProperty("ownerTimeBudgetMilliseconds").GetInt32());
         Assert.Equal(
-            ZLinkSerialExecutionQueue.LifecycleTurnLimit,
+            ZLinkExecutionLanePolicy.Default.LifecycleBurstLimit,
             limits.GetProperty("lifecycleBurstLimit").GetInt32());
+        Assert.Equal(1_024, ZLinkExecutionLanePolicy.Default.ApplicationMessageCapacity);
+        Assert.Equal(64L * 1024 * 1024, ZLinkExecutionLanePolicy.Default.ApplicationByteCapacity);
+        Assert.Equal(128, ZLinkExecutionLanePolicy.Default.LifecycleMessageCapacity);
+        Assert.Equal(4L * 1024 * 1024, ZLinkExecutionLanePolicy.Default.LifecycleByteCapacity);
+        Assert.Equal(256, ZLinkExecutionLanePolicy.Default.FixedWorkByteCost);
+        Assert.Equal(8, ZLinkExecutionLanePolicy.Default.LifecycleBurstLimit);
+        Assert.Equal(TimeSpan.FromMilliseconds(10), ZLinkExecutionLanePolicy.Default.OwnerTimeBudget);
     }
 
     [Fact]
@@ -106,49 +113,58 @@ public sealed class RuntimeConformanceFixtureTests
         var firstStarted = Signal();
         var releaseFirst = Signal();
 
-        Assert.Equal(
-            ZLinkSerialPostAdmission.Accepted,
-            queue.TryPostApplicationWithAdmission(
-                async _ =>
-                {
-                    firstStarted.TrySetResult();
-                    await releaseFirst.Task.ConfigureAwait(false);
-                },
-                out _));
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        for (var index = 1; index < applicationCount; index++)
-            Assert.Equal(
-                ZLinkSerialPostAdmission.Accepted,
-                queue.TryPostApplicationWithAdmission(
-                    static _ => ValueTask.CompletedTask,
-                    out _));
-        Assert.Equal(applicationCount, queue.ApplicationPendingCount);
-        Assert.Equal(
-            ZLinkSerialPostAdmission.Accepted,
-            queue.TryPostApplicationWithAdmission(
-                static _ => ValueTask.CompletedTask,
-                out _));
-
-        ZLinkSerialWorkItem? lastLifecycle = null;
-        for (var index = 0; index < lifecycleCount; index++)
+        try
         {
             Assert.Equal(
                 ZLinkSerialPostAdmission.Accepted,
+                queue.TryPostApplicationWithAdmission(
+                    async _ =>
+                    {
+                        firstStarted.TrySetResult();
+                        await releaseFirst.Task.ConfigureAwait(false);
+                    },
+                    out _));
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            for (var index = 1; index < applicationCount; index++)
+                Assert.Equal(
+                    ZLinkSerialPostAdmission.Accepted,
+                    queue.TryPostApplicationWithAdmission(
+                        static _ => ValueTask.CompletedTask,
+                        out _));
+            Assert.Equal(applicationCount, queue.ApplicationPendingCount);
+            Assert.Equal(
+                ZLinkSerialPostAdmission.CapacityExceeded,
+                queue.TryPostApplicationWithAdmission(
+                    static _ => ValueTask.CompletedTask,
+                    out _));
+            Assert.Equal(applicationCount, queue.ApplicationPendingCount);
+
+            ZLinkSerialWorkItem? lastLifecycle = null;
+            for (var index = 0; index < lifecycleCount; index++)
+            {
+                Assert.Equal(
+                    ZLinkSerialPostAdmission.Accepted,
+                    queue.TryPostNextWithAdmission(
+                        static _ => ValueTask.CompletedTask,
+                        out var accepted));
+                lastLifecycle = accepted;
+            }
+            Assert.Equal(lifecycleCount, queue.LifecyclePendingCount);
+            Assert.Equal(
+                ZLinkSerialPostAdmission.CapacityExceeded,
                 queue.TryPostNextWithAdmission(
                     static _ => ValueTask.CompletedTask,
-                    out var accepted));
-            lastLifecycle = accepted;
-        }
-        Assert.Equal(lifecycleCount, queue.LifecyclePendingCount);
-        Assert.Equal(
-            ZLinkSerialPostAdmission.Accepted,
-            queue.TryPostNextWithAdmission(
-                static _ => ValueTask.CompletedTask,
-                out _));
+                    out _));
+            Assert.Equal(lifecycleCount, queue.LifecyclePendingCount);
 
-        releaseFirst.TrySetResult();
-        await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(10));
-        await lastLifecycle!.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+            releaseFirst.TrySetResult();
+            await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(10));
+            await lastLifecycle!.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+        }
     }
 
     [Fact]
@@ -170,22 +186,34 @@ public sealed class RuntimeConformanceFixtureTests
                 ZLinkSerialPostAdmission.Accepted,
                 queue.TryPostApplicationWithAdmission(
                     async _ => await releaseApplication.Task.ConfigureAwait(false),
+                    payloadBytes: applicationBytes,
+                    metadataBytes: 0,
+                    transferred: false,
                     out var application));
             Assert.Equal(
-                ZLinkSerialPostAdmission.Accepted,
+                ZLinkSerialPostAdmission.CapacityExceeded,
                 queue.TryPostApplicationWithAdmission(
                     static _ => ValueTask.CompletedTask,
+                    payloadBytes: 0,
+                    metadataBytes: 0,
+                    transferred: false,
                     out _));
 
             Assert.Equal(
                 ZLinkSerialPostAdmission.Accepted,
                 queue.TryPostNextWithAdmission(
                     async _ => await releaseLifecycle.Task.ConfigureAwait(false),
+                    payloadBytes: lifecycleBytes,
+                    metadataBytes: 0,
+                    transferred: false,
                     out var lifecycle));
             Assert.Equal(
-                ZLinkSerialPostAdmission.Accepted,
+                ZLinkSerialPostAdmission.CapacityExceeded,
                 queue.TryPostNextWithAdmission(
                     static _ => ValueTask.CompletedTask,
+                    payloadBytes: 0,
+                    metadataBytes: 0,
+                    transferred: false,
                     out _));
 
             releaseApplication.TrySetResult();

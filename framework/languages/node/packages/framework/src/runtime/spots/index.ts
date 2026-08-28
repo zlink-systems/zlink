@@ -117,6 +117,7 @@ import type {
 } from '../foundation/actor-join-recovery-codec';
 import { SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE } from '../foundation/service-wire-constants.generated';
 
+export { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 export { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 export {
   ZLinkManagedTimer,
@@ -1400,7 +1401,7 @@ export class DefaultZLinkSpotManager {
     context: {
       readonly channelName: string;
       readonly contentType?: string;
-      readonly workOptions?: import('../execution/serial-scheduler').ZLinkSerialWorkOptions;
+      readonly workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions;
       readonly admissionTimeoutMs?: number;
       readonly signal?: AbortSignal;
     }
@@ -1415,7 +1416,7 @@ export class DefaultZLinkSpotManager {
     context: {
       readonly channelName: string;
       readonly contentType?: string;
-      readonly workOptions?: import('../execution/serial-scheduler').ZLinkSerialWorkOptions;
+      readonly workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions;
       readonly admissionTimeoutMs?: number;
       readonly signal?: AbortSignal;
     }

@@ -882,8 +882,7 @@ void mesh_node_runtime_t::start ()
             _state->listen_endpoint = resolved_endpoint;
         peer_connections = _state->peer_connections;
     }).get ();
-    {
-        std::lock_guard peer_lock (_peer_mutex);
+    _peer_connection_intent_lane.run ([&] {
         for (const auto &peer : peer_connections) {
             const auto intent = peer.expected_routing_id
                                   ? node->connect_peer (peer.endpoint, *peer.expected_routing_id)
@@ -891,7 +890,7 @@ void mesh_node_runtime_t::start ()
             if (intent)
                 _peer_connection_intents.emplace (peer.endpoint, next_connection_intent_id ());
         }
-    }
+    }).get ();
     _node = std::move (node);
     const auto callback_gate = _peer_callback_gate;
     auto runtime_peer_connect = [this,
@@ -1713,27 +1712,29 @@ mesh_node_runtime_t::subscribe_message_follow_invalidation (
     if (!handler)
         throw std::invalid_argument ("Message Follow invalidation handler is required");
     auto state = std::make_shared<message_follow_subscription_state_t> (std::move (handler));
-    std::lock_guard lock (_message_follow_mutex);
-    auto subscription_id = _next_message_follow_subscription_id++;
-    while (subscription_id == 0 || _message_follow_subscriptions.contains (subscription_id)) {
-        subscription_id = _next_message_follow_subscription_id++;
-    }
-    _message_follow_subscriptions.emplace (subscription_id, std::move (state));
-    return subscription_id;
+    return _message_follow_subscription_lane.run ([&] {
+        auto subscription_id = _next_message_follow_subscription_id++;
+        while (subscription_id == 0 || _message_follow_subscriptions.contains (subscription_id)) {
+            subscription_id = _next_message_follow_subscription_id++;
+        }
+        _message_follow_subscriptions.emplace (subscription_id, std::move (state));
+        return subscription_id;
+    }).get ();
 }
 
 void mesh_node_runtime_t::unsubscribe_message_follow_invalidation (
   message_follow_subscription_id_t subscription_id) noexcept
 {
     std::shared_ptr<message_follow_subscription_state_t> state;
-    {
-        std::lock_guard lock (_message_follow_mutex);
+    _message_follow_subscription_lane.run ([&] {
         const auto found = _message_follow_subscriptions.find (subscription_id);
         if (found == _message_follow_subscriptions.end ())
             return;
         state = std::move (found->second);
         _message_follow_subscriptions.erase (found);
-    }
+    }).get ();
+    if (!state)
+        return;
     state->deactivate_and_wait ();
 }
 
@@ -1744,13 +1745,12 @@ void mesh_node_runtime_t::dispatch_message_follow (
     spot.invalidate_message_follow_route (notice);
     std::vector<std::shared_ptr<message_follow_subscription_state_t>> subscriptions;
     std::function<void (const runtime::protocol::actor_route_fence_t &)> actor_invalidator;
-    {
-        std::lock_guard lock (_message_follow_mutex);
+    _message_follow_subscription_lane.run ([&] {
         subscriptions.reserve (_message_follow_subscriptions.size ());
         for (const auto &[_, subscription] : _message_follow_subscriptions)
             subscriptions.push_back (subscription);
         actor_invalidator = _actor_route_invalidator;
-    }
+    }).get ();
     if (actor_invalidator) {
         if (const auto *source =
               std::get_if<runtime::protocol::actor_route_fence_t> (&notice.source)) {
@@ -1864,10 +1864,9 @@ void mesh_node_runtime_t::stop () noexcept
         return;
     }
     try {
-        {
-            std::lock_guard lock (_peer_mutex);
+        _peer_connection_intent_lane.run ([&] {
             _peer_connection_intents.clear ();
-        }
+        }).get ();
         _actors.clear ();
         for (auto &[_, spot] : _spots)
             (void) spot.close ();
@@ -1887,25 +1886,27 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
 {
     if (!_node || endpoint.empty ())
         return;
-    std::lock_guard lock (_peer_mutex);
-    if (const auto existing = _peer_connection_intents.find (endpoint);
-        existing != _peer_connection_intents.end ())
-        return;
-    const auto submitted = _node->connect_peer (
-      endpoint, expected_routing_id, expected_lifecycle_generation, std::move (security_identity));
-    if (submitted)
-        _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
+    _peer_connection_intent_lane.run ([&] {
+        if (const auto existing = _peer_connection_intents.find (endpoint);
+            existing != _peer_connection_intents.end ())
+            return;
+        const auto submitted = _node->connect_peer (
+          endpoint, expected_routing_id, expected_lifecycle_generation, std::move (security_identity));
+        if (submitted)
+            _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
+    }).get ();
 }
 
 void mesh_node_runtime_t::connect_peer (const std::string &endpoint, std::string security_identity)
 {
     if (!_node || endpoint.empty ())
         return;
-    std::lock_guard lock (_peer_mutex);
-    if (_peer_connection_intents.contains (endpoint))
-        return;
-    if (_node->connect_peer (endpoint))
-        _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
+    _peer_connection_intent_lane.run ([&] {
+        if (_peer_connection_intents.contains (endpoint))
+            return;
+        if (_node->connect_peer (endpoint))
+            _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
+    }).get ();
     static_cast<void> (security_identity);
 }
 
@@ -1933,11 +1934,12 @@ void mesh_node_runtime_t::disconnect_peer (const std::string &endpoint) noexcept
     if (!_node || endpoint.empty ())
         return;
     try {
-        std::lock_guard lock (_peer_mutex);
-        const auto found = _peer_connection_intents.find (endpoint);
-        _node->disconnect_peer (endpoint);
-        if (found != _peer_connection_intents.end ())
-            _peer_connection_intents.erase (found);
+        _peer_connection_intent_lane.run ([&] {
+            const auto found = _peer_connection_intents.find (endpoint);
+            _node->disconnect_peer (endpoint);
+            if (found != _peer_connection_intents.end ())
+                _peer_connection_intents.erase (found);
+        }).get ();
     }
     catch (...) {
     }
@@ -1949,16 +1951,17 @@ void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_r
     if (!_node || endpoint.empty ())
         return;
     try {
-        std::lock_guard lock (_peer_mutex);
-        const auto endpoint_retained = _node->disconnect_peer (
-          expected_routing_id.to_bytes (), endpoint);
-        /* A replacement RID can already be admitted through the same
-         * configured endpoint when the stale descriptor retires. The raw
-         * owner deliberately preserves that physical endpoint; preserve the
-         * matching auto-connect intent too, otherwise the next reconcile
-         * submits a duplicate connect and can preempt the admitted route. */
-        if (!endpoint_retained)
-            _peer_connection_intents.erase (endpoint);
+        _peer_connection_intent_lane.run ([&] {
+            const auto endpoint_retained = _node->disconnect_peer (
+              expected_routing_id.to_bytes (), endpoint);
+            /* A replacement RID can already be admitted through the same
+             * configured endpoint when the stale descriptor retires. The raw
+             * owner deliberately preserves that physical endpoint; preserve the
+             * matching auto-connect intent too, otherwise the next reconcile
+             * submits a duplicate connect and can preempt the admitted route. */
+            if (!endpoint_retained)
+                _peer_connection_intents.erase (endpoint);
+        }).get ();
     }
     catch (...) {
     }
@@ -2151,26 +2154,25 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
   const std::optional<zlink::message_t> &creation_payload,
   std::chrono::milliseconds timeout)
 {
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->spot_state->mutex);
+    _state->spot_state->lane.run ([&] {
         _state->spot_state->actor_types_by_id[actor_id] = actor_type;
         _state->spot_state->mesh_runtime_owned_native_actor_ids.insert (actor_id);
-    }
+    }).get ();
     try {
         std::vector<zlink::message_t> parts;
         if (creation_payload)
             parts.push_back (*creation_payload);
         auto native = create_actor (actor_type, actor_id, parts, timeout);
-        {
-            std::lock_guard<std::recursive_mutex> lock (_state->spot_state->mutex);
+        _state->spot_state->lane.run ([&] {
             _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1);
-        }
+        }).get ();
         return result_t<actor_ref_t>::success (native.ref ());
     }
     catch (const std::exception &error) {
-        std::lock_guard<std::recursive_mutex> lock (_state->spot_state->mutex);
-        _state->spot_state->actor_types_by_id.erase (actor_id);
-        _state->spot_state->mesh_runtime_owned_native_actor_ids.erase (actor_id);
+        _state->spot_state->lane.run ([&] {
+            _state->spot_state->actor_types_by_id.erase (actor_id);
+            _state->spot_state->mesh_runtime_owned_native_actor_ids.erase (actor_id);
+        }).get ();
         return result_t<actor_ref_t>::failure (framework_error_kind_t::internal_failure,
                                                error.what ());
     }
@@ -2184,11 +2186,10 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
   std::uint64_t authority_owner_generation,
   std::chrono::milliseconds timeout)
 {
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->spot_state->mutex);
+    _state->spot_state->lane.run ([&] {
         _state->spot_state->actor_types_by_id[actor_id] = actor_type;
         _state->spot_state->mesh_runtime_owned_native_actor_ids.insert (actor_id);
-    }
+    }).get ();
     try {
         std::vector<zlink::message_t> parts;
         if (creation_payload)
@@ -2201,16 +2202,16 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
                                           object_generation, authority_owner_generation,
                                           _state->mesh_name, _state->routing_id->to_string ()});
         _actors.insert_or_assign (actor_id, native);
-        {
-            std::lock_guard<std::recursive_mutex> lock (_state->spot_state->mutex);
+        _state->spot_state->lane.run ([&] {
             _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1);
-        }
+        }).get ();
         return result_t<actor_ref_t>::success (native.ref ());
     }
     catch (const std::exception &error) {
-        std::lock_guard<std::recursive_mutex> lock (_state->spot_state->mutex);
-        _state->spot_state->actor_types_by_id.erase (actor_id);
-        _state->spot_state->mesh_runtime_owned_native_actor_ids.erase (actor_id);
+        _state->spot_state->lane.run ([&] {
+            _state->spot_state->actor_types_by_id.erase (actor_id);
+            _state->spot_state->mesh_runtime_owned_native_actor_ids.erase (actor_id);
+        }).get ();
         return result_t<actor_ref_t>::failure (framework_error_kind_t::internal_failure,
                                                error.what ());
     }
@@ -2645,10 +2646,11 @@ void mesh_node_runtime_t::observe_spot_authority (const zlink::routing_id_t &tar
     if (target_spot_id.empty () || object_generation == 0 || target_node_generation == 0
         || authority_owner_generation == 0 || owner_lease_generation == 0)
         return;
-    std::lock_guard lock (_observed_spot_authority_mutex);
-    _observed_spot_authorities[observed_spot_authority_key (
-      target_node_rid, target_spot_id, object_generation)] = observed_spot_authority_t{
-      target_node_generation, authority_owner_generation, owner_lease_generation};
+    _observed_spot_authority_lane.run ([&] {
+        _observed_spot_authorities[observed_spot_authority_key (
+          target_node_rid, target_spot_id, object_generation)] = observed_spot_authority_t{
+          target_node_generation, authority_owner_generation, owner_lease_generation};
+    }).get ();
 }
 
 std::optional<mesh_node_runtime_t::observed_spot_authority_t>
@@ -2656,12 +2658,13 @@ mesh_node_runtime_t::observed_spot_authority (const zlink::routing_id_t &target_
                                               const std::string &target_spot_id,
                                               std::uint64_t object_generation) const
 {
-    std::lock_guard lock (_observed_spot_authority_mutex);
-    const auto found = _observed_spot_authorities.find (
-      observed_spot_authority_key (target_node_rid, target_spot_id, object_generation));
-    if (found == _observed_spot_authorities.end ())
-        return std::nullopt;
-    return found->second;
+    return _observed_spot_authority_lane.run ([&] () -> std::optional<observed_spot_authority_t> {
+        const auto found = _observed_spot_authorities.find (
+          observed_spot_authority_key (target_node_rid, target_spot_id, object_generation));
+        if (found == _observed_spot_authorities.end ())
+            return std::nullopt;
+        return found->second;
+    }).get ();
 }
 
 namespace
@@ -2676,37 +2679,41 @@ std::string negotiated_receive_chunk_limit_key (const actor_ref_t &actor)
 void mesh_node_runtime_t::record_negotiated_receive_chunk_limit (const actor_ref_t &actor,
                                                                  std::uint32_t limit_bytes)
 {
-    std::lock_guard lock (_negotiated_receive_chunk_limit_mutex);
-    _negotiated_receive_chunk_limits[negotiated_receive_chunk_limit_key (actor)] = limit_bytes;
+    _negotiated_receive_chunk_limit_lane.run ([&] {
+        _negotiated_receive_chunk_limits[negotiated_receive_chunk_limit_key (actor)] = limit_bytes;
+    }).get ();
 }
 
 std::optional<std::uint32_t>
 mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (const actor_ref_t &actor) const
 {
-    std::lock_guard lock (_negotiated_receive_chunk_limit_mutex);
-    const auto found =
-      _negotiated_receive_chunk_limits.find (negotiated_receive_chunk_limit_key (actor));
-    if (found == _negotiated_receive_chunk_limits.end ())
-        return std::nullopt;
-    return found->second;
+    return _negotiated_receive_chunk_limit_lane.run ([&] () -> std::optional<std::uint32_t> {
+        const auto found =
+          _negotiated_receive_chunk_limits.find (negotiated_receive_chunk_limit_key (actor));
+        if (found == _negotiated_receive_chunk_limits.end ())
+            return std::nullopt;
+        return found->second;
+    }).get ();
 }
 
 std::uint64_t mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (
   const std::vector<runtime::stateful::object_ref_t> &sources) const
 {
-    std::lock_guard lock (_negotiated_receive_chunk_limit_mutex);
-    std::uint64_t negotiated = 0;
-    for (const auto &source : sources) {
-        if (source.kind != runtime::stateful::object_kind_t::actor)
-            continue;
-        const auto found = _negotiated_receive_chunk_limits.find (
-          source.key + ":" + std::to_string (source.object_generation));
-        if (found != _negotiated_receive_chunk_limits.end () && found->second != 0) {
-            negotiated =
-              negotiated == 0 ? found->second : std::min<std::uint64_t> (negotiated, found->second);
+    return _negotiated_receive_chunk_limit_lane.run ([&] {
+        std::uint64_t negotiated = 0;
+        for (const auto &source : sources) {
+            if (source.kind != runtime::stateful::object_kind_t::actor)
+                continue;
+            const auto found = _negotiated_receive_chunk_limits.find (
+              source.key + ":" + std::to_string (source.object_generation));
+            if (found != _negotiated_receive_chunk_limits.end () && found->second != 0) {
+                negotiated = negotiated == 0
+                               ? found->second
+                               : std::min<std::uint64_t> (negotiated, found->second);
+            }
         }
-    }
-    return negotiated;
+        return negotiated;
+    }).get ();
 }
 
 // actorJoin(28) originate fence-gate: only taken when (a) this node has
@@ -3360,11 +3367,10 @@ mesh_node_runtime_t::actor_join_reply_from_completion (const host::receive_recor
         return result_t<actor_join_reply_t>::success (actor_join_reply_t{1, actor, reply});
     }
     const auto &native = joined.current_actor;
-    {
-        std::lock_guard<std::recursive_mutex> lock (_state->spot_state->mutex);
+    _state->spot_state->lane.run ([&] {
         ++_state->spot_state
             ->core_actor_membership_epochs[std::string (actor.actor_id ().value ())];
-    }
+    }).get ();
     return result_t<actor_join_reply_t>::success (actor_join_reply_t{
       0,
       ::zlink::framework::detail::actor_ref_access_t::make (

@@ -6,7 +6,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -31,8 +31,8 @@ final class DefaultInstanceSpotContext
     private final ZLinkBackendSpot backendSpot;
     private final DefaultSpotOutbound outbound;
     private final ZLinkHandlerInstanceOwner handlerInstances;
-    private final ZLinkAsyncSerialQueue dispatchQueue;
-    private final ZLinkAsyncSerialQueue infrastructureQueue;
+    private final ZLinkSerialExecutionQueue dispatchQueue;
+    private final ZLinkSerialExecutionQueue infrastructureQueue;
     private final ZLinkSpotHandlerCatalog handlers = new ZLinkSpotHandlerCatalog(
         "Instance Spot handler registration is only allowed while configure is running");
     private final ZLinkInstanceSpotHandlerRegistry publicHandlers =
@@ -53,9 +53,9 @@ final class DefaultInstanceSpotContext
         this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.nodeRid = Objects.requireNonNull(nodeRid, "nodeRid");
         this.backendSpot = Objects.requireNonNull(backendSpot, "backendSpot");
-        this.dispatchQueue = new ZLinkAsyncSerialQueue(
+        this.dispatchQueue = new ZLinkSerialExecutionQueue(
             host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
-        this.infrastructureQueue = new ZLinkAsyncSerialQueue(
+        this.infrastructureQueue = new ZLinkSerialExecutionQueue(
             host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
         this.handlerInstances = host.createHandlerInstances();
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);

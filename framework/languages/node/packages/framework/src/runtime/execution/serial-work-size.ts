@@ -1,4 +1,4 @@
-import type { ZLinkSerialWorkOptions } from './serial-scheduler';
+import type { ZLinkSerialWorkOptions } from './serial-execution-queue';
 
 /** Returns UTF-8 metadata bytes for the owning serial reservation. */
 export function zlinkMetadataByteLength(

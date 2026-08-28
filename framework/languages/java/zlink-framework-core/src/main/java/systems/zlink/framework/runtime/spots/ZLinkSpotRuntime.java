@@ -100,7 +100,7 @@ import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -116,6 +116,7 @@ import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.channels.ChannelRegistration;
@@ -1692,7 +1693,7 @@ public final class ZLinkSpotRuntime
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.requireYieldAllowed(
                     "Spot creation");
-            return ZLinkAsyncSerialQueue
+            return ZLinkSerialExecutionQueue
                 .yieldCurrent(submit());
         }
     }
@@ -1725,7 +1726,7 @@ public final class ZLinkSpotRuntime
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.requireYieldAllowed(
                     "Spot creation");
-            return ZLinkAsyncSerialQueue
+            return ZLinkSerialExecutionQueue
                 .yieldCurrent(submit());
         }
     }
@@ -1849,7 +1850,7 @@ public final class ZLinkSpotRuntime
     }
 
     void bindCommittedRelocationReplies(
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal,
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
         long targetAuthorityOwnerGeneration) {
@@ -1861,13 +1862,13 @@ public final class ZLinkSpotRuntime
     }
 
     void bindCommittedRelocationReplies(
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal,
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
         Map<String, Long> targetAuthorityOwnerGenerations) {
         List<byte[]> records = journal.getOrDefault("spot", List.of())
             .stream()
-            .map(ZLinkAsyncSerialQueue.QueuedRecord::payload)
+            .map(ZLinkSerialExecutionQueue.QueuedRecord::payload)
             .toList();
         relocationReplyRoutes.bindCommitted(
             records,
@@ -1883,7 +1884,7 @@ public final class ZLinkSpotRuntime
                 actorId, 0L);
             relocationReplyRoutes.bindActorCommitted(
                 queued.stream()
-                    .map(ZLinkAsyncSerialQueue.QueuedRecord::payload)
+                    .map(ZLinkSerialExecutionQueue.QueuedRecord::payload)
                     .toList(),
                 targetNodeRid,
                 targetNodeGeneration,
@@ -1892,14 +1893,14 @@ public final class ZLinkSpotRuntime
     }
 
     void bindCanonicalRelocationReplies(
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal,
+        Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
         Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence> fences) {
         if (journal.containsKey("spot")) {
             relocationReplyRoutes.bindCommitted(
                 journal.get("spot").stream()
-                    .map(ZLinkAsyncSerialQueue.QueuedRecord::payload)
+                    .map(ZLinkSerialExecutionQueue.QueuedRecord::payload)
                     .toList(),
                 targetNodeRid,
                 targetNodeGeneration,
@@ -1913,7 +1914,7 @@ public final class ZLinkSpotRuntime
             String actorId = lane.substring("actor:".length());
             relocationReplyRoutes.bindActorCommitted(
                 queued.stream()
-                    .map(ZLinkAsyncSerialQueue.QueuedRecord::payload)
+                    .map(ZLinkSerialExecutionQueue.QueuedRecord::payload)
                     .toList(),
                 targetNodeRid,
                 targetNodeGeneration,
@@ -2075,6 +2076,8 @@ public final class ZLinkSpotRuntime
     }
 
     public void attachActorRuntime(ZLinkActorRuntime actorRuntime) {
+        actorRuntime.setActorDispatchTargetResolver(
+            this::actorDispatchTargetFor);
         actorRuntime.setDirectJoinRelocationStores(
             frameworkRegistration.locations().storeInstance() == null
                 ? null
@@ -3018,7 +3021,7 @@ public final class ZLinkSpotRuntime
         Object entryDispatchContext = systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.currentEntrySpotDispatch();
         try {
-            ZLinkAsyncSerialQueue
+            ZLinkSerialExecutionQueue
                 .propagateCurrent(handlerExecutor).execute(() -> {
                 outboundScope.run(outbound, () -> {
                     try (systems.zlink.framework.runtime.internal.handlers
@@ -3647,6 +3650,23 @@ public final class ZLinkSpotRuntime
             actor,
             this::spotSurfaceFor,
             spotLifecycle::firstEntrySpot);
+    }
+
+    private ZLinkActorDispatchTarget actorDispatchTargetFor(String actorId) {
+        Optional<ZLinkActor> actor = actorSessions.localActor(actorId);
+        if (actor.isEmpty()) {
+            return null;
+        }
+        Object surface = localActorSpotSurface(actor.orElseThrow());
+        if (surface instanceof ZLinkSpot<?> spot
+            && spot.context() instanceof DefaultSpotContext context) {
+            return context.actorDispatchTarget();
+        }
+        if (surface instanceof ZLinkEntrySpot<?> entry
+            && entry.context() instanceof DefaultEntrySpotContext context) {
+            return context.actorDispatchTarget();
+        }
+        return null;
     }
 
     byte[] freezeActorTimerRelocationEnvelope(String actorId) {
@@ -4399,6 +4419,15 @@ public final class ZLinkSpotRuntime
     }
 
     @Override
+    CompletionStage<Void> runActorTimerDispatch(
+        ZLinkActorDispatchTarget target,
+        String actorId,
+        Supplier<CompletionStage<Void>> operation) {
+        return actorSessions.runtime().runActorDispatchTurn(
+            target, actorId, operation);
+    }
+
+    @Override
     CompletionStage<Void> enqueueActorDispatch(
         String actorId,
         long payloadBytes,
@@ -4409,12 +4438,39 @@ public final class ZLinkSpotRuntime
 
     @Override
     CompletionStage<Void> enqueueActorDispatch(
+        ZLinkActorDispatchTarget target,
+        String actorId,
+        long payloadBytes,
+        Supplier<CompletionStage<Void>> operation) {
+        return actorSessions.runtime().submitActorDispatch(
+            target, actorId, payloadBytes, operation);
+    }
+
+    @Override
+    CompletionStage<Void> enqueueActorDispatch(
         String actorId,
         Supplier<byte[]> acceptedJournalRecord,
         long acceptedJournalRecordSizeHint,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
         return actorSessions.runtime().submitActorDispatchLazyRecord(
+            actorId,
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            operation,
+            relocationRelease);
+    }
+
+    @Override
+    CompletionStage<Void> enqueueActorDispatch(
+        ZLinkActorDispatchTarget target,
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        return actorSessions.runtime().submitActorDispatchLazyRecord(
+            target,
             actorId,
             acceptedJournalRecord,
             acceptedJournalRecordSizeHint,
@@ -4756,7 +4812,7 @@ public final class ZLinkSpotRuntime
         // it; not yielding would leave that Actor turn behind the turn awaiting
         // it.
         return dispatchLine.usesSharedExecutionGate()
-            ? ZLinkAsyncSerialQueue.yieldCurrent(stage)
+            ? ZLinkSerialExecutionQueue.yieldCurrent(stage)
             : stage;
     }
 

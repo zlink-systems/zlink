@@ -1,9 +1,9 @@
 import {
-  ZLinkBoundedSerialScheduler,
+  ZLinkSerialExecutionQueue,
   type ZLinkSerialSchedulerOptions,
   type ZLinkSerialWorkOptions,
   type ZLinkSerialWorkRecord
-} from '../execution/serial-scheduler';
+} from '../execution/serial-execution-queue';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -14,11 +14,15 @@ import {
   hasApplicationJobPermit
 } from '../application-jobs/application-job-queue-scope';
 
-export class ZLinkActorDispatchMailbox {
-  private readonly scheduler: ZLinkBoundedSerialScheduler;
+export class ZLinkActorSerialExecutor {
+  private readonly scheduler: ZLinkSerialExecutionQueue;
 
-  constructor(options?: ZLinkSerialSchedulerOptions) {
-    this.scheduler = new ZLinkBoundedSerialScheduler(
+  constructor(
+    private readonly actorId: string,
+    private readonly sourceSpotId: unknown,
+    options?: ZLinkSerialSchedulerOptions
+  ) {
+    this.scheduler = new ZLinkSerialExecutionQueue(
       (record) => this.runRecord(record),
       {
         ...options,
@@ -31,14 +35,19 @@ export class ZLinkActorDispatchMailbox {
     );
   }
 
-  submit<T>(
+  execute<T>(
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
-    const boundOperation = bindApplicationJobPermit(operation);
+    const boundOperation = bindApplicationJobPermit(() =>
+      runZLinkActorExecution(this.actorId, this.sourceSpotId, operation));
     return hasApplicationJobPermit()
       ? this.scheduler.submitPreAdmitted(boundOperation, workOptions)
       : this.scheduler.submit(boundOperation, workOptions);
+  }
+
+  close(): Promise<void> {
+    return this.scheduler.close();
   }
 
   private async runRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
@@ -49,30 +58,5 @@ export class ZLinkActorDispatchMailbox {
     } finally {
       record.release();
     }
-  }
-}
-
-export class ZLinkActorDispatchMailboxSet {
-  private readonly mailboxes = new Map<string, ZLinkActorDispatchMailbox>();
-
-  constructor(
-    private readonly sourceSpotId: unknown,
-    private readonly options?: ZLinkSerialSchedulerOptions
-  ) {}
-
-  submit<T>(
-    actorId: string,
-    operation: () => Promise<T> | T,
-    workOptions?: ZLinkSerialWorkOptions
-  ): Promise<T> {
-    let mailbox = this.mailboxes.get(actorId);
-    if (mailbox === undefined) {
-      mailbox = new ZLinkActorDispatchMailbox(this.options);
-      this.mailboxes.set(actorId, mailbox);
-    }
-    return mailbox.submit(
-      () => runZLinkActorExecution(actorId, this.sourceSpotId, operation),
-      workOptions
-    );
   }
 }

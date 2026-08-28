@@ -24,7 +24,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly Action<string> _removeSession;
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly AsyncServiceScope _scope;
-    private readonly ZLinkStreamSessionSerialExecutor _serial;
+    private readonly ZLinkSessionSerialExecutor _serial;
     private readonly IZLinkBackendStreamSocket _socket;
     private readonly string _transport;
     private readonly TimeProvider _timeProvider;
@@ -132,7 +132,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             actorDispatchEnabled);
         _context.SessionRuntime = this;
         Handlers = handlers;
-        _serial = new ZLinkStreamSessionSerialExecutor(_runtime.ExecutionOwner, _runtime.ErrorSink);
+        _serial = new ZLinkSessionSerialExecutor(_runtime.ExecutionOwner, _runtime.ErrorSink);
     }
 
     public ZLinkManagedStream Stream { get; }
@@ -251,7 +251,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         string remoteAddr)
     {
         _connectionReady.TrySetResult((localAddr, remoteAddr));
-        return _serial.EnqueueControl(
+        return _serial.ExecuteControl(
             cancellationToken => MarkConnectedAsync(localAddr, remoteAddr, cancellationToken));
     }
 
@@ -274,7 +274,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         if (Volatile.Read(ref _applicationDispatchClosed) != 0)
             return ZLinkSerialPostAdmission.Closed;
         var signal = ClassifyInboundLiveness(header, payload);
-        var admission = _serial.EnqueueApplication(
+        var admission = _serial.ExecuteApplication(
             async cancellationToken =>
             {
                 using var payloadOwnerScope = payloadOwner;
@@ -287,7 +287,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         payload,
                         cancellationToken)
                     .ConfigureAwait(false);
-            });
+            },
+            Math.Max(payload.Size, 0),
+            Math.Max(header.Size, 0),
+            applicationJobAdmission is not null);
         if (admission == ZLinkSerialPostAdmission.Accepted)
             ApplyInboundLiveness(signal);
         return admission;
@@ -323,7 +326,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         })))
             return true;
 
-        if (_serial.EnqueueInfrastructure(
+        if (_serial.ExecuteInfrastructure(
                 () => InvokeActorBindingReplacedAsync(identity)))
             return true;
 
@@ -338,7 +341,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         IDisposable? payloadOwner = null)
     {
         var signal = ClassifyInboundLiveness(header, payload);
-        var admission = _serial.EnqueueControl(
+        var admission = _serial.ExecuteControl(
             async cancellationToken =>
             {
                 using var payloadOwnerScope = payloadOwner;
@@ -351,7 +354,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         payload,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
-            });
+            },
+            Math.Max(payload.Size, 0),
+            Math.Max(header.Size, 0),
+            applicationJobAdmission is not null);
         if (admission == ZLinkSerialPostAdmission.Accepted)
             ApplyInboundLiveness(signal);
         return admission;
@@ -887,10 +893,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         // terminal state. Do not let that task inherit the lane's AsyncLocal:
         // terminal completion re-enters this runtime to start finalization.
         if (ExecutionContext.IsFlowSuppressed())
-            return _serial.EnqueueFinal(finalWork);
+            return _serial.ExecuteFinal(finalWork);
 
         using (ExecutionContext.SuppressFlow())
-            return _serial.EnqueueFinal(finalWork);
+            return _serial.ExecuteFinal(finalWork);
     }
 
     private bool ClaimCloseForDisposal()

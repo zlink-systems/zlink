@@ -13,8 +13,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private static readonly TimeSpan ReceivePollInterval =
         TimeSpan.FromMilliseconds(100);
     private readonly ZLinkStreamSessionTable _sessions;
-    private readonly ZLinkStreamSessionSerialExecutor _sessionIngress;
-    private readonly ZLinkStreamSessionSerialExecutor _controlIngress;
+    private readonly ZLinkSessionSerialExecutor _sessionIngress;
+    private readonly ZLinkSessionSerialExecutor _controlIngress;
     private readonly CancellationTokenSource _stopSource = new();
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
     private readonly IZLinkRuntimeFailureReporter _errorSink;
@@ -76,8 +76,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _maxMessageSize = maxMessageSize;
         var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
         _errorSink = runtime.ErrorSink;
-        _sessionIngress = new ZLinkStreamSessionSerialExecutor(runtime.ExecutionOwner, runtime.ErrorSink);
-        _controlIngress = new ZLinkStreamSessionSerialExecutor(
+        _sessionIngress = new ZLinkSessionSerialExecutor(runtime.ExecutionOwner, runtime.ErrorSink);
+        _controlIngress = new ZLinkSessionSerialExecutor(
             runtime.ExecutionOwner,
             runtime.ErrorSink);
         _sessions = new ZLinkStreamSessionTable(
@@ -792,7 +792,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     "STREAM peer session queue is closed.");
         }
 
-            var ingressAdmission = _sessionIngress.EnqueueApplication(
+            var ingressAdmission = _sessionIngress.ExecuteApplication(
                 async cancellationToken =>
                 {
                     var ownershipTransferred = false;
@@ -846,7 +846,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 "STREAM peer control queue is closed.");
         }
 
-        if (_controlIngress.EnqueueControl(async cancellationToken =>
+        if (_controlIngress.ExecuteControl(async cancellationToken =>
         {
             var ownershipTransferred = false;
             try
@@ -901,7 +901,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 if (monitorEvent.RoutingId is RoutingId readyRoutingId)
                 {
                     ClearDisconnectedRoutingId(readyRoutingId);
-                    var connectedAdmission = _controlIngress.EnqueueControl(async cancellationToken =>
+                    var connectedAdmission = _controlIngress.ExecuteControl(async cancellationToken =>
                     {
                         var session = await _sessions.GetOrCreateAsync(readyRoutingId).ConfigureAwait(false);
                         if (session is not null)
@@ -926,7 +926,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     MarkDisconnectedRoutingId(disconnectedRoutingId);
                     RemoveReceiveState(disconnectedRoutingId);
                 }
-                var disconnectedAdmission = _controlIngress.EnqueueControl(async _ =>
+                var disconnectedAdmission = _controlIngress.ExecuteControl(async _ =>
                 {
                     if (await _sessions.TryResolveMonitorSessionAsync(monitorEvent.RoutingId)
                             .ConfigureAwait(false) is { } disconnectedSession)
@@ -953,8 +953,12 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _errorSink.ReportRuntimeTaskException(
             operation,
             new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                "The STREAM control queue closed before the monitor event was admitted."));
+                admission == ZLinkSerialPostAdmission.CapacityExceeded
+                    ? ZLinkFrameworkErrorKind.CapacityExceeded
+                    : ZLinkFrameworkErrorKind.ShuttingDown,
+                admission == ZLinkSerialPostAdmission.CapacityExceeded
+                    ? "The STREAM control queue capacity was exceeded."
+                    : "The STREAM control queue closed before the monitor event was admitted."));
     }
 
     private ZLinkStreamReceiveState? GetOrCreateReceiveState(RoutingId routingId)

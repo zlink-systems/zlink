@@ -2,6 +2,7 @@
 #pragma once
 
 #include "actor_transfer_coordinator.hpp"
+#include "runtime/actors/actor_serial_executor.hpp"
 #include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/configuration/service_scope.hpp"
@@ -24,6 +25,7 @@
 #include <zlink/Contracts/Eventing/timers.hpp>
 
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -308,12 +310,6 @@ class spot_node_builder_state_t
      * a freed instance can at worst leave an entry that no longer resolves
      * to a live registration. */
     std::map<const void *, std::pair<std::string, std::string>> actor_instance_index;
-    using actor_execution_queue_map_t =
-      std::map<std::string, std::shared_ptr<runtime::serial_execution_queue_t>>;
-    std::map<std::string, std::shared_ptr<runtime::serial_execution_queue_t>>
-      actor_execution_queues;
-    std::shared_ptr<const actor_execution_queue_map_t> actor_execution_queue_snapshot =
-      std::make_shared<actor_execution_queue_map_t> ();
     std::map<std::string, spot_route_t> actor_routes;
     std::map<std::string, std::unique_ptr<service::actor_t>> native_actors;
     std::unordered_set<std::string> mesh_runtime_owned_native_actor_ids;
@@ -453,6 +449,427 @@ class spot_lifecycle_domain_t final
     explicit spot_lifecycle_domain_t (instance_spot_domain_t value) : _value (value) {}
 
     value_t _value;
+};
+
+/* Owns the application queues for one Spot. The containing node state lane
+ * owns mutations of the name maps; readers use the published Actor snapshot
+ * so dispatch need not re-enter that lane. */
+class spot_serial_executor_t
+{
+  public:
+    using queue_t = runtime::serial_execution_queue_t;
+    using queue_ptr_t = std::shared_ptr<queue_t>;
+    using actor_executor_t = runtime::actor_serial_executor_t;
+    using actor_executor_ptr_t = std::shared_ptr<actor_executor_t>;
+    using actor_executor_map_t = std::map<std::string, actor_executor_ptr_t>;
+    struct actor_queue_submission_t
+    {
+        queue_ptr_t queue;
+        runtime::serial_submission_id_t id = 0;
+    };
+
+    spot_serial_executor_t (std::shared_ptr<runtime::offload_executor_t> worker_executor,
+                            runtime::state_lane_t &state_lane,
+                            runtime::serial_lane_policy_t spot_policy,
+                            queue_ptr_t spot_queue = {}) :
+        _worker_executor (std::move (worker_executor)), _state_lane (&state_lane),
+        _spot_policy (std::move (spot_policy))
+    {
+        _spot_queue = std::move (spot_queue);
+        if (!_spot_queue && _worker_executor) {
+            _spot_queue = std::make_shared<queue_t> (
+              *_worker_executor, runtime::serial_execution_queue_options_t{},
+              queue_t::error_handler_t{}, _spot_policy);
+        }
+    }
+
+    const queue_ptr_t &spot_queue () const noexcept { return _spot_queue; }
+
+    bool execute_spot (std::string name,
+                       queue_t::async_work_t work,
+                       runtime::serial_work_options_t options = {}) const
+    {
+        return _spot_queue
+               && _spot_queue->try_post_async (std::move (name), std::move (work),
+                                                std::move (options));
+    }
+
+    bool execute_spot (std::string name,
+                       std::function<void ()> work,
+                       runtime::serial_work_options_t options = {}) const
+    {
+        return _spot_queue
+               && _spot_queue->try_post (std::move (name), std::move (work),
+                                         std::move (options));
+    }
+
+    bool execute_lifecycle (std::string name, std::function<void ()> work) const
+    {
+        return _spot_queue
+               && _spot_queue->try_post (
+                 std::move (name), std::move (work),
+                 runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
+    }
+
+    actor_executor_ptr_t actor_executor (const std::string &actor_id)
+    {
+        if (!_state_lane || _state_lane->is_on_lane ())
+            return actor_executor_on_lane (actor_id);
+        return _state_lane->run ([this, &actor_id] {
+            return actor_executor_on_lane (actor_id);
+        }).get ();
+    }
+
+    actor_executor_ptr_t find_actor_executor (const std::string &actor_id) const
+    {
+        if (!_state_lane || _state_lane->is_on_lane ())
+            return find_actor_executor_on_lane (actor_id);
+        return _state_lane->run ([this, &actor_id] {
+            return find_actor_executor_on_lane (actor_id);
+        }).get ();
+    }
+
+    void erase_actor_queue (const std::string &actor_id)
+    {
+        if (!_state_lane || _state_lane->is_on_lane ()) {
+            erase_actor_queue_on_lane (actor_id);
+            return;
+        }
+        _state_lane->run ([this, &actor_id] {
+            erase_actor_queue_on_lane (actor_id);
+        }).get ();
+    }
+
+    void replace_actor_queue (std::string actor_id, queue_ptr_t queue)
+    {
+        if (!_state_lane || _state_lane->is_on_lane ()) {
+            replace_actor_queue_on_lane (std::move (actor_id), std::move (queue));
+            return;
+        }
+        _state_lane->run ([this, actor_id = std::move (actor_id), queue = std::move (queue)] () mutable {
+            replace_actor_queue_on_lane (std::move (actor_id), std::move (queue));
+        }).get ();
+    }
+
+    std::shared_ptr<const actor_executor_map_t> actor_executor_snapshot () const noexcept
+    {
+        return std::atomic_load_explicit (&_actor_executor_snapshot, std::memory_order_acquire);
+    }
+
+    queue_ptr_t timer_queue (const std::string &timer_name)
+    {
+        if (!_state_lane || _state_lane->is_on_lane ())
+            return timer_queue_on_lane (timer_name);
+        return _state_lane->run ([this, &timer_name] {
+            return timer_queue_on_lane (timer_name);
+        }).get ();
+    }
+
+    std::vector<queue_ptr_t> timer_queues () const
+    {
+        if (!_state_lane || _state_lane->is_on_lane ())
+            return timer_queues_on_lane ();
+        return _state_lane->run ([this] { return timer_queues_on_lane (); }).get ();
+    }
+
+    void cancel_timer (const std::string &timer_name)
+    {
+        if (!_state_lane || _state_lane->is_on_lane ()) {
+            cancel_timer_on_lane (timer_name);
+            return;
+        }
+        _state_lane->run ([this, &timer_name] {
+            cancel_timer_on_lane (timer_name);
+        }).get ();
+    }
+
+    bool uses_spot_execution_gate () const noexcept
+    {
+        return _spot_policy.allows_turn_yield ();
+    }
+
+    bool execute_actor (const std::string &actor_id,
+                        std::string name,
+                        queue_t::async_work_t work,
+                        runtime::serial_work_options_t options = {},
+                        bool current_turn = false,
+                        std::function<void ()> rejected = {})
+    {
+        if (current_turn && _spot_queue && uses_spot_execution_gate ()) {
+            auto spot_options = options;
+            spot_options.byte_cost = queue_t::fixed_work_byte_cost;
+            spot_options.transfer_owner_reservation = {};
+            return _spot_queue->try_post_async (
+              std::move (name), std::move (work), std::move (spot_options));
+        }
+
+        auto executor = find_actor_executor_snapshot (actor_id);
+        if (!executor)
+            executor = actor_executor (actor_id);
+        if (!executor)
+            return false;
+        if (!uses_spot_execution_gate ())
+            return executor->execute_actor (std::move (name), std::move (work),
+                                            std::move (options));
+
+        auto spot_options = options;
+        spot_options.byte_cost = queue_t::fixed_work_byte_cost;
+        spot_options.transfer_owner_reservation = {};
+        return executor->execute_actor (
+          std::move (name),
+          [this, work = std::move (work), spot_options,
+           rejected = std::move (rejected)] (auto actor_complete) mutable {
+              const auto posted = _spot_queue
+                                    && _spot_queue->try_post_async (
+                                      "spot-handler",
+                                      [work = std::move (work), actor_complete] (auto spot_complete) mutable {
+                                          const auto spot_turn = detail::capture_current_serial_turn ();
+                                          auto actor_terminal = std::make_shared<std::atomic_bool> (false);
+                                          work ([spot_complete = std::move (spot_complete),
+                                                 actor_complete, spot_turn,
+                                                 actor_terminal] (std::function<void ()> finish) mutable {
+                                              auto complete_actor =
+                                                [finish = std::move (finish), actor_complete,
+                                                 actor_terminal] () mutable {
+                                                    if (actor_terminal->exchange (
+                                                          true, std::memory_order_acq_rel))
+                                                        return;
+                                                    std::exception_ptr error;
+                                                    try {
+                                                        if (finish)
+                                                            finish ();
+                                                    }
+                                                    catch (...) {
+                                                        error = std::current_exception ();
+                                                    }
+                                                    actor_complete ([error] {
+                                                        if (error)
+                                                            std::rethrow_exception (error);
+                                                    });
+                                                };
+                                              if (spot_turn && spot_turn->released ()) {
+                                                  complete_actor ();
+                                                  return;
+                                              }
+                                              spot_complete (std::move (complete_actor));
+                                          });
+                                      },
+                                      spot_options);
+              if (!posted) {
+                  if (rejected)
+                      rejected ();
+                  actor_complete ([] {});
+              }
+          },
+          std::move (options));
+    }
+
+    bool actor_queue_closed (const std::string &actor_id) const noexcept
+    {
+        const auto executor = find_actor_executor_snapshot (actor_id);
+        return !executor || executor->closed ();
+    }
+
+    bool ensure_actor_queue (const std::string &actor_id)
+    {
+        return static_cast<bool> (actor_executor (actor_id));
+    }
+
+    const void *actor_queue_identity (const std::string &actor_id) const noexcept
+    {
+        const auto executor = find_actor_executor_snapshot (actor_id);
+        return executor ? executor->queue_identity () : nullptr;
+    }
+
+    bool actor_queue_matches (const std::string &actor_id, const void *identity) const noexcept
+    {
+        return actor_queue_identity (actor_id) == identity;
+    }
+
+    result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_actor_handoff_barrier (
+      const std::string &actor_id, std::string name)
+    {
+        const auto executor = actor_executor (actor_id);
+        if (!executor)
+            return result_t<std::shared_ptr<detail::deferred_barrier_t>>::failure (
+              framework_error_kind_t::shutting_down,
+              "Actor handoff queue is unavailable");
+        return executor->execute_lifecycle (std::move (name));
+    }
+
+    result_t<actor_queue_submission_t> execute_actor_cancellable (
+      const std::string &actor_id,
+      std::string name,
+      queue_t::async_work_t work,
+      std::function<void ()> cancel,
+      runtime::serial_work_options_t options = {})
+    {
+        auto executor = find_actor_executor_snapshot (actor_id);
+        if (!executor)
+            executor = actor_executor (actor_id);
+        if (!executor)
+            return result_t<actor_queue_submission_t>::failure (
+              framework_error_kind_t::shutting_down,
+              "Actor handoff queue is unavailable");
+        const auto submitted = executor->execute_actor (
+          std::move (name), std::move (work), std::move (cancel), std::move (options));
+        if (!submitted)
+            return result_t<actor_queue_submission_t>::failure (
+              submitted.error_kind (),
+              submitted.error () != nullptr ? submitted.error ()->what ()
+                                            : "Actor handoff queue is full");
+        return result_t<actor_queue_submission_t>::success (
+          actor_queue_submission_t{executor->queue (), submitted.value ()});
+    }
+
+    bool execute_timer (const std::string &timer_name,
+                        std::string name,
+                        queue_t::async_work_t work,
+                        runtime::serial_work_options_t options = {})
+    {
+        if (uses_spot_execution_gate ()) {
+            options.byte_cost = queue_t::fixed_work_byte_cost;
+            options.transfer_owner_reservation = {};
+            return _spot_queue
+                   && _spot_queue->try_post_async (
+                     std::move (name), std::move (work), std::move (options));
+        }
+        const auto queue = timer_queue (timer_name);
+        return queue && queue->try_post_async (std::move (name), std::move (work),
+                                               std::move (options));
+    }
+
+    void close ()
+    {
+        std::vector<queue_ptr_t> queues;
+        if (!_state_lane || _state_lane->is_on_lane ())
+            queues = close_on_lane ();
+        else
+            queues = _state_lane->run ([this] { return close_on_lane (); }).get ();
+        for (const auto &queue : queues)
+            if (queue)
+                queue->close ();
+    }
+
+  private:
+    void assert_on_lane () const noexcept
+    {
+        if (_state_lane)
+            assert (_state_lane->is_on_lane ());
+    }
+
+    actor_executor_ptr_t actor_executor_on_lane (const std::string &actor_id)
+    {
+        assert_on_lane ();
+        auto &executor = _actor_executors[actor_id];
+        if (!executor && _worker_executor) {
+            executor = std::make_shared<actor_executor_t> (_worker_executor);
+            publish_actor_executor_snapshot ();
+        }
+        return executor;
+    }
+
+    actor_executor_ptr_t
+    find_actor_executor_snapshot (const std::string &actor_id) const noexcept
+    {
+        const auto snapshot = actor_executor_snapshot ();
+        if (!snapshot)
+            return {};
+        const auto found = snapshot->find (actor_id);
+        return found == snapshot->end () ? actor_executor_ptr_t{} : found->second;
+    }
+
+    actor_executor_ptr_t find_actor_executor_on_lane (const std::string &actor_id) const
+    {
+        assert_on_lane ();
+        const auto found = _actor_executors.find (actor_id);
+        return found == _actor_executors.end () ? actor_executor_ptr_t{} : found->second;
+    }
+
+    void erase_actor_queue_on_lane (const std::string &actor_id)
+    {
+        assert_on_lane ();
+        _actor_executors.erase (actor_id);
+        publish_actor_executor_snapshot ();
+    }
+
+    void replace_actor_queue_on_lane (std::string actor_id, queue_ptr_t queue)
+    {
+        assert_on_lane ();
+        _actor_executors.insert_or_assign (
+          std::move (actor_id),
+          std::make_shared<actor_executor_t> (_worker_executor, std::move (queue)));
+        publish_actor_executor_snapshot ();
+    }
+
+    queue_ptr_t timer_queue_on_lane (const std::string &timer_name)
+    {
+        assert_on_lane ();
+        auto &queue = _timer_queues[timer_name];
+        if (!queue && _worker_executor) {
+            queue = std::make_shared<queue_t> (
+              *_worker_executor, runtime::serial_execution_queue_options_t{},
+              queue_t::error_handler_t{}, runtime::serial_lane_policy_t::actor_delivery ());
+        }
+        return queue;
+    }
+
+    std::vector<queue_ptr_t> timer_queues_on_lane () const
+    {
+        assert_on_lane ();
+        std::vector<queue_ptr_t> result;
+        result.reserve (_timer_queues.size ());
+        for (const auto &[_, queue] : _timer_queues)
+            result.push_back (queue);
+        return result;
+    }
+
+    void cancel_timer_on_lane (const std::string &timer_name)
+    {
+        assert_on_lane ();
+        const auto found = _timer_queues.find (timer_name);
+        if (found == _timer_queues.end ())
+            return;
+        if (found->second)
+            found->second->cancel_pending ();
+        _timer_queues.erase (found);
+    }
+
+    std::vector<queue_ptr_t> close_on_lane ()
+    {
+        assert_on_lane ();
+        std::vector<queue_ptr_t> queues;
+        queues.reserve (1 + _actor_executors.size () + _timer_queues.size ());
+        if (_spot_queue)
+            queues.push_back (_spot_queue);
+        for (const auto &[_, executor] : _actor_executors)
+            if (executor)
+                queues.push_back (executor->queue ());
+        for (const auto &[_, queue] : _timer_queues)
+            queues.push_back (queue);
+        _actor_executors.clear ();
+        _timer_queues.clear ();
+        publish_actor_executor_snapshot ();
+        return queues;
+    }
+
+  private:
+    void publish_actor_executor_snapshot ()
+    {
+        auto snapshot = std::make_shared<actor_executor_map_t> (_actor_executors);
+        std::shared_ptr<const actor_executor_map_t> published = std::move (snapshot);
+        std::atomic_store_explicit (&_actor_executor_snapshot, std::move (published),
+                                    std::memory_order_release);
+    }
+
+    std::shared_ptr<runtime::offload_executor_t> _worker_executor;
+    runtime::state_lane_t *_state_lane = nullptr;
+    runtime::serial_lane_policy_t _spot_policy;
+    queue_ptr_t _spot_queue;
+    actor_executor_map_t _actor_executors;
+    std::map<std::string, queue_ptr_t> _timer_queues;
+    std::shared_ptr<const actor_executor_map_t> _actor_executor_snapshot =
+      std::make_shared<actor_executor_map_t> ();
 };
 
 class spot_context_state_t : public std::enable_shared_from_this<spot_context_state_t>
@@ -622,7 +1039,16 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         return completion ? (*completion) (true) : true;
     }
 
+    struct timer_fire_state_snapshot_t
+    {
+        std::shared_ptr<void> spot_instance;
+        std::shared_ptr<channel_runtime_state_t> channel_runtime;
+        bool configured = false;
+        bool admitted = false;
+    };
+
     bool enter_callback ();
+    timer_fire_state_snapshot_t enter_timer_callback ();
     void leave_callback () noexcept;
     bool is_current_callback_thread () const;
     bool admission_blocked () const noexcept
@@ -688,6 +1114,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     std::shared_ptr<void> spot_instance;
     std::shared_ptr<runtime::offload_executor_t> serial_executor;
     std::shared_ptr<runtime::serial_execution_queue_t> serial_queue;
+    std::shared_ptr<spot_serial_executor_t> spot_serial_executor;
     std::shared_ptr<worker_scheduler_t> worker_scheduler;
     std::vector<zlink::received_t> queued_routed_packets;
     spot_lifecycle_callbacks_t lifecycle;
@@ -718,10 +1145,54 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     std::size_t callback_depth = 0;
     service::instance_spot_close_completion_t pending_instance_spot_close_completion;
 
+
     bool has_active_callback () const
     {
         return callback_lane.run ([this] { return callback_depth > 0; }).get ();
     }
+
+    std::shared_ptr<spot_serial_executor_t> ensure_spot_serial_executor ()
+    {
+        if (spot_serial_executor)
+            return spot_serial_executor;
+        auto owner = lane_owner.lock ();
+        if (!owner)
+            owner = node;
+        const auto worker_executor = serial_executor ? serial_executor : owner
+                                                           ? owner->worker_executor
+                                                           : nullptr;
+        if (!owner || !worker_executor)
+            return spot_serial_executor;
+        if (!owner->lane.is_on_lane ())
+            return owner->lane.run ([this, owner] {
+                return ensure_spot_serial_executor_on_lane (owner->lane);
+            }).get ();
+        return ensure_spot_serial_executor_on_lane (owner->lane);
+    }
+
+  private:
+    std::shared_ptr<spot_serial_executor_t>
+    ensure_spot_serial_executor_on_lane (runtime::state_lane_t &state_lane)
+    {
+        assert (state_lane.is_on_lane ());
+        if (spot_serial_executor)
+            return spot_serial_executor;
+        const auto lane_owner_state = lane_owner.lock ();
+        const auto owner = lane_owner_state ? lane_owner_state : node;
+        const auto worker_executor = serial_executor ? serial_executor
+                                                     : owner ? owner->worker_executor : nullptr;
+        if (!worker_executor)
+            return {};
+        const auto policy = is_entry_spot () ? runtime::serial_lane_policy_t::entry_spot ()
+                            : execution_mode == user_spot_execution_mode_t::spot_wide
+                              ? runtime::serial_lane_policy_t::spot_wide ()
+                              : runtime::serial_lane_policy_t::per_actor_spot ();
+        spot_serial_executor = std::make_shared<spot_serial_executor_t> (
+          worker_executor, state_lane, policy, serial_queue);
+        return spot_serial_executor;
+    }
+
+  public:
 
     bool is_entry_spot () const noexcept { return lifecycle_domain.is_entry (); }
 
@@ -1045,21 +1516,6 @@ inline void record_actor_route_unlocked (spot_node_builder_state_t &state,
     state.actor_generations[key] = generation;
 }
 
-/* Actor delivery reads the queue directory on every inbound packet, while
- * queue creation/removal is rare and already serialized by the node state lane.
- * Publish a copy-on-write directory at those lifecycle boundaries so the
- * normal dispatch path can take a shared_ptr snapshot without reacquiring the
- * node state lane. */
-inline void publish_actor_execution_queue_snapshot_unlocked (spot_node_builder_state_t &state)
-{
-    auto snapshot = std::make_shared<spot_node_builder_state_t::actor_execution_queue_map_t> (
-      state.actor_execution_queues);
-    std::shared_ptr<const spot_node_builder_state_t::actor_execution_queue_map_t> published =
-      std::move (snapshot);
-    std::atomic_store_explicit (&state.actor_execution_queue_snapshot, std::move (published),
-                                std::memory_order_release);
-}
-
 inline void record_actor_spot_location_unlocked (spot_node_builder_state_t &state,
                                                  const std::string &key,
                                                  spot_id_t spot_id,
@@ -1244,7 +1700,9 @@ class spot_node_runtime_t
                            const std::vector<zlink::message_t> &parts,
                            service_provider_t &services,
                            serializer_registry_t &serializers,
-                           std::function<void ()> before_application_handler = {}) const;
+                           std::function<void ()> before_application_handler = {},
+                           std::function<void ()> transfer_owner_reservation = {},
+                           std::size_t transferred_owner_byte_cost = 0) const;
     result_t<std::size_t> dispatch_multicast (std::string topic,
                                               const std::vector<zlink::message_t> &parts,
                                               service_provider_t &services,
@@ -1540,7 +1998,9 @@ class spot_node_runtime_t
       zlink::routing_id_t inbound_source_node_rid = zlink::routing_id_t::from (std::uint32_t{0}),
       runtime::protocol::wire_operation_id_t inbound_operation = {},
       std::uint64_t inbound_reply_route_id = 0,
-      std::optional<std::string> inbound_deadline = std::nullopt);
+      std::optional<std::string> inbound_deadline = std::nullopt,
+      std::function<void ()> transfer_owner_reservation = {},
+      std::size_t transferred_owner_byte_cost = 0);
     result_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
 
     template <typename TActor>
@@ -1860,23 +2320,6 @@ class spot_node_runtime_t
                + ":" + std::string (actor_ref.actor_id ().value ());
     }
 
-    /* Registration of a factory-owned actor instance. The lookup and the
-     * install both run on the node state lane and keep the registry and its
-     * identity index in step; the factory itself stays outside the lane, so
-     * the caller constructs only after the lookup misses. */
-    std::shared_ptr<void> registered_actor_instance (const actor_ref_t &actor_ref,
-                                                     const std::string &key) const
-    {
-        return _state->lane.run ([&] {
-            const auto found = _state->actor_instances.find (key);
-            if (found == _state->actor_instances.end () || !found->second) {
-                return std::shared_ptr<void>{};
-            }
-            detail::record_actor_instance_index_unlocked (*_state, actor_ref, found->second.get ());
-            return found->second;
-        }).get ();
-    }
-
     /* `refuse_destroyed` re-checks the destroy tombstone in the same lane turn
      * that installs, so a destroy landing inside the factory window cannot be
      * resurrected by a late install; the caller then reports the actor as
@@ -2128,10 +2571,25 @@ class spot_node_runtime_t
                          std::string mesh_name = {},
                          std::function<task_t<void> (void *)> staged_restore = {},
                          std::uint64_t authority_owner_generation = 1);
-    result_t<spot_context_t> actor_join_context (spot_id_t spot_id,
-                                                 const zlink::message_t &request);
-    result_t<spot_node_builder_state_t::actor_factory_registration_t>
-    actor_factory (const actor_ref_t &actor_ref) const;
+    struct actor_join_state_snapshot_t
+    {
+        std::optional<spot_context_t> context;
+        std::optional<spot_node_builder_state_t::actor_factory_registration_t> registration;
+        std::optional<spot_actor_admission_callbacks_t> admission;
+        std::shared_ptr<void> actor_instance;
+        std::shared_ptr<void> spot_instance;
+        serializer_registry_t *serializers = nullptr;
+        std::string mesh_name;
+        std::string node_rid;
+        spot_id_t source_spot_id;
+        std::chrono::milliseconds message_follow_duration{0};
+        bool has_root_services = false;
+    };
+
+    actor_join_state_snapshot_t actor_join_state_snapshot (
+      const actor_ref_t &actor_ref,
+      spot_id_t spot_id,
+      const zlink::message_t &request);
     result_t<spot_actor_admission_callbacks_t>
     actor_admission (spot_context_t &context,
                      std::type_index actor_type,

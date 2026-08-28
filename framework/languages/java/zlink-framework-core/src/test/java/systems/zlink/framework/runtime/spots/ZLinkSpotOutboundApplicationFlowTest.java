@@ -29,8 +29,9 @@ import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 /**
  * R1 value-passing contract for spot publish/direct-outbound APPLICATION
  * flow: the flow state is captured as a value and consumed only at encode
- * time, while the stage a publish turn returns stays the bare admission
- * future (no scope wrapper, no extra completion hop).
+ * time. Outside a serial turn the publish stage stays the bare public
+ * admission stage; pending completion inside a turn may add only the serial
+ * continuation wrapper.
  */
 final class ZLinkSpotOutboundApplicationFlowTest {
     @Test
@@ -116,8 +117,8 @@ final class ZLinkSpotOutboundApplicationFlowTest {
             assertNotNull(flow);
             assertEquals(ZLinkFlowOrigin.APPLICATION, flow.origin());
 
-            //  …while the public stage stays decoupled from the bare
-            //  admission future: no wrapper chain was added to it.
+            //  …while an outside-turn public stage stays decoupled from the
+            //  binding admission future.
             assertNotSame(admission, publicStage);
             assertTrue(publicStage.complete(null));
             assertFalse(admission.isDone());

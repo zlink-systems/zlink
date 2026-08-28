@@ -1690,7 +1690,9 @@ class spot_handler_registry_t
                      const zlink::message_t &, const spot_inbound_message_t &)> before_invoke = {},
                    actor_queue_dispatch_t actor_queue_dispatch = actor_queue_dispatch_t::acquire,
                    std::function<void ()> before_application_handler = {},
-                   std::function<void ()> after_application_admission = {}) const;
+                   std::function<void ()> after_application_admission = {},
+                   std::function<void ()> transfer_owner_reservation = {},
+                   std::size_t transferred_owner_byte_cost = 0) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);

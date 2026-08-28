@@ -3,7 +3,7 @@ import type {
   ZLinkBackendActorRef,
   ZLinkBackendSpot
 } from '../backend/contracts';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
 
 interface ZLinkSpotActorLifecycleTarget {
@@ -14,7 +14,7 @@ interface ZLinkSpotActorLifecycleTarget {
 
 interface ZLinkSpotActorLifecycleDrainOptions {
   readonly nativeSpot: ZLinkBackendSpot;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly getTarget: () => ZLinkSpotActorLifecycleTarget;
   readonly commitActorDeparture?: (actorId: string) => void;

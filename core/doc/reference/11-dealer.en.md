@@ -1,4 +1,3 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/reference/11-dealer/) | English
 
 [Reference index](README.en.md)
 
@@ -42,6 +41,36 @@ produce the same order as long as identifiers are distinct. A candidate that can
 right now (backpressure) is skipped for that message without losing its running value, and
 rejoins once it reports capacity again; a message rejected for exceeding a size limit is not
 retried against another candidate.
+
+---
+
+## `zlink_dealer_send_transport_pair_part`
+
+Submits one raw part only through the exact target pipe from a prior selection — no reselection to
+a different connected peer.
+
+```c
+zlink_routed_submit_target_t target;
+zlink_select_routed_submit_target(dealer, NULL, &target);
+zlink_dealer_send_transport_pair_part(dealer, &target, &part, ZLINK_SEND_FLAGS_NONE,
+                                       ZLINK_PART_FINAL);
+```
+
+**Parameters.** `target_` is a `zlink_routed_submit_target_t` obtained from
+`zlink_select_routed_submit_target` (ROUTER category, shared by DEALER: pass `NULL` for
+`router_rid_or_null_` to commit one weighted selection) on the same DEALER. Core validates once
+that the routing ID, transport pair ID, and generation still identify the same connected
+application pipe and submits only to that pipe.
+
+**Return and errno.** Returns `zlink_submit_result_t` — `ZLINK_SUBMIT_OK` on success.
+`ZLINK_SUBMIT_BACKPRESSURED` when the target pipe is at HWM; `ZLINK_SUBMIT_NOT_CONNECTED` after
+detach or for a stale generation. Neither case reselects another pipe. Once the first part
+succeeds, the exact-pipe fence remains through `ZLINK_PART_FINAL`; an intermediate or final part
+failure rolls back the entire staged record, so no partial record becomes visible to the peer.
+
+**When to use.** Use this instead of `zlink_send_part` (PAIR category) when the application has
+already snapshotted one exact weighted-selection outcome (for example to keep a related sequence
+of sends on the same peer) and must not let a later call reselect a different connected peer.
 
 ---
 
@@ -108,6 +137,32 @@ copies.
 
 ---
 
+## `zlink_dealer_request_transport_pair_part`
+
+Submits an asynchronous request only through the exact target pipe from a prior selection.
+
+```c
+zlink_dealer_request_transport_pair_part(dealer, &target, &part, ZLINK_SEND_FLAGS_NONE,
+                                          ZLINK_PART_FINAL, /*timeout_ms=*/3000, on_reply,
+                                          userdata);
+```
+
+**Parameters.** `target_` is obtained the same way as for `zlink_dealer_send_transport_pair_part`
+(this category); the remaining parameters follow `zlink_dealer_request_part`'s
+intermediate/final-part convention.
+
+**Return and errno.** Returns `zlink_submit_result_t`, with the same target validation, no
+reselection, multipart fence, and rollback rules as `zlink_dealer_send_transport_pair_part`. Core
+registers the pending correlation and timeout lifecycle before the request envelope can become
+visible on the wire; a failed final submit removes the pending entry and completion reservation
+without invoking `handler_`.
+
+**When to use.** Use this instead of `zlink_dealer_request_part` when the tracked request must go
+through the exact pipe already selected via `zlink_select_routed_submit_target` (ROUTER category),
+rather than letting Core commit a fresh weighted selection for this call.
+
+---
+
 ## `zlink_dealer_reply_part`
 
 Sends a reply part for a request record this DEALER received.
@@ -127,7 +182,7 @@ termination, so a retained complete reply can be resubmitted from its first part
 
 **When to use.** Use this to answer a record classified as `ZLINK_DEALER_MESSAGE_REQUEST` by
 `zlink_dealer_recv_part`. `ZLINK_POLLIN` (Polling and pollers category) means a raw or
-request/reply record can be received; `ZLINK_POLLOUT`/`zlink_send_ready_handler` (Socket
+request/reply record can be received; `ZLINK_POLLOUT`/`zlink_send_complete_handler` (Socket
 lifecycle category) mean retrying a backpressured submit is worth attempting, not that it will
 succeed.
 

@@ -28,6 +28,8 @@ decided first. This topic covers that entire path — from submit to completion.
   copying of a message on its way from the socket to the handler.
 - [State Ownership And State Lanes](06-state-ownership-and-lanes.en.md) covers the mechanism
   by which a component guards its own mutable state.
+- [Serial Executor Layers](07-serial-executor-layers.en.md) covers which serial unit
+  each of Spot, Actor, and Session runs its work on, and who owns that unit's lifetime.
 
 What this topic does not define — the repeating callback a Spot registers is owned by
 [Spot Timer](../03-spot-actor/10-spot-timer.en.md), the Actor/Spot model itself and queue
@@ -90,6 +92,8 @@ owned by
 | How many times is a byte copied on its way from the socket to the handler | [Payload Ownership And Codec](05-payload-ownership-and-codec.en.md) |
 | When reply, timeout, cancellation, and shutdown arrive at the same time, which one wins | [Submit And Completion "9. Request Completion — The Completion Race And Timeout Budget"](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget) |
 | What are the limits (`MaxQueuedApplicationJobs`, pause/resume %, lane caps, dispatcher 4,096) | [§6](#6-numeric-summary-table) |
+| Which queue does a Spot's Actor and Timer work run on | [Serial Executor Layers "4. Spot Execution Mode And Queue Path"](07-serial-executor-layers.en.md#4-spot-execution-mode-and-queue-path) |
+| What stops one owner from holding a queue too long | [Serial Executor Layers "6.4 Fairness"](07-serial-executor-layers.en.md#64-fairness) |
 | Why does a component guard state with a state lane instead of a lock | [State Ownership And State Lanes "3. The Prohibited Shape"](06-state-ownership-and-lanes.en.md#3-the-prohibited-shape) |
 | What is the difference between a state lane and the Application lane | [State Ownership And State Lanes "2. Terminology — State Lane Versus Application/Lifecycle Lane"](06-state-ownership-and-lanes.en.md#2-terminology--state-lane-versus-applicationlifecycle-lane) |
 
@@ -102,6 +106,7 @@ owned by
 04-application-job-queue-and-backpressure.en.md  capacity before handler start
 05-payload-ownership-and-codec.en.md         ownership and copying of a message
 06-state-ownership-and-lanes.en.md           the mechanism that guards a component's state
+07-serial-executor-layers.en.md              which serial unit each layer runs its work on
 ```
 
 A developer reading this for the first time reads in this order — understanding what

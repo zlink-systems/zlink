@@ -12,7 +12,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 final class ZLinkStandaloneActorRelocationStagingOwnerTest {
     @Test
@@ -127,7 +127,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
             11,
             true,
             new byte[] {4, 5},
-            List.of(new ZLinkAsyncSerialQueue.QueuedRecord(5, accepted)));
+            List.of(new ZLinkSerialExecutionQueue.QueuedRecord(5, accepted)));
         var staged = owner.stage(request(relocationId, true), root)
             .toCompletableFuture().join();
         AtomicReference<ZLinkActorAcceptedJournal.Record> relayed =

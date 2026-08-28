@@ -51,8 +51,7 @@ import {
   type ZLinkActorCreateRequest
 } from './actor-creation';
 export {
-  ZLinkActorDispatchMailbox,
-  ZLinkActorDispatchMailboxSet
+  ZLinkActorSerialExecutor
 } from './actor-mailbox';
 export {
   DEFAULT_MESSAGE_FOLLOW_DURATION_MS,

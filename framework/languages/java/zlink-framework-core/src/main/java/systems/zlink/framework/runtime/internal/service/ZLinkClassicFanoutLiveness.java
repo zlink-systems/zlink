@@ -7,7 +7,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletionException;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
  * Tracks classic fanout receive activity and the publisher beacon schedule.
@@ -28,6 +31,8 @@ public final class ZLinkClassicFanoutLiveness {
 
     private final long beaconIntervalNanos;
     private final long publisherTimeoutNanos;
+    // Publisher records and the beacon deadline are one C2 state group.
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<RoutingId, PublisherState> publishers = new HashMap<>();
     private long nextBeaconNanos;
 
@@ -71,20 +76,73 @@ public final class ZLinkClassicFanoutLiveness {
         return Arrays.equals(RESERVED_TOPIC, topic);
     }
 
-    public synchronized void connect(
+    public void connect(
         RoutingId publisherRoutingId,
         String connectionId,
         long nowNanos) {
-        requireConnection(publisherRoutingId, connectionId);
-        publishers.put(
-            publisherRoutingId,
-            new PublisherState(
-                connectionId,
-                false,
-                addExact(nowNanos, publisherTimeoutNanos)));
+        inStateLane(() -> {
+            requireConnection(publisherRoutingId, connectionId);
+            publishers.put(
+                publisherRoutingId,
+                new PublisherState(
+                    connectionId,
+                    false,
+                    addExact(nowNanos, publisherTimeoutNanos)));
+            return null;
+        });
     }
 
-    public synchronized ReceiveKind receive(
+    public ReceiveKind receive(
+        RoutingId publisherRoutingId,
+        String connectionId,
+        List<byte[]> frames,
+        long nowNanos) {
+        return inStateLane(() -> receiveCore(
+            publisherRoutingId, connectionId, frames, nowNanos));
+    }
+
+    public boolean disconnect(
+        RoutingId publisherRoutingId,
+        String connectionId) {
+        return inStateLane(() -> disconnectCore(publisherRoutingId, connectionId));
+    }
+
+    public boolean isReady(RoutingId publisherRoutingId) {
+        return inStateLane(() -> {
+            PublisherState current = publishers.get(publisherRoutingId);
+            return current != null && current.ready;
+        });
+    }
+
+    public boolean beaconDue(long nowNanos) {
+        return inStateLane(() -> {
+            if (nowNanos < nextBeaconNanos) {
+                return false;
+            }
+            nextBeaconNanos = addExact(nowNanos, beaconIntervalNanos);
+            return true;
+        });
+    }
+
+    public List<RoutingId> expire(long nowNanos) {
+        return inStateLane(() -> {
+            List<RoutingId> expired = new ArrayList<>();
+            for (Map.Entry<RoutingId, PublisherState> entry
+                : publishers.entrySet()) {
+                if (nowNanos >= entry.getValue().deadlineNanos) {
+                    expired.add(entry.getKey());
+                }
+            }
+            expired.forEach(publishers::remove);
+            return List.copyOf(expired);
+        });
+    }
+
+    public int size() {
+        return inStateLane(publishers::size);
+    }
+
+    private ReceiveKind receiveCore(
         RoutingId publisherRoutingId,
         String connectionId,
         List<byte[]> frames,
@@ -115,7 +173,7 @@ public final class ZLinkClassicFanoutLiveness {
         return reserved ? ReceiveKind.BEACON : ReceiveKind.APPLICATION;
     }
 
-    public synchronized boolean disconnect(
+    private boolean disconnectCore(
         RoutingId publisherRoutingId,
         String connectionId) {
         PublisherState current = publishers.get(publisherRoutingId);
@@ -126,33 +184,19 @@ public final class ZLinkClassicFanoutLiveness {
         return true;
     }
 
-    public synchronized boolean isReady(RoutingId publisherRoutingId) {
-        PublisherState current = publishers.get(publisherRoutingId);
-        return current != null && current.ready;
-    }
-
-    public synchronized boolean beaconDue(long nowNanos) {
-        if (nowNanos < nextBeaconNanos) {
-            return false;
-        }
-        nextBeaconNanos = addExact(nowNanos, beaconIntervalNanos);
-        return true;
-    }
-
-    public synchronized List<RoutingId> expire(long nowNanos) {
-        List<RoutingId> expired = new ArrayList<>();
-        for (Map.Entry<RoutingId, PublisherState> entry
-            : publishers.entrySet()) {
-            if (nowNanos >= entry.getValue().deadlineNanos) {
-                expired.add(entry.getKey());
+    private <T> T inStateLane(Supplier<T> work) {
+        try {
+            return stateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
             }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
         }
-        expired.forEach(publishers::remove);
-        return List.copyOf(expired);
-    }
-
-    public synchronized int size() {
-        return publishers.size();
     }
 
     private static void requireConnection(

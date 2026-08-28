@@ -90,14 +90,19 @@ public sealed class SerialExecutionQueueBenchmarkTests(ITestOutputHelper output)
             firstReadmission.TotalMilliseconds,
             fullyDrained.TotalMilliseconds);
 
-        //  Capacity is owned by Application Job Queue admission
-        //  (ownership alignment, 8bae89dc0f); the serial execution queue
-        //  accepts every post until sealed, so a parked-turn burst reports
-        //  zero local rejections and the full burst as pending.
+        // The serial execution queue reserves both application axes while the
+        // handler is pending. The default count limit is reached before the
+        // larger benchmark burst is admitted.
         Assert.Equal(AdmissionAttempts, accepted + rejected);
-        Assert.Equal(0, rejected);
-        Assert.Equal(0, firstRejectionOrdinal);
-        Assert.Equal(accepted, peakPending);
+        Assert.Equal(
+            AdmissionAttempts - ZLinkExecutionLanePolicy.Default.ApplicationMessageCapacity,
+            rejected);
+        Assert.Equal(
+            ZLinkExecutionLanePolicy.Default.ApplicationMessageCapacity + 1,
+            firstRejectionOrdinal);
+        Assert.Equal(
+            ZLinkExecutionLanePolicy.Default.ApplicationMessageCapacity,
+            peakPending);
         Assert.True(firstReadmission >= TimeSpan.Zero);
         Assert.True(fullyDrained >= firstReadmission);
     }

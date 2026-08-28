@@ -13,7 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -68,7 +68,7 @@ final class ZLinkAcceptedJournalReplayerTest {
                 }
             });
 
-        replayer.replay("spot", new ZLinkAsyncSerialQueue.QueuedRecord(
+        replayer.replay("spot", new ZLinkSerialExecutionQueue.QueuedRecord(
             1, encoded)).toCompletableFuture().join();
 
         assertEquals(List.of("dispatch", "reply:17"), order);
@@ -127,13 +127,13 @@ final class ZLinkAcceptedJournalReplayerTest {
             });
 
         replayer.replay("actor:actor-a",
-            new ZLinkAsyncSerialQueue.QueuedRecord(1, encoded))
+            new ZLinkSerialExecutionQueue.QueuedRecord(1, encoded))
             .toCompletableFuture().join();
 
         assertThrows(
             CompletionException.class,
             () -> replayer.replay("actor:actor-b",
-                    new ZLinkAsyncSerialQueue.QueuedRecord(1, encoded))
+                    new ZLinkSerialExecutionQueue.QueuedRecord(1, encoded))
                 .toCompletableFuture().join());
     }
 }

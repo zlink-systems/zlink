@@ -56,7 +56,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkAutoConfiguration
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle
 import systems.zlink.framework.spots.ZLinkSpot
 import systems.zlink.framework.spots.ZLinkSpotContext
@@ -299,7 +299,7 @@ final class KotlinSuspendAnnotationHandlerTest {
                     it.name == "request"
                 }
                 val result = CompletableFuture<Any?>()
-                val queue = ZLinkAsyncSerialQueue()
+                val queue = ZLinkSerialExecutionQueue()
 
                 queue.enqueue {
                     ZLinkHandlerMethodInvoker

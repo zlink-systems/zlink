@@ -65,7 +65,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -386,7 +386,7 @@ final class RequestCall implements ZLinkRequestCall {
                     reply.close();
                 }
             });
-        return ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
     }
 
@@ -394,7 +394,7 @@ final class RequestCall implements ZLinkRequestCall {
     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("Channel request");
-        return ZLinkAsyncSerialQueue
+        return ZLinkSerialExecutionQueue
             .yieldCurrent(submit(replyType));
     }
 

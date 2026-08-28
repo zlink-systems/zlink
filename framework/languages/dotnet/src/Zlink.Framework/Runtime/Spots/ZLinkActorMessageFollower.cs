@@ -726,6 +726,9 @@ internal sealed class ZLinkActorMessageFollower
                 if (_retired) return false;
                 var encodedSize = frame.EncodedSize;
                 Interlocked.Add(ref _queuedBytes, encodedSize);
+                // Message Follow retains an already accepted owner record;
+                // moving it into this execution queue is accounting transfer,
+                // not a new capacity decision.
                 var admission = _queue.TryPostApplicationWithAdmission(
                     async cancellationToken =>
                     {
@@ -742,6 +745,9 @@ internal sealed class ZLinkActorMessageFollower
                             Interlocked.Add(ref _queuedBytes, -encodedSize);
                         }
                     },
+                    payloadBytes: encodedSize,
+                    metadataBytes: 0,
+                    transferred: true,
                     out _);
                 if (admission == ZLinkSerialPostAdmission.Accepted)
                 {

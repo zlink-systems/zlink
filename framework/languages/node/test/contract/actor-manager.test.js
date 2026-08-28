@@ -1195,9 +1195,13 @@ test('ZLinkActorManager validates factory returned actor id and context', async 
   }
 });
 
-test('ZLinkActorDispatchMailboxSet serializes same actor and allows different actors to proceed', async () => {
+test('ZLinkSpotSerialExecutor serializes same actor and allows different actors to proceed', async () => {
   const events = [];
-  const mailboxes = new framework.ZLinkActorDispatchMailboxSet('entry-test');
+  const mailboxes = new framework.ZLinkSpotSerialExecutor(
+    new framework.ZLinkSpotSerialTurnExecutor(false, 'entry-test'),
+    framework.ZLinkUserSpotExecutionMode.PerActor,
+    'entry-test'
+  );
   let releaseAlice;
   let aliceStarted;
   const aliceStartedPromise = new Promise((resolve) => {
@@ -1207,17 +1211,17 @@ test('ZLinkActorDispatchMailboxSet serializes same actor and allows different ac
     releaseAlice = resolve;
   });
 
-  const aliceFirst = mailboxes.submit('alice', async () => {
+  const aliceFirst = mailboxes.executeActor('alice', async () => {
     events.push('alice:first:start');
     aliceStarted();
     await releaseAlicePromise;
     events.push('alice:first:end');
   });
   await aliceStartedPromise;
-  const aliceSecond = mailboxes.submit('alice', async () => {
+  const aliceSecond = mailboxes.executeActor('alice', async () => {
     events.push('alice:second');
   });
-  const bobFirst = mailboxes.submit('bob', async () => {
+  const bobFirst = mailboxes.executeActor('bob', async () => {
     events.push('bob:first');
   });
 
@@ -1321,7 +1325,7 @@ test('SpotWide actor join defer yields the current Spot turn while waiting', asy
     }
   });
   const actor = await manager.getOrCreateActor('alice', 'player');
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
 
   const held = serial.execute(async () => {
     events.push('defer:start');
@@ -1360,7 +1364,7 @@ test('Entry Spot deferred join releases its serial turn for the leave boundary',
     }
   });
   const actor = await manager.getOrCreateActor('alice', 'player');
-  const entrySerial = new framework.ZLinkSpotSerialExecutor(false);
+  const entrySerial = new framework.ZLinkSpotSerialTurnExecutor(false);
 
   const deferred = entrySerial.execute(async () => {
     events.push('handler');
@@ -4900,7 +4904,7 @@ test('ZLinkSpotActorDispatcher serializes user spot actor handlers on provided s
       actorType: PlayerActor,
       handlerType: MoveSendHandler
     });
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const dispatcher = new framework.ZLinkSpotActorDispatcher({
     registry,
     spot: {},

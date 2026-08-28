@@ -371,7 +371,7 @@ test('spot actor leave rejoins the actor original remote Entry Spot', async () =
 test('spot actor leave completes inside the current owner turn without nested admission', async () => {
   const events = [];
   const localNodeRid = zlink.RoutingId.from('play-node-a');
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const actor = {
     actorId: 'player-1',
     context: {
@@ -2490,7 +2490,7 @@ test('routed actor transfer separates admission from materialization and commit'
     }
   };
   const admission = new ZLinkSpotRoutedActorAdmission({
-    serial: new framework.ZLinkSpotSerialExecutor(),
+    serial: new framework.ZLinkSpotSerialTurnExecutor(),
     resolveActor: () => undefined,
     getTarget: () => target,
     defaultAccept: false,
@@ -3673,7 +3673,7 @@ test('spot outbound one-way admission does not hold the serial executor during t
     }
   };
   const outbound = new framework.DefaultZLinkSpotOutbound({
-    serial: new framework.ZLinkSpotSerialExecutor(),
+    serial: new framework.ZLinkSpotSerialTurnExecutor(),
     routedTransport
   });
 
@@ -3724,7 +3724,7 @@ test('SpotId outbound keeps Missing Instance placement intent behind the public 
     }
   };
   const outbound = new framework.DefaultZLinkSpotOutbound({
-    serial: new framework.ZLinkSpotSerialExecutor(),
+    serial: new framework.ZLinkSpotSerialTurnExecutor(),
     meshName: 'source.mesh',
     addressTransport
   });

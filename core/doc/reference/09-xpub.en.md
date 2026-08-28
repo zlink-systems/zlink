@@ -1,4 +1,3 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/reference/09-xpub/) | English
 
 [Reference index](README.en.md)
 
@@ -46,5 +45,4 @@ them automatically.
 
 See the [XPUB specification](../spec/core/socket/04-xpub.en.md) for the full rationale. Publish
 and options use `zlink_publish_part`/`zlink_set_pub_option`/`zlink_get_pub_option` (PUB
-category); send-ready notification uses `zlink_send_ready_handler` (Socket lifecycle category) —
-none of those are repeated here.
+category) — neither is repeated here.

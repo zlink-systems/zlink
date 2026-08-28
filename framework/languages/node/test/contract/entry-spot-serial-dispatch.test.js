@@ -50,10 +50,14 @@ async function createEntryFixture(entrySpotType, packetHandlers = [], options = 
     registry,
     spot: activation.entrySpot
   });
-  const mailboxes = new framework.ZLinkActorDispatchMailboxSet(activation.spotId);
+  const mailboxes = new framework.ZLinkSpotSerialExecutor(
+    activation.serialExecutor,
+    framework.ZLinkUserSpotExecutionMode.PerActor,
+    activation.spotId
+  );
   const router = {
     submit(actorId, operation) {
-      return mailboxes.submit(actorId, () => {
+      return mailboxes.executeActor(actorId, () => {
         const state = manager.getState(actorId);
         if (state?.actor === undefined) throw new Error(`Actor '${actorId}' is not created.`);
         return operation({ actor: state.actor, spotId: state.spotId });
@@ -378,7 +382,7 @@ test('same-Spot Async rejects while Yield resumes on a new FIFO turn', async () 
       return { marker: 'unexpected-reply' };
     }
   };
-  const serial = new framework.ZLinkSpotSerialExecutor(true, 'same-spot');
+  const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'same-spot');
   const outbound = new framework.DefaultZLinkSpotOutbound({
     serial,
     meshName: 'test-mesh',
@@ -422,7 +426,7 @@ test('routed local self-send queues behind the current turn while self-request f
       return 'reply';
     }
   }
-  const serial = new framework.ZLinkSpotSerialExecutor(true, 'same-spot');
+  const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'same-spot');
   const spot = {};
   const dispatch = new ZLinkRoutedSpotPacketDispatch({
     resolveActivation: () => ({
@@ -493,7 +497,7 @@ test('routed local one-way carries its shared job permit through the owner seria
       finishHandler();
     }
   }
-  const serial = new framework.ZLinkSpotSerialExecutor(true, 'capacity-target', {
+  const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'capacity-target', {
     applicationMessageCapacity: 1
   });
   const dispatch = new ZLinkRoutedSpotPacketDispatch({
@@ -563,7 +567,7 @@ test('yield request from an entry turn is rejected because Entry forbids Yield',
   // 04-async-execution-policy.ko.md SS1.1: "PerActor와 Entry에서 Yield가
   // 금지되는 기존 규칙도 바뀌지 않는다." spot-entry-activation.ts
   // constructs its serial executor with yieldAllowed=false
-  // (`new ZLinkSpotSerialExecutor(undefined, 'entry', false)`, 787d173c40)
+  // (`new ZLinkSpotSerialTurnExecutor(undefined, 'entry', false)`, 787d173c40)
   // to enforce exactly this, so `.yield()` from an Entry Spot turn must
   // reject synchronously and never reach the outbound submit.
   const events = [];
@@ -624,7 +628,7 @@ test('yield from an injected outbound is still gated by the ambient entry turn',
   const fixture = await createEntryFixture(YieldEntrySpot);
   const ownerSerial = fixture.activation.serialExecutor;
   const injectedOutbound = new framework.DefaultZLinkSpotOutbound({
-    serial: new framework.ZLinkSpotSerialExecutor(),
+    serial: new framework.ZLinkSpotSerialTurnExecutor(),
     channelClient,
     meshName: 'test-mesh'
   });
@@ -705,7 +709,7 @@ test('runCpuWorker reuses an idle worker until the configured idle timeout', asy
     idleTimeoutMs: 100,
     maxQueueLength: 4
   });
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const firstThreadId = await cpuWorkerCall(
     worker,
     serial,
@@ -786,7 +790,7 @@ test('runIoWorker yield from an entry turn is rejected because Entry forbids Yie
 
 test('runIoWorker async also works when the call is created outside a Spot turn', async () => {
   const worker = new framework.ZLinkWorkerRuntime();
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const call = ioWorkerCall(worker, serial, async () => 'done');
 
   assert.equal(await call.submit(), 'done');
@@ -794,7 +798,7 @@ test('runIoWorker async also works when the call is created outside a Spot turn'
 
 test('runCpuWorker queue full fails fast with WorkerQueueFull and does not block the dispatcher', async () => {
   const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 1, maxQueueLength: 1 });
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const longCall = cpuWorkerCall(worker, serial, () => {
     const deadline = Date.now() + 100;
     while (Date.now() < deadline) { /* occupy the CPU worker */ }
@@ -834,7 +838,7 @@ test('runCpuWorker queue full fails fast with WorkerQueueFull and does not block
 
 test('runCpuWorker cancellation removes a queued job before it consumes a worker slot', async () => {
   const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 1, maxQueueLength: 2 });
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const longJob = cpuWorkerCall(worker, serial, () => {
     const deadline = Date.now() + 80;
     while (Date.now() < deadline) { /* occupy the CPU worker */ }
@@ -857,7 +861,7 @@ test('runCpuWorker cancellation removes a queued job before it consumes a worker
 
 test('runIoWorker timeout fails the caller and drops the late completion without user callbacks', async () => {
   const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 2, maxQueueLength: 16 });
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const events = [];
 
   let observedSignal;
@@ -889,7 +893,7 @@ test('runIoWorker timeout fails the caller and drops the late completion without
 
 test('runIoWorker work failure surfaces as WorkerFailed wrapping the cause', async () => {
   const worker = new framework.ZLinkWorkerRuntime();
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const cause = new Error('disk full');
   const call = ioWorkerCall(worker, serial, async () => {
     throw cause;
@@ -905,7 +909,7 @@ test('runIoWorker work failure surfaces as WorkerFailed wrapping the cause', asy
 
 test('runIoWorker call accepts only one terminator', async () => {
   const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 1, maxQueueLength: 16 });
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
 
   const asyncFirst = ioWorkerCall(worker, serial, async () => 'done');
   const pending = asyncFirst.submit();

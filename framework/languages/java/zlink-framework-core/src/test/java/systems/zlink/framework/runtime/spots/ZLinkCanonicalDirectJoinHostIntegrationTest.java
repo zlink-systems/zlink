@@ -32,7 +32,7 @@ import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
@@ -355,7 +355,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 0);
 
             CompletableFuture<Void> activeTurn = new CompletableFuture<>();
-            ZLinkAsyncSerialQueue sourceQueue =
+            ZLinkSerialExecutionQueue sourceQueue =
                 sourceSpots.actorSessions().actorRelocationLane(ACTOR_ID);
             CompletionStage<Void> blocker = sourceQueue.enqueueLifecycleBarrier(
                 () -> activeTurn);
@@ -526,7 +526,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 ZLinkCanonicalActorRelocationEnvelope.decode(
                     link.targetRequest.get().relocationPayload(), relocationId,
                     ACTOR_ID, true).journal().stream()
-                    .map(ZLinkAsyncSerialQueue.QueuedRecord::sequence)
+                    .map(ZLinkSerialExecutionQueue.QueuedRecord::sequence)
                     .toList(),
                 "envelope decode must return the unshifted journal sequence");
             var recovery = ZLinkActorJoinRecoveryCodec.decodeFromEnvelope(

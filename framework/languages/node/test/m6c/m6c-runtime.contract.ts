@@ -49,7 +49,7 @@ import {
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
-import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import {
   decodeMaintenanceReplyRelay,
   decodeMaintenanceReplyRelayAck,
@@ -112,7 +112,7 @@ test('stateful service wire separates opaque routing IDs from canonical UTF-8 te
 
 test('ApplicationSignaled relocation consumes one deferred boundary and reports exact completion', async () => {
   const completions: ZLinkSpotRelocationReadyOutcome[] = [];
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialTurnExecutor(true);
   const activation = new ZLinkSpotActivation({
     meshName: 'mesh-a',
     spotId: 'spot-a',
@@ -185,7 +185,7 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
     },
     spotType: class {} as never,
     spot: {} as never,
-    serial: new ZLinkSpotSerialExecutor(true),
+    serial: new ZLinkSpotSerialTurnExecutor(true),
     timers: {} as never,
     actorHandlers: {} as never,
     handlers: {} as never
@@ -198,7 +198,7 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
 
 test('ApplicationSignaled defer without active relocation completes before the next application turn', async () => {
   const events: string[] = [];
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialTurnExecutor(true);
   const activation = new ZLinkSpotActivation({
     meshName: 'mesh-a',
     spotId: 'spot-ready-without-relocation',

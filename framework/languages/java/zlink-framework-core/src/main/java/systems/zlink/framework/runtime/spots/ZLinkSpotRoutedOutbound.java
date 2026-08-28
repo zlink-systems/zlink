@@ -2,7 +2,7 @@ package systems.zlink.framework.runtime.spots;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -607,7 +607,7 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
         }
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.rejectSameSpotWait(spotId);
-        return ZLinkAsyncSerialQueue.manageCurrent(
+        return ZLinkSerialExecutionQueue.manageCurrent(
             outbound.submitRequest(
             routerChannelId,
             targetNodeRid,
@@ -625,7 +625,7 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("Spot request");
-        return ZLinkAsyncSerialQueue
+        return ZLinkSerialExecutionQueue
             .yieldCurrent(submit(replyType));
     }
 

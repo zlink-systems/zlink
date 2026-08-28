@@ -91,27 +91,35 @@ int main ()
     const auto include_root = root / "framework/include";
     const auto e2e_root = root / "e2e";
     const auto cmake = read_file (root / "CMakeLists.txt");
-    const auto redis_hpp = read_file (
-      root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
+    const auto redis_hpp =
+      read_file (root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
     const auto spot_runtime = read_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
-    const auto spot_route_packets = read_file (
-      root / "framework/src/runtime/spots/spot_route_packets.cpp");
-    const auto spot_route_packets_hpp = read_file (
-      root / "framework/src/runtime/spots/spot_route_packets.hpp");
-    const auto spot_route_dispatcher = read_file (
-      root / "framework/src/runtime/spots/spot_route_internal_dispatcher.cpp");
+    const auto spot_runtime_header =
+      read_file (root / "framework/src/runtime/spots/spot_runtime.hpp");
+    const auto spot_runtime_surface = spot_runtime + spot_runtime_header;
+    const auto actor_serial_executor =
+      read_file (root / "framework/src/runtime/actors/actor_serial_executor.hpp");
+    const auto spot_route_packets =
+      read_file (root / "framework/src/runtime/spots/spot_route_packets.cpp");
+    const auto spot_route_packets_hpp =
+      read_file (root / "framework/src/runtime/spots/spot_route_packets.hpp");
+    const auto spot_route_dispatcher =
+      read_file (root / "framework/src/runtime/spots/spot_route_internal_dispatcher.cpp");
     const auto stream_host =
       read_file (root / "framework/src/runtime/streams/stream_host_service.cpp");
-    const auto call_hpp =
-      read_file (include_root / "zlink/framework/contracts/channels/call.hpp");
-    const auto mesh_node_hpp = read_file (
-      include_root / "zlink/framework/contracts/configuration/mesh_node.hpp");
+    const auto call_hpp = read_file (include_root / "zlink/framework/contracts/channels/call.hpp");
+    const auto mesh_node_hpp =
+      read_file (include_root / "zlink/framework/contracts/configuration/mesh_node.hpp");
     const auto stream_runtime =
       read_file (root / "framework/src/runtime/streams/stream_runtime.cpp");
-    const auto serial_execution_queue = read_file (
-      root / "framework/src/runtime/execution/serial_execution_queue.hpp");
-    const auto call_id = read_file (
-      root / "framework/src/runtime/operations/call_id.hpp");
+    const auto stream_runtime_header =
+      read_file (root / "framework/src/runtime/streams/stream_runtime.hpp");
+    const auto stream_runtime_surface = stream_runtime + stream_runtime_header;
+    const auto session_serial_executor =
+      read_file (root / "framework/src/runtime/streams/session_serial_executor.hpp");
+    const auto serial_execution_queue =
+      read_file (root / "framework/src/runtime/execution/serial_execution_queue.hpp");
+    const auto call_id = read_file (root / "framework/src/runtime/operations/call_id.hpp");
     const auto call_facade_runtime =
       read_file (root / "framework/src/runtime/messaging/call_facade_runtime.cpp");
     const auto logical_multicast_runtime =
@@ -2070,53 +2078,51 @@ int main ()
     /* CPP-DISP-006 — close and idle-eviction admission remain locked until
      * the per-Spot serial queue has accepted or rejected the work item. */
     gate.require (
-      spot_runtime.find (
-        "auto queue = callback_lane.run ([this] {")
-          != std::string::npos
-        && spot_runtime.find (
-             "if (callback_admission_closed || idle_eviction_in_progress)")
+      spot_runtime.find ("auto queue = callback_lane.run ([this] {") != std::string::npos
+        && spot_runtime.find ("if (callback_admission_closed || idle_eviction_in_progress)")
              != std::string::npos
-        && spot_runtime.find (
-             "return queue->try_post_async")
-             != std::string::npos,
-      "CPP-DISP-006",
-      "Spot admission and serial enqueue use separate lock spans");
+        && spot_runtime.find ("return queue->try_post_async") != std::string::npos,
+      "CPP-DISP-006", "Spot admission and serial enqueue use separate lock spans");
 
     /* CPP-EXEC-001 — actor queue lookup is a lifecycle-boundary update, not
      * a node-mutex acquisition on every inbound Actor packet. The immutable
      * snapshot keeps queue lifetime shared while creation and removal remain
      * serialized by the node owner. */
     gate.require (
-      spot_runtime.find ("actor_execution_queue_snapshot") != std::string::npos
-        && spot_runtime.find ("std::atomic_load_explicit") != std::string::npos
-        && spot_runtime.find ("publish_actor_execution_queue_snapshot_unlocked")
-             != std::string::npos,
+      spot_runtime_surface.find ("actor_executor_snapshot") != std::string::npos
+        && spot_runtime_surface.find ("std::atomic_load_explicit") != std::string::npos
+        && spot_runtime_surface.find ("spot_serial_executor_t") != std::string::npos
+        && actor_serial_executor.find ("class actor_serial_executor_t") != std::string::npos
+        && spot_runtime_surface.find ("executor->execute_actor (") != std::string::npos,
       "CPP-EXEC-001",
       "Actor delivery still resolves its serial queue through the node map on every packet");
 
     /* CPP-COMP-001 — moving retry state crosses the error envelope as a typed
      * internal origin; exception wording never selects retry or error kind. */
     gate.require (
-      failure_origin_wire.find ("actor_transfer_in_progress")
-          != std::string::npos
-        && channel_reply_writer.find (
-             "runtime::messaging::write_failure_origin (header, error)")
+      failure_origin_wire.find ("actor_transfer_in_progress") != std::string::npos
+        && channel_reply_writer.find ("runtime::messaging::write_failure_origin (header, error)")
              != std::string::npos
-        && actor_client_runtime.find (
-             "runtime::messaging::restore_failure_origin")
+        && actor_client_runtime.find ("runtime::messaging::restore_failure_origin")
              != std::string::npos
-        && actor_client_runtime.find (
-             ".find (\"transfer is in progress\")")
-             == std::string::npos
-        && actor_client_runtime.find ("message.find (")
-             == std::string::npos,
+        && actor_client_runtime.find (".find (\"transfer is in progress\")") == std::string::npos
+        && actor_client_runtime.find ("message.find (") == std::string::npos,
       "CPP-COMP-001",
       "Actor retry or native failure classification still depends on exception text");
 
     /* CPP-LAYER-003 — Actor handler and deferred join completion ordering are
-     * owned by one serial queue, without a second handler-wide mailbox lock. */
+     * owned by the coordinator's Actor entrypoints, without a second
+     * handler-wide mailbox lock. */
     gate.require (
-      spot_runtime.find ("actor_execution_queues") != std::string::npos
+      spot_runtime.find ("executor->execute_actor (") != std::string::npos
+        && spot_runtime.find ("execute_actor_cancellable") != std::string::npos
+        && spot_runtime_surface.find ("class spot_serial_executor_t") != std::string::npos
+        && actor_serial_executor.find ("class actor_serial_executor_t")
+             != std::string::npos
+        && actor_serial_executor.find ("execute_actor (") != std::string::npos
+        && actor_serial_executor.find ("execute_lifecycle (") != std::string::npos
+        && actor_serial_executor.find ("state_lane_t _state_lane") != std::string::npos
+        && actor_serial_executor.find ("std::map<") == std::string::npos
         && spot_runtime.find ("actor_mailboxes") == std::string::npos
         && spot_runtime.find ("actor_mailbox_lock") == std::string::npos,
       "CPP-LAYER-003",
@@ -2515,26 +2521,30 @@ int main ()
                       "CPP-SESS-003",
                       "serial execution lane policy is missing: " + required);
     }
-    gate.require (serial_execution_queue.find ("bool allow_yield")
-                    == std::string::npos
-                    && serial_execution_queue.find ("_allow_yield")
-                         == std::string::npos,
-                  "CPP-SESS-003",
-                  "serial execution still accepts a raw yield-policy boolean");
+    gate.require (serial_execution_queue.find ("bool allow_yield") == std::string::npos
+                    && serial_execution_queue.find ("_allow_yield") == std::string::npos,
+                  "CPP-SESS-003", "serial execution still accepts a raw yield-policy boolean");
+    for (const std::string required :
+         {"serial_lane_policy_t::entry_spot ()", "serial_lane_policy_t::spot_wide ()",
+          "serial_lane_policy_t::per_actor_spot ()", "serial_lane_policy_t::actor_delivery ()"}) {
+        gate.require (spot_runtime_surface.find (required) != std::string::npos, "CPP-SESS-003",
+                      "Spot or Actor-delivery queue omits its typed policy: " + required);
+    }
+    gate.require (session_serial_executor.find ("serial_lane_policy_t::session ()")
+                    != std::string::npos,
+                  "CPP-SESS-003", "STREAM session queue omits its typed policy");
     for (const std::string required : {
-           "serial_lane_policy_t::entry_spot ()",
-           "serial_lane_policy_t::spot_wide ()",
-           "serial_lane_policy_t::per_actor_spot ()",
-           "serial_lane_policy_t::actor_delivery ()"}) {
-        gate.require (spot_runtime.find (required) != std::string::npos,
+           "execute_application (", "execute_control (", "execute_infrastructure (",
+           "execute_final ("}) {
+        gate.require (session_serial_executor.find (required) != std::string::npos,
                       "CPP-SESS-003",
-                      "Spot or Actor-delivery queue omits its typed policy: "
-                        + required);
+                      "STREAM session executor omits entrypoint: " + required);
     }
     gate.require (
-      stream_runtime.find ("serial_lane_policy_t::session ()")
-        != std::string::npos,
-      "CPP-SESS-003", "STREAM session queue omits its typed policy");
+      stream_runtime_surface.find ("dispatch_queue") == std::string::npos
+        && stream_runtime_surface.find ("session_serial_executor") != std::string::npos,
+      "CPP-SESS-003",
+      "STREAM runtime still owns the serial queue instead of the session executor");
 
     /* TH-CP-01 — the C++ connector helper surface has a language contract. */
     const auto connector_contract_path =

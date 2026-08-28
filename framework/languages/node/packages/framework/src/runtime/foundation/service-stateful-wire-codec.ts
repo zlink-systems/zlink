@@ -1793,7 +1793,7 @@ export function decodeMaintenanceRelocationControl(
     case M6bServiceWireCommand.relocationState:
       return fromGeneratedRelocationState(decodeGeneratedRelocationState52(frame));
     default:
-      fail(`Unsupported maintenance relocation command '${frame[3] ?? -1}'.`);
+      fail(`Unsupported maintenance relocation command '${frame.length > 3 ? frame[3] : -1}'.`);
   }
 }
 

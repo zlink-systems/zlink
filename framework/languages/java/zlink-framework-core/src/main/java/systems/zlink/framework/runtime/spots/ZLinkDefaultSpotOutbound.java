@@ -5,7 +5,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
 
@@ -561,7 +561,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                 }
                 return activateRequest(replyType);
             }).thenCompose(Function.identity());
-            return ZLinkAsyncSerialQueue.manageCurrent(
+            return ZLinkSerialExecutionQueue.manageCurrent(
                 stage.whenComplete((ignored, failure) -> payload.close()));
         }
 
@@ -641,7 +641,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.requireYieldAllowed("Spot request");
-            return ZLinkAsyncSerialQueue
+            return ZLinkSerialExecutionQueue
                 .yieldCurrent(submit(replyType));
         }
     }

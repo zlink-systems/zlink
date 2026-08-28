@@ -7,7 +7,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -39,7 +39,7 @@ public interface ZLinkActorJoinRelocationPort {
         //  actor queue's active turn: source preparation must seal that
         //  exact active turn instead of reserving a new lifecycle boundary
         //  that would queue behind the barrier itself and never activate.
-        ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal,
+        ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurnSeal,
         //  The target's advertised relocation state chunk receive limit
         //  from the Join Accepted reply (spec 15 §4.2); 0 means not
         //  advertised (a mixed-version peer, or a legacy admission reply).
@@ -59,7 +59,7 @@ public interface ZLinkActorJoinRelocationPort {
             long targetSpotAuthorityOwnerGeneration,
             long targetOwnerLeaseGeneration,
             byte[] rawReply,
-            ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal) {
+            ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurnSeal) {
             this(
                 relocationId,
                 operationId,
@@ -91,7 +91,7 @@ public interface ZLinkActorJoinRelocationPort {
             long targetSpotAuthorityOwnerGeneration,
             long targetOwnerLeaseGeneration,
             byte[] rawReply,
-            ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal,
+            ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurnSeal,
             long advertisedReceiveChunkLimitBytes) {
             this(
                 relocationId,

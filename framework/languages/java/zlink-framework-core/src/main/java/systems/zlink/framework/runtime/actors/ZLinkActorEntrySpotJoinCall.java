@@ -1,7 +1,7 @@
 package systems.zlink.framework.runtime.actors;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -198,7 +198,7 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private static <T> CompletionStage<T> manage(CompletionStage<T> stage) {
-        return ZLinkAsyncSerialQueue.manageCurrent(stage);
+        return ZLinkSerialExecutionQueue.manageCurrent(stage);
     }
 
     private void rejectSameGateWait() {

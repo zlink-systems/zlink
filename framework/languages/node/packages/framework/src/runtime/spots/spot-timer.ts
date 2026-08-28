@@ -18,7 +18,7 @@ import type {
 import { ZLinkTimerOverrunPolicy } from '../../contracts';
 import { validateTimerRegistration } from '../../contracts/Configuration/TimerRegistrationValidator';
 import { throwIfAborted } from '../abort';
-import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkExecutionBarrier } from '../execution';
@@ -70,9 +70,14 @@ export class ZLinkSpotTimerRegistry {
     private readonly flowCreationEnabled: () => boolean = () => true,
     private readonly executionSerialForTimer?: (
       name: string,
-      fallback: ZLinkSpotSerialExecutor
-    ) => ZLinkSpotSerialExecutor,
-    private readonly executionAllowed: () => boolean = () => true
+      fallback: ZLinkSpotSerialTurnExecutor
+    ) => ZLinkSpotSerialTurnExecutor,
+    private readonly executionAllowed: () => boolean = () => true,
+    private readonly executeTimer?: <T>(
+      name: string,
+      operation: () => Promise<T> | T
+    ) => Promise<T>,
+    private readonly isTimerExecuting?: (name: string) => boolean
   ) {}
 
   setExecutionBarrier(barrier: ZLinkExecutionBarrier): void {
@@ -91,7 +96,7 @@ export class ZLinkSpotTimerRegistry {
     periodMs: number,
     options: ZLinkTimerOptions | undefined,
     handlerType: Type<THandler>,
-    serial: ZLinkSpotSerialExecutor,
+    serial: ZLinkSpotSerialTurnExecutor,
     spot: TSpot,
     providerResolver?: ZLinkProviderResolver,
     signal?: AbortSignal,
@@ -102,28 +107,34 @@ export class ZLinkSpotTimerRegistry {
     const handler = await resolveLifecycleHandler(spot, handlerType, providerResolver);
     const prepared = await this.lane.run(() => this.prepareAddCore(name));
     if (prepared.previous !== undefined) await prepared.previous.timer.cancel(signal);
-    const executionSerial =
-      this.executionSerialForTimer?.(name, serial) ?? serial;
-    if (this.executionBarrier !== undefined) {
-      executionSerial.setExecutionBarrier(this.executionBarrier);
-    }
+    const executionSerial = this.executeTimer === undefined
+      ? this.executionSerialForTimer?.(name, serial) ?? serial
+      : undefined;
+    if (this.executionBarrier !== undefined) executionSerial?.setExecutionBarrier(this.executionBarrier);
     const timer = startOutsideStateLane(() => new ZLinkManagedTimer(
       name,
       periodMs,
       normalizeTimerOptions(options),
       async (tick) => {
         const timerFlow = createInboundFlow(undefined, 'Timer', this.flowCreationEnabled());
-        await executionSerial.execute(() => {
+        const operation = () => {
           const current = this.timers.get(name);
           if (current === undefined || current.generation !== prepared.generation || current.timer !== timer) {
             return undefined;
           }
           if (!this.executionAllowed()) return undefined;
           return runWithFlow(timerFlow, () => handler.handle(spot, tick));
-        });
+        };
+        if (this.executeTimer !== undefined) {
+          await this.executeTimer(name, operation);
+        } else {
+          await executionSerial!.execute(operation);
+        }
       },
       reportFailure,
-      () => !executionSerial.isExecuting
+      () => this.executeTimer === undefined
+        ? !executionSerial!.isExecuting
+        : !this.isTimerExecuting?.(name)
     ));
     const registered = await this.lane.run(() => this.completeAddCore(
       name,
@@ -483,7 +494,7 @@ export async function addEntrySpotTimerRegistrations(
   timers: ZLinkSpotTimerRegistry,
   entrySpotType: Type<ZLinkEntrySpot>,
   entrySpot: ZLinkEntrySpot,
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   registrations: ZLinkEntrySpotTimerRegistrationSet,
   options: {
     readonly providerResolver?: ZLinkProviderResolver;
@@ -521,7 +532,7 @@ export async function addSpotTimerRegistrations(
   spotType: Type<ZLinkSpot>,
   spotId: SpotId,
   spot: ZLinkSpot,
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   registrations: ZLinkUserSpotTimerRegistrationSet,
   options: {
     readonly providerResolver?: ZLinkProviderResolver;

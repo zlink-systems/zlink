@@ -173,7 +173,7 @@ run_reg_02() {
     --tests systems.zlink.framework.runtime.messaging.ZLinkAdmissionRuntimeTest \
     --tests systems.zlink.framework.runtime.mesh.MeshNodeRegistrationSubmitTimeoutTest \
     --tests systems.zlink.framework.runtime.mesh.ZLinkMeshNodeRuntimeTest \
-    --tests systems.zlink.framework.execution.ZLinkAsyncSerialQueueTest \
+    --tests systems.zlink.framework.execution.ZLinkSerialExecutionQueueTest \
     --tests systems.zlink.framework.runtime.streams.ZLinkStreamSessionContextStateTest \
     --tests systems.zlink.framework.runtime.actors.ZLinkActorClientRuntimeTest \
     --tests systems.zlink.framework.runtime.channels.ZLinkChannelRuntimeTest.localNodeSendWaitsForTheExactCapacitySignalWithoutPublicRetry \

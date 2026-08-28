@@ -1,12 +1,10 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/reference/07-pub/) | English
 
 [Reference index](README.en.md)
 
 # 07. PUB
 
 A publish-only, topic-based fan-out raw socket type. PUB is send-only — no receive function
-applies. It shares `zlink_send_ready_handler` (Socket lifecycle category) with other socket
-types. The exact signatures are owned by the [PUB specification](../spec/core/socket/02-pub.en.md).
+applies. The exact signatures are owned by the [PUB specification](../spec/core/socket/02-pub.en.md).
 
 ---
 
@@ -70,5 +68,4 @@ subscribers, and a retry resubmits the whole record from its first part using re
 
 ---
 
-See the [PUB specification](../spec/core/socket/02-pub.en.md) for the full rationale. Send-ready
-notification uses `zlink_send_ready_handler` (Socket lifecycle category) — not repeated here.
+See the [PUB specification](../spec/core/socket/02-pub.en.md) for the full rationale.

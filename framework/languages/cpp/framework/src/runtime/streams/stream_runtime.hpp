@@ -17,7 +17,7 @@
 
 namespace zlink::framework::runtime
 {
-class serial_execution_queue_t;
+class session_serial_executor_t;
 }
 
 namespace zlink::framework::detail
@@ -49,7 +49,8 @@ class stream_state_t
     std::vector<zlink::message_t> written_payloads;
     mutable std::mutex state_mutex;
     mutable std::mutex dispatch_mutex;
-    std::shared_ptr<zlink::framework::runtime::serial_execution_queue_t> dispatch_queue;
+    std::shared_ptr<zlink::framework::runtime::session_serial_executor_t>
+      session_serial_executor;
     std::mutex transport_writer_mutex;
     std::function<task_t<void> (const stream_header_t &, const zlink::message_t &,
                                  std::optional<std::chrono::milliseconds>)>
@@ -142,25 +143,42 @@ class stream_runtime_t
     void drain_async_dispatch (stream_t &stream) const;
     void attach_transport_writer (
       stream_t &stream,
-      std::function<task_t<void> (const stream_header_t &, const zlink::message_t &,
-                                   std::optional<std::chrono::milliseconds>)> writer)
-      const;
+      std::function<task_t<void> (const stream_header_t &,
+                                  const zlink::message_t &,
+                                  std::optional<std::chrono::milliseconds>)> writer) const;
 
     std::vector<std::string> serial_log (const stream_t &stream) const;
     std::vector<stream_header_t> written_headers (const stream_t &stream) const;
     std::vector<zlink::message_t> written_payloads (const stream_t &stream) const;
 
   private:
-    result_t<void> dispatch_serial (stream_t &stream,
-                                    std::string operation,
-                                    std::function<task_t<void> ()> callback) const;
-    result_t<void> dispatch_serial_async (
-      stream_t &stream,
-      std::string operation,
-      std::function<task_t<void> ()> callback,
-      async_dispatch_completion_t completion,
-      async_dispatch_started_t started = {},
-      async_dispatch_cancel_t cancelled = {}) const;
+    result_t<void> dispatch_application (stream_t &stream,
+                                         std::string operation,
+                                         std::function<task_t<void> ()> callback) const;
+    result_t<void> dispatch_application_async (stream_t &stream,
+                                               std::string operation,
+                                               std::function<task_t<void> ()> callback,
+                                               async_dispatch_completion_t completion,
+                                               async_dispatch_started_t started = {},
+                                               async_dispatch_cancel_t cancelled = {}) const;
+    result_t<void> dispatch_control_async (stream_t &stream,
+                                           std::string operation,
+                                           std::function<task_t<void> ()> callback,
+                                           async_dispatch_completion_t completion) const;
+    result_t<void> dispatch_infrastructure (stream_t &stream,
+                                            std::string operation,
+                                            std::function<task_t<void> ()> callback) const;
+    result_t<void> dispatch_infrastructure_async (stream_t &stream,
+                                                  std::string operation,
+                                                  std::function<task_t<void> ()> callback,
+                                                  async_dispatch_completion_t completion) const;
+    result_t<void> dispatch_final (stream_t &stream,
+                                   std::string operation,
+                                   std::function<task_t<void> ()> callback) const;
+    result_t<void> dispatch_final_async (stream_t &stream,
+                                         std::string operation,
+                                         std::function<task_t<void> ()> callback,
+                                         async_dispatch_completion_t completion) const;
 
   public:
     const dispatch_options_t &dispatch_options_ref () const noexcept { return _state->dispatch; }

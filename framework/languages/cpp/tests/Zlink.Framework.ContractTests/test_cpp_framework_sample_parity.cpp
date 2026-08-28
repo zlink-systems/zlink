@@ -281,6 +281,30 @@ TEST (CppFrameworkSampleParity, BingoRoomClosesAfterItsLastActorLeaves)
       << "Bingo room must request spot closure after its last actor leaves";
 }
 
+TEST (CppFrameworkSampleParity, BingoFinalCleanupGuardsRelocationAfterClose)
+{
+    const auto handler =
+      read_file (cpp_language_root ()
+                 / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/"
+                   "bingo_room_draw_timer_handler.hpp");
+
+    const auto cleanup = handler.find ("co_await leave_finished_actors ()");
+    const auto occupancy_guard =
+      handler.find ("if (!actors.empty () || !observers.empty ())");
+    const auto relocation_defer =
+      handler.find ("_context->relocation_ready ().defer ()");
+    EXPECT_NE (cleanup, std::string::npos);
+    EXPECT_NE (occupancy_guard, std::string::npos);
+    EXPECT_NE (relocation_defer, std::string::npos);
+    EXPECT_LT (cleanup, occupancy_guard);
+    EXPECT_LT (occupancy_guard, relocation_defer);
+    EXPECT_EQ (
+      handler.find (
+        "co_await leave_finished_actors ();\n        _context->relocation_ready ().defer ();"),
+      std::string::npos)
+      << "Bingo final cleanup must not defer relocation unconditionally after close";
+}
+
 TEST (CppFrameworkSampleParity, DomainOwnsBingoJoinAndSupportChatTimeoutDecisions)
 {
     const auto root = cpp_language_root ();

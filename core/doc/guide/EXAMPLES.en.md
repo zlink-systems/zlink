@@ -1,4 +1,3 @@
-[한국어](EXAMPLES.en.md)
 
 [Guide index](README.en.md) · [Style conventions](STYLE.en.md)
 

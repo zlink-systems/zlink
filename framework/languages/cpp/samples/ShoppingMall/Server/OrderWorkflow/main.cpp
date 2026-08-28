@@ -8,10 +8,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 namespace zlink::samples::shoppingmall
@@ -324,7 +327,7 @@ class planned_relocation_handler_t
     {
     }
 
-    planned_relocation_res_t handle (const planned_relocation_req_t &request)
+    task_t<planned_relocation_res_t> handle (const planned_relocation_req_t &request)
     {
         const auto fixture_id = _store.update ([&] (nlohmann::json &state) {
             const auto active = state["testHooks"]["activeWorkflowSpots"].find (request.order_id);
@@ -343,16 +346,19 @@ class planned_relocation_handler_t
                              {"replayed", false}};
             return fixture;
         });
-        if (fixture_id.empty ()) return {};
-        const auto created = _spots.get_or_create (spot_id_t (fixture_id),
-                                                   "shoppingmall.planned.relocation.workflow")
-                               .submit ()
-                               .result ();
-        if (!created) {
-            throw framework_exception_t (created.error_kind (),
-                                         "planned relocation workflow fixture was not created");
+        if (fixture_id.empty ()) co_return planned_relocation_res_t{};
+        try {
+            const auto created =
+              co_await _spots.get_or_create (spot_id_t (fixture_id),
+                                             "shoppingmall.planned.relocation.workflow")
+                .submit ();
+            co_return planned_relocation_res_t{
+              true, created.spot.object_generation ()};
         }
-        return {true, created.value ().spot.object_generation ()};
+        catch (const framework_exception_t &error) {
+            throw framework_exception_t (
+              error.kind (), "planned relocation workflow fixture was not created");
+        }
     }
 
   private:
@@ -443,7 +449,37 @@ class planned_relocation_service_t final : public hosted_service_t
                             }
                         }
                     });
-                    (void) operation.result ().value ();
+                    struct completion_t
+                    {
+                        std::condition_variable ready;
+                        std::mutex mutex;
+                        std::exception_ptr error;
+                        bool completed = false;
+                    };
+                    auto completion = std::make_shared<completion_t> ();
+                    observe_task_completion (
+                      operation,
+                      [completion] (const result_t<relocation_result_t> &result) {
+                          std::exception_ptr error;
+                          try {
+                              (void) result.value ();
+                          }
+                          catch (...) {
+                              error = std::current_exception ();
+                          }
+                          {
+                              std::lock_guard lock (completion->mutex);
+                              completion->error = std::move (error);
+                              completion->completed = true;
+                          }
+                          completion->ready.notify_one ();
+                      });
+                    std::unique_lock lock (completion->mutex);
+                    completion->ready.wait (
+                      lock, [&completion] { return completion->completed; });
+                    if (completion->error) {
+                        std::rethrow_exception (completion->error);
+                    }
                     return;
                 }
             }
