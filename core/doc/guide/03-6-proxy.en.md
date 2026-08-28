@@ -5,11 +5,16 @@
 
 # Proxy Pattern
 
+> **What this chapter answers** — how to compose ROUTER, DEALER, PAIR, and the
+> PUB-family sockets into a proxy that relays messages. Each individual
+> socket's contract is owned by that socket's own spec.
+
 ## 1. Overview
 
 A proxy relays messages between two sockets.
 `zlink_proxy()` is a general-purpose utility that works with any socket
-combination. Users can also build custom proxies using public APIs.
+combination. Users can also build custom proxies by composing the public
+per-socket APIs.
 
 ## 2. zlink_proxy() — Built-in Proxy
 
@@ -20,10 +25,13 @@ zlink_config_result_t zlink_proxy (void *frontend, void *backend, void *capture)
 - Forwards messages from `frontend` to `backend` and vice versa
 - If `capture` is non-NULL, copies all passing messages to the capture socket
 - **Blocking function** — run in a dedicated thread
-- **No socket type restriction** — internally calls `socket_base_t` internal
-  recv/send methods, independent of public API `ZLINK_SUBMIT_NOT_SUPPORTED` / `ZLINK_RECV_NOT_SUPPORTED` restrictions
+- **No socket type restriction** — internally uses the same `socket_base_t`
+  recv/send paths as the raw socket APIs, so pairing sockets whose public
+  send or receive surface returns `ZLINK_SUBMIT_NOT_SUPPORTED` /
+  `ZLINK_RECV_NOT_SUPPORTED` (for example XSUB or XPUB) still works inside a
+  proxy
 
-### Supported Socket Combinations
+### Example Socket Combinations
 
 | frontend | backend | Use case |
 |----------|---------|----------|
@@ -68,15 +76,17 @@ zlink_proxy(xsub, xpub, capture);      /* blocking */
 ### 3.2 Manual Proxy
 
 When custom logic (logging, filtering, topic transformation) is needed,
-build a manual proxy using public APIs only.
+build a manual proxy using the public per-socket APIs: `zlink_subscribe_part()`
+/ `zlink_publish_part()` for data, `zlink_xpub_recv_part()` /
+`zlink_set_subscription()` for subscriptions.
 
 #### Data Flow
 
 | Step | Socket | API | Description |
 |------|--------|-----|-------------|
-| 1 | XSUB | `zlink_subscribe(xsub, ...)` | Receive data (topic + parts separated) |
+| 1 | XSUB | `zlink_subscribe_part(xsub, ...)` | Receive one payload part (topic returned separately) |
 | 2 | App | Custom logic | Filtering, transformation, logging |
-| 3 | XPUB | `zlink_publish(xpub, topic, parts, ...)` | Publish data |
+| 3 | XPUB | `zlink_publish_part(xpub, topic, ...)` | Publish that part |
 
 #### Subscription Propagation
 
@@ -95,28 +105,32 @@ zlink_bind(xsub, "tcp://*:5556");
 zlink_bind(xpub, "tcp://*:5557");
 
 while (running) {
-    /* Data relay: XSUB → app → XPUB */
-    zlink_routing_id_t rid;
-    zlink_msg_t *parts = NULL;
-    size_t count = 0;
+    /* Data relay: XSUB -> app -> XPUB, one part at a time */
     char topic[256];
-    size_t topic_len = sizeof(topic);
-    zlink_recv_result_t rc = zlink_subscribe(xsub, &rid, &parts, &count,
-                             topic, &topic_len, ZLINK_DONTWAIT);
+    size_t topic_len = 0;
+    zlink_msg_t part;
+    zlink_part_flag_t more;
+
+    zlink_msg_init(&part);
+    zlink_recv_result_t rc = zlink_subscribe_part(
+        xsub, NULL, topic, sizeof(topic), &topic_len, &part, &more,
+        ZLINK_RECV_FLAGS_DONTWAIT);
     if (rc == ZLINK_RECV_OK) {
         /* Insert custom logic here (filtering, logging, etc.) */
-        zlink_publish(xpub, topic, parts, count, 0);
+        /* `more` carries ZLINK_PART_MORE / ZLINK_PART_FINAL straight through,
+           so a multipart record on XSUB stays one record on XPUB. */
+        zlink_publish_part(xpub, topic, &part, ZLINK_SEND_FLAGS_NONE, more);
     }
 
-    /* Subscription propagation: XPUB → app → XSUB */
+    /* Subscription propagation: XPUB -> app -> XSUB */
     const zlink_routing_id_t *sub_rid = NULL;
-    int subscribed;
+    int subscribed = 0;
     char sub_topic[256];
     size_t sub_len = 0;
-    rc = zlink_xpub_recv_part(xpub, &sub_rid, &subscribed,
-                              sub_topic, sizeof(sub_topic), &sub_len,
-                              ZLINK_DONTWAIT);
-    if (rc == ZLINK_RECV_OK) {
+    zlink_recv_result_t sub_rc = zlink_xpub_recv_part(
+        xpub, &sub_rid, &subscribed, sub_topic, sizeof(sub_topic), &sub_len,
+        ZLINK_RECV_FLAGS_DONTWAIT);
+    if (sub_rc == ZLINK_RECV_OK) {
         /* Insert custom logic here (authorization, remapping, etc.) */
         if (subscribed)
             zlink_set_subscription(xsub, sub_topic);
@@ -131,15 +145,16 @@ while (running) {
 | Question | With SUB/PUB | With XSUB/XPUB |
 |----------|-------------|-----------------|
 | Data pass-through | SUB local filter on — must subscribe | XSUB local filter off — **passes all** |
-| Subscription events | PUB doesn't expose | XPUB exposes them via `zlink_xpub_recv()` |
+| Subscription events | PUB doesn't expose | XPUB exposes them via `zlink_xpub_recv_part()` |
 | Proxy suitability | Proxy must manage topics itself | **Relay only — ideal for proxy** |
 
-> **Key point:** `zlink_proxy()` internally calls `socket_base_t` internal
-> methods, not public APIs. Through the public API, `zlink_send()` on XSUB
-> returns `ZLINK_SUBMIT_NOT_SUPPORTED` and `zlink_recv()` on XPUB returns
-> `ZLINK_RECV_NOT_SUPPORTED`. Proxy operation is only possible via
-> `zlink_proxy()` or the manual approach above (using dedicated APIs like
-> `subscribe()`, `publish()`, etc.).
+> **Key point:** `zlink_proxy()` uses the same internal recv/send paths as the
+> raw socket APIs, not the public `zlink_send_part()`/`zlink_recv_part()`
+> surface. Through that public surface, `zlink_send_part()` on XSUB still
+> returns `ZLINK_SUBMIT_NOT_SUPPORTED` and `zlink_recv_part()` on XPUB still
+> returns `ZLINK_RECV_NOT_SUPPORTED`. Proxy operation is only possible via
+> `zlink_proxy()` or the manual approach above (using the dedicated
+> `zlink_subscribe_part()`, `zlink_publish_part()`, etc. APIs).
 
 ## 4. Request/Reply Proxy — ROUTER/DEALER
 
@@ -158,8 +173,10 @@ zlink_proxy(frontend, backend, NULL);  /* blocking */
 ```
 
 ROUTER/DEALER proxy has no subscription propagation, so `zlink_proxy()`
-alone is sufficient. For manual construction, use `zlink_router_recv()` →
-`zlink_send_rid()` combination.
+alone is sufficient. For manual construction of the ROUTER-facing side, use
+`zlink_router_recv_part()` → `zlink_send_part_rid()` (see the
+[ROUTER guide](03-4-router.en.md#2-basic-usage) for the full signature and a
+worked example).
 
 ## 5. Why Use a Proxy?
 
