@@ -595,9 +595,13 @@ class spot_serial_executor_t
                         bool current_turn = false,
                         std::function<void ()> rejected = {})
     {
-        if (current_turn && _spot_queue && uses_spot_execution_gate ())
-            return _spot_queue->try_post_async (std::move (name), std::move (work),
-                                                std::move (options));
+        if (current_turn && _spot_queue && uses_spot_execution_gate ()) {
+            auto spot_options = options;
+            spot_options.byte_cost = queue_t::fixed_work_byte_cost;
+            spot_options.transfer_owner_reservation = {};
+            return _spot_queue->try_post_async (
+              std::move (name), std::move (work), std::move (spot_options));
+        }
 
         auto executor = find_actor_executor_snapshot (actor_id);
         if (!executor)
@@ -619,10 +623,17 @@ class spot_serial_executor_t
                                     && _spot_queue->try_post_async (
                                       "spot-handler",
                                       [work = std::move (work), actor_complete] (auto spot_complete) mutable {
+                                          const auto spot_turn = detail::capture_current_serial_turn ();
+                                          auto actor_terminal = std::make_shared<std::atomic_bool> (false);
                                           work ([spot_complete = std::move (spot_complete),
-                                                 actor_complete] (std::function<void ()> finish) mutable {
-                                              spot_complete (
-                                                [finish = std::move (finish), actor_complete] () mutable {
+                                                 actor_complete, spot_turn,
+                                                 actor_terminal] (std::function<void ()> finish) mutable {
+                                              auto complete_actor =
+                                                [finish = std::move (finish), actor_complete,
+                                                 actor_terminal] () mutable {
+                                                    if (actor_terminal->exchange (
+                                                          true, std::memory_order_acq_rel))
+                                                        return;
                                                     std::exception_ptr error;
                                                     try {
                                                         if (finish)
@@ -635,7 +646,12 @@ class spot_serial_executor_t
                                                         if (error)
                                                             std::rethrow_exception (error);
                                                     });
-                                                });
+                                                };
+                                              if (spot_turn && spot_turn->released ()) {
+                                                  complete_actor ();
+                                                  return;
+                                              }
+                                              spot_complete (std::move (complete_actor));
                                           });
                                       },
                                       spot_options);
@@ -711,6 +727,13 @@ class spot_serial_executor_t
                         queue_t::async_work_t work,
                         runtime::serial_work_options_t options = {})
     {
+        if (uses_spot_execution_gate ()) {
+            options.byte_cost = queue_t::fixed_work_byte_cost;
+            options.transfer_owner_reservation = {};
+            return _spot_queue
+                   && _spot_queue->try_post_async (
+                     std::move (name), std::move (work), std::move (options));
+        }
         const auto queue = timer_queue (timer_name);
         return queue && queue->try_post_async (std::move (name), std::move (work),
                                                std::move (options));
