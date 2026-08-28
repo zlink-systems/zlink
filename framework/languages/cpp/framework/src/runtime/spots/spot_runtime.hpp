@@ -2,6 +2,7 @@
 #pragma once
 
 #include "actor_transfer_coordinator.hpp"
+#include "runtime/actors/actor_serial_executor.hpp"
 #include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/configuration/service_scope.hpp"
@@ -458,7 +459,9 @@ class spot_serial_executor_t
   public:
     using queue_t = runtime::serial_execution_queue_t;
     using queue_ptr_t = std::shared_ptr<queue_t>;
-    using actor_queue_map_t = std::map<std::string, queue_ptr_t>;
+    using actor_executor_t = runtime::actor_serial_executor_t;
+    using actor_executor_ptr_t = std::shared_ptr<actor_executor_t>;
+    using actor_executor_map_t = std::map<std::string, actor_executor_ptr_t>;
     struct actor_queue_submission_t
     {
         queue_ptr_t queue;
@@ -508,21 +511,21 @@ class spot_serial_executor_t
                  runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
     }
 
-    queue_ptr_t actor_queue (const std::string &actor_id)
+    actor_executor_ptr_t actor_executor (const std::string &actor_id)
     {
         if (!_state_lane || _state_lane->is_on_lane ())
-            return actor_queue_on_lane (actor_id);
+            return actor_executor_on_lane (actor_id);
         return _state_lane->run ([this, &actor_id] {
-            return actor_queue_on_lane (actor_id);
+            return actor_executor_on_lane (actor_id);
         }).get ();
     }
 
-    queue_ptr_t find_actor_queue (const std::string &actor_id) const
+    actor_executor_ptr_t find_actor_executor (const std::string &actor_id) const
     {
         if (!_state_lane || _state_lane->is_on_lane ())
-            return find_actor_queue_on_lane (actor_id);
+            return find_actor_executor_on_lane (actor_id);
         return _state_lane->run ([this, &actor_id] {
-            return find_actor_queue_on_lane (actor_id);
+            return find_actor_executor_on_lane (actor_id);
         }).get ();
     }
 
@@ -548,9 +551,9 @@ class spot_serial_executor_t
         }).get ();
     }
 
-    std::shared_ptr<const actor_queue_map_t> actor_queue_snapshot () const noexcept
+    std::shared_ptr<const actor_executor_map_t> actor_executor_snapshot () const noexcept
     {
-        return std::atomic_load_explicit (&_actor_queue_snapshot, std::memory_order_acquire);
+        return std::atomic_load_explicit (&_actor_executor_snapshot, std::memory_order_acquire);
     }
 
     queue_ptr_t timer_queue (const std::string &timer_name)
@@ -596,18 +599,18 @@ class spot_serial_executor_t
             return _spot_queue->try_post_async (std::move (name), std::move (work),
                                                 std::move (options));
 
-        auto queue = find_actor_queue_snapshot (actor_id);
-        if (!queue)
-            queue = actor_queue (actor_id);
-        if (!queue)
+        auto executor = find_actor_executor_snapshot (actor_id);
+        if (!executor)
+            executor = actor_executor (actor_id);
+        if (!executor)
             return false;
         if (!uses_spot_execution_gate ())
-            return queue->try_post_async (std::move (name), std::move (work),
-                                          std::move (options));
+            return executor->execute_actor (std::move (name), std::move (work),
+                                            std::move (options));
 
         auto spot_options = options;
         spot_options.byte_cost = queue_t::fixed_work_byte_cost;
-        return queue->try_post_async (
+        return executor->execute_actor (
           std::move (name),
           [this, work = std::move (work), spot_options,
            rejected = std::move (rejected)] (auto actor_complete) mutable {
@@ -646,19 +649,19 @@ class spot_serial_executor_t
 
     bool actor_queue_closed (const std::string &actor_id) const noexcept
     {
-        const auto queue = find_actor_queue_snapshot (actor_id);
-        return !queue || queue->closed ();
+        const auto executor = find_actor_executor_snapshot (actor_id);
+        return !executor || executor->closed ();
     }
 
     bool ensure_actor_queue (const std::string &actor_id)
     {
-        return static_cast<bool> (actor_queue (actor_id));
+        return static_cast<bool> (actor_executor (actor_id));
     }
 
     const void *actor_queue_identity (const std::string &actor_id) const noexcept
     {
-        const auto queue = find_actor_queue_snapshot (actor_id);
-        return queue.get ();
+        const auto executor = find_actor_executor_snapshot (actor_id);
+        return executor ? executor->queue_identity () : nullptr;
     }
 
     bool actor_queue_matches (const std::string &actor_id, const void *identity) const noexcept
@@ -669,12 +672,12 @@ class spot_serial_executor_t
     result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_actor_handoff_barrier (
       const std::string &actor_id, std::string name)
     {
-        const auto queue = actor_queue (actor_id);
-        if (!queue)
+        const auto executor = actor_executor (actor_id);
+        if (!executor)
             return result_t<std::shared_ptr<detail::deferred_barrier_t>>::failure (
               framework_error_kind_t::shutting_down,
               "Actor handoff queue is unavailable");
-        return queue->reserve_handoff_barrier (std::move (name));
+        return executor->execute_lifecycle (std::move (name));
     }
 
     result_t<actor_queue_submission_t> execute_actor_cancellable (
@@ -684,14 +687,14 @@ class spot_serial_executor_t
       std::function<void ()> cancel,
       runtime::serial_work_options_t options = {})
     {
-        auto queue = find_actor_queue_snapshot (actor_id);
-        if (!queue)
-            queue = actor_queue (actor_id);
-        if (!queue)
+        auto executor = find_actor_executor_snapshot (actor_id);
+        if (!executor)
+            executor = actor_executor (actor_id);
+        if (!executor)
             return result_t<actor_queue_submission_t>::failure (
               framework_error_kind_t::shutting_down,
               "Actor handoff queue is unavailable");
-        const auto submitted = queue->try_post_cancellable_async (
+        const auto submitted = executor->execute_actor (
           std::move (name), std::move (work), std::move (cancel), std::move (options));
         if (!submitted)
             return result_t<actor_queue_submission_t>::failure (
@@ -699,7 +702,7 @@ class spot_serial_executor_t
               submitted.error () != nullptr ? submitted.error ()->what ()
                                             : "Actor handoff queue is full");
         return result_t<actor_queue_submission_t>::success (
-          actor_queue_submission_t{std::move (queue), submitted.value ()});
+          actor_queue_submission_t{executor->queue (), submitted.value ()});
     }
 
     bool execute_timer (const std::string &timer_name,
@@ -731,47 +734,48 @@ class spot_serial_executor_t
             assert (_state_lane->is_on_lane ());
     }
 
-    queue_ptr_t actor_queue_on_lane (const std::string &actor_id)
+    actor_executor_ptr_t actor_executor_on_lane (const std::string &actor_id)
     {
         assert_on_lane ();
-        auto &queue = _actor_queues[actor_id];
-        if (!queue && _worker_executor) {
-            queue = std::make_shared<queue_t> (
-              *_worker_executor, runtime::serial_execution_queue_options_t{},
-              queue_t::error_handler_t{}, runtime::serial_lane_policy_t::actor_delivery ());
-            publish_actor_queue_snapshot ();
+        auto &executor = _actor_executors[actor_id];
+        if (!executor && _worker_executor) {
+            executor = std::make_shared<actor_executor_t> (_worker_executor);
+            publish_actor_executor_snapshot ();
         }
-        return queue;
+        return executor;
     }
 
-    queue_ptr_t find_actor_queue_snapshot (const std::string &actor_id) const noexcept
+    actor_executor_ptr_t
+    find_actor_executor_snapshot (const std::string &actor_id) const noexcept
     {
-        const auto snapshot = actor_queue_snapshot ();
+        const auto snapshot = actor_executor_snapshot ();
         if (!snapshot)
             return {};
         const auto found = snapshot->find (actor_id);
-        return found == snapshot->end () ? queue_ptr_t{} : found->second;
+        return found == snapshot->end () ? actor_executor_ptr_t{} : found->second;
     }
 
-    queue_ptr_t find_actor_queue_on_lane (const std::string &actor_id) const
+    actor_executor_ptr_t find_actor_executor_on_lane (const std::string &actor_id) const
     {
         assert_on_lane ();
-        const auto found = _actor_queues.find (actor_id);
-        return found == _actor_queues.end () ? queue_ptr_t{} : found->second;
+        const auto found = _actor_executors.find (actor_id);
+        return found == _actor_executors.end () ? actor_executor_ptr_t{} : found->second;
     }
 
     void erase_actor_queue_on_lane (const std::string &actor_id)
     {
         assert_on_lane ();
-        _actor_queues.erase (actor_id);
-        publish_actor_queue_snapshot ();
+        _actor_executors.erase (actor_id);
+        publish_actor_executor_snapshot ();
     }
 
     void replace_actor_queue_on_lane (std::string actor_id, queue_ptr_t queue)
     {
         assert_on_lane ();
-        _actor_queues.insert_or_assign (std::move (actor_id), std::move (queue));
-        publish_actor_queue_snapshot ();
+        _actor_executors.insert_or_assign (
+          std::move (actor_id),
+          std::make_shared<actor_executor_t> (_worker_executor, std::move (queue)));
+        publish_actor_executor_snapshot ();
     }
 
     queue_ptr_t timer_queue_on_lane (const std::string &timer_name)
@@ -811,25 +815,26 @@ class spot_serial_executor_t
     {
         assert_on_lane ();
         std::vector<queue_ptr_t> queues;
-        queues.reserve (1 + _actor_queues.size () + _timer_queues.size ());
+        queues.reserve (1 + _actor_executors.size () + _timer_queues.size ());
         if (_spot_queue)
             queues.push_back (_spot_queue);
-        for (const auto &[_, queue] : _actor_queues)
-            queues.push_back (queue);
+        for (const auto &[_, executor] : _actor_executors)
+            if (executor)
+                queues.push_back (executor->queue ());
         for (const auto &[_, queue] : _timer_queues)
             queues.push_back (queue);
-        _actor_queues.clear ();
+        _actor_executors.clear ();
         _timer_queues.clear ();
-        publish_actor_queue_snapshot ();
+        publish_actor_executor_snapshot ();
         return queues;
     }
 
   private:
-    void publish_actor_queue_snapshot ()
+    void publish_actor_executor_snapshot ()
     {
-        auto snapshot = std::make_shared<actor_queue_map_t> (_actor_queues);
-        std::shared_ptr<const actor_queue_map_t> published = std::move (snapshot);
-        std::atomic_store_explicit (&_actor_queue_snapshot, std::move (published),
+        auto snapshot = std::make_shared<actor_executor_map_t> (_actor_executors);
+        std::shared_ptr<const actor_executor_map_t> published = std::move (snapshot);
+        std::atomic_store_explicit (&_actor_executor_snapshot, std::move (published),
                                     std::memory_order_release);
     }
 
@@ -837,10 +842,10 @@ class spot_serial_executor_t
     runtime::state_lane_t *_state_lane = nullptr;
     runtime::serial_lane_policy_t _spot_policy;
     queue_ptr_t _spot_queue;
-    actor_queue_map_t _actor_queues;
+    actor_executor_map_t _actor_executors;
     std::map<std::string, queue_ptr_t> _timer_queues;
-    std::shared_ptr<const actor_queue_map_t> _actor_queue_snapshot =
-      std::make_shared<actor_queue_map_t> ();
+    std::shared_ptr<const actor_executor_map_t> _actor_executor_snapshot =
+      std::make_shared<actor_executor_map_t> ();
 };
 
 class spot_context_state_t : public std::enable_shared_from_this<spot_context_state_t>
