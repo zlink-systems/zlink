@@ -96,8 +96,12 @@ func runMultiServerRole(cfg multiConfig) {
 		runMultiDealerDealerServer(cfg)
 	case "MULTI_DEALER_ROUTER":
 		runMultiDealerRouterServer(cfg)
+	case "MULTI_DEALER_ROUTER_REQREP":
+		runMultiDealerRouterReqRepServer(cfg)
 	case "MULTI_ROUTER_ROUTER":
 		runMultiRouterRouterServer(cfg)
+	case "MULTI_ROUTER_ROUTER_REQREP":
+		runMultiRouterRouterReqRepServer(cfg)
 	case "MULTI_STREAM":
 		runMultiStreamServer(cfg)
 	default:
@@ -115,8 +119,14 @@ func runMultiClientRole(cfg multiConfig, endpoint string) {
 	case "MULTI_DEALER_ROUTER":
 		result := runMultiDealerRouterClient(cfg, endpoint)
 		printMultiResult(cfg, result)
+	case "MULTI_DEALER_ROUTER_REQREP":
+		result := runMultiDealerRouterReqRepClient(cfg, endpoint)
+		printMultiResult(cfg, result)
 	case "MULTI_ROUTER_ROUTER":
 		result := runMultiRouterRouterClientRole(cfg, endpoint)
+		printMultiResult(cfg, result)
+	case "MULTI_ROUTER_ROUTER_REQREP":
+		result := runMultiRouterRouterReqRepClient(cfg, endpoint)
 		printMultiResult(cfg, result)
 	// MULTI_STREAM has no Go client role: the shared C
 	// perf_stream_client binary is the reference client (spawned by
