@@ -237,10 +237,10 @@ public sealed class SharedAsyncDisposalTests
     public async Task StreamSessionSerialExecutor_Concurrent_Dispose_Callers_Share_Queued_Cleanup()
     {
         using var errors = new ZLinkRuntimeErrorSink();
-        var executor = new ZLinkStreamSessionSerialExecutor(new object(), errors);
+        var executor = new ZLinkSessionSerialExecutor(new object(), errors);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Assert.True(executor.EnqueueInfrastructure(async () =>
+        Assert.True(executor.ExecuteInfrastructure(async () =>
         {
             entered.TrySetResult();
             await release.Task.ConfigureAwait(false);

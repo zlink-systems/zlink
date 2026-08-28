@@ -19,7 +19,7 @@ internal sealed class ZLinkActorRuntimeState(
     private static readonly TimeSpan DefaultSessionBindingTombstoneRetention =
         TimeSpan.FromMinutes(2);
     private static readonly AsyncLocal<DispatchOwnership?> AmbientDispatch = new();
-    private readonly ZLinkActorDispatchMailbox _dispatchMailbox = new();
+    private readonly ZLinkActorSerialExecutor _dispatchMailbox = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -186,7 +186,7 @@ internal sealed class ZLinkActorRuntimeState(
         && ReferenceEquals(ownership.State, this);
 
     private async Task<T> CompleteHandlerActivationCoreAsync<T>(
-        ZLinkActorDispatchMailbox.BarrierReservation barrier,
+        ZLinkActorSerialExecutor.BarrierReservation barrier,
         Func<T> terminalTransition)
     {
         using var turn = await barrier.ClaimAsync().ConfigureAwait(false);
@@ -199,7 +199,7 @@ internal sealed class ZLinkActorRuntimeState(
     }
 
     private async Task<T> CompleteHandlerActivationAsyncCoreAsync<T>(
-        ZLinkActorDispatchMailbox.BarrierReservation barrier,
+        ZLinkActorSerialExecutor.BarrierReservation barrier,
         Func<ValueTask<T>> terminalTransition)
     {
         // The barrier is a drain fence for turns accepted before teardown.
@@ -216,7 +216,7 @@ internal sealed class ZLinkActorRuntimeState(
     internal async ValueTask InvalidateRuntimeGenerationAfterDispatchesAsync()
     {
         Task? terminalCompletion;
-        ZLinkActorDispatchMailbox.BarrierReservation? barrier = null;
+        ZLinkActorSerialExecutor.BarrierReservation? barrier = null;
         var terminal = RunState(() =>
         {
             CloseHandlerActivationCore();
@@ -279,7 +279,7 @@ internal sealed class ZLinkActorRuntimeState(
 
     public bool IsTeardownPending => _teardownPending;
 
-    public ZLinkActorDispatchMailbox.BarrierReservation?
+    public ZLinkActorSerialExecutor.BarrierReservation?
         ReserveDeferredJoinBarrier(out Task? targetCompletion)
     {
         targetCompletion = null;
@@ -304,7 +304,7 @@ internal sealed class ZLinkActorRuntimeState(
         }
     }
 
-    public ZLinkActorDispatchMailbox.BarrierReservation
+    public ZLinkActorSerialExecutor.BarrierReservation
         ReserveDeferredJoinBarrierAfterTarget()
     {
         try
@@ -319,7 +319,7 @@ internal sealed class ZLinkActorRuntimeState(
         }
     }
 
-    internal ZLinkActorDispatchMailbox.BarrierReservation
+    internal ZLinkActorSerialExecutor.BarrierReservation
         ReserveHandoffRestoreBarrier() => _dispatchMailbox.ReserveBarrier();
 
     public void EnsureDeferredJoinIdentity(IZLinkActor actor, ulong objectGeneration)

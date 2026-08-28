@@ -2,7 +2,7 @@ using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Streams;
 
-internal sealed class ZLinkStreamSessionSerialExecutor : IAsyncDisposable
+internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
 {
     private readonly ZLinkSerialExecutionQueue _queue;
     private readonly CancellationTokenSource _stopSource = new();
@@ -12,7 +12,7 @@ internal sealed class ZLinkStreamSessionSerialExecutor : IAsyncDisposable
     private bool _stopSourceDisposed;
     private bool _stopSourceFinalizing;
 
-    public ZLinkStreamSessionSerialExecutor(
+    public ZLinkSessionSerialExecutor(
         object executionOwner,
         IZLinkRuntimeFailureReporter errorSink)
     {
@@ -78,7 +78,7 @@ internal sealed class ZLinkStreamSessionSerialExecutor : IAsyncDisposable
         }));
     }
 
-    public bool EnqueueInfrastructure(Func<ValueTask> work)
+    public bool ExecuteInfrastructure(Func<ValueTask> work)
     {
         return _queue.TryPostNext(_ => work(), out _);
     }
@@ -86,19 +86,19 @@ internal sealed class ZLinkStreamSessionSerialExecutor : IAsyncDisposable
     public void CloseApplicationAdmission() =>
         _queue.CloseApplicationAdmission();
 
-    public ZLinkSerialPostAdmission EnqueueApplication(
+    public ZLinkSerialPostAdmission ExecuteApplication(
         Func<CancellationToken, ValueTask> work)
     {
         return _queue.TryPostApplicationWithAdmission(work, out _);
     }
 
-    public ZLinkSerialPostAdmission EnqueueControl(
+    public ZLinkSerialPostAdmission ExecuteControl(
         Func<CancellationToken, ValueTask> work)
     {
         return _queue.TryPostNextWithAdmission(work, out _);
     }
 
-    public bool EnqueueFinal(Func<ValueTask> work)
+    public bool ExecuteFinal(Func<ValueTask> work)
     {
         return _queue.TryPostFinal(_ => work(), out _);
     }

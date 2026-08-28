@@ -7,7 +7,7 @@ namespace Zlink.Framework.Runtime.Actors;
 // the lifecycle lane so it runs before already queued ordinary work, while a
 // terminal barrier closes admission and joins the application lane after all
 // work accepted before the close.
-internal sealed class ZLinkActorDispatchMailbox
+internal sealed class ZLinkActorSerialExecutor
 {
     private readonly ZLinkStateLane _lane = new();
     private readonly ZLinkSerialExecutionQueue _queue;
@@ -15,7 +15,7 @@ internal sealed class ZLinkActorDispatchMailbox
     private int _acceptedWaiters;
     private int _pendingRequests;
 
-    public ZLinkActorDispatchMailbox()
+    public ZLinkActorSerialExecutor()
     {
         var reporter = MailboxFailureReporter.Instance;
         _queue = new ZLinkSerialExecutionQueue(
@@ -245,7 +245,7 @@ internal sealed class ZLinkActorDispatchMailbox
 
     internal sealed class Waiter : IDisposable
     {
-        private readonly ZLinkActorDispatchMailbox _owner;
+        private readonly ZLinkActorSerialExecutor _owner;
         private readonly CancellationToken _cancellationToken;
         private readonly TaskCompletionSource<Turn> _ready =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -257,7 +257,7 @@ internal sealed class ZLinkActorDispatchMailbox
         private int _releasedOnce;
 
         internal Waiter(
-            ZLinkActorDispatchMailbox owner,
+            ZLinkActorSerialExecutor owner,
             CancellationToken cancellationToken,
             bool countsAsPendingRequest)
         {

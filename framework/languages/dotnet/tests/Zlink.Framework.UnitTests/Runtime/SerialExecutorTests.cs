@@ -421,11 +421,11 @@ public sealed class SerialExecutorTests
         errorSink.UnhandledCallbackException += exceptions.Enqueue;
         try
         {
-            await using var executor = new ZLinkStreamSessionSerialExecutor(new object(), errorSink);
+            await using var executor = new ZLinkSessionSerialExecutor(new object(), errorSink);
             var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            Assert.True(executor.EnqueueInfrastructure(() => throw new InvalidOperationException("stream failure")));
-            Assert.True(executor.EnqueueInfrastructure(() =>
+            Assert.True(executor.ExecuteInfrastructure(() => throw new InvalidOperationException("stream failure")));
+            Assert.True(executor.ExecuteInfrastructure(() =>
             {
                 completed.SetResult();
                 return ValueTask.CompletedTask;
@@ -444,7 +444,7 @@ public sealed class SerialExecutorTests
     public async Task StreamSessionSerialExecutor_PreservesQueuedMessagesUntilTerminal()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
-        await using var executor = new ZLinkStreamSessionSerialExecutor(
+        await using var executor = new ZLinkSessionSerialExecutor(
             new object(),
             errorSink);
         var started = new TaskCompletionSource(
@@ -454,7 +454,7 @@ public sealed class SerialExecutorTests
 
         Assert.Equal(
             ZLinkSerialPostAdmission.Accepted,
-            executor.EnqueueApplication(
+            executor.ExecuteApplication(
                 async _ =>
                 {
                     started.TrySetResult();
@@ -463,7 +463,7 @@ public sealed class SerialExecutorTests
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(
             ZLinkSerialPostAdmission.Accepted,
-            executor.EnqueueApplication(
+            executor.ExecuteApplication(
                 static _ => ValueTask.CompletedTask));
 
         release.TrySetResult();

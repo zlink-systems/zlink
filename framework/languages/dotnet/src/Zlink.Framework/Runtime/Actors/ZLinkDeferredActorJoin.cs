@@ -136,7 +136,7 @@ internal sealed class ZLinkDeferredActorJoin(
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private readonly IZLinkCurrentSpotActivation? _spotActivation =
         ZLinkSpotAmbientContext.CurrentOrDefault;
-    private ZLinkActorDispatchMailbox.BarrierReservation? _barrier;
+    private ZLinkActorSerialExecutor.BarrierReservation? _barrier;
     private Task? _targetCompletion;
 
     public void ReserveBarrier()
