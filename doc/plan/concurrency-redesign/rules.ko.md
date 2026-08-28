@@ -340,7 +340,7 @@ AST 방법을 따른다(단순 grep으로는 재현되지 않는다).
 
 ## 9. 캠페인 종료 후 안건 — 핵심 내부 아키텍처의 언어 간 통일 (2026-08-27 사용자 제기)
 
-> **이 안건은 별도 폴더로 분리됐다 → [`../concurrency-model-spec/`](../concurrency-model-spec/README.ko.md)**
+> **이 안건은 별도 폴더로 분리됐다 → [`../concurrency-model-spec/implementation-plan.ko.md`](../concurrency-model-spec/implementation-plan.ko.md)**
 > 스펙 초안·근거 실측 3건이 그쪽에 있다. 아래 §9.0~§9.3은 분리 이전의 논의 기록이며,
 > **일부는 이후 실측으로 정정됐다**(특히 §9.1의 "cpp는 java 방식이 구조적으로 불가능"과
 > "java에 Actor별 큐가 없다"는 서술). **현행 판단은 새 폴더의 초안을 따른다.**
