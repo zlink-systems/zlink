@@ -75,7 +75,7 @@ export class ZLinkSpotSerialExecutor {
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.spotSerial.execute(operation, workOptions);
+    return this.spotSerial.execute(operation, { ...workOptions, lane: 'lifecycle' });
   }
 
   /**
