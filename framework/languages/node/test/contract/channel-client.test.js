@@ -3555,6 +3555,71 @@ test('ZLinkChannelRequestDispatcher propagates SPOT delivery submit failure', as
   }), failure);
 });
 
+test('route receive loop keeps receiving while an earlier SPOT forward awaits admission', async () => {
+  let resolveFirstAdmission;
+  let rejectFirstAdmission;
+  const firstAdmission = new Promise((resolve, reject) => {
+    resolveFirstAdmission = resolve;
+    rejectFirstAdmission = reject;
+  });
+  let observeSecondSubmit;
+  const secondSubmitted = new Promise((resolve) => {
+    observeSecondSubmit = resolve;
+  });
+  const reported = [];
+  const firstRecord = spotForwardRecord('first', () => firstAdmission);
+  const secondRecord = spotForwardRecord('second', async () => {
+    observeSecondSubmit();
+  });
+  const records = [
+    firstRecord,
+    secondRecord
+  ];
+  const dispatcher = new framework.ZLinkRoutePacketDispatcher({
+    routerChannelId: 'mesh',
+    dispatchErrors: noDispatchErrorReporter(),
+    handlers: []
+  });
+  const router = {
+    recv() {
+      return records.shift();
+    },
+    reply() {
+      throw new Error('SPOT forward must not use the reply path.');
+    }
+  };
+  const loop = new framework.ZLinkRouteReceiveLoop(
+    router,
+    dispatcher,
+    { wait() { return records.length > 0; }, dispose() {} },
+    new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
+    undefined,
+    (error) => reported.push(error)
+  );
+  const running = loop.run();
+
+  try {
+    await withTimeout(
+      secondSubmitted,
+      1_000,
+      'second SPOT forward behind pending admission'
+    );
+    const failure = new Error('first SPOT admission failed');
+    rejectFirstAdmission(failure);
+    await waitFor(
+      () => reported.length === 1,
+      'pending SPOT admission failure reporting'
+    );
+    assert.deepEqual(reported, [failure]);
+    assert.equal(firstRecord.closed, true);
+    assert.equal(secondRecord.closed, false);
+  } finally {
+    resolveFirstAdmission();
+    await loop.stop();
+    await running;
+  }
+});
+
 test('ZLinkRoutePacketDispatcher lets route bridge handle SPOT-addressed bridge frames first', async () => {
   const handled = [];
   const dispatcher = new framework.ZLinkRoutePacketDispatcher({
@@ -5041,6 +5106,22 @@ function captureRawMultipart(parts, submit = async () => undefined) {
       return this;
     },
     submit
+  };
+}
+
+function spotForwardRecord(label, submit) {
+  return {
+    closed: false,
+    parts: [fakeMessagePart(Buffer.from(label))],
+    routingId: 'source-node',
+    spotId: `spot-${label}`,
+    requestSeq: null,
+    send() {
+      return captureRawMultipart([], submit);
+    },
+    close() {
+      this.closed = true;
+    }
   };
 }
 

@@ -86,7 +86,7 @@ interface ZLinkRoutePacketDispatchLoop {
     readonly spotId?: unknown;
     readonly requestSeq: bigint | null;
     readonly send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
-  }): Promise<boolean>;
+  }): boolean | Promise<void>;
   dispatch(
     received: {
       readonly parts: readonly Message[];
@@ -712,17 +712,29 @@ export class ZLinkRouteReceiveLoop {
         continue;
       }
       const receivedBytes = messageBytes(received.parts);
-      let infrastructureConsumed: boolean;
+      let infrastructure: boolean | Promise<void> | undefined;
       try {
-        infrastructureConsumed = await this.dispatcher.dispatchInfrastructure?.(received) === true;
+        infrastructure = this.dispatcher.dispatchInfrastructure?.(received);
       } catch (error) {
         releaseRawReceive();
         received.close();
         this.inFlight.track(Promise.reject(error));
         continue;
       }
-      if (infrastructureConsumed) {
-        releaseRawReceive();
+      if (infrastructure !== undefined && infrastructure !== false) {
+        if (infrastructure === true) {
+          releaseRawReceive();
+        } else {
+          // submit() transfers the parts to Core before returning its admission
+          // Promise. Track that terminal without serializing the single route
+          // receiver; the held reservation bounds pending infrastructure sends.
+          this.inFlight.track(infrastructure
+            .catch(error => {
+              received.close();
+              throw error;
+            })
+            .finally(releaseRawReceive));
+        }
         if (batch.record(receivedBytes)) {
           this.roundRobin?.release(this.receiveOwner);
           await batch.yieldAndReset();

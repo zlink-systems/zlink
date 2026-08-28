@@ -499,13 +499,13 @@ export class ZLinkRoutePacketDispatcher {
     return this.dispatchErrors.flow.flowCreationEnabled();
   }
 
-  async dispatchInfrastructure(received: {
+  dispatchInfrastructure(received: {
     parts: readonly Message[];
     routingId: unknown;
     spotId?: unknown;
     requestSeq: bigint | null;
     send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
-  }): Promise<boolean> {
+  }): boolean | Promise<void> {
     const channelHeader = tryDecodeChannelHeader(received.parts, this.flowEnabled());
     if (
       this.spotRouteBridge !== undefined
@@ -523,8 +523,7 @@ export class ZLinkRoutePacketDispatcher {
       if (received.send === undefined) {
         throw new ZLinkConfigurationException('Routed SPOT packet is missing a local SPOT delivery context.');
       }
-      await appendParts(received.send(), received.parts).submit();
-      return true;
+      return appendParts(received.send(), received.parts).submit();
     }
     return false;
   }
@@ -539,8 +538,12 @@ export class ZLinkRoutePacketDispatcher {
     reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
   }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader, infrastructureChecked = false): Promise<boolean | void> {
     const channelHeader = decodedHeader ?? tryDecodeChannelHeader(received.parts, this.flowEnabled());
-    if (!infrastructureChecked && await this.dispatchInfrastructure(received)) {
-      return true;
+    if (!infrastructureChecked) {
+      const infrastructure = this.dispatchInfrastructure(received);
+      if (infrastructure !== false) {
+        if (infrastructure !== true) await infrastructure;
+        return true;
+      }
     }
     if (received.parts.length === 0 || received.parts[0].data().length === 0) {
       return;
