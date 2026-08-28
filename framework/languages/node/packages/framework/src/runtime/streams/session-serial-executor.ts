@@ -1,9 +1,9 @@
 import {
-  ZLinkBoundedSerialScheduler,
+  ZLinkSerialExecutionQueue,
   type ZLinkSerialWorkLane,
   type ZLinkSerialWorkOptions,
   type ZLinkSerialWorkRecord
-} from '../execution/serial-scheduler';
+} from '../execution/serial-execution-queue';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -13,8 +13,8 @@ import {
   hasApplicationJobPermit
 } from '../application-jobs/application-job-queue-scope';
 
-export class ZLinkStreamSessionSerialExecutor {
-  private readonly scheduler = new ZLinkBoundedSerialScheduler(
+export class ZLinkSessionSerialExecutor {
+  private readonly scheduler = new ZLinkSerialExecutionQueue(
     async (record) => this.execute(record),
     {
       capacityError: (lane) => createInternalFrameworkException(
@@ -26,7 +26,44 @@ export class ZLinkStreamSessionSerialExecutor {
   );
   private closed = false;
 
-  enqueue(
+  executeApplication(
+    work: () => Promise<void>,
+    options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
+    onRejected?: (error?: unknown) => void
+  ): boolean {
+    return this.submit(work, 'application', options, onRejected);
+  }
+
+  executeControl(
+    work: () => Promise<void>,
+    options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
+    onRejected?: (error?: unknown) => void
+  ): boolean {
+    return this.submit(work, 'lifecycle', options, onRejected);
+  }
+
+  executeInfrastructure(
+    work: () => Promise<void>,
+    options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
+    onRejected?: (error?: unknown) => void
+  ): boolean {
+    return this.submit(work, 'lifecycle', options, onRejected);
+  }
+
+  executeFinal(work: () => Promise<void>): Promise<void> {
+    if (this.closed) {
+      return Promise.reject(createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+        'Session execution queue is closed.'
+      ));
+    }
+    const boundWork = bindApplicationJobPermit(work);
+    return hasApplicationJobPermit()
+      ? this.scheduler.submitPreAdmitted(boundWork, { lane: 'lifecycle' })
+      : this.scheduler.submit(boundWork, { lane: 'lifecycle' });
+  }
+
+  private submit(
     work: () => Promise<void>,
     lane: ZLinkSerialWorkLane,
     options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
@@ -41,19 +78,6 @@ export class ZLinkStreamSessionSerialExecutor {
     void submitted
       .catch(error => onRejected?.(error));
     return true;
-  }
-
-  run(work: () => Promise<void>): Promise<void> {
-    if (this.closed) {
-      return Promise.reject(createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
-        'Session execution queue is closed.'
-      ));
-    }
-    const boundWork = bindApplicationJobPermit(work);
-    return hasApplicationJobPermit()
-      ? this.scheduler.submitPreAdmitted(boundWork, { lane: 'lifecycle' })
-      : this.scheduler.submit(boundWork, { lane: 'lifecycle' });
   }
 
   async dispose(): Promise<void> {

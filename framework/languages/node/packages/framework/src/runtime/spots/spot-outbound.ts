@@ -32,7 +32,7 @@ import {
 } from '../execution';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import type { ZLinkSpotRouteTarget } from './spot-routing-internal';
-import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import {
   resolveSpotHandle,
   refreshSpotHandle,
@@ -41,7 +41,7 @@ import {
 } from './spot-handle';
 
 export interface DefaultZLinkSpotOutboundOptions {
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly channelClient?: ZLinkChannelClient;
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
   readonly routedTransport?: ZLinkSpotRoutedTransport;
@@ -52,7 +52,7 @@ export interface DefaultZLinkSpotOutboundOptions {
 }
 
 export class DefaultZLinkSpotOutbound implements ZLinkSpotOutbound {
-  private readonly serial: ZLinkSpotSerialExecutor;
+  private readonly serial: ZLinkSpotSerialTurnExecutor;
   private readonly channelClient: ZLinkChannelClient | undefined;
   private readonly spotPublisherClient: ZLinkSpotPublisherClient | undefined;
   private readonly routedTransport: ZLinkSpotRoutedTransport | undefined;
@@ -248,7 +248,7 @@ interface MutableAddressCallOptions {
 }
 
 function createAddressedSpotSendCall(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   transport: ZLinkSpotAddressTransport,
   spotId: RoutingId,
   message: unknown,
@@ -297,7 +297,7 @@ function createAddressedSpotSendCall(
 }
 
 function createAddressedSpotRequestCall(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   transport: ZLinkSpotAddressTransport,
   spotId: RoutingId,
   request: unknown,
@@ -436,7 +436,7 @@ function requireAddressValue(value: string, label: string, maxBytes: number): st
   return value;
 }
 
-function wrapSendCall(serial: ZLinkSpotSerialExecutor, inner: ZLinkSendCall): ZLinkSendCall {
+function wrapSendCall(serial: ZLinkSpotSerialTurnExecutor, inner: ZLinkSendCall): ZLinkSendCall {
   return {
     metadata(key: string | ZLinkMessageMetadata, value?: string) {
       if (typeof key === 'string') inner.metadata(key, value!);
@@ -450,7 +450,7 @@ function wrapSendCall(serial: ZLinkSpotSerialExecutor, inner: ZLinkSendCall): ZL
   };
 }
 
-function wrapPublishCall(serial: ZLinkSpotSerialExecutor, inner: ZLinkPublishCall): ZLinkPublishCall {
+function wrapPublishCall(serial: ZLinkSpotSerialTurnExecutor, inner: ZLinkPublishCall): ZLinkPublishCall {
   return {
     metadata(key: string | ZLinkMessageMetadata, value?: string) {
       if (typeof key === 'string') inner.metadata(key, value!);
@@ -464,7 +464,7 @@ function wrapPublishCall(serial: ZLinkSpotSerialExecutor, inner: ZLinkPublishCal
 }
 
 function wrapRequestCall(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   inner: ZLinkChannelRequestCall
 ): ZLinkChannelRequestCall {
   const begin = <TReply>(signal?: AbortSignal) =>
@@ -498,7 +498,7 @@ function wrapRequestCall(
  * otherwise the start is enqueued as its own serial turn.
  */
 function startRequestOnSerial<TReply>(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   begin: () => Promise<{ pending: Promise<TReply> }> | { pending: Promise<TReply> }
 ): Promise<TReply> {
   return runInternalTransportStart(serial, begin)
@@ -510,7 +510,7 @@ function startRequestOnSerial<TReply>(
  * nested public operation: public same-owner waits are rejected or use Yield.
  */
 function runInternalTransportStart<T>(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   begin: () => Promise<T> | T
 ): Promise<T> {
   return serial.isCurrentTurn
@@ -519,7 +519,7 @@ function runInternalTransportStart<T>(
 }
 
 function wrapRoutedSpotSendCall(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   transport: ZLinkSpotRoutedTransport,
   spot: SpotHandle,
   message: unknown,
@@ -563,7 +563,7 @@ function wrapRoutedSpotSendCall(
 }
 
 function wrapRoutedSpotRequestCall(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   transport: ZLinkSpotRoutedTransport,
   spot: SpotHandle,
   request: unknown,
@@ -615,7 +615,7 @@ function wrapRoutedSpotRequestCall(
 }
 
 function rejectSameSpotAsyncRequest(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   targetSpotId: RoutingId,
   waitPolicy: 'async' | 'yield'
 ): void {

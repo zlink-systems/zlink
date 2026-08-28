@@ -14,12 +14,12 @@ export interface ZLinkRuntimeTaskFailure {
 }
 
 interface ZLinkSpotSerialTurnContext {
-  readonly executor: ZLinkSpotSerialExecutorLike;
+  readonly executor: ZLinkSpotSerialTurnExecutorLike;
   readonly turnId: number;
   readonly turn: ZLinkSpotSerialTurn;
 }
 
-interface ZLinkSpotSerialExecutorLike {
+interface ZLinkSpotSerialTurnExecutorLike {
   readonly activeTurnId: number;
   readonly sourceSpotId?: unknown;
   isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean;
@@ -164,7 +164,7 @@ export class ZLinkSpotSerialTurn {
 }
 
 export function runZLinkSpotSerialTurn<T>(
-  executor: ZLinkSpotSerialExecutorLike,
+  executor: ZLinkSpotSerialTurnExecutorLike,
   turnId: number,
   turn: ZLinkSpotSerialTurn,
   operation: () => Promise<T> | T
@@ -179,7 +179,7 @@ export function runZLinkSpotSerialTurn<T>(
 }
 
 export function captureZLinkSpotSerialTurn(
-  executor?: ZLinkSpotSerialExecutorLike
+  executor?: ZLinkSpotSerialTurnExecutorLike
 ): ZLinkSpotSerialTurn | undefined {
   const current = spotSerialTurnStorage.getStore();
   if (current === undefined) {
@@ -231,7 +231,7 @@ export function captureZLinkExecutionTurn(): ZLinkCapturedExecutionTurn | undefi
   };
 }
 
-export function isCurrentZLinkSpotSerialTurn(executor: ZLinkSpotSerialExecutorLike): boolean {
+export function isCurrentZLinkSpotSerialTurn(executor: ZLinkSpotSerialTurnExecutorLike): boolean {
   const current = spotSerialTurnStorage.getStore();
   return current !== undefined
     && current.executor === executor

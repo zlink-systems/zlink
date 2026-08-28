@@ -23,8 +23,8 @@ import {
 } from '../framework-errors-internal';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
-import type { ZLinkSerialWorkOptions } from '../execution/serial-scheduler';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
+import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue';
 import {
   detachApplicationJobPermit,
   releaseApplicationJobPermitBeforeHandler
@@ -34,7 +34,7 @@ interface ZLinkRoutedSpotPacketActivation {
   readonly meshName?: string;
   readonly spotId: RoutingId;
   readonly spot: ZLinkSpot;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly handlers: {
     snapshot(): readonly ZLinkSpotHandlerRegistration[];
   };

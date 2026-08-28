@@ -12,7 +12,7 @@ export interface ZLinkSerialSchedulerOptions {
   readonly applicationByteCapacity?: number;
   readonly lifecycleMessageCapacity?: number;
   readonly lifecycleByteCapacity?: number;
-  readonly ownerTimeBudgetMs?: number;
+  readonly ownerTimeBudget?: number;
   readonly lifecycleBurstLimit?: number;
   readonly fixedWorkByteCost?: number;
   readonly capacityError?: (lane: ZLinkSerialWorkLane) => unknown;
@@ -25,7 +25,7 @@ export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<
   applicationByteCapacity: 64 * 1024 * 1024,
   lifecycleMessageCapacity: 128,
   lifecycleByteCapacity: 4 * 1024 * 1024,
-  ownerTimeBudgetMs: 10,
+  ownerTimeBudget: 10,
   lifecycleBurstLimit: 8,
   fixedWorkByteCost: 256
 });
@@ -58,14 +58,14 @@ interface ZLinkSerialAdmissionLane {
 }
 
 /**
- * One event-loop serial scheduler per Spot, Actor mailbox, or Stream session.
+ * One event-loop serial execution queue per Spot, Actor mailbox, or Stream session.
  * Its reservations are owner-local and span queued plus running work until the
  * execution owner reaches its terminal transition.
  */
-export class ZLinkBoundedSerialScheduler {
+export class ZLinkSerialExecutionQueue {
   private readonly application: ZLinkSerialAdmissionLane;
   private readonly lifecycle: ZLinkSerialAdmissionLane;
-  private readonly ownerTimeBudgetMs: number;
+  private readonly ownerTimeBudget: number;
   private readonly lifecycleBurstLimit: number;
   private readonly fixedWorkByteCost: number;
   private readonly capacityError: (lane: ZLinkSerialWorkLane) => unknown;
@@ -86,7 +86,7 @@ export class ZLinkBoundedSerialScheduler {
     validatePositive(configured.applicationByteCapacity, 'applicationByteCapacity');
     validatePositive(configured.lifecycleMessageCapacity, 'lifecycleMessageCapacity');
     validatePositive(configured.lifecycleByteCapacity, 'lifecycleByteCapacity');
-    validateNonNegative(configured.ownerTimeBudgetMs, 'ownerTimeBudgetMs');
+    validateNonNegative(configured.ownerTimeBudget, 'ownerTimeBudget');
     validatePositive(configured.lifecycleBurstLimit, 'lifecycleBurstLimit');
     validatePositive(configured.fixedWorkByteCost, 'fixedWorkByteCost');
     this.application = createLane(
@@ -97,7 +97,7 @@ export class ZLinkBoundedSerialScheduler {
       configured.lifecycleMessageCapacity,
       configured.lifecycleByteCapacity
     );
-    this.ownerTimeBudgetMs = configured.ownerTimeBudgetMs;
+    this.ownerTimeBudget = configured.ownerTimeBudget;
     this.lifecycleBurstLimit = configured.lifecycleBurstLimit;
     this.fixedWorkByteCost = configured.fixedWorkByteCost;
     this.capacityError = options.capacityError
@@ -321,8 +321,8 @@ export class ZLinkBoundedSerialScheduler {
   }
 
   private shouldYield(): boolean {
-    if (this.ownerTimeBudgetMs === 0 || !this.hasPendingWork) return false;
-    return performance.now() - (this.claimStartedAt ?? performance.now()) >= this.ownerTimeBudgetMs;
+    if (this.ownerTimeBudget === 0 || !this.hasPendingWork) return false;
+    return performance.now() - (this.claimStartedAt ?? performance.now()) >= this.ownerTimeBudget;
   }
 
   private resolveIdleWaiters(): void {

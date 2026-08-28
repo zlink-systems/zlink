@@ -18,7 +18,7 @@ import type {
 import { ZLinkTimerOverrunPolicy } from '../../contracts';
 import { validateTimerRegistration } from '../../contracts/Configuration/TimerRegistrationValidator';
 import { throwIfAborted } from '../abort';
-import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkExecutionBarrier } from '../execution';
@@ -70,8 +70,8 @@ export class ZLinkSpotTimerRegistry {
     private readonly flowCreationEnabled: () => boolean = () => true,
     private readonly executionSerialForTimer?: (
       name: string,
-      fallback: ZLinkSpotSerialExecutor
-    ) => ZLinkSpotSerialExecutor,
+      fallback: ZLinkSpotSerialTurnExecutor
+    ) => ZLinkSpotSerialTurnExecutor,
     private readonly executionAllowed: () => boolean = () => true
   ) {}
 
@@ -91,7 +91,7 @@ export class ZLinkSpotTimerRegistry {
     periodMs: number,
     options: ZLinkTimerOptions | undefined,
     handlerType: Type<THandler>,
-    serial: ZLinkSpotSerialExecutor,
+    serial: ZLinkSpotSerialTurnExecutor,
     spot: TSpot,
     providerResolver?: ZLinkProviderResolver,
     signal?: AbortSignal,
@@ -483,7 +483,7 @@ export async function addEntrySpotTimerRegistrations(
   timers: ZLinkSpotTimerRegistry,
   entrySpotType: Type<ZLinkEntrySpot>,
   entrySpot: ZLinkEntrySpot,
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   registrations: ZLinkEntrySpotTimerRegistrationSet,
   options: {
     readonly providerResolver?: ZLinkProviderResolver;
@@ -521,7 +521,7 @@ export async function addSpotTimerRegistrations(
   spotType: Type<ZLinkSpot>,
   spotId: SpotId,
   spot: ZLinkSpot,
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   registrations: ZLinkUserSpotTimerRegistrationSet,
   options: {
     readonly providerResolver?: ZLinkProviderResolver;

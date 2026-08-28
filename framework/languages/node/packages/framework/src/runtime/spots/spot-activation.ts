@@ -65,7 +65,7 @@ import {
   addSpotTimerRegistrations,
   ZLinkSpotTimerRegistry
 } from './spot-timer';
-import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { createInstanceSpotContext, createSpotContext } from './spot-context';
 import type { ZLinkSpotActorJoinDispatch, ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
 import { ZLinkSpotActorAdmissionCoordinator } from './spot-actor-admission-coordinator';
@@ -183,7 +183,7 @@ export class ZLinkSpotActivationLifecycle {
     authorityOwnerGeneration: bigint,
     signal?: AbortSignal
   ): Promise<ZLinkSpotActivation> {
-    const serial = new ZLinkSpotSerialExecutor(true, spotId);
+    const serial = new ZLinkSpotSerialTurnExecutor(true, spotId);
     const actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
     const handlers = new DefaultZLinkSpotHandlerRegistry(actorHandlers);
     applySpotHandlerRegistrations(
@@ -328,7 +328,7 @@ export class ZLinkSpotActivationLifecycle {
     objectGeneration: bigint,
     signal?: AbortSignal
   ): Promise<ZLinkSpotActivation> {
-    const serial = new ZLinkSpotSerialExecutor(true, spotId);
+    const serial = new ZLinkSpotSerialTurnExecutor(true, spotId);
     const actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
     const handlers = new DefaultZLinkSpotHandlerRegistry(actorHandlers);
     const instanceHandlers = new DefaultZLinkInstanceSpotHandlerRegistry(handlers);
@@ -465,11 +465,11 @@ export class ZLinkSpotActivationLifecycle {
   ): Promise<ZLinkLocalSpotCreateResult> {
     const executionMode = this.options.userSpotExecutionMode?.(meshName, spotType)
       ?? ZLinkUserSpotExecutionMode.SpotWide;
-    const serial = new ZLinkSpotSerialExecutor(
+    const serial = new ZLinkSpotSerialTurnExecutor(
       executionMode === ZLinkUserSpotExecutionMode.SpotWide,
       spotId
     );
-    const timerSerials = new Map<string, ZLinkSpotSerialExecutor>();
+    const timerSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
     const actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
     const handlers = new DefaultZLinkSpotHandlerRegistry(actorHandlers);
     applySpotHandlerRegistrations(handlers, spotType, {
@@ -487,7 +487,7 @@ export class ZLinkSpotActivationLifecycle {
         }
         let timerSerial = timerSerials.get(name);
         if (timerSerial === undefined) {
-          timerSerial = new ZLinkSpotSerialExecutor(false);
+          timerSerial = new ZLinkSpotSerialTurnExecutor(false);
           timerSerials.set(name, timerSerial);
         }
         return timerSerial;
@@ -643,7 +643,7 @@ export class ZLinkSpotActivationLifecycle {
     spotType: Type<TSpot>,
     spotId: RoutingId,
     request: Message,
-    serial: ZLinkSpotSerialExecutor,
+    serial: ZLinkSpotSerialTurnExecutor,
     actorHandlers: ZLinkSpotActorHandlerRegistryRuntime,
     handlers: DefaultZLinkSpotHandlerRegistry,
     timers: ZLinkSpotTimerRegistry,

@@ -65,7 +65,7 @@ import { ZLinkFrameworkRuntimeHost } from './runtime/host';
 import {
   DefaultZLinkSpotManager,
   DefaultZLinkSpotOutbound,
-  ZLinkSpotSerialExecutor
+  ZLinkSpotSerialTurnExecutor
 } from './runtime/spots';
 import { ZLinkWorkerRuntime } from './runtime/workers';
 import { captureZLinkExecutionTurn } from './runtime/execution';
@@ -229,7 +229,7 @@ export function createIntegrationSpotOutbound(runtime: ZLinkNestIntegrationRunti
   const host = runtimeHost(runtime);
   const runtimeOptions = host.createSpotManagerOptions();
   return new DefaultZLinkSpotOutbound({
-    serial: new ZLinkSpotSerialExecutor(),
+    serial: new ZLinkSpotSerialTurnExecutor(),
     routedTransport: host.routeTransport,
     spotRouterChannelIdForMesh: runtimeOptions.spotRouterChannelIdForMesh,
     addressTransport: host.spotAddressTransport

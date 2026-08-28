@@ -12,7 +12,7 @@ import {
 } from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkSpotActivationLifecycle } from '../../packages/framework/src/runtime/spots/spot-activation';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
-import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
 
 interface Deferred {
@@ -29,7 +29,7 @@ function deferred(): Deferred {
 }
 
 function activation(
-  serial: ZLinkSpotSerialExecutor,
+  serial: ZLinkSpotSerialTurnExecutor,
   timers: ZLinkSpotTimerRegistry,
   executionMode: ZLinkUserSpotExecutionMode
 ): ZLinkSpotActivation {
@@ -52,7 +52,7 @@ function activation(
 
 test('lifecycle seal quiesces a yielded turn and rejects its late continuation', async () => {
   const barrier = new ZLinkExecutionBarrier();
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialTurnExecutor(true);
   serial.setExecutionBarrier(barrier);
   const response = deferred();
   const started = deferred();
@@ -99,12 +99,12 @@ test('lifecycle seal quiesces a yielded turn and rejects its late continuation',
 });
 
 test('PerActor lifecycle barrier quiesces Actor, Spot, and timer lanes together', async () => {
-  const spotSerial = new ZLinkSpotSerialExecutor(false);
-  const timerSerials = new Map<string, ZLinkSpotSerialExecutor>();
+  const spotSerial = new ZLinkSpotSerialTurnExecutor(false);
+  const timerSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
   const timers = new ZLinkSpotTimerRegistry(undefined, () => false, (name) => {
     let serial = timerSerials.get(name);
     if (serial === undefined) {
-      serial = new ZLinkSpotSerialExecutor(false);
+      serial = new ZLinkSpotSerialTurnExecutor(false);
       timerSerials.set(name, serial);
     }
     return serial;
@@ -160,7 +160,7 @@ test('PerActor lifecycle barrier quiesces Actor, Spot, and timer lanes together'
 });
 
 test('Spot close invokes lifecycle cleanup only after its execution seal is quiescent', async () => {
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialTurnExecutor(true);
   const timers = new ZLinkSpotTimerRegistry();
   const events: string[] = [];
   const activeDone = deferred();
@@ -233,7 +233,7 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
 });
 
 test('relocation abort restores only its exact barrier generation', async () => {
-  const serial = new ZLinkSpotSerialExecutor(false);
+  const serial = new ZLinkSpotSerialTurnExecutor(false);
   const timers = new ZLinkSpotTimerRegistry();
   const state = activation(serial, timers, ZLinkUserSpotExecutionMode.PerActor);
 

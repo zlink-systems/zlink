@@ -32,8 +32,8 @@ import {
   ZLinkPublicSpotManager
 } from '../../packages/framework/src/runtime/spots/spot-manager-public';
 import {
-  ZLinkSpotSerialExecutor
-} from '../../packages/framework/src/runtime/spots/spot-serial-executor';
+  ZLinkSpotSerialTurnExecutor
+} from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import {
   invokeSpotClosing
 } from '../../packages/framework/src/runtime/spots/spot-closing';
@@ -904,7 +904,7 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
 
   published = false;
   let entryTurn: ReturnType<ZLinkPublicSpotManager['getOrCreate']> | undefined;
-  await new ZLinkSpotSerialExecutor(false, 'entry').execute(async () => {
+  await new ZLinkSpotSerialTurnExecutor(false, 'entry').execute(async () => {
     const call = manager.getOrCreate('room-entry', 'room').inMesh('mesh');
     entryTurn = call;
     assert.throws(
@@ -915,7 +915,7 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
   assert.equal((await entryTurn!.submit()).state, ZLinkSpotCreateState.Created);
 
   published = false;
-  const spotWideSerial = new ZLinkSpotSerialExecutor(true, 'owner');
+  const spotWideSerial = new ZLinkSpotSerialTurnExecutor(true, 'owner');
   let initialTurn = 0;
   let resumedTurn = 0;
   const yielded = await spotWideSerial.execute(async () => {

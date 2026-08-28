@@ -12,18 +12,18 @@ import {
   createInternalFrameworkException
 } from '../framework-errors-internal';
 import {
-  ZLinkBoundedSerialScheduler,
+  ZLinkSerialExecutionQueue,
   type ZLinkSerialSchedulerOptions,
   type ZLinkSerialWorkOptions,
   type ZLinkSerialWorkRecord
-} from '../execution/serial-scheduler';
+} from '../execution/serial-execution-queue';
 import {
   bindApplicationJobPermit,
   hasApplicationJobPermit
 } from '../application-jobs/application-job-queue-scope';
 
-export class ZLinkSpotSerialExecutor {
-  private readonly scheduler: ZLinkBoundedSerialScheduler;
+export class ZLinkSpotSerialTurnExecutor {
+  private readonly scheduler: ZLinkSerialExecutionQueue;
   private depth = 0;
   private turnSequence = 0;
   private executionBarrier: ZLinkExecutionBarrier | undefined;
@@ -36,7 +36,7 @@ export class ZLinkSpotSerialExecutor {
     readonly sourceSpotId?: SpotId,
     schedulerOptions?: ZLinkSerialSchedulerOptions
   ) {
-    this.scheduler = new ZLinkBoundedSerialScheduler(
+    this.scheduler = new ZLinkSerialExecutionQueue(
       (record) => this.runQueuedRecord(record),
       {
         ...schedulerOptions,

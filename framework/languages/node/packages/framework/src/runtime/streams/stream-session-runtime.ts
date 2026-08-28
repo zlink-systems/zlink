@@ -48,7 +48,7 @@ import {
   type ZLinkNativeSessionRoute
 } from './managed-stream';
 import { createSessionDispatchContext, DefaultZLinkSessionContext } from './session-context';
-import { ZLinkStreamSessionSerialExecutor } from './session-serial-executor';
+import { ZLinkSessionSerialExecutor } from './session-serial-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import { ownedMessage } from './stream-message-utils';
 import {
@@ -172,7 +172,7 @@ export class ZLinkStreamSessionRuntime {
   readonly stream: ZLinkManagedStream;
   readonly context: DefaultZLinkSessionContext;
   private readonly sessionReady: Promise<ZLinkSession>;
-  private readonly serial = new ZLinkStreamSessionSerialExecutor();
+  private readonly serial = new ZLinkSessionSerialExecutor();
   private connected = false;
   private disconnected = false;
   private disconnectQueued = false;
@@ -250,7 +250,7 @@ export class ZLinkStreamSessionRuntime {
   }
 
   enqueueConnected(localAddr?: string, remoteAddr?: string): void {
-    this.enqueue(async () => this.markConnected(localAddr, remoteAddr));
+    this.serial.executeInfrastructure(async () => this.markConnected(localAddr, remoteAddr));
   }
 
   enqueuePacket(
@@ -284,7 +284,7 @@ export class ZLinkStreamSessionRuntime {
           return;
         }
       }
-      this.enqueue(
+      this.enqueueControl(
         async () => {
           try {
             const dispatch = () => this.dispatchPacket(payload, decodedHeader);
@@ -307,7 +307,7 @@ export class ZLinkStreamSessionRuntime {
       decodedHeader.kind === ZLinkStreamMessageKind.Response
       || decodedHeader.kind === ZLinkStreamMessageKind.Error
     ) {
-      this.enqueue(
+      this.enqueueInfrastructure(
         async () => {
           try {
             await this.dispatchPacket(payload, decodedHeader);
@@ -360,7 +360,7 @@ export class ZLinkStreamSessionRuntime {
     actor: ServiceActorRef,
     retiredSession: ServiceRetiredBoundSessionRouteFence
   ): void {
-    this.enqueue(async () => {
+    this.serial.executeControl(async () => {
       if (this.disposed || this.disconnected) return;
       if (!this.context.beginActorBindingReplacement(actor, retiredSession)) return;
       const session = await this.requireSession();
@@ -457,7 +457,7 @@ export class ZLinkStreamSessionRuntime {
 
   async drainClose(): Promise<void> {
     this.closeReason = 'server_drain';
-    await this.serial.run(async () => {
+    await this.serial.executeFinal(async () => {
       if (this.disposed) return;
       this.stream.markTransportClosed();
       this.stopLivenessChecks();
@@ -626,7 +626,7 @@ export class ZLinkStreamSessionRuntime {
     }
     this.livenessTimer = this.livenessClock.setTimer(() => {
       this.livenessTimer = undefined;
-      this.enqueue(async () => this.runLivenessCheck());
+    this.serial.executeInfrastructure(async () => this.runLivenessCheck());
     }, ZLINK_STREAM_HEARTBEAT_INTERVAL_MS);
   }
 
@@ -778,13 +778,13 @@ export class ZLinkStreamSessionRuntime {
     if (this.disconnected || this.disconnectQueued) return;
     this.disconnectQueued = true;
     this.stopLivenessChecks();
-    this.enqueue(async () => {
+    void this.serial.executeFinal(async () => {
       this.disconnectQueued = false;
       if (this.disconnected) return;
       this.stream.markTransportClosed();
       this.disconnected = true;
       await this.complete(error, true);
-    }, () => {
+    }).catch(() => {
       this.disconnectQueued = false;
     });
   }
@@ -802,12 +802,24 @@ export class ZLinkStreamSessionRuntime {
     this.removeSession(this.stream.sessionId, this);
   }
 
-  private enqueue(
+  private enqueueControl(
     work: () => Promise<void>,
     onRejected?: () => void,
     onShutdownRejected?: () => void
   ): void {
-    if (!this.serial.enqueue(work, 'lifecycle', {}, onRejected)) {
+    if (!this.serial.executeControl(work, {}, onRejected)) {
+      // The serial lane only refuses new work after dispose() closed it.
+      onShutdownRejected?.();
+      onRejected?.();
+    }
+  }
+
+  private enqueueInfrastructure(
+    work: () => Promise<void>,
+    onRejected?: () => void,
+    onShutdownRejected?: () => void
+  ): void {
+    if (!this.serial.executeInfrastructure(work, {}, onRejected)) {
       // The serial lane only refuses new work after dispose() closed it.
       onShutdownRejected?.();
       onRejected?.();
@@ -826,13 +838,13 @@ export class ZLinkStreamSessionRuntime {
       onRejected?.(error);
       return;
     }
-    if (!this.serial.enqueue(async () => {
+    if (!this.serial.executeApplication(async () => {
       try {
         await work();
       } finally {
         claim?.close();
       }
-    }, 'application', {}, () => {
+    }, {}, () => {
       claim?.close();
       onRejected?.();
     })) {

@@ -29,7 +29,7 @@ import { ZLinkSpotRoutePacketDispatch } from './spot-route-packet-dispatch';
 import { ZLinkSpotRoutedActorAdmission } from './spot-routed-actor-admission';
 import { ZLinkSpotRoutedBoundSessionDispatch } from './spot-routed-bound-session-dispatch';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import type { ZLinkRoutedActorTransferProvider } from './spot-remote-codec';
 import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
@@ -42,7 +42,7 @@ interface ZLinkSpotRoutedFrameDispatchOptions {
   readonly nativeSpot: ZLinkBackendSpot;
   readonly createReceived: () => ZLinkBackendReceived;
   readonly nativeSpotId: string;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly getTarget: () => ZLinkRoutedFrameAdmissionTarget & ZLinkSpot;
   readonly defaultAccept: boolean;

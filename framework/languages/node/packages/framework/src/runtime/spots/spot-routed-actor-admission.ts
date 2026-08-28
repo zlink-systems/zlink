@@ -30,7 +30,7 @@ import {
   submitRoutedActorJoinError,
   submitRoutedActorJoinReply
 } from './spot-route-replies';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
 
 interface ZLinkRoutedActorAdmissionTarget {
@@ -38,7 +38,7 @@ interface ZLinkRoutedActorAdmissionTarget {
 }
 
 interface ZLinkSpotRoutedActorAdmissionOptions {
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly getTarget: () => ZLinkRoutedActorAdmissionTarget;
   readonly defaultAccept: boolean;
   readonly routedActorTransferProvider?: ZLinkRoutedActorTransferProvider;

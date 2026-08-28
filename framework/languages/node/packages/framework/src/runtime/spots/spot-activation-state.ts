@@ -18,7 +18,7 @@ import { ZLinkActorDispatchMailboxSet } from '../actors';
 import type { ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkSpotActorHandlerRegistryRuntime } from '../actors';
 import type { DefaultZLinkSpotHandlerRegistry } from './spot-handler-registry';
-import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkSpotTimerRegistry } from './spot-timer';
 import type { ZLinkSpotActorJoinDispatch } from './spot-actor-join-dispatch';
 import {
@@ -44,7 +44,7 @@ export interface ZLinkSpotActivationOptions {
   readonly domain: ZLinkSpotActivationDomain;
   readonly spotType: Type<ZLinkSpot>;
   readonly spot: ZLinkSpot;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly timers: ZLinkSpotTimerRegistry;
   readonly actorHandlers: ZLinkSpotActorHandlerRegistryRuntime;
   readonly handlers: DefaultZLinkSpotHandlerRegistry;
@@ -80,7 +80,7 @@ export class ZLinkSpotActivation {
   readonly domain: ZLinkSpotActivationDomain;
   readonly spotType: Type<ZLinkSpot>;
   readonly spot: ZLinkSpot;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly timers: ZLinkSpotTimerRegistry;
   readonly actorHandlers: ZLinkSpotActorHandlerRegistryRuntime;
   readonly handlers: DefaultZLinkSpotHandlerRegistry;
@@ -90,7 +90,7 @@ export class ZLinkSpotActivation {
 
   private readonly joinedActors = new Map<string, ZLinkActor>();
   private readonly actorClaims: ZLinkActorDispatchMailboxSet;
-  private readonly actorSerials = new Map<string, ZLinkSpotSerialExecutor>();
+  private readonly actorSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
   private readonly departedActorIds = new Set<string>();
   private readonly externalActorCount: () => number;
   private readonly closeWhenReady?: (reason: ZLinkSpotCloseReason) => void;
@@ -260,7 +260,7 @@ export class ZLinkSpotActivation {
 
   executeActor<T>(
     actorId: string,
-    operation: (serial: ZLinkSpotSerialExecutor) => Promise<T> | T
+    operation: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T
   ): Promise<T> {
     return this.actorClaims.submit(actorId, () =>
       operation(this.actorSerial(actorId)));
@@ -403,13 +403,13 @@ export class ZLinkSpotActivation {
     }
   }
 
-  private actorSerial(actorId: string): ZLinkSpotSerialExecutor {
+  private actorSerial(actorId: string): ZLinkSpotSerialTurnExecutor {
     if (this.executionMode === ZLinkUserSpotExecutionMode.SpotWide) {
       return this.serial;
     }
     let serial = this.actorSerials.get(actorId);
     if (serial === undefined) {
-      serial = new ZLinkSpotSerialExecutor(false);
+      serial = new ZLinkSpotSerialTurnExecutor(false);
       serial.setExecutionBarrier(this.executionBarrier);
       this.actorSerials.set(actorId, serial);
     }

@@ -21,7 +21,7 @@ import {
   encodeFrameworkPayloadMessage,
   wrapFrameworkPayloadMessage
 } from '../messaging/payload-codec';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { REMOTE_ACTOR_JOIN_PACKET } from './spot-remote-codec';
 
 interface ZLinkNativeActorJoinAdmissionTarget {
@@ -31,7 +31,7 @@ interface ZLinkNativeActorJoinAdmissionTarget {
 
 interface ZLinkSpotNativeActorJoinAdmissionOptions {
   readonly nativeSpot: ZLinkBackendSpot;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly getTarget: () => ZLinkNativeActorJoinAdmissionTarget;
   readonly defaultAccept: boolean;

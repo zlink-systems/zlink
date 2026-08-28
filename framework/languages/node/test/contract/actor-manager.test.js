@@ -1321,7 +1321,7 @@ test('SpotWide actor join defer yields the current Spot turn while waiting', asy
     }
   });
   const actor = await manager.getOrCreateActor('alice', 'player');
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
 
   const held = serial.execute(async () => {
     events.push('defer:start');
@@ -1360,7 +1360,7 @@ test('Entry Spot deferred join releases its serial turn for the leave boundary',
     }
   });
   const actor = await manager.getOrCreateActor('alice', 'player');
-  const entrySerial = new framework.ZLinkSpotSerialExecutor(false);
+  const entrySerial = new framework.ZLinkSpotSerialTurnExecutor(false);
 
   const deferred = entrySerial.execute(async () => {
     events.push('handler');
@@ -4900,7 +4900,7 @@ test('ZLinkSpotActorDispatcher serializes user spot actor handlers on provided s
       actorType: PlayerActor,
       handlerType: MoveSendHandler
     });
-  const serial = new framework.ZLinkSpotSerialExecutor();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const dispatcher = new framework.ZLinkSpotActorDispatcher({
     registry,
     spot: {},

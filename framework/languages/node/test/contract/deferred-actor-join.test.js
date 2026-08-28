@@ -21,8 +21,8 @@ const {
   ZLinkActorDispatchMailbox
 } = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
 const {
-  ZLinkSpotSerialExecutor
-} = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+  ZLinkSpotSerialTurnExecutor
+} = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
 const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
@@ -365,7 +365,7 @@ test('deferred Actor Join barrier keeps the next Actor mailbox turn behind compl
 test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait policy', async () => {
   const events = [];
   const { actor, context } = actorHarness(events);
-  const serial = new ZLinkSpotSerialExecutor(true, 'spot-a');
+  const serial = new ZLinkSpotSerialTurnExecutor(true, 'spot-a');
   const mailboxes = new framework.ZLinkActorDispatchMailboxSet('spot-a');
   let routeResolutions = 0;
   let transportAdmissions = 0;
@@ -468,7 +468,7 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
 
 test('rejected deferred Join yields its completion turn while source backlog replays', async () => {
   const events = [];
-  const serial = new ZLinkSpotSerialExecutor(true, 'spot-a');
+  const serial = new ZLinkSpotSerialTurnExecutor(true, 'spot-a');
   const completionResult = {
     accepted: false,
     async finalizeDeferredJoin() {
@@ -543,7 +543,7 @@ test('SpotWide deferred Actor Join yields the shared Spot gate while waiting for
     }
   };
   state.bindActor(actor, context);
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialTurnExecutor(true);
 
   const first = serial.execute(() => runActorHandlerWithDeferredJoins(() => {
     events.push('handler:first');

@@ -58,7 +58,7 @@ import {
   type ZLinkSpotRoutedTransport
 } from './spot-outbound';
 import { createProviderInstance } from './spot-provider';
-import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { invokeSpotClosing } from './spot-closing';
 import {
   addEntrySpotTimerRegistrations,
@@ -113,7 +113,7 @@ interface ZLinkEntrySpotActivationOptions {
 }
 
 export class ZLinkEntrySpotActivation {
-  private readonly serial: ZLinkSpotSerialExecutor;
+  private readonly serial: ZLinkSpotSerialTurnExecutor;
   private readonly actorPacketMailboxes: ZLinkActorDispatchMailboxSet;
   private readonly timers: ZLinkSpotTimerRegistry;
   private readonly actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
@@ -131,7 +131,7 @@ export class ZLinkEntrySpotActivation {
   readonly context: ZLinkEntrySpotContext;
 
   constructor(private readonly options: ZLinkEntrySpotActivationOptions) {
-    this.serial = new ZLinkSpotSerialExecutor(false, options.nativeSpot.routingId);
+    this.serial = new ZLinkSpotSerialTurnExecutor(false, options.nativeSpot.routingId);
     this.actorPacketMailboxes = new ZLinkActorDispatchMailboxSet(
       options.nativeSpot.routingId
     );
@@ -221,7 +221,7 @@ export class ZLinkEntrySpotActivation {
    * lifecycle, timers, request continuations and worker completions. Actor
    * packets use the target actor mailbox instead.
    */
-  get serialExecutor(): ZLinkSpotSerialExecutor {
+  get serialExecutor(): ZLinkSpotSerialTurnExecutor {
     return this.serial;
   }
 

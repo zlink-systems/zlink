@@ -26,7 +26,7 @@ const {
   releaseApplicationJobPermitBeforeHandler
 } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
 const {
-  ZLinkSpotSerialExecutor
+  ZLinkSpotSerialTurnExecutor
 } = require('../../packages/framework/dist/runtime/spots');
 
 function applicationJobQueue(maxQueuedApplicationJobs) {
@@ -1040,7 +1040,7 @@ test('backend mesh dispatch pump does not inherit the Spot turn that signaled re
       };
     }
   };
-  const serial = new ZLinkSpotSerialExecutor();
+  const serial = new ZLinkSpotSerialTurnExecutor();
   const pump = new backend.ZLinkMeshDispatchPump(node, {
     applicationJobQueue: applicationJobQueue(),
     async dispatch() {

@@ -26,7 +26,7 @@ import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -36,7 +36,7 @@ import {
 interface ZLinkSpotSubscriptionDispatchOptions {
   readonly nativeSpot: ZLinkBackendSpot;
   readonly createTopicMessage: () => ZLinkBackendTopicMessage;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly getTarget: () => ZLinkSpot;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly providerResolver?: ZLinkProviderResolver;

@@ -22,7 +22,7 @@ import type { ZLinkMessageSerializer } from '../../contracts';
 import { actorJoinIdentity } from './actor-lifecycle-snapshot';
 import { runActorHandlerWithDeferredJoins } from './actor-join-deferred-scope';
 import { runWithLifecycleHandler } from '../handlers/handler-instance-scope';
-import type { ZLinkSerialWorkOptions } from '../execution/serial-scheduler';
+import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue';
 
 export enum ZLinkActorPacketKind {
   Send = 'send',

@@ -117,7 +117,7 @@ import type {
 import {
   DefaultZLinkSpotManager,
   DefaultZLinkSpotOutbound,
-  ZLinkSpotSerialExecutor
+  ZLinkSpotSerialTurnExecutor
 } from '../../packages/framework/src/runtime/spots';
 import {
   hasObjectClientCapability,
@@ -5347,7 +5347,7 @@ test('public SpotId call reaches production host Missing Instance placement with
     defaultRequestTimeoutMs: 5_000
   });
   const outbound = new DefaultZLinkSpotOutbound({
-    serial: new ZLinkSpotSerialExecutor(),
+    serial: new ZLinkSpotSerialTurnExecutor(),
     meshName: 'mesh',
     addressTransport: address
   });

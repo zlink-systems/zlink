@@ -65,7 +65,7 @@ test('HTTP async retains a Spot turn while yield releases and resumes it', async
     errorSink: { reportRuntimeTaskException: (_task, error) => runtimeErrors.push(error) }
   });
   const client = ZLinkHttpClient.create(server.baseUrl).executionScheduler(scheduler).build();
-  const serial = new frameworkInternal.ZLinkSpotSerialExecutor();
+  const serial = new frameworkInternal.ZLinkSpotSerialTurnExecutor();
   try {
     const retainedEvents = [];
     const retained = serial.execute(async () => {
@@ -106,7 +106,7 @@ test('HTTP callback completion is posted as a new Spot turn', async () => {
   });
   const scheduler = frameworkIntegration.createIntegrationHttpExecutionScheduler({});
   const client = ZLinkHttpClient.create(server.baseUrl).executionScheduler(scheduler).build();
-  const serial = new frameworkInternal.ZLinkSpotSerialExecutor();
+  const serial = new frameworkInternal.ZLinkSpotSerialTurnExecutor();
   const events = [];
   let releaseTurn;
   const turnGate = new Promise((resolve) => { releaseTurn = resolve; });

@@ -1,9 +1,9 @@
 import {
-  ZLinkBoundedSerialScheduler,
+  ZLinkSerialExecutionQueue,
   type ZLinkSerialSchedulerOptions,
   type ZLinkSerialWorkOptions,
   type ZLinkSerialWorkRecord
-} from '../execution/serial-scheduler';
+} from '../execution/serial-execution-queue';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -15,10 +15,10 @@ import {
 } from '../application-jobs/application-job-queue-scope';
 
 export class ZLinkActorDispatchMailbox {
-  private readonly scheduler: ZLinkBoundedSerialScheduler;
+  private readonly scheduler: ZLinkSerialExecutionQueue;
 
   constructor(options?: ZLinkSerialSchedulerOptions) {
-    this.scheduler = new ZLinkBoundedSerialScheduler(
+    this.scheduler = new ZLinkSerialExecutionQueue(
       (record) => this.runRecord(record),
       {
         ...options,

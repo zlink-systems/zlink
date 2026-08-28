@@ -37,7 +37,7 @@ import {
 } from '../actors';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
-import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import { REMOTE_ACTOR_JOIN_PACKET } from './spot-remote-codec';
@@ -56,7 +56,7 @@ import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/ap
 interface ZLinkSpotRoutePacketDispatchOptions {
   readonly packetHandlers: ReadonlyMap<string, readonly ZLinkSpotHandlerRegistration[]>;
   readonly nativeSpotId: string;
-  readonly serial: ZLinkSpotSerialExecutor;
+  readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly getTarget: () => ZLinkSpot;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;

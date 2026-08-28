@@ -10,11 +10,11 @@ const path = require('node:path');
 const { performance } = require('node:perf_hooks');
 
 const {
-  ZLinkBoundedSerialScheduler,
+  ZLinkSerialExecutionQueue,
   ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS
 } = require(path.resolve(
   __dirname,
-  '../packages/framework/dist/runtime/execution/serial-scheduler'
+  '../packages/framework/dist/runtime/execution/serial-execution-queue'
 ));
 const {
   ZLinkFrameworkInternalErrorKind,
@@ -64,7 +64,7 @@ async function runRound() {
   const accepted = [];
   let firstRejection;
   let firstRejectionOrdinal;
-  const scheduler = new ZLinkBoundedSerialScheduler(
+  const scheduler = new ZLinkSerialExecutionQueue(
     async (record) => {
       try {
         record.resolve(await record.operation());
@@ -171,7 +171,7 @@ async function main() {
   console.log(
     `attempts=${ATTEMPTS} payloadBytes=${PAYLOAD_BYTES} rounds=${ROUNDS} ` +
     `capacity=${defaults.applicationMessageCapacity}/${defaults.applicationByteCapacity} ` +
-    `ownerBudgetMs=${defaults.ownerTimeBudgetMs}`
+    `ownerBudgetMs=${defaults.ownerTimeBudget}`
   );
   for (const [index, result] of results.entries()) {
     console.log(
