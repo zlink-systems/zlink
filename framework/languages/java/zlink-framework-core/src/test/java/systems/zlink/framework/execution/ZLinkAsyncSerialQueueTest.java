@@ -265,6 +265,38 @@ final class ZLinkAsyncSerialQueueTest {
     }
 
     @Test
+    void relocationByteAccountingRejectsAnUnrepresentableAggregate() throws Exception {
+        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
+            null,
+            ZLinkExecutionLanePolicy.generic(),
+            4,
+            Long.MAX_VALUE,
+            4,
+            4,
+            1,
+            2,
+            Duration.ofSeconds(1));
+        ZLinkAsyncSerialQueue.RelocationSeal seal =
+            queue.trySealRelocation().orElseThrow();
+
+        CompletableFuture<Void> first = queue.enqueueWithPayloadBytes(
+            Long.MAX_VALUE - 2,
+            () -> CompletableFuture.completedFuture(null)).toCompletableFuture();
+        CompletableFuture<Void> lastRepresentable = queue.enqueue(
+            () -> CompletableFuture.completedFuture(null)).toCompletableFuture();
+
+        assertFalse(queue.tryEnqueue(
+            () -> CompletableFuture.completedFuture(null)));
+        assertTrue(queue.enqueue(
+            () -> CompletableFuture.completedFuture(null)).toCompletableFuture()
+            .isCompletedExceptionally());
+
+        queue.commitRelocation(seal).orElseThrow();
+        first.get(3, TimeUnit.SECONDS);
+        lastRepresentable.get(3, TimeUnit.SECONDS);
+    }
+
+    @Test
     void ownerReservationChargesPayloadAndCountsEmptyTurns()
         throws Exception {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(

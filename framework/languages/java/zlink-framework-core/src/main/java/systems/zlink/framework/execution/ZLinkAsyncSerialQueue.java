@@ -1,5 +1,4 @@
 package systems.zlink.framework.execution;
-import java.math.BigInteger;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -60,8 +59,8 @@ public final class ZLinkAsyncSerialQueue {
     private long applicationBytes;
     private long lifecycleBytes;
     private long relocationApplicationBacklog;
-    private BigInteger relocationApplicationBytes = BigInteger.ZERO;
-    private final Map<Entry, BigInteger> relocationEntryCosts =
+    private long relocationApplicationBytes;
+    private final Map<Entry, Long> relocationEntryCosts =
         new IdentityHashMap<>();
     private int lifecycleStreak;
     private long outstanding;
@@ -328,17 +327,17 @@ public final class ZLinkAsyncSerialQueue {
         if (nextSequence == Long.MAX_VALUE) {
             throw new IllegalStateException("queue sequence exhausted");
         }
-        if (relocation != null) {
-            return holdRelocationIngress(
-                record,
-                recordSizeHint,
-                operation,
-                relocationRelease);
-        }
         if (!canRepresentWorkByteCost(recordSizeHint)) {
             return capacityFailure("application payload exceeds queue byte capacity");
         }
         long byteCost = workByteCost(recordSizeHint);
+        if (relocation != null) {
+            return holdRelocationIngress(
+                record,
+                byteCost,
+                operation,
+                relocationRelease);
+        }
         if (!canReserve(Lane.APPLICATION, byteCost)) {
             return capacityFailure("application queue is full");
         }
@@ -356,8 +355,7 @@ public final class ZLinkAsyncSerialQueue {
         if (relocated) {
             return false;
         }
-        if (relocation == null
-            && !canReserve(Lane.APPLICATION, fixedWorkByteCost)) {
+        if (!canAcceptApplicationWork(fixedWorkByteCost)) {
             return false;
         }
         enqueueAccepted(null, 0, operation);
@@ -376,9 +374,8 @@ public final class ZLinkAsyncSerialQueue {
         if (relocated) {
             return false;
         }
-        if (relocation == null
-            && (!canRepresentWorkByteCost(payloadBytes)
-                || !canReserve(Lane.APPLICATION, workByteCost(payloadBytes)))) {
+        if (!canRepresentWorkByteCost(payloadBytes)
+            || !canAcceptApplicationWork(workByteCost(payloadBytes))) {
             return false;
         }
         enqueueAccepted(null, payloadBytes, operation);
@@ -392,9 +389,8 @@ public final class ZLinkAsyncSerialQueue {
         if (relocated) {
             return false;
         }
-        if (relocation == null
-            && (!canRepresentWorkByteCost(record.length)
-                || !canReserve(Lane.APPLICATION, workByteCost(record.length)))) {
+        if (!canRepresentWorkByteCost(record.length)
+            || !canAcceptApplicationWork(workByteCost(record.length))) {
             return false;
         }
         enqueueAccepted(record.clone(), record.length, operation);
@@ -428,17 +424,17 @@ public final class ZLinkAsyncSerialQueue {
         if (nextSequence == Long.MAX_VALUE) {
             throw new IllegalStateException("queue sequence exhausted");
         }
-        if (relocation != null) {
-            return holdRelocationIngress(
-                record,
-                payloadBytes,
-                operation,
-                relocationRelease);
-        }
         if (!canRepresentWorkByteCost(payloadBytes)) {
             return capacityFailure("application payload exceeds queue byte capacity");
         }
         long byteCost = workByteCost(payloadBytes);
+        if (relocation != null) {
+            return holdRelocationIngress(
+                record,
+                byteCost,
+                operation,
+                relocationRelease);
+        }
         if (!canReserve(Lane.APPLICATION, byteCost)) {
             return capacityFailure("application queue is full");
         }
@@ -461,9 +457,12 @@ public final class ZLinkAsyncSerialQueue {
 
     private CompletionStage<Void> holdRelocationIngress(
         byte[] record,
-        long payloadBytes,
+        long byteCost,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
+        if (!canHoldRelocationCost(byteCost)) {
+            return capacityFailure("application queue byte accounting overflow");
+        }
         Entry entry = new Entry(
             nextSequence++,
             record,
@@ -477,18 +476,20 @@ public final class ZLinkAsyncSerialQueue {
             false);
         outstanding++;
         relocationApplicationBacklog++;
-        BigInteger cost = relocationWorkByteCost(payloadBytes);
-        relocationApplicationBytes = relocationApplicationBytes.add(cost);
-        relocationEntryCosts.put(entry, cost);
+        relocationApplicationBytes += byteCost;
+        relocationEntryCosts.put(entry, byteCost);
         holdRelocationEntry(entry);
         return entry.result;
     }
 
     private CompletionStage<Void> holdRelocationIngress(
         Supplier<byte[]> record,
-        long payloadBytes,
+        long byteCost,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
+        if (!canHoldRelocationCost(byteCost)) {
+            return capacityFailure("application queue byte accounting overflow");
+        }
         Entry entry = new Entry(
             nextSequence++,
             record,
@@ -502,9 +503,8 @@ public final class ZLinkAsyncSerialQueue {
             false);
         outstanding++;
         relocationApplicationBacklog++;
-        BigInteger cost = relocationWorkByteCost(payloadBytes);
-        relocationApplicationBytes = relocationApplicationBytes.add(cost);
-        relocationEntryCosts.put(entry, cost);
+        relocationApplicationBytes += byteCost;
+        relocationEntryCosts.put(entry, byteCost);
         holdRelocationEntry(entry);
         return entry.result;
     }
@@ -527,15 +527,17 @@ public final class ZLinkAsyncSerialQueue {
             return false;
         }
         if (lane == Lane.APPLICATION) {
-            return applicationMessages + relocationApplicationBacklog
-                    < applicationMessageCapacity
-                && BigInteger.valueOf(applicationBytes)
-                    .add(relocationApplicationBytes)
-                    .add(BigInteger.valueOf(byteCost))
-                    .compareTo(BigInteger.valueOf(applicationByteCapacity))
-                    <= 0;
+            return applicationMessages < applicationMessageCapacity
+                && relocationApplicationBacklog
+                    < applicationMessageCapacity - applicationMessages
+                && fitsWithinCapacity(
+                    applicationBytes,
+                    relocationApplicationBytes,
+                    byteCost,
+                    applicationByteCapacity);
         }
         return lifecycleMessages < lifecycleMessageCapacity
+            && lifecycleBytes <= lifecycleByteCapacity
             && byteCost <= lifecycleByteCapacity - lifecycleBytes;
     }
 
@@ -567,13 +569,12 @@ public final class ZLinkAsyncSerialQueue {
             }
         } else if (entry.lane == Lane.APPLICATION) {
             relocationApplicationBacklog--;
-            BigInteger cost = relocationEntryCosts.remove(entry);
+            Long cost = relocationEntryCosts.remove(entry);
             if (cost == null) {
                 throw new IllegalStateException(
                     "relocation backlog entry has no byte cost");
             }
-            relocationApplicationBytes = relocationApplicationBytes
-                .subtract(cost);
+            relocationApplicationBytes -= cost;
         }
         outstanding--;
     }
@@ -587,14 +588,34 @@ public final class ZLinkAsyncSerialQueue {
         return Math.addExact(fixedWorkByteCost, payloadBytes);
     }
 
-    private BigInteger relocationWorkByteCost(long payloadBytes) {
-        validatePayloadBytes(payloadBytes);
-        return BigInteger.valueOf(payloadBytes)
-            .add(BigInteger.valueOf(fixedWorkByteCost));
-    }
-
     private boolean canRepresentWorkByteCost(long payloadBytes) {
         return payloadBytes <= Long.MAX_VALUE - fixedWorkByteCost;
+    }
+
+    private boolean canAcceptApplicationWork(long byteCost) {
+        return relocation == null
+            ? canReserve(Lane.APPLICATION, byteCost)
+            : canHoldRelocationCost(byteCost);
+    }
+
+    private boolean canHoldRelocationCost(long byteCost) {
+        return byteCost > 0
+            && relocationApplicationBytes <= Long.MAX_VALUE - byteCost;
+    }
+
+    private static boolean fitsWithinCapacity(
+        long first,
+        long second,
+        long added,
+        long capacity) {
+        if (first > capacity) {
+            return false;
+        }
+        long remaining = capacity - first;
+        if (second > remaining) {
+            return false;
+        }
+        return added <= remaining - second;
     }
 
     private static void validatePayloadBytes(long payloadBytes) {
