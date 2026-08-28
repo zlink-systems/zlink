@@ -31,7 +31,7 @@ class timer_state_t
     std::weak_ptr<void> handler_instance;
     handler_invoker_t handler_invoker;
     std::unique_ptr<zlink::timer_t> native_timer;
-    std::shared_ptr<runtime::serial_execution_queue_t> lane;
+    std::shared_ptr<runtime::serial_execution_queue_t> serial_queue;
     std::uint64_t delivery_index = 0;
     std::uint64_t last_scheduled_index = 0;
     bool disposed = false;
@@ -56,6 +56,7 @@ class timer_runtime_t
 
     static void post_fire_count (const std::shared_ptr<spot_context_state_t> &context,
                                  const std::shared_ptr<timer_state_t> &state,
+                                 const std::shared_ptr<runtime::serial_execution_queue_t> &queue,
                                  std::uint64_t fire_count);
 
     task_t<timer_tick_t> dispatch_fire_count_async (timer_t &timer, std::uint64_t fire_count) const;

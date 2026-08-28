@@ -94,6 +94,8 @@ int main ()
     const auto redis_hpp = read_file (
       root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
     const auto spot_runtime = read_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
+    const auto spot_runtime_header = read_file (root / "framework/src/runtime/spots/spot_runtime.hpp");
+    const auto spot_runtime_surface = spot_runtime + spot_runtime_header;
     const auto spot_route_packets = read_file (
       root / "framework/src/runtime/spots/spot_route_packets.cpp");
     const auto spot_route_packets_hpp = read_file (
@@ -2087,10 +2089,9 @@ int main ()
      * snapshot keeps queue lifetime shared while creation and removal remain
      * serialized by the node owner. */
     gate.require (
-      spot_runtime.find ("actor_execution_queue_snapshot") != std::string::npos
-        && spot_runtime.find ("std::atomic_load_explicit") != std::string::npos
-        && spot_runtime.find ("publish_actor_execution_queue_snapshot_unlocked")
-             != std::string::npos,
+      spot_runtime_surface.find ("actor_queue_snapshot") != std::string::npos
+        && spot_runtime_surface.find ("std::atomic_load_explicit") != std::string::npos
+        && spot_runtime_surface.find ("spot_serial_executor_t") != std::string::npos,
       "CPP-EXEC-001",
       "Actor delivery still resolves its serial queue through the node map on every packet");
 
@@ -2114,9 +2115,12 @@ int main ()
       "Actor retry or native failure classification still depends on exception text");
 
     /* CPP-LAYER-003 — Actor handler and deferred join completion ordering are
-     * owned by one serial queue, without a second handler-wide mailbox lock. */
+     * owned by the coordinator's Actor entrypoints, without a second
+     * handler-wide mailbox lock. */
     gate.require (
-      spot_runtime.find ("actor_execution_queues") != std::string::npos
+      spot_runtime.find ("executor->execute_actor (") != std::string::npos
+        && spot_runtime.find ("execute_actor_cancellable") != std::string::npos
+        && spot_runtime_surface.find ("class spot_serial_executor_t") != std::string::npos
         && spot_runtime.find ("actor_mailboxes") == std::string::npos
         && spot_runtime.find ("actor_mailbox_lock") == std::string::npos,
       "CPP-LAYER-003",
@@ -2526,7 +2530,7 @@ int main ()
            "serial_lane_policy_t::spot_wide ()",
            "serial_lane_policy_t::per_actor_spot ()",
            "serial_lane_policy_t::actor_delivery ()"}) {
-        gate.require (spot_runtime.find (required) != std::string::npos,
+        gate.require (spot_runtime_surface.find (required) != std::string::npos,
                       "CPP-SESS-003",
                       "Spot or Actor-delivery queue omits its typed policy: "
                         + required);

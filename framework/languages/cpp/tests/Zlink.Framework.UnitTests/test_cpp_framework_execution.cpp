@@ -3763,8 +3763,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         *node->worker_executor, queued_options,
         runtime::serial_execution_queue_t::error_handler_t{},
         runtime::serial_lane_policy_t::actor_delivery ());
-    node->actor_execution_queues[queued_key] = queued_actor_queue;
-    publish_actor_execution_queue_snapshot_unlocked (*node);
+    target->spot_serial_executor->replace_actor_queue (queued_key, queued_actor_queue);
     std::mutex queued_gate;
     std::condition_variable queued_changed;
     std::optional<runtime::serial_execution_queue_t::async_completion_t>
@@ -3830,8 +3829,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     std::weak_ptr<runtime::serial_execution_queue_t> cancelled_queue_owner =
       queued_actor_queue;
-    node->actor_execution_queues.erase (queued_key);
-    publish_actor_execution_queue_snapshot_unlocked (*node);
+    target->spot_serial_executor->erase_actor_queue (queued_key);
     queued_actor_queue.reset ();
     if (!cancelled_queue_owner.expired ()) {
         return false;

@@ -110,18 +110,15 @@ timer_t spot_context_t::add_timer_erased (std::string name,
         state->handler_instance = handler_instance;
     }
     state->handler_invoker = std::move (handler_invoker);
-    if (_state->execution_mode == user_spot_execution_mode_t::per_actor
-        && _state->serial_executor) {
-        state->lane = std::make_shared<runtime::serial_execution_queue_t> (
-          *_state->serial_executor,
-          runtime::serial_execution_queue_options_t{},
-          runtime::serial_execution_queue_t::error_handler_t{},
-          runtime::serial_lane_policy_t::actor_delivery ());
+    if (_state->execution_mode == user_spot_execution_mode_t::per_actor) {
+        if (const auto coordinator = _state->ensure_spot_serial_executor ())
+            state->serial_queue = coordinator->timer_queue (state->name);
     }
     state->native_timer = std::make_unique<zlink::timer_t> ();
     auto context = _state;
-    state->native_timer->on_fire ([context, state] (std::uint64_t fire_count) {
-        detail::timer_runtime_t::post_fire_count (context, state, fire_count);
+    const auto timer_queue = state->serial_queue;
+    state->native_timer->on_fire ([context, state, timer_queue] (std::uint64_t fire_count) {
+        detail::timer_runtime_t::post_fire_count (context, state, timer_queue, fire_count);
     });
     state->native_timer->start (period, std::numeric_limits<std::uint64_t>::max ());
     _state->timers.push_back (state);
@@ -145,6 +142,7 @@ timer_runtime_t timer_runtime_t::from (spot_context_t &context)
 
 void timer_runtime_t::post_fire_count (const std::shared_ptr<spot_context_state_t> &context,
                                        const std::shared_ptr<timer_state_t> &state,
+                                       const std::shared_ptr<runtime::serial_execution_queue_t> &queue,
                                        std::uint64_t fire_count)
 {
     if (!context || !state) {
@@ -178,12 +176,9 @@ void timer_runtime_t::post_fire_count (const std::shared_ptr<spot_context_state_
           detail::observe_task_completion (
             task, [complete] (const result_t<timer_tick_t> &) mutable { complete ([] {}); });
       };
-    const bool posted =
-      state->lane
-        ? state->lane->try_post_async (
-            "spot-timer:" + state->name, std::move (work))
-        : context->try_post_serial_async (
-            "spot-timer:" + state->name, std::move (work));
+    const auto queue_name = "spot-timer:" + state->name;
+    const bool posted = queue ? queue->try_post_async (queue_name, std::move (work))
+                              : context->try_post_serial_async (queue_name, std::move (work));
     if (!posted) {
         std::lock_guard lock (state->mutex);
         if (!state->disposed) {
@@ -373,7 +368,8 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
         }
         context->leave_callback ();
         if (post_pending) {
-            timer_runtime_t::post_fire_count (context, state, pending_fire_count);
+            timer_runtime_t::post_fire_count (context, state, state->serial_queue,
+                                              pending_fire_count);
         }
     };
 
@@ -452,9 +448,8 @@ void timer_runtime_t::cancel_all (spot_context_state_t &context) noexcept
         // Stop alone leaves the binding callback object attached to the
         // native timer. Destroy it to break the callback-to-state cycle.
         timer->native_timer.reset ();
-        if (timer->lane) {
-            timer->lane->cancel_pending ();
-        }
+        if (const auto coordinator = context.ensure_spot_serial_executor ())
+            coordinator->cancel_timer (timer->name);
     }
 }
 
