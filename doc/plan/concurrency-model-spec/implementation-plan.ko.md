@@ -16,29 +16,114 @@
 
 ---
 
-## 1. 착수 순서
+## 0. 새 세션 부트스트랩 (2026-08-28 인계)
 
-**P0은 나머지와 독립이다.** 구조를 바꾸지 않고 이미 정해진 규칙(스펙 07 §7)을 지키는 일이므로
-P1~P4와 병행해도 되고 먼저 해도 된다.
+이 캠페인은 **구현 세션**이다. 계약은 확정돼 있고 여기서 다시 정하지 않는다 — 스펙과
+어긋나 보이면 코드를 스펙에 맞추고, 스펙 자체가 틀렸다고 판단되면 **멈추고 사용자에게
+에스컬레이션**한다([[spec-change-policy]] — 오류·개선만 허용, 구현 편의 완화 금지).
 
-**P1을 P2·P3보다 먼저 한다.** dotnet이 세 계층 조율자를 모두 갖고 있는 유일한 언어이고, java와
-cpp는 조율자를 신설해야 한다 — 신설할 때 볼 참조 구현이 P1에서 스펙 이름으로 정리된 상태여야
-한다. 참조 구현 없이 신설을 맡기면 이번 캠페인에서 이미 네 번 실패한 자리다.
+### 0.1 읽기 순서 — 소유 문서 먼저
 
-| 단계 | 내용 | 선행 | 병렬 |
-|---|---|---|---|
-| **P0** | cpp 핫패스 조회 묶기 · java binding wrapper 중복 lock · 큐 임계 구역 축소 | 없음 | P1~P4와 병행 가능 |
-| **P1** | dotnet을 스펙 이름으로 정렬한다 (개명 · `_laneGate` 제거 · `ownerTimeBudget` 추가) | 없음 | 단독 |
-| **P2** | java 세 계층 조율자 신설 | P1 | P3와 병렬 |
-| **P3** | cpp 세 계층 조율자 신설 | P1 | P2와 병렬 |
-| **P4** | node Spot 조율자 신설 · 흩어진 큐 맵 3개 이관 | P1 | P2·P3와 병렬 |
-| **P5** | 스펙 07 §10 검증 요구를 언어별 계약 test로 옮긴다 | P1~P4 | 언어별 병렬 |
+직전 세션이 소유 문서를 안 읽고 구현 코드에서 계약을 추론하다 Critical 2건을 만들고
+되돌렸다. 같은 실수를 반복하지 않으려면 **판단 전에 아래를 이 순서로 정독한다.**
 
-P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같은 빌드 트리에 두 작업을 붙이지
-않는다 — 유령 실패로 측정이 무효가 된다
-([`../concurrency-redesign/rules.ko.md`](../concurrency-redesign/rules.ko.md) §5.2).
+| # | 문서 | 소유하는 것 |
+|---|---|---|
+| 1 | `framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md` | **이 캠페인의 계약** — 계층·진입점·queue 경로·primitive·turn 구동 |
+| 2 | 같은 트리 `06-state-ownership-and-lanes.ko.md` | state lane 계약, C1/C2/C3 판별 |
+| 3 | 같은 트리 `04-application-job-queue-and-backpressure.ko.md` §1·§3·**§8「Owner 예약의 이관」** | permit 순서, owner FIFO, **예약 이관(2026-08-28 신설)** |
+| 4 | 같은 트리 `02-handler-turn-and-execution-gate.ko.md` §1·§3·§7·§10 | queue/gate 분리, `Yield` claim, lane 기본값, 공유 실행 자원 |
+| 5 | `00-foundation/06-framework-api.ko.md` §11 | mailbox 두 축·반환 시점·scheduler |
+| 6 | [executor-naming-contract.ko.md](executor-naming-contract.ko.md) → 이 플랜 §1~§9 | 이름 계약 실측, 작업 순서 |
+
+### 0.2 진행 방식 — 역할 분담 (2026-08-28 사용자 지정)
+
+| 역할 | 담당 |
+|---|---|
+| 감독·판정·**기본 리뷰**·스펙 수정 | **Claude 감독관 본체** (위임 금지 — 특히 스펙 문장은 에이전트가 쓰지 않는다) |
+| 작업(구현·조사) | **codex 서브에이전트** — `gpt-5.6-terra`(구현 기본) · `gpt-5.6-luna`(구현 — 감독관이 난이도·가용성으로 선택) · `gpt-5.6-sol`(조사) |
+| **최종 리뷰** (P 단계 마감마다) | **codex sol** |
+
+- 기동은 직접 실행 경로를 쓴다(플러그인 sandbox는 TCP bind·cmake를 막는다):
+  `codex exec -m gpt-5.6-terra -c model_reasoning_effort="high" -s danger-full-access --skip-git-repo-check "<프롬프트>" < /dev/null` 을 Bash run_in_background로.
+  **`< /dev/null` 필수**(stdin 파이프면 무한 대기), 기동 직후 로그 수백 B 성장 검증(좀비 방지).
+- **3분 주기로 출력을 읽어 진행을 확인한다** — 프로세스 생존 확인은 진행 확인이 아니다.
+  3분간 로그 성장 0이면 좀비로 판정하고 재기동한다(직전 세션에서 2시간 좀비 실증).
+- 에이전트 프롬프트에 반드시 넣는다: 대상 스펙 절 인용, 동작 보존, git reset/stash 금지,
+  커밋 금지(검토·커밋은 감독관), 모호하면 [의심]으로 보고하고 판정은 감독관.
+- 에이전트 결과는 **감독관이 diff를 직접 읽고 재검증**한 뒤에만 커밋한다(맹신 금지).
+- **적절한 시점마다 커밋·푸시한다** (2026-08-28 사용자 지정) — 항목(P*-N) 단위 검증 통과가
+  그 시점이다. `git add`는 파일 명시 목록으로만, push 전 fetch+분기 확인.
+- **진행하면서 리팩토링을 함께 한다** (2026-08-28 사용자 지정) — 손대는 파일에서
+  ① `doc/principal/dev/posddd.ko.md` 원칙 위반, ② 성능 병목(할당·복사·경합),
+  ③ 불필요한 코드를 발견하면 정리한다. 단 **동작 보존 전환과 리팩토링은 커밋을 분리**한다
+  — 한 커밋에 섞으면 되돌림 검증이 불가능해진다.
+
+### 0.3 규율 — 직전 세션 교훈 (위반이 실제 사고를 냈다)
+
+1. **계약 판정은 소유 문서 인용으로만.** 구현 코드에서 계약을 추론하지 않는다.
+2. **"없다/잔재다" 판정은 저장소 전체 검색으로만.** 쓴 검색 명령을 근거에 남긴다
+   (한 파일 grep 판정으로 네 번 틀렸다 — node claim wrapper, cpp 정책 등).
+3. **지적받으면 재추론 전에 증거부터 넓힌다** — 안 읽은 소유 문서 후보를 나열하고 읽는다.
+4. **스펙을 고치는 대형 판단은 반영 전 codex sol 리뷰를 거친다.**
+5. git: `git add`는 파일 명시 목록으로만(-A·디렉터리 add 금지), push 전 fetch+분기 확인.
+6. 같은 빌드 트리에 작업 2개 금지(유령 실패). P2·P3·P4는 트리가 달라 병렬 가능.
+
+### 0.4 게이트와 기준선 (0.14.0, 2026-08-28 실측)
+
+bindings 0.14.0 전환 완료(릴리스·로컬 패키지·참조 모두). 아래가 그 위의 그린 기준선이다.
+
+| 언어 | 게이트 명령 (트리 루트: `framework/languages/<lang>`) | 기준선 |
+|---|---|---|
+| dotnet | `dotnet test tests/Zlink.Framework.UnitTests -c Release` | **1901/1901** |
+| java | `./gradlew cleanTest test` (`cleanTest` 필수 — UP-TO-DATE 함정) | 전체 그린. full-run 한정 flake: `ZLinkMicrometerMetricSinkTest`·`RawMeshNodeM6ATest`·`AsyncSerialQueueTest…YieldRegistration` — 단독 재실행으로 판정 |
+| cpp | `cmake --build build -j 14` 후 `ctest --test-dir build -L 'framework-(unit\|contract)' -LE 'e2e\|sample\|perf'` | **44/45** — `layout_contract` 1건은 기존 샘플 결함(`OrderWorkflow` blocking `result()`). exit 86/134는 1회 재실행 |
+| node | `npx tsc -b tsconfig.build.json` 후 `npm test` | contract 기존 실패 23건 등재(`../concurrency-redesign/rules.ko.md` §4) — 회귀 판정은 실패 이름 집합 대조로. lint 157건(0.14.0 타입 적응)은 별도 수정 진행 중 |
+
+### 0.5 진행표 — 새 세션이 이 표를 갱신한다
+
+| 항목 | 상태 | 비고 |
+|---|---|---|
+| P0-1 cpp 조회 묶기 | 대기 | |
+| P0-2 java wrapper lock | 대기 | |
+| P0-3 java BigInteger | 대기 | |
+| P0-4 두 축 회계 조사 | **완료** | §2.1 — 판정은 04 §8로 스펙 확정, 잔여는 P1-6·P2-6·P3-6·P4-8 |
+| P1 dotnet (P1-1~P1-6) | 대기 | 착수 전 dotnet 세션 소유 확인(§3) |
+| P2 java (P2-1~P2-7) | 대기 | P1~P4 병렬 |
+| P3 cpp (P3-1~P3-6) | 대기 | P1~P4 병렬 |
+| P4 node (P4-1~P4-8) | 대기 | P1~P4 병렬 |
+| P5 계약 test | 대기 | P1~P4 뒤 |
+| 마감 게이트 (unit·cross-language e2e·샘플 6종 ZoneWorld 제외) | 대기 | §1.1 |
 
 ---
+
+## 1. 착수 순서 — 언어별 병렬 (2026-08-28 사용자 지정)
+
+**P1~P4는 언어별로 병렬로 진행한다.** 트리가 서로 다르고(각 `framework/languages/<lang>`),
+이름·라우팅은 [executor-naming-contract.ko.md](executor-naming-contract.ko.md)와 스펙 07에
+이미 고정돼 있어 서로를 기다릴 이유가 없다 — P2·P3의 참조 구현은 "P1이 끝난 dotnet"이
+아니라 **현행 dotnet 구조 + 스펙 07**이다(개명 전 이름이어도 구조 참조에는 지장 없다).
+
+| 단계 | 내용 | 병렬성 |
+|---|---|---|
+| **P0** | 구조와 독립인 선행 작업(§2) — 대상 언어별로 해당 P와 같은 에이전트에 묶어도 된다 | P1~P4와 병행 |
+| **P1 dotnet · P2 java · P3 cpp · P4 node** | 언어별 정렬 작업(§3~§6) | **4개 동시** — 언어당 codex 에이전트 1개, 같은 빌드 트리에 2개 금지 |
+| **P5** | 스펙 07 §10 → 언어별 계약 test | P1~P4 뒤, 언어별 병렬 |
+
+단 P1 착수 전 **dotnet 세션 소유 확인**(§3)만 예외로 먼저 한다 — 다른 세션이 같은 파일을
+잡고 있으면 dotnet만 뒤로 미루고 나머지 셋을 먼저 돌린다.
+
+### 1.1 마감 게이트 — 전 단계 완료 후 (2026-08-28 사용자 지정)
+
+P1~P5가 끝나면 다음 세 가지를 이 순서로 확인해야 캠페인이 끝난다.
+
+1. **언어별 unit test 전부** — §0.4의 게이트·기준선으로 판정
+2. **cross-language e2e**
+3. **샘플 6종 동작 확인 — ZoneWorld 제외**
+
+명령과 판정 기준은 [`../concurrency-redesign/rules.ko.md`](../concurrency-redesign/rules.ko.md)
+§4 게이트 매트릭스를 그대로 쓴다(알려진 기존 실패 목록 포함). 샘플·harness 실행은 codex
+sandbox가 loopback bind를 막으므로 **감독관이 직접 실행**한다(§0.2).
 
 ## 2. P0 — 구조와 독립인 선행 작업
 
@@ -96,74 +181,6 @@ spec-gap이 아니라 확정이다.
 P0-1~P0-3의 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에
 있다. P0-1은 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을
 어긴 자리를 되돌린다.
-
-### 2.1 P0-4 — mailbox 두 축 회계 (자체 조사 2026-08-28, 부분 완료)
-
-**계약.** owner mailbox는 건수·byte 두 축을 하나의 작업으로 예약하고, **반환은 handler가
-끝난 뒤**다([Framework API §11](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명) ·
-[02 §7](../../../framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)).
-`mailboxMessageBudget`·`mailboxByteBudget`은 **MeshNode socket 설정**이다(4언어 exact
-interface 공통).
-
-**실측 — 회계는 두 계층에 있다.** 앞선 "dotnet 미구현" 표는 serial queue 계층만 보고 내린
-판정이라 틀렸다.
-
-| 계층 | dotnet | java | cpp | node |
-|---|---|---|---|---|
-| **mesh/service mailbox** (owner별 admission, socket 설정이 여기로 감) | `ZLinkManagedMeshNode.EnqueueOwned` → `OwnedMailbox.TryEnqueue(…, MailboxMessageBudget, MailboxByteBudget)` (`:10530`) | `ZLinkServiceMailbox.tryEnqueue` (`:39`, 고정비 record 96+part 16) | `service_mailbox_t::try_enqueue` (`service_mailbox.cpp:46`, 4개 budget 필수) | `service-mailbox.ts` enqueue에서 `queue.bytes += retainedBytes` (`:102-124`) |
-| **owner serial queue** (02 §7의 application·lifecycle lane, 기본값 1,024/64 MiB·128/4 MiB·고정 256) | **없음** — admission이 seal·stopping만 본다 | `ZLinkAsyncSerialQueue` 두 축 | `serial_execution_queue` 두 축 (`hpp:119-130`) | `ZLinkBoundedSerialScheduler` 두 축 |
-
-**반환 시점 실측** — 02 §7은 "handler terminal completion에서만 반환"을 요구한다.
-
-| 언어 | serial queue 계층 | mesh mailbox 계층 |
-|---|---|---|
-| java | **handler 종료 시** — `finish(entry)`→`release(entry)` (`:670-679`), javadoc "released when the turn reaches its terminal boundary" (`:370`) | 확인 필요 |
-| node | **handler 종료 시** — record settle에서 `release()` (`serial-scheduler.ts:226,237`) | **dequeue 시** — drain에서 `queue.bytes -= nextBytes` (`service-mailbox.ts:158`) |
-| cpp | 완료 경로에서 `lane.bytes -= _active_bytes` (`:1094`) — terminal 의미 **확인 필요** | 확인 필요 |
-| dotnet | 계층 자체가 없음 | **dequeue 시** — `TryDequeue`→`onRecordDequeued(PendingBytes)` (`ZLinkMeshOwnedMailbox.cs:122`) |
-
-**남은 판정 (구현 세션 몫)**
-
-1. **dotnet 이탈 의심** — serial queue 계층에 회계가 없고 mesh mailbox는 dequeue에서
-   반환하므로, dequeue와 handler 종료 사이의 in-flight byte가 dotnet 어디에서도 계상되지
-   않는 것으로 보인다. 02 §7 위반인지, 다른 자리(Application job permit 등)가 그 구간을
-   지는지 판정.
-2. **node의 `submitPreAdmitted` 건너뛰기** — `service-mailbox.ts:87` 주석("second mailbox
-   cap would reject already-admitted work")이 두 계층 사이 이중 상한 회피를 명시한다. 위반이
-   아니라 계층 분담 설계일 가능성이 높아졌다. mesh 계층이 dequeue에서 반환하므로 in-flight
-   구간을 serial queue가 이어받는지가 판정 기준.
-3. cpp mesh mailbox·java service mailbox의 반환 시점 확인.
-4. 02 §7의 owner FIFO가 두 계층 중 어느 쪽을 가리키는지 — 기본값(1,024/64 MiB)은 serial
-   queue 계층과 일치한다. 스펙에 계층 구분이 없으면 spec-gap으로 올린다.
-
-P0-1~P0-3의 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에
-있다. P0-1은 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을
-어긴 자리를 되돌린다.
-
-### 2.1 P0-4 조사 대상 — mailbox 두 축 회계
-
-**계약.** owner mailbox는 **건수와 대기 중 byte 합계 두 축을 모두** 강제하고, 두 축을 하나의
-작업으로 예약하며, **반환은 handler가 끝난 뒤**다
-([Framework API 「11. Handler 실행 객체와 dependency 수명」](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)).
-[Application job queue](../../../framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.ko.md)
-permit과는 계상 경계가 다르다 — permit은 callback 첫 instruction 직전에 반환된다.
-
-| 언어 | 실측 | 판정할 것 |
-|---|---|---|
-| java | `ZLinkAsyncSerialQueue`가 두 축을 항상 예약한다. inbound Actor packet도 `payloadCopy.size()`를 넘긴다(`ZLinkSpotRuntime.java:4831`) | **만족으로 보인다.** 반환 시점이 handler 종료인지 확인 |
-| cpp | `serial_execution_queue.hpp:119-130`에 두 축이 있다 | 반환 시점과 원자적 예약 확인 |
-| **node** | permit을 든 작업은 `submitPreAdmitted`로 **예약을 건너뛴다**(`serial-scheduler.ts:145`). 주석은 "The shared permit is the capacity authority"라고 적혀 있다 | **이탈 의심.** ordinary ingress가 mailbox 두 축에 계상되지 않는다. 주석의 전제가 §11과 충돌하는지, 아니면 다른 자리에서 계상되는지 |
-| **dotnet** | `ZLinkSerialExecutionQueue`에 두 축이 **없다.** admission이 relocation seal과 stopping 상태만 본다 | **미구현 의심.** `ZLinkManagedMeshNode`의 `SetMailboxBudgets`·`ZLinkSpotNodeInitializer.cs:48` 경로가 그 자리인지 |
-
-**이 조사가 먼저인 이유.** 네 언어가 같은 계약을 서로 다르게 만족하고 있다면, 조율자 통일
-(P1~P4)보다 이쪽이 먼저 드러나야 한다. 판정 결과에 따라 P1의 dotnet 작업 범위와 node의
-`submitPreAdmitted` 처리 방향이 갈린다.
-
-**단정하지 않는다.** node의 건너뛰기는 이번 세션에서 "04 §3 위반"이라고 했다가 되돌린
-자리다 — 두 축 계약(§11)과 ingress permit 순서(04 §3)가 각각 무엇을 소유하는지부터 확인하고
-판정한다.
-
----
 
 ## 3. P1 — dotnet
 
@@ -312,6 +329,9 @@ wrapper를 비우고(P4-1) 그 이름을 조율자에 준다 — 순서를 뒤�
 - **빌드 실패를 진행 중으로 읽는다.** 전체 빌드 rc만 보면 무관한 codegen 실패가 통과로
   읽힌다. 필요한 target만 빌드하고 `Built target <name>` 문자열로 판정한다.
 - **`git add -A`로 진행 중인 작업을 쓸어 담는다.** 두 번 일어났다. 경로를 명시해 add한다.
+- **소유 문서를 안 읽고 구현 코드에서 계약을 추론한다.** SpotWide 2단 제거·byte 축 제거
+  두 Critical이 전부 이 실수였다 — 02 §3의 `Yield` claim과 Framework API §11이 정확히
+  반대를 규정하고 있었다. §0.1의 읽기 순서가 그 재발 방지다.
 - **한 파일만 보고 "없다"고 판정한다.** node Actor 큐를 `spot-serial-executor.ts`만 보고
   없다고 적었으나 다른 세 파일에 있었다. 없다는 판정은 저장소 전체 검색으로만 내린다.
 
