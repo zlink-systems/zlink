@@ -6,6 +6,9 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.net.URI
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.samples.kotlin.shoppingmall.server.commerceapi.handlers.ServerAssertionHandler
@@ -104,23 +107,24 @@ private fun startHttp(
 }
 
 private fun startObjectRouteReadiness(nodeId: String, meshes: ZLinkRouteMeshRuntime) {
-    Thread({
-        repeat(300) {
-            try {
-                if (meshes.isReady(SampleNames.OrderWorkflowMesh)) {
-                    println("shoppingmall-ready kind=object-route node=$nodeId target=workflow-a")
-                    println("shoppingmall-ready kind=object-route node=$nodeId target=workflow-b")
-                    return@Thread
-                }
-            } catch (_: IllegalStateException) {
-                // The passive runtime view becomes available after Framework startup.
-            }
-            Thread.sleep(100)
-        }
-    }, "shoppingmall-object-route-readiness-$nodeId").apply {
-        isDaemon = true
-        start()
+    val readiness = Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task, "shoppingmall-object-route-readiness-$nodeId").apply { isDaemon = true }
     }
+    val attempts = AtomicInteger()
+    readiness.scheduleWithFixedDelay({
+        val attempt = attempts.incrementAndGet()
+        try {
+            if (meshes.isReady(SampleNames.OrderWorkflowMesh)) {
+                println("shoppingmall-ready kind=object-route node=$nodeId target=workflow-a")
+                println("shoppingmall-ready kind=object-route node=$nodeId target=workflow-b")
+                readiness.shutdown()
+            }
+        } catch (_: IllegalStateException) {
+            // The passive runtime view becomes available after Framework startup.
+        } finally {
+            if (attempt >= 300) readiness.shutdown()
+        }
+    }, 0, 100, TimeUnit.MILLISECONDS)
 }
 
 private fun HttpExchange.runSafely(json: ObjectMapper, action: suspend () -> Any) {

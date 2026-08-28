@@ -1,12 +1,19 @@
 package systems.zlink.samples.gamequest.client;
 
+import java.io.IOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -303,16 +310,48 @@ public final class GameQuestClientScenario {
         throw new IllegalStateException("Projection did not reach " + questId + "=" + currentCount);
     }
 
-    private void waitForOwnerTerminationRelease() throws InterruptedException {
+    private void waitForOwnerTerminationRelease() throws IOException, InterruptedException {
         if (options.ownerUnavailableReleaseFile().isBlank()) {
             throw new IllegalStateException("sample.ownerUnavailableReleaseFile is required");
         }
-        Path releaseFile = Path.of(options.ownerUnavailableReleaseFile());
-        for (int attempt = 0; attempt < 300; attempt++) {
+        Path releaseFile = Path.of(options.ownerUnavailableReleaseFile()).toAbsolutePath().normalize();
+        Path parent = releaseFile.getParent();
+        if (parent == null) {
+            throw new IllegalStateException("Release file must have a parent directory");
+        }
+        if (Files.exists(releaseFile)) {
+            return;
+        }
+
+        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        try (WatchService watcher = FileSystems.getDefault().newWatchService()) {
+            parent.register(watcher, StandardWatchEventKinds.ENTRY_CREATE);
             if (Files.exists(releaseFile)) {
                 return;
             }
-            Thread.sleep(100);
+
+            while (true) {
+                long remainingNanos = deadlineNanos - System.nanoTime();
+                if (remainingNanos <= 0) {
+                    break;
+                }
+                WatchKey key = watcher.poll(remainingNanos, TimeUnit.NANOSECONDS);
+                if (key == null) {
+                    break;
+                }
+                boolean released = key.pollEvents().stream()
+                    .map(WatchEvent::context)
+                    .filter(Path.class::isInstance)
+                    .map(Path.class::cast)
+                    .anyMatch(releaseFile.getFileName()::equals);
+                boolean valid = key.reset();
+                if (released || Files.exists(releaseFile)) {
+                    return;
+                }
+                if (!valid) {
+                    break;
+                }
+            }
         }
         throw new IllegalStateException("Timed out waiting for owner termination release");
     }

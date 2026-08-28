@@ -8,9 +8,12 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import systems.zlink.contracts.core.RoutingId;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -18,6 +21,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.StandardEnvironment;
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
@@ -111,33 +115,34 @@ public final class Program {
     private static void startObjectRouteReadinessSignal(
         String nodeId,
         ZLinkRouteMeshRuntime routeRuntime) {
-        Thread readiness = new Thread(() -> {
-            for (int attempt = 0; attempt < 300; attempt++) {
-                try {
-                    var mesh = routeRuntime.snapshot(SampleNames.OrderSpotDiscovery);
-                    boolean ready = mesh.isReady() && mesh.peers().stream()
-                        .filter(peer -> peer.state().name().equals("READY"))
-                        .count() >= 2;
-                    if (ready) {
-                        System.out.println("shoppingmall-ready kind=object-route node=" + nodeId
-                            + " target=workflow-a");
-                        System.out.println("shoppingmall-ready kind=object-route node=" + nodeId
-                            + " target=workflow-b");
-                        return;
-                    }
-                } catch (RuntimeException ignored) {
-                    // The framework is still starting; the next passive snapshot retries it.
+        ScheduledExecutorService readiness = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "shoppingmall-object-route-readiness-" + nodeId);
+            thread.setDaemon(true);
+            return thread;
+        });
+        AtomicInteger attempts = new AtomicInteger();
+        readiness.scheduleWithFixedDelay(() -> {
+            int attempt = attempts.incrementAndGet();
+            try {
+                var mesh = routeRuntime.snapshot(SampleNames.OrderSpotDiscovery);
+                boolean ready = mesh.isReady() && mesh.peers().stream()
+                    .filter(peer -> peer.state().name().equals("READY"))
+                    .count() >= 2;
+                if (ready) {
+                    System.out.println("shoppingmall-ready kind=object-route node=" + nodeId
+                        + " target=workflow-a");
+                    System.out.println("shoppingmall-ready kind=object-route node=" + nodeId
+                        + " target=workflow-b");
+                    readiness.shutdown();
                 }
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    return;
+            } catch (RuntimeException ignored) {
+                // The framework is still starting; the next passive snapshot retries it.
+            } finally {
+                if (attempt >= 300) {
+                    readiness.shutdown();
                 }
             }
-        }, "shoppingmall-object-route-readiness-" + nodeId);
-        readiness.setDaemon(true);
-        readiness.start();
+        }, 0, 100, TimeUnit.MILLISECONDS);
     }
 
     private static void route(
