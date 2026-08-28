@@ -72,7 +72,12 @@ export class ZLinkSpotTimerRegistry {
       name: string,
       fallback: ZLinkSpotSerialTurnExecutor
     ) => ZLinkSpotSerialTurnExecutor,
-    private readonly executionAllowed: () => boolean = () => true
+    private readonly executionAllowed: () => boolean = () => true,
+    private readonly executeTimer?: <T>(
+      name: string,
+      operation: () => Promise<T> | T
+    ) => Promise<T>,
+    private readonly isTimerExecuting?: (name: string) => boolean
   ) {}
 
   setExecutionBarrier(barrier: ZLinkExecutionBarrier): void {
@@ -102,28 +107,34 @@ export class ZLinkSpotTimerRegistry {
     const handler = await resolveLifecycleHandler(spot, handlerType, providerResolver);
     const prepared = await this.lane.run(() => this.prepareAddCore(name));
     if (prepared.previous !== undefined) await prepared.previous.timer.cancel(signal);
-    const executionSerial =
-      this.executionSerialForTimer?.(name, serial) ?? serial;
-    if (this.executionBarrier !== undefined) {
-      executionSerial.setExecutionBarrier(this.executionBarrier);
-    }
+    const executionSerial = this.executeTimer === undefined
+      ? this.executionSerialForTimer?.(name, serial) ?? serial
+      : undefined;
+    if (this.executionBarrier !== undefined) executionSerial?.setExecutionBarrier(this.executionBarrier);
     const timer = startOutsideStateLane(() => new ZLinkManagedTimer(
       name,
       periodMs,
       normalizeTimerOptions(options),
       async (tick) => {
         const timerFlow = createInboundFlow(undefined, 'Timer', this.flowCreationEnabled());
-        await executionSerial.execute(() => {
+        const operation = () => {
           const current = this.timers.get(name);
           if (current === undefined || current.generation !== prepared.generation || current.timer !== timer) {
             return undefined;
           }
           if (!this.executionAllowed()) return undefined;
           return runWithFlow(timerFlow, () => handler.handle(spot, tick));
-        });
+        };
+        if (this.executeTimer !== undefined) {
+          await this.executeTimer(name, operation);
+        } else {
+          await executionSerial!.execute(operation);
+        }
       },
       reportFailure,
-      () => !executionSerial.isExecuting
+      () => this.executeTimer === undefined
+        ? !executionSerial!.isExecuting
+        : !this.isTimerExecuting?.(name)
     ));
     const registered = await this.lane.run(() => this.completeAddCore(
       name,

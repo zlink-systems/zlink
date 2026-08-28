@@ -69,6 +69,11 @@ export class ZLinkSpotSerialTurnExecutor {
     return captureZLinkSpotSerialTurn(this);
   }
 
+  /** Stops new turns while allowing turns accepted before close to complete. */
+  close(): Promise<void> {
+    return this.scheduler.close();
+  }
+
   /** Distinguishes a gate-owning turn from a suspended AsyncLocalStorage tail. */
   isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean {
     return this.depth > 0

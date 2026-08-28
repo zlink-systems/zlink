@@ -12,6 +12,7 @@ import {
 } from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkSpotActivationLifecycle } from '../../packages/framework/src/runtime/spots/spot-activation';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
+import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
 import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
 
@@ -31,7 +32,8 @@ function deferred(): Deferred {
 function activation(
   serial: ZLinkSpotSerialTurnExecutor,
   timers: ZLinkSpotTimerRegistry,
-  executionMode: ZLinkUserSpotExecutionMode
+  executionMode: ZLinkUserSpotExecutionMode,
+  serialExecutor?: ZLinkSpotSerialExecutor
 ): ZLinkSpotActivation {
   return new ZLinkSpotActivation({
     meshName: 'mesh',
@@ -39,6 +41,7 @@ function activation(
     spotType: class BarrierSpot {} as never,
     spot: {} as never,
     serial,
+    serialExecutor,
     domain: {
       kind: 'user',
       executionMode,
@@ -100,16 +103,25 @@ test('lifecycle seal quiesces a yielded turn and rejects its late continuation',
 
 test('PerActor lifecycle barrier quiesces Actor, Spot, and timer lanes together', async () => {
   const spotSerial = new ZLinkSpotSerialTurnExecutor(false);
-  const timerSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
-  const timers = new ZLinkSpotTimerRegistry(undefined, () => false, (name) => {
-    let serial = timerSerials.get(name);
-    if (serial === undefined) {
-      serial = new ZLinkSpotSerialTurnExecutor(false);
-      timerSerials.set(name, serial);
-    }
-    return serial;
-  });
-  const state = activation(spotSerial, timers, ZLinkUserSpotExecutionMode.PerActor);
+  const serialExecutor = new ZLinkSpotSerialExecutor(
+    spotSerial,
+    ZLinkUserSpotExecutionMode.PerActor,
+    'spot-barrier'
+  );
+  const timers = new ZLinkSpotTimerRegistry(
+    undefined,
+    () => false,
+    undefined,
+    undefined,
+    (name, operation) => serialExecutor.executeTimer(name, operation),
+    (name) => serialExecutor.isTimerExecuting(name)
+  );
+  const state = activation(
+    spotSerial,
+    timers,
+    ZLinkUserSpotExecutionMode.PerActor,
+    serialExecutor
+  );
   const actorDone = deferred();
   const actorStarted = deferred();
   const spotDone = deferred();

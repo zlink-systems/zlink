@@ -75,6 +75,7 @@ export class ZLinkSerialExecutionQueue {
   private lifecycleStreak = 0;
   private lifecycleDebt = false;
   private claimStartedAt?: number;
+  private closed = false;
   private readonly idleWaiters: Array<() => void> = [];
 
   constructor(
@@ -178,12 +179,19 @@ export class ZLinkSerialExecutionQueue {
     return new Promise(resolve => this.idleWaiters.push(resolve));
   }
 
+  /** Stops new submissions while allowing the accepted FIFO to finish. */
+  close(): Promise<void> {
+    this.closed = true;
+    return this.whenIdle();
+  }
+
   private admit<T>(
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions,
     context?: unknown,
     reserveCapacity = true
   ): Promise<T> {
+    if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options.lane ?? 'application';
     const byteCost = reserveCapacity ? this.byteCost(options) : 0;
     const target = lane === 'application' ? this.application : this.lifecycle;

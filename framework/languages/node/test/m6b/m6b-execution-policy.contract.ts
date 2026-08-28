@@ -11,6 +11,7 @@ import {
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
 import { ZLinkConfigurationException } from '../../packages/framework/src/runtime/configuration';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
+import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
 import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
 import { DefaultZLinkWorkerCall } from '../../packages/framework/src/runtime/workers';
@@ -193,18 +194,18 @@ test('Yield rejects outside an allowed gate before worker admission', async () =
 
 test('PerActor timer registrations select an independent lane per timer name', async () => {
   const spotSerial = new ZLinkSpotSerialTurnExecutor(false);
-  const timerSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
+  const serialExecutor = new ZLinkSpotSerialExecutor(
+    spotSerial,
+    ZLinkUserSpotExecutionMode.PerActor,
+    'spot-a'
+  );
   const registry = new ZLinkSpotTimerRegistry(
     undefined,
     () => false,
-    (name) => {
-      let serial = timerSerials.get(name);
-      if (serial === undefined) {
-        serial = new ZLinkSpotSerialTurnExecutor(false);
-        timerSerials.set(name, serial);
-      }
-      return serial;
-    }
+    undefined,
+    undefined,
+    (name, operation) => serialExecutor.executeTimer(name, operation),
+    (name) => serialExecutor.isTimerExecuting(name)
   );
   class TimerHandler {
     handle(): void {}
@@ -227,9 +228,18 @@ test('PerActor timer registrations select an independent lane per timer name', a
     {} as never
   );
 
-  assert.notEqual(timerSerials.get('heartbeat'), timerSerials.get('expiry'));
-  assert.notEqual(timerSerials.get('heartbeat'), spotSerial);
-  assert.notEqual(timerSerials.get('expiry'), spotSerial);
+  const heartbeatStarted = deferred<void>();
+  const heartbeatDone = deferred<void>();
+  const expiryStarted = deferred<void>();
+  const heartbeat = serialExecutor.executeTimer('heartbeat', async () => {
+    heartbeatStarted.resolve();
+    await heartbeatDone.promise;
+  });
+  await heartbeatStarted.promise;
+  const expiry = serialExecutor.executeTimer('expiry', () => expiryStarted.resolve());
+  await expiryStarted.promise;
+  heartbeatDone.resolve();
+  await Promise.all([heartbeat, expiry]);
   await registry.dispose();
 });
 

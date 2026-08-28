@@ -14,7 +14,7 @@ const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 const {
-  ZLinkActorDispatchMailbox
+  ZLinkActorSerialExecutor
 } = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
 const {
   decodeActorAuthorityIdentity,
@@ -1121,7 +1121,7 @@ test('cross-node Accepted root preserves identity, reply and cursor across mailb
   assert.equal(root.actor.nodeRid, 'node-b');
   assert.equal(roots.has(references[0]), false);
 
-  const mailbox = new ZLinkActorDispatchMailbox();
+  const mailbox = new ZLinkActorSerialExecutor(actorRef.actorId, 'spot-a');
   const callbackEvents = [];
   let attempts = 0;
   const actor = {
@@ -1134,11 +1134,11 @@ test('cross-node Accepted root preserves identity, reply and cursor across mailb
       if (attempts === 1) throw new Error('retry');
     }
   };
-  const backlog = mailbox.submit(async () => {
+  const backlog = mailbox.execute(async () => {
     callbackEvents.push('backlog');
   });
   await assert.rejects(
-    journal.deliver(root, actor, actorRef, operation => mailbox.submit(operation)),
+    journal.deliver(root, actor, actorRef, operation => mailbox.execute(operation)),
     /retry/
   );
   await backlog;
@@ -1152,7 +1152,7 @@ test('cross-node Accepted root preserves identity, reply and cursor across mailb
     root,
     actor,
     actorRef,
-    operation => mailbox.submit(operation)
+    operation => mailbox.execute(operation)
   );
   assert.equal(root.cursor, 'delivered');
   assert.equal(root.reference.value, references[2]);
@@ -1164,7 +1164,7 @@ test('cross-node Accepted root preserves identity, reply and cursor across mailb
     root,
     actor,
     actorRef,
-    operation => mailbox.submit(operation)
+    operation => mailbox.execute(operation)
   );
   assert.equal(attempts, 2);
   assert.deepEqual(events, [
@@ -1246,10 +1246,10 @@ test('a replacement runtime preserves committed Accepted completion ordering wit
   assert.deepEqual(recovered.operationId, operationId);
   assert.equal(recovered.actor.objectGeneration, 17n);
 
-  const mailbox = new ZLinkActorDispatchMailbox();
+  const mailbox = new ZLinkActorSerialExecutor(targetActorRef.actorId, 'spot-a');
   const events = [];
   let callbacks = 0;
-  const backlog = mailbox.submit(async () => {
+  const backlog = mailbox.execute(async () => {
     events.push('backlog');
   });
   const delivered = await recoveredRuntime.deliver(
@@ -1262,7 +1262,7 @@ test('a replacement runtime preserves committed Accepted completion ordering wit
       }
     },
     targetActorRef,
-    operation => mailbox.submit(operation)
+    operation => mailbox.execute(operation)
   );
   await backlog;
 

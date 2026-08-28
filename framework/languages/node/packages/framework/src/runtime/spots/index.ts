@@ -118,6 +118,7 @@ import type {
 import { SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE } from '../foundation/service-wire-constants.generated';
 
 export { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
+export { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 export {
   ZLinkManagedTimer,
   ZLinkSpotTimerRegistry
