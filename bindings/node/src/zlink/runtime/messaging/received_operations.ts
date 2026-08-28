@@ -8,29 +8,40 @@ import {
 import type {
   ReplyOperation,
   ReplySubmitOperation,
-  ImmediateSendOperation,
-  ImmediateSendSubmitOperation,
+  RoutedSendOperation,
+  RoutedSendSubmitOperation,
 } from '../../contracts/messaging/operations';
 import { SendFlags } from '../../contracts/sockets/socket_constants';
 import { SendOperationBase } from './send_operation_base';
 
 class RuntimeReceivedSendOperation
   extends SendOperationBase<Message | BufferLike, Message>
-  implements ImmediateSendOperation, ImmediateSendSubmitOperation {
-  private readonly _invoke: (parts: readonly Message[], flags: SendFlags) => boolean;
+  implements RoutedSendOperation, RoutedSendSubmitOperation {
+  private _timeoutMs = 0;
 
-  constructor(invoke: (parts: readonly Message[], flags: SendFlags) => boolean) {
+  constructor(
+    private readonly _invoke: (parts: readonly Message[], flags: SendFlags) => void,
+    private readonly _invokeAsync: (parts: readonly Message[], timeoutMs: number) => Promise<void>
+  ) {
     super((message) => message instanceof Message ? message : Message.from(message));
-    this._invoke = invoke;
   }
 
-  submit(): boolean {
-    const parts = this.consumeParts();
-    const accepted = this._invoke(parts, this._flags);
-    if (accepted) {
-      for (const part of parts) consumeSubmittedMessage(part);
+  timeout(timeoutMs: number): this {
+    this.ensureOpen();
+    if (!Number.isInteger(timeoutMs) || timeoutMs < -1 || timeoutMs > 0x7fffffff) {
+      throw new RangeError('timeoutMs must be in the range -1..2147483647');
     }
-    return accepted;
+    this._timeoutMs = timeoutMs;
+    return this;
+  }
+
+  submit(): Promise<void>;
+  submit(flags: SendFlags): void;
+  submit(flags?: SendFlags): Promise<void> | void {
+    const parts = this.consumeParts();
+    if (flags === undefined) return this._invokeAsync(parts, this._timeoutMs);
+    this._invoke(parts, flags);
+    for (const part of parts) consumeSubmittedMessage(part);
   }
 }
 
@@ -54,9 +65,10 @@ class RuntimeReceivedReplyOperation
 }
 
 export function createReceivedSendOperation(
-  invoke: (parts: readonly Message[], flags: SendFlags) => boolean
-): ImmediateSendOperation {
-  return new RuntimeReceivedSendOperation(invoke);
+  invoke: (parts: readonly Message[], flags: SendFlags) => void,
+  invokeAsync: (parts: readonly Message[], timeoutMs: number) => Promise<void>
+): RoutedSendOperation {
+  return new RuntimeReceivedSendOperation(invoke, invokeAsync);
 }
 
 export function createReceivedReplyOperation(

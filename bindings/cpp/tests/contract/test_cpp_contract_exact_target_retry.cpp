@@ -8,8 +8,6 @@
 
 #include "support.hpp"
 
-#include <Runtime/Core/routing_id_access.hpp>
-#include <Runtime/Sockets/socket_access.hpp>
 #include <zlink/message/api.h>
 
 #include <atomic>
@@ -23,18 +21,18 @@
 namespace
 {
 
-bool send_dealer_dontwait (zlink::dealer_socket_t &dealer_,
-                           const std::string &payload_)
+bool send_dealer_dontwait (zlink::dealer_socket_t &dealer_, const std::string &payload_)
 {
-    zlink_msg_t part;
-    assert (zlink_msg_init_size (&part, payload_.size ()) == ZLINK_CONFIG_OK);
-    if (!payload_.empty ())
-        std::memcpy (zlink_msg_data (&part), payload_.data (), payload_.size ());
-    const zlink_submit_result_t result = zlink_send_part (
-      zlink::detail::native_handle (dealer_), &part,
-      ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
-    assert (zlink_msg_close (&part) == ZLINK_CONFIG_OK);
-    return result == ZLINK_SUBMIT_OK;
+    zlink::message_t payload = zlink_cpp_contract::make_message (payload_);
+    try {
+        dealer_.send ().message (payload).flags (zlink::send_flags_t::dontwait).submit ();
+        return true;
+    }
+    catch (const zlink::submit_error_t &error) {
+        assert (error.result () == zlink::submit_result_t::backpressured);
+        assert (payload.valid ());
+        return false;
+    }
 }
 
 bool fill_until_backpressured (zlink::dealer_socket_t &dealer_,
@@ -154,12 +152,14 @@ int test_routed_send_without_credit_reports_backpressure ()
     }
 
     dealer.options ().send_timeout (std::chrono::milliseconds (100));
-    zlink::message_t payload =
-      zlink_cpp_contract::make_message ("not-admitted");
+    zlink::message_t payload = zlink_cpp_contract::make_message ("not-admitted");
     const auto started = std::chrono::steady_clock::now ();
     try {
-        dealer.send ().message (payload).submit ();
-        std::fprintf (stderr, "expired SNDTIMEO must fail the submit\n");
+        dealer.send ()
+          .message (payload)
+          .flags (zlink::send_flags_t::dontwait)
+          .submit ();
+        std::fprintf (stderr, "DONTWAIT must fail immediately at the HWM\n");
         return 2;
     }
     catch (const zlink::submit_error_t &error) {
@@ -171,7 +171,7 @@ int test_routed_send_without_credit_reports_backpressure ()
         }
     }
     if (std::chrono::steady_clock::now () - started >= std::chrono::seconds (2)) {
-        std::fprintf (stderr, "SNDTIMEO was not the wait bound\n");
+        std::fprintf (stderr, "DONTWAIT did not return immediately\n");
         return 4;
     }
     // The C++ staging policy preserves the public lvalue even though Core

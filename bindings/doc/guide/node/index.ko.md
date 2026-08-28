@@ -48,7 +48,7 @@ server.recv(received);
 console.log(received.parts[0].data().toString()); // PING
 received.close();
 
-server.send().message(Buffer.from('ACK')).submit();
+await server.send().message(Buffer.from('ACK')).submit();
 
 server.close();
 ctx.close();
@@ -60,7 +60,7 @@ const ctx = zlink.createContext();
 const client = zlink.createPairSocket(ctx);
 client.connect('tcp://127.0.0.1:5555');
 
-client.send().message(Buffer.from('PING')).submit();
+await client.send().message(Buffer.from('PING')).submit();
 
 const received = new zlink.Received();
 client.recv(received);
@@ -89,8 +89,8 @@ Node 바인딩은 `Buffer`를 메시지로 직접 씁니다. `message()`를 호�
 만들기 때문에 원본 Buffer를 마음껏 재사용할 수 있습니다.
 
 ```javascript
-socket.send().message(Buffer.from('hello')).submit();
-socket.send().message(Buffer.from([0x01, 0x02])).submit();
+await socket.send().message(Buffer.from('hello')).submit();
+await socket.send().message(Buffer.from([0x01, 0x02])).submit();
 
 // 수신 후 페이로드 접근
 const received = new zlink.Received();
@@ -98,6 +98,16 @@ socket.recv(received);
 const data = received.parts[0].data();   // Buffer
 const text = data.toString('utf8');
 received.close();
+```
+
+HWM 대기 가능 send는 비동기 `submit()`과 동기 `submit(SendFlags)` overload를
+제공합니다. Node 이벤트 루프에서는 Promise를 반환하는 flag 없는 `submit()`을
+기본으로 사용합니다. 즉시 backpressure가 필요할 때만
+`submit(zlink.SendFlags.DontWait)`을 사용합니다.
+
+```javascript
+await socket.send().message(Buffer.from('data')).submit(); // 비동기
+socket.send().message(Buffer.from('data')).submit(zlink.SendFlags.DontWait); // 동기 non-blocking
 ```
 
 ### Received — 수신 봉투
@@ -150,7 +160,7 @@ Node 바인딩은 작업별 에러 클래스를 던집니다.
 
 ```javascript
 try {
-  socket.send().message(Buffer.from('data')).submit();
+  socket.send().message(Buffer.from('data')).submit(zlink.SendFlags.DontWait);
 } catch (error) {
   if (error instanceof zlink.SubmitError) {
     if (error.result === zlink.SubmitResult.Backpressured) {
@@ -177,7 +187,8 @@ try {
 | `zlink_socket(ctx, type)` | `zlink.createPairSocket(ctx)` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` | `socket.send().message(buf).submit()` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(buf).submit(flags)` |
+| `zlink_send_async(...)` | `await socket.send().message(buf).submit()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` (Buffer) |
 | `zlink_routing_id_t` | `zlink.RoutingId` |
@@ -203,7 +214,13 @@ console.log(`zlink ${major}.${minor}.${patch}`);
 |------|------|
 | `Context`·소켓 | 메인 이벤트 루프에서 사용 |
 | 블로킹 `recv()` | 이벤트 루프를 막으므로 짧게 사용하거나 논블로킹 + 폴러 권장 |
+| 동기 `submit(SendFlags.None)` | HWM 대기 시 이벤트 루프 전체를 멈춰 런타임 진행이 정지함 — 사용하지 않음 |
+| 동기 `submit(SendFlags.DontWait)` | 즉시 반환하므로 이벤트 루프를 막지 않음 |
 | 비동기 `submit()` | Promise 기반 — 이벤트 루프를 막지 않음 |
+
+Node에서는 blocking send를 이벤트 루프에서 실행하지 않습니다. `DONTWAIT`가 필요한
+즉시 제출에는 `submit(zlink.SendFlags.DontWait)`을 사용하고, HWM admission을
+기다려야 하면 비동기 `submit()`을 `await`합니다.
 
 ---
 

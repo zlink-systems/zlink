@@ -16,6 +16,8 @@ import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.contracts.messaging.RoutedSendSubmitOperation;
 import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.contracts.messaging.SendSubmitOperation;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
 import java.time.Duration;
 import java.util.List;
@@ -39,12 +41,14 @@ public final class MessageOperations {
             Objects.requireNonNull(invoker, "invoker"));
     }
 
-    public static RoutedSendOperation routedSend(RoutedSendInvoker invoker) {
-        return new RoutedSendBuilder(invoker);
+    public static RoutedSendOperation routedSend(RoutedSendInvoker invoker,
+                                                  SyncSendInvoker syncInvoker) {
+        return new RoutedSendBuilder(invoker, syncInvoker);
     }
 
-    public static AsyncSendOperation asyncSend(AsyncSendInvoker invoker) {
-        return new AsyncSendBuilder(invoker);
+    public static AsyncSendOperation asyncSend(AsyncSendInvoker invoker,
+                                               SyncSendInvoker syncInvoker) {
+        return new AsyncSendBuilder(invoker, syncInvoker);
     }
 
     public static PublishOperation publish(PublishInvoker invoker) {
@@ -80,6 +84,11 @@ public final class MessageOperations {
     }
 
     @FunctionalInterface
+    public interface SyncSendInvoker {
+        boolean submit(List<Message> parts, SendFlags flags);
+    }
+
+    @FunctionalInterface
     public interface PublishInvoker {
         void submit(List<Message> parts, SendFlags flags);
     }
@@ -87,12 +96,16 @@ public final class MessageOperations {
     private static final class AsyncSendBuilder
       implements AsyncSendOperation, AsyncSendSubmitOperation {
         private final AsyncSendInvoker invoker;
+        private final SyncSendInvoker syncInvoker;
         private final MessagePartsBuffer parts = new MessagePartsBuffer();
         private Duration timeout;
         private boolean submitted;
 
-        private AsyncSendBuilder(AsyncSendInvoker invoker) {
+        private AsyncSendBuilder(AsyncSendInvoker invoker,
+                                 SyncSendInvoker syncInvoker) {
             this.invoker = Objects.requireNonNull(invoker, "invoker");
+            this.syncInvoker = Objects.requireNonNull(syncInvoker,
+                "syncInvoker");
         }
 
         @Override
@@ -118,6 +131,22 @@ public final class MessageOperations {
             return invoker.submit(parts.asList(), timeout);
         }
 
+        @Override
+        public void submit(SendFlags flags) {
+            markSubmitted();
+            if (!syncInvoker.submit(parts.asList(), Objects.requireNonNull(
+                flags, "flags"))) {
+                throw new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
+            }
+        }
+
+        private void markSubmitted() {
+            ensureNotSubmitted();
+            if (parts.isEmpty())
+                throw new IllegalArgumentException("at least one message required");
+            submitted = true;
+        }
+
         private void ensureNotSubmitted() {
             if (submitted)
                 throw new IllegalStateException("operation already submitted");
@@ -133,12 +162,16 @@ public final class MessageOperations {
     private static final class RoutedSendBuilder
       implements RoutedSendOperation, RoutedSendSubmitOperation {
         private final RoutedSendInvoker invoker;
+        private final SyncSendInvoker syncInvoker;
         private final MessagePartsBuffer parts = new MessagePartsBuffer();
         private Duration timeout;
         private boolean submitted;
 
-        private RoutedSendBuilder(RoutedSendInvoker invoker) {
+        private RoutedSendBuilder(RoutedSendInvoker invoker,
+                                  SyncSendInvoker syncInvoker) {
             this.invoker = Objects.requireNonNull(invoker, "invoker");
+            this.syncInvoker = Objects.requireNonNull(syncInvoker,
+                "syncInvoker");
         }
 
         @Override
@@ -162,6 +195,18 @@ public final class MessageOperations {
                 throw new IllegalArgumentException("at least one message required");
             submitted = true;
             return invoker.submit(parts.asList(), timeout);
+        }
+
+        @Override
+        public void submit(SendFlags flags) {
+            ensureNotSubmitted();
+            if (parts.isEmpty())
+                throw new IllegalArgumentException("at least one message required");
+            submitted = true;
+            if (!syncInvoker.submit(parts.asList(), Objects.requireNonNull(
+                flags, "flags"))) {
+                throw new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
+            }
         }
 
         private void ensureNotSubmitted() {

@@ -21,7 +21,7 @@ internal static class Program
 
         const string payload = "hello-pair";
         using (Message message = Message.From(payload))
-            sender.Send().Message(message).Submit();
+            sender.Send().Message(message).Submit(SendFlags.None);
         string receivedPayload = SampleSupport.ReceiveUtf8(receiver, 2000);
         Console.WriteLine(
             $"[pair/recv] send: \"hello-pair\" -> recv: \"{receivedPayload}\"");

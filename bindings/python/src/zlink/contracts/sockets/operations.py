@@ -40,6 +40,10 @@ class RoutedSendOp(_FluentMessageOp, Protocol):
         """Return the coroutine Core's send-completion notification resolves."""
         ...
 
+    def submit_blocking(self, *, flags=0) -> None:
+        """Submit synchronously, blocking unless DONT_WAIT is set."""
+        ...
+
 
 @runtime_checkable
 class RequestOp(_FluentMessageOp, Protocol):

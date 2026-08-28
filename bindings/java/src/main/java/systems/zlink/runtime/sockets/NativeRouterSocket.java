@@ -58,7 +58,9 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     public RoutedSendOperation send(RoutingId rid) {
         Objects.requireNonNull(rid, "rid");
         return MessageOperations.routedSend((parts, timeout) ->
-            runtime().sendAsync(rid, parts, timeout));
+            runtime().sendAsync(rid, parts, timeout),
+            (parts, flags) -> runtime().send(rid, parts,
+                SendFlag.fromValue(flags.value())));
     }
 
     public RoutedSendOperation send(RoutingId rid,
@@ -70,7 +72,10 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
         }
         return MessageOperations.routedSend((parts, timeout) ->
             runtime().sendAsync(rid, transportPairId, transportPairGeneration,
-                parts, timeout));
+                parts, timeout),
+            (parts, flags) -> runtime().send(rid, transportPairId,
+                transportPairGeneration, parts,
+                SendFlag.fromValue(flags.value())));
     }
 
     private boolean sendInternal(RoutingId rid, Message part, SendFlags flags) {

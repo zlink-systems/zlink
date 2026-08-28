@@ -277,14 +277,15 @@ behavior are defined only by the immutable byte value.
   variants. An awaitable terminal on an HWM-managed DEALER/ROUTER routed
   send/request builder is unified as `Async(...)`.
 
-### DEALER/ROUTER routed asynchronous terminals
+### HWM-managed send sync(+flags)/async terminals
 
 - `IDealerSocket.Send()` and `IRouterSocket.Send(RoutingId)` return
-  `RoutedSendOperation`. The only terminal on `RoutedSendSubmitOperation` is
-  `Task Async(CancellationToken)`. Both sockets inherit only
-  `IReceivingMessageSocket` and connect roles, which contain no synchronous
-  `SendOperation`. Conversion to a base interface therefore cannot recover
-  `Flags(...)` or `Submit()`.
+  `RoutedSendOperation`. `RoutedSendSubmitOperation` provides both the sync
+  `void Submit(SendFlags)` terminal and the async
+  `Task Async(CancellationToken)` terminal. `SendFlags.None` waits inside Core
+  for admission; `SendFlags.DontWait` immediately throws
+  `ZlinkSubmitException` (`Result == Backpressured`) when HWM is full. PAIR send
+  and `Received.Send()` provide the same terminal pair.
 - The only terminal on the `RequestSubmitOperation` returned from
   `IDealerSocket.Request()` or `IRouterSocket.Request(RoutingId)` is
   `Task<IReadOnlyList<Message>> Async(CancellationToken)`. These routed builders
@@ -316,9 +317,10 @@ behavior are defined only by the immutable byte value.
   operation until one of the preceding terminal conditions completes it.
 - The public contract has no separate queue capacity or queue-full result and
   requires no Framework retry or polling.
-- Unrelated common synchronous data-plane builders for roles such as PAIR and
-  STREAM remain separate contracts; they are not canonical terminals for the
-  DEALER/ROUTER HWM-managed routed path.
+- PAIR, STREAM, DEALER/ROUTER routed send, and `Received.Send()` all follow the
+  same HWM-managed send terminal pair. The sync terminal passes flags to native
+  `zlink_send_part(_rid)`; the async terminal follows `zlink_send_async`
+  completion.
 - Core's send-completion notification drives pending routed send completion. The socket
   runtime installs `zlink_send_complete_handler` once, on the first `Async(...)`,
   and every operation then hands one complete record to `zlink_send_async`. The

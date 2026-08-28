@@ -4,6 +4,7 @@ package systems.zlink.contracts.messaging;
 
 import java.time.Duration;
 import java.util.concurrent.CompletionStage;
+import systems.zlink.contracts.sockets.SendFlags;
 
 /** Accepts further parts and starts a Core asynchronous routed send. */
 public interface RoutedSendSubmitOperation
@@ -20,4 +21,13 @@ public interface RoutedSendSubmitOperation
      * @return a stage completed when Core accepts the complete record
      */
     CompletionStage<Void> submit();
+
+    /**
+     * Sends synchronously with the requested blocking behavior.
+     *
+     * @param flags {@link SendFlags#NONE} to wait for admission or
+     *              {@link SendFlags#DONT_WAIT} to report backpressure
+     *              immediately
+     */
+    void submit(SendFlags flags);
 }

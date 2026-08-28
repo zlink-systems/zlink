@@ -2,7 +2,7 @@
 
 import { Received } from '../../contracts/messaging/received';
 import { Message } from '../../contracts/messaging/message';
-import type { ImmediateSendOperation, ReplyOperation } from '../../contracts/messaging/operations';
+import type { ReplyOperation, RoutedSendOperation } from '../../contracts/messaging/operations';
 import { RoutingId } from '../../contracts/core/routing_id';
 import {
   closeMessageParts,
@@ -15,7 +15,7 @@ export interface ReplyContext {
 }
 
 export interface SendContext {
-  beginSend(): ImmediateSendOperation;
+  beginSend(): RoutedSendOperation;
 }
 
 interface ReceivedState {

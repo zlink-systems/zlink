@@ -106,6 +106,16 @@ socket.send ().message (msg).submit ();
 // 전송 후 msg는 무효 — 다시 쓰지 말 것
 ```
 
+HWM 대기 가능 send에는 동기와 비동기 종결자가 모두 있습니다. plain thread에서는
+`submit()`을 사용하며, `flags(ZLINK_DONTWAIT)`를 앞에 붙이면 HWM이 가득 찼을 때
+즉시 반환합니다. coroutine에서는 flag 없는 `async()`를 `co_await`합니다.
+
+```cpp
+socket.send ().message (msg).submit (); // 동기, 기본은 HWM admission까지 blocking
+bool sent = socket.send ().message (msg).flags (ZLINK_DONTWAIT).submit ();
+co_await socket.send ().message (msg).async (); // 비동기, 호출 thread를 막지 않음
+```
+
 수신된 메시지 읽기:
 
 ```cpp
@@ -209,7 +219,8 @@ try {
 | `zlink_socket(ctx, type)` | `zlink::pair_socket_t{ctx}` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` | `socket.send().message(m).submit()` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).flags(flag).submit()` |
+| `zlink_send_async(...)` | `co_await socket.send().message(m).async()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` / `part.bytes()` |
 | `zlink_msg_size(msg)` | `part.size()` |
@@ -240,6 +251,11 @@ if (zlink::has ("draft")) {
 | 소켓 | **하나의 스레드에서만** 사용. 동시 접근 금지 |
 | 디스패치 핸들러 | zlink 내부 워커 스레드에서 호출됨 |
 | `message_t::bytes()` | 메시지 수명 동안만 유효한 span |
+
+flag 없는 동기 `submit()`은 HWM admission을 기다리는 동안 호출 thread를 멈춥니다.
+plain thread에서는 그 thread만 대기합니다. 다른 작업을 계속해야 하는 coroutine에서는
+`co_await async()`를 사용하고, 즉시 backpressure가 필요하면
+`.flags(ZLINK_DONTWAIT).submit()`을 사용합니다.
 
 ```cpp
 // 올바른 패턴: 소켓 per-스레드

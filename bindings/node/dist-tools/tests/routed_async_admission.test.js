@@ -49,6 +49,49 @@ test('managed PAIR send resolves from Core completion and consumes at submit', a
         payload.close();
     }
 });
+test('sync PAIR submit(NONE) admits a send and returns void', () => {
+    const context = zlink.createContext();
+    const sender = zlink.createPairSocket(context);
+    const receiver = zlink.createPairSocket(context);
+    sender.bind(endpoint('sync-blocking'));
+    receiver.connect(sender.options.lastEndpoint);
+    try {
+        const result = sender.send().message('sync-completion').submit(zlink.SendFlags.None);
+        assert.equal(result, undefined);
+        const received = new zlink.Received();
+        assert.equal(receiver.recv(received), true);
+        assert.equal(received.singlePartOrThrow().getString(), 'sync-completion');
+        received.close();
+    }
+    finally {
+        closeAll(context, sender, receiver);
+    }
+});
+test('sync PAIR submit(DONTWAIT) reports immediate backpressure at HWM', async () => {
+    const context = zlink.createContext();
+    context.options.autoHwmEnabled = false;
+    const sender = zlink.createPairSocket(context);
+    const receiver = zlink.createPairSocket(context);
+    sender.options.sendHwm = 4096n;
+    receiver.options.recvHwm = 4096n;
+    sender.bind(endpoint('sync-dontwait'));
+    receiver.connect(sender.options.lastEndpoint);
+    const first = zlink.Message.from(Buffer.alloc(4_096, 0x65));
+    const rejected = zlink.Message.from(Buffer.alloc(4_096, 0x66));
+    try {
+        await sender.send().message(first).submit();
+        const startedAt = Date.now();
+        assert.throws(() => sender.send().message(rejected).submit(zlink.SendFlags.DontWait), (error) => error instanceof zlink.SubmitError
+            && error.result === zlink.SubmitResult.Backpressured);
+        assert.ok(Date.now() - startedAt < 250, 'DONTWAIT submit must return immediately');
+        assert.equal(rejected.size(), 4_096);
+    }
+    finally {
+        closeAll(context, sender, receiver);
+        first.close();
+        rejected.close();
+    }
+});
 test('Core timeout maps to per-operation SubmitError with the Core errno', async () => {
     const context = zlink.createContext();
     context.options.autoHwmEnabled = false;

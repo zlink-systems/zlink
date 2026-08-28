@@ -28,7 +28,7 @@ internal static class Program
         SampleSupport.EnsureEqual("ping", requestPayload, "request");
 
         using var reply = Message.From("pong");
-        received.Send().Message(reply).Submit();
+        received.Send().Message(reply).Submit(SendFlags.None);
         string payload = SampleSupport.ReceiveUtf8(dealer, 2000);
         Console.WriteLine($"[dealer-router/recv] send: \"ping\" -> recv: \"{payload}\"");
         // --8<-- [end:doc]

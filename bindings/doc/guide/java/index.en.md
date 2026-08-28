@@ -70,7 +70,7 @@ try (Context ctx = Zlink.createContext();
         System.out.println(text); // PING
 
         try (Message reply = Message.from("ACK")) {
-            server.send().message(reply).submit();
+            server.send().message(reply).submit(SendFlags.NONE);
         }
     }
 }
@@ -84,7 +84,7 @@ try (Context ctx = Zlink.createContext();
     client.connect("tcp://127.0.0.1:5555");
 
     try (Message ping = Message.from("PING")) {
-        client.send().message(ping).submit();
+        client.send().message(ping).submit(SendFlags.NONE);
     }
 
     try (Received received = new Received()) {
@@ -129,7 +129,7 @@ retained, so retry or close it explicitly.
 ```java
 // build a copy from a string
 try (Message msg = Message.from("payload")) {
-    socket.send().message(msg).submit();
+    socket.send().message(msg).submit(SendFlags.NONE);
 }
 // once submit succeeds msg is already consumed — closing the try block is harmless
 
@@ -139,8 +139,19 @@ try (Message msg = Message.from(bytes)) { ... }
 // allocate a sized empty frame
 try (Message msg = new Message(256)) {
     msg.mutableDataBuffer().put(data);
-    socket.send().message(msg).submit();
+    socket.send().message(msg).submit(SendFlags.NONE);
 }
+```
+
+HWM-managed sends provide asynchronous `submit()` and synchronous
+`submit(SendFlags)` overloads. `submit(SendFlags.NONE)` stops the current thread
+until HWM admission, while `submit(SendFlags.DONT_WAIT)` immediately throws
+`ZlinkSubmitException` when the HWM is full. The flag-free overload returns a
+`CompletionStage<Void>` for asynchronous completion.
+
+```java
+socket.send().message(message).submit(SendFlags.DONT_WAIT); // synchronous, non-blocking
+CompletionStage<Void> completion = socket.send().message(message).submit(); // asynchronous
 ```
 
 Calling `recv(..., RecvFlags.NONE)` directly blocks the current Java thread in
@@ -220,8 +231,8 @@ The Java binding's ownership rules. try-with-resources is the default pattern.
 
 | Situation | Rule |
 |------|------|
-| `submit()` succeeds | ownership of the added `Message` transfers to the send stack. No separate `close()` needed |
-| `submit()` fails (exception) | ownership is retained by the caller. try-with-resources handles it automatically |
+| A send terminal succeeds | ownership of the added `Message` transfers to the send stack. No separate `close()` needed |
+| A send terminal fails (exception or failed stage) | ownership is retained by the caller. try-with-resources handles it automatically |
 | `recv()` succeeds | the caller owns the `Received`. try-with-resources required |
 | `submitAsync()` completes | the reply `List<Message>` is caller-owned. Needs `Message.closeAll(reply)` |
 | `Context.close()` | interrupts every blocking operation under the context |
@@ -229,8 +240,8 @@ The Java binding's ownership rules. try-with-resources is the default pattern.
 ```java
 // pattern: safe via try-with-resources
 try (Message msg = Message.from("data")) {
-    boolean submitted = socket.send().message(msg).submit();
-    // submitted=true means msg was consumed; false means back-pressure (only with DONT_WAIT)
+    socket.send().message(msg).submit(SendFlags.DONT_WAIT);
+    // returning means msg was consumed; back-pressure is a ZlinkSubmitException
 } // if submit throws, try-with-resources closes msg
 ```
 
@@ -242,7 +253,7 @@ The Java binding throws exceptions from the `ZlinkException` hierarchy.
 
 ```java
 try (Message msg = Message.from("data")) {
-    socket.send().message(msg).submit();
+    socket.send().message(msg).submit(SendFlags.DONT_WAIT);
 } catch (ZlinkSubmitException e) {
     switch (e.getResult()) {
         case BACKPRESSURED -> { /* retry shortly */ }
@@ -280,7 +291,8 @@ Every exception inherits from `ZlinkException` and exposes `getCode()` and
 | `zlink_close(socket)` | `socket.close()` |
 | `zlink_bind(socket, ep)` | `socket.bind(ep)` |
 | `zlink_connect(socket, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` | `socket.send().message(m).submit()` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit(flags)` |
+| `zlink_send_async(...)` | `socket.send().message(m).submit()` (`CompletionStage`) |
 | `zlink_recv_part(...)` | `socket.recv(received, flags)` |
 | `zlink_msg_data(msg)` | `msg.data()` |
 | `zlink_msg_size(msg)` | `msg.size()` |
@@ -314,7 +326,12 @@ if (Zlink.has("draft")) {
 
 **Threading:** `Context` can be shared across threads, but sockets must be used
 **from a single thread only**. Dispatch handlers are invoked on zlink's internal
-worker threads, so avoid blocking for long inside a handler. See
+worker threads, so avoid blocking for long inside a handler.
+`submit(SendFlags.NONE)` stops the current platform thread
+or virtual thread while waiting for HWM admission. Other threads and virtual
+threads continue to run, so this is safe in those execution environments. Use
+asynchronous `submit()` to keep the caller available, or
+`submit(SendFlags.DONT_WAIT)` for immediate back-pressure. See
 [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/) for
 details.
 
@@ -358,6 +375,9 @@ table above all apply identically — only the idiom differs for Kotlin.
   **2.1.0** or later.
 - **Ownership**: since it's `AutoCloseable`, clean up with `use { }` instead of
   `try`/`finally`.
+- **Send completion**: in a coroutine, await the `CompletionStage` returned by
+  Java's asynchronous `submit()` as `submit().await()`. Do not call the blocking
+  `submit(SendFlags)` overload inside a coroutine.
 
 ```kotlin
 Zlink.createContext().use { ctx ->

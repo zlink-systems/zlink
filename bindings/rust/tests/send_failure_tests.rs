@@ -8,6 +8,90 @@ use std::time::Duration;
 
 use zlink::{Context, Message, RoutingId, SendFlags};
 
+const RECORD_HWM: u64 = 65_536 + 64;
+
+#[test]
+fn sync_blocking_terminal_admits_a_send() {
+    let ctx = Context::new().unwrap();
+    let receiver = ctx.pair_socket().unwrap();
+    let sender = ctx.pair_socket().unwrap();
+    receiver.bind("inproc://rust-sync-send-admit").unwrap();
+    sender.connect("inproc://rust-sync-send-admit").unwrap();
+    thread::sleep(Duration::from_millis(50));
+
+    sender
+        .send()
+        .message(Message::try_from(b"sync-admitted").unwrap())
+        .submit_blocking(SendFlags::NONE)
+        .unwrap();
+
+    receiver
+        .common_options()
+        .set_receive_timeout(Duration::from_secs(2))
+        .unwrap();
+    let mut received = zlink::Received::empty();
+    assert!(receiver
+        .recv(&mut received, zlink::RecvFlags::NONE)
+        .unwrap());
+    assert_eq!(received.single_part().unwrap().as_bytes(), b"sync-admitted");
+}
+
+#[test]
+fn sync_dont_wait_reports_hwm_backpressure_immediately() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let receiver = ctx.pair_socket().unwrap();
+    let sender = ctx.pair_socket().unwrap();
+    sender
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    receiver
+        .common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    receiver.bind("inproc://rust-sync-send-backpressure").unwrap();
+    sender
+        .connect("inproc://rust-sync-send-backpressure")
+        .unwrap();
+    thread::sleep(Duration::from_millis(50));
+
+    let started = std::time::Instant::now();
+    let error = (0..256)
+        .find_map(|_| {
+            sender
+                .send()
+                .message(Message::try_from(vec![b'x'; 65_536].as_slice()).unwrap())
+                .submit_blocking(SendFlags::DONT_WAIT)
+                .err()
+        })
+        .expect("the undrained outbound lane did not reach HWM");
+
+    assert_eq!(error.code(), zlink::SubmitResult::Backpressured);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "DONT_WAIT must surface backpressure without waiting"
+    );
+}
+
+#[test]
+fn async_terminal_still_completes_after_sync_terminal_is_added() {
+    let ctx = Context::new().unwrap();
+    let receiver = ctx.pair_socket().unwrap();
+    let sender = ctx.pair_socket().unwrap();
+    receiver.bind("inproc://rust-async-send-regression").unwrap();
+    sender.connect("inproc://rust-async-send-regression").unwrap();
+    thread::sleep(Duration::from_millis(50));
+
+    test_support::block_on(
+        sender
+            .send()
+            .message(Message::try_from(b"async-still-works").unwrap())
+            .submit(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn blocking_send_failure_surfaces_error() {
     // ROUTER with mandatory=true, no connected peers

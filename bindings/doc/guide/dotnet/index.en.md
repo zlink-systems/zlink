@@ -54,7 +54,7 @@ server.Recv(received);
 Console.WriteLine(received.FirstPart().GetString());   // PING
 
 using var reply = Message.From("ACK");
-server.Send().Message(reply).Submit();
+server.Send().Message(reply).Submit(SendFlags.None);
 ```
 
 ```csharp
@@ -66,7 +66,7 @@ client.Connect("tcp://127.0.0.1:5555");
 mon.Recv();
 
 using var ping = Message.From("PING");
-client.Send().Message(ping).Submit();
+client.Send().Message(ping).Submit(SendFlags.None);
 
 using var received = Received.Create();
 client.Recv(received);
@@ -122,6 +122,16 @@ and byte payloads. If you need object serialization, register a framework codec
 extension during the framework's configuration stage. On surfaces that exchange
 raw `Message` directly — such as the framework's actor join callback — the
 application layer explicitly builds and interprets the byte payload.
+
+HWM-managed sends provide synchronous `Submit(SendFlags)` and asynchronous
+`Async()` terminals. `Submit(SendFlags.None)` blocks until HWM admission, while
+`Submit(SendFlags.DontWait)` immediately throws `ZlinkSubmitException` when the
+HWM is full. In asynchronous code, use the flag-free `await ...Async()` terminal.
+
+```csharp
+socket.Send().Message(message).Submit(SendFlags.DontWait); // synchronous, non-blocking
+await socket.Send().Message(message).Async();              // asynchronous completion
+```
 
 ### 3. Received
 
@@ -204,13 +214,14 @@ catch (ZlinkException ex)
 | `ZlinkConfigException` | Option/config |
 | `ZlinkCloseException` / `ZlinkHandlerException` | Close/callback |
 
-**No data and transient back-pressure are not exceptions.** Distinguish them by
-return value: a non-blocking receive returns `false` from `Recv(...)`, and a
-non-blocking send returns `false` from `Submit()`:
+A non-blocking receive returns `false` from `Recv(...)` when no data is available.
+For a non-blocking send, `Submit(SendFlags.DontWait)` reports back-pressure with
+`ZlinkSubmitException`.
 
 ```csharp
 if (!socket.Recv(received, RecvFlags.DontWait)) { /* no data */ }
-if (!socket.Send().Message(m).Flags(SendFlags.DontWait).Submit()) { /* back-pressure */ }
+try { socket.Send().Message(m).Submit(SendFlags.DontWait); }
+catch (ZlinkSubmitException ex) when (ex.Result == SubmitResult.Backpressured) { /* back-pressure */ }
 ```
 
 ---
@@ -235,7 +246,8 @@ for the full list of C functions.
 | Message creation | `zlink_msg_init` / `_init_size` / `_init_data` | `new Message(size)` / `Message.From(...)` |
 | Message access | `zlink_msg_data` / `zlink_msg_size` | `Message.AsReadOnlySpan()` / `Message.Size` |
 | Message release | `zlink_msg_close` / `zlink_multipart_close` | `Message.Dispose()` / `Zlink.MultipartClose(parts)` |
-| Send | `zlink_send_part` (+`_rid`) | `socket.Send().Message(...).Submit()` |
+| Synchronous send | `zlink_send_part` (+`_rid`) + flag | `socket.Send().Message(...).Submit(flags)` |
+| Asynchronous send | `zlink_send_async` | `await socket.Send().Message(...).Async()` |
 | Receive | `zlink_recv_part` | `socket.Recv(Received)` |
 | Request / reply | `zlink_dealer_request_part` / `zlink_router_reply_part` | `dealer.Request()....Async()` / `router.Reply(...)` |
 | Subscribe | `zlink_set_subscription` / `zlink_subscribe_part` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
@@ -261,6 +273,10 @@ AOT** publishing, make sure the target RID's assets are included in the output
 Threading: `IContext` is thread-safe and shareable across threads. Sockets are
 single-thread-owned — see [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/)
 for the full rules.
+`Submit(SendFlags.None)` stops the calling thread while it
+waits for HWM admission. This is safe on a plain thread because only that thread
+waits. Use `Async()` when the caller must remain available, or
+`Submit(SendFlags.DontWait)` when immediate back-pressure is required.
 
 ---
 

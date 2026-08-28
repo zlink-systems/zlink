@@ -61,6 +61,15 @@ export class RouterSocket extends RoutedMessageSocket {
     const peer = normalizeRoutingId(peerRid, 'peerRid');
     return new ManagedRoutedRuntimeSendOperation(
       (selector, parts, timeoutMs) => this.sendCompletion.submit(parts, timeoutMs, selector),
+      (selector, parts, flags) => {
+        if (selector === null || !this.sendDirectRaw(selector, parts, flags)) {
+          throw submitErrorFromNativeResult(
+            selector === null ? SubmitResult.InvalidArgument : SubmitResult.Backpressured,
+            0,
+            'send failed'
+          );
+        }
+      },
       peer
     );
   }
@@ -123,6 +132,13 @@ export class RouterSocket extends RoutedMessageSocket {
     flags: SendFlags,
   ): void {
     this.replyDirect(sourceRid, requestSeq, parts, flags);
+  }
+  protected sendReceivedAsync(
+    routingId: Buffer,
+    parts: readonly import('../../contracts').Message[],
+    timeoutMs: number
+  ): Promise<void> {
+    return this.sendCompletion.submit(parts, timeoutMs, routingId);
   }
   private replyDirect(peerRid: RoutingId, requestSeq: bigint, payloadOrParts: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): void {
     normalizeReplyFlags(flags);

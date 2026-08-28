@@ -453,7 +453,8 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   빌더 메서드의 언어별 이름은
   [바인딩 비동기 실행 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
 - routed **send**의 terminal은 `routed_send_submit_operation_t`의
-  `submit() -> void`(호출 thread에서 Core가 blocking)와
+  sync `flags(int).submit() -> void`(flag 없거나 `NONE`이면 호출 thread에서 Core가
+  blocking, `DONTWAIT`면 즉시 backpressure를 `submit_error_t`로 전달)와
   `async() -> async_result_t<void>`(Core send-completion) 두 가지다. 두 경로 모두
   binding은 admission park queue, WRITABLE-callback 재시도, deadline timer,
   dispatcher thread를 두지 않는다 —
@@ -465,9 +466,9 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   어플리케이션이며 binding은 재시도하지 않는다. 실패는 `submit_error_t`로 던지고,
   binding이 별도 native view를 제출하므로 공개 C++ message는 호출자에게 남는다. 일반 실패에서도
   동기 호출에 실제 전달된 native part는 Core가 소비한다.
-- routed send builder는 flags 단계는 노출하지 않으며, `timeout(...)`은 `async()`의
-  Core per-operation deadline이다. 동기 `submit()`의 대기 상한은 socket
-  `SNDTIMEO`다.
+- routed send builder는 sync `submit()` 전용 `flags(int)` 단계를 노출한다.
+  `timeout(...)`은 `async()`의 Core per-operation deadline이며, async에는 flags가
+  없다. flag 없거나 `NONE`인 동기 `submit()`의 대기 상한은 socket `SNDTIMEO`다.
 - C++ binding은 outbound 경로에 자체 lock이나 gate를 두지 않는다. Core는 socket별
   transaction state로 이미 열린 sequence에 다른 sender의 part가 들어오지 않게 막는다.
   열린 sequence와 경합하는 attempt는 peer에 부분 record를 남기지 않고 통째로 거부한다.
@@ -493,9 +494,10 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   context를 파괴하면 deadlock하며, completion callback 안에서 send/publish/request를
   제출하면 `EDEADLK`다. 실행 모델 연결(다른 executor로의 handoff)은 framework와
   어플리케이션 몫이다.
-- `send_submit_operation_t`(PAIR/STREAM one-shot)의 terminal은 `submit() -> bool`와
-  `async() -> async_result_t<void>`다. `async()`의 `timeout(...)`은 Core per-operation
-  deadline이며, completion은 admission을 뜻한다. `.flags(dontwait).submit()`은
+- `send_submit_operation_t`(PAIR/STREAM one-shot)의 terminal은 sync
+  `flags(int).submit() -> bool`와 `async() -> async_result_t<void>`다. `async()`의
+  `timeout(...)`은 Core per-operation deadline이며, completion은 admission을 뜻한다.
+  `.flags(dontwait).submit()`은
   backpressure면 `false`를 즉시 반환한다. `async()`의 resumed continuation에서 socket/context를
   파괴하면 deadlock하고 completion callback 안의 submit은 `EDEADLK`다.
 - `publish_operation_t`(PUB/XPUB)의 terminal은 synchronous `submit() -> bool` 하나다.

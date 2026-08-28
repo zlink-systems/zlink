@@ -39,7 +39,7 @@ public interface IMessageSocket : IReceivingMessageSocket, IConnectableSocket
     ///     send builders may be submitted concurrently on the same socket. Do not
     ///     share one builder or one message between concurrent operations.
     /// </summary>
-    SendOperation Send();
+    RoutedSendOperation Send();
 }
 
 /// <summary>

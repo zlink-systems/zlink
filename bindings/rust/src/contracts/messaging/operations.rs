@@ -61,12 +61,12 @@ impl MessageParts {
 /// and reply builders in this module share this same consume-on-submit
 /// ownership model.
 ///
-/// HWM-managed send is classified ASYNC by
-/// `bindings/doc/spec/async-coroutine-policy.ko.md`, so [`submit`] returns a
+/// HWM-managed send has two terminals. [`submit`](SendOp::submit) returns a
 /// runtime-independent [`Future`](std::future::Future) whose completion is
-/// driven by the Core send-completion callback. There is no flags stage: Core
-/// never blocks in `zlink_send_async`, and the retry that a full queue needs
-/// belongs to Core.
+/// driven by the Core send-completion callback. [`submit_blocking`](SendOp::submit_blocking)
+/// completes synchronously and accepts [`SendFlags`]: [`SendFlags::NONE`]
+/// blocks for admission and [`SendFlags::DONT_WAIT`] reports backpressure
+/// immediately.
 ///
 /// The `State` type parameter is a typestate ([`Empty`] or [`Ready`]) that
 /// statically tracks whether at least one part has been added.
@@ -202,6 +202,15 @@ impl SendOp<Ready> {
     pub fn submit(self) -> impl std::future::Future<Output = Result<(), SubmitError>> + Send {
         crate::operations::submit_send(self.inner)
     }
+
+    /// Submits the HWM-managed send synchronously with the supplied flags.
+    ///
+    /// [`SendFlags::NONE`] blocks until Core admits the record (subject to the
+    /// socket's `SNDTIMEO`). [`SendFlags::DONT_WAIT`] returns an immediate
+    /// [`SubmitError`] when the outbound HWM is full.
+    pub fn submit_blocking(self, flags: SendFlags) -> Result<(), SubmitError> {
+        crate::operations::submit_send_blocking(self.inner, flags)
+    }
 }
 
 impl PublishOp<Empty> {
@@ -275,6 +284,16 @@ impl RoutedSendOp<Ready> {
     /// `zlink_send_async_cancel`.
     pub fn submit(self) -> impl std::future::Future<Output = Result<(), SubmitError>> + Send {
         crate::operations::submit_routed_send(self.inner)
+    }
+
+    /// Submits the HWM-managed routed send synchronously with the supplied
+    /// flags.
+    ///
+    /// [`SendFlags::NONE`] blocks until Core admits the record (subject to the
+    /// socket's `SNDTIMEO`). [`SendFlags::DONT_WAIT`] returns an immediate
+    /// [`SubmitError`] when the outbound HWM is full.
+    pub fn submit_blocking(self, flags: SendFlags) -> Result<(), SubmitError> {
+        crate::operations::submit_routed_send_blocking(self.inner, flags)
     }
 }
 

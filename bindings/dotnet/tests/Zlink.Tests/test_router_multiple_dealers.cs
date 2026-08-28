@@ -95,7 +95,7 @@ public sealed class test_router_multiple_dealers
             received.SinglePartOrThrow().AsReadOnlySpan()));
 
         using Message reply = Message.From("pong");
-        Assert.True(received.Send().Message(reply).Submit());
+        received.Send().Message(reply).Submit(SendFlags.None);
 
         Assert.Equal("pong", CoreTestSupport.ReceiveUtf8WithTimeout(dealer,
             2000));

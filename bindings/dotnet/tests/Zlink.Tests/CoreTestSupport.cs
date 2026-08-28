@@ -160,7 +160,7 @@ internal static class CoreTestSupport
             using Message message = Message.From(payload);
             try
             {
-                socket.Send().Message(message).Submit();
+                socket.Send().Message(message).Submit(SendFlags.None);
                 return;
             }
             catch (ZlinkSubmitException)

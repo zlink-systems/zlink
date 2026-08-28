@@ -27,7 +27,7 @@ with zlink.create_context() as ctx:
             sender.bind("inproc://python-guide-pair")
             receiver.connect("inproc://python-guide-pair")
 
-            sender.send().message(b"hello").submit()  # 한 part를 전송한다.
+            sender.send().message(b"hello").submit_blocking(flags=zlink.SendFlags.NONE)
             received = zlink.create_received()  # 호출자가 수신 저장 공간을 소유한다.
             assert receiver.recv_into(received)
             with received:
@@ -46,7 +46,7 @@ with zlink.create_context() as ctx:
 ```python
 message = zlink.Message.from_(bytearray(b"payload"))  # caller buffer와 분리된 message를 만든다.
 with message:
-    socket.send().message(message).submit()  # submit 성공 뒤 native 소유권이 이동한다.
+    socket.send().message(message).submit_blocking(flags=zlink.SendFlags.NONE)
 
 received = zlink.create_received()
 socket.recv_into(received)  # no-data를 허용하는 non-blocking 호출이면 False를 반환한다.
@@ -56,6 +56,12 @@ with received:
 
 `RecvFlags.DONT_WAIT`를 지정한 receive는 message가 없으면 `False`를 반환한다. timer나 monitor처럼
 pending value를 직접 반환하는 control API는 값이 없을 때 `None`을 반환한다.
+
+HWM 대기 가능 send는 async `submit()`과 sync
+`submit_blocking(*, flags=zlink.SendFlags.NONE)`을 제공한다. async 코드에서는
+`await socket.send().message(message).submit()`을 사용한다. plain thread에서는
+`submit_blocking()`을 사용할 수 있으며, `flags=zlink.SendFlags.DONT_WAIT`을 지정하면
+HWM이 가득 찼을 때 즉시 `SubmitError`가 발생한다.
 
 ## DEALER와 ROUTER
 
@@ -86,7 +92,7 @@ with zlink.create_context() as ctx:
 ```python
 rid = zlink.RoutingId.from_(b"server-01")
 try:
-    socket.send().message(b"data").submit()
+    socket.send().message(b"data").submit_blocking(flags=zlink.SendFlags.DONT_WAIT)
 except zlink.SubmitError as exc:
     if exc.result == zlink.SubmitResult.BACKPRESSURED:
         # back-pressure는 결과를 확인한 뒤 application policy로 처리한다.
@@ -97,6 +103,14 @@ except zlink.SubmitError as exc:
 
 `SubmitError`, `RequestError`, `RecvError`, `BindError`, `ConnectError`, `ConfigError`와 `CloseError`는
 `ZlinkError` 계열이며 `result`, `code`, `native_errno`를 제공한다.
+
+## 스레딩 유의사항
+
+flag 없는 `submit_blocking()`은 HWM admission을 기다리는 동안 호출 thread를 멈춘다.
+plain thread에서는 그 thread만 대기하므로 사용할 수 있다. 그러나 asyncio 이벤트 루프
+안에서 호출하면 루프 전체가 멈춰 다른 task와 send completion도 진행되지 않는다.
+asyncio 코드에서는 async `submit()`을 `await`한다. 즉시 backpressure가 필요하면
+`submit_blocking(flags=zlink.SendFlags.DONT_WAIT)`을 사용한다.
 
 ## Sample와 perf
 

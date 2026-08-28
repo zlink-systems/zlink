@@ -223,7 +223,7 @@ class send_submit_operation_t : private detail::operation_builder_base_t<
     friend class send_operation_t;
 };
 
-/// @brief Accepts further parts, timeout, and terminals of a DEALER/ROUTER send.
+/// @brief Accepts further parts, flags, timeout, and terminals of a DEALER/ROUTER send.
 class routed_send_submit_operation_t : private detail::operation_builder_base_t<
                                          detail::operation_state_t,
                                          detail::pooled_operation_state_policy_t>
@@ -239,14 +239,16 @@ class routed_send_submit_operation_t : private detail::operation_builder_base_t<
 
     routed_send_submit_operation_t &&message (message_t &part_) &&;
     routed_send_submit_operation_t &&message (message_t &&part_) &&;
+    /// Selects the synchronous submit mode. `none` lets Core block up to
+    /// `SNDTIMEO`; `dontwait` reports immediate backpressure as submit_error_t.
+    routed_send_submit_operation_t &&flags (int flags_) &&;
     routed_send_submit_operation_t &&timeout (std::chrono::milliseconds timeout_) &&;
 
     /// Submits the part sequence to Core on the calling thread. Core owns the
-    /// HWM contract: a blocking submit waits inside Core and resumes on the
-    /// Core signal, `SNDTIMEO` bounds that wait, and the binding neither
-    /// parks, retries, nor times the operation out. Failure, including an
-    /// expired `SNDTIMEO`, is reported as a @ref submit_error_t; the parts
-    /// stay owned by the caller when the submit does not succeed.
+    /// HWM contract: `none` blocks inside Core up to `SNDTIMEO`; `dontwait`
+    /// returns immediate backpressure as @ref submit_error_t. The binding
+    /// neither parks, retries, nor times the operation out. The parts stay
+    /// owned by the caller when the submit does not succeed.
     void submit () &&;
     /// Completes from Core's send-completion callback. The awaiting coroutine
     /// resumes in that callback's context; destroying the socket or context

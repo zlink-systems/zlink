@@ -55,6 +55,18 @@ export class DealerSocket extends ReceiveSocket {
   send(): RoutedSendOperation {
     return new ManagedRoutedRuntimeSendOperation(
       (_selector, parts, timeoutMs) => this.sendCompletion.submit(parts, timeoutMs, null),
+      (_selector, parts, flags) => {
+        const normalized = normalizeOperationPayload(parts);
+        try {
+          if (Array.isArray(normalized)) {
+            native.socketSendParts(getNativeHandle(this), normalized, flags | 0);
+          } else {
+            native.socketSend(getNativeHandle(this), normalized, flags | 0);
+          }
+        } catch (error) {
+          throw submitNativeError(error, flags, 'send failed');
+        }
+      },
       null
     );
   }

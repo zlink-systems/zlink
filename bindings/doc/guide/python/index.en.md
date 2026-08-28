@@ -28,7 +28,7 @@ with zlink.create_context() as ctx:
             sender.bind("inproc://python-guide-pair")
             receiver.connect("inproc://python-guide-pair")
 
-            sender.send().message(b"hello").submit()  # sends one part.
+            sender.send().message(b"hello").submit_blocking(flags=zlink.SendFlags.NONE)
             received = zlink.create_received()  # the caller owns the receive storage.
             assert receiver.recv_into(received)
             with received:
@@ -50,7 +50,7 @@ shown below.
 ```python
 message = zlink.Message.from_(bytearray(b"payload"))  # builds a message detached from the caller's buffer.
 with message:
-    socket.send().message(message).submit()  # native ownership moves once submit succeeds.
+    socket.send().message(message).submit_blocking(flags=zlink.SendFlags.NONE)
 
 received = zlink.create_received()
 socket.recv_into(received)  # returns False for a non-blocking call that allows no-data.
@@ -61,6 +61,12 @@ with received:
 A receive with `RecvFlags.DONT_WAIT` returns `False` when there's no message.
 Control APIs that directly return a pending value — timers, monitors — return
 `None` when there's no value.
+
+HWM-managed sends provide asynchronous `submit()` and synchronous
+`submit_blocking(*, flags=zlink.SendFlags.NONE)` terminals. In async code, use
+`await socket.send().message(message).submit()`. On a plain thread,
+`submit_blocking()` is available; pass `flags=zlink.SendFlags.DONT_WAIT` to get
+an immediate `SubmitError` when the HWM is full.
 
 ## DEALER And ROUTER
 
@@ -93,7 +99,7 @@ and values exceeding the Core max length are rejected at input validation.
 ```python
 rid = zlink.RoutingId.from_(b"server-01")
 try:
-    socket.send().message(b"data").submit()
+    socket.send().message(b"data").submit_blocking(flags=zlink.SendFlags.DONT_WAIT)
 except zlink.SubmitError as exc:
     if exc.result == zlink.SubmitResult.BACKPRESSURED:
         # handle back-pressure as application policy, after checking the result.
@@ -105,6 +111,15 @@ except zlink.SubmitError as exc:
 `SubmitError`, `RequestError`, `RecvError`, `BindError`, `ConnectError`,
 `ConfigError`, and `CloseError` are all `ZlinkError` subtypes and expose
 `result`, `code`, and `native_errno`.
+
+## Threading Notes
+
+`submit_blocking()` without `DONT_WAIT` stops its calling thread while waiting
+for HWM admission. This is safe on a plain thread because only that thread waits.
+Calling it inside an asyncio event loop stops the entire loop, so other tasks and
+send completions cannot progress. In asyncio code, `await` asynchronous
+`submit()`. For immediate back-pressure, use
+`submit_blocking(flags=zlink.SendFlags.DONT_WAIT)`.
 
 ## Samples And Perf
 

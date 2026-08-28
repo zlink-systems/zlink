@@ -49,7 +49,7 @@ server.recv(received);
 console.log(received.parts[0].data().toString()); // PING
 received.close();
 
-server.send().message(Buffer.from('ACK')).submit();
+await server.send().message(Buffer.from('ACK')).submit();
 
 server.close();
 ctx.close();
@@ -61,7 +61,7 @@ const ctx = zlink.createContext();
 const client = zlink.createPairSocket(ctx);
 client.connect('tcp://127.0.0.1:5555');
 
-client.send().message(Buffer.from('PING')).submit();
+await client.send().message(Buffer.from('PING')).submit();
 
 const received = new zlink.Received();
 client.recv(received);
@@ -90,8 +90,8 @@ The Node binding uses `Buffer` directly as a message. `message()` makes a copy,
 so you're free to reuse the original Buffer.
 
 ```javascript
-socket.send().message(Buffer.from('hello')).submit();
-socket.send().message(Buffer.from([0x01, 0x02])).submit();
+await socket.send().message(Buffer.from('hello')).submit();
+await socket.send().message(Buffer.from([0x01, 0x02])).submit();
 
 // access the payload after receiving
 const received = new zlink.Received();
@@ -99,6 +99,16 @@ socket.recv(received);
 const data = received.parts[0].data();   // Buffer
 const text = data.toString('utf8');
 received.close();
+```
+
+HWM-managed sends provide asynchronous `submit()` and synchronous
+`submit(SendFlags)` overloads. On Node's event loop, use the flag-free,
+Promise-returning `submit()` by default. Use
+`submit(zlink.SendFlags.DontWait)` only when immediate back-pressure is needed.
+
+```javascript
+await socket.send().message(Buffer.from('data')).submit(); // asynchronous
+socket.send().message(Buffer.from('data')).submit(zlink.SendFlags.DontWait); // sync, non-blocking
 ```
 
 ### Received — the receive envelope
@@ -151,7 +161,7 @@ The Node binding throws per-operation error classes.
 
 ```javascript
 try {
-  socket.send().message(Buffer.from('data')).submit();
+  socket.send().message(Buffer.from('data')).submit(zlink.SendFlags.DontWait);
 } catch (error) {
   if (error instanceof zlink.SubmitError) {
     if (error.result === zlink.SubmitResult.Backpressured) {
@@ -178,7 +188,8 @@ Each exposes the result code via a `.result` property.
 | `zlink_socket(ctx, type)` | `zlink.createPairSocket(ctx)`, etc. |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` | `socket.send().message(buf).submit()` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(buf).submit(flags)` |
+| `zlink_send_async(...)` | `await socket.send().message(buf).submit()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` (Buffer) |
 | `zlink_routing_id_t` | `zlink.RoutingId` |
@@ -204,7 +215,13 @@ console.log(`zlink ${major}.${minor}.${patch}`);
 |------|------|
 | `Context` / sockets | used on the main event loop |
 | Blocking `recv()` | blocks the event loop, so keep it short or prefer non-blocking + poller |
+| Synchronous `submit(SendFlags.None)` | stops the entire event loop while waiting for HWM admission, halting runtime progress — do not use it |
+| Synchronous `submit(SendFlags.DontWait)` | returns immediately and does not block the event loop |
 | Async `submit()` | Promise-based — doesn't block the event loop |
+
+Do not run a blocking send on Node's event loop. For an immediate attempt, use
+`submit(zlink.SendFlags.DontWait)`; to wait for HWM admission, `await` the
+asynchronous `submit()` terminal.
 
 ---
 

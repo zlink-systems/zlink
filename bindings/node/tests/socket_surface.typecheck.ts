@@ -16,9 +16,14 @@ const events = zlink.createPollEvents(8);
 const timer = zlink.createTimer();
 
 const pairSend: Promise<void> = pair.send().message('one').message(Buffer.from('two')).submit();
+const pairSyncSend: void = pair.send().message('sync').submit(zlink.SendFlags.None);
 const received = new zlink.Received();
 pair.recv(received, zlink.RecvFlags.DontWait);
 received.parts;
+const receivedSendAsync: Promise<void> = received.send().message('async').submit();
+const receivedSendSync: void = received.send().message('sync').submit(zlink.SendFlags.DontWait);
+void receivedSendAsync;
+void receivedSendSync;
 
 const pubSend: void = pub.publish('topic').message('payload').submit();
 sub.setSubscription('topic');
@@ -27,6 +32,7 @@ sub.subscribe(topicMessage, zlink.RecvFlags.DontWait);
 
 dealer.setRoutingId(routingId);
 const dealerSend: Promise<void> = dealer.send().message('dealer-send').submit();
+const dealerSyncSend: void = dealer.send().message('dealer-sync').submit(zlink.SendFlags.DontWait);
 const dealerRequest: Promise<zlink.Message[]> = dealer.request()
   .message('request')
   .timeout(1000)
@@ -34,6 +40,7 @@ const dealerRequest: Promise<zlink.Message[]> = dealer.request()
 dealer.setReceiveFlowState(zlink.ReceiveFlowState.RUNNING);
 router.setReceiveFlowState(zlink.ReceiveFlowState.PAUSED);
 const routerSend: Promise<void> = router.send(routingId).message('routed').submit();
+const routerSyncSend: void = router.send(routingId).message('routed-sync').submit(zlink.SendFlags.None);
 const routerRequest: Promise<zlink.Message[]> = router.request(routingId)
   .message('request')
   .timeout(1000)
@@ -51,16 +58,19 @@ const immediatePairSend: void = router.sendTransportPair(
   zlink.SendFlags.DontWait
 );
 void pairSend;
+void pairSyncSend;
 void pubSend;
 void dealerSend;
+void dealerSyncSend;
 void dealerRequest;
 void routerSend;
+void routerSyncSend;
 void routerRequest;
 void routerPairRequest;
 void immediatePairSend;
 // @ts-expect-error managed routed sends do not expose compatibility flags
 dealer.send().message('legacy').flags(zlink.SendFlags.DontWait);
-// @ts-expect-error Promise submit is the sole managed send terminal
+// @ts-expect-error managed send terminals accept only zero arguments or SendFlags
 dealer.send().message('legacy').submit((_result: unknown) => {});
 // @ts-expect-error managed requests do not expose compatibility flags
 dealer.request().message('legacy').flags(zlink.SendFlags.DontWait);
@@ -70,9 +80,11 @@ router.reply(routingId, 1n).message('reply').submit();
 
 stream.setRoutingId(routingId);
 const streamSend: Promise<void> = stream.send(routingId).message('packet').timeout(1).submit();
+const streamSyncSend: void = stream.send(routingId).message('packet').submit(zlink.SendFlags.DontWait);
 const streamTrySend: boolean = stream.trySend(routingId).message('packet').submit();
 void streamTrySend;
 void streamSend;
+void streamSyncSend;
 stream.setPacketHandler((_source, header, body) => {
   header.size();
   body.size();

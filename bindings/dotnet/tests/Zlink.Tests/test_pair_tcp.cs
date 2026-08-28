@@ -57,7 +57,7 @@ public sealed class test_pair_tcp
         using Message part1 = Message.From("hello");
         using Message part2 = Message.From("world");
         Assert.True(client.Send().Message(part1).Message(part2)
-            .Flags(SendFlags.DontWait).Submit());
+            .TrySubmit(SendFlags.DontWait));
 
         var received = Received.Create();
         server.Recv(received);
@@ -465,8 +465,8 @@ public sealed class test_pair_tcp
         for (int i = 0; i < 16 * 1024; i++)
         {
             using Message payload = Message.From(payloadBytes);
-            sent = sender.Send().Message(payload).Flags(SendFlags.DontWait)
-                .Submit();
+            sent = sender.Send().Message(payload)
+                .TrySubmit(SendFlags.DontWait);
             if (!sent)
                 break;
         }
@@ -492,7 +492,7 @@ public sealed class test_pair_tcp
 
         using Message first = Message.From("first"u8.ToArray());
         using Message second = Message.From("second"u8.ToArray());
-        Assert.True(sender.Send().Message(first).Message(second).Submit());
+        sender.Send().Message(first).Message(second).Submit(SendFlags.None);
 
         using var received = Received.Create();
         Assert.True(CoreTestSupport.WaitUntil(
@@ -527,9 +527,10 @@ public sealed class test_pair_tcp
         Thread.Sleep(50);
 
         using Message payload = Message.From("once");
-        SendSubmitOperation operation = sender.Send().Message(payload);
-        Assert.True(operation.Submit());
-        Assert.Throws<ZlinkConfigException>(() => operation.Submit());
+        RoutedSendSubmitOperation operation = sender.Send().Message(payload);
+        operation.Submit(SendFlags.None);
+        Assert.Throws<ZlinkConfigException>(() =>
+            operation.Submit(SendFlags.None));
     }
 
     [Fact]
@@ -561,8 +562,7 @@ public sealed class test_pair_tcp
                 using Message payload = Message.From(payloadBytes);
                 sent = sender.Send()
                     .Message(payload)
-                    .Flags(SendFlags.DontWait)
-                    .Submit();
+                    .TrySubmit(SendFlags.DontWait);
                 while (receiver.Recv(received, RecvFlags.DontWait))
                 {
                 }
@@ -593,8 +593,8 @@ public sealed class test_pair_tcp
         for (int i = 0; i < 16 * 1024; i++)
         {
             using Message payload = Message.From(payloadBytes);
-            sent = sender.Send().Message(payload).Flags(SendFlags.DontWait)
-                .Submit();
+            sent = sender.Send().Message(payload)
+                .TrySubmit(SendFlags.DontWait);
             if (!sent)
                 break;
         }

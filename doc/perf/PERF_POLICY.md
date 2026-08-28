@@ -166,13 +166,47 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   모델만 사용한다.
   - recv: poller `POLLIN` readiness 감지 → 비동기 `zlink_recv()` /
     `zlink_msg_recv()` drain 루프 (react 방식).
-  - send (single): blocking send. HWM 도달 시 자연 backpressure.
-    단일 프로세스에서 sender/receiver를 구동하므로 nonblocking 제어 불필요.
-  - send (multi): nonblocking send + poller `POLLOUT` readiness 감지.
-    서버가 N개 클라이언트를 한 poller에서 처리하므로 EAGAIN 시 pending
-    deque/flag에 저장하고 POLLOUT에서 재개.
+  - **suite별 send 모델은 다음과 같이 고정한다.**
+    - 각 send 종결자의 언어별 이름·반환 타입은 [async-coroutine-policy](../../bindings/doc/spec/async-coroutine-policy.ko.md) 정규 표가 소유한다. blocking/non-blocking 축은 [async-execution-model](../../bindings/doc/spec/async-execution-model.ko.md)을 따른다. 아래 blocking=sync 종결자 `NONE`, nonblocking=sync 종결자 `DONTWAIT`(C++ `.flags(DONTWAIT).submit()`, .NET `Submit(SendFlags.DontWait)`, Java `submit(SendFlags.DONT_WAIT)`, Node `submit(SendFlags.DONTWAIT)`, Python `submit_blocking(flags=DONT_WAIT)`, Rust `submit_blocking(DONT_WAIT)`, Go `Flags(DontWait).Submit(ctx)`) 또는 async 종결자를 뜻한다.
+  - send (single): **poller + blocking send**. HWM 도달 시 자연 backpressure로
+    멈춘다. 단일 프로세스에서 sender/receiver를 구동하므로 nonblocking 제어가
+    필요 없다. C reference와 대부분 binding은 이를 thread + blocking send로
+    동일하게 구현한다. 따라서 single 측정은 C와 같은 실행 모델이며 binding의
+    순수 오버헤드를 나타낸다. **예외**: async/event-loop가 기본인 언어(Node,
+    Python 등)는 blocking submit이 부자연스러우므로 single에서 async submit
+    경로를 사용할 수 있다. 이 경우에도 poller 기반 recv 집계와 phase/header
+    계약은 동일하게 유지한다.
+  - send (multi): **poller + nonblocking send**. 두 구현 경로가 있으며, 둘 다
+    "backpressure를 만나면 그 소켓의 송신 진행을 멈추되 메시지를 잃지 않고 다른
+    소켓은 계속 진행한다"는 같은 목표를 이루지만 **admission 처리 의미가 다르다.**
+    - **C reference (DONTWAIT 경로)**: `send(..., DONTWAIT)`로 제출한다.
+      admission이 막히면 core가 **`EAGAIN`을 즉시 반환하고 메시지를 받지 않는다**
+      (호출자 소유 유지). runner가 그 소켓을 pending으로 표시했다가 poller
+      `POLLOUT` readiness에서 **같은 메시지를 재제출**한다. 즉 backpressure를
+      runner가 수동으로 관리한다.
+    - **코루틴/async binding (async admission 경로)**: `async()` submit으로
+      제출한다. admission이 막히면 core가 그 요청을 **pending으로 수용하고 그
+      async 작업을 suspend**한다(메시지는 이미 core로 이관). core의
+      writable/completion 신호에서 그 작업이 resume되며, 다른 소켓의 submit은
+      계속 진행한다. C가 수동으로 하던 pending 표시와 `POLLOUT` 재제출을 언어
+      런타임의 suspend/resume이 대신하므로 runner 코드에 pending/재제출 로직이
+      없다.
+    binding multi 오버헤드는 이 async/코루틴 실행(suspend/resume) 오버헤드를
+    포함한 값으로 정의한다. **매 submit을 즉시 await하여 한 소켓의 왕복을
+    직렬화하면(사실상 inflight 1) 계약 위반이다** — 이는 blocking 실행이며
+    C의 nonblocking 모델과 다른 측정이 된다. inflight 깊이는 어느 경로에서도
+    코드로 고정하지 않고 소켓 HWM(backpressure)이 결정한다.
   - poller는 recv readiness와 request-reply completion 감지에 공통 사용하고,
     send backpressure는 suite별로 위 방식을 따른다.
+- **binding이 위 nonblocking 경로를 표현할 수 있어야 한다**: multi 측정은
+  binding 공개 API로 위 두 경로 중 하나(sync 종결자 `DONTWAIT` submit 또는
+  async 종결자 admission)를 사용한다. **0.14.0부터 send 계열은 모든 바인딩에
+  sync(+flags) 종결자를 노출하므로(async-coroutine-policy 정규 표), 이 nonblocking
+  경로는 항상 표현 가능하다.** 그럼에도 어떤 이유로 그 소켓 송신이 admission
+  완료까지 직렬화되면 C와 다른 실행이 되어 측정 의미가 어긋난다. 이때 **perf
+  runner를 우회로 손대 측정을 억지로 맞추지 않는다.** 이는 perf 측정 조건이 아니라
+  binding 라이브러리 API 계약의 문제이므로, 측정에서는 그 사실을 그대로 보고한다
+  (perf 정책이 API 설계의 단일 근거가 되지 않는다).
 - direct message callback 경로는 perf에서 측정하지 않는다. callback의 동기화
   메커니즘(TSFN, GIL, mutex 등)은 언어별 런타임에 의존하므로 일관된 비교
   기준이 불가능하다.
@@ -183,7 +217,10 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   - single reqrep은 같은 process 안에서 requester submit thread, requester
     progress thread, replier thread를 분리한다. requester progress thread는
     blocking recv/wait 또는 그와 같은 의미의 public completion progress 경로로
-    reply completion을 drain한다.
+    reply completion을 drain한다. async/event-loop가 기본인 언어(Node, Python
+    등)는 이 progress를 async completion 경로로 구현할 수 있으나, 매 request를
+    제출 즉시 await하여 왕복을 직렬화하지 않는다. submit flow는 계약이 허용하는
+    만큼 연속 제출하고 progress가 완료를 drain한다.
   - multi reqrep은 client process의 active poller loop가 N개 requester socket을
     multiplex한다. socket request/reply surface와 spot request/reply surface는
     이 public poller loop에 `POLLCOMPLETION`을 등록한다.
@@ -1086,7 +1123,7 @@ Saved result file: ... (status=partial)
 
 - **이유**: inflight 제한은 벤치마크 결과를 인위적으로 왜곡한다. 라이브러리의 실제 처리 능력을 측정해야 하며, 벤치마크 인프라가 추가 병목을 도입하면 안 된다.
 - one-way 패턴에서는 응답이 없으므로 outstanding 개념 자체가 성립하지 않는다.
-- echo 패턴에서는 클라이언트 측 per-socket pending 제어(1:1 send-recv)와 소켓 HWM이 자연 backpressure를 제공하므로 별도의 outstanding 제한이 불필요하다.
+- echo·request/reply 패턴에서도 outstanding을 코드로 고정하지 않는다. echo를 받아야 다음을 보내는 1:1 직렬화 없이 backpressure까지 연속 제출하며, 소켓 HWM이 자연 backpressure를 제공하므로 별도의 outstanding 상한이 불필요하다.
 
 ### 7.3 실패 시 대응 절차
 

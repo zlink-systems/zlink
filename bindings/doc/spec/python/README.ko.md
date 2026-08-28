@@ -141,8 +141,9 @@ routed request completion callback을 등록하는 별도 public method는 제�
   표면화하며, Core의 `zlink_send_async`는 PUB/XPUB에서 `ENOTSUP`을 반환하므로 publish
   awaitable은 없다.
 - HWM-managed send — PAIR `send()`와 DEALER/ROUTER routed `send()` — 와 `request()`는
-  둘 다 Core HWM admission queue를 지날 수 있으므로 ASYNC다. 이 builder들의 유일한
-  terminal은 `submit()`이다.
+  둘 다 Core HWM admission queue를 지날 수 있으므로 ASYNC다. Send builder에는 async
+  `submit()`과 sync `submit_blocking(*, flags=0) -> None` 종결자가 있고, request
+  builder에는 async `submit()`만 있다. Async send는
   `await pair.send().message(message).submit()`,
   `await dealer.send().message(message).submit()`,
   `reply = await dealer.request().message(request).submit()`처럼 사용하며, `submit()`은
@@ -172,9 +173,11 @@ routed request completion callback을 등록하는 별도 public method는 제�
     target을 선택하고, DEALER는 Core가 submit 시점에 하나를 직접 선택하게 한다.
   - Coroutine cancellation은 pending operation을 정확히 한 번 종료한다. 한 target의
     send나 request 대기는 다른 target의 submit도 Python event loop도 막지 않는다 —
-    admission 순서는 Python 쪽 대기가 아니라 Core 자신의 target별 queue가 정한다. 같은
-    routed operation에 flags, callback, blocking terminal이나 `submit_async()`를 함께
-    제공하지 않는다.
+    admission 순서는 Python 쪽 대기가 아니라 Core 자신의 target별 queue가 정한다.
+    Sync `submit_blocking(*, flags=0)`은 `zlink_send_part(_rid)`를 호출한다. Flag가
+    없거나 `SendFlags.NONE`이면 Core 안에서 admit까지 blocking하고,
+    `SendFlags.DONT_WAIT`이면 backpressure를 즉시 `SubmitError`로 전달한다. Callback이나
+    `submit_async()` compatibility terminal은 제공하지 않는다.
 - `RecvFlags.DONT_WAIT`를 사용한 caller-provided receive는 message가 없을 때 `False`를 반환한다.
 - timer, monitor와 같은 직접 반환 control API는 pending value가 없을 때 `None`을 반환한다.
 - 실제 native failure는 해당 error type으로 전달하며 no-data로 숨기지 않는다.

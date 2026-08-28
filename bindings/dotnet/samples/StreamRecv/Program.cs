@@ -33,7 +33,7 @@ internal static class Program
         SampleSupport.EnsureEqual("hello-stream", payload, "payload");
 
         using var reply = Message.From("hello-stream");
-        received.Send().Message(reply).Submit();
+        received.Send().Message(reply).Submit(SendFlags.None);
         string echoed = System.Text.Encoding.UTF8.GetString(
             SampleSupport.ReceiveExact(network, "hello-stream".Length));
         Console.WriteLine(

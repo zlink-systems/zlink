@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Send and publish terminals for the Core 0.13.1 contract.
+//! Send and publish terminals for the Core 0.14.0 contract.
 //!
 //! HWM-managed send (PAIR send, DEALER/ROUTER routed send, STREAM peer send,
-//! and the routed send addressed at a received envelope) is asynchronous: one
-//! `zlink_send_async` call hands the whole record to Core and the registered
-//! `zlink_send_complete_handler` completes the returned `Future`. The binding
-//! owns no thread, no park queue, no retry and no deadline timer.
+//! and the routed send addressed at a received envelope) has an asynchronous
+//! `zlink_send_async` terminal and a synchronous `zlink_send_part(_rid)`
+//! terminal with send flags. The binding owns no thread, park queue, retry or
+//! deadline timer.
 //!
 //! Publish is synchronous: PUB semantics are lossy, the publisher never waits
 //! at a HWM, and `zlink_send_async` answers `ENOTSUP` for PUB/XPUB.
@@ -166,6 +166,51 @@ pub(crate) fn submit_routed_send(
         parts: op.parts,
         timeout: op.timeout,
     })
+}
+
+// -- HWM-managed send (synchronous + flags) ---------------------------------
+
+pub(crate) fn submit_send_blocking(
+    mut op: SendOpStorage,
+    flags: crate::flags::SendFlags,
+) -> Result<(), SubmitError> {
+    let handle = op
+        .routed
+        .as_ref()
+        .map_or(op.handle, |routed| routed.handle());
+    if handle.is_null() {
+        return Err(submit_error_from_errno(libc::ECANCELED));
+    }
+
+    let target = op.target.as_ref().map(|rid| rid.as_raw() as *const _);
+    let rc = submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
+        match target {
+            Some(target) => {
+                ffi::zlink_send_part_rid(handle, target, part, flags.bits(), part_flag)
+            }
+            None => ffi::zlink_send_part(handle, part, flags.bits(), part_flag),
+        }
+    })?;
+    drop(op.parts);
+    check_submit_rc(rc)
+}
+
+pub(crate) fn submit_routed_send_blocking(
+    op: RoutedSendOpStorage,
+    flags: crate::flags::SendFlags,
+) -> Result<(), SubmitError> {
+    submit_send_blocking(
+        SendOpStorage {
+            handle: op.routed.handle(),
+            routed: Some(op.routed),
+            completions: Some(op.completions),
+            kind: SendOpKind::Routed,
+            target: op.target,
+            parts: op.parts,
+            timeout: op.timeout,
+        },
+        flags,
+    )
 }
 
 /// Consumer side of one Core send operation.

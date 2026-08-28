@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { SubmitError, SubmitResult } from '../errors/errors';
-import type { ImmediateSendOperation, ReplyOperation } from './operations';
+import type { ReplyOperation, RoutedSendOperation } from './operations';
 import { RoutingId } from '../core/routing_id';
 import { MessagePartsEnvelope } from './message_parts_envelope';
 
@@ -10,7 +10,7 @@ interface ReplyContext {
 }
 
 interface SendContext {
-  beginSend(): ImmediateSendOperation;
+  beginSend(): RoutedSendOperation;
 }
 
 function invalidReplyContextError(): SubmitError {
@@ -73,7 +73,7 @@ export class Received extends MessagePartsEnvelope {
    * submit. Parts are consumed on a successful submit. Throws when the envelope
    * carries no send context.
    */
-  send(): ImmediateSendOperation {
+  send(): RoutedSendOperation {
     if (!this._sendContext) {
       throw invalidSendContextError();
     }

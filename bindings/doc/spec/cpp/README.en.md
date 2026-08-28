@@ -416,8 +416,9 @@ artifact. The finished binding therefore keeps the following build rules.
 - A Dealer socket does not expose protocol envelope helpers such as `request_frame(...)` or `reply(request_token, parts)`. Dealer can start a request with `request()`, but has no API-level peer routing id, so it cannot reply to an arbitrary token.
 - No operation-start overload family such as `send_no_wait`, `publish_with_flags`, `request_async` is added. Keep one operation name, and let the builder absorb variants. The per-language name of the terminal builder method follows the [bindings async execution surface policy](../async-coroutine-policy.en.md).
 - A routed **send** has two terminals on `routed_send_submit_operation_t`:
-  blocking `submit() -> void` (Core waits on the caller's path) and
-  `async() -> async_result_t<void>` (Core send-completion). Both paths keep no
+  sync `flags(int).submit() -> void` (no flag or `NONE` blocks in Core on the
+  caller's path; `DONTWAIT` reports immediate backpressure as `submit_error_t`)
+  and `async() -> async_result_t<void>` (Core send-completion). Both paths keep no
   admission park queue, WRITABLE-callback retry, deadline timer, or dispatcher
   thread — see the
   [bindings routed send contract and async completion surface policy](../async-coroutine-policy.en.md).
@@ -429,8 +430,9 @@ artifact. The finished binding therefore keeps the following build rules.
   Failure is thrown as `submit_error_t`. The public C++ message stays with the
   caller because the binding submits a separate native view; Core consumes the
   native part actually passed to a synchronous call on ordinary failure.
-- The routed send builder exposes no flags stage. Its `timeout(...)` stage sets
-  the Core per-operation deadline used by `async()`; blocking `submit()` uses
+- The routed send builder exposes a `flags(int)` stage only for sync `submit()`.
+  Its `timeout(...)` stage sets the Core per-operation deadline used by
+  `async()`, which takes no flags; sync `submit()` with no flag or `NONE` uses
   the socket `SNDTIMEO` bound.
 - The C++ binding adds no lock or gate of its own to an outbound path. Core's
   per-socket transaction state keeps another sender's parts out of an open
@@ -463,10 +465,10 @@ artifact. The finished binding therefore keeps the following build rules.
   deadlocks; submitting send/publish/request from a completion callback fails
   with `EDEADLK`. Handing the continuation to another execution model is the
   framework's and the application's job.
-- `send_submit_operation_t` (the PAIR/STREAM one-shot) exposes
-  `submit() -> bool` and `async() -> async_result_t<void>`. Its `timeout(...)`
-  stage sets the Core per-operation deadline for `async()`; completion means
-  admission, not peer delivery. `.flags(dontwait).submit()` returns `false`
+- `send_submit_operation_t` (the PAIR/STREAM one-shot) exposes sync
+  `flags(int).submit() -> bool` and `async() -> async_result_t<void>`. Its
+  `timeout(...)` stage sets the Core per-operation deadline for `async()`;
+  completion means admission, not peer delivery. `.flags(dontwait).submit()` returns `false`
   immediately on backpressure. Destroying the socket/context from an async
   resumed continuation deadlocks, and submitting from its completion callback
   fails with `EDEADLK`.

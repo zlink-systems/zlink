@@ -645,9 +645,10 @@ physical transport pair만 종료 대상으로 지정한다. 같은 peer routing
 identity가 필요한 Framework connection replacement와 같은 runtime 제어에
 사용하며, 임의의 pair identity를 새로 만들어 전달하지 않는다.
 
-PAIR send와 DEALER/ROUTER routed send, request builder의 canonical terminal은
-인자 없는 `submit()` 하나다. PAIR send와 routed send는
-`CompletionStage<Void>`, request는 `CompletionStage<List<Message>>`를 반환한다.
+PAIR send와 DEALER/ROUTER routed send builder에는 두 `submit` overload가 있다.
+비동기 `submit()`은 `CompletionStage<Void>`를 반환하고, 동기
+`submit(SendFlags)`는 `void`를 반환한다. request builder의 terminal은 인자 없는
+`submit()` 하나이며 `CompletionStage<List<Message>>`를 반환한다.
 PUB/XPUB publish도 같은 staged message builder를 사용하지만 `submit()`은
 동기 `void`이며, 성공하지 못하면 즉시 `ZlinkSubmitException`을 던진다.
 
@@ -656,12 +657,14 @@ public interface AsyncSendSubmitOperation {
     AsyncSendSubmitOperation message(Message part);
     AsyncSendSubmitOperation timeout(Duration timeout);
     CompletionStage<Void> submit();
+    void submit(SendFlags flags);
 }
 
 public interface RoutedSendSubmitOperation {
     RoutedSendSubmitOperation message(Message part);
     RoutedSendSubmitOperation timeout(Duration timeout);
     CompletionStage<Void> submit();
+    void submit(SendFlags flags);
 }
 
 public interface RequestSubmitOperation {
@@ -671,10 +674,14 @@ public interface RequestSubmitOperation {
 }
 ```
 
-이 비동기 builder에는 blocking `await()`, `submit(callback)`, `flags(...)`, boolean
-one-shot terminal을 제공하지 않는다. `submit()`은 호출 thread를 막지 않으며
-Framework와 Kotlin은 반환된 `CompletionStage`를 직접 completion/await 경계에
-연결한다. Kotlin의 canonical 사용은 `submit().await()`다. 언어별 비동기 실행 표면 기준은
+send builder는 별도 `await()`, `submit(callback)`, `flags(...)`, boolean one-shot
+terminal을 제공하지 않는다. 대신 `submit(SendFlags.NONE)`은 Core가 admit할 때까지
+동기 대기하고, `submit(SendFlags.DONT_WAIT)`은 HWM이 가득 차면 즉시
+`ZlinkSubmitException(BACKPRESSURED)`을 던진다. 인자 없는 `submit()`은 호출 thread를
+막지 않는다. Framework와 Kotlin framework는 동기 overload를 사용하지 않고 반환된
+`CompletionStage`를 직접 completion/await 경계에 연결하며, Kotlin framework의 사용은
+계속 `submit().await()`다. Kotlin이 Java binding을 직접 사용할 때는 동기 overload도
+사용할 수 있다. 언어별 비동기 실행 표면 기준은
 [바인딩 비동기 실행 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
 
 PUB/XPUB publish builder의 `submit()`은 `CompletionStage`를 만들지 않는다. 기본

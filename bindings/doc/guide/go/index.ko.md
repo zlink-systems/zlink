@@ -141,6 +141,16 @@ snapshot := msg.Bytes()       // 독립 복사본
 text := msg.Text()            // UTF-8 문자열 변환
 ```
 
+HWM 대기 가능 send의 동기 종결자는 `Flags(SendFlags).Submit(ctx)`입니다. flag를
+생략하거나 `SendFlagsNone`을 지정하면 Core 안에서 HWM admission까지 현재 goroutine이
+대기합니다. `SendFlagsDontWait`을 지정하면 HWM이 가득 찼을 때 routed send는 즉시
+`*SubmitError`를 반환하고, PAIR send는 `(false, nil)`을 반환합니다. Go send에는
+별도 async 종결자가 없습니다.
+
+```go
+err := dealer.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(ctx)
+```
+
 ### 3. Received — 수신 봉투
 
 메시지를 받은 봉투입니다. 라우팅 ID, 파트 목록, 회신 컨텍스트(선택)를 담습니다.
@@ -210,7 +220,7 @@ Go 바인딩은 표준 `error` 인터페이스를 돌려줍니다. 결과 코드
 어서션으로 확인합니다.
 
 ```go
-_, err := socket.Send().Message(msg).Submit(nil)
+_, err := socket.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(nil)
 if err != nil {
     var submitErr *zlink.SubmitError
     if errors.As(err, &submitErr) {
@@ -260,7 +270,7 @@ if !ok { /* 메시지 없음 */ }
 | `zlink_close(socket)` | `socket.Close()` |
 | `zlink_bind(socket, ep)` | `socket.Bind(ep)` |
 | `zlink_connect(socket, ep)` | `socket.Connect(ep)` |
-| `zlink_send_part(...)` | `socket.Send().Message(m).Submit(nil)` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.Send().Message(m).Flags(flag).Submit(ctx)` |
 | `zlink_recv_part(...)` | `socket.Recv(&received, flags)` |
 | `zlink_msg_data(msg)` | `msg.Data()` |
 | `zlink_msg_size(msg)` | `msg.Size()` |
@@ -294,6 +304,9 @@ if zlink.Has("draft") {
 
 스레딩: `Context`는 고루틴 사이에서 공유할 수 있지만, 소켓은 **하나의 고루틴에서만**
 써야 합니다. ([스레드 안전성](https://zlink-systems.github.io/zlink/ko/guide/11-thread-safety/) 참고)
+flag 없는 기본 send는 HWM admission을 기다리는 동안 호출 goroutine을 멈춥니다.
+다른 goroutine은 계속 실행되므로 이 실행 환경에서는 안전합니다. 즉시 backpressure가
+필요하면 `Flags(zlink.SendFlagsDontWait).Submit(ctx)`를 사용합니다.
 
 ---
 

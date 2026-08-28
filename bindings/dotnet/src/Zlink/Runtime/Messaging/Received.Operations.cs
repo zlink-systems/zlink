@@ -6,6 +6,23 @@ namespace Systems.Zlink;
 // Received.cs.
 public sealed partial class Received : IDisposable
 {
+    internal Task SendAsyncCore(OperationMessageBuffer parts,
+        CancellationToken cancellationToken)
+    {
+        if (_sendKernel == null)
+            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
+                (int)ErrorCode.EInval);
+        var target = _sendRoutingIdSnapshot.ToRoutingId();
+        if (!target.HasValue)
+            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
+                (int)ErrorCode.EInval);
+        return parts.IsSingle
+            ? _sendKernel.SendCompletion.SendSingleAsync(target.Value,
+                parts.Single, cancellationToken)
+            : _sendKernel.SendCompletion.SendAsync(target.Value, parts.Parts,
+                cancellationToken);
+    }
+
     internal ReceivedReplyHandler CaptureReplyHandler()
     {
         if (_metadata is not

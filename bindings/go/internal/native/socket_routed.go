@@ -113,8 +113,8 @@ func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 }
 
 func (s *RouterSocket) SendTo(target RoutingID) RoutedSendOp {
-	return newRoutedSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
-		return submitRoutedSend(ctx, s.socketCore, routedRouter, &target, parts)
+	return newRoutedSendBuilder(func(ctx context.Context, flags SendFlags, parts []sendBuilderPart) error {
+		return submitRoutedSend(ctx, s.socketCore, routedRouter, &target, flags, parts)
 	})
 }
 

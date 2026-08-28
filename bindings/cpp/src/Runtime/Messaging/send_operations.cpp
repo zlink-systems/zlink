@@ -306,6 +306,12 @@ routed_send_submit_operation_t::message (message_t &&part_) &&
     return std::move (*this);
 }
 
+routed_send_submit_operation_t &&routed_send_submit_operation_t::flags (int flags_) &&
+{
+    state ().flags = send_flags_t (flags_);
+    return std::move (*this);
+}
+
 routed_send_submit_operation_t
 routed_send_operation_t::message (message_t &part_) &&
 {
@@ -385,11 +391,11 @@ void routed_send_submit_operation_t::submit () &&
     auto &state = this->state ();
     if (!detail::has_send_parts (state))
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
-    // Core owns the HWM contract for this submit: it blocks and resumes on its
-    // own signal, bounds the wait with SNDTIMEO, and reports backpressure. The
-    // routed builder exposes no flags stage, so the socket options are the
-    // single owner of that policy.
-    (void) detail::submit_raw_send_state (state);
+    // Core owns the HWM contract for this submit. `none` blocks and is bounded
+    // by SNDTIMEO; `dontwait` returns false from the shared sync helper, which
+    // routed send maps to its void terminal's submit_error_t failure surface.
+    if (!detail::submit_raw_send_state (state))
+        throw submit_error_t (submit_result_t::backpressured, EAGAIN);
 }
 
 async_result_t<void> send_submit_operation_t::async () &&

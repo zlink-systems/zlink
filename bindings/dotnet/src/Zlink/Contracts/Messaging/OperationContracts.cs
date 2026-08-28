@@ -114,6 +114,14 @@ public interface RoutedSendSubmitOperation
     RoutedSendSubmitOperation Message(Message message);
 
     /// <summary>
+    ///     Submits the accumulated parts synchronously using the selected send
+    ///     flags. <see cref="SendFlags.None" /> waits for Core admission;
+    ///     <see cref="SendFlags.DontWait" /> reports immediate back-pressure as
+    ///     <see cref="ZlinkSubmitException" />.
+    /// </summary>
+    void Submit(SendFlags flags);
+
+    /// <summary>
     ///     Hands the complete record to Core and returns without waiting for
     ///     target HWM credit. The task is completed exactly once by the Core
     ///     send completion: successfully on admission, with

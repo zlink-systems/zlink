@@ -27,6 +27,10 @@ export type ManagedSendInvoker = (
   parts: OperationPayloadValue<MessageLike>,
   timeoutMs: number
 ) => Promise<void>;
+export type SyncSendInvoker = (
+  parts: OperationPayloadValue<MessageLike>,
+  flags: SendFlags
+) => void;
 export type PublishInvoker = (
   topic: string,
   payload: OperationPayloadValue<MessageLike>
@@ -46,6 +50,11 @@ export type ManagedRoutedSendInvoker = (
   parts: OperationPayloadValue<MessageLike>,
   timeoutMs: number
 ) => Promise<void>;
+export type SyncRoutedSendInvoker = (
+  routingId: Buffer | null,
+  parts: OperationPayloadValue<MessageLike>,
+  flags: SendFlags
+) => void;
 
 function consumeSubmittedMessages(payload: OperationPayloadValue<MessageLike>): void {
   if (payload instanceof Message) {
@@ -72,7 +81,10 @@ export class RuntimeSendOperation
   implements SendOperation, SendSubmitOperation {
   private _timeoutMs = 0;
 
-  constructor(private readonly _invoke: ManagedSendInvoker) { super(); }
+  constructor(
+    private readonly _invoke: ManagedSendInvoker,
+    private readonly _invokeSync: SyncSendInvoker
+  ) { super(); }
 
   timeout(timeoutMs: number): this {
     this.ensureOpen();
@@ -80,8 +92,13 @@ export class RuntimeSendOperation
     return this;
   }
 
-  submit(): Promise<void> {
-    return this._invoke(this.consumePayload(), this._timeoutMs);
+  submit(): Promise<void>;
+  submit(flags: SendFlags): void;
+  submit(flags?: SendFlags): Promise<void> | void {
+    const payload = this.consumePayload();
+    if (flags === undefined) return this._invoke(payload, this._timeoutMs);
+    this._invokeSync(payload, flags);
+    consumeSubmittedMessages(payload);
   }
 }
 
@@ -115,6 +132,7 @@ export class ManagedRoutedRuntimeSendOperation
 
   constructor(
     private readonly _invoke: ManagedRoutedSendInvoker,
+    private readonly _invokeSync: SyncRoutedSendInvoker,
     private readonly _routingId: Buffer | null
   ) { super(); }
 
@@ -124,8 +142,13 @@ export class ManagedRoutedRuntimeSendOperation
     return this;
   }
 
-  submit(): Promise<void> {
-    return this._invoke(this._routingId, this.consumePayload(), this._timeoutMs);
+  submit(): Promise<void>;
+  submit(flags: SendFlags): void;
+  submit(flags?: SendFlags): Promise<void> | void {
+    const payload = this.consumePayload();
+    if (flags === undefined) return this._invoke(this._routingId, payload, this._timeoutMs);
+    this._invokeSync(this._routingId, payload, flags);
+    consumeSubmittedMessages(payload);
   }
 }
 

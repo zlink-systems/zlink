@@ -129,7 +129,7 @@ public sealed partial class Received : IDisposable
     ///     Start a send operation addressed to the source route of this envelope.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SendOperation Send()
+    public RoutedSendOperation Send()
     {
         return new ReceivedSendOperationImpl(this);
     }

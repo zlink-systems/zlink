@@ -96,7 +96,7 @@ public sealed class test_socket_surface
     }
 
     [Fact]
-    public void routed_send_and_request_expose_only_async_terminals()
+    public void send_exposes_sync_and_async_terminals_while_request_is_async_only()
     {
         MethodInfo dealerSend = PublicInstanceMethods(typeof(IDealerSocket))
             .Single(method => method.Name == nameof(IDealerSocket.Send)
@@ -136,7 +136,7 @@ public sealed class test_socket_surface
                 method.Name == "Send"
                 && method.ReturnType == typeof(SendOperation));
         }
-        Assert.Equal(typeof(SendOperation),
+        Assert.Equal(typeof(RoutedSendOperation),
             PublicInstanceMethods(typeof(IPairSocket)).Single(method =>
                 method.Name == nameof(IPairSocket.Send)).ReturnType);
         Assert.Equal(typeof(RoutedSendOperation),
@@ -145,12 +145,20 @@ public sealed class test_socket_surface
         Assert.Equal(typeof(SendOperation),
             PublicInstanceMethods(typeof(IStreamSocket)).Single(method =>
                 method.Name == nameof(IStreamSocket.TrySend)).ReturnType);
+        Assert.Equal(typeof(RoutedSendOperation),
+            PublicInstanceMethods(typeof(Received)).Single(method =>
+                method.Name == nameof(Received.Send)).ReturnType);
+        Assert.True(HasPublicInstanceMethod(typeof(RoutedSendSubmitOperation),
+            nameof(RoutedSendSubmitOperation.Submit),
+            typeof(SendFlags)));
         Assert.True(HasPublicInstanceMethod(typeof(RoutedSendSubmitOperation),
             nameof(RoutedSendSubmitOperation.Async),
             typeof(System.Threading.CancellationToken)));
         Assert.DoesNotContain(PublicInstanceMethods(
                 typeof(RoutedSendSubmitOperation)),
-            method => method.Name is "Submit" or "Flags");
+            method => method.Name == "Flags"
+                || method.Name == "Submit"
+                && method.GetParameters().Length == 0);
 
         Assert.True(HasPublicInstanceMethod(typeof(RequestSubmitOperation),
             nameof(RequestSubmitOperation.Async),

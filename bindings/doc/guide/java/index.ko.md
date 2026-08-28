@@ -68,7 +68,7 @@ try (Context ctx = Zlink.createContext();
         System.out.println(text); // PING
 
         try (Message reply = Message.from("ACK")) {
-            server.send().message(reply).submit();
+            server.send().message(reply).submit(SendFlags.NONE);
         }
     }
 }
@@ -82,7 +82,7 @@ try (Context ctx = Zlink.createContext();
     client.connect("tcp://127.0.0.1:5555");
 
     try (Message ping = Message.from("PING")) {
-        client.send().message(ping).submit();
+        client.send().message(ping).submit(SendFlags.NONE);
     }
 
     try (Received received = new Received()) {
@@ -126,7 +126,7 @@ ctx.options().ioThreads(4);
 ```java
 // 문자열에서 복사본 생성
 try (Message msg = Message.from("payload")) {
-    socket.send().message(msg).submit();
+    socket.send().message(msg).submit(SendFlags.NONE);
 }
 // submit 성공 시 msg는 이미 소비됨 — try 블록이 닫혀도 무방
 
@@ -136,8 +136,18 @@ try (Message msg = Message.from(bytes)) { ... }
 // 크기 지정으로 빈 프레임 할당
 try (Message msg = new Message(256)) {
     msg.mutableDataBuffer().put(data);
-    socket.send().message(msg).submit();
+    socket.send().message(msg).submit(SendFlags.NONE);
 }
+```
+
+HWM 대기 가능 send는 비동기 `submit()`과 동기 `submit(SendFlags)` overload를
+제공합니다. `submit(SendFlags.NONE)`은 HWM admission까지 현재 thread를 멈추고,
+`submit(SendFlags.DONT_WAIT)`은 HWM이 가득 차면 즉시 `ZlinkSubmitException`을
+발생시킵니다. 비동기 완료는 flag 없는 `CompletionStage<Void>`로 받습니다.
+
+```java
+socket.send().message(message).submit(SendFlags.DONT_WAIT); // 동기 non-blocking
+CompletionStage<Void> completion = socket.send().message(message).submit(); // 비동기
 ```
 
 직접 `recv(..., RecvFlags.NONE)`를 호출하면 현재 Java thread가 native recv에서
@@ -216,8 +226,8 @@ Java 바인딩의 소유권 규칙입니다. try-with-resources를 기본 패턴
 
 | 상황 | 규칙 |
 |------|------|
-| `submit()` 성공 | 추가한 `Message`의 소유권이 전송 스택으로 이전됩니다. 별도 `close()` 불필요 |
-| `submit()` 실패(예외) | 소유권이 호출자에게 유지됩니다. try-with-resources가 자동 처리 |
+| send 종결자 성공 | 추가한 `Message`의 소유권이 전송 스택으로 이전됩니다. 별도 `close()` 불필요 |
+| send 종결자 실패(예외 또는 failed stage) | 소유권이 호출자에게 유지됩니다. try-with-resources가 자동 처리 |
 | `recv()` 성공 | 호출자가 `Received`의 소유권을 가집니다. try-with-resources 필수 |
 | `submitAsync()` 완료 | 회신 `List<Message>`는 호출자 소유. `Message.closeAll(reply)` 필요 |
 | `Context.close()` | 컨텍스트 하위의 모든 블로킹 작업을 중단합니다 |
@@ -225,8 +235,8 @@ Java 바인딩의 소유권 규칙입니다. try-with-resources를 기본 패턴
 ```java
 // 패턴: try-with-resources로 안전하게
 try (Message msg = Message.from("data")) {
-    boolean submitted = socket.send().message(msg).submit();
-    // submitted=true면 msg가 소비됨, false면 백프레셔(DONT_WAIT일 때만)
+    socket.send().message(msg).submit(SendFlags.DONT_WAIT);
+    // 반환되면 msg가 소비됨. backpressure는 ZlinkSubmitException으로 전달됨
 } // submit이 예외를 던지면 try-with-resources가 msg를 닫음
 ```
 
@@ -238,7 +248,7 @@ Java 바인딩은 `ZlinkException` 계층 구조로 예외를 던집니다.
 
 ```java
 try (Message msg = Message.from("data")) {
-    socket.send().message(msg).submit();
+    socket.send().message(msg).submit(SendFlags.DONT_WAIT);
 } catch (ZlinkSubmitException e) {
     switch (e.getResult()) {
         case BACKPRESSURED -> { /* 잠시 후 재시도 */ }
@@ -276,7 +286,8 @@ try (Message msg = Message.from("data")) {
 | `zlink_close(socket)` | `socket.close()` |
 | `zlink_bind(socket, ep)` | `socket.bind(ep)` |
 | `zlink_connect(socket, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` | `socket.send().message(m).submit()` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit(flags)` |
+| `zlink_send_async(...)` | `socket.send().message(m).submit()` (`CompletionStage`) |
 | `zlink_recv_part(...)` | `socket.recv(received, flags)` |
 | `zlink_msg_data(msg)` | `msg.data()` |
 | `zlink_msg_size(msg)` | `msg.size()` |
@@ -310,6 +321,10 @@ if (Zlink.has("draft")) {
 
 **스레딩:** `Context`는 스레드 간 공유 가능하나, 소켓은 **하나의 스레드에서만** 사용해야 합니다.
 디스패치 핸들러는 zlink 내부 워커 스레드에서 호출되므로 핸들러 안에서 오래 블록하지 않아야 합니다.
+`submit(SendFlags.NONE)`은 HWM admission을 기다리는 동안 현재 platform thread 또는
+virtual thread를 멈춥니다. 다른 thread와 virtual thread는 계속 실행되므로 이 실행 환경에서는
+안전합니다. 호출 thread를 멈추지 않으려면 비동기 `submit()`을 사용하고, 즉시
+backpressure가 필요하면 `submit(SendFlags.DONT_WAIT)`을 사용합니다.
 자세한 내용은 [스레드 안전성](https://zlink-systems.github.io/zlink/ko/guide/11-thread-safety/)을 참고하세요.
 
 ---
@@ -351,6 +366,9 @@ Kotlin 관용만 다릅니다.
 - **의존성**: `systems.zlink:zlink`(위와 동일). Kotlin 플러그인은 **2.1.0**
   이상을 씁니다.
 - **소유권**: `AutoCloseable`이므로 `try`/`finally` 대신 `use { }`로 정리합니다.
+- **send 완료**: coroutine에서는 Java의 비동기 `submit()`이 반환한
+  `CompletionStage`를 `submit().await()`로 기다립니다. blocking
+  `submit(SendFlags)` overload는 coroutine 안에서 사용하지 않습니다.
 
 ```kotlin
 Zlink.createContext().use { ctx ->

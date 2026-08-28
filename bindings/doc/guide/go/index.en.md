@@ -144,6 +144,16 @@ snapshot := msg.Bytes()       // an independent copy
 text := msg.Text()            // UTF-8 string conversion
 ```
 
+The synchronous terminal for HWM-managed sends is
+`Flags(SendFlags).Submit(ctx)`. With no flag or `SendFlagsNone`, the current
+goroutine waits inside Core for HWM admission. With `SendFlagsDontWait`, a full
+HWM immediately returns a `*SubmitError` for a routed send and `(false, nil)` for
+a PAIR send. Go send has no separate asynchronous terminal.
+
+```go
+err := dealer.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(ctx)
+```
+
 ### 3. Received — the receive envelope
 
 Holds a received message envelope. Carries a routing ID, part list, and an
@@ -214,7 +224,7 @@ The Go binding returns the standard `error` interface. If you need the result
 code, check it with a type assertion.
 
 ```go
-_, err := socket.Send().Message(msg).Submit(nil)
+_, err := socket.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(nil)
 if err != nil {
     var submitErr *zlink.SubmitError
     if errors.As(err, &submitErr) {
@@ -264,7 +274,7 @@ if !ok { /* no message */ }
 | `zlink_close(socket)` | `socket.Close()` |
 | `zlink_bind(socket, ep)` | `socket.Bind(ep)` |
 | `zlink_connect(socket, ep)` | `socket.Connect(ep)` |
-| `zlink_send_part(...)` | `socket.Send().Message(m).Submit(nil)` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.Send().Message(m).Flags(flag).Submit(ctx)` |
 | `zlink_recv_part(...)` | `socket.Recv(&received, flags)` |
 | `zlink_msg_data(msg)` | `msg.Data()` |
 | `zlink_msg_size(msg)` | `msg.Size()` |
@@ -298,6 +308,10 @@ if zlink.Has("draft") {
 
 Threading: `Context` can be shared across goroutines, but sockets must be used
 **from a single goroutine only**. (see [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/))
+A default send without `DontWait` stops its calling goroutine while waiting for
+HWM admission. Other goroutines continue to run, so this is safe in this
+execution environment. Use `Flags(zlink.SendFlagsDontWait).Submit(ctx)` when
+immediate back-pressure is required.
 
 ---
 

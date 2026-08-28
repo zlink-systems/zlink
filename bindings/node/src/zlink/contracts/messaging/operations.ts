@@ -29,6 +29,8 @@ export interface SendSubmitOperation
   extends PartBuilder<SendSubmitOperation>, Timeoutable<SendSubmitOperation> {
   /** Resolve when Core reports send completion; reject on timeout or terminal failure. */
   submit(): Promise<void>;
+  /** Submit synchronously with the requested blocking or non-blocking send flags. */
+  submit(flags: SendFlags): void;
 }
 
 /** Builds a DEALER/ROUTER/STREAM routed send. */
@@ -39,6 +41,8 @@ export interface RoutedSendSubmitOperation
   extends PartBuilder<RoutedSendSubmitOperation>, Timeoutable<RoutedSendSubmitOperation> {
   /** Resolve after Core accepts the complete record; reject on terminal failure. */
   submit(): Promise<void>;
+  /** Submit synchronously with the requested blocking or non-blocking send flags. */
+  submit(flags: SendFlags): void;
 }
 
 /** Immediate raw send retained for STREAM relay/try-send surfaces. */

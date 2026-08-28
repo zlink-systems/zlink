@@ -15,10 +15,11 @@ import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.contracts.messaging.RoutedSendSubmitOperation;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.contracts.sockets.SendFlags;
 
 class RoutedCompletionSurfaceContractTest {
     @Test
-    void routedSendAndRequestExposeOnlyCompletionStageSubmit()
+    void routedSendExposesAsyncAndFlaggedSyncSubmitWhileRequestStaysAsyncOnly()
         throws NoSuchMethodException {
         assertEquals(RoutedSendOperation.class,
             DealerSocket.class.getMethod("send").getReturnType());
@@ -27,22 +28,48 @@ class RoutedCompletionSurfaceContractTest {
                 systems.zlink.contracts.core.RoutingId.class)
                 .getReturnType());
 
-        assertCanonicalTerminal(RoutedSendSubmitOperation.class);
-        assertCanonicalTerminal(RequestSubmitOperation.class);
+        assertRoutedSendTerminals();
+        assertRequestAsyncTerminal();
     }
 
-    private static void assertCanonicalTerminal(Class<?> type) {
+    private static void assertRoutedSendTerminals()
+        throws NoSuchMethodException {
+        assertNoLegacyTerminals(RoutedSendSubmitOperation.class);
+        Method[] submits = submitMethods(RoutedSendSubmitOperation.class);
+        assertEquals(2, submits.length);
+
+        Method asyncSubmit = RoutedSendSubmitOperation.class
+            .getMethod("submit");
+        assertTrue(CompletionStage.class.isAssignableFrom(
+            asyncSubmit.getReturnType()));
+
+        Method syncSubmit = RoutedSendSubmitOperation.class
+            .getMethod("submit", SendFlags.class);
+        assertEquals(void.class, syncSubmit.getReturnType());
+    }
+
+    private static void assertRequestAsyncTerminal()
+        throws NoSuchMethodException {
+        assertNoLegacyTerminals(RequestSubmitOperation.class);
+        Method[] submits = submitMethods(RequestSubmitOperation.class);
+        assertEquals(1, submits.length);
+
+        Method asyncSubmit = RequestSubmitOperation.class.getMethod("submit");
+        assertTrue(CompletionStage.class.isAssignableFrom(
+            asyncSubmit.getReturnType()));
+    }
+
+    private static void assertNoLegacyTerminals(Class<?> type) {
         Method[] methods = type.getMethods();
         assertFalse(Arrays.stream(methods)
             .anyMatch(method -> method.getName().equals("await")));
         assertFalse(Arrays.stream(methods)
             .anyMatch(method -> method.getName().equals("flags")));
-        Method[] submits = Arrays.stream(methods)
+    }
+
+    private static Method[] submitMethods(Class<?> type) {
+        return Arrays.stream(type.getMethods())
             .filter(method -> method.getName().equals("submit"))
             .toArray(Method[]::new);
-        assertEquals(1, submits.length);
-        assertEquals(0, submits[0].getParameterCount());
-        assertTrue(CompletionStage.class.isAssignableFrom(
-            submits[0].getReturnType()));
     }
 }

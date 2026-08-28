@@ -506,8 +506,9 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   교체할 때는 `set...Handler`를 사용한다.
 - `sendNoWait`, `publishWithFlags`, `requestAsync` 같은 operation-start 변형을
   만들지 않는다. operation 이름은 하나로 유지한다. 각 operation이 지원하는 flag나
-  timeout은 빌더에 두며, 관리형 DEALER/ROUTER send와 request는 아래에서 정의하는
-  유일한 Promise `submit()` 종단을 사용한다.
+  timeout은 빌더에 둔다. 관리형 send는 아래에서 정의하는 sync
+  `submit(SendFlags)`와 async `submit()` 종단을 사용하고, request는 Promise
+  `submit()` 종단을 사용한다.
 
 ## 정식 인터페이스 규칙
 
@@ -543,15 +544,17 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - operation-start 명명은 위의 함수 이름 규칙을 따른다. 빌더의 종단 메서드는
   Promise 반환 표면에서도 지금처럼 `submit(...)`을 사용한다. `submitAsync` 같은
   별도 종단 이름을 추가하지 않는다.
-- Pair의 `send().message(...).submit()`와 DEALER/ROUTER의 routed
-  `send(...).message(...).submit()`은 Core send-complete callback으로 완료되는
-  관리형 `Promise<void>` 종단이다. timeout은 각 operation의 option으로 Core에
-  전달하며, `ADMITTED`면 Promise를 resolve하고 `TIMED_OUT`/`TERMINAL`이면
+- Pair의 `send().message(...)`, DEALER/ROUTER의 routed
+  `send(...).message(...)`, `Received.send().message(...)`는 두 종결자를 제공한다. sync
+  `submit(SendFlags): void`는 `zlink_send_part(_rid)`로 제출하고 실패 시
+  `SubmitError`를 발생시킨다. async `submit(): Promise<void>`는 Core
+  send-complete callback으로 완료된다. timeout은 async operation의 option으로
+  Core에 전달하며, `ADMITTED`면 Promise를 resolve하고 `TIMED_OUT`/`TERMINAL`이면
   Core errno를 보존한 `SubmitError`로 reject한다. Promise를 버리거나 GC하는 것은
   취소가 아니며 별도 cancel API를 노출하지 않는다. 이 binding은 thread, queue,
   retry 또는 readiness/admission 상태를 소유하지 않고, native callback은 JS
   completion 전달만 수행한다.
-- Stream의 managed `send(routingId)`도 같은 send-complete Promise 계약을 사용한다.
+- Stream의 managed `send(routingId)`도 같은 sync/async send 계약을 사용한다.
   Stream의 `trySend`와 공개 ROUTER `sendTransportPair(...)` 같은 raw one-shot
   operation은 기존 동기 `void`/`boolean` 계약을 유지하며 managed HWM 대기 종단으로
   해석하지 않는다.

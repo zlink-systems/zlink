@@ -344,9 +344,12 @@ public crate items and re-exports.
   ```
 
   HWM-managed **send** (PAIR `send()`, STREAM `send(target)`,
-  `Received::send()`, and DEALER/ROUTER routed send) returns a
-  runtime-independent `Future<Output = Result<(), SubmitError>>` from
-  `submit()`; request `submit()` returns
+  `Received::send()`, and DEALER/ROUTER routed send) provides two terminals.
+  Asynchronous `submit()` returns a runtime-independent
+  `Future<Output = Result<(), SubmitError>>`. Synchronous
+  `submit_blocking(SendFlags) -> Result<(), SubmitError>` blocks inside Core
+  for admission with `SendFlags::NONE` and immediately returns
+  `Backpressured` with `SendFlags::DONT_WAIT`. Request `submit()` returns
   `Future<Output = Result<Vec<Message>, ZlinkError>>`. **publish** is not in
   that classification: its terminal is the synchronous
   `submit() -> Result<(), SubmitError>` (lossy PUB semantics; with
@@ -365,8 +368,10 @@ public crate items and re-exports.
   binding keeps no park queue, no WRITABLE retry, no deadline timer and no
   dispatcher thread. There is no public `on_send_ready`; send completion is
   delivered only through the Future.
-- Routed send/request builders do not also expose callback, blocking-wait, or
-  progress-polling terminals. PUB/XPUB `publish` and ROUTER reply remain
+- Routed send builders expose both `submit()` and
+  `submit_blocking(SendFlags)` as required by the send contract. Request
+  builders do not also expose callback, blocking-wait, or progress-polling
+  terminals. PUB/XPUB `publish` and ROUTER reply remain
   separate synchronous operation contracts. The raw
   ROUTER/`Received` reply terminal is the one-shot
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal

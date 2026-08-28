@@ -280,6 +280,34 @@ func TestRoutedSendZeroSendTimeoutReturnsBackpressureImmediately(t *testing.T) {
 	}
 }
 
+// Builder flags select the synchronous non-blocking terminal independently of
+// the socket timeout. DONTWAIT must surface Core backpressure immediately.
+func TestRoutedSendBuilderDontWaitReturnsBackpressureImmediately(t *testing.T) {
+	f := newRoutedAsyncFixture(t, false)
+	defer f.close()
+
+	_ = fillRoutedTargetUntilBackpressured(t, f.router, f.ridA)
+	if err := f.router.SetSendTimeout(2 * time.Second); err != nil {
+		t.Fatalf("router SetSendTimeout() error = %v", err)
+	}
+
+	started := time.Now()
+	err := f.router.SendTo(f.ridA).
+		Bytes([]byte("builder-dontwait")).
+		Flags(zlink.SendFlagsDontWait).
+		Submit(context.Background())
+	if err == nil {
+		t.Fatal("DONTWAIT routed send completed without backpressure")
+	}
+	var submitError *zlink.SubmitError
+	if !errors.As(err, &submitError) || submitError.Result != zlink.SubmitBackpressured {
+		t.Fatalf("DONTWAIT routed send error = %v, want SubmitBackpressured", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("DONTWAIT routed send waited %s behind the target queue", elapsed)
+	}
+}
+
 // The blocking submit parks inside Core and resumes on a Core credit signal.
 // Nothing in the binding retries or reschedules it.
 func TestRoutedSendBlockingSubmitParksInCoreAndResumesOnCredit(t *testing.T) {

@@ -448,6 +448,18 @@ final class NativeSocketRuntime implements AutoCloseable {
         return true;
     }
 
+    boolean send(RoutingId rid, long transportPairId,
+                 long transportPairGeneration, List<Message> parts,
+                 SendFlag flags) {
+        if (transportPairId == 0L || transportPairGeneration == 0L) {
+            throw new IllegalArgumentException(
+                "transport pair identity must be non-zero");
+        }
+        return trySendResult(sendPlane.sendTransportPair(rid, transportPairId,
+            transportPairGeneration, parts,
+            Objects.requireNonNull(flags, "flags")));
+    }
+
     SendResult sendNoWaitResult(RoutingId rid, Message part) {
         Objects.requireNonNull(part, "part");
         return sendMessageFrameNoWaitResult(rid, part);

@@ -72,6 +72,7 @@ func submitRoutedSend(
 	core *socketCore,
 	role routedRole,
 	routerRID *RoutingID,
+	flags SendFlags,
 	parts []sendBuilderPart,
 ) error {
 	if err := contextError(ctx); err != nil {
@@ -87,13 +88,13 @@ func submitRoutedSend(
 	if role == routedDealer {
 		return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 			return submitErrorFromResult(C.zlink_send_part(
-				handle, part, C.ZLINK_SEND_FLAGS_NONE, partFlag))
+				handle, part, C.zlink_send_flags_t(flags), partFlag))
 		})
 	}
 	rid := routerRID.toC()
 	return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 		return submitErrorFromResult(C.zlink_send_part_rid(
-			handle, &rid, part, C.ZLINK_SEND_FLAGS_NONE, partFlag))
+			handle, &rid, part, C.zlink_send_flags_t(flags), partFlag))
 	})
 }
 

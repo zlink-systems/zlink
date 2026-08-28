@@ -30,7 +30,7 @@ zlink = "11.2"
 - The native core is linked in at build time.
 
 ```rust
-use zlink::{Context, Message, Received, RecvFlags};
+use zlink::{Context, Message, Received, RecvFlags, SendFlags};
 ```
 
 ---
@@ -50,7 +50,7 @@ server.recv(&mut received, RecvFlags::NONE).unwrap();
 println!("{}", received.parts()[0].as_str().unwrap()); // PING
 
 let ack = Message::try_from(b"ACK").unwrap();
-server.send().message(ack).submit().unwrap();
+server.send().message(ack).submit_blocking(SendFlags::NONE).unwrap();
 ```
 
 ```rust
@@ -60,7 +60,7 @@ let client = ctx.pair_socket().unwrap();
 client.connect("tcp://127.0.0.1:5555").unwrap();
 
 let ping = Message::try_from(b"PING").unwrap();
-client.send().message(ping).submit().unwrap();
+client.send().message(ping).submit_blocking(SendFlags::NONE).unwrap();
 
 let mut received = Received::empty();
 client.recv(&mut received, RecvFlags::NONE).unwrap();
@@ -92,9 +92,15 @@ let mut msg = Message::with_size(256).unwrap();
 msg.data_mut().copy_from_slice(&data);
 
 // send — msg is moved here
-socket.send().message(msg).submit().unwrap();
+socket.send().message(msg).submit_blocking(SendFlags::NONE).unwrap();
 // reusing msg is a compile error → ownership safety is enforced by the type system
 ```
+
+HWM-managed sends provide an asynchronous `submit()` future and synchronous
+`submit_blocking(SendFlags)`. In async code, use
+`socket.send().message(msg).submit().await?`. On a plain thread,
+`submit_blocking(SendFlags::NONE)` is available; pass `SendFlags::DONT_WAIT`
+when immediate back-pressure is required.
 
 Reading a received message:
 
@@ -139,7 +145,7 @@ Rust's ownership system enforces most of this at compile time.
 ```rust
 // error-handling pattern
 let msg = Message::try_from(b"data").unwrap();
-match socket.send().message(msg).submit() {
+match socket.send().message(msg).submit_blocking(SendFlags::NONE) {
     Ok(_) => { /* sent */ }
     Err(e) => eprintln!("send failed: {e}"),
 }
@@ -152,7 +158,7 @@ match socket.send().message(msg).submit() {
 The Rust binding returns per-operation error types via `Result`.
 
 ```rust
-match socket.send().message(msg).submit() {
+match socket.send().message(msg).submit_blocking(SendFlags::DONT_WAIT) {
     Ok(_) => {}
     Err(e) => match e.code() {
         zlink::SubmitResult::Backpressured => { /* retry */ }
@@ -177,7 +183,8 @@ Each exposes the result code enum via a `code()` method.
 | `zlink_socket(ctx, type)` | `ctx.pair_socket()`, etc. |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` | `socket.send().message(m).submit()` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit_blocking(flags)` |
+| `zlink_send_async(...)` | `socket.send().message(m).submit().await` |
 | `zlink_recv_part(...)` | `socket.recv(&mut received, flags)` |
 | `zlink_msg_data(msg)` | `part.as_bytes()` |
 | `zlink_routing_id_t` | `RoutingId` |
@@ -204,6 +211,11 @@ println!("zlink {major}.{minor}.{patch}");
 | `Context` | `Sync` — shareable across threads (`Arc<Context>`) |
 | Sockets | `Send`, but single-thread use only. No concurrent access |
 | `Message::as_bytes()` | valid only while the message lives |
+
+`submit_blocking(SendFlags::NONE)` stops its calling thread while waiting for
+HWM admission. This only parks that plain thread. In an async executor that must
+keep running other tasks, use `submit().await`; use
+`submit_blocking(SendFlags::DONT_WAIT)` for immediate back-pressure.
 
 ```rust
 use std::sync::Arc;

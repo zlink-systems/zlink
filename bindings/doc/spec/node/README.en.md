@@ -545,8 +545,9 @@ using TypeScript spelling.
   when the API stores or replaces the current handler.
 - Do not create operation-start variants such as `sendNoWait`,
   `publishWithFlags`, or `requestAsync`. Keep a single operation name. Put
-  operation-specific flags or timeouts on the builder; managed DEALER/ROUTER
-  send and request use the sole Promise `submit()` terminal defined below.
+  operation-specific flags or timeouts on the builder. Managed sends use the
+  synchronous `submit(SendFlags)` and asynchronous `submit()` terminals defined
+  below, while requests use the Promise-returning `submit()` terminal.
 
 ## Canonical Interface Rules
 
@@ -589,16 +590,18 @@ using TypeScript spelling.
   builder's terminal method keeps using `submit(...)` even on a
   Promise-returning surface. Do not add a separate `submitAsync` terminal
   name.
-- Pair `send().message(...).submit()` and DEALER/ROUTER routed
-  `send(...).message(...).submit()` are managed `Promise<void>` terminals
-  completed by Core's send-completion callback. The per-operation timeout is
+- Pair `send().message(...)`, DEALER/ROUTER routed
+  `send(...).message(...)`, and `Received.send().message(...)` provide two terminals. Synchronous
+  `submit(SendFlags): void` submits through `zlink_send_part(_rid)` and throws
+  `SubmitError` on failure. Asynchronous `submit(): Promise<void>` completes
+  through Core's send-completion callback. The async operation timeout is
   passed to Core. `ADMITTED` resolves the Promise; `TIMED_OUT` and `TERMINAL`
   reject it with a `SubmitError` that preserves Core's errno. Dropping or
   garbage-collecting the Promise is not cancellation, and no separate cancel
   API is exposed. The binding owns no admission thread, queue, retry, or
   readiness state; the native callback only delivers completion to JavaScript.
-- Stream managed `send(routingId)` uses the same send-completion Promise
-  contract. Stream `trySend` and raw one-shot operations such as public ROUTER
+- Stream managed `send(routingId)` uses the same sync/async send contract.
+  Stream `trySend` and raw one-shot operations such as public ROUTER
   `sendTransportPair(...)` retain their synchronous `void`/`boolean` contracts
   and are not managed HWM-wait terminals.
 - DEALER/ROUTER `request(...).message(...).submit()` returns

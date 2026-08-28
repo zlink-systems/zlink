@@ -10,6 +10,7 @@ operation bound surfaces immediately for application policy.
 """
 
 import asyncio
+import inspect
 import threading
 import time
 import uuid
@@ -135,6 +136,90 @@ def test_pair_send_is_also_hwm_managed_and_coroutine_driven():
                     assert await asyncio.wait_for(pending, 2) is None
                     assert right.recv_into(received)
                     received.close()
+
+    asyncio.run(scenario())
+
+
+def test_sync_blocking_terminal_admits_and_returns_none():
+    with zlink.create_context() as context:
+        with zlink.create_pair_socket(context) as left:
+            with zlink.create_pair_socket(context) as right:
+                left.options.linger_ms = 0
+                right.options.linger_ms = 0
+                endpoint = _endpoint("sync-blocking")
+                right.bind(endpoint)
+                left.connect(endpoint)
+
+                for _ in range(200):
+                    try:
+                        result = left.send().message(b"sync").submit_blocking()
+                        break
+                    except zlink.SubmitError as error:
+                        if error.result != zlink.SubmitResult.NOT_CONNECTED:
+                            raise
+                        time.sleep(0.001)
+                else:
+                    raise AssertionError("PAIR target did not connect")
+
+                assert result is None
+                received = zlink.create_received()
+                assert right.recv_into(received)
+                assert received.to_bytes_list() == [b"sync"]
+                received.close()
+
+
+def test_sync_dontwait_immediately_raises_when_hwm_is_full():
+    async def scenario():
+        with zlink.create_context() as context:
+            with zlink.create_dealer_socket(context) as dealer:
+                with zlink.create_router_socket(context) as router:
+                    dealer.options.linger_ms = 0
+                    router.options.linger_ms = 0
+                    dealer.options.send_high_water_mark = 2048
+                    endpoint = _endpoint("sync-dontwait")
+                    router.bind(endpoint)
+                    dealer.connect(endpoint)
+
+                    payload = b"z" * 65536
+                    await _send_when_connected(dealer, payload)
+                    started = time.monotonic()
+                    try:
+                        dealer.send().message(payload).submit_blocking(
+                            flags=zlink.SendFlags.DONT_WAIT
+                        )
+                    except zlink.SubmitError as error:
+                        assert error.result == zlink.SubmitResult.BACKPRESSURED
+                    else:
+                        raise AssertionError("full HWM did not backpressure")
+                    assert time.monotonic() - started < 0.1
+
+                    received = zlink.create_received()
+                    assert router.recv_into(received)
+                    assert (
+                        received.send()
+                        .message(b"received-send")
+                        .submit_blocking()
+                        is None
+                    )
+                    received.close()
+                    assert dealer.recv_into(received)
+                    assert received.to_bytes_list() == [b"received-send"]
+                    received.close()
+
+    asyncio.run(scenario())
+
+
+def test_async_submit_remains_a_coroutine_terminal():
+    operation = zlink.RoutedSendOp.submit_blocking
+    signature = inspect.signature(operation)
+    assert str(signature) == "(self, *, flags=0) -> None"
+
+    async def scenario():
+        with zlink.create_context() as context:
+            with zlink.create_pair_socket(context) as left:
+                coroutine = left.send().message(b"async-regression").submit()
+                assert inspect.iscoroutine(coroutine)
+                coroutine.close()
 
     asyncio.run(scenario())
 

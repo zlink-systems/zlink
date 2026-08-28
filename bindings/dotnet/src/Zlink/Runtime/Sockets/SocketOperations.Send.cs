@@ -4,11 +4,10 @@ using System.Runtime.CompilerServices;
 
 namespace Systems.Zlink;
 
-internal sealed class MessageSocketSendOperation : SendOperation,
-    SendSubmitOperation
+internal sealed class MessageSocketSendOperation : RoutedSendOperation,
+    RoutedSendSubmitOperation
 {
     private readonly MessageSocketBase _socket;
-    private SendFlags _flags;
     private OperationMessageBuffer _parts;
     private OperationSubmissionGuard _submission;
 
@@ -18,7 +17,7 @@ internal sealed class MessageSocketSendOperation : SendOperation,
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SendSubmitOperation Message(Message message)
+    public RoutedSendSubmitOperation Message(Message message)
     {
         EnsureNotSubmitted();
         _parts.Add(message);
@@ -26,21 +25,25 @@ internal sealed class MessageSocketSendOperation : SendOperation,
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SendSubmitOperation Flags(SendFlags flags)
+    public void Submit(SendFlags flags)
     {
-        EnsureNotSubmitted();
-        _flags = flags;
-        return this;
+        EnsureReady();
+        _submission.MarkSubmittedAfterValidation();
+        if (_parts.IsSingle)
+            _socket.Kernel.SendMessageUnchecked(_parts.Single, flags);
+        else
+            _socket.Kernel.Send(_parts.Parts, flags);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Submit()
+    public Task Async(CancellationToken ct = default)
     {
         EnsureReady();
         _submission.MarkSubmittedAfterValidation();
         return _parts.IsSingle
-            ? _socket.SendCore(_parts.Single, _flags)
-            : _socket.SendCore(_parts.Parts, _flags);
+            ? _socket.Kernel.SendCompletion.SendSingleAsync(null,
+                _parts.Single, ct)
+            : _socket.Kernel.SendCompletion.SendAsync(null, _parts.Parts, ct);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -276,6 +279,26 @@ internal sealed class RoutedAsyncSendOperation : RoutedSendOperation,
             _parts.Parts, ct);
     }
 
+    public void Submit(SendFlags flags)
+    {
+        EnsureNotSubmitted();
+        _parts.EnsureNotEmpty();
+        _submission.MarkSubmittedAfterValidation();
+        if (_routingId.HasValue)
+        {
+            if (_parts.IsSingle)
+                _socket.Kernel.Send(_routingId.Value, _parts.Single, flags);
+            else
+                _socket.Kernel.Send(_routingId.Value, _parts.Parts, flags);
+            return;
+        }
+
+        if (_parts.IsSingle)
+            _socket.Kernel.Send(_parts.Single, flags);
+        else
+            _socket.Kernel.Send(_parts.Parts, flags);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureNotSubmitted()
     {
@@ -283,11 +306,10 @@ internal sealed class RoutedAsyncSendOperation : RoutedSendOperation,
     }
 }
 
-internal sealed class ReceivedSendOperationImpl : SendOperation,
-    SendSubmitOperation
+internal sealed class ReceivedSendOperationImpl : RoutedSendOperation,
+    RoutedSendSubmitOperation
 {
     private readonly Received _received;
-    private SendFlags _flags;
     private OperationMessageBuffer _parts;
     private OperationSubmissionGuard _submission;
 
@@ -297,7 +319,7 @@ internal sealed class ReceivedSendOperationImpl : SendOperation,
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SendSubmitOperation Message(Message message)
+    public RoutedSendSubmitOperation Message(Message message)
     {
         EnsureNotSubmitted();
         _parts.Add(message);
@@ -305,21 +327,24 @@ internal sealed class ReceivedSendOperationImpl : SendOperation,
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SendSubmitOperation Flags(SendFlags flags)
-    {
-        EnsureNotSubmitted();
-        _flags = flags;
-        return this;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Submit()
+    public void Submit(SendFlags flags)
     {
         EnsureReady();
         _submission.MarkSubmittedAfterValidation();
-        return _parts.IsSingle
-            ? _received.SendCore(_parts.Single, _flags)
-            : _received.SendCore(_parts.Parts, _flags);
+        bool sent = _parts.IsSingle
+            ? _received.SendCore(_parts.Single, flags)
+            : _received.SendCore(_parts.Parts, flags);
+        if (!sent)
+            throw new ZlinkSubmitException(SubmitResult.Backpressured,
+                (int)ErrorCode.EAgain);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Task Async(CancellationToken ct = default)
+    {
+        EnsureReady();
+        _submission.MarkSubmittedAfterValidation();
+        return _received.SendAsyncCore(_parts, ct);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

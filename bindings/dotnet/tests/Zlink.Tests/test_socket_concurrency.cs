@@ -211,7 +211,8 @@ public sealed class test_socket_concurrency
                         Message body = Message.From($"{prefix}:body");
                         try
                         {
-                            sender.Send().Message(header).Message(body).Submit();
+                            sender.Send().Message(header).Message(body)
+                                .Submit(SendFlags.None);
                             Interlocked.Increment(ref succeeded);
                         }
                         catch (ZlinkSubmitException exception) when (
@@ -306,8 +307,8 @@ public sealed class test_socket_concurrency
         while (true)
         {
             using Message filler = Message.From(bytes);
-            if (!sender.Send().Message(filler).Flags(SendFlags.DontWait)
-                    .Submit())
+            if (!sender.Send().Message(filler)
+                    .TrySubmit(SendFlags.DontWait))
                 break;
         }
 
@@ -319,7 +320,7 @@ public sealed class test_socket_concurrency
             sendStarted.Set();
             try
             {
-                sender.Send().Message(blocked).Submit();
+                sender.Send().Message(blocked).Submit(SendFlags.None);
             }
             catch (Exception exception)
             {
@@ -391,10 +392,10 @@ public sealed class test_socket_concurrency
                         : null;
                     try
                     {
-                        SendSubmitOperation operation = sender.Send().Message(first);
+                        RoutedSendSubmitOperation operation = sender.Send().Message(first);
                         if (second != null)
                             operation = operation.Message(second);
-                        operation.Submit();
+                        operation.Submit(SendFlags.None);
                         Interlocked.Increment(ref succeeded);
                     }
                     catch (ZlinkSubmitException exception) when (

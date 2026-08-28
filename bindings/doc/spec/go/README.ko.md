@@ -149,6 +149,7 @@ type RoutedSendSubmitOp interface {
     Message(*Message) RoutedSendSubmitOp
     MoveMessage(*Message) RoutedSendSubmitOp
     Bytes([]byte) RoutedSendSubmitOp
+    Flags(SendFlags) RoutedSendSubmitOp
     Submit(context.Context) error
 }
 
@@ -183,16 +184,19 @@ type ReplySubmitOp interface {
   제출한다. HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`, `TERMINATED`,
   `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `*SubmitError`를 `error`로
   반환한다.
-- DEALER `Send`, ROUTER `SendTo`와 DEALER/ROUTER `Request`의 managed routed
-  builder는 flags, callback, `SubmitAsync` 호환 terminal을 제공하지 않는다.
+- DEALER `Send`와 ROUTER `SendTo`의 managed routed builder는
+  `Flags(SendFlags)`를 제공한다. flag가 없거나 `SendFlagsNone`이면 Core 안에서
+  blocking하고, `SendFlagsDontWait`이면 Core가 즉시
+  `SubmitBackpressured`/`EAGAIN`을 `error`로 반환한다. DEALER/ROUTER `Request`
+  builder에는 flags가 없고, send 계열에 callback이나 `SubmitAsync` 호환 terminal은 없다.
 - **바인딩은 스레드·대기열·재시도를 하나도 소유하지 않는다.** routed send의
   `Submit(ctx)`는 동기 종결자이며 complete record를 blocking Core 호출
   (DEALER는 `zlink_send_part`, ROUTER는 `zlink_send_part_rid`)로 그대로
   넘긴다. HWM 대기는 전적으로 Core 안에서 일어나고 Core 신호로 재개한다.
   binding에는 park queue도, readiness callback 재시도도, deadline timer도,
   dispatcher goroutine도 없다.
-- routed send 대기의 상한은 socket `SNDTIMEO`다. `SNDTIMEO=0`은 `DONTWAIT`
-  계약이며 즉시 `SubmitBackpressured`/`EAGAIN`으로 끝난다. `SNDTIMEO`가
+- flag 없는 routed send 대기의 상한은 socket `SNDTIMEO`다. `SNDTIMEO=0`도
+  `DONTWAIT`와 같이 즉시 `SubmitBackpressured`/`EAGAIN`으로 끝난다. `SNDTIMEO`가
   무한(`-1`)이면 credit이 돌아올 때까지 호출 goroutine이 Core 안에서 대기한다 —
   어플리케이션에는 유한한 `SNDTIMEO` 사용을 권한다.
 - routed send에서 `ctx`가 담당하는 것은 **submit 경계**다. 이미 취소되었거나

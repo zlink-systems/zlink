@@ -154,7 +154,9 @@ The bindings own zero threads, queues, or retry anywhere in this surface
   awaitable.
 - HWM-managed send — PAIR `send()` and DEALER/ROUTER routed `send()` — and
   `request()` are ASYNC because both can pass through Core's HWM admission
-  queue. The sole terminal on these builders is `submit()`. Use
+  queue. A send builder has the async `submit()` terminal and the synchronous
+  `submit_blocking(*, flags=0) -> None` terminal; a request builder has only
+  async `submit()`. For asynchronous sends, use
   `await pair.send().message(message).submit()`,
   `await dealer.send().message(message).submit()`, and
   `reply = await dealer.request().message(request).submit()`. `submit()`
@@ -189,9 +191,11 @@ The bindings own zero threads, queues, or retry anywhere in this surface
   - Coroutine cancellation terminally resolves the pending operation exactly
     once. Waiting on one target's send or request blocks neither another
     target's submit nor the Python event loop — Core's own per-target queue
-    orders admission, not a Python-side wait. The same routed operation
-    exposes no flags, callback, blocking terminal, or `submit_async()`
-    compatibility terminal.
+    orders admission, not a Python-side wait. Synchronous
+    `submit_blocking(*, flags=0)` calls `zlink_send_part(_rid)`: omitted flags
+    or `SendFlags.NONE` blocks inside Core until admission, while
+    `SendFlags.DONT_WAIT` immediately raises `SubmitError` on backpressure.
+    There is no callback or `submit_async()` compatibility terminal.
 - A caller-provided receive using `RecvFlags.DONT_WAIT` returns `False` when there is no message.
 - A direct-return control API such as a timer or monitor returns `None` when there is no pending value.
 - An actual native failure is delivered as its matching error type, never hidden as no-data.

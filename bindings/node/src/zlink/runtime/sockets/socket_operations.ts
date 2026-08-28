@@ -95,9 +95,23 @@ export class SendSocket extends ReceiveSocket {
   }
 
   send(): SendOperation {
-    return new RuntimeSendOperation((payload, timeoutMs) =>
-      this.sendCompletion.submit(payload, timeoutMs, null)
+    return new RuntimeSendOperation(
+      (payload, timeoutMs) => this.sendCompletion.submit(payload, timeoutMs, null),
+      (payload, flags) => this.sendDirect(payload, flags)
     );
+  }
+
+  private sendDirect(payload: MessageLike | readonly MessageLike[], flags: SendFlags): void {
+    const normalized = normalizeOperationPayload(payload);
+    try {
+      if (Array.isArray(normalized)) {
+        native.socketSendParts(getNativeHandle(this), normalized, flags | 0);
+      } else {
+        native.socketSend(getNativeHandle(this), normalized, flags | 0);
+      }
+    } catch (error) {
+      throw submitNativeError(error, flags, 'send failed');
+    }
   }
 }
 
@@ -195,8 +209,13 @@ export class SubscriberSocket extends ConnectableSocket {
 
 export class RoutedMessageSocket extends ConnectableSocket {
   private readonly receivedOperations = {
-    send: (routingId: Buffer, parts: readonly Message[], flags: SendFlags) =>
-      this.sendDirectRaw(routingId, parts, flags),
+    send: (routingId: Buffer, parts: readonly Message[], flags: SendFlags) => {
+      if (!this.sendDirectRaw(routingId, parts, flags)) {
+        throw submitErrorFromResult(SubmitResult.Backpressured, 'send failed');
+      }
+    },
+    sendAsync: (routingId: Buffer, parts: readonly Message[], timeoutMs: number) =>
+      this.sendReceivedAsync(routingId, parts, timeoutMs),
     reply: (routingId: Buffer, requestSeq: bigint,
             parts: readonly Message[], flags: SendFlags) =>
       this.replyToRoutedMessage(RoutingId.from(routingId), requestSeq, parts, flags),
@@ -250,6 +269,16 @@ export class RoutedMessageSocket extends ConnectableSocket {
       SubmitResult.InvalidState,
       'request reply is only supported by RouterSocket'
     );
+  }
+  protected sendReceivedAsync(
+    _routingId: Buffer,
+    _parts: readonly Message[],
+    _timeoutMs: number
+  ): Promise<void> {
+    return Promise.reject(submitErrorFromResult(
+      SubmitResult.InvalidState,
+      'managed received send is not supported by this socket'
+    ));
   }
 
   /**

@@ -51,7 +51,7 @@ server.Recv(received);
 Console.WriteLine(received.FirstPart().GetString());   // PING
 
 using var reply = Message.From("ACK");
-server.Send().Message(reply).Submit();
+server.Send().Message(reply).Submit(SendFlags.None);
 ```
 
 ```csharp
@@ -63,7 +63,7 @@ client.Connect("tcp://127.0.0.1:5555");
 mon.Recv();
 
 using var ping = Message.From("PING");
-client.Send().Message(ping).Submit();
+client.Send().Message(ping).Submit(SendFlags.None);
 
 using var received = Received.Create();
 client.Recv(received);
@@ -117,6 +117,16 @@ byte[] copy             = fromText.ToArray();         // 복사해서 꺼내기
 객체 직렬화가 필요하면 framework codec extension을 framework 구성 단계에 등록한다.
 framework의 actor join callback처럼 raw `Message`를 직접 주고받는 표면에서는
 application 계층에서 명시적으로 byte payload를 만들고 해석한다.
+
+HWM 대기 가능 send는 동기 `Submit(SendFlags)`와 비동기 `Async()`를 제공합니다.
+`Submit(SendFlags.None)`은 HWM admission까지 blocking하고,
+`Submit(SendFlags.DontWait)`는 HWM이 가득 차면 즉시 `ZlinkSubmitException`을
+발생시킵니다. 비동기 실행 흐름에서는 flag 없는 `await ...Async()`를 사용합니다.
+
+```csharp
+socket.Send().Message(message).Submit(SendFlags.DontWait); // 동기 non-blocking
+await socket.Send().Message(message).Async();              // 비동기 완료
+```
 
 ### 3. 수신 (Received)
 
@@ -197,12 +207,14 @@ catch (ZlinkException ex)
 | `ZlinkConfigException` | 옵션/설정 |
 | `ZlinkCloseException` / `ZlinkHandlerException` | 종료/콜백 |
 
-**데이터 없음·일시적 백프레셔는 예외가 아닙니다.** 논블로킹 수신은 `Recv(...)`가
-`false`를, 논블로킹 송신은 `Submit()`이 `false`를 반환하는 것으로 구분하세요:
+논블로킹 수신에서 데이터가 없으면 `Recv(...)`가 `false`를 반환합니다. 논블로킹
+send의 backpressure는 `Submit(SendFlags.DontWait)`가 `ZlinkSubmitException`으로
+전달합니다.
 
 ```csharp
 if (!socket.Recv(received, RecvFlags.DontWait)) { /* 데이터 없음 */ }
-if (!socket.Send().Message(m).Flags(SendFlags.DontWait).Submit()) { /* 백프레셔 */ }
+try { socket.Send().Message(m).Submit(SendFlags.DontWait); }
+catch (ZlinkSubmitException ex) when (ex.Result == SubmitResult.Backpressured) { /* 백프레셔 */ }
 ```
 
 ---
@@ -226,7 +238,8 @@ C 코어(`zlink.h`)에서 넘어오거나 다른 언어 바인딩과 비교할 �
 | 메시지 생성 | `zlink_msg_init` / `_init_size` / `_init_data` | `new Message(size)` / `Message.From(...)` |
 | 메시지 접근 | `zlink_msg_data` / `zlink_msg_size` | `Message.AsReadOnlySpan()` / `Message.Size` |
 | 메시지 해제 | `zlink_msg_close` / `zlink_multipart_close` | `Message.Dispose()` / `Zlink.MultipartClose(parts)` |
-| 송신 | `zlink_send_part` (+`_rid`) | `socket.Send().Message(...).Submit()` |
+| 동기 송신 | `zlink_send_part` (+`_rid`) + flag | `socket.Send().Message(...).Submit(flags)` |
+| 비동기 송신 | `zlink_send_async` | `await socket.Send().Message(...).Async()` |
 | 수신 | `zlink_recv_part` | `socket.Recv(Received)` |
 | 요청 / 응답 | `zlink_dealer_request_part` / `zlink_router_reply_part` | `dealer.Request()....Async()` / `router.Reply(...)` |
 | 구독 | `zlink_set_subscription` / `zlink_subscribe_part` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
@@ -249,6 +262,10 @@ RID 자산이 출력에 포함되는지 확인하세요 (`dotnet publish -r <rid
 
 스레딩: `IContext`는 스레드 안전하며 여러 스레드에서 공유 가능합니다. 소켓은
 단일 스레드 소유 — 전체 규칙은 [스레드 안전성](https://zlink-systems.github.io/zlink/ko/guide/11-thread-safety/) 참고.
+`Submit(SendFlags.None)`은 HWM admission을 기다리는 동안 호출 thread를 멈춥니다.
+plain thread에서는 그 thread만 대기하므로 사용할 수 있습니다. thread를 점유하지 않고
+완료를 기다려야 하면 `Async()`를 사용하고, 즉시 backpressure가 필요하면
+`Submit(SendFlags.DontWait)`를 사용합니다.
 
 ---
 

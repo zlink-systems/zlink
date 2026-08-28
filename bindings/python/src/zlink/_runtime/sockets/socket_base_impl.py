@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import ctypes
+import errno
 
 from ...contracts.sockets.codes import SocketType
 from ...contracts.core.routing_id import RoutingId
@@ -298,6 +299,20 @@ class _ManagedSendOp:
             return submit_multipart()
         return self._socket._send_completion.submit(payload)
 
+    def submit_blocking(self, *, flags=0) -> None:
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        self._payload_or_raise()
+        self._submitted = True
+        fallback = _SocketSendOp(self._socket)
+        if self._parts is not None:
+            fallback.messages(*self._parts)
+        else:
+            fallback.message(self._payload)
+        fallback.flags(flags)
+        if not fallback.submit():
+            raise SubmitError(SubmitResult.BACKPRESSURED, errno.EAGAIN)
+
 
 class _ManagedRoutedSendOp:
     """Canonical coroutine builder for DEALER/ROUTER HWM admission."""
@@ -374,6 +389,24 @@ class _ManagedRoutedSendOp:
         return self._socket._routed_admission.submit_send(
             self._routing_id, payload
         )
+
+    def submit_blocking(self, *, flags=0) -> None:
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        self._payload_or_raise()
+        self._submitted = True
+        fallback = (
+            _SocketSendOp(self._socket)
+            if self._routing_id is None
+            else _RoutedSocketSendOp(self._socket, self._routing_id)
+        )
+        if self._parts is not None:
+            fallback.messages(*self._parts)
+        else:
+            fallback.message(self._payload)
+        fallback.flags(flags)
+        if not fallback.submit():
+            raise SubmitError(SubmitResult.BACKPRESSURED, errno.EAGAIN)
 
 
 class _PublisherSendOp(_SocketSendOp):

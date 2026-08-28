@@ -665,10 +665,10 @@ another pair using the same peer routing id. This operation is used for
 runtime connection control such as Framework connection replacement; callers
 must not invent a pair identity.
 
-The canonical terminal on PAIR send, DEALER/ROUTER routed send, and request
-builders is the single no-argument `submit()` method. PAIR and routed send
-return `CompletionStage<Void>`, and request returns
-`CompletionStage<List<Message>>`. PUB/XPUB publish uses the same staged message
+PAIR send and DEALER/ROUTER routed send builders have two `submit` overloads.
+Asynchronous `submit()` returns `CompletionStage<Void>`, while synchronous
+`submit(SendFlags)` returns `void`. The request builder has only the no-argument
+`submit()` terminal and returns `CompletionStage<List<Message>>`. PUB/XPUB publish uses the same staged message
 builder shape, but its `submit()` is synchronous `void` and immediately throws
 `ZlinkSubmitException` on failure.
 
@@ -677,12 +677,14 @@ public interface AsyncSendSubmitOperation {
     AsyncSendSubmitOperation message(Message part);
     AsyncSendSubmitOperation timeout(Duration timeout);
     CompletionStage<Void> submit();
+    void submit(SendFlags flags);
 }
 
 public interface RoutedSendSubmitOperation {
     RoutedSendSubmitOperation message(Message part);
     RoutedSendSubmitOperation timeout(Duration timeout);
     CompletionStage<Void> submit();
+    void submit(SendFlags flags);
 }
 
 public interface RequestSubmitOperation {
@@ -692,11 +694,16 @@ public interface RequestSubmitOperation {
 }
 ```
 
-These asynchronous builders do not expose blocking `await()`, `submit(callback)`,
-`flags(...)`, or a boolean one-shot terminal. `submit()` does not block the
-calling thread; Framework and Kotlin connect the returned `CompletionStage`
-directly to their completion/await boundaries. Kotlin's canonical use is
-`submit().await()`. The shared language policy is defined in
+Send builders do not expose a separate `await()`, `submit(callback)`,
+`flags(...)`, or a boolean one-shot terminal. Instead,
+`submit(SendFlags.NONE)` waits synchronously for Core admission, while
+`submit(SendFlags.DONT_WAIT)` immediately throws
+`ZlinkSubmitException(BACKPRESSURED)` when the HWM is full. The no-argument
+`submit()` does not block the calling thread. Framework and Kotlin framework do
+not use the synchronous overload; they continue to connect the returned
+`CompletionStage` directly to their completion/await boundaries with
+`submit().await()`. Kotlin code that uses the Java binding directly may also use
+the synchronous overload. The shared language policy is defined in
 [bindings async execution surface policy](../async-coroutine-policy.en.md).
 
 The PUB/XPUB publish builder's `submit()` creates no `CompletionStage`. Default

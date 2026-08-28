@@ -187,8 +187,8 @@ func (s *DealerSocket) SetRequestTimeout(value time.Duration) error {
 }
 
 func (s *DealerSocket) Send() RoutedSendOp {
-	return newRoutedSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
-		return submitRoutedSend(ctx, s.socketCore, routedDealer, nil, parts)
+	return newRoutedSendBuilder(func(ctx context.Context, flags SendFlags, parts []sendBuilderPart) error {
+		return submitRoutedSend(ctx, s.socketCore, routedDealer, nil, flags, parts)
 	})
 }
 

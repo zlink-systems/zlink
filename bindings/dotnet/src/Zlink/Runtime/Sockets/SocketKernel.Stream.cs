@@ -88,6 +88,13 @@ internal sealed partial class SocketKernel : IDisposable
     {
         EnsureSupports(nameof(ReceiveStreamPart),
             SocketTypePolicy.SocketCapability.RoutedReceive);
+        lock (_streamRegistrationSync)
+        {
+            if (_streamAttached)
+                throw ZlinkException.CreateHandlerException(
+                    HandlerResult.Busy);
+        }
+
         var received = new Message();
         try
         {

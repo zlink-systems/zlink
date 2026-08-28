@@ -108,6 +108,16 @@ socket.send ().message (msg).submit ();
 // msg is invalid after send — don't reuse it
 ```
 
+HWM-managed sends provide both synchronous and asynchronous terminals. On a
+plain thread, use `submit()`; add `flags(ZLINK_DONTWAIT)` to return immediately
+when the HWM is full. In a coroutine, `co_await` the flag-free `async()` terminal.
+
+```cpp
+socket.send ().message (msg).submit (); // sync; blocks until HWM admission by default
+bool sent = socket.send ().message (msg).flags (ZLINK_DONTWAIT).submit ();
+co_await socket.send ().message (msg).async (); // async; does not block the caller thread
+```
+
 Reading a received message:
 
 ```cpp
@@ -212,7 +222,8 @@ instead of throwing (see the samples).
 | `zlink_socket(ctx, type)` | `zlink::pair_socket_t{ctx}`, etc. |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` | `socket.send().message(m).submit()` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).flags(flag).submit()` |
+| `zlink_send_async(...)` | `co_await socket.send().message(m).async()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` / `part.bytes()` |
 | `zlink_msg_size(msg)` | `part.size()` |
@@ -243,6 +254,11 @@ Threading rules:
 | Sockets | **single-thread use only**. No concurrent access |
 | Dispatch handlers | invoked on zlink's internal worker threads |
 | `message_t::bytes()` | span valid only while the message lives |
+
+A synchronous `submit()` without a flag stops its calling thread while waiting
+for HWM admission. This only parks that plain thread. In a coroutine that must
+keep making progress, use `co_await async()`; use
+`.flags(ZLINK_DONTWAIT).submit()` when immediate back-pressure is required.
 
 ```cpp
 // correct pattern: one socket per thread

@@ -122,10 +122,10 @@ static_assert (has_managed_request_callback_t<zlink::request_submit_operation_t>
 template <typename T>
 concept has_async_t = requires (T &&operation) { std::move (operation).async (); };
 
-// Routed send exposes both Core-owned blocking submit() and completion-driven
-// async(); it still has no flags stage.
+// Routed send exposes Core-owned blocking/non-blocking sync submit via flags()
+// and completion-driven async().
 static_assert (has_sync_submit_t<zlink::routed_send_submit_operation_t>);
-static_assert (!has_flags_t<zlink::routed_send_submit_operation_t>);
+static_assert (has_flags_t<zlink::routed_send_submit_operation_t>);
 static_assert (has_async_t<zlink::routed_send_submit_operation_t>);
 static_assert (std::is_same_v<
                decltype (std::declval<zlink::routed_send_submit_operation_t &&> ().submit ()),

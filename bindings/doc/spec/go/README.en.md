@@ -162,6 +162,7 @@ type RoutedSendSubmitOp interface {
     Message(*Message) RoutedSendSubmitOp
     MoveMessage(*Message) RoutedSendSubmitOp
     Bytes([]byte) RoutedSendSubmitOp
+    Flags(SendFlags) RoutedSendSubmitOp
     Submit(context.Context) error
 }
 
@@ -197,16 +198,20 @@ type ReplySubmitOp interface {
   reply result; `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other
   non-HWM submit failures return immediately as a `*SubmitError` through
   `error`.
-- Managed DEALER `Send`, ROUTER `SendTo`, and DEALER/ROUTER `Request` builders
-  expose no flags, callback, or `SubmitAsync` compatibility terminal.
+- Managed DEALER `Send` and ROUTER `SendTo` builders expose
+  `Flags(SendFlags)`. With no flag or `SendFlagsNone`, Core blocks; with
+  `SendFlagsDontWait`, Core immediately returns
+  `SubmitBackpressured`/`EAGAIN` through `error`. DEALER/ROUTER `Request`
+  builders have no flags, and the send family exposes no callback or
+  `SubmitAsync` compatibility terminal.
 - **The binding owns no thread, no queue, and no retry.** A routed send's
   `Submit(ctx)` is a synchronous terminal that hands the complete record to a
   blocking Core call (`zlink_send_part` for DEALER, `zlink_send_part_rid` for
   ROUTER). The HWM wait happens entirely inside Core and resumes on a Core
   signal. There is no park queue, no readiness-callback retry, no deadline
   timer, and no dispatcher goroutine in the binding.
-- The upper bound on that wait is the socket `SNDTIMEO`. `SNDTIMEO=0` is the
-  `DONTWAIT` contract and fails immediately with
+- The upper bound on a flag-free routed-send wait is the socket `SNDTIMEO`.
+  `SNDTIMEO=0`, like `DONTWAIT`, fails immediately with
   `SubmitBackpressured`/`EAGAIN`. With an unbounded `SNDTIMEO` (`-1`) the
   calling goroutine waits inside Core until credit returns, so applications
   are advised to set a finite `SNDTIMEO`.

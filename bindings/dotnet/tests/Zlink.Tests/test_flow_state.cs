@@ -147,7 +147,7 @@ public sealed class test_flow_state
             () => client.SetReceiveFlowState(ReceiveFlowState.Paused));
 
         using Message payload = Message.From("still-works");
-        client.Send().Message(payload).Submit();
+        client.Send().Message(payload).Submit(SendFlags.None);
 
         var received = Received.Create();
         Assert.True(CoreTestSupport.WaitUntil(

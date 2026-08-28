@@ -62,7 +62,8 @@ function isNativeTopicMessageSinglePart(
 }
 
 export interface RoutedReceiveOperations {
-  send(routingId: Buffer, parts: readonly Message[], flags: SendFlags): boolean;
+  send(routingId: Buffer, parts: readonly Message[], flags: SendFlags): void;
+  sendAsync(routingId: Buffer, parts: readonly Message[], timeoutMs: number): Promise<void>;
   reply(routingId: Buffer, requestSeq: bigint,
         parts: readonly MessageLike[], flags: SendFlags): void;
 }
@@ -173,7 +174,8 @@ function hasReplyableRequestSeq(requestSeq: bigint | null): requestSeq is bigint
 export function materializeReceived(
   raw: NativeReceivedRaw,
   reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
-  send?: (parts: readonly Message[], flags: SendFlags) => boolean
+  send?: (parts: readonly Message[], flags: SendFlags) => void,
+  sendAsync?: (parts: readonly Message[], timeoutMs: number) => Promise<void>
 ): Received {
   const envelope = envelopeOf(raw);
   const requestSeq = envelope?.requestSeq ?? null;
@@ -192,12 +194,13 @@ export function materializeReceived(
           }
         }
       : null,
-    send
+    send && sendAsync
       ? {
           beginSend() {
             return createReceivedSendOperation(
-              (parts: readonly Message[], flags: SendFlags): boolean =>
-                send(parts, flags)
+              (parts: readonly Message[], flags: SendFlags): void => send(parts, flags),
+              (parts: readonly Message[], timeoutMs: number): Promise<void> =>
+                sendAsync(parts, timeoutMs)
             );
           }
         }
@@ -209,7 +212,8 @@ export function materializeReceivedInto(
   target: Received,
   raw: NativeReceivedRaw,
   reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
-  send?: (parts: readonly Message[], flags: SendFlags) => boolean
+  send?: (parts: readonly Message[], flags: SendFlags) => void,
+  sendAsync?: (parts: readonly Message[], timeoutMs: number) => Promise<void>
 ): void {
   const envelope = envelopeOf(raw);
   const requestSeq = envelope?.requestSeq ?? null;
@@ -229,12 +233,13 @@ export function materializeReceivedInto(
             }
           }
         : null,
-      send
+      send && sendAsync
         ? {
             beginSend() {
               return createReceivedSendOperation(
-                (parts: readonly Message[], flags: SendFlags): boolean =>
-                  send(parts, flags)
+                (parts: readonly Message[], flags: SendFlags): void => send(parts, flags),
+                (parts: readonly Message[], timeoutMs: number): Promise<void> =>
+                  sendAsync(parts, timeoutMs)
               );
             }
           }
@@ -268,8 +273,10 @@ export function materializeRoutedReceivedInto(
           const routingId = context!.routingId;
           const operations = context!.operations;
           if (routingId == null) throw new Error('missing routed send target');
-          return createReceivedSendOperation((parts, flags) =>
-            operations.send(routingId, parts, flags));
+          return createReceivedSendOperation(
+            (parts, flags) => operations.send(routingId, parts, flags),
+            (parts, timeoutMs) => operations.sendAsync(routingId, parts, timeoutMs)
+          );
         }
       },
       replyContext: {

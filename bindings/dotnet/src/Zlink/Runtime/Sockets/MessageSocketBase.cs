@@ -94,7 +94,7 @@ internal abstract class MessageSocketBase : ReceivingMessageSocketBase,
     ///     Start a send operation (operation builder).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SendOperation Send()
+    public RoutedSendOperation Send()
     {
         return new MessageSocketSendOperation(this);
     }

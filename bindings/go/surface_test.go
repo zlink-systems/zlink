@@ -163,12 +163,13 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 	}
 }
 
-func TestSurfaceManagedRoutedTerminalIsSubmitOnly(t *testing.T) {
+func TestSurfaceManagedRoutedTerminalHasSyncSubmitAndSendFlags(t *testing.T) {
 	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
-	// Routed send is synchronous: Submit(ctx) error. Request keeps its
-	// Core-driven completion channel.
+	// Routed send is synchronous: Submit(ctx) error plus builder flags. Request
+	// keeps its Core-driven completion channel and has no send flags.
 	sendCompletionType := reflect.TypeOf((*error)(nil)).Elem()
 	requestCompletionType := reflect.TypeOf((<-chan zlink.RequestReplyCompletion)(nil))
+	sendFlagsType := reflect.TypeOf(zlink.SendFlagsNone)
 
 	assertTerminal := func(target reflect.Type, completion reflect.Type) {
 		t.Helper()
@@ -176,15 +177,25 @@ func TestSurfaceManagedRoutedTerminalIsSubmitOnly(t *testing.T) {
 		if !ok || method.Type.NumIn() != 1 || method.Type.In(0) != contextType || method.Type.NumOut() != 1 || method.Type.Out(0) != completion {
 			t.Fatalf("%v.Submit signature = %v", target, method.Type)
 		}
-		for _, forbidden := range []string{"SubmitAsync", "Flags", "Callback", "OnProgress"} {
+		for _, forbidden := range []string{"SubmitAsync", "Callback", "OnProgress"} {
 			if _, ok := target.MethodByName(forbidden); ok {
 				t.Fatalf("%v should not expose compatibility terminal %s", target, forbidden)
 			}
 		}
 	}
 
-	assertTerminal(reflect.TypeOf((*zlink.RoutedSendSubmitOp)(nil)).Elem(), sendCompletionType)
-	assertTerminal(reflect.TypeOf((*zlink.RequestSubmitOp)(nil)).Elem(), requestCompletionType)
+	routedType := reflect.TypeOf((*zlink.RoutedSendSubmitOp)(nil)).Elem()
+	assertTerminal(routedType, sendCompletionType)
+	flagsMethod, ok := routedType.MethodByName("Flags")
+	if !ok || flagsMethod.Type.NumIn() != 1 || flagsMethod.Type.In(0) != sendFlagsType || flagsMethod.Type.NumOut() != 1 || flagsMethod.Type.Out(0) != routedType {
+		t.Fatalf("%v.Flags signature = %v", routedType, flagsMethod.Type)
+	}
+
+	requestType := reflect.TypeOf((*zlink.RequestSubmitOp)(nil)).Elem()
+	assertTerminal(requestType, requestCompletionType)
+	if _, ok := requestType.MethodByName("Flags"); ok {
+		t.Fatalf("%v should not expose send flags", requestType)
+	}
 }
 
 func TestSurfaceMonitorOpenUsesOnlyByteHwmOption(t *testing.T) {

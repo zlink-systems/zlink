@@ -38,6 +38,7 @@ type RoutedSendSubmitOp interface {
 	Message(message *Message) RoutedSendSubmitOp
 	MoveMessage(message *Message) RoutedSendSubmitOp
 	Bytes(data []byte) RoutedSendSubmitOp
+	Flags(flags SendFlags) RoutedSendSubmitOp
 	Submit(ctx context.Context) error
 }
 
@@ -144,11 +145,12 @@ func (b *sendBuilder) singlePart() []sendBuilderPart {
 
 type routedSendBuilder struct {
 	parts []sendBuilderPart
+	flags SendFlags
 	submitOnce
-	submit func(context.Context, []sendBuilderPart) error
+	submit func(context.Context, SendFlags, []sendBuilderPart) error
 }
 
-func newRoutedSendBuilder(submit func(context.Context, []sendBuilderPart) error) RoutedSendOp {
+func newRoutedSendBuilder(submit func(context.Context, SendFlags, []sendBuilderPart) error) RoutedSendOp {
 	return &routedSendBuilder{submit: submit}
 }
 
@@ -167,6 +169,11 @@ func (b *routedSendBuilder) Bytes(data []byte) RoutedSendSubmitOp {
 	return b
 }
 
+func (b *routedSendBuilder) Flags(flags SendFlags) RoutedSendSubmitOp {
+	b.flags = flags
+	return b
+}
+
 func (b *routedSendBuilder) Submit(ctx context.Context) error {
 	if len(b.parts) == 0 {
 		return configInvalidArgumentError()
@@ -174,7 +181,7 @@ func (b *routedSendBuilder) Submit(ctx context.Context) error {
 	if err := b.markSubmitted(); err != nil {
 		return err
 	}
-	return b.submit(ctx, b.parts)
+	return b.submit(ctx, b.flags, b.parts)
 }
 
 type requestBuilderState struct {

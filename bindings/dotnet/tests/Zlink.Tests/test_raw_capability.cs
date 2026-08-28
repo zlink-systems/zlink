@@ -14,11 +14,11 @@ public sealed class test_raw_capability
     [Fact]
     public void public_assembly_exposes_required_raw_capabilities()
     {
-        Func<IPairSocket, SendOperation> multipartSend =
+        Func<IPairSocket, RoutedSendOperation> multipartSend =
             static socket => socket.Send();
-        Func<SendOperation, Message, SendSubmitOperation> firstPart =
+        Func<RoutedSendOperation, Message, RoutedSendSubmitOperation> firstPart =
             static (operation, part) => operation.Message(part);
-        Func<SendSubmitOperation, Message, SendSubmitOperation> nextPart =
+        Func<RoutedSendSubmitOperation, Message, RoutedSendSubmitOperation> nextPart =
             static (operation, part) => operation.Message(part);
         Func<Received, IReadOnlyList<Message>> multipartReceive =
             static received => received.Parts;

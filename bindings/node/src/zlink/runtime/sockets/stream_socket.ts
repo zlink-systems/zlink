@@ -77,6 +77,14 @@ export class StreamSocket extends SocketBase {
         }
         return this.sendCompletion.submit(parts, timeoutMs, selector);
       },
+      (selector, parts, flags) => {
+        if (selector === null || !this.sendDirectRaw(selector, parts, flags)) {
+          throw submitErrorFromResult(
+            selector === null ? SubmitResult.InvalidArgument : SubmitResult.Backpressured,
+            'send failed'
+          );
+        }
+      },
       target
     );
   }
@@ -138,14 +146,25 @@ export class StreamSocket extends SocketBase {
     if (raw == null) return result ? false : null;
     const receivedRaw = raw;
     const receivedRoutingId = nativeReceivedRoutingId(receivedRaw);
-    const send = (parts: readonly Message[], sendFlags: SendFlags) => {
+    const send = (parts: readonly Message[], sendFlags: SendFlags): void => {
         if (!receivedRoutingId) {
           throw submitErrorFromResult(SubmitResult.InvalidState, 'missing routed send target');
         }
-        return this.sendDirectRaw(receivedRoutingId, parts, sendFlags);
+        if (!this.sendDirectRaw(receivedRoutingId, parts, sendFlags)) {
+          throw submitErrorFromResult(SubmitResult.Backpressured, 'send failed');
+        }
       };
-    if (!result) return materializeReceived(receivedRaw, undefined, send);
-    materializeReceivedInto(result, receivedRaw, undefined, send);
+    const sendAsync = (parts: readonly Message[], timeoutMs: number) => {
+      if (!receivedRoutingId) {
+        return Promise.reject(submitErrorFromResult(
+          SubmitResult.InvalidState,
+          'missing routed send target'
+        ));
+      }
+      return this.sendCompletion.submit(parts, timeoutMs, receivedRoutingId);
+    };
+    if (!result) return materializeReceived(receivedRaw, undefined, send, sendAsync);
+    materializeReceivedInto(result, receivedRaw, undefined, send, sendAsync);
     return true;
   }
   setPacketHandler(handler: StreamPacketHandler): void {

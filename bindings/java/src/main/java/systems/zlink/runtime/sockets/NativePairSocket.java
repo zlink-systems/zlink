@@ -26,7 +26,9 @@ final class NativePairSocket extends NativeSocketBase implements PairSocket {
 
     public AsyncSendOperation send() {
         return MessageOperations.asyncSend((parts, timeout) ->
-            runtime().sendAsync(parts, timeout));
+            runtime().sendAsync(parts, timeout),
+            (parts, flags) -> runtime().send(parts,
+                SendFlag.fromValue(flags.value())));
     }
     SendResult sendNoWaitResult(Message part) { return runtime().sendNoWaitResult(part); }
     SendResult sendNoWaitResult(List<Message> parts) { return runtime().sendNoWaitResult(parts); }

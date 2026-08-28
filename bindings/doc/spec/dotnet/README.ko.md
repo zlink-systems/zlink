@@ -335,14 +335,15 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   builder가 흡수한다. HWM-managed DEALER/ROUTER routed send/request의 awaitable
   terminal builder 메서드는 `Async(...)`로 통일한다.
 
-### DEALER/ROUTER routed 비동기 terminal
+### HWM-managed send의 sync(+flags)/async terminal
 
 - `IDealerSocket.Send()`와 `IRouterSocket.Send(RoutingId)`는
-  `RoutedSendOperation`을 반환한다. `RoutedSendSubmitOperation`의 terminal은
-  `Task Async(CancellationToken)`뿐이다. 두 socket은
-  `IReceivingMessageSocket`과 connect 역할만 상속하며, 공통 역할에는 동기
-  `SendOperation`이 없다. 따라서 base interface로 변환해 `Flags(...)`나
-  `Submit()`을 호출할 수 없다.
+  `RoutedSendOperation`을 반환한다. `RoutedSendSubmitOperation`은 sync
+  `void Submit(SendFlags)`와 async `Task Async(CancellationToken)` terminal을
+  함께 제공한다. `SendFlags.None`은 Core 안에서 admission까지 기다리고,
+  `SendFlags.DontWait`는 HWM이 가득 차면 즉시 `ZlinkSubmitException`
+  (`Result == Backpressured`)을 발생시킨다. PAIR send와 `Received.Send()`도
+  같은 두 terminal을 제공한다.
 - `IDealerSocket.Request()`와 `IRouterSocket.Request(RoutingId)`의
   `RequestSubmitOperation` terminal은
   `Task<IReadOnlyList<Message>> Async(CancellationToken)`뿐이다. 이 두 routed
@@ -372,9 +373,10 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   operation이 끝날 때까지 유지된다.
 - 공개 계약에는 별도 queue capacity나 queue-full 결과가 없으며,
   Framework retry/polling을 요구하지 않는다.
-- PAIR, STREAM 등 unrelated 공통 sync data-plane builder는 별도 계약으로 남지만
-  DEALER/ROUTER의 HWM-managed routed 경로에서 canonical terminal로 취급하지
-  않는다.
+- PAIR, STREAM, DEALER/ROUTER routed send와 `Received.Send()`는 모두 같은
+  HWM-managed send terminal 짝을 따른다. sync terminal은 native
+  `zlink_send_part(_rid)`에 flag를 넘기고 async terminal은
+  `zlink_send_async` 완료 통지를 따른다.
 - routed send의 pending 완료는 Core send-completion 통지가 구동한다. socket runtime은 첫
   `Async(...)` 시점에 `zlink_send_complete_handler`를 한 번 등록하고, 이후 모든
   operation은 complete record 하나를 `zlink_send_async`로 넘긴다. 바인딩은 park

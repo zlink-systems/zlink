@@ -18,6 +18,58 @@ public sealed class test_routed_async_admission
         "filler" + new string('d', 65_536);
 
     [Fact]
+    public void synchronous_terminal_admits_a_routed_send()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var context = Zlink.CreateContext();
+        using var dealer = context.CreateDealerSocket();
+        using var router = context.CreateRouterSocket();
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "dotnet-routed-sync-admission");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        Thread.Sleep(100);
+
+        using Message payload = Message.From("sync-payload");
+        dealer.Send().Message(payload).Submit(SendFlags.None);
+
+        using Received received = RecvWithRetry(router);
+        Assert.Equal("sync-payload", received.SinglePartOrThrow().GetString());
+    }
+
+    [Fact]
+    public void dontwait_terminal_reports_immediate_backpressure()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var context = Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        using var dealer = context.CreateDealerSocket();
+        using var router = context.CreateRouterSocket();
+        dealer.Options.SendHighWaterMark = RecordHwm;
+        router.Options.ReceiveHighWaterMark = RecordHwm;
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "dotnet-routed-sync-dontwait");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        Thread.Sleep(100);
+        _ = FillDealerTarget(dealer, out List<Task> filler);
+
+        using Message payload = Message.From("backpressured");
+        var started = Stopwatch.StartNew();
+        ZlinkSubmitException error = Assert.Throws<ZlinkSubmitException>(() =>
+            dealer.Send().Message(payload).Submit(SendFlags.DontWait));
+        started.Stop();
+
+        Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured, error.Result);
+        Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
+        SwallowAll(filler);
+    }
+
+    [Fact]
     public async Task admitted_send_completes_without_occupying_the_caller()
     {
         if (!CoreTestSupport.IsNativeAvailable())
