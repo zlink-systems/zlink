@@ -47,11 +47,8 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 이는 이미 성문화된 **발견 10**을 지키는 일이다. cpp가 lane 전환 중 그 규칙을 어겼다.
 
 **dotnet과 java의 Spot 실행 구조는 거의 같다.** Actor는 `SPOT_WIDE`에서 Actor 큐 → Spot 큐로
-2단, Timer는 Spot 큐로 직행 — 양 언어 동일하다.
-
-**그 2단은 걷어내기로 확정했다(2026-08-28).** 겹침이 사는 것이 없다 — 순서는 Spot 큐 하나로
-끝나고, 유입 제한은 이 계층 권한이 아니며(스펙 04 소유), `SpotWide`는 Spot 전체가 한 줄이라
-Actor를 따로 세워도 어느 Actor가 먼저 돌지 않는다. node 현행(Spot 큐 직행)이 정본이다.
+2단, Timer는 Spot 큐로 직행 — 양 언어 동일하다. 그 비대칭의 이유는 순서가 아니라
+**용량 회계**다(Actor 큐가 payload admission을 소유하고 Timer는 payload가 없다).
 
 ---
 
@@ -64,8 +61,7 @@ Actor를 따로 세워도 어느 Actor가 먼저 돌지 않는다. node 현행(S
 |---|---|---|
 | **조율자** | **dotnet** | Spot마다 전용 조율자가 Spot 큐 · Actor별 큐 · Timer별 큐를 **모두 소유**. 진입점이 큐를 고르고 호출자는 모른다 |
 | **큐 primitive** | **java** | 실행뿐 아니라 **backpressure · lifecycle burst · owner time budget · 정책 주입**을 계약으로 |
-| 큐 경로 | **node** | `SpotWide`는 Spot 큐 직행. Actor·timer 큐는 `PerActor`에서만 만든다 (2026-08-28 확정) |
-| 한도 | — | **건수뿐.** payload byte 회계는 예전 설계의 잔재로 제거 대상 (2026-08-28 확정) |
+| 용량 회계 | — | Actor 큐가 payload admission 소유. 상위 Spot 큐는 고정 turn 비용만 예약 (이중 예약 금지) |
 
 **언어별 작업량**
 
@@ -113,7 +109,10 @@ Actor를 따로 세워도 어느 Actor가 먼저 돌지 않는다. node 현행(S
    `ZLinkActorDispatchMailboxSet` 세 맵이 조율자 밖에 흩어져 있다. `await`가 turn을 양보하므로
    Actor별 직렬 단위는 node에서도 필요하다. 그 맵을 담을 Spot 조율자도 node에는 없다 —
    현행 `ZLinkSpotSerialExecutor`는 직렬 단위 wrapper다(계약서 §7 · 플랜 §6)
-⑥ ~~`SpotWide`에서 Actor 큐를 거칠 이유~~ → **확정: 없다. 걷어낸다.** 순서는 Spot 큐 하나로
-   끝나고 유입 제한은 이 계층 권한이 아니다(04 소유). node 현행이 정본이고 나머지 셋이 맞춘다
-⑦ ~~owner queue의 byte 계상~~ → **확정: 잔재다. 제거한다.** java·cpp·node가 같은 숫자를
-   하드코딩하고 있다. 제거 목록은 플랜 §2.1(P0-4~P0-7). 스펙 04의 owner FIFO byte 축도 함께 정정했다
+⑥ ~~`SpotWide`에서 Actor 큐를 거칠 이유~~ → **해소: 계약이 이미 정하고 있었다.** 스펙 02 §3의
+   `Yield` claim — `SpotWide` member Actor가 `Yield`하면 gate만 반납하고 Actor queue claim은
+   유지한다. 02 §1은 queue를 합치는 것을 잘못된 구조로 명시한다. 2단 유지
+⑦ ~~owner queue byte 계상~~ → **해소: 잔재가 아니라 현행 계약이다.** Framework API §11이
+   건수·byte 두 축을 강제하고("건수만 두면 같은 건수가 payload 크기에 따라 수천 배의 memory를
+   점유한다"), 네 언어 exact interface에 `mailboxByteBudget`이 있다. dotnet 실행 큐에만 없어
+   어디서 만족하는지 조사 필요(플랜 P0-4)

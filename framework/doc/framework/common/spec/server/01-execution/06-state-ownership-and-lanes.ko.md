@@ -68,21 +68,27 @@ await SendAsync(entry.Route);                                         // 낡았�
 다시 잡을 수 있는 지점(비동기 작업 완료 이후)에 도달했을 때, 그 사이 다른 turn이 같은
 상태를 이미 바꿨을 수 있으므로 스냅샷은 구조적으로 낡는다.
 
-state lane은 이 형태 자체를 없앤다. Lane의 turn 안에는 해제 지점이 없으므로 — 상태를
-읽는 코드와 그 상태에 근거해 행동하는 코드가 같은 turn 안에 있으면 — 스냅샷이 생기지
-않는다.
+state lane은 이 형태 자체를 없앤다. Lane의 turn 안에는 해제 지점이 없으므로, 상태를 읽는
+코드와 그 결정을 확정하는 코드가 같은 turn 안에 들어간다.
 
 ```csharp
 // contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
-await lane.Run(async () =>
-{
-    if (!entries.TryGetValue(key, out var entry)) return;   // 평범한 map이다. 잠그지 않는다
-    await SendAsync(entry.Route);                           // 같은 turn 안 — 값이 낡을 수 없다
-});
+// turn 안에서 상태를 읽고, 그 결정의 유효성을 되돌릴 수 없게 고정한다.
+var claim = await lane.Run(() =>
+    entries.TryGetValue(key, out var entry)
+        ? entry.ClaimRoute()      // generation·ownership을 이 turn 안에서 확정한다
+        : null);                  // 평범한 map이다. 잠그지 않는다
+
+if (claim is null) return;
+await SendAsync(claim);           // 장기 외부 호출은 turn 밖에서 — §4·§5
 ```
 
-**`await`이 turn 안에 있다는 것이 핵심이다.** lock은 `await`을 감쌀 수 없지만 lane의 turn은
-감쌀 수 있다. 그래서 "읽고 → 놓고 → 행동한다"가 "읽고 → 행동한다"가 된다.
+**turn 밖으로 나가는 값이 무엇인지가 갈림길이다.** 위 금지 형태는 mutable 상태의 사본을
+들고 나가서 그 값이 아직 맞다고 가정한다. 이쪽은 turn 안에서 유효성이 고정된 claim을 만들어
+들고 나가므로, 그 사이 상태가 바뀌어도 claim이 무엇을 가리키는지는 변하지 않는다.
+
+**장기 외부 호출을 turn 안에서 기다리지 않는다.** state lane의 turn이 하는 일은 상태를 읽고
+결정을 확정하는 데까지다 — turn 안에서 외부 operation의 완료를 기다리는 것은 §4가 금지한다.
 
 ## 4. 상태 분류와 판별 기준
 
@@ -330,8 +336,9 @@ public 표면에 재진입한다. 다음 세 단계로 나눈다.
 정의하는 같은 보장 — 한 번에 한 turn만 실행, FIFO, 재진입의 즉시 예외 검출, 소유
 collection의 무잠금 — 을 만족하는 그 언어의 primitive를 쓴다.
 
-**다만 공개 표면의 이름과 계약은 예외다.** state lane의 다음 여섯은 4개 언어가 같은 이름
-(언어별 표기 변환만)과 같은 의미를 갖는다. 실측으로 이미 네 언어가 일치한다.
+**다만 공개 표면의 이름과 계약은 예외다.** state lane의 다음 여섯은 4개 언어가 같은 의미를 갖는다.
+앞의 다섯은 이름도 표기 변환만으로 일치한다. `close`는 현재 언어마다 이름이 갈리므로
+**통일 대상**이다 — 표의 이름은 현재 실측이고, 목표는 `close` 한 벌이다.
 
 | 계약 | 의미 | .NET | java | cpp | node |
 |---|---|---|---|---|---|
@@ -340,7 +347,7 @@ collection의 무잠금 — 을 만족하는 그 언어의 primitive를 쓴다.
 | `run` | lane turn에서 실행 | `RunAsync()` | `runAsync()` | `run()` | `run()` |
 | `tryPost` | 대기 없이 게시 | `TryPost()` | `tryPost()` | `try_post()` | `tryPost()` |
 | `throwIfReentrant` | 재진입 시 예외 | `ThrowIfReentrant()` | `throwIfReentrant()` | `throw_if_reentrant()` | `throwIfReentrant()` |
-| `close` | 종료 | `DisposeAsync()` | — | `close()` | `closed` |
+| `close` | 종료 | `DisposeAsync()` | `closeAsync()` | `close()` | `dispose()` |
 
 `throwIfReentrant`는 **선택이 아니라 필수 계약이다.** 상위 실행 단위가 직렬 소유를 보장하는
 자리라도 그 전제를 검사 없이 믿지 않는다 — 재진입이 뚫리면 hang이 되고, 검사하는 주체가
@@ -372,8 +379,8 @@ Node.js의 동기 메서드는 하나의 JavaScript turn 안에서 끝나는 동
 
 **단일 실행과 순서**
 
-- 서로 다른 호출자가 동시에 같은 lane에 작업을 제출해도, lane이 소유한 잠금 없는 평범한
-  collection에 대한 갱신이 유실되지 않는다.
+- 서로 다른 호출자가 동시에 같은 lane에 작업을 제출해도 갱신이 유실되지 않는다 — 이후
+  조회가 모든 제출을 반영한 값을 돌려준다.
 - 같은 lane에 제출한 작업은 제출한 순서대로 실행된다.
 - 닫힌 lane에 결과를 기다리는 호출을 제출하면 즉시 예외로 끝나고, 결과를 기다리지 않는
   제출은 실패를 반환한다.
@@ -389,12 +396,10 @@ Node.js의 동기 메서드는 하나의 JavaScript turn 안에서 끝나는 동
 
 **완료 경계**
 
-- 완료 continuation은 lane-current scope 밖에서 실행된다 — turn 안에서 완료를 신호해도
-  그 continuation이 같은 lane에 재진입하지 않는다.
+- turn 안에서 완료를 신호해도 그 continuation이 재진입 예외로 끝나지 않고 정상 실행된다.
 - 반환 전 등록·캡처 계약이 있는 메서드는, caller가 반환을 관찰하는 시점에 그 등록·캡처가
   이미 완료돼 있다.
-- 작업 프로토콜 gate를 보유한 채 lane 완료를 기다리는 자리에서, 그 lane 항목이 같은
-  gate를 다시 획득하지 않고 모든 completion continuation이 비동기다.
+- 작업 프로토콜 gate를 보유한 채 lane 완료를 기다리는 호출이 멈추지 않고 반환된다.
 
 **교차 불변식**
 

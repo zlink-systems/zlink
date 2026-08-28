@@ -47,7 +47,6 @@ ZLinkSpotSerialExecutor          ← Spot 하나마다 조율자 하나
  ├── Spot queue                     하나
  ├── Actor queue                    Actor마다 하나    ─┐ 이 Spot이 사라질 때
  └── timer queue                    timer 이름마다 하나 ─┘ 함께 사라진다
-                                    ↑ 이 둘은 `PerActor`에서만 만든다(§4)
 
 ZLinkActorSerialExecutor         ← Actor 하나마다 조율자 하나
  └── Actor queue                    하나              ← 맵이 없다
@@ -78,9 +77,10 @@ class ZLinkActorSerialExecutor           // Actor 하나마다 하나
   묶여 있기 때문이다 — 그 Spot이 사라지면 그 Spot의 Actor queue와 timer queue도 함께
   사라진다. Actor와 session에는 수명이 자신에게 묶인 하위 대상이 없으므로 queue를 이름으로
   찾는 map을 두지 않고, 인스턴스마다 queue 하나만 갖는다.
-- **queue map은 [state lane](06-state-ownership-and-lanes.ko.md)이 소유한다.** 이 map은
-  이름으로 queue를 찾기만 하는 collection이므로 06 §4의 C1에 해당하고, lock으로 지키지
-  않는다.
+- **queue map은 [state lane](06-state-ownership-and-lanes.ko.md)이 소유한다.** 조회만 하는
+  map이면 06 §4의 C1이지만 이 map은 그렇지 않다 — 조율자를 닫을 때 map을 비우는 것과 그
+  안의 queue를 모두 완료 처리하는 것이 함께 움직여야 하므로 06 §4의 **C2**다. 따라서 lock이
+  아니라 state lane이 소유하고, map 자체는 평범한 자료구조로 둔다.
 
 **내부 확인 조건** — 조율자 밖에서 Actor queue나 timer queue를 field로 들고 있는 코드가
 없다. Actor 조율자와 session 조율자에는 queue map field가 없다.
@@ -109,9 +109,11 @@ class ZLinkActorSerialExecutor           // Actor 하나마다 하나
 
 ## 4. Spot 실행 mode와 queue 경로
 
-[User Spot execution mode](../00-foundation/02-glossary.ko.md#user-spot-execution-mode)가
-정하는 것은 **queue를 몇 개 만드는가**다. 어느 mode에서도 작업 하나가 queue 두 개를 지나지
-않는다.
+[User Spot execution mode](../00-foundation/02-glossary.ko.md#user-spot-execution-mode)에
+따라 Actor 작업과 timer 작업이 지나는 queue가 달라진다.
+
+`SpotWide`에서 Actor 작업만 queue 두 개를 지난다. 두 mode 모두 직렬 실행이 보장되며 지나는
+queue 수만 다르다.
 
 진입점이 어느 queue에 연결되는지를 mode별로 그리면 다음과 같다. Actor 둘(A·B)과 timer
 둘(`tick`·`beat`)이 있는 Spot을 예로 든다.
@@ -129,81 +131,122 @@ class ZLinkActorSerialExecutor           // Actor 하나마다 하나
   executeTimer("beat") ────▶ [  beat queue   ] ──▶ 실행   ┘
 ```
 
-**`SpotWide`** — queue가 하나뿐이고 모든 진입점이 거기로 간다.
+**`SpotWide`** — 모든 작업이 마지막에 Spot queue 한 줄을 지난다.
 
 ```text
-  executeSpot ──────────┐
-  executeLifecycle ─────┤
-  executeActor(A) ──────┤
-  executeActor(B) ──────┼──▶ [  Spot queue   ] ──▶ 실행
-  executeTimer("tick") ─┤
-  executeTimer("beat") ─┘
-
-  ← Actor queue도 timer queue도 만들지 않는다.
+  executeSpot ──────────────────────────────────┐
+  executeLifecycle ─────────────────────────────┤
+  executeTimer("tick") ─────────────────────────┤ ← timer queue를 만들지 않는다
+  executeTimer("beat") ─────────────────────────┤
+                                                │
+  executeActor(A) ─▶ [ Actor A queue ] ─────────┤ ← Actor queue에서
+  executeActor(B) ─▶ [ Actor B queue ] ─────────┤   payload 바이트를 예약한다
+                                                ▼
+                                       [   Spot queue   ] ← 고정 비용만 예약한다
+                                                │
+                                                ▼
+                                          한 번에 하나 실행
 ```
 
-- **`SpotWide`에서는 Actor queue를 만들지 않는다.** 실행 순서는 Spot queue 하나로 이미
-  끝나고, 유입 제한은 이 계층의 권한이 아니며(§5), 그 mode에서는 Spot 전체가 한 줄이라
-  Actor를 따로 세워도 어느 Actor가 더 빨리 돌지 않는다. 남는 것이 없는데 queue를 하나 더
-  거치면, 그 겹침이 만드는 문제만 늘어난다 — Spot turn 안에서 Actor 작업을 제출하면 자기가
-  쥔 turn을 기다리게 되므로 그것을 피하는 장치가 따로 필요해진다.
-- **`SpotWide`에서는 timer queue도 만들지 않는다.** 같은 이유다.
-- **`PerActor`에서만 Actor별·timer별 queue를 만든다.** 그 mode에서는 서로 다른 Actor와 서로
-  다른 timer가 실제로 겹쳐 진행되므로 각자 줄이 필요하다.
+Actor queue는 작업을 바로 실행하지 않고, 자기 turn이 오면 Spot queue로 넘긴다. 그래서 Actor
+작업만 queue 둘을 지나고, 실행 순서는 Spot queue 하나가 정한다.
 
-**내부 확인 조건** — 한 작업이 queue 둘에 연달아 제출되는 자리가 없다. `SpotWide`로 등록된
-Spot의 조율자에서 Actor queue map과 timer queue map이 비어 있다.
+- **`SpotWide`에서 Actor 작업이 Actor queue를 먼저 지나는 이유는 순서가 아니라 claim이다.**
+  실행 순서는 위 Spot queue 하나로 이미 끝난다. Actor queue가 하는 일은 **`Yield`한 Actor의
+  다음 record가 실행되지 않게 막는 것**이다 —
+  [Handler turn과 execution gate 「3. `Yield` 시 gate와 claim」](02-handler-turn-and-execution-gate.ko.md#3-yield-시-gate와-claim)이
+  소유한다: `SpotWide` member Actor가 `Yield`하면 shared Spot gate만 반납하고 Actor queue
+  claim은 유지한다. Actor queue가 없으면 gate를 반납한 사이 같은 Actor의 다음 record가
+  실행되어 그 Actor의 handler가 자기 자신과 겹친다.
+- **queue를 하나로 합치면 이동도 깨진다.**
+  [02 「1. Queue와 gate 분리 원칙」](02-handler-turn-and-execution-gate.ko.md#1-queue와-gate-분리-원칙)이
+  "`SpotWide`에서 queue 자체를 하나로 합친다"를 잘못된 구조로 명시한다 — 이동할 때 Actor별로
+  남은 작업을 갈라내야 하는데 이미 섞여 있으면 갈라낼 수 없다.
+- **timer 작업은 queue 하나만 지난다.** timer callback은 application payload를 나르지 않아
+  Actor처럼 따로 셀 바이트가 없고, `SpotWide`의 Spot queue가 이미 전체를 한 줄로 세우므로
+  timer 이름별 queue를 만들 이유가 없다.
 
-진입점 하나가 이 경로 판정을 전부 안고 있고, 호출자에게는 queue가 보이지 않는다.
+`SpotWide`에서 Actor 작업 하나가 지나는 경로는 다음과 같다.
+
+```mermaid
+sequenceDiagram
+    participant Caller as 호출자
+    participant Coord as Spot 조율자
+    participant AQ as Actor queue
+    participant SQ as Spot queue
+    participant H as Actor handler
+
+    Caller->>Coord: executeActor(actorId, 작업)
+    Coord->>AQ: 그 Actor의 queue를 찾거나 만든다
+    AQ->>AQ: 이 작업의 payload 바이트를 예약한다
+    Note over AQ: 그 Actor 몫이 가득 차 있으면<br/>여기서 backpressure로 거절한다
+    AQ->>SQ: 자기 turn이 오면 Spot queue에 넣는다
+    SQ->>SQ: fixedWorkByteCost만 예약한다
+    Note over SQ: 같은 payload를 다시 예약하지 않는다
+    SQ->>H: Spot turn 하나를 점유해 실행한다
+    H-->>Caller: 완료
+```
+
+정상 경로만 그렸다. 예약이 거절되는 backpressure 분기는 §5가, 한 소유자가 turn을 오래
+점유했을 때 양보하는 분기는 §6.4가 설명한다.
+
+위 두 그림을 코드로 옮기면 다음과 같다. 진입점 하나가 §4의 경로 판정을 전부 안고 있고,
+호출자에게는 queue가 보이지 않는다.
 
 ```csharp
 // contract pseudocode이며 실제 API가 아니다 — 실제 시그니처는 언어별 interface가 소유한다.
-ExecuteActor(actorId, work)
+ExecuteActor(actorId, work, payloadBytes)
 {
-    if (executionMode == SpotWide)
+    // queue map은 state lane이 소유한다(§2). lock을 잡지 않는다.
+    actorQueue = lane.Run(() => GetOrCreateActorQueue(actorId));
+
+    if (executionMode == PerActor)
     {
-        spotQueue.Enqueue(work);         // Actor queue를 만들지 않는다
+        // Actor queue 하나에서 끝난다. 다른 Actor와 겹쳐 진행된다.
+        actorQueue.EnqueueWithPayloadBytes(work, payloadBytes);
         return;
     }
 
-    // queue map은 state lane이 소유한다(§2). lock을 잡지 않는다.
-    actorQueue = lane.Run(() => GetOrCreateActorQueue(actorId));
-    actorQueue.Enqueue(work);            // §5의 건수 상한
+    // SpotWide — Actor queue가 payload 바이트를 예약하고, 자기 turn이 오면
+    // 작업을 Spot queue로 넘긴다. 실행 순서는 Spot queue 하나가 정한다.
+    actorQueue.EnqueueWithPayloadBytes(
+        () => spotQueue.Enqueue(work),   // 같은 payload를 다시 예약하지 않는다(§5)
+        payloadBytes);
 }
 
 ExecuteTimer(timerName, work)
 {
     if (executionMode == SpotWide)
     {
-        spotQueue.Enqueue(work);         // timer queue를 만들지 않는다
+        // timer queue를 만들지 않는다. Spot queue가 이미 전체를 한 줄로 세운다.
+        spotQueue.Enqueue(work);
         return;
     }
 
     timerQueue = lane.Run(() => GetOrCreateTimerQueue(timerName));
-    timerQueue.Enqueue(work);
+    timerQueue.Enqueue(work);            // payload가 없어 fixedWorkByteCost로 회계한다
 }
 ```
 
-## 5. 이 계층의 한도는 건수뿐이다
+## 5. 두 queue가 무엇을 예약하는가
 
-**유입 속도를 정하는 권한은 이 문서에 없다.** Ordinary ingress가 permit을 얻고 record를
-receive하는 순서는
-[Application job queue와 backpressure 「1. 두 독립된 capacity authority」](04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)와
-[「3. Ordinary ingress permit 순서」](04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)가
-소유한다. 여기서 다시 정의하지 않는다.
+owner queue(mailbox)의 한도는 **건수와 대기 중 byte 합계 두 축**이고, 그 계약은
+[Framework API 「11. Handler 실행 객체와 dependency 수명」](../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)가
+소유한다. 여기서 다시 정의하지 않고, 이 문서의 queue 배치에 걸리는 두 가지만 밝힌다.
 
-**queue는 payload 바이트를 세지 않는다.** Byte로 재는 것은 Core byte HWM과 소켓 수신 회전
-한도뿐이고, Framework 쪽 한도는 모두 건수다(04 §9). owner별로 payload 바이트를 따로 세면
-Core HWM을 다른 이름으로 다시 구현하는 것이 되고, 그렇게 세어도 owner 수만큼 곱해지므로
-process memory를 묶지도 못한다.
+**계상 경계가 [Application job queue](../00-foundation/02-glossary.ko.md#application-job-queue)
+permit과 다르다.** permit은 callback의 첫 instruction 직전에 반환되지만, mailbox 예약은
+handler가 끝난 뒤에 반환된다 — 실행 중인 작업이 점유한 memory가 아직 해제되지 않았기
+때문이다. 그래서 두 한도는 서로를 대신하지 못한다(04 §1).
 
-queue가 갖는 건수 상한은 [04 §8](04-application-job-queue-and-backpressure.ko.md#8-backpressure-3단계와-한도-종류)의
-owner FIFO가 소유한다. 그 상한이 걸리는 단위는 §4가 만든 queue를 따라간다 — `PerActor`는
-Actor마다, `SpotWide`는 Spot 하나다.
+`SpotWide`에서 Actor 작업이 두 queue를 지날 때 **아래 Actor queue가 그 작업의 payload
+바이트를 예약하고, 위 Spot queue는 payload 크기와 무관한 고정 비용 `fixedWorkByteCost`만
+예약한다.** 같은 payload를 두 queue에서 모두 예약하지 않는다. 이중으로 예약하면 아래에서
+통과한 작업이 위에서 다시 걸려 Actor별 상한이 실제 상한이 아니게 되고, Spot queue는 실제
+실행 부하보다 이르게 가득 찬다.
 
-Application job queue permit은 작업이 이 queue에 줄 서 있는 동안에도 계속 잡혀 있다(04 §3의
-5단계). 따라서 모든 queue에 쌓인 총 건수는 이미 permit 수로 묶여 있고, 여기의 건수 상한은
-그 위에 얹는 owner별 분배 장치다.
+**내부 확인 조건** — `SpotWide`의 Actor 경로에서 위 Spot queue에 제출할 때 payload 바이트를
+인자로 넘기는 자리가 없다.
 
 ## 6. 직렬 queue primitive
 
@@ -217,9 +260,8 @@ Application job queue permit은 작업이 이 queue에 줄 서 있는 동안에�
 다음 값은 정책 객체 `ZLinkExecutionLanePolicy`로 주입받는다. queue 안에 상수로 박지
 않는다 — Spot·Actor·session이 서로 다른 값을 쓰기 때문이다.
 
-이 값들은 §5의 건수 상한을 정하는 것이지 유입 속도를 제한하는 값이 아니다. Ordinary
+이 값들은 §5의 owner FIFO 상한을 정하는 것이지 유입 속도를 제한하는 값이 아니다. Ordinary
 ingress의 admission은 [04](04-application-job-queue-and-backpressure.ko.md)가 소유한다.
-payload 바이트를 재는 값은 두지 않는다(§5).
 
 다음은 의미를 설명하는 contract pseudocode이며 실제 API가 아니다. 정확한 signature는 언어별
 exact interface가 정의한다.
@@ -227,7 +269,12 @@ exact interface가 정의한다.
 ```text
 ZLinkExecutionLanePolicy {
     applicationMessageCapacity   // application lane이 동시에 담는 작업 수 상한 (건, > 0)
+    applicationByteCapacity      // application lane이 동시에 예약하는 payload 크기 상한
+                                 //   (byte, > 0, encoded payload 기준)
     lifecycleMessageCapacity     // lifecycle lane이 동시에 담는 작업 수 상한 (건, > 0)
+    lifecycleByteCapacity        // lifecycle lane이 동시에 예약하는 크기 상한 (byte, > 0)
+    fixedWorkByteCost            // payload를 나르지 않는 작업 하나가 차지하는 고정 크기
+                                 //   (byte, >= 0). timer 작업과 §5의 위 Spot queue가 쓴다
     lifecycleBurstLimit          // lifecycle 작업이 application 작업을 연속으로 앞지를 수 있는
                                  //   최대 건수 (건, > 0). 이 수를 넘기면 application 작업이
                                  //   한 건 실행된다
@@ -239,7 +286,8 @@ ZLinkExecutionLanePolicy {
 ### 6.2 진입점
 
 ```text
-enqueue(작업)                    // application lane. 한 건으로 센다
+enqueue(작업)                    // application lane. fixedWorkByteCost로 예약한다
+enqueueWithPayloadBytes(작업, n) // application lane. 실제 payload n byte로 예약한다
 enqueueLifecycle(작업)           // lifecycle lane. 대기 중인 application 작업을 앞지른다
 enqueueBarrierNext(작업)         // 현재 turn 직후, 줄 서 있는 application 작업보다 먼저
 isCurrent()                      // 호출한 thread가 이 queue의 turn을 점유하고 있는가
@@ -247,9 +295,9 @@ awaitQuiescence()                // 줄 선 작업이 모두 끝날 때까지 �
 close()                          // 새 제출을 받지 않고 이미 받은 작업을 끝낸다
 ```
 
-### 6.3 자리 판정과 순서 발급의 원자적 범위
+### 6.3 수용량 판정과 순서 발급의 원자적 범위
 
-자리 판정·순서 번호 발급·queue 삽입 셋은 **전부 일어나거나 전혀 일어나지 않는다.**
+수용량 판정·순서 번호 발급·queue 삽입 셋은 **전부 일어나거나 전혀 일어나지 않는다.**
 호출자 하나의 제출에서 이 셋이 쪼개지지 않는다.
 
 세 동작을 각각 별개로 처리하는 동시성 queue 자료구조로 치환하지 않는다. 쪼개면 두 호출자가
@@ -259,10 +307,16 @@ close()                          // 새 제출을 받지 않고 이미 받은 �
 
 ### 6.4 공정성
 
-현재 소유자가 turn을 `ownerTimeBudget`보다 오래 점유하면, 그 소유자의 남은 작업을 계속
-실행하지 않고 다음 소유자에게 넘긴다. 이 장치가 없으면 작업을 많이 쌓아 둔 소유자 하나가
-queue를 계속 차지할 수 있고, 그러면 같은 queue에 걸린 다른 작업이 언제 시작되는지 상한을
-말할 수 없다.
+현재 소유자가 `ownerTimeBudget`보다 오래 점유하면 **남은 작업을 ready 상태로 되돌리고 자기
+차례를 끊는다.** 이 장치가 없으면 작업을 많이 쌓아 둔 소유자 하나가 실행 자원을 계속 차지할
+수 있고, 그러면 같은 node의 다른 owner가 언제 시작되는지 상한을 말할 수 없다.
+
+**어느 owner에게 넘길지는 이 queue가 정하지 않는다.** queue 하나는 자기 owner의 작업만
+알고 있다. ready 상태로 돌아온 owner들 사이의 순서는
+[Framework API 「11. Handler 실행 객체와 dependency 수명」](../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)의
+scheduler 계약이 소유한다 — 이 문서는 그 계약이 순서를 정할 수 있도록 **차례를 끊어 주는
+것**까지만 정한다. 상한은 handler 경계에서만 확인한다. 실행 중인 handler 하나가 상한을
+넘겨 도는 경우는 이 계약이 다루지 않는다.
 
 ### 6.5 누가 loop를 시작하는가
 
@@ -462,20 +516,20 @@ snapshot 타입 이름은 `<대상>StateSnapshot`으로 한다.
 의미를 바꾸는 개명은 하지 않는다. `executeActor`를 cpp에서 `execute_actor`로 쓰는 것은
 표기 변환이지만, `dispatch_actor`로 쓰는 것은 다른 이름을 짓는 것이다.
 
-`SpotWide`에서 Actor queue를 만들지 않는 §4의 규칙은 node runtime이 이미 그렇게 동작한다.
-나머지 세 언어는 현재 `SpotWide`에서도 Actor queue를 거치므로 §4에 맞춰야 한다.
+§4의 두 단계 구조는 네 언어가 모두 갖고 있다. node도 `executeActor`가 Actor별 mailbox
+claim(`actorClaims.submit(actorId, …)`)을 먼저 잡은 뒤 그 안에서 shared Spot 실행 단위를
+쓴다 — Actor queue를 건너뛰는 것이 아니라 §4가 정한 "queue는 Actor마다, gate는 Spot 공유"
+그대로다.
 
 ## 10. 검증 요구
 
 공개 표면(§3의 진입점 호출과 그 반환값, backpressure 거절, handler·callback이 실행된 순서와
 시각, 재진입 호출이 받는 예외)만으로 다음을 확인한다. 각 항목은 test 하나로 이어진다.
 
-**진입점**
+**제출 경로**
 
-- 네 언어의 Spot 조율자에 `executeSpot`·`executeActor`·`executeTimer`·`executeLifecycle`이
-  있고, 어느 진입점에도 호출자가 queue를 지정하는 인자가 없다.
-- Actor 조율자와 session 조율자의 진입점은 §3의 표와 같고, 그 밖에 작업을 넣는 공개
-  표면이 없다.
+- Spot handler·Actor handler·timer callback·session callback 중 어느 것을 등록해도,
+  application이 그 작업이 어느 queue에서 돌지 지정하는 수단이 없다.
 
 **실행 mode별 동시 실행과 순서**
 
@@ -489,21 +543,26 @@ snapshot 타입 이름은 `<대상>StateSnapshot`으로 한다.
 
 **수용량과 backpressure**
 
-- `PerActor`에서 Actor 하나에 작업을 몰아 `applicationMessageCapacity`를 채우면 그 Actor에
-  대한 제출만 거절되고, 같은 Spot의 다른 Actor에 대한 제출은 계속 수락된다.
-- `SpotWide`에서는 같은 상한이 Spot 단위로 걸린다(§5).
-- 같은 건수를 제출하면 payload 크기와 무관하게 같은 지점에서 거절이 시작된다 — 이 계층은
-  payload 바이트를 세지 않는다(§5).
-- owner queue 포화로 인한 거절이 조용히 사라지지 않는다. 그 거절과 permit 대기를 구분해
-  관찰하는 계약은 [04 §10](04-application-job-queue-and-backpressure.ko.md#10-검증-요구)이
-  소유한다.
+- 두 mode 모두, Actor 하나에 작업을 몰아 그 Actor mailbox의 한도를 채우면 그 Actor에 대한
+  제출만 거절되고 같은 Spot의 다른 Actor에 대한 제출은 계속 수락된다.
+- `SpotWide`에서 같은 건수의 큰 payload와 작은 payload를 Actor 하나에 제출하면, 큰 쪽이 먼저
+  거절된다 — 아래 Actor queue가 payload 바이트를 예약한다(§5).
+- 같은 제출로 Spot queue가 가득 차는 시점은 payload 크기와 무관하게 제출 건수로 결정된다 —
+  위 Spot queue는 고정 비용만 예약한다(§5).
 - `enqueueLifecycle`로 제출한 작업은 이미 줄 서 있는 application 작업보다 먼저 실행되고,
   연속으로 앞지르는 건수는 `lifecycleBurstLimit`에서 멈춰 application 작업이 한 건 실행된다.
 
 **공정성**
 
-- 작업을 많이 쌓아 둔 소유자가 `ownerTimeBudget`을 넘겨 점유하면, 그 뒤에 작업을 하나만
-  제출한 다른 소유자의 작업이 먼저 쌓인 소유자의 남은 작업보다 먼저 시작된다.
+- 작업을 많이 쌓아 둔 소유자가 `ownerTimeBudget`을 넘겨 점유하면 그 소유자의 남은 작업이
+  한 번에 이어서 실행되지 않고 자기 차례가 끊긴다 — 그 뒤 owner 사이의 순서는
+  [Framework API §11](../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)의
+  scheduler 계약이 소유한다.
+
+**`Yield`한 Actor**
+
+- `SpotWide`에서 member Actor의 handler가 `Yield`한 사이, 같은 Actor 앞으로 온 다음 record는
+  실행되지 않고 같은 Spot의 다른 Actor handler·Spot handler·timer는 진행한다(§4).
 
 **상태 조회의 시점 일치**
 

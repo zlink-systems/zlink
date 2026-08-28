@@ -49,7 +49,6 @@ ZLinkSpotSerialExecutor          ← one coordinator per Spot
  ├── Spot queue                     one
  ├── Actor queue                    one per Actor      ─┐ these go away when
  └── timer queue                    one per timer name ─┘ this Spot goes away
-                                    ↑ created only under `PerActor` (§4)
 
 ZLinkActorSerialExecutor         ← one coordinator per Actor
  └── Actor queue                    one                ← no map
@@ -80,8 +79,10 @@ class ZLinkActorSerialExecutor           // one per Actor
   queue is bound to the Spot — when that Spot goes away, that Spot's Actor and timer queues go
   with it. Actor and session have no subordinate whose lifetime is bound to them, so they carry
   no map for finding a queue by name; each instance holds exactly one queue.
-- **The queue map is owned by a [state lane](06-state-ownership-and-lanes.en.md).** The map only
-  looks a queue up by name, which makes it class C1 of 06 §4, and it is not guarded with a lock.
+- **The queue map is owned by a [state lane](06-state-ownership-and-lanes.en.md).** A
+  lookup-only map would be class C1 of 06 §4, but this one is not — closing the coordinator has
+  to empty the map and complete every queue in it together, which makes it class **C2**. So a
+  state lane owns it rather than a lock, and the map itself stays an ordinary structure.
 
 **Internal check condition** — no code outside a coordinator holds an Actor queue or a timer
 queue in a field. The Actor coordinator and the session coordinator have no queue map field.
@@ -110,9 +111,11 @@ layer, the same call has to be looked up again every time work crosses a layer.
 
 ## 4. Spot Execution Mode And Queue Path
 
-What the [User Spot execution mode](../00-foundation/02-glossary.en.md#user-spot-execution-mode)
-decides is **how many queues get created.** Under neither mode does one piece of work pass
-through two queues.
+Which queues Actor work and timer work pass through depends on the
+[User Spot execution mode](../00-foundation/02-glossary.en.md#user-spot-execution-mode).
+
+Only Actor work under `SpotWide` passes through two queues. Both modes guarantee serial
+execution; only the number of queues crossed differs.
 
 Which queue each entry point connects to, drawn per mode. The example Spot has two Actors
 (A and B) and two timers (`tick` and `beat`).
@@ -130,85 +133,126 @@ Which queue each entry point connects to, drawn per mode. The example Spot has t
   executeTimer("beat") ────▶ [  beat queue   ] ──▶ run   ┘
 ```
 
-**`SpotWide`** — there is one queue, and every entry point goes to it.
+**`SpotWide`** — everything ends up passing through the single Spot queue.
 
 ```text
-  executeSpot ──────────┐
-  executeLifecycle ─────┤
-  executeActor(A) ──────┤
-  executeActor(B) ──────┼──▶ [  Spot queue   ] ──▶ run
-  executeTimer("tick") ─┤
-  executeTimer("beat") ─┘
-
-  ← neither an Actor queue nor a timer queue is created.
+  executeSpot ──────────────────────────────────┐
+  executeLifecycle ─────────────────────────────┤
+  executeTimer("tick") ─────────────────────────┤ ← no timer queue is created
+  executeTimer("beat") ─────────────────────────┤
+                                                │
+  executeActor(A) ─▶ [ Actor A queue ] ─────────┤ ← the Actor queue is where
+  executeActor(B) ─▶ [ Actor B queue ] ─────────┤   payload bytes are reserved
+                                                ▼
+                                       [   Spot queue   ] ← reserves the fixed cost only
+                                                │
+                                                ▼
+                                            one at a time
 ```
 
-- **No Actor queue is created under `SpotWide`.** Execution order is already settled by the Spot
-  queue alone, limiting inbound work is not this layer's authority (§5), and under that mode the
-  whole Spot is one line, so lining Actors up separately does not make any Actor run sooner.
-  Nothing is gained, and crossing one more queue only adds the problems nesting creates —
-  submitting Actor work from inside a Spot turn would wait on the very turn the submitter holds,
-  which then needs a separate device to avoid.
-- **No timer queue is created under `SpotWide`** either, for the same reason.
-- **Per-Actor and per-timer queues are created only under `PerActor`.** Under that mode different
-  Actors and different timers really do progress overlapped, so each needs its own line.
+An Actor queue does not run the work itself; on its own turn it hands the work to the Spot
+queue. That is why only Actor work passes through two queues, and why execution order is
+decided by the Spot queue alone.
 
-**Internal check condition** — no work is submitted to two queues in succession. In the
-coordinator of a Spot registered `SpotWide`, the Actor queue map and the timer queue map are
-empty.
+- **Under `SpotWide`, Actor work goes through the Actor queue first because of the claim, not
+  the order.** Execution order is already settled by the upper Spot queue alone. What the Actor
+  queue does is **stop the next record of an Actor that has yielded from running** — owned by
+  [Handler Turn And Execution Gate "3. Gate And Claim On `Yield`"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield):
+  when a `SpotWide` member Actor yields, it hands back only the shared Spot gate and keeps its
+  Actor queue claim. Without the Actor queue, that Actor's next record runs while the gate is
+  handed back, and that Actor's handler overlaps itself.
+- **Merging the queues also breaks relocation.**
+  [02 "1. Separating Queue From Gate"](02-handler-turn-and-execution-gate.en.md#1-separating-queue-from-gate)
+  names "merging the queues into one under `SpotWide`" as a wrong structure — relocation has to
+  separate each Actor's remaining work, and once mixed it cannot be separated.
+- **Timer work crosses one queue.** A timer callback carries no application payload, so it has
+  no per-Actor bytes to count, and under `SpotWide` the Spot queue already puts everything in
+  one line — so there is no reason to create a per-timer-name queue.
 
-One entry point carries this whole path decision, and the caller never sees a queue.
+Here is the path one piece of Actor work takes under `SpotWide`.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Coord as Spot coordinator
+    participant AQ as Actor queue
+    participant SQ as Spot queue
+    participant Handler as Actor handler
+
+    Caller->>Coord: executeActor(actorId, work)
+    Coord->>AQ: find or create that Actor's queue
+    AQ->>AQ: reserve this work's payload bytes
+    Note over AQ: if that Actor's share is full,<br/>it is rejected here as backpressure
+    AQ->>SQ: on its own turn, put it on the Spot queue
+    SQ->>SQ: reserve fixedWorkByteCost only
+    Note over SQ: the same payload is not reserved again
+    SQ->>Handler: hold one Spot turn and run
+    Handler-->>Caller: complete
+```
+
+Only the normal path is drawn. The backpressure branch where a reservation is rejected is
+covered by §5, and the branch where an owner that has held a turn too long yields is covered by
+§6.4.
+
+The two diagrams above, as code. One entry point carries the whole §4 path decision, and the
+caller never sees a queue.
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
-ExecuteActor(actorId, work)
+ExecuteActor(actorId, work, payloadBytes)
 {
-    if (executionMode == SpotWide)
+    // the queue map is owned by a state lane (§2). no lock is taken.
+    actorQueue = lane.Run(() => GetOrCreateActorQueue(actorId));
+
+    if (executionMode == PerActor)
     {
-        spotQueue.Enqueue(work);         // no Actor queue is created
+        // ends at the one Actor queue. progresses overlapped with other Actors.
+        actorQueue.EnqueueWithPayloadBytes(work, payloadBytes);
         return;
     }
 
-    // the queue map is owned by a state lane (§2). no lock is taken.
-    actorQueue = lane.Run(() => GetOrCreateActorQueue(actorId));
-    actorQueue.Enqueue(work);            // §5's item-count ceiling
+    // SpotWide — the Actor queue reserves the payload bytes, and on its own turn
+    // hands the work to the Spot queue. execution order is decided by the Spot queue.
+    actorQueue.EnqueueWithPayloadBytes(
+        () => spotQueue.Enqueue(work),   // the same payload is not reserved again (§5)
+        payloadBytes);
 }
 
 ExecuteTimer(timerName, work)
 {
     if (executionMode == SpotWide)
     {
-        spotQueue.Enqueue(work);         // no timer queue is created
+        // no timer queue is created. the Spot queue already puts everything in one line.
+        spotQueue.Enqueue(work);
         return;
     }
 
     timerQueue = lane.Run(() => GetOrCreateTimerQueue(timerName));
-    timerQueue.Enqueue(work);
+    timerQueue.Enqueue(work);            // no payload, so charged at fixedWorkByteCost
 }
 ```
 
-## 5. Every Limit At This Layer Is A Count
+## 5. What Each Queue Reserves
 
-**This document has no authority over the rate of inbound work.** The order in which ordinary
-ingress acquires a permit and receives a record is owned by
-[Application Job Queue And Backpressure "1. Two Independent Capacity Authorities"](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)
-and
-[04 "3. Ordinary Ingress Permit Order"](04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order).
-It is not redefined here.
+An owner queue (mailbox) is limited on **two axes — item count and total queued bytes** — and
+that contract is owned by
+[Framework API "11. Handler Execution Objects And Dependency Lifetime"](../00-foundation/06-framework-api.en.md).
+It is not redefined here; only the two things that bear on this document's queue layout are.
 
-**Queues do not count payload bytes.** The only things measured in bytes are the Core byte HWM
-and the per-wakeup socket receive limit; every Framework-side limit is a count (04 §9). Counting
-payload bytes per owner would be re-implementing the Core HWM under another name, and it would
-not bound process memory anyway, since it multiplies by the number of owners.
+**Its accounting boundary differs from the
+[Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) permit.** The
+permit is returned right before the callback's first instruction, while the mailbox reservation
+is returned after the handler finishes — the memory work in flight holds is not yet released. The
+two limits therefore cannot stand in for each other (04 §1).
 
-The item-count ceiling a queue carries is owned by the owner FIFO in
-[04 §8](04-application-job-queue-and-backpressure.en.md#8-the-three-backpressure-stages-and-kinds-of-limits).
-The unit that ceiling applies to follows the queues §4 creates — per Actor under `PerActor`, and
-the one Spot queue under `SpotWide`.
+When Actor work crosses two queues under `SpotWide`, **the lower Actor queue reserves that work's
+payload bytes, and the upper Spot queue reserves only `fixedWorkByteCost`, a fixed cost
+independent of payload size.** The same payload is not reserved on both. Reserving twice means
+work that passed below is caught again above, so the per-Actor ceiling stops being the real
+ceiling, and the Spot queue fills ahead of the real execution load.
 
-An Application job queue permit stays held while its work sits in this queue (04 §3, step 5). The
-total number of items queued across all queues is therefore already bounded by the permit count,
-and the ceiling here is a per-owner distribution device layered on top of that.
+**Internal check condition** — on the `SpotWide` Actor path, nothing passes payload bytes as an
+argument when submitting to the upper Spot queue.
 
 ## 6. The Serial Queue Primitive
 
@@ -222,9 +266,9 @@ guarantee — that latency is bounded under any load — can be stated.
 The following values are injected as a policy object, `ZLinkExecutionLanePolicy`. They are not
 baked into the queue as constants, because Spot, Actor, and session use different values.
 
-These set §5's item-count ceilings; they are not values that limit the rate of inbound work.
+These set §5's owner FIFO ceilings; they are not values that limit the rate of inbound work.
 Admission for ordinary ingress is owned by
-[04](04-application-job-queue-and-backpressure.en.md). No value here measures payload bytes (§5).
+[04](04-application-job-queue-and-backpressure.en.md).
 
 The following is contract pseudocode explaining the meaning; it is not the real API. The exact
 signature is defined by each language's exact interface.
@@ -233,8 +277,15 @@ signature is defined by each language's exact interface.
 ZLinkExecutionLanePolicy {
     applicationMessageCapacity   // ceiling on work items the application lane holds at once
                                  //   (count, > 0)
+    applicationByteCapacity      // ceiling on payload the application lane reserves at once
+                                 //   (bytes, > 0, encoded payload)
     lifecycleMessageCapacity     // ceiling on work items the lifecycle lane holds at once
                                  //   (count, > 0)
+    lifecycleByteCapacity        // ceiling on size the lifecycle lane reserves at once
+                                 //   (bytes, > 0)
+    fixedWorkByteCost            // fixed size charged to one work item carrying no payload
+                                 //   (bytes, >= 0). used by timer work and by §5's upper
+                                 //   Spot queue
     lifecycleBurstLimit          // how many lifecycle items may consecutively overtake
                                  //   application work (count, > 0). past this count, one
                                  //   application item runs
@@ -246,7 +297,8 @@ ZLinkExecutionLanePolicy {
 ### 6.2 Entry Points
 
 ```text
-enqueue(work)                    // application lane; counted as one item
+enqueue(work)                    // application lane; reserved at fixedWorkByteCost
+enqueueWithPayloadBytes(work, n) // application lane; reserved at the actual n payload bytes
 enqueueLifecycle(work)           // lifecycle lane; overtakes queued application work
 enqueueBarrierNext(work)         // right after the current turn, ahead of queued application work
 isCurrent()                      // does the calling thread hold this queue's turn
@@ -254,9 +306,9 @@ awaitQuiescence()                // wait until all queued work has finished
 close()                          // accept no new submissions; finish what was already accepted
 ```
 
-### 6.3 The Atomic Extent Of The Room Decision And Sequence Issue
+### 6.3 The Atomic Extent Of Capacity Decision And Sequence Issue
 
-The room decision, the sequence-number issue, and the queue insertion **either all happen or
+The capacity decision, the sequence-number issue, and the queue insertion **either all happen or
 none happen.** For one caller's submission these three are not split apart.
 
 Do not substitute a concurrent queue data structure that handles the three separately. Split
@@ -267,10 +319,16 @@ three must move together, which makes them class C2 of
 
 ### 6.4 Fairness
 
-When the current owner holds a turn longer than `ownerTimeBudget`, its remaining work does not
-keep running; the queue moves to the next owner. Without this, one owner with a lot of work piled
-up can hold the queue indefinitely, and then no bound can be stated for when other work on the
-same queue starts.
+When the current owner holds longer than `ownerTimeBudget`, it **returns its remaining work to
+ready and cuts its own turn.** Without this, one owner with a lot of work piled up can hold the
+execution resource indefinitely, and then no bound can be stated for when other owners on the
+same node start.
+
+**Which owner it goes to next is not decided by this queue.** One queue knows only its own
+owner's work. The order among owners returned to ready is owned by the scheduler contract in
+[Framework API "11. Handler Execution Objects And Dependency Lifetime"](../00-foundation/06-framework-api.en.md) —
+this document defines only **cutting the turn** so that contract can decide the order. The bound
+is checked at handler boundaries only; a single handler running past it is outside this contract.
 
 ### 6.5 Who Starts The Loop
 
@@ -478,9 +536,10 @@ Use the names set in §2, §3, and §6; convert only the spelling to each langua
 Do not rename in a way that changes meaning. Writing `executeActor` as `execute_actor` in cpp is
 spelling conversion; writing it as `dispatch_actor` is inventing a different name.
 
-§4's rule that no Actor queue is created under `SpotWide` is already how the node runtime
-behaves. The other three languages still go through an Actor queue under `SpotWide` and must be
-brought in line with §4.
+All four languages carry §4's two-stage structure. node's `executeActor` too takes a per-Actor
+mailbox claim (`actorClaims.submit(actorId, …)`) first and only then uses the shared Spot
+execution unit — it does not skip the Actor queue; it is exactly §4's "a queue per Actor, a gate
+shared by the Spot".
 
 ## 10. Verification Requirements
 
@@ -488,12 +547,10 @@ The following are checked using the public surface only (the §3 entry-point cal
 return values, backpressure rejection, the order and timing in which handlers and callbacks ran,
 and the exception a reentrant call receives). Each item maps to one test.
 
-**Entry points**
+**Submission path**
 
-- All four languages' Spot coordinator has `executeSpot`, `executeActor`, `executeTimer`, and
-  `executeLifecycle`, and no entry point takes an argument by which a caller names a queue.
-- The Actor coordinator's and the session coordinator's entry points match the table in §3, and
-  no other public surface submits work.
+- Registering a Spot handler, an Actor handler, a timer callback, or a session callback gives
+  the application no means of naming which queue that work will run on.
 
 **Concurrency and order per execution mode**
 
@@ -507,22 +564,26 @@ and the exception a reentrant call receives). Each item maps to one test.
 
 **Capacity and backpressure**
 
-- Under `PerActor`, piling work on one Actor until it fills `applicationMessageCapacity` rejects
-  only submissions to that Actor; submissions to other Actors in the same Spot are still accepted.
-- Under `SpotWide` the same ceiling applies per Spot (§5).
-- Submitting the same number of items begins rejecting at the same point regardless of payload
-  size — this layer does not count payload bytes (§5).
-- A rejection from a full owner queue does not vanish silently. Observing that rejection as
-  distinct from a permit wait is a contract owned by
-  [04 §10](04-application-job-queue-and-backpressure.en.md#10-verification-requirements).
+- Piling local submissions on one Actor inside the same runtime until it fills
+  `applicationByteCapacity` rejects only submissions to that Actor; submissions to other Actors
+  in the same Spot are still accepted.
+- Actor packets arriving from a remote node are still delivered to an Actor that has filled that
+  ceiling — ordinary ingress is not counted again at the owner queue (§5).
 - Work submitted with `enqueueLifecycle` runs ahead of already queued application work, and the
   consecutive overtaking stops at `lifecycleBurstLimit` so one application item runs.
 
 **Fairness**
 
-- When an owner with a lot of work piled up holds past `ownerTimeBudget`, work submitted
-  afterwards by another owner with a single item starts before the piled-up owner's remaining
-  work.
+- When an owner with a lot of work piled up holds past `ownerTimeBudget`, its remaining work
+  does not keep running in one stretch; its turn is cut. The order among owners after that is
+  owned by the scheduler contract in
+  [Framework API §11](../00-foundation/06-framework-api.en.md).
+
+**A yielded Actor**
+
+- While a member Actor's handler has yielded under `SpotWide`, the next record addressed to that
+  same Actor does not run, while other Actor handlers, the Spot handler, and timers in the same
+  Spot do proceed (§4).
 
 **Point-in-time agreement of state reads**
 

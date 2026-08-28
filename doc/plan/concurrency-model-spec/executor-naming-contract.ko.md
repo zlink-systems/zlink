@@ -63,18 +63,14 @@ Spot 하나마다 인스턴스 하나. **세 종류 직렬 단위의 수명과 �
 
 | 경로 | `PerActor` | `SpotWide` |
 |---|---|---|
-| `executeActor` | `actorQueues[actorId]` | **`spotQueue`** (Actor 큐 생성 안 함) |
-| `executeTimer` | `timerQueues[timerName]` | **`spotQueue`** (timer 큐 생성 안 함) |
+| `executeActor` | `actorQueues[actorId]` | `actorQueues[actorId]` → **`spotQueue`** (2단) |
+| `executeTimer` | `timerQueues[timerName]` | **`spotQueue`만** (timer 큐 생성 안 함) |
 | `executeSpot` | `spotQueue` | `spotQueue` |
 | `executeLifecycle` | `spotQueue` | `spotQueue` |
 
-**R-N4 (개정 2026-08-28).** `SpotWide`에서는 `actorQueues`·`timerQueues`를 **만들지 않는다.**
-어느 mode에서도 한 작업이 큐 둘을 연달아 지나지 않는다.
-
-앞선 판(2단 겹침)은 그 겹침이 **용량 회계를 산다**는 전제였는데, 그 전제가 틀렸다 —
-유입 제한은 이 계층의 권한이 아니고(스펙 04 소유), `SpotWide`는 Spot 전체가 한 줄이라 Actor를
-따로 세워도 어느 Actor가 먼저 돌지 않는다. 겹침이 사는 것이 없다. 계약은 스펙 07 §4가
-소유한다.
+**R-N4.** Actor가 `SpotWide`에서 2단인 이유는 **순서가 아니라 용량 회계**다(§3 참조).
+Timer는 payload가 없어 회계할 것이 없으므로 `SpotWide`에서 큐를 만들지 않는다.
+**이 비대칭을 "버그"로 보고 대칭화하지 않는다.**
 
 ---
 
@@ -194,29 +190,27 @@ Spot만 "Spot 1 + Actor N + Timer M"을 **소유**하므로 맵을 갖는다. Ac
 
 ---
 
-## 3. 한도는 건수뿐이다 (개정 2026-08-28)
+## 3. 용량 회계 (스펙 07 §5가 소유)
 
-**R-N8 (개정).** 큐는 **payload 바이트를 세지 않는다.** byte로 재는 것은 Core byte HWM과
-소켓 수신 회전 한도뿐이고 Framework 쪽 한도는 모두 건수다(스펙 04 §9 · 07 §5).
+**R-N8.** owner mailbox의 한도는 **건수와 대기 중 byte 합계 두 축**이며 그 계약은
+[Framework API §11](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)이
+소유한다. 이 문서는 이름만 고정한다.
 
-**R-N8a.** 정책에서 `applicationByteCapacity`·`lifecycleByteCapacity`·`fixedWorkByteCost`를
-**뺀다.** 남는 것은 `applicationMessageCapacity`·`lifecycleMessageCapacity`·
-`lifecycleBurstLimit`·`ownerTimeBudget` 넷이다.
+**R-N8a.** 정책 값 일곱: `applicationMessageCapacity` · `applicationByteCapacity` ·
+`lifecycleMessageCapacity` · `lifecycleByteCapacity` · `fixedWorkByteCost` ·
+`lifecycleBurstLimit` · `ownerTimeBudget`.
 
-**R-N8b.** `enqueueWithPayloadBytes`를 두지 않는다. 진입점은 `enqueue`·`enqueueLifecycle`·
-`enqueueBarrierNext` 셋이다.
+**R-N8b.** `SpotWide`에서 두 queue를 지날 때 아래 Actor queue가 payload 바이트를, 위 Spot
+queue는 `fixedWorkByteCost`만 예약한다. 이중 예약 금지.
 
-**R-N8c.** 건수 상한이 걸리는 단위는 그 mode가 만든 큐를 따라간다 — `PerActor`는 Actor별,
-`SpotWide`는 Spot별.
+**R-N8c.** 두 축은 하나의 작업으로 예약한다 — 한 축이라도 넘기면 두 축 모두 바뀌지 않은 채
+실패한다. 반환은 handler가 끝난 뒤다.
 
-**근거.** byte 축은 예전 byte 제어 설계의 잔재다. archive 47 §6이 "정식 spec이 두 축을
-의무화했다(Framework API)"를 근거로 결정을 기록했으나, 현재 `RootInboundDispatchOptions`에는
-그 두 축을 설정할 수단이 없다.
-
-**java·cpp·node 셋 다 갖고 있고 숫자까지 같다** — application 64 MiB, lifecycle 4 MiB, 작업당
-고정 256 byte(java `ZLinkAsyncSerialQueue` · cpp `dispatch_limits.hpp`). 같은 설계에서 나온
-같은 잔재다. dotnet 실행 큐에만 없으며, 없는 것이 현재 계약에 맞다. 제거 대상과 유지 대상은
-[implementation-plan.ko.md §2.1](implementation-plan.ko.md)이 갖는다.
+> **정정 이력.** 2026-08-28에 "byte 축은 잔재이므로 제거한다"고 적었다가 되돌렸다. 근거로
+> 삼았던 `RootInboundDispatchOptions`에 byte 축이 없다는 사실은 그 설정이 host-wide job
+> supply를 소유하기 때문이며, owner mailbox budget은 MeshNode socket 설정과 Framework API
+> §11이 소유한다. 네 언어 exact interface에도 `mailboxMessageBudget`·`mailboxByteBudget`이
+> 있다.
 
 ## 4. 상태 조회 — turn 경계 (고정)
 
@@ -321,8 +315,7 @@ Actor 큐를 거치지 않는다(`spot-activation-state.ts:407`). 순서는 보�
 2. `actorQueues`·`timerQueues` 맵이 lock이 아닌 state lane 소유인가 (R-N2)
 3. §1.2의 네 진입점 외 공개 API가 없는가 (R-N3)
 4. `ownerTimeBudget`이 4언어에 있는가 (R-N7)
-5. `SpotWide` Spot의 `actorQueues`·`timerQueues`가 **비어 있는가** (R-N4·R-N8)
-5a. 큐가 payload 바이트를 세는 자리가 **0**인가 (R-N8·R-N8a)
+5. `SpotWide` Actor 경로에서 payload가 **이중 예약되지 않는가** (R-N8)
 6. 한 메시지 경로에서 같은 값을 두 번 읽는 자리가 **0**인가 (R-N10)
 7. 상위 소유를 전제하는 자리에 단언이 있는가 (R-N11)
 

@@ -73,21 +73,28 @@ act on that value." By the time the code reaches a point where the lock can be r
 (after the asynchronous work completes), some other turn may already have changed the same
 state in the meantime, so the snapshot is structurally stale.
 
-A state lane removes this shape entirely. Because there is no release point inside a lane
-turn — the code that reads the state and the code that acts on it stay in the same turn — no
-snapshot is ever produced.
+A state lane removes this shape entirely. Because there is no release point inside a lane turn,
+the code that reads the state and the code that settles the decision stay in the same turn.
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
-await lane.Run(async () =>
-{
-    if (!entries.TryGetValue(key, out var entry)) return;   // a plain map. not locked
-    await SendAsync(entry.Route);                           // same turn — the value cannot go stale
-});
+// inside the turn, read the state and fix the decision so it cannot be undone.
+var claim = await lane.Run(() =>
+    entries.TryGetValue(key, out var entry)
+        ? entry.ClaimRoute()      // generation and ownership settled inside this turn
+        : null);                  // a plain map. not locked
+
+if (claim is null) return;
+await SendAsync(claim);           // the long external call happens outside the turn — §4, §5
 ```
 
-**The point is that the `await` sits inside the turn.** A lock cannot wrap an `await`; a lane
-turn can. So "read → release → act" becomes "read → act".
+**What matters is what leaves the turn.** The prohibited shape above carries a copy of mutable
+state out and assumes it is still correct. This one builds a claim whose validity was fixed
+inside the turn, so what the claim refers to does not change even if the state does.
+
+**Do not wait for a long external call inside a turn.** A state lane turn goes as far as reading
+the state and settling the decision — waiting for an external operation to complete inside a turn
+is what §4 forbids.
 
 ## 4. State Classifications And How To Tell Them Apart
 
@@ -362,7 +369,7 @@ Measurement confirms the four already agree.
 | `run` | execute in a lane turn | `RunAsync()` | `runAsync()` | `run()` | `run()` |
 | `tryPost` | post without waiting | `TryPost()` | `tryPost()` | `try_post()` | `tryPost()` |
 | `throwIfReentrant` | throw on reentrancy | `ThrowIfReentrant()` | `throwIfReentrant()` | `throw_if_reentrant()` | `throwIfReentrant()` |
-| `close` | shut down | `DisposeAsync()` | — | `close()` | `closed` |
+| `close` | shut down | `DisposeAsync()` | `closeAsync()` | `close()` | `dispose()` |
 
 `throwIfReentrant` is a **required contract, not an option.** Even where an upper execution unit
 guarantees serial ownership, do not trust that premise unchecked — once reentrancy slips through
@@ -395,8 +402,8 @@ at the moment a component method returns). Each item maps to one test.
 
 **Single execution and order**
 
-- When different callers submit work to the same lane concurrently, no update to the plain,
-  unlocked collection the lane owns is lost.
+- When different callers submit work to the same lane concurrently, no update is lost — a
+  later read returns a value reflecting every submission.
 - Work submitted to the same lane executes in submission order.
 - Submitting a result-awaiting call to a closed lane ends immediately with an exception, and a
   submission that does not await a result returns a failure.
@@ -413,12 +420,12 @@ at the moment a component method returns). Each item maps to one test.
 
 **Completion boundary**
 
-- Completion continuations run outside the lane-current scope — signalling completion inside a
-  turn does not make that continuation re-enter the same lane.
+- Signalling completion inside a turn does not make that continuation end in a reentrancy
+  exception; it runs normally.
 - A method with a register-or-capture-before-return contract has that registration or capture
   already finished at the moment a caller observes the return.
-- Where a call waits for lane completion while holding an operation-protocol gate, that lane
-  item does not re-acquire the same gate and every completion continuation is asynchronous.
+- A call that waits for lane completion while holding an operation-protocol gate returns
+  without hanging.
 
 **Cross-collection invariants**
 

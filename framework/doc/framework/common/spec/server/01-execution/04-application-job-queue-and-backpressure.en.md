@@ -185,7 +185,7 @@ Handle the following as one commit inside that span.
 2. Is the target object on this node and is the owner information valid
 3. Is it not sealed for a move, not waiting for creation, and not waiting for a session
    connection
-4. Does the lane have room to take this work item
+4. Can both the lane's item count and bytes be reserved together
 5. Commit the accepted-order sequence and append the message to the owner queue
 6. If the queue was empty, put that owner into the set of ready owners and notify the
    execution resource immediately
@@ -194,7 +194,7 @@ Handle the following as one commit inside that span.
   enqueue-then-remove — enqueuing and then removing lets it possibly execute in
   between, and the removal cannot be distinguished from observation either. A call
   waiting for a response receives the failure reason as its result. A failed
-  reservation or enqueue also leaves the item usage and accepted sequence
+  reservation or enqueue also leaves the item/byte usage and accepted sequence
   unchanged. A failed attempt does not change the ordering or admission result of the
   next valid work item.
 
@@ -376,7 +376,7 @@ defaults to `64 KiB`, and does not apply to server-to-client outbound.
 |---|---|---|
 | Core HWM | Directional queued/accounted bytes | Backpressure from Core queue to sender |
 | Application job queue | Host-instance reserved/queued/in-use permits | Cancellable shared-cap wait |
-| [Owner](../00-foundation/02-glossary.en.md#owner) FIFO — the per-MeshNode queue for the node that currently executes an Actor or Spot | Per-owner item count | Structural owner-isolation error |
+| [Owner](../00-foundation/02-glossary.en.md#owner) FIFO — the per-MeshNode queue for the node that currently executes an Actor or Spot | Per-owner count and bytes | Structural owner-isolation error |
 | Outbound admission waiter | Bounded waiter per operation family | Original send deadline/cancellation result |
 
 No path creates a separate unbounded backlog, polling, busy-spin, or silent replay.
@@ -386,14 +386,6 @@ No path creates a separate unbounded backlog, polling, busy-spin, or silent repl
 - **The Application job queue limits job count; it does not weight jobs by payload
   bytes.** An empty payload and a large payload each consume one job. The Framework
   queue limit is therefore not a process-memory byte hard cap.
-- **Every Framework-side limit is a count. Owner queues carry no payload byte axis
-  either.** The only things measured in bytes are the Core byte HWM and the receive
-  limit that decides how much one wakeup reads from a socket (§4). A Framework that
-  counted payload bytes per owner would be re-implementing the Core HWM under another
-  name — which
-  [Framework API "3. Core Memory Budget And Application Job Queue Configuration"](../00-foundation/06-framework-api.en.md#3-core-memory-budget-and-application-job-queue-configuration)
-  forbids — and would not bound process memory anyway, since it multiplies by the
-  number of owners.
 - For workloads that retain large payloads for a long time, measure production-
   equivalent payload distribution, permits in use, process memory, throughput, and
   latency together, then lower `MaxQueuedApplicationJobs`. Limit an individual message
@@ -422,7 +414,7 @@ names — confirms the following. Each item leads to one contract test.
 
 - Without a permit, the next ordinary record is not received first.
 - A send/request that failed a check does not change the owner queue's observed
-  count/sequence values.
+  count/byte/sequence values.
 - When all shared permits are reserved, ordinary ingress waits cancellably, and terminal
   reply/error completion continues to progress.
 - While one connection keeps sending, another connection's receiving still progresses.

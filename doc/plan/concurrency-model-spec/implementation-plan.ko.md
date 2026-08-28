@@ -27,7 +27,7 @@ cpp는 조율자를 신설해야 한다 — 신설할 때 볼 참조 구현이 P
 
 | 단계 | 내용 | 선행 | 병렬 |
 |---|---|---|---|
-| **P0** | cpp 핫패스 조회 묶기 · java binding wrapper 중복 lock · 큐 임계 구역 축소 · **byte-HWM 잔재 제거(§2.1)** | 없음 | P1~P4와 병행 가능 |
+| **P0** | cpp 핫패스 조회 묶기 · java binding wrapper 중복 lock · 큐 임계 구역 축소 | 없음 | P1~P4와 병행 가능 |
 | **P1** | dotnet을 스펙 이름으로 정렬한다 (개명 · `_laneGate` 제거 · `ownerTimeBudget` 추가) | 없음 | 단독 |
 | **P2** | java 세 계층 조율자 신설 | P1 | P3와 병렬 |
 | **P3** | cpp 세 계층 조율자 신설 | P1 | P2와 병렬 |
@@ -47,6 +47,7 @@ P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같�
 | P0-1 | Spot 핫패스에서 연속된 단순 조회를 한 turn으로 묶는다 | cpp `runtime/spots/spot_runtime.cpp` | 블로킹 브리지 send 11→4~5 · request 13→5~6 |
 | P0-2 | binding wrapper의 중복 lock 제거 | java `runtime/` binding wrapper 31곳 | hot path 7곳 |
 | P0-3 | 큐 임계 구역에서 `BigInteger` 할당을 걷어낸다 | java `execution/ZLinkAsyncSerialQueue.java` | enqueue마다 4할당 제거 |
+| P0-4 | **조사** — dotnet이 Framework API §11의 mailbox count·byte 두 축을 어디서 만족하는지 확인한다 | dotnet `Runtime/Service/ZLinkManagedMeshNode.cs` (`SetMailboxBudgets`) · `Runtime/Spots/ZLinkSpotNodeInitializer.cs` | 만족하는 자리가 있으면 그대로, 없으면 P1에 신설 항목 추가 |
 
 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에 있다. P0-1은
 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을 어긴 자리를
@@ -54,48 +55,16 @@ P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같�
 
 ---
 
-### 2.1 byte-HWM 잔재 제거 (P0-4 ~ P0-7)
-
-Framework 쪽 한도는 모두 건수다. byte로 재는 것은 **Core byte HWM**과 **소켓 수신 회전
-한도** 둘뿐이다(스펙 04 §9 · 07 §5). 각 언어 실행 큐에 있는 payload byte 회계는 예전 byte
-제어 설계의 잔재이며, 현재 `RootInboundDispatchOptions`에는 그 축을 설정할 수단이 없다.
-
-세 언어가 **같은 숫자**를 하드코딩하고 있다는 것이 같은 잔재라는 증거다.
-
-| 값 | java | cpp | node |
-|---|---|---|---|
-| application lane byte | 64 MiB | 64 MiB (`application_mailbox_bytes`) | scheduler 내부 |
-| lifecycle lane byte | 4 MiB | 4 MiB (`control_mailbox_bytes`) | scheduler 내부 |
-| 작업당 고정 byte | 256 | 256 (`fixed_work_byte_cost`) | scheduler 내부 |
-
-**건드리지 않는 것** — 잘못 걷어내면 계약 위반이다.
-
-| 유지 | 이유 |
-|---|---|
-| Core byte HWM 설정 전달 (`CoreHwmProfile` 등) | Core 소유. 04 §1 |
-| 소켓 수신 회전 한도의 byte 축 (`receive_batch_bytes` · `FrameworkReceiveBatch` · `ZLinkReceiveBatchBudget`) | 04 §4·§10이 건수·byte·경과 시간 셋을 계약으로 둔다 |
-| `MaxMessageSize` | 별도 wire guard. 04 §8 |
-| wire codec의 크기 계산 (join recovery codec, message parts 등) | 직렬화 크기이지 admission이 아니다 |
-
-| # | 작업 | 대상 | 완료 판정 |
-|---|---|---|---|
-| P0-4 | java 큐에서 byte 축과 `enqueueWithPayloadBytes`를 제거한다 | `execution/ZLinkAsyncSerialQueue.java:32-38` · 호출자 `runtime/spots/ZLinkDefaultSpotContext.java:171,183,198,625` · `runtime/actors/ZLinkActorDispatchSerials.java` · `runtime/spots/ZLinkSpotRuntime.java:4831` | 정책이 건수 넷만 남고 5모듈 그린 |
-| P0-5 | cpp 큐에서 byte 축을 제거한다 | `runtime/execution/serial_execution_queue.{hpp,cpp}` · `runtime/dispatch/dispatch_limits.hpp:11,13,21` · 호출자 `spots/spot_runtime.cpp` · `stateful/stateful_object_runtime.{hpp,cpp}` · `mesh/service_mailbox.cpp` | `receive_batch_bytes`만 남고 45 test 그린 |
-| P0-6 | node scheduler에서 byte 축을 제거한다. `serial-work-size.ts`의 `zlinkMetadataByteLength`도 함께 없앤다 | `runtime/execution/serial-scheduler.ts` · `runtime/execution/serial-work-size.ts` | 계약 테스트 그린 |
-| P0-7 | **조사** — dotnet `ZLinkBoundedIngressAdmission`·`ZLinkActorHandoffAdmissions`의 byte 축이 relocation hold 전용인지 판정한다 | `Runtime/ZLinkBoundedIngressAdmission.cs` · `Runtime/Actors/ZLinkActorHandoffAdmissions.cs` | relocation 전용이면 유지(상한이 `long.MaxValue`라 사실상 무제한), 아니면 제거 |
-
-**P0-6에는 hot path 이득이 붙는다.** node는 메시지마다 metadata의 모든 key·value에
-`Buffer.byteLength`를 돌려 예약 크기를 만든다. byte 축이 없어지면 그 순회 자체가 사라진다.
-
-**dotnet 실행 큐에는 byte 축이 없다.** `ZLinkSerialExecutionQueue`의 admission은 relocation
-seal과 stopping 상태만 본다 — 현재 계약에 맞는 상태이므로 신설하지 않는다.
-
----
-
 ## 3. P1 — dotnet
 
-dotnet은 세 계층 조율자를 모두 갖고 있다. 조율자는 이름을 스펙에 맞추면 되지만, **큐
-primitive에는 채워야 할 것이 남아 있다.**
+dotnet은 세 계층 조율자를 모두 갖고 있다. **조율자는 이름을 스펙에 맞추고, 큐 primitive에는
+정책 주입만 채운다.**
+
+**dotnet 실행 큐에는 mailbox의 count·byte 회계가 없다(실측 2026-08-28).** admission이
+relocation seal과 stopping 상태만 본다. java·cpp·node는 두 축을 갖고 있으므로
+[Framework API §11](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)의
+두 축 계약을 dotnet이 어디서 만족하는지 확인이 필요하다 — `ZLinkManagedMeshNode`의
+`SetMailboxBudgets` 경로가 그 자리일 수 있다. **P0-4로 조사한 뒤 P1 범위를 정한다.**
 
 | # | 작업 | 파일 | 완료 판정 |
 |---|---|---|---|
@@ -104,21 +73,7 @@ primitive에는 채워야 할 것이 남아 있다.**
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
 | P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | 상수로 박힌 `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`을 정책 주입으로 바꾼다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs:7,8` | `ZLinkExecutionLanePolicy` 일곱 값이 주입된다 |
-| P1-7 | **`SpotWide`에서 Actor lane 겹침을 없앤다** — `_queue`로 직행 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:109` | `SpotWide` Spot의 `_actorLanes`·`_timerLanes`가 빈다 |
-
-**payload 바이트 회계는 제거 대상이다(확정 2026-08-28).** Framework 쪽 한도는 모두 건수이고
-byte로 재는 것은 Core byte HWM과 소켓 수신 회전 한도뿐이다(스펙 04 §9 · 07 §5). java의
-`applicationByteCapacity = 64 MiB` 같은 값은 예전 byte 제어 설계의 잔재이며, 현재
-`RootInboundDispatchOptions`에는 그 축을 설정할 수단이 아예 없다.
-
-대상은 java·cpp·node 셋이다(§2.1). dotnet 실행 큐에는 그 축이 없으므로 **신설하지 않는다** —
-없는 것이 현재 계약에 맞다.
-
-**`SpotWide` 2단 겹침은 걷어낸다(확정 2026-08-28).** 그 겹침이 사는 것이 없다 — 순서는 Spot
-큐 하나로 끝나고, 유입 제한은 이 계층 권한이 아니며, `SpotWide`는 Spot 전체가 한 줄이라 Actor를
-따로 세워도 어느 Actor가 먼저 돌지 않는다. relocation도 `SpotWide`에서는 Spot 전체를 한 덩어리로
-옮긴다(dotnet의 Actor별 seal 경로는 `PerActor`에서만 열린다). 반대로 겹침은 자기 데드락을
-만들어 java가 `yieldCurrent`로 회피하고 있다. node는 이미 직행한다.
+| P1-6 | 큐에 owner FIFO의 count·byte 상한을 **신설**한다 — permit을 든 작업은 재지 않는다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" 두 항목 통과 |
 
 **단, 이 상한은 유입 제한이 아니다.** ordinary ingress는 permit을 이미 들고 owner queue에
 도착하므로(스펙 04 §3의 3단계) owner queue가 다시 재면 안 된다. node는 `submitPreAdmitted`로
@@ -156,8 +111,6 @@ java는 큐 primitive가 정본이고 **조율자가 셋 다 없다.** 런타임
 | P2-3 | `ZLinkSessionSerialExecutor` 신설 · `ZLinkStreamRuntime.stateLane`에서 실행 책임을 분리 | `runtime/streams/ZLinkStreamRuntime.java` | 진입점 넷이 스펙 07 §3과 일치 |
 | P2-4 | `ZLinkAsyncSerialQueue` → `ZLinkSerialExecutionQueue` 개명 | `execution/ZLinkAsyncSerialQueue.java` | 이전 이름 0건 |
 | P2-5 | Actor 경로의 `sharedSpotGate()` 분기를 조율자 안으로 넣는다 | `runtime/spots/ZLinkDefaultSpotContext.java` | 호출자가 큐를 고르는 자리 0건 |
-| P2-6 | **`SpotWide`에서 Actor 큐 겹침을 없앤다** — `dispatchQueue`로 직행 | `runtime/spots/ZLinkDefaultSpotContext.java:665` | `sharedSpotGate()`에서 Actor 큐를 거치지 않는다 |
-| P2-7 | P2-6과 함께 `yieldCurrent` 자기 데드락 회피를 **제거**한다 | 같은 파일 `:679` | 겹침이 없어져 그 분기가 필요 없다 |
 
 **P2-3은 분리이지 이동이 아니다.** `ZLinkStreamRuntime.stateLane`은 상태 소유와 작업 실행을
 함께 지고 있다. 상태 소유는 그 자리에 남기고(스펙 06), 작업 실행만 새 조율자로 옮긴다 —
@@ -176,7 +129,6 @@ cpp도 조율자가 셋 다 없고, 큐 primitive에 수용량·우선순위·�
 | P3-3 | `session_serial_executor_t` 신설 · `stream_runtime.dispatch_queue`에서 분리 | `runtime/streams/stream_runtime.{hpp,cpp}` | 진입점 넷이 스펙 07 §3과 일치 |
 | P3-4 | 큐 primitive에 정책 주입 · lifecycle lane · `ownerTimeBudget`을 추가한다 | `runtime/execution/` | 스펙 07 §10 "수용량과 backpressure"·"공정성" test 통과 |
 | P3-5 | 조회 스냅샷 묶기 (P0-1과 같은 작업 — 먼저 끝났으면 생략) | `runtime/spots/spot_runtime.cpp` | 같은 값을 두 번 읽는 자리 0건 |
-| P3-6 | `SpotWide`에서 Actor·timer 큐를 만들지 않는다 | `runtime/spots/spot_runtime.cpp` | `SpotWide` Spot의 이름 맵이 빈다 |
 
 **P3-4를 P3-1보다 먼저 한다.** 조율자가 큐를 소유하려면 그 큐가 정책을 받을 수 있어야 한다.
 순서를 뒤집으면 조율자를 만든 뒤 큐 시그니처를 다시 바꾸게 된다.
