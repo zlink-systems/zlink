@@ -42,9 +42,9 @@ const POLICY_TRANSPORTS = {
     MULTI_DEALER_ROUTER: ['tcp', 'tls', 'ws', 'wss'],
     MULTI_DEALER_ROUTER_SENDSEND: ['tcp', 'tls', 'ws', 'wss'],
     MULTI_DEALER_ROUTER_REQREP: ['tcp', 'tls', 'ws', 'wss'],
-    MULTI_ROUTER_ROUTER: ['tcp', 'tls', 'ws', 'wss'],
-    MULTI_ROUTER_ROUTER_SENDSEND: ['tcp', 'tls', 'ws', 'wss'],
-    MULTI_ROUTER_ROUTER_REQREP: ['tcp', 'tls', 'ws', 'wss'],
+    MULTI_ROUTER_ROUTER: ['tcp', 'tls', 'ws', 'wss', 'ipc'],
+    MULTI_ROUTER_ROUTER_SENDSEND: ['tcp', 'tls', 'ws', 'wss', 'ipc'],
+    MULTI_ROUTER_ROUTER_REQREP: ['tcp', 'tls', 'ws', 'wss', 'ipc'],
     MULTI_PUBSUB: ['tcp', 'tls', 'ws', 'wss'],
     MULTI_STREAM: ['tcp', 'tls', 'ws', 'wss']
 };
