@@ -113,6 +113,9 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
                                             zlink::msg_t *msg_,
                                             zlink::pipe_t *pipe_);
     int stream_dispatch_raw_msg_from_io (const zlink_routing_id_t *rid_, zlink::msg_t *msg_);
+    int stream_dispatch_send_to_route (uint32_t routing_id_,
+                                       zlink::msg_t *msg_,
+                                       int flags_);
     uint32_t resolve_dispatch_routing_id_fast (const zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     void stop_dispatch_from_callback ();
     void clear_packet_dispatch_state ();

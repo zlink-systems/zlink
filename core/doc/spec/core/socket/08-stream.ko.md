@@ -229,8 +229,10 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
 
 STREAM은 frame 경계가 없는 raw byte를 나르므로 STREAM record는 항상 정확히 1 part다.
 `part_count_`가 1이 아니면 `ZLINK_SUBMIT_NOT_SUPPORTED`다. `options_->target`은
-하나의 exact peer를 지정하며 그 identity는 `zlink_select_routed_submit_target()`에서
-얻는다.
+필수이며 `zlink_select_routed_submit_target()`이 반환한 exact identity를
+넣거나, `peer_rid`만 채우고 두 transport-pair field를 0으로 둘 수 있다. 후자는
+Core가 이 submit 안에서 exact connection을 snapshot하라는 요청이며, pending
+record를 다른 connection으로 retarget하지 않는다.
 
 완료는 Core 송신 queue로의 admission을 뜻하며 peer 전달이 아니다. 소유권 이전,
 target별 FIFO 순서, socket 단위 pending 상한, operation별 timeout, 취소, close

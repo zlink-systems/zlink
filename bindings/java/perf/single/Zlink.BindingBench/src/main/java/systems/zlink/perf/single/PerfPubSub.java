@@ -107,14 +107,18 @@ final class PerfPubSub {
                                     RecvFlags.DONT_WAIT)) {
                                 break;
                             }
-                            if (PerfStopToken.isStopTokenMessage(
-                                    received.firstPart())) {
+                            if (received.parts().size() == 1
+                                && PerfStopToken.isStopTokenMessage(received.firstPart())) {
                                 stop = true;
                                 break;
                             }
+                            Message payload = PerfUtil.measurementPayload(received.parts());
+                            if (payload == null) {
+                                continue;
+                            }
                             long receivedNanoTime = System.nanoTime();
                             PerfUtil.Header header = PerfUtil.decodeHeader(
-                                received.firstPart(), config.size(),
+                                payload, config.size(),
                                 receivedNanoTime);
                             if (header != null
                                 && header.phase() == PerfUtil.PHASE_ACTIVE
@@ -147,7 +151,7 @@ final class PerfPubSub {
                 // Do the same so a backpressured submit cannot leave a reused
                 // message in an ambiguous native ownership state.
                 try (Message stop = PerfStopToken.newMessage()) {
-                    return tryPublish(pub, stop, SendFlags.DONT_WAIT);
+                    return tryPublish(pub, stop, SendFlags.DONT_WAIT, false);
                 }
             }, "pubsub");
             PerfUtil.join(recvThread, "pubsub receiver",
@@ -184,16 +188,18 @@ final class PerfPubSub {
     }
 
     private static boolean tryPublishBlocking(PubSocket pub, Message message) {
-        return tryPublish(pub, message, SendFlags.NONE);
+        return tryPublish(pub, message, SendFlags.NONE, true);
     }
 
     private static boolean tryPublish(PubSocket pub, Message message,
-                                      SendFlags flags) {
+                                      SendFlags flags, boolean measurement) {
         try {
-            pub.publish(TOPIC)
-                .message(message)
-                .flags(flags)
-                .submit();
+            if (measurement && PerfUtil.measurementPartCount() == 2) {
+                pub.publish(TOPIC).message(message).message(PerfUtil.measurementTail())
+                    .flags(flags).submit();
+            } else {
+                pub.publish(TOPIC).message(message).flags(flags).submit();
+            }
             return true;
         } catch (ZlinkSubmitException ex) {
             if (ex.getResult() == SubmitResult.BACKPRESSURED) {

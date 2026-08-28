@@ -264,7 +264,12 @@ class router_router_client_bench_t
         }
 
         try {
-            std::move (state.sock->send (_server_rid)).message (request).submit ();
+            if (perf::multi::measurement_part_count () == 2) {
+                zlink::message_t tail = perf::multi::measurement_empty_part ();
+                std::move (state.sock->send (_server_rid)).message (request).message (tail).submit ();
+            } else {
+                std::move (state.sock->send (_server_rid)).message (request).submit ();
+            }
             ++_seq;
             state.awaiting_reply = true;
             state.send_pending = false;
@@ -296,11 +301,12 @@ class router_router_client_bench_t
             return -1;
         }
         if (!received.routing_id ().has_value () || received.routing_id ()->size () == 0
-            || received.request_seq ().has_value () || !received.is_single_part ()) {
+            || received.request_seq ().has_value ()
+            || !perf::multi::measurement_parts_valid (received.parts ())) {
             errno = EPROTO;
             return -1;
         }
-        zlink::message_t &reply = received.first_part ();
+        zlink::message_t &reply = received.parts ().front ();
 
         if (!reply.valid ()) {
             errno = EPROTO;

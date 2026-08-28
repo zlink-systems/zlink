@@ -1,7 +1,12 @@
+import errno
+import threading
+import time
 import unittest
+import uuid
 
 import zlink
 from zlink._runtime.sockets.socket_base import _native_socket_type
+from zlink._runtime.sockets.socket_base_impl import _SocketSendOp
 
 
 class BoundaryValidationContractTests(unittest.TestCase):
@@ -78,6 +83,97 @@ class BoundaryValidationContractTests(unittest.TestCase):
 
 
 class OwnershipContractTests(unittest.TestCase):
+    def test_concurrent_multipart_binding_staging_preserves_public_parts(self):
+        endpoint = f"inproc://python-concurrent-multipart-{uuid.uuid4()}"
+        with zlink.create_context() as context:
+            with zlink.create_pair_socket(context) as sender:
+                with zlink.create_pair_socket(context) as receiver:
+                    sender.options.send_high_water_mark = 1 << 20
+                    receiver.options.receive_high_water_mark = 1 << 20
+                    receiver.bind(endpoint)
+                    sender.connect(endpoint)
+                    time.sleep(0.05)
+
+                    self.assertFalse(
+                        hasattr(sender, "_outbound_record_attempt_gate")
+                    )
+                    lock = threading.Lock()
+                    successes = set()
+                    rejected = 0
+                    failures = []
+
+                    def submit_records(worker):
+                        nonlocal rejected
+                        local_successes = set()
+                        local_rejected = 0
+                        try:
+                            for index in range(500):
+                                prefix = f"record-{worker}-{index:03d}"
+                                first = zlink.Message.from_(
+                                    (prefix + "-a").encode()
+                                )
+                                second = zlink.Message.from_(
+                                    (prefix + "-b").encode()
+                                )
+                                try:
+                                    _SocketSendOp(sender).messages(
+                                        first, second
+                                    ).submit()
+                                    local_successes.add(prefix)
+                                except zlink.SubmitError as error:
+                                    if (
+                                        error.result
+                                        != zlink.SubmitResult.INVALID_ARGUMENT
+                                        or error.native_errno != errno.EINVAL
+                                    ):
+                                        raise
+                                    if first.to_bytes() != (
+                                        prefix + "-a"
+                                    ).encode() or second.to_bytes() != (
+                                        prefix + "-b"
+                                    ).encode():
+                                        raise AssertionError(
+                                            "binding staging lost caller-owned parts after Core rejection"
+                                        )
+                                    local_rejected += 1
+                                finally:
+                                    first.close()
+                                    second.close()
+                        except BaseException as error:
+                            with lock:
+                                failures.append(error)
+                            return
+                        with lock:
+                            successes.update(local_successes)
+                            rejected += local_rejected
+
+                    threads = [
+                        threading.Thread(target=submit_records, args=(worker,))
+                        for worker in range(8)
+                    ]
+                    for thread in threads:
+                        thread.start()
+                    for thread in threads:
+                        thread.join()
+
+                    if failures:
+                        raise failures[0]
+                    self.assertGreater(len(successes), 0)
+                    self.assertGreater(rejected, 0)
+
+                    received_prefixes = set()
+                    received = zlink.create_received()
+                    for _ in range(len(successes)):
+                        self.assertTrue(receiver.recv_into(received))
+                        parts = received.to_bytes_list()
+                        self.assertEqual(len(parts), 2)
+                        self.assertTrue(parts[0].endswith(b"-a"))
+                        prefix = parts[0][:-2].decode()
+                        self.assertEqual(parts[1], (prefix + "-b").encode())
+                        received_prefixes.add(prefix)
+                    received.close()
+                    self.assertEqual(received_prefixes, successes)
+
     def test_message_copy_owns_bytes_independently_of_source_buffer(self):
         source = bytearray(b"payload")
         with zlink.Message.from_(source) as message:

@@ -244,10 +244,6 @@ class _BaseSocket:
         self._recv_handler_cb = None
         self._packet_handler = None
         self._packet_handler_cb = None
-        # Part-based outbound paths on one native handle share this only for
-        # the duration of one complete-record attempt. Routed HWM waits never
-        # retain the gate.
-        self._outbound_record_attempt_gate = threading.Lock()
         self._dispatcher = CallbackDispatcher(
             "zlink-socket-dispatch", _enter_callback, _leave_callback
         )

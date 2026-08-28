@@ -91,6 +91,11 @@ executor가 아니다.
   operation builder를 반환한다.
 - payload와 timeout은 operation 시작점 인자가 아니라 builder 단계에서
   표현한다.
+- 하나의 part만 보내는 payload도 같은 builder를 사용한다. 호출자는
+  `Message(...)`를 한 번 추가한 뒤 terminal을 호출한다. `Send(Message)`,
+  `Send(RoutingId, Message)`, `Publish(topic, Message)` 같은 직접 single-part
+  단축 API는 공개 계약에 추가하지 않는다. 구현은 내부 one-part fast path를
+  선택할 수 있지만, 호출자가 고르는 별도 API가 되어서는 안 된다.
 - bindings 라이브러리는 framework coroutine scheduler, Kotlin `CoroutineScope`,
   C++ framework executor를 소유하지 않는다. **바인딩 라이브러리는 admission
   대기열이나 재시도 정책도 소유하지 않는다** — send, publish, routed send,
@@ -142,8 +147,9 @@ entrypoint가 반환하는 builder에서 언어별 canonical terminal을 호출�
   submit 경계에서 확인하고, Core가 record를 수용한 뒤의 대기는 Core가 소유한다.
 - **완료 구동.** C++ `async()`와 .NET·Java·Node·Python·Rust의 비동기 send
   terminal은 Core `zlink_send_async`를 사용한다. 먼저
-  `zlink_send_complete_handler`를 설치하고, 수용된 operation의 socket-local
-  operation id를 awaitable에 연결한다. `zlink_send_complete_event_t`는 admission,
+  `zlink_send_complete_handler`를 설치한다. 즉시 admission은 operation id `0`을
+  반환하고 binding이 awaitable을 즉시 완료한다. HWM으로 대기하면 nonzero
+  operation id를 awaitable에 연결하며, `zlink_send_complete_event_t`가 admission,
   deadline 만료 또는 terminal 실패를 정확히 한 번 전달한다. 같은 target의 완료는
   제출 순서를 유지하고 한 socket의 completion callback은 서로 동시에 실행되지
   않는다. `ZLINK_POLLCOMPLETION` 등록은 같은 callback과 event의 dispatch 위치를
@@ -152,9 +158,10 @@ entrypoint가 반환하는 builder에서 언어별 canonical terminal을 호출�
   대기·재개를 사용한다.
 - 공개 send-ready handler는 없다. `ZLINK_POLLOUT`은 동기 nonblocking send의
   재시도를 위한 readiness 값이고, accepted async operation의 완료가 아니다.
-- 바인딩은 이 완료 표면을 위해 park queue, WRITABLE-callback 재시도,
-  deadline timer, dispatcher thread를 두지 않는다 — 완료는 Core
-  send-completion 통지가 구동한다.
+- 바인딩은 이 완료 표면을 위해 park queue, WRITABLE-callback 재시도 또는
+  deadline timer를 두지 않는다. callback 안에서 continuation이 다음 submit을
+  호출할 수 있는 C++ 기본 coroutine은 pending slow path에서 continuation
+  dispatcher를 거쳐 callback 밖에서 재개한다.
 - submit flags는 언어 관용 방식(옵션 인자 또는 builder 단계)으로 받을 수
   있다.
 - accepted async operation의 HWM 재시도는 Core가 소유한다. Binding은 재시도하지

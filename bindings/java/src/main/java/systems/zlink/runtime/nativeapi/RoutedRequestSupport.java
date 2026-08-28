@@ -12,6 +12,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -21,29 +22,38 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
 
 /** Core reply callback registry; it owns no executor, queue, or timer. */
-public final class RoutedRequestSupport {
+public final class RoutedRequestSupport implements AutoCloseable {
     private static final Linker LINKER = Linker.nativeLinker();
     private static final FunctionDescriptor FD_REPLY_CALLBACK =
         FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
             ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
-    private static final Arena CALLBACK_ARENA = Arena.ofShared();
-    private static final MemorySegment REPLY_CALLBACK = LINKER.upcallStub(
-        callbackHandle(), FD_REPLY_CALLBACK, CALLBACK_ARENA);
-    private static final AtomicLong NEXT_REQUEST_ID = new AtomicLong(1L);
-    private static final ConcurrentMap<Long, PendingReply> PENDING =
+    private final Arena callbackArena = Arena.ofShared();
+    private final MemorySegment replyCallback;
+    private final AtomicLong nextRequestId = new AtomicLong(1L);
+    private final ConcurrentMap<Long, PendingReply> pending =
         new ConcurrentHashMap<>();
+    private final CallbackLifecycle callbackLifecycle;
 
-    private RoutedRequestSupport() {
+    public RoutedRequestSupport(CallbackLifecycle callbackLifecycle) {
+        this.callbackLifecycle = Objects.requireNonNull(callbackLifecycle,
+            "callbackLifecycle");
+        try {
+            this.replyCallback = LINKER.upcallStub(callbackHandle(),
+                FD_REPLY_CALLBACK, callbackArena);
+        } catch (RuntimeException failure) {
+            RuntimeResources.closeArena(callbackArena);
+            throw failure;
+        }
     }
 
-    public static MemorySegment replyCallback() {
-        return REPLY_CALLBACK;
+    public MemorySegment replyCallback() {
+        return replyCallback;
     }
 
-    public static long nextRequestId() {
+    public long nextRequestId() {
         long value;
         do {
-            value = NEXT_REQUEST_ID.getAndIncrement();
+            value = nextRequestId.getAndIncrement();
         } while (value == 0L);
         return value;
     }
@@ -52,61 +62,61 @@ public final class RoutedRequestSupport {
         return MemorySegment.ofAddress(requestId);
     }
 
-    public static void registerRoutedPending(
-            long requestId, CompletableFuture<List<Message>> future,
-            CallbackLifecycle callbackLifecycle) {
-        PENDING.put(requestId, new PendingReply(future, callbackLifecycle));
+    public void registerRoutedPending(
+            long requestId, CompletableFuture<List<Message>> future) {
+        pending.put(requestId, new PendingReply(future));
     }
 
-    public static void removeRoutedPending(long requestId) {
-        PENDING.remove(requestId);
+    public void removeRoutedPending(long requestId) {
+        pending.remove(requestId);
     }
 
     /** Removes and fails one pending request, used by socket close. */
-    public static boolean completePendingExceptionally(long requestId,
-                                                        Throwable failure) {
-        PendingReply pending = PENDING.remove(requestId);
-        if (pending == null) {
+    public boolean completePendingExceptionally(long requestId,
+                                                Throwable failure) {
+        PendingReply reply = pending.remove(requestId);
+        if (reply == null) {
             return false;
         }
-        pending.callbackLifecycle().enter();
+        callbackLifecycle.enter();
         try {
-            pending.future().completeExceptionally(failure);
+            reply.future().completeExceptionally(failure);
         } finally {
-            pending.callbackLifecycle().exit();
+            callbackLifecycle.exit();
         }
         return true;
     }
 
-    private static MethodHandle callbackHandle() {
+    private MethodHandle callbackHandle() {
         try {
-            return MethodHandles.lookup().findStatic(
+            return MethodHandles.lookup().findVirtual(
                 RoutedRequestSupport.class, "handleReplyCallback",
                 MethodType.methodType(void.class, int.class,
-                    MemorySegment.class, long.class, MemorySegment.class));
+                    MemorySegment.class, long.class, MemorySegment.class))
+                .bindTo(this);
         } catch (ReflectiveOperationException failure) {
             throw new ExceptionInInitializerError(failure);
         }
     }
 
-    private static void handleReplyCallback(int result,
-                                            MemorySegment parts,
-                                            long partCount,
-                                            MemorySegment userdata) {
+    private void handleReplyCallback(int result,
+                                     MemorySegment parts,
+                                     long partCount,
+                                     MemorySegment userdata) {
         long requestId = userdata == null ? 0L : userdata.address();
-        PendingReply pending = PENDING.remove(requestId);
-        if (pending == null) {
+        PendingReply replyState = pending.remove(requestId);
+        if (replyState == null) {
             closeParts(parts, partCount);
             return;
         }
         Runnable completion;
         Runnable rejectedCompletion;
-        pending.callbackLifecycle().enter();
+        callbackLifecycle.enter();
         try {
             if (result != RequestResult.OK.value()) {
                 ZlinkRequestException failure = new ZlinkRequestException(
                     requestResult(result), result);
-                completion = () -> pending.future().completeExceptionally(
+                completion = () -> replyState.future().completeExceptionally(
                     failure);
                 rejectedCompletion = completion;
             } else {
@@ -116,7 +126,7 @@ public final class RoutedRequestSupport {
                 List<Message> reply = frames.length == 0
                     ? List.of() : Arrays.asList(frames);
                 completion = () -> {
-                    if (!pending.future().complete(reply)) {
+                    if (!replyState.future().complete(reply)) {
                         Message.closeAll(frames);
                     }
                 };
@@ -124,21 +134,22 @@ public final class RoutedRequestSupport {
                     try {
                         Message.closeAll(frames);
                     } finally {
-                        pending.future().completeExceptionally(
+                        replyState.future().completeExceptionally(
                             new ZlinkRequestException(RequestResult.TERMINATED,
                                 NativeErrno.ECANCELED));
                     }
                 };
             }
         } catch (Throwable failure) {
-            completion = () -> pending.future().completeExceptionally(failure);
+            completion = () -> replyState.future().completeExceptionally(
+                failure);
             rejectedCompletion = completion;
         } finally {
             closeParts(parts, partCount);
-            pending.callbackLifecycle().exit();
+            callbackLifecycle.exit();
         }
         try {
-            pending.callbackLifecycle().dispatch(completion);
+            callbackLifecycle.dispatch(completion);
         } catch (RuntimeException rejected) {
             // Socket close cannot normally reject while the Core callback is
             // active: native close reports BUSY until the callback returns.
@@ -164,6 +175,19 @@ public final class RoutedRequestSupport {
         }
     }
 
+    public void close(Throwable failure) {
+        Objects.requireNonNull(failure, "failure");
+        pending.forEach((requestId, reply) ->
+            completePendingExceptionally(requestId, failure));
+        RuntimeResources.closeArena(callbackArena);
+    }
+
+    @Override
+    public void close() {
+        close(new ZlinkRequestException(RequestResult.TERMINATED,
+            NativeErrno.ECANCELED));
+    }
+
     /** Marks the native callback's completion delivery context. */
     public interface CallbackLifecycle {
         void enter();
@@ -173,7 +197,6 @@ public final class RoutedRequestSupport {
         void dispatch(Runnable completion);
     }
 
-    private record PendingReply(CompletableFuture<List<Message>> future,
-                                CallbackLifecycle callbackLifecycle) {
+    private record PendingReply(CompletableFuture<List<Message>> future) {
     }
 }

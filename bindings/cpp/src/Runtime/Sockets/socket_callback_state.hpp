@@ -5,11 +5,10 @@
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
 
-#include <functional>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
 
 namespace zlink
 {
@@ -19,20 +18,12 @@ namespace detail
 struct socket_callback_state_t :
     public std::enable_shared_from_this<socket_callback_state_t>
 {
-    std::atomic<bool> socket_closed{false};
     std::function<void (const routing_id_t &, message_t &&, message_t &&)> packet_handler;
-    // A binding submit takes this gate for one complete native part sequence
-    // so two threads cannot interleave parts of different messages through
-    // the per-handle send-sequence gate, and so a close cannot run underneath
-    // an in-flight submit.
-    std::mutex outbound_record_attempt_mutex;
 
     // One Core send-completion handler is installed lazily per socket. The
-    // values are opaque here so this socket-state header does not depend on
-    // the private per-operation anchor type in send_operations.cpp.
+    // atomic flag keeps the mutex off every submit after that first install.
     std::mutex send_completion_mutex;
-    bool send_completion_handler_registered = false;
-    std::unordered_map<void *, std::shared_ptr<void>> send_completion_anchors;
+    std::atomic<bool> send_completion_handler_registered{false};
 };
 
 } // namespace detail

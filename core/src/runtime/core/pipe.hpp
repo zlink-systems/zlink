@@ -316,6 +316,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Remove unfinished parts of the outbound message from the pipe.
     void rollback ();
 
+    //  Remove an unfinished outbound message, if one exists. Returns true
+    //  only when a multipart prefix was actually discarded. This keeps the
+    //  normal single-message path free of an owner-side multipart flag while
+    //  still allowing a failed continuation to be reported as an atomic
+    //  record abort.
+    bool rollback_incomplete ();
+
     //  Flush the messages downstream.
     void flush ();
 

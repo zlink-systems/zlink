@@ -3,6 +3,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
+async function waitForConnectionReady(monitor) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+        const event = monitor.recv(zlink.RecvFlags.DontWait);
+        if (event?.event === zlink.MonitorEventType.ConnectionReady)
+            return;
+        await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    throw new Error('connection-ready monitor event timed out');
+}
 test('dealer/router uses routing id through Received and routed send', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
@@ -51,9 +61,19 @@ test('dealer recv reuses Received from plain payload to replyable request', asyn
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);
     const dealerRid = zlink.RoutingId.from(Buffer.from('dealer-recv-request'));
-    router.bind('inproc://dealer-recv-request-metadata');
-    dealer.setRoutingId(dealerRid);
-    dealer.connect('inproc://dealer-recv-request-metadata');
+    const routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+    const dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+    try {
+        router.bind('inproc://dealer-recv-request-metadata');
+        dealer.setRoutingId(dealerRid);
+        dealer.connect('inproc://dealer-recv-request-metadata');
+        await waitForConnectionReady(routerMonitor);
+        await waitForConnectionReady(dealerMonitor);
+    }
+    finally {
+        dealerMonitor.close();
+        routerMonitor.close();
+    }
     const received = new zlink.Received();
     await router.send(dealerRid).message('plain').submit();
     assert.equal(dealer.recv(received), true);
@@ -113,7 +133,7 @@ test('router forwards an unread received Message from managed storage', async ()
     router.close();
     ctx.close();
 });
-test('router repeatedly transfers pooled native receive frames without stale state', async () => {
+test('router repeatedly transfers native receive frames without stale state', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);

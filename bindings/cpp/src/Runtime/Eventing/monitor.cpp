@@ -10,7 +10,6 @@
 #include <zlink.h>
 
 #include <cerrno>
-#include <mutex>
 
 namespace zlink
 {
@@ -90,7 +89,6 @@ struct socket_monitor_t::impl
     void *handle = nullptr;
     struct callback_state
     {
-        std::mutex mutex;
         std::function<void (const monitor_event_t &)> handler;
     };
     std::shared_ptr<callback_state> event_callback =
@@ -156,10 +154,7 @@ void socket_monitor_t::on_event (std::function<void (const monitor_event_t &)> h
 {
     if (!_impl || !_impl->handle)
         throw handler_error_t (handler_result_t::invalid_handle, EINVAL);
-    {
-        std::lock_guard lock (_impl->event_callback->mutex);
-        _impl->event_callback->handler = std::move (handler_);
-    }
+    _impl->event_callback->handler = std::move (handler_);
     const auto result = zlink_socket_monitor_handler (
         _impl->handle,
         [] (const zlink_monitor_event_t *event_, void *userdata_) {
@@ -167,11 +162,7 @@ void socket_monitor_t::on_event (std::function<void (const monitor_event_t &)> h
             if (!state || !event_)
                 return;
             const monitor_event_t event = make_monitor_event (*event_);
-            std::function<void (const monitor_event_t &)> handler;
-            {
-                std::lock_guard lock (state->mutex);
-                handler = state->handler;
-            }
+            std::function<void (const monitor_event_t &)> handler = state->handler;
             if (handler)
                 handler (event);
         },
@@ -209,10 +200,7 @@ void socket_monitor_t::close ()
     if (result != close_result_t::ok)
         throw close_error_t (result, zlink_errno ());
     _impl->handle = nullptr;
-    {
-        std::lock_guard lock (_impl->event_callback->mutex);
-        _impl->event_callback->handler = nullptr;
-    }
+    _impl->event_callback->handler = nullptr;
 }
 
 void socket_monitor_t::close_noexcept () noexcept
@@ -222,7 +210,6 @@ void socket_monitor_t::close_noexcept () noexcept
     void *monitor = _impl->handle;
     (void) zlink_monitor_close (&monitor);
     _impl->handle = nullptr;
-    std::lock_guard lock (_impl->event_callback->mutex);
     _impl->event_callback->handler = nullptr;
 }
 

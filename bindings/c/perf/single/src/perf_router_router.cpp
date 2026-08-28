@@ -290,7 +290,7 @@ int recv_router_router_header_flags (void *receiver_,
     }
 
     const bool rid_ok = source_rid && source_rid->size > 0;
-    const bool shape_ok = rid_ok && request_seq == 0 && has_more == ZLINK_PART_FINAL;
+    const bool shape_ok = rid_ok && request_seq == 0;
     if (!shape_ok) {
         if (bench_debug_enabled ()) {
             std::cerr << "[perf-router-router] invalid routed recv"
@@ -304,8 +304,18 @@ int recv_router_router_header_flags (void *receiver_,
 
     const size_t actual_size = zlink_msg_size (&part);
     if (is_stop_token (zlink_msg_data (&part), actual_size)) {
+        if (has_more != ZLINK_PART_FINAL) {
+            zlink_msg_close (&part);
+            return -1;
+        }
         zlink_msg_close (&part);
         return 2; // stop token
+    }
+    if (!perf_zlink_recv_measurement_tail (
+          receiver_, has_more, static_cast<zlink_recv_flags_t> (flags_),
+          perf_zlink_recv_next_router)) {
+        zlink_msg_close (&part);
+        return -1;
     }
     const bool size_ok = actual_size == payload_size_;
     bool header_ok = false;
@@ -380,8 +390,8 @@ bool send_router_samples (void *sender_,
         if (!payload_->empty ())
             std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
 
-        if (perf_zlink_send_rid_parts (sender_, &state_->target_rid, &part, 1,
-                                       ZLINK_SEND_FLAGS_NONE)
+        if (perf_zlink_send_rid_measurement_parts (
+              sender_, &state_->target_rid, &part, ZLINK_SEND_FLAGS_NONE)
             != 0) {
             const int err = zlink_errno ();
             if (bench_debug_enabled ()) {
@@ -427,7 +437,8 @@ int send_router_probe_once (void *sender_,
         std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
     }
 
-    if (perf_zlink_send_rid_parts (sender_, &target_rid, &part, 1, ZLINK_DONTWAIT) == 0)
+    if (perf_zlink_send_rid_measurement_parts (
+          sender_, &target_rid, &part, ZLINK_DONTWAIT) == 0)
         return 1;
 
     const int err = zlink_errno ();

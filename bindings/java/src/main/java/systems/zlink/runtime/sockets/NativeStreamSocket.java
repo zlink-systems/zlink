@@ -29,8 +29,6 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
     }
 
     private final StreamSocketOptions options = ContractAccess.streamSocketOptions(this);
-    private final OutboundRecordAttemptGate outboundRecordAttempts =
-        new OutboundRecordAttemptGate();
     NativeStreamSocket(Context ctx) {
         super(ctx, SocketType.STREAM);
     }
@@ -42,42 +40,34 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
 
     boolean send(int rid, Message part) {
-        return outboundRecordAttempts.call(() -> runtime().send(
-            RoutingId.from(Integer.toUnsignedLong(rid)), part,
-            SendFlag.NONE));
+        return runtime().send(RoutingId.from(Integer.toUnsignedLong(rid)),
+            part, SendFlag.NONE);
     }
     boolean send(int rid, Message part, SendFlags flags) {
-        return outboundRecordAttempts.call(() -> runtime().send(
-            RoutingId.from(Integer.toUnsignedLong(rid)), part,
-            SendFlag.fromValue(flags.value())));
+        return runtime().send(RoutingId.from(Integer.toUnsignedLong(rid)),
+            part, SendFlag.fromValue(flags.value()));
     }
     SendResult sendNoWaitResult(int rid, Message part) {
-        return outboundRecordAttempts.call(() -> runtime().sendNoWaitResult(
-            RoutingId.from(Integer.toUnsignedLong(rid)), part));
+        return runtime().sendNoWaitResult(
+            RoutingId.from(Integer.toUnsignedLong(rid)), part);
     }
     SendResult sendNoWaitResult(RoutingId rid, Message part) {
-        return outboundRecordAttempts.call(
-            () -> runtime().sendNoWaitResult(rid, part));
+        return runtime().sendNoWaitResult(rid, part);
     }
     int send(int rid, MemorySegment payload, int length, SendFlags flags) {
-        return outboundRecordAttempts.call(
-            () -> runtime().send(rid, payload, length, flags.value()));
+        return runtime().send(rid, payload, length, flags.value());
     }
     int sendCopied(int rid, MemorySegment payload, int length,
                    SendFlags flags) {
-        return outboundRecordAttempts.call(
-            () -> runtime().sendCopied(
-                rid, payload, length, flags.value()));
+        return runtime().sendCopied(rid, payload, length, flags.value());
     }
     SendResult sendNoWaitResult(RoutingId rid, List<Message> parts) {
-        return outboundRecordAttempts.call(
-            () -> runtime().sendNoWaitResult(rid, parts));
+        return runtime().sendNoWaitResult(rid, parts);
     }
     public SendOperation send(RoutingId rid) {
         Objects.requireNonNull(rid, "rid");
-        return MessageOperations.send((parts, flags) ->
-            outboundRecordAttempts.call(() -> runtime().send(rid, parts,
-                SendFlag.fromValue(flags.value()))));
+        return MessageOperations.send((parts, flags) -> runtime().send(rid,
+            parts, SendFlag.fromValue(flags.value())));
     }
 
     private CompletionStage<Void> sendAsync(
@@ -115,7 +105,7 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
     }
     @Override
     public void close() {
-        outboundRecordAttempts.run(runtime()::close);
+        runtime().close();
     }
     @Override public StreamSocketOptions options() { return options; }
 

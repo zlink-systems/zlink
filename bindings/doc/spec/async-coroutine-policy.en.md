@@ -93,6 +93,11 @@ object, and a Rust request builder's `submit()` returns a runtime-independent
 - The bindings public API keeps a single name for an operation's starting point. It does not grow that name with completion style or flag combinations, as in `requestAsync`, `request_callback`, `sendNoWait`, or `publishWithFlags`.
 - `send`, `request`, `reply`, `publish`, Actor location operations, and Actor session attach operations all return an operation builder.
 - Payload and timeout are expressed at the builder stage, not as arguments to the operation's starting point.
+- A one-part payload uses that same builder: callers add one `Message(...)`
+  and invoke its terminal. The public contract does not add a direct
+  one-part shortcut such as `Send(Message)`, `Send(RoutingId, Message)`, or
+  `Publish(topic, Message)`. An implementation may select an internal
+  one-part fast path, but this is not a caller-visible API choice.
 - The bindings library does not own a framework coroutine scheduler, a Kotlin `CoroutineScope`, or a C++ framework executor. **The bindings library owns no admission queue or retry policy of its own either** — for send, publish, routed send, or request. An existing completion dispatcher may deliver a terminal outside a Core callback when a language future or promise can run user continuations inline, but this adds no per-operation executor, queue, or timer.
 - It does not add separate public APIs to the bindings contract for a coroutine-only recv, a virtual-thread-only recv, or a framework-dispatcher-only submit.
 - Once a builder has been submitted, it cannot be submitted again. Where the language offers an ownership type or typestate, this is blocked by the type system; otherwise it is blocked by a runtime state check.
@@ -136,8 +141,9 @@ same operation entrypoint. It adds no separate name such as `send_async` or
   the wait.
 - **Completion driver.** C++ `async()` and the .NET, Java, Node, Python, and
   Rust asynchronous send terminals use Core `zlink_send_async`. They first
-  install `zlink_send_complete_handler`, then correlate the accepted
-  operation's socket-local id with an awaitable. A
+  install `zlink_send_complete_handler`. Immediate admission returns operation
+  id zero and the binding completes the awaitable locally. HWM wait returns a
+  non-zero socket-local id that the binding correlates with an awaitable. A
   `zlink_send_complete_event_t` reports admission, deadline expiry, or terminal
   failure exactly once. Completions preserve submit order for the same target,
   and completion callbacks for one socket do not run concurrently.
@@ -148,9 +154,9 @@ same operation entrypoint. It adds no separate name such as `send_async` or
 - No public send-ready handler exists. `ZLINK_POLLOUT` is a readiness value for
   retrying a synchronous nonblocking send, not completion of an accepted async
   operation.
-- A binding keeps no park queue, WRITABLE-callback retry, deadline timer, or
-  dispatcher thread for this completion surface — completion is driven by
-  the Core send-completion notification.
+- A binding keeps no park queue, WRITABLE-callback retry, or deadline timer.
+  A C++ default coroutine that could submit again from inside a callback uses
+  a continuation dispatcher only on the pending slow path.
 - Submit flags may be accepted as a language-idiomatic option argument or
   builder stage.
 - Core retries an accepted async operation. The binding never retries; the

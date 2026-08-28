@@ -88,9 +88,7 @@ internal sealed class Poller : NativeOwner, IPoller
         var rc = NativeMethods.zlink_poller_modify(_handle, socketHandle,
             (short)events);
         ZlinkException.ThrowConfigIfError(rc);
-        UnregisterExternalProgress(_items[index]);
         _items[index].Events = events;
-        RegisterExternalProgress(_items[index]);
     }
 
     public void ModifyFd(int fd, PollEventFlags events)
@@ -164,12 +162,10 @@ internal sealed class Poller : NativeOwner, IPoller
         if (_handle == IntPtr.Zero)
         {
             _handle = IntPtr.Zero;
-            UnregisterAllExternalProgress();
             _items.Clear();
             _nativeEvents = Array.Empty<ZlinkPollerEvent>();
             throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
         }
-        UnregisterAllExternalProgress();
         _items.Clear();
         _nativeEvents = Array.Empty<ZlinkPollerEvent>();
     }
@@ -228,7 +224,6 @@ internal sealed class Poller : NativeOwner, IPoller
     {
         _ = DestroyHandle(DestroyNative, throwOnError, _ =>
         {
-            UnregisterAllExternalProgress();
             _items.Clear();
             _nativeEvents = Array.Empty<ZlinkPollerEvent>();
         });
@@ -322,35 +317,12 @@ internal sealed class Poller : NativeOwner, IPoller
 
     private void RegisterItem(PollItem item)
     {
-        RegisterExternalProgress(item);
         _items.Add(item);
     }
 
     private void UnregisterItem(int index)
     {
-        var item = _items[index];
-        UnregisterExternalProgress(item);
         _items.RemoveAt(index);
-    }
-
-    private static void RegisterExternalProgress(PollItem item)
-    {
-        if (item.IsSocket
-            && (item.Events & PollEventFlags.PollCompletion) != 0)
-            RequestProgressPump.AcquireExternalProgress(item.SocketHandle);
-    }
-
-    private static void UnregisterExternalProgress(PollItem item)
-    {
-        if (item.IsSocket
-            && (item.Events & PollEventFlags.PollCompletion) != 0)
-            RequestProgressPump.ReleaseExternalProgress(item.SocketHandle);
-    }
-
-    private void UnregisterAllExternalProgress()
-    {
-        foreach (var item in _items)
-            UnregisterExternalProgress(item);
     }
 
     private void EnsureNotDisposed()

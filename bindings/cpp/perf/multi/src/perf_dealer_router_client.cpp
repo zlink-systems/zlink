@@ -220,7 +220,12 @@ class dealer_router_client_bench_t
         }
 
         try {
-            std::move (state.sock->send ()).message (state.request).submit ();
+            if (perf::multi::measurement_part_count () == 2) {
+                zlink::message_t tail = perf::multi::measurement_empty_part ();
+                std::move (state.sock->send ()).message (state.request).message (tail).submit ();
+            } else {
+                std::move (state.sock->send ()).message (state.request).submit ();
+            }
             ++_seq;
             state.awaiting_reply = true;
             state.send_pending = false;
@@ -245,18 +250,19 @@ class dealer_router_client_bench_t
             return -1;
         }
 
-        const int rc = state.sock->recv (state.reply, zlink::recv_flags_t::dontwait);
+        zlink::received_t reply;
+        const int rc = state.sock->recv (reply, zlink::recv_flags_t::dontwait);
         if (rc != 0)
             return -1;
 
-        if (!state.reply.valid ()) {
+        if (!perf::multi::measurement_parts_valid (reply.parts ())) {
             errno = EPROTO;
             return -1;
         }
 
+        const zlink::message_t &payload = reply.parts ().front ();
         const bool decoded =
-          perf_metric::decode_payload_header (state.reply.data (), state.reply.size (), header_out);
-        state.reply.close ();
+          perf_metric::decode_payload_header (payload.data (), payload.size (), header_out);
         if (!decoded)
             return 1;
         return 0;

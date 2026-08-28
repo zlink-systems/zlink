@@ -68,13 +68,23 @@ struct ready_monitor_t
 
 struct drain_gate_t
 {
-    drain_gate_t () : start (false), done (false), received (0), error_code (0) {}
+    drain_gate_t () :
+        start (false),
+        done (false),
+        received (0),
+        queued_received (0),
+        resumed_received (0),
+        error_code (0)
+    {
+    }
 
     std::mutex sync;
     std::condition_variable cv;
     bool start;
     bool done;
     size_t received;
+    size_t queued_received;
+    size_t resumed_received;
     int error_code;
 };
 
@@ -263,6 +273,32 @@ static bool wait_ready_count (ready_monitor_t *monitor_, size_t expected_count_,
            && state->error_code == 0 && state->ready_count >= expected_count_;
 }
 
+static void wait_pubsub_subscription (void *pub_)
+{
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (kTimeoutMs);
+    while (std::chrono::steady_clock::now () < deadline) {
+        const zlink_routing_id_t *source_rid = NULL;
+        int subscribed = 0;
+        char topic[256];
+        size_t topic_len = sizeof (topic);
+        const zlink_recv_result_t result = zlink_xpub_recv_part (
+          pub_, &source_rid, &subscribed, topic, sizeof (topic), &topic_len,
+          static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+        if (result == ZLINK_RECV_OK) {
+            TEST_ASSERT_NOT_NULL (source_rid);
+            TEST_ASSERT_EQUAL_INT (1, subscribed);
+            TEST_ASSERT_EQUAL_UINT (strlen (kTopic), topic_len);
+            TEST_ASSERT_EQUAL_MEMORY (kTopic, topic, topic_len);
+            return;
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, result);
+        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+        msleep (1);
+    }
+    TEST_FAIL_MESSAGE ("timed out waiting for XPUB subscription event");
+}
+
 static void close_ready_monitor (ready_monitor_t *monitor_)
 {
     if (!monitor_)
@@ -274,11 +310,11 @@ static void close_ready_monitor (ready_monitor_t *monitor_)
     monitor_->state = NULL;
 }
 
-static zlink_msg_t make_payload_part ()
+static zlink_msg_t make_payload_part (char fill_ = 'p')
 {
     zlink_msg_t part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, kPayloadSize));
-    memset (zlink_msg_data (&part), 'p', kPayloadSize);
+    memset (zlink_msg_data (&part), fill_, kPayloadSize);
     return part;
 }
 
@@ -321,7 +357,7 @@ static int try_send_raw_part (void *sender_,
 
 static int try_publish_part (void *subject_, zlink_submit_result_t *result_out_)
 {
-    zlink_msg_t part = make_payload_part ();
+    zlink_msg_t part = make_payload_part ('q');
     const int rc = zlink_publish (subject_, kTopic, &part, 1, ZLINK_DONTWAIT);
     if (rc == 0) {
         *result_out_ = ZLINK_SUBMIT_OK;
@@ -368,7 +404,7 @@ static void prime_raw_case (raw_case_t *raw_, raw_pattern_t pattern_)
 
 static void publish_part_blocking (void *subject_)
 {
-    zlink_msg_t part = make_payload_part ();
+    zlink_msg_t part = make_payload_part ('b');
     TEST_ASSERT_SUCCESS_ERRNO (zlink_publish (subject_, kTopic, &part, 1, 0));
 }
 
@@ -550,6 +586,8 @@ static void drain_subscription_receiver (void *sub_, size_t expected_messages_, 
     wait_drain_start (gate_);
 
     size_t received = 0;
+    size_t queued_received = 0;
+    size_t resumed_received = 0;
     int error_code = 0;
     while (received < expected_messages_) {
         zlink_msg_t *parts = NULL;
@@ -566,10 +604,30 @@ static void drain_subscription_receiver (void *sub_, size_t expected_messages_, 
             zlink_multipart_close (parts, part_count);
             break;
         }
+        if (part_count != 1 || zlink_msg_size (&parts[0]) != kPayloadSize) {
+            error_code = EPROTO;
+            zlink_multipart_close (parts, part_count);
+            break;
+        }
+        const char marker = *static_cast<const char *> (zlink_msg_data (&parts[0]));
+        if (marker == 'q')
+            ++queued_received;
+        else if (marker == 'b')
+            ++resumed_received;
+        else {
+            error_code = EPROTO;
+            zlink_multipart_close (parts, part_count);
+            break;
+        }
         zlink_multipart_close (parts, part_count);
         ++received;
     }
 
+    {
+        std::lock_guard<std::mutex> lock (gate_->sync);
+        gate_->queued_received = queued_received;
+        gate_->resumed_received = resumed_received;
+    }
     finish_drain (gate_, received, error_code);
 }
 
@@ -727,6 +785,7 @@ static void setup_pubsub_case (
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (out_->sub, kTopic));
     TEST_ASSERT_TRUE (wait_ready_count (&out_->pub_monitor, 1, kTimeoutMs));
     TEST_ASSERT_TRUE (wait_ready_count (&out_->sub_monitor, 1, kTimeoutMs));
+    wait_pubsub_subscription (out_->pub);
 }
 
 
@@ -908,11 +967,17 @@ static void verify_pubsub_pressure_entry_and_resume ()
         publish_part_blocking (entry_case.pub);
         set_send_timeout (entry_case.pub, 0);
 
-        TEST_ASSERT_TRUE (wait_drain_done (&drain, kTimeoutMs));
         drain_thread.join ();
-        TEST_ASSERT_EQUAL_UINT (queued + 1, drain.received);
-        TEST_ASSERT_EQUAL_INT (0, drain.error_code);
+        char drain_label[160];
+        snprintf (drain_label, sizeof (drain_label),
+                  "PUBSUB %s drain queued=%zu received=%zu q=%zu b=%zu errno=%d",
+                  transport, queued, drain.received, drain.queued_received,
+                  drain.resumed_received, drain.error_code);
         close_pubsub_case (&entry_case);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE (queued + 1, drain.received, drain_label);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE (queued, drain.queued_received, drain_label);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE (1, drain.resumed_received, drain_label);
+        TEST_ASSERT_EQUAL_INT_MESSAGE (0, drain.error_code, drain_label);
 
         pubsub_case_t low_rcv;
         setup_pubsub_case (transport, kLargeHwm, kSmallHwm, &low_rcv);

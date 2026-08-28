@@ -21,7 +21,7 @@ void ignore_reply (zlink_request_result_t, zlink_msg_t *, size_t, void *)
 }
 }
 
-void test_open_more_sequence_survives_bad_recv_and_bad_send_attempts ()
+void test_wrong_send_helper_aborts_open_sequence_after_bad_recv_attempt ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -50,6 +50,8 @@ void test_open_more_sequence_survives_bad_recv_and_bad_send_attempts ()
                                  ZLINK_PART_FINAL, 1000, &ignore_reply, NULL);
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_INVALID_ARGUMENT, wrong_rc);
     TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&wrong_family));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&wrong_family));
 
     zlink_msg_t final_part;
     init_part (&final_part, "part-2");
@@ -58,7 +60,6 @@ void test_open_more_sequence_survives_bad_recv_and_bad_send_attempts ()
       zlink_send_part (dealer, &final_part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
 
     recv_string_expect_success (router, "D1", 0);
-    recv_string_expect_success (router, "part-1", 1);
     recv_string_expect_success (router, "part-2", 0);
 
     zlink_msg_t next_msg;
@@ -68,6 +69,9 @@ void test_open_more_sequence_survives_bad_recv_and_bad_send_attempts ()
       zlink_send_part (dealer, &next_msg, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
     recv_string_expect_success (router, "D1", 0);
     recv_string_expect_success (router, "after-reset", 0);
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
 }
 
 int main (void)
@@ -75,7 +79,7 @@ int main (void)
     setup_test_environment ();
 
     UNITY_BEGIN ();
-    RUN_TEST (test_open_more_sequence_survives_bad_recv_and_bad_send_attempts);
+    RUN_TEST (test_wrong_send_helper_aborts_open_sequence_after_bad_recv_attempt);
     const int rc = UNITY_END ();
     fflush (NULL);
     std::_Exit (rc);

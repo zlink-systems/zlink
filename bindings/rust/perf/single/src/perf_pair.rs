@@ -2,7 +2,7 @@
 
 mod common;
 
-use zlink::{SocketMonitor, SubmitResult};
+use zlink::{Message, SocketMonitor, SubmitResult};
 
 fn main() {
     let config = common::PerfConfig::from_env_and_args();
@@ -56,7 +56,7 @@ fn main() {
             active_deadline,
             config.size,
             common::PHASE_ACTIVE,
-            |msg| match common::block_on(sender.send().message(msg).submit()) {
+            |msg| match perf_submit_measurement!(sender.send(), msg) {
                 Ok(()) => true,
                 Err(err) if err.code() == SubmitResult::NotConnected => false,
                 Err(err) => panic!("active send: {err}"),
@@ -65,7 +65,7 @@ fn main() {
         common::send_stop_token(|msg| {
             // Match C perf: the phase terminator must be queued after every
             // accepted payload even when the data path has reached its HWM.
-            common::block_on(sender.send().message(msg).submit()).map(|()| true)
+            perf_submit_measurement!(sender.send(), msg).map(|()| true)
         });
     });
 

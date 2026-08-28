@@ -28,78 +28,16 @@ int zlink::stream_t::stream_dispatch_send_from_io (const zlink_routing_id_t *rid
         return -1;
     }
 
-    pipe_t *const direct_out = resolve_direct_dispatch_output_pipe (this, routing_id);
-    if (size_ == 0) {
-        if (direct_out) {
-            direct_out->terminate (false);
-            return 1;
-        }
-
-        route_shard_t &shard = route_shard_for (routing_id);
-        scoped_fast_lock_t shard_lock (shard.sync);
-        route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-        if (it == shard.routes.end () || !it->second) {
-            errno = EHOSTUNREACH;
-            return -1;
-        }
-        it->second->terminate (false);
-        return 1;
-    }
-
     msg_t out_msg;
     if (out_msg.init_buffer (data_, size_) != 0)
         return -1;
 
-    if (direct_out
-        && direct_out->write_single_message_and_flush_no_recursive_hwm_check (&out_msg)) {
-        const int init_rc = out_msg.init ();
-        errno_assert (init_rc == 0);
-        return 1;
+    const int rc = stream_dispatch_send_to_route (routing_id, &out_msg, flags_);
+    if (rc == -1) {
+        const int close_rc = out_msg.close ();
+        errno_assert (close_rc == 0);
     }
-
-    const stream_dispatch_send_policy_t policy (flags_, options.sndtimeo);
-
-    for (;;) {
-        {
-            route_shard_t &shard = route_shard_for (routing_id);
-            scoped_fast_lock_t shard_lock (shard.sync);
-            route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-            if (it == shard.routes.end () || !it->second) {
-                const int rc = out_msg.close ();
-                errno_assert (rc == 0);
-                errno = EHOSTUNREACH;
-                return -1;
-            }
-
-            if (it->second->write_single_message_and_flush_no_recursive_hwm_check (&out_msg)) {
-                const int init_rc = out_msg.init ();
-                errno_assert (init_rc == 0);
-                return 1;
-            }
-        }
-
-        if (policy.dontwait ()) {
-            const int rc = out_msg.close ();
-            errno_assert (rc == 0);
-            errno = EAGAIN;
-            return -1;
-        }
-
-        if (policy.timed_out ()) {
-            const int rc = out_msg.close ();
-            errno_assert (rc == 0);
-            errno = EAGAIN;
-            return -1;
-        }
-
-        if (!policy.wait_retry ())
-            break;
-    }
-
-    const int rc = out_msg.close ();
-    errno_assert (rc == 0);
-    errno = EAGAIN;
-    return -1;
+    return rc;
 }
 
 int zlink::stream_t::stream_dispatch_send_msg_from_io (const zlink_routing_id_t *rid_,
@@ -117,7 +55,14 @@ int zlink::stream_t::stream_dispatch_send_msg_from_io (const zlink_routing_id_t 
         return -1;
     }
 
-    pipe_t *const direct_out = resolve_direct_dispatch_output_pipe (this, routing_id);
+    return stream_dispatch_send_to_route (routing_id, msg_, flags_);
+}
+
+int zlink::stream_t::stream_dispatch_send_to_route (uint32_t routing_id_,
+                                                     msg_t *msg_,
+                                                     int flags_)
+{
+    pipe_t *const direct_out = resolve_direct_dispatch_output_pipe (this, routing_id_);
     if (direct_out) {
         if (msg_->size () == 0) {
             direct_out->terminate (false);
@@ -137,9 +82,9 @@ int zlink::stream_t::stream_dispatch_send_msg_from_io (const zlink_routing_id_t 
 
     for (;;) {
         {
-            route_shard_t &shard = route_shard_for (routing_id);
+            route_shard_t &shard = route_shard_for (routing_id_);
             scoped_fast_lock_t shard_lock (shard.sync);
-            route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
+            route_shard_t::routes_t::iterator it = shard.routes.find (routing_id_);
             if (it == shard.routes.end () || !it->second) {
                 errno = EHOSTUNREACH;
                 return -1;

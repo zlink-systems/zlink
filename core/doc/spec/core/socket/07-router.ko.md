@@ -282,6 +282,12 @@ submit한다. 이 lane은 application byte HWM, manual HWM, LWM과 Core budget r
 readiness 대기나 재시도 경로에 진입하지 않는다. 연결, lifecycle, argument,
 state와 allocation failure는 호출 시점의 해당 `zlink_submit_result_t`로 즉시 끝난다.
 
+reply 대상 경로가 없으면 결과는 `ZLINK_SUBMIT_NOT_CONNECTED`이고 `errno`는 `ENOTCONN`이다.
+대상 completion pipe를 찾지 못한 경우와, 이미 선택한 대상이 reply를 커밋하는 도중 사라진
+경우에 같은 규칙을 적용한다. 이 실패는 backpressure가 아니므로 `ZLINK_POLLOUT`이 서더라도
+이 one-shot reply의 재시도가 가능해지지 않는다. 두 경우 모두 이미 전달한 part는 소비되고
+호출자에게 되돌아가지 않는다.
+
 ## 10. Result와 readiness
 
 submit은 `zlink_submit_result_t`, receive는 `zlink_recv_result_t`, option은
@@ -383,7 +389,7 @@ test 하나로 이어진다.
 
 **Reply와 completion lane**
 - `zlink_router_reply_part()`는 수신 record가 반환한 `peer_rid_`·`request_seq_`를 그대로 사용하며, `ZLINK_PART_FINAL`이 성공하면 reply가 완료된다.
-- raw reply와 error reply는 completion lane capacity를 이유로 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하지 않으며, 연결·lifecycle·argument·state·allocation failure는 호출 시점의 해당 `zlink_submit_result_t`로 즉시 끝난다.
+- raw reply와 error reply는 completion lane capacity를 이유로 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하지 않으며, 연결·lifecycle·argument·state·allocation failure는 호출 시점의 해당 `zlink_submit_result_t`로 즉시 끝난다. 대상 경로가 없으면(대상 completion pipe 미발견, 또는 커밋 도중 대상 소멸) `errno == ENOTCONN`과 함께 `ZLINK_SUBMIT_NOT_CONNECTED`를 반환하며, 이는 backpressure가 아니므로 `ZLINK_POLLOUT`으로 재시도가 가능해지지 않는다.
 
 **Readiness**
 - `ZLINK_POLLIN`은 완전한 raw record를 수신할 수 있을 때 서고, `ZLINK_POLLOUT`은 backpressure 뒤 재시도 가치를 나타낼 뿐 다음 submit 성공을 보장하지 않는다.

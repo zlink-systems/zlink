@@ -691,13 +691,12 @@ one-way 패턴 latency는 패턴의 실제 receiver 측에서 측정한다.
 | runs | `--runs N` | — | 1 |
 | msg sizes | `--msg-sizes` | `PERF_MSG_SIZES` | 표준 6종 |
 | transports | `--transports` | `PERF_TRANSPORTS` | 패턴별 기본값 (§ 8.3 참조) |
-| clients | `--clients` | `PERF_MULTI_CLIENTS` | 100 (stream=10000), 메모리 가드 초과 시 해당 pattern skip |
+| clients | `--clients` | `PERF_MULTI_CLIENTS` | 100, 메모리 가드 초과 시 해당 pattern skip |
 
 - **CLI 인자 > 환경 변수 > 기본값** 순으로 적용한다.
 - shell entrypoint의 메모리 가드(`PERF_MULTI_MEMORY_BUDGET_PCT` 기반)가 예상 메모리 사용량이 예산을
   넘는다고 판단하면 해당 pattern을 실행하지 않는다. client 수나 전송 속도를 자동으로 낮추지 않는다.
   `PERF_SKIP_MEMORY_CHECK=1`로 이 사전 검사를 비활성화할 수 있다.
-
 ---
 
 ## 7. Metric Tiers
@@ -873,7 +872,7 @@ run_benchmarks_multi.sh / .ps1                         # 공식 multi entrypoint
 | `--results-dir PATH` | 결과 저장 루트 디렉터리 override | `perf/results` |
 | `--results-tag NAME` | 결과 파일명에 태그 추가 | 없음 |
 | `--duration N` | 측정 시간(초) | 5 |
-| `--clients N` | 클라이언트 소켓 수 | 100 (stream=10000) |
+| `--clients N` | 클라이언트 소켓 수 | 100 |
 | `--hwm N` | debug 전용 소켓 HWM 공통 fallback. `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1` 필요 | auto-HWM |
 | `--send-hwm N` | debug 전용 소켓 송신 HWM. `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1` 필요 | `--hwm` fallback |
 | `--recv-hwm N` | debug 전용 소켓 수신 HWM. `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1` 필요 | `--hwm` fallback |
@@ -1139,9 +1138,9 @@ bindings/c/perf/run_benchmarks_multi.sh --duration 10
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
 | `PERF_MULTI_MSG_SIZES` | multi benchmark 바이너리에서 읽는 size 목록 fallback. runner는 보통 공통 `PERF_MSG_SIZES`로 전달한다 | 공통 기본값 |
-| `PERF_MULTI_CLIENTS` | raw 패턴의 client socket 수. Spot 패턴에서는 peer MeshNode 수 | 100 (stream=10000) |
+| `PERF_MULTI_CLIENTS` | raw 패턴의 client socket 수. Spot 패턴에서는 peer MeshNode 수 | 100 |
 | `PERF_MULTI_DEFAULT_CLIENTS` | `PERF_MULTI_CLIENTS` 미설정 시 raw/spot 계열 기본 client 수 | 100 |
-| `PERF_MULTI_DEFAULT_STREAM_CLIENTS` | `PERF_MULTI_CLIENTS` 미설정 시 STREAM 계열 기본 client 수 | 10000 |
+| `PERF_MULTI_DEFAULT_STREAM_CLIENTS` | `PERF_MULTI_CLIENTS` 미설정 시 STREAM 계열 기본 client 수 | 100 |
 | `PERF_MULTI_STREAM_MSG_SIZES` | STREAM 계열 전용 size 목록. 미설정 시 `PERF_MSG_SIZES`가 설정되어 있으면 그 값을 사용하고, 둘 다 미설정이면 기본값 사용 | `64,256,1024,65536` |
 | `PERF_MULTI_HWM` | debug 전용 공통 HWM override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_SNDHWM` | debug 전용 송신 HWM override | 비활성 |

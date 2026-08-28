@@ -91,7 +91,7 @@ fn main() {
                     args.msg_size as u32,
                     seq,
                 );
-                match common::block_on(socket.send().message(msg).submit()) {
+                match perf_submit_measurement!(socket.send(), msg) {
                     Ok(()) => {
                         seq += 1;
                         progressed = true;

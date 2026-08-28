@@ -182,7 +182,7 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                 os.environ.pop(key, None)
             self.assertEqual(RC.pattern_default_clients("DEALER_DEALER"), 100)
             self.assertEqual(RC.pattern_default_clients("ROUTER_ROUTER_REQREP"), 100)
-            self.assertEqual(RC.pattern_default_clients("STREAM"), 10000)
+            self.assertEqual(RC.pattern_default_clients("STREAM"), 100)
             self.assertEqual(RC.pattern_default_hwm("DEALER_DEALER"), 0)
             self.assertEqual(RC.pattern_default_hwm("STREAM"), 0)
             self.assertEqual(RC.pattern_default_io_threads("DEALER_DEALER"), 4)

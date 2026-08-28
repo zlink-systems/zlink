@@ -120,8 +120,9 @@ final class PerfSocketReqRep {
                 try {
                     Throwable cause = completionCause(error);
                     if (cause == null) {
-                        if (parts != null && !parts.isEmpty()) {
-                            PerfUtil.Header header = PerfUtil.decodeHeader(parts.get(0),
+                        Message payload = PerfUtil.measurementPayload(parts);
+                        if (payload != null) {
+                            PerfUtil.Header header = PerfUtil.decodeHeader(payload,
                                 config.size());
                             if (header != null
                                 && header.phase() == PerfUtil.PHASE_ACTIVE) {
@@ -212,10 +213,16 @@ final class PerfSocketReqRep {
                                Message request, Duration timeout,
                                BiConsumer<List<Message>, Throwable> completion) {
         var stage = routedClient
-            ? ((RouterSocket) client).request(SERVER_RID)
-                .message(request).timeout(timeout).submit()
-            : ((DealerSocket) client).request()
-                .message(request).timeout(timeout).submit();
+            ? (PerfUtil.measurementPartCount() == 2
+                ? ((RouterSocket) client).request(SERVER_RID).message(request)
+                    .message(PerfUtil.measurementTail()).timeout(timeout).submit()
+                : ((RouterSocket) client).request(SERVER_RID)
+                    .message(request).timeout(timeout).submit())
+            : (PerfUtil.measurementPartCount() == 2
+                ? ((DealerSocket) client).request().message(request)
+                    .message(PerfUtil.measurementTail()).timeout(timeout).submit()
+                : ((DealerSocket) client).request()
+                    .message(request).timeout(timeout).submit());
         stage.whenComplete(completion);
     }
 
@@ -256,7 +263,8 @@ final class PerfSocketReqRep {
                     }
                     throw ex;
                 }
-                if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+                if (received.parts().size() == 1
+                    && PerfStopToken.isStopTokenMessage(received.firstPart())) {
                     stopped.set(true);
                     return;
                 }
@@ -264,7 +272,12 @@ final class PerfSocketReqRep {
                     received.close();
                     continue;
                 }
-                Message reply = Message.from(received.firstPart());
+                Message payload = PerfUtil.measurementPayload(received.parts());
+                if (payload == null) {
+                    received.close();
+                    continue;
+                }
+                Message reply = Message.from(payload);
                 submitReplyWithRetry(received, reply, completionDrainTimeoutMs);
                 received.close();
             }
@@ -279,7 +292,11 @@ final class PerfSocketReqRep {
             + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         while (true) {
             try {
-                received.reply().message(reply).submit();
+                if (PerfUtil.measurementPartCount() == 2) {
+                    received.reply().message(reply).message(PerfUtil.measurementTail()).submit();
+                } else {
+                    received.reply().message(reply).submit();
+                }
                 return;
             } catch (ZlinkSubmitException ex) {
                 if (ex.getResult() != SubmitResult.BACKPRESSURED

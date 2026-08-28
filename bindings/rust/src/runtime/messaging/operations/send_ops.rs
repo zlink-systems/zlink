@@ -2,9 +2,9 @@
 
 //! Send and publish terminals for the Core 0.13.1 contract.
 //!
-//! HWM-managed send (PAIR send, DEALER/ROUTER routed send, and the routed send
-//! addressed at a received envelope) is asynchronous: one `zlink_send_async`
-//! call hands the whole record to Core and the registered
+//! HWM-managed send (PAIR send, DEALER/ROUTER routed send, STREAM peer send,
+//! and the routed send addressed at a received envelope) is asynchronous: one
+//! `zlink_send_async` call hands the whole record to Core and the registered
 //! `zlink_send_complete_handler` completes the returned `Future`. The binding
 //! owns no thread, no park queue, no retry and no deadline timer.
 //!
@@ -266,22 +266,9 @@ enum StartedSend {
     },
 }
 
-fn start_send(mut op: SendOpStorage) -> Result<StartedSend, SubmitError> {
+fn start_send(op: SendOpStorage) -> Result<StartedSend, SubmitError> {
     if op.parts.is_empty() {
         return Err(submit_validation_error());
-    }
-
-    if matches!(op.kind, SendOpKind::StreamRouted) {
-        // STREAM addresses one exact raw peer through the rid lane. Core owns
-        // the HWM wait inside this one call, so the Future resolves on its
-        // first poll.
-        let handle = op.handle;
-        let target = op.target.as_ref().expect("STREAM send target");
-        let rc = submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
-            ffi::zlink_send_part_rid(handle, target.as_raw(), part, 0, part_flag)
-        })?;
-        drop(op.parts);
-        return check_submit_rc(rc).map(|()| StartedSend::Completed);
     }
 
     let completions = op
@@ -291,18 +278,30 @@ fn start_send(mut op: SendOpStorage) -> Result<StartedSend, SubmitError> {
 
     // Exact routed target. ROUTER must name one; DEALER passes none and lets
     // Core commit one selection at submit time.
-    let target = match op.routed.as_ref() {
-        // ROUTER names the peer; DEALER passes none and Core commits one
-        // weighted selection. Either way the record is pinned to one exact
-        // physical pipe, so a multipart record cannot straddle two pipes.
-        Some(routed) => {
-            let (rc, selected) = routed.select_target(op.target.as_ref());
-            if rc != 0 {
-                return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }));
+    let target = if matches!(op.kind, SendOpKind::StreamRouted) {
+        // A RID-only target asks Core to snapshot the current STREAM transport
+        // pair as part of this submit. Once accepted, Core owns the part and
+        // every HWM retry until the completion callback resolves the Future.
+        let peer_rid = op.target.as_ref().expect("STREAM send target");
+        Some(ffi::zlink_routed_submit_target_t {
+            peer_rid: *peer_rid.as_raw(),
+            transport_pair_id: 0,
+            transport_pair_generation: 0,
+        })
+    } else {
+        match op.routed.as_ref() {
+            // ROUTER names the peer; DEALER passes none and Core commits one
+            // weighted selection. Either way the record is pinned to one exact
+            // physical pipe, so a multipart record cannot straddle two pipes.
+            Some(routed) => {
+                let (rc, selected) = routed.select_target(op.target.as_ref());
+                if rc != 0 {
+                    return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }));
+                }
+                Some(selected)
             }
-            Some(selected)
+            None => None,
         }
-        None => None,
     };
     let target_ptr: *const ffi::zlink_routed_submit_target_t = match target.as_ref() {
         Some(target) => target,
@@ -341,10 +340,9 @@ fn start_send(mut op: SendOpStorage) -> Result<StartedSend, SubmitError> {
     drop(parts);
 
     if op_id == 0 {
-        // Core promises a non-zero id for every accepted operation. Surface an
-        // impossible contract instead of installing an uncancellable Future.
+        // Core completed synchronously and deliberately emits no callback.
         completions.discard(userdata);
-        return Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO));
+        return Ok(StartedSend::Completed);
     }
     slot.arm(op_id);
     Ok(StartedSend::Pending { slot, handle })
@@ -357,9 +355,10 @@ fn duration_to_timeout_ms(duration: Duration) -> u32 {
     duration.as_millis().clamp(1, u32::MAX as u128) as u32
 }
 
-/// Moves every part into one contiguous native array, runs `call`, and moves
-/// the parts back when Core refused the record. `zlink_send_async` takes
-/// ownership of `parts_[0 .. count)` only on `ZLINK_SUBMIT_OK`.
+/// Moves every part into one contiguous native array for `zlink_send_async`
+/// and moves the parts back when that asynchronous submit returns non-OK.
+/// Unlike synchronous part APIs, `zlink_send_async` takes ownership of
+/// `parts_[0 .. count)` only on `ZLINK_SUBMIT_OK`.
 fn with_moved_native_parts(
     parts: &mut [Message],
     call: impl FnOnce(*mut ffi::zlink_msg_t, usize) -> i32,

@@ -120,7 +120,39 @@ pub fn is_valid_message(data: &[u8], expected_size: usize) -> bool {
 }
 
 pub fn message_payload<'a>(parts: &'a [Message]) -> &'a [u8] {
-    parts.last().map(|part| part.as_bytes()).unwrap_or(&[])
+    let expected = if std::env::var("PERF_PART_COUNT").ok().as_deref() == Some("1") {
+        1
+    } else {
+        2
+    };
+    if parts.len() != expected || (expected == 2 && !parts[1].as_bytes().is_empty()) {
+        return &[];
+    }
+    parts.first().map(|part| part.as_bytes()).unwrap_or(&[])
+}
+
+pub fn measurement_part_count() -> usize {
+    if std::env::var("PERF_PART_COUNT").ok().as_deref() == Some("1") {
+        1
+    } else {
+        2
+    }
+}
+
+#[macro_export]
+macro_rules! perf_submit_measurement {
+    ($operation:expr, $payload:expr) => {{
+        let operation = $operation.message($payload);
+        if $crate::common::measurement_part_count() == 2 {
+            $crate::common::block_on(
+                operation
+                    .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
+                    .submit(),
+            )
+        } else {
+            $crate::common::block_on(operation.submit())
+        }
+    }};
 }
 
 pub fn now_ns() -> u64 {

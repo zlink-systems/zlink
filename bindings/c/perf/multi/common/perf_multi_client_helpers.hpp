@@ -97,13 +97,14 @@ inline send_status_t send_echo_message_flags (void *socket,
         }
 
         const zlink_submit_result_t rc =
-          ::perf_zlink_send_rid_parts (socket, target_rid, &part, 1, base_flags);
+          ::perf_zlink_send_rid_measurement_parts (socket, target_rid, &part, base_flags);
         if (rc != ZLINK_SUBMIT_OK)
             zlink_msg_close (&part);
         return classify_send_result (rc);
     }
 
-    const zlink_submit_result_t payload_rc = ::perf_zlink_send_parts (socket, &part, 1, base_flags);
+    const zlink_submit_result_t payload_rc =
+      ::perf_zlink_send_measurement_parts (socket, &part, base_flags);
     if (payload_rc != ZLINK_SUBMIT_OK)
         zlink_msg_close (&part);
     return classify_send_result (payload_rc);
@@ -149,14 +150,21 @@ inline int recv_one_message (
         return -1;
     }
 
+    const perf_zlink_recv_next_fn recv_next = router_surface
+                                                ? ::perf_zlink_recv_next_router
+                                                : ::perf_zlink_recv_next_plain;
     if (router_surface
-        && ((source_rid && source_rid->size == 0) || request_seq != 0 || has_more != ZLINK_PART_FINAL)) {
+        && ((source_rid && source_rid->size == 0) || request_seq != 0
+            || !::perf_zlink_recv_measurement_tail (
+              socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
         zlink_msg_close (&part);
         errno = EPROTO;
         return -1;
     }
 
-    if (!router_surface && (source_rid || has_more != ZLINK_PART_FINAL)) {
+    if (!router_surface
+        && (source_rid || !::perf_zlink_recv_measurement_tail (
+          socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
         zlink_msg_close (&part);
         errno = EPROTO;
         return -1;
@@ -495,15 +503,20 @@ inline int recv_one_message_header (void *socket,
         return -1;
     }
 
+    const perf_zlink_recv_next_fn recv_next = router_surface
+                                                ? ::perf_zlink_recv_next_router
+                                                : ::perf_zlink_recv_next_plain;
     if (router_surface
-        && (request_seq != 0
-            || has_more != ZLINK_PART_FINAL)) {
+        && (request_seq != 0 || !::perf_zlink_recv_measurement_tail (
+          socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
         zlink_msg_close (&part);
         errno = EPROTO;
         return -1;
     }
 
-    if (!router_surface && (source_rid || has_more != ZLINK_PART_FINAL)) {
+    if (!router_surface
+        && (source_rid || !::perf_zlink_recv_measurement_tail (
+          socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
         zlink_msg_close (&part);
         errno = EPROTO;
         return -1;

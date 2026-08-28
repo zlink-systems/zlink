@@ -1138,15 +1138,17 @@ void test_send_complete_startup_failure_does_not_publish_handler ()
       zlink_ctx_set (ctx, ZLINK_IO_THREADS, io_threads));
     void *dealer = zlink_socket (ctx, ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (dealer);
-    const socket_handle_t handle = as_socket_handle (dealer);
-    TEST_ASSERT_NOT_NULL (handle.socket);
+    {
+        const socket_handle_t handle = as_socket_handle (dealer);
+        TEST_ASSERT_NOT_NULL (handle.socket);
 
-    errno = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_HANDLER_INTERNAL_ERROR,
-      zlink_send_complete_handler (dealer, &ignore_send_complete, NULL));
-    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
-    TEST_ASSERT_FALSE (handle.socket->send_complete_handler_active ());
+        errno = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_HANDLER_INTERNAL_ERROR,
+          zlink_send_complete_handler (dealer, &ignore_send_complete, NULL));
+        TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+        TEST_ASSERT_FALSE (handle.socket->send_complete_handler_active ());
+    }
 
     close_socket_zero_linger (dealer);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (ctx));

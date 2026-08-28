@@ -261,13 +261,14 @@ internal static class PerfMultiDealerDealerServer
         PerfPhase expectedPhase, LatencySampleBuffer latSamples,
         ref long messageCount, bool collectMetrics)
     {
-        if (!received.IsSinglePart)
-            return false;
-
-        ReadOnlySpan<byte> body = received.FirstPart().AsReadOnlySpan();
-
-        if (IsStopTokenPayload(body))
+        if (received.Parts.Count == 1
+            && IsStopTokenPayload(received.FirstPart().AsReadOnlySpan()))
             return true;
+
+        if (!PerfSocketIo.TryMeasurementPayload(received.Parts,
+                out Message payloadPart))
+            return false;
+        ReadOnlySpan<byte> body = payloadPart.AsReadOnlySpan();
 
         if (!TryDecodeActiveHeader(body, msgSize, expectedRunId,
                 expectedPhase, out ulong sentTsNs))

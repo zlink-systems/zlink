@@ -634,12 +634,65 @@ class socket_t
         });
     }
 
+    void send_routed (message_t &first_, message_t &second_)
+    {
+        visit ([&] (auto &socket_) {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
+                std::move (socket_.send ().message (first_)).message (second_).submit ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
     void send_routed (const routing_id_t &routing_id_, message_t &part_)
     {
         visit ([&] (auto &socket_) {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
                 std::move (socket_.send (routing_id_)).message (part_).submit ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    void send_routed (const routing_id_t &routing_id_, message_t &first_, message_t &second_)
+    {
+        visit ([&] (auto &socket_) {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
+                std::move (socket_.send (routing_id_).message (first_)).message (second_).submit ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    // Public asynchronous routed-send terminal used by the coroutine
+    // ROUTER_ROUTER benchmark.
+    async_result_t<void> send_routed_async (const routing_id_t &routing_id_,
+                                            message_t &part_)
+    {
+        return visit ([&] (auto &socket_) -> async_result_t<void> {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
+                return std::move (socket_.send (routing_id_)).message (part_).async ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    async_result_t<void> send_routed_async (const routing_id_t &routing_id_,
+                                             message_t &first_,
+                                             message_t &second_)
+    {
+        return visit ([&] (auto &socket_) -> async_result_t<void> {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
+                return std::move (socket_.send (routing_id_).message (first_)).message (second_).async ();
             } else {
                 throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }
@@ -731,6 +784,20 @@ class socket_t
     }
 
     async_result_t<std::vector<message_t>>
+    request (message_t &first_, message_t &second_, std::chrono::milliseconds timeout_)
+    {
+        return visit ([&] (auto &socket_) -> async_result_t<std::vector<message_t>> {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
+                return std::move (socket_.request ()).message (first_).message (second_)
+                  .timeout (timeout_).async ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    async_result_t<std::vector<message_t>>
     request (const routing_id_t &target_rid_,
              message_t &part_,
              std::chrono::milliseconds timeout_)
@@ -742,6 +809,23 @@ class socket_t
                   .message (part_)
                   .timeout (timeout_)
                   .async ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    async_result_t<std::vector<message_t>>
+    request (const routing_id_t &target_rid_,
+             message_t &first_,
+             message_t &second_,
+             std::chrono::milliseconds timeout_)
+    {
+        return visit ([&] (auto &socket_) -> async_result_t<std::vector<message_t>> {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
+                return std::move (socket_.request (target_rid_)).message (first_).message (second_)
+                  .timeout (timeout_).async ();
             } else {
                 throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }

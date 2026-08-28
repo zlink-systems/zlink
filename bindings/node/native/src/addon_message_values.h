@@ -7,7 +7,6 @@
 #include <atomic>
 #include <cstring>
 #include <new>
-#include <vector>
 
 // A Message owns this frame. Its Buffer is only a JavaScript view of the
 // zlink_msg_t storage; it is never the owning payload allocation.
@@ -24,60 +23,14 @@ struct native_message_frame_handle_t
     native_message_frame_t *frame;
 };
 
-class native_message_frame_pool_t
-{
-  public:
-    native_message_frame_pool_t () { frames.reserve (64); }
-
-    ~native_message_frame_pool_t ()
-    {
-        for (size_t i = 0; i < frames.size (); ++i)
-            delete frames[i];
-    }
-
-    native_message_frame_t *acquire ()
-    {
-        if (frames.empty ())
-            return new (std::nothrow) native_message_frame_t;
-        native_message_frame_t *frame = frames.back ();
-        frames.pop_back ();
-        frame->references.store (1, std::memory_order_relaxed);
-        return frame;
-    }
-
-    void recycle (native_message_frame_t *frame)
-    {
-        // HOT PATH: routed single-part recv creates one frame per message.
-        // Keep a small per-JS-thread reserve after ownership reaches zero so
-        // relay workloads do not enter the general allocator for every recv.
-        // The bound prevents retained user messages from growing this cache.
-        if (frames.size () < 64) {
-            frames.push_back (frame);
-            return;
-        }
-        delete frame;
-    }
-
-  private:
-    std::vector<native_message_frame_t *> frames;
-};
-
-inline native_message_frame_pool_t &native_message_frame_pool ()
-{
-    // Synchronous N-API recv and its finalizers execute on the owning JS
-    // thread. Thread-local ownership avoids a lock in this message hot path.
-    static thread_local native_message_frame_pool_t pool;
-    return pool;
-}
-
 inline native_message_frame_t *acquire_native_message_frame ()
 {
-    return native_message_frame_pool ().acquire ();
+    return new (std::nothrow) native_message_frame_t ();
 }
 
 inline void recycle_native_message_frame (native_message_frame_t *frame)
 {
-    native_message_frame_pool ().recycle (frame);
+    delete frame;
 }
 
 inline void retain_native_message_frame (native_message_frame_t *frame)

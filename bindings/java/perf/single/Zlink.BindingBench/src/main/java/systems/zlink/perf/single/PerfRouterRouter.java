@@ -96,13 +96,18 @@ final class PerfRouterRouter {
                                 break;
                             }
                             try {
-                                if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+                                if (received.parts().size() == 1
+                                    && PerfStopToken.isStopTokenMessage(received.firstPart())) {
                                     stop = true;
                                     break;
                                 }
+                                Message payload = PerfUtil.measurementPayload(received.parts());
+                                if (payload == null) {
+                                    continue;
+                                }
                                 long receivedNanoTime = System.nanoTime();
                                 PerfUtil.Header header = PerfUtil.decodeHeader(
-                                    received.firstPart(), config.size(),
+                                    payload, config.size(),
                                     receivedNanoTime);
                                 if (header == null) {
                                     continue;
@@ -318,9 +323,12 @@ final class PerfRouterRouter {
     private static boolean trySendActive(RouterSocket sender, RoutingId route,
                                          Message active) {
         try {
-            PerfUtil.awaitStage(sender.send(route)
-                .message(active)
-                .submit());
+            if (PerfUtil.measurementPartCount() == 2) {
+                PerfUtil.awaitStage(sender.send(route).message(active)
+                    .message(PerfUtil.measurementTail()).submit());
+            } else {
+                PerfUtil.awaitStage(sender.send(route).message(active).submit());
+            }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
             if (ex.getResult()
@@ -340,9 +348,12 @@ final class PerfRouterRouter {
     private static boolean trySendBlocking(RouterSocket sender, RoutingId route,
                                            Message active) {
         try {
-            PerfUtil.awaitStage(sender.send(route)
-                .message(active)
-                .submit());
+            if (PerfUtil.measurementPartCount() == 2) {
+                PerfUtil.awaitStage(sender.send(route).message(active)
+                    .message(PerfUtil.measurementTail()).submit());
+            } else {
+                PerfUtil.awaitStage(sender.send(route).message(active).submit());
+            }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
             if (ex.getResult()

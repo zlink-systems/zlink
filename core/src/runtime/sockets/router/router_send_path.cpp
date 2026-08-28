@@ -163,12 +163,18 @@ int zlink::router_t::xsend (
             _current_out_connection_id = 0;
             if (_mandatory) {
                 _more_out = false;
-                errno = write_admission == pipe_message_admission_hwm_full
-                              || write_admission
-                                   == pipe_message_admission_transport_wait
-                          ? EAGAIN
-                          : EHOSTUNREACH;
-                return -1;
+                errno = write_admission == pipe_message_admission_too_large
+                          ? EMSGSIZE
+                          : write_admission == pipe_message_admission_hwm_full
+                                || write_admission
+                                     == pipe_message_admission_transport_wait
+                              ? EAGAIN
+                              : EHOSTUNREACH;
+                // The pipe rollback discarded the already staged prefix and
+                // earlier parts. A blocking retry of only this continuation
+                // would start a different record, so report the multipart
+                // abort distinctly to the scoped public send path.
+                return -2;
             }
             const int rc = msg_->close ();
             errno_assert (rc == 0);
@@ -232,8 +238,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                  msg_ ? msg_->size () : 0, _more_out ? 1 : 0);
     }
 
-    out_pipe_t *out_pipe = lookup_out_pipe (blob_t (const_cast<unsigned char *> (target_rid_->data),
-                                                    target_rid_->size, zlink::reference_tag_t ()));
+    out_pipe_t *out_pipe = NULL;
     pipe_t *scoped_pipe = NULL;
     if (expected_transport_pair_id_ != 0 || expected_transport_pair_generation_ != 0) {
         scoped_pipe = find_transport_pair_pipe (
@@ -257,7 +262,10 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             *connection_id_out_ = _current_out_connection_id;
         if (pipe_out_)
             *pipe_out_ = _current_out;
-        out_pipe = NULL;
+    } else {
+        out_pipe = lookup_out_pipe (
+          blob_t (const_cast<unsigned char *> (target_rid_->data),
+                  target_rid_->size, zlink::reference_tag_t ()));
     }
     if (scoped_pipe && _more_out) {
         const pipe_message_admission_t write_admission =
@@ -389,15 +397,18 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             _current_out_connection_id = 0;
             if (connection_id_out_)
                 *connection_id_out_ = 0;
-            if (pipe_out_)
-                *pipe_out_ = NULL;
             if (_mandatory) {
                 _more_out = false;
-                errno = write_admission == pipe_message_admission_hwm_full
-                              || write_admission
-                                   == pipe_message_admission_transport_wait
-                          ? EAGAIN
-                          : EHOSTUNREACH;
+                errno = write_admission == pipe_message_admission_too_large
+                          ? EMSGSIZE
+                          : write_admission == pipe_message_admission_hwm_full
+                                || write_admission
+                                     == pipe_message_admission_transport_wait
+                              ? EAGAIN
+                              : EHOSTUNREACH;
+                // xsend_routed always starts a new record, so no earlier part
+                // was staged by this call. Report an ordinary failure and let
+                // the caller apply its submit-retry policy.
                 return -1;
             }
             const int rc = msg_->close ();

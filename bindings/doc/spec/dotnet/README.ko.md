@@ -375,7 +375,7 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
 - PAIR, STREAM 등 unrelated 공통 sync data-plane builder는 별도 계약으로 남지만
   DEALER/ROUTER의 HWM-managed routed 경로에서 canonical terminal로 취급하지
   않는다.
-- routed send의 완료는 Core send-completion 통지가 구동한다. socket runtime은 첫
+- routed send의 pending 완료는 Core send-completion 통지가 구동한다. socket runtime은 첫
   `Async(...)` 시점에 `zlink_send_complete_handler`를 한 번 등록하고, 이후 모든
   operation은 complete record 하나를 `zlink_send_async`로 넘긴다. 바인딩은 park
   queue, readiness 재시도 pump, deadline timer, dispatcher thread를 두지
@@ -387,10 +387,12 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   닫힌 뒤에만 해제한다. 수집되면 Core가 해제된 reverse-P/Invoke stub을 호출하게
   된다.
 - operation 상태는 `zlink_send_async`의 `userdata`로 전달되는 `GCHandle`이
-  살려 두며, 정확히 한 번 도착하는 완료가 그 handle을 해제한다. `SUBMIT_OK`가
-  아니면 완료가 없으므로 payload ownership은 즉시 호출자에게 되돌아간다.
-- 즉시 admission되는 record는 `zlink_send_async` 안에서 완료가 inline으로
-  실행되므로 호출자는 suspend하지 않는다.
+  살려 둔다. nonzero operation id를 받은 pending은 정확히 한 번 도착하는 완료가
+  그 handle을 해제한다. `SUBMIT_OK`가 아니면 완료가 없으므로 payload ownership은
+  즉시 호출자에게 되돌아간다.
+- 즉시 admission은 `SUBMIT_OK`와 operation id `0`을 반환하고 callback을 실행하지
+  않는다. binding이 `GCHandle`을 해제하고 완료된 Task를 반환하므로 호출자는
+  suspend하지 않는다.
 - `CancellationToken`은 `zlink_send_async_cancel`로 매핑한다. 취소된 operation도
   정확히 한 번 완료하며(`TERMINAL`/`ECANCELED`), 이미 admission이 확정된
   operation은 취소되지 않고 `ADMITTED`로 완료한다.

@@ -96,7 +96,7 @@ int recv_pubsub_header_flags (void *subscriber_,
 
     const bool topic_ok = topic_len == std::strlen (k_pubsub_topic)
                           && std::memcmp (topic, k_pubsub_topic, topic_len) == 0;
-    if (!topic_ok || source_rid || has_more != ZLINK_PART_FINAL) {
+    if (!topic_ok || source_rid) {
         if (bench_debug_enabled ()) {
             std::cerr << "[perf-pubsub] invalid recv topic_ok=" << (topic_ok ? 1 : 0)
                       << " has_more=" << static_cast<int> (has_more) << std::endl;
@@ -107,8 +107,18 @@ int recv_pubsub_header_flags (void *subscriber_,
 
     const size_t actual_size = zlink_msg_size (&part);
     if (is_stop_token (zlink_msg_data (&part), actual_size)) {
+        if (has_more != ZLINK_PART_FINAL) {
+            zlink_msg_close (&part);
+            return perf_single_one_way::recv_result_error;
+        }
         zlink_msg_close (&part);
         return perf_single_one_way::recv_result_stop;
+    }
+    if (!perf_zlink_recv_measurement_tail (
+          subscriber_, has_more, static_cast<zlink_recv_flags_t> (flags_),
+          perf_zlink_recv_next_subscribe)) {
+        zlink_msg_close (&part);
+        return perf_single_one_way::recv_result_error;
     }
     const bool size_ok = actual_size == payload_size_;
     bool header_ok = false;
@@ -200,8 +210,8 @@ void run_pubsub (const std::string &transport, size_t msg_size, const std::strin
                                                                   active_state, seq)) {
                   return perf_single_one_way::send_step_fatal;
               }
-              if (perf_zlink_publish_parts (publisher, k_pubsub_topic, &part, 1,
-                                            ZLINK_SEND_FLAGS_NONE)
+              if (perf_zlink_publish_measurement_parts (
+                    publisher, k_pubsub_topic, &part, ZLINK_SEND_FLAGS_NONE)
                   == 0) {
                   return perf_single_one_way::send_step_sent;
               }

@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, integerEnv, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRecvSocket, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForMonitorConnectionReady, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForMonitorConnectionReady, waitForWorkerMessage, } = require('./perf_single_common');
 async function runPairBenchmark(msgSize, options) {
     if (options.transport === 'inproc') {
         return runLocalSocketOneWayBenchmark({
@@ -58,7 +58,12 @@ async function runPairBenchmark(msgSize, options) {
         // setup_connected_*); the receiver drains until the wire stop token,
         // exactly like C perf_single_one_way.hpp run_active_phase.
         const recvTask = drainRecvSocket(server, (received) => {
-            const data = received.singlePartOrThrow().data();
+            const payload = measurementPayload(received.parts);
+            if (!payload) {
+                collector.recordPayload(null, currentEpochNs());
+                return;
+            }
+            const data = payload.data();
             if (data.length !== Math.max(msgSize, HEADER_SIZE)) {
                 collector.recordPayload(null, currentEpochNs());
                 return;

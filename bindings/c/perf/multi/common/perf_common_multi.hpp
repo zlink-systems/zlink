@@ -114,10 +114,7 @@ inline uint64_t resolve_default_hwm (const char *pattern, int clients)
 
 inline int resolve_default_clients (const char *pattern)
 {
-    const std::string normalized = normalize_multi_pattern_name (pattern);
-    if (normalized == "STREAM")
-        return 10000;
-
+    (void) pattern;
     return 100;
 }
 

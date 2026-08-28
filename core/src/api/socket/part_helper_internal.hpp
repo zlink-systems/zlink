@@ -118,8 +118,11 @@ void trace_routed_part_first_send (const zlink_routing_id_t &rid_,
                                    zlink_send_flags_t flags_);
 std::shared_ptr<handle_state_t> find_or_create_handle_state (void *handle_);
 std::shared_ptr<handle_state_t> find_handle_state (void *handle_);
+std::shared_ptr<handle_state_t> find_or_create_socket_state (zlink::socket_base_t *socket_);
+std::shared_ptr<handle_state_t> find_socket_state (zlink::socket_base_t *socket_);
 bool recv_sequence_active (const std::shared_ptr<handle_state_t> &state_);
 bool send_sequence_active (void *handle_);
+bool send_sequence_active (zlink::socket_base_t *socket_);
 int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
                          recv_family_t family_,
                          zlink::socket_base_t *source_socket_,
@@ -177,10 +180,12 @@ void complete_send_step (const std::shared_ptr<handle_state_t> &state_,
 void complete_recv_step (const std::shared_ptr<handle_state_t> &state_,
                          zlink_part_flag_t has_more_);
 void abort_send_step (const std::shared_ptr<handle_state_t> &state_);
+void abort_current_non_publish_send_sequence (void *handle_);
 void abort_recv_step (const std::shared_ptr<handle_state_t> &state_);
 int reject_if_send_sequence_open (void *handle_);
 void invalidate_recv_sequence (void *handle_);
 void cleanup_handle (void *handle_);
+void cleanup_socket (zlink::socket_base_t *socket_);
 }
 }
 

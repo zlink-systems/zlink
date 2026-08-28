@@ -1,10 +1,20 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Systems.Zlink.Tests;
 
 public sealed class test_socket_concurrency
 {
+    private readonly ITestOutputHelper _output;
+
+    public test_socket_concurrency(ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
     [Fact]
     public async Task dealer_and_router_allow_concurrent_public_sends()
     {
@@ -120,204 +130,346 @@ public sealed class test_socket_concurrency
     }
 
     [Fact]
-    public async Task dealer_and_router_allow_concurrent_multipart_requests_and_replies()
+    public void concurrent_multipart_rejection_consumes_submitted_caller_parts()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
 
         using var context = Zlink.CreateContext();
-        using var router = context.CreateRouterSocket();
-        using var dealer = context.CreateDealerSocket();
+        context.Options.AutoHwmEnabled = false;
+        using var sender = context.CreatePairSocket();
+        using var receiver = context.CreatePairSocket();
+        sender.Options.SendHighWaterMark = 0;
+        receiver.Options.ReceiveHighWaterMark = 0;
         string endpoint = CoreTestSupport.NewEndpoint(
-            "inproc", "concurrent-public-request-reply");
-        router.Bind(endpoint);
-        dealer.Connect(endpoint);
+            "inproc", "concurrent-multipart-ownership");
+        sender.Bind(endpoint);
+        receiver.Connect(endpoint);
         Thread.Sleep(50);
 
-        const int requestCount = 32;
-        var start = new Barrier(requestCount + 1);
-        Task<IReadOnlyList<Message>>[] requests = Enumerable.Range(0, requestCount)
-            .Select(requestIndex => Task.Run(async () =>
+        const int producerCount = 8;
+        const int attemptsPerProducer = 5_000;
+        const int totalAttempts = producerCount * attemptsPerProducer;
+        using var start = new ManualResetEventSlim(false);
+        var unexpected = new ConcurrentQueue<Exception>();
+        var succeeded = 0;
+        var rejected = 0;
+        var receivedCount = 0;
+        var badWireRecordCount = 0;
+        var badOwnershipCount = 0;
+        var producersDone = 0;
+
+        var receiveThread = new Thread(() =>
+        {
+            try
             {
-                start.SignalAndWait();
-                using Message header = Message.From(
-                    $"request-{requestIndex}-header");
-                using Message body = Message.From(
-                    $"request-{requestIndex}-body");
-                IReadOnlyList<Message> reply = await dealer.Request()
-                    .Messages([header, body])
-                    .Timeout(TimeSpan.FromSeconds(5))
-                    .Async();
+                using var received = Received.Create();
+                while (Volatile.Read(ref producersDone) == 0
+                    || Volatile.Read(ref receivedCount)
+                    < Volatile.Read(ref succeeded))
+                {
+                    if (!receiver.Recv(received, RecvFlags.DontWait))
+                    {
+                        Thread.Yield();
+                        continue;
+                    }
+
+                    if (received.Parts.Count != 2)
+                    {
+                        Interlocked.Increment(ref badWireRecordCount);
+                    }
+                    else
+                    {
+                        string header = received.Parts[0].GetString();
+                        string body = received.Parts[1].GetString();
+                        if (!header.EndsWith(":header", StringComparison.Ordinal)
+                            || body != header[..^":header".Length] + ":body")
+                            Interlocked.Increment(ref badWireRecordCount);
+                    }
+                    Interlocked.Increment(ref receivedCount);
+                }
+            }
+            catch (Exception exception)
+            {
+                unexpected.Enqueue(exception);
+            }
+        }) { IsBackground = true };
+        receiveThread.Start();
+
+        Thread[] producers = Enumerable.Range(0, producerCount)
+            .Select(producer => new Thread(() =>
+            {
                 try
                 {
-                    Assert.Equal(2, reply.Count);
-                    Assert.Equal($"reply-{requestIndex}-header",
-                        reply[0].GetString());
-                    Assert.Equal($"reply-{requestIndex}-body",
-                        reply[1].GetString());
+                    start.Wait();
+                    for (var attempt = 0;
+                         attempt < attemptsPerProducer;
+                         attempt++)
+                    {
+                        string prefix = $"{producer}:{attempt}";
+                        Message header = Message.From($"{prefix}:header");
+                        Message body = Message.From($"{prefix}:body");
+                        try
+                        {
+                            sender.Send().Message(header).Message(body).Submit();
+                            Interlocked.Increment(ref succeeded);
+                        }
+                        catch (ZlinkSubmitException exception) when (
+                            exception.Result ==
+                            ZlinkSubmitException.ErrorCode.InvalidArgument)
+                        {
+                            // The first part was passed to Core and is consumed
+                            // for both success and ordinary failure. The second
+                            // part is either consumed if Core saw it or restored
+                            // unchanged if the first submit rejected the record.
+                            try
+                            {
+                                string readableHeader = header.GetString();
+                                Interlocked.Increment(ref badOwnershipCount);
+                                unexpected.Enqueue(new InvalidOperationException(
+                                    $"submitted header remained readable: '{readableHeader}'"));
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                // Expected: the first part reached Core.
+                            }
+
+                            try
+                            {
+                                string restoredBody = body.GetString();
+                                if (restoredBody != $"{prefix}:body")
+                                {
+                                    Interlocked.Increment(ref badOwnershipCount);
+                                    unexpected.Enqueue(new InvalidOperationException(
+                                        $"unsubmitted body='{restoredBody}' expected='{prefix}:body'"));
+                                }
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                // The second submit was attempted and consumed.
+                            }
+                            Interlocked.Increment(ref rejected);
+                        }
+                        finally
+                        {
+                            header.Dispose();
+                            body.Dispose();
+                        }
+                    }
                 }
-                finally
+                catch (Exception exception)
                 {
-                    Zlink.MultipartClose(reply);
+                    unexpected.Enqueue(exception);
                 }
-
-                return reply;
-            }))
+            }) { IsBackground = true })
             .ToArray();
-        start.SignalAndWait();
-        var replies = new List<Task>(requestCount);
-        for (var requestIndex = 0; requestIndex < requestCount; requestIndex++)
-        {
-            using Received received = ReceiveWithRetry(router);
-            RoutingId routingId = received.RoutingId
-                ?? throw new InvalidOperationException("missing routing id");
-            ulong requestSeq = received.RequestSeq
-                ?? throw new InvalidOperationException("missing request sequence");
-            string requestHeader = received.Parts[0].GetString();
-            int requestNumber = int.Parse(
-                requestHeader["request-".Length..^"-header".Length]);
-            replies.Add(Task.Run(() =>
-            {
-                using Message header = Message.From(
-                    $"reply-{requestNumber}-header");
-                using Message body = Message.From(
-                    $"reply-{requestNumber}-body");
-                router.Reply(routingId, requestSeq)
-                    .Messages([header, body])
-                    .Submit();
-            }));
-        }
 
-        await Task.WhenAll(replies).WaitAsync(TimeSpan.FromSeconds(10));
-        await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(10));
-        start.Dispose();
+        foreach (Thread producer in producers)
+            producer.Start();
+        start.Set();
+        foreach (Thread producer in producers)
+            Assert.True(producer.Join(TimeSpan.FromSeconds(30)));
+        Volatile.Write(ref producersDone, 1);
+        Assert.True(receiveThread.Join(TimeSpan.FromSeconds(30)));
+
+        _output.WriteLine(
+            $"attempts={totalAttempts} succeeded={succeeded} rejected={rejected} received={receivedCount} bad_wire_record_count={badWireRecordCount} bad_ownership_count={badOwnershipCount}");
+        Assert.Empty(unexpected);
+        Assert.Equal(totalAttempts, succeeded + rejected);
+        Assert.True(succeeded > 0);
+        Assert.True(rejected > 0);
+        Assert.Equal(succeeded, receivedCount);
+        Assert.Equal(0, badWireRecordCount);
+        Assert.Equal(0, badOwnershipCount);
     }
 
     [Fact]
-    public async Task dealer_allows_concurrent_send_and_request_submission()
+    public void busy_close_preserves_socket_until_retry_succeeds()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
 
         using var context = Zlink.CreateContext();
-        using var router = context.CreateRouterSocket();
-        using var dealer = context.CreateDealerSocket();
+        context.Options.AutoHwmEnabled = false;
+        var sender = context.CreatePairSocket();
+        using var receiver = context.CreatePairSocket();
+        sender.Options.SendHighWaterMark = 1;
+        sender.Options.SendTimeout = TimeSpan.FromMilliseconds(750);
+        receiver.Options.ReceiveHighWaterMark = 1;
         string endpoint = CoreTestSupport.NewEndpoint(
-            "inproc", "concurrent-public-send-request");
-        router.Bind(endpoint);
-        dealer.Connect(endpoint);
+            "inproc", "close-busy-preserves-handle");
+        sender.Bind(endpoint);
+        receiver.Connect(endpoint);
         Thread.Sleep(50);
 
-        const int producerCount = 4;
-        const int operationsPerProducer = 8;
-        const int operationCount = producerCount * operationsPerProducer;
-        var start = new Barrier(producerCount * 2 + 1);
-        var requests = new List<Task>(operationCount);
-        var sends = new List<Task>(operationCount);
-
-        for (var producer = 0; producer < producerCount; producer++)
+        byte[] bytes = new byte[64 * 1024];
+        while (true)
         {
-            var producerIndex = producer;
-            sends.Add(Task.Run(async () =>
-            {
-                start.SignalAndWait();
-                for (var operation = 0; operation < operationsPerProducer; operation++)
-                {
-                    using Message header = Message.From(
-                        $"send-{producerIndex}-{operation}-header");
-                    using Message body = Message.From(
-                        $"send-{producerIndex}-{operation}-body");
-                    await dealer.Send()
-                        .Messages([header, body])
-                        .Async();
-                }
-            }));
+            using Message filler = Message.From(bytes);
+            if (!sender.Send().Message(filler).Flags(SendFlags.DontWait)
+                    .Submit())
+                break;
+        }
 
-            requests.Add(Task.Run(async () =>
+        using var sendStarted = new ManualResetEventSlim(false);
+        Exception? sendError = null;
+        var sendThread = new Thread(() =>
+        {
+            using Message blocked = Message.From(bytes);
+            sendStarted.Set();
+            try
             {
-                start.SignalAndWait();
-                for (var operation = 0; operation < operationsPerProducer; operation++)
+                sender.Send().Message(blocked).Submit();
+            }
+            catch (Exception exception)
+            {
+                sendError = exception;
+            }
+        }) { IsBackground = true };
+        sendThread.Start();
+        Assert.True(sendStarted.Wait(TimeSpan.FromSeconds(2)));
+        Thread.Sleep(50);
+
+        var elapsed = Stopwatch.StartNew();
+        ZlinkCloseException closeError = Assert.Throws<ZlinkCloseException>(
+            () => sender.Close());
+        elapsed.Stop();
+        Assert.Equal(ZlinkCloseException.ErrorCode.Busy, closeError.Result);
+        Assert.True(elapsed.Elapsed < TimeSpan.FromMilliseconds(500));
+
+        // EBUSY did not destroy the handle or mutate the managed lifecycle.
+        Assert.Equal(TimeSpan.FromMilliseconds(750),
+            sender.Options.SendTimeout);
+        Assert.True(sendThread.Join(TimeSpan.FromSeconds(3)));
+        Assert.IsType<ZlinkSubmitException>(sendError);
+
+        sender.Close();
+        _output.WriteLine(
+            $"close_busy_elapsed_us={elapsed.Elapsed.TotalMicroseconds:F0} retry=success");
+    }
+
+    [Fact]
+    public void single_multipart_and_close_race_exposes_only_core_outcomes()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var context = Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        var sender = context.CreatePairSocket();
+        using var receiver = context.CreatePairSocket();
+        sender.Options.SendHighWaterMark = 0;
+        receiver.Options.ReceiveHighWaterMark = 0;
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "mixed-send-close-race");
+        sender.Bind(endpoint);
+        receiver.Connect(endpoint);
+        Thread.Sleep(50);
+
+        const int producerCount = 8;
+        const int attemptsPerProducer = 6_250;
+        const int totalAttempts = producerCount * attemptsPerProducer;
+        using var start = new ManualResetEventSlim(false);
+        var unexpected = new ConcurrentQueue<Exception>();
+        var attempted = 0;
+        var succeeded = 0;
+        var multipartRejected = 0;
+        var shutdown = 0;
+        var closeBusy = 0;
+        var closeAccepted = 0;
+
+        Thread[] producers = Enumerable.Range(0, producerCount)
+            .Select(producer => new Thread(() =>
+            {
+                start.Wait();
+                for (var attempt = 0; attempt < attemptsPerProducer; attempt++)
                 {
-                    using Message header = Message.From(
-                        $"request-{producerIndex}-{operation}-header");
-                    using Message body = Message.From(
-                        $"request-{producerIndex}-{operation}-body");
-                    IReadOnlyList<Message> reply = await dealer.Request()
-                        .Messages([header, body])
-                        .Timeout(TimeSpan.FromSeconds(5))
-                        .Async();
+                    Interlocked.Increment(ref attempted);
+                    Message first = Message.From($"{producer}:{attempt}:first");
+                    Message? second = (attempt & 1) == 0
+                        ? Message.From($"{producer}:{attempt}:second")
+                        : null;
                     try
                     {
-                        Assert.Equal(2, reply.Count);
-                        Assert.Equal($"reply-{producerIndex}-{operation}-header",
-                            reply[0].GetString());
-                        Assert.Equal($"reply-{producerIndex}-{operation}-body",
-                            reply[1].GetString());
+                        SendSubmitOperation operation = sender.Send().Message(first);
+                        if (second != null)
+                            operation = operation.Message(second);
+                        operation.Submit();
+                        Interlocked.Increment(ref succeeded);
+                    }
+                    catch (ZlinkSubmitException exception) when (
+                        exception.Result ==
+                        ZlinkSubmitException.ErrorCode.InvalidArgument)
+                    {
+                        Interlocked.Increment(ref multipartRejected);
+                    }
+                    catch (ZlinkSubmitException exception) when (
+                        exception.Result is ZlinkSubmitException.ErrorCode.Terminated
+                            or ZlinkSubmitException.ErrorCode.InvalidHandle
+                            or ZlinkSubmitException.ErrorCode.NotConnected)
+                    {
+                        Interlocked.Increment(ref shutdown);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        Interlocked.Increment(ref shutdown);
+                    }
+                    catch (Exception exception)
+                    {
+                        unexpected.Enqueue(exception);
                     }
                     finally
                     {
-                        Zlink.MultipartClose(reply);
+                        first.Dispose();
+                        second?.Dispose();
                     }
                 }
-            }));
-        }
-        start.SignalAndWait();
+            }) { IsBackground = true })
+            .ToArray();
 
-        var rawPayloads = new HashSet<string>(StringComparer.Ordinal);
-        var replyTasks = new List<Task>(operationCount);
-        for (var receivedCount = 0; receivedCount < operationCount * 2; receivedCount++)
+        var closeThread = new Thread(() =>
         {
-            using Received received = ReceiveWithRetry(router);
-            if (received.MessageType != ReceivedMessageType.Request)
+            start.Wait();
+            while (Volatile.Read(ref attempted) < 20_000)
+                Thread.Yield();
+            while (true)
             {
-                rawPayloads.Add(string.Join("|", received.Parts.Select(
-                    part => part.GetString())));
-                continue;
+                try
+                {
+                    sender.Close();
+                    Interlocked.Exchange(ref closeAccepted, 1);
+                    return;
+                }
+                catch (ZlinkCloseException exception) when (
+                    exception.Result == ZlinkCloseException.ErrorCode.Busy)
+                {
+                    Interlocked.Increment(ref closeBusy);
+                    Thread.Yield();
+                }
+                catch (Exception exception)
+                {
+                    unexpected.Enqueue(exception);
+                    return;
+                }
             }
+        }) { IsBackground = true };
 
-            RoutingId routingId = received.RoutingId
-                ?? throw new InvalidOperationException("missing routing id");
-            ulong requestSeq = received.RequestSeq
-                ?? throw new InvalidOperationException("missing request sequence");
-            string requestHeader = received.Parts[0].GetString();
-            string requestPrefix = requestHeader["request-".Length..^"-header".Length];
-            replyTasks.Add(Task.Run(() =>
-            {
-                using Message header = Message.From($"reply-{requestPrefix}-header");
-                using Message body = Message.From($"reply-{requestPrefix}-body");
-                router.Reply(routingId, requestSeq)
-                    .Messages([header, body])
-                    .Submit();
-            }));
-        }
+        foreach (Thread producer in producers)
+            producer.Start();
+        closeThread.Start();
+        start.Set();
+        foreach (Thread producer in producers)
+            Assert.True(producer.Join(TimeSpan.FromSeconds(30)));
+        Assert.True(closeThread.Join(TimeSpan.FromSeconds(5)));
 
-        await Task.WhenAll(replyTasks).WaitAsync(TimeSpan.FromSeconds(10));
-        await Task.WhenAll(sends).WaitAsync(TimeSpan.FromSeconds(10));
-        await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(10));
-        start.Dispose();
-        Assert.Equal(operationCount, rawPayloads.Count);
-        Assert.All(rawPayloads, payload =>
-        {
-            string[] parts = payload.Split('|');
-            Assert.Equal(2, parts.Length);
-            Assert.EndsWith("-header", parts[0], StringComparison.Ordinal);
-            Assert.Equal(parts[0][..^"-header".Length] + "-body", parts[1]);
-        });
+        _output.WriteLine(
+            $"attempts={totalAttempts} succeeded={succeeded} multipart_rejected={multipartRejected} shutdown={shutdown} close_busy={closeBusy} close_accepted={closeAccepted}");
+        Assert.Empty(unexpected);
+        Assert.Equal(totalAttempts,
+            succeeded + multipartRejected + shutdown);
+        Assert.True(succeeded > 0);
+        Assert.True(multipartRejected > 0);
+        Assert.Equal(1, closeAccepted);
     }
 
-    private static Received ReceiveWithRetry(IRouterSocket socket)
-    {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            var received = Received.Create();
-            if (socket.Recv(received, RecvFlags.DontWait))
-                return received;
-
-            received.Dispose();
-            Thread.Sleep(1);
-        }
-
-        throw new TimeoutException("Timed out waiting for router message.");
-    }
 }

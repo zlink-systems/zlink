@@ -15,6 +15,7 @@
 
 #include "core/ctx.hpp"
 #include "sockets/common/socket_base.hpp"
+#include "sockets/common/socket_public_handle.hpp"
 #include "core/io_thread.hpp"
 #include "core/reaper.hpp"
 #include "core/pipe.hpp"
@@ -70,6 +71,7 @@ zlink::ctx_t::ctx_t () :
     _max_sockets (ctx_t::clipped_maxsocket (ZLINK_MAX_SOCKETS_DFLT)),
     _max_msgsz (INT_MAX),
     _io_thread_count (ZLINK_IO_THREADS_DFLT),
+    _auto_hwm_recalc_stopped (false),
     _blocky (true),
     _ipv6 (false)
 {
@@ -93,11 +95,44 @@ zlink::ctx_t::~ctx_t ()
     stop_auto_hwm_recalc_task ();
     teardown_runtime ();
 
+    for (std::vector<socket_public_handle_t *>::iterator it =
+           _public_socket_handles.begin ();
+         it != _public_socket_handles.end (); ++it)
+        delete *it;
+    _public_socket_handles.clear ();
+
     //  De-initialise crypto library, if needed.
     zlink::random_close ();
 
     //  Remove the tag, so that the object is considered dead.
     _tag = ZLINK_CTX_TAG_VALUE_BAD;
+}
+
+void *zlink::ctx_t::register_public_socket_handle (socket_base_t *socket_)
+{
+    if (!socket_) {
+        errno = EFAULT;
+        return NULL;
+    }
+
+    socket_public_handle_t *handle =
+      new (std::nothrow) socket_public_handle_t (socket_);
+    if (!handle) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    try {
+        scoped_lock_t locker (_slot_sync);
+        _public_socket_handles.push_back (handle);
+        socket_->set_public_handle (handle);
+    }
+    catch (...) {
+        delete handle;
+        errno = ENOMEM;
+        return NULL;
+    }
+    return static_cast<void *> (handle);
 }
 
 bool zlink::ctx_t::valid () const

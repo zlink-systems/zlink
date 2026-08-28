@@ -17,8 +17,6 @@ import systems.zlink.runtime.nativeapi.Native;
 import java.util.List;
 final class NativeXPubSocket extends NativeSocketBase implements XPubSocket {
     private final PubSocketOptions options = ContractAccess.pubSocketOptions(this);
-    private final OutboundRecordAttemptGate outboundRecordAttempts =
-        new OutboundRecordAttemptGate();
     private TopicSendInvoker cachedTopicInvoker;
 
     NativeXPubSocket(Context ctx) {
@@ -57,8 +55,7 @@ final class NativeXPubSocket extends NativeSocketBase implements XPubSocket {
 
         @Override
         public void submit(List<Message> parts, SendFlags flags) {
-            SendResult result = outboundRecordAttempts.call(() ->
-                runtime().publishNoWaitResult(topicId, parts));
+            SendResult result = runtime().publishNoWaitResult(topicId, parts);
             if (result == SendResult.SENT)
                 return;
             int errno = Native.errno();
@@ -70,7 +67,7 @@ final class NativeXPubSocket extends NativeSocketBase implements XPubSocket {
     public boolean receiveSubscriptionEvent(SubscriptionEvent result, RecvFlags flags) { return runtime().receiveSubscriptionEvent(result, ReceiveFlag.fromValue(flags.value())); }
     @Override
     public void close() {
-        outboundRecordAttempts.run(runtime()::close);
+        runtime().close();
     }
     @Override public PubSocketOptions options() { return options; }
 }

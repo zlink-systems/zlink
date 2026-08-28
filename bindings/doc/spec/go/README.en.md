@@ -226,11 +226,15 @@ type ReplySubmitOp interface {
   as `RequestTimedOut`. `ctx` cancellation and deadline separately complete the
   caller's channel first; a Core reply arriving afterwards is dropped and its
   parts released.
-- Outbound paths on one native handle share a short record-attempt gate (a
-  plain mutex) that protects one complete multipart attempt from its first part
-  through `FINAL`. It is not a queue or a worker: it only prevents part-sequence
-  interleaving and close races. While a blocking submit holds it inside Core,
-  submits to other targets on the same socket serialize behind it.
+- The Go binding adds no lock or gate of its own to an outbound path. Core's
+  per-socket transaction state keeps another sender's parts out of an open
+  sequence and rejects a racing attempt as a whole, without exposing a partial
+  record to the peer. Core consumes the native part actually passed to a
+  synchronous call on ordinary failure; any caller-visible preservation is
+  implemented with binding-owned staging storage. Concurrent multipart submits
+  on one socket are the application's responsibility: the binding does not
+  serialize, wait, or retry. Core's lifecycle gate likewise owns races between
+  close and an in-flight submit.
 - A request channel yields exactly one reply, submit failure, timeout,
   disconnect, or context-cancellation result and then closes. On success the
   caller closes `Parts`; failures are carried by `Err` and the corresponding

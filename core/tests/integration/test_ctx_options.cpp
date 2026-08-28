@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <limits>
+#include <thread>
 #include <vector>
 #include <string.h>
 #include "testutil.hpp"
@@ -887,6 +889,151 @@ void test_socket_option_manual_hwm_overrides_auto_hwm_recalculation ()
     test_context_socket_close (router);
 }
 
+static bool auto_hwm_snapshot_u64_is_candidate (uint64_t value_,
+                                                 uint64_t first_,
+                                                 uint64_t second_)
+{
+    return value_ == first_ || value_ == second_;
+}
+
+static bool auto_hwm_snapshot_int_is_candidate (int32_t value_,
+                                                 int first_,
+                                                 int second_)
+{
+    return value_ == first_ || value_ == second_;
+}
+
+void test_auto_hwm_recalculate_monitor_and_setsockopt_are_thread_safe ()
+{
+    void *ctx = get_test_context ();
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_ctx_set (ctx, ZLINK_CTX_OPT_AUTO_HWM_PROFILE,
+                     ZLINK_AUTO_HWM_PROFILE_BALANCED));
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (router);
+
+    const uint64_t sndhwm_values[2] = {65536, 131072};
+    const uint64_t rcvhwm_values[2] = {196608, 262144};
+    const int sndbuf_values[2] = {131072, 262144};
+    const int rcvbuf_values[2] = {393216, 524288};
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_SNDHWM, &sndhwm_values[0],
+                        sizeof (sndhwm_values[0])));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_RCVHWM, &rcvhwm_values[0],
+                        sizeof (rcvhwm_values[0])));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_SNDBUF, &sndbuf_values[0],
+                        sizeof (sndbuf_values[0])));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_RCVBUF, &rcvbuf_values[0],
+                        sizeof (rcvbuf_values[0])));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_auto_hwm_recalculate (ctx));
+
+    zlink_socket_monitor_open_options_t opts;
+    memset (&opts, 0, sizeof (opts));
+    opts.events = 0;
+    void *monitor = zlink_socket_monitor_open (router, &opts);
+    TEST_ASSERT_NOT_NULL (monitor);
+
+    const int iteration_count = 1000;
+    std::atomic<int> ready (0);
+    std::atomic<bool> start (false);
+    std::atomic<int> recalc_failures (0);
+    std::atomic<int> setsockopt_failures (0);
+    std::atomic<int> monitor_failures (0);
+    std::atomic<int> invalid_snapshots (0);
+
+    std::thread recalculate ([&] () {
+        ready.fetch_add (1, std::memory_order_release);
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        for (int i = 0; i != iteration_count; ++i) {
+            if (zlink_ctx_auto_hwm_recalculate (ctx) != ZLINK_CONFIG_OK)
+                recalc_failures.fetch_add (1, std::memory_order_relaxed);
+            std::this_thread::yield ();
+        }
+    });
+
+    std::thread set_options ([&] () {
+        ready.fetch_add (1, std::memory_order_release);
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        for (int i = 0; i != iteration_count; ++i) {
+            const int selected = i & 1;
+            if (zlink_set_option (router, ZLINK_OPT_SNDHWM,
+                                  &sndhwm_values[selected],
+                                  sizeof (sndhwm_values[selected]))
+                  != ZLINK_CONFIG_OK
+                || zlink_set_option (router, ZLINK_OPT_RCVHWM,
+                                     &rcvhwm_values[selected],
+                                     sizeof (rcvhwm_values[selected]))
+                     != ZLINK_CONFIG_OK
+                || zlink_set_option (router, ZLINK_OPT_SNDBUF,
+                                     &sndbuf_values[selected],
+                                     sizeof (sndbuf_values[selected]))
+                     != ZLINK_CONFIG_OK
+                || zlink_set_option (router, ZLINK_OPT_RCVBUF,
+                                     &rcvbuf_values[selected],
+                                     sizeof (rcvbuf_values[selected]))
+                     != ZLINK_CONFIG_OK)
+                setsockopt_failures.fetch_add (1, std::memory_order_relaxed);
+            std::this_thread::yield ();
+        }
+    });
+
+    std::thread read_monitor ([&] () {
+        ready.fetch_add (1, std::memory_order_release);
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        for (int i = 0; i != iteration_count; ++i) {
+            zlink_monitor_status_t status;
+            memset (&status, 0, sizeof (status));
+            if (zlink_monitor_status (monitor, &status) != 0) {
+                monitor_failures.fetch_add (1, std::memory_order_relaxed);
+                continue;
+            }
+            if (status.abi_version != ZLINK_MONITOR_STATUS_ABI_VERSION
+                || status.struct_size != sizeof (status)
+                || status.source_kind != ZLINK_MONITOR_SOURCE_SOCKET
+                || status.auto_hwm_profile != ZLINK_AUTO_HWM_PROFILE_BALANCED
+                || !auto_hwm_snapshot_u64_is_candidate (
+                  status.auto_hwm_applied_sndhwm_bytes, sndhwm_values[0],
+                  sndhwm_values[1])
+                || !auto_hwm_snapshot_u64_is_candidate (
+                  status.auto_hwm_applied_rcvhwm_bytes, rcvhwm_values[0],
+                  rcvhwm_values[1])
+                || !auto_hwm_snapshot_int_is_candidate (
+                  status.auto_hwm_effective_sndbuf, sndbuf_values[0],
+                  sndbuf_values[1])
+                || !auto_hwm_snapshot_int_is_candidate (
+                  status.auto_hwm_effective_rcvbuf, rcvbuf_values[0],
+                  rcvbuf_values[1]))
+                invalid_snapshots.fetch_add (1, std::memory_order_relaxed);
+            std::this_thread::yield ();
+        }
+    });
+
+    while (ready.load (std::memory_order_acquire) != 3)
+        std::this_thread::yield ();
+    start.store (true, std::memory_order_release);
+
+    recalculate.join ();
+    set_options.join ();
+    read_monitor.join ();
+
+    TEST_ASSERT_EQUAL_INT (0, recalc_failures.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (0,
+                           setsockopt_failures.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (0, monitor_failures.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (0,
+                           invalid_snapshots.load (std::memory_order_relaxed));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close (router);
+}
+
 void test_ctx_option_invalid ()
 {
     TEST_ASSERT_EQUAL_INT (
@@ -924,6 +1071,7 @@ int main (void)
     RUN_TEST (test_socket_option_auto_hwm_buffer_options_do_not_change_snapshot_contract);
     RUN_TEST (test_socket_monitor_hwm_bytes_are_applied_without_conversion);
     RUN_TEST (test_socket_option_manual_hwm_overrides_auto_hwm_recalculation);
+    RUN_TEST (test_auto_hwm_recalculate_monitor_and_setsockopt_are_thread_safe);
     RUN_TEST (test_ctx_option_invalid);
     return UNITY_END ();
 }

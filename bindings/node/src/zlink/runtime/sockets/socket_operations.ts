@@ -13,7 +13,7 @@ import {
   materializeReceivedInto,
   materializeRoutedReceivedInto,
   materializeTopicMessage,
-  routedReceivedCachedRoutingBytes,
+  routedReceivedRoutingBytes,
   routedReceivedPrefersManagedBuffer,
 } from '../messaging/message_materializer';
 import {
@@ -260,20 +260,20 @@ export class RoutedMessageSocket extends ConnectableSocket {
     // relays consume the movable native frame. Use the previous refill to
     // select the next internal storage mode without changing the public API.
     const preferManagedSinglePart = routedReceivedPrefersManagedBuffer(result);
-    const cachedRoutingId = routedReceivedCachedRoutingBytes(result);
+    const routingIdStorage = routedReceivedRoutingBytes(result);
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
         ? native.routerRecvMessageNoWait(
             getNativeHandle(this),
             preferManagedSinglePart,
-            cachedRoutingId
+            routingIdStorage
           )
         : native.routerRecvMessage(
             getNativeHandle(this),
             flags | 0,
             preferManagedSinglePart,
-            cachedRoutingId
+            routingIdStorage
           );
     } catch (error) {
       throw recvNativeError(error, flags, 'recv failed');

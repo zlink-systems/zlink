@@ -5,6 +5,7 @@
 #include "perf_single_latency.hpp"
 #include "perf_single_metric_header.hpp"
 #include "perf_single_phase.hpp"
+#include "../../common/perf_zlink_part_helpers.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -73,7 +74,7 @@ inline int recv_single_part_header_flags (void *socket_,
         return recv_result_error;
     }
 
-    if (source_rid || has_more != ZLINK_PART_FINAL) {
+    if (source_rid) {
         if (bench_debug_enabled ()) {
             std::cerr << "[" << (trace_label_ ? trace_label_ : "perf-single")
                       << "] unexpected recv metadata has_more=" << static_cast<int> (has_more)
@@ -85,8 +86,38 @@ inline int recv_single_part_header_flags (void *socket_,
 
     const size_t actual_size = zlink_msg_size (&part);
     if (is_stop_token (zlink_msg_data (&part), actual_size)) {
+        if (has_more != ZLINK_PART_FINAL) {
+            zlink_msg_close (&part);
+            return recv_result_error;
+        }
         zlink_msg_close (&part);
         return recv_result_stop;
+    }
+    if (perf_measurement_part_count () == 2u) {
+        if (has_more != ZLINK_PART_MORE) {
+            zlink_msg_close (&part);
+            return recv_result_error;
+        }
+        zlink_msg_t empty_part;
+        zlink_part_flag_t tail_more = ZLINK_PART_FINAL;
+        if (zlink_msg_init (&empty_part) != 0) {
+            zlink_msg_close (&part);
+            return recv_result_error;
+        }
+        const zlink_recv_result_t tail_rc = zlink_recv_part (
+          socket_, &source_rid, &empty_part, &tail_more,
+          static_cast<zlink_recv_flags_t> (flags_));
+        const bool tail_ok = tail_rc == ZLINK_RECV_OK && !source_rid
+                             && tail_more == ZLINK_PART_FINAL
+                             && zlink_msg_size (&empty_part) == 0;
+        zlink_msg_close (&empty_part);
+        if (!tail_ok) {
+            zlink_msg_close (&part);
+            return recv_result_error;
+        }
+    } else if (has_more != ZLINK_PART_FINAL) {
+        zlink_msg_close (&part);
+        return recv_result_error;
     }
     const bool size_ok = actual_size == expected_size_;
     bool header_ok = false;
@@ -138,7 +169,8 @@ send_socket_active_message (void *sender_, zlink_msg_t *part_, int flags_, bool 
     if (!sender_ || !part_)
         return send_step_fatal;
 
-    if (perf_zlink_send_parts (sender_, part_, 1, static_cast<zlink_send_flags_t> (flags_)) == 0) {
+    if (perf_zlink_send_measurement_parts (
+          sender_, part_, static_cast<zlink_send_flags_t> (flags_)) == 0) {
         return send_step_sent;
     }
 

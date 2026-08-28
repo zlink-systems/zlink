@@ -73,12 +73,12 @@ export interface SocketNativeBinding {
     socket: NativeHandle,
     flags: number,
     preferManagedSinglePart?: boolean,
-    cachedRoutingId?: Buffer | null
+    routingIdStorage?: Buffer | null
   ) => NativeReceivedRaw | null;
   routerRecvMessageNoWait: (
     socket: NativeHandle,
     preferManagedSinglePart?: boolean,
-    cachedRoutingId?: Buffer | null
+    routingIdStorage?: Buffer | null
   ) => NativeReceivedRaw | null;
   routerReply: (
     socket: NativeHandle,

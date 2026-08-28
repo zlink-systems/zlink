@@ -145,22 +145,22 @@ perf::async_task_t<bool> perf_router_router_server (const std::string &lib_name,
                 break;
             }
             if (!received.routing_id ().has_value () || received.routing_id ()->size () == 0
-                || received.request_seq ().has_value () || !received.is_single_part ()) {
+                || received.request_seq ().has_value ()
+                || !perf::multi::measurement_parts_valid (received.parts ())) {
                 debug_log ("recv envelope mismatch");
                 failed = true;
                 break;
             }
-            zlink::message_t &part = received.first_part ();
-
-            // No socket stop-token handling: matches the C reference relay
-            // server, which terminates only via stdin STOP/QUIT + signals.
-            if (part.size () == 0) {
-                continue;
-            }
+            zlink::message_t &part = received.parts ().front ();
 
             const zlink::routing_id_t source_node_rid = *received.routing_id ();
             try {
-                std::move (server.send (source_node_rid)).message (part).submit ();
+                if (perf::multi::measurement_part_count () == 2) {
+                    zlink::message_t tail = perf::multi::measurement_empty_part ();
+                    std::move (server.send (source_node_rid).message (part)).message (tail).submit ();
+                } else {
+                    std::move (server.send (source_node_rid)).message (part).submit ();
+                }
             }
             catch (const zlink::submit_error_t &err) {
                 const int err_no = err.internal_errno ();

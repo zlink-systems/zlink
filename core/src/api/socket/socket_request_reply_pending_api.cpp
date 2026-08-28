@@ -30,7 +30,15 @@ int reqrep::lookup_socket_pending_request_by_seq (
         return -1;
     }
 
-    *key_out_ = it->second;
+    reqrep::pending_key_t key;
+    try {
+        key = it->second;
+    } catch (...) {
+        errno = ENOMEM;
+        return -1;
+    }
+    key_out_->request_seq = key.request_seq;
+    key_out_->peer_rid.swap (key.peer_rid);
     return 0;
 }
 
@@ -114,41 +122,115 @@ int reqrep::ensure_socket_pending_request (
 
     reqrep::pending_key_t key;
     reqrep::pending_request_t pending;
+    int prepare_errno = 0;
     {
         std::lock_guard<std::mutex> lock (state->mutex);
-        const uint64_t request_seq =
-          zlink::request_reply_runtime::allocate_request_sequence (state.get ());
-        if (request_seq == 0)
-        {
-            zlink::request_completion::release_reservation (&state->completion);
-            return -1;
-        }
+        try {
+            const uint64_t request_seq =
+              zlink::request_reply_runtime::allocate_request_sequence (
+                state.get ());
+            if (request_seq == 0) {
+                prepare_errno = errno;
+            } else {
+                key.request_seq = request_seq;
+                if (handle_.socket->socket_type ()
+                      == ZLINK_CORE_SOCKET_ROUTER
+                    && zlink::valid_routing_id (peer_rid_)) {
+                    key.peer_rid = zlink::routing_id_key (peer_rid_);
+                }
 
-        key.request_seq = request_seq;
-        if (handle_.socket->socket_type () == ZLINK_CORE_SOCKET_ROUTER
-            && zlink::valid_routing_id (peer_rid_)) {
-            key.peer_rid = zlink::routing_id_key (peer_rid_);
+                pending.key = key;
+                pending.transport_pair_id = 0;
+                pending.transport_pair_generation = 0;
+                pending.timeout_ms = zlink::request_reply::resolve_timeout_ms (
+                  timeout_ms_, state->default_timeout_ms);
+                pending.handler = handler_;
+                pending.userdata = userdata_;
+                // The reply deadline begins only after the request record has
+                // been admitted to a pipe. Correlation itself is registered
+                // first so a fast reply cannot overtake it.
+                if (reqrep::add_socket_pending_request_locked (
+                      state.get (), key, pending)
+                    != 0)
+                    prepare_errno = errno;
+                else
+                    *request_seq_out_ = request_seq;
+            }
+        } catch (...) {
+            prepare_errno = ENOMEM;
         }
-
-        pending.key = key;
-        pending.transport_pair_id = 0;
-        pending.transport_pair_generation = 0;
-        pending.handler = handler_;
-        pending.userdata = userdata_;
-        const uint32_t resolved_timeout_ms =
-          zlink::request_reply::resolve_timeout_ms (timeout_ms_, state->default_timeout_ms);
-        if (reqrep::schedule_socket_pending_timeout (state, key, resolved_timeout_ms,
-                                                     &pending.timeout_task)
-            != 0) {
-            zlink::request_completion::release_reservation (&state->completion);
-            return -1;
-        }
-
-        reqrep::add_socket_pending_request_locked (state.get (), key, pending);
-        *request_seq_out_ = request_seq;
+    }
+    if (prepare_errno != 0) {
+        zlink::request_completion::release_reservation (&state->completion);
+        errno = prepare_errno;
+        return -1;
     }
 
     *state_out_ = state;
-    *key_out_ = key;
+    key_out_->request_seq = key.request_seq;
+    key_out_->peer_rid.swap (key.peer_rid);
+    return 0;
+}
+
+int reqrep::arm_socket_pending_request_timeout (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  const reqrep::pending_key_t &key_)
+{
+    if (!state_) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    uint32_t timeout_ms = 0;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        std::unordered_map<reqrep::pending_key_t, reqrep::pending_request_t,
+                           reqrep::pending_key_hash_t>::iterator pending =
+          state_->pending_requests.find (key_);
+        if (pending == state_->pending_requests.end ())
+            return 0;
+        if (pending->second.timeout_task)
+            return 0;
+        timeout_ms = pending->second.timeout_ms;
+    }
+
+    std::shared_ptr<zlink::request_timeout::task_t> task;
+    if (reqrep::schedule_socket_pending_timeout (state_, key_, timeout_ms, &task) != 0) {
+        // The request record is already physically committed when this is
+        // called, so timeout-allocation failure cannot be reported as a
+        // submit failure: the caller's payload has transferred and the peer
+        // may receive it. Resolve the admitted request through its normal
+        // completion channel instead.
+        const int terminal_errno = errno;
+        reqrep::pending_request_t pending;
+        if (reqrep::remove_socket_pending_request (state_, key_, &pending)) {
+            if (reqrep::queue_reply_completion (
+                  state_, pending.handler, pending.userdata, terminal_errno,
+                  NULL, 0)
+                != 0) {
+                zlink::request_completion::invoke_callback (
+                  state_->socket, pending.handler, terminal_errno, NULL, 0,
+                  pending.userdata);
+                zlink::request_completion::release_reservation (
+                  &state_->completion);
+            }
+        }
+        errno = 0;
+        return 0;
+    }
+
+    bool installed = false;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        std::unordered_map<reqrep::pending_key_t, reqrep::pending_request_t,
+                           reqrep::pending_key_hash_t>::iterator pending =
+          state_->pending_requests.find (key_);
+        if (pending != state_->pending_requests.end () && !pending->second.timeout_task) {
+            pending->second.timeout_task = task;
+            installed = true;
+        }
+    }
+    if (!installed && task)
+        zlink::request_timeout::cancel (task);
     return 0;
 }

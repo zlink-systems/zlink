@@ -14,9 +14,10 @@ extern "C" zlink_config_result_t
 zlink_socket_set_receive_flow_state (void *handle_,
                                      zlink_receive_flow_state_t state_)
 {
-    zlink::socket_base_t *socket = as_socket (handle_);
+    socket_handle_t handle = as_socket (handle_);
+    zlink::socket_base_t *socket = handle.socket;
     if (!socket)
-        return ZLINK_CONFIG_INVALID_HANDLE;
+        return zlink::config_result_internal::from_errno (errno);
 
     return zlink::config_result_internal::from_rc (
       socket->set_local_receive_flow_state (static_cast<int> (state_)));

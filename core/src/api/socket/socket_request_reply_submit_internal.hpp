@@ -12,6 +12,7 @@ namespace zlink
 namespace socket_reqrep_internal
 {
 int validate_socket_type (void *socket_, int expected_type_);
+int validate_socket_type (const socket_handle_t &handle_, int expected_type_);
 int validate_request_send_flags (zlink_send_flags_t flags_);
 int send_request_frame (zlink::socket_base_t *socket_,
                         zlink::part_helper_internal::handle_state_t *helper_state_,

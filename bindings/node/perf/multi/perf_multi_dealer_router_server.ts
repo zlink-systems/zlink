@@ -15,6 +15,7 @@ const {
   emitMultiSocketHwmDetail,
   pollEvents,
   tryRoutedSocketSend,
+  measurementPayload,
   waitPollerOne
 } = require('./perf_multi_runtime');
 const {
@@ -43,7 +44,11 @@ async function receiveAndQueueReplies(router, pending, received) {
       if (!received.routingId || received.requestSeq) {
         continue;
       }
-      const payload = received.singlePartOrThrow();
+      const payload = measurementPayload(received.parts);
+      if (!payload) {
+        received.close();
+        continue;
+      }
       if (isStopTokenParts([payload])) {
         return true;
       }

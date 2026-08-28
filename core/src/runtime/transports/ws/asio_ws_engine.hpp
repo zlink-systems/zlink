@@ -228,6 +228,7 @@ class asio_ws_engine_t ZLINK_FINAL : public i_engine
     input_stop_reason_t _input_stop_reason;
     bool _output_stopped;
     bool _io_error;
+    bool _handshake_pending;
     bool _read_pending;
     bool _write_pending;
     bool _terminating;

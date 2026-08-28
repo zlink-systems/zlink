@@ -77,21 +77,18 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
         RequestReplySupport.EnsureParts(parts, nameof(parts));
         var nativeRoutingId = peerRid.ToNative();
         var cloned = RequestReplySupport.CloneParts(parts);
-        lock (SubmitGate)
+        try
         {
-            try
-            {
-                RequestReplySupport.SubmitClonedParts(cloned,
-                    (ref ZlinkMsg nativePart,
-                            NativeMethods.ZlinkPartFlag partFlag) =>
-                        NativeMethods.zlink_router_reply_part(Handle,
-                            ref nativeRoutingId, requestSeq, ref nativePart,
-                            partFlag));
-            }
-            finally
-            {
-                RequestReplySupport.DisposeParts(cloned);
-            }
+            RequestReplySupport.SubmitClonedParts(cloned,
+                (ref ZlinkMsg nativePart,
+                        NativeMethods.ZlinkPartFlag partFlag) =>
+                    NativeMethods.zlink_router_reply_part(Handle,
+                        ref nativeRoutingId, requestSeq, ref nativePart,
+                        partFlag));
+        }
+        finally
+        {
+            RequestReplySupport.DisposeParts(cloned);
         }
     }
 

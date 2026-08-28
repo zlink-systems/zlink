@@ -313,13 +313,14 @@ func startMultiRouterRouterEchoServer(
 				break
 			}
 
-			part, partErr := received.SinglePartOrError()
+			parts := received.Parts()
+			if len(parts) == 1 && perfcommon.IsStopTokenMessage(parts[0]) {
+				stopRequested = true
+				_ = received.Close()
+				break
+			}
+			part, partErr := perfcommon.MeasurementPayload(parts)
 			if partErr == nil {
-				if perfcommon.IsStopTokenMessage(part) {
-					stopRequested = true
-					_ = received.Close()
-					break
-				}
 				routingID := received.RoutingID()
 				payload := part.Data()
 				if len(pending) == 0 {
@@ -381,7 +382,7 @@ func drainRouterReplies(
 		if !ok {
 			return drained, nil
 		}
-		part, partErr := reply.SinglePartOrError()
+		part, partErr := perfcommon.MeasurementPayload(reply.Parts())
 		if partErr == nil && stats != nil {
 			perfcommon.RecordMessageRTTLatency(stats, activeAt, stopAt, msgSize, part)
 		}
@@ -391,7 +392,7 @@ func drainRouterReplies(
 }
 
 func tryRouterSend(socket *zlink.RouterSocket, target zlink.RoutingID, payload []byte) (bool, error) {
-	return perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) error {
-		return socket.SendTo(target).MoveMessage(message).Submit(context.Background())
-	})
+	message := perfcommon.NewMessage(payload)
+	err := perfcommon.SubmitMeasurementRouted(socket.SendTo(target), message)
+	return err == nil, err
 }

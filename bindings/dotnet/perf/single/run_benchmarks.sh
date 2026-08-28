@@ -57,6 +57,7 @@ PATTERN="ALL"
 TRANSPORTS="${PERF_TRANSPORTS:-}"
 MSG_SIZES="${PERF_MSG_SIZES:-64,256,1024,65536,131072,262144}"
 DURATION="${PERF_SINGLE_DURATION_SECONDS:-5}"
+PART_COUNT="${PERF_PART_COUNT:-2}"
 RUNS="${PERF_RUNS:-1}"
 RESULTS_TAG=""
 CONFIGURATION="${PERF_CONFIGURATION:-Release}"
@@ -149,6 +150,7 @@ Options:
   -h, --help            Show this help.
   --pattern NAME        Pattern list (comma-separated) or ALL.
   --duration N          Active duration seconds (default: 5).
+  --part-count N        Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST      Message size list (default: 64,256,1024,65536,131072,262144).
   --transports LIST     Transport list override.
   --runs N              Iterations per configuration (default: 1).
@@ -510,6 +512,10 @@ while [[ $# -gt 0 ]]; do
       DURATION="${2:-}"
       shift
       ;;
+    --part-count)
+      PART_COUNT="${2:-}"
+      shift
+      ;;
     --runs)
       RUNS="${2:-}"
       shift
@@ -584,6 +590,11 @@ fi
 
 validate_uint "--duration" "${DURATION}"
 validate_uint "--runs" "${RUNS}"
+if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
+  echo "--part-count must be 1 or 2." >&2
+  exit 1
+fi
+export PERF_PART_COUNT="${PART_COUNT}"
 if [[ -n "${IO_THREADS}" ]]; then
   validate_uint "--io-threads" "${IO_THREADS}"
 fi
@@ -663,6 +674,9 @@ fi
 EMIT_ENV=(
   "PERF_SINGLE_DURATION_SECONDS=${DURATION}"
   "PERF_CONFIGURATION=${CONFIGURATION}"
+  "PERF_CORE_SOURCE=${ZLINK_CORE_SOURCE}"
+  "PERF_CORE_VERSION=${ZLINK_CORE_VERSION}"
+  "PERF_CORE_RUNTIME=${CORE_LIB}"
 )
 if [[ -n "${TRANSPORTS}" ]]; then
   EMIT_ENV+=("PERF_TRANSPORTS=${TRANSPORTS}")

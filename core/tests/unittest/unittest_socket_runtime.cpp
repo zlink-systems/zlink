@@ -257,6 +257,55 @@ void test_socket_lifecycle_coordinator_tracks_destroy_state ()
     TEST_ASSERT_TRUE (coordinator.is_destroyed ());
 }
 
+void test_socket_lifecycle_coordinator_seals_mailbox_refs_at_zero ()
+{
+    zlink::socket_lifecycle_coordinator_t coordinator;
+
+    TEST_ASSERT_TRUE (coordinator.try_inc_mailbox_ref ());
+    TEST_ASSERT_EQUAL_INT (1, coordinator.mailbox_refcount ());
+    TEST_ASSERT_FALSE (coordinator.seal_mailbox_refs_if_zero ());
+    TEST_ASSERT_FALSE (coordinator.mailbox_refs_sealed ());
+
+    TEST_ASSERT_FALSE (coordinator.dec_mailbox_ref ());
+    TEST_ASSERT_TRUE (coordinator.seal_mailbox_refs_if_zero ());
+    TEST_ASSERT_TRUE (coordinator.mailbox_refs_sealed ());
+    TEST_ASSERT_FALSE (coordinator.try_inc_mailbox_ref ());
+    TEST_ASSERT_EQUAL_INT (0, coordinator.mailbox_refcount ());
+}
+
+void test_socket_lifecycle_coordinator_atomically_seals_or_acquires_mailbox_ref ()
+{
+    for (size_t attempt = 0; attempt < 200; ++attempt) {
+        zlink::socket_lifecycle_coordinator_t coordinator;
+        std::atomic<bool> start (false);
+        bool acquired = false;
+        bool sealed = false;
+
+        std::thread acquire_thread ([&] {
+            while (!start.load (std::memory_order_acquire))
+                std::this_thread::yield ();
+            acquired = coordinator.try_inc_mailbox_ref ();
+        });
+        std::thread seal_thread ([&] {
+            while (!start.load (std::memory_order_acquire))
+                std::this_thread::yield ();
+            sealed = coordinator.seal_mailbox_refs_if_zero ();
+        });
+
+        start.store (true, std::memory_order_release);
+        acquire_thread.join ();
+        seal_thread.join ();
+
+        TEST_ASSERT_TRUE (acquired != sealed);
+        if (acquired) {
+            TEST_ASSERT_FALSE (coordinator.dec_mailbox_ref ());
+            TEST_ASSERT_TRUE (coordinator.seal_mailbox_refs_if_zero ());
+        }
+        TEST_ASSERT_TRUE (coordinator.mailbox_refs_sealed ());
+        TEST_ASSERT_FALSE (coordinator.try_inc_mailbox_ref ());
+    }
+}
+
 void test_socket_lifecycle_coordinator_completes_deferred_close_without_async_mailbox ()
 {
     zlink::socket_lifecycle_coordinator_t coordinator;
@@ -267,7 +316,7 @@ void test_socket_lifecycle_coordinator_completes_deferred_close_without_async_ma
     TEST_ASSERT_TRUE (coordinator.public_close_requested ());
     TEST_ASSERT_TRUE (coordinator.leave_callback_api ());
 
-    coordinator.complete_deferred_close_handoff (&mailbox, 1);
+    coordinator.complete_deferred_close_handoff (&mailbox, NULL, 1);
 
     TEST_ASSERT_TRUE (coordinator.public_close_requested ());
     TEST_ASSERT_FALSE (coordinator.is_async_mailbox_active ());
@@ -284,7 +333,7 @@ void test_socket_lifecycle_coordinator_handoff_waits_pending_async_quiesce ()
     TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (true));
     TEST_ASSERT_TRUE (coordinator.leave_callback_api ());
 
-    coordinator.complete_deferred_close_handoff (&mailbox, 1);
+    coordinator.complete_deferred_close_handoff (&mailbox, NULL, 1);
 
     TEST_ASSERT_FALSE (coordinator.is_async_mailbox_active ());
     TEST_ASSERT_TRUE (coordinator.is_async_quiesce_pending ());
@@ -490,7 +539,8 @@ void test_socket_send_pending_runtime_starts_empty ()
     TEST_ASSERT_FALSE (pending.handler_installed.load (std::memory_order_acquire));
     TEST_ASSERT_TRUE (pending.queues.empty ());
     TEST_ASSERT_TRUE (pending.by_op.empty ());
-    TEST_ASSERT_TRUE (pending.completions.empty ());
+    TEST_ASSERT_NULL (pending.completion_head);
+    TEST_ASSERT_NULL (pending.completion_tail);
     TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_msgs);
     TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_bytes);
     TEST_ASSERT_FALSE (pending.failing);
@@ -578,6 +628,9 @@ int main (int argc, char **argv)
     RUN_TEST (test_socket_endpoint_runtime_tracks_last_recv_source_rid);
     RUN_TEST (test_socket_endpoint_runtime_tracks_last_endpoint);
     RUN_TEST (test_socket_lifecycle_coordinator_tracks_destroy_state);
+    RUN_TEST (test_socket_lifecycle_coordinator_seals_mailbox_refs_at_zero);
+    RUN_TEST (
+      test_socket_lifecycle_coordinator_atomically_seals_or_acquires_mailbox_ref);
     RUN_TEST (test_socket_lifecycle_coordinator_completes_deferred_close_without_async_mailbox);
     RUN_TEST (test_socket_lifecycle_coordinator_handoff_waits_pending_async_quiesce);
     RUN_TEST (test_socket_lifecycle_coordinator_claims_deferred_close_once);

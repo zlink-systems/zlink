@@ -2,10 +2,13 @@
 
 #include "support.hpp"
 
+#include <atomic>
+#include <barrier>
 #include <cerrno>
 #include <climits>
 #include <cstring>
 #include <optional>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -556,6 +559,27 @@ void test_router_recv_received_multipart ()
     assert (inbound.parts ().size () == 2);
     assert (inbound.parts ()[0].to_string () == "one");
     assert (inbound.parts ()[1].to_string () == "two");
+
+    const size_t reusable_capacity = inbound.parts ().capacity ();
+    std::vector<zlink::message_t> next_outbound;
+    next_outbound.push_back (zlink_cpp_contract::make_message ("three"));
+    next_outbound.push_back (zlink_cpp_contract::make_message ("four"));
+    dealer.send ().message (next_outbound[0]).message (next_outbound[1]).submit ();
+
+    assert (router.recv (inbound) == 0);
+    assert (inbound.parts ().capacity () == reusable_capacity);
+    assert (inbound.routing_id ().has_value ());
+    assert (*inbound.routing_id () == dealer_id);
+    assert (inbound.parts ().size () == 2);
+    assert (inbound.parts ()[0].to_string () == "three");
+    assert (inbound.parts ()[1].to_string () == "four");
+
+    const int no_data_rc = router.recv (inbound, zlink::recv_flags_t::dontwait);
+    assert (no_data_rc == static_cast<int> (zlink::recv_result_t::no_data)
+            || no_data_rc == -1);
+    assert (!inbound.routing_id ().has_value ());
+    assert (inbound.parts ().empty ());
+    assert (inbound.parts ().capacity () == reusable_capacity);
 }
 
 void test_router_direct_recv_no_data_preserves_output ()
@@ -650,6 +674,126 @@ void test_pair_send_recv_multipart ()
     assert (inbound.parts ()[1].to_string () == "two");
 }
 
+void test_pair_multipart_invalid_part_returns_lvalues ()
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t socket (ctx);
+
+    zlink::message_t first = zlink_cpp_contract::make_message ("first");
+    zlink::message_t invalid;
+    invalid.close ();
+    zlink::message_t third = zlink_cpp_contract::make_message ("third");
+
+    bool rejected = false;
+    try {
+        socket.send ().message (first).message (invalid).message (third).submit ();
+    }
+    catch (const zlink::binding_error_t &) {
+        rejected = true;
+    }
+
+    // Multipart staging owns the record until Core accepts every part. An
+    // invalid middle part must not consume either caller-owned neighbor.
+    assert (rejected);
+    assert (first.valid ());
+    assert (first.to_string () == "first");
+    assert (!invalid.valid ());
+    assert (third.valid ());
+    assert (third.to_string () == "third");
+}
+
+void test_concurrent_pair_multipart_exposes_core_rejection_and_returns_lvalues ()
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t receiver (ctx);
+    zlink::pair_socket_t sender (ctx);
+    zlink::socket_monitor_t receiver_monitor = receiver.monitor_open ();
+    zlink::socket_monitor_t sender_monitor = sender.monitor_open ();
+
+    const std::string endpoint =
+      zlink_cpp_contract::unique_inproc ("pair-concurrent-multipart");
+    receiver.bind (endpoint);
+    sender.connect (endpoint);
+    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
+      receiver_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
+    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
+      sender_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
+
+    constexpr int k_sender_count = 8;
+    constexpr int k_attempts_per_sender = 2000;
+    std::barrier start_line (k_sender_count);
+    std::atomic<int> accepted{0};
+    std::atomic<int> rejected{0};
+    std::atomic<int> ownership_failures{0};
+    std::atomic<int> unexpected_results{0};
+
+    std::vector<std::thread> senders;
+    senders.reserve (k_sender_count);
+    for (int thread_id = 0; thread_id < k_sender_count; ++thread_id) {
+        senders.emplace_back ([&, thread_id] {
+            start_line.arrive_and_wait ();
+            for (int attempt = 0; attempt < k_attempts_per_sender; ++attempt) {
+                const std::string record = std::to_string (thread_id) + ":"
+                                           + std::to_string (attempt);
+                const std::string first_text = record + ":0";
+                const std::string second_text = record + ":1";
+                const std::string third_text = record + ":2";
+                zlink::message_t first = zlink_cpp_contract::make_message (first_text);
+                zlink::message_t second = zlink_cpp_contract::make_message (second_text);
+                zlink::message_t third = zlink_cpp_contract::make_message (third_text);
+
+                try {
+                    if (!sender.send ().message (first).message (second).message (third).submit ()) {
+                        unexpected_results.fetch_add (1, std::memory_order_relaxed);
+                        continue;
+                    }
+                    accepted.fetch_add (1, std::memory_order_relaxed);
+                    if (first.valid () || second.valid () || third.valid ())
+                        ownership_failures.fetch_add (1, std::memory_order_relaxed);
+                }
+                catch (const zlink::submit_error_t &error) {
+                    if (error.result () != zlink::submit_result_t::invalid_argument
+                        || error.internal_errno () != EINVAL) {
+                        unexpected_results.fetch_add (1, std::memory_order_relaxed);
+                        continue;
+                    }
+                    rejected.fetch_add (1, std::memory_order_relaxed);
+                    if (!first.valid () || first.to_string () != first_text
+                        || !second.valid () || second.to_string () != second_text
+                        || !third.valid () || third.to_string () != third_text)
+                        ownership_failures.fetch_add (1, std::memory_order_relaxed);
+                }
+                catch (...) {
+                    unexpected_results.fetch_add (1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    for (std::thread &thread : senders)
+        thread.join ();
+
+    const int accepted_count = accepted.load (std::memory_order_relaxed);
+    const int rejected_count = rejected.load (std::memory_order_relaxed);
+    assert (accepted_count + rejected_count == k_sender_count * k_attempts_per_sender);
+    assert (rejected_count > 0);
+    assert (ownership_failures.load (std::memory_order_relaxed) == 0);
+    assert (unexpected_results.load (std::memory_order_relaxed) == 0);
+
+    int received_count = 0;
+    while (received_count < accepted_count) {
+        zlink::received_t inbound;
+        assert (receiver.recv (inbound) == 0);
+        assert (inbound.parts ().size () == 3);
+        const std::string first_text = inbound.parts ()[0].to_string ();
+        assert (first_text.size () > 2);
+        assert (first_text.ends_with (":0"));
+        const std::string record = first_text.substr (0, first_text.size () - 2);
+        assert (inbound.parts ()[1].to_string () == record + ":1");
+        assert (inbound.parts ()[2].to_string () == record + ":2");
+        ++received_count;
+    }
+}
+
 void test_publisher_synchronous_multipart ()
 {
     zlink::context_t ctx;
@@ -734,6 +878,8 @@ int main ()
     test_router_direct_recv_no_data_preserves_output ();
     test_router_direct_recv_multipart_failure_preserves_output ();
     test_pair_send_recv_multipart ();
+    test_pair_multipart_invalid_part_returns_lvalues ();
+    test_concurrent_pair_multipart_exposes_core_rejection_and_returns_lvalues ();
     test_publisher_synchronous_multipart ();
 #if !defined(_WIN32)
     test_pair_ipc_large_message_shutdown ();

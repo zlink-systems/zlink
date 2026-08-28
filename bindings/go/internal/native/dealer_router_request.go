@@ -83,19 +83,17 @@ func submitRoutedSend(
 	if role == routedRouter && routerRID == nil {
 		return &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
-	return core.withSendGate(func() error {
-		handle := core.raw()
-		if role == routedDealer {
-			return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-				return submitErrorFromResult(C.zlink_send_part(
-					handle, part, C.ZLINK_SEND_FLAGS_NONE, partFlag))
-			})
-		}
-		rid := routerRID.toC()
+	handle := core.raw()
+	if role == routedDealer {
 		return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-			return submitErrorFromResult(C.zlink_send_part_rid(
-				handle, &rid, part, C.ZLINK_SEND_FLAGS_NONE, partFlag))
+			return submitErrorFromResult(C.zlink_send_part(
+				handle, part, C.ZLINK_SEND_FLAGS_NONE, partFlag))
 		})
+	}
+	rid := routerRID.toC()
+	return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+		return submitErrorFromResult(C.zlink_send_part_rid(
+			handle, &rid, part, C.ZLINK_SEND_FLAGS_NONE, partFlag))
 	})
 }
 
@@ -198,14 +196,11 @@ func submitRoutedRequest(
 		return result
 	}
 
-	err = core.withSendGate(func() error {
-		target, selectErr := selectRoutedTarget(core, routerRID)
-		if selectErr != nil {
-			return selectErr
-		}
-		return submitExactRoutedRequest(
+	target, err := selectRoutedTarget(core, routerRID)
+	if err == nil {
+		err = submitExactRoutedRequest(
 			core.raw(), role, routerRID, &target, parts, timeoutMillis, completion.onReply)
-	})
+	}
 	if err != nil {
 		completion.fail(err)
 		return result

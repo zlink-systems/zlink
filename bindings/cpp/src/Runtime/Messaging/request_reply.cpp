@@ -234,6 +234,46 @@ void managed_request_trampoline (zlink_request_result_t result_,
     (*bridge_ref)->finish (result_, parts_, part_count_);
 }
 
+using async_request_completion_t = detail::async_request_operation_state_t;
+
+void release_async_request_completion (void *userdata_) noexcept
+{
+    auto *completion = static_cast<async_request_completion_t *> (userdata_);
+    if (completion)
+        completion->release_from_core ();
+}
+
+void delete_managed_request_bridge_ref (void *userdata_) noexcept
+{
+    delete static_cast<std::shared_ptr<managed_request_bridge_t> *> (userdata_);
+}
+
+void async_request_trampoline (zlink_request_result_t result_,
+                               zlink_msg_t *parts_, size_t part_count_,
+                               void *userdata_)
+{
+    auto *completion = static_cast<async_request_completion_t *> (userdata_);
+    if (!completion) {
+        detail::close_message_array (parts_, part_count_);
+        return;
+    }
+    if (result_ != ZLINK_REQUEST_OK) {
+        detail::close_message_array (parts_, part_count_);
+        const request_result_t result_kind = static_cast<request_result_t> (result_);
+        completion->fail (std::make_exception_ptr (
+          request_error_t (result_kind, request_result_errno (result_kind))));
+    } else {
+        try {
+            completion->complete (detail::take_parts_from_native (parts_, part_count_));
+        }
+        catch (...) {
+            detail::close_message_array (parts_, part_count_);
+            completion->fail (std::current_exception ());
+        }
+    }
+    completion->release_from_core ();
+}
+
 std::chrono::milliseconds resolved_request_timeout (
   const detail::operation_state_t &state_, bool dealer_)
 {
@@ -270,12 +310,15 @@ void ensure_raw_request_state (const detail::operation_state_t &state_)
 // The caller chooses whether the bridge is consumed by a coroutine, a
 // blocking caller, or an application callback.
 void submit_raw_request (detail::operation_state_t &state_,
-                         const std::shared_ptr<managed_request_bridge_t> &bridge)
+                         zlink_reply_handler_fn reply_handler_, void *reply_userdata_,
+                         void (*delete_userdata_) (void *) noexcept)
 {
     ensure_raw_request_state (state_);
+    if (!reply_handler_ || !reply_userdata_ || !delete_userdata_)
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     detail::socket_callback_state_t *const callbacks =
       detail::live_callback_state (state_.raw);
-    if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
+    if (!callbacks)
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
 
     const bool dealer = state_.kind == detail::operation_kind_t::raw_request;
@@ -287,59 +330,94 @@ void submit_raw_request (detail::operation_state_t &state_,
     submit_result_t result = submit_result_t::internal_error;
     int result_errno = EINVAL;
     {
-        std::lock_guard<std::mutex> attempt_lock (
-          callbacks->outbound_record_attempt_mutex);
-        if (callbacks->socket_closed.load (std::memory_order_acquire))
-            throw submit_error_t (submit_result_t::terminated, ETERM);
-
         const zlink_routed_submit_target_t target =
           select_routed_submit_target (state_.raw.socket, router_rid);
 
-        std::vector<message_t> parts = detail::take_send_parts (state_);
-        std::shared_ptr<managed_request_bridge_t> *bridge_ref = nullptr;
+        std::vector<message_t> parts;
+        bool multipart = false;
         int raw_rc = -1;
         errno = 0;
         try {
-            bridge_ref = new std::shared_ptr<managed_request_bridge_t> (bridge);
-            raw_rc = detail::submit_borrowed_message_array (
-              parts, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
-                  size_t failed_index = 0;
-                  return detail::submit_native_parts (
-                    native_parts_, part_count_, failed_index,
-                    [&] (zlink_msg_t *part_, zlink_part_flag_t part_flag_,
-                         bool is_final_) {
-                        zlink_reply_handler_fn handler =
-                          is_final_ ? &managed_request_trampoline : nullptr;
-                        void *userdata = is_final_ ? bridge_ref : nullptr;
-                        if (dealer) {
-                            return zlink_dealer_request_transport_pair_part (
-                              state_.raw.socket, &target, part_,
+            if (state_.message.single_part.has_value ()
+                || state_.message.single_part_source) {
+                // request().message(part) is by far the common public path.
+                // Submit a one-part borrowed native view directly instead of
+                // allocating a vector and routing it through the generic
+                // multipart adapter. Core consumes the supplied native part
+                // on both success and failure, so it must never receive the
+                // caller's handle: failure leaves the original untouched,
+                // while success closes that original shared reference before
+                // marking the public message consumed.
+                message_t &part = detail::send_single_part (state_);
+                if (!part.valid ())
+                    throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+                zlink_msg_t native_view;
+                const bool native_view_initialized = zlink_msg_init (&native_view) == 0;
+                if (!native_view_initialized
+                    || zlink_msg_copy (&native_view, detail::native_handle (part)) != 0) {
+                    if (native_view_initialized)
+                        (void) zlink_msg_close (&native_view);
+                } else {
+                    if (dealer) {
+                        raw_rc = zlink_dealer_request_transport_pair_part (
+                          state_.raw.socket, &target, &native_view,
+                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, timeout,
+                          reply_handler_, reply_userdata_);
+                    } else {
+                        raw_rc = zlink_router_request_transport_pair_part (
+                          state_.raw.socket, &target.peer_rid,
+                          target.transport_pair_id, target.transport_pair_generation,
+                          &native_view, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, timeout,
+                          reply_handler_, reply_userdata_);
+                    }
+                    (void) zlink_msg_close (&native_view);
+                    if (raw_rc == ZLINK_SUBMIT_OK) {
+                        detail::message_access_t::close_noexcept (part);
+                        detail::mark_sent (part);
+                    }
+                }
+            } else {
+                multipart = true;
+                parts = detail::take_send_parts (state_);
+                raw_rc = detail::submit_borrowed_message_array (
+                  parts, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
+                      size_t failed_index = 0;
+                      return detail::submit_native_parts (
+                        native_parts_, part_count_, failed_index,
+                        [&] (zlink_msg_t *part_, zlink_part_flag_t part_flag_,
+                             bool is_final_) {
+                            zlink_reply_handler_fn handler =
+                              is_final_ ? reply_handler_ : nullptr;
+                            void *userdata = is_final_ ? reply_userdata_ : nullptr;
+                            if (dealer) {
+                                return zlink_dealer_request_transport_pair_part (
+                                  state_.raw.socket, &target, part_,
+                                  ZLINK_SEND_FLAGS_NONE, part_flag_,
+                                  is_final_ ? timeout : 0u, handler, userdata);
+                            }
+                            return zlink_router_request_transport_pair_part (
+                              state_.raw.socket, &target.peer_rid,
+                              target.transport_pair_id,
+                              target.transport_pair_generation, part_,
                               ZLINK_SEND_FLAGS_NONE, part_flag_,
                               is_final_ ? timeout : 0u, handler, userdata);
-                        }
-                        return zlink_router_request_transport_pair_part (
-                          state_.raw.socket, &target.peer_rid,
-                          target.transport_pair_id,
-                          target.transport_pair_generation, part_,
-                          ZLINK_SEND_FLAGS_NONE, part_flag_,
-                          is_final_ ? timeout : 0u, handler, userdata);
-                    });
-              });
+                        });
+                  });
+            }
         }
         catch (...) {
-            delete bridge_ref;
-            // The submit adapter borrows the parts, so every one of them is
-            // still intact here; hand the caller-owned ones back before the
-            // builder recycles the state and drops `parts`.
-            detail::restore_send_parts_to_sources (state_, parts);
+            delete_userdata_ (reply_userdata_);
+            if (multipart)
+                detail::restore_send_parts_to_sources (state_, parts);
             throw;
         }
         result_errno = zlink_errno ();
         if (raw_rc == ZLINK_SUBMIT_OK) {
             result = submit_result_t::ok;
         } else {
-            delete bridge_ref;
-            detail::restore_send_parts_to_sources (state_, parts);
+            delete_userdata_ (reply_userdata_);
+            if (multipart)
+                detail::restore_send_parts_to_sources (state_, parts);
             result = raw_rc == -1 ? submit_result_t::internal_error
                                   : static_cast<submit_result_t> (raw_rc);
         }
@@ -361,12 +439,10 @@ void submit_raw_request (detail::operation_state_t &state_,
 async_result_t<std::vector<message_t>>
 submit_raw_request_awaitable (detail::operation_state_t &state_)
 {
-    const auto completion = std::make_shared<
-      detail::async_operation_state_t<std::vector<message_t>>> ();
-    const auto bridge = std::make_shared<managed_request_bridge_t> ();
-    bridge->completion = completion;
-    submit_raw_request (state_, bridge);
-    bridge->arm ();
+    const auto completion = std::make_shared<async_request_completion_t> ();
+    completion->retain_for_core (completion);
+    submit_raw_request (state_, &async_request_trampoline, completion.get (),
+                        &release_async_request_completion);
     return detail::async_result_access_t::make<std::vector<message_t>> (
       completion);
 }
@@ -445,7 +521,9 @@ std::vector<message_t> request_submit_operation_t::submit () &&
     // that wins the race with this registration is still delivered exactly
     // once and remains visible to the predicate in `wait()`.
     bridge->arm ();
-    submit_raw_request (state, bridge);
+    auto *bridge_ref = new std::shared_ptr<managed_request_bridge_t> (bridge);
+    submit_raw_request (state, &managed_request_trampoline, bridge_ref,
+                        &delete_managed_request_bridge_ref);
     return bridge->wait ();
 }
 
@@ -461,8 +539,10 @@ bool request_submit_operation_t::submit (request_callback_t callback_) &&
 
     const auto bridge = std::make_shared<managed_request_bridge_t> ();
     bridge->callback = std::move (callback_);
-    submit_raw_request (state, bridge);
     bridge->arm ();
+    auto *bridge_ref = new std::shared_ptr<managed_request_bridge_t> (bridge);
+    submit_raw_request (state, &managed_request_trampoline, bridge_ref,
+                        &delete_managed_request_bridge_ref);
     return true;
 }
 

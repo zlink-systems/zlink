@@ -8,10 +8,8 @@ import java.lang.foreign.ValueLayout;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
@@ -30,40 +28,12 @@ final class CoreRequestSupport implements AutoCloseable {
 
     private final NativeSocketRuntime socket;
     private final boolean dealer;
-    private final OutboundRecordAttemptGate attemptGate;
-    private final Set<Long> requestIds = ConcurrentHashMap.newKeySet();
-    private volatile boolean closed;
+    private final RoutedRequestSupport requests;
 
-    CoreRequestSupport(NativeSocketRuntime socket, boolean dealer,
-                       OutboundRecordAttemptGate attemptGate) {
+    CoreRequestSupport(NativeSocketRuntime socket, boolean dealer) {
         this.socket = Objects.requireNonNull(socket, "socket");
         this.dealer = dealer;
-        this.attemptGate = Objects.requireNonNull(attemptGate, "attemptGate");
-    }
-
-    CompletionStage<List<Message>> submit(List<Message> sourceParts,
-                                          Duration timeout,
-                                          MemorySegment target) {
-        Objects.requireNonNull(sourceParts, "sourceParts");
-        if (sourceParts.isEmpty()) {
-            throw new IllegalArgumentException("parts must not be empty");
-        }
-        for (int i = 0; i < sourceParts.size(); i++) {
-            Objects.requireNonNull(sourceParts.get(i), "parts[" + i + "]");
-        }
-        if (timeout != null && timeout.isNegative()) {
-            throw new IllegalArgumentException("timeout must not be negative");
-        }
-        if (closed) {
-            return CompletableFuture.failedFuture(
-                new ZlinkRequestException(RequestResult.TERMINATED,
-                    NativeErrno.ECANCELED));
-        }
-
-        long requestId = RoutedRequestSupport.nextRequestId();
-        CompletableFuture<List<Message>> future = new CompletableFuture<>();
-        requestIds.add(requestId);
-        RoutedRequestSupport.registerRoutedPending(requestId, future,
+        this.requests = new RoutedRequestSupport(
             new RoutedRequestSupport.CallbackLifecycle() {
                 @Override
                 public void enter() {
@@ -80,7 +50,24 @@ final class CoreRequestSupport implements AutoCloseable {
                     socket.dispatchCompletion(completion);
                 }
             });
-        future.whenComplete((ignored, failure) -> requestIds.remove(requestId));
+    }
+
+    CompletionStage<List<Message>> submit(List<Message> sourceParts,
+                                          Duration timeout,
+                                          MemorySegment target) {
+        Objects.requireNonNull(sourceParts, "sourceParts");
+        if (sourceParts.isEmpty()) {
+            throw new IllegalArgumentException("parts must not be empty");
+        }
+        for (int i = 0; i < sourceParts.size(); i++) {
+            Objects.requireNonNull(sourceParts.get(i), "parts[" + i + "]");
+        }
+        if (timeout != null && timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout must not be negative");
+        }
+        long requestId = requests.nextRequestId();
+        CompletableFuture<List<Message>> future = new CompletableFuture<>();
+        requests.registerRoutedPending(requestId, future);
 
         MessagePartsBuffer materializer = new MessagePartsBuffer();
         for (Message part : sourceParts) {
@@ -96,43 +83,42 @@ final class CoreRequestSupport implements AutoCloseable {
             int result;
             try {
                 try {
-                    result = attemptGate.call(() -> {
-                        for (int index = 0; index < sourceParts.size(); index++) {
-                            int partFlag = index + 1 < sourceParts.size()
-                                ? Native.PART_MORE : Native.PART_FINAL;
-                            MemorySegment nativePart = nativeParts.asSlice(
-                                index * stride, stride);
-                            int rc = dealer
-                                ? Native.dealerRequestTransportPairPart(
-                                    socket.handle(), target, nativePart, DONT_WAIT,
-                                    partFlag,
-                                    partFlag == Native.PART_FINAL ? timeoutMs : 0,
-                                    partFlag == Native.PART_FINAL
-                                        ? RoutedRequestSupport.replyCallback()
-                                        : MemorySegment.NULL,
-                                    partFlag == Native.PART_FINAL
-                                        ? RoutedRequestSupport.userData(requestId)
-                                        : MemorySegment.NULL)
-                                : Native.routerRequestTransportPairPart(
-                                    socket.handle(), nativeRid,
-                                    target.get(ValueLayout.JAVA_LONG,
-                                        NativeLayouts.ROUTED_SUBMIT_TARGET_PAIR_ID_OFFSET),
-                                    target.get(ValueLayout.JAVA_LONG,
-                                        NativeLayouts.ROUTED_SUBMIT_TARGET_GENERATION_OFFSET),
-                                    nativePart, DONT_WAIT, partFlag,
-                                    partFlag == Native.PART_FINAL ? timeoutMs : 0,
-                                    partFlag == Native.PART_FINAL
-                                        ? RoutedRequestSupport.replyCallback()
-                                        : MemorySegment.NULL,
-                                    partFlag == Native.PART_FINAL
-                                        ? RoutedRequestSupport.userData(requestId)
-                                        : MemorySegment.NULL);
-                            if (rc != SubmitResult.OK.value()) {
-                                return rc;
-                            }
+                    result = SubmitResult.OK.value();
+                    for (int index = 0; index < sourceParts.size(); index++) {
+                        int partFlag = index + 1 < sourceParts.size()
+                            ? Native.PART_MORE : Native.PART_FINAL;
+                        MemorySegment nativePart = nativeParts.asSlice(
+                            index * stride, stride);
+                        int rc = dealer
+                            ? Native.dealerRequestTransportPairPart(
+                                socket.handle(), target, nativePart, DONT_WAIT,
+                                partFlag,
+                                partFlag == Native.PART_FINAL ? timeoutMs : 0,
+                                partFlag == Native.PART_FINAL
+                                    ? requests.replyCallback()
+                                    : MemorySegment.NULL,
+                                partFlag == Native.PART_FINAL
+                                    ? RoutedRequestSupport.userData(requestId)
+                                    : MemorySegment.NULL)
+                            : Native.routerRequestTransportPairPart(
+                                socket.handle(), nativeRid,
+                                target.get(ValueLayout.JAVA_LONG,
+                                    NativeLayouts.ROUTED_SUBMIT_TARGET_PAIR_ID_OFFSET),
+                                target.get(ValueLayout.JAVA_LONG,
+                                    NativeLayouts.ROUTED_SUBMIT_TARGET_GENERATION_OFFSET),
+                                nativePart, DONT_WAIT, partFlag,
+                                partFlag == Native.PART_FINAL ? timeoutMs : 0,
+                                partFlag == Native.PART_FINAL
+                                    ? requests.replyCallback()
+                                    : MemorySegment.NULL,
+                                partFlag == Native.PART_FINAL
+                                    ? RoutedRequestSupport.userData(requestId)
+                                    : MemorySegment.NULL);
+                        if (rc != SubmitResult.OK.value()) {
+                            result = rc;
+                            break;
                         }
-                        return SubmitResult.OK.value();
-                    });
+                    }
                 } finally {
                     // The request-part Core entrypoint consumes each native
                     // message on both success and rejection. Close any
@@ -143,12 +129,12 @@ final class CoreRequestSupport implements AutoCloseable {
                         sourceParts.size());
                 }
             } catch (RuntimeException failure) {
-                RoutedRequestSupport.removeRoutedPending(requestId);
+                requests.removeRoutedPending(requestId);
                 throw failure;
             }
             if (result != SubmitResult.OK.value()) {
                 int errno = Native.errno();
-                RoutedRequestSupport.removeRoutedPending(requestId);
+                requests.removeRoutedPending(requestId);
                 future.completeExceptionally(new ZlinkSubmitException(
                     submitResult(result), errno));
                 return future;
@@ -163,17 +149,8 @@ final class CoreRequestSupport implements AutoCloseable {
 
     @Override
     public void close() {
-        if (closed) {
-            return;
-        }
-        closed = true;
-        for (Long requestId : requestIds.toArray(Long[]::new)) {
-            if (requestIds.remove(requestId)) {
-                RoutedRequestSupport.completePendingExceptionally(requestId,
-                    new ZlinkRequestException(RequestResult.TERMINATED,
-                        NativeErrno.ECANCELED));
-            }
-        }
+        requests.close(new ZlinkRequestException(RequestResult.TERMINATED,
+            NativeErrno.ECANCELED));
     }
 
     private static SubmitResult submitResult(int result) {

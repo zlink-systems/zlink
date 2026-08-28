@@ -67,6 +67,7 @@ EFFECTIVE_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:
 EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-10000}}"
 EFFECTIVE_DEFAULT_IO_THREADS="${PERF_MULTI_DEFAULT_IO_THREADS:-${PERF_DEFAULT_IO_THREADS:-4}}"
 DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
+PART_COUNT="${PERF_PART_COUNT:-2}"
 RUNS="${PERF_RUNS:-1}"
 READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}"
 SPOT_READY_TIMEOUT_MS="$(( READY_TIMEOUT_MS > READY_TIMEOUT_MS * 6 ? READY_TIMEOUT_MS : READY_TIMEOUT_MS * 6 ))"
@@ -184,6 +185,7 @@ Options:
   -h, --help            Show this help.
   --pattern NAME        Pattern list (comma-separated) or ALL.
   --duration N          Active duration seconds (default: 5).
+  --part-count N        Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST      Message size list.
   --transports LIST     Transport list override (default: tcp,tls,ws,wss).
   --clients N           Client socket count (default: 100, stream=10000).
@@ -1407,6 +1409,11 @@ while [[ $# -gt 0 ]]; do
       DURATION="${2:-}"
       shift
       ;;
+    --part-count)
+      require_arg "$1" "${2:-}"
+      PART_COUNT="${2:-}"
+      shift
+      ;;
     --runs)
       require_arg "$1" "${2:-}"
       RUNS="${2:-}"
@@ -1450,6 +1457,11 @@ fi
 
 validate_uint "--duration" "${DURATION}"
 validate_uint "--runs" "${RUNS}"
+if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
+  echo "--part-count must be 1 or 2." >&2
+  exit 1
+fi
+export PERF_PART_COUNT="${PART_COUNT}"
 validate_uint "PERF_MULTI_CONNECT_READY_TIMEOUT_MS" "${READY_TIMEOUT_MS}"
 validate_nonnegative_uint "PERF_MULTI_SERVER_READY_TIMEOUT_MS" "${SERVER_READY_TIMEOUT_MS}"
 validate_nonnegative_uint "PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS" "${SERVER_SHUTDOWN_TIMEOUT_MS}"

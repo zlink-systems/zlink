@@ -124,6 +124,27 @@ void send_request_to_activate_callback_dispatch (void *client_,
     peer_rid.size = static_cast<uint8_t> (strlen (peer_rid_));
     memcpy (peer_rid.data, peer_rid_, peer_rid.size);
 
+    // Connection establishment and routing-id attachment are asynchronous.
+    // Synchronize on the route that the request below actually needs instead
+    // of assuming that a fixed settle delay made it visible.
+    bool route_ready = false;
+    for (int i = 0; i < 100 && !route_ready; ++i) {
+        if (test_stream_send_bytes (
+              client_, &peer_rid, "ready", 5, ZLINK_DONTWAIT)
+            != 5) {
+            msleep (10);
+            continue;
+        }
+
+        char source[255];
+        TEST_ASSERT_GREATER_THAN_INT (
+          0, zlink_recv (server_, source, sizeof source, 0));
+        recv_string_expect_success (server_, "ready", 0);
+        route_ready = true;
+    }
+    TEST_ASSERT_TRUE_MESSAGE (
+      route_ready, "router route did not become ready for request");
+
     zlink_msg_t request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request, 4));
     memcpy (zlink_msg_data (&request), "ping", 4);
@@ -203,7 +224,6 @@ void test_callback_dispatch_same_direction_reconnect_handover ()
       zlink_set_option (client, ZLINK_OPT_RID_DUPLICATE_POLICY, &handover, sizeof handover));
     set_connect_routing_id (client, "S");
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_one));
-    msleep (SETTLE_TIME);
 
     // This installs callback dispatch and records traffic on the original pipe.
     send_request_to_activate_callback_dispatch (client, server_one, "S");
@@ -272,7 +292,6 @@ void test_callback_dispatch_cross_direction_duplicate_converges ()
       zlink_set_option (server_one, ZLINK_OPT_LINGER, &zero, sizeof zero));
     set_connect_routing_id (server_one, "Z");
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (server_one, client_endpoint));
-    msleep (SETTLE_TIME);
 
     send_request_to_activate_callback_dispatch (client, server_one, "A");
 
@@ -377,7 +396,6 @@ void test_repeated_cross_direction_reconnect_uses_current_endpoint ()
         set_connect_routing_id (client, "A");
         TEST_ASSERT_SUCCESS_ERRNO (
           zlink_connect (client, server_endpoint));
-        msleep (SETTLE_TIME);
 
         send_request_to_activate_callback_dispatch (
           client, server, "A");
@@ -440,7 +458,6 @@ void test_async_handshake_preserves_outgoing_direction ()
 
     // No connect routing id is supplied. The client therefore learns S from
     // the asynchronous handshake and must retain that it initiated this pipe.
-    msleep (SETTLE_TIME);
     send_request_to_activate_callback_dispatch (client, server_one, "S");
 
     void *server_two = test_context_socket (ZLINK_SOCKET_DEALER);

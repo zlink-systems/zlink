@@ -85,11 +85,20 @@ final class PerfMultiRouterRouter {
                         if (!ok) break;
 
                         RoutingId rid = receivedBuffer.getRoutingId().orElseThrow();
-                        Message ownedReply = Message.from(receivedBuffer.firstPart());
+                        Message payload = PerfUtil.measurementPayload(receivedBuffer.parts());
+                        if (payload == null) {
+                            receivedBuffer.close();
+                            continue;
+                        }
+                        Message ownedReply = Message.from(payload);
                         receivedBuffer.close();
                         try (ownedReply) {
-                            PerfUtil.awaitStage(server.send(rid)
-                                .message(ownedReply).submit());
+                            if (PerfUtil.measurementPartCount() == 2) {
+                                PerfUtil.awaitStage(server.send(rid).message(ownedReply)
+                                    .message(PerfUtil.measurementTail()).submit());
+                            } else {
+                                PerfUtil.awaitStage(server.send(rid).message(ownedReply).submit());
+                            }
                         }
                     }
                 }
@@ -256,8 +265,10 @@ final class PerfMultiRouterRouter {
                 continue;
             }
             waitingReply[idx] = false;
-            PerfUtil.recordActiveLatency(metrics, replyBuffer.firstPart(),
-                msgSize, true);
+            Message payload = PerfUtil.measurementPayload(replyBuffer.parts());
+            if (payload != null) {
+                PerfUtil.recordActiveLatency(metrics, payload, msgSize, true);
+            }
         }
     }
 
@@ -271,7 +282,11 @@ final class PerfMultiRouterRouter {
     }
 
     private static void sendPayload(RouterSocket client, Message payload) {
-        PerfUtil.awaitStage(client.send(SERVER_ID)
-            .message(payload).submit());
+        if (PerfUtil.measurementPartCount() == 2) {
+            PerfUtil.awaitStage(client.send(SERVER_ID).message(payload)
+                .message(PerfUtil.measurementTail()).submit());
+        } else {
+            PerfUtil.awaitStage(client.send(SERVER_ID).message(payload).submit());
+        }
     }
 }

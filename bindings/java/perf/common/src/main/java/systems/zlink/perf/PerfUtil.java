@@ -19,6 +19,7 @@ import systems.zlink.contracts.sockets.SubSocket;
 import systems.zlink.contracts.messaging.TopicMessage;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.List;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
@@ -29,6 +30,24 @@ public final class PerfUtil {
     public static final int PHASE_ACTIVE = 1;
     public static final int PHASE_COOLDOWN = 2;
     public static final int HEADER_SIZE = 29;
+
+    public static int measurementPartCount() {
+        return "1".equals(System.getenv("PERF_PART_COUNT")) ? 1 : 2;
+    }
+
+    public static Message measurementTail() {
+        return new Message(0);
+    }
+
+    public static boolean measurementPartsValid(List<Message> parts) {
+        return parts != null
+            && parts.size() == measurementPartCount()
+            && (measurementPartCount() == 1 || parts.get(1).size() == 0);
+    }
+
+    public static Message measurementPayload(List<Message> parts) {
+        return measurementPartsValid(parts) ? parts.get(0) : null;
+    }
 
     private PerfUtil() {
     }

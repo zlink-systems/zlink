@@ -8,30 +8,20 @@ internal sealed partial class SocketKernel : IDisposable
 {
     public void Dispose()
     {
-        Dispose(true);
+        DisposeCore();
     }
 
     public void Close()
     {
-        Dispose(true);
+        DisposeCore();
     }
 
-    private void Dispose(bool closeNativeSocket)
+    private void DisposeCore()
     {
-        SendCompletionRegistry? sendCompletion;
-        lock (_sendCompletionSync)
-        {
-            _sendCompletionClosing = true;
-            sendCompletion = _sendCompletion;
-        }
-
-        // Core delivers a terminal completion for every operation still
-        // pending when the socket closes, so nothing is drained here; the
-        // binding only stops accepting new cancel entry points.
-        sendCompletion?.BeginClose();
+        _handle.Dispose();
 
         // The Core raw API has no STREAM detach entry point; the packet
-        // callback lifecycle ends with the socket close below. Clearing the
+        // callback lifecycle ends with the successful socket close. Clearing the
         // managed stream callback state keeps the pinned delegates collectable.
         if (_streamAttached)
         {
@@ -39,14 +29,15 @@ internal sealed partial class SocketKernel : IDisposable
             _callbacks.ClearStream();
         }
 
-        if (closeNativeSocket)
-            _handle.Dispose();
-        else
-            _handle.ReleaseWithoutClose();
+        // Core delivers a terminal completion for every operation still
+        // pending when the socket closes, so nothing is drained here. Managed
+        // completion state changes only after Core accepted the close; EBUSY
+        // leaves the native handle and every managed callback intact.
+        _sendCompletion?.BeginClose();
 
         // Core no longer holds the reverse-P/Invoke stub once the socket is
         // closed, so the completion delegate root can finally be released.
-        sendCompletion?.ReleaseAfterNativeClose();
+        _sendCompletion?.ReleaseAfterNativeClose();
         _callbacks.ClearAllNonStream();
         GC.SuppressFinalize(this);
     }

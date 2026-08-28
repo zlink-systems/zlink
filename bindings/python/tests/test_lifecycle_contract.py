@@ -147,13 +147,12 @@ def test_routed_async_owner_is_not_terminated_until_socket_close_succeeds():
     with pytest.raises(zlink.CloseError):
         socket.close()
 
-    admission.begin_close.assert_called_once_with()
-    admission.rollback_close.assert_called_once_with()
+    # The binding does not publish a closing gate or wait for submitters.
+    # Core rejected this close, so all Python-side state remains live.
     admission.finish_close.assert_not_called()
 
     socket.close()
 
-    assert admission.begin_close.call_count == 2
     admission.finish_close.assert_called_once_with()
 
 

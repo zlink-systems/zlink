@@ -18,7 +18,7 @@ zlink_recv_handler (void *s_, zlink_socket_msg_handler_fn handler_, void *userda
 
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
-        return zlink::handler_result_internal::from_errno (EFAULT);
+        return zlink::handler_result_internal::from_errno (errno);
 
     const int type = socket_type (handle);
     if (type != ZLINK_CORE_SOCKET_STREAM) {
@@ -41,7 +41,7 @@ zlink_handler_result_t zlink_stream_packet_handler (void *stream_,
 
     socket_handle_t handle = as_socket_handle (stream_);
     if (!handle.socket)
-        return zlink::handler_result_internal::from_errno (EFAULT);
+        return zlink::handler_result_internal::from_errno (errno);
 
     const int type = socket_type (handle);
     if (type != ZLINK_CORE_SOCKET_STREAM) {
@@ -62,14 +62,12 @@ zlink_handler_result_t zlink_send_complete_handler (
     }
 
     const zlink::option_target_t target = zlink::resolve_option_target (s_);
-    if (target.kind != zlink::option_target_socket) {
-        errno = EFAULT;
-        return ZLINK_HANDLER_INVALID_HANDLE;
-    }
+    if (target.kind != zlink::option_target_socket)
+        return zlink::handler_result_internal::from_errno (errno);
 
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
-        return zlink::handler_result_internal::from_errno (EFAULT);
+        return zlink::handler_result_internal::from_errno (errno);
     if (!zlink::socket_type_supports_send_completion (socket_type (handle))) {
         errno = ENOTSUP;
         return ZLINK_HANDLER_NOT_SUPPORTED;

@@ -17,7 +17,9 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.CloseResult;
 import systems.zlink.contracts.errors.ConfigResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
@@ -176,9 +178,22 @@ final class ReceiveFlowStateContractTest {
                 });
                 setter.start();
                 ready.await();
-                dealer.close();
+
+                ZlinkCloseException initialCloseFailure = null;
+                try {
+                    dealer.close();
+                } catch (ZlinkCloseException ex) {
+                    initialCloseFailure = ex;
+                }
                 setter.join(TimeUnit.SECONDS.toMillis(5));
+                if (initialCloseFailure != null) {
+                    dealer.close();
+                }
                 assertTrue(!setter.isAlive(), "setter thread did not finish");
+                assertTrue(
+                    initialCloseFailure == null
+                        || initialCloseFailure.getResult() == CloseResult.BUSY,
+                    "unexpected initial close outcome: " + initialCloseFailure);
 
                 Throwable outcome = observed.get();
                 if (outcome == null) {

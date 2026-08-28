@@ -24,6 +24,7 @@ const {
   recvNoWaitInto,
   sendStopTokenOnce,
   tryRoutedSocketSend,
+  measurementPayload,
   waitForConnectionReady
 } = require('./perf_multi_runtime');
 const {
@@ -100,7 +101,9 @@ async function main() {
         return false;
       }
       waiting[index] = false;
-      collector.recordPayload(echoed.parts[0].data(), currentEpochNs());
+      const payload = measurementPayload(echoed.parts);
+      if (!payload) throw new Error('invalid multipart echo reply');
+      collector.recordPayload(payload.data(), currentEpochNs());
       // HOT PATH: each ROUTER client has one request in flight.  C waits for
       // this socket's POLLIN event, receives one reply, then permits its next
       // send.  Do not probe every socket with recv(DONT_WAIT) each round.
@@ -167,7 +170,7 @@ async function main() {
     // PERF_MULTI_TEST_POLICY § 1.3.1: signal phase end via wire stop token.
     await sendStopTokenOnce(
       routers[0],
-      (bytes) => tryRoutedSocketSend(routers[0], SERVER_ROUTING_ID, bytes)
+      (bytes) => tryRoutedSocketSend(routers[0], SERVER_ROUTING_ID, [bytes])
     );
 
     const result = await collector.finish();

@@ -25,7 +25,7 @@ internal static class RoutedRequestSubmitter
         Marshal.GetFunctionPointerForDelegate(ReplyHandler);
 
     internal static Task<IReadOnlyList<Message>> RequestAsync(IntPtr handle,
-        SocketType socketType, object submitGate, RoutingId? routerRoutingId,
+        SocketType socketType, RoutingId? routerRoutingId,
         IReadOnlyList<Message> parts, uint timeoutMs,
         CancellationToken cancellationToken)
     {
@@ -39,12 +39,9 @@ internal static class RoutedRequestSubmitter
         var userData = GCHandle.ToIntPtr(self);
         try
         {
-            lock (submitGate)
-            {
-                var target = SelectTarget(handle, routerRoutingId);
-                SubmitParts(handle, socketType, ref target, parts, timeoutMs,
-                    userData);
-            }
+            var target = SelectTarget(handle, routerRoutingId);
+            SubmitParts(handle, socketType, ref target, parts, timeoutMs,
+                userData);
         }
         catch
         {
@@ -55,7 +52,7 @@ internal static class RoutedRequestSubmitter
         }
 
         pending.AttachCancellation();
-        return RequestProgressPump.AttachSocket(handle, pending.Task);
+        return pending.Task;
     }
 
     private static unsafe ZlinkRoutedSubmitTarget SelectTarget(IntPtr handle,

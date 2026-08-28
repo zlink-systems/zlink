@@ -130,4 +130,14 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("atomicCounterDestroy", atomic_counter_destroy),
     };
     define_exports (env, exports, descs, sizeof (descs) / sizeof (*descs));
+
+    if (getenv ("ZLINK_NODE_TEST_HOOKS")) {
+        napi_property_descriptor test_descs[] = {
+          ZLINK_METHOD ("testBeginHeldRoutedMultipart", test_begin_held_routed_multipart),
+          ZLINK_METHOD ("testEndHeldRoutedMultipart", test_end_held_routed_multipart),
+          ZLINK_METHOD ("testRunSendCloseStress", test_run_send_close_stress),
+        };
+        define_exports (
+          env, exports, test_descs, sizeof (test_descs) / sizeof (*test_descs));
+    }
 }

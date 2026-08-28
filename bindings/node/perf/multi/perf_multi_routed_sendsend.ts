@@ -47,15 +47,16 @@ function createClientSocket(ctx, routerClient) {
     : zlink.createDealerSocket(ctx);
 }
 
-function sendPayload(socket, routerClient, payload) {
+function sendPayload(socket, routerClient, payload, control = false) {
+  const frames = control ? [payload] : payload;
   return routerClient
-    ? tryRoutedSocketSend(socket, SERVER_ROUTING_ID, payload)
-    : tryRoutedSocketSend(socket, payload);
+    ? tryRoutedSocketSend(socket, SERVER_ROUTING_ID, frames)
+    : tryRoutedSocketSend(socket, frames);
 }
 
 async function sendStopTokenWithRetry(socket, routerClient, poller, pollBuffer) {
   const deadline = Date.now() + 5000;
-  while (!(await sendPayload(socket, routerClient, STOP_TOKEN_BYTES))) {
+  while (!(await sendPayload(socket, routerClient, STOP_TOKEN_BYTES, true))) {
     if (Date.now() >= deadline) {
       throw new Error('stop token send timeout');
     }
@@ -254,8 +255,16 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
           if (!router.recv(received, zlink.RecvFlags.DontWait)) {
             break;
           }
-          const data = received.singlePartOrThrow().data();
-          if (!isStopToken(data) && data.length === payloadSize) {
+          const parts = received.parts;
+          if (parts.length === 1 && isStopToken(parts[0].data())) {
+            continue;
+          }
+          const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+          if (parts.length !== expectedParts || (expectedParts === 2 && parts[1].data().length !== 0)) {
+            continue;
+          }
+          const data = parts[0].data();
+          if (data.length === payloadSize) {
             collector.recordPayload(data, currentEpochNs());
           }
         }

@@ -37,7 +37,7 @@ inline bool submit_raw_send_state (operation_state_t &state_)
     // so the socket that owns this callback state is still the owner for the
     // whole call. Only its liveness is checked; no ownership share is taken.
     socket_callback_state_t *const callbacks = live_callback_state (state_.raw);
-    if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire)) {
+    if (!callbacks) {
         restore_single_send_part_to_source (state_);
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     }
@@ -48,47 +48,37 @@ inline bool submit_raw_send_state (operation_state_t &state_)
     if (state_.kind == operation_kind_t::raw_publish && state_.raw.topic.empty ())
         throw_invalid_argument ();
 
-    std::lock_guard<std::mutex> attempt_lock (
-      callbacks->outbound_record_attempt_mutex);
-    if (callbacks->socket_closed.load (std::memory_order_acquire)) {
-        restore_single_send_part_to_source (state_);
-        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
-    }
-
     if (state_.message.single_part.has_value () || state_.message.single_part_source) {
         message_t &part = send_single_part (state_);
         if (!part.valid ())
             throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
 
-        zlink_submit_result_t direct_rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
-        switch (state_.kind) {
-            case operation_kind_t::raw_send:
-                direct_rc = zlink_send_part (
-                  state_.raw.socket, zlink::detail::native_handle (part),
-                  static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                  ZLINK_PART_FINAL);
-                break;
-            case operation_kind_t::raw_routed_send:
-                direct_rc = zlink_send_part_rid (
-                  state_.raw.socket, first_rid, zlink::detail::native_handle (part),
-                  static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                  ZLINK_PART_FINAL);
-                break;
-            case operation_kind_t::raw_publish:
-                direct_rc = zlink_publish_part (
-                  state_.raw.socket, state_.raw.topic.c_str (), zlink::detail::native_handle (part),
-                  static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                  ZLINK_PART_FINAL);
-                break;
-            default:
-                break;
-        }
+        const int direct_rc = zlink::detail::submit_borrowed_message_part (
+          part, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
+              switch (state_.kind) {
+                  case operation_kind_t::raw_send:
+                      return zlink_send_part (
+                        state_.raw.socket, part_out_,
+                        static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                        part_flag_);
+                  case operation_kind_t::raw_routed_send:
+                      return zlink_send_part_rid (
+                        state_.raw.socket, first_rid, part_out_,
+                        static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                        part_flag_);
+                  case operation_kind_t::raw_publish:
+                      return zlink_publish_part (
+                        state_.raw.socket, state_.raw.topic.c_str (), part_out_,
+                        static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                        part_flag_);
+                  default:
+                      return ZLINK_SUBMIT_INVALID_ARGUMENT;
+              }
+          });
 
         const submit_result_t rc = static_cast<submit_result_t> (direct_rc);
-        if (rc == submit_result_t::ok) {
-            zlink::detail::mark_sent (part);
+        if (rc == submit_result_t::ok)
             return true;
-        }
         restore_single_send_part_to_source (state_);
         if (state_.flags == send_flags_t::dontwait && rc == submit_result_t::backpressured) {
             return false;
@@ -96,7 +86,11 @@ inline bool submit_raw_send_state (operation_state_t &state_)
         throw submit_error_t (rc, zlink_errno ());
     }
 
-    std::vector<message_t> parts = take_send_parts (state_);
+    // Multipart record staging, ownership recovery, and pooled capacity belong
+    // to one operation state. Moving this vector into a call-local temporary
+    // makes the terminal destroy its capacity after every record, even though
+    // the state pool is intended to retain it for the next builder chain.
+    std::vector<message_t> &parts = state_.message.parts;
     const int raw_rc = zlink::detail::submit_message_parts (
       parts, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           switch (state_.kind) {
@@ -116,11 +110,13 @@ inline bool submit_raw_send_state (operation_state_t &state_)
                   return ZLINK_SUBMIT_INVALID_ARGUMENT;
           }
       });
-    if (raw_rc == -1)
+    if (raw_rc == -1) {
+        restore_send_parts_to_sources (state_, parts);
         throw last_error ();
+    }
     const submit_result_t rc = static_cast<submit_result_t> (raw_rc);
     if (rc != submit_result_t::ok) {
-        restore_send_parts_to_state (state_, parts);
+        restore_send_parts_to_sources (state_, parts);
         if (state_.flags == send_flags_t::dontwait && rc == submit_result_t::backpressured) {
             return false;
         }

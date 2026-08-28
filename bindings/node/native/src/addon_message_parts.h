@@ -123,8 +123,11 @@ inline int submit_msg_parts (zlink_msg_t *parts, size_t part_count, Submit submi
         const zlink_part_flag_t part_flag = is_final ? ZLINK_PART_FINAL : ZLINK_PART_MORE;
         int rc = submit (&parts[i], part_flag, is_final);
         if (rc != ZLINK_SUBMIT_OK) {
-            for (size_t j = i + 1u; j < part_count; ++j)
-                zlink_msg_close (&parts[j]);
+            // Core consumes the attempted native part even when the record is
+            // rejected. Release the empty attempted slot and every untouched
+            // later slot in this staging copy; the JavaScript Message owners
+            // remain separate and untouched.
+            zlink_multipart_close (parts, part_count);
             return rc;
         }
     }

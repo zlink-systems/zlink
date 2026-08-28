@@ -42,6 +42,7 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
     }
 
     process_commands (0, false);
+    scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
     memset (out_, 0, sizeof (*out_));
     out_->abi_version = ZLINK_MONITOR_STATUS_ABI_VERSION;
     out_->struct_size = static_cast<uint32_t> (sizeof (*out_));
@@ -250,7 +251,7 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
                                    uint64_t monitor_hwm_bytes_)
 {
     monitor_runtime_t &monitor = monitor_runtime ();
-    scoped_lock_t lock (monitor.sync);
+    scoped_lock_t operation_lock (monitor.operation_sync);
 
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
@@ -272,7 +273,12 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
         return -1;
     }
 
-    if (monitor.socket != NULL)
+    bool has_monitor = false;
+    {
+        scoped_lock_t monitor_lock (monitor.sync);
+        has_monitor = monitor.socket != NULL;
+    }
+    if (has_monitor)
         stop_monitor (true);
 
     switch (type_) {
@@ -284,17 +290,14 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
             return -1;
     }
 
-    monitor.events = events_;
-    monitor.lossy = event_version_ <= 3;
-    monitor.socket = static_cast<void *> (get_ctx ()->create_socket (type_));
-    if (monitor.socket == NULL)
+    socket_base_t *monitor_socket = get_ctx ()->create_socket (type_);
+    if (!monitor_socket)
         return -1;
 
-    socket_base_t *monitor_socket = static_cast<socket_base_t *> (monitor.socket);
     int rc =
       monitor_socket->configure_internal_monitor_queue (monitor_hwm_bytes_);
     if (rc == -1) {
-        stop_monitor (false);
+        monitor_socket->close ();
         return -1;
     }
 
@@ -302,7 +305,7 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
     rc = monitor_socket->setsockopt (ZLINK_INTERNAL_OPT_LINGER, &linger,
                                      sizeof (linger));
     if (rc == -1) {
-        stop_monitor (false);
+        monitor_socket->close ();
         return -1;
     }
 
@@ -313,42 +316,93 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
     rc = monitor_socket->setsockopt (ZLINK_INTERNAL_OPT_SNDTIMEO, &sndtimeo,
                                      sizeof (sndtimeo));
     if (rc == -1) {
-        stop_monitor (false);
+        monitor_socket->close ();
         return -1;
     }
 
-    rc = zlink_bind (monitor.socket, endpoint_);
-    if (rc == -1)
-        stop_monitor (false);
-    else {
-        monitor.reset_worker_state (monitor_hwm_bytes_,
-                                    socket_monitor_event_accounted_bytes ());
-        control_runtime_t *runtime = get_ctx ()->control_runtime ();
-        const uint64_t task_id =
-          runtime ? runtime->add_periodic_task (&socket_base_t::monitor_task_main, this, 10, true)
-                  : 0;
-        if (task_id == 0) {
-            stop_monitor (false);
-            return -1;
-        }
-        monitor.start_task (task_id);
-        monitor.events_atomic.store (monitor.events, std::memory_order_release);
-        // A raw monitor is an independent consumer.  Once it is open, source
-        // connection commands must keep progressing even when the application
-        // is only polling or receiving from the monitor socket.  Reuse the
-        // socket-wide command owner also used by retained-credit processing;
-        // it remains active for the source socket lifetime, so closing one
-        // monitor cannot strand another asynchronous consumer.
-        const bool started_monitor_owner =
-          !lifecycle_coordinator ().is_async_mailbox_active ();
-        if (ensure_async_command_processing () != 0) {
-            stop_monitor (false);
-            return -1;
-        }
-        monitor.owns_async_command_processing.store (
-          started_monitor_owner, std::memory_order_release);
+    rc = monitor_socket->bind (endpoint_);
+    if (rc == -1) {
+        monitor_socket->close ();
+        return -1;
     }
-    return rc;
+
+    monitor.reset_worker_state (monitor_hwm_bytes_,
+                                socket_monitor_event_accounted_bytes ());
+
+    // A raw monitor is an independent consumer. Establish command ownership
+    // without monitor.sync held: process_stop() owns the command mutex before
+    // it detaches a monitor, so the inverse nesting would be a real deadlock.
+    const bool started_monitor_owner =
+      !lifecycle_coordinator ().is_async_mailbox_active ();
+    if (started_monitor_owner)
+        monitor.owns_async_command_processing.store (true,
+                                                      std::memory_order_release);
+    if (ensure_async_command_processing () != 0) {
+        if (started_monitor_owner)
+            monitor.owns_async_command_processing.store (
+              false, std::memory_order_release);
+        monitor_socket->close ();
+        return -1;
+    }
+
+    const auto release_monitor_owner = [&] () {
+        if (!monitor.owns_async_command_processing.exchange (
+              false, std::memory_order_acq_rel))
+            return;
+        stop_async_mailbox_processing ();
+        if (current_async_mailbox_dispatch_socket () != this)
+            wait_async_quiesced (10000);
+    };
+
+    control_runtime_t *runtime = get_ctx ()->control_runtime ();
+    if (!runtime) {
+        const int saved_errno = errno;
+        release_monitor_owner ();
+        monitor_socket->close ();
+        errno = saved_errno;
+        return -1;
+    }
+
+    bool published = false;
+    int publish_errno = EBUSY;
+    {
+        scoped_lock_t monitor_lock (monitor.sync);
+        // Context stop may have won while async ownership was being handed
+        // over. Publish only if this source is still live and no other
+        // internal monitor appeared in the meantime.
+        if (_ctx_terminated)
+            publish_errno = ETERM;
+        else if (monitor.socket == NULL) {
+            monitor.events = events_;
+            monitor.lossy = event_version_ <= 3;
+            monitor.socket = static_cast<void *> (monitor_socket);
+            // Publish the worker-visible socket before adding the task. The
+            // control-runtime mutex then carries that initialization to the
+            // first callback without requiring the callback to take
+            // monitor.sync (detach waits for an active callback while holding
+            // that lock).
+            const uint64_t task_id = runtime->add_periodic_task (
+              &socket_base_t::monitor_task_main, this, 10, true);
+            if (task_id != 0) {
+                monitor.start_task (task_id);
+                monitor.events_atomic.store (monitor.events,
+                                             std::memory_order_release);
+                published = true;
+            } else {
+                publish_errno = errno != 0 ? errno : EFAULT;
+                monitor.socket = NULL;
+                monitor.events = 0;
+                monitor.lossy = true;
+            }
+        }
+    }
+    if (!published) {
+        release_monitor_owner ();
+        monitor_socket->close ();
+        errno = publish_errno;
+        return -1;
+    }
+    return 0;
 }
 
 void zlink::socket_base_t::event_connected (const endpoint_uri_pair_t &endpoint_uri_pair_,
@@ -748,7 +802,7 @@ void zlink::socket_base_t::stop_monitor (bool send_monitor_stopped_event_)
 {
     socket_base_t *monitor_socket = detach_monitor_socket (send_monitor_stopped_event_);
     if (monitor_socket)
-        zlink_close (monitor_socket);
+        monitor_socket->close ();
 }
 
 zlink::socket_base_t *

@@ -32,9 +32,8 @@ func runMultiPubSubServer(cfg multiConfig) {
 	payload := perfcommon.PreparePayload(cfg.msgSize)
 	for time.Now().Before(window.StopAt) {
 		if useMultiPubSubWindowMessage(cfg.transport, cfg.msgSize) {
-			_, err := perfcommon.SubmitWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) (bool, error) {
-				return publisher.Publish("bench").MoveMessage(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
-			})
+			_, err := perfcommon.SubmitMeasurement(publisher.Publish("bench"),
+				perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt), zlink.SendFlagsDontWait)
 			if err != nil {
 				if perfcommon.IsTransient(err) {
 					continue
@@ -46,7 +45,7 @@ func runMultiPubSubServer(cfg multiConfig) {
 		}
 		perfcommon.StampWindowPayload(payload, window.ActiveAt)
 		msg := perfcommon.NewMessage(payload)
-		_, err = publisher.Publish("bench").MoveMessage(msg).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
+		_, err = perfcommon.SubmitMeasurement(publisher.Publish("bench"), msg, zlink.SendFlagsDontWait)
 		if err != nil {
 			if perfcommon.IsTransient(err) {
 				continue
@@ -210,16 +209,17 @@ func drainMultiPubSubSocket(
 	if !ok {
 		return
 	}
-	if received.Topic() != "bench" || len(received.Parts()) != 1 {
+	if received.Topic() != "bench" {
 		perfcommon.Must(fmt.Errorf("multi pubsub unexpected metadata[%d]: topic=%q parts=%d", index, received.Topic(), len(received.Parts())))
 	}
-	part, partErr := received.SinglePartOrError()
-	if partErr != nil {
-		perfcommon.Must(fmt.Errorf("multi pubsub part[%d]: %w", index, partErr))
-	}
-	if perfcommon.IsStopTokenMessage(part) {
+	parts := received.Parts()
+	if len(parts) == 1 && perfcommon.IsStopTokenMessage(parts[0]) {
 		*phaseDone = true
 		return
+	}
+	part, partErr := perfcommon.MeasurementPayload(parts)
+	if partErr != nil {
+		perfcommon.Must(fmt.Errorf("multi pubsub part[%d]: %w", index, partErr))
 	}
 	if !perfcommon.HasMetricHeaderPhase(part.Data(), msgSize, perfcommon.PhaseActive) {
 		return

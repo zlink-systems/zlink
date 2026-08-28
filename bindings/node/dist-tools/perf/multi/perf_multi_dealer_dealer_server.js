@@ -80,7 +80,13 @@ async function main() {
                     if (!server.recv(received, zlink.RecvFlags.DontWait)) {
                         break;
                     }
-                    const data = received.singlePartOrThrow().data();
+                    const parts = received.parts;
+                    const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+                    if (parts.length !== expectedParts || (expectedParts === 2 && parts[1].data().length !== 0)) {
+                        received.close();
+                        continue;
+                    }
+                    const data = parts[0].data();
                     const receivedBytes = data.length;
                     if (isStopToken(data)) {
                         continue;

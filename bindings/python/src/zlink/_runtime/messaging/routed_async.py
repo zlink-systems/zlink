@@ -143,6 +143,12 @@ class SendCompletionOwner:
     def native_handle(self):
         return self._socket._handle
 
+    def drain_pending(self):
+        with self._lock:
+            pending = list(self._pending.values())
+            self._pending.clear()
+        return pending
+
     def _on_complete(self, _subject, event_ptr, _userdata):
         if not event_ptr:
             return
@@ -200,6 +206,12 @@ class SendCompletionOwner:
             _close_native_parts(parts_array)
             _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
 
+        if op_id_out.value == 0:
+            # Core completed synchronously and deliberately emits no callback.
+            with self._lock:
+                self._pending.pop(token, None)
+            return None
+
         with self._lock:
             pending_op = self._pending.get(token)
             if pending_op is not None:
@@ -250,16 +262,12 @@ class RoutedSendOwner:
         self,
         socket,
         role,
-        complete_record_attempt_gate,
         read_request_timeout_ms,
     ):
         self._socket = socket
         self._role = role
-        self._attempt_gate = complete_record_attempt_gate
         self._read_request_timeout_ms = read_request_timeout_ms
         self._state_lock = threading.RLock()
-        self._closing = False
-        self._closed = False
         self._request_completions = {}
         self._next_request_token = 1
         self._reply_handler = _REPLY_HANDLER(self._on_request_reply)
@@ -285,9 +293,6 @@ class RoutedSendOwner:
         return target
 
     async def submit_send(self, router_rid, payload):
-        with self._state_lock:
-            if self._closing or self._closed or not self.native_handle():
-                raise SubmitError(SubmitResult.INVALID_STATE, errno.ECANCELED)
         # ROUTER requires an exact target snapshot for the given routing id.
         # DEALER always passes `target=None` here — Core commits one
         # weighted selection at submit time (`zlink_send_async_options_t`
@@ -301,16 +306,15 @@ class RoutedSendOwner:
         await self._send_completion.submit(payload, target=target, timeout_ms=0)
 
     def run_sync_outbound_attempt(self, attempt):
-        with self._attempt_gate:
-            with self._state_lock:
-                if self._closing or self._closed or not self.native_handle():
-                    _raise_result_error(
-                        SubmitError,
-                        SubmitResult,
-                        SubmitResult.TERMINATED,
-                        errno.ECANCELED,
-                    )
-            rc, native_errno = attempt(self.native_handle())
+        handle = self.native_handle()
+        if not handle:
+            _raise_result_error(
+                SubmitError,
+                SubmitResult,
+                SubmitResult.TERMINATED,
+                errno.ECANCELED,
+            )
+        rc, native_errno = attempt(handle)
         if rc != int(SubmitResult.OK):
             _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
 
@@ -322,7 +326,11 @@ class RoutedSendOwner:
             rc = submit_part(ctypes.byref(native), flag, index == part_count - 1)
             if rc != int(SubmitResult.OK):
                 native_errno = lib().zlink_errno()
-                _close_native_parts(native_parts, index + 1)
+                # Core consumes the attempted native part on ordinary
+                # rejection. The binding owns these materialized copies and
+                # closes the now-empty attempted slot together with every
+                # later part that was not attempted.
+                _close_native_parts(native_parts, index)
                 return int(rc), native_errno
         return int(SubmitResult.OK), 0
 
@@ -370,16 +378,12 @@ class RoutedSendOwner:
                 ),
             )
 
-        with self._attempt_gate:
-            with self._state_lock:
-                if self._closing or self._closed or not self.native_handle():
-                    return int(SubmitResult.TERMINATED), errno.ECANCELED
-            return attempt(self.native_handle())
+        handle = self.native_handle()
+        if not handle:
+            return int(SubmitResult.TERMINATED), errno.ECANCELED
+        return attempt(handle)
 
     async def submit_request(self, router_rid, payload, timeout_ms):
-        with self._state_lock:
-            if self._closing or self._closed or not self.native_handle():
-                raise SubmitError(SubmitResult.INVALID_STATE, errno.ECANCELED)
         loop = asyncio.get_running_loop()
         native_parts = _materialize_native_parts(payload)
         target = self._select_target(router_rid)
@@ -435,26 +439,11 @@ class RoutedSendOwner:
 
     # -- lifecycle --------------------------------------------------------
 
-    def begin_close(self):
-        with self._state_lock:
-            if self._closed:
-                return
-            self._closing = True
-        with self._attempt_gate:
-            pass
-
-    def rollback_close(self):
-        with self._state_lock:
-            self._closing = False
-
     def finish_close(self):
         with self._state_lock:
-            self._closed = True
-            self._closing = False
             completions = list(self._request_completions.values())
             self._request_completions.clear()
-            pending_sends = list(self._send_completion._pending.values())
-            self._send_completion._pending.clear()
+        pending_sends = self._send_completion.drain_pending()
         for completion in completions:
             completion.resolve(
                 error=RequestError(RequestResult.TERMINATED, errno.ECANCELED)

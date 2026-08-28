@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, integerEnv, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsClient, drainRecvSocket, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForPostReadySettle, waitForMonitorConnectionReady, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, appendMeasurement, benchmarkEndpoint, closeSenderWorker, configureTlsClient, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForPostReadySettle, waitForMonitorConnectionReady, waitForWorkerMessage, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 function trace(message) {
     if (process.env.PERF_NODE_TRACE === '1') {
@@ -18,9 +18,16 @@ function trySubscribe(socket, received, buffer, flags) {
         if (!socket.subscribe(received, flags)) {
             return null;
         }
-        const data = received.singlePartOrThrow().data();
+        if (received.parts.length === 1 && received.parts[0].data().equals(STOP_TOKEN_BYTES)) {
+            return { stop: true, size: STOP_TOKEN_BYTES.length };
+        }
+        const payload = measurementPayload(received.parts);
+        if (!payload) {
+            return { valid: false, size: 0 };
+        }
+        const data = payload.data();
         data.copy(buffer, 0, 0, Math.min(buffer.length, data.length));
-        return { size: data.length };
+        return { valid: true, size: data.length };
     }
     catch (error) {
         if (error instanceof zlink.RecvError &&
@@ -52,10 +59,13 @@ async function drainPubSubPayloadInto(socket, buffer, onHeader, options = {}) {
             }
             first = false;
             processed = true;
-            if (received.size === STOP_TOKEN_BYTES.length &&
-                buffer.subarray(0, received.size).equals(STOP_TOKEN_BYTES)) {
+            if (received.stop) {
                 stopReceived = true;
                 break;
+            }
+            if (!received.valid) {
+                onHeader(null, currentEpochNs());
+                continue;
             }
             if (recordUntilNs !== null && recordingActive) {
                 recordingActive = currentEpochNs() <= recordUntilNs;
@@ -100,7 +110,7 @@ async function runPubSubBenchmark(msgSize, options) {
             senderHwmComponent: 'publisher',
             sendActive: (socket, payload) => {
                 try {
-                    socket.publish(TOPIC).message(payload).submit();
+                    appendMeasurement(socket.publish(TOPIC), payload).submit();
                     return true;
                 }
                 catch (error) {

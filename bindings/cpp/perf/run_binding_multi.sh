@@ -60,6 +60,7 @@ PERF_COMPARISON_SCRIPT="${ROOT_DIR}/bindings/cpp/perf/multi/run_comparison.py"
 PATTERNS="DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM"
 TRANSPORTS="tcp,tls,ws,wss"
 DEFAULT_MULTI_MSG_SIZES="64,256,1024,4096,65536,131072"
+PART_COUNT="${PERF_PART_COUNT:-2}"
 IFS=',' read -r -a PATTERN_LIST <<< "${PATTERNS}"
 
 SECONDS=0
@@ -254,6 +255,7 @@ Options:
                          (default: non-stream=4, stream=4).
   --msg-sizes LIST       Comma-separated message sizes
                          (default: 64,256,1024,4096,65536,131072).
+  --part-count N         Application frame count per measured message (1 or 2; default: 2).
                          MULTI_STREAM uses 64,256,1024,65536 by default;
                          override it with PERF_MULTI_STREAM_MSG_SIZES.
   --transports LIST      Comma-separated transports.
@@ -389,7 +391,7 @@ BUILD_MODE_EXPLICIT=0
 DURATION_SECONDS="${PERF_MULTI_DURATION_SECONDS:-${PERF_DURATION_SECONDS:-5}}"
 CLIENTS="${PERF_MULTI_CLIENTS:-${PERF_CLIENTS:-}}"
 EFFECTIVE_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
-EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-10000}}"
+EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
 HWM="${PERF_MULTI_HWM:-${PERF_HWM:-}}"
 SNDHWM="${PERF_MULTI_SNDHWM:-${PERF_SNDHWM:-}}"
 RCVHWM="${PERF_MULTI_RCVHWM:-${PERF_RCVHWM:-}}"
@@ -464,6 +466,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       MSG_SIZES_OVERRIDE="${2}"
+      shift 2
+      ;;
+    --part-count)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: $1 requires a value." >&2
+        exit 1
+      fi
+      PART_COUNT="${2}"
       shift 2
       ;;
     --pattern)
@@ -741,6 +751,11 @@ done
 
 if [[ "${HAS_EXPLICIT_MSG_SIZES}" -eq 1 ]]; then
   STREAM_MSG_SIZES="${MSG_SIZES_OVERRIDE}"
+fi
+
+if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
+  echo "Error: --part-count must be 1 or 2." >&2
+  exit 1
 fi
 
 if [[ -n "${HWM}" || -n "${SNDHWM}" || -n "${RCVHWM}" || -n "${SNDBUF}" || -n "${RCVBUF}" ]]; then
@@ -1032,11 +1047,21 @@ if [[ -z "${RESULTS_DIR_OVERRIDE}" ]]; then
 fi
 
 RUN_ENV=()
+prepare_core_runtime_metadata
 RUN_ENV+=(PERF_ALLOW_MULTI="1")
 RUN_ENV+=(PERF_POLICY="1")
+RUN_ENV+=(PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE}")
+RUN_ENV+=(PERF_CORE_VERSION="${ZLINK_CORE_VERSION}")
+RUN_ENV+=(PERF_CORE_RUNTIME="${PERF_CORE_RUNTIME_PATH}")
+RUN_ENV+=(PERF_CORE_REVISION="${PERF_CORE_PROVENANCE_REVISION:-unknown}")
+RUN_ENV+=(PERF_CORE_DIRTY="${PERF_CORE_DIRTY_VALUE}")
+if [[ -n "${PERF_CORE_RELEASE_TAG_VALUE}" ]]; then
+  RUN_ENV+=(PERF_CORE_RELEASE_TAG="${PERF_CORE_RELEASE_TAG_VALUE}")
+fi
 RUN_ENV+=(PERF_RESULTS_DIR="${RESULTS_DIR_OVERRIDE}")
 RUN_ENV+=(PERF_TRANSPORTS="${TRANSPORTS_OVERRIDE}")
 RUN_ENV+=(PERF_MULTI_DURATION_SECONDS="${DURATION_SECONDS}")
+RUN_ENV+=(PERF_PART_COUNT="${PART_COUNT}")
 RUN_ENV+=(PERF_MULTI_RUN_COOLDOWN_MS="${RUN_COOLDOWN_MS}")
 RUN_ENV+=(PERF_MULTI_TRANSPORT_TRANSITION_MS="${TRANSPORT_TRANSITION_MS}")
 RUN_ENV+=(PERF_MULTI_PATTERN_TRANSITION_MS="${PATTERN_TRANSITION_MS}")

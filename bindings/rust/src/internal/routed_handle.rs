@@ -9,7 +9,7 @@
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::ffi;
@@ -23,12 +23,10 @@ pub(crate) enum RoutedRole {
 }
 
 /// Keeps the native handle reachable from operation builders that outlive the
-/// socket value, and serialises the multi-call request submit sequence so two
-/// concurrent requests cannot interleave their parts on the same handle.
+/// socket value. Core owns submit admission and lifecycle concurrency.
 pub(crate) struct RoutedHandle {
     handle: AtomicPtr<c_void>,
     role: RoutedRole,
-    submit_gate: Mutex<()>,
 }
 
 unsafe impl Send for RoutedHandle {}
@@ -39,7 +37,6 @@ impl RoutedHandle {
         Arc::new(Self {
             handle: AtomicPtr::new(handle),
             role,
-            submit_gate: Mutex::new(()),
         })
     }
 
@@ -51,10 +48,9 @@ impl RoutedHandle {
         self.handle.load(Ordering::Acquire)
     }
 
-    /// Runs `attempt` with the live handle under the outbound gate. Returns
-    /// `None` once the handle has been closed and detached.
-    pub(crate) fn with_submit_gate<T>(&self, attempt: impl FnOnce(*mut c_void) -> T) -> Option<T> {
-        let _gate = self.submit_gate.lock().expect("routed submit gate");
+    /// Runs `attempt` with the current handle. Core rejects a submit racing an
+    /// open multipart sequence or close; the binding does not wait or retry.
+    pub(crate) fn with_live_handle<T>(&self, attempt: impl FnOnce(*mut c_void) -> T) -> Option<T> {
         let handle = self.handle();
         (!handle.is_null()).then(|| attempt(handle))
     }
@@ -65,7 +61,6 @@ impl RoutedHandle {
         &self,
         router_rid: Option<&RoutingId>,
     ) -> (i32, ffi::zlink_routed_submit_target_t) {
-        let _gate = self.submit_gate.lock().expect("routed submit gate");
         let handle = self.handle();
         let mut target = ffi::zlink_routed_submit_target_t {
             peer_rid: ffi::zlink_routing_id_t::empty(),
@@ -84,7 +79,6 @@ impl RoutedHandle {
 
     /// Core-owned request deadline (`ZLINK_REQUEST_TIMED_OUT` fires it).
     pub(crate) fn request_timeout(&self) -> Result<Duration, crate::error::SubmitError> {
-        let _gate = self.submit_gate.lock().expect("routed submit gate");
         let handle = self.handle();
         if handle.is_null() {
             return Err(submit_error_from_errno(libc::ECANCELED));
@@ -113,14 +107,13 @@ impl RoutedHandle {
         Ok(Duration::from_millis(millis.max(0) as u64))
     }
 
-    pub(crate) fn close_native(&self, detach_on_failure: bool) -> i32 {
-        let _gate = self.submit_gate.lock().expect("routed submit gate");
+    pub(crate) fn close_native(&self) -> i32 {
         let handle = self.handle();
         if handle.is_null() {
             return 0;
         }
         let rc = unsafe { ffi::zlink_close(handle) };
-        if rc == 0 || detach_on_failure {
+        if rc == 0 {
             self.handle.store(std::ptr::null_mut(), Ordering::Release);
         }
         rc

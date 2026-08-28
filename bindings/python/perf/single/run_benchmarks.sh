@@ -13,6 +13,7 @@ for arg in "$@"; do
 done
 
 CORE_VERSION_OPTION=""
+PART_COUNT="${PERF_PART_COUNT:-2}"
 SCRIPT_ARGUMENTS=("$@")
 FORWARD_ARGUMENTS=()
 for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_index)); do
@@ -27,6 +28,19 @@ for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_i
       ;;
     --core-version=*)
       requested_core_version="${SCRIPT_ARGUMENTS[argument_index]#--core-version=}"
+      ;;
+    --part-count)
+      if (( argument_index + 1 >= ${#SCRIPT_ARGUMENTS[@]} )); then
+        echo "Error: --part-count requires 1 or 2." >&2
+        exit 1
+      fi
+      ((++argument_index))
+      PART_COUNT="${SCRIPT_ARGUMENTS[argument_index]}"
+      continue
+      ;;
+    --part-count=*)
+      PART_COUNT="${SCRIPT_ARGUMENTS[argument_index]#--part-count=}"
+      continue
       ;;
     *)
       FORWARD_ARGUMENTS+=("${SCRIPT_ARGUMENTS[argument_index]}")
@@ -44,6 +58,11 @@ for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_i
   CORE_VERSION_OPTION="${requested_core_version}"
 done
 set -- "${FORWARD_ARGUMENTS[@]+"${FORWARD_ARGUMENTS[@]}"}"
+if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
+  echo "Error: --part-count must be 1 or 2." >&2
+  exit 1
+fi
+export PERF_PART_COUNT="${PART_COUNT}"
 
 # An explicit ZLINK_LIBRARY_PATH (Core or wheel runtime) always wins, exactly
 # as before. Otherwise, use the current workspace Core by default; an explicit
@@ -68,11 +87,15 @@ else
   source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
   export ZLINK_LIBRARY_PATH="${ZLINK_LOCAL_CORE_RUNTIME}"
 fi
+export PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE:-explicit}"
+export PERF_CORE_VERSION="${ZLINK_CORE_VERSION:-$(awk -F= '/^LIBZLINK_VERSION=/{print $2}' "${REPO_DIR}/VERSION")}"
+export PERF_CORE_RUNTIME="$(readlink -f "${ZLINK_LIBRARY_PATH}" 2>/dev/null || printf '%s' "${ZLINK_LIBRARY_PATH}")"
 
 if [[ $show_help -eq 1 ]]; then
     echo "Note: --core-version VERSION downloads and uses a released Core runtime."
     echo "      Without it (and without an explicit ZLINK_LIBRARY_PATH), the current"
     echo "      workspace Core (core/build) is used by default."
+    echo "      --part-count N selects 1 or 2 application frames (default: 2)."
 fi
 
 if [[ $show_help -eq 0 ]]; then

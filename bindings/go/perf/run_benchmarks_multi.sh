@@ -128,6 +128,7 @@ print_total_time() {
 }
 PATTERN="ALL"
 DURATION="5"
+PART_COUNT="${PERF_PART_COUNT:-2}"
 MSG_SIZES=""
 TRANSPORTS="${PERF_TRANSPORTS:-}"
 RUNS="1"
@@ -324,6 +325,7 @@ Usage: bindings/go/perf/run_benchmarks_multi.sh [options]
 Options:
   --pattern NAME
   --duration N
+  --part-count N          Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST
   --transports LIST
   --runs N
@@ -378,6 +380,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage; exit 0 ;;
     --pattern) PATTERN="$2"; shift 2 ;;
     --duration) DURATION="$2"; shift 2 ;;
+    --part-count) PART_COUNT="$2"; shift 2 ;;
     --msg-sizes) MSG_SIZES="$2"; shift 2 ;;
     --transports) TRANSPORTS="$2"; shift 2 ;;
     --runs) RUNS="$2"; shift 2 ;;
@@ -468,6 +471,12 @@ while [[ $# -gt 0 ]]; do
       exit 1 ;;
   esac
 done
+
+if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
+  echo "Error: --part-count must be 1 or 2." >&2
+  exit 1
+fi
+export PERF_PART_COUNT="${PART_COUNT}"
 
 if [[ "${REUSE_BUILD}" -eq 1 && "${CLEAN_BUILD}" -eq 1 ]]; then
   echo "Error: --reuse-build and --clean-build are mutually exclusive." >&2

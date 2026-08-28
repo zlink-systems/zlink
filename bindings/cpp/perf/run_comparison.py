@@ -1474,7 +1474,7 @@ def detect_special_status(stdout, expected_lib, expected_pattern, expected_trans
 
 def pattern_default_clients(pattern_name, transport=None):
     if pattern_name in STREAM_VARIANT_PATTERNS:
-        base = 10000
+        base = 100
         tr = (transport or "").strip().lower()
         if tr in ("tls", "ws", "wss"):
             non_tcp_cap = max(
@@ -1849,7 +1849,6 @@ def run_sizes_test_stream_shared(
     pending_ready_sizes = set()
     pending_phase_active_sizes = set()
     client_proc = [None]
-
     def maybe_send_phase_active(size_value):
         try:
             size_int = int(size_value)
@@ -1898,7 +1897,6 @@ def run_sizes_test_stream_shared(
         emit_result_metrics_from_line(
             line, transport, expected_sizes, result_line_callback
         )
-
     def stop_server():
         nonlocal server_proc
         if not server_proc:
@@ -2394,6 +2392,8 @@ def run_sizes_test_split(
             client_env[str(key)] = str(value)
     set_env_pair(server_env, "PERF_IO_THREADS", server_io_threads_int)
     set_env_pair(client_env, "PERF_IO_THREADS", client_io_threads_int)
+    if pattern_name == "DEALER_DEALER":
+        set_env_pair(client_env, "PERF_WAIT_SERVER_STOP_AFTER_CLIENT_DONE", 1)
 
     server_proc = None
     close_server_sampler = None
@@ -2412,6 +2412,23 @@ def run_sizes_test_split(
     pending_ready_sizes = set()
     pending_phase_active_sizes = set()
     client_proc = [None]
+    server_result_metrics = set()
+
+    def maybe_release_dealer_dealer_client():
+        if pattern_name != "DEALER_DEALER" or not expected_sizes:
+            return
+        for size_value in expected_sizes:
+            for metric_name in REQUIRED_RESULT_METRICS:
+                if (size_value, metric_name) not in server_result_metrics:
+                    return
+        try:
+            if client_proc[0] and client_proc[0].stdin:
+                client_proc[0].stdin.write("STOP\n")
+                client_proc[0].stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+        except Exception as exc:
+            report_runner_warning("dealer-dealer-client-release", exc)
 
     def maybe_send_phase_active(size_value):
         try:
@@ -2461,6 +2478,15 @@ def run_sizes_test_split(
         emit_result_metrics_from_line(
             line, transport, expected_sizes, result_line_callback
         )
+        if pattern_name == "DEALER_DEALER":
+            parsed_line, _warning = parse_result_line(
+                line, transport, expected_sizes
+            )
+            if parsed_line:
+                line_transport, line_size, metric, _value = parsed_line
+                if line_transport == transport and line_size in expected_sizes:
+                    server_result_metrics.add((line_size, metric))
+                    maybe_release_dealer_dealer_client()
 
     def stop_server():
         nonlocal server_proc
@@ -3900,7 +3926,7 @@ def resolve_clients_meta(selected_patterns):
     if not selected_patterns or not all(is_pattern(p) for p in selected_patterns):
         return ""
 
-    stream_default = 10000
+    stream_default = 100
     general_default = 100
     if len(selected_patterns) == 1 and selected_patterns[0] in STREAM_VARIANT_PATTERNS:
         return str(stream_default)
@@ -3916,6 +3942,17 @@ def build_meta_items(num_runs, selected_patterns):
     meta_items.append(("cores", str(os.cpu_count() or 0)))
     meta_items.append(("build", detect_build_type(BUILD_DIR)))
     meta_items.append(("commit", get_commit_short_sha()))
+    for key, env_name in (
+        ("core_source", "PERF_CORE_SOURCE"),
+        ("core_version", "PERF_CORE_VERSION"),
+        ("core_runtime", "PERF_CORE_RUNTIME"),
+        ("core_revision", "PERF_CORE_REVISION"),
+        ("core_dirty", "PERF_CORE_DIRTY"),
+        ("core_release_tag", "PERF_CORE_RELEASE_TAG"),
+    ):
+        value = _read_env_value(env_name)
+        if value:
+            meta_items.append((key, value))
     local_now = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
     meta_items.append(("timestamp", local_now))
     load_avg = get_load_avg()

@@ -140,11 +140,14 @@ internal static class PerfDealerDealer
         bool stopReceived = false;
         Exception? sendError = null;
 
-        bool ProcessReceived(Message message)
+        bool ProcessReceived(Received message)
         {
-            ReadOnlySpan<byte> body = message.AsReadOnlySpan();
-            if (StopToken.IsStopToken(body))
+            if (message.Parts.Count == 1
+                && StopToken.IsStopToken(message.FirstPart().AsReadOnlySpan()))
                 return true;
+            if (!PerfSocketIo.TryMeasurementPayload(message.Parts, out Message payloadPart))
+                return false;
+            ReadOnlySpan<byte> body = payloadPart.AsReadOnlySpan();
 
             long recvTicks = Stopwatch.GetTimestamp();
             if (TryDecodeExpectedSingleHeader(body, msgSize, ActivePhase,
@@ -202,7 +205,7 @@ internal static class PerfDealerDealer
 
                 while (TryReceiveNonBlocking(receiver, maybe))
                 {
-                    if (ProcessReceived(maybe.FirstPart()))
+                    if (ProcessReceived(maybe))
                     {
                         stopReceived = true;
                         break;

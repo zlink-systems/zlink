@@ -8,6 +8,7 @@
 #include <cstddef>
 
 #include "sockets/common/socket_base.hpp"
+#include "api/socket/socket_api_internal.hpp"
 
 struct option_descriptor_t
 {
@@ -32,12 +33,13 @@ struct option_target_t
 
     option_target_kind_t kind;
     socket_base_t *socket;
+    socket_handle_t handle;
 };
 
 option_target_t resolve_option_target (void *handle_);
 }
 
-zlink::socket_base_t *as_socket (void *handle_);
+socket_handle_t as_socket (void *handle_);
 int socket_type_of (zlink::socket_base_t *socket_);
 
 int map_common_option (zlink_option_t option_);

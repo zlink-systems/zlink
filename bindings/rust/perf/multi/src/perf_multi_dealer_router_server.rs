@@ -93,11 +93,8 @@ fn main() {
         }
         // Flush pending backlog first (POLLOUT side).
         while let Some((rid, reply_bytes)) = pending.pop_front() {
-            match common::block_on(
-                router
-                    .send(&rid)
-                    .message(Message::try_from(&reply_bytes).expect("pending reply"))
-                    .submit(),
+            match perf_submit_measurement!(
+                router.send(&rid), Message::try_from(&reply_bytes).expect("pending reply")
             ) {
                 Ok(()) => {}
                 Err(err) if err.code() == SubmitResult::Backpressured => {
@@ -116,11 +113,8 @@ fn main() {
                     };
                     let reply_bytes = common::message_payload(received.parts()).to_vec();
                     if pending.is_empty() {
-                        match common::block_on(
-                            received
-                                .send()
-                                .message(Message::try_from(&reply_bytes).expect("reply"))
-                                .submit(),
+                        match perf_submit_measurement!(
+                            received.send(), Message::try_from(&reply_bytes).expect("reply")
                         ) {
                             Ok(()) => continue,
                             Err(err) if err.code() == SubmitResult::Backpressured => {}

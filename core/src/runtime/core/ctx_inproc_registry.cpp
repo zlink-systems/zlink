@@ -11,6 +11,8 @@
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
 
+#include <memory>
+
 zlink::endpoint_t::endpoint_t () : socket (NULL)
 {
 }
@@ -116,19 +118,34 @@ bool zlink::ctx_inproc_registry_t::pend_connection (const std::string &addr_,
 
 void zlink::ctx_inproc_registry_t::connect_pending (const char *addr_, socket_base_t *bind_socket_)
 {
-    scoped_lock_t locker (_sync);
+    std::unique_ptr<options_t> bind_options;
+    std::vector<pending_connection_t> pending_connections;
+    {
+        scoped_lock_t locker (_sync);
 
-    const endpoints_t::iterator endpoint_it = _endpoints.find (addr_);
-    if (endpoint_it == _endpoints.end ())
-        return;
+        const endpoints_t::iterator endpoint_it = _endpoints.find (addr_);
+        if (endpoint_it == _endpoints.end ())
+            return;
 
-    const std::pair<pending_connections_t::iterator, pending_connections_t::iterator> pending =
-      _pending_connections.equal_range (addr_);
-    for (pending_connections_t::iterator p = pending.first; p != pending.second; ++p) {
-        connect_inproc_sockets (bind_socket_, endpoint_it->second.options, p->second, bind_side);
+        bind_options.reset (new options_t (endpoint_it->second.options));
+        const std::pair<pending_connections_t::iterator,
+                        pending_connections_t::iterator>
+          pending = _pending_connections.equal_range (addr_);
+        // Copy the complete batch before erasing it.  If allocation fails,
+        // every pending pipe remains owned by the registry exactly as before.
+        for (pending_connections_t::iterator p = pending.first;
+             p != pending.second; ++p)
+            pending_connections.push_back (p->second);
+        _pending_connections.erase (pending.first, pending.second);
     }
 
-    _pending_connections.erase (pending.first, pending.second);
+    // Binding a pending inproc peer synchronously runs attach_pipe().  It may
+    // replan Auto-HWM and acquire context/socket locks, so it must never run
+    // while the registry mutex is held.
+    for (std::vector<pending_connection_t>::const_iterator p =
+           pending_connections.begin ();
+         p != pending_connections.end (); ++p)
+        connect_inproc_sockets (bind_socket_, *bind_options, *p, bind_side);
 }
 
 bool zlink::ctx_inproc_registry_t::has_pending_for_socket (
@@ -156,22 +173,34 @@ size_t zlink::ctx_inproc_registry_t::materialize_pending_for_socket (
     options_t bind_options;
     bind_options.type = ZLINK_CORE_SOCKET_PAIR;
 
-    size_t count = 0;
-    scoped_lock_t locker (_sync);
-    const std::pair<pending_connections_t::iterator, pending_connections_t::iterator> pending =
-      _pending_connections.equal_range (addr_);
-    pending_connections_t::iterator it = pending.first;
-    while (it != pending.second) {
-        if (it->second.endpoint.socket != socket_) {
-            ++it;
-            continue;
-        }
+    std::vector<pending_connection_t> pending_connections;
+    {
+        scoped_lock_t locker (_sync);
+        const std::pair<pending_connections_t::iterator,
+                        pending_connections_t::iterator>
+          pending = _pending_connections.equal_range (addr_);
 
-        connect_inproc_sockets (bind_socket_, bind_options, it->second, bind_side);
-        it = _pending_connections.erase (it);
-        ++count;
+        // First finish every possibly-throwing copy.  Only then remove the
+        // selected entries so allocation failure cannot orphan their pipes.
+        for (pending_connections_t::iterator it = pending.first;
+             it != pending.second; ++it) {
+            if (it->second.endpoint.socket == socket_)
+                pending_connections.push_back (it->second);
+        }
+        pending_connections_t::iterator it = pending.first;
+        while (it != pending.second) {
+            if (it->second.endpoint.socket == socket_)
+                it = _pending_connections.erase (it);
+            else
+                ++it;
+        }
     }
-    return count;
+
+    for (std::vector<pending_connection_t>::const_iterator it =
+           pending_connections.begin ();
+         it != pending_connections.end (); ++it)
+        connect_inproc_sockets (bind_socket_, bind_options, *it, bind_side);
+    return pending_connections.size ();
 }
 
 void zlink::ctx_inproc_registry_t::collect_pending_addresses (std::vector<std::string> *out_) const

@@ -6,6 +6,8 @@
 #include "utils/macros.hpp"
 #include "utils/stdint.hpp"
 
+#include <atomic>
+
 #if defined ZLINK_HAVE_OSX
 // condition_variable.hpp includes clock.hpp to get these platform definitions.
 #ifndef CLOCK_REALTIME
@@ -40,10 +42,10 @@ class clock_t
 
   private:
     //  TSC timestamp of when last time measurement was made.
-    uint64_t _last_tsc;
+    std::atomic<uint64_t> _last_tsc;
 
     //  Physical time corresponding to the TSC above (in milliseconds).
-    uint64_t _last_time;
+    std::atomic<uint64_t> _last_time;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (clock_t)
 };

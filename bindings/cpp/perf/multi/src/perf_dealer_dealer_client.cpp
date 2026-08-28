@@ -53,6 +53,23 @@ void debug_log (const std::string &message_)
     std::cerr << "dealer_dealer client: " << message_ << std::endl;
 }
 
+bool wait_for_runner_release_after_done ()
+{
+    const char *const enabled =
+      std::getenv ("PERF_WAIT_SERVER_STOP_AFTER_CLIENT_DONE");
+    if (!enabled || std::strcmp (enabled, "1") != 0)
+        return true;
+
+    std::string line;
+    while (std::getline (std::cin, line)) {
+        if (!line.empty () && line[line.size () - 1] == '\r')
+            line.erase (line.size () - 1);
+        if (line == "STOP" || line == "QUIT")
+            return true;
+    }
+    return false;
+}
+
 struct phase_config_t
 {
     int active_seconds;
@@ -133,6 +150,11 @@ class dealer_dealer_client_bench_t
             co_return false;
 
         std::cout << "CLIENT_DONE," << _msg_size << std::endl;
+        // Keep the socket/context alive until the measuring server has consumed
+        // every queued payload and per-socket stop token. With linger=0, exiting
+        // here can discard stop tokens that are still behind the active backlog.
+        if (!wait_for_runner_release_after_done ())
+            co_return false;
         co_return _result.active_count > 0;
     }
 
@@ -226,7 +248,15 @@ class dealer_dealer_client_bench_t
             debug_log ("stamp payload failed");
             co_return false;
         }
-        std::move (state.sock->send ()).message (state.message).submit ();
+        // The public routed builder has no DONTWAIT terminal. Await Core's
+        // admission completion so HWM pressure suspends this coroutine instead
+        // of turning the socket's finite SNDTIMEO into a benchmark failure.
+        if (perf::multi::measurement_part_count () == 2) {
+            zlink::message_t tail = perf::multi::measurement_empty_part ();
+            co_await std::move (state.sock->send ()).message (state.message).message (tail).async ();
+        } else {
+            co_await std::move (state.sock->send ()).message (state.message).async ();
+        }
         ++_seq;
         if (count)
             ++(*count);
@@ -250,7 +280,7 @@ class dealer_dealer_client_bench_t
             co_return stop_token_fatal;
 
         try {
-            std::move (state.sock->send ()).message (part).submit ();
+            co_await std::move (state.sock->send ()).message (part).async ();
             co_return stop_token_sent;
         }
         catch (const zlink::submit_error_t &error_) {

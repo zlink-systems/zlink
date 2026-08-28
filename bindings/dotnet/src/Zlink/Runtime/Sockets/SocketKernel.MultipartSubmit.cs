@@ -68,16 +68,6 @@ internal sealed partial class SocketKernel
                 flags,
                 mapNoWaitResult);
 
-        lock (SubmitGate)
-            return SubmitMultipartCoreUnlocked(kind, topic, ref routingId, parts,
-                flags, paramName, mapNoWaitResult);
-    }
-
-    private unsafe SendResult SubmitMultipartCoreUnlocked(
-        MultipartSubmitKind kind, string? topic, ref ZlinkRoutingId routingId,
-        ReadOnlySpan<Message> parts, int flags, string paramName,
-        bool mapNoWaitResult)
-    {
         ZlinkMsg[]? rented = null;
         var nativeParts = parts.Length <= NativeMessageParts.StackPartLimit
             ? stackalloc ZlinkMsg[NativeMessageParts.StackPartLimit]
@@ -85,13 +75,13 @@ internal sealed partial class SocketKernel
         nativeParts = nativeParts.Slice(0, parts.Length);
 
         var built = 0;
-        var submitted = 0;
+        var consumed = 0;
         try
         {
             NativeMessageParts.MoveToNative(parts, nativeParts, paramName,
                 ref built);
             var publishTopicUtf8 = kind == MultipartSubmitKind.Publish
-                ? GetPublishTopicUtf8Unlocked(topic!)
+                ? PublishTopicEncoding.GetNullTerminatedUtf8(topic!)
                 : null;
             for (var i = 0; i < built; i++)
             {
@@ -116,9 +106,18 @@ internal sealed partial class SocketKernel
                         _ => throw new InvalidOperationException()
                     };
 
-                submitted = i + 1;
                 if (rc == 0)
+                {
+                    consumed = i + 1;
                     continue;
+                }
+
+                // STREAM is the sole synchronous send contract that retains
+                // the submitted native part on EAGAIN. Every other result,
+                // including EAGAIN on other socket families, consumes it.
+                var retainCurrent = Type == SocketType.Stream
+                    && rc == (int)SubmitResult.Backpressured;
+                consumed = retainCurrent ? i : i + 1;
 
                 if (mapNoWaitResult)
                 {
@@ -127,7 +126,8 @@ internal sealed partial class SocketKernel
                     if (sendResult != null)
                     {
                         NativeMessageParts.RestoreManaged(parts, nativeParts,
-                            submitted, built - submitted);
+                            consumed, built - consumed);
+                        consumed = built;
                         return sendResult.Value;
                     }
                 }
@@ -139,8 +139,8 @@ internal sealed partial class SocketKernel
         }
         catch
         {
-            NativeMessageParts.RestoreManaged(parts, nativeParts, submitted,
-                built - submitted);
+            NativeMessageParts.RestoreManaged(parts, nativeParts, consumed,
+                built - consumed);
             throw;
         }
         finally

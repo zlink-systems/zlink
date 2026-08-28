@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -76,6 +77,7 @@ struct client_state_t
         active_deadline_ns (0),
         active_reply_count (0),
         fatal (false),
+        callback_mutex (),
         slots (),
         events (),
         latency ()
@@ -88,6 +90,9 @@ struct client_state_t
     uint64_t active_deadline_ns;
     unsigned long long active_reply_count;
     bool fatal;
+    // Reply callbacks are serialized per socket, but different client sockets
+    // may complete concurrently. Guard per-slot wait state and shared metrics.
+    std::mutex callback_mutex;
     std::vector<client_slot_t> slots;
     std::vector<zlink_poller_event_t> events;
     bench_latency_sampler_t latency;
@@ -135,9 +140,14 @@ inline void on_request_reply (zlink_request_result_t result,
         return;
 
     client_state_t *state = slot->owner;
+    std::lock_guard<std::mutex> lock (state->callback_mutex);
     slot->waiting_reply = false;
 
-    if (result != ZLINK_REQUEST_OK || !parts || part_count == 0)
+    if (result != ZLINK_REQUEST_OK || !parts
+        || part_count != perf_measurement_part_count ())
+        return;
+
+    if (part_count == 2 && zlink_msg_size (&parts[1]) != 0)
         return;
 
     perf_multi_metric::header_t header;
@@ -195,21 +205,26 @@ inline bool submit_request (const endpoint_config_t &config,
     if (payload_size > 0)
         std::memcpy (zlink_msg_data (&part), slot->payload.data (), payload_size);
 
-    slot->waiting_reply = true;
+    {
+        std::lock_guard<std::mutex> lock (slot->owner->callback_mutex);
+        slot->waiting_reply = true;
+    }
     zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
     if (config.client_router_request) {
         if (!target_rid || target_rid->size == 0) {
             zlink_msg_close (&part);
+            std::lock_guard<std::mutex> lock (slot->owner->callback_mutex);
             slot->waiting_reply = false;
             errno = EINVAL;
             return false;
         }
-        rc = zlink_router_request_part (slot->socket, target_rid, &part, ZLINK_SEND_FLAGS_NONE,
-                                        ZLINK_PART_FINAL, timeout_ms, on_request_reply, slot);
+        rc = perf_zlink_router_request_measurement_part (
+          slot->socket, target_rid, &part, ZLINK_SEND_FLAGS_NONE, timeout_ms,
+          on_request_reply, slot);
     } else {
-        rc = zlink_dealer_request_part (slot->socket, &part, ZLINK_SEND_FLAGS_NONE,
-                                        ZLINK_PART_FINAL,
-                                        timeout_ms, on_request_reply, slot);
+        rc = perf_zlink_dealer_request_measurement_part (
+          slot->socket, &part, ZLINK_SEND_FLAGS_NONE, timeout_ms,
+          on_request_reply, slot);
     }
 
     if (rc == ZLINK_SUBMIT_OK) {
@@ -219,7 +234,10 @@ inline bool submit_request (const endpoint_config_t &config,
 
     const int err = zlink_errno ();
     zlink_msg_close (&part);
-    slot->waiting_reply = false;
+    {
+        std::lock_guard<std::mutex> lock (slot->owner->callback_mutex);
+        slot->waiting_reply = false;
+    }
     if (is_transient_submit (rc, err)) {
         if (blocked_out)
             *blocked_out = true;
@@ -228,8 +246,9 @@ inline bool submit_request (const endpoint_config_t &config,
     return false;
 }
 
-inline bool any_waiting_reply (const client_state_t &state)
+inline bool any_waiting_reply (client_state_t &state)
 {
+    std::lock_guard<std::mutex> lock (state.callback_mutex);
     for (size_t i = 0; i < state.slots.size (); ++i) {
         if (state.slots[i].waiting_reply)
             return true;
@@ -282,16 +301,20 @@ inline bool run_active_window (const endpoint_config_t &config,
         target_rid_ptr = &target_rid;
     }
 
-    state->active_run_id = run_id;
-    state->active_msg_size = msg_size;
-    state->active_deadline_ns =
-      perf_multi_metric::now_ns ()
-      + static_cast<uint64_t> (std::max (1, settings.duration_seconds)) * 1000000000ULL;
-    state->active_reply_count = 0;
+    {
+        std::lock_guard<std::mutex> lock (state->callback_mutex);
+        state->active_run_id = run_id;
+        state->active_msg_size = msg_size;
+        state->active_deadline_ns =
+          perf_multi_metric::now_ns ()
+          + static_cast<uint64_t> (std::max (1, settings.duration_seconds)) * 1000000000ULL;
+        state->active_reply_count = 0;
+        state->latency.reset ();
+        for (size_t i = 0; i < state->slots.size (); ++i)
+            state->slots[i].waiting_reply = false;
+    }
     state->fatal = false;
-    state->latency.reset ();
     for (size_t i = 0; i < state->slots.size (); ++i) {
-        state->slots[i].waiting_reply = false;
         state->slots[i].next_seq = 1;
     }
 
@@ -305,8 +328,11 @@ inline bool run_active_window (const endpoint_config_t &config,
         bool progress = false;
         for (size_t i = 0; i < state->slots.size (); ++i) {
             client_slot_t &slot = state->slots[i];
-            if (slot.waiting_reply)
-                continue;
+            {
+                std::lock_guard<std::mutex> lock (state->callback_mutex);
+                if (slot.waiting_reply)
+                    continue;
+            }
 
             bool blocked = false;
             if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
@@ -338,8 +364,11 @@ inline bool run_active_window (const endpoint_config_t &config,
     if (!drain_pending_replies (state, request_timeout_ms))
         return false;
 
-    *reply_count_out = state->active_reply_count;
-    *latency_out = state->latency.snapshot ();
+    {
+        std::lock_guard<std::mutex> lock (state->callback_mutex);
+        *reply_count_out = state->active_reply_count;
+        *latency_out = state->latency.snapshot ();
+    }
     return true;
 }
 
@@ -480,6 +509,30 @@ inline bool submit_router_reply_with_retry (void *server,
     if (!server || !source_rid || request_seq == 0 || !part)
         return false;
 
+    if (perf_measurement_part_count () == 2u) {
+        const zlink_submit_result_t payload_rc = zlink_router_reply_part (
+          server, source_rid, request_seq, part, ZLINK_PART_MORE);
+        if (payload_rc != ZLINK_SUBMIT_OK)
+            return false;
+        while (!perf_stop_requested ().load (std::memory_order_acquire)) {
+            zlink_msg_t empty_part;
+            if (zlink_msg_init (&empty_part) != 0)
+                return false;
+            const zlink_submit_result_t final_rc = zlink_router_reply_part (
+              server, source_rid, request_seq, &empty_part, ZLINK_PART_FINAL);
+            if (final_rc == ZLINK_SUBMIT_OK)
+                return true;
+            zlink_msg_close (&empty_part);
+            if (final_rc != ZLINK_SUBMIT_BACKPRESSURED)
+                return false;
+            zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
+            if (perf_socket_poll (&item, 1, perf_aux_poll_wait_ms ()) < 0
+                && zlink_errno () != EINTR && zlink_errno () != EAGAIN)
+                return false;
+        }
+        return false;
+    }
+
     // Reply submission consumes the supplied part on backpressure. Keep a
     // shared-storage copy so the retry preserves the received metric payload.
     zlink_msg_t retry_template;
@@ -555,7 +608,9 @@ inline server_recv_step_t reply_one_request (void *server,
         return server_recv_step_error;
     }
 
-    if (!source_rid || source_rid->size == 0 || request_seq == 0 || has_more != ZLINK_PART_FINAL) {
+    if (!source_rid || source_rid->size == 0 || request_seq == 0
+        || !perf_zlink_recv_measurement_tail (
+          server, has_more, ZLINK_RECV_FLAGS_DONTWAIT, perf_zlink_recv_next_router)) {
         zlink_msg_close (&part);
         errno = EPROTO;
         return server_recv_step_error;

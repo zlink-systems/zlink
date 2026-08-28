@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <set>
 #include <string>
 #include <thread>
@@ -48,6 +49,25 @@ inline void noop_free (void *, void *)
 inline zlink::message_t message_from_external_buffer (std::vector<char> &buffer, size_t size)
 {
     return zlink::message_t::from (std::as_bytes (std::span<const char> (buffer.data (), size)));
+}
+
+// Non-STREAM benchmark traffic normally carries a payload followed by an
+// empty final frame.  Keep the one-part form available for comparison runs.
+inline int measurement_part_count ()
+{
+    const char *value = std::getenv ("PERF_PART_COUNT");
+    return value && std::strcmp (value, "1") == 0 ? 1 : 2;
+}
+
+inline zlink::message_t measurement_empty_part ()
+{
+    return zlink::message_t::from (std::as_bytes (std::span<const char> ("", 0)));
+}
+
+inline bool measurement_parts_valid (const std::vector<zlink::message_t> &parts)
+{
+    return parts.size () == static_cast<size_t> (measurement_part_count ())
+           && (measurement_part_count () == 1 || parts[1].size () == 0);
 }
 
 inline std::vector<size_t> resolve_case_msg_sizes (size_t fallback_size)

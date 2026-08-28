@@ -15,9 +15,19 @@
 
 namespace
 {
-const uint32_t public_api_closing_bit = 0x80000000u;
-const uint32_t public_api_sync_bit = 0x40000000u;
-const uint32_t public_api_inflight_mask = ~(public_api_closing_bit | public_api_sync_bit);
+// Keep send admission in the lifecycle word so a successful public send
+// needs one atomic acquire/release pair. The low word remains the lifecycle
+// in-flight count; the high word owns close, public synchronization, one
+// incremental multipart marker, and the complete-record admission count.
+const uint64_t public_api_closing_bit = UINT64_C (1) << 63;
+const uint64_t public_api_sync_bit = UINT64_C (1) << 62;
+const uint64_t public_api_multipart_bit = UINT64_C (1) << 61;
+const uint64_t public_api_complete_unit = UINT64_C (1) << 32;
+const uint64_t public_api_complete_mask =
+  ((UINT64_C (1) << 29) - 1) * public_api_complete_unit;
+const uint64_t public_api_inflight_mask = UINT64_C (0xffffffff);
+const uint32_t mailbox_ref_sealed_bit = UINT32_C (1) << 31;
+const uint32_t mailbox_ref_count_mask = mailbox_ref_sealed_bit - 1;
 
 //  The sync bit is held for the whole body of a public API call, which can be
 //  arbitrarily long (a blocking recv, an endpoint teardown). A contended
@@ -50,11 +60,12 @@ bool zlink::socket_lifecycle_coordinator_t::enter_public_api ()
         return false;
     }
 
-    const uint32_t old = public_api_state.fetch_add (1, std::memory_order_acq_rel);
+    const uint64_t old = public_api_state.fetch_add (1, std::memory_order_acq_rel);
+    zlink_assert ((old & public_api_inflight_mask) != public_api_inflight_mask);
     if ((old & public_api_closing_bit) == 0)
         return true;
 
-    const uint32_t reverted = public_api_state.fetch_sub (1, std::memory_order_acq_rel);
+    const uint64_t reverted = public_api_state.fetch_sub (1, std::memory_order_acq_rel);
     zlink_assert ((reverted & public_api_inflight_mask) > 0);
     errno = ESHUTDOWN;
     return false;
@@ -70,7 +81,7 @@ bool zlink::socket_lifecycle_coordinator_t::enter_public_api_and_lock_sync ()
         return false;
     }
 
-    uint32_t expected = 0;
+    uint64_t expected = 0;
     if (public_api_state.compare_exchange_strong (expected, 1u | public_api_sync_bit,
                                                   std::memory_order_acq_rel,
                                                   std::memory_order_acquire)) {
@@ -86,8 +97,167 @@ bool zlink::socket_lifecycle_coordinator_t::enter_public_api_and_lock_sync ()
 
 void zlink::socket_lifecycle_coordinator_t::leave_public_api ()
 {
-    const uint32_t old = public_api_state.fetch_sub (1, std::memory_order_acq_rel);
+    const uint64_t old = public_api_state.fetch_sub (1, std::memory_order_acq_rel);
     zlink_assert ((old & public_api_inflight_mask) > 0);
+}
+
+bool zlink::socket_lifecycle_coordinator_t::enter_public_send (
+  bool needs_sync_,
+  bool multipart_sequence_,
+  bool *sync_locked_out_,
+  bool *multipart_active_out_)
+{
+    if (sync_locked_out_)
+        *sync_locked_out_ = false;
+    if (multipart_active_out_)
+        *multipart_active_out_ = false;
+
+    if (socket_send_complete_dispatch_scope_t::dispatching_any ()) {
+        errno = EDEADLK;
+        return false;
+    }
+
+    uint64_t old = public_api_state.load (std::memory_order_acquire);
+    while (true) {
+        if ((old & public_api_closing_bit) != 0) {
+            errno = ESHUTDOWN;
+            return false;
+        }
+        if ((old & public_api_inflight_mask) == public_api_inflight_mask) {
+            errno = EBUSY;
+            return false;
+        }
+
+        if (multipart_sequence_) {
+            if ((old & (public_api_multipart_bit | public_api_complete_mask)) != 0) {
+                errno = EINVAL;
+                return false;
+            }
+        } else {
+            if ((old & public_api_multipart_bit) != 0) {
+                if (multipart_active_out_)
+                    *multipart_active_out_ = true;
+                errno = EINVAL;
+                return false;
+            }
+            if ((old & public_api_complete_mask) == public_api_complete_mask) {
+                errno = EBUSY;
+                return false;
+            }
+        }
+
+        uint64_t desired = old + 1;
+        desired += multipart_sequence_ ? public_api_multipart_bit
+                                       : public_api_complete_unit;
+        const bool take_sync_in_admission =
+          needs_sync_ && (old & public_api_sync_bit) == 0;
+        if (take_sync_in_admission)
+            desired |= public_api_sync_bit;
+        if (public_api_state.compare_exchange_weak (
+              old, desired, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+            if (needs_sync_ && !take_sync_in_admission)
+                lock_public_api_sync ();
+            if (sync_locked_out_)
+                *sync_locked_out_ = needs_sync_;
+            return true;
+        }
+    }
+}
+
+void zlink::socket_lifecycle_coordinator_t::leave_public_send (
+  bool sync_locked_, bool multipart_sequence_)
+{
+    uint64_t delta = 1;
+    delta += multipart_sequence_ ? public_api_multipart_bit
+                                 : public_api_complete_unit;
+    if (sync_locked_)
+        delta += public_api_sync_bit;
+
+    const uint64_t old = public_api_state.fetch_sub (
+      delta, std::memory_order_acq_rel);
+    zlink_assert ((old & public_api_inflight_mask) > 0);
+    if (multipart_sequence_)
+        zlink_assert ((old & public_api_multipart_bit) != 0);
+    else
+        zlink_assert ((old & public_api_complete_mask) != 0);
+    if (sync_locked_)
+        zlink_assert ((old & public_api_sync_bit) != 0);
+}
+
+void zlink::socket_lifecycle_coordinator_t::suspend_public_multipart_send (
+  bool sync_locked_)
+{
+    uint64_t delta = 1;
+    if (sync_locked_)
+        delta += public_api_sync_bit;
+
+    const uint64_t old = public_api_state.fetch_sub (
+      delta, std::memory_order_acq_rel);
+    zlink_assert ((old & public_api_inflight_mask) > 0);
+    zlink_assert ((old & public_api_multipart_bit) != 0);
+    zlink_assert ((old & public_api_complete_mask) == 0);
+    if (sync_locked_)
+        zlink_assert ((old & public_api_sync_bit) != 0);
+}
+
+bool zlink::socket_lifecycle_coordinator_t::resume_public_multipart_send (
+  bool needs_sync_, bool *sync_locked_out_)
+{
+    if (sync_locked_out_)
+        *sync_locked_out_ = false;
+
+    if (socket_send_complete_dispatch_scope_t::dispatching_any ()) {
+        errno = EDEADLK;
+        return false;
+    }
+
+    uint64_t old = public_api_state.load (std::memory_order_acquire);
+    while (true) {
+        if ((old & public_api_closing_bit) != 0) {
+            errno = ESHUTDOWN;
+            return false;
+        }
+        if ((old & public_api_multipart_bit) == 0
+            || (old & public_api_complete_mask) != 0) {
+            errno = EINVAL;
+            return false;
+        }
+        if ((old & public_api_inflight_mask) == public_api_inflight_mask) {
+            errno = EBUSY;
+            return false;
+        }
+
+        uint64_t desired = old + 1;
+        const bool take_sync_in_admission =
+          needs_sync_ && (old & public_api_sync_bit) == 0;
+        if (take_sync_in_admission)
+            desired |= public_api_sync_bit;
+        if (public_api_state.compare_exchange_weak (
+              old, desired, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+            if (needs_sync_ && !take_sync_in_admission)
+                lock_public_api_sync ();
+            if (sync_locked_out_)
+                *sync_locked_out_ = needs_sync_;
+            return true;
+        }
+    }
+}
+
+void zlink::socket_lifecycle_coordinator_t::release_public_multipart_marker (
+  bool sync_locked_)
+{
+    uint64_t delta = public_api_multipart_bit;
+    if (sync_locked_)
+        delta += public_api_sync_bit;
+
+    const uint64_t old = public_api_state.fetch_sub (
+      delta, std::memory_order_acq_rel);
+    zlink_assert ((old & public_api_multipart_bit) != 0);
+    zlink_assert ((old & public_api_complete_mask) == 0);
+    if (sync_locked_)
+        zlink_assert ((old & public_api_sync_bit) != 0);
 }
 
 bool zlink::socket_lifecycle_coordinator_t::acquire_poller_registration ()
@@ -126,19 +296,25 @@ bool zlink::socket_lifecycle_coordinator_t::leave_callback_api ()
 
 bool zlink::socket_lifecycle_coordinator_t::begin_close_or_fail_busy (bool from_self_callback_)
 {
-    uint32_t old = public_api_state.load (std::memory_order_acquire);
+    uint64_t old = public_api_state.load (std::memory_order_acquire);
     while (true) {
         if ((old & public_api_closing_bit) != 0) {
             errno = EALREADY;
             return false;
         }
 
-        const uint32_t inflight = old & public_api_inflight_mask;
+        const uint64_t inflight = old & public_api_inflight_mask;
         if (!from_self_callback_) {
             if (inflight != 0) {
                 errno = EBUSY;
                 return false;
             }
+            // An incremental multipart lease can outlive the individual part
+            // call, and the async command owner can hold the raw sync bit
+            // without a public lifecycle token. Neither is an executing public
+            // API. Complete-record admission, however, is always paired with
+            // an in-flight token and must be absent here.
+            zlink_assert ((old & public_api_complete_mask) == 0);
         } else {
             // A callback may defer only its own close. Another callback or
             // public API on any thread keeps the socket busy.
@@ -150,7 +326,7 @@ bool zlink::socket_lifecycle_coordinator_t::begin_close_or_fail_busy (bool from_
             }
         }
 
-        const uint32_t desired = old | public_api_closing_bit;
+        const uint64_t desired = old | public_api_closing_bit;
         if (public_api_state.compare_exchange_weak (old, desired, std::memory_order_acq_rel,
                                                     std::memory_order_acquire)) {
             if (from_self_callback_)
@@ -173,10 +349,10 @@ bool zlink::socket_lifecycle_coordinator_t::public_api_sync_held () const
 void zlink::socket_lifecycle_coordinator_t::lock_public_api_sync ()
 {
     unsigned int attempt = 0;
-    uint32_t old = public_api_state.load (std::memory_order_acquire);
+    uint64_t old = public_api_state.load (std::memory_order_acquire);
     while (true) {
         if ((old & public_api_sync_bit) == 0) {
-            const uint32_t desired = old | public_api_sync_bit;
+            const uint64_t desired = old | public_api_sync_bit;
             if (public_api_state.compare_exchange_weak (old, desired, std::memory_order_acquire,
                                                         std::memory_order_acquire)) {
                 return;
@@ -193,14 +369,14 @@ void zlink::socket_lifecycle_coordinator_t::lock_public_api_sync ()
 
 void zlink::socket_lifecycle_coordinator_t::unlock_public_api_sync ()
 {
-    const uint32_t old =
+    const uint64_t old =
       public_api_state.fetch_and (~public_api_sync_bit, std::memory_order_release);
     zlink_assert ((old & public_api_sync_bit) != 0);
 }
 
 void zlink::socket_lifecycle_coordinator_t::unlock_public_api_sync_and_leave ()
 {
-    const uint32_t old =
+    const uint64_t old =
       public_api_state.fetch_sub (public_api_sync_bit | 1u, std::memory_order_acq_rel);
     zlink_assert ((old & public_api_sync_bit) != 0);
     zlink_assert ((old & public_api_inflight_mask) > 0);
@@ -230,9 +406,26 @@ zlink::socket_callback_scope_t::~socket_callback_scope_t ()
 }
 
 zlink::socket_public_send_scope_t::socket_public_send_scope_t (
-  socket_lifecycle_coordinator_t &coordinator_, bool needs_sync_) :
-    _coordinator (&coordinator_), _entered (false), _needs_sync (needs_sync_), _sync_locked (false)
+  socket_lifecycle_coordinator_t &coordinator_,
+  bool needs_sync_,
+  socket_send_admission_mode_t admission_mode_) :
+    _coordinator (&coordinator_),
+    _entered (false),
+    _needs_sync (needs_sync_),
+    _sync_locked (false),
+    _admission_mode (admission_mode_),
+    _multipart_active (false),
+    _multipart_marker_owned (false)
 {
+    if (_admission_mode != socket_send_admission_none) {
+        _entered = _coordinator->enter_public_send (
+          _needs_sync, _admission_mode == socket_send_admission_multipart,
+          &_sync_locked, &_multipart_active);
+        _multipart_marker_owned =
+          _entered && _admission_mode == socket_send_admission_multipart;
+        return;
+    }
+
     if (_needs_sync) {
         _entered = _coordinator->enter_public_api_and_lock_sync ();
         _sync_locked = _entered;
@@ -242,10 +435,47 @@ zlink::socket_public_send_scope_t::socket_public_send_scope_t (
     _entered = _coordinator->enter_public_api ();
 }
 
+zlink::socket_public_send_scope_t::socket_public_send_scope_t (
+  socket_public_send_scope_t &&other_) noexcept :
+    _coordinator (other_._coordinator),
+    _entered (other_._entered),
+    _needs_sync (other_._needs_sync),
+    _sync_locked (other_._sync_locked),
+    _admission_mode (other_._admission_mode),
+    _multipart_active (other_._multipart_active),
+    _multipart_marker_owned (other_._multipart_marker_owned)
+{
+    other_._coordinator = NULL;
+    other_._entered = false;
+    other_._needs_sync = false;
+    other_._sync_locked = false;
+    other_._admission_mode = socket_send_admission_none;
+    other_._multipart_active = false;
+    other_._multipart_marker_owned = false;
+}
+
 zlink::socket_public_send_scope_t::~socket_public_send_scope_t ()
 {
+    if (_multipart_marker_owned) {
+        if (_entered) {
+            _coordinator->leave_public_send (_sync_locked, true);
+        } else {
+            _coordinator->release_public_multipart_marker (_sync_locked);
+        }
+        _entered = false;
+        _sync_locked = false;
+        _multipart_marker_owned = false;
+        return;
+    }
+
     if (!_entered)
         return;
+
+    if (_admission_mode == socket_send_admission_complete) {
+        _coordinator->leave_public_send (
+          _sync_locked, false);
+        return;
+    }
 
     if (_sync_locked)
         _coordinator->unlock_public_api_sync_and_leave ();
@@ -285,6 +515,48 @@ void zlink::socket_public_send_scope_t::relock_sync ()
 
     _coordinator->lock_public_api_sync ();
     _sync_locked = true;
+}
+
+void zlink::socket_public_send_scope_t::suspend_multipart_call ()
+{
+    if (_admission_mode != socket_send_admission_multipart
+        || !_multipart_marker_owned || !_entered)
+        return;
+
+    _coordinator->suspend_public_multipart_send (_sync_locked);
+    _entered = false;
+    _sync_locked = false;
+}
+
+bool zlink::socket_public_send_scope_t::resume_multipart_call ()
+{
+    if (_entered)
+        return true;
+    if (_admission_mode != socket_send_admission_multipart
+        || !_multipart_marker_owned) {
+        errno = EFAULT;
+        return false;
+    }
+
+    _entered = _coordinator->resume_public_multipart_send (
+      _needs_sync, &_sync_locked);
+    return _entered;
+}
+
+bool zlink::socket_public_send_scope_t::lock_multipart_for_close_cleanup ()
+{
+    if (_entered || _admission_mode != socket_send_admission_multipart
+        || !_multipart_marker_owned
+        || !_coordinator->public_close_requested ()) {
+        errno = EINVAL;
+        return false;
+    }
+
+    if (_needs_sync && !_sync_locked) {
+        _coordinator->lock_public_api_sync ();
+        _sync_locked = true;
+    }
+    return true;
 }
 
 int zlink::socket_lifecycle_coordinator_t::start_async_mailbox_processing (
@@ -385,13 +657,25 @@ bool zlink::socket_lifecycle_coordinator_t::is_async_quiesce_pending () const
     return async_quiesce_pending.load (std::memory_order_acquire);
 }
 
-void zlink::socket_lifecycle_coordinator_t::complete_deferred_close_handoff (mailbox_t *mailbox_,
-                                                                             int timeout_ms_)
+void zlink::socket_lifecycle_coordinator_t::complete_deferred_close_handoff (
+  mailbox_t *mailbox_, socket_base_t *socket_, int timeout_ms_)
 {
     clear_deferred_close ();
 
     if (is_async_mailbox_active ()) {
         stop_async_mailbox_processing (mailbox_);
+        // schedule_if_needed() alone cannot close the running-handler race:
+        // it may observe _scheduled=true just before that handler performs its
+        // final active check and clears _scheduled on an empty command pipe.
+        // Queue a real no-op command so either that handler reschedules itself
+        // from visible data or a new handler is posted after it exits.
+        if (mailbox_ && socket_) {
+            command_t wake;
+            memset (&wake, 0, sizeof (wake));
+            wake.destination = socket_;
+            wake.type = command_t::request_completion;
+            mailbox_->send (wake);
+        }
         wait_async_quiesced (timeout_ms_);
     } else if (is_async_quiesce_pending ()) {
         wait_async_quiesced (timeout_ms_);
@@ -413,17 +697,17 @@ bool zlink::socket_lifecycle_coordinator_t::take_deferred_close ()
 
 void zlink::socket_lifecycle_coordinator_t::mark_destroy_pending ()
 {
-    destroy_pending = true;
+    destroy_pending.store (true, std::memory_order_release);
 }
 
 void zlink::socket_lifecycle_coordinator_t::clear_destroy_pending ()
 {
-    destroy_pending = false;
+    destroy_pending.store (false, std::memory_order_release);
 }
 
 bool zlink::socket_lifecycle_coordinator_t::is_destroy_pending () const
 {
-    return destroy_pending;
+    return destroy_pending.load (std::memory_order_acquire);
 }
 
 void zlink::socket_lifecycle_coordinator_t::set_reaper_poller (poller_t *poller_)
@@ -448,15 +732,51 @@ bool zlink::socket_lifecycle_coordinator_t::is_destroyed () const
 
 int zlink::socket_lifecycle_coordinator_t::mailbox_refcount ()
 {
-    return mailbox_refcnt.add (0);
+    return static_cast<int> (
+      mailbox_ref_state.load (std::memory_order_acquire)
+      & mailbox_ref_count_mask);
+}
+
+bool zlink::socket_lifecycle_coordinator_t::try_inc_mailbox_ref ()
+{
+    uint32_t old = mailbox_ref_state.load (std::memory_order_acquire);
+    while ((old & mailbox_ref_sealed_bit) == 0) {
+        zlink_assert ((old & mailbox_ref_count_mask)
+                      != mailbox_ref_count_mask);
+        if (mailbox_ref_state.compare_exchange_weak (
+              old, old + 1, std::memory_order_acq_rel,
+              std::memory_order_acquire))
+            return true;
+    }
+    return false;
 }
 
 void zlink::socket_lifecycle_coordinator_t::inc_mailbox_ref ()
 {
-    mailbox_refcnt.add (1);
+    const bool acquired = try_inc_mailbox_ref ();
+    zlink_assert (acquired);
 }
 
 bool zlink::socket_lifecycle_coordinator_t::dec_mailbox_ref ()
 {
-    return mailbox_refcnt.sub (1) != 0;
+    const uint32_t old =
+      mailbox_ref_state.fetch_sub (1, std::memory_order_acq_rel);
+    zlink_assert ((old & mailbox_ref_sealed_bit) == 0);
+    zlink_assert ((old & mailbox_ref_count_mask) != 0);
+    return ((old - 1) & mailbox_ref_count_mask) != 0;
+}
+
+bool zlink::socket_lifecycle_coordinator_t::seal_mailbox_refs_if_zero ()
+{
+    uint32_t expected = 0;
+    return mailbox_ref_state.compare_exchange_strong (
+      expected, mailbox_ref_sealed_bit, std::memory_order_acq_rel,
+      std::memory_order_acquire);
+}
+
+bool zlink::socket_lifecycle_coordinator_t::mailbox_refs_sealed () const
+{
+    return (mailbox_ref_state.load (std::memory_order_acquire)
+            & mailbox_ref_sealed_bit)
+           != 0;
 }

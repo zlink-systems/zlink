@@ -108,11 +108,14 @@ final class PerfMultiDealerDealer {
     private static boolean recordCounted(Received received,
                                          PerfUtil.Config config,
                                          PerfUtil.Metrics metrics) {
-        if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+        if (received.parts().size() == 1
+            && PerfStopToken.isStopTokenMessage(received.firstPart())) {
             return true;
         }
-        PerfUtil.recordActiveLatency(metrics, received.firstPart(),
-            config.size(), false);
+        Message payload = PerfUtil.measurementPayload(received.parts());
+        if (payload != null) {
+            PerfUtil.recordActiveLatency(metrics, payload, config.size(), false);
+        }
         return false;
     }
 
@@ -269,7 +272,12 @@ final class PerfMultiDealerDealer {
         Message payload = PerfUtil.payload(size, (byte) PerfUtil.PHASE_ACTIVE,
             System.nanoTime());
         try (payload) {
-            PerfUtil.awaitStage(socket.send().message(payload).submit());
+            if (PerfUtil.measurementPartCount() == 2) {
+                PerfUtil.awaitStage(socket.send().message(payload)
+                    .message(PerfUtil.measurementTail()).submit());
+            } else {
+                PerfUtil.awaitStage(socket.send().message(payload).submit());
+            }
             return true;
         } catch (ZlinkSubmitException ex) {
             if (isTransient(ex)) {

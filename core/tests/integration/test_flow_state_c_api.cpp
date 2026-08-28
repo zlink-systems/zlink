@@ -29,7 +29,8 @@ namespace
 {
 zlink::socket_base_t *as_socket (void *socket_)
 {
-    return static_cast<zlink::socket_base_t *> (socket_);
+    socket_handle_t handle = as_socket_handle (socket_);
+    return handle.socket;
 }
 
 bool deadline_expired (const std::chrono::steady_clock::time_point &deadline_)
@@ -419,12 +420,15 @@ void test_close_races_with_set_receive_flow_state ()
         void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
         std::atomic<int> go (0);
         zlink_config_result_t result = static_cast<zlink_config_result_t> (-1);
+        zlink_close_result_t close_result = ZLINK_CLOSE_INTERNAL_ERROR;
+        int close_errno = 0;
         //  Both threads spin-wait on the same release so scheduling skew from
         //  thread creation cannot decide the race by itself.
-        std::thread closer ([dealer, &go] {
+        std::thread closer ([dealer, &go, &close_result, &close_errno] {
             while (go.load (std::memory_order_acquire) == 0)
                 std::this_thread::yield ();
-            zlink_close (dealer);
+            close_result = zlink_close (dealer);
+            close_errno = errno;
         });
         std::thread setter ([dealer, &go, &result] {
             while (go.load (std::memory_order_acquire) == 0)
@@ -435,6 +439,13 @@ void test_close_races_with_set_receive_flow_state ()
         go.store (1, std::memory_order_release);
         closer.join ();
         setter.join ();
+
+        TEST_ASSERT_TRUE (close_result == ZLINK_CLOSE_OK
+                          || close_result == ZLINK_CLOSE_BUSY);
+        if (close_result == ZLINK_CLOSE_BUSY) {
+            TEST_ASSERT_EQUAL_INT (EBUSY, close_errno);
+            TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (dealer));
+        }
         test_context_socket_mark_closed (dealer);
 
         TEST_ASSERT_TRUE (result == ZLINK_CONFIG_OK

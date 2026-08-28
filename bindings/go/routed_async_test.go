@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -403,20 +404,13 @@ func TestRoutedSendExpiredContextDeadlineNeverReachesTheWire(t *testing.T) {
 	}
 }
 
-// Concurrent senders must not interleave the parts of one multipart record.
-// The binding keeps a plain record-attempt mutex for exactly this, not a queue.
-// A receiver drains in parallel because the send is now synchronous: with the
-// HWM wait owned by Core, nobody else would return credit.
-func TestRoutedSendConcurrentMultipartRecordsDoNotInterleave(t *testing.T) {
+// Concurrent multipart attempts are application-coordinated. The binding does
+// not serialize them: Core either accepts a whole record or rejects the whole
+// competing attempt with EINVAL. Binding-owned staging preserves the public
+// Message values even though Core consumes each attempted native part.
+func TestRoutedSendConcurrentMultipartBindingStagingPreservesParts(t *testing.T) {
 	f := newRoutedAsyncFixture(t, false)
 	defer f.close()
-	if err := f.router.SetSendTimeout(5 * time.Second); err != nil {
-		t.Fatalf("router SetSendTimeout() error = %v", err)
-	}
-	// Record contiguity is the subject here, not backpressure: give both
-	// queues enough headroom that no record has to park on the Core HWM wait.
-	// Parked-record behavior has a separate Core regression gate; this test
-	// isolates binding record contiguity by avoiding that condition.
 	if err := f.router.SetSendHighWaterMark(1 << 20); err != nil {
 		t.Fatalf("router SetSendHighWaterMark() error = %v", err)
 	}
@@ -424,94 +418,103 @@ func TestRoutedSendConcurrentMultipartRecordsDoNotInterleave(t *testing.T) {
 		t.Fatalf("dealer A SetReceiveHighWaterMark() error = %v", err)
 	}
 
-	const senders = 4
-	const perSender = 6
-	const records = senders * perSender
-
-	type recordParts struct {
-		prefix string
-		parts  []string
-	}
-	receivedRecords := make(chan recordParts, records)
-	receiverErr := make(chan error, 1)
-	go func() {
-		defer close(receivedRecords)
-		for i := 0; i < records; i++ {
-			received := &zlink.Received{}
-			ok, err := f.dealerA.Recv(received, zlink.RecvFlagsNone)
-			if err != nil || !ok {
-				receiverErr <- fmt.Errorf("Recv() = (%v, %v)", ok, err)
-				return
-			}
-			record := recordParts{}
-			for _, part := range received.Parts() {
-				record.parts = append(record.parts, string(part.Data()))
-			}
-			if len(record.parts) > 0 {
-				record.prefix = record.parts[0]
-			}
-			_ = received.Close()
-			receivedRecords <- record
-		}
-		receiverErr <- nil
-	}()
+	const senders = 8
+	const perSender = 500
 
 	var wg sync.WaitGroup
-	errs := make(chan error, records)
+	type senderResult struct {
+		successes int
+		rejected  int
+		err       error
+	}
+	results := make(chan senderResult, senders)
 	for sender := 0; sender < senders; sender++ {
 		wg.Add(1)
 		go func(sender int) {
 			defer wg.Done()
+			result := senderResult{}
 			for i := 0; i < perSender; i++ {
-				prefix := fmt.Sprintf("record-%d-%02d", sender, i)
+				prefix := fmt.Sprintf("record-%d-%03d", sender, i)
+				first := newMessage(t, prefix+"-a")
+				second := newMessage(t, prefix+"-b")
 				err := f.router.SendTo(f.ridA).
-					Bytes([]byte(prefix + "-a")).
-					Bytes([]byte(prefix + "-b")).
-					Bytes([]byte(prefix + "-c")).
+					Message(first).
+					Message(second).
 					Submit(context.Background())
-				if err != nil {
-					errs <- err
-					return
+				if err == nil {
+					result.successes++
+					continue
 				}
+				var submitErr *zlink.SubmitError
+				if !errors.As(err, &submitErr) ||
+					submitErr.Result != zlink.SubmitInvalidArgument ||
+					submitErr.InternalErrno() != int(syscall.EINVAL) {
+					result.err = fmt.Errorf("concurrent submit error = %v, want EINVAL rejection", err)
+					_ = first.Close()
+					_ = second.Close()
+					break
+				}
+				if string(first.Data()) != prefix+"-a" || string(second.Data()) != prefix+"-b" {
+					result.err = fmt.Errorf("binding staging lost caller-owned parts after multipart rejection %q", prefix)
+					_ = first.Close()
+					_ = second.Close()
+					break
+				}
+				_ = first.Close()
+				_ = second.Close()
+				result.rejected++
 			}
+			results <- result
 		}(sender)
 	}
 	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Fatalf("concurrent multipart send error = %v", err)
+	close(results)
+	successes := 0
+	rejected := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		successes += result.successes
+		rejected += result.rejected
+	}
+	if successes == 0 || rejected == 0 {
+		t.Fatalf("concurrent multipart results: successes=%d rejected=%d; want both", successes, rejected)
 	}
 
-	select {
-	case err := <-receiverErr:
-		if err != nil {
-			t.Fatalf("receiver error = %v", err)
+	seen := make(map[string]bool, successes)
+	for i := 0; i < successes; i++ {
+		received := &zlink.Received{}
+		ok, err := f.dealerA.Recv(received, zlink.RecvFlagsNone)
+		if err != nil || !ok {
+			t.Fatalf("Recv() = (%v, %v)", ok, err)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("receiver did not collect every record")
-	}
-
-	seen := make(map[string]bool, records)
-	for record := range receivedRecords {
-		if len(record.parts) != 3 {
-			t.Fatalf("multipart record has %d parts, want 3", len(record.parts))
+		parts := received.Parts()
+		if len(parts) != 2 {
+			_ = received.Close()
+			t.Fatalf("multipart record has %d parts, want 2", len(parts))
 		}
-		first := record.parts[0]
+		first := string(parts[0].Data())
 		if len(first) < 2 || first[len(first)-2:] != "-a" {
+			_ = received.Close()
 			t.Fatalf("first multipart part = %q", first)
 		}
 		prefix := first[:len(first)-2]
-		if record.parts[1] != prefix+"-b" || record.parts[2] != prefix+"-c" {
+		if string(parts[1].Data()) != prefix+"-b" {
+			_ = received.Close()
 			t.Fatalf("multipart record %q was interleaved", prefix)
 		}
 		if seen[prefix] {
+			_ = received.Close()
 			t.Fatalf("multipart record %q was duplicated", prefix)
 		}
 		seen[prefix] = true
+		_ = received.Close()
 	}
-	if len(seen) != records {
-		t.Fatalf("received %d records, want %d", len(seen), records)
+	if len(seen) != successes {
+		t.Fatalf("received %d records, want %d successful records", len(seen), successes)
 	}
+	t.Logf("concurrent multipart: attempts=%d successes=%d rejected=%d", senders*perSender, successes, rejected)
 }
 
 // The request submit is synchronous but keeps its completion channel: Core's

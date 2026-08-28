@@ -4,6 +4,8 @@
 
 #include <zlink/Contracts/Core/routing_id.hpp>
 
+#include <atomic>
+
 namespace zlink
 {
 
@@ -16,18 +18,22 @@ inline const void *native_handle (const socket_handle_t &socket_) noexcept;
 class socket_handle_t
 {
   public:
-    socket_handle_t () noexcept : _socket (nullptr), _own (false) {}
+    socket_handle_t () noexcept : _socket (nullptr), _open (false), _own (false) {}
 
     explicit socket_handle_t (void *socket_, bool own_ = true) noexcept :
-        _socket (socket_), _own (own_)
+        _socket (socket_), _open (socket_ != nullptr), _own (own_)
     {
     }
 
     ~socket_handle_t () { (void) close (); }
 
-    socket_handle_t (socket_handle_t &&other) noexcept : _socket (other._socket), _own (other._own)
+    socket_handle_t (socket_handle_t &&other) noexcept :
+        _socket (other._socket),
+        _open (other._open.load (std::memory_order_acquire)),
+        _own (other._own)
     {
         other._socket = nullptr;
+        other._open.store (false, std::memory_order_release);
         other._own = false;
     }
 
@@ -38,8 +44,11 @@ class socket_handle_t
 
         (void) close ();
         _socket = other._socket;
+        _open.store (other._open.load (std::memory_order_acquire),
+                     std::memory_order_release);
         _own = other._own;
         other._socket = nullptr;
+        other._open.store (false, std::memory_order_release);
         other._own = false;
         return *this;
     }
@@ -47,26 +56,24 @@ class socket_handle_t
     socket_handle_t (const socket_handle_t &) = delete;
     socket_handle_t &operator= (const socket_handle_t &) = delete;
 
-    bool valid () const noexcept { return _socket != nullptr; }
+    bool valid () const noexcept
+    {
+        return _socket != nullptr && _open.load (std::memory_order_acquire);
+    }
 
     [[nodiscard]] int close () noexcept
     {
-        if (!_socket) {
-            _own = false;
+        if (!_socket || !_open.load (std::memory_order_acquire))
             return 0;
-        }
 
         if (!_own) {
-            _socket = nullptr;
+            _open.store (false, std::memory_order_release);
             return 0;
         }
 
-        void *socket = _socket;
-        const int rc = zlink_close (socket);
-        if (rc == 0) {
-            _socket = nullptr;
-            _own = false;
-        }
+        const int rc = zlink_close (_socket);
+        if (rc == 0 || rc == ZLINK_CLOSE_SHUTDOWN)
+            _open.store (false, std::memory_order_release);
         return rc;
     }
 
@@ -77,6 +84,7 @@ class socket_handle_t
     void reset_handle (void *socket_, bool own_) noexcept
     {
         _socket = socket_;
+        _open.store (socket_ != nullptr, std::memory_order_release);
         _own = own_;
     }
 
@@ -85,6 +93,7 @@ class socket_handle_t
     friend const void *native_handle (const socket_handle_t &socket_) noexcept;
 
     void *_socket;
+    std::atomic<bool> _open;
     bool _own;
 };
 

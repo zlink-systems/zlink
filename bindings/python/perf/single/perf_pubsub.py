@@ -11,6 +11,7 @@ from perf_common import (
     configure_single_tls_client,
     configure_single_tls_server,
     new_payload,
+    measurement_parts,
     parse_single_args,
     perf_context,
     poll_idle_ms,
@@ -64,9 +65,9 @@ def main(argv=None):
         submit_backpressured = zlink.SubmitResult.BACKPRESSURED
         while perf_counter() < active_end:
             try:
-                publish(topic).message(stamp(payload, phase=1, run_id=run_id)).flags(
-                    flag
-                ).submit()
+                publish(topic).messages(
+                    *measurement_parts(stamp(payload, phase=1, run_id=run_id))
+                ).flags(flag).submit()
             except zlink.SubmitError as exc:
                 if exc.result != submit_backpressured:
                     raise

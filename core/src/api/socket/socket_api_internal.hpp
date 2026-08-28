@@ -8,53 +8,103 @@
 #include <mutex>
 
 #include "sockets/common/socket_base.hpp"
+#include "sockets/common/socket_public_handle.hpp"
 #include "zlink.h"
 
-struct socket_handle_t
+class socket_handle_t
 {
+  public:
+    socket_handle_t () : socket (NULL), _public_handle (NULL) {}
+
+    socket_handle_t (const socket_handle_t &other_) :
+        socket (other_.socket), _public_handle (other_._public_handle)
+    {
+        if (_public_handle)
+            _public_handle->add_ref ();
+    }
+
+    socket_handle_t &operator= (const socket_handle_t &other_)
+    {
+        if (this == &other_)
+            return *this;
+        if (other_._public_handle)
+            other_._public_handle->add_ref ();
+        if (_public_handle)
+            _public_handle->release ();
+        socket = other_.socket;
+        _public_handle = other_._public_handle;
+        return *this;
+    }
+
+    ~socket_handle_t ()
+    {
+        if (_public_handle)
+            _public_handle->release ();
+    }
+
+    bool begin_close ()
+    {
+        return _public_handle && _public_handle->begin_close ();
+    }
+
+    void cancel_close ()
+    {
+        if (_public_handle)
+            _public_handle->cancel_close ();
+    }
+
     zlink::socket_base_t *socket;
+
+  private:
+    friend socket_handle_t make_socket_handle (zlink::socket_base_t *);
+    friend socket_handle_t as_socket_handle (void *);
+
+    socket_handle_t (zlink::socket_base_t *socket_,
+                     zlink::socket_public_handle_t *public_handle_) :
+        socket (socket_), _public_handle (public_handle_)
+    {
+    }
+
+    zlink::socket_public_handle_t *_public_handle;
 };
 
-static inline socket_handle_t make_socket_handle (zlink::socket_base_t *socket_)
+inline socket_handle_t make_socket_handle (zlink::socket_base_t *socket_)
 {
-    socket_handle_t handle;
-    handle.socket = socket_;
-    return handle;
+    return socket_handle_t (socket_, NULL);
 }
 
-static inline zlink::socket_base_t *try_as_socket (void *s_)
+inline socket_handle_t as_socket_handle (void *s_)
 {
-    if (!s_)
-        return NULL;
-
-    zlink::socket_base_t *socket = static_cast<zlink::socket_base_t *> (s_);
-    return socket->check_tag () ? socket : NULL;
-}
-
-static inline socket_handle_t as_socket_handle (void *s_)
-{
-    socket_handle_t handle = make_socket_handle (NULL);
-
     if (!s_) {
         errno = EFAULT;
-        return handle;
+        return socket_handle_t ();
     }
 
-    zlink::socket_base_t *s = try_as_socket (s_);
-    if (!s) {
+    zlink::socket_public_handle_t *public_handle =
+      static_cast<zlink::socket_public_handle_t *> (s_);
+    if (!public_handle->check_tag ()) {
         errno = EFAULT;
-        return handle;
+        return socket_handle_t ();
     }
 
-    return make_socket_handle (s);
+    zlink::socket_base_t *socket = NULL;
+    if (!public_handle->acquire (&socket))
+        return socket_handle_t ();
+    if (!socket->check_tag ()) {
+        public_handle->release ();
+        errno = EFAULT;
+        return socket_handle_t ();
+    }
+
+    return socket_handle_t (socket, public_handle);
 }
 
-static inline bool is_stream_type (socket_handle_t handle_)
+static inline bool is_stream_type (const socket_handle_t &handle_)
 {
     return handle_.socket && handle_.socket->socket_type () == ZLINK_CORE_SOCKET_STREAM;
 }
 
-static inline int socket_type (socket_handle_t handle_)
+static inline int socket_type (const socket_handle_t &handle_)
 {
     return handle_.socket ? handle_.socket->socket_type () : -1;
 }
@@ -100,7 +150,7 @@ static inline bool is_send_only_socket_type (int type_)
 class stream_api_lock_t
 {
   public:
-    explicit stream_api_lock_t (socket_handle_t handle_) : _lock ()
+    explicit stream_api_lock_t (const socket_handle_t &handle_) : _lock ()
     {
         if (!handle_.socket)
             return;

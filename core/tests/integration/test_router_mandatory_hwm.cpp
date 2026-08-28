@@ -157,7 +157,6 @@ zlink_send_op_id_t park_routed_record (void *router_,
     if (rc != ZLINK_SUBMIT_OK)
         zlink_msg_close (&part);
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, rc);
-    TEST_ASSERT_TRUE (op_id != 0);
     return op_id;
 }
 
@@ -455,21 +454,18 @@ void test_send_complete_isolated_by_exact_target_and_terminal_cause ()
       a_backpressured, "target A did not reach its manual byte HWM");
 
     //  A is full: this record is reserved, not admitted.
-    park_routed_record (router, &rid_a, 65536);
+    TEST_ASSERT_TRUE (park_routed_record (router, &rid_a, 65536) != 0);
     {
         std::lock_guard<std::mutex> lock (probe.sync);
         TEST_ASSERT_EQUAL_UINT64 (0, probe.events.size ());
     }
 
     //  B is unaffected by A's backpressure and admits inline on the caller
-    //  thread, so its completion is already recorded when the call returns.
-    park_routed_record (router, &rid_b, 65536);
+    //  thread. Immediate admission returns op_id zero and emits no callback.
+    TEST_ASSERT_EQUAL_UINT64 (0, park_routed_record (router, &rid_b, 65536));
     {
         std::lock_guard<std::mutex> lock (probe.sync);
-        TEST_ASSERT_EQUAL_UINT64 (1, probe.events.size ());
-        TEST_ASSERT_TRUE (probe.events[0].rid == "B");
-        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, probe.events[0].result);
-        probe.events.clear ();
+        TEST_ASSERT_EQUAL_UINT64 (0, probe.events.size ());
     }
 
     //  Credit recovery is target-exact: draining A admits A's pending record.
@@ -501,7 +497,7 @@ void test_send_complete_isolated_by_exact_target_and_terminal_cause ()
         TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
     }
     TEST_ASSERT_TRUE (a_backpressured_again);
-    park_routed_record (router, &rid_a, 65536);
+    TEST_ASSERT_TRUE (park_routed_record (router, &rid_a, 65536) != 0);
 
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
                            zlink_disconnect_rid (router, &rid_a));
@@ -526,7 +522,7 @@ void test_send_complete_isolated_by_exact_target_and_terminal_cause ()
         TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
     }
     TEST_ASSERT_TRUE (b_backpressured);
-    park_routed_record (router, &rid_b, 65536);
+    TEST_ASSERT_TRUE (park_routed_record (router, &rid_b, 65536) != 0);
 
     test_context_socket_close (router);
     TEST_ASSERT_TRUE_MESSAGE (
@@ -587,7 +583,7 @@ void test_routed_send_terminal_batch_survives_callback_self_close ()
             backpressured = result == ZLINK_SUBMIT_BACKPRESSURED;
         }
         TEST_ASSERT_TRUE (backpressured);
-        park_routed_record (router, rids[target], 65536);
+        TEST_ASSERT_TRUE (park_routed_record (router, rids[target], 65536) != 0);
     }
 
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_ctx_shutdown (ctx));

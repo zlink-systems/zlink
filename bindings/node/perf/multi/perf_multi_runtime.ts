@@ -15,6 +15,20 @@ const POLLIN = 1;
 const POLLOUT = 2;
 const { emitMultiSocketHwmDetail } = require('./perf_multi_auto_hwm');
 
+function measurementPartCount() {
+  return process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+}
+
+function measurementParts(payload) {
+  return measurementPartCount() === 1 ? [payload] : [payload, Buffer.alloc(0)];
+}
+
+function measurementPayload(parts) {
+  if (!Array.isArray(parts) || parts.length !== measurementPartCount()) return null;
+  if (measurementPartCount() === 2 && parts[1].data().length !== 0) return null;
+  return parts[0];
+}
+
 function integerEnvPair(primary, fallbackName, fallback) {
   return integerEnv(primary, integerEnv(fallbackName, fallback));
 }
@@ -226,7 +240,7 @@ function trySocketSend(socket, ...args) {
     // STREAM packet callbacks keep their synchronous raw trySend relay;
     // managed PAIR/DEALER/ROUTER sends use the completion Promise below.
     let op = routed ? socket.trySend(args[0]) : socket.trySend();
-    const parts = Array.isArray(payload) ? payload : [payload];
+    const parts = Array.isArray(payload) ? payload : measurementParts(payload);
     for (const part of parts) {
       op = op.message(part);
     }
@@ -248,7 +262,7 @@ async function tryRoutedSocketSend(socket, ...args) {
     const routed = args.length >= 2 && args[0] instanceof zlink.RoutingId;
     const payload = routed ? args[1] : args[0];
     let op = routed ? socket.send(args[0]) : socket.send();
-    const parts = Array.isArray(payload) ? payload : [payload];
+    const parts = Array.isArray(payload) ? payload : measurementParts(payload);
     for (const part of parts) {
       op = op.message(part);
     }
@@ -279,7 +293,7 @@ async function sendStopTokenOnce(_socket, sendFn) {
 function trySocketPublish(socket, topic, payload) {
   try {
     let op = socket.publish(topic);
-    const parts = Array.isArray(payload) ? payload : [payload];
+    const parts = Array.isArray(payload) ? payload : measurementParts(payload);
     for (const part of parts) {
       op = op.message(part);
     }
@@ -322,7 +336,7 @@ async function publishControlUntilSent(socket, _waiter, topic, payload) {
   );
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
-    if (trySocketPublish(socket, topic, body)) {
+    if (trySocketPublish(socket, topic, [body])) {
       return true;
     }
     const remaining = deadline - Date.now();
@@ -461,6 +475,8 @@ module.exports = {
   trySocketPublish,
   tryRoutedSocketSend,
   trySocketSend,
+  measurementParts,
+  measurementPayload,
   waitForControlStart,
   waitForRunnerControlConnected,
   waitForRunnerStart,

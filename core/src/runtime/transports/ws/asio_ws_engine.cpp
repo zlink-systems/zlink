@@ -137,6 +137,7 @@ zlink::asio_ws_engine_t::asio_ws_engine_t (fd_t fd_,
     _input_stop_reason (input_running),
     _output_stopped (false),
     _io_error (false),
+    _handshake_pending (false),
     _read_pending (false),
     _write_pending (false),
     _terminating (false),
@@ -226,6 +227,7 @@ zlink::asio_ws_engine_t::asio_ws_engine_t (
     _input_stop_reason (input_running),
     _output_stopped (false),
     _io_error (false),
+    _handshake_pending (false),
     _read_pending (false),
     _write_pending (false),
     _terminating (false),
@@ -371,18 +373,16 @@ void zlink::asio_ws_engine_t::start_ws_handshake ()
 
     //  Start WebSocket handshake (client or server)
     const int handshake_type = _is_client ? 0 : 1;
-    const std::weak_ptr<callback_guard_t> callback_guard = _callback_guard;
-
+    _handshake_pending = true;
     _transport->async_handshake (
-      handshake_type, [this, callback_guard] (const boost::system::error_code &ec, std::size_t) {
-          if (callback_guard.expired ())
-              return;
+      handshake_type, [this] (const boost::system::error_code &ec, std::size_t) {
           on_ws_handshake_complete (ec);
       });
 }
 
 void zlink::asio_ws_engine_t::on_ws_handshake_complete (const boost::system::error_code &ec)
 {
+    _handshake_pending = false;
     WS_ENGINE_DBG ("WebSocket handshake complete, ec=%s", ec.message ().c_str ());
 
     if (_terminating)
@@ -491,12 +491,9 @@ void zlink::asio_ws_engine_t::start_async_read ()
         buffer_size = _read_buffer.size ();
     }
 
-    const std::weak_ptr<callback_guard_t> callback_guard = _callback_guard;
     _transport->async_read_some (
       buffer, buffer_size,
-      [this, callback_guard] (const boost::system::error_code &ec, std::size_t bytes_transferred) {
-          if (callback_guard.expired ())
-              return;
+      [this] (const boost::system::error_code &ec, std::size_t bytes_transferred) {
           on_read_complete (ec, bytes_transferred);
       });
 }
@@ -647,12 +644,9 @@ void zlink::asio_ws_engine_t::start_async_write ()
 
     _write_pending = true;
 
-    const std::weak_ptr<callback_guard_t> callback_guard = _callback_guard;
     _transport->async_write_some (
       _outpos, _outsize,
-      [this, callback_guard] (const boost::system::error_code &ec, std::size_t bytes_transferred) {
-          if (callback_guard.expired ())
-              return;
+      [this] (const boost::system::error_code &ec, std::size_t bytes_transferred) {
           on_write_complete (ec, bytes_transferred);
       });
 }
@@ -1131,12 +1125,9 @@ bool zlink::asio_ws_engine_t::prepare_gather_output ()
     _write_pending = true;
     _output_stopped = false;
 
-    const std::weak_ptr<callback_guard_t> callback_guard = _callback_guard;
     _transport->async_writev (
       _gather_header, _gather_header_size, _gather_body, _gather_body_size,
-      [this, callback_guard] (const boost::system::error_code &ec, std::size_t bytes) {
-          if (callback_guard.expired ())
-              return;
+      [this] (const boost::system::error_code &ec, std::size_t bytes) {
           on_write_complete (ec, bytes);
       });
     return true;
@@ -1484,7 +1475,7 @@ void zlink::asio_ws_engine_t::schedule_terminate_completion ()
     }
 
     boost::asio::post (*_io_context, [this] () {
-        if (_read_pending || _write_pending) {
+        if (_handshake_pending || _read_pending || _write_pending) {
             schedule_terminate_completion ();
             return;
         }

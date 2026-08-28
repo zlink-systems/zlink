@@ -104,15 +104,16 @@ func recvSingleRoutedOneWayOnce(
 	if !ok {
 		return false, nil
 	}
-	if received.RoutingID().Size() == 0 || received.HasRequestSeq() || len(received.Parts()) != 1 {
+	if received.RoutingID().Size() == 0 || received.HasRequestSeq() {
 		return false, fmt.Errorf("unexpected routed receive metadata")
 	}
-	part, partErr := received.SinglePartOrError()
+	parts := received.Parts()
+	if len(parts) == 1 && perfcommon.IsStopTokenMessage(parts[0]) {
+		return true, nil
+	}
+	part, partErr := perfcommon.MeasurementPayload(parts)
 	if partErr != nil {
 		return false, partErr
-	}
-	if perfcommon.IsStopTokenMessage(part) {
-		return true, nil
 	}
 	now := time.Now()
 	if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, msgSize, perfcommon.PhaseActive, now); ok {

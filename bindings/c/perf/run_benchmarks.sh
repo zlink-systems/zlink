@@ -195,6 +195,7 @@ PIN_CPU=0
 PERF_IO_THREADS="${PERF_IO_THREADS:-}"
 PERF_MSG_SIZES="${PERF_MSG_SIZES:-}"
 PERF_TRANSPORTS="${PERF_TRANSPORTS:-}"
+PERF_PART_COUNT="${PERF_PART_COUNT:-2}"
 SINGLE_DURATION_SECONDS="${PERF_SINGLE_DURATION_SECONDS:-5}"
 SINGLE_HWM="${PERF_SINGLE_HWM:-}"
 SINGLE_SNDHWM="${PERF_SINGLE_SNDHWM:-}"
@@ -244,6 +245,7 @@ Options:
   --pin-cpu                   Pin CPU core during benchmark runs (Linux taskset).
   --io-threads N              Set PERF_IO_THREADS for benchmark binaries.
   --msg-sizes LIST            Comma-separated sizes (e.g., 64,1024,65536).
+  --part-count N              Application frame count per measured message (1 or 2; default: 2).
   --transports LIST           Comma-separated transports.
   --auto-hwm-profile NAME     Set auto-HWM profile: compact, low_latency, balanced, throughput (default: balanced).
   --core-version VERSION      Download and use the specified released Core version.
@@ -521,6 +523,10 @@ while [[ $# -gt 0 ]]; do
       PERF_MSG_SIZES="${2:-}"
       shift
       ;;
+    --part-count)
+      PERF_PART_COUNT="${2:-}"
+      shift
+      ;;
     --transports)
       PERF_TRANSPORTS="${2:-}"
       shift
@@ -643,6 +649,11 @@ fi
 
 if [[ -n "${PERF_MSG_SIZES}" && ! "${PERF_MSG_SIZES}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
   echo "PERF_MSG_SIZES must be a comma-separated list of integers." >&2
+  exit 1
+fi
+
+if [[ "${PERF_PART_COUNT}" != "1" && "${PERF_PART_COUNT}" != "2" ]]; then
+  echo "--part-count must be 1 or 2." >&2
   exit 1
 fi
 
@@ -953,6 +964,7 @@ fi
 if [[ -n "${PERF_MSG_SIZES}" ]]; then
   RUN_ENV+=(PERF_MSG_SIZES="${PERF_MSG_SIZES}")
 fi
+RUN_ENV+=(PERF_PART_COUNT="${PERF_PART_COUNT}")
 if [[ -n "${PERF_TRANSPORTS}" ]]; then
   RUN_ENV+=(PERF_TRANSPORTS="${PERF_TRANSPORTS}")
 fi
@@ -1066,6 +1078,7 @@ print_effective_option "ctx_auto_hwm_profile" "${CTX_AUTO_HWM_PROFILE}"
 print_effective_option "pin_cpu" "${PIN_CPU}"
 print_effective_option "io_threads" "${EFFECTIVE_IO_THREADS}"
 print_effective_option "msg_sizes" "$(value_or_default "${PERF_MSG_SIZES}" "default(benchmark)")"
+print_effective_option "part_count" "${PERF_PART_COUNT}"
 print_effective_option "transports" "$(value_or_default "${PERF_TRANSPORTS}" "default(benchmark)")"
 print_effective_option "results_dir" "${RESULTS_DIR}"
 print_effective_option "results_tag" "$(value_or_default "${RESULTS_TAG}" "none")"

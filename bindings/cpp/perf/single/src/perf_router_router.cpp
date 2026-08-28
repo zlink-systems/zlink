@@ -4,7 +4,6 @@
 #include "../common/perf_single_runner.hpp"
 
 #include <atomic>
-#include <thread>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -35,7 +34,7 @@ struct router_router_recv_state_t
 bool record_router_router_sample (uint32_t run_id_,
                                   size_t msg_size_,
                                   size_t payload_size_,
-                                  zlink::message_t &part_,
+                                  const zlink::message_t &part_,
                                   perf::single::latency_stats_builder_t *latency_,
                                   unsigned long long *received_)
 {
@@ -62,17 +61,17 @@ bool record_router_router_sample (uint32_t run_id_,
     return true;
 }
 
-// The routed send terminal is synchronous, so the sender owns a thread of its
-// own exactly like the C reference runner. Measurement anchors are unchanged:
-// the timestamp is stamped immediately before the send and decoded on receipt.
-bool send_router_samples (::perf::socket_t *sender_,
+// Exercise the public coroutine terminal. Immediate admission remains on this
+// coroutine without suspension; an HWM-pending completion resumes through the
+// binding's slow-path continuation dispatcher.
+perf::async_task_t<bool> send_router_samples (::perf::socket_t *sender_,
                                               std::vector<char> *payload_,
                                               router_router_recv_state_t *state_,
                                               int duration_s_,
                                               std::atomic<unsigned long long> *sent_count_)
 {
     if (!sender_ || !payload_ || !state_ || !sent_count_)
-        return false;
+        co_return false;
 
     const auto deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (std::max (1, duration_s_));
@@ -82,14 +81,30 @@ bool send_router_samples (::perf::socket_t *sender_,
                                                 state_->run_id, perf_single_metric::phase_active,
                                                 state_->msg_size, seq,
                                                 perf_single_metric::now_ns ())) {
-            return false;
+            co_return false;
         }
 
         if (!state_->target_rid.has_value ())
-            return false;
+            co_return false;
 
-        const int send_rc = perf::single::send_payload_active (
-          *sender_, *state_->target_rid, payload_->data (), payload_->size ());
+        int send_rc = -1;
+        zlink::message_t msg =
+          perf::single::message_from_payload (payload_->data (), payload_->size ());
+        if (!msg.valid ())
+            co_return false;
+        try {
+            if (perf::single::measurement_part_count () == 2) {
+                zlink::message_t tail = perf::single::message_from_payload (NULL, 0);
+                co_await sender_->send_routed_async (*state_->target_rid, msg, tail);
+            } else {
+                co_await sender_->send_routed_async (*state_->target_rid, msg);
+            }
+            send_rc = 1;
+        }
+        catch (const zlink::binding_error_t &err) {
+            errno = err.internal_errno ();
+            send_rc = perf::single::is_transient_routed_send_errno (errno) ? 0 : -1;
+        }
         if (send_rc <= 0) {
             const int err = errno;
             if (perf::single::is_transient_routed_send_errno (err)
@@ -100,7 +115,7 @@ bool send_router_samples (::perf::socket_t *sender_,
                 break;
             if (perf_debug_enabled ())
                 std::cerr << "router_router: send failed errno=" << err << std::endl;
-            return false;
+            co_return false;
         }
 
         sent_count_->fetch_add (1, std::memory_order_release);
@@ -109,9 +124,9 @@ bool send_router_samples (::perf::socket_t *sender_,
 
     // PERF_SINGLE_TEST_POLICY § 1.4: signal phase end with one
     // wire-level blocking stop token.
-    const bool stop_ok =
-      perf::single::send_stop_token_active (*sender_, *state_->target_rid);
-    return stop_ok;
+    const bool stop_ok = co_await perf::single::send_stop_token_async (
+      *sender_, *state_->target_rid);
+    co_return stop_ok;
 }
 
 } // namespace
@@ -179,29 +194,19 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
     state.run_id = run_id;
     state.msg_size = msg_size;
     state.payload_size = payload_size;
-    std::atomic<bool> sender_result{false};
-    std::thread sender_thread ([&] {
-        sender_result.store (
-          send_router_samples (&sender.sock (), &payload, &state, duration_s,
-                               &sent_count),
-          std::memory_order_release);
-    });
+    perf::async_task_t<bool> sender_task =
+      send_router_samples (&sender.sock (), &payload, &state, duration_s, &sent_count);
     unsigned long long received = 0;
     perf::single::latency_stats_t latency;
     // C-faithful receiver (bindings/c/perf single perf_router_router.cpp
     // run_active_phase): blocking recv (flags=0, bounded by rcvtimeo) into
-    // a reused routing id and a single message_t, exiting on the wire-level
-    // stop token. The previous poller.wait()+received_t drain allocated a
-    // fresh std::vector<message_t> per message (received_t::parts ()
-    // materialize), capping ROUTER_ROUTER throughput at ~76-80% of C; C
-    // uses one reused zlink_msg_t recv buffer with no per-message heap
-    // churn.
+    // a complete received_t, so the benchmark can validate the required
+    // payload + empty-tail message shape before decoding the payload.
     {
-        zlink::routing_id_t source_rid = zlink::routing_id_t::from (std::string ("placeholder"));
         bool stop_received = false;
         while (!stop_received) {
-            zlink::message_t part;
-            const int recv_rc = receiver.sock ().recv (source_rid, part, 0);
+            zlink::received_t message;
+            const int recv_rc = receiver.sock ().receive (message, 0);
             if (recv_rc != 0) {
                 if (errno == EAGAIN || errno == EINTR)
                     continue;
@@ -210,11 +215,15 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
                 sender_ok.store (false, std::memory_order_release);
                 break;
             }
-            if (perf::single::is_stop_token_message (part)) {
+            const std::vector<zlink::message_t> &parts = message.parts ();
+            if (parts.size () == 1 && perf::single::is_stop_token_message (parts.front ())) {
                 stop_received = true;
                 break;
             }
-            if (!record_router_router_sample (run_id, msg_size, payload_size, part, &state.latency,
+            const zlink::message_t *part = perf::single::measurement_payload_part (parts);
+            if (!part)
+                continue;
+            if (!record_router_router_sample (run_id, msg_size, payload_size, *part, &state.latency,
                                               &received)) {
                 sender_ok.store (false, std::memory_order_release);
                 break;
@@ -222,9 +231,7 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
         }
     }
 
-    sender_thread.join ();
-    sender_ok.store (sender_result.load (std::memory_order_acquire),
-                     std::memory_order_release);
+    sender_ok.store (co_await std::move (sender_task), std::memory_order_release);
     if (!sender_ok.load (std::memory_order_acquire)) {
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
         co_return false;

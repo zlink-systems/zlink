@@ -2,6 +2,8 @@
 
 #include "utils/precompiled.hpp"
 
+#include <new>
+
 #include "api/socket/request_completion_queue_internal.hpp"
 
 #include "api/socket/request_reply_protocol_internal.hpp"
@@ -31,13 +33,42 @@ class request_completion_callback_scope_t
     zlink::socket_send_complete_dispatch_scope_t dispatch_scope;
     void *previous_owner;
 };
+
+void delete_control_chain (zlink::request_completion::control_t *head_)
+{
+    while (head_) {
+        zlink::request_completion::control_t *next = head_->next;
+        delete head_;
+        head_ = next;
+    }
+}
+
+void release_ready_node (zlink::request_completion::queue_state_t *state_,
+                         zlink::request_completion::control_t *node_)
+{
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        zlink_assert (state_->reserved > 0);
+        --state_->reserved;
+    }
+    delete node_;
+}
 }
 
 zlink::request_completion::queue_state_t::queue_state_t () :
+    reserved_head (NULL),
+    ready_head (NULL),
+    ready_tail (NULL),
     reserved (0),
     owner_thread_valid (false),
     closed (false)
 {
+}
+
+zlink::request_completion::queue_state_t::~queue_state_t ()
+{
+    delete_control_chain (reserved_head);
+    delete_control_chain (ready_head);
 }
 
 bool zlink::request_completion::try_reserve (queue_state_t *state_)
@@ -46,12 +77,23 @@ bool zlink::request_completion::try_reserve (queue_state_t *state_)
         errno = EFAULT;
         return false;
     }
-    std::lock_guard<std::mutex> lock (state_->mutex);
-    if (state_->closed || state_->reserved >= max_pending_completions) {
-        errno = state_->closed ? ETERM : EAGAIN;
+    control_t *node = new (std::nothrow) control_t ();
+    if (!node) {
+        errno = ENOMEM;
         return false;
     }
-    ++state_->reserved;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        if (state_->closed || state_->reserved >= max_pending_completions) {
+            const int failure_errno = state_->closed ? ETERM : EAGAIN;
+            delete node;
+            errno = failure_errno;
+            return false;
+        }
+        node->next = state_->reserved_head;
+        state_->reserved_head = node;
+        ++state_->reserved;
+    }
     return true;
 }
 
@@ -59,17 +101,30 @@ void zlink::request_completion::release_reservation (queue_state_t *state_)
 {
     if (!state_)
         return;
-    std::lock_guard<std::mutex> lock (state_->mutex);
-    if (state_->reserved > 0)
-        --state_->reserved;
-    else
-        zlink_assert (state_->closed);
+    control_t *released = NULL;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        if (state_->reserved > 0) {
+            //  Reservations are fungible. A request that completes directly
+            //  always has one node in this unqueued pool; terminal controls
+            //  move their node to ready_head and release it in drain().
+            zlink_assert (state_->reserved_head != NULL);
+            released = state_->reserved_head;
+            state_->reserved_head = released->next;
+            released->next = NULL;
+            --state_->reserved;
+        } else {
+            zlink_assert (state_->closed);
+        }
+    }
+    delete released;
 }
 
 zlink::request_completion::control_t::control_t () :
     handler (NULL),
     userdata (NULL),
-    errnum (0)
+    errnum (0),
+    next (NULL)
 {
 }
 
@@ -92,11 +147,21 @@ int zlink::request_completion::enqueue (queue_state_t *state_,
             errno = ETERM;
             return -1;
         }
-        control_t control;
-        control.handler = handler_;
-        control.userdata = userdata_;
-        control.errnum = errnum_;
-        state_->controls.push_back (control);
+        if (!state_->reserved_head) {
+            errno = EFAULT;
+            return -1;
+        }
+        control_t *control = state_->reserved_head;
+        state_->reserved_head = control->next;
+        control->handler = handler_;
+        control->userdata = userdata_;
+        control->errnum = errnum_;
+        control->next = NULL;
+        if (state_->ready_tail)
+            state_->ready_tail->next = control;
+        else
+            state_->ready_head = control;
+        state_->ready_tail = control;
     }
 
     static_cast<zlink::socket_base_t *> (owner_handle_)->notify_request_completion ();
@@ -126,23 +191,30 @@ int drain_controls (zlink::request_completion::queue_state_t *state_,
         return -1;
     }
 
-    std::deque<zlink::request_completion::control_t> controls;
+    zlink::request_completion::control_t *controls = NULL;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
         state_->owner_thread = std::this_thread::get_id ();
         state_->owner_thread_valid = true;
-        controls.swap (state_->controls);
+        controls = state_->ready_head;
+        state_->ready_head = NULL;
+        state_->ready_tail = NULL;
     }
 
-    for (std::deque<zlink::request_completion::control_t>::iterator it = controls.begin ();
-         it != controls.end (); ++it) {
+    int drained = 0;
+    while (controls) {
+        zlink::request_completion::control_t *control = controls;
+        controls = control->next;
+        control->next = NULL;
         zlink::request_completion::invoke_callback (
-          owner_handle_, it->handler, it->errnum, NULL, 0, it->userdata);
-        zlink::request_completion::release_reservation (state_);
+          owner_handle_, control->handler, control->errnum, NULL, 0,
+          control->userdata);
+        release_ready_node (state_, control);
+        ++drained;
     }
 
     errno = 0;
-    return static_cast<int> (controls.size ());
+    return drained;
 }
 }
 
@@ -153,9 +225,9 @@ int zlink::request_completion::drain (queue_state_t *state_, void *owner_handle_
         return -1;
     }
 
-    std::deque<control_t> controls;
+    control_t *controls = NULL;
     std::unique_lock<std::mutex> lock (state_->mutex);
-    if (state_->controls.empty ()) {
+    if (!state_->ready_head) {
         errno = 0;
         return 0;
     }
@@ -169,18 +241,24 @@ int zlink::request_completion::drain (queue_state_t *state_, void *owner_handle_
 
     state_->owner_thread = std::this_thread::get_id ();
     state_->owner_thread_valid = true;
-    controls.swap (state_->controls);
+    controls = state_->ready_head;
+    state_->ready_head = NULL;
+    state_->ready_tail = NULL;
     lock.unlock ();
 
-    for (std::deque<control_t>::iterator it = controls.begin ();
-         it != controls.end (); ++it) {
-        invoke_callback (owner_handle_, it->handler, it->errnum, NULL, 0,
-                         it->userdata);
-        release_reservation (state_);
+    int drained = 0;
+    while (controls) {
+        control_t *control = controls;
+        controls = control->next;
+        control->next = NULL;
+        invoke_callback (owner_handle_, control->handler, control->errnum,
+                         NULL, 0, control->userdata);
+        release_ready_node (state_, control);
+        ++drained;
     }
 
     errno = 0;
-    return static_cast<int> (controls.size ());
+    return drained;
 }
 
 int zlink::request_completion::drain_while_closing (queue_state_t *state_,
@@ -193,11 +271,21 @@ void zlink::request_completion::close (queue_state_t *state_)
 {
     if (!state_)
         return;
-    std::lock_guard<std::mutex> lock (state_->mutex);
-    state_->closed = true;
-    state_->controls.clear ();
-    state_->reserved = 0;
-    state_->owner_thread_valid = false;
+    control_t *reserved = NULL;
+    control_t *ready = NULL;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        state_->closed = true;
+        reserved = state_->reserved_head;
+        ready = state_->ready_head;
+        state_->reserved_head = NULL;
+        state_->ready_head = NULL;
+        state_->ready_tail = NULL;
+        state_->reserved = 0;
+        state_->owner_thread_valid = false;
+    }
+    delete_control_chain (reserved);
+    delete_control_chain (ready);
 }
 
 void zlink::request_completion::claim_owner_thread (queue_state_t *state_)
@@ -222,7 +310,7 @@ bool zlink::request_completion::has_pending (queue_state_t *state_)
     if (!state_)
         return false;
     std::lock_guard<std::mutex> lock (state_->mutex);
-    return !state_->controls.empty ();
+    return state_->ready_head != NULL;
 }
 
 bool zlink::request_completion::in_request_completion_callback (void *owner_handle_)

@@ -44,6 +44,7 @@ class msg_t;
 class pipe_t;
 class io_thread_t;
 class socket_base_t;
+class socket_public_handle_t;
 
 namespace socket_reqrep_internal
 {
@@ -167,6 +168,7 @@ class socket_base_t : public own_t,
 {
     friend class reaper_t;
     friend class socket_callback_scope_t;
+    friend class socket_public_handle_t;
 #ifdef ZLINK_BUILD_TESTS
     friend class session_termination_test_access_t;
 #endif
@@ -175,6 +177,14 @@ class socket_base_t : public own_t,
     //  Returns false if object is not a socket.
     bool check_tag () const;
     int socket_type () const;
+    void set_public_handle (socket_public_handle_t *handle_)
+    {
+        _public_handle = handle_;
+    }
+    void *public_handle () const
+    {
+        return static_cast<void *> (_public_handle);
+    }
 
     //  Create a socket of a specified type.
     static socket_base_t *create (int type_, zlink::ctx_t *parent_, uint32_t tid_, int sid_);
@@ -199,13 +209,18 @@ class socket_base_t : public own_t,
     int term_transport_pair (uint64_t transport_pair_id_,
                              uint64_t transport_pair_generation_);
     int send (zlink::msg_t *msg_, int flags_);
+    int send_complete_record (zlink::msg_t *msg_, int flags_);
     // Internal helper for logical multipart wrappers that already hold the
     // public send scope for the whole transaction.
     int send_scoped (zlink::msg_t *msg_,
                      int flags_,
                      socket_public_send_scope_t &scope_,
-                     zlink::pipe_t **pipe_out_ = NULL);
+                     zlink::pipe_t **pipe_out_ = NULL,
+                     bool report_multipart_abort_ = false);
     int send_routed (const zlink_routing_id_t *target_rid_, zlink::msg_t *msg_, int flags_);
+    int send_routed_complete_record (const zlink_routing_id_t *target_rid_,
+                                     zlink::msg_t *msg_,
+                                     int flags_);
     // Submit to the exact transport pair selected by
     // select_routed_submit_target(). A replacement peer with the same RID
     // must not receive an operation parked for the previous generation.
@@ -222,7 +237,8 @@ class socket_base_t : public own_t,
                             uint64_t expected_connection_id_ = 0,
                             zlink::pipe_t **pipe_out_ = NULL,
                             uint64_t expected_transport_pair_id_ = 0,
-                            uint64_t expected_transport_pair_generation_ = 0);
+                            uint64_t expected_transport_pair_generation_ = 0,
+                            bool report_multipart_abort_ = false);
     int select_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);
@@ -301,6 +317,8 @@ class socket_base_t : public own_t,
     uint64_t test_local_receive_flow_epoch () const;
 #endif
     std::unique_ptr<socket_public_send_scope_t> begin_public_send_scope (bool force_sync_);
+    std::unique_ptr<socket_public_send_scope_t> begin_complete_send_scope (bool force_sync_);
+    void notify_incremental_send_released ();
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
     int rollback ();
     int rollback_scoped (socket_public_send_scope_t &scope_);
@@ -354,6 +372,8 @@ class socket_base_t : public own_t,
                            zlink_send_op_id_t *op_id_out_);
     int send_async_cancel (zlink_send_op_id_t op_id_);
     bool send_complete_handler_active () const;
+    bool begin_send_async_public_call ();
+    void end_send_async_public_call ();
     //  Admit whatever the current pipe state allows, then hand resolved
     //  completions to the callback. Called by the async mailbox loop and by
     //  the POLLCOMPLETION drain owner.
@@ -729,6 +749,12 @@ class socket_base_t : public own_t,
     friend class socket_poller_t;
     friend struct multipart_send_facade_t;
 
+    auto_hwm_socket_plan_t prepare_auto_hwm_socket_plan_locked (
+      const auto_hwm_context_plan_t &context_);
+    physical_queue_endpoint_policy_t make_auto_hwm_queue_policy_locked (
+      const std::shared_ptr<physical_queue_record_t> &queue_,
+      bool writer_) const;
+
     int get_events_for_poller (int events_, uint32_t *out_);
 
     // Direct public send currently shares one scope between single-part and
@@ -746,7 +772,8 @@ class socket_base_t : public own_t,
                                 zlink::pipe_t **pipe_out_ = NULL,
                                 uint64_t expected_transport_pair_id_ = 0,
                                 uint64_t expected_transport_pair_generation_ = 0,
-                                bool record_context_admission_ = true);
+                                bool record_context_admission_ = true,
+                                bool commands_already_processed_ = false);
 
     enum
     {
@@ -844,7 +871,8 @@ class socket_base_t : public own_t,
     void extract_flags (const msg_t *msg_);
 
     //  Used to check whether the object is a socket.
-    uint32_t _tag;
+    socket_public_handle_t *_public_handle;
+    std::atomic<uint32_t> _tag;
 
     //  If true, associated context was already terminated.
     std::atomic<bool> _ctx_terminated;
@@ -867,9 +895,13 @@ class socket_base_t : public own_t,
     //  If throttle argument is true, commands are processed at most once
     //  in a predefined time period.
     int process_commands (int timeout_, bool throttle_);
+    bool try_inc_mailbox_ref ();
     void inc_mailbox_ref ();
     void dec_mailbox_ref ();
+    void schedule_finalize_destroy ();
     void finalize_destroy ();
+    void finish_close_reap ();
+    void materialize_pending_inprocs_before_reap ();
     void process_async_mailbox ();
     void notify_receive_progress_locked ();
     void notify_receive_progress ();
@@ -892,6 +924,17 @@ class socket_base_t : public own_t,
                                       uint64_t *async_mailbox_drains_out_);
     void test_set_receive_wait_hook (receive_runtime_t::wait_hook_fn hook_,
                                      void *userdata_);
+    void test_set_send_pending_gate_release_hook (
+      socket_send_pending_runtime_t::gate_release_hook_fn hook_,
+      void *userdata_);
+    void test_set_send_inline_fallback_hook (
+      socket_send_pending_runtime_t::inline_fallback_hook_fn hook_,
+      void *userdata_);
+    void test_set_send_deadline_enqueue_hook (
+      socket_send_pending_runtime_t::deadline_enqueue_hook_fn hook_,
+      void *userdata_);
+    void test_set_send_next_op_id (zlink_send_op_id_t next_op_id_);
+    void test_set_send_fail_after_queue_push (bool enabled_);
   private:
 #endif
     //  close / ctx term: fail every pending record fast. LINGER does not
@@ -903,6 +946,18 @@ class socket_base_t : public own_t,
     //  Claim/finish helpers used by the admit loop.
     bool claim_send_pending_head (send_pending_record_t **out_);
     int try_admit_send_pending (send_pending_record_t *record_);
+    int try_admit_send_parts (zlink_msg_t *parts_,
+                              size_t part_count_,
+                              const routed_send_target_key_t &target_,
+                              bool has_target_,
+                              bool commands_already_processed_,
+                              send_pending_record_t *record_ = NULL);
+    int try_admit_send_parts_scoped (
+      zlink_msg_t *parts_, size_t part_count_,
+      const routed_send_target_key_t &target_, bool has_target_,
+      socket_public_send_scope_t &scope_,
+      zlink::pipe_t **attempted_pipe_out_ = NULL,
+      bool commands_already_processed_ = false);
     void finish_send_pending (send_pending_record_t *record_,
                               zlink_send_complete_result_t result_,
                               int terminal_errno_);
@@ -920,6 +975,7 @@ class socket_base_t : public own_t,
     //  Handlers for incoming commands.
     void process_stop () ZLINK_FINAL;
     void process_bind (zlink::pipe_t *pipe_) ZLINK_FINAL;
+    void process_send_pending_timeout (uint64_t op_id_) ZLINK_FINAL;
     void process_term (int linger_) ZLINK_FINAL;
     void process_term_endpoint (std::string *endpoint_) ZLINK_FINAL;
 
@@ -956,6 +1012,11 @@ class socket_base_t : public own_t,
     mutable mutex_t _completion_owner_sync;
     std::atomic<uint32_t> _completion_poller_refs;
     std::atomic<bool> _request_completion_pending;
+    //  Auto-HWM planning runs on the context control runtime while option
+    //  updates and monitor snapshots run on public threads. Keep the socket
+    //  plan and the option values used to derive it in one snapshot domain.
+    //  This lock is never acquired by send admission.
+    mutable mutex_t _auto_hwm_sync;
     auto_hwm_context_plan_t _auto_hwm_context_plan;
     auto_hwm_socket_plan_t _auto_hwm_socket_plan;
     uint64_t _auto_hwm_last_recalc_ms;

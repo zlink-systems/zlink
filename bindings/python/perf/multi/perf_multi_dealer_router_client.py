@@ -16,6 +16,7 @@ from perf_multi_common import (
     perf_client_context,
     print_result_lines,
     recv_nonblocking,
+    received_metric_payload,
     resolve_multi_connect_ready_timeout_ms,
     result_metrics,
     safe_poll,
@@ -136,10 +137,12 @@ async def main(argv=None):
                                 with msg:
                                     active = False
                                     latency = None
-                                    if msg.parts:
+                                    data = received_metric_payload(
+                                        msg, expected_size=args.msg_size
+                                    )
+                                    if data:
                                         active, latency = active_message_latency_ns(
-                                            msg.parts[-1].data,
-                                            expected_msg_size=args.msg_size,
+                                            data, expected_msg_size=args.msg_size,
                                             run_id=run_id,
                                         )
                                     # C: every matched header counts (++local_recv,

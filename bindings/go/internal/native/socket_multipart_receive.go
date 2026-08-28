@@ -9,9 +9,18 @@ package native
 */
 import "C"
 
-import "unsafe"
+import (
+	"runtime"
+	"unsafe"
+)
 
 func recvMultipart(reuse []*Message, flags RecvFlags, recv multipartRecvFunc) ([]*Message, error) {
+	// Core owns a multipart receive sequence per native thread until the final
+	// part is consumed. A Go goroutine may migrate between cgo calls, so pin it
+	// while draining this one logical message.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if reuse == nil {
 		reuse = make([]*Message, 0, 1)
 	}

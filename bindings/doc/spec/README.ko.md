@@ -1317,16 +1317,25 @@ receive를 늦춰야 할 때 사용하는 동적 제어 경계는 socket의 `RUN
 state setter 하나다.
 
 HWM-managed PAIR **send**와 DEALER/ROUTER **routed send**의 비동기 terminal은 Core
-`zlink_send_async`와 send-completion을 감싼다. Core가 HWM 대기와 재시도, operation deadline,
-route 종료와 cancel을 소유하고 accepted operation마다 정확히 한 번 completion을 전달한다.
-Binding은 Core operation id를 언어별 awaitable에 연결할 뿐 park queue, readiness callback
-재시도, deadline timer 또는 dispatcher thread를 두지 않는다. Core가 pending-operation
-상한 때문에 submit 자체를 거부한 경우에만 application이 그 즉시 실패의 정책을 정한다.
+`zlink_send_async`와 send-completion을 감싼다. 즉시 admission은 operation id `0`을 반환하며
+binding이 awaitable을 즉시 완료한다. Core가 HWM 대기와 재시도, operation deadline,
+route 종료와 cancel을 소유하고, nonzero id를 받은 pending operation마다 정확히 한 번
+completion을 전달한다. Binding은 park queue, readiness callback 재시도 또는 deadline timer를
+두지 않는다. pending 상한은 기본 unlimited이며, application이 nonzero 상한을 명시한 경우에만
+초과 submit의 즉시 실패 정책을 소유한다.
 
-Part 단위 Core API를 사용하는 binding은 같은 native handle의 모든 outbound 경로가 공유하는 짧은
-complete-record attempt gate를 둔다. Gate 안에서 기존 exact-target part API를 첫 part부터 `FINAL`까지
-호출하고, Core 내부 blocking 대기를 포함한 한 번의 attempt가 끝나면 즉시 해제한다. 별도
-multipart ABI나 public transaction abstraction을 추가하지 않는다.
+Part 단위 Core API를 사용하는 binding은 **송신 경로에 자체 lock이나 gate를 두지 않는다.**
+multipart record는 Core에서 all-or-nothing이다. Core는 socket별 transaction state로 다른 sender의
+part가 sequence 사이에 삽입되지 않게 보호하며, 이미 열린 sequence와 경합하는 attempt는 부분 제출을
+peer에 남기지 않고 통째로 거부한다. 그래도 동기 send 호출에 실제 전달한 native part는 성공과 일반
+실패 모두에서 Core가 소비한다. 예외는 STREAM backpressure의 `EAGAIN`이며, 이때만 해당 native part가
+보존된다. 공개 API가 실패 시 message를 보존하는 binding은 독립적으로 소유한 staging copy를 Core에
+전달해 그 계약을 구현한다. 따라서 같은 socket에 대한 **동시 multipart 제출은 어플리케이션의
+책임**이며, binding은 이를
+직렬화하거나 대기시키거나 재시도하지 않고 Core의 결과를 그대로 전달한다. 이는 백프레셔 정책과
+같은 원칙이다. close와 in-flight 제출의 경합도 Core lifecycle gate가 소유한다. 다른 thread가 같은
+핸들에서 admitted API를 실행 중이면 close는 `EBUSY`이고, close가 accepted된 뒤 새 API 진입은
+`ESHUTDOWN`이다. binding은 별도 multipart ABI나 public transaction abstraction을 추가하지 않는다.
 
 **Request**는 다르다: reply 완료는 Core가 구동한다. Reply handler callback은
 terminal을 한 번만 인수한다. 언어 future·promise가 completion 호출 thread에서 user
@@ -1412,8 +1421,9 @@ channel. C++만 기존 `submit()`·`submit(callback)`·`async()` 세 terminal을
   수행하면 안 된다. 바인딩도 같은 전제를 두고 lazy bootstrap 로직을 올리지 않는다.
 #### Send completion, Peer 가중치, STREAM 수신 모드
 
-- `zlink_send_complete_handler()`는 `zlink_send_async()`가 수용한 operation의
-  최종 결과를 전달한다. `ZLINK_POLLCOMPLETION`은 같은 callback과
+- `zlink_send_complete_handler()`는 `zlink_send_async()`가 nonzero id로 수용한
+  pending operation의 최종 결과를 전달한다. operation id `0`은 즉시 admission이며
+  callback이 없다. `ZLINK_POLLCOMPLETION`은 같은 callback과
   `zlink_send_complete_event_t`의 dispatch를 `zlink_poller_wait()` 호출 thread로
   옮긴다. `ZLINK_POLLOUT`은 동기 nonblocking send를 다시 시도할 수 있다는
   readiness 값이며 async send completion과 같은 축이 아니다. 공개 send-ready
@@ -1672,6 +1682,14 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
    - 각 operation 계약이 허용하는 `BACKPRESSURED`, `NOT_CONNECTED`, `NOT_FOUND`
      등의 실패는 예외로 전달한다. 이들은 반환값이 아니다. 단, raw terminal reply는
      HWM 없는 completion lane을 사용하므로 `BACKPRESSURED`를 허용하지 않는다.
+   - terminal reply의 대상 경로가 없으면 실패는 `NOT_CONNECTED` (`ENOTCONN`) 다.
+     대상 completion pipe를 찾지 못한 경우와, 이미 선택한 대상이 reply를 커밋하는
+     도중 사라진 경우에 같은 규칙을 적용한다. 이는 backpressure가 아니므로 readiness
+     (`POLLOUT`) 가 서더라도 재시도가 가능해지지 않는다. 바인딩은 이 실패를 받은
+     one-shot reply를 보관하거나 자동으로 다시 submit하지 않으며, 소유권 규칙에 따라
+     이미 소비된 part를 호출자에게 되돌리지 않는다.
+     이 의미는 모든 언어 binding에서 동일하다. 언어 관용구만 다르게 표현한다
+     (exception 언어는 해당 code를 가진 예외, return-based 언어는 해당 result 값).
 2. **C / Go / Rust 는 exception 이 없으므로 return-based 계약을 따른다.**
    바인딩은 각 언어 관용구에 맞는 스타일로 처리한다.
    - C: 함수별 typed result enum 반환
@@ -4688,7 +4706,8 @@ ownership 관리, native loader, package boundary, hot path 최적화를 함께 
 
 ### Required: Ownership 테스트
 - send 성공 시 ownership 이동 계약 (native에 넘어감, 바인딩이 이후 접근 금지)
-- send 실패 시 restore 또는 caller ownership 유지 계약
+- 언어 API가 명시한 send 실패 ownership 계약과 Core가 소비했거나 아직 시도하지 않은 native
+  staging part의 정리 계약
 - 생성 후 send하지 않은 메시지의 명시적 close/해제 (close 없으면 native 메모리 누수)
 - recv 결과 ownership 계약 (바인딩이 받아서 해제 책임)
 - callback 후 frame validity 계약

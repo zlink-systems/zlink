@@ -229,7 +229,6 @@ internal static class PerfRouterRouter
     {
         _ = recvTimeoutMs;
         long received = 0;
-        long activeDeadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
         Exception? sendError = null;
         var samples = new List<double>(Math.Max(0, latencyCap));
         long sampleSeen = 0;
@@ -238,12 +237,14 @@ internal static class PerfRouterRouter
 
         bool ProcessReceived(Received receivedMessage)
         {
-            if (!TryGetPayloadPart(receivedMessage, out Message payloadMessage))
-                return false;
-
-            ReadOnlySpan<byte> body = payloadMessage.AsReadOnlySpan();
-            if (StopToken.IsStopToken(body))
+            if (receivedMessage.Parts.Count == 1
+                && StopToken.IsStopToken(receivedMessage.FirstPart().AsReadOnlySpan()))
                 return true;
+
+            if (!PerfSocketIo.TryMeasurementPayload(receivedMessage.Parts,
+                    out Message payloadMessage))
+                return false;
+            ReadOnlySpan<byte> body = payloadMessage.AsReadOnlySpan();
 
             if (!TryDecodeExpectedSingleHeader(body, msgSize, ActivePhase,
                     out var header, RunId))
@@ -251,16 +252,17 @@ internal static class PerfRouterRouter
                 return false;
             }
 
-            if (Stopwatch.GetTimestamp() < activeDeadlineTicks)
+            // The sender stamps and submits only until its active deadline.
+            // Count every matching record before the wire-level stop token,
+            // including records already queued when that deadline elapsed.
+            // This is the C/C++ PERF_SINGLE_TEST_POLICY § 1.4 boundary.
+            received++;
+            ulong nowNs = EpochNs();
+            if (nowNs >= header.SentTsNs)
             {
-                received++;
-                ulong nowNs = EpochNs();
-                if (nowNs >= header.SentTsNs)
-                {
-                    double latencyNs = nowNs - header.SentTsNs;
-                    ReservoirSample(samples, latencyNs, ref sampleSeen, latencyCap,
-                        ref rng);
-                }
+                double latencyNs = nowNs - header.SentTsNs;
+                ReservoirSample(samples, latencyNs, ref sampleSeen, latencyCap,
+                    ref rng);
             }
 
             return false;
@@ -290,7 +292,7 @@ internal static class PerfRouterRouter
                     seq++;
                     try
                     {
-                        if (await PerfSocketIo.SendAsync(sender,
+                        if (await PerfSocketIo.SendMeasurementAsync(sender,
                                 targetRoutingId, payload, SendFlags.None)
                                 .ConfigureAwait(false) == 0)
                             continue;
@@ -326,7 +328,7 @@ internal static class PerfRouterRouter
             }
         }
 
-        Task senderTask = SendLoopAsync();
+        Task senderTask = Task.Run(SendLoopAsync);
 
         // PERF_SINGLE_TEST_POLICY § 1.4: blocking first recv per cycle, then
         // DontWait burst-drain. The phase ends purely when the wire-level stop

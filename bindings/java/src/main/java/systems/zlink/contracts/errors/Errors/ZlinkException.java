@@ -121,9 +121,11 @@ public abstract sealed class ZlinkException extends RuntimeException
                 SubmitResult.INVALID_HANDLE;
             case NativeErrorCodes.EAGAIN, NativeErrorCodes.EWOULDBLOCK_WIN ->
                 SubmitResult.BACKPRESSURED;
-            case NativeErrorCodes.ENOTCONN, NativeErrorCodes.ENOTCONN_WIN ->
+            case NativeErrorCodes.ENOTCONN, NativeErrorCodes.ENOTCONN_WIN,
+                 NativeErrorCodes.EHOSTUNREACH,
+                 NativeErrorCodes.EHOSTUNREACH_WIN ->
                 SubmitResult.NOT_CONNECTED;
-            case NativeErrorCodes.EHOSTUNREACH, NativeErrorCodes.EHOSTUNREACH_WIN ->
+            case NativeErrorCodes.ENOENT ->
                 SubmitResult.NOT_FOUND;
             case NativeErrorCodes.ECONNREFUSED, NativeErrorCodes.ECONNREFUSED_WIN ->
                 SubmitResult.NOT_ADMITTED;

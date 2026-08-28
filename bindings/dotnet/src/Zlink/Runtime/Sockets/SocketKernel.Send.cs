@@ -237,26 +237,18 @@ internal sealed partial class SocketKernel : IDisposable
         EnsureSupports(nameof(Publish), SocketTypePolicy.SocketCapability.Publish);
         if (message == null)
             throw new ArgumentNullException(nameof(message));
-        lock (SubmitGate)
-        {
-            var topicUtf8 = GetValidatedPublishTopicUtf8Unlocked(topic,
-                nameof(topic));
-            PublishSingleCoreUnlocked(topicUtf8, message, (int)flags);
-        }
+        var topicUtf8 = GetValidatedPublishTopicUtf8(topic, nameof(topic));
+        PublishSingleCore(topicUtf8, message, (int)flags);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PublishMessageUnchecked(string topic, Message message,
         SendFlags flags = SendFlags.None)
     {
-        lock (SubmitGate)
-        {
-            var topicUtf8 = GetValidatedPublishTopicUtf8Unlocked(topic,
-                nameof(topic));
-            if (message == null)
-                throw new ArgumentNullException(nameof(message));
-            PublishSingleCoreUnlocked(topicUtf8, message, (int)flags);
-        }
+        var topicUtf8 = GetValidatedPublishTopicUtf8(topic, nameof(topic));
+        if (message == null)
+            throw new ArgumentNullException(nameof(message));
+        PublishSingleCore(topicUtf8, message, (int)flags);
     }
 
     internal SendResult PublishNoWaitResult(string topic, Message message)
@@ -265,12 +257,8 @@ internal sealed partial class SocketKernel : IDisposable
             SocketTypePolicy.SocketCapability.Publish);
         if (message == null)
             throw new ArgumentNullException(nameof(message));
-        lock (SubmitGate)
-        {
-            var topicUtf8 = GetValidatedPublishTopicUtf8Unlocked(topic,
-                nameof(topic));
-            return PublishNoWaitSingleCoreUnlocked(topicUtf8, message);
-        }
+        var topicUtf8 = GetValidatedPublishTopicUtf8(topic, nameof(topic));
+        return PublishNoWaitSingleCore(topicUtf8, message);
     }
 
     public void Publish(string topic, IReadOnlyList<Message> parts,

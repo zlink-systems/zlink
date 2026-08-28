@@ -358,6 +358,13 @@ int zlink::xpub_t::xsend (
             if (admission_out_)
                 *admission_out_ = admission;
             errno = admission == pipe_message_admission_too_large ? EMSGSIZE : EAGAIN;
+            if (_more_send) {
+                const int failure_errno = errno;
+                _dist.rollback ();
+                _more_send = false;
+                errno = failure_errno;
+                return -2;
+            }
         }
         return rc;
     }
@@ -403,6 +410,13 @@ int zlink::xpub_t::xsend (
         if (admission_out_)
             *admission_out_ = admission;
         errno = admission == pipe_message_admission_too_large ? EMSGSIZE : EAGAIN;
+        if (_more_send) {
+            const int failure_errno = errno;
+            _dist.rollback ();
+            _more_send = false;
+            errno = failure_errno;
+            return -2;
+        }
     }
     return rc;
 }

@@ -199,7 +199,8 @@ and must close the reply messages. `RequestSubmitOperation.submit(callback)`/
 `RequestCallbackSubmitOperation.submit(callback)` return `boolean` (same `DontWait` convention) and
 deliver `(result, parts)` to `RequestCallback` later — the callback owns `parts` only when `result`
 is the success value. Every builder consumes its accumulated `Message` parts on a successful submit
-only; on failure ownership is restored to the caller.
+only; on failure the public messages remain with the caller because the binding submitted separate
+native staging parts. Core still consumes each staging part actually passed to a synchronous call.
 
 **When to use.** Use the no-argument `submit()`'s `Promise` in ordinary `async`/`await` code; use
 `.flags(...).submit(callback)` when a callback-completion surface is needed instead of a promise.

@@ -93,7 +93,14 @@ static void *create_socket_handle (void *ctx_, zlink_socket_type_t type_)
     if (!socket)
         return NULL;
 
-    return static_cast<void *> (socket);
+    void *public_handle = ctx->register_public_socket_handle (socket);
+    if (!public_handle) {
+        const int saved_errno = errno;
+        socket->close ();
+        errno = saved_errno;
+        return NULL;
+    }
+    return public_handle;
 }
 
 extern "C" void zlink_socket_request_reply_cleanup (void *socket_);
@@ -107,23 +114,23 @@ zlink_close_result_t zlink_close (void *s_)
 {
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
-        return ZLINK_CLOSE_INVALID_HANDLE;
+        return zlink::close_result_internal::from_errno (errno);
     std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t>
       request_reply_state = zlink::socket_reqrep_internal::find_request_reply_state (handle);
-    if (zlink::socket_reqrep_internal::in_socket_request_completion_callback (s_)) {
+    if (zlink::socket_reqrep_internal::in_socket_request_completion_callback (handle.socket)) {
         errno = EBUSY;
         return ZLINK_CLOSE_BUSY;
     }
     //  The pin keeps the state alive while this close inspects it. It must be
     //  released before unregister_monitor_handlers: the unregister path waits
     //  for reader pins to drain before deleting the state.
-    zlink::socket_base_t *raw_monitor_source = NULL;
     {
         monitor_state_pin_t monitor_pin (handle.socket);
         monitor_handler_state_t *monitor_state = monitor_pin.get ();
-        raw_monitor_source = raw_monitor_snapshot_subject (monitor_state);
         if (monitor_state) {
             if (zlink::current_monitor_handler_state () == monitor_state) {
+                if (!handle.begin_close ())
+                    return zlink::close_result_internal::from_errno (errno);
                 monitor_state->close_requested.store (true, std::memory_order_release);
                 return ZLINK_CLOSE_OK;
             }
@@ -154,26 +161,31 @@ zlink_close_result_t zlink_close (void *s_)
     // Reserve close before unregistering handlers, stopping the socket or
     // clearing multipart/request state. This atomically rejects an active
     // callback and prevents a new callback from starting.
-    const int close_admission = handle.socket->begin_close_handoff ();
-    if (close_admission < 0)
+    if (!handle.begin_close ())
         return zlink::close_result_internal::from_rc (-1);
+    const int close_admission = handle.socket->begin_close_handoff ();
+    if (close_admission < 0) {
+        handle.cancel_close ();
+        return zlink::close_result_internal::from_rc (-1);
+    }
     const bool deferred_close = close_admission > 0;
 
     {
         monitor_state_pin_t monitor_pin (handle.socket);
         monitor_handler_state_t *monitor_state = monitor_pin.get ();
-        raw_monitor_source = raw_monitor_snapshot_subject (monitor_state);
-        if (raw_monitor_source && raw_monitor_source != handle.socket) {
+        socket_handle_t monitor_source =
+          monitor_snapshot_subject_handle (monitor_state);
+        if (monitor_source.socket && monitor_source.socket != handle.socket) {
             monitor_state->snapshot_subject.store (NULL, std::memory_order_release);
-            (void) raw_monitor_source->monitor (NULL, 0, 3,
-                                                ZLINK_CORE_SOCKET_PAIR, 0);
+            (void) monitor_source.socket->monitor (NULL, 0, 3,
+                                                   ZLINK_CORE_SOCKET_PAIR, 0);
         } else {
             clear_raw_monitor_snapshot_subjects (handle.socket);
         }
     }
 
     unregister_monitor_handlers (handle.socket);
-    zlink::part_helper_internal::cleanup_handle (s_);
+    zlink::part_helper_internal::cleanup_socket (handle.socket);
 
     if (handle.socket->api_sync_mutex ()) {
         if (handle.socket->socket_msg_dispatch_active ()) {
@@ -193,7 +205,7 @@ zlink_close_result_t zlink_close (void *s_)
         const int drain_rc =
           zlink::socket_reqrep_internal::drain_close_request_reply_socket (handle);
         const int drain_errno = errno;
-        zlink_socket_request_reply_cleanup (s_);
+        zlink::socket_reqrep_internal::cleanup_request_reply_socket (handle);
         if (!deferred_close)
             handle.socket->complete_close_handoff ();
         // The drain API returns the number of callbacks it delivered. Only a
@@ -214,7 +226,7 @@ zlink_close_result_t zlink_close (void *s_)
     const int drain_rc =
       zlink::socket_reqrep_internal::drain_close_request_reply_socket (handle);
     const int drain_errno = errno;
-    zlink_socket_request_reply_cleanup (s_);
+    zlink::socket_reqrep_internal::cleanup_request_reply_socket (handle);
     if (!deferred_close)
         handle.socket->complete_close_handoff ();
     // The drain API returns the number of callbacks it delivered. Only a
@@ -240,10 +252,8 @@ zlink_poller_add (void *poller_, void *socket_, void *user_data_, short events_)
         return ZLINK_CONFIG_BUSY;
     }
     const zlink::option_target_t target = zlink::resolve_option_target (socket_);
-    if (target.kind != zlink::option_target_socket) {
-        errno = EFAULT;
-        return ZLINK_CONFIG_INVALID_HANDLE;
-    }
+    if (target.kind != zlink::option_target_socket)
+        return zlink::config_result_internal::from_errno (errno);
     socket_handle_t handle = make_socket_handle (target.socket);
     const int type = socket_type (handle);
     //  A completion registration is valid on any socket that owns a
@@ -302,10 +312,8 @@ zlink_config_result_t zlink_poller_modify (void *poller_, void *socket_, short e
     if (validate_socket_poller_event_mask (events_, false) != 0)
         return zlink::config_result_internal::from_errno (errno);
     const zlink::option_target_t target = zlink::resolve_option_target (socket_);
-    if (target.kind != zlink::option_target_socket) {
-        errno = EFAULT;
-        return ZLINK_CONFIG_INVALID_HANDLE;
-    }
+    if (target.kind != zlink::option_target_socket)
+        return zlink::config_result_internal::from_errno (errno);
     socket_handle_t handle = make_socket_handle (target.socket);
     if (validate_socket_callback_poller_events (handle, events_) != 0)
         return ZLINK_CONFIG_INVALID_ARGUMENT;
@@ -344,10 +352,8 @@ zlink_config_result_t zlink_poller_remove (void *poller_, void *socket_)
     // arbitrary invalid pointers still go through normal handle validation.
     if (poller_find_registration_index (poller, socket_, poller_subject_none) < 0) {
         const zlink::option_target_t target = zlink::resolve_option_target (socket_);
-        if (target.kind != zlink::option_target_socket) {
-            errno = EFAULT;
-            return ZLINK_CONFIG_INVALID_HANDLE;
-        }
+        if (target.kind != zlink::option_target_socket)
+            return zlink::config_result_internal::from_errno (errno);
     }
     return zlink::config_result_internal::from_rc (
       poller_remove_all_registrations_for_subject (poller, socket_));

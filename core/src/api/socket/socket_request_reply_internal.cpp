@@ -2,6 +2,7 @@
 
 #include "utils/precompiled.hpp"
 
+#include <atomic>
 #include <memory>
 #include <new>
 
@@ -20,6 +21,11 @@ size_t hash_combine (size_t seed_, size_t value_)
 {
     return seed_ ^ (value_ + 0x9e3779b97f4a7c15ULL + (seed_ << 6) + (seed_ >> 2));
 }
+
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<int> g_request_reply_allocation_failpoint (
+  request_reply_allocation_none);
+#endif
 }
 
 bool pending_key_t::operator== (const pending_key_t &other_) const
@@ -40,7 +46,12 @@ size_t pending_key_hash_t::operator() (const pending_key_t &key_) const
     return hash_combine (seed, std::hash<std::string> () (key_.peer_rid));
 }
 
-dealer_reply_target_t::dealer_reply_target_t () : pipe (NULL), request_seq (0)
+dealer_reply_target_t::dealer_reply_target_t () :
+    pipe (NULL), request_seq (0), checked_out (false)
+{
+}
+
+router_reply_target_t::router_reply_target_t () : pipe (NULL), checked_out (false)
 {
 }
 
@@ -184,24 +195,53 @@ void queue_socket_pending_timeout_completion (
 }
 
 std::shared_ptr<socket_request_reply_state_t>
-find_or_create_request_reply_state (socket_handle_t handle_)
+find_or_create_request_reply_state (const socket_handle_t &handle_)
 {
+    if (!handle_.socket) {
+        errno = EFAULT;
+        return std::shared_ptr<socket_request_reply_state_t> ();
+    }
     std::shared_ptr<socket_request_reply_state_t> state =
-      handle_.socket ? handle_.socket->request_reply_state ()
-                     : std::shared_ptr<socket_request_reply_state_t> ();
+      handle_.socket->request_reply_state ();
     if (state)
         return state;
 
-    state.reset (new socket_request_reply_state_t (handle_.socket, socket_type (handle_)));
+    try {
+        state.reset (new socket_request_reply_state_t (handle_.socket,
+                                                       socket_type (handle_)));
+    } catch (...) {
+        errno = ENOMEM;
+        return std::shared_ptr<socket_request_reply_state_t> ();
+    }
     return handle_.socket->set_request_reply_state (state);
 }
 
-std::shared_ptr<socket_request_reply_state_t> find_request_reply_state (socket_handle_t handle_)
+std::shared_ptr<socket_request_reply_state_t>
+find_request_reply_state (const socket_handle_t &handle_)
 {
     return handle_.socket && handle_.socket->has_request_reply_state ()
              ? handle_.socket->request_reply_state ()
              : std::shared_ptr<socket_request_reply_state_t> ();
 }
+
+#ifdef ZLINK_BUILD_TESTS
+void test_set_request_reply_allocation_failpoint (
+  request_reply_allocation_failpoint_t failpoint_)
+{
+    g_request_reply_allocation_failpoint.store (
+      static_cast<int> (failpoint_), std::memory_order_release);
+}
+
+void test_throw_request_reply_allocation_failpoint (
+  request_reply_allocation_failpoint_t failpoint_)
+{
+    int expected = static_cast<int> (failpoint_);
+    if (g_request_reply_allocation_failpoint.compare_exchange_strong (
+          expected, static_cast<int> (request_reply_allocation_none),
+          std::memory_order_acq_rel, std::memory_order_acquire))
+        throw std::bad_alloc ();
+}
+#endif
 
 }
 }

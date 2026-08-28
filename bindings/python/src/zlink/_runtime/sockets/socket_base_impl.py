@@ -284,6 +284,18 @@ class _ManagedSendOp:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         payload = self._payload_or_raise()
         self._submitted = True
+        if self._parts is not None:
+            # Async admission accepts a single logical payload. Multipart
+            # callers retain the same awaitable terminal through the public
+            # part-builder fallback; the optimized one-part path stays below.
+            fallback = _SocketSendOp(self._socket)
+            fallback.messages(*self._parts)
+
+            async def submit_multipart():
+                fallback.submit()
+                return None
+
+            return submit_multipart()
         return self._socket._send_completion.submit(payload)
 
 
@@ -346,6 +358,19 @@ class _ManagedRoutedSendOp:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         payload = self._payload_or_raise()
         self._submitted = True
+        if self._parts is not None:
+            fallback = (
+                _SocketSendOp(self._socket)
+                if self._routing_id is None
+                else _RoutedSocketSendOp(self._socket, self._routing_id)
+            )
+            fallback.messages(*self._parts)
+
+            async def submit_multipart():
+                fallback.submit()
+                return None
+
+            return submit_multipart()
         return self._socket._routed_admission.submit_send(
             self._routing_id, payload
         )
@@ -575,7 +600,6 @@ class _RoutedAsyncSocket:
             admission = RoutedSendOwner(
                 self,
                 role,
-                self._outbound_record_attempt_gate,
                 read_request_timeout,
             )
         except Exception:
@@ -587,12 +611,7 @@ class _RoutedAsyncSocket:
         admission = getattr(self, "_routed_admission", None)
         if admission is None:
             return super().close()
-        try:
-            admission.begin_close()
-            super().close()
-        except Exception:
-            admission.rollback_close()
-            raise
+        super().close()
         admission.finish_close()
 
 

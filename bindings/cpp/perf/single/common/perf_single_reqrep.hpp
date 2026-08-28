@@ -48,10 +48,10 @@ inline detached_async_task_t observe_request_completion (
 {
     try {
         std::vector<zlink::message_t> parts = co_await std::move (result_);
-        if (!parts.empty ()) {
+        if (const zlink::message_t *payload = measurement_payload_part (parts)) {
             perf_single_metric::header_t header;
             if (perf_single_metric::decode_payload_header (
-                  parts.back ().data (), parts.back ().size (), &header)
+                  payload->data (), payload->size (), &header)
                 && perf_single_metric::is_expected (
                   header, state_->run_id, perf_single_metric::phase_active,
                   state_->msg_size)) {
@@ -157,9 +157,11 @@ inline async_task_t<bool> run_reqrep_pattern (const reqrep_config_t &config_,
             }
             if (received.parts ().empty ())
                 continue;
-            if (is_stop_token_message (received.parts ().front ()))
+            if (received.parts ().size () == 1
+                && is_stop_token_message (received.parts ().front ()))
                 return;
-            if (!received.request_seq ().has_value ())
+            if (!received.request_seq ().has_value ()
+                || !measurement_parts_valid (received.parts ()))
                 continue;
             try {
                 zlink::message_t &part = received.parts ().front ();
@@ -169,7 +171,12 @@ inline async_task_t<bool> run_reqrep_pattern (const reqrep_config_t &config_,
                   + std::chrono::milliseconds (drain_timeout_ms);
                 while (!replied && std::chrono::steady_clock::now () < retry_deadline) {
                     try {
-                        std::move (received.reply ().message (part)).submit ();
+                        if (measurement_part_count () == 2) {
+                            zlink::message_t tail = message_from_payload (NULL, 0);
+                            std::move (received.reply ().message (part)).message (tail).submit ();
+                        } else {
+                            std::move (received.reply ().message (part)).submit ();
+                        }
                         replied = true;
                     }
                     catch (const zlink::binding_error_t &err) {
@@ -223,14 +230,20 @@ inline async_task_t<bool> run_reqrep_pattern (const reqrep_config_t &config_,
             }
             state->in_flight.fetch_add (1, std::memory_order_release);
             try {
-                zlink::async_result_t<std::vector<zlink::message_t>> result =
-                  config_.routed_request
-                    ? client.sock ().request (
-                        server_rid, part,
-                        std::chrono::milliseconds (request_timeout_ms))
-                    : client.sock ().request (
-                        part, std::chrono::milliseconds (request_timeout_ms));
-                observe_request_completion (std::move (result), state);
+                const std::chrono::milliseconds timeout (request_timeout_ms);
+                if (measurement_part_count () == 2) {
+                    zlink::message_t tail = message_from_payload (NULL, 0);
+                    if (config_.routed_request)
+                        observe_request_completion (
+                          client.sock ().request (server_rid, part, tail, timeout), state);
+                    else
+                        observe_request_completion (client.sock ().request (part, tail, timeout), state);
+                } else {
+                    if (config_.routed_request)
+                        observe_request_completion (client.sock ().request (server_rid, part, timeout), state);
+                    else
+                        observe_request_completion (client.sock ().request (part, timeout), state);
+                }
                 ++seq;
             }
             catch (const zlink::submit_error_t &err) {

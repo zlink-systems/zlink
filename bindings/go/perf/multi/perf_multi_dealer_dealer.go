@@ -73,13 +73,14 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 			if !ok {
 				break
 			}
-			part, partErr := received.SinglePartOrError()
+			parts := received.Parts()
+			if len(parts) == 1 && perfcommon.IsStopTokenMessage(parts[0]) {
+				stopRequested = true
+				_ = received.Close()
+				break
+			}
+			part, partErr := perfcommon.MeasurementPayload(parts)
 			if partErr == nil {
-				if perfcommon.IsStopTokenMessage(part) {
-					stopRequested = true
-					_ = received.Close()
-					break
-				}
 				if latencyStride <= 1 {
 					now := time.Now()
 					if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, cfg.msgSize, perfcommon.PhaseActive, now); ok && now.After(window.ActiveAt) && now.Before(window.StopAt) {
@@ -260,12 +261,20 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 			if !now.Before(window.StopAt) {
 				break
 			}
-			sent, sendErr := perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
-				if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
-					return client.socket.Send().Message(message).Submit(context.Background())
-				}
-				return client.socket.Send().MoveMessage(message).Submit(context.Background())
-			})
+			var sent bool
+			var sendErr error
+			if perfcommon.MeasurementPartCount() == 2 {
+				message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
+				sendErr = perfcommon.SubmitMeasurementRouted(client.socket.Send(), message)
+				sent = sendErr == nil
+			} else {
+				sent, sendErr = perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
+					if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
+						return client.socket.Send().Message(message).Submit(context.Background())
+					}
+					return client.socket.Send().MoveMessage(message).Submit(context.Background())
+				})
+			}
 			if sendErr == nil && sent {
 				if pending[i] {
 					pending[i] = false

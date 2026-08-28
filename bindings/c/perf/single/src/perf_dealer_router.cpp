@@ -120,8 +120,7 @@ int recv_router_header_flags (void *router_,
         return -1;
     }
 
-    if (!source_rid || source_rid->size == 0 || request_seq != 0
-        || has_more != ZLINK_PART_FINAL) {
+    if (!source_rid || source_rid->size == 0 || request_seq != 0) {
         if (bench_debug_enabled ()) {
             std::cerr << "[perf-dealer-router] invalid routed recv"
                       << " rid_size=" << static_cast<int> (source_rid ? source_rid->size : 0)
@@ -134,8 +133,18 @@ int recv_router_header_flags (void *router_,
 
     const size_t actual_size = zlink_msg_size (&part);
     if (is_stop_token (zlink_msg_data (&part), actual_size)) {
+        if (has_more != ZLINK_PART_FINAL) {
+            zlink_msg_close (&part);
+            return -1;
+        }
         zlink_msg_close (&part);
         return 2; // stop token
+    }
+    if (!perf_zlink_recv_measurement_tail (
+          router_, has_more, static_cast<zlink_recv_flags_t> (flags_),
+          perf_zlink_recv_next_router)) {
+        zlink_msg_close (&part);
+        return -1;
     }
     const bool size_ok = actual_size == payload_size_;
     bool header_ok = false;
@@ -207,7 +216,7 @@ bool send_dealer_samples (void *sender_,
         if (!payload_->empty ())
             std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
 
-        if (perf_zlink_send_parts (sender_, &part, 1, ZLINK_SEND_FLAGS_NONE) != 0) {
+        if (perf_zlink_send_measurement_parts (sender_, &part, ZLINK_SEND_FLAGS_NONE) != 0) {
             const int err = zlink_errno ();
             if (bench_debug_enabled ()) {
                 std::cerr << "[perf-dealer-router] send failed err=" << err << std::endl;
@@ -246,7 +255,7 @@ int send_dealer_probe_once (void *sender_,
         std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
     }
 
-    if (perf_zlink_send_parts (sender_, &part, 1, ZLINK_DONTWAIT) == 0)
+    if (perf_zlink_send_measurement_parts (sender_, &part, ZLINK_DONTWAIT) == 0)
         return 1;
 
     const int err = zlink_errno ();

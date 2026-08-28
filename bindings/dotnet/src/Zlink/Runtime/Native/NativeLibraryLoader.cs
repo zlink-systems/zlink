@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -11,7 +10,6 @@ internal static class NativeLibraryLoader
     private const string LinuxSoname = "libzlink.so.0";
 
     private static readonly object Sync = new();
-    private static readonly ConcurrentDictionary<string, bool> ExportCache = new();
     private static IntPtr _handle = IntPtr.Zero;
     private static bool _resolverInstalled;
     private static bool _exportsValidated;
@@ -27,7 +25,7 @@ internal static class NativeLibraryLoader
     internal static void EnsureLoaded()
     {
         EnsureResolverInstalled();
-        if (_handle != IntPtr.Zero)
+        if (Volatile.Read(ref _handle) != IntPtr.Zero)
             return;
 
         lock (Sync)
@@ -48,13 +46,13 @@ internal static class NativeLibraryLoader
             }
 
             throw new DllNotFoundException(
-                "The packaged Core 0.13.2 runtime was not found. Set ZLINK_LIBRARY_PATH only when testing an approved Core 0.13.2 runtime directly.");
+                "The packaged Core 0.14.0 runtime was not found. Set ZLINK_LIBRARY_PATH only when testing an approved Core 0.14.0 runtime directly.");
         }
     }
 
     private static void EnsureResolverInstalled()
     {
-        if (_resolverInstalled)
+        if (Volatile.Read(ref _resolverInstalled))
             return;
 
         lock (Sync)
@@ -63,7 +61,7 @@ internal static class NativeLibraryLoader
                 return;
             NativeLibrary.SetDllImportResolver(typeof(NativeLibraryLoader).Assembly,
                 Resolve);
-            _resolverInstalled = true;
+            Volatile.Write(ref _resolverInstalled, true);
         }
     }
 
@@ -109,7 +107,7 @@ internal static class NativeLibraryLoader
                 nameof(symbol));
 
         EnsureLoaded();
-        return ExportCache.GetOrAdd(symbol, HasLoadedExport);
+        return HasLoadedExport(symbol);
     }
 
     internal static List<string> GetMissingExports(IEnumerable<string> symbols)

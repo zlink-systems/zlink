@@ -49,6 +49,7 @@ else
   export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
 fi
 source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
+export ZLINK_CORE_INCLUDE_DIR ZLINK_CORE_LIB_DIR
 source "${ROOT_DIR}/require_java22.sh"
 VERSION_FILE="${REPO_DIR}/VERSION"
 CORE_VERSION="$(awk -F= '/^LIBZLINK_VERSION=/{print $2}' "${VERSION_FILE}")"
@@ -59,6 +60,7 @@ TRANSPORTS=""
 MSG_SIZES="${PERF_MSG_SIZES:-64,256,1024,65536,131072,262144}"
 RUNS=1
 DURATION="${PERF_SINGLE_DURATION_SECONDS:-${PERF_DURATION_SECONDS:-5}}"
+PART_COUNT="${PERF_PART_COUNT:-2}"
 RESULTS_TAG="${PERF_RESULTS_TAG:-}"
 BUILD_DIR=""
 OUTPUT_PATH=""
@@ -96,6 +98,7 @@ Options:
   --msg-sizes LIST       Payload sizes.
   --runs N               Iterations per pattern/transport/size.
   --duration N           Active duration seconds.
+  --part-count N         Application frame count per measured message (1 or 2; default: 2).
   --build-dir PATH       Build directory override.
   --reuse-build          Reuse existing installDist output.
   --clean-build          Delete build dir before installDist.
@@ -130,6 +133,7 @@ while [[ $# -gt 0 ]]; do
     --msg-sizes) MSG_SIZES="${2:-}"; shift ;;
     --runs) RUNS="${2:-}"; shift ;;
     --duration) DURATION="${2:-}"; shift ;;
+    --part-count) PART_COUNT="${2:-}"; shift ;;
     --build-dir) BUILD_DIR="${2:-}"; shift ;;
     --reuse-build) REUSE_BUILD=1 ;;
     --clean-build) CLEAN_BUILD=1 ;;
@@ -154,6 +158,12 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
+  echo "--part-count must be 1 or 2." >&2
+  exit 1
+fi
+export PERF_PART_COUNT="${PART_COUNT}"
 
 failure_reason_from_output() {
   local output_text="$1"
@@ -221,7 +231,7 @@ for numeric_opt in SNDTIMEO_MS RCVTIMEO_MS TRANSPORT_TRANSITION_MS; do
 done
 
 if [[ "${PATTERN}" == "ALL" ]]; then
-  PATTERN="PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,DEALER_ROUTER_REQREP,ROUTER_ROUTER,ROUTER_ROUTER_REQREP,SPOT"
+  PATTERN="PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,DEALER_ROUTER_REQREP,ROUTER_ROUTER,ROUTER_ROUTER_REQREP"
 fi
 
 detect_platform() {
@@ -462,8 +472,8 @@ for pattern in "${patterns[@]}"; do
         cmd+=(--sndtimeo "${SNDTIMEO_MS}" --rcvtimeo "${RCVTIMEO_MS}")
         if command -v timeout >/dev/null 2>&1; then
           timeout_seconds="$(case_timeout_seconds "${pattern}")"
+          status=0
           output="$(timeout "${timeout_seconds}s" "${cmd[@]}" 2>&1)" || status=$?
-          status="${status:-0}"
           if [[ "${status}" -ne 0 ]]; then
             if [[ "${status}" -eq 124 ]]; then
               record_failure "${pattern}" "${transport}" "${size}" "${run}" \
@@ -554,12 +564,14 @@ else
 fi
 
 python_status=0
+commit_sha="$(git -C "${REPO_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 python3 - "${ROOT_DIR}/report_common.py" "${tmp_metrics}" "${tmp_failures}" "${tmp_auto_hwm}" "${tmp_plan}" "${report}" "${PATTERN}" "${MSG_SIZES}" \
   "${RUNS}" "${DURATION}" "${TIMEOUT_SECONDS}" "${RESULTS_TAG}" "${PIN_CPU}" "${expected_result_lines}" "${actual_result_lines}" \
   "${IO_THREADS}" "${HWM}" "${SEND_HWM}" "${RECV_HWM}" "${SNDTIMEO_MS}" \
   "${RCVTIMEO_MS}" "${SNDBUF}" "${RCVBUF}" \
   "${CTX_AUTO_HWM_ENABLE_DISPLAY}" "${CTX_AUTO_HWM_PROFILE}" "${OUTPUT_PATH}" \
-  "${PERF_FAIL_FAST:-0}" <<'PY' || python_status=$?
+  "${PERF_FAIL_FAST:-0}" "${commit_sha}" "${ZLINK_CORE_SOURCE}" "${CORE_VERSION}" \
+  "${CORE_RUNTIME}" <<'PY' || python_status=$?
 import csv
 import math
 import sys
@@ -572,6 +584,7 @@ from pathlib import Path
     results_tag, pin_cpu, expected_result_lines, actual_result_lines,
     io_threads, hwm, send_hwm, recv_hwm, sndtimeo_ms, rcvtimeo_ms, sndbuf,
     rcvbuf, ctx_auto_hwm_enable, ctx_auto_hwm_profile, output_path, fail_fast,
+    commit_sha, core_source, core_version, core_runtime,
 ) = sys.argv[1:]
 sys.path.insert(0, str(Path(helper_path).resolve().parent))
 from report_common import load_failures
@@ -792,6 +805,11 @@ def emit_auto_hwm(pattern):
 PATTERN_SEPARATOR = "=" * 79
 
 # Leading blank line then start options (matches C print("\n## Effective ...")).
+emit("")
+emit(f"META,commit,{commit_sha}")
+emit(f"META,core_source,{core_source}")
+emit(f"META,core_version,{core_version}")
+emit(f"META,core_runtime,{core_runtime}")
 emit("")
 emit_options("start")
 

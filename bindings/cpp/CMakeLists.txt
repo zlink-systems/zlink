@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 0.13.2 LANGUAGES CXX)
+project(zlink_cpp VERSION 0.14.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -11,7 +11,7 @@ set(ZLINK_CORE_DIR "${ZLINK_REPO_ROOT_DIR}/core" CACHE PATH "Path to zlink core"
 set(ZLINK_CPP_CORE_BUILD_DIR "${ZLINK_REPO_ROOT_DIR}/core/build" CACHE PATH
     "Path to an existing zlink core build directory")
 set(ZLINK_CPP_CORE_PACKAGE_PREFIX "" CACHE PATH
-    "Path to an installed Zlink 0.13.2 Core release prefix")
+    "Path to an installed Zlink 0.14.0 Core release prefix")
 option(ZLINK_CPP_USE_CORE_BUILD_RUNTIME
   "Require the targeted core/build runtime instead of an installed Core package"
   OFF)
@@ -40,6 +40,11 @@ function(zlink_cpp_resolve_core_build_layout out_dir_var out_lib_var)
   set(_candidate_dirs
     "${ZLINK_CPP_CORE_BUILD_DIR}/lib"
     "${ZLINK_CPP_CORE_BUILD_DIR}/bin")
+  # find_file caches its result. Re-resolve when a local validation switches
+  # ZLINK_CPP_CORE_BUILD_DIR so an existing build tree cannot retain a stale
+  # release runtime from the previous prefix.
+  unset(_core_lib CACHE)
+  unset(_core_lib)
   find_file(_core_lib
     NAMES "${_libname}"
     PATHS ${_candidate_dirs}
@@ -213,7 +218,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
 
   message(FATAL_ERROR
     "No zlink core runtime found for this platform. "
-    "Expected an installed Core 0.13.2 package, an existing libzlink target, "
+    "Expected an installed Core 0.14.0 package, an existing libzlink target, "
     "or a targeted source build under ${ZLINK_CPP_CORE_BUILD_DIR}.")
 endfunction()
 
@@ -253,6 +258,7 @@ add_library(zlink_cpp STATIC
   src/Runtime/Eventing/monitor.cpp
   src/Runtime/Eventing/timers.cpp
   src/Runtime/Messaging/message.cpp
+  src/Runtime/Messaging/async_continuation_dispatcher.cpp
   src/Runtime/Messaging/received.cpp
   src/Runtime/Messaging/reply_operations.cpp
   src/Runtime/Messaging/request_reply.cpp
@@ -526,6 +532,20 @@ if(ZLINK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_contract_exact_request_target PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
   )
+
+  add_cpp_binding_executable(
+    test_cpp_send_close_stress
+    tests/stress/test_cpp_send_close_stress.cpp
+  )
+  if(ZLINK_CPP_REGISTER_CTEST)
+    add_test(NAME test_cpp_send_close_stress
+      COMMAND /bin/bash -lc "$<TARGET_FILE:test_cpp_send_close_stress>")
+    set_tests_properties(test_cpp_send_close_stress PROPERTIES
+      LABELS "stress"
+      TIMEOUT 300
+    )
+    configure_cpp_binding_runtime(test_cpp_send_close_stress)
+  endif()
 
   add_executable(
     test_cpp_contract_common_header_version

@@ -17,8 +17,6 @@ import java.util.List;
 
 final class NativePubSocket extends NativeSocketBase implements PubSocket {
     private final PubSocketOptions options = ContractAccess.pubSocketOptions(this);
-    private final OutboundRecordAttemptGate outboundRecordAttempts =
-        new OutboundRecordAttemptGate();
     private TopicSendInvoker cachedTopicInvoker;
 
     NativePubSocket(Context ctx) {
@@ -58,8 +56,7 @@ final class NativePubSocket extends NativeSocketBase implements PubSocket {
 
         @Override
         public void submit(List<Message> parts, SendFlags flags) {
-            SendResult result = outboundRecordAttempts.call(() ->
-                runtime().publishNoWaitResult(topicId, parts));
+            SendResult result = runtime().publishNoWaitResult(topicId, parts);
             if (result == SendResult.SENT)
                 return;
             int errno = Native.errno();
@@ -71,7 +68,7 @@ final class NativePubSocket extends NativeSocketBase implements PubSocket {
 
     @Override
     public void close() {
-        outboundRecordAttempts.run(runtime()::close);
+        runtime().close();
     }
 
     @Override public PubSocketOptions options() { return options; }

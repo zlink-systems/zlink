@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 
 CORE_VERSION_OPTION=""
+PART_COUNT="${PERF_PART_COUNT:-2}"
 SCRIPT_ARGUMENTS=("$@")
 FORWARD_ARGUMENTS=()
 for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_index)); do
@@ -19,6 +20,19 @@ for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_i
       ;;
     --core-version=*)
       requested_core_version="${SCRIPT_ARGUMENTS[argument_index]#--core-version=}"
+      ;;
+    --part-count)
+      if (( argument_index + 1 >= ${#SCRIPT_ARGUMENTS[@]} )); then
+        echo "Error: --part-count requires 1 or 2." >&2
+        exit 1
+      fi
+      ((++argument_index))
+      PART_COUNT="${SCRIPT_ARGUMENTS[argument_index]}"
+      continue
+      ;;
+    --part-count=*)
+      PART_COUNT="${SCRIPT_ARGUMENTS[argument_index]#--part-count=}"
+      continue
       ;;
     *)
       FORWARD_ARGUMENTS+=("${SCRIPT_ARGUMENTS[argument_index]}")
@@ -36,6 +50,11 @@ for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_i
   CORE_VERSION_OPTION="${requested_core_version}"
 done
 set -- "${FORWARD_ARGUMENTS[@]+"${FORWARD_ARGUMENTS[@]}"}"
+if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
+  echo "Error: --part-count must be 1 or 2." >&2
+  exit 1
+fi
+export PERF_PART_COUNT="${PART_COUNT}"
 
 # Use the current workspace Core by default. An explicit --core-version selects
 # the downloaded release package for that version instead.
@@ -59,6 +78,7 @@ for arg in "$@"; do
     -h|--help)
       echo "Note: --core-version VERSION downloads and uses a released Core runtime."
       echo "      Without it, the current workspace Core (core/build) is used by default."
+      echo "      --part-count N selects 1 or 2 application frames (default: 2)."
       ;;
   esac
 done
@@ -112,5 +132,8 @@ echo "Perf runtime libzlink: $(realpath "$CORE_RUNTIME")"
 echo "Perf Node runtime: ${NODE_VERSION}"
 export ZLINK_PERF_RUNTIME_LIBZLINK
 ZLINK_PERF_RUNTIME_LIBZLINK="$(realpath "$CORE_RUNTIME")"
+export PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE}"
+export PERF_CORE_VERSION="${ZLINK_CORE_VERSION}"
+export PERF_CORE_RUNTIME="${ZLINK_PERF_RUNTIME_LIBZLINK}"
 
 node dist-tools/perf/single/run_benchmarks.js "$@"

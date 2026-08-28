@@ -3,9 +3,12 @@
 
 mod test_support;
 
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::task::Poll;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zlink::{
     Context, Message, Received, RecvFlags, RoutingId, SendFlags, SocketMonitor, SubscriptionEvent,
@@ -277,6 +280,80 @@ fn tcp_endpoint() -> String {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     format!("tcp://127.0.0.1:{}", port)
+}
+
+#[test]
+fn stream_backpressure_is_held_by_core_until_async_admission() {
+    let ctx = Context::new().unwrap();
+    let endpoint = tcp_endpoint();
+    let stream = ctx.stream_socket().unwrap();
+
+    const PAYLOAD_SIZE: usize = 4096;
+    stream
+        .common_options()
+        .set_send_high_water_mark(10 * (PAYLOAD_SIZE as u64 + 64))
+        .unwrap();
+    stream
+        .common_options()
+        .set_receive_timeout(Duration::from_secs(5))
+        .unwrap();
+    stream.bind(&endpoint).unwrap();
+
+    let address = endpoint.strip_prefix("tcp://").unwrap();
+    let mut raw = std::net::TcpStream::connect(address).unwrap();
+    raw.write_all(b"route").unwrap();
+
+    let mut received = Received::empty();
+    assert!(stream.recv(&mut received, RecvFlags::NONE).unwrap());
+    let target = *received.routing_id().expect("missing STREAM routing id");
+
+    let payload = vec![0x73; PAYLOAD_SIZE];
+    for _ in 0..4096 {
+        let message = Message::try_from(payload.as_slice()).unwrap();
+        let mut future = Box::pin(
+            stream
+                .send(&target)
+                .message(message)
+                .timeout(Duration::from_secs(5))
+                .submit(),
+        );
+        match test_support::poll_once(&mut future) {
+            Poll::Ready(result) => {
+                result.unwrap();
+            }
+            Poll::Pending => {
+                let stop = Arc::new(AtomicBool::new(false));
+                let reader_stop = Arc::clone(&stop);
+                raw.set_read_timeout(Some(Duration::from_millis(50)))
+                    .unwrap();
+                let mut reader = raw.try_clone().unwrap();
+                let drain = thread::spawn(move || {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    let mut buffer = [0u8; 64 * 1024];
+                    while !reader_stop.load(Ordering::Acquire) && Instant::now() < deadline {
+                        match reader.read(&mut buffer) {
+                            Ok(0) => break,
+                            Ok(_) => {}
+                            Err(error)
+                                if matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::WouldBlock
+                                        | std::io::ErrorKind::TimedOut
+                                ) => {}
+                            Err(error) => panic!("STREAM drain error: {error}"),
+                        }
+                    }
+                });
+
+                test_support::block_on(future).unwrap();
+                stop.store(true, Ordering::Release);
+                drain.join().unwrap();
+                return;
+            }
+        }
+    }
+
+    panic!("STREAM send did not enter Core's pending queue");
 }
 
 #[test]

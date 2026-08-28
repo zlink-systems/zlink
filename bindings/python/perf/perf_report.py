@@ -344,6 +344,21 @@ def render_single_report(args):
     result_lines = []
     failures = []
 
+    lines.extend(
+        [
+            f"META,os,{platform.system()} {platform.release()}",
+            f"META,cpu,{_cpu_name()}",
+            f"META,cores,{os.cpu_count() or 0}",
+            "META,build,Release",
+            f"META,commit,{_git_commit()}",
+            f"META,core_source,{os.environ.get('PERF_CORE_SOURCE', 'unknown')}",
+            f"META,core_version,{os.environ.get('PERF_CORE_VERSION', 'unknown')}",
+            f"META,core_runtime,{os.environ.get('PERF_CORE_RUNTIME', 'unknown')}",
+            f"META,timestamp,{datetime.now().astimezone().isoformat(timespec='seconds')}",
+            f"META,runs,{runs}",
+            "",
+        ]
+    )
     lines.extend(_single_effective_options(args, "start"))
     for pattern_index, pattern in enumerate(patterns):
         if pattern_index:

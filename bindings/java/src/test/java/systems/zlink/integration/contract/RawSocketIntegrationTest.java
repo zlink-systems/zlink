@@ -3,6 +3,7 @@
 package systems.zlink.integration.contract;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.Context;
@@ -39,6 +40,27 @@ public class RawSocketIntegrationTest {
                 assertArrayEquals(payload,
                     received.singlePartOrThrow().toByteArray());
             }
+        }
+    }
+
+    @Test
+    public void immediateAdmissionCompletesStageBeforeSubmitReturns() {
+        TestSupport.assumeNative();
+
+        try (Context context = Zlink.createContext();
+             PairSocket sender = context.createPairSocket();
+             PairSocket receiver = context.createPairSocket();
+             Message message = Message.from("immediate")) {
+            String endpoint = TestSupport.inprocEndpoint(
+                "immediate-admission");
+            sender.bind(endpoint);
+            receiver.connect(endpoint);
+
+            CompletableFuture<Void> completion = sender.send()
+                .message(message).submit().toCompletableFuture();
+            assertTrue(completion.isDone(),
+                "op_id == 0 admission must complete inline");
+            assertFalse(completion.isCompletedExceptionally());
         }
     }
 

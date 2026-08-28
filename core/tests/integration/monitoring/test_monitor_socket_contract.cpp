@@ -1801,13 +1801,14 @@ void test_monitor_handler_attach_with_queued_events_and_self_close ()
           zlink_socket_monitor_handler (monitor, &self_close_monitor_handler, &probe));
 
         void *watch = zlink_stopwatch_start ();
-        while (probe.monitor.load (std::memory_order_acquire) != NULL) {
+        while (probe.close_rc.load (std::memory_order_acquire) == -1) {
             msleep (1);
             TEST_ASSERT_LESS_OR_EQUAL_MESSAGE (
               3000000UL, zlink_stopwatch_intermediate (watch),
-              "Timeout waiting for the self-closing monitor callback");
+              "Timeout waiting for the self-closing monitor result");
         }
         zlink_stopwatch_stop (watch);
+        TEST_ASSERT_NULL (probe.monitor.load (std::memory_order_acquire));
         TEST_ASSERT_EQUAL_INT (static_cast<int> (ZLINK_CLOSE_OK),
                                probe.close_rc.load (std::memory_order_acquire));
         //  The dispatch task must be gone with the state; give a stray tick

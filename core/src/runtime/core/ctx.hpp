@@ -28,6 +28,7 @@ namespace zlink
 class object_t;
 class io_thread_t;
 class socket_base_t;
+class socket_public_handle_t;
 class reaper_t;
 class pipe_t;
 class control_runtime_t;
@@ -67,6 +68,7 @@ class ctx_t ZLINK_FINAL
 
     //  Create and destroy a socket.
     zlink::socket_base_t *create_socket (int type_);
+    void *register_public_socket_handle (zlink::socket_base_t *socket_);
     void destroy_socket (zlink::socket_base_t *socket_);
     int wait_for_socket_removal (const zlink::socket_base_t *socket_, int timeout_ms_);
     int close_socket_and_wait (zlink::socket_base_t *&socket_, int timeout_ms_);
@@ -180,6 +182,7 @@ class ctx_t ZLINK_FINAL
     //  a memory barrier to ensure that all CPU cores see the same data.
     mutex_t _slot_sync;
     ctx_socket_registry_t _socket_registry;
+    std::vector<socket_public_handle_t *> _public_socket_handles;
 
     //  Mailbox for zlink_ctx_term thread.
     mailbox_t _term_mailbox;
@@ -204,6 +207,18 @@ class ctx_t ZLINK_FINAL
     int _io_thread_count;
 
     ctx_auto_hwm_state_t _auto_hwm;
+    // Scheduling generations, the applied budget snapshot and task identity
+    // are control-plane state. Keep them independent from the socket slot
+    // registry so pipe/monitor callbacks never need _slot_sync merely to
+    // request a replan.
+    mutable mutex_t _auto_hwm_state_sync;
+    // Serializes complete replans without holding _slot_sync across socket
+    // monitor/option locks. It is a control-path lock and never participates
+    // in message admission.
+    mutex_t _auto_hwm_recalc_sync;
+    // Protected by _auto_hwm_state_sync. Once set, teardown must never publish
+    // another context-owned auto-HWM task.
+    bool _auto_hwm_recalc_stopped;
     ctx_physical_queue_registry_t _physical_queue_registry;
 
     //  Does context wait (possibly forever) on termination?

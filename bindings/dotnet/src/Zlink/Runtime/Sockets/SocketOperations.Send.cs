@@ -269,6 +269,9 @@ internal sealed class RoutedAsyncSendOperation : RoutedSendOperation,
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
         _submission.MarkSubmittedAfterValidation();
+        if (_parts.IsSingle)
+            return _socket.Kernel.SendCompletion.SendSingleAsync(
+                _routingId, _parts.Single, ct);
         return _socket.Kernel.SendCompletion.SendAsync(_routingId,
             _parts.Parts, ct);
     }

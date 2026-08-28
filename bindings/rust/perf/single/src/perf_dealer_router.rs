@@ -90,7 +90,7 @@ fn main() {
     let active_deadline = std::time::Instant::now() + active;
     let send_thread = std::thread::spawn(move || {
         common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
-            match common::block_on(dealer.send().message(msg).submit()) {
+            match perf_submit_measurement!(dealer.send(), msg) {
                 Ok(()) => true,
                 Err(err) if err.code() == SubmitResult::NotConnected => false,
                 Err(err) if common::is_single_send_retry_error(&err) => false,
@@ -98,7 +98,7 @@ fn main() {
             }
         });
         common::send_stop_token(|msg| {
-            common::block_on(dealer.send().message(msg).submit()).map(|()| true)
+            perf_submit_measurement!(dealer.send(), msg).map(|()| true)
         });
     });
 

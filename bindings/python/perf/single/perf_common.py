@@ -76,6 +76,24 @@ def _env_int(name, default):
         return default
 
 
+def measurement_part_count():
+    """Measured non-STREAM messages default to payload plus an empty tail."""
+    return 1 if os.environ.get("PERF_PART_COUNT") == "1" else 2
+
+
+def measurement_parts(payload):
+    return (payload,) if measurement_part_count() == 1 else (payload, b"")
+
+
+def measurement_payload(parts):
+    """Validate the benchmark payload + empty-tail wire shape and return payload."""
+    if len(parts) != measurement_part_count():
+        return None
+    if measurement_part_count() == 2 and len(parts[1]) != 0:
+        return None
+    return parts[0]
+
+
 def perf_context():
     zlink_mod = _require_zlink()
     ctx = zlink_mod.create_context()
@@ -283,7 +301,10 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
                     )
                     if recv_method(storage, flags=flags):
                         parts = storage.to_bytes_list()
-                        data = parts[-1] if parts else b""
+                        if len(parts) == 1 and is_stop_token(parts[0]):
+                            stop_received = True
+                            break
+                        data = measurement_payload(parts)
                     else:
                         wait_socket_readable_until(poller, poll_events, stop_wait_end)
                         break
@@ -296,10 +317,7 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
                     stop_received = True
                     break
                 flags = dont_wait
-                if len(data) == len(stop_view) and data == stop_view:
-                    stop_received = True
-                    break
-                if len(data) != msg_size or len(data) < HEADER_SIZE:
+                if data is None or len(data) != msg_size or len(data) < HEADER_SIZE:
                     continue
                 magic, hdr_run_id, phase, hdr_msg_size, _seq, sent_ts_ns = (
                     struct.unpack_from(HEADER_FORMAT, data, 0)
@@ -378,24 +396,32 @@ def _submit_backpressured_result():
     return _SUBMIT_BACKPRESSURED
 
 
-def send_nonblocking(sock, payload, *, routing_id=None):
+def send_nonblocking(sock, payload, *, routing_id=None, measurement=True):
     flag = _dont_wait_flag()
     try:
         if routing_id is None:
             op = sock.send()
         else:
             op = sock.send(routing_id)
-        return bool(op.message(payload).flags(flag).submit())
+        if measurement:
+            op.messages(*measurement_parts(payload))
+        else:
+            op.message(payload)
+        return bool(op.flags(flag).submit())
     except _submit_error_type() as exc:
         if exc.result == _submit_backpressured_result():
             return False
         raise
 
 
-async def send_routed(sock, payload, *, routing_id=None):
+async def send_routed(sock, payload, *, routing_id=None, measurement=True):
     try:
         op = sock.send() if routing_id is None else sock.send(routing_id)
-        await op.message(payload).submit()
+        if measurement:
+            op.messages(*measurement_parts(payload))
+        else:
+            op.message(payload)
+        await op.submit()
         return True
     except _submit_error_type() as exc:
         if exc.result == _submit_backpressured_result():
@@ -403,15 +429,15 @@ async def send_routed(sock, payload, *, routing_id=None):
         raise
 
 
-def publish_nonblocking(sock, topic, payload):
+def publish_nonblocking(sock, topic, payload, *, measurement=True):
     flag = _dont_wait_flag()
     try:
-        return bool(
-            sock.publish(topic)
-            .message(payload)
-            .flags(flag)
-            .submit()
-        )
+        op = sock.publish(topic)
+        if measurement:
+            op.messages(*measurement_parts(payload))
+        else:
+            op.message(payload)
+        return bool(op.flags(flag).submit())
     except _submit_error_type() as exc:
         if exc.result == _submit_backpressured_result():
             return False
@@ -451,7 +477,7 @@ async def single_routing_probe(sender, receiver, payload, *, run_id, msg_size,
     probe = stamp_payload(payload, phase=1, run_id=run_id, seq=0)
     try:
         while time.perf_counter() < deadline:
-            await send_routed(sender, probe, routing_id=routing_id)
+            await send_routed(sender, probe, routing_id=routing_id, measurement=False)
             probe_deadline = min(deadline, time.perf_counter() + 0.05)
             while time.perf_counter() < probe_deadline:
                 received = recv_nonblocking(receiver)

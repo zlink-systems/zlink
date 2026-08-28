@@ -1228,7 +1228,7 @@ def detect_special_status(stdout, expected_lib, expected_pattern, expected_trans
 
 def pattern_default_clients(pattern_name, transport=None):
     if pattern_name in STREAM_VARIANT_PATTERNS:
-        base = 10000
+        base = 100
         tr = (transport or "").strip().lower()
         if tr in ("tls", "ws", "wss"):
             non_tcp_cap = max(
@@ -3612,7 +3612,7 @@ def resolve_clients_meta(selected_patterns):
     if not selected_patterns or not all(is_pattern(p) for p in selected_patterns):
         return ""
 
-    stream_default = 10000
+    stream_default = 100
     general_default = 100
     if len(selected_patterns) == 1 and selected_patterns[0] in STREAM_VARIANT_PATTERNS:
         return str(stream_default)
@@ -3734,7 +3734,7 @@ def build_effective_option_items(args, selected_patterns):
         timeout_override = parse_env_int("PERF_TIMEOUT_SECONDS", 0)
         service_clients = parse_env_int("PERF_SERVICE_CLIENTS", 0)
         default_clients = 100
-        default_stream_clients = 10000
+        default_stream_clients = 100
         explicit_server_io = _read_env_value("PERF_SERVER_IO_THREADS") or ""
         explicit_client_io = _read_env_value("PERF_CLIENT_IO_THREADS") or ""
         explicit_stream_server_io = (

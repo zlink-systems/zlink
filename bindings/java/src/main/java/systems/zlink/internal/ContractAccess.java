@@ -58,8 +58,6 @@ public final class ContractAccess {
     public interface RoutingIdAccess {
         RoutingId fromTrusted(byte[] value);
 
-        RoutingId tryFromInlineCached(int size, long lo, long hi);
-
         byte[] trustedBytes(RoutingId routingId);
     }
 
@@ -395,11 +393,6 @@ public final class ContractAccess {
 
     public static RoutingId routingIdFromTrusted(byte[] value) {
         return routingIdAccess().fromTrusted(value);
-    }
-
-    public static RoutingId routingIdTryFromInlineCached(int size, long lo,
-                                                         long hi) {
-        return routingIdAccess().tryFromInlineCached(size, lo, hi);
     }
 
     public static byte[] routingIdTrustedBytes(RoutingId routingId) {

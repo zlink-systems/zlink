@@ -25,15 +25,32 @@ bool same_pair_peer_identity (const zlink::pipe_t *first_, const zlink::pipe_t *
 
 void zlink::socket_base_t::finish_close_handoff (int handoff_timeout_ms_)
 {
-    lifecycle_coordinator ().complete_deferred_close_handoff (static_cast<mailbox_t *> (_mailbox),
-                                                              handoff_timeout_ms_);
+    lifecycle_coordinator ().complete_deferred_close_handoff (
+      static_cast<mailbox_t *> (_mailbox), this, handoff_timeout_ms_);
 
+    finish_close_reap ();
+}
+
+void zlink::socket_base_t::finish_close_reap ()
+{
     fail_all_send_pending (_ctx_terminated ? ETERM : ECANCELED);
     dispatch_send_completions (true);
+    materialize_pending_inprocs_before_reap ();
     static_cast<mailbox_t *> (_mailbox)->clear_signalers ();
 
-    _tag = 0xdeadbeef;
     send_reap (this);
+}
+
+void zlink::socket_base_t::materialize_pending_inprocs_before_reap ()
+{
+    // Async command processing is quiesced before this helper runs, and the
+    // socket has not reached the reaper yet. Materialization therefore cannot
+    // erase this socket's inproc map while it is traversed. Iterate the
+    // existing keys directly so close does not add an allocation-failure path.
+    endpoint_runtime ().inprocs.for_each_unique_endpoint (
+      [this] (const std::string &endpoint_) {
+          (void) get_ctx ()->materialize_pending_inproc (endpoint_, this);
+      });
 }
 
 int zlink::socket_base_t::get_peer_state (const void *routing_id_, size_t routing_id_size_) const
@@ -348,7 +365,12 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         const bool recalculate_application_attach =
           attach_application
           && pipe_->get_transport_lane () == transport_lane_application;
-        if (recalculate_application_attach && _auto_hwm_policy_enabled)
+        bool auto_hwm_policy_enabled = false;
+        {
+            scoped_lock_t lock (_auto_hwm_sync);
+            auto_hwm_policy_enabled = _auto_hwm_policy_enabled;
+        }
+        if (recalculate_application_attach && auto_hwm_policy_enabled)
             (void) get_ctx ()->auto_hwm_recalculate_now ();
         else
             get_ctx ()->schedule_auto_hwm_recalculate ();
@@ -395,6 +417,7 @@ int zlink::socket_base_t::setsockopt (int option_, const void *optval_, size_t o
 
     {
         socket_public_api_lock_scope_t guard (lifecycle);
+        scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
         rc = options.setsockopt (option_, optval_, optvallen_);
         if (rc == 0) {
             if (option_ == ZLINK_INTERNAL_OPT_SNDHWM)
@@ -419,7 +442,11 @@ int zlink::socket_base_t::getsockopt (int option_, void *optval_, size_t *optval
     if (!admission.acquired ())
         return -1;
 
-    if (unlikely (_ctx_terminated)) {
+    //  A poller must keep watching the mailbox after stop() publishes context
+    //  termination: process_stop() and an in-flight claimed send can still
+    //  publish the final completion there. All user-visible options retain
+    //  their ordinary ETERM boundary.
+    if (unlikely (_ctx_terminated) && option_ != ZLINK_INTERNAL_OPT_FD) {
         errno = ETERM;
         return -1;
     }
@@ -481,16 +508,21 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
         if (rc != 0 && (errno == EINTR || errno == ETERM))
             return -1;
         errno_assert (rc == 0);
+    }
 
+    //  Process readiness commands before trying pending records, but release
+    //  the query sync bit first: physical admission takes that bit itself and
+    //  would otherwise wait on this thread's own lock.
+    if (events_ & ZLINK_POLLCOMPLETION)
+        drive_send_pending ();
+
+    {
+        socket_public_api_lock_scope_t guard (lifecycle);
         //  Only a caller that asks for ZLINK_POLLCOMPLETION owns the
         //  completion drain, so only that caller runs reply handlers.
         bool completion_notified = false;
         int drained_completions = 0;
         if (events_ & ZLINK_POLLCOMPLETION) {
-            //  Admit outside the completion owner gate: admission takes the
-            //  public send scope, and nesting that inside the owner gate would
-            //  invert the lock order the poller registration path uses.
-            drive_send_pending ();
             scoped_lock_t owner_lock (_completion_owner_sync);
             const completion_drain_scope_t drain_scope (this);
             completion_notified =
@@ -530,8 +562,57 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
     }
 
     const int rc = process_commands (0, false);
-    if (rc != 0 && (errno == EINTR || errno == ETERM))
-        return -1;
+    if (unlikely (rc != 0)) {
+        if (errno == EINTR)
+            return -1;
+        if (errno == ETERM) {
+            const int terminal_errno = errno;
+            if ((events_ & ZLINK_POLLCOMPLETION) == 0)
+                return -1;
+
+            // stop() publishes context termination before its command reaches
+            // process_stop(). Resolve unclaimed sends here as well, closing
+            // that publication window without driving physical admission.
+            // Claimed sends receive the same deferred-terminal handoff used by
+            // process_stop() and will wake the still-registered mailbox fd
+            // when their attempt finishes.
+            fail_all_send_pending (ETERM);
+
+            // A POLLCOMPLETION registration remains the sole dispatch owner
+            // during context shutdown, so drain already-resolved request and
+            // send records under the same owner gate as the normal path.
+            zlink_assert (
+              _completion_poller_refs.load (std::memory_order_acquire) != 0);
+            int drained_completions = 0;
+            {
+                scoped_lock_t owner_lock (_completion_owner_sync);
+                const completion_drain_scope_t drain_scope (this);
+                _request_completion_pending.exchange (
+                  false, std::memory_order_acq_rel);
+                drained_completions = drain_request_completions ();
+                if (drained_completions < 0)
+                    return -1;
+                drained_completions += drain_send_completions ();
+            }
+            if (drained_completions > 0) {
+                *out_ = ZLINK_POLLCOMPLETION;
+                return 0;
+            }
+
+            // A claimed record can still be completing its deferred ETERM
+            // handoff. Keep the poller alive on the mailbox descriptor rather
+            // than reporting a stale completion notification or surfacing
+            // ETERM before the callback exists.
+            if (has_send_pending ()) {
+                *out_ = 0;
+                errno = terminal_errno;
+                return 0;
+            }
+
+            errno = terminal_errno;
+            return -1;
+        }
+    }
     errno_assert (rc == 0);
 
     bool completion_notified = false;

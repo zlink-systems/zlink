@@ -2,7 +2,7 @@
 
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
@@ -305,7 +305,20 @@ async function main() {
 
   // C: print_effective_options does print("\n## Effective Options ...").
   // The report file's first line is therefore an empty line.
+  let commit = 'unknown';
+  try {
+    commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: path.resolve(__dirname, '../../../..'),
+      encoding: 'utf8'
+    }).trim();
+  } catch {
+    // Keep report generation available outside a Git checkout.
+  }
   emit('');
+  emit(`META,commit,${commit}`);
+  emit(`META,core_source,${process.env.PERF_CORE_SOURCE || 'unknown'}`);
+  emit(`META,core_version,${process.env.PERF_CORE_VERSION || 'unknown'}`);
+  emit(`META,core_runtime,${process.env.PERF_CORE_RUNTIME || 'unknown'}`);
   emit(`META,node_runtime,${process.versions.node}`);
   if (process.env.ZLINK_PERF_RUNTIME_LIBZLINK) {
     emit(`META,runtime_libzlink,${process.env.ZLINK_PERF_RUNTIME_LIBZLINK}`);

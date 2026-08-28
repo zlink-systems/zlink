@@ -168,7 +168,7 @@ impl RoutedRequestFuture {
 
         let mut parts = operation.parts.into_vec();
         let callback_owner = Arc::into_raw(Arc::clone(&self.completion));
-        let result = operation.routed.with_submit_gate(|handle| {
+        let result = operation.routed.with_live_handle(|handle| {
             submit_exact_request(
                 handle,
                 role,

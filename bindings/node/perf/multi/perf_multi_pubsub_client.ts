@@ -21,6 +21,7 @@ const {
   emitMultiSocketHwmDetail,
   pollEvents,
   pollEventHas,
+  measurementPayload,
   waitForConnectionReady
 } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
@@ -113,11 +114,14 @@ async function main() {
               if (!subs[index].subscribe(received, zlink.RecvFlags.DontWait)) {
                 break;
               }
-              const data = received.singlePartOrThrow().data();
-              if (isStopTokenPayload(data, data.length)) {
+              const parts = received.parts;
+              if (parts.length === 1 && isStopTokenPayload(parts[0].data(), parts[0].data().length)) {
                 stopReceived = true;
                 continue;
               }
+              const payload = measurementPayload(parts);
+              if (!payload) throw new Error('invalid multipart PUBSUB payload');
+              const data = payload.data();
               collector.recordPayload(data, currentEpochNs());
             }
           }

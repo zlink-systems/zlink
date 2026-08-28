@@ -165,7 +165,7 @@ internal static partial class PerfRunner
         ReadOnlySpan<byte> buffer,
         SendFlags flags = SendFlags.None)
     {
-        return PerfSocketIo.Send(socket, buffer, flags);
+        return PerfSocketIo.SendMeasurement(socket, buffer, flags);
     }
 
     internal static int SendBlocking(IMessageSocket socket, byte[] buffer,
@@ -173,7 +173,7 @@ internal static partial class PerfRunner
     {
         if (buffer == null)
             throw new ArgumentNullException(nameof(buffer));
-        return PerfSocketIo.Send(socket, buffer, flags);
+        return PerfSocketIo.SendMeasurement(socket, buffer, flags);
     }
 
     internal static async Task<int> SendAsync(IDealerSocket socket, byte[] buffer,
@@ -181,7 +181,7 @@ internal static partial class PerfRunner
     {
         if (buffer == null)
             throw new ArgumentNullException(nameof(buffer));
-        return await PerfSocketIo.SendAsync(socket, buffer, flags)
+        return await PerfSocketIo.SendMeasurementAsync(socket, buffer, flags)
             .ConfigureAwait(false);
     }
 
@@ -190,7 +190,7 @@ internal static partial class PerfRunner
     {
         try
         {
-            return PerfSocketIo.Send(socket, buffer, SendFlags.DontWait) > 0;
+            return PerfSocketIo.SendMeasurement(socket, buffer, SendFlags.DontWait) > 0;
         }
         catch (ZlinkException ex)
             when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
@@ -209,7 +209,7 @@ internal static partial class PerfRunner
     {
         try
         {
-            return PerfSocketIo.Send(socket, routingId, buffer,
+            return PerfSocketIo.SendMeasurement(socket, routingId, buffer,
                 SendFlags.DontWait) > 0;
         }
         catch (ZlinkException ex)
@@ -233,7 +233,7 @@ internal static partial class PerfRunner
             // HOT PATH: C PUBSUB uses blocking publish so socket HWM applies
             // backpressure. DontWait would repeatedly allocate and discard
             // payloads while full, changing both the workload and throughput.
-            return PerfSocketIo.Publish(socket, topic, buffer) > 0;
+            return PerfSocketIo.PublishMeasurement(socket, topic, buffer) > 0;
         }
         catch (Exception ex)
         {

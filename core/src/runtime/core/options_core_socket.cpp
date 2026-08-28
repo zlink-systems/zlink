@@ -122,8 +122,6 @@ int zlink::options_setsockopt_core_socket (
             if (optvallen_ == sizeof (uint64_t)) {
                 uint64_t value = 0;
                 memcpy (&value, optval_, sizeof (value));
-                if (value == 0)
-                    break;
                 self_->send_pending_max_msgs = value;
                 return 0;
             }
@@ -133,8 +131,6 @@ int zlink::options_setsockopt_core_socket (
             if (optvallen_ == sizeof (uint64_t)) {
                 uint64_t value = 0;
                 memcpy (&value, optval_, sizeof (value));
-                if (value == 0)
-                    break;
                 self_->send_pending_max_bytes = value;
                 return 0;
             }

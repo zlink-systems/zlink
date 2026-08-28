@@ -2,8 +2,11 @@
 
 package systems.zlink.runtime.nativeapi;
 
+import systems.zlink.contracts.errors.ErrorCategory;
+import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
+
 public final class NativeSubmitErrors {
     private NativeSubmitErrors() {
     }
@@ -20,6 +23,10 @@ public final class NativeSubmitErrors {
             || errno == NativeErrno.EHOSTUNREACH_WIN;
     }
 
+    public static boolean isNotFound(int errno) {
+        return errno == NativeErrno.ENOENT;
+    }
+
     public static boolean isNotAdmitted(int errno) {
         return errno == NativeErrno.ECONNREFUSED
             || errno == NativeErrno.ECONNREFUSED_WIN;
@@ -32,9 +39,30 @@ public final class NativeSubmitErrors {
         if (isNotConnected(errno)) {
             return new ZlinkSubmitException(SubmitResult.NOT_CONNECTED, errno);
         }
+        if (isNotFound(errno)) {
+            return new ZlinkSubmitException(SubmitResult.NOT_FOUND, errno);
+        }
         if (isNotAdmitted(errno)) {
             return new ZlinkSubmitException(SubmitResult.NOT_ADMITTED, errno);
         }
         return null;
+    }
+
+    public static ZlinkSubmitException submitException(int result, int errno) {
+        if (result == SubmitResult.OK.value()) {
+            throw new IllegalArgumentException(
+                "submit result indicates success");
+        }
+        try {
+            return new ZlinkSubmitException(SubmitResult.fromValue(result),
+                errno);
+        } catch (IllegalArgumentException ignored) {
+            ZlinkSubmitException mapped = submitExceptionOrNull(errno);
+            if (mapped != null) {
+                return mapped;
+            }
+            return (ZlinkSubmitException) ZlinkException.fromErrno(
+                ErrorCategory.SUBMIT, errno);
+        }
     }
 }

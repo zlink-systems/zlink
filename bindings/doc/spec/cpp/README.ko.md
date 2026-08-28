@@ -463,14 +463,18 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   내부에서 대기하다 Core 신호로 재개하고, socket `SNDTIMEO`가 대기 상한이며,
   `SNDTIMEO=0`은 즉시 `BACKPRESSURED`(`EAGAIN`)를 반환한다. 백프레셔 정책의 소유자는
   어플리케이션이며 binding은 재시도하지 않는다. 실패는 `submit_error_t`로 던지고,
-  Core가 받아들이지 않은 part의 handle은 호출자에게 남는다.
+  binding이 별도 native view를 제출하므로 공개 C++ message는 호출자에게 남는다. 일반 실패에서도
+  동기 호출에 실제 전달된 native part는 Core가 소비한다.
 - routed send builder는 flags 단계는 노출하지 않으며, `timeout(...)`은 `async()`의
   Core per-operation deadline이다. 동기 `submit()`의 대기 상한은 socket
   `SNDTIMEO`다.
-- 같은 native handle의 모든 C++ outbound 경로는 binding-owned record-attempt gate를 공유한다.
-  한 번의 native attempt에서 기존 part API를 첫 part부터 `FINAL`까지 호출하고 즉시 gate를
-  해제한다. gate는 part sequence의 교차 제출과 close 경합만 막으며, 재시도나 대기 정책을
-  소유하지 않는다.
+- C++ binding은 outbound 경로에 자체 lock이나 gate를 두지 않는다. Core는 socket별
+  transaction state로 이미 열린 sequence에 다른 sender의 part가 들어오지 않게 막는다.
+  열린 sequence와 경합하는 attempt는 peer에 부분 record를 남기지 않고 통째로 거부한다.
+  거부된 native part도 Core의 동기 send 계약에 따라 소비되지만, binding의 별도 native view가
+  공개 C++ message를 보존한다. 같은 socket에 동시에 multipart를 제출할 때 직렬화할 책임은
+  어플리케이션에 있다. binding은 직렬화하거나 대기하거나 재시도하지 않는다. close와
+  in-flight 제출의 경합도 Core lifecycle gate가 담당한다.
 - routed **request**의 terminal은 `submit()`(caller thread blocking 반환),
   `submit(callback)`(즉시 반환), `async()`(`async_result_t<std::vector<message_t>>`) 세
   가지다. Core가 선택한 정확한 `(RID, transport pair id, generation)` target에 호출

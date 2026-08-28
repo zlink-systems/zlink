@@ -12,8 +12,6 @@
 #include "api/message/submit_result_internal.hpp"
 #include "api/socket/part_helper_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
-#include "core/msg.hpp"
-#include "utils/err.hpp"
 
 zlink_submit_result_t zlink_send_async (void *s_,
                                         zlink_msg_t *parts_,
@@ -31,37 +29,44 @@ zlink_submit_result_t zlink_send_async (void *s_,
         return zlink::submit_result_internal::from_errno (errno);
     }
 
-    zlink::socket_base_t *socket = try_as_socket (s_);
+    socket_handle_t handle = as_socket_handle (s_);
+    zlink::socket_base_t *socket = handle.socket;
     if (!socket) {
-        errno = EFAULT;
         return zlink::submit_result_internal::from_errno (errno);
     }
-
-    //  A multipart sequence in flight on this handle owns the send gate. A
-    //  record submit cannot interleave with it.
-    if (zlink::part_helper_internal::send_sequence_active (s_)) {
-        errno = EINVAL;
+    if (!socket->begin_send_async_public_call ())
         return zlink::submit_result_internal::from_errno (errno);
-    }
 
-    return zlink::submit_result_internal::from_rc (
-      socket->send_async_submit (parts_, part_count_, options_, op_id_out_));
+    const int rc =
+      socket->send_async_submit (parts_, part_count_, options_, op_id_out_);
+    const int saved_errno = errno;
+    handle = socket_handle_t ();
+    socket->end_send_async_public_call ();
+    errno = saved_errno;
+    return zlink::submit_result_internal::from_rc (rc);
 }
 
 zlink_submit_result_t zlink_send_async_cancel (void *s_,
                                                 zlink_send_op_id_t op_id_)
 {
-    zlink::socket_base_t *socket = try_as_socket (s_);
+    socket_handle_t handle = as_socket_handle (s_);
+    zlink::socket_base_t *socket = handle.socket;
     if (!socket) {
-        errno = EFAULT;
         return zlink::submit_result_internal::from_errno (errno);
     }
+    if (!socket->begin_send_async_public_call ())
+        return zlink::submit_result_internal::from_errno (errno);
 
     const int rc = socket->send_async_cancel (op_id_);
+    const int saved_errno = errno;
+    handle = socket_handle_t ();
+    socket->end_send_async_public_call ();
+    errno = saved_errno;
     if (rc == 0)
         return ZLINK_SUBMIT_OK;
-    //  EBUSY here means admission already committed: the operation is not
-    //  cancellable any more but it still completes exactly once, as ADMITTED.
+    //  EBUSY means another resolver already claimed the operation. It is no
+    //  longer cancellable but still completes exactly once as that resolver's
+    //  ADMITTED or TERMINAL result.
     if (errno == EBUSY)
         return ZLINK_SUBMIT_INVALID_STATE;
     if (errno == ENOENT)

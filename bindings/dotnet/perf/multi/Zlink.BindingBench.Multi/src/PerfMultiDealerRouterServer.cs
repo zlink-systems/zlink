@@ -72,19 +72,14 @@ internal static class PerfMultiDealerRouterServer
                 if (!TryRecvNoWait(server, receivedBuffer))
                     break;
 
-                // Skip Parts.Count: it materializes a
-                // MultipartMessageCollection wrapper around the lazy
-                // single-part message (one heap alloc per recv).
-                Message bodyMessage = receivedBuffer.SinglePartOrThrow();
-                if (IsStopTokenPayload(bodyMessage.AsReadOnlySpan()))
+                if (receivedBuffer.Parts.Count == 1
+                    && IsStopTokenPayload(receivedBuffer.FirstPart().AsReadOnlySpan()))
                 {
                     stop = true;
                     break;
                 }
-
-                if (pendingReplies.Count == 0
-                    && receivedBuffer.Send().Message(bodyMessage)
-                        .Flags(SendFlags.DontWait).Submit())
+                if (!PerfSocketIo.TryMeasurementPayload(receivedBuffer.Parts,
+                        out Message bodyMessage))
                 {
                     continue;
                 }
@@ -107,7 +102,7 @@ internal static class PerfMultiDealerRouterServer
         while (pendingReplies.Count > 0)
         {
             PendingReply pending = pendingReplies.Peek();
-            if (await PerfSocketIo.SendAsync(server, pending.RoutingId,
+            if (await PerfSocketIo.SendMeasurementAsync(server, pending.RoutingId,
                     pending.Message).ConfigureAwait(false) > 0)
             {
                 pendingReplies.Dequeue();

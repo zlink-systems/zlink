@@ -3,7 +3,7 @@
 mod common;
 
 use std::time::Duration;
-use zlink::{RecvFlags, SocketMonitor, SubmitResult, TopicMessage};
+use zlink::{Message, RecvFlags, SocketMonitor, SubmitResult, TopicMessage};
 
 fn main() {
     let config = common::PerfConfig::from_env_and_args();
@@ -60,7 +60,12 @@ fn main() {
     let send_thread =
         std::thread::spawn(move || {
             common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
-                match pub_sock.publish("P").message(msg).submit() {
+                match if common::measurement_part_count() == 2 {
+                    pub_sock.publish("P").message(msg)
+                        .message(Message::try_from(&[] as &[u8]).expect("empty measurement tail")).submit()
+                } else {
+                    pub_sock.publish("P").message(msg).submit()
+                } {
                     Ok(()) => true,
                     Err(err) if err.code() == SubmitResult::NotConnected => false,
                     Err(err) => panic!("active publish: {err}"),

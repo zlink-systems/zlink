@@ -58,10 +58,10 @@
 | # | 결정 |
 |---|---|
 | D1 | `send_ready` **"readiness hint" 의미론을 전 표면에서 폐지**한다. routed handler의 WRITABLE/TERMINAL, plain `zlink_send_ready_handler`, 그리고 recv 가능한 형태의 어떤 hint 이벤트도 포함한다. 어떤 소비자도 다시는 "hint 받고 재시도"를 하지 않는다 |
-| D2 | 대체물은 **Core 소유 async send admission + COMPLETION 의미론**이다. Core가 pending send의 소유권을 가져가고(진짜 예약), 공간이 생기면 admit하거나 terminal errno/timeout으로 실패시키고, **완료를 통지**한다. 기계장치는 기존 blocking-send 내부 대기와 동일하되 출구가 condvar 대신 통지다 |
+| D2 | 대체물은 **Core 소유 async send admission + pending COMPLETION 의미론**이다. 즉시 admission은 `ZLINK_SUBMIT_OK` + `op_id=0`으로 반환하고 callback을 만들지 않는다. HWM에 걸리면 Core가 pending send의 소유권을 가져가고 nonzero id를 반환한 뒤, 공간이 생기면 admit하거나 terminal errno/timeout으로 실패시키고 완료를 통지한다 |
 | D3 | 완료 통지는 **의미론이 동일한 두 디스패치 위치** 중 소비자가 고른다: (a) async-mailbox 스레드에서 도는 등록 콜백(기본), (b) `ZLINK_POLLCOMPLETION` 등록으로 poller-owned가 된 같은 콜백(poll 루프 소비자용). 중복이 아니라 선택지다 — 이벤트 종류나 API가 두 개가 아니라 같은 콜백의 디스패치 소유권이 다를 뿐이다 (Q10, §13 해결) |
 | D4 | **Sync send는 그대로 둔다** (blocking / `SNDTIMEO` / `DONTWAIT`, 전부 Core 소유) |
-| D5 | **바인딩은 스레드를 0개 소유한다** (순수 래퍼 원칙). awaitable terminal은 Core completion 콜백에서 완료된다. 금지됐던 것은 *콜백에서 submit하는 것*이었고, 재시도가 사라졌으므로 더 이상 발생하지 않는다 |
+| D5 | 바인딩은 pending queue·재시도·deadline을 소유하지 않는다. 즉시 admission은 이미 완료된 awaitable로 반환한다. pending callback은 언어 executor로 continuation을 넘긴다. C++ 기본 coroutine은 callback 안에서 다음 submit을 호출하지 않도록 slow path continuation dispatcher를 사용한다 |
 | D6 | 규범 terminal 표면: C++ send/publish = `submit()` 블로킹 + `async()` 코루틴 / C++ request = `submit()` 블로킹 반환 + `submit(callback)` + `async()` / .NET = HWM-managed op는 단일 `Async()` / Java·Kotlin·Node·Python·Rust = 단일 `submit()`가 awaitable 반환 / **Go = `Submit(ctx) -> error` 동기 형태** / raw reply는 전 언어 동기 `submit()`. **"suspension terminal 옆에 callback terminal을 두지 않는다"는 기존 규칙은 C++ request에 한해 폐기**한다 |
 | D7 | **명명: 대체 계열의 이름은 `send_complete`다.** 기존 두 핸들러(`zlink_send_ready_handler`, `zlink_routed_send_ready_handler`)는 **하나의 계열로 병합**한다 — 완료 payload가 항상 target identity를 싣기 때문에 routed 전용 표면을 따로 둘 이유가 없다. 등록 API는 `zlink_send_complete_handler(socket, handler_fn, userdata)` 하나뿐이고, payload는 `zlink_send_complete_event_t`, 결과 enum은 `ZLINK_SEND_ADMITTED` / `ZLINK_SEND_TIMED_OUT` / `ZLINK_SEND_TERMINAL`이다. "수신 채널"은 별도 이벤트 종류나 recv 함수가 아니라 기존 `ZLINK_POLLCOMPLETION` 등록을 통한 디스패치 위치 이전이다 (Q10, §13 해결 — §5 참고) |
 | D8 | **완료 = Core 큐로의 admission이지 peer 전달이 아니다.** 헤더 문서가 이 점을 명시해야 한다 |
@@ -393,35 +393,19 @@ admit된 바이트에만 적용된다는 기존 계약과 정확히 대칭이다
 다시 상대 소비 속도에 종속되는 문제가 재도입되므로, 옵트인 없이 fail-fast
 하나로 고정한다.
 
-### 4.7 pending 큐 자체의 백프레셔 — **반드시 bounded**
+### 4.7 pending 큐의 기본 계약 — **HWM은 비동기 대기**
 
-**[제안]** pending 큐는 **소켓당 bounded**다. unbounded pending은 HWM을
-우회하는 무한 버퍼이며, 그 자체가 D2가 없애려는 문제를 다른 층에 재현한다.
+기존 binding-owned admission queue는 HWM에 걸린 async send를 개수 제한 없이
+보관했다. pending 소유권을 Core로 옮기면서 기본 상한을 추가하면 기존에는
+기다리던 operation이 즉시 실패한다. 따라서 정상 HWM은 항상 Core pending으로
+전환하며, 기본 pending 건수와 byte 상한은 `0`(unlimited)이다.
 
-- 새 옵션 **`ZLINK_OPT_SEND_PENDING_MAX`** [제안] (다음 빈 번호 `0x303A`;
-  현재 최대값이 `ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS = 0x3039`
-  (`core/include/zlink_enum.h:108` [확인])).
-- 단위: **개수와 바이트 둘 다**를 둔다.
-  - `ZLINK_OPT_SEND_PENDING_MAX_MSGS` — 기본 제안 **1024**
-  - `ZLINK_OPT_SEND_PENDING_MAX_BYTES` — 기본 제안 **SNDHWM과 동일한 값**
-  - 개수만 두면 대형 메시지에서 메모리가 터지고, 바이트만 두면 소형 메시지
-    폭주에서 부기 비용이 터진다. Core의 HWM 회계가 이미 바이트 기준이고
-    최소 프레임 charge를 갖고 있으므로(`minimum_core_message_charge_bytes`,
-    `core/include/zlink/eventing/api.h:173` [확인]) 바이트 축은 그 회계를 재사용한다.
-- 초과 시 `zlink_send_async`는 **`ZLINK_SUBMIT_BACKPRESSURED`를 즉시 반환**하고
-  part 소유권은 호출자에게 남는다. **여기가 앱이 정책을 소유하는 지점이다** —
-  Core는 절대 pending 제출을 블로킹하지 않는다.
-- 0 = 무제한은 **제공하지 않는다**. 무제한이 필요하다는 것은 앱이 큐를 스스로
-  가져야 한다는 뜻이다.
-
-**한도는 소켓당으로만 둔다 (Q3, §13 해결).** target당 부분 상한은 두지 않는다.
-target당 상한이 head-of-line 격리에는 유리하지만, target 수가 동적인
-DEALER/ROUTER에서는 총량 상한이 사실상 사라지는 대가를 치른다. 소켓당 단일
-한도가 더 단순하고, 소켓 스코프 옵션(`ZLINK_OPT_*`)이라는 기존 선례와도
-그대로 맞는다 — `ZLINK_OPT_SEND_PENDING_MAX_MSGS`/`_BYTES`는 다른 `ZLINK_OPT_*`와
-마찬가지로 소켓 단위 값이다. target별 격리가 필요한 앱은 §4.4의 target별
-FIFO 자체가 head-of-line을 이미 target 단위로 국한하므로 별도 부분 상한
-없이도 격리가 성립한다.
+메모리 상한이 필요한 앱은 소켓 단위 옵션
+`ZLINK_OPT_SEND_PENDING_MAX_MSGS`와
+`ZLINK_OPT_SEND_PENDING_MAX_BYTES`를 nonzero로 설정한다. 명시한 상한을 넘긴
+submit만 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하고 part 소유권을 호출자에게
+남긴다. target별 부분 상한은 두지 않으며 같은 target의 pending은 FIFO를
+유지한다.
 
 ### 4.8 timeout — op별 Core 소유 deadline
 
@@ -436,37 +420,23 @@ FIFO 자체가 head-of-line을 이미 target 단위로 국한하므로 별도 �
   스케줄러를 **재사용**한다 (`request_timeout_scheduler_internal.cpp:86-89,175-197` [확인]).
   새 스레드를 만들지 않는다. 만료 시 pending을 큐에서 제거하고
   `ZLINK_SEND_TIMED_OUT`으로 통지한다.
-- `timeout_ms = 0`은 무제한이다. 무제한 pending은 §4.7의 bound와 close 시
-  fail-fast로 이미 회수 가능하므로 안전하다.
+- `timeout_ms = 0`은 무제한이다. pending은 cancel과 close 시 fail-fast로
+  회수된다.
 - **만료와 admit의 경합**: deadline 스케줄러와 admit 스레드가 같은 pending을
   동시에 집을 수 있다. 완료는 **원자적 1회 claim**으로 결정한다 (pending
   엔트리의 상태 CAS). 먼저 claim한 쪽이 결과를 정한다.
 
 ### 4.9 즉시 성공 경로
 
-**[제안]** `zlink_send_async`는 HWM에 여유가 있으면 호출 스레드에서 그대로
-admit한다. 그래도 **완료 통지는 발생한다.** 두 가지 하위 선택지:
+`zlink_send_async`는 HWM에 여유가 있으면 호출 thread에서 그대로 admit한다.
+이때 `ZLINK_SUBMIT_OK`과 `op_id=0`을 반환하고 완료 callback을 만들지 않는다.
+바인딩은 awaitable이나 Task를 그 자리에서 완료한다. C++은
+`async_result_t::await_ready() == true`, .NET은 완료된 Task 경로를 사용한다.
 
-| 선택 | 장점 | 단점 |
-|---|---|---|
-| (i) 콜백을 **인라인으로** 즉시 호출 | 지연 최소, 스레드 홉 0 | 콜백이 caller 스택에서 돈다 — 재진입 규칙이 caller에도 적용된다 |
-| (ii) 항상 통지 채널을 거친다 | 컨텍스트가 균일 | fast path에도 스레드 홉 1회 — 0.12.0에서 이미 실측된 비용 문제 |
-
-**(i)을 권고한다.** §2.4의 실측(admission 부기가 `async()` 비용의 절반 이상)이
-균일성보다 fast path를 지키는 쪽을 지지한다. 대신 계약에 명시한다:
-**"완료 콜백은 `zlink_send_async` 호출 안에서 인라인으로 실행될 수 있다."**
-바인딩은 이 경우 suspension을 "이미 완료된 상태"로 만들어야 한다 (C++
-`async_result_t`의 `await_ready() == true` 경로, Rust `Poll::Ready`).
-
-**인라인 fast-path 콜백을 유지한다 (Q4, §13 해결).** 별도 우회 신호
-(`op_id_out_ = 0`이면 이벤트 없음 등)는 두지 않는다. 실측 근거(§2.4, admission
-부기가 `async()` 비용의 절반 이상)가 계약 균일성보다 fast path 보존을
-지지하고, 두 갈래 계약이 주는 이득보다 인지 비용이 크다. 그 결과로 생기는
-비대칭(§5의 poller-owned dispatch 소비자는 즉시 admit이어도 여전히
-`zlink_poller_wait()`를 거쳐야 콜백이 실행된다)은 받아들인다 — 이는 "callback
-채널은 caller 스레드 인라인일 수 있고, poller-owned dispatch 채널은 항상
-poller_wait 호출 시점에 실행된다"는 §5의 디스패치 위치 차이의 자연스러운
-결과이지 별도 계약이 아니다.
+HWM 때문에 record를 Core pending queue에 보관했을 때만 nonzero `op_id`를
+반환한다. 이 operation은 admission, timeout, cancel 또는 종료 시 callback을
+정확히 한 번 받는다. 이 구분은 모든 즉시 send에 completion record와 callback을
+만들던 비용을 제거하고, 정상 fast path에서 callback 재진입이 발생하지 않게 한다.
 
 ---
 
@@ -652,17 +622,17 @@ D3의 "동일 의미론"을 타입 수준에서 강제한다. 필드 확장이 �
 |---|---|
 | **완료의 의미 (D8)** | `ZLINK_SEND_ADMITTED` = **Core 송신 큐로의 admission**. peer가 받았다는 뜻이 **아니다**. 전달 확인이 필요하면 request/reply를 쓴다. 헤더 doc comment에 명시한다 |
 | 제출 단위 | 완전한 멀티파트 레코드 1개. 성공 시 part 소유권이 Core로 이전 |
-| 제출 블로킹 | 절대 없음. pending 상한 초과 시 즉시 `BACKPRESSURED` |
-| 완료 횟수 | op당 정확히 1회. 성공·타임아웃·취소·terminal·종료 모두 포함 |
+| 제출 블로킹 | 절대 없음. 정상 HWM은 pending 비동기 대기로 전환 |
+| 완료 횟수 | `op_id=0`인 즉시 admission은 callback 없음. nonzero pending op는 성공·타임아웃·취소·terminal·종료 중 정확히 1회 |
 | 순서 | target별 FIFO는 **async pending 사이에서만** 보장(admit·완료 통지 모두). target 간 무보장. 동기 send는 같은 HWM을 두고 그 target의 다른 생산자와 동등 경쟁 — 특례 없음(Q1) |
 | 취소 | 요청 의미론. 접수되면 `CANCELED`로 완료. 이미 커밋이면 `INVALID_STATE` 반환 후 `OK`로 완료 |
 | timeout | op별 `timeout_ms`. Core 전역 deadline 스케줄러가 구동. 0=무제한 |
 | close | 모든 pending을 `TERMINATED`(`ECANCELED`)로 즉시 실패. LINGER 미적용. drain 옵트인 없음(Q2) |
 | ctx term | 동일, errno `ETERM` |
-| pending 상한 | **소켓당** msgs/bytes 이중 상한. target당 부분 상한 없음(Q3). 무제한 없음 |
+| pending 상한 | 기본값은 unlimited다. 앱이 msgs/bytes 상한을 nonzero로 명시한 경우에만 초과 submit을 `BACKPRESSURED`로 거부 |
 | 완료 채널 | 콜백 하나(`zlink_send_complete_handler`). "수신 채널"은 새 API가 아니라 `ZLINK_POLLCOMPLETION` 등록으로 같은 콜백의 디스패치 소유권이 poller로 넘어가는 것(Q10). 소켓 단위 상호배타(Q7) |
-| 콜백 계약 | 완료 전달만. send 재진입은 `EDEADLK`. 소켓당 직렬. 즉시 admit 시 인라인 실행 허용(Q4) |
-| 유실 | 없음. 완료는 pending 1건당 정확히 1회 콜백이므로 pending 상한이 곧 상한 |
+| 콜백 계약 | 완료 전달만. send 재진입은 `EDEADLK`. 소켓당 직렬. 즉시 admission callback은 없음 |
+| 유실 | 없음. Core가 접수한 pending 1건당 정확히 1회 callback |
 | 대상 소켓 | PAIR/PUB/XPUB/DEALER/ROUTER/STREAM 전체 (Q8) |
 
 ---
@@ -1127,8 +1097,8 @@ Phase 2 이후는 8개 언어가 동시에 깨지므로 전진만 가능하다.
 |---|---|---|---|
 | **Q1** | 같은 target에 pending이 있을 때 동기 `submit()`의 앞지르기를 허용할 것인가, `INVALID_STATE`로 거절할 것인가 | §4.4 | **특례 없음.** 동기냐 비동기냐에 상관없이 걸리는 것은 같은 HWM 하나다 — Core는 공간이 생기면 target별 stored pending을 FIFO로 admit하고, 동기 submit은 그 순간 같은 target의 다른 생산자와 동등하게 경쟁한다. target별 순서 보장은 **async pending 사이에서만** 성립한다 (소유자: "동기냐 비동기냐에 상관없이 HWM이 걸리는 것" — 거절 규칙 없음) |
 | **Q2** | close 시 pending drain 옵트인(`SEND_PENDING_LINGER_MS`)을 제공할 것인가 | §4.6 | **옵트인 없음, fail-fast만.** 선례: `socket_base_lifecycle`의 close/term fail-fast 형태와 정확히 같은 모양이며, `LINGER`는 이미 admit된 바이트에만 적용된다는 기존 계약과 대칭이다 |
-| **Q3** | pending 상한을 소켓당만 둘 것인가, target당 부분 상한도 둘 것인가 | §4.7 | **소켓당 상한만.** 더 단순하고, 소켓 스코프 옵션(`ZLINK_OPT_*`)이라는 기존 선례와 일치한다 |
-| **Q4** | 즉시 성공 시 수신 채널 소비자도 이벤트를 거치게 할 것인가(대칭) 아니면 우회 신호를 줄 것인가(비대칭·빠름) | §4.9 | **인라인 fast-path 콜백 유지.** 실측(부기 비용이 `async()` 비용의 절반 이상)이 균일성보다 fast path 보존을 지지한다 |
+| **Q3** | pending 상한을 소켓당만 둘 것인가, target당 부분 상한도 둘 것인가 | §4.7 | **기본 unlimited, 명시한 경우 소켓당 상한만.** 기존 async 대기 계약을 유지하고 overload 정책만 opt-in으로 제공한다 |
+| **Q4** | 즉시 성공 시 수신 채널 소비자도 이벤트를 거치게 할 것인가(대칭) 아니면 우회 신호를 줄 것인가(비대칭·빠름) | §4.9 | **`op_id=0` 우회 신호 채택.** 즉시 admission은 callback 없이 반환하고 binding이 awaitable을 즉시 완료한다 |
 | **Q5** | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` 비트를 제거할 것인가 | §9.3 | **유지, 문구만 강화.** 헤더/스펙에 "진단용, 재시도 트리거로 쓰지 말 것"을 명시한다 |
 | **Q6** | `zlink_routed_target_writable`을 이번 범위에 포함할 것인가 | §11.3 | **포함하지 않음.** 불필요한 복잡성이다 — 기존 `DONTWAIT` 프로브(즉 `zlink_send_async` 자체의 즉시 응답)가 그 질의 역할을 겸한다 (소유자: 불필요한 복잡성) |
 | **Q7** | 완료 콜백과 수신 채널의 상호배타를 소켓 단위로 강제할 것인가, op 단위로 선택하게 할 것인가 | §5.2 | **소켓 단위.** 선례: monitor의 기존 콜백/수신 상호배타 `EBUSY` 규칙과 같은 모양이다 |

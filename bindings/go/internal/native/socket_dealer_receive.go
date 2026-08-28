@@ -65,14 +65,12 @@ func (s *DealerSocket) reply(requestSeq uint64, flags SendFlags, parts ...*Messa
 	if err := validateReplyFlags(flags); err != nil {
 		return err
 	}
-	return s.withSendGate(func() error {
-		return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-			return submitErrorFromResult(C.zlink_dealer_reply_part(
-				s.raw(),
-				C.uint64_t(requestSeq),
-				part,
-				partFlag,
-			))
-		})
+	return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+		return submitErrorFromResult(C.zlink_dealer_reply_part(
+			s.raw(),
+			C.uint64_t(requestSeq),
+			part,
+			partFlag,
+		))
 	})
 }

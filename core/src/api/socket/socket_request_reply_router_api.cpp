@@ -68,12 +68,11 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
     }
     if (validate_recv_flags (flags_) != 0)
         return zlink::recv_result_internal::from_errno (errno);
-    if (reqrep::validate_socket_type (router_, ZLINK_CORE_SOCKET_ROUTER) != 0)
-        return zlink::recv_result_internal::from_errno (errno);
-
     socket_handle_t handle = as_socket_handle (router_);
     if (!handle.socket)
-        return zlink::recv_result_internal::from_errno (EFAULT);
+        return zlink::recv_result_internal::from_errno (errno);
+    if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_ROUTER) != 0)
+        return zlink::recv_result_internal::from_errno (errno);
 
     // ROUTER is a native socket handle here, so its optional multipart state
     // is owned by the socket. Do not route the steady-state raw role through
@@ -300,12 +299,11 @@ zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,
     }
     if (validate_recv_flags (flags_) != 0)
         return zlink::recv_result_internal::from_errno (errno);
-    if (reqrep::validate_socket_type (dealer_, ZLINK_CORE_SOCKET_DEALER) != 0)
-        return zlink::recv_result_internal::from_errno (errno);
-
     socket_handle_t handle = as_socket_handle (dealer_);
     if (!handle.socket)
-        return zlink::recv_result_internal::from_errno (EFAULT);
+        return zlink::recv_result_internal::from_errno (errno);
+    if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_DEALER) != 0)
+        return zlink::recv_result_internal::from_errno (errno);
 
     std::shared_ptr<reqrep::socket_request_reply_state_t> state =
       reqrep::find_or_create_request_reply_state (handle);

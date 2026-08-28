@@ -12,6 +12,7 @@
 #include "zlink.h"
 
 napi_value throw_last_error (napi_env env, const char *prefix);
+napi_value throw_submit_error (napi_env env, const char *prefix, int result);
 std::string get_string (napi_env env, napi_value val);
 const char *get_c_string_arg (
   napi_env env, napi_value val, char *stack_buf, size_t stack_buf_size, std::string *heap_buf);

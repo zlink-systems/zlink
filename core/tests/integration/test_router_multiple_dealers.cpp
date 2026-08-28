@@ -2,6 +2,7 @@
 
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
+#include "api/socket/socket_api_internal.hpp"
 #include "core/object.hpp"
 #include "core/pipe.hpp"
 #include "sockets/internal/dist.hpp"
@@ -304,7 +305,8 @@ void test_weighted_dealer_preserves_peer_weight_after_backpressure ()
 void test_weighted_lb_reactivation_keeps_configured_weight ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t hwms[] = {1, 1};
     const bool conflate[] = {false, false};
@@ -370,7 +372,8 @@ void test_weighted_lb_reactivation_keeps_configured_weight ()
 void test_single_pipe_lb_rolls_back_byte_hwm_rejected_multipart ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t frame_bytes = sizeof (zlink::msg_t) + 1;
     const uint64_t hwms[] = {frame_bytes * 2, frame_bytes * 2};
@@ -447,7 +450,8 @@ void test_single_pipe_lb_rolls_back_byte_hwm_rejected_multipart ()
 void test_single_pipe_dist_rolls_back_byte_hwm_rejected_multipart ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t frame_bytes = sizeof (zlink::msg_t) + 1;
     const uint64_t hwms[] = {frame_bytes * 2, frame_bytes * 2};
@@ -526,7 +530,8 @@ void test_single_pipe_dist_rolls_back_byte_hwm_rejected_multipart ()
 void test_pipe_rejects_multipart_before_partial_bytes_exceed_hwm ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t frame_bytes = sizeof (zlink::msg_t) + 1;
     const uint64_t hwms[] = {frame_bytes * 3, frame_bytes * 3};
@@ -599,7 +604,8 @@ void test_pipe_rejects_multipart_before_partial_bytes_exceed_hwm ()
 void test_empty_pipe_incomplete_multipart_stops_at_max_message_size ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t frame_bytes = sizeof (zlink::msg_t) + 1;
     const uint64_t hwms[] = {frame_bytes * 3, frame_bytes * 3};
@@ -641,7 +647,8 @@ void test_empty_pipe_incomplete_multipart_stops_at_max_message_size ()
 void test_empty_pipe_oversize_exception_applies_only_to_complete_message ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t frame_bytes = sizeof (zlink::msg_t) + 1;
     const uint64_t hwms[] = {frame_bytes * 2, frame_bytes * 2};
@@ -692,7 +699,8 @@ void test_empty_pipe_oversize_exception_applies_only_to_complete_message ()
 void test_drained_pipe_oversize_multipart_uses_fresh_peer_credit ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t hwm = 4096;
     const uint64_t hwms[] = {hwm, hwm};
@@ -764,7 +772,8 @@ void test_drained_pipe_oversize_multipart_uses_fresh_peer_credit ()
 void test_physical_queue_snapshot_accounts_multipart_once ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t hwms[] = {4096, 4096};
     const bool conflate[] = {false, false};
@@ -841,7 +850,8 @@ void test_physical_queue_snapshot_accounts_multipart_once ()
 void test_physical_queue_deferred_shrink_applies_on_drain ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t initial_hwm = 4096;
     const uint64_t hwms[] = {initial_hwm, initial_hwm};
@@ -889,7 +899,8 @@ void test_physical_queue_deferred_shrink_applies_on_drain ()
 void test_completion_pipe_does_not_apply_hwm_admission ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t configured_hwm = 64u * 1024u;
     const uint64_t hwms[] = {configured_hwm, configured_hwm};
@@ -938,7 +949,8 @@ void test_completion_pipe_does_not_apply_hwm_admission ()
 void test_conflate_replacement_releases_physical_queue_charge ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
-    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
     zlink::object_t *parents[] = {owner, owner};
     const uint64_t hwms[] = {0, 0};
     const bool conflate[] = {true, true};
@@ -1004,7 +1016,8 @@ class weighted_selection_harness_t
                              uint32_t weight_,
                              uint64_t hwm_ = weighted_selection_hwm)
     {
-        zlink::object_t *owner = static_cast<zlink::object_t *> (_owner_handle);
+        zlink::object_t *owner = static_cast<zlink::object_t *> (
+          as_socket_handle (_owner_handle).socket);
         zlink::object_t *parents[] = {owner, owner};
         const uint64_t hwms[] = {hwm_, hwm_};
         const bool conflate[] = {false, false};

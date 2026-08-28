@@ -147,6 +147,12 @@ void test_public_header_retains_send_complete_and_monitor_surface ()
     TEST_ASSERT_FALSE (header.empty ());
 
     assert_text_present (header, "zlink_send_complete_handler");
+    assert_text_present (
+      header,
+      "A callback for a non-zero operation id can run before the corresponding");
+    assert_text_present (header, "Pending admission is FIFO per target");
+    assert_text_absent (header,
+                        "Completions for the same target run in submit order");
     assert_text_present (header, "zlink_socket_monitor_open");
     assert_text_present (header, "zlink_socket_monitor_handler");
     assert_text_absent (header, "zlink_service_monitor_open");
@@ -166,16 +172,27 @@ void test_docs_reflect_tiered_thread_safe_contract ()
     const std::string socket_doc_ko = read_text_file (
       (std::string (TEST_REPO_ROOT) + "/core/doc/spec/core/socket/README.ko.md").c_str ());
     const std::string threading_doc = read_text_file (
-      (std::string (TEST_REPO_ROOT) + "/core/doc/internals/threading-model.en.md").c_str ());
+      (std::string (TEST_REPO_ROOT) + "/core/doc/guide/11-thread-safety.en.md").c_str ());
     const std::string threading_doc_ko = read_text_file (
-      (std::string (TEST_REPO_ROOT) + "/core/doc/internals/threading-model.ko.md").c_str ());
+      (std::string (TEST_REPO_ROOT) + "/core/doc/guide/11-thread-safety.ko.md").c_str ());
 
     assert_text_present (socket_doc, "tiered contract");
     assert_text_present (threading_doc, "`send`/`publish`/`send_rid`");
     assert_text_present (socket_doc, "can be called concurrently from multiple threads");
     assert_text_present (socket_doc, "fails with `errno=ESHUTDOWN`");
-    assert_text_present (threading_doc, "control paths serialize for correctness");
-    assert_text_present (threading_doc_ko, "여러 스레드에서 동시 사용 가능");
+    assert_text_present (
+      threading_doc,
+      "Configuration and endpoint operations serialize internally where required");
+    assert_text_present (threading_doc_ko, "여러 thread의 send를 허용한다");
+    assert_text_present (
+      socket_doc,
+      "callback order can differ under timeout/cancel/terminal races");
+    assert_text_present (
+      socket_doc,
+      "another resolver already owns the result");
+    assert_text_present (
+      socket_doc_ko,
+      "op id 0인 즉시 admission에는 callback이 없다");
 
     assert_text_absent (socket_doc, "same-handle operational APIs");
     assert_text_absent (socket_doc_ko, "모든 operational API 동일 강도 thread-safe");
