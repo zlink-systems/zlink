@@ -16,7 +16,8 @@ from perf_metrics import (
     result_metrics,
     stamp_payload,
 )
-from run_benchmarks import _normalize_pattern, _result_pattern
+from perf_multi_common import benchmark_endpoint
+from run_benchmarks import POLICY_TRANSPORTS, _normalize_pattern, _result_pattern
 
 
 class PerfMultiRunnerTests(unittest.TestCase):
@@ -49,6 +50,16 @@ class PerfMultiRunnerTests(unittest.TestCase):
         self.assertEqual(
             _result_pattern("ROUTER_ROUTER"), "MULTI_ROUTER_ROUTER_SENDSEND"
         )
+
+    def test_router_router_supports_ipc_with_unique_bind_endpoint(self):
+        self.assertIn("ipc", POLICY_TRANSPORTS["ROUTER_ROUTER"])
+        first = benchmark_endpoint("ipc", "multi-router-router")
+        second = benchmark_endpoint("ipc", "multi-router-router")
+        self.assertRegex(
+            first,
+            r"^ipc:///tmp/zlink-python-perf-multi-router-router-\d+-\d+\.ipc$",
+        )
+        self.assertNotEqual(first, second)
 
     def test_latency_sampler_keeps_exact_mean_with_bounded_percentiles(self):
         sampler = LatencySampler(sample_cap=2)
