@@ -13,6 +13,7 @@ import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.SocketType;
+import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.errors.ZlinkException;
@@ -25,7 +26,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class PerfRouterRouter {
@@ -43,8 +43,6 @@ final class PerfRouterRouter {
     static PerfUtil.Result run(PerfUtil.Config config) {
         String endpoint = PerfUtil.endpoint(config.transport(), "single-router-router");
         CountDownLatch finished = new CountDownLatch(1);
-        CountDownLatch routed = new CountDownLatch(1);
-        AtomicBoolean probePending = new AtomicBoolean(true);
         AtomicReference<Throwable> failure = new AtomicReference<>();
         PerfUtil.Metrics metrics = new PerfUtil.Metrics(config);
         boolean sharedContext = true;
@@ -112,11 +110,6 @@ final class PerfRouterRouter {
                                 if (header == null) {
                                     continue;
                                 }
-                                if (header.phase() == PerfUtil.PHASE_WARMUP
-                                    && probePending.compareAndSet(true, false)) {
-                                    routed.countDown();
-                                    continue;
-                                }
                                 if (header.phase() == PerfUtil.PHASE_ACTIVE
                                     && receivedNanoTime < activeEnd) {
                                     metrics.recordNanos(header.latencyNanos());
@@ -136,26 +129,6 @@ final class PerfRouterRouter {
                 }
             }, "single-router-router-receiver");
             receiverThread.start();
-
-            long probeDeadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-            while (System.nanoTime() < probeDeadline && routed.getCount() != 0) {
-                try (Message probe = PerfUtil.payload(config.size(),
-                         (byte) PerfUtil.PHASE_WARMUP, System.nanoTime())) {
-                    if (!trySendActive(sender, targetRoute, probe)) {
-                        Thread.onSpinWait();
-                    }
-                }
-                try {
-                    if (routed.await(10, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                        break;
-                    }
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException(
-                        "router/router self-check interrupted", ex);
-                }
-            }
-            PerfUtil.await(routed, "router/router self-check", Duration.ofSeconds(10));
 
             Thread traffic = new Thread(() -> {
                 try {
@@ -315,19 +288,18 @@ final class PerfRouterRouter {
     private static void senderRouterSend(RouterSocket socket,
                                          RoutingId route,
                                          Message message) {
-        PerfUtil.awaitStage(socket.send(route)
-            .message(message)
-            .submit());
+        socket.send(route).message(message).submit_sync(SendFlags.NONE);
     }
 
     private static boolean trySendActive(RouterSocket sender, RoutingId route,
                                          Message active) {
         try {
             if (PerfUtil.measurementPartCount() == 2) {
-                PerfUtil.awaitStage(sender.send(route).message(active)
-                    .message(PerfUtil.measurementTail()).submit());
+                sender.send(route).message(active)
+                    .message(PerfUtil.measurementTail())
+                    .submit_sync(SendFlags.NONE);
             } else {
-                PerfUtil.awaitStage(sender.send(route).message(active).submit());
+                sender.send(route).message(active).submit_sync(SendFlags.NONE);
             }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
@@ -349,10 +321,11 @@ final class PerfRouterRouter {
                                            Message active) {
         try {
             if (PerfUtil.measurementPartCount() == 2) {
-                PerfUtil.awaitStage(sender.send(route).message(active)
-                    .message(PerfUtil.measurementTail()).submit());
+                sender.send(route).message(active)
+                    .message(PerfUtil.measurementTail())
+                    .submit_sync(SendFlags.NONE);
             } else {
-                PerfUtil.awaitStage(sender.send(route).message(active).submit());
+                sender.send(route).message(active).submit_sync(SendFlags.NONE);
             }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {

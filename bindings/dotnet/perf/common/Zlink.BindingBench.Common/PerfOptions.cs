@@ -183,7 +183,7 @@ public sealed record PerfOptions(
     private static int ResolveMultiClients(string pattern)
     {
         int fallback = pattern.Equals("STREAM", StringComparison.OrdinalIgnoreCase)
-            ? PerfEnv.ReadPositive("PERF_MULTI_DEFAULT_STREAM_CLIENTS", 10000)
+            ? PerfEnv.ReadPositive("PERF_MULTI_DEFAULT_STREAM_CLIENTS", 100)
             : PerfEnv.ReadPositive("PERF_MULTI_DEFAULT_CLIENTS", 100);
         return Math.Max(1, PerfEnv.ReadPositive("PERF_MULTI_CLIENTS", fallback));
     }

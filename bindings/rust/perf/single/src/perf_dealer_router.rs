@@ -55,12 +55,10 @@ fn main() {
     let ready_timeout = common::resolve_single_ready_timeout();
     common::wait_monitor_ready(&mut router_mon, ready_timeout, "dealer-router router");
     common::wait_monitor_ready(&mut mon, ready_timeout, "dealer-router dealer");
-    common::block_on(
-        dealer
-            .send()
-            .message(Message::try_from(b"PING").expect("dealer ping"))
-            .submit(),
-    )
+    dealer
+        .send()
+        .message(Message::try_from(b"PING").expect("dealer ping"))
+        .submit_sync(zlink::SendFlags::NONE)
     .expect("dealer handshake send");
     let mut handshake = zlink::Received::empty();
     if let Err(err) = router.recv(&mut handshake, zlink::RecvFlags::NONE) {
@@ -71,12 +69,10 @@ fn main() {
         .expect("router handshake rid")
         .clone();
     assert_eq!(handshake.parts()[0].as_bytes(), b"PING");
-    common::block_on(
-        router
-            .send(&reply_rid)
-            .message(Message::try_from(b"PONG").expect("router pong"))
-            .submit(),
-    )
+    router
+        .send(&reply_rid)
+        .message(Message::try_from(b"PONG").expect("router pong"))
+        .submit_sync(zlink::SendFlags::NONE)
     .expect("router handshake reply");
     let mut handshake_reply = zlink::Received::empty();
     if let Err(err) = dealer.recv(&mut handshake_reply, zlink::RecvFlags::NONE) {

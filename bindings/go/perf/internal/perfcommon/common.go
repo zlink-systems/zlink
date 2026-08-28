@@ -25,6 +25,9 @@ type Stats struct {
 	mu           sync.Mutex
 	latNs        []float64
 	sumNs        float64
+	latencySeen  uint64
+	latencyRng   uint64
+	latencyCap   int
 }
 
 type Result struct {
@@ -41,8 +44,24 @@ type Result struct {
 }
 
 func NewStats() *Stats {
+	return newStats(1_000_000)
+}
+
+func NewMultiStats() *Stats {
+	latencyCap := 65536
+	if raw := os.Getenv("PERF_MULTI_LATENCY_SAMPLE_CAP"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			latencyCap = value
+		}
+	}
+	return newStats(latencyCap)
+}
+
+func newStats(latencyCap int) *Stats {
 	return &Stats{
-		latNs: make([]float64, 0),
+		latNs:      make([]float64, 0, latencyCap),
+		latencyRng: 0xA341316C,
+		latencyCap: latencyCap,
 	}
 }
 
@@ -55,10 +74,18 @@ func (s *Stats) AddLatencyNs(latencyNs float64) {
 	atomic.AddUint64(&s.latencyCount, 1)
 	s.mu.Lock()
 	s.sumNs += latencyNs
-	// perf_single_latency.hpp latency_stats_builder_t::add: unbounded
-	// push_back, exact percentiles, no reservoir cap.
-	s.latNs = append(s.latNs, latencyNs)
+	s.addLatencyReservoir(latencyNs)
 	s.mu.Unlock()
+}
+
+// AddLatencyNsSingleThread records an exact mean and a bounded percentile
+// sample without taking the mutex. Multi poller receivers call it only from
+// their single application thread and snapshot after the receive loop ends.
+func (s *Stats) AddLatencyNsSingleThread(latencyNs float64) {
+	atomic.AddUint64(&s.count, 1)
+	atomic.AddUint64(&s.latencyCount, 1)
+	s.sumNs += latencyNs
+	s.addLatencyReservoir(latencyNs)
 }
 
 func (s *Stats) AddCount() uint64 {
@@ -76,10 +103,21 @@ func (s *Stats) AddLatencySampleNs(latencyNs float64) {
 	atomic.AddUint64(&s.latencyCount, 1)
 	s.mu.Lock()
 	s.sumNs += latencyNs
-	// perf_single_latency.hpp latency_stats_builder_t::add: unbounded
-	// push_back, exact percentiles, no reservoir cap.
-	s.latNs = append(s.latNs, latencyNs)
+	s.addLatencyReservoir(latencyNs)
 	s.mu.Unlock()
+}
+
+func (s *Stats) addLatencyReservoir(latencyNs float64) {
+	s.latencySeen++
+	if len(s.latNs) < s.latencyCap {
+		s.latNs = append(s.latNs, latencyNs)
+		return
+	}
+	s.latencyRng = s.latencyRng*1664525 + 1013904223
+	slot := s.latencyRng % s.latencySeen
+	if slot < uint64(s.latencyCap) {
+		s.latNs[slot] = latencyNs
+	}
 }
 
 func (s *Stats) Snapshot(duration time.Duration, msgSize int) Result {
@@ -396,7 +434,8 @@ func FinalizeResult(pattern string, msgSize int, result Result) Result {
 
 func isEchoPattern(pattern string) bool {
 	switch pattern {
-	case "MULTI_DEALER_ROUTER", "MULTI_ROUTER_ROUTER", "MULTI_STREAM":
+	case "DEALER_ROUTER_REQREP", "ROUTER_ROUTER_REQREP",
+		"MULTI_DEALER_ROUTER", "MULTI_ROUTER_ROUTER", "MULTI_STREAM":
 		return true
 	default:
 		return false

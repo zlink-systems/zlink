@@ -4,7 +4,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, summarizeMetrics } = require('../common/perf_metrics');
-const { integerEnv } = require('../common/perf_args');
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, measurementPayload, waitForConnectionReady } = require('./perf_multi_runtime');
@@ -59,11 +58,11 @@ async function main() {
                 const activeStartNs = currentEpochNs();
                 const activeStopNs = activeStartNs + BigInt(Math.floor(options.duration * 1_000_000_000));
                 collector = createMetricCollector({
+                    suite: 'multi',
                     runId: createRunId(1),
                     msgSize: options.msgSize,
                     activeStartNs,
                     activeStopNs,
-                    latencySampleStride: integerEnv('PERF_MULTI_PUBSUB_LATENCY_SAMPLE_STRIDE', 32),
                 });
                 // C parity: run_recv_duration checks the active deadline before
                 // each poll and waits no more than 100ms. A received socket is then
@@ -112,7 +111,7 @@ async function main() {
             }
         }
         const result = collector ? await collector.finish() : { latenciesNs: [] };
-        for (const line of summarizeMetrics('MULTI_PUBSUB', options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted)) {
+        for (const line of summarizeMetrics('MULTI_PUBSUB', options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs)) {
             console.log(line);
         }
         console.log(`CLIENT_DONE,${options.msgSize}`);

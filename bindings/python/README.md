@@ -61,16 +61,20 @@ retry** anywhere in the send/request completion surface.
   Python timer; the deadline is the Core-side
   `zlink_send_async_options_t.timeout_ms` field (the same pattern
   `_runtime/eventing/timer.py` already uses for Core-owned timing).
+  The synchronous terminal is `submit_sync(*, flags=0)`: `NONE` waits for
+  admission and `DONT_WAIT` raises `SubmitError(BACKPRESSURED)` immediately.
 - **`publish`** (PUB/XPUB) is synchronous-only: `submit()` returns `None` or
   raises `SubmitError` immediately. PUB semantics are lossy by default — a
   full subscriber queue silently drops that subscriber's copy and the
   publisher never waits; `ZLINK_PUB_OPT_NODROP` surfaces an immediate
   `SubmitError` instead. `zlink_send_async` returns `ENOTSUP` for PUB/XPUB,
   so there is no publish awaitable.
-- **`request`** is ASYNC; `submit()` returns an awaitable coroutine object
-  completed purely by Core's reply callback (`ZLINK_REQUEST_TIMED_OUT` on
-  expiry). There is no admission ticket and no polling thread driving
-  completion.
+- **`request`** provides three terminals. `submit_sync(*, flags=0)` waits and
+  returns the reply. `submit_sync(*, flags=0, callback=...)` returns after
+  admission and later calls `callback(reply, error)`. `submit()` returns an
+  awaitable coroutine object. Core's reply callback completes all three
+  surfaces (`ZLINK_REQUEST_TIMED_OUT` on expiry); the binding adds no
+  admission queue, retry policy, or polling thread.
 - **Raw `reply()`** (on `Received`, ROUTER only) is HWM-free and
   synchronous: `submit()` returns `None` or raises `SubmitError`
   immediately.

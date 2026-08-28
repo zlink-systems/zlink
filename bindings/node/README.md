@@ -15,10 +15,16 @@ Aligned Node bindings for `libzlink`.
   `RouterSocket`, `PubSocket`, `SubSocket`
 - publisher sockets: `publish(topic).message(...).submit()` (synchronous
   void-or-throw)
-- message sockets: `send().message(...).submit()` (Core-completion Promise),
+- message sockets: async `send().message(...).submit()` (Core-completion Promise)
+  and sync `submit_sync(SendFlags)`,
   `recv(flags?)`
-- routed sockets: `send(routingId).message(...).submit()` (Core-completion
-  Promise), `recv(flags?)`
+- routed sockets: async `send(routingId).message(...).submit()`
+  (Core-completion Promise) and sync `submit_sync(SendFlags)`, `recv(flags?)`
+- requests: async `request(...).message(...).submit()` returns
+  `Promise<Message[]>`; `submit_sync(flags)` returns `Message[]`, while
+  `submit_sync(flags, callback)` returns after admission and delivers the reply
+  to `(error, reply)`. `submit_sync(SendFlags.None)` can block the Node event
+  loop, so use it only when another execution context can make reply progress.
 - subscriber sockets: `setSubscription(topicOrPattern)`,
   `unsetSubscription(topicOrPattern)`, `subscribe(topicMessage, flags?)`
 - `XPubSocket`: `receiveSubscriptionEvent(subscriptionEvent, flags?)`

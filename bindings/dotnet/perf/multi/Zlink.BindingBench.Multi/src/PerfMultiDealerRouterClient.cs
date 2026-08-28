@@ -15,7 +15,6 @@ internal static class PerfMultiDealerRouterClient
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
         int latencySampleCap = ResolveMultiLatencySampleCap(options);
         int clientCount = ResolveMultiClients(options);
-        int pollTimeoutMs = ResolveMultiClientPollTimeoutMs(options);
         string endpoint = options.Endpoint;
 
         using var ctx = Zlink.CreateContext();
@@ -57,9 +56,9 @@ internal static class PerfMultiDealerRouterClient
                     options.Transport, size);
 
             var slots = CreateSlots(activeClients, size);
-            var result = await RunMultiDealerRouterClientLoopAsync(pollManager, slots,
-                size, latencySampleCap, pollTimeoutMs, durationSeconds,
-                readyTimeoutMs).ConfigureAwait(false);
+            var result = RunMultiDealerRouterClientLoop(pollManager,
+                slots, size, latencySampleCap, durationSeconds,
+                readyTimeoutMs);
 
             // PERF_MULTI: echo (relay) clients send NO wire stop token. C
             // perf_multi_dealer_router_client.cpp drives run_echo_duration
@@ -97,11 +96,11 @@ internal static class PerfMultiDealerRouterClient
         return slots;
     }
 
-    private static async Task<(double throughput, double latencyNs,
-        double latencyP95Ns, double latencyP99Ns, long measureCount)>
-        RunMultiDealerRouterClientLoopAsync(PollManager pollManager,
+    private static (double throughput, double latencyNs,
+        double latencyP95Ns, double latencyP99Ns, long measureCount)
+        RunMultiDealerRouterClientLoop(PollManager pollManager,
             DealerRouterClientSlot[] slots, int msgSize, int latencySampleCap,
-            int pollTimeoutMs, int durationSeconds, int readyTimeoutMs)
+            int durationSeconds, int readyTimeoutMs)
     {
         _ = readyTimeoutMs;
         const uint runId = 1;
@@ -119,14 +118,16 @@ internal static class PerfMultiDealerRouterClient
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
-            (seq, rrIndex) = await TryScheduleIdleSendsAsync(slots, eventMasks,
-                msgSize, runId, PerfPhase.Active, seq, rrIndex)
-                .ConfigureAwait(false);
+            (seq, rrIndex) = TryScheduleSendsUntilBackpressured(slots,
+                eventMasks, msgSize, runId, PerfPhase.Active, seq, rrIndex,
+                benchDeadlineTicks);
 
-            // PERF_MULTI_TEST_POLICY § 1.3.1: poller wait is signal-driven
-            // (-1). The benchDeadlineTicks check at the top of the loop
-            // ends the active phase; the wire-level stop token sent
-            // afterwards instructs the server to wind down.
+            // C echo requesters own the active deadline. Bound each wait by
+            // the remaining active interval so a quiet peer cannot extend the
+            // configured phase.
+            int pollTimeoutMs = RemainingMilliseconds(benchDeadlineTicks);
+            if (pollTimeoutMs <= 0)
+                break;
             int readyCount = PollSocketEvents(pollManager, sockets, eventMasks,
                 pollTimeoutMs);
             if (readyCount <= 0)
@@ -135,12 +136,11 @@ internal static class PerfMultiDealerRouterClient
             }
 
             for (int i = 0; i < readyCount; i++)
-                seq = await HandleClientEventAsync(pollManager, slots,
+                seq = HandleClientEvent(pollManager, slots,
                     ReadySocketIndexAt(pollManager, i),
                     ReadySocketMaskAt(pollManager, i), eventMasks, msgSize,
                     runId, PerfPhase.Active, seq, metrics, allowSend: true,
-                    activeDeadlineTicks: benchDeadlineTicks)
-                    .ConfigureAwait(false);
+                    activeDeadlineTicks: benchDeadlineTicks);
         }
 
         long benchEndTicks = Stopwatch.GetTimestamp();
@@ -161,31 +161,31 @@ internal static class PerfMultiDealerRouterClient
             metrics.MeasureCount);
     }
 
-    private static async Task<(ulong Seq, int RrIndex)>
-        TryScheduleIdleSendsAsync(DealerRouterClientSlot[] slots,
+    private static (ulong Seq, int RrIndex)
+        TryScheduleSendsUntilBackpressured(DealerRouterClientSlot[] slots,
             PollEventFlags[] eventMasks, int msgSize, uint runId,
-            PerfPhase phase, ulong seq, int rrIndex)
+            PerfPhase phase, ulong seq, int rrIndex, long activeDeadlineTicks)
     {
         int startIndex = rrIndex;
         for (int i = 0; i < slots.Length; i++)
         {
+            if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+                break;
             int slotIndex = (startIndex + i) % slots.Length;
             DealerRouterClientSlot slot = slots[slotIndex];
-            if (slot.WaitingForReply || slot.WaitingForWritable)
+            if (slot.WaitingForWritable)
                 continue;
 
-            if (await TrySendAsync(slot, msgSize, runId, phase, seq)
-                    .ConfigureAwait(false))
+            while (Stopwatch.GetTimestamp() < activeDeadlineTicks)
             {
+                if (!TrySend(slot, msgSize, runId, phase, seq))
+                {
+                    slot.WaitingForWritable = true;
+                    UpdatePollMask(slot, eventMasks, slotIndex);
+                    break;
+                }
                 seq++;
-                slot.WaitingForReply = true;
-                slot.WaitingForWritable = false;
-                UpdatePollMask(slot, eventMasks, slotIndex);
-                continue;
             }
-
-            slot.WaitingForWritable = true;
-            UpdatePollMask(slot, eventMasks, slotIndex);
         }
 
         if (slots.Length > 0)
@@ -193,29 +193,30 @@ internal static class PerfMultiDealerRouterClient
         return (seq, rrIndex);
     }
 
-    private static async Task<ulong> HandleClientEventAsync(PollManager pollManager,
+    private static ulong HandleClientEvent(
+        PollManager pollManager,
         DealerRouterClientSlot[] slots,
         int slotIndex, PollEventFlags readyMask, PollEventFlags[] eventMasks,
         int msgSize, uint runId, PerfPhase phase, ulong seq,
         DealerRouterMetrics metrics, bool allowSend, long activeDeadlineTicks)
     {
-        _ = activeDeadlineTicks;
         _ = pollManager;
         DealerRouterClientSlot slot = slots[slotIndex];
+        if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+            return seq;
 
         if (allowSend
             && (readyMask & PollEventFlags.PollOut) != 0
-            && slot.WaitingForWritable
-            && !slot.WaitingForReply)
+            && slot.WaitingForWritable)
         {
-            if (await TrySendAsync(slot, msgSize, runId, phase, seq)
-                    .ConfigureAwait(false))
+            while (Stopwatch.GetTimestamp() < activeDeadlineTicks)
             {
+                if (!TrySend(slot, msgSize, runId, phase, seq))
+                    break;
                 seq++;
-                slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
-                UpdatePollMask(slot, eventMasks, slotIndex);
             }
+            UpdatePollMask(slot, eventMasks, slotIndex);
         }
 
         if ((readyMask & PollEventFlags.PollIn) == 0)
@@ -225,21 +226,18 @@ internal static class PerfMultiDealerRouterClient
         Received receivedMessage = slot.ReusableReceived;
         while (true)
         {
+            if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+                break;
             if (!dealerSock.Recv(receivedMessage, RecvFlags.DontWait))
                 break;
 
-            if (!slot.WaitingForReply)
-            {
-                continue;
-            }
+            if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+                break;
 
-            slot.WaitingForReply = false;
             if (phase == PerfPhase.Active)
             {
-                // Match C reference: outer while loop bounds the active
-                // window; dropping replies that arrive after activeDeadline
-                // would lower throughput vs C for replies whose sends were
-                // inside the active phase.
+                // The active deadline checks immediately around Recv keep
+                // post-window replies out of both throughput and latency.
                 if (PerfSocketIo.TryMeasurementPayload(receivedMessage.Parts,
                         out Message payloadPart)
                     && PerfRunner.TryDecodeMetricHeader(
@@ -271,8 +269,6 @@ internal static class PerfMultiDealerRouterClient
             if (!allowSend)
                 continue;
 
-            slot.WaitingForWritable = false;
-            UpdatePollMask(slot, eventMasks, slotIndex);
         }
         return seq;
     }
@@ -302,7 +298,7 @@ internal static class PerfMultiDealerRouterClient
         eventMasks[index] = events;
     }
 
-    private static async Task<bool> TrySendAsync(DealerRouterClientSlot slot,
+    private static bool TrySend(DealerRouterClientSlot slot,
         int msgSize, uint runId, PerfPhase phase, ulong seq)
     {
         // Match C: stamp immediately before every send attempt. A blocked
@@ -311,8 +307,8 @@ internal static class PerfMultiDealerRouterClient
             seq, EpochNs());
         using Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan(0, PerfMetricHeaderSize).CopyTo(message.AsSpan());
-        return await PerfSocketIo.SendMeasurementAsync((IDealerSocket)slot.Socket,
-            message).ConfigureAwait(false) > 0;
+        return PerfSocketIo.SendMeasurement((IDealerSocket)slot.Socket,
+            message.AsReadOnlySpan(), SendFlags.DontWait) > 0;
     }
 
     private static int RemainingMilliseconds(long deadlineTicks)
@@ -343,7 +339,6 @@ internal static class PerfMultiDealerRouterClient
         // The binding overwrites the internal state in place, avoiding the
         // per-recv Received allocation.
         internal Received ReusableReceived { get; }
-        internal bool WaitingForReply { get; set; }
         internal bool WaitingForWritable { get; set; }
     }
 

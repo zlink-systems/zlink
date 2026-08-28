@@ -90,9 +90,9 @@ async function main() {
             throw new Error('PERF_STREAM_PACKET_BODY_MATERIALIZATION must be native or managed');
         }
         configureTlsServer(stream, options.transport);
+        stream.bind(options.endpoint);
         ctx.recalculateAutoHwm();
         emitMultiSocketHwmDetail(stream, 'endpoint', options.transport, options.msgSize);
-        stream.bind(options.endpoint);
         stream.setPacketHandler((sourceRid, header, body) => {
             let queued = false;
             try {

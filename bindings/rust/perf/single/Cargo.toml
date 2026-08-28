@@ -30,3 +30,11 @@ path = "src/perf_dealer_dealer.rs"
 [[bin]]
 name = "perf_router_router"
 path = "src/perf_router_router.rs"
+
+[[bin]]
+name = "perf_dealer_router_reqrep"
+path = "src/perf_dealer_router_reqrep.rs"
+
+[[bin]]
+name = "perf_router_router_reqrep"
+path = "src/perf_router_router_reqrep.rs"

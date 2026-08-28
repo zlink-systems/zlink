@@ -20,7 +20,7 @@ from perf_multi_common import (
     resolve_multi_connect_ready_timeout_ms,
     result_metrics,
     safe_poll,
-    send_routed,
+    send_nonblocking,
     stamp_payload,
     wait_monitor_event,
 )
@@ -30,9 +30,7 @@ async def main(argv=None):
     args = parse_client_args(argv or sys.argv[1:], pattern="router_router")
     run_id = benchmark_run_id()
     payloads = [new_payload(args.msg_size) for _ in range(args.clients)]
-    # C run_echo_window_round_robin: purely deadline-driven, no stop token.
-    waiting_reply = [False] * args.clients
-    send_pending = [True] * args.clients
+    send_pending = [False] * args.clients
     received = 0
     latency_sampler = LatencySampler()
     seq = 0
@@ -64,32 +62,27 @@ async def main(argv=None):
                 with zlink.create_poller() as poller:
                     poll_events = zlink.create_poll_events(max(1, len(sockets)))
                     for index, sock in enumerate(sockets):
-                        poller.add_socket(sock, zlink.PollEventFlag.POLLIN, index)
-
-                    for index, current_sock in enumerate(sockets):
-                        next_seq = seq + 1
-                        payload = stamp_payload(
-                            payloads[index],
-                            phase=1,
-                            run_id=run_id,
-                            seq=next_seq,
+                        poller.add_socket(
+                            sock,
+                            zlink.PollEventFlag.POLLIN | zlink.PollEventFlag.POLLOUT,
+                            index,
                         )
-                        if await send_routed(
-                            current_sock,
-                            payload,
-                            routing_id=b"SERVER",
-                        ):
-                            seq = next_seq
-                            waiting_reply[index] = True
-                            send_pending[index] = False
-                        else:
-                            poller.modify_socket(
-                                current_sock, zlink.PollEventFlag.POLLOUT
-                            )
 
-                    # Keep the measured inflight window at one while
-                    # dispatching only sockets that changed readiness state.
                     while time.perf_counter() < active_deadline:
+                        for index, current_sock in enumerate(sockets):
+                            if send_pending[index]:
+                                continue
+                            while time.perf_counter() < active_deadline:
+                                next_seq = seq + 1
+                                payload = stamp_payload(
+                                    payloads[index], phase=1, run_id=run_id, seq=next_seq
+                                )
+                                if not send_nonblocking(
+                                    current_sock, payload, routing_id=b"SERVER"
+                                ):
+                                    send_pending[index] = True
+                                    break
+                                seq = next_seq
                         remaining_ms = int((active_deadline - time.perf_counter()) * 1000)
                         if remaining_ms <= 0:
                             break
@@ -102,33 +95,9 @@ async def main(argv=None):
                                 continue
                             current_sock = sockets[index]
                             ev = poll_events.revents(offset)
-                            if (
-                                ev & int(zlink.PollEventFlag.POLLOUT)
-                                and not waiting_reply[index]
-                                and send_pending[index]
-                            ):
-                                next_seq = seq + 1
-                                payload = stamp_payload(
-                                    payloads[index],
-                                    phase=1,
-                                    run_id=run_id,
-                                    seq=next_seq,
-                                )
-                                if await send_routed(
-                                    current_sock,
-                                    payload,
-                                    routing_id=b"SERVER",
-                                ):
-                                    seq = next_seq
-                                    waiting_reply[index] = True
-                                    send_pending[index] = False
-                                    poller.modify_socket(
-                                        current_sock, zlink.PollEventFlag.POLLIN
-                                    )
-                            if not (
-                                ev & int(zlink.PollEventFlag.POLLIN)
-                                and waiting_reply[index]
-                            ):
+                            if ev & int(zlink.PollEventFlag.POLLOUT):
+                                send_pending[index] = False
+                            if not (ev & int(zlink.PollEventFlag.POLLIN)):
                                 continue
                             while True:
                                 msg = recv_nonblocking(
@@ -154,31 +123,6 @@ async def main(argv=None):
                                         received += 1
                                         if latency is not None:
                                             latency_sampler.add(latency / 2.0)
-                                waiting_reply[index] = False
-                                if time.perf_counter() < active_deadline:
-                                    send_pending[index] = True
-                                    next_seq = seq + 1
-                                    payload = stamp_payload(
-                                        payloads[index],
-                                        phase=1,
-                                        run_id=run_id,
-                                        seq=next_seq,
-                                    )
-                                    if await send_routed(
-                                        current_sock,
-                                        payload,
-                                        routing_id=b"SERVER",
-                                    ):
-                                        seq = next_seq
-                                        waiting_reply[index] = True
-                                        send_pending[index] = False
-                                    else:
-                                        poller.modify_socket(
-                                            current_sock,
-                                            zlink.PollEventFlag.POLLOUT,
-                                        )
-                                if waiting_reply[index]:
-                                    break
                 if received == 0:
                     raise RuntimeError(
                         "multi router-router benchmark did not receive any active reply"

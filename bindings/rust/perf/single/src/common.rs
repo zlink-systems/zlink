@@ -11,8 +11,9 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use zlink::{
-    Context, DealerSocket, Message, PairSocket, PubSocket, RouterSocket, SocketMonitor, SubSocket,
-    SubmitError, ZlinkError,
+    Context, DealerSocket, Message, POLLCOMPLETION, PairSocket, PollEvent, Pollable, Poller,
+    PubSocket, RequestResult, RouterSocket, SocketMonitor, SubSocket, SubmitError, SubmitResult,
+    ZlinkError,
 };
 
 // -- Metric header (29 bytes) ------------------------------------------------
@@ -144,13 +145,11 @@ macro_rules! perf_submit_measurement {
     ($operation:expr, $payload:expr) => {{
         let operation = $operation.message($payload);
         if $crate::common::measurement_part_count() == 2 {
-            $crate::common::block_on(
-                operation
-                    .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
-                    .submit(),
-            )
+            operation
+                .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
+                .submit_sync(zlink::SendFlags::NONE)
         } else {
-            $crate::common::block_on(operation.submit())
+            operation.submit_sync(zlink::SendFlags::NONE)
         }
     }};
 }
@@ -500,6 +499,19 @@ pub fn print_result(
     print_phase_result(&key, &phase);
 }
 
+pub fn print_reqrep_result(
+    pattern: &str,
+    transport: &str,
+    size: usize,
+    duration_s: u64,
+    stats: &StatsResult,
+) {
+    let key = format!("RESULT,current,{pattern},{transport},{size}");
+    let mut phase = build_phase_result(size, duration_s, stats);
+    phase.bandwidth = phase.throughput * size as f64 * 2.0 / 1_000_000.0;
+    print_phase_result(&key, &phase);
+}
+
 pub struct MetricCollector {
     stats: Arc<Mutex<LatencyStats>>,
 }
@@ -584,6 +596,191 @@ where
         } else {
             continue;
         }
+    }
+}
+
+// -- Request/reply loop -----------------------------------------------------
+
+pub type RequestCallback =
+    Box<dyn FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static>;
+
+fn record_reqrep_completion(
+    outcome: Result<Vec<Message>, ZlinkError>,
+    expected_size: usize,
+    stats: &mut LatencyStats,
+    count_active: bool,
+) -> Result<(), String> {
+    let parts = match outcome {
+        Ok(parts) => parts,
+        Err(ZlinkError::Request(error)) if error.code() == RequestResult::TimedOut => return Ok(()),
+        Err(error) => return Err(format!("request completion failed: {error}")),
+    };
+    if parts.len() != measurement_part_count() {
+        return Ok(());
+    }
+    if measurement_part_count() == 2 && !parts[1].as_bytes().is_empty() {
+        return Err("request reply returned a non-empty measurement tail".to_string());
+    }
+    let payload = parts[0].as_bytes();
+    if count_active && is_valid_active_message(payload, expected_size) {
+        let latency_ns = (now_ns() as i64)
+            .saturating_sub(decode_sent_ts_ns(payload))
+            .max(0) as u64;
+        stats.record_ns(latency_ns);
+    }
+    Ok(())
+}
+
+fn drain_reqrep_completions(
+    completions: &mpsc::Receiver<Result<Vec<Message>, ZlinkError>>,
+    outstanding: &mut usize,
+    expected_size: usize,
+    stats: &mut LatencyStats,
+    count_active: bool,
+) -> Result<usize, String> {
+    let mut completed = 0;
+    while let Ok(outcome) = completions.try_recv() {
+        *outstanding = outstanding.saturating_sub(1);
+        record_reqrep_completion(outcome, expected_size, stats, count_active)?;
+        completed += 1;
+    }
+    Ok(completed)
+}
+
+/// Continuously submits through the synchronous callback terminal until Core
+/// reports admission backpressure, then drains callbacks through
+/// `POLLCOMPLETION`. HWM alone determines the number of outstanding requests.
+pub fn run_reqrep<S>(
+    config: &PerfConfig,
+    requester: &dyn Pollable,
+    mut submit: S,
+) -> Result<StatsResult, String>
+where
+    S: FnMut(Message, Duration, RequestCallback) -> Result<(), SubmitError>,
+{
+    let request_timeout = Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
+    let drain_timeout =
+        Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10_000));
+    let payload_size = config.size.max(HEADER_SIZE);
+    let active_deadline = Instant::now() + Duration::from_secs(config.duration_seconds.max(1));
+    let poller = Poller::new().map_err(|error| error.to_string())?;
+    poller
+        .add_socket(requester, POLLCOMPLETION, 0)
+        .map_err(|error| error.to_string())?;
+    let mut poll_events = [PollEvent::default(); 1];
+    let (completion_tx, completion_rx) = mpsc::channel();
+    let mut outstanding = 0usize;
+    let mut stats = LatencyStats::new();
+    let mut sequence = 1u64;
+
+    while Instant::now() < active_deadline {
+        while Instant::now() < active_deadline {
+            let mut payload = Message::with_size(payload_size).map_err(|error| error.to_string())?;
+            encode_header(
+                payload.data_mut(),
+                PHASE_ACTIVE,
+                config.size as u32,
+                sequence,
+            );
+            let callback_tx = completion_tx.clone();
+            match submit(
+                payload,
+                request_timeout,
+                Box::new(move |outcome| {
+                    let _ = callback_tx.send(outcome);
+                }),
+            ) {
+                Ok(()) => {
+                    outstanding += 1;
+                    sequence = sequence.wrapping_add(1);
+                }
+                Err(error) if error.code() == SubmitResult::Backpressured => break,
+                Err(error) => {
+                    return Err(format!("request admission failed: {error}"));
+                }
+            }
+        }
+
+        drain_reqrep_completions(
+            &completion_rx,
+            &mut outstanding,
+            config.size,
+            &mut stats,
+            true,
+        )?;
+        if outstanding != 0 && Instant::now() < active_deadline {
+            let remaining_ms = active_deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .clamp(1, i64::MAX as u128) as i64;
+            poller
+                .wait(&mut poll_events, remaining_ms)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    let drain_deadline = Instant::now() + drain_timeout;
+    while outstanding != 0 && Instant::now() < drain_deadline {
+        drain_reqrep_completions(
+            &completion_rx,
+            &mut outstanding,
+            config.size,
+            &mut stats,
+            false,
+        )?;
+        if outstanding != 0 {
+            let remaining_ms = drain_deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .clamp(1, i64::MAX as u128) as i64;
+            poller
+                .wait(&mut poll_events, remaining_ms)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    if outstanding != 0 {
+        return Err(format!(
+            "request completion drain timed out with {} in flight",
+            outstanding
+        ));
+    }
+
+    let result = stats.finish();
+    if result.count == 0 {
+        return Err("no request completed during the active phase".to_string());
+    }
+    Ok(result)
+}
+
+pub fn run_router_replier(router: RouterSocket) -> Result<(), String> {
+    let mut request = zlink::Received::empty();
+    loop {
+        match router.recv(&mut request, zlink::RecvFlags::NONE) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => return Err(format!("replier receive failed: {error}")),
+        }
+        if request.parts().len() == 1 && is_stop_token(request.parts()[0].as_bytes()) {
+            return Ok(());
+        }
+        if request.routing_id().is_none() || request.request_seq().is_none() {
+            continue;
+        }
+        let payload = message_payload(request.parts());
+        if payload.is_empty() {
+            continue;
+        }
+        let payload_part = Message::try_from(payload)
+            .map_err(|error| format!("reply payload allocation failed: {error}"))?;
+        let reply = request.reply().message(payload_part);
+        let result = if measurement_part_count() == 2 {
+            reply
+                .message(Message::new().map_err(|error| error.to_string())?)
+                .submit()
+        } else {
+            reply.submit()
+        };
+        result.map_err(|error| format!("reply submit failed: {error}"))?;
     }
 }
 

@@ -11,6 +11,7 @@ import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
+import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.errors.ZlinkException;
@@ -273,10 +274,11 @@ final class PerfMultiDealerDealer {
             System.nanoTime());
         try (payload) {
             if (PerfUtil.measurementPartCount() == 2) {
-                PerfUtil.awaitStage(socket.send().message(payload)
-                    .message(PerfUtil.measurementTail()).submit());
+                socket.send().message(payload)
+                    .message(PerfUtil.measurementTail())
+                    .submit_sync(SendFlags.DONT_WAIT);
             } else {
-                PerfUtil.awaitStage(socket.send().message(payload).submit());
+                socket.send().message(payload).submit_sync(SendFlags.DONT_WAIT);
             }
             return true;
         } catch (ZlinkSubmitException ex) {
@@ -300,7 +302,7 @@ final class PerfMultiDealerDealer {
         // the peer stopped draining its queue.
         while (true) {
             try (Message stop = PerfStopToken.newMessage()) {
-                PerfUtil.awaitStage(socket.send().message(stop).submit());
+                socket.send().message(stop).submit_sync(SendFlags.NONE);
                 return;
             } catch (ZlinkSubmitException ex) {
                 if (!isTransient(ex)) {

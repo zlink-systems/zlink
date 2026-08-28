@@ -114,8 +114,17 @@ bool run_phase (::perf::socket_t &publisher,
                                              perf_metric::now_ns ()))
                 return false;
             for (;;) {
-                const int sent = publisher.publish (
-                  k_topic, payload_part, static_cast<int> (zlink::send_flags_t::dontwait));
+                int sent = -1;
+                if (perf::multi::measurement_part_count () == 2) {
+                    zlink::message_t tail = perf::multi::measurement_empty_part ();
+                    sent = publisher.publish (
+                      k_topic, payload_part, tail,
+                      static_cast<int> (zlink::send_flags_t::dontwait));
+                } else {
+                    sent = publisher.publish (
+                      k_topic, payload_part,
+                      static_cast<int> (zlink::send_flags_t::dontwait));
+                }
                 if (sent == 0)
                     break;
 

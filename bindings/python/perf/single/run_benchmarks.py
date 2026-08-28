@@ -29,6 +29,8 @@ DEFAULT_PATTERNS = (
     "DEALER_DEALER",
     "DEALER_ROUTER",
     "ROUTER_ROUTER",
+    "DEALER_ROUTER_REQREP",
+    "ROUTER_ROUTER_REQREP",
 )
 DEFAULT_MSG_SIZES = ("64", "256", "1024", "65536", "131072", "262144")
 RAW_TRANSPORTS = (
@@ -42,6 +44,8 @@ POLICY_TRANSPORTS = {
     "DEALER_DEALER": RAW_TRANSPORTS,
     "DEALER_ROUTER": RAW_TRANSPORTS,
     "ROUTER_ROUTER": RAW_TRANSPORTS,
+    "DEALER_ROUTER_REQREP": RAW_TRANSPORTS,
+    "ROUTER_ROUTER_REQREP": RAW_TRANSPORTS,
 }
 RUNNABLE_TRANSPORTS = POLICY_TRANSPORTS
 
@@ -217,8 +221,8 @@ def _metric_row(pattern, msg_size, metrics, *, indent="      "):
     )
 
 
-def pattern_direction(_pattern):
-    return "one-way"
+def pattern_direction(pattern):
+    return "request-reply" if pattern.endswith("_REQREP") else "one-way"
 
 
 def _status_row(msg_size, status, *, indent="      "):

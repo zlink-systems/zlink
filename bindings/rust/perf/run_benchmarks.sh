@@ -334,7 +334,10 @@ fi
 IFS=',' read -ra SIZE_LIST <<< "${MSG_SIZES}"
 
 if [[ "${PATTERN}" == "ALL" ]]; then
-    PATTERNS=("PAIR" "PUBSUB" "DEALER_DEALER" "DEALER_ROUTER" "ROUTER_ROUTER")
+    PATTERNS=(
+        "PAIR" "PUBSUB" "DEALER_DEALER" "DEALER_ROUTER" "ROUTER_ROUTER"
+        "DEALER_ROUTER_REQREP" "ROUTER_ROUTER_REQREP"
+    )
 else
     IFS=',' read -ra PATTERNS <<< "${PATTERN}"
 fi
@@ -366,6 +369,8 @@ for pat in "${PATTERNS[@]}"; do
         DEALER_DEALER)   BIN="${SINGLE_DIR}/perf_dealer_dealer" ;;
         DEALER_ROUTER)   BIN="${SINGLE_DIR}/perf_dealer_router" ;;
         ROUTER_ROUTER)   BIN="${SINGLE_DIR}/perf_router_router" ;;
+        DEALER_ROUTER_REQREP) BIN="${SINGLE_DIR}/perf_dealer_router_reqrep" ;;
+        ROUTER_ROUTER_REQREP) BIN="${SINGLE_DIR}/perf_router_router_reqrep" ;;
         *)               continue ;;
     esac
     current_transports="${TRANSPORTS:-$(default_transports_for_pattern "${pat}")}"

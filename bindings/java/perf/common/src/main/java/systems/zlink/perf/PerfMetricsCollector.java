@@ -117,7 +117,8 @@ final class PerfMetricsCollector {
         Arrays.sort(merged);
         double throughput = totalCount / (double) config.durationSeconds();
         double bandwidth = throughput * config.size()
-            * (PerfMeasurement.isEchoPattern(config.pattern()) ? 2.0d : 1.0d)
+            * (PerfMeasurement.isEchoPattern(config.suite(), config.pattern())
+                ? 2.0d : 1.0d)
             / 1_000_000.0d;
         long totalSampleCount = singleThreaded
             ? singleSampleCount

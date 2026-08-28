@@ -824,7 +824,6 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
     std::vector<std::vector<char>> socket_payloads;
     if (allow_send && per_socket_payload)
         socket_payloads.assign (sockets.size (), payload);
-    std::vector<uint8_t> awaiting_reply (sockets.size (), 0);
     std::vector<uint8_t> send_pending (sockets.size (), allow_send ? static_cast<uint8_t> (1) : 0);
     std::vector<zlink_pollitem_t> poll_items (sockets.size ());
     std::vector<size_t> poll_indexes (sockets.size (), 0);
@@ -833,43 +832,45 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
             const size_t send_start_rr = rr;
             for (size_t attempts = 0; attempts < sockets.size (); ++attempts) {
                 const size_t idx = (send_start_rr + attempts) % sockets.size ();
-                if (send_pending[idx] == 0 || awaiting_reply[idx] != 0)
+                if (send_pending[idx] == 0)
                     continue;
 
-                std::vector<char> &send_payload =
-                  per_socket_payload ? socket_payloads[idx] : payload;
-                if (!stamp_metric_payload (send_payload, payload_size, run_id, phase,
-                                           expected_msg_size, sequence)) {
-                    fatal_error = true;
-                    break;
-                }
+                while (std::chrono::steady_clock::now () < deadline) {
+                    std::vector<char> &send_payload =
+                      per_socket_payload ? socket_payloads[idx] : payload;
+                    if (!stamp_metric_payload (send_payload, payload_size, run_id, phase,
+                                               expected_msg_size, sequence)) {
+                        fatal_error = true;
+                        break;
+                    }
 
-                const send_status_t send_rc =
-                  send_echo_message (sockets[idx], target_rid_ptr, send_payload, payload_size,
-                                     client_router_send, per_socket_payload);
-                if (send_rc == send_ok) {
-                    awaiting_reply[idx] = 1;
-                    send_pending[idx] = 0;
-                    ++sequence;
-                    continue;
-                }
-                if (send_rc == send_blocked) {
-                    if (bench_debug_enabled ()
-                        && g_debug_one_way_logs.fetch_add (1, std::memory_order_acq_rel) < 12) {
-                        std::cerr << "[perf-multi-echo] send blocked phase="
+                    const send_status_t send_rc =
+                      send_echo_message (sockets[idx], target_rid_ptr, send_payload, payload_size,
+                                         client_router_send, per_socket_payload);
+                    if (send_rc == send_ok) {
+                        ++sequence;
+                        continue;
+                    }
+                    if (send_rc == send_blocked) {
+                        if (bench_debug_enabled ()
+                            && g_debug_one_way_logs.fetch_add (1, std::memory_order_acq_rel) < 12) {
+                            std::cerr << "[perf-multi-echo] send blocked phase="
+                                      << static_cast<unsigned int> (phase) << " idx=" << idx
+                                      << " errno=" << zlink_errno () << std::endl;
+                        }
+                        break;
+                    }
+
+                    if (bench_debug_enabled ()) {
+                        std::cerr << "[perf-multi-echo] send error phase="
                                   << static_cast<unsigned int> (phase) << " idx=" << idx
                                   << " errno=" << zlink_errno () << std::endl;
                     }
-                    continue;
+                    fatal_error = true;
+                    break;
                 }
-
-                if (bench_debug_enabled ()) {
-                    std::cerr << "[perf-multi-echo] send error phase="
-                              << static_cast<unsigned int> (phase) << " idx=" << idx
-                              << " errno=" << zlink_errno () << std::endl;
-                }
-                fatal_error = true;
-                break;
+                if (fatal_error)
+                    break;
             }
         }
 
@@ -884,9 +885,8 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
             const size_t idx = (start_rr + attempts) % sockets.size ();
             short events = 0;
 
-            if (awaiting_reply[idx] != 0)
-                events = static_cast<short> (events | ZLINK_POLLIN);
-            else if (allow_send && send_pending[idx] != 0)
+            events = static_cast<short> (events | ZLINK_POLLIN);
+            if (allow_send && send_pending[idx] != 0)
                 events = static_cast<short> (events | ZLINK_POLLOUT);
 
             if (events == 0)
@@ -902,15 +902,8 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
         }
         rr = (start_rr + 1) % sockets.size ();
 
-        if (!any_interest) {
-            if (!allow_send)
-                break;
-            for (size_t i = 0; i < send_pending.size (); ++i) {
-                if (awaiting_reply[i] == 0)
-                    send_pending[i] = 1;
-            }
-            continue;
-        }
+        if (!any_interest)
+            break;
 
         // The echo requester owns the active deadline.  Bound this wait by
         // the remaining interval so a quiet peer cannot leave the active
@@ -957,8 +950,6 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
                     if (recv_rc == 0)
                         break;
 
-                    awaiting_reply[idx] = 0;
-
                     if (decoded
                         && metric_header_matches (header, run_id, phase, expected_msg_size)) {
                         ++local_recv;
@@ -984,10 +975,6 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
                                   << std::endl;
                     }
 
-                    if (allow_send && std::chrono::steady_clock::now () < deadline) {
-                        send_pending[idx] = 1;
-                    }
-
                     if (client_router_send)
                         break;
                 }
@@ -997,7 +984,7 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
                 break;
 
             if ((revents & ZLINK_POLLOUT) != 0 && allow_send && send_pending[idx] != 0
-                && awaiting_reply[idx] == 0 && bench_debug_enabled ()
+                && bench_debug_enabled ()
                 && g_debug_one_way_logs.fetch_add (1, std::memory_order_acq_rel) < 12) {
                 std::cerr << "[perf-multi-echo] send writable phase="
                           << static_cast<unsigned int> (phase) << " idx=" << idx << std::endl;

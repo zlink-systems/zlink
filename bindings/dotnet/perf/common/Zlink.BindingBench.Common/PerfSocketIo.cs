@@ -186,11 +186,12 @@ public static class PerfSocketIo
         try
         {
             var submit = socket.Send().Message(message);
-            bool sent = flags == SendFlags.None
-                ? submit.Submit()
-                : submit.Flags(flags).Submit();
-            if (sent)
-                return payload.Length;
+            submit.Submit(flags);
+            return payload.Length;
+        }
+        catch (ZlinkSubmitException ex)
+            when (ex.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
             return 0;
         }
         finally
@@ -209,10 +210,13 @@ public static class PerfSocketIo
             var submit = socket.Send().Message(message);
             if (tail != null)
                 submit = submit.Message(tail);
-            bool sent = flags == SendFlags.None
-                ? submit.Submit()
-                : submit.Flags(flags).Submit();
-            return sent ? payload.Length : 0;
+            submit.Submit(flags);
+            return payload.Length;
+        }
+        catch (ZlinkSubmitException ex)
+            when (ex.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
+            return 0;
         }
         finally
         {
@@ -225,30 +229,63 @@ public static class PerfSocketIo
         SendFlags flags = SendFlags.None)
     {
         int size = message.Size;
-        return socket.Send().Message(message).Flags(flags).Submit()
-            ? size
-            : 0;
+        try
+        {
+            socket.Send().Message(message).Submit(flags);
+            return size;
+        }
+        catch (ZlinkSubmitException ex)
+            when (ex.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
+            return 0;
+        }
     }
 
-    public static int Send(IRoutedMessageSocket socket, string routingId,
+    public static int SendMeasurement(IDealerSocket socket,
+        ReadOnlySpan<byte> payload, SendFlags flags = SendFlags.None)
+    {
+        Message message = CreatePooledMessage(payload);
+        Message? tail = MeasurementPartCount == 2 ? MeasurementTail() : null;
+        try
+        {
+            var submit = socket.Send().Message(message);
+            if (tail != null)
+                submit = submit.Message(tail);
+            submit.Submit(flags);
+            return payload.Length;
+        }
+        catch (ZlinkSubmitException ex)
+            when (ex.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
+            return 0;
+        }
+        finally
+        {
+            tail?.Dispose();
+            message.Dispose();
+        }
+    }
+
+    public static int Send(IRouterSocket socket, string routingId,
         ReadOnlySpan<byte> payload, SendFlags flags = SendFlags.None)
     {
         return Send(socket, RoutingId.From(System.Text.Encoding.UTF8.GetBytes(routingId)),
             payload, flags);
     }
 
-    public static int Send(IRoutedMessageSocket socket, RoutingId routingId,
+    public static int Send(IRouterSocket socket, RoutingId routingId,
         ReadOnlySpan<byte> payload, SendFlags flags = SendFlags.None)
     {
         Message message = CreatePooledMessage(payload);
         try
         {
             var submit = socket.Send(routingId).Message(message);
-            bool sent = flags == SendFlags.None
-                ? submit.Submit()
-                : submit.Flags(flags).Submit();
-            if (sent)
-                return payload.Length;
+            submit.Submit(flags);
+            return payload.Length;
+        }
+        catch (ZlinkSubmitException ex)
+            when (ex.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
             return 0;
         }
         finally
@@ -257,7 +294,7 @@ public static class PerfSocketIo
         }
     }
 
-    public static int SendMeasurement(IRoutedMessageSocket socket, RoutingId routingId,
+    public static int SendMeasurement(IRouterSocket socket, RoutingId routingId,
         ReadOnlySpan<byte> payload, SendFlags flags = SendFlags.None)
     {
         Message message = CreatePooledMessage(payload);
@@ -267,10 +304,13 @@ public static class PerfSocketIo
             var submit = socket.Send(routingId).Message(message);
             if (tail != null)
                 submit = submit.Message(tail);
-            bool sent = flags == SendFlags.None
-                ? submit.Submit()
-                : submit.Flags(flags).Submit();
-            return sent ? payload.Length : 0;
+            submit.Submit(flags);
+            return payload.Length;
+        }
+        catch (ZlinkSubmitException ex)
+            when (ex.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
+            return 0;
         }
         finally
         {
@@ -279,13 +319,20 @@ public static class PerfSocketIo
         }
     }
 
-    public static int Send(IRoutedMessageSocket socket, RoutingId routingId,
+    public static int Send(IRouterSocket socket, RoutingId routingId,
         Message message, SendFlags flags = SendFlags.None)
     {
         int size = message.Size;
-        return socket.Send(routingId).Message(message).Flags(flags).Submit()
-            ? size
-            : 0;
+        try
+        {
+            socket.Send(routingId).Message(message).Submit(flags);
+            return size;
+        }
+        catch (ZlinkSubmitException ex)
+            when (ex.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
+            return 0;
+        }
     }
 
     public static int Publish(IPublisherSocket socket, string topic,

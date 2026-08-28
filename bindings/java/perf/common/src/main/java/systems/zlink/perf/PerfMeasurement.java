@@ -96,7 +96,11 @@ final class PerfMeasurement {
         };
     }
 
-    static boolean isEchoPattern(String pattern) {
+    static boolean isEchoPattern(String suite, String pattern) {
+        if ("single".equals(suite)) {
+            return "DEALER_ROUTER_REQREP".equals(pattern)
+                || "ROUTER_ROUTER_REQREP".equals(pattern);
+        }
         return "DEALER_ROUTER".equals(pattern)
             || "DEALER_ROUTER_SENDSEND".equals(pattern)
             || "DEALER_ROUTER_REQREP".equals(pattern)

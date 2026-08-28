@@ -290,16 +290,17 @@ def send_nonblocking(sock, payload, *, method="send", routing_id=None, measureme
     flag = _dont_wait_flag()
     try:
         if routing_id is None:
-            op = send_method().flags(flag)
+            op = send_method()
         else:
-            op = send_method(routing_id).flags(flag)
+            op = send_method(routing_id)
         if measurement and not isinstance(payload, (list, tuple)):
             op.messages(*measurement_parts(payload))
         elif isinstance(payload, (list, tuple)):
             op.messages(*payload)
         else:
             op.message(payload)
-        return bool(op.submit())
+        op.submit_sync(flags=flag)
+        return True
     except _submit_error_type() as exc:
         if exc.result == _submit_backpressured_result():
             return False

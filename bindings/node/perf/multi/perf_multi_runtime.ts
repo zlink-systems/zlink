@@ -257,7 +257,7 @@ function trySocketSend(socket, ...args) {
   }
 }
 
-async function tryRoutedSocketSend(socket, ...args) {
+function tryRoutedSocketSend(socket, ...args) {
   try {
     const routed = args.length >= 2 && args[0] instanceof zlink.RoutingId;
     const payload = routed ? args[1] : args[0];
@@ -266,7 +266,7 @@ async function tryRoutedSocketSend(socket, ...args) {
     for (const part of parts) {
       op = op.message(part);
     }
-    await op.submit();
+    op.submit_sync(zlink.SendFlags.DontWait);
     return true;
   } catch (error) {
     if (error instanceof zlink.SubmitError && error.result === zlink.SubmitResult.Backpressured) {

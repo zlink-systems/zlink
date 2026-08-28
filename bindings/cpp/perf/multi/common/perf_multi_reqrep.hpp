@@ -8,7 +8,6 @@
 #include "perf_metric_header.hpp"
 
 #include <atomic>
-#include <condition_variable>
 #include <csignal>
 #include <memory>
 #include <mutex>
@@ -41,6 +40,7 @@ struct client_completion_state_t
         run_id (1U),
         msg_size (msg_size_),
         deadline_ns (0),
+        outstanding (0),
         completed (0),
         fatal (false),
         latency ()
@@ -50,10 +50,9 @@ struct client_completion_state_t
     const uint32_t run_id;
     const size_t msg_size;
     std::atomic<uint64_t> deadline_ns;
+    std::atomic<unsigned long long> outstanding;
     std::atomic<unsigned long long> completed;
     std::atomic<bool> fatal;
-    std::mutex completion_mutex;
-    std::condition_variable completion_changed;
     std::mutex latency_mutex;
     bench_latency_sampler_t latency;
 };
@@ -63,15 +62,13 @@ template <typename SocketT> struct client_slot_t
     client_slot_t () :
         socket (),
         payload (),
-        next_seq (1),
-        waiting (std::make_shared<std::atomic<bool>> (false))
+        next_seq (1)
     {
     }
 
     std::unique_ptr<SocketT> socket;
     std::vector<char> payload;
     uint64_t next_seq;
-    std::shared_ptr<std::atomic<bool>> waiting;
 };
 
 template <typename SocketT> class client_bench_t
@@ -93,6 +90,8 @@ template <typename SocketT> class client_bench_t
         _ctx (),
         _slots (),
         _monitors (),
+        _poller (),
+        _poll_events (),
         _completion (std::make_shared<client_completion_state_t> (msg_size_))
     {
     }
@@ -111,40 +110,35 @@ template <typename SocketT> class client_bench_t
 
         while (std::chrono::steady_clock::now () < deadline
                && !_completion->fatal.load (std::memory_order_acquire)) {
-            bool submitted = false;
+            bool backpressured = false;
             for (size_t i = 0; i < _slots.size (); ++i) {
-                if (_slots[i]->waiting->load (std::memory_order_acquire))
-                    continue;
-                if (!submit (*_slots[i]))
-                    return false;
-                submitted =
-                  submitted || _slots[i]->waiting->load (std::memory_order_acquire);
-            }
-            if (!submitted) {
-                try {
-                    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-                      deadline - std::chrono::steady_clock::now ());
-                    const int wait_ms = static_cast<int> (
-                      std::max<int64_t> (1, std::min<int64_t> (50, remaining.count ())));
-                    std::unique_lock<std::mutex> lock (_completion->completion_mutex);
-                    _completion->completion_changed.wait_for (
-                      lock, std::chrono::milliseconds (wait_ms));
-                }
-                catch (const zlink::binding_error_t &err) {
-                    if (err.internal_errno () != EINTR)
+                while (std::chrono::steady_clock::now () < deadline) {
+                    bool admitted = false;
+                    if (!submit (*_slots[i], admitted))
                         return false;
+                    if (!admitted) {
+                        backpressured = true;
+                        break;
+                    }
                 }
+            }
+            if (backpressured || _completion->outstanding.load (std::memory_order_acquire) > 0) {
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+                  deadline - std::chrono::steady_clock::now ());
+                const auto wait = std::chrono::milliseconds (
+                  std::max<int64_t> (1, std::min<int64_t> (50, remaining.count ())));
+                (void) _poller.wait (_poll_events.data (), _poll_events.size (), wait);
             }
         }
 
         const auto drain_deadline =
           std::chrono::steady_clock::now () + std::chrono::milliseconds (
                                                 std::max (1000, _settings.rcvtimeo_ms * 4));
-        while (any_waiting () && std::chrono::steady_clock::now () < drain_deadline) {
+        while (_completion->outstanding.load (std::memory_order_acquire) > 0
+               && std::chrono::steady_clock::now () < drain_deadline) {
             try {
-                std::unique_lock<std::mutex> lock (_completion->completion_mutex);
-                _completion->completion_changed.wait_for (
-                  lock, std::chrono::milliseconds (50));
+                (void) _poller.wait (_poll_events.data (), _poll_events.size (),
+                                     std::chrono::milliseconds (50));
             }
             catch (const zlink::binding_error_t &err) {
                 if (err.internal_errno () != EINTR)
@@ -154,7 +148,8 @@ template <typename SocketT> class client_bench_t
 
         const unsigned long long completed =
           _completion->completed.load (std::memory_order_acquire);
-        if (_completion->fatal.load (std::memory_order_acquire) || any_waiting ()
+        if (_completion->fatal.load (std::memory_order_acquire)
+            || _completion->outstanding.load (std::memory_order_acquire) != 0
             || completed == 0)
             return false;
         const bench_latency_stats_t latency = _completion->latency.snapshot ();
@@ -189,6 +184,7 @@ template <typename SocketT> class client_bench_t
                     return false;
                 slot->socket->connect (_endpoint);
                 slot->payload.assign (payload_size, 'q');
+                _poller.add (*slot->socket, zlink::poll_event_flag_t::pollcompletion, i);
                 _slots.push_back (std::move (slot));
             }
             const bool ready = wait_connect_ready_all (_monitors, _settings.connect_ready_timeout_ms);
@@ -196,6 +192,7 @@ template <typename SocketT> class client_bench_t
                 close_connect_monitor (_monitors[i]);
             if (!ready || !recalculate_auto_hwm (_ctx))
                 return false;
+            _poll_events.resize (std::max<size_t> (1, _slots.size ()));
             return !_slots.empty ();
         }
         catch (const zlink::binding_error_t &) {
@@ -203,8 +200,9 @@ template <typename SocketT> class client_bench_t
         }
     }
 
-    bool submit (client_slot_t<SocketT> &slot_)
+    bool submit (client_slot_t<SocketT> &slot_, bool &admitted_)
     {
+        admitted_ = false;
         const uint64_t sent_ns = perf_metric::now_ns ();
         if (!perf_metric::stamp_payload (
               slot_.payload.data (), slot_.payload.size (), _completion->run_id,
@@ -215,61 +213,67 @@ template <typename SocketT> class client_bench_t
         if (!request.valid ())
             return false;
 
-        slot_.waiting->store (true, std::memory_order_release);
+        _completion->outstanding.fetch_add (1, std::memory_order_release);
         try {
+            const zlink::request_callback_t callback =
+              [completion = _completion] (zlink::request_result_t result,
+                                           std::vector<zlink::message_t> parts) {
+                  observe_request (completion, result, std::move (parts));
+              };
             if constexpr (std::is_same<SocketT, zlink::router_socket_t>::value) {
                 // PERF_POLICY / C parity: the C reference builds the constant
                 // server routing id once per active client state, not once per
                 // request. Keep routing-id construction out of the measured loop.
                 if (measurement_part_count () == 2) {
                     zlink::message_t tail = measurement_empty_part ();
-                    observe_request (
-                      slot_.waiting, _completion,
-                      std::move (slot_.socket->request (_target_rid)).message (request).message (tail)
-                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms))).async ());
+                    (void) std::move (slot_.socket->request (_target_rid)).message (request)
+                      .message (tail)
+                      .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms)))
+                      .flags (zlink::send_flags_t::dontwait).submit (callback);
                 } else {
-                    observe_request (
-                      slot_.waiting, _completion,
-                      std::move (slot_.socket->request (_target_rid)).message (request)
-                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms))).async ());
+                    (void) std::move (slot_.socket->request (_target_rid)).message (request)
+                      .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms)))
+                      .flags (zlink::send_flags_t::dontwait).submit (callback);
                 }
             } else {
                 if (measurement_part_count () == 2) {
                     zlink::message_t tail = measurement_empty_part ();
-                    observe_request (
-                      slot_.waiting, _completion,
-                      std::move (slot_.socket->request ()).message (request).message (tail)
-                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms))).async ());
+                    (void) std::move (slot_.socket->request ()).message (request)
+                      .message (tail)
+                      .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms)))
+                      .flags (zlink::send_flags_t::dontwait).submit (callback);
                 } else {
-                    observe_request (
-                      slot_.waiting, _completion,
-                      std::move (slot_.socket->request ()).message (request)
-                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms))).async ());
+                    (void) std::move (slot_.socket->request ()).message (request)
+                      .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms)))
+                      .flags (zlink::send_flags_t::dontwait).submit (callback);
                 }
             }
             ++slot_.next_seq;
+            admitted_ = true;
             return true;
         }
         catch (const zlink::submit_error_t &err) {
-            slot_.waiting->store (false, std::memory_order_release);
+            _completion->outstanding.fetch_sub (1, std::memory_order_release);
             if (err.result () == zlink::submit_result_t::backpressured
                 || transient (err.internal_errno ()))
                 return true;
             return false;
         }
+        catch (...) {
+            _completion->outstanding.fetch_sub (1, std::memory_order_release);
+            return false;
+        }
     }
 
-    static detached_async_task_t observe_request (
-      std::shared_ptr<std::atomic<bool>> waiting_,
+    static void observe_request (
       std::shared_ptr<client_completion_state_t> completion_,
-      zlink::async_result_t<std::vector<zlink::message_t>> result_)
+      zlink::request_result_t result_, std::vector<zlink::message_t> parts_)
     {
-        try {
-            std::vector<zlink::message_t> parts = co_await std::move (result_);
-            if (measurement_parts_valid (parts)) {
+        if (result_ == zlink::request_result_t::ok) {
+            if (measurement_parts_valid (parts_)) {
                 perf_metric::header_t header;
                 if (perf_metric::decode_payload_header (
-                      parts.front ().data (), parts.front ().size (), &header)
+                      parts_.front ().data (), parts_.front ().size (), &header)
                     && perf_metric::is_expected (
                       header, completion_->run_id, perf_metric::phase_active,
                       completion_->msg_size)) {
@@ -283,25 +287,10 @@ template <typename SocketT> class client_bench_t
                     }
                 }
             }
-        }
-        catch (const zlink::request_error_t &err) {
-            if (err.result () != zlink::request_result_t::timed_out)
-                completion_->fatal.store (true, std::memory_order_release);
-        }
-        catch (...) {
+        } else if (result_ != zlink::request_result_t::timed_out) {
             completion_->fatal.store (true, std::memory_order_release);
         }
-        waiting_->store (false, std::memory_order_release);
-        completion_->completion_changed.notify_one ();
-    }
-
-    bool any_waiting () const
-    {
-        for (size_t i = 0; i < _slots.size (); ++i) {
-            if (_slots[i]->waiting->load (std::memory_order_acquire))
-                return true;
-        }
-        return false;
+        completion_->outstanding.fetch_sub (1, std::memory_order_release);
     }
 
     const config_t _config;
@@ -314,6 +303,8 @@ template <typename SocketT> class client_bench_t
     ctx_guard_t _ctx;
     std::vector<std::unique_ptr<client_slot_t<SocketT>>> _slots;
     std::vector<connect_monitor_t> _monitors;
+    zlink::poller_t _poller;
+    std::vector<zlink::poll_event_t> _poll_events;
     std::shared_ptr<client_completion_state_t> _completion;
 };
 

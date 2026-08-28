@@ -34,7 +34,7 @@ func runPair(cfg benchmarkConfig) perfcommon.Result {
 	perfcommon.WaitConnectedWithTimeout(perfcommon.SingleReadyTimeout(), serverMon, clientMon)
 
 	result := runSingleOneWay(cfg, server, func(message *zlink.Message) (bool, error) {
-		return perfcommon.SubmitMeasurement(client.Send(), message, zlink.SendFlagsDontWait)
+		return perfcommon.SubmitMeasurement(client.Send(), message, zlink.SendFlagsNone)
 	}, func(message *zlink.Message) error {
 		_, err := client.Send().MoveMessage(message).Submit(context.Background())
 		return err

@@ -47,6 +47,16 @@
 - 측정 집계가 걸리는 수신 경로는 **recv 모델**(poller `POLLIN` readiness 감지 +
   비동기 `recv` drain) 을 기본으로 한다. callback으로 측정 data delivery를
   직접 집계하는 경로는 single 에서 사용하지 않는다.
+- **single 실행 모델은 poller + blocking send다.** C reference와 대부분의
+  binding(C++, Java, .NET, Go, Rust)은 이를 thread + blocking send로 동일하게
+  구현한다. single은 단일 프로세스에서 sender/receiver를 구동하므로 nonblocking
+  backpressure 제어가 필요 없고, HWM 도달 시 blocking send가 자연 backpressure로
+  멈춘다. 따라서 single 측정은 C와 같은 실행 모델이며 binding의 순수 오버헤드를
+  나타낸다. multi의 코루틴 nonblocking 모델을 single에 적용하지 않는다.
+- **예외 (async/event-loop 기본 언어)**: Node, Python처럼 blocking submit이
+  부자연스러운 언어는 single에서 async submit 경로를 사용할 수 있다. 이 경우
+  binding 오버헤드는 그 async 실행 오버헤드를 포함하며, poller 기반 recv 집계와
+  phase/header 계약은 다른 언어와 동일하게 유지한다.
 - `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`,
   `ROUTER_ROUTER`, `SPOT_PUBSUB` 은 이 recv 모델로 active payload를 집계한다.
 - `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP` 은 request-reply completion
@@ -76,7 +86,7 @@ single 의 기본 패턴은 one-way 측정 surface를 사용한다. request-repl
 |                   metric collect     |
 +--------------------------------------+
 ```
-- sender flow: blocking send 연속 수행. HWM 도달 시 자연 backpressure.
+- sender flow: blocking send 연속 수행(async 기본 언어는 async submit). HWM 도달 시 자연 backpressure로 멈춘다.
 - recv/progress flow: recv 루프 안에서 throughput/latency 집계를 수행한다.
   recv loop 구조와 active 집계 anchor는 모든 raw one-way 패턴과 바인딩에서
   동일 의미로 유지해야 한다.
@@ -95,9 +105,11 @@ single 의 기본 패턴은 one-way 측정 surface를 사용한다. request-repl
 - request submit flow는 ready gate 통과 후 requester socket으로 request를 가능한
   만큼 연속 제출한다. submit 이 backpressure 를 만나면 새 request 제출을 멈추고
   completion progress 쪽이 reply를 drain할 수 있게 한다.
-- requester progress flow는 같은 requester socket에서 blocking requester
-  progress loop를 수행한다. 이 loop는 blocking recv/wait 또는 그와 같은 의미의
-  public completion progress 경로로 reply completion을 drain하고, completion
+- requester progress flow는 같은 requester socket에서 requester progress loop를
+  수행한다. single 기본 모델에서 이 loop는 blocking recv/wait 또는 그와 같은
+  의미의 public completion progress 경로로 reply completion을 drain한다.
+  async/event-loop 기본 언어(Node, Python 등)는 이를 async completion 경로로
+  구현하되, 매 request를 제출 즉시 await하여 직렬화하지 않는다. loop는 completion
   callback 또는 completion result를 집계한다. 같은 handle 동시 사용은 public
   handle concurrency 계약을 따른다.
 - replier thread는 request를 받은 뒤 source routing id와 request sequence로 reply를
@@ -125,6 +137,16 @@ single 의 기본 패턴은 one-way 측정 surface를 사용한다. request-repl
   multi에서 사용하는 backpressure 메커니즘을 적용하지 않는다. single reqrep은
   request API의 public backpressure 결과를 사용해 submit flow를 멈추고,
   completion progress가 pending reply를 drain한 뒤 다시 submit한다.
+  inflight request 수를 코드로 관리하거나 상한으로 고정하지 않는다. request는
+  backpressure(`EAGAIN`/`BACKPRESSURED`)를 만날 때까지 연속 제출하며,
+  outstanding 깊이는 소켓 HWM 이 결정한다. 응답을 받아야 다음 request를 보내는
+  1:1 ping-pong 으로 직렬화하지 않는다.
+- single reqrep **유효 집계**: throughput과 latency는 active 측정 구간 안에서
+  reply까지 완료된 왕복만 계산한다. 측정 종료(deadline) 시점에 응답이 오지 않은
+  outstanding request는 완료 왕복이 아니므로 집계에서 제외한다. deadline 이후의
+  bounded drain은 완료 카운트를 늘리지 않는 정리 동작이다. 각 (pattern,
+  transport, size) 케이스는 별도 프로세스로 실행되므로, 남은 outstanding은
+  프로세스 종료로 자연 정리된다. 별도 cancel/close 로직을 요구하지 않는다.
 - latency sample 계산, percentile sample 축적은 recv 루프 내에서 처리한다.
 - phase 종료 후에는 bounded idle drain을 반드시 수행한다. 이 절차는 "deadline 이전에
   송신되어 queue/in-flight에 남아 있던 메시지를 추가 recv로 비운다"는 의미이며,

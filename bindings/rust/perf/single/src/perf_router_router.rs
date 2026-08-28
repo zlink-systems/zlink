@@ -71,12 +71,10 @@ fn main() {
     let target = receiver_rid.clone();
     common::wait_monitor_ready(&mut receiver_mon, ready_timeout, "router-router receiver");
     common::wait_monitor_ready(&mut mon, ready_timeout, "router-router sender");
-    common::block_on(
-        sender
-            .send(&target)
-            .message(Message::try_from(b"PING").expect("router ping"))
-            .submit(),
-    )
+    sender
+        .send(&target)
+        .message(Message::try_from(b"PING").expect("router ping"))
+        .submit_sync(zlink::SendFlags::NONE)
     .expect("router handshake send");
     let mut handshake = zlink::Received::empty();
     if let Err(err) = receiver.recv(&mut handshake, zlink::RecvFlags::NONE) {
@@ -87,12 +85,10 @@ fn main() {
         .expect("receiver handshake rid")
         .clone();
     assert_eq!(handshake.parts()[0].as_bytes(), b"PING");
-    common::block_on(
-        receiver
-            .send(&reply_rid)
-            .message(Message::try_from(b"PONG").expect("router pong"))
-            .submit(),
-    )
+    receiver
+        .send(&reply_rid)
+        .message(Message::try_from(b"PONG").expect("router pong"))
+        .submit_sync(zlink::SendFlags::NONE)
     .expect("receiver handshake reply");
     let mut handshake_reply = zlink::Received::empty();
     if let Err(err) = sender.recv(&mut handshake_reply, zlink::RecvFlags::NONE) {

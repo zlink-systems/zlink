@@ -5,9 +5,9 @@ const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, HEADER_SIZE, currentEpochNs, stampPayload, summarizeMetrics } = require('../common/perf_metrics');
 const { configureTlsClient, configureTlsServer } = require('../common/perf_tls');
-const { STOP_TOKEN_BYTES, isStopToken } = require('../perf_stop_token');
+const { STOP_TOKEN_BYTES, isStopTokenParts } = require('../perf_stop_token');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, tryRoutedSocketSend, waitForConnectionReady, waitForConnectionReadyCount, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementPayload, pollEvents, pollEventHas, recvNoWaitInto, tryRoutedSocketSend, waitForConnectionReady, waitForConnectionReadyCount, waitPollerOne } = require('./perf_multi_runtime');
 const SERVER_ROUTING_ID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
 function resolveRoutedPattern(pattern, family) {
     const base = `MULTI_${family}`;
@@ -30,7 +30,7 @@ function sendPayload(socket, routerClient, payload, control = false) {
 }
 async function sendStopTokenWithRetry(socket, routerClient, poller, pollBuffer) {
     const deadline = Date.now() + 5000;
-    while (!(await sendPayload(socket, routerClient, STOP_TOKEN_BYTES, true))) {
+    while (!sendPayload(socket, routerClient, STOP_TOKEN_BYTES, true)) {
         if (Date.now() >= deadline) {
             throw new Error('stop token send timeout');
         }
@@ -42,7 +42,8 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
     applyContextPolicy(ctx, 'client', pattern);
     const sockets = [];
     const payloads = [];
-    const pending = [];
+    const sendPending = [];
+    const replies = [];
     const poller = zlink.createPoller();
     const pollBuffer = zlink.createPollEvents(Math.max(1, options.clients));
     let rl = null;
@@ -60,11 +61,12 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
             }
             sockets.push(socket);
             payloads.push(createPayload(options.msgSize));
-            pending.push(false);
+            sendPending.push(false);
+            replies.push(new zlink.Received());
         }
         for (let i = 0; i < sockets.length; i += 1) {
             await waitForConnectionReady(sockets[i], () => sockets[i].connect(options.endpoint));
-            poller.add(sockets[i], pollEvents(POLLOUT), i);
+            poller.add(sockets[i], pollEvents(POLLIN), i);
         }
         ctx.recalculateAutoHwm();
         for (const socket of sockets) {
@@ -81,20 +83,21 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
             }
         }
         const runId = createRunId(1);
-        const activeStopNs = currentEpochNs()
+        const activeStartNs = currentEpochNs();
+        const activeStopNs = activeStartNs
             + BigInt(Math.floor(options.duration * 1_000_000_000));
+        const collector = createMetricCollector({
+            suite: 'multi',
+            runId,
+            msgSize: options.msgSize,
+            activeStartNs,
+            activeStopNs,
+            roundTrip: true
+        });
         let seq = 1n;
-        // The sender owns the active window. Each pass gives every non-pending
-        // socket one send, then repeats round-robin until backpressure requires a
-        // POLLOUT wakeup. ROUTER clients submit the pass concurrently; DEALER
-        // clients keep the pass sequential to avoid flooding the shared ROUTER
-        // receive path. Both modes keep all client sockets in the measured flow.
         while (currentEpochNs() < activeStopNs) {
-            let pendingCount = 0;
-            const sends = [];
             for (let i = 0; i < sockets.length; i += 1) {
-                if (pending[i]) {
-                    pendingCount += 1;
+                if (sendPending[i]) {
                     continue;
                 }
                 if (currentEpochNs() >= activeStopNs) {
@@ -106,43 +109,42 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
                     msgSize: options.msgSize,
                     seq
                 });
-                if (routerClient) {
-                    const socketIndex = i;
-                    sends.push(sendPayload(sockets[i], routerClient, payloads[i])
-                        .then((sent) => ({ socketIndex, sent })));
-                }
-                else {
-                    const sent = await sendPayload(sockets[i], routerClient, payloads[i]);
-                    if (!sent) {
-                        pending[i] = true;
-                        pendingCount += 1;
-                    }
-                    else {
-                        seq += 1n;
-                    }
-                }
-            }
-            const results = await Promise.all(sends);
-            for (const { socketIndex, sent } of results) {
+                const sent = sendPayload(sockets[i], routerClient, payloads[i]);
                 if (!sent) {
-                    pending[socketIndex] = true;
-                    pendingCount += 1;
+                    sendPending[i] = true;
+                    poller.modify(sockets[i], pollEvents(POLLIN | POLLOUT));
+                    continue;
                 }
-                else {
-                    seq += 1n;
-                }
+                seq += 1n;
             }
-            if (currentEpochNs() >= activeStopNs || pendingCount === 0) {
-                continue;
+            const remainingMs = Math.ceil((Number(activeStopNs) - Number(currentEpochNs())) / 1_000_000);
+            if (remainingMs <= 0) {
+                break;
             }
-            const readyCount = poller.wait(pollBuffer, -1);
+            const readyCount = poller.wait(pollBuffer, sendPending.every(Boolean) ? Math.max(1, Math.min(remainingMs, 2_147_483_647)) : 0);
             for (let offset = 0; offset < readyCount; offset += 1) {
                 const index = pollBuffer.slot(offset);
                 if (!Number.isInteger(index) || index < 0 || index >= sockets.length) {
                     continue;
                 }
-                if (pollEventHas({ revents: pollBuffer.revents(offset) }, POLLOUT)) {
-                    pending[index] = false;
+                const event = { revents: pollBuffer.revents(offset) };
+                if (pollEventHas(event, POLLIN)) {
+                    const reply = replies[index];
+                    while (recvNoWaitInto(sockets[index], reply)) {
+                        try {
+                            const payload = measurementPayload(reply.parts);
+                            if (!payload)
+                                throw new Error('invalid multipart echo reply');
+                            collector.recordPayload(payload.data(), currentEpochNs());
+                        }
+                        finally {
+                            reply.close();
+                        }
+                    }
+                }
+                if (pollEventHas(event, POLLOUT)) {
+                    sendPending[index] = false;
+                    poller.modify(sockets[index], pollEvents(POLLIN));
                 }
             }
         }
@@ -151,12 +153,19 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
         for (const socket of sockets) {
             await sendStopTokenWithRetry(socket, routerClient, poller, pollBuffer);
         }
+        const result = await collector.finish();
+        for (const metricLine of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs)) {
+            console.log(metricLine);
+        }
         console.log(`CLIENT_DONE,${options.msgSize}`);
     }
     finally {
         rl?.close();
         pollBuffer.close();
         poller.close();
+        for (const reply of replies) {
+            reply.close();
+        }
         for (const socket of sockets) {
             socket.close();
         }
@@ -169,8 +178,19 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
     const router = zlink.createRouterSocket(ctx);
     const poller = zlink.createPoller();
     const received = new zlink.Received();
+    const pending = [];
     let pollBuffer = null;
     let rl = null;
+    let pollMask = POLLIN;
+    const drainPending = async () => {
+        while (pending.length > 0) {
+            const reply = pending[0];
+            if (!tryRoutedSocketSend(router, reply.routingId, reply.parts)) {
+                return;
+            }
+            pending.shift();
+        }
+    };
     try {
         applySocketPolicy(router, { transport: options.transport });
         configureTlsServer(router, options.transport);
@@ -193,69 +213,50 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
                 continue;
             }
             await readyBarrier;
-            const payloadSize = Math.max(options.msgSize, HEADER_SIZE);
-            const activeStartNs = currentEpochNs();
-            const activeStopNs = activeStartNs
-                + BigInt(Math.floor(options.duration * 1_000_000_000));
-            const collector = createMetricCollector({
-                runId: createRunId(1),
-                msgSize: options.msgSize,
-                activeStartNs,
-                activeStopNs,
-                latencySampleStride: 32,
-                roundTrip: false
-            });
-            while (currentEpochNs() < activeStopNs) {
+            let stopTokenCount = 0;
+            while (stopTokenCount < options.clients) {
                 const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
-                if (!ready || !pollEventHas(ready, POLLIN)) {
+                if (!ready) {
                     continue;
                 }
-                while (true) {
-                    if (!router.recv(received, zlink.RecvFlags.DontWait)) {
-                        break;
-                    }
-                    const parts = received.parts;
-                    if (parts.length === 1 && isStopToken(parts[0].data())) {
-                        continue;
-                    }
-                    const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
-                    if (parts.length !== expectedParts || (expectedParts === 2 && parts[1].data().length !== 0)) {
-                        continue;
-                    }
-                    const data = parts[0].data();
-                    if (data.length === payloadSize) {
-                        collector.recordPayload(data, currentEpochNs());
-                    }
+                if (pollEventHas(ready, POLLOUT)) {
+                    await drainPending();
                 }
-            }
-            // Drain the in-flight tail and stop tokens without counting it. This
-            // keeps the sender's final token from being stranded by receiver HWM.
-            const tailReceived = new zlink.Received();
-            const tailDeadlineNs = currentEpochNs() + 2000000000n;
-            const idleNs = 50000000n;
-            let idleDeadlineNs = currentEpochNs() + idleNs;
-            while (currentEpochNs() < tailDeadlineNs
-                && currentEpochNs() < idleDeadlineNs) {
-                let drained = false;
-                while (true) {
-                    if (!router.recv(tailReceived, zlink.RecvFlags.DontWait)) {
-                        break;
+                if (pollEventHas(ready, POLLIN)) {
+                    while (router.recv(received, zlink.RecvFlags.DontWait)) {
+                        try {
+                            if (!received.routingId) {
+                                throw new Error('routed echo received without routing id');
+                            }
+                            if (isStopTokenParts(received.parts)) {
+                                stopTokenCount += 1;
+                                continue;
+                            }
+                            const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+                            if (received.parts.length !== expectedParts
+                                || (expectedParts === 2 && received.parts[1].data().length !== 0)) {
+                                throw new Error('invalid multipart echo request');
+                            }
+                            if (pending.length === 0
+                                && tryRoutedSocketSend(router, received.routingId, received.parts)) {
+                                continue;
+                            }
+                            pending.push({
+                                routingId: zlink.RoutingId.from(received.routingId.toBytes()),
+                                parts: received.parts.map((part) => Buffer.from(part.data()))
+                            });
+                        }
+                        finally {
+                            received.close();
+                        }
                     }
-                    drained = true;
+                    await drainPending();
                 }
-                if (drained) {
-                    idleDeadlineNs = currentEpochNs() + idleNs;
-                    continue;
+                const nextPollMask = pending.length > 0 ? POLLIN | POLLOUT : POLLIN;
+                if (nextPollMask !== pollMask) {
+                    poller.modify(router, pollEvents(nextPollMask));
+                    pollMask = nextPollMask;
                 }
-                const ready = waitPollerOne(poller, pollBuffer, 50);
-                if (ready && pollEventHas(ready, POLLIN)) {
-                    idleDeadlineNs = currentEpochNs() + idleNs;
-                }
-            }
-            tailReceived.close();
-            const result = await collector.finish();
-            for (const metricLine of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted)) {
-                console.log(metricLine);
             }
             break;
         }

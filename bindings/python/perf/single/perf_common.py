@@ -153,6 +153,18 @@ def resolve_single_recv_timeout_ms():
     return _env_int("PERF_SINGLE_RCVTIMEO_MS", 200)
 
 
+def resolve_single_reqrep_timeout_ms():
+    return _env_int("PERF_SINGLE_REQREP_TIMEOUT_MS", 200)
+
+
+def resolve_single_reqrep_drain_timeout_ms():
+    return _env_int("PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10000)
+
+
+def resolve_single_latency_sample_cap():
+    return max(0, _env_int("PERF_SINGLE_LATENCY_SAMPLE_CAP", 1000000))
+
+
 def resolve_single_pubsub_recv_timeout_ms():
     return _env_int(
         "PERF_SINGLE_PUBSUB_RCVTIMEO_MS",
@@ -407,7 +419,8 @@ def send_nonblocking(sock, payload, *, routing_id=None, measurement=True):
             op.messages(*measurement_parts(payload))
         else:
             op.message(payload)
-        return bool(op.flags(flag).submit())
+        op.submit_sync(flags=flag)
+        return True
     except _submit_error_type() as exc:
         if exc.result == _submit_backpressured_result():
             return False

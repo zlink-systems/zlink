@@ -4,7 +4,6 @@
 #include "perf_single_common.hpp"
 
 #include <atomic>
-#include <condition_variable>
 #include <memory>
 #include <mutex>
 
@@ -37,18 +36,15 @@ struct reqrep_state_t
     std::atomic<unsigned long long> in_flight;
     std::atomic<bool> fatal;
     std::mutex latency_mutex;
-    std::mutex completion_mutex;
-    std::condition_variable completion_changed;
     latency_stats_builder_t latency;
 };
 
-inline detached_async_task_t observe_request_completion (
-  zlink::async_result_t<std::vector<zlink::message_t>> result_,
-  std::shared_ptr<reqrep_state_t> state_)
+inline void observe_request_completion (
+  zlink::request_result_t result_, std::vector<zlink::message_t> parts_,
+  const std::shared_ptr<reqrep_state_t> &state_)
 {
-    try {
-        std::vector<zlink::message_t> parts = co_await std::move (result_);
-        if (const zlink::message_t *payload = measurement_payload_part (parts)) {
+    if (result_ == zlink::request_result_t::ok) {
+        if (const zlink::message_t *payload = measurement_payload_part (parts_)) {
             perf_single_metric::header_t header;
             if (perf_single_metric::decode_payload_header (
                   payload->data (), payload->size (), &header)
@@ -62,16 +58,10 @@ inline detached_async_task_t observe_request_completion (
                 state_->completed.fetch_add (1, std::memory_order_relaxed);
             }
         }
-    }
-    catch (const zlink::request_error_t &err) {
-        if (err.result () != zlink::request_result_t::timed_out)
-            state_->fatal.store (true, std::memory_order_release);
-    }
-    catch (...) {
+    } else if (result_ != zlink::request_result_t::timed_out) {
         state_->fatal.store (true, std::memory_order_release);
     }
     state_->in_flight.fetch_sub (1, std::memory_order_release);
-    state_->completion_changed.notify_one ();
 }
 
 inline bool reqrep_transient_errno (int err_)
@@ -143,6 +133,10 @@ inline async_task_t<bool> run_reqrep_pattern (const reqrep_config_t &config_,
     const int drain_timeout_ms = parse_positive_env ("PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10000);
     const std::shared_ptr<reqrep_state_t> state =
       std::make_shared<reqrep_state_t> (1U, msg_size_);
+    zlink::poller_t completion_poller;
+    zlink::poll_event_t completion_event;
+    client.sock ().poller_add (completion_poller,
+                               zlink::poll_event_flag_t::pollcompletion);
     std::atomic<bool> server_ok (true);
 
     std::thread server_thread ([&] () {
@@ -201,21 +195,13 @@ inline async_task_t<bool> run_reqrep_pattern (const reqrep_config_t &config_,
         }
     });
 
-    constexpr size_t pipeline_budget_bytes = 768u * 1024u;
-    const size_t message_bytes = std::max<size_t> (1, msg_size_);
-    const unsigned long long max_in_flight = std::max<size_t> (
-      1, std::min<size_t> (64, pipeline_budget_bytes / message_bytes));
     uint64_t seq = 1;
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (duration_s);
     while (std::chrono::steady_clock::now () < deadline
            && !state->fatal.load (std::memory_order_acquire)) {
-        // This is the measured request hot path. Match the C reference's
-        // count-and-byte bound so expired requests cannot accumulate in queues.
-        for (unsigned int burst = 0;
-             burst < max_in_flight
-             && state->in_flight.load (std::memory_order_acquire) < max_in_flight
-             && std::chrono::steady_clock::now () < deadline;
-             ++burst) {
+        // Submit continuously until the public request surface reports
+        // backpressure. The socket HWM, not a runner window, owns the depth.
+        while (std::chrono::steady_clock::now () < deadline) {
             if (!perf_single_metric::stamp_payload (payload.data (), payload.size (), state->run_id,
                                                     perf_single_metric::phase_active,
                                                     state->msg_size, seq,
@@ -231,18 +217,30 @@ inline async_task_t<bool> run_reqrep_pattern (const reqrep_config_t &config_,
             state->in_flight.fetch_add (1, std::memory_order_release);
             try {
                 const std::chrono::milliseconds timeout (request_timeout_ms);
+                const zlink::request_callback_t callback =
+                  [state] (zlink::request_result_t result,
+                           std::vector<zlink::message_t> parts) {
+                      observe_request_completion (result, std::move (parts), state);
+                  };
                 if (measurement_part_count () == 2) {
                     zlink::message_t tail = message_from_payload (NULL, 0);
                     if (config_.routed_request)
-                        observe_request_completion (
-                          client.sock ().request (server_rid, part, tail, timeout), state);
+                        (void) client.sock ().request_submit (
+                          server_rid, part, tail, timeout, callback,
+                          static_cast<int> (zlink::send_flags_t::dontwait));
                     else
-                        observe_request_completion (client.sock ().request (part, tail, timeout), state);
+                        (void) client.sock ().request_submit (
+                          part, tail, timeout, callback,
+                          static_cast<int> (zlink::send_flags_t::dontwait));
                 } else {
                     if (config_.routed_request)
-                        observe_request_completion (client.sock ().request (server_rid, part, timeout), state);
+                        (void) client.sock ().request_submit (
+                          server_rid, part, timeout, callback,
+                          static_cast<int> (zlink::send_flags_t::dontwait));
                     else
-                        observe_request_completion (client.sock ().request (part, timeout), state);
+                        (void) client.sock ().request_submit (
+                          part, timeout, callback,
+                          static_cast<int> (zlink::send_flags_t::dontwait));
                 }
                 ++seq;
             }
@@ -255,16 +253,18 @@ inline async_task_t<bool> run_reqrep_pattern (const reqrep_config_t &config_,
                 break;
             }
         }
-        std::unique_lock<std::mutex> lock (state->completion_mutex);
-        state->completion_changed.wait_for (lock, std::chrono::milliseconds (50));
+        if (state->in_flight.load (std::memory_order_acquire) > 0) {
+            (void) completion_poller.wait (&completion_event, 1,
+                                           std::chrono::milliseconds (50));
+        }
     }
 
     const auto drain_deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (drain_timeout_ms);
     while (state->in_flight.load (std::memory_order_acquire) > 0
            && std::chrono::steady_clock::now () < drain_deadline) {
-        std::unique_lock<std::mutex> lock (state->completion_mutex);
-        state->completion_changed.wait_for (lock, std::chrono::milliseconds (50));
+        (void) completion_poller.wait (&completion_event, 1,
+                                       std::chrono::milliseconds (50));
     }
     const bool stop_ok = config_.routed_request
                            ? send_stop_token_active (client.sock (), server_rid)

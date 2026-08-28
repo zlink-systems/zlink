@@ -64,7 +64,7 @@ MSG_SIZES="${PERF_MSG_SIZES:-}"
 STREAM_MSG_SIZES="${PERF_MULTI_STREAM_MSG_SIZES:-${PERF_STREAM_MSG_SIZES:-${DEFAULT_MULTI_STREAM_MSG_SIZES}}}"
 CLIENTS="${PERF_MULTI_CLIENTS:-}"
 EFFECTIVE_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
-EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-10000}}"
+EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
 EFFECTIVE_DEFAULT_IO_THREADS="${PERF_MULTI_DEFAULT_IO_THREADS:-${PERF_DEFAULT_IO_THREADS:-4}}"
 DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
 PART_COUNT="${PERF_PART_COUNT:-2}"
@@ -188,7 +188,7 @@ Options:
   --part-count N        Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST      Message size list.
   --transports LIST     Transport list override (default: tcp,tls,ws,wss).
-  --clients N           Client socket count (default: 100, stream=10000).
+  --clients N           Client socket count (default: 100).
   --runs N              Iterations per configuration (default: 1).
   --build-dir PATH      Accepted for policy compatibility.
   --reuse-build         Reuse existing build output.

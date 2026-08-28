@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -33,7 +31,7 @@ func runMultiPubSubServer(cfg multiConfig) {
 	for time.Now().Before(window.StopAt) {
 		if useMultiPubSubWindowMessage(cfg.transport, cfg.msgSize) {
 			_, err := perfcommon.SubmitMeasurement(publisher.Publish("bench"),
-				perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt), zlink.SendFlagsDontWait)
+				perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt), zlink.SendFlagsNone)
 			if err != nil {
 				if perfcommon.IsTransient(err) {
 					continue
@@ -45,7 +43,7 @@ func runMultiPubSubServer(cfg multiConfig) {
 		}
 		perfcommon.StampWindowPayload(payload, window.ActiveAt)
 		msg := perfcommon.NewMessage(payload)
-		_, err = perfcommon.SubmitMeasurement(publisher.Publish("bench"), msg, zlink.SendFlagsDontWait)
+		_, err = perfcommon.SubmitMeasurement(publisher.Publish("bench"), msg, zlink.SendFlagsNone)
 		if err != nil {
 			if perfcommon.IsTransient(err) {
 				continue
@@ -77,8 +75,7 @@ func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
 	perfcommon.Must(err)
 	defer ctx.Close()
 
-	stats := perfcommon.NewStats()
-	latencyStride := resolveMultiPubSubLatencySampleStride()
+	stats := perfcommon.NewMultiStats()
 	subs := make([]*zlink.SubSocket, 0, cfg.clients)
 	monitors := make([]*zlink.SocketMonitor, 0, cfg.clients)
 	for i := 0; i < cfg.clients; i++ {
@@ -130,16 +127,21 @@ func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
 		perfcommon.Must(poller.AddSocket(sub, perfcommon.ZLinkPollIn, uintptr(i)))
 	}
 
-	// perf_multi_pubsub_client.cpp run_recv_duration: the wire stop token is
-	// the normal phase boundary. If PUB drops that terminal message for a
-	// subscriber, the same bounded cooldown used by the Python runner lets a
-	// client that observed active traffic finish without an infinite wait.
+	// PUB delivery is lossy, so the active deadline is the required boundary;
+	// the wire stop token only allows an earlier wake after the sender closes.
 	phaseDone := false
 	activeObserved := false
-	stopWaitDeadline := window.StopAt.Add(6 * time.Second)
 	events := make([]zlink.PollEvent, len(subs))
 	for !phaseDone {
-		n, err := poller.Wait(events, time.Second)
+		remaining := time.Until(window.StopAt)
+		if remaining <= 0 {
+			break
+		}
+		wait := 100 * time.Millisecond
+		if remaining < wait {
+			wait = remaining
+		}
+		n, err := poller.Wait(events, wait)
 		if err != nil {
 			if perfcommon.IsTransient(err) {
 				continue
@@ -147,12 +149,9 @@ func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
 			perfcommon.Must(fmt.Errorf("multi pubsub client poll: %w", err))
 		}
 		if n == 0 {
-			if activeObserved && time.Now().After(stopWaitDeadline) {
-				phaseDone = true
-			}
 			continue
 		}
-		drainMultiPubSubReady(subs, received, events[:n], stats, cfg.msgSize, window.StopAt, latencyStride, &phaseDone, &activeObserved)
+		drainMultiPubSubReady(subs, received, events[:n], stats, cfg.msgSize, window.StopAt, &phaseDone, &activeObserved)
 	}
 	flushControlLine("CLIENT_DONE,%d", cfg.msgSize)
 	return stats.Snapshot(cfg.duration, cfg.msgSize)
@@ -165,7 +164,6 @@ func drainMultiPubSubReady(
 	stats *perfcommon.Stats,
 	msgSize int,
 	recvStopAt time.Time,
-	latencyStride uint64,
 	phaseDone *bool,
 	activeObserved *bool,
 ) {
@@ -177,7 +175,7 @@ func drainMultiPubSubReady(
 		if index < 0 || index >= len(subs) {
 			continue
 		}
-		drainMultiPubSubSocket(index, subs[index], received[index], stats, msgSize, recvStopAt, latencyStride, phaseDone, activeObserved)
+		drainMultiPubSubSocket(index, subs[index], received[index], stats, msgSize, recvStopAt, phaseDone, activeObserved)
 		if *phaseDone {
 			return
 		}
@@ -191,7 +189,6 @@ func drainMultiPubSubSocket(
 	stats *perfcommon.Stats,
 	msgSize int,
 	recvStopAt time.Time,
-	latencyStride uint64,
 	phaseDone *bool,
 	activeObserved *bool,
 ) {
@@ -224,34 +221,11 @@ func drainMultiPubSubSocket(
 	if !perfcommon.HasMetricHeaderPhase(part.Data(), msgSize, perfcommon.PhaseActive) {
 		return
 	}
-	count := stats.AddCount()
-	*activeObserved = true
-	if shouldSampleMultiPubSubLatency(count, latencyStride) {
-		now := time.Now()
-		if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, msgSize, perfcommon.PhaseActive, now); ok && now.Before(recvStopAt) {
-			stats.AddLatencySampleNs(latencyNs)
-		}
+	now := time.Now()
+	if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, msgSize, perfcommon.PhaseActive, now); ok && now.Before(recvStopAt) {
+		stats.AddLatencyNsSingleThread(latencyNs)
+		*activeObserved = true
 	}
-}
-
-func resolveMultiPubSubLatencySampleStride() uint64 {
-	return uint64(positiveMultiPubSubIntEnv("PERF_MULTI_PUBSUB_LATENCY_SAMPLE_STRIDE", 32))
-}
-
-func positiveMultiPubSubIntEnv(name string, fallback int) int {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
-}
-
-func shouldSampleMultiPubSubLatency(index, stride uint64) bool {
-	return stride <= 1 || index == 1 || index%stride == 0
 }
 
 func sendMultiPubSubStopToken(publisher *zlink.PubSocket) {

@@ -44,7 +44,7 @@ from `bindings/README.md` for CLI names, defaults, result file naming, and the
   - default patterns: `MULTI_DEALER_DEALER`, `MULTI_DEALER_ROUTER`, `MULTI_ROUTER_ROUTER`, `MULTI_PUBSUB`, `MULTI_STREAM`
   - public receive surface: `recv`
   - default transports: `tcp,tls,ws,wss`
-  - default clients: `100` and `10000` for `MULTI_STREAM`
+  - default clients: `100` for all multi patterns, including `MULTI_STREAM`
   - default sizes: `64,256,1024,65536,131072,262144`
   - stream default sizes: `64,256,1024,65536`
   - runner behavior: the client is pointed at the server's emitted `READY,<endpoint>` value so the measured path matches the actual bind endpoint

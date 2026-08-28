@@ -21,7 +21,6 @@ const {
 const { STOP_TOKEN_BYTES, isStopToken } = require('../perf_stop_token');
 
 const SERVER_RID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
-const REQUEST_WINDOW_BYTES = 768 * 1024;
 const trace = (message) => {
   if (process.env.PERF_DEBUG === '1') console.error(`[socket-reqrep] ${message}`);
 };
@@ -147,8 +146,12 @@ async function runSocketReqRep(msgSize, options, routedClient) {
                               : zlink.createDealerSocket(ctx);
   const serverMonitor = server.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
   const clientMonitor = client.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+  const completionPoller = zlink.createPoller();
+  const completionEvents = zlink.createPollEvents(1);
   const endpoint = await benchmarkEndpoint(options.transport,
     routedClient ? `router-router-reqrep-${msgSize}` : `dealer-router-reqrep-${msgSize}`);
+  let replierTask = null;
+  let stopReplier = false;
   try {
     applySocketPolicy(server, options);
     applySocketPolicy(client, options);
@@ -171,6 +174,7 @@ async function runSocketReqRep(msgSize, options, routedClient) {
       await handshakeRouters(client, server);
       trace('handshake-done');
     }
+    completionPoller.add(client, [zlink.PollEventFlag.PollCompletion], 0);
     const runId = createRunId(options.runId ?? 1);
     const activeStartNs = currentEpochNs();
     const activeStopNs = activeStartNs
@@ -181,24 +185,21 @@ async function runSocketReqRep(msgSize, options, routedClient) {
       activeStartNs,
       activeStopNs,
       roundTrip: false,
+      acceptDrainCompletions: true,
     });
     let seq = 1n;
     let outstanding = 0;
-    const maxInFlight = Math.max(
-      1,
-      Math.min(64, Math.floor(REQUEST_WINDOW_BYTES / Math.max(1, msgSize)))
-    );
     // parseSingleBinaryArgs yields NaN when PERF_SINGLE_RCVTIMEO_MS is unset,
     // and NaN is not nullish, so `??` would forward it into timeout().
     const requestTimeoutMs = Number.isFinite(options.recvTimeoutMs)
       ? Math.trunc(options.recvTimeoutMs)
       : 200;
     let failure = null;
-    let completionSignal = Promise.resolve();
-    const observe = async (request) => {
-      let parts = null;
+    let replierFailure = null;
+    let stopReceived = false;
+    const observe = (error, parts) => {
       try {
-        parts = await request;
+        if (error) throw error;
         const payload = measurementPayload(parts);
         if (payload) {
           collector.recordPayload(payload.data(), currentEpochNs());
@@ -216,52 +217,83 @@ async function runSocketReqRep(msgSize, options, routedClient) {
       }
     };
 
-    while (currentEpochNs() < activeStopNs && !failure) {
-      while (outstanding < maxInFlight && currentEpochNs() < activeStopNs) {
+    // Keep reply receive/reply work in an independent event-loop flow. The
+    // requester flow below can continue submitting and progressing completion
+    // callbacks while this flow drains the replier socket, matching C's three
+    // simultaneously active submit/progress/replier roles as closely as the
+    // single-threaded public Node runtime permits.
+    replierTask = (async () => {
+      while (!stopReplier) {
+        try {
+          if (drainServer(server)) {
+            stopReceived = true;
+            return;
+          }
+        } catch (error) {
+          replierFailure = error;
+          return;
+        }
+        await sleepImmediate();
+      }
+    })();
+
+    while (currentEpochNs() < activeStopNs && !failure && !replierFailure) {
+      while (currentEpochNs() < activeStopNs) {
         const payload = createPayload(msgSize);
         stampPayload(payload, { phase: 1, runId, msgSize, seq });
         try {
           const operation = routedClient ? client.request(SERVER_RID) : client.request();
-          const request = appendMeasurement(operation, payload)
-            .timeout(requestTimeoutMs).submit();
+          appendMeasurement(operation, payload).timeout(requestTimeoutMs)
+            .submit_sync(zlink.SendFlags.DontWait, observe);
           outstanding += 1;
-          completionSignal = observe(request);
           seq += 1n;
         } catch (error) {
           if (!transientSubmit(error)) throw error;
           break;
         }
       }
-      drainServer(server);
-      await Promise.race([completionSignal, sleepImmediate()]);
+      // Let native request completions and admission failures dispatch. The
+      // request surface owns its pending limit; the runner does not impose an
+      // inflight/window cap.
+      completionPoller.wait(completionEvents, 0);
+      await sleepImmediate();
     }
     trace(`active-done outstanding=${outstanding}`);
 
     const drainStopNs = currentEpochNs() + 10_000_000_000n;
-    while (outstanding > 0 && currentEpochNs() < drainStopNs) {
-      drainServer(server);
-      await Promise.race([completionSignal, sleepImmediate()]);
+    while (outstanding > 0 && currentEpochNs() < drainStopNs && !replierFailure) {
+      completionPoller.wait(completionEvents, 0);
+      await sleepImmediate();
     }
-    if (failure || outstanding !== 0) throw failure ?? new Error('request drain timed out');
+    if (failure || replierFailure || outstanding !== 0) {
+      stopReplier = true;
+      await replierTask;
+      throw failure ?? replierFailure ?? new Error('request drain timed out');
+    }
     trace('drain-done');
 
     const stopOperation = routedClient ? client.send(SERVER_RID) : client.send();
     await stopOperation.message(STOP_TOKEN_BYTES).submit();
     const stopDeadlineNs = currentEpochNs() + 5_000_000_000n;
-    let stopReceived = false;
     while (!stopReceived && currentEpochNs() < stopDeadlineNs) {
-      stopReceived = drainServer(server);
-      if (!stopReceived) await sleepImmediate();
+      await Promise.race([replierTask, sleepImmediate()]);
     }
+    stopReplier = true;
+    await replierTask;
+    if (replierFailure) throw replierFailure;
     if (!stopReceived) throw new Error('wire stop token was not received');
     trace('stop-done');
     return collector.finish();
   } catch (error) {
+    stopReplier = true;
+    await replierTask;
     trace(`failure=${error?.stack ?? error}`);
     throw error;
   } finally {
+    stopReplier = true;
+    await replierTask?.catch?.(() => {});
     trace('closing');
-    for (const resource of [clientMonitor, serverMonitor,
+    for (const resource of [completionEvents, completionPoller, clientMonitor, serverMonitor,
       client, server, ctx]) {
       try { resource?.close?.(); } catch (_) { /* preserve the benchmark failure */ }
     }

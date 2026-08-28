@@ -164,7 +164,6 @@ async function runRouterRouterBenchmark(msgSize, options) {
             msgSize,
             activeStartNs,
             activeStopNs,
-            latencySampleStride: integerEnv('PERF_SINGLE_ROUTED_LATENCY_SAMPLE_STRIDE', 32),
         });
         // PERF_SINGLE_TEST_POLICY § 1.4 / § 2.0.1: the PING/PONG handshake
         // above is the routing-id discovery gate (C perf_router_router.cpp
@@ -193,7 +192,11 @@ if (require.main === module) {
     (async () => {
         const options = parseSingleBinaryArgs(process.argv.slice(2));
         const result = await runRouterRouterBenchmark(options.msgSize, options);
-        for (const line of summarizeMetrics('ROUTER_ROUTER', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted)) {
+        if (result.unsupported) {
+            console.log(`UNSUPPORTED,${options.libName},ROUTER_ROUTER,${options.transport}`);
+            return;
+        }
+        for (const line of summarizeMetrics('ROUTER_ROUTER', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted, result.latencyMeanNs)) {
             console.log(line);
         }
     })().catch((error) => {

@@ -15,7 +15,6 @@ internal static class PerfMultiRouterRouterClient
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
         int latencySampleCap = ResolveMultiLatencySampleCap(options);
         int clientCount = ResolveMultiClients(options);
-        int pollTimeoutMs = ResolveMultiClientPollTimeoutMs(options);
         string endpoint = options.Endpoint;
         byte[] serverRoutingId = "SERVER"u8.ToArray();
 
@@ -67,10 +66,9 @@ internal static class PerfMultiRouterRouterClient
                 double latencyP99Ns, long measureCount) result;
             try
             {
-                result = await RunMultiRouterRouterClientLoopAsync(pollManager,
-                    slots,
-                    size, latencySampleCap, pollTimeoutMs, durationSeconds,
-                    readyTimeoutMs).ConfigureAwait(false);
+                result = RunMultiRouterRouterClientLoop(pollManager,
+                    slots, size, latencySampleCap, durationSeconds,
+                    readyTimeoutMs);
             }
             finally
             {
@@ -120,11 +118,11 @@ internal static class PerfMultiRouterRouterClient
             slots[i].ReusableReceived.Dispose();
     }
 
-    private static async Task<(double throughput, double latencyNs,
-        double latencyP95Ns, double latencyP99Ns, long measureCount)>
-        RunMultiRouterRouterClientLoopAsync(PollManager pollManager,
+    private static (double throughput, double latencyNs,
+        double latencyP95Ns, double latencyP99Ns, long measureCount)
+        RunMultiRouterRouterClientLoop(PollManager pollManager,
             RouterRouterClientSlot[] slots, int msgSize, int latencySampleCap,
-            int pollTimeoutMs, int durationSeconds, int readyTimeoutMs)
+            int durationSeconds, int readyTimeoutMs)
     {
         _ = readyTimeoutMs;
         const uint runId = 1;
@@ -142,11 +140,16 @@ internal static class PerfMultiRouterRouterClient
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
-            (seq, rrIndex) = await TryScheduleIdleSendsAsync(slots, eventMasks,
-                msgSize, runId, PerfPhase.Active, seq, rrIndex)
-                .ConfigureAwait(false);
+            (seq, rrIndex) = TryScheduleSendsUntilBackpressured(slots,
+                eventMasks, msgSize, runId, PerfPhase.Active, seq, rrIndex,
+                benchDeadlineTicks);
 
-            // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait.
+            // C echo requesters own the active deadline. Bound each wait by
+            // the remaining active interval so a quiet peer cannot extend the
+            // configured phase.
+            int pollTimeoutMs = RemainingMilliseconds(benchDeadlineTicks);
+            if (pollTimeoutMs <= 0)
+                break;
             int readyCount = PollSocketEvents(pollManager, sockets, eventMasks,
                 pollTimeoutMs);
             if (readyCount <= 0)
@@ -155,12 +158,11 @@ internal static class PerfMultiRouterRouterClient
             }
 
             for (int i = 0; i < readyCount; i++)
-                seq = await HandleClientEventAsync(pollManager, slots,
+                seq = HandleClientEvent(pollManager, slots,
                     ReadySocketIndexAt(pollManager, i),
                     ReadySocketMaskAt(pollManager, i), eventMasks, msgSize,
                     runId, PerfPhase.Active, seq, metrics, allowSend: true,
-                    activeDeadlineTicks: benchDeadlineTicks)
-                    .ConfigureAwait(false);
+                    activeDeadlineTicks: benchDeadlineTicks);
         }
 
         long benchEndTicks = Stopwatch.GetTimestamp();
@@ -180,31 +182,31 @@ internal static class PerfMultiRouterRouterClient
             metrics.MeasureCount);
     }
 
-    private static async Task<(ulong Seq, int RrIndex)>
-        TryScheduleIdleSendsAsync(RouterRouterClientSlot[] slots,
+    private static (ulong Seq, int RrIndex)
+        TryScheduleSendsUntilBackpressured(RouterRouterClientSlot[] slots,
             PollEventFlags[] eventMasks, int msgSize, uint runId,
-            PerfPhase phase, ulong seq, int rrIndex)
+            PerfPhase phase, ulong seq, int rrIndex, long activeDeadlineTicks)
     {
         int startIndex = rrIndex;
         for (int i = 0; i < slots.Length; i++)
         {
+            if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+                break;
             int slotIndex = (startIndex + i) % slots.Length;
             RouterRouterClientSlot slot = slots[slotIndex];
-            if (slot.WaitingForReply || slot.WaitingForWritable)
+            if (slot.WaitingForWritable)
                 continue;
 
-            if (await TrySendAsync(slot, msgSize, runId, phase, seq)
-                    .ConfigureAwait(false))
+            while (Stopwatch.GetTimestamp() < activeDeadlineTicks)
             {
+                if (!TrySend(slot, msgSize, runId, phase, seq))
+                {
+                    slot.WaitingForWritable = true;
+                    UpdatePollMask(slot, eventMasks, slotIndex);
+                    break;
+                }
                 seq++;
-                slot.WaitingForReply = true;
-                slot.WaitingForWritable = false;
-                UpdatePollMask(slot, eventMasks, slotIndex);
-                continue;
             }
-
-            slot.WaitingForWritable = true;
-            UpdatePollMask(slot, eventMasks, slotIndex);
         }
 
         if (slots.Length > 0)
@@ -212,28 +214,29 @@ internal static class PerfMultiRouterRouterClient
         return (seq, rrIndex);
     }
 
-    private static async Task<ulong> HandleClientEventAsync(PollManager pollManager,
+    private static ulong HandleClientEvent(
+        PollManager pollManager,
         RouterRouterClientSlot[] slots,
         int slotIndex, PollEventFlags readyMask, PollEventFlags[] eventMasks,
         int msgSize, uint runId, PerfPhase phase, ulong seq,
         RouterRouterMetrics metrics, bool allowSend, long activeDeadlineTicks)
     {
-        _ = activeDeadlineTicks;
         _ = pollManager;
         RouterRouterClientSlot slot = slots[slotIndex];
+        if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+            return seq;
 
         if ((readyMask & PollEventFlags.PollOut) != 0
-            && slot.WaitingForWritable
-            && !slot.WaitingForReply)
+            && slot.WaitingForWritable)
         {
-            if (await TrySendAsync(slot, msgSize, runId, phase, seq)
-                    .ConfigureAwait(false))
+            while (Stopwatch.GetTimestamp() < activeDeadlineTicks)
             {
+                if (!TrySend(slot, msgSize, runId, phase, seq))
+                    break;
                 seq++;
-                slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
-                UpdatePollMask(slot, eventMasks, slotIndex);
             }
+            UpdatePollMask(slot, eventMasks, slotIndex);
         }
 
         if ((readyMask & PollEventFlags.PollIn) == 0)
@@ -243,19 +246,18 @@ internal static class PerfMultiRouterRouterClient
         Received received = slot.ReusableReceived;
         while (true)
         {
+            if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+                break;
             if (!routerSock.Recv(received, RecvFlags.DontWait))
                 break;
 
-            if (!slot.WaitingForReply)
-                continue;
+            if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+                break;
 
-            slot.WaitingForReply = false;
             if (phase == PerfPhase.Active)
             {
-                // Match C reference: outer while loop bounds the active
-                // window; dropping replies that arrive after activeDeadline
-                // would lower throughput vs C for replies whose sends were
-                // inside the active phase.
+                // The active deadline checks immediately around Recv keep
+                // post-window replies out of both throughput and latency.
                 if (PerfSocketIo.TryMeasurementPayload(received.Parts,
                         out Message payloadPart)
                     && PerfShared.TryDecodeMetricHeader(
@@ -285,11 +287,6 @@ internal static class PerfMultiRouterRouterClient
                 }
             }
 
-            if (!allowSend)
-                continue;
-
-            slot.WaitingForWritable = false;
-            UpdatePollMask(slot, eventMasks, slotIndex);
         }
         return seq;
     }
@@ -314,12 +311,12 @@ internal static class PerfMultiRouterRouterClient
         PollEventFlags[] eventMasks, int index)
     {
         PollEventFlags events = SocketPollIn;
-        if (slot.WaitingForWritable && !slot.WaitingForReply)
+        if (slot.WaitingForWritable)
             events |= SocketPollOut;
         eventMasks[index] = events;
     }
 
-    private static async Task<bool> TrySendAsync(RouterRouterClientSlot slot,
+    private static bool TrySend(RouterRouterClientSlot slot,
         int msgSize, uint runId, PerfPhase phase, ulong seq)
     {
         // Match C: stamp immediately before every send attempt, including a
@@ -329,8 +326,8 @@ internal static class PerfMultiRouterRouterClient
             seq, EpochNs());
         using Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan(0, PerfMetricHeaderSize).CopyTo(message.AsSpan());
-        return await PerfSocketIo.SendMeasurementAsync(slot.Socket, slot.ServerRoutingId,
-            message).ConfigureAwait(false) > 0;
+        return PerfSocketIo.SendMeasurement(slot.Socket, slot.ServerRoutingId,
+            message.AsReadOnlySpan(), SendFlags.DontWait) > 0;
     }
 
     private static int RemainingMilliseconds(long deadlineTicks)
@@ -363,7 +360,6 @@ internal static class PerfMultiRouterRouterClient
         // Caller-provided storage reused across every recv on this slot.
         internal Received ReusableReceived { get; }
         internal bool WaitingForWritable { get; set; }
-        internal bool WaitingForReply { get; set; }
     }
 
     private sealed class RouterRouterMetrics

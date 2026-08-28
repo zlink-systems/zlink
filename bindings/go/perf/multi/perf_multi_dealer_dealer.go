@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -35,9 +33,8 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 		return
 	}
 
-	stats := perfcommon.NewStats()
+	stats := perfcommon.NewMultiStats()
 	window := activeDeadline(cfg.duration)
-	latencyStride := resolveMultiDealerDealerLatencySampleStride(cfg.transport, cfg.msgSize)
 	poller := perfcommon.NewSocketPoller(server, perfcommon.ZLinkPollIn)
 	defer poller.Close()
 	events := make([]zlink.PollEvent, 1)
@@ -81,22 +78,9 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 			}
 			part, partErr := perfcommon.MeasurementPayload(parts)
 			if partErr == nil {
-				if latencyStride <= 1 {
-					now := time.Now()
-					if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, cfg.msgSize, perfcommon.PhaseActive, now); ok && now.After(window.ActiveAt) && now.Before(window.StopAt) {
-						stats.AddLatencyNs(latencyNs)
-					}
-					_ = received.Close()
-					continue
-				}
-				if perfcommon.HasMetricHeaderPhase(part.Data(), cfg.msgSize, perfcommon.PhaseActive) {
-					count := stats.AddCount()
-					if shouldSampleMultiDealerDealerLatency(count, latencyStride) {
-						now := time.Now()
-						if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, cfg.msgSize, perfcommon.PhaseActive, now); ok && now.After(window.ActiveAt) && now.Before(window.StopAt) {
-							stats.AddLatencySampleNs(latencyNs)
-						}
-					}
+				now := time.Now()
+				if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, cfg.msgSize, perfcommon.PhaseActive, now); ok && now.After(window.ActiveAt) && now.Before(window.StopAt) {
+					stats.AddLatencyNsSingleThread(latencyNs)
 				}
 			}
 			_ = received.Close()
@@ -104,29 +88,6 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 	}
 	drainMultiDealerDealerActiveTail(server, poller, events, cfg)
 	printMultiResult(cfg, stats.Snapshot(cfg.duration, cfg.msgSize))
-}
-
-func resolveMultiDealerDealerLatencySampleStride(transport string, msgSize int) uint64 {
-	if msgSize == 64 {
-		return uint64(positiveMultiDealerDealerIntEnv("PERF_MULTI_DEALER_DEALER_LATENCY_SAMPLE_STRIDE", 32))
-	}
-	return 1
-}
-
-func positiveMultiDealerDealerIntEnv(name string, fallback int) int {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
-}
-
-func shouldSampleMultiDealerDealerLatency(index, stride uint64) bool {
-	return stride <= 1 || index == 1 || index%stride == 0
 }
 
 func drainMultiDealerDealerActiveTail(
@@ -265,14 +226,14 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 			var sendErr error
 			if perfcommon.MeasurementPartCount() == 2 {
 				message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
-				sendErr = perfcommon.SubmitMeasurementRouted(client.socket.Send(), message)
+				sendErr = perfcommon.SubmitMeasurementRoutedFlags(client.socket.Send(), message, zlink.SendFlagsDontWait)
 				sent = sendErr == nil
 			} else {
 				sent, sendErr = perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
 					if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
-						return client.socket.Send().Message(message).Submit(context.Background())
+						return client.socket.Send().Message(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
 					}
-					return client.socket.Send().MoveMessage(message).Submit(context.Background())
+					return client.socket.Send().MoveMessage(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
 				})
 			}
 			if sendErr == nil && sent {

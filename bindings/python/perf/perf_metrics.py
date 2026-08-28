@@ -511,6 +511,11 @@ def rows_by_case(rows, *, warn=None):
 
 def pattern_direction_label(pattern):
     if pattern in {
+        "DEALER_ROUTER_REQREP",
+        "ROUTER_ROUTER_REQREP",
+    }:
+        return "request-reply"
+    if pattern in {
         "MULTI_DEALER_ROUTER",
         "MULTI_DEALER_ROUTER_SENDSEND",
         "MULTI_ROUTER_ROUTER",
@@ -522,7 +527,11 @@ def pattern_direction_label(pattern):
 
 
 def throughput_unit(pattern):
-    return "Kops/s" if pattern_direction_label(pattern) == "echo" else "Kmsg/s"
+    return (
+        "Kops/s"
+        if pattern_direction_label(pattern) in {"echo", "request-reply"}
+        else "Kmsg/s"
+    )
 
 
 def _metric_row_text(pattern, size, metrics):

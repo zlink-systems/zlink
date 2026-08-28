@@ -109,9 +109,22 @@ internal static class PerfPair
                 {
                     StampMetricHeader(payload.AsSpan(), RunId, ActivePhase,
                         msgSize, seq, EpochNs());
-                    seq++;
-                    if (SendBlocking(sender, payload) <= 0)
-                        continue;
+                    try
+                    {
+                        if (SendBlocking(sender, payload) <= 0)
+                        {
+                            Thread.Sleep(1);
+                            continue;
+                        }
+                        seq++;
+                    }
+                    catch (ZlinkException ex)
+                        when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
+                    {
+                        // Match the C single one-way path: retry transient
+                        // admission failures with a newly stamped payload.
+                        Thread.Sleep(1);
+                    }
                 }
             }
             catch (Exception ex)

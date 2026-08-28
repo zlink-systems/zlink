@@ -42,13 +42,17 @@ func SubmitMeasurement(op zlink.SendOp, message *zlink.Message, flags zlink.Send
 }
 
 func SubmitMeasurementRouted(op zlink.RoutedSendOp, message *zlink.Message) error {
+	return SubmitMeasurementRoutedFlags(op, message, zlink.SendFlagsNone)
+}
+
+func SubmitMeasurementRoutedFlags(op zlink.RoutedSendOp, message *zlink.Message, flags zlink.SendFlags) error {
 	submit := op.MoveMessage(message)
 	if MeasurementPartCount() == 2 {
 		tail := NewMessageWithSize(0)
 		defer tail.Close()
 		submit = submit.Message(tail)
 	}
-	return submit.Submit(context.Background())
+	return submit.Flags(flags).Submit(context.Background())
 }
 
 func MeasurementPayload(parts []*zlink.Message) (*zlink.Message, error) {

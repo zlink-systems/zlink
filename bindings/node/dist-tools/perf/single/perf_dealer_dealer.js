@@ -2,7 +2,7 @@
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
-const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, integerEnv, summarizeMetrics, } = require('../common/perf_metrics');
+const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, summarizeMetrics, } = require('../common/perf_metrics');
 const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForMonitorConnectionReady, waitForWorkerMessage, } = require('./perf_single_common');
 async function runDealerDealerBenchmark(msgSize, options) {
     if (options.transport === 'inproc') {
@@ -50,7 +50,6 @@ async function runDealerDealerBenchmark(msgSize, options) {
             msgSize,
             activeStartNs,
             activeStopNs,
-            latencySampleStride: integerEnv('PERF_SINGLE_DEALER_DEALER_LATENCY_SAMPLE_STRIDE', 32),
         });
         // PERF_SINGLE_TEST_POLICY § 1.4 / § 2.0.1: no start/stop control
         // channel. The connection-ready gate above is the only cross-thread
@@ -90,7 +89,11 @@ if (require.main === module) {
     (async () => {
         const options = parseSingleBinaryArgs(process.argv.slice(2));
         const result = await runDealerDealerBenchmark(options.msgSize, options);
-        for (const line of summarizeMetrics('DEALER_DEALER', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted)) {
+        if (result.unsupported) {
+            console.log(`UNSUPPORTED,${options.libName},DEALER_DEALER,${options.transport}`);
+            return;
+        }
+        for (const line of summarizeMetrics('DEALER_DEALER', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted, result.latencyMeanNs)) {
             console.log(line);
         }
     })().catch((error) => {

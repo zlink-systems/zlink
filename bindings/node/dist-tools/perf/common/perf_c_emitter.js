@@ -86,8 +86,10 @@ function multiTableSeparatorLine() {
 }
 function isEchoPattern(pattern) {
     return pattern === 'MULTI_DEALER_ROUTER'
+        || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
         || pattern === 'MULTI_DEALER_ROUTER_REQREP'
         || pattern === 'MULTI_ROUTER_ROUTER'
+        || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
         || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
         || pattern === 'MULTI_STREAM'
         || pattern === 'MULTI_SPOT_REQREP'
@@ -209,7 +211,7 @@ function resolveClientsMeta(selectedPatterns, clientsOverride = undefined) {
     if (!selectedPatterns || selectedPatterns.length === 0) {
         return '';
     }
-    const streamDefault = envGet('PERF_MULTI_DEFAULT_STREAM_CLIENTS') || envGet('PERF_STREAM_DEFAULT_CLIENTS') || '10000';
+    const streamDefault = envGet('PERF_MULTI_DEFAULT_STREAM_CLIENTS') || envGet('PERF_STREAM_DEFAULT_CLIENTS') || '100';
     const generalDefault = envGet('PERF_MULTI_DEFAULT_CLIENTS') || envGet('PERF_DEFAULT_CLIENTS') || '100';
     if (selectedPatterns.every((p) => STREAM_VARIANT_PATTERNS.has(p))) {
         return streamDefault;
@@ -323,7 +325,7 @@ function buildMultiOptionItems(opts) {
         ['fail_fast', envGet('PERF_FAIL_FAST') === '1' ? '1' : '0'],
         ['clients', clientsMeta],
         ['default_clients', envGet('PERF_MULTI_DEFAULT_CLIENTS') || envGet('PERF_DEFAULT_CLIENTS') || '100'],
-        ['default_stream_clients', envGet('PERF_MULTI_DEFAULT_STREAM_CLIENTS') || envGet('PERF_STREAM_DEFAULT_CLIENTS') || '10000'],
+        ['default_stream_clients', envGet('PERF_MULTI_DEFAULT_STREAM_CLIENTS') || envGet('PERF_STREAM_DEFAULT_CLIENTS') || '100'],
         ['service_clients', serviceClients > 0 ? String(serviceClients) : 'auto'],
         ['server_io_threads', roleIoDisplay('server')],
         ['client_io_threads', roleIoDisplay('client')],

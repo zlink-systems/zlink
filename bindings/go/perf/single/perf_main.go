@@ -50,6 +50,10 @@ func main() {
 		result = runDealerRouter(cfg)
 	case "ROUTER_ROUTER":
 		result = runRouterRouter(cfg)
+	case "DEALER_ROUTER_REQREP":
+		result = runDealerRouterReqRep(cfg)
+	case "ROUTER_ROUTER_REQREP":
+		result = runRouterRouterReqRep(cfg)
 	default:
 		perfcommon.Must(
 			&unsupportedPatternError{pattern: cfg.pattern},

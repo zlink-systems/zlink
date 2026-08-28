@@ -115,13 +115,11 @@ macro_rules! perf_submit_measurement {
     ($operation:expr, $payload:expr) => {{
         let operation = $operation.message($payload);
         if $crate::common::measurement_part_count() == 2 {
-            $crate::common::block_on(
-                operation
-                    .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
-                    .submit(),
-            )
+            operation
+                .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
+                .submit_sync(zlink::SendFlags::DONT_WAIT)
         } else {
-            $crate::common::block_on(operation.submit())
+            operation.submit_sync(zlink::SendFlags::DONT_WAIT)
         }
     }};
 }

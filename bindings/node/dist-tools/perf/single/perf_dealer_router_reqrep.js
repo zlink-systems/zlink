@@ -7,6 +7,6 @@ const { runSocketReqRep } = require('./perf_socket_reqrep');
 (async () => {
     const options = parseSingleBinaryArgs(process.argv.slice(2));
     const result = await runSocketReqRep(options.msgSize, options, false);
-    for (const line of summarizeMetrics('DEALER_ROUTER_REQREP', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted, 2.0))
+    for (const line of summarizeMetrics('DEALER_ROUTER_REQREP', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted, result.latencyMeanNs))
         console.log(line);
 })().catch((error) => { console.error(error); process.exitCode = 1; });

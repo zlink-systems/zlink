@@ -162,11 +162,10 @@ final class PerfPair {
     private static boolean trySendBlocking(PairSocket sender, Message active) {
         try {
             if (PerfUtil.measurementPartCount() == 2) {
-                sender.send().message(active).message(PerfUtil.measurementTail()).submit()
-                    .toCompletableFuture().join();
+                sender.send().message(active).message(PerfUtil.measurementTail())
+                    .submit_sync(SendFlags.NONE);
             } else {
-                sender.send().message(active).submit()
-                    .toCompletableFuture().join();
+                sender.send().message(active).submit_sync(SendFlags.NONE);
             }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
@@ -186,8 +185,7 @@ final class PerfPair {
 
     private static boolean trySendStop(PairSocket sender) {
         try (Message stop = PerfStopToken.newMessage()) {
-            sender.send().message(stop).submit()
-                .toCompletableFuture().join();
+            sender.send().message(stop).submit_sync(SendFlags.NONE);
             return true;
         } catch (ZlinkSubmitException ex) {
             if (ex.getResult() == SubmitResult.BACKPRESSURED) {

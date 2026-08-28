@@ -441,7 +441,7 @@ function isTransientSubmit(error) {
 }
 async function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
     try {
-        await appendMeasurement(socket.send(), payload).submit();
+        appendMeasurement(socket.send(), payload).submit_sync(flags);
         return true;
     }
     catch (error) {
@@ -452,7 +452,7 @@ async function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWai
     }
 }
 async function sendSocketRequired(socket, payload, flags = zlink.SendFlags.None) {
-    await appendMeasurement(socket.send(), payload).submit();
+    appendMeasurement(socket.send(), payload).submit_sync(flags);
 }
 async function sendSocketStopWithRetry(socket) {
     for (let retry = 0; retry < 100; retry += 1) {
@@ -492,133 +492,11 @@ function drainRecvSocketNoWaitUntilIdle(socket, collector, payloadSize, viaSubsc
         collector.recordPayload(data, currentEpochNs());
     }
 }
-async function runLocalSocketOneWayBenchmark({ pattern, msgSize, options, endpointToken, createReceiver, createSender, configureReceiver = null, configureSender = null, 
-// Single-context inproc parity extensions (used by PUBSUB / ROUTER_ROUTER
-// inproc where the non-inproc path uses a Worker that cannot share the
-// inproc context). Defaults preserve the PAIR/DEALER behaviour.
-senderBinds = false, // PUBSUB: PUB binds, SUB connects
-drainViaSubscribe = false, // PUBSUB: subscriber drains via subscribe
-handshake = null, // ROUTER_ROUTER: PING/PONG routing-id gate
-sendActive = null, // custom send (publish topic / send rid)
-sendStop = null, // custom wire stop-token send
-// C parity: the AUTO_HWM_DETAIL `component=` token must match the C
-// reference's per-pattern socket labels. PAIR/DEALER use receiver/sender
-// (C default); PUBSUB's C reference (perf_pubsub.cpp ~L259-269) labels
-// the PUB `publisher` and the SUB `subscriber`, so the inproc path must
-// emit those names too (otherwise the `## Auto-HWM Detail` collector
-// gains extra non-C `receiver`/`sender` rows for PUBSUB).
-receiverHwmComponent = 'receiver', senderHwmComponent = 'sender' }) {
-    const ctx = zlink.createContext();
-    applyContextPolicy(ctx);
-    const receiver = createReceiver(ctx);
-    const sender = createSender(ctx);
-    const receiverMonitor = receiver.monitorOpen([MonitorEventType.ConnectionReady]);
-    const senderMonitor = sender.monitorOpen([MonitorEventType.ConnectionReady]);
-    const endpoint = await benchmarkEndpoint(options.transport, `${endpointToken}-${msgSize}`);
-    try {
-        applySocketPolicy(receiver, options);
-        applySocketPolicy(sender, options);
-        if (typeof configureReceiver === 'function') {
-            configureReceiver(receiver);
-        }
-        if (typeof configureSender === 'function') {
-            configureSender(sender);
-        }
-        ctx.recalculateAutoHwm();
-        if (senderBinds) {
-            sender.bind(endpoint);
-            receiver.connect(endpoint);
-        }
-        else {
-            receiver.bind(endpoint);
-            sender.connect(endpoint);
-        }
-        await waitForMonitorConnectionReady(receiverMonitor);
-        await waitForMonitorConnectionReady(senderMonitor);
-        // ROUTER_ROUTER routing-id discovery gate (C perf_router_router.cpp
-        // does a PING/PONG before the active window). Runs in the single
-        // shared context — no Worker, so inproc works.
-        let activeRoutingId = null;
-        if (typeof handshake === 'function') {
-            activeRoutingId = await handshake(sender, receiver);
-        }
-        const activeStartNs = currentEpochNs();
-        const activeStopNs = activeStartNs
-            + BigInt(Math.floor(options.duration * 1_000_000_000));
-        const runId = createRunId(options.runId ?? 1);
-        const payload = createPayload(msgSize);
-        const payloadSize = Math.max(msgSize, HEADER_SIZE);
-        const collector = createMetricCollector({
-            runId,
-            msgSize,
-            activeStartNs,
-            activeStopNs,
-            latencySampleStride: integerEnv('PERF_SINGLE_LOCAL_LATENCY_SAMPLE_STRIDE', 32),
-        });
-        // PERF_POLICY § 1.1.2 / C bindings/c/perf/single/common/
-        // perf_single_one_way.hpp run_active_phase (~276-358): C runs a
-        // dedicated BLOCKING sender thread + a separate receiver thread that
-        // share one context. Node Worker threads cannot share a zlink context
-        // (inproc is context-local — doc/guide/04-transports.md "Same
-        // context"), so the inproc path cannot spawn an OS sender thread the
-        // way the non-inproc path uses a sender Worker. The faithful single-
-        // context adaptation: emulate C's blocking sender — every message is
-        // retried through backpressure until accepted (NO silent EAGAIN drop,
-        // NO uncounted send) and the receiver drain between attempts plays the
-        // role of C's concurrent receiver thread, relieving backpressure so
-        // the send anchor matches C (`sent` advances only on an accepted
-        // send, exactly like send_active_samples). The valid-recv / deadline
-        // anchor stays in the shared collector (perf_measurement.ts ~280),
-        // mirroring C's `steady_clock::now() < deadline` guard.
-        const drainOnce = () => drainRecvSocketNoWaitUntilIdle(receiver, collector, payloadSize, drainViaSubscribe);
-        const sendOne = typeof sendActive === 'function'
-            ? (value) => sendActive(sender, value, activeRoutingId)
-            : (value) => sendSocketNoWait(sender, value);
-        const sendActiveBlocking = async (value) => {
-            while (true) {
-                if (await sendOne(value)) {
-                    return true;
-                }
-                // Backpressured: drain the receiver (the Node stand-in for C's
-                // concurrent receiver thread) to relieve HWM, then retry the SAME
-                // message. This is the blocking-send semantic, not a drop.
-                if (drainOnce()) {
-                    // Stop token observed mid-active (should not happen before we
-                    // send it) — treat as fatal handshake error rather than a drop.
-                    throw new Error('unexpected stop token during active send');
-                }
-            }
-        };
-        let seq = 1n;
-        while (currentEpochNs() < activeStopNs) {
-            stampPayload(payload, { phase: 1, runId, msgSize, seq });
-            await sendActiveBlocking(payload);
-            seq += 1n;
-            drainOnce();
-        }
-        // C single sends active samples until the deadline and then sends only
-        // the wire stop token. There is no post-active phase-2 payload.
-        if (typeof sendStop === 'function') {
-            await sendStop(sender, activeRoutingId);
-        }
-        else {
-            await sendSocketStopWithRetry(sender);
-        }
-        while (!drainOnce()) {
-            // Drain until the wire-level stop token arrives.
-        }
-        const result = collector.finish();
-        emitSingleSocketHwmDetail(receiver, pattern, options.transport, receiverHwmComponent, msgSize);
-        emitSingleSocketHwmDetail(sender, pattern, options.transport, senderHwmComponent, msgSize);
-        return result;
-    }
-    finally {
-        receiverMonitor.close();
-        senderMonitor.close();
-        receiver.close();
-        sender.close();
-        ctx.close();
-    }
+async function runLocalSocketOneWayBenchmark({ pattern }) {
+    // inproc is context-local, while Node Workers cannot share a Context.
+    // A single JavaScript loop that alternates send and recv imposes a hidden
+    // window and does not represent C's concurrent sender/receiver workload.
+    return { unsupported: true, pattern };
 }
 function parseSingleBinaryArgs(argv) {
     if (argv.length < 3) {

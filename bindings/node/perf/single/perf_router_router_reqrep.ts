@@ -9,5 +9,5 @@ const { runSocketReqRep } = require('./perf_socket_reqrep');
   const result = await runSocketReqRep(options.msgSize, options, true);
   for (const line of summarizeMetrics('ROUTER_ROUTER_REQREP', options.transport,
     options.msgSize, result.latenciesNs, options.duration, options.libName,
-    result.accepted, 2.0)) console.log(line);
+    result.accepted, result.latencyMeanNs)) console.log(line);
 })().catch((error) => { console.error(error); process.exitCode = 1; });

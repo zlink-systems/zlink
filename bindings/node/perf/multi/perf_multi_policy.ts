@@ -74,7 +74,7 @@ function positiveIntegerEnv(...names) {
 
 function defaultClientsForPattern(patternName) {
   if (patternName === 'MULTI_STREAM') {
-    return positiveIntegerEnv('PERF_MULTI_DEFAULT_STREAM_CLIENTS', 'PERF_STREAM_DEFAULT_CLIENTS') ?? 10000;
+    return positiveIntegerEnv('PERF_MULTI_DEFAULT_STREAM_CLIENTS', 'PERF_STREAM_DEFAULT_CLIENTS') ?? 100;
   }
   return positiveIntegerEnv('PERF_MULTI_DEFAULT_CLIENTS', 'PERF_DEFAULT_CLIENTS') ?? 100;
 }

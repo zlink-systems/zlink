@@ -87,7 +87,7 @@ final class PerfArgs {
         String endpoint = "";
         int defaultClients = streamPattern
             ? intEnv("PERF_MULTI_DEFAULT_STREAM_CLIENTS",
-                intEnv("PERF_STREAM_DEFAULT_CLIENTS", 10_000))
+                intEnv("PERF_STREAM_DEFAULT_CLIENTS", 100))
             : intEnv("PERF_MULTI_DEFAULT_CLIENTS",
                 intEnv("PERF_DEFAULT_CLIENTS", 100));
         int clients = intEnv("PERF_MULTI_CLIENTS",

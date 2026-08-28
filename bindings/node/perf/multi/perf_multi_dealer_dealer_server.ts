@@ -79,10 +79,12 @@ async function main() {
       const activeStopNs = activeStartNs
         + BigInt(Math.floor(options.duration * 1_000_000_000));
       collector = createMetricCollector({
+        suite: 'multi',
         runId: createRunId(1),
         msgSize: options.msgSize,
         activeStartNs,
-        latencySampleStride: integerEnv('PERF_MULTI_DEALER_DEALER_LATENCY_SAMPLE_STRIDE', 32),
+        exactLatencyMean: true,
+        latencySampleCap: integerEnv('PERF_MULTI_LATENCY_SAMPLE_CAP', 65536),
       });
 
       // C run_receive_window (~240-297): poller wait with `-1` (signal-
@@ -158,7 +160,8 @@ async function main() {
         result.latenciesNs,
         options.duration,
         'current',
-        result.accepted
+        result.accepted,
+        result.latencyMeanNs
       )) {
         console.log(resultLine);
       }

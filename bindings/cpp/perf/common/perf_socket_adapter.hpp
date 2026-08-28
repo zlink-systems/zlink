@@ -723,6 +723,33 @@ class socket_t
         });
     }
 
+    int publish (const std::string &topic_id_,
+                 message_t &first_,
+                 message_t &second_,
+                 int flags_ = 0)
+    {
+        return visit ([&] (auto &socket_) -> int {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, pub_socket_t>::value
+                          || std::is_same<socket_type_t, xpub_socket_t>::value) {
+                try {
+                    const bool sent = std::move (socket_.publish (topic_id_).message (first_))
+                                        .message (second_)
+                                        .flags (flags_)
+                                        .submit ();
+                    return bool_result_to_errno (sent);
+                }
+                catch (const binding_error_t &err) {
+                    errno = err.internal_errno ();
+                    return -1;
+                }
+            } else {
+                errno = EOPNOTSUPP;
+                return -1;
+            }
+        });
+    }
+
     int recv (message_t &part_, int flags_ = 0)
     {
         return visit ([&] (auto &socket_) -> int {
@@ -809,6 +836,65 @@ class socket_t
                   .message (part_)
                   .timeout (timeout_)
                   .async ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    bool request_submit (message_t &part_, std::chrono::milliseconds timeout_,
+                         request_callback_t callback_, int flags_)
+    {
+        return visit ([&] (auto &socket_) -> bool {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
+                return std::move (socket_.request ()).message (part_)
+                  .timeout (timeout_).flags (flags_).submit (std::move (callback_));
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    bool request_submit (message_t &first_, message_t &second_,
+                         std::chrono::milliseconds timeout_,
+                         request_callback_t callback_, int flags_)
+    {
+        return visit ([&] (auto &socket_) -> bool {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
+                return std::move (socket_.request ()).message (first_).message (second_)
+                  .timeout (timeout_).flags (flags_).submit (std::move (callback_));
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    bool request_submit (const routing_id_t &target_rid_, message_t &part_,
+                         std::chrono::milliseconds timeout_,
+                         request_callback_t callback_, int flags_)
+    {
+        return visit ([&] (auto &socket_) -> bool {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
+                return std::move (socket_.request (target_rid_)).message (part_)
+                  .timeout (timeout_).flags (flags_).submit (std::move (callback_));
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    bool request_submit (const routing_id_t &target_rid_, message_t &first_,
+                         message_t &second_, std::chrono::milliseconds timeout_,
+                         request_callback_t callback_, int flags_)
+    {
+        return visit ([&] (auto &socket_) -> bool {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
+                return std::move (socket_.request (target_rid_)).message (first_).message (second_)
+                  .timeout (timeout_).flags (flags_).submit (std::move (callback_));
             } else {
                 throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }

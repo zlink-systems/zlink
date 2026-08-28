@@ -55,7 +55,7 @@ struct client_slot_t
         socket (NULL),
         index (0),
         next_seq (1),
-        waiting_reply (false),
+        outstanding (0),
         payload ()
     {
     }
@@ -64,7 +64,7 @@ struct client_slot_t
     void *socket;
     size_t index;
     uint64_t next_seq;
-    bool waiting_reply;
+    size_t outstanding;
     std::vector<char> payload;
 };
 
@@ -141,7 +141,8 @@ inline void on_request_reply (zlink_request_result_t result,
 
     client_state_t *state = slot->owner;
     std::lock_guard<std::mutex> lock (state->callback_mutex);
-    slot->waiting_reply = false;
+    if (slot->outstanding > 0)
+        --slot->outstanding;
 
     if (result != ZLINK_REQUEST_OK || !parts
         || part_count != perf_measurement_part_count ())
@@ -207,23 +208,23 @@ inline bool submit_request (const endpoint_config_t &config,
 
     {
         std::lock_guard<std::mutex> lock (slot->owner->callback_mutex);
-        slot->waiting_reply = true;
+        ++slot->outstanding;
     }
     zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
     if (config.client_router_request) {
         if (!target_rid || target_rid->size == 0) {
             zlink_msg_close (&part);
             std::lock_guard<std::mutex> lock (slot->owner->callback_mutex);
-            slot->waiting_reply = false;
+            --slot->outstanding;
             errno = EINVAL;
             return false;
         }
         rc = perf_zlink_router_request_measurement_part (
-          slot->socket, target_rid, &part, ZLINK_SEND_FLAGS_NONE, timeout_ms,
+          slot->socket, target_rid, &part, ZLINK_SEND_FLAGS_DONTWAIT, timeout_ms,
           on_request_reply, slot);
     } else {
         rc = perf_zlink_dealer_request_measurement_part (
-          slot->socket, &part, ZLINK_SEND_FLAGS_NONE, timeout_ms,
+          slot->socket, &part, ZLINK_SEND_FLAGS_DONTWAIT, timeout_ms,
           on_request_reply, slot);
     }
 
@@ -236,7 +237,7 @@ inline bool submit_request (const endpoint_config_t &config,
     zlink_msg_close (&part);
     {
         std::lock_guard<std::mutex> lock (slot->owner->callback_mutex);
-        slot->waiting_reply = false;
+        --slot->outstanding;
     }
     if (is_transient_submit (rc, err)) {
         if (blocked_out)
@@ -250,7 +251,7 @@ inline bool any_waiting_reply (client_state_t &state)
 {
     std::lock_guard<std::mutex> lock (state.callback_mutex);
     for (size_t i = 0; i < state.slots.size (); ++i) {
-        if (state.slots[i].waiting_reply)
+        if (state.slots[i].outstanding != 0)
             return true;
     }
     return false;
@@ -311,7 +312,7 @@ inline bool run_active_window (const endpoint_config_t &config,
         state->active_reply_count = 0;
         state->latency.reset ();
         for (size_t i = 0; i < state->slots.size (); ++i)
-            state->slots[i].waiting_reply = false;
+            state->slots[i].outstanding = 0;
     }
     state->fatal = false;
     for (size_t i = 0; i < state->slots.size (); ++i) {
@@ -325,27 +326,21 @@ inline bool run_active_window (const endpoint_config_t &config,
       static_cast<uint32_t> (bench_timeout_ms_from_env ("PERF_MULTI_REQREP_TIMEOUT_MS", 200));
 
     while (std::chrono::steady_clock::now () < deadline && !state->fatal) {
-        bool progress = false;
         for (size_t i = 0; i < state->slots.size (); ++i) {
             client_slot_t &slot = state->slots[i];
-            {
-                std::lock_guard<std::mutex> lock (state->callback_mutex);
-                if (slot.waiting_reply)
-                    continue;
+            while (std::chrono::steady_clock::now () < deadline) {
+                bool blocked = false;
+                if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
+                                     request_timeout_ms, &blocked)) {
+                    state->fatal = true;
+                    break;
+                }
+                if (blocked)
+                    break;
             }
-
-            bool blocked = false;
-            if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
-                                 request_timeout_ms, &blocked)) {
-                state->fatal = true;
+            if (state->fatal)
                 break;
-            }
-            if (!blocked)
-                progress = true;
         }
-        if (progress)
-            continue;
-
         const int wait_ms = poll_timeout_until (deadline, 50);
         if (wait_ms <= 0)
             break;

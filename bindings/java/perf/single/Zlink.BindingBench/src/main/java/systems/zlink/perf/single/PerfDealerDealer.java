@@ -9,6 +9,7 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.SocketType;
+import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.errors.ZlinkException;
@@ -131,9 +132,7 @@ final class PerfDealerDealer {
                     // the terminator.
                     PerfStopToken.sendWithRetry(() -> {
                         try (Message stop = PerfStopToken.newMessage()) {
-                            PerfUtil.awaitStage(sender.send()
-                                .message(stop)
-                                .submit());
+                            sender.send().message(stop).submit_sync(SendFlags.NONE);
                             return true;
                         }
                     }, "dealer/dealer");
@@ -163,10 +162,10 @@ final class PerfDealerDealer {
     private static boolean trySendBlocking(DealerSocket sender, Message active) {
         try {
             if (PerfUtil.measurementPartCount() == 2) {
-                PerfUtil.awaitStage(sender.send().message(active)
-                    .message(PerfUtil.measurementTail()).submit());
+                sender.send().message(active).message(PerfUtil.measurementTail())
+                    .submit_sync(SendFlags.NONE);
             } else {
-                PerfUtil.awaitStage(sender.send().message(active).submit());
+                sender.send().message(active).submit_sync(SendFlags.NONE);
             }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {

@@ -49,10 +49,9 @@ internal static partial class PerfRunner
         return options.ConnectReadyTimeoutMs;
     }
 
-    // PERF_MULTI_TEST_POLICY § 1.3.1: client/server poller wait timeouts
-    // are unconditionally -1 (signal-driven wait). Deadlines are tracked
-    // by application clock; phase end / shutdown is signaled either by
-    // stdin STOP (server) or wire-level stop token (client/receiver).
+    // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven receive/relay loops use
+    // -1. Echo requester loops own the active clock and bound each wait by
+    // their remaining interval at the call site.
     internal const int MultiClientPollTimeoutMs = -1;
 
     internal static int ResolveMultiClientPollTimeoutMs(PerfOptions options)

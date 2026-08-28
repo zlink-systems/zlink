@@ -8,11 +8,9 @@ use zlink::{
 };
 
 fn drain_socket(
-    index: usize,
     socket: &DealerSocket,
     msg_size: usize,
     latency: &mut common::LatencyStats,
-    waiting_reply: &mut [bool],
 ) -> bool {
     let mut processed = false;
     let mut received = zlink::Received::empty();
@@ -27,7 +25,6 @@ fn drain_socket(
                 let latency_ns =
                     common::now_ns().saturating_sub(sent_ts_ns.max(0) as u64) as f64 / 2.0;
                 latency.record_ns(latency_ns);
-                waiting_reply[index] = false;
                 processed = true;
             }
             Ok(false) => break,
@@ -44,8 +41,8 @@ fn main() {
     let ctx = common::perf_client_context();
     let mut sockets: Vec<DealerSocket> = Vec::with_capacity(settings.clients);
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
-    let mut waiting_reply = vec![false; settings.clients];
     let mut send_pending = vec![false; settings.clients];
+    let mut pending_messages = (0..settings.clients).map(|_| None).collect::<Vec<_>>();
     let mut seqs = vec![1u64; settings.clients];
     let mut monitors: Vec<SocketMonitor> = Vec::with_capacity(settings.clients);
 
@@ -77,8 +74,8 @@ fn main() {
     }
 
     // C perf_multi_client_helpers.hpp run_echo loop: unified poller, signal-
-    // driven perf_socket_poll(...,-1) when no socket made progress; inflight==1
-    // per socket via waiting_reply/send_pending. No hot-loop sleep(1ms).
+    // driven perf_socket_poll(...,-1) when no socket made progress. Echo receive
+    // never gates send; each socket submits continuously until its HWM blocks.
     let poller = Poller::new().expect("poller");
     for (index, sock) in sockets.iter().enumerate() {
         poller
@@ -93,33 +90,29 @@ fn main() {
         let mut progressed = false;
         for index in 0..sockets.len() {
             progressed |= drain_socket(
-                index,
                 &sockets[index],
                 args.msg_size,
                 &mut latency,
-                &mut waiting_reply,
             );
-            if waiting_reply[index] {
-                continue;
-            }
-            let mut msg = Message::with_size(payload_size).expect("msg");
-            common::encode_header(
-                msg.data_mut(),
-                common::PHASE_ACTIVE,
-                args.msg_size as u32,
-                seqs[index],
-            );
-            match perf_submit_measurement!(sockets[index].send(), msg) {
+            while !send_pending[index] && Instant::now() < deadline {
+                let payload = pending_messages[index].take().unwrap_or_else(|| {
+                    let mut payload = vec![0u8; payload_size];
+                    common::encode_header(&mut payload, common::PHASE_ACTIVE, args.msg_size as u32, seqs[index]);
+                    payload
+                });
+                let msg = Message::try_from(payload.as_slice()).expect("msg");
+                match perf_submit_measurement!(sockets[index].send(), msg) {
                 Ok(()) => {
-                    waiting_reply[index] = true;
                     send_pending[index] = false;
                     seqs[index] += 1;
                     progressed = true;
                 }
                 Err(err) if err.code() == SubmitResult::Backpressured => {
                     send_pending[index] = true;
+                    pending_messages[index] = Some(payload);
                 }
                 Err(err) => panic!("send failed: {err}"),
+                }
             }
         }
         if progressed {
@@ -133,7 +126,11 @@ fn main() {
             .as_millis()
             .max(1) as i64;
         match poller.wait(&mut poll_events, remaining_ms) {
-            Ok(_) => {}
+            Ok(event_count) => for event in &poll_events[..event_count] {
+                if event.revents & POLLOUT != 0 && event.slot < send_pending.len() {
+                    send_pending[event.slot] = false;
+                }
+            },
             Err(err) => panic!("poller wait failed: {err}"),
         }
     }

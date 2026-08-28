@@ -30,7 +30,7 @@ Options:
   --duration N          Override multi duration seconds (default: 5).
   --msg-sizes LIST      Comma-separated sizes.
   --transports LIST     Comma-separated transports (default: policy transport set).
-  --clients N           Override number of client sockets per pattern (default: 100, stream=10000).
+  --clients N           Override number of client sockets per pattern (default: 100).
   --hwm N               Override PERF_MULTI_HWM (default baseline: auto-HWM).
   --send-hwm N          Override PERF_MULTI_SNDHWM.
   --recv-hwm N          Override PERF_MULTI_RCVHWM.

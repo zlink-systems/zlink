@@ -118,8 +118,8 @@ internal static class PerfMultiDealerDealerClient
                     Message message = Message.Allocate(payloadSize);
                     StampMetricHeader(message.AsSpan(), runId,
                         PerfPhase.Active, msgSize, seq, EpochNs());
-                    bool sent = await PerfSocketIo.SendMeasurementAsync(socket, message)
-                        .ConfigureAwait(false) > 0;
+                    bool sent = PerfSocketIo.SendMeasurement(socket,
+                        message.AsReadOnlySpan(), SendFlags.DontWait) > 0;
                     message.Dispose();
                     if (!sent)
                     {
@@ -148,8 +148,8 @@ internal static class PerfMultiDealerDealerClient
         // server drains these tokens before the size process closes.
         for (int i = 0; i < activeClients.Count; i++)
         {
-            if (!await SendStopTokenAsync((IDealerSocket)activeClients[i],
-                    controlState).ConfigureAwait(false))
+            if (!SendStopTokenBlocking((IDealerSocket)activeClients[i],
+                    controlState))
                 return false;
         }
 
@@ -160,7 +160,7 @@ internal static class PerfMultiDealerDealerClient
     // transient backpressure (EINTR/EAGAIN/EWOULDBLOCK/ETIMEDOUT), aborting
     // the retry loop early only when shutdown is requested
     // (C g_stop_requested). Any non-transient failure is fatal.
-    private static async Task<bool> SendStopTokenAsync(IDealerSocket socket,
+    private static bool SendStopTokenBlocking(IDealerSocket socket,
         RunnerControlState controlState)
     {
         while (!controlState.StopRequested)
@@ -168,9 +168,8 @@ internal static class PerfMultiDealerDealerClient
             try
             {
                 using Message message = new(MultiStopToken.AsSpan());
-                if (await PerfSocketIo.SendAsync(socket, message)
-                        .ConfigureAwait(false) > 0)
-                    return true;
+                socket.Send().Message(message).Submit(SendFlags.None);
+                return true;
             }
             catch (ZlinkSubmitException ex)
                 when (ex.Result == ZlinkSubmitException.ErrorCode.Backpressured

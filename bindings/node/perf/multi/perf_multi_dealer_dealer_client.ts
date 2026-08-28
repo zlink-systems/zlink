@@ -91,7 +91,7 @@ async function main() {
         // backpressure occurs, then wait for POLLOUT before returning to it.
         while (currentEpochNs() < activeStopNs) {
           stampPayload(payloads[i], { phase: 1, runId: 1, msgSize: options.msgSize, seq });
-          if (!(await tryRoutedSocketSend(dealers[i], payloads[i]))) {
+          if (!tryRoutedSocketSend(dealers[i], payloads[i])) {
             pending[i] = true;
             pendingCount += 1;
             break;
@@ -116,7 +116,7 @@ async function main() {
     }
     for (let i = 0; i < dealers.length; i += 1) {
       const deadline = Date.now() + 5000;
-      while (!(await tryRoutedSocketSend(dealers[i], [STOP_TOKEN_BYTES]))) {
+      while (!tryRoutedSocketSend(dealers[i], [STOP_TOKEN_BYTES])) {
         if (Date.now() >= deadline) {
           throw new Error('stop token send timeout');
         }

@@ -9,7 +9,7 @@ use std::sync::{
 };
 use std::time::Duration;
 use zlink::{
-    Message, POLLIN, POLLOUT, PollEvent, Poller, RecvFlags, RecvResult, RoutingId, SendFlags,
+    Message, POLLIN, POLLOUT, PollEvent, Poller, RecvFlags, RecvResult, RoutingId,
     SubmitResult,
 };
 

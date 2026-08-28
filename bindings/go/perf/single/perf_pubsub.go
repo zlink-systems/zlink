@@ -65,7 +65,7 @@ func runPubSub(cfg benchmarkConfig) perfcommon.Result {
 
 	for time.Now().Before(window.StopAt) {
 		_, err := perfcommon.SubmitMeasurement(publisher.Publish(singlePubSubTopic),
-			perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt), zlink.SendFlagsDontWait)
+			perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt), zlink.SendFlagsNone)
 		if err != nil {
 			if perfcommon.IsTransient(err) {
 				continue

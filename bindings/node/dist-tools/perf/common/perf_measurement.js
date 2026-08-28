@@ -92,20 +92,26 @@ function percentile(sortedValues, q) {
     if (sortedValues.length === 0) {
         return 0;
     }
-    const index = Math.min(sortedValues.length - 1, Math.max(0, Math.ceil(sortedValues.length * q) - 1));
-    return sortedValues[index];
+    const position = (sortedValues.length - 1) * q;
+    const lower = Math.floor(position);
+    const upper = Math.min(sortedValues.length - 1, lower + 1);
+    const fraction = position - lower;
+    return sortedValues[lower]
+        + (sortedValues[upper] - sortedValues[lower]) * fraction;
 }
-function computeMetrics(latenciesNs, durationSeconds, msgSize, bandwidthMultiplier = 1, throughputCount = latenciesNs.length) {
-    const count = latenciesNs.length;
+function computeMetrics(latenciesNs, durationSeconds, msgSize, bandwidthMultiplier = 1, throughputCount = latenciesNs.length, latencyCount = latenciesNs.length, latencySumNs = latenciesNs.reduce((sum, value) => sum + value, 0)) {
+    const count = Number.isFinite(latencyCount) && latencyCount >= 0
+        ? latencyCount
+        : latenciesNs.length;
     const effectiveCount = Number.isFinite(throughputCount) && throughputCount >= 0
         ? throughputCount
         : count;
     const throughput = durationSeconds > 0 ? effectiveCount / durationSeconds : 0;
     const bandwidth = throughput * msgSize * bandwidthMultiplier / 1_000_000;
     const sorted = latenciesNs.slice().sort((a, b) => a - b);
-    const latency = count > 0 ? sorted.reduce((sum, value) => sum + value, 0) / count : 0;
-    const latencyP95 = percentile(sorted, 0.95);
-    const latencyP99 = percentile(sorted, 0.99);
+    const latency = count > 0 ? latencySumNs / count : 0;
+    const latencyP95 = sorted.length > 0 ? percentile(sorted, 0.95) : latency;
+    const latencyP99 = sorted.length > 0 ? percentile(sorted, 0.99) : latency;
     return {
         throughput,
         bandwidth,
@@ -135,18 +141,28 @@ function isEchoPattern(pattern) {
     return pattern === 'DEALER_ROUTER_REQREP'
         || pattern === 'ROUTER_ROUTER_REQREP'
         || pattern === 'MULTI_DEALER_ROUTER'
+        || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
         || pattern === 'MULTI_DEALER_ROUTER_REQREP'
         || pattern === 'MULTI_ROUTER_ROUTER'
+        || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
         || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
         || pattern === 'MULTI_STREAM'
         || pattern === 'MULTI_SPOT_REQREP'
         || pattern === 'MULTI_SPOT_SENDSEND';
 }
-function summarizeMetrics(pattern, transport, msgSize, latenciesNs, durationSeconds, libName = 'current', throughputCount = latenciesNs.length) {
-    if (!Number.isFinite(throughputCount) || throughputCount <= 0 || latenciesNs.length === 0) {
+function summarizeMetrics(pattern, transport, msgSize, latenciesNs, durationSeconds, libName = 'current', throughputCount = latenciesNs.length, exactLatencyMeanNs = null) {
+    if (!Number.isFinite(throughputCount) || throughputCount <= 0
+        || (latenciesNs.length === 0 && !Number.isFinite(exactLatencyMeanNs))) {
         throw new Error(`no measured messages for ${pattern} ${transport} ${msgSize}B`);
     }
     const metrics = computeMetrics(latenciesNs, durationSeconds, msgSize, isEchoPattern(pattern) ? 2 : 1, throughputCount);
+    if (Number.isFinite(exactLatencyMeanNs)) {
+        metrics.latency = exactLatencyMeanNs / 1_000_000;
+        if (latenciesNs.length === 0) {
+            metrics.latency_p95 = metrics.latency;
+            metrics.latency_p99 = metrics.latency;
+        }
+    }
     return Object.entries(metrics).map(([metric, value]) => {
         const formatted = value.toFixed(3);
         return `RESULT,${libName},${pattern},${transport},${msgSize},${metric},${formatted}`;
@@ -218,12 +234,45 @@ function createMetricCollector(config) {
         ? BigInt('0xffffffffffffffff')
         : BigInt(config.activeStopNs);
     const rttDivisor = config.roundTrip ? 2n : 1n;
-    const latencySampleStride = Math.max(1, Number(config.latencySampleStride ?? 1) | 0);
+    const sampleCapEnv = config.suite === 'multi'
+        ? process.env.PERF_MULTI_LATENCY_SAMPLE_CAP
+        : process.env.PERF_SINGLE_LATENCY_SAMPLE_CAP;
+    const defaultSampleCap = config.suite === 'multi' ? 65_536 : 1_000_000;
+    const parsedSampleCap = Number(config.latencySampleCap ?? sampleCapEnv);
+    const latencySampleCap = Number.isFinite(parsedSampleCap) && parsedSampleCap >= 0
+        ? Math.trunc(parsedSampleCap)
+        : defaultSampleCap;
+    const acceptDrainCompletions = config.acceptDrainCompletions === true;
     let accepted = 0;
     let rejected = 0;
+    let latencyCount = 0;
+    let latencySumNs = 0;
+    let latencyRng = 0xa341316c;
     let closed = false;
-    function shouldSampleLatency(nextAccepted) {
-        return ((nextAccepted - 1) % latencySampleStride) === 0;
+    function addLatency(latencyNs) {
+        latencyCount += 1;
+        latencySumNs += latencyNs;
+        if (latencySampleCap === 0) {
+            return;
+        }
+        if (latenciesNs.length < latencySampleCap) {
+            latenciesNs.push(latencyNs);
+            return;
+        }
+        latencyRng = (Math.imul(latencyRng, 1664525) + 1013904223) >>> 0;
+        const slot = latencyRng % latencyCount;
+        if (slot < latencySampleCap) {
+            latenciesNs[slot] = latencyNs;
+        }
+    }
+    function isWithinMeasurementBounds(sentTsNs, recvTsNs) {
+        if (recvTsNs < sentTsNs) {
+            return false;
+        }
+        if (acceptDrainCompletions) {
+            return sentTsNs >= activeStartNs && sentTsNs <= activeStopNs;
+        }
+        return recvTsNs >= activeStartNs && recvTsNs <= activeStopNs;
     }
     return {
         recordPayload(buffer, receivedAtNs) {
@@ -242,22 +291,14 @@ function createMetricCollector(config) {
                 return;
             }
             const recvTsNs = BigInt(receivedAtNs);
-            if (recvTsNs < activeStartNs || recvTsNs > activeStopNs) {
+            const sentTsNs = buffer.readBigInt64LE(21);
+            if (!isWithinMeasurementBounds(sentTsNs, recvTsNs)) {
+                if (recvTsNs < sentTsNs)
+                    rejected += 1;
                 return;
             }
-            const nextAccepted = accepted + 1;
-            if (shouldSampleLatency(nextAccepted)) {
-                const sentTsNs = buffer.readBigInt64LE(21);
-                if (recvTsNs < sentTsNs) {
-                    rejected += 1;
-                    return;
-                }
-                accepted = nextAccepted;
-                latenciesNs.push(Number((recvTsNs - sentTsNs) / rttDivisor));
-            }
-            else {
-                accepted = nextAccepted;
-            }
+            accepted += 1;
+            addLatency(Number((recvTsNs - sentTsNs) / rttDivisor));
         },
         record(header, receivedAtNs) {
             if (!header || closed) {
@@ -272,39 +313,28 @@ function createMetricCollector(config) {
             }
             const sentTsNs = BigInt(header.sentTsNs);
             const recvTsNs = BigInt(receivedAtNs);
-            if (recvTsNs < activeStartNs || recvTsNs > activeStopNs) {
+            if (!isWithinMeasurementBounds(sentTsNs, recvTsNs)) {
+                if (recvTsNs < sentTsNs)
+                    rejected += 1;
                 return;
             }
-            const nextAccepted = accepted + 1;
-            if (shouldSampleLatency(nextAccepted)) {
-                if (recvTsNs < sentTsNs) {
-                    rejected += 1;
-                    return;
-                }
-                accepted = nextAccepted;
-                latenciesNs.push(Number((recvTsNs - sentTsNs) / rttDivisor));
-            }
-            else {
-                accepted = nextAccepted;
-            }
+            accepted += 1;
+            addLatency(Number((recvTsNs - sentTsNs) / rttDivisor));
         },
         recordLatencyNs(latencyNs) {
             if (closed || typeof latencyNs !== 'number' || latencyNs < 0) {
                 return;
             }
-            const nextAccepted = accepted + 1;
-            if (shouldSampleLatency(nextAccepted)) {
-                accepted = nextAccepted;
-                latenciesNs.push(latencyNs / Number(rttDivisor));
-            }
-            else {
-                accepted = nextAccepted;
-            }
+            accepted += 1;
+            addLatency(latencyNs / Number(rttDivisor));
         },
         async finish() {
             closed = true;
             return {
                 latenciesNs,
+                latencyMeanNs: latencyCount > 0
+                    ? latencySumNs / latencyCount
+                    : null,
                 accepted,
                 rejected
             };

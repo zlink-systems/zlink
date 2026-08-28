@@ -198,7 +198,7 @@ Options:
   -h, --help
 
 Notes:
-  - Supported single patterns: PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,ROUTER_ROUTER
+  - Supported single patterns: PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,ROUTER_ROUTER,DEALER_ROUTER_REQREP,ROUTER_ROUTER_REQREP
   - If GOMAXPROCS is unset, PERF_GO_GOMAXPROCS is an explicit positive-integer override.
     Otherwise --io-threads/PERF_IO_THREADS derives Go scheduler parallelism
     with a minimum of 4.
@@ -460,7 +460,7 @@ trap cleanup EXIT
 
 IFS=',' read -r -a SIZES <<< "${MSG_SIZES}"
 if [[ "${PATTERN}" == "ALL" ]]; then
-	PATTERNS=("PAIR" "PUBSUB" "DEALER_DEALER" "DEALER_ROUTER" "ROUTER_ROUTER")
+	PATTERNS=("PAIR" "PUBSUB" "DEALER_DEALER" "DEALER_ROUTER" "ROUTER_ROUTER" "DEALER_ROUTER_REQREP" "ROUTER_ROUTER_REQREP")
 else
   IFS=',' read -r -a PATTERNS <<< "${PATTERN}"
 fi

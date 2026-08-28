@@ -209,18 +209,23 @@ internal static class PerfMultiSocketReqRep
         }
     }
 
-    private static async Task<(long completed, List<double> latencySamples)>
+    private static Task<(long completed, List<double> latencySamples)>
         RunClientLoopAsync(
         List<ClientSlot> slots, bool routerRouter,
         int msgSize, int durationSeconds, int latencyCap)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
-        using var completionSignal = new SemaphoreSlim(0);
+        using var completionPoller = Zlink.CreatePoller();
+        var completionEvents = new PollEvent[slots.Count];
+        for (int i = 0; i < slots.Count; i++)
+            completionPoller.Add(slots[i].Socket,
+                PollEventFlags.PollCompletion, (nuint)i);
         var samples = new List<double>(Math.Max(0, latencyCap));
         object gate = new();
         Exception? completionError = null;
         int hasCompletionError = 0;
         long completed = 0;
+        long outstanding = 0;
         long sampleSeen = 0;
         uint rng = 0xA341316Cu;
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
@@ -240,7 +245,7 @@ internal static class PerfMultiSocketReqRep
 
         bool TrySubmit(ClientSlot slot)
         {
-            if (slot.InFlight || HasCompletionError()
+            if (HasCompletionError()
                 || Stopwatch.GetTimestamp() >= deadlineTicks)
             {
                 return false;
@@ -253,29 +258,33 @@ internal static class PerfMultiSocketReqRep
 
             try
             {
-                slot.InFlight = true;
+                Interlocked.Increment(ref outstanding);
                 using Message? tail = PerfSocketIo.MeasurementPartCount == 2
                     ? Message.Allocate(0) : null;
-                Task<IReadOnlyList<Message>> request;
                 if (routerRouter)
-                    request = tail == null
-                        ? ((IRouterSocket)slot.Socket).Request(ServerRoutingId)
-                            .Message(message).Timeout(requestTimeout).Async()
-                        : ((IRouterSocket)slot.Socket).Request(ServerRoutingId)
-                            .Message(message).Message(tail).Timeout(requestTimeout).Async();
+                {
+                    var request = ((IRouterSocket)slot.Socket)
+                        .Request(ServerRoutingId).Message(message);
+                    if (tail != null)
+                        request = request.Message(tail);
+                    request.Timeout(requestTimeout).Submit(SendFlags.DontWait,
+                        CompleteRequest);
+                }
                 else
-                    request = tail == null
-                        ? ((IDealerSocket)slot.Socket).Request()
-                            .Message(message).Timeout(requestTimeout).Async()
-                        : ((IDealerSocket)slot.Socket).Request()
-                            .Message(message).Message(tail).Timeout(requestTimeout).Async();
-                _ = ObserveRequestAsync(slot, request);
+                {
+                    var request = ((IDealerSocket)slot.Socket).Request()
+                        .Message(message);
+                    if (tail != null)
+                        request = request.Message(tail);
+                    request.Timeout(requestTimeout).Submit(SendFlags.DontWait,
+                        CompleteRequest);
+                }
             }
             catch (ZlinkException ex)
                 when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
                       || PerfShared.IsTransientNetworkError(ex.NativeErrno))
             {
-                slot.InFlight = false;
+                Interlocked.Decrement(ref outstanding);
                 return false;
             }
 
@@ -285,13 +294,21 @@ internal static class PerfMultiSocketReqRep
             return true;
         }
 
-        async Task ObserveRequestAsync(ClientSlot slot,
-            Task<IReadOnlyList<Message>> request)
+        void CompleteRequest(RequestResult result,
+            IReadOnlyList<Message> parts)
         {
-            IReadOnlyList<Message>? parts = null;
             try
             {
-                parts = await request.ConfigureAwait(false);
+                if (result == RequestResult.TimedOut)
+                {
+                    if (s_debugEnabled)
+                        DebugLogLimited(ref s_debugClientReplyLogs,
+                            "socket_reqrep_client: completion timed out");
+                    return;
+                }
+                if (result != RequestResult.Ok)
+                    throw new InvalidOperationException(
+                        $"request completion failed: {result}");
                 if (s_debugEnabled)
                 {
                     DebugLogLimited(ref s_debugClientReplyLogs,
@@ -320,23 +337,14 @@ internal static class PerfMultiSocketReqRep
                     }
                 }
             }
-            catch (ZlinkRequestException ex)
-                when (ex.Result == ZlinkRequestException.ErrorCode.TimedOut)
-            {
-                if (s_debugEnabled)
-                    DebugLogLimited(ref s_debugClientReplyLogs,
-                        "socket_reqrep_client: completion timed out");
-            }
             catch (Exception ex)
             {
                 RecordCompletionError(ex);
             }
             finally
             {
-                if (parts != null)
-                    Zlink.MultipartClose(parts);
-                slot.InFlight = false;
-                completionSignal.Release();
+                Zlink.MultipartClose(parts);
+                Interlocked.Decrement(ref outstanding);
             }
         }
 
@@ -346,17 +354,22 @@ internal static class PerfMultiSocketReqRep
             for (int i = 0; i < slots.Count; i++)
                 submittedAny |= TrySubmit(slots[i]);
 
-            if (!submittedAny)
-                _ = await completionSignal.WaitAsync(50).ConfigureAwait(false);
-            else
-                _ = await completionSignal.WaitAsync(0).ConfigureAwait(false);
+            long remainingTicks = deadlineTicks - Stopwatch.GetTimestamp();
+            int remainingMs = remainingTicks <= 0 ? 0 : (int)Math.Min(
+                int.MaxValue, Math.Ceiling(remainingTicks * 1000.0
+                    / Stopwatch.Frequency));
+            int waitMs = submittedAny ? 0 : Math.Min(50, remainingMs);
+            if (waitMs >= 0)
+                _ = completionPoller.Wait(completionEvents,
+                    TimeSpan.FromMilliseconds(waitMs));
         }
 
         long drainStart = Stopwatch.GetTimestamp();
         TimeSpan drainTimeout = ResolveReqRepDrainTimeout();
-        while (!HasCompletionError() && AnyInFlight(slots))
+        while (!HasCompletionError() && Volatile.Read(ref outstanding) > 0)
         {
-            _ = await completionSignal.WaitAsync(50).ConfigureAwait(false);
+            _ = completionPoller.Wait(completionEvents,
+                TimeSpan.FromMilliseconds(50));
             if (Stopwatch.GetElapsedTime(drainStart) > drainTimeout)
                 throw new TimeoutException("multi request/reply operations did not drain");
         }
@@ -366,17 +379,7 @@ internal static class PerfMultiSocketReqRep
             if (completionError != null)
                 throw completionError;
         }
-        return (Volatile.Read(ref completed), samples);
-    }
-
-    private static bool AnyInFlight(List<ClientSlot> slots)
-    {
-        for (int i = 0; i < slots.Count; i++)
-        {
-            if (slots[i].InFlight)
-                return true;
-        }
-        return false;
+        return Task.FromResult((Volatile.Read(ref completed), samples));
     }
 
     private static bool ReplyReceived(IReadOnlyList<ISocket> pollSockets,
@@ -501,7 +504,6 @@ internal static class PerfMultiSocketReqRep
 
         internal IZlinkSocket Socket { get; }
         internal ulong NextSeq { get; set; } = 1;
-        internal volatile bool InFlight;
     }
 
     private static void DebugLogLimited(ref int counter, string message)

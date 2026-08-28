@@ -15,10 +15,9 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfControl;
-import systems.zlink.perf.PerfMessageTemplatePool;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
@@ -27,10 +26,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
@@ -159,88 +156,74 @@ final class PerfMultiSocketReqRep {
                                    PerfUtil.Config config,
                                    boolean routedClients,
                                    PerfUtil.Metrics metrics) {
-        int count = clients.size();
-        AtomicBoolean[] waiting = new AtomicBoolean[count];
         AtomicReference<Throwable> failure = new AtomicReference<>();
-        Semaphore completionSignals = new Semaphore(0);
+        AtomicLong outstanding = new AtomicLong();
         long activeEnd = System.nanoTime()
             + config.durationSeconds() * 1_000_000_000L;
         int requestTimeoutMs = resolveRequestTimeoutMs();
         Duration timeout = Duration.ofMillis(requestTimeoutMs);
-        @SuppressWarnings("unchecked")
-        BiConsumer<List<Message>, Throwable>[] completions =
-            (BiConsumer<List<Message>, Throwable>[]) new BiConsumer<?, ?>[count];
-        for (int i = 0; i < count; i++) {
-            waiting[i] = new AtomicBoolean();
-            AtomicBoolean slotWaiting = waiting[i];
-            completions[i] = (parts, error) -> {
-                try {
-                    long receivedAt = System.nanoTime();
-                    Throwable cause = completionCause(error);
-                    Message payload = PerfUtil.measurementPayload(parts);
-                    if (cause == null && payload != null && receivedAt < activeEnd) {
-                        PerfUtil.recordActiveLatency(metrics, payload,
-                            config.size(), true, receivedAt);
-                    } else if (cause != null
-                        && (!(cause instanceof ZlinkRequestException request)
-                            || request.getResult() != RequestResult.TIMED_OUT)) {
-                        failure.compareAndSet(null, cause);
-                    }
-                } catch (Throwable ex) {
-                    failure.compareAndSet(null, ex);
-                } finally {
-                    if (parts != null) {
-                        Message.closeAll(parts);
-                    }
-                    slotWaiting.set(false);
-                    completionSignals.release();
+        BiConsumer<RequestResult, List<Message>> completion = (result, parts) -> {
+            try {
+                long receivedAt = System.nanoTime();
+                Message payload = PerfUtil.measurementPayload(parts);
+                if (result == RequestResult.OK && payload != null
+                    && receivedAt < activeEnd) {
+                    PerfUtil.recordActiveLatency(metrics, payload,
+                        config.size(), true, receivedAt);
+                } else if (result != RequestResult.OK
+                    && result != RequestResult.TIMED_OUT) {
+                    failure.compareAndSet(null, new IllegalStateException(
+                        "request completion failed: " + result));
                 }
-            };
-        }
+            } catch (Throwable ex) {
+                failure.compareAndSet(null, ex);
+            } finally {
+                if (parts != null) {
+                    Message.closeAll(parts);
+                }
+                outstanding.decrementAndGet();
+            }
+        };
 
-        // Keep reusable native payload storage per concurrent request slot.
-        // acquire() returns an independent Message owner, so request submit
-        // snapshots it before returning exactly as the public contract
-        // requires, while the template is reused after Core releases it.
-        try (PerfMessageTemplatePool payloads = new PerfMessageTemplatePool(
-                config.size(), Math.max(4, count * 2))) {
+        // Request completion targets are registered with POLLCOMPLETION
+        // alone. Submission continues until the public request terminal
+        // reports backpressure; replies never gate the next request.
+        try (PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
+                clients, PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean progress = false;
-                boolean hasWaiting = false;
-                for (int i = 0; i < count; i++) {
-                    if (waiting[i].get()) {
-                        hasWaiting = true;
-                        continue;
-                    }
-                    Message payload = payloads.acquire(config.size(),
-                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(),
-                        activeEnd);
-                    if (payload == null) {
-                        break;
-                    }
-                    waiting[i].set(true);
-                    try (payload) {
-                        submit(clients.get(i), routedClients, payload, timeout,
-                            completions[i]);
-                        progress = true;
-                    } catch (ZlinkSubmitException ex) {
-                        waiting[i].set(false);
-                        if (ex.getResult() != SubmitResult.BACKPRESSURED
-                            && ex.getResult() != SubmitResult.NOT_CONNECTED) {
-                            throw ex;
+                for (Socket client : clients) {
+                    while (System.nanoTime() < activeEnd) {
+                        try (Message payload = PerfUtil.payload(config.size(),
+                                 (byte) PerfUtil.PHASE_ACTIVE,
+                                 System.nanoTime())) {
+                            outstanding.incrementAndGet();
+                            try {
+                                submit(client, routedClients, payload, timeout,
+                                    completion);
+                                progress = true;
+                            } catch (ZlinkSubmitException ex) {
+                                outstanding.decrementAndGet();
+                                if (ex.getResult() != SubmitResult.BACKPRESSURED
+                                    && ex.getResult()
+                                        != SubmitResult.NOT_CONNECTED) {
+                                    throw ex;
+                                }
+                                break;
+                            }
                         }
                     }
                 }
-                if (!progress && hasWaiting) {
-                    awaitCompletionSignal(completionSignals, 50);
+                if (!progress && System.nanoTime() < activeEnd) {
+                    completionPoller.poll(remainingTimeoutMs(activeEnd));
                 }
             }
             long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
                 Math.max(1_000, requestTimeoutMs * 4));
-            while (anyWaiting(waiting) && System.nanoTime() < drainEnd) {
-                awaitCompletionSignal(completionSignals, 50);
+            while (outstanding.get() > 0 && System.nanoTime() < drainEnd) {
+                completionPoller.poll(remainingTimeoutMs(drainEnd));
             }
-            if (anyWaiting(waiting) || failure.get() != null) {
+            if (outstanding.get() != 0 || failure.get() != null) {
                 throw new IllegalStateException("multi socket reqrep failed",
                     failure.get());
             }
@@ -250,12 +233,12 @@ final class PerfMultiSocketReqRep {
             PerfStopToken.sendWithRetry(() -> {
                 try (Message stop = PerfStopToken.newMessage()) {
                     if (routedClients) {
-                        PerfUtil.awaitStage(((RouterSocket) client)
-                            .send(SERVER_RID).message(stop).submit());
+                        ((RouterSocket) client).send(SERVER_RID).message(stop)
+                            .submit_sync(SendFlags.NONE);
                         return true;
                     }
-                    PerfUtil.awaitStage(((DealerSocket) client)
-                        .send().message(stop).submit());
+                    ((DealerSocket) client).send().message(stop)
+                        .submit_sync(SendFlags.NONE);
                     return true;
                 }
             }, "multi socket reqrep");
@@ -264,47 +247,34 @@ final class PerfMultiSocketReqRep {
 
     private static void submit(Socket client, boolean routedClients,
                                Message payload, Duration timeout,
-                               BiConsumer<List<Message>, Throwable> completion) {
-        var stage = routedClients
-            ? (PerfUtil.measurementPartCount() == 2
-                ? ((RouterSocket) client).request(SERVER_RID).message(payload)
-                    .message(PerfUtil.measurementTail()).timeout(timeout).submit()
-                : ((RouterSocket) client).request(SERVER_RID)
-                    .message(payload).timeout(timeout).submit())
-            : (PerfUtil.measurementPartCount() == 2
-                ? ((DealerSocket) client).request().message(payload)
-                    .message(PerfUtil.measurementTail()).timeout(timeout).submit()
-                : ((DealerSocket) client).request()
-                    .message(payload).timeout(timeout).submit());
-        stage.whenComplete(completion);
-    }
-
-    private static Throwable completionCause(Throwable error) {
-        if (error instanceof CompletionException completion
-            && completion.getCause() != null) {
-            return completion.getCause();
-        }
-        return error;
-    }
-
-    private static void awaitCompletionSignal(Semaphore completions,
-                                              long timeoutMs) {
-        try {
-            completions.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(
-                "request completion wait interrupted", ex);
-        }
-    }
-
-    private static boolean anyWaiting(AtomicBoolean[] waiting) {
-        for (AtomicBoolean slot : waiting) {
-            if (slot.get()) {
-                return true;
+                               BiConsumer<RequestResult, List<Message>> completion) {
+        if (routedClients) {
+            if (PerfUtil.measurementPartCount() == 2) {
+                ((RouterSocket) client).request(SERVER_RID).message(payload)
+                    .message(PerfUtil.measurementTail()).timeout(timeout)
+                    .submit_sync(SendFlags.DONT_WAIT, completion);
+            } else {
+                ((RouterSocket) client).request(SERVER_RID).message(payload)
+                    .timeout(timeout)
+                    .submit_sync(SendFlags.DONT_WAIT, completion);
             }
+        } else if (PerfUtil.measurementPartCount() == 2) {
+            ((DealerSocket) client).request().message(payload)
+                .message(PerfUtil.measurementTail()).timeout(timeout)
+                .submit_sync(SendFlags.DONT_WAIT, completion);
+        } else {
+            ((DealerSocket) client).request().message(payload).timeout(timeout)
+                .submit_sync(SendFlags.DONT_WAIT, completion);
         }
-        return false;
+    }
+
+    private static int remainingTimeoutMs(long deadline) {
+        long remainingNs = deadline - System.nanoTime();
+        if (remainingNs <= 0) {
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE,
+            (remainingNs + 999_999L) / 1_000_000L);
     }
 
     private static int resolveRequestTimeoutMs() {

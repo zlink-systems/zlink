@@ -68,7 +68,6 @@ struct socket_state_t
     std::vector<char> request_buffer;
     size_t payload_size;
     bool use_per_socket_buffer;
-    bool awaiting_reply;
     bool send_pending;
     zlink::poll_event_flag_t poll_events;
 
@@ -77,7 +76,6 @@ struct socket_state_t
         request_buffer (),
         payload_size (0),
         use_per_socket_buffer (false),
-        awaiting_reply (false),
         send_pending (false),
         poll_events (zlink::poll_event_flag_t::none)
     {
@@ -225,11 +223,9 @@ class router_router_client_bench_t
         if (!state.sock)
             return false;
 
-        zlink::poll_event_flag_t events = zlink::poll_event_flag_t::none;
-        if (state.awaiting_reply)
-            events = zlink::poll_event_flag_t::pollin;
-        else if (state.send_pending)
-            events = zlink::poll_event_flag_t::pollout;
+        zlink::poll_event_flag_t events = zlink::poll_event_flag_t::pollin;
+        if (state.send_pending)
+            events = events | zlink::poll_event_flag_t::pollout;
 
         if (state.poll_events == events)
             return true;
@@ -244,47 +240,46 @@ class router_router_client_bench_t
         }
     }
 
-    perf::async_task_t<bool> try_send_request (socket_state_t &state,
-                                               perf_metric::phase_t phase)
+    int try_send_request (socket_state_t &state, perf_metric::phase_t phase)
     {
         std::vector<char> &request_buffer =
           state.use_per_socket_buffer ? state.request_buffer : _shared_request_buffer;
         if (!state.sock || request_buffer.empty ())
-            co_return false;
+            return -1;
 
         const uint64_t sent_ts_ns = perf_metric::now_ns ();
         if (!perf_metric::stamp_payload (&request_buffer[0], state.payload_size, _run_id, phase,
                                          _msg_size, _seq, sent_ts_ns)) {
-            co_return false;
+            return -1;
         }
         zlink::message_t request = zlink::message_t::from (
           std::as_bytes (std::span<const char> (request_buffer.data (), state.payload_size)));
         if (!request.valid ()) {
-            co_return false;
+            return -1;
         }
 
         try {
             if (perf::multi::measurement_part_count () == 2) {
                 zlink::message_t tail = perf::multi::measurement_empty_part ();
-                std::move (state.sock->send (_server_rid)).message (request).message (tail).submit ();
+                std::move (state.sock->send (_server_rid)).message (request)
+                  .message (tail).flags (zlink::send_flags_t::dontwait).submit ();
             } else {
-                std::move (state.sock->send (_server_rid)).message (request).submit ();
+                std::move (state.sock->send (_server_rid)).message (request)
+                  .flags (zlink::send_flags_t::dontwait).submit ();
             }
             ++_seq;
-            state.awaiting_reply = true;
             state.send_pending = false;
-            co_return true;
+            return 1;
         }
         catch (const zlink::submit_error_t &err) {
             const int err_no = err.internal_errno ();
             if (err_no == EAGAIN || err_no == EWOULDBLOCK) {
-                state.awaiting_reply = false;
                 state.send_pending = true;
                 errno = err_no;
-                co_return false;
+                return 0;
             }
             errno = err_no;
-            co_return false;
+            return -1;
         }
     }
 
@@ -352,8 +347,9 @@ class router_router_client_bench_t
 
             size_t rr = 0;
             for (size_t i = 0; i < _socket_states.size (); ++i) {
-                _socket_states[i].awaiting_reply = false;
-                _socket_states[i].send_pending = true;
+                _socket_states[i].send_pending = false;
+                if (!update_poll_interest (_socket_states[i]))
+                    co_return false;
             }
 
             while (std::chrono::steady_clock::now () < deadline) {
@@ -361,10 +357,18 @@ class router_router_client_bench_t
                 for (size_t attempt = 0; attempt < _socket_states.size (); ++attempt) {
                     socket_state_t &state =
                       _socket_states[(send_start + attempt) % _socket_states.size ()];
-                    if (!state.sock || !state.send_pending || state.awaiting_reply)
+                    if (!state.sock || state.send_pending)
                         continue;
-                    if (!co_await try_send_request (state, phase))
-                        co_return false;
+                    while (std::chrono::steady_clock::now () < deadline) {
+                        const int send_rc = try_send_request (state, phase);
+                        if (send_rc < 0)
+                            co_return false;
+                        if (send_rc == 0) {
+                            if (!update_poll_interest (state))
+                                co_return false;
+                            break;
+                        }
+                    }
                 }
 
                 const size_t poll_start = rr;
@@ -376,24 +380,20 @@ class router_router_client_bench_t
                     if (!state.sock)
                         continue;
 
-                    zlink::poll_event_flag_t events = zlink::poll_event_flag_t::none;
-                    if (state.awaiting_reply)
-                        events = zlink::poll_event_flag_t::pollin;
-                    else if (state.send_pending)
-                        events = zlink::poll_event_flag_t::pollout;
-                    if (state.poll_events != events) {
-                        _poller.modify (*state.sock, events);
-                        state.poll_events = events;
-                    }
+                    if (!update_poll_interest (state))
+                        co_return false;
                 }
                 rr = (poll_start + 1) % _socket_states.size ();
 
-                const size_t ready_count = _poller.wait (_poll_events.data (), _poll_events.size (),
-                                                         std::chrono::milliseconds (-1));
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+                  deadline - std::chrono::steady_clock::now ());
+                const size_t ready_count = _poller.wait (
+                  _poll_events.data (), _poll_events.size (),
+                  std::chrono::milliseconds (std::max<int64_t> (1, remaining.count ())));
                 if (ready_count == 0) {
                     for (size_t i = 0; i < _socket_states.size (); ++i) {
-                        if (!_socket_states[i].awaiting_reply)
-                            _socket_states[i].send_pending = true;
+                        if (!_socket_states[i].send_pending)
+                            continue;
                     }
                     continue;
                 }
@@ -405,9 +405,7 @@ class router_router_client_bench_t
                     socket_state_t &state = _socket_states[slot_index];
                     const short revents = static_cast<short> (_poll_events[i].revents);
 
-                    if ((revents & static_cast<short> (zlink::poll_event_flag_t::pollin)) == 0)
-                        continue;
-
+                    if ((revents & static_cast<short> (zlink::poll_event_flag_t::pollin)) != 0)
                     for (;;) {
                         perf_metric::header_t header{};
                         const int recv_rc = recv_reply (state, &header);
@@ -420,8 +418,6 @@ class router_router_client_bench_t
                             debug_log ("active recv failed errno=" + std::to_string (err));
                             co_return false;
                         }
-                        state.awaiting_reply = false;
-
                         if (recv_rc != 0) {
                             debug_log ("active recv ignored rc=" + std::to_string (recv_rc));
                         } else if (perf_metric::is_expected (header, _run_id, phase, _msg_size)) {
@@ -440,9 +436,13 @@ class router_router_client_bench_t
                         if (std::chrono::steady_clock::now () >= deadline)
                             continue;
 
-                        state.send_pending = true;
-
                         break;
+                    }
+
+                    if ((revents & static_cast<short> (zlink::poll_event_flag_t::pollout)) != 0) {
+                        state.send_pending = false;
+                        if (!update_poll_interest (state))
+                            co_return false;
                     }
                 }
             }

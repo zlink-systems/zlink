@@ -139,12 +139,10 @@ fn main() {
     for socket in &sockets {
         let mut sent = false;
         for _ in 0..100 {
-            match common::block_on(
-                socket
-                    .send()
-                    .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
-                    .submit(),
-            ) {
+            match socket
+                .send()
+                .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
+                .submit_sync(zlink::SendFlags::NONE) {
                 Ok(()) => {
                     sent = true;
                     break;

@@ -9,22 +9,13 @@ const { isStopTokenParts } = require('../perf_stop_token');
 const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, tryRoutedSocketSend, measurementPayload, waitPollerOne } = require('./perf_multi_runtime');
 const { resolveRoutedPattern, runRoutedSendSendServer } = require('./perf_multi_routed_sendsend');
 const PATTERN = 'MULTI_ROUTER_ROUTER_REQREP';
-async function drainPending(router, pending) {
-    while (pending.length > 0) {
-        const reply = pending[0];
-        if (!(await tryRoutedSocketSend(router, reply.routingId, reply.payload))) {
-            break;
-        }
-        pending.shift();
-    }
-}
-async function receiveAndQueueReplies(router, pending, received) {
+function receiveAndReply(router, received) {
     while (true) {
         if (!router.recv(received, zlink.RecvFlags.DontWait)) {
             return false;
         }
         try {
-            if (!received.routingId || received.requestSeq) {
+            if (!received.routingId) {
                 continue;
             }
             const payload = measurementPayload(received.parts);
@@ -35,12 +26,13 @@ async function receiveAndQueueReplies(router, pending, received) {
             if (isStopTokenParts([payload])) {
                 return true;
             }
-            const routingId = received.routingId;
-            if (pending.length === 0
-                && await tryRoutedSocketSend(router, routingId, payload)) {
-                continue;
+            if (received.requestSeq === null) {
+                throw new Error('request/reply server received payload without request sequence');
             }
-            pending.push({ routingId, payload: Buffer.from(payload.data()) });
+            let reply = received.reply().message(Buffer.from(payload.data()));
+            if (process.env.PERF_PART_COUNT !== '1')
+                reply = reply.message(Buffer.alloc(0));
+            reply.submit();
         }
         finally {
             received.close();
@@ -62,12 +54,10 @@ async function main() {
     applyContextPolicy(ctx, 'server', PATTERN);
     const router = zlink.createRouterSocket(ctx);
     const poller = zlink.createPoller();
-    const pending = [];
     const received = new zlink.Received();
     let pollBuffer = null;
     let rl = null;
     let stop = false;
-    let pollMask = POLLIN;
     try {
         applySocketPolicy(router);
         configureTlsServer(router, options.transport);
@@ -88,27 +78,16 @@ async function main() {
             }
         })();
         while (!stop) {
-            const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
+            const ready = waitPollerOne(poller, pollBuffer, 50);
+            await new Promise((resolve) => setImmediate(resolve));
             if (!ready) {
                 continue;
             }
             // HOT PATH: waitPollerOne returns the Core revents mask. Test it
             // directly so each ready relay event avoids generic event inspection.
             const revents = ready.revents;
-            if ((revents & POLLOUT) !== 0) {
-                await drainPending(router, pending);
-            }
             if ((revents & POLLIN) !== 0) {
-                stop = await receiveAndQueueReplies(router, pending, received);
-                await drainPending(router, pending);
-            }
-            const nextPollMask = pending.length > 0 ? POLLIN | POLLOUT : POLLIN;
-            if (nextPollMask !== pollMask) {
-                // HOT PATH: keep the relay asleep on POLLIN unless a queued reply
-                // needs a writable notification. This is the C relay poll contract;
-                // permanent POLLOUT interest makes an idle ROUTER spin.
-                poller.modify(router, pollEvents(nextPollMask));
-                pollMask = nextPollMask;
+                stop = receiveAndReply(router, received);
             }
         }
     }

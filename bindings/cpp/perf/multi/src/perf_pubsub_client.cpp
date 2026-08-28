@@ -62,14 +62,34 @@ pubsub_recv_result_t recv_one_pubsub_message (zlink::sub_socket_t &sock,
         return pubsub_recv_error;
     }
 
-    if ((source_rid && source_rid->size () > 0) || topic != k_topic || has_more) {
+    if ((source_rid && source_rid->size () > 0) || topic != k_topic) {
         return pubsub_recv_payload;
     }
 
     const size_t recv_size = part.size ();
     const void *recv_data = part.data ();
     if (perf::multi::is_stop_token (recv_data, recv_size)) {
+        if (has_more)
+            return pubsub_recv_error;
         return pubsub_recv_stop;
+    }
+
+    if (perf::multi::measurement_part_count () == 1) {
+        if (has_more)
+            return pubsub_recv_error;
+    } else {
+        if (!has_more)
+            return pubsub_recv_error;
+
+        std::optional<zlink::routing_id_t> tail_source_rid;
+        std::string tail_topic;
+        zlink::message_t tail;
+        bool tail_has_more = false;
+        const int tail_rc = sock.subscribe_part (
+          tail_source_rid, tail_topic, tail, tail_has_more,
+          static_cast<int> (zlink::recv_flags_t::dontwait));
+        if (tail_rc != 0 || tail_has_more || tail.size () != 0)
+            return pubsub_recv_error;
     }
 
     perf_metric::header_t header;

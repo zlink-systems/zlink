@@ -111,12 +111,12 @@ inline recv_result_t receive_one_message (void *server,
         zlink_msg_close (&part);
         return recv_stop;
     }
-    if (!perf_zlink_recv_measurement_tail (
-          server, has_more, static_cast<zlink_recv_flags_t> (flags),
-          perf_zlink_recv_next_plain)) {
-        zlink_msg_close (&part);
-        return recv_fatal;
-    }
+    // This socket multiplexes parts from all connected DEALER pipes. The
+    // next zlink_recv_part() call may select another ready pipe, so it cannot
+    // be used to validate the empty measurement tail for the part just read.
+    // Drain every part independently and let the metric header identify the
+    // one payload frame that contributes to throughput and latency. Empty
+    // tails and other non-metric parts are consumed without being counted.
 
     perf_multi_metric::header_t header;
     const bool matched =

@@ -41,11 +41,22 @@
   - recv: poller `POLLIN` readiness 감지 → `zlink_recv()` / `zlink_msg_recv()`
     비동기 drain 루프 (react 방식). poller가 readable을 알려주면 수신 가능한
     만큼 drain한다.
-  - send: `send(..., DONTWAIT)` nonblocking send 사용.
-  - send backpressure: poller `POLLOUT` readiness 감지 → writable 상태에서만
-    send 수행. `EAGAIN` 발생 시 `POLLOUT`을 대기하고, writable이 되면 재개한다.
-  - app thread가 poller event loop를 직접 구동하며, `POLLIN` / `POLLOUT`
-    이벤트에 따라 recv drain과 send 재개를 처리한다.
+  - send: **poller + nonblocking send**. C reference는 `send(..., DONTWAIT)`로
+    구현한다.
+  - send backpressure: C reference는 poller `POLLOUT` readiness를 감지해
+    writable 상태에서만 send하고, `EAGAIN` 발생 시 그 소켓을 pending으로
+    표시했다가 `POLLOUT`에서 재개한다(메시지를 잃지 않는다).
+  - **코루틴/async binding**: 같은 nonblocking 의미를 async submit +
+    suspend/resume으로 구현한다. backpressure를 만난 submit은 그 async 작업을
+    suspend하고 core의 writable/completion 신호에서 resume하며, 다른 소켓의
+    submit은 계속 진행한다. C가 수동으로 관리하는 pending 표시와 `POLLOUT`
+    재등록/재개를 binding은 언어 런타임의 suspend/resume이 대신한다. binding
+    multi 오버헤드는 이 async 실행 오버헤드를 포함한다. **매 submit을 즉시
+    await하여 왕복을 직렬화하면 nonblocking 계약 위반이다** — 이는 blocking
+    실행이며 C의 poller+nonblocking 모델과 다른 측정이 된다.
+  - app thread(또는 event loop)가 poller/completion 구동을 담당하며, C는
+    `POLLIN`/`POLLOUT` 이벤트로, binding은 async recv drain과 submit
+    suspend/resume으로 recv drain과 send 재개를 처리한다.
   - `send_ready_handler`는 사용하지 않는다.
 - multi one-way와 send/send echo pattern은 recv 모델로 측정한다. raw socket
   request/reply pattern은 public completion poller로 reply completion을 측정한다.
@@ -53,8 +64,10 @@
   MeshNode의 `zlink_mesh_node_drain_ready()`로 ready record를 받고 claim을 얻은 뒤
   `zlink_mesh_claim_recv_batch()`로 record를 읽는다.
 - `MULTI_SPOT_REQREP` server는 `ZLINK_MESH_RECORD_SPOT_REQUEST`를 읽고
-  `zlink_mesh_reply()`로 응답한다. requester는 infrastructure claim batch의
-  `ZLINK_MESH_RECORD_COMPLETION`을 읽은 뒤 다음 request를 제출한다.
+  `zlink_mesh_reply()`로 응답한다. requester는 completion을 기다리지 않고
+  backpressure까지 request를 연속 제출하며, infrastructure claim batch의
+  `ZLINK_MESH_RECORD_COMPLETION`을 계속 drain해 완료 왕복을 집계한다.
+  outstanding 깊이는 backpressure가 결정한다.
 - `MULTI_SPOT_SENDSEND` 양쪽은 `ZLINK_MESH_RECORD_SPOT_SEND`를 읽는다. hub는 source
   Spot 주소로 `zlink_spot_send_to_spot()`을 호출해 echo를 반환한다.
 - `MULTI_STREAM`은 raw callback을 테스트하지 않고
@@ -75,8 +88,8 @@ poller wait 이후 hot path는 poller가 ready로 보고한 source만 처리해�
 - Java, .NET 등 managed binding perf는 poll 결과를 ready index 목록이나
   ready event 목록으로 보존해야 한다. active hot path에서 매 wake마다 전체
   socket 수를 다시 훑으면서 `isReady(index)`를 반복 호출하는 구조는 피한다.
-- 이 규칙은 echo client의 `inflight 1`, nonblocking send, `POLLIN` drain,
-  `POLLOUT` backpressure 의미를 바꾸지 않는다.
+- 이 규칙은 echo client의 backpressure 기반 연속 제출, nonblocking send,
+  `POLLIN` drain, `POLLOUT`/suspend-resume backpressure 의미를 바꾸지 않는다.
 
 ### 1.2 Backpressure 전략
 
@@ -87,27 +100,38 @@ poller wait 이후 hot path는 poller가 ready로 보고한 source만 처리해�
   - pending이 있는 동안 새 send는 pending deque에 추가만 한다.
   - poller `POLLOUT` readiness에서 pending deque를 `EAGAIN`까지 drain한다.
   - 소켓 1개로 N개 클라이언트를 처리하므로, EAGAIN 중에도 다른 클라이언트의 메시지가 도착할 수 있어 deque가 필요하다.
-- **send/send echo 클라이언트** (per-socket, inflight 1):
-  - `EAGAIN` 시 `bool send_pending` 플래그만 설정한다.
-  - poller `POLLOUT` readiness에서 플래그 확인 후 재전송한다.
-  - 응답 수신 → 다음 전송의 1:1 대응이므로 deque 불필요하다.
-  - 이 `inflight 1`은 구현 선택이 아니라 측정 계약이다.
-    `MULTI_DEALER_ROUTER_SENDSEND`, `MULTI_ROUTER_ROUTER_SENDSEND`,
-    `MULTI_STREAM` echo client는 소켓별 outstanding send를 반드시 1개로 유지해야
-    하며, 숨은 추가 inflight/deque/window를 두면 안 된다.
+- **send/send echo 클라이언트** (per-socket):
+  - inflight 깊이를 인위적으로 고정하지 않는다. outstanding send 수는
+    backpressure(HWM)가 결정한다. 즉 backpressure를 만날 때까지 연속 제출하고,
+    막히면 재개 신호에서 이어간다.
+    - C reference: `EAGAIN` 시 `bool send_pending` 플래그를 설정하고 poller
+      `POLLOUT` readiness에서 재전송한다.
+    - 코루틴/async binding: backpressure를 만난 submit을 suspend하고 core의
+      writable 신호에서 resume한다. 같은 소켓의 이후 submit은 언어 런타임이
+      순서를 관리한다.
+  - echo record 수신은 send를 gate하지 않는다. echo를 받아야만 다음을 보내는
+    1:1 ping-pong으로 직렬화하지 않으며, backpressure를 만날 때까지 연속 제출한다.
+    실제 outstanding 깊이는 소켓 HWM이 결정한다.
   - 기존 `MULTI_DEALER_ROUTER`, `MULTI_ROUTER_ROUTER` 이름은 위 send/send echo
     pattern의 호환 이름이다.
-- **request/reply 클라이언트** (per-socket, inflight 1):
+- **request/reply 클라이언트** (per-socket):
   - client process는 N개 requester socket을 하나의 active poller loop에서
     multiplex한다. socket마다 별도 recv/progress thread를 만들지 않는다.
-  - 각 requester socket은 inflight request를 1개만 유지한다.
+  - inflight request 수를 인위적으로 고정하지 않는다. **응답을 기다리지 않고
+    backpressure를 만날 때까지 request를 연속 제출**하며, 동시에 reply를 계속
+    drain한다. outstanding request 깊이는 backpressure(HWM)가 결정한다.
+    응답을 받아야 다음 request를 보내는 1:1 ping-pong으로 직렬화하지 않는다.
   - public request API로 request를 제출하고, 같은 active poller에 completion
     대상을 `POLLCOMPLETION` 단독으로 등록한다.
   - requester socket은 request 제출 뒤에도 reply 수신/progress 경로를 계속
     실행해야 한다. `POLLCOMPLETION`은 이 requester socket reply progress와
     completion callback drain을 public poller loop에 묶는 등록이다.
-  - completion drain 뒤 다음 request를 제출한다. 별도 progress thread, timer,
-    pipe wake, sleep fallback은 금지한다.
+  - 코루틴/async binding은 여러 request의 async 완료를 동시에 진행한다.
+    backpressure를 만난 submit은 suspend하고 writable/completion 신호에서
+    resume한다. 별도 progress thread, timer, pipe wake, sleep fallback은 금지한다.
+  - **유효 집계**: throughput과 latency는 **active 측정 구간 안에서 reply까지
+    완료된 왕복만** 계산한다. 측정 종료 시점에 아직 응답이 오지 않은 outstanding
+    request는 완료 왕복이 아니므로 집계에서 제외한다(C reference와 동일).
 - **one-way sender** (단일 흐름):
   - `EAGAIN` 시 `bool send_pending` 플래그만 설정한다.
   - poller `POLLOUT` readiness에서 플래그 확인 후 재전송한다.
@@ -144,10 +168,10 @@ active loop에 일반화하지 않는다.
 | 짧은 timer tick 기반 fallback (1–25 ms) | 금지. 과거 wakeup 누락 우회용으로 사용됐으나 core fix 이후 사용 금지. 단, C 기준 코드가 같은 위치에서 `perf_socket_poll(NULL, 0, N)`을 쓰는 idle wait는 `PERF_POLICY.md`의 empty-poll 예외를 따른다 |
 | 종료 / cooldown 용 별도 deadline 검사 | 별도 application clock 으로 처리하고 poller timeout 으로 대체하지 않음 |
 
-송수신 양방향 가능한 Spot 워크로드(`MULTI_SPOT_SENDSEND`)의 각 peer는 outstanding
-send를 1개만 유지하고 echo record를 읽은 뒤 다음 send를 제출한다. `EAGAIN`이면
-ready/claim 진행을 계속한 뒤 다시 제출한다. 별도 송신 간격이나 재시도 횟수 상한을
-두지 않는다.
+송수신 양방향 가능한 Spot 워크로드(`MULTI_SPOT_SENDSEND`)의 각 peer는 echo record
+수신을 send의 gate로 삼지 않고 backpressure를 만날 때까지 연속 제출한다. `EAGAIN`이면
+ready/claim 진행을 계속한 뒤 재개한다. outstanding send 깊이는 backpressure가
+결정하며, 별도 송신 간격·재시도 횟수·outstanding 상한을 두지 않는다.
 
 request completion이 있는 socket request/reply 워크로드는 같은 active poller에 completion 대상을
 **`ZLINK_POLLCOMPLETION` 단독**으로 등록한다. `ZLINK_POLLCOMPLETION`은

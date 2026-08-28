@@ -15,20 +15,14 @@ from perf_multi_common import (
     perf_client_context,
     resolve_multi_connect_ready_timeout_ms,
     safe_poll,
-    send_routed,
+    send_nonblocking,
     stamp_payload,
     wait_monitor_event,
 )
 
 
-async def _send_stop_token(sock):
-    # C perf_multi_dealer_dealer_client.cpp send_stop_token: bounded retry
-    # through transient backpressure so the server's receive window observes
-    # the per-socket wire stop token.
-    for _ in range(1000):
-        if await send_routed(sock, STOP_TOKEN, measurement=False):
-            return True
-    return False
+def _send_stop_token(sock):
+    sock.send().message(STOP_TOKEN).submit_sync(flags=0)
 
 
 async def main(argv=None):
@@ -74,16 +68,17 @@ async def main(argv=None):
                             if send_pending[index]:
                                 continue
                             while time.perf_counter() < active_deadline:
-                                seq += 1
-                                if await send_routed(
+                                next_seq = seq + 1
+                                if send_nonblocking(
                                     current_sock,
                                     stamp_payload(
                                         payloads[index],
                                         phase=1,
                                         run_id=run_id,
-                                        seq=seq,
+                                        seq=next_seq,
                                     ),
                                 ):
+                                    seq = next_seq
                                     continue
                                 # EAGAIN/backpressure: defer until POLLOUT.
                                 send_pending[index] = True
@@ -115,7 +110,7 @@ async def main(argv=None):
                 # C run_single_size_case: send a wire stop token per socket
                 # so the server receive window terminates.
                 for sock in sockets:
-                    await _send_stop_token(sock)
+                    _send_stop_token(sock)
                 print(f"CLIENT_DONE,{args.msg_size}", flush=True)
         finally:
             for sock in sockets:

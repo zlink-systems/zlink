@@ -8,7 +8,6 @@ const {
   createRunId,
   currentEpochNs,
   HEADER_SIZE,
-  integerEnv,
   summarizeMetrics,
 } = require('../common/perf_metrics');
 const {
@@ -77,7 +76,6 @@ async function runDealerDealerBenchmark(msgSize, options) {
       msgSize,
       activeStartNs,
       activeStopNs,
-      latencySampleStride: integerEnv('PERF_SINGLE_DEALER_DEALER_LATENCY_SAMPLE_STRIDE', 32),
     });
 
     // PERF_SINGLE_TEST_POLICY § 1.4 / § 2.0.1: no start/stop control
@@ -123,6 +121,10 @@ if (require.main === module) {
   (async () => {
     const options = parseSingleBinaryArgs(process.argv.slice(2));
     const result = await runDealerDealerBenchmark(options.msgSize, options);
+    if (result.unsupported) {
+      console.log(`UNSUPPORTED,${options.libName},DEALER_DEALER,${options.transport}`);
+      return;
+    }
     for (const line of summarizeMetrics(
       'DEALER_DEALER',
       options.transport,
@@ -130,7 +132,8 @@ if (require.main === module) {
       result.latenciesNs,
       options.duration,
       options.libName,
-      result.accepted
+      result.accepted,
+      result.latencyMeanNs
     )) {
       console.log(line);
     }

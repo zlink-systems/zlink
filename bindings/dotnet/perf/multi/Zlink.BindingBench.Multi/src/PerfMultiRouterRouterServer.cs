@@ -107,8 +107,8 @@ internal static class PerfMultiRouterRouterServer
         while (pendingReplies.Count > 0)
         {
             PendingReply pending = pendingReplies.Peek();
-            if (await PerfSocketIo.SendMeasurementAsync(server, pending.RoutingId,
-                    pending.Message).ConfigureAwait(false) > 0)
+            if (PerfSocketIo.SendMeasurement(server, pending.RoutingId,
+                    pending.Message.AsReadOnlySpan(), SendFlags.DontWait) > 0)
             {
                 pendingReplies.Dequeue();
                 pending.Dispose();

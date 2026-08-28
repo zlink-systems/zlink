@@ -183,7 +183,6 @@ internal static class PerfReqRep
         IDealerSocket client, IRouterSocket server, int msgSize,
         int durationSeconds, int latencyCap)
     {
-        using var stop = new ManualResetEventSlim(false);
         Exception? serverError = null;
         long serverReceived = 0;
         long serverReplied = 0;
@@ -191,7 +190,7 @@ internal static class PerfReqRep
         {
             try
             {
-                RunReplyLoop(server, stop, ref serverReceived, ref serverReplied);
+                RunReplyLoop(server, ref serverReceived, ref serverReplied);
             }
             catch (Exception ex)
             {
@@ -205,20 +204,23 @@ internal static class PerfReqRep
         serverThread.Start();
 
         var result = await RunRequestLoopAsync(
+            client,
             msgSize,
             durationSeconds,
             latencyCap,
-            async message =>
+            (message, callback) =>
             {
                 using Message? tail = PerfSocketIo.MeasurementPartCount == 2
                     ? Message.Allocate(0) : null;
-                return tail == null
-                    ? await client.Request().Message(message)
-                        .Timeout(ResolveReqRepTimeout()).Async().ConfigureAwait(false)
-                    : await client.Request().Message(message).Message(tail)
-                        .Timeout(ResolveReqRepTimeout()).Async().ConfigureAwait(false);
+                if (tail == null)
+                    client.Request().Message(message)
+                        .Timeout(ResolveReqRepTimeout())
+                        .Submit(SendFlags.DontWait, callback);
+                else
+                    client.Request().Message(message).Message(tail)
+                        .Timeout(ResolveReqRepTimeout())
+                        .Submit(SendFlags.DontWait, callback);
             }).ConfigureAwait(false);
-        stop.Set();
         if (!await SendStopTokenAsync(client,
                 "[single-dealer-router-reqrep]").ConfigureAwait(false))
             throw new TimeoutException("dealer-router reqrep stop token was not sent");
@@ -324,7 +326,6 @@ internal static class PerfReqRep
         IRouterSocket client, IRouterSocket server, RoutingId targetRid,
         int msgSize, int durationSeconds, int latencyCap)
     {
-        using var stop = new ManualResetEventSlim(false);
         Exception? serverError = null;
         long serverReceived = 0;
         long serverReplied = 0;
@@ -332,7 +333,7 @@ internal static class PerfReqRep
         {
             try
             {
-                RunReplyLoop(server, stop, ref serverReceived, ref serverReplied);
+                RunReplyLoop(server, ref serverReceived, ref serverReplied);
             }
             catch (Exception ex)
             {
@@ -346,20 +347,23 @@ internal static class PerfReqRep
         serverThread.Start();
 
         var result = await RunRequestLoopAsync(
+            client,
             msgSize,
             durationSeconds,
             latencyCap,
-            async message =>
+            (message, callback) =>
             {
                 using Message? tail = PerfSocketIo.MeasurementPartCount == 2
                     ? Message.Allocate(0) : null;
-                return tail == null
-                    ? await client.Request(targetRid).Message(message)
-                        .Timeout(ResolveReqRepTimeout()).Async().ConfigureAwait(false)
-                    : await client.Request(targetRid).Message(message).Message(tail)
-                        .Timeout(ResolveReqRepTimeout()).Async().ConfigureAwait(false);
+                if (tail == null)
+                    client.Request(targetRid).Message(message)
+                        .Timeout(ResolveReqRepTimeout())
+                        .Submit(SendFlags.DontWait, callback);
+                else
+                    client.Request(targetRid).Message(message).Message(tail)
+                        .Timeout(ResolveReqRepTimeout())
+                        .Submit(SendFlags.DontWait, callback);
             }).ConfigureAwait(false);
-        stop.Set();
         if (!await SendRoutedStopTokenAsync(client, targetRid,
                 "[single-router-router-reqrep]").ConfigureAwait(false))
         {
@@ -373,13 +377,15 @@ internal static class PerfReqRep
         return result;
     }
 
-    private static async Task<(long completed, List<double> latencySamples)>
+    private static Task<(long completed, List<double> latencySamples)>
         RunRequestLoopAsync(
-        int msgSize, int durationSeconds, int latencyCap,
-        Func<Message, Task<IReadOnlyList<Message>>> submit)
+        ISocket requester, int msgSize, int durationSeconds, int latencyCap,
+        Action<Message, RequestCallback> submit)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
-        using var completionSignal = new SemaphoreSlim(0);
+        using var completionPoller = Zlink.CreatePoller();
+        var completionEvents = new PollEvent[1];
+        completionPoller.Add(requester, PollEventFlags.PollCompletion, 0);
         var samples = new List<double>(Math.Max(0, latencyCap));
         object gate = new();
         Exception? completionError = null;
@@ -389,9 +395,6 @@ internal static class PerfReqRep
         long sampleSeen = 0;
         uint rng = 0xA341316Cu;
         ulong seq = 1;
-        const int pipelineBudgetBytes = 768 * 1024;
-        int maxInFlight = Math.Max(1,
-            Math.Min(64, pipelineBudgetBytes / Math.Max(1, msgSize)));
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
 
         bool HasCompletionError()
@@ -423,9 +426,8 @@ internal static class PerfReqRep
             bool submitted = false;
             try
             {
-                Task<IReadOnlyList<Message>> request = submit(message);
+                submit(message, CompleteRequest);
                 submitted = true;
-                _ = ObserveRequestAsync(request);
                 return true;
             }
             catch (ZlinkException ex)
@@ -443,12 +445,19 @@ internal static class PerfReqRep
                 }
             }
 
-            async Task ObserveRequestAsync(Task<IReadOnlyList<Message>> request)
+            void CompleteRequest(RequestResult result,
+                IReadOnlyList<Message> parts)
             {
-                IReadOnlyList<Message>? parts = null;
                 try
                 {
-                    parts = await request.ConfigureAwait(false);
+                    if (result == RequestResult.TimedOut)
+                    {
+                        DebugLog("single_reqrep_completion_result:timed_out");
+                        return;
+                    }
+                    if (result != RequestResult.Ok)
+                        throw new InvalidOperationException(
+                            $"request completion failed: {result}");
                     if (!PerfSocketIo.TryMeasurementPayload(parts,
                             out Message replyPayload)
                         || !TryDecodeExpectedSingleHeader(
@@ -469,22 +478,15 @@ internal static class PerfReqRep
                     }
                     Interlocked.Increment(ref completed);
                 }
-                catch (ZlinkRequestException ex)
-                    when (ex.Result == ZlinkRequestException.ErrorCode.TimedOut)
-                {
-                    DebugLog("single_reqrep_completion_result:timed_out");
-                }
                 catch (Exception ex)
                 {
                     RecordCompletionError(ex);
                 }
                 finally
                 {
-                    if (parts != null)
-                        Zlink.MultipartClose(parts);
+                    Zlink.MultipartClose(parts);
                     if (Interlocked.Exchange(ref counted, 0) == 1)
                         Interlocked.Decrement(ref inFlight);
-                    completionSignal.Release();
                 }
             }
         }
@@ -493,23 +495,13 @@ internal static class PerfReqRep
         while (Stopwatch.GetTimestamp() < deadlineTicks && !HasCompletionError())
         {
             bool submittedAny = false;
-            int submittedSinceProgress = 0;
-            // HOT PATH: keep request count and total payload below the same
-            // balanced pipeline budget as C. Removing this bound turns queue
-            // residence into the latency metric and times out large payloads.
-            while (Volatile.Read(ref inFlight) < maxInFlight
-                   && Stopwatch.GetTimestamp() < deadlineTicks
+            while (Stopwatch.GetTimestamp() < deadlineTicks
                    && !HasCompletionError())
             {
                 if (!TrySubmitOne())
                     break;
                 submittedAny = true;
-                if (++submittedSinceProgress >= 64)
-                {
-                    submittedSinceProgress = 0;
-                    _ = await completionSignal.WaitAsync(0)
-                        .ConfigureAwait(false);
-                }
+                _ = completionPoller.Wait(completionEvents, TimeSpan.Zero);
             }
 
             if (!submittedAny && Volatile.Read(ref inFlight) == 0)
@@ -518,13 +510,15 @@ internal static class PerfReqRep
                 continue;
             }
 
-            _ = await completionSignal.WaitAsync(50).ConfigureAwait(false);
+            _ = completionPoller.Wait(completionEvents,
+                TimeSpan.FromMilliseconds(50));
         }
 
         long drainStartTicks = Stopwatch.GetTimestamp();
         while (Volatile.Read(ref inFlight) > 0 && !HasCompletionError())
         {
-            _ = await completionSignal.WaitAsync(50).ConfigureAwait(false);
+            _ = completionPoller.Wait(completionEvents,
+                TimeSpan.FromMilliseconds(50));
             if (Stopwatch.GetElapsedTime(drainStartTicks) > drainTimeout)
             {
                 DebugLog(
@@ -538,14 +532,14 @@ internal static class PerfReqRep
             if (completionError != null)
                 throw completionError;
         }
-        return (Volatile.Read(ref completed), samples);
+        return Task.FromResult((Volatile.Read(ref completed), samples));
     }
 
-    private static void RunReplyLoop(IRouterSocket server, ManualResetEventSlim stop,
+    private static void RunReplyLoop(IRouterSocket server,
         ref long serverReceived, ref long serverReplied)
     {
         using var received = Received.Create();
-        while (!stop.IsSet)
+        while (true)
         {
             if (!TryReceiveBlocking(server, received))
                 continue;

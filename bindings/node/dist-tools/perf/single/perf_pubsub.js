@@ -2,7 +2,7 @@
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
-const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, integerEnv, summarizeMetrics, } = require('../common/perf_metrics');
+const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, summarizeMetrics, } = require('../common/perf_metrics');
 const { applyContextPolicy, applySocketPolicy, appendMeasurement, benchmarkEndpoint, closeSenderWorker, configureTlsClient, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForPostReadySettle, waitForMonitorConnectionReady, waitForWorkerMessage, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 function trace(message) {
@@ -192,7 +192,6 @@ async function runPubSubBenchmark(msgSize, options) {
             msgSize,
             activeStartNs,
             activeStopNs,
-            latencySampleStride: integerEnv('PERF_SINGLE_PUBSUB_LATENCY_SAMPLE_STRIDE', 32),
         });
         // PERF_SINGLE_TEST_POLICY § 1.4 / § 2.0.1 / C setup_connected_pubsub_
         // pair + send_pubsub_stop_token: the `bound`->CONNECTION_READY->settle
@@ -230,7 +229,11 @@ if (require.main === module) {
     (async () => {
         const options = parseSingleBinaryArgs(process.argv.slice(2));
         const result = await runPubSubBenchmark(options.msgSize, options);
-        for (const line of summarizeMetrics('PUBSUB', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted)) {
+        if (result.unsupported) {
+            console.log(`UNSUPPORTED,${options.libName},PUBSUB,${options.transport}`);
+            return;
+        }
+        for (const line of summarizeMetrics('PUBSUB', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted, result.latencyMeanNs)) {
             console.log(line);
         }
     })().catch((error) => {

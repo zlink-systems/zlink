@@ -204,7 +204,7 @@ internal static partial class PerfRunner
         }
     }
 
-    internal static bool TrySendRoutedActiveMessage(IRoutedMessageSocket socket,
+    internal static bool TrySendRoutedActiveMessage(IRouterSocket socket,
         RoutingId routingId, ReadOnlySpan<byte> buffer, string tag)
     {
         try
@@ -298,14 +298,11 @@ internal static partial class PerfRunner
         }
     }
 
-    // PERF_SINGLE_TEST_POLICY § 1.4: send the wire-level stop token through
-    // the socket's writable signal. The stop path must not turn a full queue
-    // into an unbounded blocking native call after the active window ends.
+    // PERF_SINGLE_TEST_POLICY § 1.4: send the wire-level stop token with a
+    // blocking send. The socket send timeout bounds transient failures, which
+    // are retried like the C single one-way path without a POLLOUT wait.
     internal static bool SendStopTokenBlocking(IMessageSocket sender, string tag)
     {
-        using var poller = Zlink.CreatePoller();
-        var events = new PollEvent[1];
-        poller.Add(sender, PollEventFlags.PollOut, 0);
         long deadlineTicks = DeadlineTicksFromMilliseconds(
             ResolveStopTokenTimeoutMs());
 
@@ -314,7 +311,7 @@ internal static partial class PerfRunner
             try
             {
                 if (PerfSocketIo.Send(sender, StopToken.Bytes,
-                        SendFlags.DontWait) > 0)
+                        SendFlags.None) > 0)
                     return true;
             }
             catch (ZlinkException ex)
@@ -329,19 +326,7 @@ internal static partial class PerfRunner
                 return false;
             }
 
-            int waitMs = RemainingMilliseconds(deadlineTicks);
-            if (waitMs <= 0)
-                break;
-            try
-            {
-                _ = poller.Wait(events, TimeSpan.FromMilliseconds(waitMs));
-            }
-            catch (ZlinkException ex)
-                when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
-                      || PerfShared.IsTransientNetworkError(ex.NativeErrno)
-                      || IsInterrupted(ex.NativeErrno))
-            {
-            }
+            Thread.Sleep(1);
         }
 
         Console.Error.WriteLine($"{tag} stop-token send failed");
@@ -378,12 +363,9 @@ internal static partial class PerfRunner
         }
     }
 
-    internal static bool SendRoutedStopTokenBlocking(IRoutedMessageSocket sender,
+    internal static bool SendRoutedStopTokenBlocking(IRouterSocket sender,
         RoutingId routingId, string tag)
     {
-        using var poller = Zlink.CreatePoller();
-        var events = new PollEvent[1];
-        poller.Add(sender, PollEventFlags.PollOut, 0);
         long deadlineTicks = DeadlineTicksFromMilliseconds(
             ResolveStopTokenTimeoutMs());
 
@@ -392,7 +374,7 @@ internal static partial class PerfRunner
             try
             {
                 if (PerfSocketIo.Send(sender, routingId, StopToken.Bytes,
-                        SendFlags.DontWait) > 0)
+                        SendFlags.None) > 0)
                     return true;
             }
             catch (ZlinkException ex)
@@ -407,19 +389,7 @@ internal static partial class PerfRunner
                 return false;
             }
 
-            int waitMs = RemainingMilliseconds(deadlineTicks);
-            if (waitMs <= 0)
-                break;
-            try
-            {
-                _ = poller.Wait(events, TimeSpan.FromMilliseconds(waitMs));
-            }
-            catch (ZlinkException ex)
-                when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
-                      || PerfShared.IsTransientNetworkError(ex.NativeErrno)
-                      || IsInterrupted(ex.NativeErrno))
-            {
-            }
+            Thread.Sleep(1);
         }
 
         Console.Error.WriteLine($"{tag} stop-token send failed");

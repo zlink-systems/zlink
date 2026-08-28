@@ -242,8 +242,8 @@ public final class PerfUtil {
         };
     }
 
-    public static boolean isEchoPattern(String pattern) {
-        return PerfMeasurement.isEchoPattern(pattern);
+    public static boolean isEchoPattern(String suite, String pattern) {
+        return PerfMeasurement.isEchoPattern(suite, pattern);
     }
 
     public static Result classifyFailure(Config config, Throwable failure) {
