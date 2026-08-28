@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -9,9 +10,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private readonly Func<bool> _flowCaptureEnabled;
     private readonly ZLinkSerialExecutionQueue _queue;
     private readonly ZLinkUserSpotExecutionMode _executionMode;
-    private readonly object _laneGate = new();
+    private readonly ZLinkStateLane _stateLane = new();
     private readonly Dictionary<ZLinkActorId, ZLinkSerialExecutionQueue> _actorLanes = [];
     private readonly Dictionary<ZLinkTimerName, ZLinkSerialExecutionQueue> _timerLanes = [];
+    private ZLinkSerialExecutionQueue[]? _completedChildLanes;
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationToken _stopToken;
     private readonly object _executionOwner;
@@ -65,17 +67,11 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         Interlocked.Exchange(ref _spotStopping, 1);
         Interlocked.Exchange(ref _stopping, 1);
         await _queue.DisposeAsync().ConfigureAwait(false);
-        ZLinkSerialExecutionQueue[] lanes;
-        lock (_laneGate)
-        {
-            lanes = _actorLanes.Values
-                .Concat(_timerLanes.Values)
-                .ToArray();
-            _actorLanes.Clear();
-            _timerLanes.Clear();
-        }
+        var lanes = await _stateLane.RunAsync(CompleteChildLanesOnStateLane)
+            .ConfigureAwait(false);
         foreach (var lane in lanes)
             await lane.DisposeAsync().ConfigureAwait(false);
+        await _stateLane.DisposeAsync().ConfigureAwait(false);
         await _taskRunner.StopAsync().ConfigureAwait(false);
     }
 
@@ -84,11 +80,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         Interlocked.Exchange(ref _spotStopping, 1);
         Interlocked.Exchange(ref _stopping, 1);
         _queue.Complete();
-        lock (_laneGate)
-        {
-            foreach (var lane in _actorLanes.Values) lane.Complete();
-            foreach (var lane in _timerLanes.Values) lane.Complete();
-        }
+        CompleteChildLanes();
     }
 
     public async ValueTask ExecuteAsync(
@@ -1105,13 +1097,47 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         TIdentifier key)
         where TIdentifier : notnull
     {
-        lock (_laneGate)
-        {
-            if (lanes.TryGetValue(key, out var lane)) return lane;
-            lane = CreateQueue();
-            lanes.Add(key, lane);
-            return lane;
-        }
+        _stateLane.ThrowIfReentrant();
+        return _stateLane.RunAsync(() => GetLaneOnStateLane(lanes, key))
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private ZLinkSerialExecutionQueue GetLaneOnStateLane<TIdentifier>(
+        Dictionary<TIdentifier, ZLinkSerialExecutionQueue> lanes,
+        TIdentifier key)
+        where TIdentifier : notnull
+    {
+        if (lanes.TryGetValue(key, out var lane)) return lane;
+        lane = CreateQueue();
+        lanes.Add(key, lane);
+        return lane;
+    }
+
+    private void CompleteChildLanes()
+    {
+        _stateLane.ThrowIfReentrant();
+        _ = _stateLane.RunAsync(CompleteChildLanesOnStateLane)
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private ZLinkSerialExecutionQueue[] CompleteChildLanesOnStateLane()
+    {
+        if (_completedChildLanes is not null)
+            return _completedChildLanes;
+
+        var lanes = _actorLanes.Values
+            .Concat(_timerLanes.Values)
+            .ToArray();
+        _actorLanes.Clear();
+        _timerLanes.Clear();
+        foreach (var lane in lanes)
+            lane.Complete();
+        _completedChildLanes = lanes;
+        return lanes;
     }
 
     private async ValueTask RunClaimedAsync(
