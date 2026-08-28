@@ -439,7 +439,56 @@ read, not a branch condition. The error kind value itself is owned by the
 [Framework Error Model](../00-foundation/07-framework-error-model.en.md); this document only
 defines which completion path picks that value.
 
-## 15. Per-Language Representation
+## 15. Consuming Binding Send Terminals (Implementation)
+
+When the framework runtime consumes a binding's HWM-managed send family
+(PAIR send, routed send, `Received.send()`), it uses only the **async
+terminal** (C++ `async()`, .NET `Async()`, `submit()` elsewhere). The
+binding's sync(+flags) terminal is the binding's public surface, not a
+framework-internal path. Core send-completion notification drives the
+completion, so the framework doesn't wrap it in a separate executor or
+offload. The binding terminal names, return types, and flags contract
+themselves are owned by
+[the binding routed-transfer contract and asynchronous completion surface policy](../../../../../../bindings/doc/spec/async-coroutine-policy.en.md)
+— this section owns only the framework's consumption rule.
+
+The following two cases legitimately use the sync terminal.
+
+- **Immediate backpressure observation** — a path that must receive the
+  admission result without waiting, via the `DONTWAIT` flag. The sync
+  terminal is the only surface of that contract.
+- **Implementing a public synchronous contract** — the internal
+  implementation of a public synchronous surface whose preservation
+  [State Ownership And Lanes §5](06-state-ownership-and-lanes.en.md#completion-guarantees-before-return)
+  requires. Waiting at HWM saturation is then an observable property of
+  that public contract, not a violation.
+
+Publish and raw reply are HWM-free, so the synchronous terminal is
+canonical for them (owned by the binding spec).
+
+### Framework Typed Session Reply
+
+The framework's typed Session reply is not a surface that turns the raw
+binding reply into an async terminator. The framework runtime owns typed
+serialization and the per-request one-shot reply token; the terminator
+atomically claims the token and then waits for source-local admission. A
+second reply on the same token ends as an exceptional completion without
+attempting transport. Token claim rules are owned by
+[§8](#8-stream-reply-token).
+
+| Framework language | Typed Session reply terminal | Completion expression |
+|---|---|---|
+| C++ | `.reply_packet(...).submit()` | `co_await`-able framework task |
+| .NET | `.Reply(...).Async(ct)` | `ValueTask` |
+| Java | `.reply(...).submit()` | `CompletionStage<Void>` |
+| Kotlin | `.reply(...).await()` | suspending `Unit` |
+| Node | `.reply(...).submit(signal?)` | `Promise<void>` |
+
+Even in languages that use the same `submit` name, the return type and
+owning layer distinguish it from the raw binding reply (a synchronous
+one-shot).
+
+## 16. Per-Language Representation
 
 The common contract does not mandate a specific async type name. This document owns
 completion ordering, cancellation, and error semantics; each language's per-language interface owns
@@ -471,7 +520,7 @@ not offer a blocking `submit()` alongside a coroutine terminal for the same argu
 offers a single `task_t<T> submit()`. A callback overload can be provided as
 `submit(callback)` since its parameter list differs.
 
-## 16. Verification Requirements
+## 17. Verification Requirements
 
 The public surface (each language's terminator return type, returned error kind, one-way
 submit's normal/exceptional completion, a request's reply/error/timeout/cancellation/

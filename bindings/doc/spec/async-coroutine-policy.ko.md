@@ -61,8 +61,7 @@ framework가 맡는다.
 | [Request 완료 표면과 세 terminal](#request-완료-표면과-세-terminal) | HWM-managed request의 세 terminal(sync 반환/sync callback/async)과 언어별 표면 |
 | [Send·Publish·Request·Raw reply 언어별 정규 표](#sendpublishrequestraw-reply-언어별-정규-표) | 네 operation 유형 각각의 언어별 terminal과 반환 타입 |
 | [Raw reply 동기 one-shot](#raw-reply-동기-one-shot) | 일곱 binding의 reply 종결자와 즉시 실패 계약 |
-| [Framework typed Session reply](#framework-typed-session-reply) | raw binding reply와 별개인 awaitable Framework 계약 |
-| [Framework에서 비동기 완료를 붙이는 방법](#framework에서-비동기-완료를-붙이는-방법) | 언어별 framework가 완료 경계를 자기 실행 환경으로 바꾸는 방법 |
+| [Framework의 소비 규칙 (포인터)](#framework의-소비-규칙-포인터) | framework가 이 표면을 어떻게 쓰는지는 framework 스펙이 소유한다 |
 
 ## 분류 원칙
 
@@ -80,9 +79,9 @@ framework가 맡는다.
   동기 `submit()`이 terminal이다. `ZLINK_PUB_OPT_NODROP`에서는 가득 찬
   subscriber가 동기 submit에서 즉시 `BACKPRESSURED`/`EAGAIN`을 표면화하며,
   재시도 정책은 어플리케이션이 소유한다.
-- 이 분류는 bindings와 framework 표면에 동일하게 적용된다. framework의
-  typed Session reply, managed request, HWM-managed send도 같은 기준으로
-  ASYNC/SYNC가 갈린다 — framework가 별도의 완화된 규칙을 갖지 않는다.
+- 이 분류의 근거(HWM 대기 가능성)는 표면 계층과 무관하게 성립한다. framework
+  표면이 이 분류를 어떻게 따르는지는 framework 스펙이 소유한다
+  ([Framework의 소비 규칙](#framework의-소비-규칙-포인터) 참조).
   publish는 위의 lossy 계약에 따라 별도로 synchronous다.
 - 이 원칙이 아래 모든 절의 근거다: C++가 send에 `submit()`/`async()`(또는
   request의 세 terminal)를 노출하는 것도, 다른 언어가 send·request에서 sync/async terminal을
@@ -267,8 +266,8 @@ Go는 `Submit(ctx)`를 쓴다.
    completion channel로 fire-and-collect한다(별도 callback 메서드 없음).
 3. **async** — coroutine/awaitable용. 언어 awaitable(C++ `async_result_t<T>`, .NET
    `Task`, Java `CompletionStage`, Node `Promise`, Python coroutine object, Rust
-   `Future`, Go completion channel)을 반환한다. framework canonical terminal이다 —
-   framework는 비동기 실행 전용이므로 오직 이 terminal만 사용한다. flag를 받지 않는다.
+   `Future`, Go completion channel)을 반환한다. flag를 받지 않는다.
+   (framework가 어느 terminal을 쓰는지는 framework 스펙이 소유한다 — 아래 포인터.)
 
 sync 반환과 sync callback은 **admission flag를 받고**, async는 받지 않는다(send와
 동일). request 제출의 admission backpressure는 sync callback(또는 Go channel)으로
@@ -285,7 +284,7 @@ operation별 executor나 timer를 추가하지 않는다.
 | 구분 | bindings 완료 표면 |
 |---|---|
 | 분류 | ASYNC (HWM 대기 가능) |
-| terminal (모든 바인딩) | **sync 반환**(blocking, reply 직접 반환) / **sync callback**(즉시 admission 결과, reply는 callback) / **async**(awaitable, framework canonical) |
+| terminal (모든 바인딩) | **sync 반환**(blocking, reply 직접 반환) / **sync callback**(즉시 admission 결과, reply는 callback) / **async**(awaitable) |
 | 언어별 이름 | C++ `submit()`/`submit(callback)`/`async()` · .NET `Submit(SendFlags)`/`Submit(SendFlags, cb)`/`Async()` · Java·Node·Python·Rust `submit_sync(flags)`/`submit_sync(flags, cb)`/`submit()` · Go `Submit(ctx)`(+Flags)+channel |
 | reply 전달 | sync 반환의 반환값, callback 인자, suspension 성공 값, 또는 channel completion |
 | submit flags | **sync 반환·sync callback은 admission flag를 받는다**(`NONE` admission 대기 / `DONTWAIT` 즉시 backpressure, send와 동일). async terminal은 받지 않는다 |
@@ -323,8 +322,8 @@ lane으로 전송되므로 raw reply 열의 동기 terminal 하나만 가지며 
 | Binding | HWM-managed send | Publish | Request | Raw reply |
 |---|---|---|---|---|
 | C | 해당 없음 — C ABI는 builder 정책을 적용하지 않으며 `core/include/zlink.h`의 함수형 계약을 따른다 | 해당 없음 | 해당 없음 | 해당 없음 |
-| C++ | sync `submit()`+`flags(int)` → PAIR/STREAM `bool`, routed `void`. async `async()` → `async_result_t<T>` | `submit()` → 동기 `bool`, 실패 시 `submit_error_t`를 던진다 | `submit()`(blocking) → reply, 실패 시 예외. `submit(callback)` → 즉시 반환, completion은 callback으로 전달. `async()` → `async_result_t<T>`(framework canonical) | `submit()` → `void`, 실패 시 `submit_error_t`를 던진다 |
-| .NET | sync `Submit(SendFlags)` → `void`. async `Async()` → `Task`/`ValueTask`(`<T>`) | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 | sync 반환 `Submit(SendFlags)` → reply. sync callback `Submit(SendFlags, callback)` → 즉시 admission. async `Async(ct)` → `Task`(framework canonical). 실패 시 `ZlinkSubmitException` | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 |
+| C++ | sync `submit()`+`flags(int)` → PAIR/STREAM `bool`, routed `void`. async `async()` → `async_result_t<T>` | `submit()` → 동기 `bool`, 실패 시 `submit_error_t`를 던진다 | `submit()`(blocking) → reply, 실패 시 예외. `submit(callback)` → 즉시 반환, completion은 callback으로 전달. `async()` → `async_result_t<T>` | `submit()` → `void`, 실패 시 `submit_error_t`를 던진다 |
+| .NET | sync `Submit(SendFlags)` → `void`. async `Async()` → `Task`/`ValueTask`(`<T>`) | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 | sync 반환 `Submit(SendFlags)` → reply. sync callback `Submit(SendFlags, callback)` → 즉시 admission. async `Async(ct)` → `Task`. 실패 시 `ZlinkSubmitException` | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 |
 | Java, Kotlin | sync `submit_sync(SendFlags)` → `void`. async `submit()` → `CompletionStage<T>` | `submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 | sync 반환 `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → 즉시 admission. async `submit()` → `CompletionStage<T>`. 실패 시 `ZlinkSubmitException` | `submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 |
 | Node | sync `submit_sync(SendFlags)` → `void`. async `submit()` → `Promise<T>`(또는 `Promise<void>`) | `submit()` → 동기 `void`, 실패 시 `SubmitError`를 던진다 | sync 반환 `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → 즉시 admission. async `submit()` → `Promise<T>`. 실패 시 `SubmitError` | `submit()` → 동기 `void`, 실패 시 `SubmitError`를 던진다 |
 | Python | sync `submit_sync(*, flags)` → `None`. async `submit()` → await 가능한 coroutine object | `submit()` → 동기 `None`, 실패 시 `SubmitError`를 발생시킨다 | sync 반환 `submit_sync(*, flags)` → reply. sync callback `submit_sync(*, flags, callback)` → 즉시 admission. async `submit()` → coroutine object. 실패 시 `SubmitError` | `submit()` → 동기 `None`, 실패 시 `SubmitError`를 발생시킨다 |
@@ -332,8 +331,8 @@ lane으로 전송되므로 raw reply 열의 동기 terminal 하나만 가지며 
 | Rust | sync `submit_sync(SendFlags)` → `Result<(), SubmitError>`. async `submit()` → `Future<Output = Result<(), SubmitError>>` | `submit()` → 동기 `Result<(), SubmitError>` | sync 반환 `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → 즉시 admission. async `submit()` → runtime 비종속 `Future<Output = Result<Vec<message_t>, ZlinkError>>` | `submit()` → 동기 `Result<(), SubmitError>` |
 
 Kotlin이 Java binding을 직접 사용할 때도 위 Java 열의 계약을 그대로 따른다.
-Kotlin Framework 표면(`.reply(...).await()` 등)은 [Framework typed Session
-reply](#framework-typed-session-reply)에서 별도로 다룬다.
+Kotlin Framework 표면(`.reply(...).await()` 등)은 framework 스펙이 소유한다
+([Framework의 소비 규칙](#framework의-소비-규칙-포인터) 참조).
 
 ## Raw reply 동기 one-shot
 
@@ -356,117 +355,13 @@ submit 실패는 즉시 언어별 `SubmitError`로 전달한다.
 | Rust | `ReplyOp<Ready>::submit()` | `Ok(())` | `Err(SubmitError)`를 반환한다 |
 
 Kotlin이 Java binding을 직접 사용할 때도 Java의 동기 `submit(): void` reply 계약을
-그대로 사용한다. 이는 아래의 Kotlin Framework `reply(...).await()`와 다른 API다.
+그대로 사용한다. Kotlin Framework `reply(...).await()`는 framework 스펙이 소유하는 별개 API다.
 
-## Framework typed Session reply
+## Framework의 소비 규칙 (포인터)
 
-Framework의 typed Session reply는 raw binding reply를 async 종결자로 바꾼 표면이 아니다.
-Framework runtime이 typed serialization과 request별 one-shot reply token을 소유하며,
-종결자는 token을 원자적으로 claim한 뒤 source-local admission까지 기다린다. 같은 token의
-두 번째 reply는 transport를 시도하지 않고 exceptional completion으로 끝난다.
-
-| Framework 언어 | Typed Session reply terminal | 완료 표현 |
-|---|---|---|
-| C++ | `.reply_packet(...).submit()` | `co_await` 가능한 Framework task |
-| .NET | `.Reply(...).Async(ct)` | `ValueTask` |
-| Java | `.reply(...).submit()` | `CompletionStage<Void>` |
-| Kotlin | `.reply(...).await()` | suspending `Unit` |
-| Node | `.reply(...).submit(signal?)` | `Promise<void>` |
-
-따라서 같은 `submit` 이름을 쓰는 C++·Java·Node에서도 반환 타입과 소유 계층으로 의미를
-구분한다. Raw binding reply는 동기 one-shot이고, Framework typed Session reply만
-source-local admission을 관찰하는 awaitable이다.
-
-## Framework에서 비동기 완료를 붙이는 방법
-
-framework는 bindings가 제공하는 완료 경계를 자기 실행 환경으로 변환한다.
-
-- **framework는 비동기 실행 전용이다.** 모든 framework 언어는 자기 실행 환경
-  (코루틴·가상 스레드·이벤트 루프)의 비동기 표면만 지원하며, blocking 전용 표면을
-  따로 두지 않는다.
-  bindings의 sync(+flags) send terminal은 binding 표면일 뿐 framework는 async terminal만
-  쓴다.
-- **framework는 executor를 새로 만들지 않는다.** bindings는 framework executor를 제공하지
-  않지만, framework가 만들 필요도 없다. operation별로 다음을 그대로 쓴다.
-
-| operation | framework 처리 |
-|---|---|
-| HWM-managed send | send의 awaitable(정규 표의 async terminal: C++ `async()`, .NET `Async()`, 그 밖 `submit()` 등)을 자기 비동기 실행 환경에서 직접 `await`/`co_await`한다. Core send-completion 통지가 완료를 구동한다 |
-| publish | awaitable이 아니다. 동기 `submit()`을 직접 호출한다 |
-| request | 이미 언어 native awaitable(C++ `async()`)을 반환하므로 감쌀 필요가 없다 |
-
-### Java framework
-
-- Java framework는 managed request의 `submit()`으로 받은
-  `CompletionStage`를 handler executor, virtual thread, timeout 정책에 연결한다.
-- HWM-managed send의 `submit()`이 반환하는 `CompletionStage`도 managed
-  request와 동일하게 그대로 연결한다 — Core send-completion 통지가 완료를
-  구동하므로 별도 executor로 감쌀 필요가 없다.
-- PUB/XPUB publish는 `submit()`을 동기 호출하고 즉시 반환되는 성공 또는
-  실패를 처리한다. 이를 `CompletionStage`나 coroutine suspension으로
-  연결하지 않는다.
-- virtual thread를 쓰는 경우에도 bindings에 virtual thread 전용 recv나 submit API를
-  추가하지 않는다.
-
-### Kotlin framework
-
-- Kotlin wrapper는 Java `await()`를 호출하지 않는다.
-- Kotlin wrapper는 Java managed request builder의 `submit()`으로 `CompletionStage`를 얻고,
-  `kotlinx-coroutines-jdk8`의 `await()`로 coroutine suspension에 연결한다.
-- HWM-managed send도 request와 동일하게 Java `submit()`의 `CompletionStage`를
-  `await()`로 coroutine suspension에 연결한다 — `Dispatchers.IO` 같은 별도
-  dispatcher로 감쌀 필요가 없다(Core send-completion 통지가 이미 완료를
-  구동하므로 blocking 호출이 아니다).
-- PUB/XPUB publish는 동기 `submit()`을 직접 호출하고 즉시 반환되는 성공 또는
-  실패를 처리한다. publish를 coroutine suspension으로 연결하지 않는다.
-- Kotlin 사용자 코드와 Kotlin sample은 Java `submit()`을 직접 호출하지 않고
-  `connect().await()`, `request(...).await<T>()`, `waitFor<T>(...).await()` 같은 Kotlin
-  wrapper를 사용한다.
-- coroutine scope, dispatcher, cancellation 처리는 Kotlin framework가 소유한다. bindings
-  라이브러리는 scope나 dispatcher를 만들지 않는다.
-
-### C++ framework
-
-- C++ bindings는 managed request의 `async()`로 move-only
-  `async_result_t<T>`를 제공하고 사용자와 framework coroutine은 이를 직접
-  `co_await`한다.
-- HWM-managed send도 동일하게 `async()`가 반환하는 `async_result_t<T>`를
-  framework coroutine이 직접 `co_await`한다 — Core send-completion 통지가
-  완료를 구동하므로 framework가 별도 executor에서 blocking `submit()`을
-  감쌀 필요가 없다. framework는 send에 `submit()`(blocking)이 아니라
-  `async()`만 사용한다.
-- PUB/XPUB publish는 동기 `submit()`을 직접 호출한다. `async()`나
-  `co_await`를 사용하지 않는다.
-- standalone coroutine은 완료가 발생한 컨텍스트(Core reply handler callback,
-  Core send-completion 통지 콜백 등)에서 재개될 수 있다. 이는 바인딩이
-  완료·재개를 위한 자체 스레드, dispatcher, scheduler를 생성해도 된다는
-  뜻이 아니다 — 실행 자원 소유는 framework의 몫이다. Framework `task_t`
-  promise는 optional continuation scheduler hook으로 현재 serial turn과
-  ambient context만 handoff한다.
-- bindings public API에 coroutine 전용 `request_async`, `request_coroutine`, framework
-  executor 인자, framework dispatcher 인자를 추가하지 않는다.
-
-### 다른 언어 framework
-
-- .NET framework는 managed request가 반환한 `Task` / `ValueTask`를 그대로
-  `await`한다. HWM-managed send의 `Async()`가 반환하는 `Task`/`ValueTask`도
-  동일하게 그대로 `await`한다 — `Task.Run(...)` 같은 executor로 감쌀 필요가
-  없다. PUB/XPUB publish는 `Submit()`을 직접 호출하고 반환된 성공 또는
-  실패를 처리한다.
-- Node framework는 managed request가 반환한 `Promise`를 event loop 정책에
-  맞게 `await`한다. HWM-managed send의 `submit()`이 반환하는 `Promise`도
-  동일하게 직접 `await`한다 — worker offload로 감쌀 필요가 없다. PUB/XPUB
-  publish는 동기 `submit()`을 직접 호출한다.
-- Python framework는 managed request의 `submit()` coroutine object를 직접
-  await한다. HWM-managed send의 `submit()` coroutine object도 동일하게 직접
-  await한다 — `loop.run_in_executor(...)` 같은 실행 경로로 감쌀 필요가 없다.
-  PUB/XPUB publish는 동기 `submit()`을 직접 호출한다.
-- Rust framework는 managed request의 runtime 비종속 `submit()` Future를 자기
-  executor에서 poll한다. HWM-managed send의 `submit()` Future도 동일하게
-  poll한다 — `spawn_blocking` 등으로 감쌀 필요가 없다. PUB/XPUB publish는
-  동기 `submit()`을 직접 호출한다.
-
-이 방식이면 bindings는 C API wrapper로서의 책임을 유지하고, framework는 자기 실행 환경에
-맞는 비동기 실행 지원을 독립적으로 제공할 수 있다. bindings는 admission 대기·재시도를
-위한 스레드나 queue를 소유하지 않는다. 언어 runtime상 필요한 기존 completion
-dispatcher는 Core callback 밖에서 terminal을 전달하는 경계만 소유한다.
+Framework가 이 문서의 binding 표면(send·publish·request·raw reply terminal) 중
+무엇을 어떤 규칙으로 소비하는지 — async terminal 전용 원칙, sync terminal이
+정당한 예외(즉시 backpressure 관찰, 공개 동기 계약의 구현), typed Session reply
+표면 — 는 framework 스펙
+[제출과 완료 §15 「Binding send terminal 소비」](../../../framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md#15-binding-send-terminal-소비-구현)가
+소유한다. 이 문서는 binding이 무엇을 제공하는지만 정의한다.

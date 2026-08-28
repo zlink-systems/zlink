@@ -421,7 +421,48 @@ acceptance 한 표현만 사용한다.
 [Framework 오류 모델](../00-foundation/07-framework-error-model.ko.md)이 소유하며
 이 문서는 그 값을 어떤 완료 경로가 골라야 하는지만 정의한다.
 
-## 15. 언어별 표현
+## 15. Binding send terminal 소비 (구현)
+
+Framework runtime이 binding의 HWM-managed send 계열(PAIR send, routed send,
+`Received.send()`)을 소비할 때는 **async terminal**(C++ `async()`, .NET `Async()`,
+그 외 `submit()`)만 사용한다. Binding의 sync(+flags) terminal은 binding의 공개
+표면이지 framework 내부 경로가 아니다. Core send-completion 통지가 완료를
+구동하므로 framework는 별도 executor나 offload로 감싸지 않는다. Binding terminal의
+이름·반환 타입·flags 계약 자체는
+[바인딩 routed 전송 계약과 비동기 완료 표면 정책](../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md)이
+소유한다 — 이 절은 framework의 소비 규칙만 소유한다.
+
+다음 두 경우는 sync terminal 사용이 정당하다.
+
+- **즉시 backpressure 관찰** — `DONTWAIT` flag로 대기 없이 admission 결과를 받아야
+  하는 경로. sync terminal이 그 계약의 유일한 표면이다.
+- **공개 동기 계약의 구현** —
+  [상태 소유와 state lane §5](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)가
+  유지를 요구하는 공개 동기 표면의 내부 구현. 이때 HWM 포화 시의 대기는 그 공개
+  계약의 관측 가능한 특성이며 위반이 아니다.
+
+Publish와 raw reply는 HWM-free이므로 동기 terminal이 정본이다(binding 스펙 소유).
+
+### Framework typed Session reply
+
+Framework의 typed Session reply는 raw binding reply를 async 종결자로 바꾼 표면이
+아니다. Framework runtime이 typed serialization과 request별 one-shot reply token을
+소유하며, 종결자는 token을 원자적으로 claim한 뒤 source-local admission까지
+기다린다. 같은 token의 두 번째 reply는 transport를 시도하지 않고 exceptional
+completion으로 끝난다. Token claim 규칙은 [§8](#8-stream-reply-token)이 소유한다.
+
+| Framework 언어 | Typed Session reply terminal | 완료 표현 |
+|---|---|---|
+| C++ | `.reply_packet(...).submit()` | `co_await` 가능한 Framework task |
+| .NET | `.Reply(...).Async(ct)` | `ValueTask` |
+| Java | `.reply(...).submit()` | `CompletionStage<Void>` |
+| Kotlin | `.reply(...).await()` | suspending `Unit` |
+| Node | `.reply(...).submit(signal?)` | `Promise<void>` |
+
+같은 `submit` 이름을 쓰는 언어에서도 반환 타입과 소유 계층으로 raw binding
+reply(동기 one-shot)와 구분한다.
+
+## 16. 언어별 표현
 
 공통 계약은 특정 async type 이름을 강제하지 않는다. 완료 순서, cancellation과 오류
 의미는 이 문서가 소유하며, 각 언어의 정확한 반환 type과 오류 표현은 다음 언어별
@@ -452,7 +493,7 @@ blocking `submit()`과 coroutine terminal을 함께 제공하지 않고 `task_t<
 하나를 제공한다. Callback overload는 parameter list가 다르므로 `submit(callback)`으로
 제공할 수 있다.
 
-## 16. 검증 요구
+## 17. 검증 요구
 
 공개 표면(각 언어의 terminator return type, 반환된 오류 kind, one-way submit의
 정상·예외 완료, request의 reply·오류·timeout·cancellation·shutdown 완료, STREAM

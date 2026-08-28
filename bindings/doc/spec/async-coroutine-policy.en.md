@@ -69,8 +69,7 @@ type as follows.
 | [Request completion surface and three terminals](#request-completion-surface-and-three-terminals) | the three terminals of HWM-managed request (sync return/sync callback/async) and their per-language surfaces |
 | [Per-language normative table for send/publish/request/raw reply](#per-language-normative-table-for-sendpublishrequestraw-reply) | per-language terminal and return type for each of the four operation types |
 | [Raw reply synchronous one-shot](#raw-reply-synchronous-one-shot) | the reply terminal and immediate-failure contract across the seven bindings |
-| [Framework typed Session reply](#framework-typed-session-reply) | the awaitable Framework contract, distinct from the raw binding reply |
-| [How frameworks attach async completion](#how-frameworks-attach-async-completion) | how each language's framework turns the completion boundary into its own execution model |
+| [The framework's consumption rule (pointer)](#the-frameworks-consumption-rule-pointer) | how the framework uses these surfaces is owned by the framework spec |
 
 ## Classification principle
 
@@ -91,11 +90,11 @@ type as follows.
   `ZLINK_PUB_OPT_NODROP` a full subscriber surfaces `BACKPRESSURED`/`EAGAIN`
   immediately from the synchronous submit, and the retry policy is owned by the
   application.
-- This classification applies identically to the bindings and the framework
-  surfaces. A framework's typed Session reply, managed request, and HWM-managed
-  send split into ASYNC/SYNC by the same criterion — the framework has no
-  separate, relaxed rule. Publish is separately synchronous per the lossy
-  contract above.
+- The basis of this classification (the possibility of HWM waiting) holds
+  regardless of the surface layer. How the framework surfaces follow this
+  classification is owned by the framework spec
+  (see [the framework's consumption rule](#the-frameworks-consumption-rule-pointer)).
+  Publish is separately synchronous per the lossy contract above.
 - This principle is the basis for every section below: C++ exposing both
   `submit()`/`async()` on send (or the three terminals on request), other
   languages exposing sync/async terminals on send and request, and publish and
@@ -307,8 +306,7 @@ The request builder exposes three completion surfaces. Names follow the
 3. **async** — for coroutines/awaitables. It returns the language awaitable (C++
    `async_result_t<T>`, .NET `Task`, Java `CompletionStage`, Node `Promise`, Python
    coroutine object, Rust `Future`, or Go completion channel). It is the framework
-   canonical terminal — since the framework is async-execution-only, it uses this
-   terminal exclusively. It takes no flag.
+   It takes no flag.
 
 The sync-return and sync-callback terminals **take an admission flag**; the async
 terminal does not, just as with send. The sync callback (or Go channel) expresses
@@ -326,7 +324,7 @@ admission·retry queue, per-operation executor, or timer.
 | Aspect | bindings completion surface |
 |---|---|
 | classification | ASYNC (HWM waiting possible) |
-| terminal (every binding) | **sync return** (blocking, returns reply directly) / **sync callback** (immediate admission result, reply via callback) / **async** (awaitable, framework canonical) |
+| terminal (every binding) | **sync return** (blocking, returns reply directly) / **sync callback** (immediate admission result, reply via callback) / **async** (awaitable) |
 | per-language names | C++ `submit()`/`submit(callback)`/`async()` · .NET `Submit(SendFlags)`/`Submit(SendFlags, cb)`/`Async()` · Java/Node/Python/Rust `submit_sync(flags)`/`submit_sync(flags, cb)`/`submit()` · Go `Submit(ctx)` (+Flags) + channel |
 | reply delivery | sync return value, callback argument, suspension success value, or channel completion |
 | submit flags | **sync return and sync callback take an admission flag** (`NONE` waits for admission / `DONTWAIT` returns immediate backpressure, as with send). The async terminal takes none |
@@ -369,8 +367,8 @@ the single synchronous terminal of the raw-reply column and no send flag.
 | Binding | HWM-managed send | Publish | Request | Raw reply |
 |---|---|---|---|---|
 | C | not applicable — the C ABI applies no builder policy and follows the functional contract in `core/include/zlink.h` | not applicable | not applicable | not applicable |
-| C++ | sync `submit()`+`flags(int)` → PAIR/STREAM `bool`, routed `void`. async `async()` → `async_result_t<T>` | `submit()` → synchronous `bool`, throws `submit_error_t` on failure | `submit()` (blocking) → reply, throws on failure. `submit(callback)` → returns immediately, completion via callback. `async()` → `async_result_t<T>` (framework canonical) | `submit()` → `void`, throws `submit_error_t` on failure |
-| .NET | sync `Submit(SendFlags)` → `void`. async `Async()` → `Task`/`ValueTask`(`<T>`) | `Submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure | sync return `Submit(SendFlags)` → reply. sync callback `Submit(SendFlags, callback)` → immediate admission. async `Async(ct)` → `Task` (framework canonical). Throws `ZlinkSubmitException` on failure | `Submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure |
+| C++ | sync `submit()`+`flags(int)` → PAIR/STREAM `bool`, routed `void`. async `async()` → `async_result_t<T>` | `submit()` → synchronous `bool`, throws `submit_error_t` on failure | `submit()` (blocking) → reply, throws on failure. `submit(callback)` → returns immediately, completion via callback. `async()` → `async_result_t<T>` | `submit()` → `void`, throws `submit_error_t` on failure |
+| .NET | sync `Submit(SendFlags)` → `void`. async `Async()` → `Task`/`ValueTask`(`<T>`) | `Submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure | sync return `Submit(SendFlags)` → reply. sync callback `Submit(SendFlags, callback)` → immediate admission. async `Async(ct)` → `Task`. Throws `ZlinkSubmitException` on failure | `Submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure |
 | Java, Kotlin | sync `submit_sync(SendFlags)` → `void`. async `submit()` → `CompletionStage<T>` | `submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure | sync return `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → immediate admission. async `submit()` → `CompletionStage<T>`. Throws `ZlinkSubmitException` on failure | `submit()` → synchronous `void`, throws `ZlinkSubmitException` on failure |
 | Node | sync `submit_sync(SendFlags)` → `void`. async `submit()` → `Promise<T>` (or `Promise<void>`) | `submit()` → synchronous `void`, throws `SubmitError` on failure | sync return `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → immediate admission. async `submit()` → `Promise<T>`. Throws `SubmitError` on failure | `submit()` → synchronous `void`, throws `SubmitError` on failure |
 | Python | sync `submit_sync(*, flags)` → `None`. async `submit()` → an `await`-able coroutine object | `submit()` → synchronous `None`, raises `SubmitError` on failure | sync return `submit_sync(*, flags)` → reply. sync callback `submit_sync(*, flags, callback)` → immediate admission. async `submit()` → coroutine object. Raises `SubmitError` on failure | `submit()` → synchronous `None`, raises `SubmitError` on failure |
@@ -378,8 +376,9 @@ the single synchronous terminal of the raw-reply column and no send flag.
 | Rust | sync `submit_sync(SendFlags)` → `Result<(), SubmitError>`. async `submit()` → `Future<Output = Result<(), SubmitError>>` | `submit()` → synchronous `Result<(), SubmitError>` | sync return `submit_sync(SendFlags)` → reply. sync callback `submit_sync(SendFlags, callback)` → immediate admission. async `submit()` → runtime-agnostic `Future<Output = Result<Vec<message_t>, ZlinkError>>` | `submit()` → synchronous `Result<(), SubmitError>` |
 
 When Kotlin uses the Java binding directly it follows the Java column's contract
-as-is. The Kotlin Framework surface (`.reply(...).await()`, etc.) is covered
-separately in [Framework typed Session reply](#framework-typed-session-reply).
+as-is. The Kotlin Framework surface (`.reply(...).await()`, etc.) is owned by
+the framework spec (see
+[the framework's consumption rule](#the-frameworks-consumption-rule-pointer)).
 
 ## Raw reply synchronous one-shot
 
@@ -403,125 +402,16 @@ as a per-language `SubmitError`.
 | Rust | `ReplyOp<Ready>::submit()` | `Ok(())` | returns `Err(SubmitError)` |
 
 When Kotlin uses the Java binding directly it also uses Java's synchronous
-`submit(): void` reply contract as-is. This is a different API from the Kotlin
-Framework `reply(...).await()` below.
+`submit(): void` reply contract as-is. The Kotlin Framework
+`reply(...).await()` is a distinct API owned by the framework spec.
 
-## Framework typed Session reply
+## The framework's consumption rule (pointer)
 
-A framework's typed Session reply is not the raw binding reply turned into an
-async terminal. The framework runtime owns typed serialization and a per-request
-one-shot reply token; the terminal atomically claims the token and then waits for
-source-local admission. A second reply on the same token does not attempt
-transport and finishes with an exceptional completion.
-
-| Framework language | Typed Session reply terminal | completion representation |
-|---|---|---|
-| C++ | `.reply_packet(...).submit()` | a `co_await`-able Framework task |
-| .NET | `.Reply(...).Async(ct)` | `ValueTask` |
-| Java | `.reply(...).submit()` | `CompletionStage<Void>` |
-| Kotlin | `.reply(...).await()` | suspending `Unit` |
-| Node | `.reply(...).submit(signal?)` | `Promise<void>` |
-
-Thus, even in C++·Java·Node that use the same `submit` name, the meaning is
-distinguished by the return type and the ownership layer. The raw binding reply is
-a synchronous one-shot, and only the Framework typed Session reply is an awaitable
-observing source-local admission.
-
-## How frameworks attach async completion
-
-The framework converts the completion boundary the bindings provide into its own
-execution model.
-
-- **The framework is async-execution-only.** Every framework language supports
-  only the asynchronous surface of its own execution model
-  (coroutine·virtual thread·event loop) and keeps no blocking-only surface. The
-  bindings' sync(+flags) send terminal is merely a binding surface; the framework
-  uses only the async terminal.
-- **The framework creates no new executor.** The bindings do not provide a
-  framework executor, but the framework does not need to create one either. Per
-  operation it uses the following as-is.
-
-| operation | framework handling |
-|---|---|
-| HWM-managed send | it `await`s/`co_await`s the send's awaitable (the async terminal of the normative table: C++ `async()`, .NET `Async()`, `submit()` elsewhere) directly in its own async execution model. The Core send-completion notification drives completion |
-| publish | not an awaitable. It calls the synchronous `submit()` directly |
-| request | it already returns a language-native awaitable (C++ `async()`), so there is nothing to wrap |
-
-### Java framework
-
-- The Java framework wires the `CompletionStage` obtained from a managed request's
-  `submit()` to the handler executor, virtual threads, and timeout policy.
-- The `CompletionStage` returned by HWM-managed send's `submit()` is wired the
-  same way as a managed request — since the Core send-completion notification
-  drives completion, there is no need to wrap it in a separate executor.
-- PUB/XPUB publish calls `submit()` synchronously and handles the immediately
-  returned success or failure. It does not wire this to a `CompletionStage` or a
-  coroutine suspension.
-- Even when using virtual threads, no virtual-thread-only recv or submit API is
-  added to the bindings.
-
-### Kotlin framework
-
-- The Kotlin wrapper does not call Java `await()`.
-- The Kotlin wrapper obtains a `CompletionStage` from the Java managed request
-  builder's `submit()` and wires it to a coroutine suspension with
-  `kotlinx-coroutines-jdk8`'s `await()`.
-- HWM-managed send is wired the same as request: it connects the `CompletionStage`
-  of Java `submit()` to a coroutine suspension via `await()` — there is no need to
-  wrap it in a separate dispatcher like `Dispatchers.IO` (the Core send-completion
-  notification already drives completion, so it is not a blocking call).
-- PUB/XPUB publish calls the synchronous `submit()` directly and handles the
-  immediately returned success or failure. It does not wire publish to a coroutine
-  suspension.
-- Kotlin user code and Kotlin samples do not call Java `submit()` directly; they
-  use Kotlin wrappers like `connect().await()`, `request(...).await<T>()`,
-  `waitFor<T>(...).await()`.
-- Coroutine scope, dispatcher, and cancellation handling are owned by the Kotlin
-  framework. The bindings library creates no scope or dispatcher.
-
-### C++ framework
-
-- C++ bindings provide a move-only `async_result_t<T>` from a managed request's
-  `async()`, and the user and the framework coroutine `co_await` it directly.
-- HWM-managed send is likewise `co_await`ed directly by the framework coroutine on
-  the `async_result_t<T>` returned by `async()` — since the Core send-completion
-  notification drives completion, the framework need not wrap a blocking
-  `submit()` in a separate executor. The framework uses only `async()` on send,
-  not `submit()` (blocking).
-- PUB/XPUB publish calls the synchronous `submit()` directly. It uses neither
-  `async()` nor `co_await`.
-- A standalone coroutine may resume in the context where completion occurred (a
-  Core reply handler callback, a Core send-completion notification callback, etc.).
-  This does not mean the binding may create its own thread, dispatcher, or
-  scheduler for completion·resumption — ownership of execution resources is the
-  framework's job. The Framework `task_t` promise hands off only the current
-  serial turn and ambient context via an optional continuation-scheduler hook.
-- No coroutine-only `request_async`, `request_coroutine`, framework-executor
-  argument, or framework-dispatcher argument is added to the bindings public API.
-
-### Other language frameworks
-
-- The .NET framework `await`s the `Task` / `ValueTask` returned by a managed
-  request as-is. It also `await`s the `Task`/`ValueTask` returned by HWM-managed
-  send's `Async()` the same way — there is no need to wrap it in an executor like
-  `Task.Run(...)`. PUB/XPUB publish calls `Submit()` directly and handles the
-  returned success or failure.
-- The Node framework `await`s the `Promise` returned by a managed request per
-  event-loop policy. The `Promise` returned by HWM-managed send's `submit()` is
-  likewise `await`ed directly — there is no need to wrap it in a worker offload.
-  PUB/XPUB publish calls the synchronous `submit()` directly.
-- The Python framework `await`s the `submit()` coroutine object of a managed
-  request directly. The HWM-managed send `submit()` coroutine object is likewise
-  `await`ed directly — there is no need to wrap it in an execution path like
-  `loop.run_in_executor(...)`. PUB/XPUB publish calls the synchronous `submit()`
-  directly.
-- The Rust framework polls a managed request's runtime-agnostic `submit()` Future
-  on its own executor. The HWM-managed send `submit()` Future is polled the same
-  way — there is no need to wrap it in `spawn_blocking` or the like. PUB/XPUB
-  publish calls the synchronous `submit()` directly.
-
-With this approach the bindings keep their responsibility as a C API wrapper, and
-the framework can independently provide async-execution support suited to its own
-execution model. The bindings own no thread or queue for admission waiting or
-retry. Any existing completion dispatcher required by the language runtime owns
-only the boundary that delivers the terminal off the Core callback.
+Which of this document's binding surfaces (the send, publish, request, and
+raw reply terminals) the framework consumes, and under what rules — the
+async-terminal-only principle, the sanctioned sync-terminal exceptions
+(immediate backpressure observation; implementing a public synchronous
+contract), and the framework typed Session reply surface — is owned by the
+framework spec,
+[Submit And Completion §15 "Consuming Binding Send Terminals"](../../../framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.en.md#15-consuming-binding-send-terminals-implementation).
+This document defines only what the bindings provide.
