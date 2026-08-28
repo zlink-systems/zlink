@@ -47,7 +47,32 @@ P2·P3·P4는 서로 다른 빌드 트리를 쓰므로 동시에 돌린다. 같�
 | P0-1 | Spot 핫패스에서 연속된 단순 조회를 한 turn으로 묶는다 | cpp `runtime/spots/spot_runtime.cpp` | 블로킹 브리지 send 11→4~5 · request 13→5~6 |
 | P0-2 | binding wrapper의 중복 lock 제거 | java `runtime/` binding wrapper 31곳 | hot path 7곳 |
 | P0-3 | 큐 임계 구역에서 `BigInteger` 할당을 걷어낸다 | java `execution/ZLinkAsyncSerialQueue.java` | enqueue마다 4할당 제거 |
-| P0-4 | **조사** — dotnet이 Framework API §11의 mailbox count·byte 두 축을 어디서 만족하는지 확인한다 | dotnet `Runtime/Service/ZLinkManagedMeshNode.cs` (`SetMailboxBudgets`) · `Runtime/Spots/ZLinkSpotNodeInitializer.cs` | 만족하는 자리가 있으면 그대로, 없으면 P1에 신설 항목 추가 |
+| P0-4 | **조사** — mailbox 두 축 계약(Framework API §11)을 네 언어가 어디서 만족하는지 확인한다 | 아래 §2.1 | 언어별로 "만족 / 이탈 / 미구현" 판정과 근거 |
+
+### 2.1 P0-4 조사 대상 — mailbox 두 축 회계
+
+**계약.** owner mailbox는 **건수와 대기 중 byte 합계 두 축을 모두** 강제하고, 두 축을 하나의
+작업으로 예약하며, **반환은 handler가 끝난 뒤**다
+([Framework API 「11. Handler 실행 객체와 dependency 수명」](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)).
+[Application job queue](../../../framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.ko.md)
+permit과는 계상 경계가 다르다 — permit은 callback 첫 instruction 직전에 반환된다.
+
+| 언어 | 실측 | 판정할 것 |
+|---|---|---|
+| java | `ZLinkAsyncSerialQueue`가 두 축을 항상 예약한다. inbound Actor packet도 `payloadCopy.size()`를 넘긴다(`ZLinkSpotRuntime.java:4831`) | **만족으로 보인다.** 반환 시점이 handler 종료인지 확인 |
+| cpp | `serial_execution_queue.hpp:119-130`에 두 축이 있다 | 반환 시점과 원자적 예약 확인 |
+| **node** | permit을 든 작업은 `submitPreAdmitted`로 **예약을 건너뛴다**(`serial-scheduler.ts:145`). 주석은 "The shared permit is the capacity authority"라고 적혀 있다 | **이탈 의심.** ordinary ingress가 mailbox 두 축에 계상되지 않는다. 주석의 전제가 §11과 충돌하는지, 아니면 다른 자리에서 계상되는지 |
+| **dotnet** | `ZLinkSerialExecutionQueue`에 두 축이 **없다.** admission이 relocation seal과 stopping 상태만 본다 | **미구현 의심.** `ZLinkManagedMeshNode`의 `SetMailboxBudgets`·`ZLinkSpotNodeInitializer.cs:48` 경로가 그 자리인지 |
+
+**이 조사가 먼저인 이유.** 네 언어가 같은 계약을 서로 다르게 만족하고 있다면, 조율자 통일
+(P1~P4)보다 이쪽이 먼저 드러나야 한다. 판정 결과에 따라 P1의 dotnet 작업 범위와 node의
+`submitPreAdmitted` 처리 방향이 갈린다.
+
+**단정하지 않는다.** node의 건너뛰기는 이번 세션에서 "04 §3 위반"이라고 했다가 되돌린
+자리다 — 두 축 계약(§11)과 ingress permit 순서(04 §3)가 각각 무엇을 소유하는지부터 확인하고
+판정한다.
+
+---
 
 근거는 [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md)에 있다. P0-1은
 새 설계가 아니라 스펙 07 §7을 지키는 일이다 — cpp가 lane 전환 중 그 규칙을 어긴 자리를
