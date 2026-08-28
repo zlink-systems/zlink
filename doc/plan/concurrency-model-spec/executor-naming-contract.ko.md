@@ -206,6 +206,11 @@ queue는 `fixedWorkByteCost`만 예약한다. 이중 예약 금지.
 **R-N8c.** 두 축은 하나의 작업으로 예약한다 — 한 축이라도 넘기면 두 축 모두 바뀌지 않은 채
 실패한다. 반환은 handler가 끝난 뒤다.
 
+**R-N8d (2026-08-28 확정, 스펙 04 §8 소유).** 회계는 두 계층이 나눠 진다 — 수신 mailbox가
+receive 수락→claim, 실행 queue가 claim→handler terminal. claim 경계에서 예약이 끊기지 않고
+이관되며, 이관은 재판정이 아니다(용량 거절은 로컬 제출에만). 언어별 정합 작업은
+[implementation-plan.ko.md](implementation-plan.ko.md) §2.1 (P1-6·P2-6·P3-6·P4-8).
+
 > **정정 이력.** 2026-08-28에 "byte 축은 잔재이므로 제거한다"고 적었다가 되돌렸다. 근거로
 > 삼았던 `RootInboundDispatchOptions`에 byte 축이 없다는 사실은 그 설정이 host-wide job
 > supply를 소유하기 때문이며, owner mailbox budget은 MeshNode socket 설정과 Framework API

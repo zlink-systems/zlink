@@ -62,15 +62,16 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 | **조율자** | **dotnet** | Spot마다 전용 조율자가 Spot 큐 · Actor별 큐 · Timer별 큐를 **모두 소유**. 진입점이 큐를 고르고 호출자는 모른다 |
 | **큐 primitive** | **java** | 실행뿐 아니라 **backpressure · lifecycle burst · owner time budget · 정책 주입**을 계약으로 |
 | 용량 회계 | — | Actor 큐가 payload admission 소유. 상위 Spot 큐는 고정 turn 비용만 예약 (이중 예약 금지) |
+| **예약 이관** | — | **(2026-08-28 확정, 스펙 04 §8 신설)** record 예약은 receive 수락→handler terminal까지 끊기지 않는다. mailbox→실행 queue로 claim 경계에서 이관하며, 이관은 재판정이 아니다 |
 
 **언어별 작업량**
 
 | 언어 | 조율자 | 큐 primitive |
 |---|---|---|
-| dotnet | 있음 · **Actor·Session 조율자 개명 필요** | **공정성(owner time budget) 추가 필요** |
-| java | **3계층 모두 신설** — Actor 큐를 Spot 조율자로 이관 | 이미 있음 |
-| cpp | **3계층 모두 신설** — 이름 맵을 조율자로 | 용량·우선순위·공정성 **추가** |
-| node | **Spot·Actor 조율자 신설** — 현행 `SpotSerialExecutor`는 직렬 단위다 · Session은 개명 | `BoundedSerialScheduler` 개명·정책 정렬 |
+| dotnet | 있음 · **Actor·Session 조율자 개명 필요** | 양보 동작은 있음(상수→정책 주입) · **두 축 계상 신설**(04 §8 이탈 — dequeue~terminal 무계상) |
+| java | **3계층 모두 신설** — Actor 큐를 Spot 조율자로 이관 | 이미 있음 · 이관 record 용량 거절 여부만 확인(04 §8) |
+| cpp | **3계층 모두 신설** — 이름 맵을 조율자로 | **이미 완성**(정책 일곱·우선순위·debt) · 04 §8 이관·terminal 반환만 검증 |
+| node | **Spot·Actor 조율자 신설** — 현행 `SpotSerialExecutor`는 직렬 단위다 · Session은 개명 | `BoundedSerialScheduler` 개명·정책 정렬 · **preAdmitted 이관 계상**(04 §8 이탈) |
 
 **구현은 별도 세션에서 진행한다.** 계약은 정식 스펙
 [07. 직렬 실행기 계층](../../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md)이
@@ -112,7 +113,7 @@ ActorStateSnapshot state = inStateLane(() -> new ActorStateSnapshot(
 ⑥ ~~`SpotWide`에서 Actor 큐를 거칠 이유~~ → **해소: 계약이 이미 정하고 있었다.** 스펙 02 §3의
    `Yield` claim — `SpotWide` member Actor가 `Yield`하면 gate만 반납하고 Actor queue claim은
    유지한다. 02 §1은 queue를 합치는 것을 잘못된 구조로 명시한다. 2단 유지
-⑦ ~~owner queue byte 계상~~ → **해소: 잔재가 아니라 현행 계약이다.** Framework API §11이
-   건수·byte 두 축을 강제하고("건수만 두면 같은 건수가 payload 크기에 따라 수천 배의 memory를
-   점유한다"), 네 언어 exact interface에 `mailboxByteBudget`이 있다. dotnet 실행 큐에만 없어
-   어디서 만족하는지 조사 필요(플랜 P0-4)
+⑦ ~~owner queue byte 계상~~ → **확정 완료.** 잔재가 아니라 현행 계약이며(§11 두 축),
+   회계는 두 계층(mesh mailbox + 실행 queue)이 나눠 진다. 계층 경계의 예약 이관 규칙을
+   **스펙 04 §8로 신설해 고정**했다(2026-08-28). 언어별 판정·작업은 플랜 §2.1 —
+   dotnet·node 이탈, java·cpp 검증

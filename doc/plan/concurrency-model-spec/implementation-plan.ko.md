@@ -212,6 +212,7 @@ java는 큐 primitive가 정본이고 **조율자가 셋 다 없다.** 런타임
 | P2-3 | `ZLinkSessionSerialExecutor` 신설 · `ZLinkStreamRuntime.stateLane`에서 실행 책임을 분리 | `runtime/streams/ZLinkStreamRuntime.java` | 진입점 넷이 스펙 07 §3과 일치 |
 | P2-4 | `ZLinkAsyncSerialQueue` → `ZLinkSerialExecutionQueue` 개명 | `execution/ZLinkAsyncSerialQueue.java` | 이전 이름 0건 |
 | P2-5 | Actor 경로의 `sharedSpotGate()` 분기를 조율자 안으로 넣는다 | `runtime/spots/ZLinkDefaultSpotContext.java` | 호출자가 큐를 고르는 자리 0건 |
+| P2-6 | **(04 §8)** 이관 record의 용량 거절 여부를 확인하고, 거절하면 "계상만 하는 이관"으로 바꾼다 | `execution/ZLinkAsyncSerialQueue.java` (`enqueueWithPayloadBytes` ingress 경로) | permit 이관 record의 용량 거절 0건 |
 
 **P2-3은 분리이지 이동이 아니다.** `ZLinkStreamRuntime.stateLane`은 상태 소유와 작업 실행을
 함께 지고 있다. 상태 소유는 그 자리에 남기고(스펙 06), 작업 실행만 새 조율자로 옮긴다 —
@@ -232,6 +233,7 @@ cpp는 조율자가 셋 다 없다. **큐 primitive는 이미 완성돼 있다(�
 | P3-2 | `actor_serial_executor_t` 신설 | `runtime/actors/` | 큐 맵 없이 인스턴스당 큐 하나 |
 | P3-3 | `session_serial_executor_t` 신설 · `stream_runtime.dispatch_queue`에서 분리 | `runtime/streams/stream_runtime.{hpp,cpp}` | 진입점 넷이 스펙 07 §3과 일치 |
 | P3-5 | 조회 스냅샷 묶기 (P0-1과 같은 작업 — 먼저 끝났으면 생략) | `runtime/spots/spot_runtime.cpp` | 같은 값을 두 번 읽는 자리 0건 |
+| P3-6 | **(04 §8)** 반환 시점이 handler terminal인지, claim 이관이 재판정 없이 계상되는지 검증하고 어긋나면 정합 | `runtime/execution/serial_execution_queue.cpp:1094` · `runtime/mesh/service_mailbox.cpp` | 04 §8 내부 확인 조건 통과 |
 
 **참조 구현을 반드시 명시해 맡긴다.** cpp `spot_runtime` 작업은 이번 캠페인에서 참조 없이
 맡겼을 때 네 번 실패했고, dotnet·java 구현을 참조로 지정한 뒤에야 통과했다.
@@ -266,6 +268,7 @@ wrapper를 비우고(P4-1) 그 이름을 조율자에 준다 — 순서를 뒤�
 | P4-5 | `ZLinkActorDispatchMailboxSet`을 조율자로 옮기고, `ZLinkActorDispatchMailbox`를 `ZLinkActorSerialExecutor`로 개명한다 | `actors/actor-mailbox.ts` · `spot-entry-activation.ts` · `spot-activation-state.ts` | 소유처가 조율자 하나 |
 | P4-6 | `ZLinkStreamSessionSerialExecutor` → `ZLinkSessionSerialExecutor` · 진입점 넷을 §3과 맞춘다 | `streams/session-serial-executor.ts` | 이전 이름 0건 |
 | P4-7 | `ZLinkBoundedSerialScheduler` → `ZLinkSerialExecutionQueue` · 정책 이름 일곱을 §6.1과 맞춘다 | `runtime/execution/serial-scheduler.ts` | 정책 이름 일곱이 스펙과 일치 |
+| P4-8 | **(04 §8)** `submitPreAdmitted`를 "계상하되 거절하지 않는" 이관으로 바꾼다 — 지금은 계상까지 건너뛴다 | `runtime/execution/serial-scheduler.ts:145` · mesh 반환은 `foundation/service-mailbox.ts:158` | dequeue~terminal 구간 무계상 0 |
 
 **P4는 java·cpp와 같은 규모다.** 앞서 "node는 조율자가 있으니 이관만"이라고 적었던 것은
 `spot-serial-executor.ts`의 클래스 이름만 보고 역할을 판정한 결과이며 틀렸다.
