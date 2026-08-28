@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
@@ -23,6 +24,7 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
 
         try (var ignored = ZLinkApplicationJobContext.enter(first)) {
             serial.enqueue(() -> {
+                assertTrue(ZLinkApplicationJobContext.current().isPresent());
                 assertEquals(1, queue.snapshot().queuedApplicationJobs());
                 ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
                 assertEquals(0, queue.snapshot().permitsInUse());
@@ -38,6 +40,57 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
         assertFalse(handlerContinuation.isDone());
         second.close();
         handlerContinuation.complete(null);
+    }
+
+    @Test
+    void transferredIngressIsAccountedWithoutSerialCapacityRejection()
+        throws Exception {
+        ZLinkApplicationJobQueue applicationJobs = queue(1);
+        ZLinkSerialExecutionQueue serial = new ZLinkSerialExecutionQueue(
+            Runnable::run,
+            ZLinkExecutionLanePolicy.generic(),
+            1,
+            4,
+            1,
+            4,
+            4,
+            1,
+            java.time.Duration.ofSeconds(1));
+        CompletableFuture<Void> firstStarted = new CompletableFuture<>();
+        CompletableFuture<Void> firstActive = new CompletableFuture<>();
+        CompletableFuture<Void> transferredStarted = new CompletableFuture<>();
+        CompletableFuture<Void> transferredActive = new CompletableFuture<>();
+
+        serial.enqueue(() -> {
+            firstStarted.complete(null);
+            return firstActive;
+        });
+        firstStarted.get();
+
+        ZLinkApplicationJobQueue.Permit permit =
+            applicationJobs.acquire().toCompletableFuture().join();
+        CompletionStage<Void> transferred;
+        try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+            transferred = serial.enqueueWithPayloadBytes(0, () -> {
+                ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+                transferredStarted.complete(null);
+                return transferredActive;
+            });
+        } finally {
+            permit.abandonReservation();
+        }
+        assertFalse(transferred.toCompletableFuture().isCompletedExceptionally());
+
+        firstActive.complete(null);
+        transferredStarted.get();
+        assertFalse(serial.tryEnqueue(
+            () -> CompletableFuture.completedFuture(null)));
+
+        transferredActive.complete(null);
+        transferred.toCompletableFuture().get();
+        serial.awaitQuiescence().toCompletableFuture().get();
+        assertTrue(serial.tryEnqueue(
+            () -> CompletableFuture.completedFuture(null)));
     }
 
     @Test

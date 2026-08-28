@@ -17,12 +17,31 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 final class ZLinkSerialExecutionQueueTest {
+    @Test
+    void firstDrainDoesNotRunOnTheSubmitterStack() throws Exception {
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
+            Runnable::run, ZLinkExecutionLanePolicy.generic());
+        AtomicBoolean ranOnSubmitterStack = new AtomicBoolean();
+        CompletableFuture<Void> started = new CompletableFuture<>();
+        Thread submitter = Thread.currentThread();
+
+        queue.enqueue(() -> {
+            ranOnSubmitterStack.set(Thread.currentThread() == submitter);
+            started.complete(null);
+            return CompletableFuture.completedFuture(null);
+        });
+
+        started.get(3, TimeUnit.SECONDS);
+        assertFalse(ranOnSubmitterStack.get());
+    }
+
     @Test
     void lazyRelocationRecordIsNotMaterializedDuringNormalDispatch()
         throws Exception {

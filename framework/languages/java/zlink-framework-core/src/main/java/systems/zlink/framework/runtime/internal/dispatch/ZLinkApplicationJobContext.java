@@ -28,6 +28,16 @@ public final class ZLinkApplicationJobContext {
     }
 
     /**
+     * Returns whether the current ingress reservation has not yet crossed a
+     * Framework queue boundary. A queued handler keeps its permit in this
+     * context after handler entry, but cannot transfer it to a second job.
+     */
+    public static boolean hasTransferableQueuedOwnership() {
+        State state = CURRENT.get();
+        return state != null && state.ownership.canHandoff();
+    }
+
+    /**
      * Transfers the current receive reservation to exactly one queued job.
      * Repeated queue captures in the same ingress scope cannot duplicate a
      * permit; fan-out must acquire one distinct permit for each job.
@@ -96,6 +106,10 @@ public final class ZLinkApplicationJobContext {
             }
             handedOff = true;
             return true;
+        }
+
+        private synchronized boolean canHandoff() {
+            return !handedOff;
         }
 
         @Override

@@ -38,6 +38,11 @@ public final class ZLinkSerialExecutionQueue {
     private static final ThreadLocal<ZLinkSerialExecutionQueue> CURRENT = new ThreadLocal<>();
     private static final ThreadLocal<CompletableFuture<Void>> CURRENT_GATE = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> CURRENT_RELEASE_DEFERRED = new ThreadLocal<>();
+    // A queue never runs a drain on its submitter's stack.  This is shared by
+    // every owner; it is deliberately not an executor per Spot, Actor, or
+    // session.
+    private static final ExecutorService DRAIN_EXECUTOR =
+        Executors.newVirtualThreadPerTaskExecutor();
 
     private final Executor executor;
     private final ExecutorService ownedExecutor;
@@ -67,6 +72,7 @@ public final class ZLinkSerialExecutionQueue {
     private long nextSequence = 1L;
     private long nextRelocationSerial = 1L;
     private Entry active;
+    private boolean drainScheduled;
     private int suspendedContinuations;
     private long turnClaimedAtNanos;
     private RelocationState relocation;
@@ -181,12 +187,17 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    public synchronized CompletionStage<Void> enqueue(Supplier<CompletionStage<Void>> operation) {
-        if (relocated) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("queue owner has relocated"));
+    public CompletionStage<Void> enqueue(Supplier<CompletionStage<Void>> operation) {
+        EnqueueResult result;
+        synchronized (this) {
+            if (relocated) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException("queue owner has relocated"));
+            }
+            result = enqueueAccepted(null, 0, operation);
         }
-        return enqueueAccepted(null, 0, operation);
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return result.result();
     }
 
     /**
@@ -194,15 +205,20 @@ public final class ZLinkSerialExecutionQueue {
      * application byte budget. The queue also charges the fixed per-turn cost;
      * callers must pass the payload length before deserializing the payload.
      */
-    public synchronized CompletionStage<Void> enqueueWithPayloadBytes(
+    public CompletionStage<Void> enqueueWithPayloadBytes(
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
-        validatePayloadBytes(payloadBytes);
-        if (relocated) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("queue owner has relocated"));
+        EnqueueResult result;
+        synchronized (this) {
+            validatePayloadBytes(payloadBytes);
+            if (relocated) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException("queue owner has relocated"));
+            }
+            result = enqueueAccepted(null, payloadBytes, operation);
         }
-        return enqueueAccepted(null, payloadBytes, operation);
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return result.result();
     }
 
     /**
@@ -218,38 +234,36 @@ public final class ZLinkSerialExecutionQueue {
      * Internal lifecycle barrier that runs immediately after the active turn
      * and before previously queued application turns.
      */
-    public synchronized CompletionStage<Void> enqueueBarrierNext(
+    public CompletionStage<Void> enqueueBarrierNext(
         Supplier<CompletionStage<Void>> operation) {
-        Objects.requireNonNull(operation, "operation");
-        if (relocated) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("queue owner has relocated"));
+        EnqueueResult result;
+        synchronized (this) {
+            Objects.requireNonNull(operation, "operation");
+            if (relocated) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException("queue owner has relocated"));
+            }
+            if (nextSequence == Long.MAX_VALUE) {
+                throw new IllegalStateException("queue sequence exhausted");
+            }
+            if (!canReserve(Lane.LIFECYCLE, fixedWorkByteCost)) {
+                return capacityFailure("lifecycle barrier queue is full");
+            }
+            reserve(Lane.LIFECYCLE, fixedWorkByteCost);
+            Entry entry = new Entry(
+                nextSequence++, (byte[]) null, operation, () -> { },
+                new CompletableFuture<>(), ZLinkFlowContext.current(), null,
+                Lane.LIFECYCLE, fixedWorkByteCost, false);
+            if (relocation != null) {
+                holdRelocationEntry(entry);
+                result = new EnqueueResult(entry.result, false);
+            } else {
+                lifecyclePending.addLast(entry);
+                result = new EnqueueResult(entry.result, requestDrainLocked());
+            }
         }
-        if (nextSequence == Long.MAX_VALUE) {
-            throw new IllegalStateException("queue sequence exhausted");
-        }
-        if (!canReserve(Lane.LIFECYCLE, fixedWorkByteCost)) {
-            return capacityFailure("lifecycle barrier queue is full");
-        }
-        reserve(Lane.LIFECYCLE, fixedWorkByteCost);
-        Entry entry = new Entry(
-            nextSequence++,
-            (byte[]) null,
-            operation,
-            () -> { },
-            new CompletableFuture<>(),
-            ZLinkFlowContext.current(),
-            null,
-            Lane.LIFECYCLE,
-            fixedWorkByteCost,
-            false);
-        if (relocation != null) {
-            holdRelocationEntry(entry);
-        } else {
-            lifecyclePending.addLast(entry);
-            startNext();
-        }
-        return entry.result;
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return result.result();
     }
 
     /**
@@ -258,108 +272,115 @@ public final class ZLinkSerialExecutionQueue {
      * remains available after relocation has committed so the old owner can
      * release local resources.
      */
-    public synchronized CompletionStage<Void> enqueueLifecycleBarrier(
+    public CompletionStage<Void> enqueueLifecycleBarrier(
         Supplier<CompletionStage<Void>> operation) {
-        Objects.requireNonNull(operation, "operation");
-        if (relocation != null) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("queue relocation is in progress"));
+        EnqueueResult result;
+        synchronized (this) {
+            Objects.requireNonNull(operation, "operation");
+            if (relocation != null) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException("queue relocation is in progress"));
+            }
+            if (nextSequence == Long.MAX_VALUE) {
+                throw new IllegalStateException("queue sequence exhausted");
+            }
+            if (!canReserve(Lane.LIFECYCLE, fixedWorkByteCost)) {
+                return capacityFailure("lifecycle barrier queue is full");
+            }
+            reserve(Lane.LIFECYCLE, fixedWorkByteCost);
+            Entry entry = new Entry(
+                nextSequence++, (byte[]) null, operation, () -> { },
+                new CompletableFuture<>(), ZLinkFlowContext.current(), null,
+                Lane.LIFECYCLE, fixedWorkByteCost, false);
+            lifecyclePending.addLast(entry);
+            result = new EnqueueResult(entry.result, requestDrainLocked());
         }
-        if (nextSequence == Long.MAX_VALUE) {
-            throw new IllegalStateException("queue sequence exhausted");
-        }
-        if (!canReserve(Lane.LIFECYCLE, fixedWorkByteCost)) {
-            return capacityFailure("lifecycle barrier queue is full");
-        }
-        reserve(Lane.LIFECYCLE, fixedWorkByteCost);
-        Entry entry = new Entry(
-            nextSequence++,
-            (byte[]) null,
-            operation,
-            () -> { },
-            new CompletableFuture<>(),
-            ZLinkFlowContext.current(),
-            null,
-            Lane.LIFECYCLE,
-            fixedWorkByteCost,
-            false);
-        lifecyclePending.addLast(entry);
-        startNext();
-        return entry.result;
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return result.result();
     }
 
-    public synchronized CompletionStage<Void> enqueueRelocatable(
+    public CompletionStage<Void> enqueueRelocatable(
         byte[] record,
         Supplier<CompletionStage<Void>> operation) {
         return enqueueRelocatable(record, operation, () -> { });
     }
 
-    public synchronized CompletionStage<Void> enqueueRelocatable(
+    public CompletionStage<Void> enqueueRelocatable(
         byte[] record,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
-        Objects.requireNonNull(record, "record");
-        Objects.requireNonNull(relocationRelease, "relocationRelease");
-        if (relocated) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("queue owner has relocated"));
+        EnqueueResult result;
+        synchronized (this) {
+            Objects.requireNonNull(record, "record");
+            Objects.requireNonNull(relocationRelease, "relocationRelease");
+            if (relocated) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException("queue owner has relocated"));
+            }
+            result = enqueueAccepted(
+                record.clone(), record.length, operation, relocationRelease);
         }
-        return enqueueAccepted(record.clone(), record.length, operation, relocationRelease);
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return result.result();
     }
 
     /**
      * Enqueues a relocatable turn without materializing its relocation record
      * until a relocation seal captures the turn.
      */
-    public synchronized CompletionStage<Void> enqueueRelocatableLazyRecord(
+    public CompletionStage<Void> enqueueRelocatableLazyRecord(
         Supplier<byte[]> record,
         long recordSizeHint,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
-        Objects.requireNonNull(record, "record");
-        Objects.requireNonNull(operation, "operation");
-        Objects.requireNonNull(relocationRelease, "relocationRelease");
-        validatePayloadBytes(recordSizeHint);
-        if (relocated) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("queue owner has relocated"));
+        EnqueueResult result;
+        synchronized (this) {
+            Objects.requireNonNull(record, "record");
+            Objects.requireNonNull(operation, "operation");
+            Objects.requireNonNull(relocationRelease, "relocationRelease");
+            validatePayloadBytes(recordSizeHint);
+            if (relocated) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException("queue owner has relocated"));
+            }
+            if (nextSequence == Long.MAX_VALUE) {
+                throw new IllegalStateException("queue sequence exhausted");
+            }
+            if (!canRepresentWorkByteCost(recordSizeHint)) {
+                return capacityFailure("application payload exceeds queue byte capacity");
+            }
+            long byteCost = workByteCost(recordSizeHint);
+            if (relocation != null) {
+                return holdRelocationIngress(
+                    record, byteCost, operation, relocationRelease);
+            }
+            boolean transferred = hasTransferredApplicationJob();
+            if (!transferred && !canReserve(Lane.APPLICATION, byteCost)) {
+                return capacityFailure("application queue is full");
+            }
+            reserve(Lane.APPLICATION, byteCost, transferred);
+            Entry entry = new Entry(
+                nextSequence++, record, operation, relocationRelease,
+                new CompletableFuture<>(), ZLinkFlowContext.current(), null,
+                Lane.APPLICATION, byteCost, false);
+            applicationPending.addLast(entry);
+            result = new EnqueueResult(entry.result, requestDrainLocked());
         }
-        if (nextSequence == Long.MAX_VALUE) {
-            throw new IllegalStateException("queue sequence exhausted");
-        }
-        if (!canRepresentWorkByteCost(recordSizeHint)) {
-            return capacityFailure("application payload exceeds queue byte capacity");
-        }
-        long byteCost = workByteCost(recordSizeHint);
-        if (relocation != null) {
-            return holdRelocationIngress(
-                record,
-                byteCost,
-                operation,
-                relocationRelease);
-        }
-        if (!canReserve(Lane.APPLICATION, byteCost)) {
-            return capacityFailure("application queue is full");
-        }
-        reserve(Lane.APPLICATION, byteCost);
-        Entry entry = new Entry(
-            nextSequence++, record, operation, relocationRelease,
-            new CompletableFuture<>(), ZLinkFlowContext.current(), null,
-            Lane.APPLICATION, byteCost, false);
-        applicationPending.addLast(entry);
-        startNext();
-        return entry.result;
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return result.result();
     }
 
-    public synchronized boolean tryEnqueue(Supplier<CompletionStage<Void>> operation) {
-        if (relocated) {
-            return false;
+    public boolean tryEnqueue(Supplier<CompletionStage<Void>> operation) {
+        EnqueueResult result;
+        synchronized (this) {
+            if (relocated || (!hasTransferredApplicationJob()
+                && !canAcceptApplicationWork(fixedWorkByteCost))) {
+                return false;
+            }
+            result = enqueueAccepted(null, 0, operation);
         }
-        if (!canAcceptApplicationWork(fixedWorkByteCost)) {
-            return false;
-        }
-        enqueueAccepted(null, 0, operation);
-        return true;
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return !result.result().toCompletableFuture().isCompletedExceptionally();
     }
 
     /**
@@ -367,50 +388,56 @@ public final class ZLinkSerialExecutionQueue {
      * The length participates in the same byte admission as the fixed turn
      * cost and is released when the turn reaches its terminal boundary.
      */
-    public synchronized boolean tryEnqueueWithPayloadBytes(
+    public boolean tryEnqueueWithPayloadBytes(
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
-        validatePayloadBytes(payloadBytes);
-        if (relocated) {
-            return false;
+        EnqueueResult result;
+        synchronized (this) {
+            validatePayloadBytes(payloadBytes);
+            if (relocated
+                || !canRepresentWorkByteCost(payloadBytes)
+                || (!hasTransferredApplicationJob()
+                    && !canAcceptApplicationWork(workByteCost(payloadBytes)))) {
+                return false;
+            }
+            result = enqueueAccepted(null, payloadBytes, operation);
         }
-        if (!canRepresentWorkByteCost(payloadBytes)
-            || !canAcceptApplicationWork(workByteCost(payloadBytes))) {
-            return false;
-        }
-        enqueueAccepted(null, payloadBytes, operation);
-        return true;
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return !result.result().toCompletableFuture().isCompletedExceptionally();
     }
 
-    public synchronized boolean tryEnqueueRelocatable(
+    public boolean tryEnqueueRelocatable(
         byte[] record,
         Supplier<CompletionStage<Void>> operation) {
-        Objects.requireNonNull(record, "record");
-        if (relocated) {
-            return false;
+        EnqueueResult result;
+        synchronized (this) {
+            Objects.requireNonNull(record, "record");
+            if (relocated
+                || !canRepresentWorkByteCost(record.length)
+                || (!hasTransferredApplicationJob()
+                    && !canAcceptApplicationWork(workByteCost(record.length)))) {
+                return false;
+            }
+            result = enqueueAccepted(record.clone(), record.length, operation);
         }
-        if (!canRepresentWorkByteCost(record.length)
-            || !canAcceptApplicationWork(workByteCost(record.length))) {
-            return false;
-        }
-        enqueueAccepted(record.clone(), record.length, operation);
-        return true;
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return !result.result().toCompletableFuture().isCompletedExceptionally();
     }
 
-    private CompletionStage<Void> enqueueAccepted(
+    private EnqueueResult enqueueAccepted(
         byte[] record,
         Supplier<CompletionStage<Void>> operation) {
         return enqueueAccepted(record, record == null ? 0 : record.length, operation, () -> { });
     }
 
-    private CompletionStage<Void> enqueueAccepted(
+    private EnqueueResult enqueueAccepted(
         byte[] record,
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
         return enqueueAccepted(record, payloadBytes, operation, () -> { });
     }
 
-    private CompletionStage<Void> enqueueAccepted(
+    private EnqueueResult enqueueAccepted(
         byte[] record,
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation,
@@ -418,27 +445,27 @@ public final class ZLinkSerialExecutionQueue {
         Objects.requireNonNull(operation, "operation");
         validatePayloadBytes(payloadBytes);
         if (relocated) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("queue owner has relocated"));
+            return new EnqueueResult(CompletableFuture.failedFuture(
+                new IllegalStateException("queue owner has relocated")), false);
         }
         if (nextSequence == Long.MAX_VALUE) {
             throw new IllegalStateException("queue sequence exhausted");
         }
         if (!canRepresentWorkByteCost(payloadBytes)) {
-            return capacityFailure("application payload exceeds queue byte capacity");
+            return new EnqueueResult(
+                capacityFailure("application payload exceeds queue byte capacity"), false);
         }
         long byteCost = workByteCost(payloadBytes);
         if (relocation != null) {
-            return holdRelocationIngress(
-                record,
-                byteCost,
-                operation,
-                relocationRelease);
+            return new EnqueueResult(holdRelocationIngress(
+                record, byteCost, operation, relocationRelease), false);
         }
-        if (!canReserve(Lane.APPLICATION, byteCost)) {
-            return capacityFailure("application queue is full");
+        boolean transferred = hasTransferredApplicationJob();
+        if (!transferred && !canReserve(Lane.APPLICATION, byteCost)) {
+            return new EnqueueResult(
+                capacityFailure("application queue is full"), false);
         }
-        reserve(Lane.APPLICATION, byteCost);
+        reserve(Lane.APPLICATION, byteCost, transferred);
         Entry entry = new Entry(
             nextSequence++,
             record,
@@ -451,8 +478,7 @@ public final class ZLinkSerialExecutionQueue {
             byteCost,
             false);
         applicationPending.addLast(entry);
-        startNext();
-        return entry.result;
+        return new EnqueueResult(entry.result, requestDrainLocked());
     }
 
     private CompletionStage<Void> holdRelocationIngress(
@@ -542,7 +568,11 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void reserve(Lane lane, long byteCost) {
-        if (!canReserve(lane, byteCost)) {
+        reserve(lane, byteCost, false);
+    }
+
+    private void reserve(Lane lane, long byteCost, boolean transferred) {
+        if (!transferred && !canReserve(lane, byteCost)) {
             throw new IllegalStateException("serial queue reservation is unavailable");
         }
         if (lane == Lane.APPLICATION) {
@@ -553,6 +583,10 @@ public final class ZLinkSerialExecutionQueue {
             lifecycleBytes = Math.addExact(lifecycleBytes, byteCost);
         }
         outstanding++;
+    }
+
+    private static boolean hasTransferredApplicationJob() {
+        return ZLinkApplicationJobContext.hasTransferableQueuedOwnership();
     }
 
     private void release(Entry entry) {
@@ -665,68 +699,88 @@ public final class ZLinkSerialExecutionQueue {
         return lifecyclePending.removeFirst();
     }
 
-    private void startNext() {
-        if (active != null || !hasPending()) {
-            return;
+    private boolean requestDrainLocked() {
+        if (drainScheduled || active != null || !hasPending()) {
+            return false;
         }
         if (!lifecyclePending.isEmpty()
             && lifecyclePending.peekFirst().relocationBoundary != null
             && suspendedContinuations != 0
             && continuationPending.isEmpty()) {
+            return false;
+        }
+        drainScheduled = true;
+        return true;
+    }
+
+    private void scheduleDrainIfNeeded(boolean scheduleDrain) {
+        if (!scheduleDrain) {
             return;
+        }
+        try {
+            DRAIN_EXECUTOR.execute(this::drainScheduled);
+        } catch (RuntimeException rejected) {
+            throw new IllegalStateException("serial queue drain executor rejected", rejected);
+        }
+    }
+
+    private void drainScheduled() {
+        Entry entry;
+        synchronized (this) {
+            drainScheduled = false;
+            entry = takeNextForDrainLocked();
+        }
+        if (entry != null) {
+            invoke(entry.operation, entry.result, entry.flow,
+                entry.applicationJobOwnership).whenComplete(
+                    (ignored, error) -> finish(entry));
+        }
+    }
+
+    private Entry takeNextForDrainLocked() {
+        if (active != null || !hasPending()) {
+            return null;
+        }
+        if (!lifecyclePending.isEmpty()
+            && lifecyclePending.peekFirst().relocationBoundary != null
+            && suspendedContinuations != 0
+            && continuationPending.isEmpty()) {
+            return null;
         }
         Entry entry = takeNext();
         active = entry;
         if (turnClaimedAtNanos == 0) {
             turnClaimedAtNanos = System.nanoTime();
         }
-        CompletionStage<Void> gate = invoke(
-            entry.operation,
-            entry.result,
-            entry.flow,
-            entry.applicationJobOwnership);
-        gate.whenComplete((ignored, error) -> finish(entry));
+        return entry;
     }
 
     private void finish(Entry entry) {
         List<CompletableFuture<Void>> quiescent = List.of();
         RelocationBoundary boundary = entry.relocationBoundary;
-        boolean yieldToExecutor = false;
+        boolean scheduleDrain = false;
         synchronized (this) {
             if (active != entry) {
                 return;
             }
             active = null;
             release(entry);
-            yieldToExecutor = hasPending()
+            boolean yieldToExecutor = hasPending()
                 && ownerTimeBudgetNanos > 0
                 && System.nanoTime() - turnClaimedAtNanos >= ownerTimeBudgetNanos;
             if (yieldToExecutor) {
                 turnClaimedAtNanos = 0;
             } else if (!hasPending()) {
                 turnClaimedAtNanos = 0;
-            } else {
-                startNext();
             }
+            scheduleDrain = requestDrainLocked();
             quiescent = takeQuiescenceWaitersIfReady();
         }
-        if (yieldToExecutor) {
-            try {
-                executor.execute(this::startNextAsync);
-            } catch (RuntimeException rejected) {
-                startNextAsync();
-            }
-        }
+        scheduleDrainIfNeeded(scheduleDrain);
         if (boundary != null) {
             boundary.finished.complete(null);
         }
         quiescent.forEach(waiter -> waiter.complete(null));
-    }
-
-    private void startNextAsync() {
-        synchronized (this) {
-            startNext();
-        }
     }
 
     /**
@@ -752,34 +806,33 @@ public final class ZLinkSerialExecutionQueue {
      * records. The reservation remains active until {@link
      * RelocationBoundary#release()} is called.
      */
-    public synchronized Optional<RelocationBoundary>
+    public Optional<RelocationBoundary>
         reserveRelocationTurnBoundary() {
-        if (relocated || relocation != null) {
-            return Optional.empty();
+        Optional<RelocationBoundary> result;
+        boolean scheduleDrain;
+        synchronized (this) {
+            if (relocated || relocation != null) {
+                return Optional.empty();
+            }
+            if (nextSequence == Long.MAX_VALUE) {
+                throw new IllegalStateException("queue sequence exhausted");
+            }
+            if (!canReserve(Lane.LIFECYCLE, fixedWorkByteCost)) {
+                return Optional.empty();
+            }
+            RelocationBoundary boundary = new RelocationBoundary(this);
+            Entry entry = new Entry(
+                nextSequence++, (byte[]) null, boundary::reach, () -> { },
+                new CompletableFuture<>(), ZLinkFlowContext.current(), boundary,
+                Lane.LIFECYCLE, fixedWorkByteCost, false);
+            boundary.entry = entry;
+            reserve(Lane.LIFECYCLE, fixedWorkByteCost);
+            lifecyclePending.addLast(entry);
+            result = Optional.of(boundary);
+            scheduleDrain = requestDrainLocked();
         }
-        if (nextSequence == Long.MAX_VALUE) {
-            throw new IllegalStateException("queue sequence exhausted");
-        }
-        if (!canReserve(Lane.LIFECYCLE, fixedWorkByteCost)) {
-            return Optional.empty();
-        }
-        RelocationBoundary boundary = new RelocationBoundary(this);
-        Entry entry = new Entry(
-            nextSequence++,
-            (byte[]) null,
-            boundary::reach,
-            () -> { },
-            new CompletableFuture<>(),
-            ZLinkFlowContext.current(),
-            boundary,
-            Lane.LIFECYCLE,
-            fixedWorkByteCost,
-            false);
-        boundary.entry = entry;
-        reserve(Lane.LIFECYCLE, fixedWorkByteCost);
-        lifecyclePending.addLast(entry);
-        startNext();
-        return Optional.of(boundary);
+        scheduleDrainIfNeeded(scheduleDrain);
+        return result;
     }
 
     /**
@@ -866,25 +919,29 @@ public final class ZLinkSerialExecutionQueue {
         return Optional.of(seal);
     }
 
-    public synchronized boolean abortRelocation(RelocationSeal seal) {
-        if (!matches(seal) || relocation.retained != null) {
-            return false;
-        }
-        ArrayDeque<Entry> restored = new ArrayDeque<>(relocation.captured);
-        while (!restored.isEmpty()) {
-            applicationPending.addLast(restored.removeFirst());
-        }
-        relocation.held.forEach(entry -> {
-            if (entry.lane == Lane.LIFECYCLE) {
-                lifecyclePending.addLast(entry);
-            } else if (entry.continuation) {
-                continuationPending.addLast(entry);
-            } else {
-                applicationPending.addLast(entry);
+    public boolean abortRelocation(RelocationSeal seal) {
+        boolean scheduleDrain;
+        synchronized (this) {
+            if (!matches(seal) || relocation.retained != null) {
+                return false;
             }
-        });
-        relocation = null;
-        startNext();
+            ArrayDeque<Entry> restored = new ArrayDeque<>(relocation.captured);
+            while (!restored.isEmpty()) {
+                applicationPending.addLast(restored.removeFirst());
+            }
+            relocation.held.forEach(entry -> {
+                if (entry.lane == Lane.LIFECYCLE) {
+                    lifecyclePending.addLast(entry);
+                } else if (entry.continuation) {
+                    continuationPending.addLast(entry);
+                } else {
+                    applicationPending.addLast(entry);
+                }
+            });
+            relocation = null;
+            scheduleDrain = requestDrainLocked();
+        }
+        scheduleDrainIfNeeded(scheduleDrain);
         return true;
     }
 
@@ -1228,38 +1285,37 @@ public final class ZLinkSerialExecutionQueue {
         suspendedContinuations++;
     }
 
-    private synchronized CompletionStage<Void> enqueueContinuation(
+    private CompletionStage<Void> enqueueContinuation(
         Supplier<CompletionStage<Void>> operation) {
-        if (suspendedContinuations <= 0) {
-            throw new IllegalStateException(
-                "suspended continuation count is inconsistent");
+        CompletionStage<Void> result;
+        boolean scheduleDrain = false;
+        synchronized (this) {
+            if (suspendedContinuations <= 0) {
+                throw new IllegalStateException(
+                    "suspended continuation count is inconsistent");
+            }
+            suspendedContinuations--;
+            if (nextSequence == Long.MAX_VALUE) {
+                throw new IllegalStateException("queue sequence exhausted");
+            }
+            if (!canReserve(Lane.APPLICATION, fixedWorkByteCost)) {
+                return capacityFailure("application continuation queue is full");
+            }
+            reserve(Lane.APPLICATION, fixedWorkByteCost);
+            Entry continuation = new Entry(
+                nextSequence++, (byte[]) null, operation, () -> { },
+                new CompletableFuture<>(), ZLinkFlowContext.current(), null,
+                Lane.APPLICATION, fixedWorkByteCost, true);
+            if (relocation != null) {
+                holdRelocationEntry(continuation);
+            } else {
+                continuationPending.addLast(continuation);
+                scheduleDrain = requestDrainLocked();
+            }
+            result = continuation.result;
         }
-        suspendedContinuations--;
-        if (nextSequence == Long.MAX_VALUE) {
-            throw new IllegalStateException("queue sequence exhausted");
-        }
-        if (!canReserve(Lane.APPLICATION, fixedWorkByteCost)) {
-            return capacityFailure("application continuation queue is full");
-        }
-        reserve(Lane.APPLICATION, fixedWorkByteCost);
-        Entry continuation = new Entry(
-            nextSequence++,
-            (byte[]) null,
-            operation,
-            () -> { },
-            new CompletableFuture<>(),
-            ZLinkFlowContext.current(),
-            null,
-            Lane.APPLICATION,
-            fixedWorkByteCost,
-            true);
-        if (relocation != null) {
-            holdRelocationEntry(continuation);
-        } else {
-            continuationPending.addLast(continuation);
-            startNext();
-        }
-        return continuation.result;
+        scheduleDrainIfNeeded(scheduleDrain);
+        return result;
     }
 
     private boolean isQuiescent() {
@@ -1497,6 +1553,7 @@ public final class ZLinkSerialExecutionQueue {
 
         @Override
         public void abort() {
+            boolean scheduleDrain;
             synchronized (owner) {
                 if (!canAbort()) {
                     throw new IllegalStateException(
@@ -1525,8 +1582,9 @@ public final class ZLinkSerialExecutionQueue {
                         owner.applicationPending.addLast(entry);
                     }
                 }
-                owner.startNext();
+                scheduleDrain = owner.requestDrainLocked();
             }
+            owner.scheduleDrainIfNeeded(scheduleDrain);
         }
 
         @Override
@@ -1680,6 +1738,11 @@ public final class ZLinkSerialExecutionQueue {
             }
             return new QueuedRecord(sequence, record);
         }
+    }
+
+    private record EnqueueResult(
+        CompletionStage<Void> result,
+        boolean scheduleDrain) {
     }
 
     private static final class RelocationState {
