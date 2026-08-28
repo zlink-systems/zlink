@@ -116,6 +116,7 @@ import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.channels.ChannelRegistration;
@@ -2075,6 +2076,8 @@ public final class ZLinkSpotRuntime
     }
 
     public void attachActorRuntime(ZLinkActorRuntime actorRuntime) {
+        actorRuntime.setActorDispatchTargetResolver(
+            this::actorDispatchTargetFor);
         actorRuntime.setDirectJoinRelocationStores(
             frameworkRegistration.locations().storeInstance() == null
                 ? null
@@ -3649,6 +3652,23 @@ public final class ZLinkSpotRuntime
             spotLifecycle::firstEntrySpot);
     }
 
+    private ZLinkActorDispatchTarget actorDispatchTargetFor(String actorId) {
+        Optional<ZLinkActor> actor = actorSessions.localActor(actorId);
+        if (actor.isEmpty()) {
+            return null;
+        }
+        Object surface = localActorSpotSurface(actor.orElseThrow());
+        if (surface instanceof ZLinkSpot<?> spot
+            && spot.context() instanceof DefaultSpotContext context) {
+            return context.actorDispatchTarget();
+        }
+        if (surface instanceof ZLinkEntrySpot<?> entry
+            && entry.context() instanceof DefaultEntrySpotContext context) {
+            return context.actorDispatchTarget();
+        }
+        return null;
+    }
+
     byte[] freezeActorTimerRelocationEnvelope(String actorId) {
         ZLinkActor actor = actorSessions.localActor(actorId)
             .orElseThrow(() -> new IllegalStateException(
@@ -4399,6 +4419,15 @@ public final class ZLinkSpotRuntime
     }
 
     @Override
+    CompletionStage<Void> runActorTimerDispatch(
+        ZLinkActorDispatchTarget target,
+        String actorId,
+        Supplier<CompletionStage<Void>> operation) {
+        return actorSessions.runtime().runActorDispatchTurn(
+            target, actorId, operation);
+    }
+
+    @Override
     CompletionStage<Void> enqueueActorDispatch(
         String actorId,
         long payloadBytes,
@@ -4409,12 +4438,39 @@ public final class ZLinkSpotRuntime
 
     @Override
     CompletionStage<Void> enqueueActorDispatch(
+        ZLinkActorDispatchTarget target,
+        String actorId,
+        long payloadBytes,
+        Supplier<CompletionStage<Void>> operation) {
+        return actorSessions.runtime().submitActorDispatch(
+            target, actorId, payloadBytes, operation);
+    }
+
+    @Override
+    CompletionStage<Void> enqueueActorDispatch(
         String actorId,
         Supplier<byte[]> acceptedJournalRecord,
         long acceptedJournalRecordSizeHint,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
         return actorSessions.runtime().submitActorDispatchLazyRecord(
+            actorId,
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            operation,
+            relocationRelease);
+    }
+
+    @Override
+    CompletionStage<Void> enqueueActorDispatch(
+        ZLinkActorDispatchTarget target,
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        return actorSessions.runtime().submitActorDispatchLazyRecord(
+            target,
             actorId,
             acceptedJournalRecord,
             acceptedJournalRecordSizeHint,

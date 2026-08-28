@@ -10,27 +10,27 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 
 /** Owns the one serial execution queue associated with one Actor activation. */
-final class ZLinkActorSerialExecutor {
+public final class ZLinkActorSerialExecutor {
     private final ZLinkSerialExecutionQueue queue;
 
-    ZLinkActorSerialExecutor(Executor executor) {
+    public ZLinkActorSerialExecutor(Executor executor) {
         queue = executor == null
             ? new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.actorDelivery())
             : new ZLinkSerialExecutionQueue(
                 executor, ZLinkExecutionLanePolicy.actorDelivery());
     }
 
-    CompletionStage<Void> executeActor(Supplier<CompletionStage<Void>> operation) {
+    public CompletionStage<Void> executeActor(Supplier<CompletionStage<Void>> operation) {
         return queue.enqueue(operation);
     }
 
-    CompletionStage<Void> executeActor(
+    public CompletionStage<Void> executeActor(
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
         return queue.enqueueWithPayloadBytes(payloadBytes, operation);
     }
 
-    CompletionStage<Void> executeActor(
+    public CompletionStage<Void> executeActor(
         byte[] acceptedJournalRecord,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
@@ -40,7 +40,7 @@ final class ZLinkActorSerialExecutor {
                 acceptedJournalRecord, operation, relocationRelease);
     }
 
-    CompletionStage<Void> executeActorLazyRecord(
+    public CompletionStage<Void> executeActorLazyRecord(
         Supplier<byte[]> acceptedJournalRecord,
         long acceptedJournalRecordSizeHint,
         Supplier<CompletionStage<Void>> operation,
@@ -52,36 +52,38 @@ final class ZLinkActorSerialExecutor {
             relocationRelease);
     }
 
-    CompletionStage<Void> executeLifecycle(
+    public CompletionStage<Void> executeLifecycle(
         Supplier<CompletionStage<Void>> operation) {
         return queue.enqueueLifecycleBarrier(operation);
     }
 
-    CompletionStage<Void> executeLifecycleNext(
+    public CompletionStage<Void> executeLifecycleNext(
         Supplier<CompletionStage<Void>> operation) {
         return queue.enqueueBarrierNext(operation);
     }
 
-    boolean isCurrent() { return queue.isCurrent(); }
-    Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealRelocation() {
+    public boolean isCurrent() { return queue.isCurrent(); }
+    public Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealRelocation() {
         return queue.trySealRelocation();
     }
-    boolean abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
+    public boolean abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return queue.abortRelocation(seal);
     }
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitRelocation(
+    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitRelocation(
         ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return queue.commitRelocation(seal);
     }
-    Optional<ZLinkRetainedSerialQueueCommit.Commit> retainRelocationCommit(
+    public Optional<ZLinkRetainedSerialQueueCommit.Commit> retainRelocationCommit(
         ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return ZLinkRetainedSerialQueueCommit.retain(queue, seal);
     }
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeRelocationIngress(
+    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeRelocationIngress(
         ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return queue.freezeRelocationIngress(seal);
     }
-    CompletionStage<Void> awaitQuiescence() { return queue.awaitQuiescence(); }
+    public CompletionStage<Void> awaitQuiescence() { return queue.awaitQuiescence(); }
 
-    ZLinkSerialExecutionQueue relocationLane() { return queue; }
+    public ZLinkSerialExecutionQueue relocationLane() { return queue; }
+
+    public void close() { queue.close(); }
 }

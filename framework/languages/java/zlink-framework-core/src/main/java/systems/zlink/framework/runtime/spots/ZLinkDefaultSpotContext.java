@@ -30,6 +30,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -54,6 +55,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     private final DefaultSpotOutbound outbound;
     private final ZLinkSerialExecutionQueue dispatchQueue;
     private final ZLinkSerialExecutionQueue infrastructureQueue;
+    private final ZLinkSpotSerialExecutor serials;
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final List<DefaultSpotContext> timerContexts = new ArrayList<>();
     private final Map<String, ZLinkSpotTimerRegistry> actorTimers =
@@ -77,6 +79,12 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
         this.infrastructureQueue = new ZLinkSerialExecutionQueue(
             host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
+        this.serials = new ZLinkSpotSerialExecutor(
+            dispatchQueue,
+            infrastructureQueue,
+            host.serialExecutor(),
+            ZLinkUserSpotExecutionMode.PER_ACTOR,
+            false);
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);
         this.handlerInstances = host.createHandlerInstances();
     }
@@ -133,6 +141,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         timerContexts.forEach(DefaultSpotContext::closeTimers);
         actorTimers.values().forEach(ZLinkSpotTimerRegistry::close);
         actorTimers.clear();
+        serials.close();
     }
 
     @Override
@@ -151,8 +160,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     CompletionStage<Void> awaitAllLanes() {
         List<CompletionStage<Void>> lanes = new ArrayList<>();
-        lanes.add(dispatchQueue.awaitQuiescence());
-        lanes.add(infrastructureQueue.awaitQuiescence());
+        lanes.add(serials.awaitAllLanes());
         timerContexts.forEach(context -> lanes.add(context.awaitAllLanes()));
         return CompletableFuture.allOf(
             lanes.stream()
@@ -199,6 +207,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(actorId, "actorId");
         return host.enqueueActorDispatch(
+            serials,
             actorId,
             payloadBytes,
             () -> runApplicationExecution(actorId, false, operation));
@@ -213,6 +222,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         Runnable relocationRelease) {
         Objects.requireNonNull(actorId, "actorId");
         return host.enqueueActorDispatch(
+            serials,
             actorId,
             acceptedJournalRecord,
             acceptedJournalRecordSizeHint,
@@ -297,10 +307,11 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                 spotId(),
                 handlerInstances,
                 (timerName, operation) -> host.runActorTimerDispatch(
+                    serials,
                     key,
                     () -> runApplicationExecution(
                         key,
-                        false,
+                        serials.usesSharedExecutionGate(),
                         () -> host.runWithOutbound(outbound, operation))));
             if (entrySpot != null) {
                 timer.setSpot(new ZLinkEntrySpotTimerSurface(this));
@@ -333,6 +344,10 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                     + name,
                 error);
         }
+    }
+
+    ZLinkActorDispatchTarget actorDispatchTarget() {
+        return serials;
     }
 }
 
@@ -535,6 +550,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         timers.close();
         actorTimers.values().forEach(ZLinkSpotTimerRegistry::close);
         actorTimers.clear();
+        serials.close();
     }
 
     @Override
@@ -659,9 +675,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         Objects.requireNonNull(actorId, "actorId");
         streamTrace(STREAM_TRACE ? "actor-enqueue spot=" + spotId() + " actor=" + actorId
             + " shared=" + serials.usesSharedExecutionGate() : null);
-        return serials.executeActor(
-            turn -> host.enqueueActorDispatch(actorId, payloadBytes, turn),
-            yieldAllowed -> runActorApplication(actorId, yieldAllowed, operation));
+        return host.enqueueActorDispatch(
+            serials,
+            actorId,
+            payloadBytes,
+            () -> runActorApplication(
+                actorId, serials.usesSharedExecutionGate(), operation));
     }
 
     @Override
@@ -674,14 +693,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         Objects.requireNonNull(actorId, "actorId");
         Objects.requireNonNull(acceptedJournalRecord, "acceptedJournalRecord");
         Objects.requireNonNull(relocationRelease, "relocationRelease");
-        return serials.executeActor(
-            turn -> host.enqueueActorDispatch(
-                actorId,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                turn,
-                relocationRelease),
-            yieldAllowed -> runActorApplication(actorId, yieldAllowed, operation));
+        return host.enqueueActorDispatch(
+            serials,
+            actorId,
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            () -> runActorApplication(
+                actorId, serials.usesSharedExecutionGate(), operation),
+            relocationRelease);
     }
 
     private CompletionStage<Void> runActorApplication(
@@ -742,6 +761,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     Map<String, ZLinkSerialExecutionQueue> relocationLanes() {
         return serials.relocationLanes();
+    }
+
+    ZLinkSerialExecutionQueue actorRelocationLane(String actorId) {
+        return serials.actorRelocationLane(actorId);
+    }
+
+    ZLinkActorDispatchTarget actorDispatchTarget() {
+        return serials;
     }
 
     ZLinkUserSpotRelocationBarrier relocationBarrier(
@@ -876,10 +903,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 spotId(),
                 handlerInstances,
                 (timerName, operation) -> host.runActorTimerDispatch(
+                    serials,
                     key,
                     () -> runApplicationExecution(
                         key,
-                        false,
+                        serials.usesSharedExecutionGate(),
                         () -> host.runWithOutbound(outbound, operation))));
             if (spot != null) {
                 timer.setSpot(spot);

@@ -475,7 +475,7 @@ final class ZLinkUserSpotRelocationBarrier {
         for (String actorId : participantActorIds) {
             if (lanes.putIfAbsent(
                     "actor:" + actorId,
-                    actors.actorRelocationLane(actorId)) != null) {
+                    context.actorRelocationLane(actorId)) != null) {
                 throw new IllegalStateException(
                     "duplicate User Spot relocation lane: actor:"
                         + actorId);

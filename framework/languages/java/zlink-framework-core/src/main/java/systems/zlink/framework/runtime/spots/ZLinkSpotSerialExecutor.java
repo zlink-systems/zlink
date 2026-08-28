@@ -11,34 +11,57 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
+import systems.zlink.framework.runtime.actors.ZLinkActorSerialExecutor;
+import systems.zlink.framework.runtime.internal.relocation
+    .ZLinkRetainedSerialQueueCommit;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /** Coordinates the Spot queue and its named timer execution queues. */
-final class ZLinkSpotSerialExecutor {
+public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     private final ZLinkSerialExecutionQueue spotQueue;
     private final ZLinkSerialExecutionQueue infrastructureQueue;
     private final Executor serialExecutor;
     private final boolean sharedSpotGate;
+    private final AtomicBoolean closed = new AtomicBoolean();
     // Named child queues are C2 state: clearing this map and completing its
     // queues must happen as one state-lane turn when Spot shutdown is wired.
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, ZLinkSerialExecutionQueue> timerQueues =
         new LinkedHashMap<>();
+    private final Map<String, ZLinkActorSerialExecutor> actorQueues =
+        new LinkedHashMap<>();
 
-    ZLinkSpotSerialExecutor(
+    public ZLinkSpotSerialExecutor(
         ZLinkSerialExecutionQueue spotQueue,
         Executor infrastructureExecutor,
         Executor serialExecutor,
         ZLinkUserSpotExecutionMode executionMode,
         boolean instanceSpot) {
+        this(
+            spotQueue,
+            new ZLinkSerialExecutionQueue(
+                infrastructureExecutor, ZLinkExecutionLanePolicy.spot()),
+            serialExecutor,
+            executionMode,
+            instanceSpot);
+    }
+
+    public ZLinkSpotSerialExecutor(
+        ZLinkSerialExecutionQueue spotQueue,
+        ZLinkSerialExecutionQueue infrastructureQueue,
+        Executor serialExecutor,
+        ZLinkUserSpotExecutionMode executionMode,
+        boolean instanceSpot) {
         this.spotQueue = Objects.requireNonNull(spotQueue, "spotQueue");
-        this.infrastructureQueue = new ZLinkSerialExecutionQueue(
-            infrastructureExecutor, ZLinkExecutionLanePolicy.spot());
+        this.infrastructureQueue = Objects.requireNonNull(
+            infrastructureQueue, "infrastructureQueue");
         this.serialExecutor = Objects.requireNonNull(serialExecutor, "serialExecutor");
         this.sharedSpotGate = instanceSpot
             || executionMode == ZLinkUserSpotExecutionMode.SPOT_WIDE;
@@ -55,15 +78,155 @@ final class ZLinkSpotSerialExecutor {
         return infrastructureQueue.enqueueWithPayloadBytes(0, operation);
     }
 
-    CompletionStage<Void> executeActor(
-        Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>> submit,
-        Function<Boolean, CompletionStage<Void>> operation) {
-        CompletionStage<Void> queued = submit.apply(() -> sharedSpotGate
-            ? spotQueue.enqueue(() -> operation.apply(true))
-            : operation.apply(false));
+    @Override
+    public CompletionStage<Void> executeActor(
+        String actorId,
+        Supplier<CompletionStage<Void>> operation) {
+        return executeActor(actorId, 0, operation);
+    }
+
+    @Override
+    public CompletionStage<Void> executeActor(
+        String actorId,
+        long payloadBytes,
+        Supplier<CompletionStage<Void>> operation) {
+        Objects.requireNonNull(actorId, "actorId");
+        Objects.requireNonNull(operation, "operation");
+        ZLinkActorSerialExecutor actorQueue = actorQueue(actorId);
+        CompletionStage<Void> queued = actorQueue.executeActor(
+            payloadBytes,
+            () -> sharedSpotGate
+                ? spotQueue.enqueue(operation)
+                : operation.get());
         return sharedSpotGate && spotQueue.isCurrent()
             ? ZLinkSerialExecutionQueue.yieldCurrent(queued)
             : queued;
+    }
+
+    @Override
+    public CompletionStage<Void> executeActor(
+        String actorId,
+        byte[] acceptedJournalRecord,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        Objects.requireNonNull(actorId, "actorId");
+        Objects.requireNonNull(operation, "operation");
+        Objects.requireNonNull(relocationRelease, "relocationRelease");
+        CompletionStage<Void> queued = actorQueue(actorId).executeActor(
+            acceptedJournalRecord,
+            () -> sharedSpotGate
+                ? spotQueue.enqueue(operation)
+                : operation.get(),
+            relocationRelease);
+        return sharedSpotGate && spotQueue.isCurrent()
+            ? ZLinkSerialExecutionQueue.yieldCurrent(queued)
+            : queued;
+    }
+
+    @Override
+    public CompletionStage<Void> executeActorLazyRecord(
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        Objects.requireNonNull(actorId, "actorId");
+        Objects.requireNonNull(acceptedJournalRecord, "acceptedJournalRecord");
+        Objects.requireNonNull(operation, "operation");
+        Objects.requireNonNull(relocationRelease, "relocationRelease");
+        CompletionStage<Void> queued = actorQueue(actorId).executeActorLazyRecord(
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            () -> sharedSpotGate
+                ? spotQueue.enqueue(operation)
+                : operation.get(),
+            relocationRelease);
+        return sharedSpotGate && spotQueue.isCurrent()
+            ? ZLinkSerialExecutionQueue.yieldCurrent(queued)
+            : queued;
+    }
+
+    @Override
+    public CompletionStage<Void> executeActorLifecycle(
+        String actorId,
+        Supplier<CompletionStage<Void>> operation) {
+        return actorQueue(actorId).executeLifecycle(operation);
+    }
+
+    @Override
+    public CompletionStage<Void> executeActorLifecycleNext(
+        String actorId,
+        Supplier<CompletionStage<Void>> operation) {
+        return actorQueue(actorId).executeLifecycleNext(operation);
+    }
+
+    @Override
+    public boolean isActorQueueCurrent(String actorId) {
+        return actorQueueIfPresent(actorId)
+            .map(ZLinkActorSerialExecutor::isCurrent)
+            .orElse(false);
+    }
+
+    @Override
+    public Optional<ZLinkSerialExecutionQueue.RelocationSeal>
+        trySealActorRelocation(String actorId) {
+        return actorQueue(actorId).trySealRelocation();
+    }
+
+    @Override
+    public boolean abortActorRelocation(
+        String actorId,
+        ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return actorQueueIfPresent(actorId)
+            .map(queue -> queue.abortRelocation(seal))
+            .orElse(false);
+    }
+
+    @Override
+    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>
+        commitActorRelocation(
+            String actorId,
+            ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return actorQueueIfPresent(actorId)
+            .flatMap(queue -> queue.commitRelocation(seal));
+    }
+
+    @Override
+    public Optional<ZLinkRetainedSerialQueueCommit.Commit>
+        retainActorRelocationCommit(
+            String actorId,
+            ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return actorQueueIfPresent(actorId)
+            .flatMap(queue -> queue.retainRelocationCommit(seal));
+    }
+
+    @Override
+    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>
+        freezeActorRelocationIngress(
+            String actorId,
+            ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return actorQueueIfPresent(actorId)
+            .flatMap(queue -> queue.freezeRelocationIngress(seal));
+    }
+
+    @Override
+    public CompletionStage<Void> awaitActorQuiescence(String actorId) {
+        return actorQueueIfPresent(actorId)
+            .map(ZLinkActorSerialExecutor::awaitQuiescence)
+            .orElseGet(() -> CompletableFuture.completedFuture(null));
+    }
+
+    @Override
+    public void removeActorQueue(String actorId) {
+        inStateLane(() -> {
+            actorQueues.remove(actorId);
+            return null;
+        });
+    }
+
+    @Override
+    public ZLinkSerialExecutionQueue actorRelocationLane(String actorId) {
+        return actorQueue(actorId).relocationLane();
     }
 
     CompletionStage<Void> executeTimer(
@@ -128,10 +291,28 @@ final class ZLinkSpotSerialExecutor {
         queues.add(spotQueue.awaitQuiescence());
         queues.add(infrastructureQueue.awaitQuiescence());
         timerSnapshot().forEach(queue -> queues.add(queue.awaitQuiescence()));
+        actorSnapshot().forEach(queue -> queues.add(queue.awaitQuiescence()));
         return CompletableFuture.allOf(queues.stream()
             .map(CompletionStage::toCompletableFuture)
             .toArray(CompletableFuture[]::new));
     }
+
+    void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        inStateLane(() -> {
+            timerQueues.values().forEach(ZLinkSerialExecutionQueue::close);
+            actorQueues.values().forEach(ZLinkActorSerialExecutor::close);
+            timerQueues.clear();
+            actorQueues.clear();
+            return null;
+        });
+        spotQueue.close();
+        infrastructureQueue.close();
+        stateLane.closeAsync().toCompletableFuture().join();
+    }
+
     Map<String, ZLinkSerialExecutionQueue> relocationLanes() {
         LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes = new LinkedHashMap<>();
         lanes.put("spot", spotQueue);
@@ -154,6 +335,22 @@ final class ZLinkSpotSerialExecutor {
 
     private List<ZLinkSerialExecutionQueue> timerSnapshot() {
         return inStateLane(() -> List.copyOf(timerQueues.values()));
+    }
+
+    private List<ZLinkActorSerialExecutor> actorSnapshot() {
+        return inStateLane(() -> List.copyOf(actorQueues.values()));
+    }
+
+    private ZLinkActorSerialExecutor actorQueue(String actorId) {
+        Objects.requireNonNull(actorId, "actorId");
+        return inStateLane(() -> actorQueues.computeIfAbsent(actorId,
+            ignored -> new ZLinkActorSerialExecutor(serialExecutor)));
+    }
+
+    private Optional<ZLinkActorSerialExecutor> actorQueueIfPresent(
+        String actorId) {
+        Objects.requireNonNull(actorId, "actorId");
+        return inStateLane(() -> Optional.ofNullable(actorQueues.get(actorId)));
     }
 
     private <T> T inStateLane(Supplier<T> operation) {

@@ -230,6 +230,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private final ZLinkStreamCodec defaultStreamCodec;
     private final ActorRegistry actorRegistry = new ActorRegistry();
     private final ZLinkActorDispatchSerials dispatches;
+    private volatile Function<String, ZLinkActorDispatchTarget>
+        actorDispatchTargetResolver = ignored -> null;
     private final ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
     private final ConcurrentMap<String, Long> transferStarts =
         new ConcurrentHashMap<>();
@@ -861,7 +863,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         this.dispatches = new ZLinkActorDispatchSerials(
             this,
             this::deferredJoinIncarnation,
-            serialExecutor);
+            serialExecutor,
+            actorId -> actorDispatchTargetResolver.apply(actorId));
         this.meshName = spotNode.routingId().toString();
         this.factories = Map.copyOf(factories);
         this.defaultRequestTimeout = defaultRequestTimeout;
@@ -908,6 +911,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             throw new ZLinkConfigurationException("meshName is required");
         }
         this.meshName = meshName;
+    }
+
+    public void setActorDispatchTargetResolver(
+        Function<String, ZLinkActorDispatchTarget> resolver) {
+        actorDispatchTargetResolver = resolver == null
+            ? ignored -> null
+            : resolver;
     }
 
     public String meshName() {
@@ -3922,6 +3932,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
         return submitActorDispatch(
+            null,
             actorId,
             null,
             payloadBytes,
@@ -3943,6 +3954,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
         return submitActorDispatch(
+            null,
             actorId,
             acceptedJournalRecord,
             null,
@@ -3951,6 +3963,51 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     public CompletionStage<Void> submitActorDispatchLazyRecord(
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        return submitActorDispatchLazyRecord(
+            null,
+            actorId,
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            operation,
+            relocationRelease);
+    }
+
+    public CompletionStage<Void> submitActorDispatch(
+        ZLinkActorDispatchTarget target,
+        String actorId,
+        long payloadBytes,
+        Supplier<CompletionStage<Void>> operation) {
+        return submitActorDispatch(
+            target,
+            actorId,
+            null,
+            payloadBytes,
+            operation,
+            () -> { });
+    }
+
+    public CompletionStage<Void> submitActorDispatch(
+        ZLinkActorDispatchTarget target,
+        String actorId,
+        byte[] acceptedJournalRecord,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        return submitActorDispatch(
+            target,
+            actorId,
+            acceptedJournalRecord,
+            null,
+            operation,
+            relocationRelease);
+    }
+
+    public CompletionStage<Void> submitActorDispatchLazyRecord(
+        ZLinkActorDispatchTarget target,
         String actorId,
         Supplier<byte[]> acceptedJournalRecord,
         long acceptedJournalRecordSizeHint,
@@ -3970,7 +4027,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 throw new ZLinkConfigurationException(
                     "actor is not managed by this runtime: " + actorId);
             }
-                return dispatches.prepare(actorId);
+                return target == null
+                    ? dispatches.prepare(actorId)
+                    : dispatches.prepare(actorId, target);
             });
         } catch (ZLinkConfigurationException error) {
             return CompletableFuture.failedFuture(error);
@@ -3984,6 +4043,22 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private CompletionStage<Void> submitActorDispatch(
+        String actorId,
+        byte[] acceptedJournalRecord,
+        Long payloadBytes,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        return submitActorDispatch(
+            null,
+            actorId,
+            acceptedJournalRecord,
+            payloadBytes,
+            operation,
+            relocationRelease);
+    }
+
+    private CompletionStage<Void> submitActorDispatch(
+        ZLinkActorDispatchTarget target,
         String actorId,
         byte[] acceptedJournalRecord,
         Long payloadBytes,
@@ -4003,7 +4078,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 throw new ZLinkConfigurationException(
                     "actor is not managed by this runtime: " + actorId);
             }
-                return dispatches.prepare(actorId);
+                return target == null
+                    ? dispatches.prepare(actorId)
+                    : dispatches.prepare(actorId, target);
             });
         } catch (ZLinkConfigurationException error) {
             return CompletableFuture.failedFuture(error);
@@ -4063,6 +4140,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         String actorId,
         Supplier<CompletionStage<T>> operation) {
         return dispatches.runTurn(actorId, operation);
+    }
+
+    public CompletionStage<Void> runActorDispatchTurn(
+        ZLinkActorDispatchTarget target,
+        String actorId,
+        Supplier<CompletionStage<Void>> operation) {
+        return target.executeActor(
+            actorId,
+            () -> dispatches.runTurn(actorId, operation));
     }
 
     public <T> CompletionStage<T> invokeActorLifecycle(
