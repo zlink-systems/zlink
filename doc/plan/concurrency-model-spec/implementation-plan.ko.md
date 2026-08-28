@@ -213,6 +213,7 @@ java는 큐 primitive가 정본이고 **조율자가 셋 다 없다.** 런타임
 | P2-4 | `ZLinkAsyncSerialQueue` → `ZLinkSerialExecutionQueue` 개명 | `execution/ZLinkAsyncSerialQueue.java` | 이전 이름 0건 |
 | P2-5 | Actor 경로의 `sharedSpotGate()` 분기를 조율자 안으로 넣는다 | `runtime/spots/ZLinkDefaultSpotContext.java` | 호출자가 큐를 고르는 자리 0건 |
 | P2-6 | **(04 §8)** 이관 record의 용량 거절 여부를 확인하고, 거절하면 "계상만 하는 이관"으로 바꾼다 | `execution/ZLinkAsyncSerialQueue.java` (`enqueueWithPayloadBytes` ingress 경로) | permit 이관 record의 용량 거절 0건 |
+| P2-7 | **(07 §6.5)** 첫 turn의 inline 시작을 공유 실행 자원 게시로 바꾼다 — 지금은 `enqueueAccepted`가 `synchronized` 구간 안에서 `startNext()`를 직접 불러 제출자 스택·queue monitor 아래에서 handler 동기 구간이 실행된다 | `execution/ZLinkAsyncSerialQueue.java` (enqueueAccepted→startNext) | drain이 제출 스택에서 시작되는 자리 0건 |
 
 **P2-3은 분리이지 이동이 아니다.** `ZLinkStreamRuntime.stateLane`은 상태 소유와 작업 실행을
 함께 지고 있다. 상태 소유는 그 자리에 남기고(스펙 06), 작업 실행만 새 조율자로 옮긴다 —

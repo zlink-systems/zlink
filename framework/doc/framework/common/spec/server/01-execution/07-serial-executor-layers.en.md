@@ -390,11 +390,19 @@ Enqueue(work)
 - **The wake-up call happens outside the critical section.** Starting inside it can begin
   executing work while that section is still held.
 
-**Where the loop runs is language discretion.** Post it to a separate scheduler, hang it on the
-event loop's next turn, or throw it at a thread pool — it does not matter. The observable result
-matches because under any of these exactly one party drives that queue at a time and items come
-out in submission order. The criterion for checking this is "Concurrency and order per execution
-mode" in §10.
+**The loop does not start on the submitter's call stack.** A submission enqueues, wakes, and
+returns — running the loop right on the submitter's stack removes any bound on submission
+latency, and runs a handler's synchronous stretch under whatever lock the submission site holds.
+Where the wake-up is posted is decided by the runtime's threading model.
+
+| runtime | where the loop is posted |
+|---|---|
+| multi-threaded (.NET·java·cpp) | the **shared execution resource** of [02 §10](02-handler-turn-and-execution-gate.en.md#10-execution-resources-do-not-scale-with-the-number-of-spots-implementation) — proportional to cores, never a dedicated thread per owner |
+| single-threaded (node) | the **event loop's next turn** (a microtask) — the loop starts after the submitting call's synchronous stretch has finished |
+
+On a single-threaded runtime, §6.4's yielding crosses a boundary at which the event loop can
+service I/O and timers (a macrotask). Yielding only through microtasks starves the event loop
+itself.
 
 **What this pattern is called.** The overall shape — enqueue an invocation and let a scheduler
 take them one at a time — is **Active Object** in the pattern literature (Lavender & Schmidt,

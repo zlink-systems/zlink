@@ -376,10 +376,17 @@ Enqueue(work)
 - **깨우는 호출은 임계 구간 밖에서 한다.** 구간 안에서 시작하면 그 구간을 잡은 채로 작업
   실행이 시작될 수 있다.
 
-**loop를 어디서 돌릴지는 언어별 재량이다.** 별도 scheduler에 게시하든, event loop의 다음
-차례에 걸든, thread pool에 던지든 상관없다. 관찰 결과가 같은 이유는 어느 방식이든 그 queue를
-도는 주체가 한 번에 하나이고 꺼내는 순서가 제출 순서이기 때문이다. 확인 기준은 §10의
-"실행 mode별 동시 실행과 순서"다.
+**loop는 제출 호출의 스택에서 시작하지 않는다.** 제출은 넣고, 깨우고, 반환한다 — 제출자
+스택에서 바로 돌리면 제출 지연에 상한이 없어지고, 제출 지점이 쥔 lock 아래에서 handler의
+동기 구간이 실행된다. 어디에 게시하는지는 runtime의 스레드 모델이 정한다.
+
+| runtime | loop를 게시하는 곳 |
+|---|---|
+| 멀티스레드 (.NET·java·cpp) | [02 §10](02-handler-turn-and-execution-gate.ko.md#10-실행-자원은-spot-수에-비례하지-않는다-구현)의 **공유 실행 자원** — 코어 수에 비례하며, owner마다 전용 thread를 만들지 않는다 |
+| 단일 스레드 (node) | **event loop의 다음 차례**(microtask) — 제출 호출의 동기 구간이 끝난 뒤 시작한다 |
+
+단일 스레드 runtime에서 §6.4의 양보는 **event loop이 I/O·timer를 처리할 수 있는
+경계**(macrotask)로 한다. microtask로만 양보하면 loop가 event loop 자체를 굶긴다.
 
 **이 패턴의 이름.** 호출을 queue에 넣고 scheduler가 하나씩 꺼내 실행하는 전체 모양은 패턴
 문헌의 **Active Object**다(Lavender & Schmidt, PLoP 1995 · *Pattern Languages of Program
