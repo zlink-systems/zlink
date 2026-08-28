@@ -119,7 +119,7 @@ if(ENABLE_NATIVE_TUNE AND NOT MSVC)
 endif()
 
 # Release build optimizations for production deployment
-option(ENABLE_LTO "Enable Link-Time Optimization (LTO/IPO)" ON)
+option(ENABLE_LTO "Enable Link-Time Optimization (LTO/IPO)" OFF)
 
 if(ENABLE_LTO AND NOT CMAKE_BUILD_TYPE MATCHES "Debug")
     message(STATUS "Enabling Link-Time Optimization (LTO/IPO)")
