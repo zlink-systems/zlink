@@ -23,8 +23,8 @@ exact function contract is governed by
 
 - [Routing ID](08-routing-id.en.md)
 - [Message API](09-message-api.en.md)
-- [Monitoring](../spec/core/06-monitoring.en.md)
-- [Performance](10-performance.en.md), [Thread safety](../spec/core/systems/04-thread-safety.en.md),
+- [Monitoring](06-monitoring.en.md)
+- [Performance](10-performance.en.md), [Thread safety](11-thread-safety.en.md),
   [Socket options](12-socket-options.en.md)
 - [Reliability](reliability.en.md), [Shared scenarios](scenarios.en.md), [Glossary](glossary.en.md)
 
