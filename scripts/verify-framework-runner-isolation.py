@@ -268,7 +268,8 @@ SAMPLE_RUNNER_INVENTORIES = (
         "cpp",
         "framework/languages/cpp/samples",
         "",
-        ("Bingo", "TicTacToe"),
+        ("Bingo", "DeliveryDispatch", "GameQuest", "ShoppingMall",
+         "SupportChat", "TicTacToe"),
     ),
     SampleRunnerInventory(
         "dotnet",
@@ -280,13 +281,15 @@ SAMPLE_RUNNER_INVENTORIES = (
         "java",
         "framework/languages/java/samples/java",
         "",
-        ("Bingo", "ShoppingMall", "TicTacToe"),
+        ("Bingo", "DeliveryDispatch", "GameQuest", "ShoppingMall",
+         "SupportChat", "TicTacToe"),
     ),
     SampleRunnerInventory(
         "kotlin",
         "framework/languages/java/samples/kotlin",
         "",
-        ("Bingo", "GameQuest", "ShoppingMall", "SupportChat", "TicTacToe"),
+        ("Bingo", "DeliveryDispatch", "GameQuest", "ShoppingMall",
+         "SupportChat", "TicTacToe"),
     ),
     SampleRunnerInventory(
         "node",

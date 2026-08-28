@@ -30,9 +30,9 @@ cmake --build "$BUILD_DIR" --parallel 2 --target sample_cpp_framework_zoneworld_
 B8_PROVEN=0
 G4_PROVEN=0
 if [[ "$B8_CHILD" == "0" && "$G4_CHILD" == "0" ]]; then
-  "$0" --b8-child
+  bash "$0" --b8-child
   B8_PROVEN=1
-  "$0" --g4-child
+  bash "$0" --g4-child
   G4_PROVEN=1
 fi
 
