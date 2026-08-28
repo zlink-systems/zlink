@@ -358,6 +358,11 @@ def wait_for_command_line(stream, *, deadline):
 
 
 def benchmark_endpoint(transport, prefix):
+    if transport.lower() == "ipc":
+        sock_path = Path("/tmp") / (
+            f"zlink-python-perf-{prefix}-{os.getpid()}-{time.time_ns()}.ipc"
+        )
+        return f"ipc://{sock_path}"
     endpoint = transport_endpoint(transport, prefix)
     bind_port = _env_int("PERF_MULTI_SERVER_BIND_PORT", 0)
     if bind_port <= 0:

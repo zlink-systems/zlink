@@ -58,7 +58,7 @@ NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
 MAKE_BIN="$(command -v gmake || command -v make)"
 PERF_COMPARISON_SCRIPT="${ROOT_DIR}/bindings/cpp/perf/multi/run_comparison.py"
 PATTERNS="DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM"
-TRANSPORTS="tcp,tls,ws,wss"
+TRANSPORTS="tcp,tls,ws,wss,ipc"
 DEFAULT_MULTI_MSG_SIZES="64,256,1024,4096,65536,131072"
 PART_COUNT="${PERF_PART_COUNT:-2}"
 IFS=',' read -r -a PATTERN_LIST <<< "${PATTERNS}"
@@ -230,7 +230,7 @@ Default PATTERN is:
   DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM
 This script invokes the shared comparison runner directly.
 By default, multi-bench uses ready -> active with a 5s duration window.
-By default, multi-bench uses transports: tcp,tls,ws,wss (can be overridden with --transports).
+By default, multi-bench uses transports: tcp,tls,ws,wss,ipc (can be overridden with --transports).
 Policy contract:
   - benchmark binaries execute one pattern/transport/size/run case only
   - this runner owns pattern/transport/size iteration, cooldown, aggregation,

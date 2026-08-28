@@ -739,7 +739,14 @@ fi
 
 pattern_transports() {
   case "$1" in
-	MULTI_STREAM|MULTI_PUBSUB|MULTI_DEALER_DEALER|MULTI_DEALER_ROUTER|MULTI_ROUTER_ROUTER)
+    MULTI_ROUTER_ROUTER)
+      if [[ "${PLATFORM}" == "windows" ]]; then
+        echo "tcp tls ws wss"
+      else
+        echo "tcp tls ws wss ipc"
+      fi
+      ;;
+	MULTI_STREAM|MULTI_PUBSUB|MULTI_DEALER_DEALER|MULTI_DEALER_ROUTER)
       echo "tcp tls ws wss"
       ;;
     *)

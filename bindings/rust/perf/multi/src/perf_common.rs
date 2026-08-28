@@ -575,6 +575,11 @@ pub fn resolve_server_bind_endpoint(pattern: &str, transport: &str) -> Option<St
         "tls" => Some(format!("tls://127.0.0.1:{port}")),
         "ws" => Some(format!("ws://127.0.0.1:{port}")),
         "wss" => Some(format!("wss://127.0.0.1:{port}")),
+        "ipc" => Some(format!(
+            "ipc:///tmp/zlink-rust-perf-server-{}-{}.ipc",
+            std::process::id(),
+            now_ns()
+        )),
         _ => {
             emit_unsupported(pattern, transport, "unsupported_transport");
             None

@@ -28,6 +28,12 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace perf
 {
 namespace multi
@@ -39,7 +45,8 @@ static const char *k_stop_token = "__zlink_perf_stop__";
 
 inline bool is_supported_transport (const std::string &transport)
 {
-    return transport == "tcp" || transport == "tls" || transport == "ws" || transport == "wss";
+    return transport == "tcp" || transport == "tls" || transport == "ws"
+           || transport == "wss" || transport == "ipc";
 }
 
 inline void noop_free (void *, void *)
@@ -623,8 +630,19 @@ make_endpoint (const std::string &transport, const std::string &id, int fixed_po
 {
     if (transport == "inproc")
         return std::string ("inproc://") + id;
-    if (transport == "ipc")
-        return "ipc://*";
+    if (transport == "ipc") {
+#if defined(_WIN32)
+        const int process_id = _getpid ();
+#else
+        const int process_id = getpid ();
+#endif
+        const long long timestamp =
+          std::chrono::duration_cast<std::chrono::nanoseconds> (
+            std::chrono::system_clock::now ().time_since_epoch ())
+            .count ();
+        return "ipc:///tmp/zlink-cpp-perf-server-" + std::to_string (process_id) + "-"
+               + std::to_string (timestamp) + "-" + id + ".ipc";
+    }
 
     const std::string host = "127.0.0.1";
     if (fixed_port > 0) {

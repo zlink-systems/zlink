@@ -96,12 +96,7 @@ final class PerfMultiRouterRouter {
                         Message ownedReply = Message.from(payload);
                         receivedBuffer.close();
                         try (ownedReply) {
-                            if (PerfUtil.measurementPartCount() == 2) {
-                                server.send(rid).message(ownedReply)
-                                    .message(PerfUtil.measurementTail()).submit();
-                            } else {
-                                server.send(rid).message(ownedReply).submit();
-                            }
+                            sendReply(server, rid, ownedReply);
                         }
                     }
                 }
@@ -293,6 +288,27 @@ final class PerfMultiRouterRouter {
                 return false;
             }
             throw ex;
+        }
+    }
+
+    private static void sendReply(RouterSocket server, RoutingId routingId,
+                                  Message payload) {
+        try {
+            if (PerfUtil.measurementPartCount() == 2) {
+                server.send(routingId).message(payload)
+                    .message(PerfUtil.measurementTail()).submit();
+            } else {
+                server.send(routingId).message(payload).submit();
+            }
+        } catch (ZlinkSubmitException ex) {
+            // The runner stops this relay only after the client process exits.
+            // TLS transports can leave decrypted requests queued briefly after
+            // the corresponding client route has closed. Dropping that stale
+            // reply is normal relay teardown; other submit failures remain
+            // fatal so active-run failures are not hidden.
+            if (ex.getResult() != SubmitResult.NOT_CONNECTED) {
+                throw ex;
+            }
         }
     }
 }

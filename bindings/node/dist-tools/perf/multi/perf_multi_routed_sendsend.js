@@ -152,6 +152,7 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
                         }
                         finally {
                             reply.close();
+                            replies[index] = new zlink.Received();
                         }
                     }
                 }
@@ -190,7 +191,7 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
     applyContextPolicy(ctx, 'server', pattern);
     const router = zlink.createRouterSocket(ctx);
     const poller = zlink.createPoller();
-    const received = new zlink.Received();
+    let received = new zlink.Received();
     const pending = [];
     let pollBuffer = null;
     let rl = null;
@@ -248,7 +249,8 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
                             const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
                             if (received.parts.length !== expectedParts
                                 || (expectedParts === 2 && received.parts[1].data().length !== 0)) {
-                                throw new Error('invalid multipart echo request');
+                                const partSizes = received.parts.map((part) => part.data().length).join(',');
+                                throw new Error(`invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`);
                             }
                             if (pending.length === 0
                                 && tryServerReply(router, received.routingId, received.parts)) {
@@ -261,6 +263,7 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
                         }
                         finally {
                             received.close();
+                            received = new zlink.Received();
                         }
                     }
                     await drainPending();

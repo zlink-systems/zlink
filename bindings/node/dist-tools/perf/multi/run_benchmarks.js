@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = require('node:fs');
 const path = require('node:path');
-const { defaultMultiMsgSizes, DEFAULT_MULTI_TRANSPORTS, hasPrimaryMetricsFromResultLines, medianMetrics, parseCommonArgs, primaryMetricsFromResultLines, resolveMultiPatternNames } = require('../common/perf_metrics');
+const { defaultMultiMsgSizes, defaultMultiTransports, hasPrimaryMetricsFromResultLines, medianMetrics, parseCommonArgs, primaryMetricsFromResultLines, resolveMultiPatternNames } = require('../common/perf_metrics');
 const { buildMetaItems, metaLines, buildMultiOptionItems, effectiveOptionLines, multiResultDataLines, multiTableHeaderLine, multiTableSeparatorLine, multiTableRowLine, isEchoPattern, createAutoHwmCollector } = require('../common/perf_c_emitter');
 const { spawnMultiPair } = require('./perf_multi_orchestrator');
 const { MULTI_PATTERN_RUNNERS, POLICY_TRANSPORTS, patternMsgSizes, defaultClientsForPattern } = require('./perf_multi_policy');
@@ -87,7 +87,7 @@ async function main() {
         duration: 5,
         msgSizes: defaultMultiMsgSizes(['MULTI_DEALER_DEALER'], false),
         resultsDir: path.join(process.cwd(), 'perf', 'results'),
-        transports: DEFAULT_MULTI_TRANSPORTS,
+        transports: defaultMultiTransports(),
         clients: defaultClientsForPattern('MULTI_DEALER_DEALER')
     });
     if (options.helpRequested) {

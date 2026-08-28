@@ -370,6 +370,17 @@ async function terminateProcessTree(processRef, timeoutMs = 5000) {
 }
 
 async function stopServer(server, label, timeoutMs = 5000) {
+  if (server.exitCode !== null || server.signalCode !== null) {
+    if (server.exitCode !== 0) {
+      const error = new Error(`${label} failed: ${server.exitCode ?? server.signalCode}`);
+      const stderr = stderrText(server);
+      if (stderr) {
+        error.message = `${error.message}\n${stderr}`;
+      }
+      throw error;
+    }
+    return;
+  }
   writeChildLine(server, 'STOP\n', { end: true });
   try {
     const graceful = await Promise.race([

@@ -15,7 +15,8 @@ internal static partial class PerfRunner
         return transport.Equals("tcp", StringComparison.OrdinalIgnoreCase)
             || transport.Equals("tls", StringComparison.OrdinalIgnoreCase)
             || transport.Equals("ws", StringComparison.OrdinalIgnoreCase)
-            || transport.Equals("wss", StringComparison.OrdinalIgnoreCase);
+            || transport.Equals("wss", StringComparison.OrdinalIgnoreCase)
+            || transport.Equals("ipc", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool ParseEndpointArg(string endpoint,
