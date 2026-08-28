@@ -9835,29 +9835,93 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
 
     using actor_factory_registration_t =
       detail::spot_node_builder_state_t::actor_factory_registration_t;
-    struct actor_materialization_plan_t
+    struct actor_dispatch_plan_t
+    {
+        spot_id_t current_spot_id;
+        std::uint64_t current_generation = 0;
+        bool stale_generation = false;
+        std::optional<actor_ref_t> current_actor_ref;
+        std::shared_ptr<detail::spot_context_state_t> context_state;
+        std::shared_ptr<void> spot_instance;
+        std::string mesh_name;
+        bool dispatch_on_spot_serial = true;
+    };
+    auto project_actor_dispatch_state = [&] (
+                                          const std::optional<spot_id_t> &found_location)
+      -> result_t<actor_dispatch_plan_t> {
+        if (!found_location) {
+            return result_t<actor_dispatch_plan_t>::failure (
+              framework_error_kind_t::not_found, "actor spot route disappeared before dispatch");
+        }
+
+        actor_dispatch_plan_t plan;
+        // Actor movement can replace or erase the route while a user callback
+        // is suspended. Keep the complete derived dispatch projection in this turn.
+        plan.current_spot_id = *found_location;
+        const auto found_generation = _state->actor_generations.find (key);
+        plan.current_generation = found_generation != _state->actor_generations.end ()
+                                    ? found_generation->second
+                                    : actor_ref.object_generation ();
+        if (plan.current_generation != actor_ref.object_generation ()) {
+            plan.stale_generation = true;
+            return result_t<actor_dispatch_plan_t>::success (std::move (plan));
+        }
+
+        const auto current_actor_node_rid = actor_ref.node_rid ().empty ()
+                                              ? detail::effective_spot_node_rid (_state->snapshot)
+                                              : std::string (actor_ref.node_rid ().value ());
+        plan.current_actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid_t::from_string (current_actor_node_rid),
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
+          std::string (actor_ref.actor_id ().value ()), plan.current_generation);
+        const auto context = _state->spot_contexts_by_id.find (std::string (plan.current_spot_id));
+        if (context == _state->spot_contexts_by_id.end () || !context->second._state
+            || !context->second._state->spot_instance) {
+            return result_t<actor_dispatch_plan_t>::failure (
+              framework_error_kind_t::not_found,
+              "actor spot context is not registered. node="
+                + detail::effective_spot_node_rid (_state->snapshot) + ", actor="
+                + std::string (actor_ref.actor_id ().value ()) + ", spot="
+                + plan.current_spot_id);
+        }
+        plan.context_state = context->second._state;
+        plan.spot_instance = plan.context_state->spot_instance;
+        plan.mesh_name = plan.context_state->mesh_name;
+        if (_state->snapshot.entry_spot_name) {
+            const auto entry_id =
+              _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
+            plan.dispatch_on_spot_serial =
+              entry_id == _state->spot_ids_by_name.end () || entry_id->second != plan.current_spot_id;
+        }
+        if (plan.context_state->execution_mode == user_spot_execution_mode_t::per_actor) {
+            plan.dispatch_on_spot_serial = false;
+        }
+        return result_t<actor_dispatch_plan_t>::success (std::move (plan));
+    };
+    struct actor_state_snapshot_t
     {
         actor_factory_registration_t factory;
         std::optional<spot_id_t> found_location;
         std::shared_ptr<void> actor_instance;
         std::string actor_mesh_name;
+        std::optional<result_t<actor_dispatch_plan_t>> dispatch;
     };
-    auto materialized = _state->lane.run ([&] () -> result_t<actor_materialization_plan_t> {
+    auto materialized = _state->lane.run ([&] () -> result_t<actor_state_snapshot_t> {
         const auto actor_type_key =
           std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
         const auto found_factory = _state->actor_factories.find (actor_type_key);
         if (found_factory == _state->actor_factories.end ()) {
-            return result_t<actor_materialization_plan_t>::failure (
+            return result_t<actor_state_snapshot_t>::failure (
               framework_error_kind_t::not_found, "actor factory is not registered");
         }
 
-        actor_materialization_plan_t plan;
+        actor_state_snapshot_t plan;
         plan.factory = found_factory->second;
         const auto found_location = _state->actor_spot_ids.find (key);
         if (found_location != _state->actor_spot_ids.end ()) {
             plan.found_location = found_location->second;
         } else if (_state->destroyed_actor_keys.contains (key)) {
-            return result_t<actor_materialization_plan_t>::failure (
+            return result_t<actor_state_snapshot_t>::failure (
               framework_error_kind_t::not_found, "actor has been destroyed");
         }
 
@@ -9866,6 +9930,9 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
             plan.actor_instance = found_instance->second;
             detail::record_actor_instance_index_unlocked (*_state, actor_ref,
                                                           plan.actor_instance.get ());
+            if (plan.found_location) {
+                plan.dispatch = project_actor_dispatch_state (plan.found_location);
+            }
         } else if (plan.factory.create_context_instance) {
             plan.actor_mesh_name = _state->snapshot.name;
             if (plan.found_location) {
@@ -9877,7 +9944,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                 }
             }
         }
-        return result_t<actor_materialization_plan_t>::success (std::move (plan));
+        return result_t<actor_state_snapshot_t>::success (std::move (plan));
     }).get ();
     if (!materialized) {
         co_return detail::propagate_failure<std::optional<zlink::message_t>> (
@@ -10010,76 +10077,21 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         }
     }
 
-    struct actor_dispatch_plan_t
-    {
-        spot_id_t current_spot_id;
-        std::uint64_t current_generation = 0;
-        bool stale_generation = false;
-        std::optional<actor_ref_t> current_actor_ref;
-        std::shared_ptr<detail::spot_context_state_t> context_state;
-        std::shared_ptr<void> spot_instance;
-        std::string mesh_name;
-        bool dispatch_on_spot_serial = true;
-    };
-    auto dispatch_planned = _state->lane.run ([&] () -> result_t<actor_dispatch_plan_t> {
-        const auto found_location = _state->actor_spot_ids.find (key);
-        if (found_location == _state->actor_spot_ids.end ()) {
-            return result_t<actor_dispatch_plan_t>::failure (
-              framework_error_kind_t::not_found,
-              "actor spot route disappeared before dispatch");
-        }
-
-        actor_dispatch_plan_t plan;
-        // Actor movement can replace or erase the route while a user callback
-        // is suspended. Keep the complete derived dispatch projection in this turn.
-        plan.current_spot_id = found_location->second;
-        const auto found_generation = _state->actor_generations.find (key);
-        plan.current_generation = found_generation != _state->actor_generations.end ()
-                                    ? found_generation->second
-                                    : actor_ref.object_generation ();
-        if (plan.current_generation != actor_ref.object_generation ()) {
-            plan.stale_generation = true;
-            return result_t<actor_dispatch_plan_t>::success (std::move (plan));
-        }
-
-        const auto current_actor_node_rid = actor_ref.node_rid ().empty ()
-                                              ? detail::effective_spot_node_rid (_state->snapshot)
-                                              : std::string (actor_ref.node_rid ().value ());
-        plan.current_actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
-          node_rid_t::from_string (current_actor_node_rid),
-          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-          std::string (actor_ref.actor_id ().value ()), plan.current_generation);
-        const auto context =
-          _state->spot_contexts_by_id.find (std::string (plan.current_spot_id));
-        if (context == _state->spot_contexts_by_id.end () || !context->second._state
-            || !context->second._state->spot_instance) {
-            return result_t<actor_dispatch_plan_t>::failure (
-              framework_error_kind_t::not_found,
-              "actor spot context is not registered. node="
-                + detail::effective_spot_node_rid (_state->snapshot) + ", actor="
-                + std::string (actor_ref.actor_id ().value ()) + ", spot="
-                + plan.current_spot_id);
-        }
-        plan.context_state = context->second._state;
-        plan.spot_instance = plan.context_state->spot_instance;
-        plan.mesh_name = plan.context_state->mesh_name;
-        if (_state->snapshot.entry_spot_name) {
-            const auto entry_id =
-              _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
-            plan.dispatch_on_spot_serial =
-              entry_id == _state->spot_ids_by_name.end ()
-              || entry_id->second != plan.current_spot_id;
-        }
-        if (plan.context_state->execution_mode == user_spot_execution_mode_t::per_actor) {
-            plan.dispatch_on_spot_serial = false;
-        }
-        return result_t<actor_dispatch_plan_t>::success (std::move (plan));
-    }).get ();
+    auto dispatch_planned = std::move (materialization.dispatch);
     if (!dispatch_planned) {
-        co_return detail::propagate_failure<std::optional<zlink::message_t>> (
-          dispatch_planned, "actor dispatch state projection failed");
+        dispatch_planned = _state->lane.run ([&] {
+            const auto found_location = _state->actor_spot_ids.find (key);
+            return project_actor_dispatch_state (
+              found_location == _state->actor_spot_ids.end ()
+                ? std::optional<spot_id_t>{}
+                : std::make_optional (found_location->second));
+        }).get ();
     }
-    auto dispatch_plan = std::move (dispatch_planned.value ());
+    if (!*dispatch_planned) {
+        co_return detail::propagate_failure<std::optional<zlink::message_t>> (
+          *dispatch_planned, "actor dispatch state projection failed");
+    }
+    auto dispatch_plan = std::move (dispatch_planned->value ());
     const auto current_spot_id = dispatch_plan.current_spot_id;
     if (dispatch_plan.stale_generation) {
         // The dispatched ref's generation does not match the actor's current
