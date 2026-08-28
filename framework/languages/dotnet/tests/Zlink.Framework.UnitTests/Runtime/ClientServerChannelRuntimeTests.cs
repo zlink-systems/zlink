@@ -1563,6 +1563,80 @@ public sealed class ClientServerChannelRuntimeTests
         Assert.Equal(17UL, probeId);
     }
 
+    [Fact]
+    public async Task RequestedLivenessProbe_RepliesAndProcessesFollowingUpdate()
+    {
+        var port = ReservePort();
+        var endpoint = $"tcp://127.0.0.1:{port}";
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = context.CreateRouterSocket();
+        router.Bind(endpoint);
+        await using var client = CreateClient(port);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            using var hello = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5));
+            Assert.True(
+                ZLinkClientServerControlProtocol.TryDecodeHello(
+                    hello.Parts,
+                    out _));
+            ReplyAdmission(router, hello, endpoint);
+            await WaitUntilAsync(
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5));
+
+            var clientRid = hello.RoutingId
+                ?? throw new InvalidOperationException(
+                    "missing client routing id");
+            using var probe =
+                ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
+            var reply = await router.Request(clientRid)
+                .Message(probe)
+                .Timeout(TimeSpan.FromSeconds(2))
+                .Async(CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(3));
+            try
+            {
+                Assert.True(
+                    ZLinkClientServerControlProtocol.TryDecodeLivenessAck(
+                        reply,
+                        out var probeId));
+                Assert.Equal(17UL, probeId);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(reply);
+            }
+
+            using var draining =
+                ZLinkClientServerControlProtocol.EncodeUpdate(
+                    new ZLinkClientServerControlProtocol.Admission(
+                        "work",
+                        RoutingId.From("manual-server"),
+                        1,
+                        2,
+                        0,
+                        ZLinkFrameworkRuntimeState.Draining,
+                        "plaintext",
+                        1024 * 1024,
+                        endpoint));
+            await router.Send(clientRid)
+                .Message(draining)
+                .Async(CancellationToken.None);
+            await WaitUntilAsync(
+                () => transport.ReadyCount == 0,
+                TimeSpan.FromSeconds(3));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     private static async Task<Received> PollReceivedAsync(
         Func<Received, bool> receive,
         TimeSpan timeout)

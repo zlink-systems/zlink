@@ -1305,11 +1305,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             ZLinkClientServerControlProtocol.EncodeLivenessAck(
                                 probeId);
                         if (received.RequestSeq is not null)
-                            await ReplyOwnedAsync(
-                                    received,
-                                    ack,
-                                    cancellationToken)
-                                .ConfigureAwait(false);
+                            ReplyOwned(received, ack);
                         else
                             await SendOwnedAsync(ack, cancellationToken)
                                 .ConfigureAwait(false);
@@ -1660,17 +1656,18 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
         }
 
-        private static async ValueTask ReplyOwnedAsync(
+        private static void ReplyOwned(
             Received received,
-            Message message,
-            CancellationToken cancellationToken)
+            Message message)
         {
             try
             {
-                await received.Send()
+                // A request envelope needs the correlated raw reply terminal.
+                // Raw replies are HWM-free, so Submit is canonical and cannot
+                // suspend the sole control receive loop behind send admission.
+                received.Reply()
                     .Message(message)
-                    .Async(cancellationToken)
-                    .ConfigureAwait(false);
+                    .Submit();
             }
             finally
             {
