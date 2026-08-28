@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -27,6 +28,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntConsumer;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
@@ -482,8 +487,40 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             "the target must send FAILED even when pre-stage cleanup throws");
     }
 
+    @Test
+    void actorJoinPrepareRetriesNotConnectedWithinOriginalDeadline()
+        throws Exception {
+        Fixture fixture = fixtureWithTransientPrepareDisconnect();
+
+        fixture.source.stage(
+                fixture.targetRid,
+                fixture.request(new byte[] {1}),
+                Duration.ofSeconds(2))
+            .toCompletableFuture().get(3, java.util.concurrent.TimeUnit.SECONDS);
+
+        assertEquals(2L, fixture.sourceCommands.stream()
+            .filter(command -> command
+                == ServiceWireConstants.COMMAND_RELOCATION_PREPARE)
+            .count());
+        assertEquals(1, fixture.endpoint.staged.get(),
+            "the retried exact PREPARE must retain one target stage");
+        assertTrue(ZLinkCanonicalRelocationStateMachine
+            .isRetryablePrepareRequestFailure(new ZlinkRequestException(
+                RequestResult.NOT_CONNECTED)));
+        assertTrue(ZLinkCanonicalRelocationStateMachine
+            .isRetryablePrepareRequestFailure(new ZlinkSubmitException(
+                SubmitResult.NOT_CONNECTED)));
+        assertFalse(ZLinkCanonicalRelocationStateMachine
+            .isRetryablePrepareRequestFailure(new ZlinkSubmitException(
+                SubmitResult.BACKPRESSURED)));
+    }
+
     private Fixture fixture() {
         return fixture(null);
+    }
+
+    private Fixture fixtureWithTransientPrepareDisconnect() {
+        return fixture(null, new CountingEndpoint(), true);
     }
 
     /**
@@ -501,6 +538,14 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         ZLinkCanonicalRelocationStateMachine.RetentionScheduler
             retentionScheduler,
         CountingEndpoint endpoint) {
+        return fixture(retentionScheduler, endpoint, false);
+    }
+
+    private Fixture fixture(
+        ZLinkCanonicalRelocationStateMachine.RetentionScheduler
+            retentionScheduler,
+        CountingEndpoint endpoint,
+        boolean disconnectFirstPrepare) {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         String actorId = "actor-a";
@@ -556,9 +601,13 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             new AtomicReference<>();
         var sourceCommands = new CopyOnWriteArrayList<Integer>();
         var targetCommands = new CopyOnWriteArrayList<Integer>();
+        ZLinkInternalMeshNode sourceNode = disconnectFirstPrepare
+            ? requestReplyNode(
+                sourceRid, 11, target, sourceCommands)
+            : node(sourceRid, 11, target, sourceCommands);
         if (retentionScheduler == null) {
             source.set(new ZLinkCanonicalRelocationStateMachine(
-                node(sourceRid, 11, target, sourceCommands),
+                sourceNode,
                 "mesh", "source-entry", locations, coordinator,
                 new CountingEndpoint()));
             target.set(new ZLinkCanonicalRelocationStateMachine(
@@ -566,7 +615,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 "mesh", "target-entry", locations, coordinator, endpoint));
         } else {
             source.set(new ZLinkCanonicalRelocationStateMachine(
-                node(sourceRid, 11, target, sourceCommands),
+                sourceNode,
                 "mesh", "source-entry", locations, coordinator,
                 new CountingEndpoint(), retentionScheduler));
             target.set(new ZLinkCanonicalRelocationStateMachine(
@@ -789,6 +838,53 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     if (hook != null) {
                         hook.accept(command);
                     }
+                    yield peer.get().apply(localRid, command, encoded);
+                }
+                default -> throw new UnsupportedOperationException(
+                    method.getName());
+            });
+    }
+
+    private static ZLinkInternalMeshNode requestReplyNode(
+        RoutingId localRid,
+        long generation,
+        AtomicReference<ZLinkCanonicalRelocationStateMachine> peer,
+        List<Integer> commands) {
+        MeshNodeStatus status = new MeshNodeStatus(
+            MeshNodeState.READY, localRid, "mesh", "", generation,
+            1, 0, 1, 1, 0, 0, 0, 0, 0, 0);
+        AtomicInteger prepareRequests = new AtomicInteger();
+        return (ZLinkInternalMeshNode) Proxy.newProxyInstance(
+            ZLinkInternalMeshNode.class.getClassLoader(),
+            new Class<?>[] {
+                ZLinkInternalMeshNode.class,
+                ZLinkInternalMeshNode
+                    .CanonicalRelocationPrepareRequestReplySupport.class
+            },
+            (proxy, method, args) -> switch (method.getName()) {
+                case "status" -> status;
+                case "requestCanonicalRelocationPrepare" -> {
+                    byte[] encoded = (byte[]) args[1];
+                    commands.add(Byte.toUnsignedInt(encoded[3]));
+                    CompletionStage<byte[]> reply = peer.get().apply(
+                        localRid, 1L,
+                        ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                        encoded);
+                    if (prepareRequests.incrementAndGet() == 1) {
+                        // The request was admitted and the target owns its
+                        // stage, but the selected pair disappears before the
+                        // callback can expose READY to the source.
+                        yield reply.thenCompose(ignored ->
+                            CompletableFuture.failedFuture(
+                                new ZlinkRequestException(
+                                    RequestResult.NOT_CONNECTED)));
+                    }
+                    yield reply;
+                }
+                case "sendCanonicalRelocationControl" -> {
+                    byte[] encoded = (byte[]) args[1];
+                    int command = Byte.toUnsignedInt(encoded[3]);
+                    commands.add(command);
                     yield peer.get().apply(localRid, command, encoded);
                 }
                 default -> throw new UnsupportedOperationException(

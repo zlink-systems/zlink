@@ -19,6 +19,10 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
@@ -1560,7 +1564,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         encoded));
                 reply.whenComplete((ignored, failure) -> {
                     if (failure != null
-                        && !(unwrap(failure) instanceof TimeoutException)) {
+                        && !isRetryablePrepareRequestFailure(failure)) {
                         attempt.ready().completeExceptionally(unwrap(failure));
                     }
                 });
@@ -1591,6 +1595,19 @@ final class ZLinkCanonicalRelocationStateMachine
                     return CompletableFuture.<Void>failedFuture(unwrap(failure));
                 })
                 .thenCompose(stage -> stage));
+    }
+
+    static boolean isRetryablePrepareRequestFailure(Throwable failure) {
+        Throwable cause = unwrap(failure);
+        // A disconnected exact PREPARE is either known-not-admitted
+        // (submit terminal) or acceptance-unknown (request terminal). The
+        // target owns duplicate suppression for this relocation identity, so
+        // both cases stay on the existing bounded PREPARE resend path.
+        return cause instanceof TimeoutException
+            || cause instanceof ZlinkRequestException requestFailure
+                && requestFailure.getResult() == RequestResult.NOT_CONNECTED
+            || cause instanceof ZlinkSubmitException submitFailure
+                && submitFailure.getResult() == SubmitResult.NOT_CONNECTED;
     }
 
     /**
