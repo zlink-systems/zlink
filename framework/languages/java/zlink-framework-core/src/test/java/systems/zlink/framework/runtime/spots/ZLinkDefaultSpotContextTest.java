@@ -8,10 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
 import java.lang.reflect.Proxy;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,6 +25,7 @@ import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -541,7 +540,7 @@ final class ZLinkDefaultSpotContextTest {
             CompletionStage<Void> active = context.enqueueActorDispatch(
                 "actor-a",
                 () -> {
-                    handle.set(host.actorQueue("actor-a")
+                    handle.set(context.actorRelocationLane("actor-a")
                         .captureActiveTurnSealHandle()
                         .orElseThrow());
                     activeStarted.complete(null);
@@ -555,7 +554,7 @@ final class ZLinkDefaultSpotContextTest {
                 () -> CompletableFuture.completedFuture(null),
                 () -> { });
 
-            ZLinkSerialExecutionQueue queue = host.actorQueue("actor-a");
+            ZLinkSerialExecutionQueue queue = context.actorRelocationLane("actor-a");
             ZLinkSerialExecutionQueue.RelocationSeal seal = queue
                 .trySealRelocation(handle.get())
                 .orElseThrow();
@@ -612,8 +611,6 @@ final class ZLinkDefaultSpotContextTest {
 
     private static final class TestHost extends ZLinkSpotContextHost {
         private final Executor executor;
-        private final Map<String, ZLinkSerialExecutionQueue> actorQueues =
-            new ConcurrentHashMap<>();
         private final AtomicInteger actorDispatchSubmissions =
             new AtomicInteger();
         private final ZLinkBackendSpot backendSpot = backendSpot();
@@ -788,9 +785,17 @@ final class ZLinkDefaultSpotContextTest {
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation) {
+            throw new AssertionError("actor dispatch must use its coordinator target");
+        }
+
+        @Override
+        CompletionStage<Void> enqueueActorDispatch(
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation) {
             actorDispatchSubmissions.incrementAndGet();
-            return actorQueue(actorId)
-                .enqueue(operation);
+            return target.executeActor(actorId, payloadBytes, operation);
         }
 
         @Override
@@ -800,19 +805,24 @@ final class ZLinkDefaultSpotContextTest {
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+            throw new AssertionError("actor dispatch must use its coordinator target");
+        }
+
+        @Override
+        CompletionStage<Void> enqueueActorDispatch(
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease) {
             actorDispatchSubmissions.incrementAndGet();
-            return actorQueue(actorId).enqueueRelocatableLazyRecord(
+            return target.executeActorLazyRecord(
+                actorId,
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
                 operation,
                 relocationRelease);
-        }
-
-        private ZLinkSerialExecutionQueue actorQueue(String actorId) {
-            return actorQueues.computeIfAbsent(
-                actorId,
-                ignored -> new ZLinkSerialExecutionQueue(
-                    executor, ZLinkExecutionLanePolicy.spot()));
         }
 
         private static ZLinkBackendSpot backendSpot() {
