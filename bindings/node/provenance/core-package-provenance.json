@@ -5,12 +5,16 @@
   "abiMajor": 0,
   "runtime": {
     "path": "lib/libzlink.so.0.14.0",
-    "sha256": "f777f8bd80b451e5e791834d2581a2cb3318588ec2cd022096c9049885d5ae3b",
+    "sha256": "3e9884da54534850e89b9fb74b6a086693ce46e0fe4d58f38ac0dc68db58648d",
     "soname": "libzlink.so.0"
   },
   "source": {
-    "revision": "0c7ad502b3dbf81f94e793b3f6e12e129df2420c",
-    "dirty": true
+    "revision": "140947a52f43064a5e203717555bf91e6ad30312",
+    "dirty": false
+  },
+  "release": {
+    "tag": "core/v0.14.0",
+    "checksumsSha256": "b66ba603f01992e51ec67da9eac3308f730988f3194c0480765a6737ba3ad69c"
   },
   "files": [
     {
@@ -47,35 +51,23 @@
     },
     {
       "path": "lib/cmake/zlink/zlinkConfig.cmake",
-      "sha256": "0b613155a60cb4b380adfd638d34b18836b758bbaa56cd4ca7300f537f719e37"
+      "sha256": "c311ce64cb761ac072c45883117028b835225fde0c0da8abf3d61b48c07ffb6a"
     },
     {
       "path": "lib/cmake/zlink/zlinkConfigVersion.cmake",
-      "sha256": "97239aa018cf62482f943664c0856f5623450d3a71f3b3ff6d36137d9bca8af0"
-    },
-    {
-      "path": "lib/cmake/zlink/zlinkTargets-release.cmake",
-      "sha256": "0cbbe26b3cdfb2e6a4f850eceab1af60084975ab907805874eaf1793ac56a01f"
-    },
-    {
-      "path": "lib/cmake/zlink/zlinkTargets.cmake",
-      "sha256": "c5b966fb028dc2bceef05a54a4783dd9a64d54502e1a80b73c26cbb897b9e0ef"
-    },
-    {
-      "path": "lib/libzlink.a",
-      "sha256": "2047a661803db807c2faba7da96c430f2d963d88a9cc6652f84f8a747f58e84f"
+      "sha256": "5dc6d6824b84a144ea940fb90404708ee971a80ff8e77de476bf5e982a7042f8"
     },
     {
       "path": "lib/libzlink.so.0.14.0",
-      "sha256": "f777f8bd80b451e5e791834d2581a2cb3318588ec2cd022096c9049885d5ae3b"
+      "sha256": "3e9884da54534850e89b9fb74b6a086693ce46e0fe4d58f38ac0dc68db58648d"
     },
     {
-      "path": "lib/pkgconfig/libzlink.pc",
-      "sha256": "ba18ecc529f41fb0bccfec63c227b115456a4f267210e22577c99478e4468a42"
+      "path": "share/zlink/release-checksums.txt",
+      "sha256": "b66ba603f01992e51ec67da9eac3308f730988f3194c0480765a6737ba3ad69c"
     },
     {
-      "path": "share/zlink/LICENSE.txt",
-      "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+      "path": "share/zlink/release-provenance.txt",
+      "sha256": "20650b551500753db894782e5fb1851f4e994d7f9390bcffd3f82b7386dc4da6"
     }
   ]
 }
