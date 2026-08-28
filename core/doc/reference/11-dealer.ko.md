@@ -45,6 +45,36 @@ candidate의 몫을 한 번에 몰아주지 않고 설정된 비율대로 연속
 
 ---
 
+## `zlink_dealer_send_transport_pair_part`
+
+이전 selection에서 얻은 exact target pipe로만 raw part 하나를 제출한다 — 다른 연결된
+peer로 재선택하지 않는다.
+
+```c
+zlink_routed_submit_target_t target;
+zlink_select_routed_submit_target(dealer, NULL, &target);
+zlink_dealer_send_transport_pair_part(dealer, &target, &part, ZLINK_SEND_FLAGS_NONE,
+                                       ZLINK_PART_FINAL);
+```
+
+**Parameters.** `target_`는 같은 DEALER에서 `zlink_select_routed_submit_target`(ROUTER
+category, DEALER와 공유 — `router_rid_or_null_`에 `NULL`을 넘기면 하나의 weighted
+selection을 commit함)으로 얻은 `zlink_routed_submit_target_t`다. Core는 routing ID,
+transport pair ID, generation이 여전히 같은 연결된 application pipe를 식별하는지 한 번
+검증하고 그 pipe에만 제출한다.
+
+**Return과 errno.** `zlink_submit_result_t`를 반환한다 — 성공하면 `ZLINK_SUBMIT_OK`.
+Target pipe가 HWM이면 `ZLINK_SUBMIT_BACKPRESSURED`, detach되거나 generation이 stale이면
+`ZLINK_SUBMIT_NOT_CONNECTED`다 — 둘 다 다른 pipe로 재선택하지 않는다. 첫 part가
+성공하면 exact-pipe fence가 `ZLINK_PART_FINAL`까지 유지된다 — 중간이나 마지막 part가
+실패하면 스테이징된 record 전체가 rollback되어 peer에게는 부분 record가 보이지 않는다.
+
+**선택 기준.** 애플리케이션이 이미 하나의 exact weighted-selection 결과를
+snapshot해뒀고(예를 들어 관련된 연속 send를 같은 peer에 유지하려고) 나중 호출이 다른
+연결된 peer로 재선택하면 안 될 때 `zlink_send_part`(PAIR category) 대신 이걸 쓴다.
+
+---
+
 ## `zlink_dealer_recv_part`
 
 DEALER socket에서 완결된 record의 part 하나를 종류와 함께 수신한다.
@@ -104,6 +134,32 @@ callback으로 이전되며 callback이 정확히 한 번 해제한다. `zlink_r
 한다 — 어느 시점에서든 실패하면 그 record에 스테이징된 모든 part가 원자적으로 폐기되고(peer
 에게는 아무것도 보이지 않음), 실패한 호출의 `part_`은 여전히 소비되며, request sequence나
 handler 호출은 생기지 않는다 — 보관해 둔 복사본으로 record 전체를 처음 part부터 재시도한다.
+
+---
+
+## `zlink_dealer_request_transport_pair_part`
+
+이전 selection에서 얻은 exact target pipe로만 비동기 request를 제출한다.
+
+```c
+zlink_dealer_request_transport_pair_part(dealer, &target, &part, ZLINK_SEND_FLAGS_NONE,
+                                          ZLINK_PART_FINAL, /*timeout_ms=*/3000, on_reply,
+                                          userdata);
+```
+
+**Parameters.** `target_`는 `zlink_dealer_send_transport_pair_part`(이 category)와 같은
+방식으로 얻는다 — 나머지 parameter는 `zlink_dealer_request_part`의 중간·마지막 part
+관례를 따른다.
+
+**Return과 errno.** `zlink_submit_result_t`를 반환하며, `zlink_dealer_send_transport_pair_part`
+와 같은 target 검증·재선택 없음·multipart fence·rollback 규칙을 따른다. Core는 request
+envelope가 wire에 보이기 전에 pending correlation과 timeout lifecycle을 등록한다 —
+마지막 submit이 실패하면 pending 항목과 completion reservation을 제거하고 `handler_`를
+호출하지 않는다.
+
+**선택 기준.** `zlink_select_routed_submit_target`(ROUTER category)으로 이미 고른
+정확한 pipe로 추적되는 request를 보내야 할 때, Core가 이 호출에 새 weighted selection을
+commit하게 두는 대신 `zlink_dealer_request_part` 대신 이걸 쓴다.
 
 ---
 

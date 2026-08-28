@@ -4,9 +4,9 @@
 # 12. ROUTER
 
 하나의 socket에서 여러 peer pipe를 관리하고 routing ID로 send target을 고르는 비동기 raw
-socket이다. 일반 directed 메시지, request/reply record, 별도의 completion-control
-채널을 처리한다. 정확한 signature는 [ROUTER 스펙](../spec/core/socket/07-router.ko.md)이
-소유한다.
+socket이다. 일반 directed 메시지와 request/reply record를 routing ID로, 또는 정확히 하나의
+transport pair에 고정해 처리한다. 정확한 signature는
+[ROUTER 스펙](../spec/core/socket/07-router.ko.md)이 소유한다.
 
 ---
 
@@ -87,6 +87,91 @@ submit은 절대 호출하지 않는다. Callback의 `parts_` 소유권은 callb
 
 ---
 
+## `zlink_router_request_transport_pair_part`
+
+정확히 하나의 transport pair로만 특정 peer에게 비동기 request를 제출한다.
+
+```c
+zlink_router_request_transport_pair_part(router, &peer_rid, target.transport_pair_id,
+                                          target.transport_pair_generation, &part,
+                                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+                                          /*timeout_ms=*/3000, on_reply, userdata);
+```
+
+**Parameters.** `peer_rid_`, `transport_pair_id_`, `transport_pair_generation_`은 위
+`zlink_send_part_transport_pair`(이 category)와 같은 exact pipe를 식별한다 — 나머지
+parameter는 `zlink_router_request_part`의 중간·마지막 part 관례를 따른다.
+
+**Return과 errno.** `zlink_submit_result_t`를 반환하며, `zlink_send_part_transport_pair`와
+같은 exact-target 검증·재라우팅 없음·rollback 규칙을 따른다. Core는 request envelope가
+wire에 보이기 전에 pending correlation을 등록한다 — 마지막 submit이 실패하면 그 pending
+항목과 completion reservation을 제거하고 `handler_`를 호출하지 않는다.
+
+**선택 기준.** `zlink_select_routed_submit_target`(이 category)으로 이미 고른 정확한
+물리 연결로 추적되는 request를 보내야 할 때, Core가 그 routing ID의 현재 route를
+재선택하게 두는 대신 `zlink_router_request_part` 대신 이걸 쓴다.
+
+---
+
+## `zlink_select_routed_submit_target`
+
+Pipe credit을 점유하지 않고 나중의 exact-target submit을 위해 정확한 routed submit
+target 하나를 snapshot한다.
+
+```c
+zlink_routed_submit_target_t target;
+zlink_select_routed_submit_target(router, &peer_rid, &target);
+```
+
+**Parameters.** `router_rid_or_null_`은 ROUTER에서 필수이며 non-`NULL`이다 — snapshot할
+정확한 admitted route를 가진 peer를 식별한다(DEALER에서는 같은 함수가 `NULL`을 요구하고
+대신 하나의 weighted selection을 commit한다 — DEALER category 참고). `target_out_`은
+`zlink_routed_submit_target_t`(peer routing ID, transport pair ID, transport pair
+generation)를 받는다 — DONTWAIT exact submit 전에 binding이 소유한 pending state에
+보관한다.
+
+**Return과 errno.** `zlink_submit_result_t`를 반환한다 — 성공하면 `ZLINK_SUBMIT_OK`.
+이 selection은 value snapshot이다 — pipe나 그 credit을 예약하지 않으므로, 그 사이 pipe가
+detach되거나 generation이 바뀌면 `target_out_`을 쓴 나중의 exact submit이 여전히 실패할
+수 있다.
+
+**선택 기준.** `zlink_send_part_transport_pair`, `zlink_router_request_transport_pair_part`
+(둘 다 이 category), 또는 DEALER의 exact-target send(DEALER category)를 submit하기 전에
+binding이 필요로 하는 정확한 pipe identity를 얻을 때 쓴다. 애플리케이션이 이미 관측한
+정확한 물리 연결에 multipart 시도를 고정해야 하고, Core가 그 routing ID의 현재 route를
+재선택하게 두면 안 될 때 `zlink_send_part_rid`/`zlink_router_request_part` 대신 이걸
+쓴다.
+
+---
+
+## `zlink_send_part_transport_pair`
+
+정확히 하나의 transport pair로만 ROUTER raw part 하나를 보낸다 — 같은 routing ID를 쓰는
+다른 연결로 재라우팅하지 않는다.
+
+```c
+zlink_send_part_transport_pair(router, &target_rid, target.transport_pair_id,
+                                target.transport_pair_generation, &part,
+                                ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+```
+
+**Parameters.** `target_rid_`, `transport_pair_id_`, `transport_pair_generation_`은 같은
+admitted peer를 식별해야 한다 — 보통 `zlink_select_routed_submit_target`이나 monitor
+event의 pair identity에서 얻는다. `flags_`/`part_flag_`는 `zlink_send_part_rid`와 같은
+관례를 따른다.
+
+**Return과 errno.** `zlink_submit_result_t`를 반환한다 — 성공하면 `ZLINK_SUBMIT_OK`.
+Exact pipe가 HWM이면 `ZLINK_SUBMIT_BACKPRESSURED`, detach되거나 generation이 stale이면
+`ZLINK_SUBMIT_NOT_CONNECTED`다 — 둘 다 같은 routing ID의 다른 pipe로 재선택하지
+않는다. 첫 part가 받아들여지면 exact-pipe fence가 `ZLINK_PART_FINAL`까지 유지되며,
+실패하면 스테이징된 record 전체가 rollback된다.
+
+**선택 기준.** 애플리케이션이 이미 선택한 정확한 물리 연결에 multipart send를 고정해야 할
+때 `zlink_send_part_rid` 대신 이걸 쓴다 — 예를 들어 같은 routing ID로 peer가 재연결한
+것을 관측하고 새 연결로 조용히 재라우팅되는 것을 피해야 할 때다.
+
+---
+
 ## `zlink_router_recv_part`
 
 완결된 raw record의 part 하나 — 일반 directed 메시지나 수신된 request — 를 수신한다.
@@ -117,6 +202,35 @@ raw multipart 메시지다. 0이 아니면 수신된 request이며 그 sequence�
 
 ---
 
+## `zlink_router_recv_part_v2`
+
+`zlink_router_recv_part`와 같은 계약으로 raw record part 하나를 수신하되, source transport
+pair identity를 추가로 반환한다.
+
+```c
+const zlink_routing_id_t *source_rid;
+uint64_t request_seq, pair_id, pair_generation;
+zlink_msg_t part;
+zlink_msg_init(&part);
+zlink_part_flag_t has_more;
+zlink_router_recv_part_v2(router, &source_rid, &request_seq, &pair_id, &pair_generation,
+                           &part, &has_more, ZLINK_RECV_FLAGS_NONE);
+```
+
+**Parameters.** `zlink_router_recv_part`와 같은 필수 출력 pointer에 더해
+`transport_pair_id_out_`, `transport_pair_generation_out_`가 있다.
+
+**Return과 errno.** `zlink_router_recv_part`와 같다. 한 multipart record의 모든 part는
+같은 routing ID, request sequence, pair ID, pair generation을 반환한다.
+
+**선택 기준.** Caller가 record가 도착한 정확한 transport pair를 알아야 할 때 —
+예를 들어 routing ID를 다시 해석해 다른 현재 pipe로 갈 위험 없이
+`zlink_send_part_transport_pair`/`zlink_router_request_transport_pair_part`(이
+category)로 reply하거나 후속 작업을 해야 할 때 — `zlink_router_recv_part` 대신 이걸
+쓴다.
+
+---
+
 ## `zlink_router_reply_part`
 
 이 ROUTER가 받은 request record에 대한 reply part를 보낸다.
@@ -139,37 +253,16 @@ request-lifecycle 종료 중 먼저 오는 것까지 유효하므로 보관해 �
 
 ---
 
-## `zlink_router_completion_control_handler` / `zlink_router_completion_control_part`
+## 관련 범용 함수
 
-Completion connection에서 유계 control record를 처리할 handler를 등록하고 실제로
-보낸다 — 일반 directed 메시지·request는 Application connection에 남아 있는 것과
-분리되어 있다.
-
-```c
-zlink_router_completion_control_handler(router, on_control, userdata);
-// ...
-zlink_router_completion_control_part(router, &peer_rid, &control_part, ZLINK_PART_FINAL);
-```
-
-**Parameters.** `handler_`는 `zlink_completion_control_handler_fn`이다 — socket마다
-handler가 하나이며, 다시 등록하면 교체된다. Core는 record 내용을 해석하지 않는다 — payload에
-대한 command 종류, allowlist, application 의미를 정의하지 않는다.
-
-**Return과 errno.** Handler 등록은 `zlink_handler_result_t`를 반환한다 — `NULL`
-handler면 `ZLINK_HANDLER_INVALID_ARGUMENT`, non-ROUTER socket이면
-`ZLINK_HANDLER_NOT_SUPPORTED`. 전송은 `zlink_submit_result_t`를 반환하며 다른 send
-family(DEALER category)와 같은 part-sequencing·매 결과마다 소비 규칙을 따른다 —
-Completion connection은 유한한 byte HWM을 가지므로 `ZLINK_SUBMIT_BACKPRESSURED` 결과는
-보관해 둔 복사본으로 send-ready 뒤 record 전체를 첫 part부터 재시도하라는 뜻이다. 등록된
-handler가 없는 record는 버려진다.
-
-**선택 기준.** 같은 연결의 application 메시지·request 트래픽과 경합하면 안 되는
-인프라 수준 신호에만 쓴다 — 새 socket이나 connection을 만들지 않는다. Handler는
-completion owner가 connection을 처리할 때 실행되므로, application receive 호출 없이도
-`ZLINK_POLLCOMPLETION` poller(Polling and pollers category)가 control을 받을 수
-있다. Callback 안의 `source_rid_`는 callback이 반환될 때까지만 유효하다. Callback이
-실행 중일 때 socket을 닫으면 `ZLINK_CLOSE_BUSY`/`EBUSY`로 실패한다 — callback이
-반환된 뒤 재시도한다.
+`zlink_disconnect_transport_pair`(`socket/api.h`에서 `zlink_connect`/`zlink_disconnect`와
+나란히 선언되어 있고, [socket README](../spec/core/socket/README.ko.md)가 규정)는 monitor
+event의 pair id·generation으로 식별한 정확한 transport pair를 연결 해제한다 — 같은 peer
+routing id를 쓰는 다른 연결에는 영향을 주지 않는다. ROUTER뿐 아니라 transport pair를
+노출하는 모든 socket 타입에 적용되므로, 서술상 자리는 이 파일이 아니라 Socket lifecycle
+category(`03-socket-lifecycle.ko.md`, `zlink_disconnect`/`zlink_disconnect_rid`와 나란히)다
+— 위 `zlink_send_part_transport_pair`/`zlink_router_request_transport_pair_part`의 자연스러운
+짝이라서 여기서만 언급해 둔다.
 
 ---
 

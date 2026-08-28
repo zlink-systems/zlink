@@ -4,8 +4,8 @@
 # 12. ROUTER
 
 An asynchronous raw socket that manages multiple peer pipes on one socket and selects a send
-target by routing ID. Handles ordinary directed messages, request/reply records, and a separate
-completion-control channel. The exact signatures are owned by the
+target by routing ID. Handles ordinary directed messages and request/reply records, either by
+routing ID or pinned to one exact transport pair. The exact signatures are owned by the
 [ROUTER specification](../spec/core/socket/07-router.en.md).
 
 ---
@@ -87,6 +87,90 @@ tracked reply from a specific peer.
 
 ---
 
+## `zlink_router_request_transport_pair_part`
+
+Submits an asynchronous request to a peer through one specified transport pair only.
+
+```c
+zlink_router_request_transport_pair_part(router, &peer_rid, target.transport_pair_id,
+                                          target.transport_pair_generation, &part,
+                                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+                                          /*timeout_ms=*/3000, on_reply, userdata);
+```
+
+**Parameters.** `peer_rid_`, `transport_pair_id_`, and `transport_pair_generation_` identify the
+same exact pipe as `zlink_send_part_transport_pair` (this category); the remaining parameters
+follow `zlink_router_request_part`'s intermediate/final-part convention.
+
+**Return and errno.** Returns `zlink_submit_result_t`, with the same exact-target validation, no
+rerouting, and rollback rules as `zlink_send_part_transport_pair`. Core registers the pending
+correlation before the request envelope becomes visible on the wire; a failed final submit removes
+that pending entry and the completion reservation without invoking `handler_`.
+
+**When to use.** Use this instead of `zlink_router_request_part` when the tracked request must go
+through the exact physical connection already selected via `zlink_select_routed_submit_target`
+(this category), rather than letting Core reselect a current route for that routing ID.
+
+---
+
+## `zlink_select_routed_submit_target`
+
+Snapshots one exact routed submit target without claiming pipe credit, for later exact-target
+submits.
+
+```c
+zlink_routed_submit_target_t target;
+zlink_select_routed_submit_target(router, &peer_rid, &target);
+```
+
+**Parameters.** `router_rid_or_null_` is required and non-`NULL` on ROUTER, identifying the peer
+whose exact admitted route is snapshotted. (On DEALER, the same function requires `NULL` and
+commits one weighted selection instead — see DEALER category.) `target_out_` receives the
+`zlink_routed_submit_target_t` (peer routing ID, transport pair ID, and transport pair generation)
+to hold in binding-owned pending state before a DONTWAIT exact submit.
+
+**Return and errno.** Returns `zlink_submit_result_t` — `ZLINK_SUBMIT_OK` on success. The
+selection is a value snapshot: it does not reserve the pipe or its credit, so a later exact submit
+using `target_out_` can still fail if the pipe detaches or its generation changes meanwhile.
+
+**When to use.** Use this to obtain the exact pipe identity a binding needs before submitting
+through `zlink_send_part_transport_pair`, `zlink_router_request_transport_pair_part`
+(both this category), or DEALER's exact-target sends (DEALER category). Prefer this over
+`zlink_send_part_rid`/`zlink_router_request_part` when the application must pin a multipart
+attempt to the exact physical connection it already observed, rather than letting Core reselect a
+current route for that routing ID.
+
+---
+
+## `zlink_send_part_transport_pair`
+
+Submits one ROUTER raw part only through the specified transport pair — no rerouting to another
+connection with the same routing ID.
+
+```c
+zlink_send_part_transport_pair(router, &target_rid, target.transport_pair_id,
+                                target.transport_pair_generation, &part,
+                                ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+```
+
+**Parameters.** `target_rid_`, `transport_pair_id_`, and `transport_pair_generation_` must
+describe the same admitted peer — typically obtained from `zlink_select_routed_submit_target` or
+from a monitor event's pair identity. `flags_`/`part_flag_` follow the same conventions as
+`zlink_send_part_rid`.
+
+**Return and errno.** Returns `zlink_submit_result_t` — `ZLINK_SUBMIT_OK` on success.
+`ZLINK_SUBMIT_BACKPRESSURED` when the exact pipe is at HWM; `ZLINK_SUBMIT_NOT_CONNECTED` after
+detach or for a stale generation. Neither case reselects another pipe for the same routing ID. Once
+the first part is accepted, the exact-pipe fence holds through `ZLINK_PART_FINAL`, and any failure
+rolls back the entire staged record.
+
+**When to use.** Use this instead of `zlink_send_part_rid` when the application must pin a
+multipart send to the exact physical connection it already selected — for example, after observing
+a peer reconnect under the same routing ID and needing to avoid silently rerouting to the new
+connection.
+
+---
+
 ## `zlink_router_recv_part`
 
 Receives one part of a complete raw record — either an ordinary directed message or an incoming
@@ -118,6 +202,34 @@ ZLINK_PART_MORE`, the next call continues the same record.
 
 ---
 
+## `zlink_router_recv_part_v2`
+
+Receives one raw record part with the same contract as `zlink_router_recv_part`, additionally
+returning the source transport pair identity.
+
+```c
+const zlink_routing_id_t *source_rid;
+uint64_t request_seq, pair_id, pair_generation;
+zlink_msg_t part;
+zlink_msg_init(&part);
+zlink_part_flag_t has_more;
+zlink_router_recv_part_v2(router, &source_rid, &request_seq, &pair_id, &pair_generation,
+                           &part, &has_more, ZLINK_RECV_FLAGS_NONE);
+```
+
+**Parameters.** Same required output pointers as `zlink_router_recv_part`, plus
+`transport_pair_id_out_` and `transport_pair_generation_out_`.
+
+**Return and errno.** Same as `zlink_router_recv_part`. Every part of one multipart record returns
+the same routing ID, request sequence, pair ID, and pair generation.
+
+**When to use.** Use this instead of `zlink_router_recv_part` when the caller needs the exact
+transport pair the record arrived on — for example, to reply or follow up through
+`zlink_send_part_transport_pair`/`zlink_router_request_transport_pair_part` (this category)
+without re-resolving the routing ID to a possibly different current pipe.
+
+---
+
 ## `zlink_router_reply_part`
 
 Sends a reply part for a request record this ROUTER received.
@@ -139,36 +251,16 @@ sequence.
 
 ---
 
-## `zlink_router_completion_control_handler` / `zlink_router_completion_control_part`
+## Related general-purpose function
 
-Registers a handler for, and sends, a bounded control record on the Completion connection —
-separate from ordinary directed messages and requests, which stay on the Application connection.
-
-```c
-zlink_router_completion_control_handler(router, on_control, userdata);
-// ...
-zlink_router_completion_control_part(router, &peer_rid, &control_part, ZLINK_PART_FINAL);
-```
-
-**Parameters.** `handler_` is a `zlink_completion_control_handler_fn`; each socket has one
-handler, and registering again replaces it. Core does not interpret the record's contents — it
-defines no command kind, allowlist, or application meaning for the payload.
-
-**Return and errno.** `handler` registration returns `zlink_handler_result_t` —
-`ZLINK_HANDLER_INVALID_ARGUMENT` for a `NULL` handler, `ZLINK_HANDLER_NOT_SUPPORTED` for a
-non-ROUTER socket. Sending returns `zlink_submit_result_t`, following the same part-sequencing
-and consume-on-every-result rules as other send families (DEALER category); the Completion
-connection has a finite byte HWM, so a `ZLINK_SUBMIT_BACKPRESSURED` result means retry the whole
-record from its first part, using retained copies, after send-ready. A record with no registered
-handler is discarded.
-
-**When to use.** Use this only for infrastructure-level signaling that must not compete with
-application message/request traffic on the same connection — it creates no new socket or
-connection. The handler runs when the completion owner processes the connection, so a
-`ZLINK_POLLCOMPLETION` poller (Polling and pollers category) can receive controls without an
-application receive call. `source_rid_` in the callback is valid only until the callback returns.
-Closing the socket while the callback is running fails with `ZLINK_CLOSE_BUSY`/`EBUSY` — retry
-after the callback returns.
+`zlink_disconnect_transport_pair` (declared alongside `zlink_connect`/`zlink_disconnect` in
+`socket/api.h`, specified in the [socket README](../spec/core/socket/README.en.md)) disconnects
+the exact transport pair identified by a monitor event's pair id and generation, without affecting
+another connection that shares the same peer routing id. It applies to any socket type that
+exposes transport pairs, not just ROUTER, so its narrative home is Socket lifecycle category
+(`03-socket-lifecycle.en.md`, alongside `zlink_disconnect`/`zlink_disconnect_rid`) rather than this
+file — noted here only because it is the natural counterpart to
+`zlink_send_part_transport_pair`/`zlink_router_request_transport_pair_part` above.
 
 ---
 
