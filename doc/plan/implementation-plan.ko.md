@@ -95,16 +95,19 @@ bindings 0.14.0 전환 완료(릴리스·로컬 패키지·참조 모두). 아�
 
 | 항목 | 상태 | 비고 |
 |---|---|---|
-| P0-1 cpp 조회 묶기 | 대기 | |
-| P0-2 java wrapper lock | 대기 | |
-| P0-3 java BigInteger | 대기 | |
+| P0-1 cpp 조회 묶기 | **부분 완료** `4681eb7931` | warm 경로 materialization·dispatch projection 통합. **fence 이중 조회(:9618·:9708)는 유지 판정** — backlog 선택 직전의 의도된 재판정(finish_move_replay liveness, 02 §3). 병합 시 host_lifecycle 실패 실증 |
+| P0-2 java wrapper lock | **보류** | 에이전트 [의심] 승인 — wrapper lock 39곳(31 아님), 상위 배타성 증거 없음(receive/transport lock 병행 경로). 별도 sol 조사로 이월 |
+| P0-3 java BigInteger | **완료** `33410f2172` | long 포화 검사로 대체, §11 표현 범위 초과 거절 계약 보존 + 회귀 test |
 | P0-4 두 축 회계 조사 | **완료** | §2.1 — 판정은 04 §8로 스펙 확정, 잔여는 P1-6·P2-6·P3-6·P4-8 |
-| P1 dotnet (P1-1~P1-6) | 대기 | 착수 전 dotnet 세션 소유 확인(§3) |
-| P2 java (P2-1~P2-7) | 대기 | P1~P4 병렬 |
-| P3 cpp (P3-1~P3-6) | 대기 | P1~P4 병렬 |
-| P4 node (P4-1~P4-8) | 대기 | P1~P4 병렬 |
+| P1 dotnet | P1-1~3 **완료** `e877bfff37` · P1-4 진행 중 | 세션 소유 확인 완료(2026-08-28 사용자 — 다른 작업 없음) |
+| P2 java | P2-4 **완료** `fc44a59d32` · P2-6·P2-7 진행 중 | P2-1~2-3·2-5는 다음 배치 |
+| P3 cpp | P3-1 진행 중 | 참조: 조율자=dotnet·큐/turn=java (§9 ② 채택) |
+| P4 node | P4-1·4-6·4-7 **완료** `bd83b30db5` · P4-2~4-5 진행 중 | wrapper 새 이름 `ZLinkSpotSerialTurnExecutor` |
 | P5 계약 test | 대기 | P1~P4 뒤 |
 | 마감 게이트 (unit·cross-language e2e·샘플 6종 ZoneWorld 제외) | 대기 | §1.1 |
+
+§9 ② 판정(2026-08-28 감독관): 계층별 참조 분리 채택 — lane primitive·조율자는 dotnet,
+큐 primitive·turn 경계는 java. §9 ①은 P4 범위 제외 유지(현행 보존).
 
 ---
 
@@ -676,6 +679,18 @@ CP3(마일스톤)=+cross-language e2e+스냅샷 재측정.
   ZoneWorld·run_samples 자체검사), stream/session teardown·통지, relocation seal, spot managed timer,
   canonical spec 트리. **이 스위트를 캠페인 중 전수로 돌린 기록이 없어 그동안 계수되지 않았다.**
   개별 판정·수정은 캠페인 범위 밖 — 별도 작업으로 이월.
+  **이름 기준선(2026-08-28 전수 실측, 26건 — 종전 23건과 같은 계열, 병렬 부하에 따라 ±수 건 변동)**:
+  Bingo rolling replacement·Bingo room leave lifecycle·GameQuest topology·ShoppingMall topology·
+  ZoneWorld maintenance/node status/replacements 3건·sample-zoneworld-domain(파일 로드, 단독 통과)·
+  Session Actor relay route·Session owner replaces route·Session relocation retain identity·
+  ZLinkRoutePacketDispatcher drops route requests(flowCreationEnabled undefined)·
+  canonical common spec owns server semantics·command 42 sender deadline·
+  common-spec samples entrypoints·run_samples 자체검사·samples readiness sleeps·
+  old route disconnect terminal seal·physical stream disconnect 2건·
+  remote Actor Join legacy fence ProtocolError·sample wire names·
+  spot managed timer 2건(overrun·stopOnUnhandledException — 단독 재실행에서도 실패)·
+  stream connector inconsistent frame·stream session cleanup/onDisconnected 2건·
+  unbind relocation seal. 회귀 판정은 이 이름 집합과의 대조로만 한다.
 - **node `verify:m6c-runtime` 2건** (stash 대조로 baseline 동일 110/112 확인): ① legacy fence
   불완전 시 ProtocolError 기대 vs actorType 경로(m6c-actor-join-store-resolution L126 vs
   remote-actor-join-receiver L63) ② retain identity의 coordinator fence 기대 vs codec 의도적
