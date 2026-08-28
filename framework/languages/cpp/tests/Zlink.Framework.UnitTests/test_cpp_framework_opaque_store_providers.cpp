@@ -362,6 +362,62 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsLeaseAndDescript
     EXPECT_EQ (page.items.front ().owner_id, "owner-a");
 }
 
+TEST (CppFrameworkOpaqueLocationStore, AbortedReservationCanBeReservedAgainThroughProvider)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t repository (provider);
+    const auto claim = repository.claim_owner_lease ("owner-retry", 30s).result ().value ();
+    const auto *claimed = std::get_if<owner_lease_claimed_t> (&claim);
+    ASSERT_NE (claimed, nullptr);
+
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "retry";
+    descriptor.rid = zlink::routing_id_t::from (std::string{"node-retry"});
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = claimed->token.owner_id;
+    descriptor.lease_generation = claimed->token.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back (
+      {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0});
+    descriptor.capacity.actors.limit = 1;
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::actor, "actor-retry"};
+    request.intent.stable_type = "player";
+    request.target = {"retry", node_rid_t::from_string ("node-retry"), 1, claimed->token};
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle.actor_slots = 1;
+
+    const auto first = repository.reserve (request).result ().value ();
+    const auto *first_reservation = std::get_if<object_reserved_t> (&first);
+    ASSERT_NE (first_reservation, nullptr);
+    ASSERT_TRUE (std::holds_alternative<object_aborted_t> (
+      repository.abort ({request.key, first_reservation->fence}).result ().value ()));
+
+    const auto second = repository.reserve (request).result ().value ();
+    const auto *second_reservation = std::get_if<object_reserved_t> (&second);
+    ASSERT_NE (second_reservation, nullptr);
+    EXPECT_NE (second_reservation->fence.reservation_id,
+               first_reservation->fence.reservation_id);
+    const auto capacity = capacity_record (provider, descriptor);
+    EXPECT_EQ (capacity.at ("actorsPending"), 1);
+    EXPECT_EQ (capacity.at ("actorsActive"), 0);
+
+    EXPECT_TRUE (std::holds_alternative<object_abort_stale_t> (
+      repository.abort ({request.key, first_reservation->fence}).result ().value ()));
+    EXPECT_TRUE (std::holds_alternative<object_aborted_t> (
+      repository.abort ({request.key, second_reservation->fence}).result ().value ()));
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsPending"), 0);
+}
+
 TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecycleThroughProvider)
 {
     in_memory_location_store_t provider;

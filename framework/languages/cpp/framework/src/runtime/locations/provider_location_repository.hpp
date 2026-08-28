@@ -609,9 +609,13 @@ class provider_location_repository_t final : public location_repository_t
 
         const auto reservation_key = key_reservation (request.key);
         auto old_reservation = read (reservation_key);
-        if (std::holds_alternative<store_found_t> (old_reservation))
-            return completed (object_reserve_result_t{object_reserve_conflict_t{
-              authority_missing_t{std::get<store_missing_t> (authority).store_now}}});
+        auto reservation_condition = condition_for (reservation_key, old_reservation);
+        if (const auto *found = std::get_if<store_found_t> (&old_reservation)) {
+            const auto record = parse_json (found->value.bytes);
+            if (record.at ("status").get<std::string> () != "aborted")
+                return completed (object_reserve_result_t{object_reserve_conflict_t{
+                  authority_missing_t{std::get<store_missing_t> (authority).store_now}}});
+        }
 
         // The real expected_store_version can't be known until the write
         // below returns its opaque per-key version (checklist C-4d), so
@@ -643,7 +647,7 @@ class provider_location_repository_t final : public location_repository_t
             static_cast<std::uint32_t> (request.intent.request_encoded_size)}};
         auto reservation_record = encode_reservation (request, fence, creating, "prepared");
         auto written = write (
-          {{missing_condition (authority_key), missing_condition (reservation_key),
+          {{missing_condition (authority_key), std::move (reservation_condition),
             condition_for (object_counter_key, object_generations),
             condition_for (authority_owner_counter_key, owner_generations),
             version_condition (target->key, target->provider_version),
