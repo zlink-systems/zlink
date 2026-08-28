@@ -214,6 +214,78 @@ actual STREAM connection when the source Actor `ObjectGeneration`, source
 `NodeGeneration`, `AuthorityOwnerGeneration`, and expected binding
 generation are all current.
 
+**A push's reservation transfers from the source to the session owner
+without a gap, and neither side discards it silently.** The boundaries of
+this contract:
+
+1. **Public completion is source-local acceptance.** The push success the
+   caller observes is the source Actor owner's relay acceptance, not a
+   client-delivery guarantee. Public completion semantics do not change,
+   and outcomes after public success never become a second caller terminal.
+   Before public success the source reserves the retained payload's
+   count and bytes in its own owner FIFO reservation — released only by
+   responsibility release or internal failure settlement below.
+2. **Identity and deadline.** For each push the source Actor owner creates
+   a non-zero 128-bit relay ID and an absolute relay deadline fixed at
+   public-call start from the send deadline of the
+   [submission rules](../01-execution/01-submit-and-completion.en.md), and
+   carries both on the `boundSessionSend(36)` record. The dedupe key is
+   (session identity, expected binding generation, relay ID); relay-ID
+   uniqueness is scoped to that binding generation — a different key is a
+   different reservation. The deadline is never restarted or extended;
+   owner-lease renewal does not extend it.
+3. **Until acquisition is confirmed the source holds responsibility, with
+   one unconfirmed relay per binding.** Remote submit success is not the
+   transfer — the source releases responsibility only after receiving the
+   **acquisition confirmation** (an owner→source control record with the
+   same dedupe key) that the session owner claimed the reservation. The
+   binding's next push is submitted remotely only after the previous
+   relay's confirmation (stop-and-wait), so a retransmission can never
+   overtake a later push. An unconfirmed retransmission is sent only on
+   owner-link re-establishment or a finite confirmation timeout, with the
+   same relay ID and record (no busy loop, no periodic polling). When the
+   relay deadline elapses the source settles the reservation as an
+   **internal failure, not a caller terminal**, and releases it. A
+   retransmission before confirmation is not the automatic retry that
+   [04 §8](../01-execution/04-application-job-queue-and-backpressure.en.md)
+   forbids — it is submission of the source's own not-yet-transferred
+   reservation.
+4. **After acquisition the session owner settles exactly once.** The
+   reservation state transitions only `Absent → Claimed → Settled`.
+   - Every incoming record checks the absolute relay deadline before any
+     state decision — an expired record is rejected in any state without
+     claiming (the source has already settled by deadline).
+   - An unexpired record in `Absent` transitions atomically to `Claimed`
+     and sends the acquisition confirmation.
+   - A duplicate record with the same dedupe key in `Claimed`/`Settled` is
+     not re-admitted outbound; only the same confirmation is resent — this
+     recovers a lost confirmation.
+   - The same dedupe key with differing immutable fields (payload, relay
+     deadline, source lifecycle fence) is a `ProtocolError`.
+   - The owner is responsible through generation validation, route
+     decision, and the STREAM connection's outbound queue admission, and
+     settles once internally with admission success or a classified
+     failure (invalid route `Unavailable`, relay deadline
+     `DeadlineExceeded`, shutdown `ShuttingDown`). A `Settled` entry keeps
+     its terminal result for duplicate-confirmation resends and is removed
+     after the relay deadline elapses.
+   - This guarantee holds in normal execution and orderly shutdown. On an
+     abnormal owner-process exit the existing contract applies — the
+     connection is not recovered; unacquired reservations settle by the
+     source deadline rule of 3, and durable guarantees for acquired
+     reservations are not required.
+5. **Settlement never disappears silently.** Whether and how
+   failure/expiry settlements are recorded — and the exact
+   `reason`/`action` tokens — are owned by the
+   [flow tracing](../06-observability/03-message-flow-tracing.en.md) closed
+   vocabulary and recording rules; this contract only requires that
+   settlement not vanish unobservably.
+
+This contract does not require — a client read ACK, client consumption
+confirmation, or exactly-once client delivery. The wire representation
+(the relay ID and deadline fields of record 36 and the acquisition
+confirmation record) is owned by the service wire schema.
+
 Seen as one diagram, the normal path is as follows. This diagram only shows
 the logical order of bind, relay, and push, and the validating party at each
 step. The node boundary and where the physical socket lives are shown by

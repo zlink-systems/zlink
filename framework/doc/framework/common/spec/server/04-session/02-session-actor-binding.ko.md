@@ -183,6 +183,61 @@ Actor가 session에 보내는 push는 `boundSessionSend(36)` record로 session o
 `AuthorityOwnerGeneration`과 expected binding generation이 모두 current일 때만 실제
 STREAM connection에 제출한다.
 
+**Push의 예약은 source에서 끊기지 않고 session owner로 이관되며, 어느 쪽도 조용히
+폐기하지 않는다.** 이 계약의 경계는 다음과 같다.
+
+1. **공개 완료는 source-local 수락이다.** Caller가 관찰하는 push 성공은 source Actor
+   owner의 relay 수락이며, client delivery 보장이 아니다. 공개 완료 의미와 시점은 이
+   계약으로 바뀌지 않고, 공개 성공 뒤의 결과가 caller의 두 번째 terminal이 되지 않는다.
+   공개 성공 전에 source는 retained payload의 count·byte를 자기 owner FIFO 예약으로
+   확보한다 — 이 예약은 아래 3의 책임 해제 또는 내부 실패 정산에서만 반환된다.
+2. **식별과 deadline.** Source Actor owner는 push마다 0이 아닌 128-bit relay ID와,
+   public call 시작 시
+   [제출 규칙](../01-execution/01-submit-and-completion.ko.md)의 send deadline으로부터
+   고정한 absolute relay deadline을 `boundSessionSend(36)` record에 싣는다. 예약의
+   dedupe key는 (session identity, expected binding generation, relay ID)이고, relay
+   ID의 유일성 범위는 그 binding generation 안이다 — key가 다르면 다른 예약이다.
+   Deadline은 재시작·연장하지 않는다 — owner lease 갱신이 이 deadline을 늘리지 않는다.
+3. **인수 확인 전에는 source가 책임을 보유하며, binding당 미확인 relay는 하나다.**
+   원격 제출 성공은 이관이 아니다 — session owner가 예약을 claim했다는 **인수
+   확인**(owner→source control record, 같은 dedupe key)을 받은 뒤에만 source가 책임을
+   해제한다. 같은 binding의 다음 push는 앞선 relay의 인수 확인 뒤에 원격 제출한다
+   (stop-and-wait) — 재전송이 후속 push를 앞지르는 일이 구조적으로 없다. 인수 확인을
+   받지 못한 재전송은 owner 연결 재수립 또는 유한한 확인 timeout에서만 같은 relay
+   ID·같은 record로 보낸다(busy-loop·주기 polling 금지). Relay deadline이 다하면
+   source는 그 예약을 **caller terminal이 아닌 내부 실패로** 정산하고 예약을 반환한다.
+   인수 확인 전 재전송은
+   [04 §8](../01-execution/04-application-job-queue-and-backpressure.ko.md#8-backpressure-3단계와-한도-종류)이
+   금지하는 자동 재시도가 아니다 — 아직 이관되지 않은 자기 예약의 제출이다.
+4. **인수 뒤에는 session owner가 정확히 한 번 정산한다.** 예약 상태는
+   `Absent → Claimed → Settled` 로만 전이한다.
+   - 모든 수신 record는 상태 판정보다 먼저 absolute relay deadline을 검사한다 —
+     만료된 record는 어떤 상태에서도 claim하지 않고 거부한다(source는 이미 deadline
+     정산을 마친 뒤다).
+   - `Absent`에서 만료 전 record를 받으면 원자적으로 `Claimed`로 전이하고 인수 확인을
+     보낸다.
+   - `Claimed`·`Settled` 상태에서 같은 dedupe key의 중복 record를 받으면 outbound에
+     다시 넣지 않고 같은 인수 확인만 재전송한다 — 인수 확인 유실을 이렇게 복구한다.
+   - 같은 dedupe key인데 immutable field(payload·relay deadline·source lifecycle
+     fence)가 다르면 `ProtocolError`다.
+   - Owner는 generation 검증, route 판정과 STREAM connection의 outbound queue
+     admission까지를 책임지고, admission 성공 또는 분류된 실패(route 무효
+     `Unavailable`, relay deadline `DeadlineExceeded`, 종료 `ShuttingDown`)로
+     내부적으로 한 번 `Settled`를 확정한다. `Settled` 항목은 terminal 결과를 보관해
+     중복 record의 확인 재전송에 쓰고, relay deadline 경과 후 제거한다.
+   - 이 보장은 정상 실행과 orderly shutdown에서 성립한다. Owner process가 비정상
+     종료하면 기존 계약대로 연결을 복구하지 않으며, 미인수 예약은 3의 source deadline
+     규칙이 정산하고 인수된 예약의 durable 보장은 요구하지 않는다.
+5. **정산 결과는 조용히 사라지지 않는다.** 실패·만료 정산의 관측 기록 여부·형식·
+   `reason`/`action` token은
+   [flow tracing](../06-observability/03-message-flow-tracing.ko.md)의 닫힌 vocabulary와
+   기록 규칙이 소유한다 — 이 계약은 정산이 관측 불가능하게 소실되지 않아야 한다는
+   것만 요구한다.
+
+이 계약이 요구하지 않는 것 — client read ACK, client 소비 확인, exactly-once client
+delivery. wire 표현(record 36의 relay ID·deadline field와 인수 확인 record)은 service
+wire schema가 소유한다.
+
 정상 경로를 한 그림으로 보면 다음과 같다. 이 그림은 bind·relay·push의 논리 순서와 각
 단계의 검증 주체만 보여준다. Node 경계와 physical socket의 위치는
 [STREAM 서버 session 「8. Session에서 Actor로」](01-stream-session.ko.md#8-session에서-actor로)의
