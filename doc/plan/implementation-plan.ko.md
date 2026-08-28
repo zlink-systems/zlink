@@ -110,6 +110,43 @@ bindings 0.14.0 전환 완료(릴리스·로컬 패키지·참조 모두). 아�
 §9 ② 판정(2026-08-28 감독관): 계층별 참조 분리 채택 — lane primitive·조율자는 dotnet,
 큐 primitive·turn 경계는 java. §9 ①은 P4 범위 제외 유지(현행 보존).
 
+### 0.6 후속 캠페인 — boundSessionSend 전달 보장: B안 폐기·경량 계약 재설계 (2026-08-29)
+
+**결정(사용자, 2026-08-29 새벽): B안(relay ID·wire ack·stop-and-wait) 자체를 재검토·폐기.**
+사유 = 하행 push 핫패스에 push당 wire 왕복 +1과 binding당 stop-and-wait 처리량 캡을 얹는
+과잉 설계(신뢰 전송 위의 재확인), 복잡도, 4언어 구현 회귀 규모. 원 결함(TTT JoinGameNotify
+유실 4/6·Bingo)의 실제 원인은 wire 유실이 아니라 **owner측 로컬 레이스**(binding 등록 전
+도착분 폐기·registry↔gateway 비원자 공개·stale 오권위)였음이 B안 구현 과정의 실증으로 확인됨.
+
+경과·상태:
+- B안 구현(4언어)·wire schema(36 확장·54·v14)·spec26 token 로컬 커밋 8개 → **롤백 완료**
+  (`git reset --hard de824db726`). 전체 스냅샷은 로컬 브랜치 `backup/bound-session-relay-b`
+  (+ scratchpad quarantine-patches/)에 보존 — push 금지.
+- B안 스펙 절(`46b3d43857`, origin 반영됨)은 **경량 계약으로 대체 예정**: "owner는 push를
+  조용히 폐기하지 않는다 — ① binding 준비 전 도착분은 보류 후 전달 ② 전달 불가 확정 시
+  관측 기록". wire 무변경·ack 없음. 작성=감독관, 커밋 전 사용자 리뷰.
+- 구현 중 실증된 **B안 무관 보존 가치 결함**(재적용 대상, backup diff에서 선별 재구현):
+  ⑴ cpp C44 registry commit↔gateway projection 비원자 공개(기존 선형화점 계약 위반)
+  ⑵ owner stale 판정 권위 오용 ⑶ 보류(retain-until-bound) 부재. jvm LeaveGameMsg·GameQuest,
+  node bind 정체, dotnet Bingo stale drop은 relay 코드 회귀였으므로 롤백으로 소멸 예상 — 검증으로 확인.
+
+| 단계 | 상태 |
+|---|---|
+| 롤백 + 백업 격리 | **완료** |
+| 기준선 재검증 — 4언어 게이트 + 샘플(원래 실패하던 것만 실패하는지) | **완료** — 게이트: cpp 45/45·java(flake 2건 단독 그린)·dotnet 1913(flake 1건 단독 3/3)·node(m6c 기존 2건만). 샘플: cpp TTT 3/6(원 결함 재현 정합)·cpp Bingo 5/5·jvm TTT ✅·node TTT ✅·dotnet Bingo ✅ = **밤 사이 신규 실패는 전부 relay 회귀였음 확정, 롤백으로 소멸**. 예외 1건: **jvm(java) GameQuest mission reconcile/replay 실패는 46b3d43857 이전에서도 재현** — 캠페인 무관 기존 결함/환경성으로 등재·이월(간헐 여부 추후 판정) |
+| core 0.14.1 반영 → 게이트 재실행으로 영향 분리 | **완료** — pull `c2f0c90968`+binding 4종 로컬 패키지 설치. 격리로 잡아 수정한 것: ① dotnet `Submit(SendFlags)` 시그니처 적응 후 **§15 감사로 Async 전환** `95e911ecbb` ② cpp client_server observation 미발화 = **인자 평가 순서 UB**(0.14.1 재링크가 노출한 잠복 결함, GDB 실증) `0b26f7b874` ③ java TTT JoinSpot 실패 = **PREPARE NOT_CONNECTED를 최종 확정하던 결함**(0.14.1 terminal 정렬이 노출) — 재전송 분류로 수정 `c1839a0819` |
+| **스펙 계층 이관** (사용자 지적: bindings 스펙의 framework 제약은 월권) | **완료** `ad5a2620e1` — framework 스펙 01 **§15 신설**(async terminal 전용 + 예외 ②종: DONTWAIT 관찰·공개 동기 계약) ·bindings 문서는 core 표면 정리만 남기고 포인터화 |
+| **4언어 sync send 위반 감사** (사용자 지시, §15 근거) | **완료** — dotnet 1곳 전환 `95e911ecbb`(보류 3곳은 §15-②로 정합 종결) · node 다수 전환+반려 1건(공개 write DONT_WAIT 강제 원복) `16d7232471` · cpp 2곳 전환 `db8c6dbe36` · java **위반 0건** |
+| **cpp host_lifecycle 장기 flake 완치** | **완료** `82892539a8` — aborted reservation row를 활성 충돌로 오판→재예약 거부→후보 소진. exact-version CAS 교체로 수정, 기준선 6/10 실패→10연속+6/6 그린 |
+| java 샘플 금지패턴(readiness sleep) 3곳 | **완료** `fc64950dee` — WatchService·ScheduledExecutor 재작성, 러너 패턴 게이트 그린 |
+| 최종 샘플 재검증(감사 반영 후 4언어) | node ✅6/6(감사 회귀=receive 펌프 직렬화 수정 `8050d4284a`) · jvm ✅(GameQuest까지 해소) · cpp ✅5/5+게이트(빌드 트리 vcpkg provenance 복구 — 감독관 reconfigure 실수 수습) · **dotnet TTT 회귀 수정 진행 중** |
+| **GameQuest 이월 해소** | **완료** `37b1184540` — framework 무결, 러너의 mission owner 편향 대기(무작위 배치 vs a-선행 30초 대기)가 원인. 합산 대기 + 재도입 방지 계약 테스트. 4/4 그린 |
+| **doc-contracts 검증 체인 그린** | **완료** `b3d8368105` — 노후 지문 4계열(exact 수식 제거分·ps1 인벤토리·ZoneWorld $0 호출·재구성 이전 스펙 경로) 정합, 전 체인 rc=0 |
+| 이월 등재(갱신) | java SerialExecutionQueueTest flake 발현율 상승 · dotnet 동적 flags 2곳 공개 async 표면 개정(사용자 안건) · GameQuest 권위문서 DisableRelocation vs java·kotlin recreateOnRelocation 계약 갭(사용자 안건) |
+| 스펙 경량 계약 재작성(감독관) → 사용자 리뷰 → origin의 B안 절 대체 커밋 | 대기 |
+| 로컬 레이스 수정 재적용(codex sol ultra) → TTT·Bingo 반복 실증으로 원 결함 해소 판정 | 대기 |
+| ZoneWorld (cpp·jvm·node·dotnet, codex sol ultra) | 대기 |
+
 ---
 
 ## 1. 착수 순서 — 언어별 병렬 (2026-08-28 사용자 지정)
