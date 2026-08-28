@@ -850,7 +850,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       const failureExpiry = setTimeout(() => {
         this.targetReadyFailures.delete(operationKey);
       }, RELOCATION_OPERATION_RETENTION_MS);
-      failureExpiry.unref?.();
+      failureExpiry.unref();
       console.error('[zlink.runtime.relocation.restore_failed]', operationKey, error);
       const submitted = this.replyPrepare(ingress, failed);
       if (submitted !== SubmitResult.Ok) {
@@ -874,7 +874,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const readyExpiry = setTimeout(() => {
       this.expireTargetReadyResponse(operationKey);
     }, RELOCATION_OPERATION_RETENTION_MS);
-    readyExpiry.unref?.();
+    readyExpiry.unref();
     this.submitTargetReady(meshName, operationKey, ingress, response);
   }
 
@@ -1022,9 +1022,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     //  A relocation whose session owner IS this node publishes the route
     //  to itself; RouteMesh has no self connection (NotConnected), so the
     //  control dispatches through the same inbound handler locally.
-    const localRid =
-      this.requireMeshNode(meshName).status?.().routingId ?? null;
-    if (localRid !== null && String(localRid) === String(targetNodeRid)) {
+    const localRid = this.requireMeshNode(meshName).status().routingId;
+    if (String(localRid) === String(targetNodeRid)) {
       await this.handleSessionRelocationRoute(
         meshName,
         request,
@@ -1120,7 +1119,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // (spec 32:88).
     // Spec 06 — the configured SessionRelocationSealTimeout is an additional
     // finite upper bound; the caller's earlier absolute deadline still wins.
-    const sealTimeoutMs = this.options.registration?.locations.options
+    const registration = Object.hasOwn(this.options, 'registration')
+      ? this.options.registration
+      : undefined;
+    const sealTimeoutMs = registration?.locations.options
       .sessionRelocationSealTimeoutMs
       ?? zlinkRuntimeDefaultLocationOptions.sessionRelocationSealTimeoutMs;
     const resendDeadline = Date.now() + sealTimeoutMs;
@@ -1132,9 +1134,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       //  A seal whose session owner IS this node has no RouteMesh self
       //  connection (NotConnected); dispatch through the inbound handler
       //  locally instead of the wire.
-      const localRid =
-        this.requireMeshNode(meshName).status?.().routingId ?? null;
-      if (localRid !== null && String(localRid) === expectedTarget) {
+      const localRid = this.requireMeshNode(meshName).status().routingId;
+      if (String(localRid) === expectedTarget) {
         try {
           const response = await this.handleSessionRelocationSeal(
             meshName,
@@ -1203,7 +1204,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         true
       )
     ), Math.max(0, resendDeadline - Date.now()));
-    pending.deadlineTimer.unref?.();
+    pending.deadlineTimer.unref();
     abortListener = () => pending.reject(
       signal?.reason ?? createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -1266,9 +1267,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): bigint | undefined {
     if (sourceNodeRid === null) return undefined;
     const node = this.requireMeshNode(meshName);
-    const status = node.status?.();
-    if (status?.routingId !== null && status !== undefined
-        && String(status.routingId) === String(sourceNodeRid)) {
+    const status = node.status();
+    if (String(status.routingId) === String(sourceNodeRid)) {
       return status.lifecycleGeneration;
     }
     return node.peers().find(
@@ -2334,7 +2334,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       if (window.retryTimer !== undefined) clearTimeout(window.retryTimer);
       settle();
     }, limits.relocationCutoverWaitTimeoutMs);
-    window.windowTimer.unref?.();
+    window.windowTimer.unref();
     window.followTimer = setTimeout(() => {
       window.followExpired = true;
       // S1→S4 route convergence: the span the source must keep its Message
@@ -2346,7 +2346,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
       settle();
     }, limits.messageFollowDurationMs);
-    window.followTimer.unref?.();
+    window.followTimer.unref();
     if (initialSubmitFailed) this.scheduleCutoverRetransmit(window);
   }
 
@@ -2370,7 +2370,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         }
       })();
     }, 250);
-    window.retryTimer.unref?.();
+    window.retryTimer.unref();
   }
 
   /**
@@ -2466,7 +2466,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // wire code in the vocabulary yet, so it falls through unwrapped to
       // the generic InternalFailure code (spec 15 §4).
       if (this.disposed) throw error;
-      throw new ServiceRelocationDataLostError(String((error as Error)?.message ?? error));
+      const message = error !== null && typeof error === 'object' && 'message' in error
+        ? (error as { readonly message?: unknown }).message ?? error
+        : error;
+      throw new ServiceRelocationDataLostError(String(message));
     }
     const envelope = decodeServiceRelocationEnvelope(
       payload,
@@ -3777,11 +3780,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const expectedRootId = request.object.kind === 'actor'
       ? request.object.actorId
       : request.object.spotId;
-    if (root?.rootSpotId !== expectedRootId
+    if (root === undefined
+      || root.rootSpotId !== expectedRootId
       || root.rootObjectKind !== primary.allocation.objectKind
-      || root?.rootSpotGeneration !== primary.objectGeneration
+      || root.rootSpotGeneration !== primary.objectGeneration
       || root.rootObjectKind !== 'instance_spot'
-        && root?.rootOwnerGeneration !== primary.authorityOwnerGeneration) {
+        && root.rootOwnerGeneration !== primary.authorityOwnerGeneration) {
       throw new Error('Relocation root object projection does not match Location Store.');
     }
     const transferred = new Map(envelope.participants.map(participant => [participant.participantId, participant]));
@@ -4498,8 +4502,8 @@ function rewriteAuthorityApplicationRoute(
         meshName: target.meshName,
         nodeRid: target.nodeRid as RoutingId
       },
-      target.actorSpotId ?? actor.spotId ?? target.nodeRid,
-      target.actorSpotGeneration ?? actor.spotGeneration ?? target.nodeGeneration,
+      target.actorSpotId ?? actor.spotId,
+      target.actorSpotGeneration ?? actor.spotGeneration,
       target.actorSpotKind ?? actor.spotKind,
       target.nodeGeneration,
       target.owner
@@ -4689,15 +4693,15 @@ function appendCanonicalActorJoinRecovery(
   ) {
     throw new Error(`Actor '${profile.state.actorId}' canonical Join recovery identity is incomplete.`);
   }
-  let attached = false;
+  const attachment = { attached: false };
   const participants = envelope.participants.map(participant => {
     if (participant.objectKind !== 'actor'
       || decodeAuthorityKey({ value: participant.key } as ZLinkAuthorityKey).globalId
         !== profile.state.actorId) {
       return participant;
     }
-    if (attached) throw new Error('Canonical Actor Join recovery has duplicate Actor participants.');
-    attached = true;
+    if (attachment.attached) throw new Error('Canonical Actor Join recovery has duplicate Actor participants.');
+    attachment.attached = true;
     const encoded = encodeCanonicalActorJoinRecoverySavedWork({
       actorId: profile.state.actorId,
       actorType,
@@ -4745,7 +4749,7 @@ function appendCanonicalActorJoinRecovery(
       ]
     };
   });
-  if (!attached) throw new Error('Canonical Actor Join recovery Actor participant is missing.');
+  if (!attachment.attached) throw new Error('Canonical Actor Join recovery Actor participant is missing.');
   return { ...envelope, participants };
 }
 
@@ -4901,7 +4905,7 @@ async function waitForRelocationRetry(
       signal?.removeEventListener('abort', aborted);
       resolve();
     }, delayMs);
-    timer.unref?.();
+    timer.unref();
   });
 }
 

@@ -1264,7 +1264,7 @@ export class ZLinkActorSessionBindingRegistry<
           ));
         });
       }, this.sealWaitTimeoutMs));
-      timer.unref?.();
+      timer.unref();
       const onAbort = () => {
         this.lane.tryPost(() => {
           removeWaiter();
@@ -1335,7 +1335,7 @@ export class ZLinkActorSessionBindingRegistry<
           ));
         });
       }, this.sealWaitTimeoutMs));
-      timer.unref?.();
+      timer.unref();
       if (signal === undefined) return;
       if (signal.aborted) onAbort();
       else startOutsideStateLane(() => signal.addEventListener('abort', onAbort, { once: true }));

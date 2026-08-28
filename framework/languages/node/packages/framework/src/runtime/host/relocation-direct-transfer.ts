@@ -154,10 +154,11 @@ export class ZLinkRelocationPayloadAssembly {
     this.buffer.set(data, this.receivedBytes);
     this.receivedBytes += data.byteLength;
     this.nextOrdinal += 1;
-    if (this.nextOrdinal === this.chunkCount) this.finish();
-    return this.outcome !== undefined && 'payload' in this.outcome
-      ? 'completed'
-      : 'accepted';
+    if (this.nextOrdinal === this.chunkCount) {
+      this.finish();
+      return 'completed';
+    }
+    return 'accepted';
   }
 
   /** Resolves with the verified payload or rejects with the explicit failure. */

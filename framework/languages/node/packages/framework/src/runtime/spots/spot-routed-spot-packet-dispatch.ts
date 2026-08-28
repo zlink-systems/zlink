@@ -128,7 +128,7 @@ export class ZLinkRoutedSpotPacketDispatch {
     let detached = false;
     let resolveFirstHandlerTurn: (() => void) | undefined;
     let rejectFirstHandlerTurn: ((error: unknown) => void) | undefined;
-    const firstHandlerTurn = context.awaitFirstHandlerTurn
+    const firstHandlerTurn = context.awaitFirstHandlerTurn === true
       ? new Promise<void>((resolve, reject) => {
         resolveFirstHandlerTurn = resolve;
         rejectFirstHandlerTurn = reject;

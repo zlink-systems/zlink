@@ -87,6 +87,10 @@ export class ZLinkManagedStream implements ZLinkStream {
     return this.nativeActorBindings.get(actorId)?.bindingGeneration;
   }
 
+  private isTransportClosed(): boolean {
+    return this.transportClosed;
+  }
+
   get localAddr(): string | undefined {
     return this.currentLocalAddr;
   }
@@ -193,7 +197,7 @@ export class ZLinkManagedStream implements ZLinkStream {
       }
       const nativeActor = toNativeActorRef(actor);
       await this.ensureNativeActorRoute(route, actor, timeoutMs, signal);
-      if (this.transportClosed) {
+      if (this.isTransportClosed()) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
           `Stream session '${this.sessionId}' is disconnected.`
@@ -224,7 +228,7 @@ export class ZLinkManagedStream implements ZLinkStream {
           `Actor '${actor.actorId}' native session bind completed without a binding snapshot.`
         );
       }
-      if (this.transportClosed) {
+      if (this.isTransportClosed()) {
         try {
           await this.requireSuccessfulCompletion(
             route.completions.submit(

@@ -55,7 +55,7 @@ export class ZLinkMeshCompletionTable {
     operation: () => MeshOperationId,
     signal?: AbortSignal
   ): Promise<ZLinkMeshCompletion> {
-    if (this.disposed) {
+    if (this.isDisposed()) {
       return Promise.reject(new Error('Mesh completion table is disposed.'));
     }
     if (signal?.aborted === true) {
@@ -72,7 +72,6 @@ export class ZLinkMeshCompletionTable {
     const operationId = operation();
     // The backend submission callback can synchronously re-enter `dispose()`.
     // TypeScript's control-flow analysis cannot observe mutation through it.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (this.disposed) {
       return Promise.reject(new Error('Mesh completion table is disposed.'));
     }
@@ -98,6 +97,10 @@ export class ZLinkMeshCompletionTable {
           : () => signal.removeEventListener('abort', abort)
       });
     });
+  }
+
+  private isDisposed(): boolean {
+    return this.disposed;
   }
 
   complete(record: ReceiveRecord): void {

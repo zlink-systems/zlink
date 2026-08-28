@@ -276,11 +276,14 @@ export class ZLinkSpotActorJoinDispatch {
       do {
         this.redrainRequested = false;
         await this.drainAvailableActorJoins();
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-      } while (this.redrainRequested);
+      } while (this.redrainWasRequested());
     } finally {
       this.draining = false;
     }
+  }
+
+  private redrainWasRequested(): boolean {
+    return this.redrainRequested;
   }
 
   private async drainAvailableActorJoins(): Promise<void> {

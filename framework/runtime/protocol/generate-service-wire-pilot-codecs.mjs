@@ -727,7 +727,26 @@ inline std::vector<std::uint8_t> encode_zljr_record_v1(const service_wire_pilot_
 
 const nodeOut = (node + nodeMechanical + nodeBatch3 + nodeBatch4)
   .replace("u32(out,value.applicationStates.length);for(const s", "if(!value.applicationStates.length)throw new RangeError(\"applicationStates\");u32(out,value.applicationStates.length);for(const s")
-  .replace("const applicationStates:RelocationEnvelopeV1[\"applicationStates\"][number][]=[];for(let i=0,count=read32(bytes,at);", "const applicationStates:RelocationEnvelopeV1[\"applicationStates\"][number][]=[];const stateCount=read32(bytes,at);if(stateCount===0)throw new RangeError(\"applicationStates\");for(let i=0,count=stateCount;");
+  .replace("const applicationStates:RelocationEnvelopeV1[\"applicationStates\"][number][]=[];for(let i=0,count=read32(bytes,at);", "const applicationStates:RelocationEnvelopeV1[\"applicationStates\"][number][]=[];const stateCount=read32(bytes,at);if(stateCount===0)throw new RangeError(\"applicationStates\");for(let i=0,count=stateCount;")
+  // Generated wire values are numeric; make their zero guards explicit so the
+  // Node strict-boolean policy does not depend on truthiness.
+  .replaceAll("!value.applicationStates.length", "value.applicationStates.length===0")
+  .replaceAll("!b.length", "b.length===0")
+  .replaceAll("!value.length", "value.length===0")
+  .replaceAll("!s.payload.length", "s.payload.length===0")
+  .replaceAll("!chunk.length", "chunk.length===0n")
+  .replaceAll("if(!correlation ||", "if(correlation===0n ||")
+  .replaceAll("else if(s.payload.length)", "else if(s.payload.length!==0)")
+  .replaceAll("if(!n ||", "if(n===0 ||")
+  .replaceAll("if(!n)", "if(n===0)")
+  .replaceAll("if(!v)throw new RangeError(\"pending capacity\")", "if(v===0)throw new RangeError(\"pending capacity\")")
+  .replaceAll("!registeredTimerNames.get(participantId)?.has(timerName)", "registeredTimerNames.get(participantId)?.has(timerName)!==true")
+  .replaceAll("(crc&1)?", "(crc&1)!==0?")
+  .replaceAll("value.logicalFormatVersion!==1", "Number(value.logicalFormatVersion)!==1")
+  .replaceAll("v===\"source\"?1:v===\"target\"?2:v===\"coordinator\"?3:(()=>{throw new RangeError(\"role\")})()", "({source:1,target:2,coordinator:3} satisfies Record<ServiceWireRelocationRole,number>)[v]")
+  .replaceAll("v.completionKind===\"readyBarrier\"?1:v.completionKind===\"activationFailure\"?2:(()=>{throw new RangeError(\"completion kind\")})()", "v.completionKind===\"readyBarrier\"?1:2")
+  .replaceAll("v.status===\"terminalReceived\"?1:v.status===\"alreadyTerminal\"?2:(()=>{throw new RangeError(\"ack status\")})()", "v.status===\"terminalReceived\"?1:2")
+  .replaceAll(/!([a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)*)(?=[)&|])/g, "$1===0n");
 const javaOut = java.replace(/\}\n$/, `${javaMechanical}${javaBatch2}${javaBatch3}${javaBatch4}}\n`)
   .replace("  public static byte[] encodeRelocationEnvelopeV1(byte[] logical){return logical.clone();} public static byte[] decodeRelocationEnvelopeV1(List<byte[]> chunks){var o=new ByteArrayOutputStream();for(var c:chunks)o.writeBytes(c);return o.toByteArray();}\n", "")
   .replace("decodeRelocationEnvelopeV1Model(", "decodeRelocationEnvelopeV1(")

@@ -348,9 +348,9 @@ export class ZLinkRemoteBoundSessionRelay {
     );
     state.sealTimer = setTimeout(
       () => { void expire(timeoutError()); },
-      this.options.sessionRelocationSealTimeoutMs ?? 3_000
+      this.options.sessionRelocationSealTimeoutMs
     );
-    state.sealTimer.unref?.();
+    state.sealTimer.unref();
     if (signal !== undefined) {
       const onAbort = () => { void expire(signal.reason ?? timeoutError()); };
       state.sealAbortCleanup = () => signal.removeEventListener('abort', onAbort);
@@ -362,7 +362,7 @@ export class ZLinkRemoteBoundSessionRelay {
       state.sealed = sealed;
       return sealed;
     } catch (error) {
-      if (state.sealTimer !== undefined) clearTimeout(state.sealTimer);
+      clearTimeout(state.sealTimer);
       state.sealAbortCleanup?.();
       if (this.activeServiceWireRelocations.get(key) === state) {
         this.activeServiceWireRelocations.delete(key);

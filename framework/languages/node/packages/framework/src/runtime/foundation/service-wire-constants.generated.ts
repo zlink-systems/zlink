@@ -124,6 +124,8 @@ export const isValidServiceWireTerminalFailure = (
   if (failureCode === 0) {
     return false;
   }
-  const expected = (ServiceWireExactTerminalByFailureCode as Record<number, number>)[failureCode];
-  return expected !== undefined && expected === terminal;
+  if (!Object.hasOwn(ServiceWireExactTerminalByFailureCode, failureCode)) {
+    return false;
+  }
+  return ServiceWireExactTerminalByFailureCode[failureCode as keyof typeof ServiceWireExactTerminalByFailureCode] === terminal;
 };

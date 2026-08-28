@@ -26,7 +26,8 @@ export class ZlinkStreamDiagnosticsLevelCell {
     // Unlike the construction-time option, a runtime write has no "omitted
     // means default" meaning: `undefined`/`null` (reachable from plain JS,
     // bypassing the TS type) must be rejected rather than silently stored.
-    if (level === undefined || level === null) {
+    const candidate: unknown = level;
+    if (candidate === undefined || candidate === null) {
       throw connectorError(ZlinkStreamErrorCode.ConfigurationError, 'DiagnosticsLevel is invalid.');
     }
     validateDiagnosticsLevel(level);

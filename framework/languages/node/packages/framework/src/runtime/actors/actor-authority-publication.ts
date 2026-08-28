@@ -213,7 +213,7 @@ export function rewriteActorAuthorityRoute(
       nodeGeneration: ownerNodeGeneration ?? value.nodeGeneration,
       ownerId: owner?.ownerId ?? value.ownerId,
       ownerLeaseGeneration: owner?.leaseGeneration ?? value.ownerLeaseGeneration,
-      meshName: actor.meshName ?? value.meshName
+      meshName: actor.meshName
     });
   });
 }
