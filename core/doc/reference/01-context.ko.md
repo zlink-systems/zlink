@@ -132,4 +132,54 @@ context handle이면 `EFAULT`.
 
 ---
 
+## `zlink_ctx_get_auto_hwm_budget_snapshot` / `zlink_ctx_reset_auto_hwm_budget_metrics`
+
+Context 전체의 Auto HWM budget 계획과 counter를 versioned snapshot으로 읽거나, 계획은 건드리지
+않고 새 측정 구간을 위해 counter만 초기화한다.
+
+```c
+zlink_auto_hwm_budget_snapshot_t snap = {0};
+snap.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+snap.struct_size = sizeof(snap);
+zlink_ctx_get_auto_hwm_budget_snapshot(ctx, &snap);
+
+zlink_ctx_reset_auto_hwm_budget_metrics(ctx);
+```
+
+**Parameters.** `zlink_ctx_get_auto_hwm_budget_snapshot`은 context handle과 출력용
+`snapshot_` pointer를 받는다 — 호출 전 caller가 구조체를 0으로 초기화하고 `abi_version`을
+`ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1`로, `struct_size`를 자신이 할당한 크기로 설정한다.
+Core는 caller 크기와 Core v1 크기 중 작은 prefix만 기록하고, `struct_size`에는 Core v1 구조체의
+전체 크기를 반환한다. `zlink_ctx_reset_auto_hwm_budget_metrics`는 context handle만 받는다.
+Snapshot 구조체는 budget 계획(`configured_memory_limit_bytes`, `runtime_memory_limit_bytes`,
+`resolved_memory_limit_bytes`, `configured_core_budget_bytes`, `effective_core_budget_bytes`,
+`total_planned_hwm_bytes`, `total_applied_hwm_bytes`, `manual_reserved_hwm_bytes`), accounted-byte
+counter(`core_queue_accounted_bytes`, `current_accounted_bytes`, `provisional_accounted_bytes`,
+`peak_accounted_bytes`, `completion_*` 계열과 `total_messaging_accounted_bytes`,
+`monitor_queue_*`·`total_instance_*` 계열), admission counter(`oversize_admission_count`,
+`largest_oversize_message_bytes`, `blocked_ratio_ppm`), queue count
+(`active_directional_queue_count`, `active_completion_directional_queue_count`,
+`active_send_queue_count`, `active_receive_queue_count`, `unlimited_manual_queue_count`),
+generation 표식(`budget_generation`, `measurement_epoch`), `flags` bitfield
+(`ZLINK_AUTO_HWM_BUDGET_FLAG_PLANNING_ACTIVE`/`_INSUFFICIENT`/`_AGGREGATE_HWM_VALID`/
+`_AGGREGATE_OVERFLOW`), 그리고 ABI 호환을 위해 남긴 예약 필드
+(`application_accounted_bytes`, `outstanding_application_lease_count`, `retired_queue_count`,
+`deferred_origin_credit_bytes`, `reserved_u64[8]` — 항상 0)를 담는다. 각 field의 정확한 의미는
+[Auto HWM 스펙](../spec/core/systems/06-auto-hwm.ko.md#3-함수)의 field 표를 참고한다.
+
+**Return과 errno.** 둘 다 `zlink_config_result_t`를 반환한다 — 성공하면 `ZLINK_CONFIG_OK`.
+`zlink_ctx_get_auto_hwm_budget_snapshot`은 `EINVAL`(null snapshot pointer이거나 `struct_size`가
+header 두 field보다 짧음), `ENOTSUP`(지원하지 않는 `abi_version`), `EFAULT`(잘못된 context),
+`ETERM`(종료 중인 context)으로 실패한다. `zlink_ctx_reset_auto_hwm_budget_metrics`는 `EFAULT`
+또는 `ETERM`으로만 실패한다.
+
+**선택 기준.** Dashboard, health check, 또는 budget 부족 상태를 진단할 때 현재 계획과 회계를
+관찰하려고 `zlink_ctx_get_auto_hwm_budget_snapshot`을 호출한다 — 호출 자체는 admission이나
+rejection 결과를 바꾸지 않는다. 새 측정 구간을 시작할 때(예: 테스트 케이스 사이, 또는 주기적
+모니터링 주기)는 `zlink_ctx_reset_auto_hwm_budget_metrics`를 호출한다 — `measurement_epoch`을
+올리고 peak counter를 현재 값으로 다시 기준화하며 blocked-ratio와 oversize counter를 0으로
+되돌리지만, `budget_generation`, 계획, 현재 byte, monitor queue field는 그대로 둔다.
+
+---
+
 전체 근거는 [Context 스펙](../spec/core/01-context.ko.md)을 참고한다.

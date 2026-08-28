@@ -134,4 +134,57 @@ Sockets with a manual HWM override, or with automatic HWM disabled, are unaffect
 
 ---
 
+## `zlink_ctx_get_auto_hwm_budget_snapshot` / `zlink_ctx_reset_auto_hwm_budget_metrics`
+
+Reads a versioned snapshot of the context-wide Auto HWM budget plan and counters, and resets the
+counters for a new measurement window without disturbing the plan.
+
+```c
+zlink_auto_hwm_budget_snapshot_t snap = {0};
+snap.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+snap.struct_size = sizeof(snap);
+zlink_ctx_get_auto_hwm_budget_snapshot(ctx, &snap);
+
+zlink_ctx_reset_auto_hwm_budget_metrics(ctx);
+```
+
+**Parameters.** `zlink_ctx_get_auto_hwm_budget_snapshot` takes the context handle and an output
+`snapshot_` pointer; the caller zero-initializes the structure, sets `abi_version` to
+`ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1`, and sets `struct_size` to its allocated size before
+calling — Core writes only the smaller prefix of the caller size and the Core v1 size, and
+returns the full Core v1 size in `struct_size`. `zlink_ctx_reset_auto_hwm_budget_metrics` takes
+only the context handle. The snapshot struct carries the budget plan
+(`configured_memory_limit_bytes`, `runtime_memory_limit_bytes`, `resolved_memory_limit_bytes`,
+`configured_core_budget_bytes`, `effective_core_budget_bytes`, `total_planned_hwm_bytes`,
+`total_applied_hwm_bytes`, `manual_reserved_hwm_bytes`), accounted-byte counters
+(`core_queue_accounted_bytes`, `current_accounted_bytes`, `provisional_accounted_bytes`,
+`peak_accounted_bytes`, the `completion_*` and `total_messaging_accounted_bytes` fields, the
+`monitor_queue_*` and `total_instance_*` fields), admission counters
+(`oversize_admission_count`, `largest_oversize_message_bytes`, `blocked_ratio_ppm`), queue counts
+(`active_directional_queue_count`, `active_completion_directional_queue_count`,
+`active_send_queue_count`, `active_receive_queue_count`, `unlimited_manual_queue_count`),
+generation markers (`budget_generation`, `measurement_epoch`), the `flags` bitfield
+(`ZLINK_AUTO_HWM_BUDGET_FLAG_PLANNING_ACTIVE`/`_INSUFFICIENT`/`_AGGREGATE_HWM_VALID`/
+`_AGGREGATE_OVERFLOW`), and reserved-always-0 fields kept for ABI compatibility
+(`application_accounted_bytes`, `outstanding_application_lease_count`, `retired_queue_count`,
+`deferred_origin_credit_bytes`, `reserved_u64[8]`) — see the [Auto HWM
+specification](../spec/core/systems/06-auto-hwm.en.md#3-functions) for every field's exact
+meaning.
+
+**Return and errno.** Both return `zlink_config_result_t` — `ZLINK_CONFIG_OK` on success.
+`zlink_ctx_get_auto_hwm_budget_snapshot` fails with `EINVAL` (null snapshot pointer or
+`struct_size` shorter than the two header fields), `ENOTSUP` (unsupported `abi_version`),
+`EFAULT` (invalid context), or `ETERM` (context is terminating). `zlink_ctx_reset_auto_hwm_budget_metrics`
+fails with `EFAULT` or `ETERM` only.
+
+**When to use.** Call `zlink_ctx_get_auto_hwm_budget_snapshot` to observe the current plan and
+accounting for dashboards, health checks, or diagnosing an insufficient-budget condition —
+calling it never changes any admission or rejection result. Call
+`zlink_ctx_reset_auto_hwm_budget_metrics` to start a fresh measurement window (e.g. between test
+cases, or on a periodic monitoring cadence): it bumps `measurement_epoch`, rebases the peak
+counters to their current values, and zeroes the blocked-ratio and oversize counters, but leaves
+`budget_generation`, the plan, current bytes, and monitor-queue fields untouched.
+
+---
+
 See the [Context specification](../spec/core/01-context.en.md) for the full rationale.
