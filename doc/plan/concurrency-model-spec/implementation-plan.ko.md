@@ -34,7 +34,23 @@
 | 3 | 같은 트리 `04-application-job-queue-and-backpressure.ko.md` §1·§3·**§8「Owner 예약의 이관」** | permit 순서, owner FIFO, **예약 이관(2026-08-28 신설)** |
 | 4 | 같은 트리 `02-handler-turn-and-execution-gate.ko.md` §1·§3·§7·§10 | queue/gate 분리, `Yield` claim, lane 기본값, 공유 실행 자원 |
 | 5 | `00-foundation/06-framework-api.ko.md` §11 | mailbox 두 축·반환 시점·scheduler |
-| 6 | [executor-naming-contract.ko.md](executor-naming-contract.ko.md) → 이 플랜 §1~§9 | 이름 계약 실측, 작업 순서 |
+| 6 | `03-spot-actor/04-actor-model.ko.md` §3 | Actor queue 불변 — "Actor payload는 항상 그 Actor queue에, Spot application queue에 넣지 않는다" |
+| 7 | [`../concurrency-redesign/rules.ko.md`](../concurrency-redesign/rules.ko.md) §4·§5.2·§10 | 게이트 매트릭스와 알려진 기존 실패, 빌드 트리 규칙, **lane 전환 절차**(P1-4가 따른다) |
+| 8 | [executor-naming-contract.ko.md](executor-naming-contract.ko.md) → 이 플랜 §1~§9 | 이름 계약 실측, 작업 순서 |
+
+용어집(`00-foundation/02-glossary.ko.md`)의 `User Spot execution mode`·`Spot turn`·`Owner`는
+위 문서들이 링크하는 자리에서 따라 읽으면 된다 — 통독 대상은 아니다.
+
+### 0.1a 이 폴더에서 필요한 문서 — 셋뿐이다
+
+| 문서 | 역할 |
+|---|---|
+| **이 플랜** | 진실 원천 — 순서·작업·판정·진행표 |
+| [executor-naming-contract.ko.md](executor-naming-contract.ko.md) | 이름·라우팅 계약과 4언어 실측 |
+| [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md) | **P0-1의 실행 근거** — 묶을 조회 지점이 콜사이트 단위로 여기 있다 |
+
+나머지(README·spec-draft-concurrency-model·executor-layer-survey·socket-lock-reclassification)는
+**결정 이력·증거 보관용**이다 — 구현 세션이 읽을 필요 없다.
 
 ### 0.2 진행 방식 — 역할 분담 (2026-08-28 사용자 지정)
 
@@ -198,7 +214,7 @@ relocation seal과 stopping 상태만 본다. java·cpp·node는 두 축을 갖�
 | P1-1 | `ZLinkActorDispatchMailbox` → `ZLinkActorSerialExecutor` | `Runtime/Actors/ZLinkActorDispatchMailbox.cs` | 이전 이름이 저장소에서 0건 |
 | P1-2 | `ZLinkStreamSessionSerialExecutor` → `ZLinkSessionSerialExecutor` | `Runtime/Streams/ZLinkStreamSessionSerialExecutor.cs` | 이전 이름 0건 |
 | P1-3 | Session 진입점 동사 `Enqueue*` → `Execute*` 넷 | 위 파일 | 스펙 07 §3 표와 일치 |
-| P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
+| P1-4 | `_laneGate` lock을 state lane 소유로 바꾼다 — 절차는 [`../concurrency-redesign/rules.ko.md`](../concurrency-redesign/rules.ko.md) §10 | `Runtime/Spots/ZLinkSpotSerialExecutor.cs:12,69,87,1108` | 그 파일에 `lock (` 0건 |
 | P1-5 | 상수로 박힌 `OwnerTimeSliceMilliseconds`·`LifecycleTurnLimit`을 정책 주입으로 바꾼다 | `Runtime/Execution/ZLinkSerialExecutionQueue.cs:7,8` | `ZLinkExecutionLanePolicy` 일곱 값이 주입된다 |
 | P1-6 | 큐에 count·byte 두 축 계상을 신설한다 — claim 이관 record는 계상만 하고 재판정하지 않는다(04 §8) | `Runtime/Execution/ZLinkSerialExecutionQueue.cs` | 스펙 07 §10 "수용량과 backpressure" + 04 §8 내부 확인 조건 |
 

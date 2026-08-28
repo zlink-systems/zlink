@@ -20,7 +20,9 @@
 | 5 | [spot-hotpath-bridge-survey.ko.md](spot-hotpath-bridge-survey.ko.md) | **메시지 1건이 블로킹 브리지를 몇 번 통과하나** |
 | 6 | [socket-lock-reclassification.ko.md](socket-lock-reclassification.ko.md) | socket lock 371개 중 무엇이 중복인가 |
 
-**구현 세션은 1~3을 읽는다.** 계약은 정식 스펙 07이 소유하고, 4~6은 그 근거다.
+**구현 세션이 이 폴더에서 읽을 것은 implementation-plan(§0에 전체 부트스트랩) ·
+executor-naming-contract · spot-hotpath-bridge-survey 셋뿐이다.** 계약은 정식 스펙
+06·07(+04 §8)이 소유한다. 나머지 문서는 결정 이력·증거 보관용이다.
 
 ---
 
