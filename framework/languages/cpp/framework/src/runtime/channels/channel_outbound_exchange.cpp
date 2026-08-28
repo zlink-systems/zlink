@@ -246,7 +246,8 @@ framework_exception_t map_native_send_exception (const std::exception &error)
     if (const auto *submit_error =
           dynamic_cast<const zlink::submit_error_t *> (&error);
         submit_error != nullptr) {
-        if (submit_error->result () == zlink::submit_result_t::backpressured
+        if ((submit_error->result () == zlink::submit_result_t::backpressured
+             || submit_error->result () == zlink::submit_result_t::not_admitted)
             && (submit_error->internal_errno () == EAGAIN
                 || submit_error->internal_errno () == ETIMEDOUT)) {
             return detail::make_boundary_exception (
@@ -495,6 +496,7 @@ class channel_native_client_t
             }
             const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
               operation_deadline - now);
+            std::optional<zlink::async_result_t<void>> pending;
             {
                 std::lock_guard client_lock (_mutex);
                 if (_closed.load (std::memory_order_acquire)
@@ -509,35 +511,26 @@ class channel_native_client_t
                       detail::boundary_error_t::shutdown,
                       "channel native client is closed");
                 }
-                const auto configured_timeout =
-                  transport->socket->options ().send_timeout ();
-                // The routed submit is synchronous, so the per-operation
-                // SNDTIMEO has to stay installed until it returns.
-                transport->socket->options ().send_timeout (
-                  remaining > std::chrono::milliseconds::zero ()
-                    ? remaining
-                    : std::chrono::milliseconds (1));
-                try {
-                    transport->socket->send ()
-                      .message (send_header)
-                      .message (send_body)
-                      .submit ();
-                }
-                catch (...) {
-                    transport->socket->options ().send_timeout (
-                      configured_timeout);
-                    throw;
-                }
-                transport->socket->options ().send_timeout (
-                  configured_timeout);
+                pending.emplace (
+                  transport->socket->send ()
+                    .message (send_header)
+                    .message (send_body)
+                    .timeout (remaining > std::chrono::milliseconds::zero ()
+                                ? remaining
+                                : std::chrono::milliseconds (1))
+                    .async ());
             }
+            co_await std::move (*pending);
             co_return;
         }
         catch (const framework_exception_t &) {
             throw;
         }
         catch (const zlink::submit_error_t &error) {
-            if (error.result () == zlink::submit_result_t::backpressured) {
+            if ((error.result () == zlink::submit_result_t::backpressured
+                 || error.result () == zlink::submit_result_t::not_admitted)
+                && (error.internal_errno () == EAGAIN
+                    || error.internal_errno () == ETIMEDOUT)) {
                 trace_channel_backpressure (
                   _runtime.dispatch_options_ref (), _channel_name,
                   trace_packet_name, correlation_id);
