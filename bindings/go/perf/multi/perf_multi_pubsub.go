@@ -222,9 +222,14 @@ func drainMultiPubSubSocket(
 		return
 	}
 	now := time.Now()
-	if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, msgSize, perfcommon.PhaseActive, now); ok && now.Before(recvStopAt) {
-		stats.AddLatencyNsSingleThread(latencyNs)
-		*activeObserved = true
+	if !now.Before(recvStopAt) {
+		return
+	}
+	stats.AddCount()
+	*activeObserved = true
+	if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(
+		part, msgSize, perfcommon.PhaseActive, now); ok {
+		stats.AddLatencySampleNs(latencyNs)
 	}
 }
 

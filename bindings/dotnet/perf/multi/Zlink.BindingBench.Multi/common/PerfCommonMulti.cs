@@ -49,6 +49,12 @@ internal static partial class PerfRunner
         return options.ConnectReadyTimeoutMs;
     }
 
+    internal static ulong ResolveMultiMonitorHwmBytes()
+    {
+        return PerfEnv.ReadUInt64("PERF_MULTI_MONITOR_HWM",
+            PerfEnv.ReadUInt64("PERF_MONITOR_HWM", 4_096_000UL));
+    }
+
     // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven receive/relay loops use
     // -1. Echo requester loops own the active clock and bound each wait by
     // their remaining interval at the call site.
@@ -495,6 +501,50 @@ internal static partial class PerfRunner
     internal static int ResolveMultiLatencySampleCap(PerfOptions options)
     {
         return options.LatencySampleCap;
+    }
+
+    internal static void ReservoirSampleMulti(List<double> samples,
+        double value, ref long seenCount, ref double exactSum, int cap,
+        ref uint rngState)
+    {
+        seenCount++;
+        exactSum += value;
+        if (cap <= 0)
+            return;
+        if (samples.Count < cap)
+        {
+            samples.Add(value);
+            return;
+        }
+
+        rngState = unchecked(rngState * 1664525u + 1013904223u);
+        ulong slot = rngState % (ulong)seenCount;
+        if (slot < (ulong)samples.Count)
+            samples[(int)slot] = value;
+    }
+
+    internal static (double mean, double p95, double p99)
+        ComputeMultiLatencyStats(List<double> samples, long exactCount,
+            double exactSum)
+    {
+        if (exactCount <= 0)
+            return (0.0, 0.0, 0.0);
+
+        double mean = exactSum / exactCount;
+        if (samples.Count == 0)
+            return (mean, mean, mean);
+
+        samples.Sort();
+        return (mean, Percentile(samples, 0.95), Percentile(samples, 0.99));
+
+        static double Percentile(IReadOnlyList<double> sorted, double q)
+        {
+            double pos = (sorted.Count - 1) * q;
+            int lo = (int)pos;
+            int hi = lo + 1 < sorted.Count ? lo + 1 : lo;
+            double fraction = pos - lo;
+            return sorted[lo] + (sorted[hi] - sorted[lo]) * fraction;
+        }
     }
 
     internal static int ResolveMultiOnewayLatencySampleStride()

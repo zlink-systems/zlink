@@ -10,7 +10,6 @@ internal static class PerfMultiSocketReqRep
     private static readonly RoutingId ServerRoutingId = RoutingId.From("SERVER"u8);
     private const uint RunId = 1;
     private const uint ActivePhase = 1;
-    private const int ReplyRetryPollTimeoutMs = 50;
     private static int s_debugServerRecvLogs;
     private static int s_debugServerReplyLogs;
     private static int s_debugClientSubmitLogs;
@@ -46,7 +45,6 @@ internal static class PerfMultiSocketReqRep
         string endpoint = MultiEndpointFor(options.Transport, endpointName, options);
 
         using var ctx = Zlink.CreateContext();
-        using var pollManager = new PollManager();
         ApplyMultiServerContextOptions(ctx, options);
         using var server = ctx.CreateRouterSocket();
         ApplyMultiSocketOptions(server, options);
@@ -64,8 +62,6 @@ internal static class PerfMultiSocketReqRep
         RecalculateAutoHwm(ctx);
         PrintAutoHwmSnapshot(server, "server", options.Transport, size);
         WriteStdoutLine($"READY,{endpoint}");
-        var pollSockets = new[] { (ISocket)server };
-
         using var stop = new CancellationTokenSource();
         Thread stdinThread = new(() =>
         {
@@ -90,12 +86,12 @@ internal static class PerfMultiSocketReqRep
         {
             if (!TryReceiveBlocking(server, received))
                 continue;
-            if (!ReplyReceived(pollSockets, pollManager, received, stop.Token))
+            if (!ReplyReceived(received, stop.Token))
                 return 2;
             while (!stop.IsCancellationRequested
                    && TryReceiveNoWait(server, received))
             {
-                if (!ReplyReceived(pollSockets, pollManager, received, stop.Token))
+                if (!ReplyReceived(received, stop.Token))
                     return 2;
             }
         }
@@ -109,6 +105,7 @@ internal static class PerfMultiSocketReqRep
         int size = Math.Max(1, options.Size);
         int durationSeconds = ResolveMultiDurationSeconds(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
+        ulong monitorHwmBytes = ResolveMultiMonitorHwmBytes();
         int latencySampleCap = ResolveMultiLatencySampleCap(options);
         int clientCount = ResolveMultiClients(options);
         string endpoint = options.Endpoint;
@@ -154,7 +151,8 @@ internal static class PerfMultiSocketReqRep
                 }
                 if (client is IConnectableSocket connectable)
                 {
-                    var monitor = connectable.MonitorOpen(SocketEvent.ConnectionReady);
+                    var monitor = connectable.MonitorOpen(
+                        SocketEvent.ConnectionReady, monitorHwmBytes);
                     connectable.Connect(endpoint);
                     monitors.Add(monitor);
                 }
@@ -188,14 +186,15 @@ internal static class PerfMultiSocketReqRep
 
             var result = await RunClientLoopAsync(slots, routerRouter, size,
                 durationSeconds, latencySampleCap).ConfigureAwait(false);
-            if (result.completed <= 0 || result.latencySamples.Count == 0)
+            if (result.completed <= 0 || result.latencyCount <= 0)
             {
                 DebugLogLimited(ref s_debugClientReplyLogs,
-                    $"socket_reqrep_client: active failed completed={result.completed} samples={result.latencySamples.Count}");
+                    $"socket_reqrep_client: active failed completed={result.completed} latency_count={result.latencyCount}");
                 return 2;
             }
 
-            var latency = ComputeLatencyStats(result.latencySamples);
+            var latency = ComputeMultiLatencyStats(result.latencySamples,
+                result.latencyCount, result.latencySum);
             double throughput = result.completed / (double)Math.Max(1, durationSeconds);
             PrintResult(options.Pattern, options.Transport, size, throughput,
                 latency.mean, latency.p95, latency.p99);
@@ -209,28 +208,23 @@ internal static class PerfMultiSocketReqRep
         }
     }
 
-    private static Task<(long completed, List<double> latencySamples)>
+    private static async Task<(long completed, List<double> latencySamples,
+        long latencyCount, double latencySum)>
         RunClientLoopAsync(
         List<ClientSlot> slots, bool routerRouter,
         int msgSize, int durationSeconds, int latencyCap)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
-        using var completionPoller = Zlink.CreatePoller();
-        var completionEvents = new PollEvent[slots.Count];
-        for (int i = 0; i < slots.Count; i++)
-            completionPoller.Add(slots[i].Socket,
-                PollEventFlags.PollCompletion, (nuint)i);
+        var requests = new List<Task>();
         var samples = new List<double>(Math.Max(0, latencyCap));
         object gate = new();
         Exception? completionError = null;
         int hasCompletionError = 0;
         long completed = 0;
-        long outstanding = 0;
         long sampleSeen = 0;
+        double sampleSum = 0.0;
         uint rng = 0xA341316Cu;
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
-        ulong activeDeadlineNs = EpochNs()
-            + (ulong)Math.Max(1, durationSeconds) * 1_000_000_000UL;
         TimeSpan requestTimeout = ResolveReqRepTimeout();
         bool HasCompletionError() => Volatile.Read(ref hasCompletionError) != 0;
 
@@ -243,72 +237,46 @@ internal static class PerfMultiSocketReqRep
             }
         }
 
-        bool TrySubmit(ClientSlot slot)
+        Task<IReadOnlyList<Message>> SubmitAsync(ClientSlot slot)
         {
-            if (HasCompletionError()
-                || Stopwatch.GetTimestamp() >= deadlineTicks)
-            {
-                return false;
-            }
-
             using Message message = Message.Allocate(payloadSize);
             long sentTicks = Stopwatch.GetTimestamp();
-            StampMetricHeader(message.AsSpan(), RunId, PerfPhase.Active, msgSize,
-                slot.NextSeq++, EpochNsFromTimestamp(sentTicks));
-
-            try
+            ulong seq = slot.NextSeq;
+            StampMetricHeader(message.AsSpan(), RunId, PerfPhase.Active,
+                msgSize, seq, EpochNsFromTimestamp(sentTicks));
+            using Message? tail = PerfSocketIo.MeasurementPartCount == 2
+                ? Message.Allocate(0) : null;
+            Task<IReadOnlyList<Message>> requestTask;
+            if (routerRouter)
             {
-                Interlocked.Increment(ref outstanding);
-                using Message? tail = PerfSocketIo.MeasurementPartCount == 2
-                    ? Message.Allocate(0) : null;
-                if (routerRouter)
-                {
-                    var request = ((IRouterSocket)slot.Socket)
-                        .Request(ServerRoutingId).Message(message);
-                    if (tail != null)
-                        request = request.Message(tail);
-                    request.Timeout(requestTimeout).Submit(SendFlags.DontWait,
-                        CompleteRequest);
-                }
-                else
-                {
-                    var request = ((IDealerSocket)slot.Socket).Request()
-                        .Message(message);
-                    if (tail != null)
-                        request = request.Message(tail);
-                    request.Timeout(requestTimeout).Submit(SendFlags.DontWait,
-                        CompleteRequest);
-                }
+                var request = ((IRouterSocket)slot.Socket)
+                    .Request(ServerRoutingId).Message(message);
+                if (tail != null)
+                    request = request.Message(tail);
+                requestTask = request.Timeout(requestTimeout).Async();
             }
-            catch (ZlinkException ex)
-                when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
-                      || PerfShared.IsTransientNetworkError(ex.NativeErrno))
+            else
             {
-                Interlocked.Decrement(ref outstanding);
-                return false;
+                var request = ((IDealerSocket)slot.Socket).Request()
+                    .Message(message);
+                if (tail != null)
+                    request = request.Message(tail);
+                requestTask = request.Timeout(requestTimeout).Async();
             }
-
+            slot.NextSeq = seq + 1;
             if (s_debugEnabled)
                 DebugLogLimited(ref s_debugClientSubmitLogs,
-                    $"socket_reqrep_client: submitted seq={slot.NextSeq - 1}");
-            return true;
+                    $"socket_reqrep_client: submitted seq={seq}");
+            return requestTask;
         }
 
-        void CompleteRequest(RequestResult result,
-            IReadOnlyList<Message> parts)
+        async Task ObserveRequestAsync(
+            Task<IReadOnlyList<Message>> requestTask)
         {
+            IReadOnlyList<Message>? parts = null;
             try
             {
-                if (result == RequestResult.TimedOut)
-                {
-                    if (s_debugEnabled)
-                        DebugLogLimited(ref s_debugClientReplyLogs,
-                            "socket_reqrep_client: completion timed out");
-                    return;
-                }
-                if (result != RequestResult.Ok)
-                    throw new InvalidOperationException(
-                        $"request completion failed: {result}");
+                parts = await requestTask.ConfigureAwait(false);
                 if (s_debugEnabled)
                 {
                     DebugLogLimited(ref s_debugClientReplyLogs,
@@ -323,19 +291,29 @@ internal static class PerfMultiSocketReqRep
                     && header.MsgSize == (uint)msgSize
                     && header.Phase == ActivePhase)
                 {
-                    ulong nowNs = EpochNs();
-                    if (nowNs < activeDeadlineNs && nowNs >= header.SentTsNs)
+                    long completionTicks = Stopwatch.GetTimestamp();
+                    ulong nowNs = EpochNsFromTimestamp(completionTicks);
+                    if (completionTicks < deadlineTicks
+                        && nowNs >= header.SentTsNs)
                     {
                         lock (gate)
                         {
                             double sampleNs =
                                 (nowNs - header.SentTsNs) * 0.5;
-                            ReservoirSample(samples, sampleNs,
-                                ref sampleSeen, latencyCap, ref rng);
+                            ReservoirSampleMulti(samples, sampleNs,
+                                ref sampleSeen, ref sampleSum, latencyCap,
+                                ref rng);
                         }
                         Interlocked.Increment(ref completed);
                     }
                 }
+            }
+            catch (ZlinkRequestException ex)
+                when (ex.Result == ZlinkRequestException.ErrorCode.TimedOut)
+            {
+                if (s_debugEnabled)
+                    DebugLogLimited(ref s_debugClientReplyLogs,
+                        "socket_reqrep_client: completion timed out");
             }
             catch (Exception ex)
             {
@@ -343,47 +321,75 @@ internal static class PerfMultiSocketReqRep
             }
             finally
             {
-                Zlink.MultipartClose(parts);
-                Interlocked.Decrement(ref outstanding);
+                if (parts != null)
+                    Zlink.MultipartClose(parts);
             }
         }
 
         while (Stopwatch.GetTimestamp() < deadlineTicks && !HasCompletionError())
         {
+            for (int i = requests.Count - 1; i >= 0; --i)
+            {
+                if (!requests[i].IsCompleted)
+                    continue;
+                await requests[i].ConfigureAwait(false);
+                requests.RemoveAt(i);
+            }
+
             bool submittedAny = false;
             for (int i = 0; i < slots.Count; i++)
-                submittedAny |= TrySubmit(slots[i]);
-
-            long remainingTicks = deadlineTicks - Stopwatch.GetTimestamp();
-            int remainingMs = remainingTicks <= 0 ? 0 : (int)Math.Min(
-                int.MaxValue, Math.Ceiling(remainingTicks * 1000.0
-                    / Stopwatch.Frequency));
-            int waitMs = submittedAny ? 0 : Math.Min(50, remainingMs);
-            if (waitMs >= 0)
-                _ = completionPoller.Wait(completionEvents,
-                    TimeSpan.FromMilliseconds(waitMs));
+            {
+                try
+                {
+                    Task<IReadOnlyList<Message>> requestTask =
+                        SubmitAsync(slots[i]);
+                    requests.Add(ObserveRequestAsync(requestTask));
+                    submittedAny = true;
+                }
+                catch (ZlinkException ex)
+                    when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
+                          || PerfShared.IsTransientNetworkError(ex.NativeErrno))
+                {
+                }
+                catch (Exception ex)
+                {
+                    RecordCompletionError(ex);
+                }
+            }
+            if (!submittedAny)
+                await Task.Yield();
         }
 
-        long drainStart = Stopwatch.GetTimestamp();
-        TimeSpan drainTimeout = ResolveReqRepDrainTimeout();
-        while (!HasCompletionError() && Volatile.Read(ref outstanding) > 0)
+        long drainDeadline = Stopwatch.GetTimestamp()
+            + (long)(ResolveReqRepDrainTimeout().TotalSeconds
+                * Stopwatch.Frequency);
+        while (requests.Count > 0
+               && Stopwatch.GetTimestamp() < drainDeadline)
         {
-            _ = completionPoller.Wait(completionEvents,
-                TimeSpan.FromMilliseconds(50));
-            if (Stopwatch.GetElapsedTime(drainStart) > drainTimeout)
-                throw new TimeoutException("multi request/reply operations did not drain");
+            for (int i = requests.Count - 1; i >= 0; --i)
+            {
+                if (!requests[i].IsCompleted)
+                    continue;
+                await requests[i].ConfigureAwait(false);
+                requests.RemoveAt(i);
+            }
+            if (requests.Count > 0)
+                await Task.Delay(1).ConfigureAwait(false);
         }
+        if (requests.Count != 0)
+            throw new TimeoutException(
+                "multi request/reply operations did not drain");
 
         lock (gate)
         {
             if (completionError != null)
                 throw completionError;
         }
-        return Task.FromResult((Volatile.Read(ref completed), samples));
+        return (Volatile.Read(ref completed), samples, sampleSeen, sampleSum);
     }
 
-    private static bool ReplyReceived(IReadOnlyList<ISocket> pollSockets,
-        PollManager pollManager, Received received, CancellationToken stopToken)
+    private static bool ReplyReceived(Received received,
+        CancellationToken stopToken)
     {
         if (!PerfSocketIo.TryMeasurementPayload(received.Parts,
                 out Message payloadPart))
@@ -398,29 +404,23 @@ internal static class PerfMultiSocketReqRep
             DebugLogLimited(ref s_debugServerRecvLogs,
                 $"socket_reqrep_server: recv size={payloadSize} seq={requestSeq}");
         }
-        using Message replyTemplate = Message.Allocate(payloadSize);
-        payloadPart.AsReadOnlySpan().CopyTo(replyTemplate.AsSpan());
-        while (!stopToken.IsCancellationRequested)
+        using Message reply = Message.Allocate(payloadSize);
+        payloadPart.AsReadOnlySpan().CopyTo(reply.AsSpan());
+        try
         {
-            using Message reply = replyTemplate.Copy();
-            try
+            if (PerfSocketIo.MeasurementPartCount == 2)
             {
-                // Keep a template and submit a fresh copy on every attempt,
-                // matching the C retry contract when backpressure consumes a
-                // native message part.
                 using Message tail = Message.Allocate(0);
-                if (PerfSocketIo.MeasurementPartCount == 2)
-                    received.Reply().Message(reply).Message(tail).Submit();
-                else
-                    received.Reply().Message(reply).Submit();
-                break;
+                received.Reply().Message(reply).Message(tail).Submit();
             }
-            catch (ZlinkSubmitException ex)
-                when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
+            else
             {
-                _ = pollManager.PollSockets(pollSockets, SocketPollOut,
-                    ReplyRetryPollTimeoutMs);
+                received.Reply().Message(reply).Submit();
             }
+        }
+        catch (ZlinkSubmitException)
+        {
+            return false;
         }
         if (s_debugEnabled)
         {

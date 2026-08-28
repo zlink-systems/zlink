@@ -7,80 +7,42 @@ const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const {
-  POLLOUT,
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
-  pollEvents,
-  pollEventHas,
-  trySocketSend,
-  waitPollerOne
 } = require('./perf_multi_runtime');
 
-function packetParts(header, body) {
-  const prefix = Buffer.allocUnsafe(6);
-  prefix.writeUInt16BE(header.size(), 0);
-  prefix.writeUInt32BE(body.size(), 2);
-  return [prefix, header, body];
+function packetFrame(header, body) {
+  const headerData = header.data();
+  const bodyData = body.data();
+  const frame = Buffer.allocUnsafe(6 + headerData.length + bodyData.length);
+  frame.writeUInt16BE(headerData.length, 0);
+  frame.writeUInt32BE(bodyData.length, 2);
+  headerData.copy(frame, 6);
+  bodyData.copy(frame, 6 + headerData.length);
+  return frame;
 }
 
-function isTransientSendError(error) {
+function isGoneRoutingSendError(error) {
   return error instanceof zlink.SubmitError
-    && (error.result === zlink.SubmitResult.Backpressured
-        || error.result === zlink.SubmitResult.NotConnected
-        || error.result === zlink.SubmitResult.NotFound
-        || error.result === zlink.SubmitResult.NotAdmitted);
+    && (error.result === zlink.SubmitResult.NotConnected
+        || error.result === zlink.SubmitResult.NotFound);
 }
 
-function tryStreamSend(stream, routingId, frame) {
+async function sendStream(stream, routingId, frame) {
   try {
     // STREAM owns its packet framing; it must remain byte-for-byte unchanged
     // when measurement multipart mode is enabled for the other patterns.
-    return trySocketSend(stream, routingId, [frame]);
+    await stream.send(routingId).message(frame).submit();
   } catch (error) {
-    if (isTransientSendError(error)) {
-      return false;
+    if (isGoneRoutingSendError(error)) {
+      // The peer route is terminally gone. Treat the reply as handled so the
+      // global FIFO can close it and continue instead of pinning every peer
+      // behind an entry that can never become writable again.
+      return;
     }
     throw error;
   }
-}
-
-function pendingLength(pending) {
-  return pending.items.length - pending.head;
-}
-
-function pushPending(pending, reply) {
-  pending.items.push(reply);
-}
-
-function closeReply(reply) {
-  for (const part of reply.frame) {
-    if (part instanceof zlink.Message) {
-      part.close();
-    }
-  }
-}
-
-function compactPending(pending) {
-  if (pending.head > 0 && pending.head >= pending.items.length) {
-    pending.items.length = 0;
-    pending.head = 0;
-  } else if (pending.head > 1024 && pending.head * 2 >= pending.items.length) {
-    pending.items.splice(0, pending.head);
-    pending.head = 0;
-  }
-}
-
-function drainPending(stream, pending) {
-  while (pending.head < pending.items.length) {
-    const reply = pending.items[pending.head];
-    if (!tryStreamSend(stream, reply.routingId, reply.frame)) {
-      break;
-    }
-    closeReply(reply);
-    pending.head += 1;
-  }
-  compactPending(pending);
 }
 
 function sleepImmediate() {
@@ -92,11 +54,10 @@ async function main() {
   const ctx = zlink.createContext();
   applyContextPolicy(ctx, 'server', 'MULTI_STREAM');
   const stream = zlink.createStreamSocket(ctx);
-  const poller = zlink.createPoller();
-  let pollBuffer = null;
   let rl = null;
   let stop = false;
-  const pending = { items: [], head: 0 };
+  const pending = new Set();
+  let sendFailure = null;
 
   try {
     applySocketPolicy(stream);
@@ -115,22 +76,23 @@ async function main() {
     ctx.recalculateAutoHwm();
     emitMultiSocketHwmDetail(stream, 'endpoint', options.transport, options.msgSize);
     stream.setPacketHandler((sourceRid, header, body) => {
-      let queued = false;
+      let reply;
       try {
-        const frame = packetParts(header, body);
-        if (pendingLength(pending) > 0 || !tryStreamSend(stream, sourceRid, frame)) {
-          pushPending(pending, { routingId: sourceRid, frame });
-          queued = true;
-        }
+        reply = {
+          routingId: zlink.RoutingId.from(sourceRid.toBytes()),
+          frame: packetFrame(header, body)
+        };
       } finally {
-        if (!queued) {
-          header.close();
-          body.close();
-        }
+        header.close();
+        body.close();
       }
+      const task = sendStream(stream, reply.routingId, reply.frame);
+      pending.add(task);
+      task.catch((error) => { sendFailure = error; })
+        .finally(() => {
+          pending.delete(task);
+        });
     });
-    poller.add(stream, pollEvents(POLLOUT), 0);
-    pollBuffer = zlink.createPollEvents(1);
     console.log(`READY,${options.endpoint}`);
 
     rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -144,22 +106,12 @@ async function main() {
     })();
 
     while (!stop) {
-      if (pendingLength(pending) === 0) {
-        await sleepImmediate();
-        continue;
-      }
-      const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
-      if (ready && pollEventHas(ready, POLLOUT)) {
-        drainPending(stream, pending);
-      }
+      await sleepImmediate();
+      if (sendFailure) throw sendFailure;
     }
+    await Promise.all(pending);
   } finally {
     rl?.close();
-    for (let index = pending.head; index < pending.items.length; index += 1) {
-      closeReply(pending.items[index]);
-    }
-    pollBuffer?.close();
-    poller.close();
     stream.close();
     ctx.close();
   }

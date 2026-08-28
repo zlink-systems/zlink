@@ -3,7 +3,7 @@ mod common;
 
 use std::io::{self, BufRead};
 use std::time::{Duration, Instant};
-use zlink::{Message, SendFlags, SubmitResult};
+use zlink::{Message, SubmitResult};
 
 const TOPIC: &str = "bench";
 const STOP_TOKEN_BURST: usize = 64;
@@ -14,14 +14,7 @@ fn main() {
 
     let ctx = common::perf_server_context();
     let pub_sock = ctx.pub_socket().expect("pub");
-    pub_sock
-        .common_options()
-        .set_send_high_water_mark(settings.send_high_water_mark)
-        .expect("sndhwm");
-    pub_sock
-        .common_options()
-        .set_receive_high_water_mark(settings.receive_high_water_mark)
-        .expect("rcvhwm");
+    common::apply_multi_hwm(&pub_sock, &settings);
     pub_sock
         .common_options()
         .set_send_timeout(Duration::from_millis(settings.send_timeout_ms))
@@ -72,18 +65,17 @@ fn main() {
             seq,
         );
         match if common::measurement_part_count() == 2 {
-            pub_sock.publish(TOPIC).message(msg)
+            pub_sock
+                .publish(TOPIC)
+                .message(msg)
                 .message(Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
-                .flags(SendFlags::DONT_WAIT).submit()
+                .submit()
         } else {
-            pub_sock.publish(TOPIC).message(msg)
-                .flags(SendFlags::DONT_WAIT).submit()
-        }
-        {
+            pub_sock.publish(TOPIC).message(msg).submit()
+        } {
             Ok(()) => {
                 seq += 1;
             }
-            Err(err) if err.code() == SubmitResult::Backpressured => {}
             Err(err) => panic!("publish failed: {err}"),
         }
     }

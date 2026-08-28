@@ -105,32 +105,32 @@ bool setup_dealer_router_session (perf::single::perf_socket_t &router_,
 
 } // namespace
 
-perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &transport,
-                                                          size_t msg_size,
-                                                          const std::string &lib_name)
+bool run_pattern_dealer_router (const std::string &transport,
+                                size_t msg_size,
+                                const std::string &lib_name)
 {
     if (!perf::single::transport_available (transport)) {
         std::cout << "UNSUPPORTED," << lib_name << ",DEALER_ROUTER," << transport << std::endl;
-        co_return true;
+        return true;
     }
 
     perf::single::ctx_guard_t ctx;
     if (!ctx.valid ()) {
-        co_return false;
+        return false;
     }
 
     perf::single::socket_guard_t router (ctx, zlink::socket_type::router);
     perf::single::socket_guard_t dealer (ctx, zlink::socket_type::dealer);
     if (!router.valid () || !dealer.valid ()) {
-        co_return false;
+        return false;
     }
 
     if (!perf::single::recalculate_single_auto_hwm (ctx)) {
-        co_return false;
+        return false;
     }
     if (!setup_dealer_router_session (router.sock (), dealer.sock (), transport,
                                       lib_name + "_dealer_router")) {
-        co_return false;
+        return false;
     }
 
     const size_t payload_size = std::max<size_t> (msg_size, perf_single_metric::header_size ());
@@ -154,7 +154,7 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
         router.sock ().poller_add (recv_poller, zlink::poll_event_flag_t::pollin, 0);
     }
     catch (const zlink::config_error_t &) {
-        co_return false;
+        return false;
     }
 
     // Synchronous routed send: the sender runs on its own thread, matching the
@@ -287,7 +287,7 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
             std::cerr << "dealer_router: no active data sent="
                       << sent_count.load (std::memory_order_acquire)
                       << " received=" << received_count << std::endl;
-        co_return false;
+        return false;
     }
 
     const perf::single::latency_stats_t latency = latency_builder.snapshot ();
@@ -301,14 +301,7 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
       static_cast<double> (received_count) / static_cast<double> (duration_s);
     perf::single::print_result (lib_name, "DEALER_ROUTER", transport, msg_size, throughput,
                                 latency.mean_ns, latency.p95_ns, latency.p99_ns);
-    co_return true;
-}
-
-bool run_pattern_dealer_router (const std::string &transport,
-                                size_t msg_size,
-                                const std::string &lib_name)
-{
-    return run_pattern_dealer_router_async (transport, msg_size, lib_name).get ();
+    return true;
 }
 
 int main (int argc, char **argv)

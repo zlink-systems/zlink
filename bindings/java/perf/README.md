@@ -59,7 +59,6 @@ Single suite pattern files:
 - `DEALER_DEALER`
 - `DEALER_ROUTER`
 - `ROUTER_ROUTER`
-- `SPOT`
 
 Multi suite pattern files:
 
@@ -67,9 +66,6 @@ Multi suite pattern files:
 - `MULTI_DEALER_ROUTER`
 - `MULTI_ROUTER_ROUTER`
 - `MULTI_PUBSUB`
-- `MULTI_SPOT`
-- `MULTI_SPOT_REQREP`
-- `MULTI_SPOT_SENDSEND`
 - `MULTI_STREAM`
 
 Each messaging pattern stays in its own source file so the hot path remains

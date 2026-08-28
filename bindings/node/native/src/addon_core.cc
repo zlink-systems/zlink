@@ -2881,8 +2881,8 @@ static int router_request_parts (void *router,
 
 napi_value dealer_request (napi_env env, napi_callback_info info)
 {
-    napi_value argv[5];
-    size_t argc = 5;
+    napi_value argv[6];
+    size_t argc = 6;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     if (argc < 4) {
         napi_throw_type_error (
@@ -2907,8 +2907,11 @@ napi_value dealer_request (napi_env env, napi_callback_info info)
     std::vector<zlink_msg_t> parts;
     if (!build_msg_vector_or_single (env, argv[1], &parts))
         return NULL;
+    bool direct_callback = false;
+    if (argc >= 6)
+        napi_get_value_bool (env, argv[5], &direct_callback);
     request_js_state_t *state = create_core_request_js_state (
-      env, dealer, token);
+      env, dealer, token, direct_callback);
     if (!state) {
         close_msg_vector (parts);
         return NULL;
@@ -2930,8 +2933,8 @@ napi_value dealer_request (napi_env env, napi_callback_info info)
 
 napi_value router_request (napi_env env, napi_callback_info info)
 {
-    napi_value argv[8];
-    size_t argc = 8;
+    napi_value argv[9];
+    size_t argc = 9;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     if (argc < 5) {
         napi_throw_type_error (
@@ -2984,8 +2987,11 @@ napi_value router_request (napi_env env, napi_callback_info info)
     std::vector<zlink_msg_t> parts;
     if (!build_msg_vector_or_single (env, argv[2], &parts))
         return NULL;
+    bool direct_callback = false;
+    if (argc >= 9)
+        napi_get_value_bool (env, argv[8], &direct_callback);
     request_js_state_t *state = create_core_request_js_state (
-      env, router, token);
+      env, router, token, direct_callback);
     if (!state) {
         close_msg_vector (parts);
         return NULL;

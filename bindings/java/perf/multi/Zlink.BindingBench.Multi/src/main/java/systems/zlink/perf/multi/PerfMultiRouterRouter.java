@@ -13,17 +13,15 @@ import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.SocketType;
-import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.perf.PerfControl;
-import systems.zlink.perf.PerfMessageTemplatePool;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfUtil;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiRouterRouter {
@@ -39,9 +37,9 @@ final class PerfMultiRouterRouter {
         AtomicBoolean stopRequested = PerfControl.watchStopSignal("router-router server");
         try (Context ctx = PerfUtil.newContext(config);
              RouterSocket server = ctx.createRouterSocket();
-             var monitor = server.monitorOpen(MonitorEventType.CONNECTION_READY)) {
+             var monitor = server.monitorOpen(
+                 config.monitorHwm(), MonitorEventType.CONNECTION_READY)) {
             server.setRoutingId(SERVER_ID);
-            PerfUtil.applyMonitorOptions(monitor, config);
             PerfUtil.applySocketOptions(server, config);
             PerfUtil.configureServerTls(server, config.transport());
             server.bind(config.endpoint());
@@ -53,66 +51,14 @@ final class PerfMultiRouterRouter {
             PerfUtil.recalculateAutoHwm(ctx);
             PerfUtil.printMultiMonitorAutoHwm(config, monitor, "server",
                 "server", SocketType.ROUTER);
-            // Long-lived caller-provided Received reused across every recv on
-            // the server hot path. The binding refills its internal state in
-            // place via adoptFrom, avoiding the per-recv Received allocation
-            // that the legacy `recv() -> Received` path forced. Matches the
-            // C++/.NET canonical caller-provided storage pattern.
-            systems.zlink.contracts.messaging.Received receivedBuffer = new systems.zlink.contracts.messaging.Received();
-            try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                List.of(server), PollEventFlags.POLLIN)) {
-                // C terminates this relay from runner stdin. Client stop
-                // tokens remain regular routed frames and must be echoed.
-                while (!stopRequested.get()) {
-                    pollSet.setEvents(0, PollEventFlags.POLLIN);
-                    int readyCount = pollSet.poll(50);
-                    boolean readable = readyCount > 0
-                        && pollSet.readyHasEventAt(0, PollEventFlags.POLLIN);
-                    if (!readable) {
-                        continue;
-                    }
-                    while (true) {
-                        if (stopRequested.get()) {
-                            break;
-                        }
-                        boolean ok;
-                        try {
-                            ok = server.recv(receivedBuffer, RecvFlags.DONT_WAIT);
-                        } catch (ZlinkRecvException ex) {
-                            if (ex.getResult() == RecvResult.NO_DATA
-                                || ex.getResult() == RecvResult.BUSY) {
-                                break;
-                            }
-                            throw ex;
-                        }
-                        if (!ok) break;
-
-                        RoutingId rid = receivedBuffer.getRoutingId().orElseThrow();
-                        Message payload = PerfUtil.measurementPayload(receivedBuffer.parts());
-                        if (payload == null) {
-                            receivedBuffer.close();
-                            continue;
-                        }
-                        Message ownedReply = Message.from(payload);
-                        receivedBuffer.close();
-                        try (ownedReply) {
-                            sendReply(server, rid, ownedReply);
-                        }
-                    }
-                }
-            }
-            receivedBuffer.close();
+            PerfMultiRoutedRelay.run(server, stopRequested);
             return PerfUtil.Result.silent(config);
         }
     }
 
-    // PERF_MULTI_TEST_POLICY §1.3 mandates a single app thread driving the
-    // poller event loop for all N client sockets, mirroring the C reference
-    // perf_multi_client_helpers.hpp::run_echo_window_round_robin. This
-    // single-thread + single-context + N-sockets model is the canonical
-    // multi-client measurement structure; the previous per-thread + per-
-    // context fan-out diverged from policy and inflated measurement noise
-    // (per-context I/O dispatcher overhead, synchronized metric collection).
+    // One context owns all N sockets. Public CompletionStage send chains
+    // handle admission independently while this thread owns only POLLIN
+    // dispatch and metric collection.
     static PerfUtil.Result runClient(PerfUtil.Config config) {
         PerfUtil.Metrics metrics = new PerfUtil.Metrics(config);
         int clientCount = Math.max(1, config.clients());
@@ -129,8 +75,7 @@ final class PerfMultiRouterRouter {
                         ("PERF_CLIENT_" + i).getBytes(StandardCharsets.UTF_8)));
                     client.options().setConnectRoutingId(SERVER_ID);
                     var monitor = client.monitorOpen(
-                        MonitorEventType.CONNECTION_READY);
-                    PerfUtil.applyMonitorOptions(monitor, config);
+                        config.monitorHwm(), MonitorEventType.CONNECTION_READY);
                     PerfUtil.applySocketOptions(client, config);
                     PerfUtil.configureClientTls(client, config.transport());
                     client.connect(config.endpoint());
@@ -153,7 +98,7 @@ final class PerfMultiRouterRouter {
                 }
                 monitors.clear();
 
-                runRouterRouterClientLoop(ctx, clients, config, durationSeconds,
+                runRouterRouterClientLoop(clients, config, durationSeconds,
                     metrics);
             } finally {
                 for (var monitor : monitors) {
@@ -167,22 +112,19 @@ final class PerfMultiRouterRouter {
         return metrics.finishMulti(config);
     }
 
-    // Single-thread round-robin: one PollSet over all client sockets, mirror
-    // of C perf_multi_client_helpers.hpp::run_echo_window_round_robin and
-    // .NET PerfMultiRouterRouterClient.RunMultiRouterRouterClientLoop.
-    private static void runRouterRouterClientLoop(Context ctx,
-                                                  List<RouterSocket> clients,
+    // One receive poll set multiplexes all client sockets. Send backpressure
+    // remains Core-owned by each public async terminal and never enters this
+    // poller's event mask.
+    private static void runRouterRouterClientLoop(List<RouterSocket> clients,
                                                   PerfUtil.Config config,
                                                   int durationSeconds,
                                                   PerfUtil.Metrics metrics) {
         int n = clients.size();
         int msgSize = config.size();
-        boolean[] sendPending = new boolean[n];
         List<systems.zlink.contracts.sockets.Socket> socketsAsBase = new ArrayList<>(n);
         for (RouterSocket c : clients) {
             socketsAsBase.add(c);
         }
-        int rrIndex = 0;
         // Long-lived Received reused across recv on every client socket. The
         // canonical ref-out recv refills it in place via populateRoutedSinglePart,
         // avoiding the per-recv Received + ArrayList allocation.
@@ -191,59 +133,43 @@ final class PerfMultiRouterRouter {
                 socketsAsBase, PollEventFlags.POLLIN)) {
             long activeEnd = System.nanoTime()
                 + (long) durationSeconds * 1_000_000_000L;
+            List<CompletionStage<Void>> sendLoops = new ArrayList<>(n);
+            CompletableFuture<Void> startGate = new CompletableFuture<>();
+            for (RouterSocket client : clients) {
+                sendLoops.add(PerfMultiAsyncSendLoop.start(activeEnd, startGate,
+                    () -> sendPayload(client, msgSize, activeEnd)));
+            }
+            startGate.complete(null);
             while (System.nanoTime() < activeEnd) {
-                int startIndex = rrIndex;
-                for (int i = 0; i < n; i++) {
-                    int idx = (startIndex + i) % n;
-                    if (sendPending[idx]) continue;
-                    while (System.nanoTime() < activeEnd) {
-                        try (Message payload = PerfUtil.payload(msgSize,
-                                 (byte) PerfUtil.PHASE_ACTIVE,
-                                 System.nanoTime())) {
-                            if (sendPayload(clients.get(idx), payload)) {
-                                continue;
-                            }
-                        }
-                        sendPending[idx] = true;
-                        pollSet.setEvents(idx, PollEventFlags.POLLIN,
-                            PollEventFlags.POLLOUT);
-                        break;
-                    }
+                int pollTimeoutMs = Math.min(50,
+                    remainingTimeoutMs(activeEnd));
+                if (pollTimeoutMs <= 0) {
+                    break;
                 }
-                rrIndex = (startIndex + 1) % n;
-                // The requester owns the active deadline. Bound the wait by
-                // its remaining interval so a quiet relay cannot keep this
-                // phase past the configured duration.
-                int readyCount = pollSet.poll(remainingTimeoutMs(activeEnd));
+                int readyCount = pollSet.poll(pollTimeoutMs);
                 for (int readyOffset = 0; readyOffset < readyCount;
                      readyOffset++) {
                     int idx = pollSet.readyIndexAt(readyOffset);
                     if (pollSet.readyHasEventAt(readyOffset,
-                            PollEventFlags.POLLOUT)) {
-                        sendPending[idx] = false;
-                        pollSet.setEvents(idx, PollEventFlags.POLLIN);
-                    }
-                    if (pollSet.readyHasEventAt(readyOffset,
                             PollEventFlags.POLLIN)) {
                         drainReplies(clients.get(idx), msgSize, metrics,
-                            replyBuffer);
+                            replyBuffer, activeEnd);
                     }
                 }
             }
+            PerfMultiAsyncSendLoop.awaitAll(sendLoops,
+                Duration.ofSeconds(durationSeconds + 5L),
+                "multi router/router async sends");
             replyBuffer.close();
             // C routed echo ends the relay through the runner control path.
             // Do not inject an extra routed stop frame after active traffic.
-        }
-        // ctx auto-HWM was already applied at setup; reference kept for the
-        // compiler so the parameter isn't flagged unused.
-        if (ctx == null) {
-            throw new IllegalStateException("ctx must not be null");
         }
     }
 
     private static void drainReplies(RouterSocket client,
                                      int msgSize, PerfUtil.Metrics metrics,
-                                     systems.zlink.contracts.messaging.Received replyBuffer) {
+                                     systems.zlink.contracts.messaging.Received replyBuffer,
+                                     long activeEnd) {
         while (true) {
             boolean ok;
             try {
@@ -256,9 +182,12 @@ final class PerfMultiRouterRouter {
                 throw ex;
             }
             if (!ok) break;
+            long receivedNanoTime = System.nanoTime();
+            if (receivedNanoTime >= activeEnd) break;
             Message payload = PerfUtil.measurementPayload(replyBuffer.parts());
             if (payload != null) {
-                PerfUtil.recordActiveLatency(metrics, payload, msgSize, true);
+                PerfUtil.recordActiveLatency(metrics, payload, msgSize, true,
+                    receivedNanoTime);
             }
         }
     }
@@ -272,43 +201,23 @@ final class PerfMultiRouterRouter {
             (remainingNs + 999_999L) / 1_000_000L);
     }
 
-    private static boolean sendPayload(RouterSocket client, Message payload) {
-        try {
+    private static CompletionStage<Void> sendPayload(RouterSocket client,
+                                                     int msgSize,
+                                                     long activeEnd) {
+        try (Message payload = PerfUtil.payload(msgSize,
+                 (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
+             Message tail = PerfUtil.measurementPartCount() == 2
+                 ? PerfUtil.measurementTail() : null) {
             if (PerfUtil.measurementPartCount() == 2) {
-                client.send(SERVER_ID).message(payload)
-                    .message(PerfUtil.measurementTail())
-                    .submit_sync(SendFlags.DONT_WAIT);
-            } else {
-                client.send(SERVER_ID).message(payload)
-                    .submit_sync(SendFlags.DONT_WAIT);
+                return client.send(SERVER_ID).message(payload)
+                    .message(tail)
+                    .timeout(PerfMultiAsyncSendLoop.remainingTimeout(activeEnd))
+                    .submit();
             }
-            return true;
-        } catch (ZlinkSubmitException ex) {
-            if (ex.getResult() == SubmitResult.BACKPRESSURED) {
-                return false;
-            }
-            throw ex;
+            return client.send(SERVER_ID).message(payload)
+                .timeout(PerfMultiAsyncSendLoop.remainingTimeout(activeEnd))
+                .submit();
         }
     }
 
-    private static void sendReply(RouterSocket server, RoutingId routingId,
-                                  Message payload) {
-        try {
-            if (PerfUtil.measurementPartCount() == 2) {
-                server.send(routingId).message(payload)
-                    .message(PerfUtil.measurementTail()).submit();
-            } else {
-                server.send(routingId).message(payload).submit();
-            }
-        } catch (ZlinkSubmitException ex) {
-            // The runner stops this relay only after the client process exits.
-            // TLS transports can leave decrypted requests queued briefly after
-            // the corresponding client route has closed. Dropping that stale
-            // reply is normal relay teardown; other submit failures remain
-            // fatal so active-run failures are not hidden.
-            if (ex.getResult() != SubmitResult.NOT_CONNECTED) {
-                throw ex;
-            }
-        }
-    }
 }

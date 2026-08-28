@@ -1,13 +1,9 @@
 //! Shared perf utilities - metric header, latency stats, phase control.
 
 use std::fs;
-use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::pin::pin;
 use std::sync::{Arc, Mutex, mpsc};
-use std::task::{Context as TaskContext, Poll, Wake, Waker};
-use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use zlink::{
@@ -40,30 +36,6 @@ pub const PHASE_WARMUP: u8 = 0;
 pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_COOLDOWN: u8 = 2;
 pub const BENCHMARK_RUN_ID: u32 = 1;
-
-struct ThreadWake(Thread);
-
-impl Wake for ThreadWake {
-    fn wake(self: Arc<Self>) {
-        self.0.unpark();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.0.unpark();
-    }
-}
-
-pub fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = pin!(future);
-    let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
-    let mut context = TaskContext::from_waker(&waker);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => thread::park(),
-        }
-    }
-}
 
 pub fn encode_header(buf: &mut [u8], phase: u8, msg_size: u32, seq: u64) {
     buf[0..4].copy_from_slice(&MAGIC.to_le_bytes());
@@ -375,39 +347,106 @@ pub struct LatencyStats {
     samples: Vec<u64>,
     count: u64,
     sum: u64,
+    sample_cap: usize,
+    seen: u64,
+    rng: u32,
 }
 
 impl LatencyStats {
     pub fn new() -> Self {
+        Self::with_sample_cap(resolve_single_latency_sample_cap())
+    }
+
+    fn with_sample_cap(sample_cap: usize) -> Self {
         Self {
-            samples: Vec::new(),
+            samples: Vec::with_capacity(sample_cap),
             count: 0,
             sum: 0,
+            sample_cap,
+            seen: 0,
+            rng: 0xA341316C,
         }
     }
 
-    // C perf_single_latency.hpp latency_stats_builder_t::add(): every sample is
-    // push_back'd into an unbounded growing vector; percentiles are exact.
+    // The exact count and sum cover every sample. Percentiles use a bounded
+    // reservoir so long runs do not grow memory without bound.
     pub fn record_ns(&mut self, latency_ns: u64) {
         self.count += 1;
         self.sum += latency_ns;
-        self.samples.push(latency_ns);
+        self.seen += 1;
+        if self.sample_cap == 0 {
+            return;
+        }
+        if self.samples.len() < self.sample_cap {
+            self.samples.push(latency_ns);
+            return;
+        }
+        self.rng = self.rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let slot = u64::from(self.rng) % self.seen;
+        if slot < self.sample_cap as u64 {
+            self.samples[slot as usize] = latency_ns;
+        }
     }
 
     pub fn finish(&mut self) -> StatsResult {
         if self.count == 0 {
             return StatsResult::default();
         }
-        self.samples.sort_unstable();
         let mean = self.sum as f64 / self.count as f64;
-        let p95 = percentile(&self.samples, 0.95);
-        let p99 = percentile(&self.samples, 0.99);
+        let (p95, p99) = if self.samples.is_empty() {
+            (mean, mean)
+        } else {
+            self.samples.sort_unstable();
+            (
+                percentile(&self.samples, 0.95),
+                percentile(&self.samples, 0.99),
+            )
+        };
         StatsResult {
             count: self.count,
             mean_ns: mean,
             p95_ns: p95,
             p99_ns: p99,
         }
+    }
+}
+
+fn resolve_single_latency_sample_cap() -> usize {
+    std::env::var("PERF_SINGLE_LATENCY_SAMPLE_CAP")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .unwrap_or(1_000_000)
+}
+
+#[cfg(test)]
+mod latency_stats_tests {
+    use super::LatencyStats;
+
+    #[test]
+    fn zero_cap_keeps_exact_mean_without_reservoir_samples() {
+        let mut stats = LatencyStats::with_sample_cap(0);
+        stats.record_ns(100);
+        stats.record_ns(300);
+
+        assert!(stats.samples.is_empty());
+        let result = stats.finish();
+        assert_eq!(result.count, 2);
+        assert_eq!(result.mean_ns, 200.0);
+        assert_eq!(result.p95_ns, 200.0);
+        assert_eq!(result.p99_ns, 200.0);
+    }
+
+    #[test]
+    fn reservoir_is_bounded_while_count_and_mean_remain_exact() {
+        let mut stats = LatencyStats::with_sample_cap(2);
+        for latency in 1..=10 {
+            stats.record_ns(latency);
+        }
+
+        assert_eq!(stats.samples.len(), 2);
+        let result = stats.finish();
+        assert_eq!(result.count, 10);
+        assert_eq!(result.mean_ns, 5.5);
     }
 }
 
@@ -601,8 +640,7 @@ where
 
 // -- Request/reply loop -----------------------------------------------------
 
-pub type RequestCallback =
-    Box<dyn FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static>;
+pub type RequestCallback = Box<dyn FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static>;
 
 fn record_reqrep_completion(
     outcome: Result<Vec<Message>, ZlinkError>,

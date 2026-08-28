@@ -6,14 +6,13 @@ using static PerfRunner;
 
 internal static class PerfMultiDealerDealerClient
 {
-    private const int ActiveDeadlineTag = int.MaxValue;
-
     internal static async Task<int> Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
         int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
+        ulong monitorHwmBytes = ResolveMultiMonitorHwmBytes();
         int clientCount = ResolveMultiClients(options);
         int durationSeconds = ResolveMultiDurationSeconds(options);
         string endpoint = options.Endpoint;
@@ -35,7 +34,8 @@ internal static class PerfMultiDealerDealerClient
                 client.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeoutMs);
                 client.SetRoutingId(RoutingId.From(
                     System.Text.Encoding.ASCII.GetBytes($"client_{i}")));
-                var monitor = client.MonitorOpen(SocketEvent.ConnectionReady);
+                var monitor = client.MonitorOpen(SocketEvent.ConnectionReady,
+                    monitorHwmBytes);
                 client.Connect(endpoint);
                 clients.Add(client);
                 monitors.Add(monitor);
@@ -86,57 +86,31 @@ internal static class PerfMultiDealerDealerClient
         int durationSeconds, RunnerControlState controlState)
     {
         const uint runId = 1;
-        ulong seq = 1;
+        long seq = 0;
+        long sent = 0;
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
         long activeDeadlineTicks = Stopwatch.GetTimestamp()
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
-        using var activeTimer = Zlink.CreateTimer();
-        using var sendPoller = Zlink.CreatePoller();
-        var sendEvents = new PollEvent[activeClients.Count + 1];
-        var pending = new bool[activeClients.Count];
-        int pendingCount = 0;
 
-        for (int i = 0; i < activeClients.Count; i++)
-            sendPoller.Add(activeClients[i], PollEventFlags.PollOut, (nuint)i);
-        sendPoller.Add(activeTimer, ActiveDeadlineTag);
-        activeTimer.Start(TimeSpan.FromSeconds(Math.Max(1, durationSeconds)),
-            1);
-
-        while (!controlState.StopRequested
-               && Stopwatch.GetTimestamp() < activeDeadlineTicks)
+        async Task SendLoopAsync(IDealerSocket socket)
         {
-            bool progressed = false;
-            for (int i = 0; i < activeClients.Count; i++)
+            while (!controlState.StopRequested
+                   && Stopwatch.GetTimestamp() < activeDeadlineTicks)
             {
-                if (pending[i])
-                    continue;
-
-                IDealerSocket socket = (IDealerSocket)activeClients[i];
-                Message message = Message.Allocate(payloadSize);
+                using Message message = Message.Allocate(payloadSize);
+                ulong currentSeq = unchecked((ulong)Interlocked.Increment(ref seq));
                 StampMetricHeader(message.AsSpan(), runId,
-                    PerfPhase.Active, msgSize, seq, EpochNs());
-                bool sent = PerfSocketIo.SendMeasurement(socket,
-                    message.AsReadOnlySpan(), SendFlags.DontWait) > 0;
-                message.Dispose();
-                if (!sent)
-                {
-                    pending[i] = true;
-                    pendingCount++;
-                    continue;
-                }
-
-                seq++;
-                progressed = true;
-            }
-
-            if (!progressed && pendingCount > 0
-                && Stopwatch.GetTimestamp() < activeDeadlineTicks)
-            {
-                if (!WaitForWritable(sendPoller, sendEvents, activeTimer, pending,
-                        ref pendingCount))
-                    break;
+                    PerfPhase.Active, msgSize, currentSeq, EpochNs());
+                await PerfSocketIo.SendMeasurementAsync(socket, message,
+                    SendFlags.None).ConfigureAwait(false);
+                Interlocked.Increment(ref sent);
             }
         }
+
+        var sendTasks = new Task[activeClients.Count];
+        for (int i = 0; i < activeClients.Count; i++)
+            sendTasks[i] = SendLoopAsync((IDealerSocket)activeClients[i]);
+        await Task.WhenAll(sendTasks).ConfigureAwait(false);
 
         // PERF_MULTI_TEST_POLICY § 1.3.1 / C
         // perf_multi_dealer_dealer_client.cpp sends one blocking wire-level
@@ -149,7 +123,7 @@ internal static class PerfMultiDealerDealerClient
                 return false;
         }
 
-        return true;
+        return Volatile.Read(ref sent) > 0;
     }
 
     // Mirrors C send_stop_token(): blocking send with retry through
@@ -188,31 +162,4 @@ internal static class PerfMultiDealerDealerClient
         return true;
     }
 
-    private static bool WaitForWritable(IPoller poller, PollEvent[] events,
-        Systems.Zlink.IZlinkTimer activeTimer, bool[] pending, ref int pendingCount)
-    {
-        int written = poller.Wait(events,
-            TimeSpan.FromMilliseconds(MultiClientPollTimeoutMs));
-        for (int i = 0; i < written; i++)
-        {
-            if (events[i].Slot == (nuint)ActiveDeadlineTag)
-            {
-                _ = activeTimer.Recv();
-                return false;
-            }
-
-            nuint slot = events[i].Slot;
-            if ((events[i].Revents & PollEventFlags.PollOut) == 0
-                || slot > (nuint)int.MaxValue
-                || (int)slot >= pending.Length
-                || !pending[(int)slot])
-                continue;
-
-            int index = (int)slot;
-            pending[index] = false;
-            pendingCount--;
-        }
-
-        return true;
-    }
 }

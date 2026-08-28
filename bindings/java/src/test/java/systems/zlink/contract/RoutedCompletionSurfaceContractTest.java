@@ -13,9 +13,11 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.contracts.messaging.RoutedSendSubmitOperation;
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.sockets.StreamSocket;
 
 class RoutedCompletionSurfaceContractTest {
     @Test
@@ -25,7 +27,10 @@ class RoutedCompletionSurfaceContractTest {
             DealerSocket.class.getMethod("send").getReturnType());
         assertEquals(RoutedSendOperation.class,
             RouterSocket.class.getMethod("send",
-                systems.zlink.contracts.core.RoutingId.class)
+                RoutingId.class)
+                .getReturnType());
+        assertEquals(RoutedSendOperation.class,
+            StreamSocket.class.getMethod("sendAsync", RoutingId.class)
                 .getReturnType());
 
         assertRoutedSendTerminals();

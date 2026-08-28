@@ -31,6 +31,8 @@ func runSingleReqRep(
 	localStop := make(chan struct{})
 	replierDone := make(chan error, 1)
 	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		replierDone <- runReqRepReplier(replier, localStop)
 	}()
 
@@ -208,9 +210,16 @@ func consumeReqRepCompletion(
 			return true, false, err
 		}
 		now := time.Now()
-		if latencyNs, valid := perfcommon.LatencyNsFromMessageAt(
-			payload, msgSize, perfcommon.PhaseActive, now); valid && now.Before(activeStopAt) {
-			stats.AddLatencyNs(latencyNs)
+		if !now.Before(activeStopAt) {
+			return true, false, nil
+		}
+		sentTsNs, valid := perfcommon.SentTimestampNsFromMessagePhase(
+			payload, msgSize, perfcommon.PhaseActive)
+		if valid {
+			stats.AddCount()
+			if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+				stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
+			}
 		}
 		return true, false, nil
 	default:

@@ -15,8 +15,14 @@ class StreamSocket(_socket_contract._SocketContract, Protocol):
         ...
 
     def send(self, routing_id):
-        """Begin a send addressed to ``routing_id``; parts are consumed on a
-        successful submit."""
+        """Begin a synchronous send addressed to ``routing_id``; ``submit()``
+        preserves the existing bool result contract."""
+        ...
+
+    def send_async(self, routing_id):
+        """Begin an HWM-managed send addressed to ``routing_id``. The returned
+        routed operation exposes awaitable ``submit()`` and blocking
+        ``submit_sync()`` terminals."""
         ...
 
     def recv_into(self, received, *, flags=0):

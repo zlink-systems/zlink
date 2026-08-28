@@ -4,8 +4,7 @@
 bool run_pattern (const std::string &transport, size_t size, const std::string &lib_name)
 {
     return perf::single::run_reqrep_pattern ({"ROUTER_ROUTER_REQREP", true}, transport, size,
-                                             lib_name)
-      .get ();
+                                             lib_name);
 }
 
 int main (int argc, char **argv)

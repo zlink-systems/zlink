@@ -7,7 +7,10 @@
 struct request_js_state_t;
 
 request_js_state_t *
-create_core_request_js_state (napi_env env, void *socket, uint64_t token);
+create_core_request_js_state (napi_env env,
+                              void *socket,
+                              uint64_t token,
+                              bool direct_callback);
 bool set_socket_request_completion_handler (napi_env env, void *socket, napi_value handler);
 void abort_request_js_state (request_js_state_t *state);
 void release_socket_request_dispatcher (void *socket);

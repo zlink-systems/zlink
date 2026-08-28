@@ -106,7 +106,7 @@ public sealed record PerfOptions(
             PerfEnv.ReadNonNegative("PERF_SINGLE_RCVTIMEO_MS", 200),
             PerfEnv.ReadPositive("PERF_CONNECT_READY_TIMEOUT_MS", 1000),
             1,
-            PerfEnv.ReadPositive("PERF_SINGLE_LATENCY_SAMPLE_CAP", 200000),
+            PerfEnv.ReadNonNegative("PERF_SINGLE_LATENCY_SAMPLE_CAP", 1_000_000),
             PerfEnv.ReadNonNegative("PERF_IO_THREADS", 0),
             0,
             PerfEnv.ReadUInt64("PERF_SINGLE_HWM", 0),
@@ -139,7 +139,7 @@ public sealed record PerfOptions(
             PerfEnv.ReadPositive("PERF_MULTI_CONNECT_READY_TIMEOUT_MS",
                 PerfEnv.ReadPositive("PERF_CONNECT_READY_TIMEOUT_MS", 10000)),
             clients,
-            PerfEnv.ReadPositive("PERF_MULTI_LATENCY_SAMPLE_CAP", 200000),
+            PerfEnv.ReadNonNegative("PERF_MULTI_LATENCY_SAMPLE_CAP", 65_536),
             // PERF_POLICY: multi default context I/O threads is 4 for both
             // server and client (C bench_io_threads: PERF_IO_THREADS default 4).
             PerfEnv.ReadPositive(

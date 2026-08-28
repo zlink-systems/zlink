@@ -1,4 +1,3 @@
-import asyncio
 import sys
 import threading
 import time
@@ -16,8 +15,9 @@ from perf_common import (
     perf_context,
     poll_idle_ms,
     print_result_lines,
+    new_single_latency_sampler,
     run_one_way_receiver_public_recv,
-    send_routed,
+    send_routed_sync,
     result_metrics,
     resolve_single_endpoint,
     resolve_single_connect_ready_timeout_ms,
@@ -26,7 +26,7 @@ from perf_common import (
 )
 
 
-async def _send_stop_token(sock):
+def _send_stop_token(sock):
     """Send wire-level stop token once with bounded backpressure attempts.
 
     PERF_SINGLE_TEST_POLICY § 1.4: phase end is signalled on the wire by
@@ -37,7 +37,7 @@ async def _send_stop_token(sock):
 
     for _ in range(100):
         try:
-            await sock.send().message(STOP_TOKEN).submit()
+            sock.send().message(STOP_TOKEN).submit_sync(flags=zlink.SendFlags.NONE)
             return
         except zlink.SubmitError as exc:
             if exc.result != zlink.SubmitResult.BACKPRESSURED:
@@ -49,22 +49,21 @@ def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):
     return None
 
 
-async def main(argv=None):
+def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="dealer_dealer")
     run_id = benchmark_run_id()
-    latencies = []
+    latency_sampler = new_single_latency_sampler()
     received = 0
     payload = new_payload(args.msg_size)
 
-    async def send_loop(dealer, active_end):
-        # Preserve C's fresh timestamp per attempt while the routed terminal
-        # suspends this coroutine until Core admission.
+    def send_loop(dealer, active_end):
+        # Preserve C's fresh timestamp per synchronous admission attempt.
         while time.perf_counter() < active_end:
-            await send_routed(
+            send_routed_sync(
                 dealer, stamp_payload(payload, phase=1, run_id=run_id)
             )
         # PERF_SINGLE_TEST_POLICY § 1.4: signal phase end on the wire.
-        await _send_stop_token(dealer)
+        _send_stop_token(dealer)
 
     with perf_context() as ctx:
         with zlink.create_dealer_socket(ctx) as server:
@@ -91,8 +90,9 @@ async def main(argv=None):
                     run_id=run_id,
                 )
                 if metrics is None:
-                    sender = threading.Thread(target=lambda: asyncio.run(
-                        send_loop(client, active_end)), daemon=True)
+                    sender = threading.Thread(
+                        target=send_loop, args=(client, active_end), daemon=True
+                    )
                     sender.start()
                     # C perf_single_one_way.hpp run_active_phase receiver.
                     received = run_one_way_receiver_public_recv(
@@ -101,7 +101,7 @@ async def main(argv=None):
                         run_id=run_id,
                         active_end=active_end,
                         received=received,
-                        latencies=latencies,
+                        latency_sampler=latency_sampler,
                     )
 
                     sender.join()
@@ -113,10 +113,10 @@ async def main(argv=None):
                         count=received,
                         msg_size=args.msg_size,
                         elapsed_s=args.duration,
-                        latencies_ns=latencies,
+                        latency_sampler=latency_sampler,
                     )
                 print_result_lines("DEALER_DEALER", args.transport, args.msg_size, metrics)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

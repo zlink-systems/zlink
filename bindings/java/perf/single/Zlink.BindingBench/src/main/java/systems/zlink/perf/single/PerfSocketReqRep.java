@@ -55,8 +55,10 @@ final class PerfSocketReqRep {
              Socket client = routedClient ? ctx.createRouterSocket()
                                           : ctx.createDealerSocket();
              var serverMonitor = server.monitorOpen(
+                 config.monitorHwm(),
                  systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY);
              var clientMonitor = client.monitorOpen(
+                 config.monitorHwm(),
                  systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY)) {
             if (client instanceof RouterSocket router) {
                 server.setRoutingId(SERVER_RID);
@@ -66,8 +68,6 @@ final class PerfSocketReqRep {
             } else {
                 ((DealerSocket) client).setRoutingId(DEALER_RID);
             }
-            PerfUtil.applyMonitorOptions(serverMonitor, config);
-            PerfUtil.applyMonitorOptions(clientMonitor, config);
             PerfUtil.applySocketOptions(server, config);
             PerfUtil.applySocketOptions(client, config);
             PerfUtil.configureServerTls(server, config.transport());
@@ -115,14 +115,17 @@ final class PerfSocketReqRep {
             BiConsumer<RequestResult, List<Message>> completion =
                 (result, parts) -> {
                 try {
+                    long completedAt = System.nanoTime();
                     if (result == RequestResult.OK) {
-                        Message payload = PerfUtil.measurementPayload(parts);
-                        if (payload != null) {
-                            PerfUtil.Header header = PerfUtil.decodeHeader(payload,
-                                config.size());
-                            if (header != null
-                                && header.phase() == PerfUtil.PHASE_ACTIVE) {
-                                metrics.recordNanos(header.latencyNanos());
+                        if (completedAt < activeEnd) {
+                            Message payload = PerfUtil.measurementPayload(parts);
+                            if (payload != null) {
+                                PerfUtil.Header header = PerfUtil.decodeHeader(
+                                    payload, config.size(), completedAt);
+                                if (header != null
+                                    && header.phase() == PerfUtil.PHASE_ACTIVE) {
+                                    metrics.recordNanos(header.latencyNanos());
+                                }
                             }
                         }
                     } else if (result != RequestResult.TIMED_OUT) {

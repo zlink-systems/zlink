@@ -186,7 +186,12 @@ inline int recv_router_followup_frame (zlink::socket_base_t *socket_, zlink_msg_
         return -1;
     }
 
-    if (socket_->recv (reinterpret_cast<zlink::msg_t *> (msg_), 0) != 0)
+    // Once the first frame has been exposed, the remaining frames must
+    // already be present atomically on the same pipe. Do not let a blocking
+    // retry cross an interrupted multipart boundary into another peer.
+    if (socket_->recv (reinterpret_cast<zlink::msg_t *> (msg_),
+                       ZLINK_DONTWAIT)
+        != 0)
         return -1;
 
     return 0;

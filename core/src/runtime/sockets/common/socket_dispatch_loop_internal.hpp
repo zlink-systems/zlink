@@ -17,7 +17,13 @@ inline void drain_socket_dispatch_loop (RecvFn recv_fn_, DispatchFn dispatch_fn_
     errno_assert (init_rc == 0);
 
     pipe_t *dispatch_pipe = NULL;
-    while (recv_fn_ (&msg, &dispatch_pipe) == 0) {
+    while (true) {
+        const int recv_rc = recv_fn_ (&msg, &dispatch_pipe);
+        if (recv_rc != 0) {
+            if (errno == ECONNABORTED)
+                continue;
+            break;
+        }
         const int dispatch_rc = dispatch_fn_ (&msg, dispatch_pipe);
         if (dispatch_rc <= 0)
             break;

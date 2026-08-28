@@ -1,7 +1,7 @@
+import asyncio
 import sys
 import threading
 import errno
-from collections import deque
 
 import zlink
 
@@ -11,23 +11,26 @@ from perf_multi_common import (
     configure_multi_tls_server,
     parse_server_args,
     perf_server_context,
-    safe_poll,
+    send_routed,
 )
 from perf_stop_token import STOP_TOKEN
 
 
-def main(argv=None):
+async def main(argv=None):
     args = parse_server_args(argv or sys.argv[1:])
     endpoint = benchmark_endpoint(args.transport, "multi-stream")
-    stop = threading.Event()
-    pending_ready = threading.Event()
-    pending = deque()
-    pending_lock = threading.Lock()
+    pending = set()
+    send_errors = []
+    loop = asyncio.get_running_loop()
+    async_stop = asyncio.Event()
+
+    def request_stop():
+        loop.call_soon_threadsafe(async_stop.set)
 
     def wait_stop():
         for line in sys.stdin:
             if line.strip() in {"STOP", "QUIT"}:
-                stop.set()
+                request_stop()
                 return
 
     threading.Thread(target=wait_stop, daemon=True).start()
@@ -41,79 +44,49 @@ def main(argv=None):
             print(f"READY,{endpoint}", flush=True)
 
             def packet_handler(routing_id, header, body):
-                # C perf_multi_stream_session.hpp stream_packet_handler_
-                # callback: the installed packet handler is the measured
-                # POLLIN drain surface; queue the framed echo for POLLOUT
-                # backpressure draining.
                 body_view = body.data
                 if len(body_view) == len(STOP_TOKEN) and body_view == STOP_TOKEN:
-                    stop.set()
+                    request_stop()
                     return
                 frame = build_packet_frame(header.data, body_view)
-                with pending_lock:
-                    pending.append((bytes(routing_id), frame))
-                pending_ready.set()
+                loop.call_soon_threadsafe(schedule_echo, bytes(routing_id), frame)
 
             server.on_packet(packet_handler)
 
-            def drain_pending():
-                while True:
-                    with pending_lock:
-                        item = pending[0] if pending else None
-                    if item is None:
-                        return
-                    routing_id, frame = item
-                    try:
-                        sent = bool(
-                            server.send(routing_id)
-                            .message(frame)
-                            .flags(zlink.SendFlags.DONT_WAIT)
-                            .submit()
-                        )
-                    except zlink.SubmitError as exc:
-                        if exc.native_errno not in {
-                            errno.EHOSTUNREACH,
-                            errno.ENOTCONN,
-                        }:
-                            raise
-                        sent = True
-                    if not sent:
-                        return
-                    with pending_lock:
-                        if pending and pending[0] == item:
-                            pending.popleft()
-                            if not pending:
-                                pending_ready.clear()
+            async def send_echo(routing_id, frame):
+                try:
+                    await send_routed(
+                        server,
+                        frame,
+                        routing_id=routing_id,
+                        measurement=False,
+                        method="send_async",
+                    )
+                except zlink.SubmitError as exc:
+                    if exc.result not in {
+                        zlink.SubmitResult.NOT_CONNECTED,
+                        zlink.SubmitResult.NOT_FOUND,
+                    } and exc.native_errno not in {errno.EHOSTUNREACH, errno.ENOTCONN}:
+                        raise
 
-            # C run_server_event_loop: POLLOUT-driven backpressure drain of
-            # the pending deque with the bounded aux poll wait
-            # (perf_aux_poll_wait_ms == 100ms); idle poll when empty. The
-            # POLLIN data path is the installed packet handler above.
-            aux_wait_ms = 100
-            with zlink.create_poller() as poller:
-                poller.add_socket(server, zlink.PollEventFlag.POLLOUT, 0)
-                poll_events = zlink.create_poll_events(1)
-                while not stop.is_set():
-                    with pending_lock:
-                        has_pending = bool(pending)
-                        if not has_pending:
-                            pending_ready.clear()
-                    if has_pending:
-                        drain_pending()
-                    with pending_lock:
-                        has_pending = bool(pending)
-                        if not has_pending:
-                            pending_ready.clear()
-                    if not has_pending:
-                        pending_ready.wait(aux_wait_ms / 1000.0)
-                        continue
-                    ready_count = safe_poll(poller, poll_events, aux_wait_ms)
-                    if ready_count:
-                        for offset in range(ready_count):
-                            if poll_events.revents(offset) & int(
-                                zlink.PollEventFlag.POLLOUT
-                            ):
-                                drain_pending()
+            def on_send_done(task):
+                pending.discard(task)
+                if not task.cancelled() and task.exception() is not None:
+                    send_errors.append(task.exception())
+
+            def schedule_echo(routing_id, frame):
+                task = asyncio.create_task(send_echo(routing_id, frame))
+                pending.add(task)
+                task.add_done_callback(on_send_done)
+
+            # Packet callbacks may arrive from the binding dispatcher thread;
+            # schedule every public async send onto this coroutine loop.  The
+            # cross-thread stop event is signal-driven, not a timer pump.
+            await async_stop.wait()
+            if send_errors:
+                raise send_errors[0]
+            if pending:
+                await asyncio.gather(*pending)
 
 
 def build_packet_frame(header_view, body_view):
@@ -136,4 +109,4 @@ def _store_u32_be(frame, offset, value):
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

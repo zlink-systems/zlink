@@ -6,7 +6,6 @@ using static PerfRunner;
 internal static class PerfMultiPubSubServer
 {
     private const string Topic = "bench";
-    private const int PublishRetryPollTimeoutMs = 100;
 
     internal static int Run(PerfOptions options)
     {
@@ -34,10 +33,6 @@ internal static class PerfMultiPubSubServer
         PrintAutoHwmSnapshot(server, "server", options.Transport, size);
         WriteStdoutLine($"READY,{endpoint}");
 
-        using var sendPoller = Zlink.CreatePoller();
-        sendPoller.Add(server, PollEventFlags.PollOut, 0);
-        var sendEvents = new PollEvent[1];
-
         if (!controlState.WaitForStart(readyTimeoutMs))
         {
             if (!controlState.StopRequested)
@@ -49,7 +44,7 @@ internal static class PerfMultiPubSubServer
         ulong seq = 1;
         int payloadSize = Math.Max(size, PerfMetricHeaderSize);
 
-        if (!RunPublishPhase(server, sendPoller, sendEvents, payloadSize,
+        if (!RunPublishPhase(server, payloadSize,
                 runId, size, ref seq, PerfPhase.Active, durationSeconds,
                 controlState)
             || !PublishStopToken(server, controlState))
@@ -60,7 +55,7 @@ internal static class PerfMultiPubSubServer
         return 0;
     }
 
-    private static bool PublishNoWait(IPubSocket server, Message message)
+    private static bool Publish(IPubSocket server, Message message)
     {
         Message? tail = PerfSocketIo.MeasurementPartCount == 2
             ? Message.Allocate(0) : null;
@@ -69,12 +64,7 @@ internal static class PerfMultiPubSubServer
             var submit = server.TryPublish(Topic).Message(message);
             if (tail != null)
                 submit = submit.Message(tail);
-            return submit.Flags(SendFlags.DontWait).Submit();
-        }
-        catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
-                                        || IsInterrupted(ex.NativeErrno))
-        {
-            return false;
+            return submit.Flags(SendFlags.None).Submit();
         }
         finally
         {
@@ -112,8 +102,8 @@ internal static class PerfMultiPubSubServer
         return IsWouldBlock(errno) || IsInterrupted(errno) || errno == 110;
     }
 
-    private static bool RunPublishPhase(IPubSocket server, IPoller sendPoller,
-        PollEvent[] sendEvents, int payloadSize, uint runId, int size,
+    private static bool RunPublishPhase(IPubSocket server, int payloadSize,
+        uint runId, int size,
         ref ulong seq, PerfPhase phase, int durationSeconds,
         RunnerControlState controlState)
     {
@@ -125,42 +115,11 @@ internal static class PerfMultiPubSubServer
             using Message message = Message.Allocate(payloadSize);
             StampMetricHeader(message.AsSpan(), runId, phase, size, seq++,
                 EpochNs());
-            while (!controlState.StopRequested)
-            {
-                if (PublishNoWait(server, message))
-                    break;
-                if (!WaitForWritable(sendPoller, sendEvents, controlState))
-                    return false;
-            }
+            if (!Publish(server, message))
+                return false;
         }
 
         return true;
-    }
-
-    private static bool WaitForWritable(IPoller sendPoller,
-        PollEvent[] sendEvents, RunnerControlState controlState)
-    {
-        while (!controlState.StopRequested)
-        {
-            int ready;
-            try
-            {
-                ready = sendPoller.Wait(sendEvents,
-                    TimeSpan.FromMilliseconds(PublishRetryPollTimeoutMs));
-            }
-            catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
-                                            || IsInterrupted(ex.NativeErrno))
-            {
-                continue;
-            }
-
-            if (ready <= 0)
-                continue;
-            if ((sendEvents[0].Revents & PollEventFlags.PollOut) != 0)
-                return true;
-        }
-
-        return false;
     }
 
 }

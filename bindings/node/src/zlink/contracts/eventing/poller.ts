@@ -56,7 +56,12 @@ export interface Poller {
   modifyFd(fd: number, events: readonly PollEventFlagValue[]): void;
   /** Unregister file descriptor `fd`; return true when it was registered. */
   removeFd(fd: number): boolean;
-  /** Wait up to `timeoutMs` for sources to become ready, filling `events`; a negative timeout blocks indefinitely. Return the number of ready sources. */
+  /**
+   * Wait up to `timeoutMs` for sources to become ready, filling `events`; a
+   * negative timeout blocks indefinitely. Request callbacks registered by
+   * `submit_sync(..., callback)` are delivered synchronously before this call
+   * returns when `PollCompletion` is watched.
+   */
   wait(events: PollEvents, timeoutMs: number): number;
   /** Close the poller and release its resources. */
   close(): void;

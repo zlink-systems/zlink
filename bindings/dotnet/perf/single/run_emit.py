@@ -303,11 +303,7 @@ def enforce_file_retention(report_dir: str) -> None:
 
 
 def select_transports(pattern: str) -> List[str]:
-    base = (
-        DEFAULT_SPOT_TRANSPORTS
-        if pattern in STREAM_TRANSPORT_PATTERNS
-        else DEFAULT_SOCKET_TRANSPORTS
-    )
+    base = DEFAULT_SOCKET_TRANSPORTS
     env_transports = parse_env_list("PERF_TRANSPORTS", str)
     if not env_transports:
         return list(base)

@@ -71,6 +71,7 @@ else
 fi
 source "${REPO_ROOT}/bindings/tools/local_core_runtime.sh"
 CORE_RUNTIME="${ZLINK_LOCAL_CORE_RUNTIME}"
+zlink_export_local_core_runtime
 cd "$ROOT_DIR"
 
 for arg in "$@"; do

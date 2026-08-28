@@ -42,9 +42,6 @@ public final class PerfMain {
     }
 
     private static boolean emitsClientDoneAfterResult(String pattern) {
-        return "PUBSUB".equals(pattern)
-            || "SPOT".equals(pattern)
-            || "SPOT_REQREP".equals(pattern)
-            || "SPOT_SENDSEND".equals(pattern);
+        return "PUBSUB".equals(pattern);
     }
 }

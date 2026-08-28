@@ -6,6 +6,7 @@
 #include "addon_tsfn_slots.h"
 
 #include <memory>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -24,11 +25,13 @@ struct request_completion_dispatcher_t
 
 struct request_js_state_t
 {
-    request_js_state_t () : env (NULL), dispatcher (NULL), token (0) {}
+    request_js_state_t () : env (NULL), dispatcher (NULL), token (0), direct_callback (false) {}
 
     napi_env env;
     request_completion_dispatcher_t *dispatcher;
     uint64_t token;
+    std::thread::id owner_thread;
+    bool direct_callback;
 };
 
 namespace
@@ -92,13 +95,12 @@ void request_dispatcher_finalize (napi_env env,
     delete dispatcher;
 }
 
-void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *data)
+void deliver_request_to_js (napi_env env,
+                            request_completion_dispatcher_t *dispatcher,
+                            request_result_js_payload_t *data)
 {
-    (void) js_cb;
-    request_completion_dispatcher_t *dispatcher =
-      static_cast<request_completion_dispatcher_t *> (context);
     std::unique_ptr<request_result_js_payload_t> payload (
-      static_cast<request_result_js_payload_t *> (data));
+      data);
     if (!dispatcher || !payload)
         return;
 
@@ -144,6 +146,14 @@ void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *
     release_request_state (state);
 }
 
+void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *data)
+{
+    (void) js_cb;
+    deliver_request_to_js (
+      env, static_cast<request_completion_dispatcher_t *> (context),
+      static_cast<request_result_js_payload_t *> (data));
+}
+
 request_completion_dispatcher_t *request_dispatcher (napi_env env, void *socket)
 {
     std::unordered_map<void *, request_completion_dispatcher_t *>::iterator existing =
@@ -174,7 +184,10 @@ request_completion_dispatcher_t *request_dispatcher (napi_env env, void *socket)
 } // namespace
 
 request_js_state_t *
-create_core_request_js_state (napi_env env, void *socket, uint64_t token)
+create_core_request_js_state (napi_env env,
+                              void *socket,
+                              uint64_t token,
+                              bool direct_callback)
 {
     request_completion_dispatcher_t *dispatcher = request_dispatcher (env, socket);
     if (!dispatcher)
@@ -188,6 +201,8 @@ create_core_request_js_state (napi_env env, void *socket, uint64_t token)
     state->env = env;
     state->dispatcher = dispatcher;
     state->token = token;
+    state->owner_thread = std::this_thread::get_id ();
+    state->direct_callback = direct_callback;
     return state;
 }
 
@@ -242,6 +257,11 @@ void request_reply_callback_trampoline (zlink_request_result_t errnum,
 
     payload->state = state;
     request_completion_dispatcher_t *dispatcher = state->dispatcher;
+    if (state->direct_callback
+        && state->owner_thread == std::this_thread::get_id ()) {
+        deliver_request_to_js (state->env, dispatcher, payload.release ());
+        return;
+    }
     if (napi_call_threadsafe_function (
           dispatcher->tsfn, payload.get (), napi_tsfn_nonblocking)
         == napi_ok)

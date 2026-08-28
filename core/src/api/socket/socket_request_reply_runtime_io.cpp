@@ -368,9 +368,8 @@ int recv_router_message_direct (const socket_handle_t &handle_,
     zlink::pipe_t *source_pipe = NULL;
     const int first_recv_rc = handle_.socket->recv_routed (
       &current, source_rid, flags_, NULL, &source_pipe);
-    if (first_recv_rc != 0) {
+    if (first_recv_rc != 0)
         return -1;
-    }
 
     metadata.transport_pair_id = source_pipe ? source_pipe->get_transport_pair_id () : 0;
     metadata.transport_pair_generation =

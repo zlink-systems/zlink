@@ -513,6 +513,8 @@ def pattern_direction_label(pattern):
     if pattern in {
         "DEALER_ROUTER_REQREP",
         "ROUTER_ROUTER_REQREP",
+        "MULTI_DEALER_ROUTER_REQREP",
+        "MULTI_ROUTER_ROUTER_REQREP",
     }:
         return "request-reply"
     if pattern in {

@@ -14,6 +14,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <string>
@@ -536,6 +537,25 @@ inline uint64_t bench_hwm_from_env (const char *name_, uint64_t default_hwm_)
     const unsigned long long parsed = std::strtoull (value, &end, 10);
     if (errno != 0 || end == value || *end != '\0' || parsed == 0)
         return default_hwm_;
+    return static_cast<uint64_t> (parsed);
+}
+
+inline uint64_t bench_monitor_hwm_bytes_from_env ()
+{
+    const uint64_t default_hwm_bytes = 4096000;
+    const char *value =
+      resolve_multi_named_env_value ("PERF_MONITOR_HWM_BYTES");
+    if (!value || !*value)
+        return default_hwm_bytes;
+    if (std::strspn (value, "0123456789") != std::strlen (value))
+        return default_hwm_bytes;
+
+    errno = 0;
+    char *end = NULL;
+    const unsigned long long parsed = std::strtoull (value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0'
+        || parsed > (std::numeric_limits<uint64_t>::max) ())
+        return default_hwm_bytes;
     return static_cast<uint64_t> (parsed);
 }
 

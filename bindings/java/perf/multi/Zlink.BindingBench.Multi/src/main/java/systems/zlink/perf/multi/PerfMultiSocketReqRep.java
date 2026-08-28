@@ -16,6 +16,7 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
@@ -26,10 +27,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
 
 final class PerfMultiSocketReqRep {
     private static final RoutingId SERVER_RID = RoutingId.from(
@@ -112,8 +113,7 @@ final class PerfMultiSocketReqRep {
                     ((DealerSocket) client).setRoutingId(RoutingId.from(rid));
                 }
                 SocketMonitor monitor = client.monitorOpen(
-                    MonitorEventType.CONNECTION_READY);
-                PerfUtil.applyMonitorOptions(monitor, config);
+                    config.monitorHwm(), MonitorEventType.CONNECTION_READY);
                 PerfUtil.applySocketOptions(client, config);
                 PerfUtil.configureClientTls(client, config.transport());
                 if (client instanceof RouterSocket router) {
@@ -162,18 +162,23 @@ final class PerfMultiSocketReqRep {
             + config.durationSeconds() * 1_000_000_000L;
         int requestTimeoutMs = resolveRequestTimeoutMs();
         Duration timeout = Duration.ofMillis(requestTimeoutMs);
-        BiConsumer<RequestResult, List<Message>> completion = (result, parts) -> {
+        byte[][] pendingPayloads = new byte[clients.size()][];
+        java.util.function.BiConsumer<List<Message>, Throwable> completion =
+            (parts, error) -> {
             try {
                 long receivedAt = System.nanoTime();
-                Message payload = PerfUtil.measurementPayload(parts);
-                if (result == RequestResult.OK && payload != null
+                Message payload = error == null
+                    ? PerfUtil.measurementPayload(parts) : null;
+                if (error == null && payload != null
                     && receivedAt < activeEnd) {
                     PerfUtil.recordActiveLatency(metrics, payload,
                         config.size(), true, receivedAt);
-                } else if (result != RequestResult.OK
-                    && result != RequestResult.TIMED_OUT) {
-                    failure.compareAndSet(null, new IllegalStateException(
-                        "request completion failed: " + result));
+                } else if (error != null) {
+                    Throwable cause = PerfMultiAsyncSendLoop.completionCause(
+                        error);
+                    if (!isExpectedRequestFailure(cause)) {
+                        failure.compareAndSet(null, cause);
+                    }
                 }
             } catch (Throwable ex) {
                 failure.compareAndSet(null, ex);
@@ -192,30 +197,22 @@ final class PerfMultiSocketReqRep {
                 clients, PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean progress = false;
-                for (Socket client : clients) {
+                for (int i = 0; i < clients.size(); i++) {
                     if (System.nanoTime() >= activeEnd) {
                         break;
                     }
-                    // Submit at most one request per socket in a round. A
-                    // per-socket inner loop can keep the first socket busy
-                    // until the active deadline when its HWM is large, which
-                    // starves POLLCOMPLETION dispatch and records no replies.
-                    try (Message payload = PerfUtil.payload(config.size(),
-                             (byte) PerfUtil.PHASE_ACTIVE,
-                             System.nanoTime())) {
-                        outstanding.incrementAndGet();
-                        try {
-                            submit(client, routedClients, payload, timeout,
-                                completion);
-                            progress = true;
-                        } catch (ZlinkSubmitException ex) {
-                            outstanding.decrementAndGet();
-                            if (ex.getResult() != SubmitResult.BACKPRESSURED
-                                && ex.getResult()
-                                    != SubmitResult.NOT_CONNECTED) {
-                                throw ex;
-                            }
-                        }
+                    if (pendingPayloads[i] == null) {
+                        pendingPayloads[i] = newLogicalPayload(config.size());
+                    }
+                    // Each accepted request owns its own CompletionStage.
+                    // Keep submitting round-robin until Core reports
+                    // admission backpressure; replies do not gate later
+                    // request tasks.
+                    if (submit(clients.get(i), routedClients,
+                            pendingPayloads[i], timeout,
+                            outstanding, completion)) {
+                        pendingPayloads[i] = null;
+                        progress = true;
                     }
                 }
 
@@ -255,27 +252,81 @@ final class PerfMultiSocketReqRep {
         }
     }
 
-    private static void submit(Socket client, boolean routedClients,
-                               Message payload, Duration timeout,
-                               BiConsumer<RequestResult, List<Message>> completion) {
-        if (routedClients) {
-            if (PerfUtil.measurementPartCount() == 2) {
-                ((RouterSocket) client).request(SERVER_RID).message(payload)
-                    .message(PerfUtil.measurementTail()).timeout(timeout)
-                    .submit_sync(SendFlags.DONT_WAIT, completion);
-            } else {
-                ((RouterSocket) client).request(SERVER_RID).message(payload)
-                    .timeout(timeout)
-                    .submit_sync(SendFlags.DONT_WAIT, completion);
-            }
-        } else if (PerfUtil.measurementPartCount() == 2) {
-            ((DealerSocket) client).request().message(payload)
-                .message(PerfUtil.measurementTail()).timeout(timeout)
-                .submit_sync(SendFlags.DONT_WAIT, completion);
-        } else {
-            ((DealerSocket) client).request().message(payload).timeout(timeout)
-                .submit_sync(SendFlags.DONT_WAIT, completion);
+    private static byte[] newLogicalPayload(int msgSize) {
+        try (Message payload = PerfUtil.payload(msgSize,
+                 (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime())) {
+            return payload.toByteArray();
         }
+    }
+
+    private static boolean submit(Socket client, boolean routedClients,
+                                  byte[] logicalPayload, Duration timeout,
+                                  AtomicLong outstanding,
+                                  java.util.function.BiConsumer<List<Message>,
+                                      Throwable> completion) {
+        CompletionStage<List<Message>> stage;
+        try (Message payload = Message.from(logicalPayload);
+             Message tail = PerfUtil.measurementPartCount() == 2
+                 ? PerfUtil.measurementTail() : null) {
+            if (routedClients) {
+                if (tail != null) {
+                    stage = ((RouterSocket) client).request(SERVER_RID)
+                        .message(payload).message(tail).timeout(timeout)
+                        .submit();
+                } else {
+                    stage = ((RouterSocket) client).request(SERVER_RID)
+                        .message(payload).timeout(timeout).submit();
+                }
+            } else if (tail != null) {
+                stage = ((DealerSocket) client).request().message(payload)
+                    .message(tail).timeout(timeout).submit();
+            } else {
+                stage = ((DealerSocket) client).request().message(payload)
+                    .timeout(timeout).submit();
+            }
+        } catch (RuntimeException | Error error) {
+            Throwable cause = PerfMultiAsyncSendLoop.completionCause(error);
+            if (isTransientAdmission(cause)) {
+                return false;
+            }
+            throw error;
+        }
+
+        var future = stage.toCompletableFuture();
+        if (future.isCompletedExceptionally()) {
+            try {
+                future.join();
+            } catch (java.util.concurrent.CompletionException error) {
+                Throwable cause = PerfMultiAsyncSendLoop.completionCause(error);
+                if (isTransientAdmission(cause)) {
+                    return false;
+                }
+                if (cause instanceof RuntimeException runtime) {
+                    throw runtime;
+                }
+                if (cause instanceof Error fatal) {
+                    throw fatal;
+                }
+                throw error;
+            }
+        }
+        outstanding.incrementAndGet();
+        stage.whenComplete((parts, error) -> {
+            completion.accept(parts, error);
+        });
+        return true;
+    }
+
+    private static boolean isExpectedRequestFailure(Throwable error) {
+        return error instanceof ZlinkRequestException request
+            && request.getResult() == RequestResult.TIMED_OUT;
+    }
+
+    private static boolean isTransientAdmission(Throwable error) {
+        return error instanceof ZlinkSubmitException submit
+            && (submit.getResult() == SubmitResult.BACKPRESSURED
+                || submit.getResult() == SubmitResult.NOT_CONNECTED
+                || submit.getResult() == SubmitResult.NOT_ADMITTED);
     }
 
     private static int remainingTimeoutMs(long deadline) {

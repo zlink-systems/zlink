@@ -626,8 +626,14 @@ int zlink::stream_t::xrecv (msg_t *msg_)
 
     pipe_t *pipe = NULL;
     const int rc = _fq.recvpipe (msg_, &pipe);
-    if (rc != 0)
+    if (rc != 0) {
+        if (errno == ECONNABORTED) {
+            _routing_id_sent = false;
+            _current_in = NULL;
+            _more_in = false;
+        }
         return -1;
+    }
 
     zlink_assert (pipe != NULL);
 

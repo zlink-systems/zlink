@@ -393,10 +393,6 @@ public final class PerfUtil {
             : Optional.empty();
     }
 
-    public static void applyMonitorOptions(SocketMonitor monitor, Config config) {
-        PerfTransport.applyMonitorOptions(monitor, config);
-    }
-
     public static long nowNs() {
         return PerfMeasurement.nowNs();
     }

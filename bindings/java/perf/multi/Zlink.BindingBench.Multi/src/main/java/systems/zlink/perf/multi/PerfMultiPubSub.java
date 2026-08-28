@@ -9,12 +9,9 @@ import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.sockets.PubSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.sockets.SubSocket;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.messaging.TopicMessage;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
@@ -51,13 +48,11 @@ final class PerfMultiPubSub {
                 "server", SocketType.PUB);
             long activeEnd = System.nanoTime() + config.durationSeconds() * 1_000_000_000L;
             Message active = PerfUtil.payloadTemplate(config.size());
-            try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
-                    List.of(pub), PollEventFlags.POLLOUT)) {
-                writable.setEvents(0);
+            try {
                 while (System.nanoTime() < activeEnd) {
                     active = PerfUtil.resetAndWritePayload(active, config.size(),
                         (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
-                    publishWithBackpressureWait(pub, writable, active);
+                    publish(pub, active);
                 }
             } finally {
                 active.close();
@@ -79,8 +74,7 @@ final class PerfMultiPubSub {
         try {
             for (int i = 0; i < config.clients(); i++) {
                 SubSocket sub = ctx.createSubSocket();
-                SocketMonitor monitor = sub.monitorOpen(READY_EVENT);
-                PerfUtil.applyMonitorOptions(monitor, config);
+                SocketMonitor monitor = sub.monitorOpen(config.monitorHwm(), READY_EVENT);
                 PerfUtil.applySocketOptions(sub, config);
                 PerfUtil.configureClientTls(sub, config.transport());
                 // C parity: perf_multi_client_helpers.hpp subscribes SUB
@@ -187,32 +181,13 @@ final class PerfMultiPubSub {
         }
     }
 
-    private static void publishWithBackpressureWait(PubSocket pub,
-                                                    PerfSocketPollSet writable,
-                                                    Message message) {
-        while (true) {
-            try {
-                if (PerfUtil.measurementPartCount() == 2) {
-                    pub.publish(TOPIC).message(message).message(PerfUtil.measurementTail())
-                        .flags(SendFlags.DONT_WAIT).submit();
-                } else {
-                    pub.publish(TOPIC).message(message).flags(SendFlags.DONT_WAIT).submit();
-                }
-                return;
-            } catch (ZlinkSubmitException ex) {
-                if (!isTransientSubmit(ex)) {
-                    throw ex;
-                }
-            }
-            writable.setEvents(0, PollEventFlags.POLLOUT);
-            writable.poll(-1);
-            writable.setEvents(0);
+    private static void publish(PubSocket pub, Message message) {
+        if (PerfUtil.measurementPartCount() == 2) {
+            pub.publish(TOPIC).message(message)
+                .message(PerfUtil.measurementTail()).submit();
+        } else {
+            pub.publish(TOPIC).message(message).submit();
         }
-    }
-
-    private static boolean isTransientSubmit(ZlinkSubmitException ex) {
-        return ex.getResult() == SubmitResult.BACKPRESSURED
-            || ex.getResult() == SubmitResult.NOT_CONNECTED;
     }
 
     // Returns true when the wire-level stop token (or cooldown phase) is seen,
@@ -252,22 +227,9 @@ final class PerfMultiPubSub {
         }
     }
 
-    // C retries a transient stop-token publish until it succeeds. The token
-    // terminates the subscriber phase, so reporting a successful server run
-    // without delivering it changes the benchmark lifecycle.
     private static void publishStopToken(PubSocket pub) {
-        while (true) {
-            try (Message stop = PerfStopToken.newMessage()) {
-                pub.publish(TOPIC)
-                    .message(stop)
-                    .flags(SendFlags.NONE)
-                    .submit();
-                return;
-            } catch (ZlinkSubmitException ex) {
-                if (!isTransientSubmit(ex)) {
-                    throw ex;
-                }
-            }
+        try (Message stop = PerfStopToken.newMessage()) {
+            pub.publish(TOPIC).message(stop).submit();
         }
     }
 }

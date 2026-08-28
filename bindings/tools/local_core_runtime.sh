@@ -92,6 +92,18 @@ zlink_has_local_core_runtime() {
 zlink_export_local_core_runtime() {
   if zlink_has_local_core_runtime; then
     export ZLINK_LIBRARY_PATH="${ZLINK_LOCAL_CORE_RUNTIME}"
+    case "$(uname -s 2>/dev/null || true)" in
+      Linux*)
+        local zlink_runtime_dir
+        zlink_runtime_dir="$(dirname "$(readlink -f "${ZLINK_LOCAL_CORE_RUNTIME}")")"
+        export LD_LIBRARY_PATH="${zlink_runtime_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+        ;;
+      Darwin*)
+        local zlink_runtime_dir
+        zlink_runtime_dir="$(dirname "${ZLINK_LOCAL_CORE_RUNTIME}")"
+        export DYLD_LIBRARY_PATH="${zlink_runtime_dir}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+        ;;
+    esac
   fi
 }
 

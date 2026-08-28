@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import time
 from contextlib import ExitStack
@@ -14,13 +15,14 @@ from perf_multi_common import (
     new_payload,
     parse_client_args,
     perf_client_context,
+    resolve_multi_monitor_hwm_bytes,
     print_result_lines,
     recv_nonblocking,
     received_metric_payload,
     resolve_multi_connect_ready_timeout_ms,
     result_metrics,
     safe_poll,
-    send_nonblocking,
+    send_routed,
     stamp_payload,
     wait_monitor_event,
 )
@@ -30,7 +32,6 @@ async def main(argv=None):
     args = parse_client_args(argv or sys.argv[1:], pattern="router_router")
     run_id = benchmark_run_id()
     payloads = [new_payload(args.msg_size) for _ in range(args.clients)]
-    send_pending = [False] * args.clients
     received = 0
     latency_sampler = LatencySampler()
     seq = 0
@@ -44,7 +45,10 @@ async def main(argv=None):
                     sock.set_routing_id(f"CLIENT-{index}".encode("ascii"))
                     sock.router_options.connect_routing_id = b"SERVER"
                     monitor = stack.enter_context(
-                        sock.monitor_open(zlink.MonitorEventMask.CONNECTION_READY)
+                        sock.monitor_open(
+                            zlink.MonitorEventMask.CONNECTION_READY,
+                            resolve_multi_monitor_hwm_bytes(),
+                        )
                     )
                     configure_multi_tls_client(sock, args.transport)
                     apply_multi_socket_options(sock)
@@ -64,41 +68,65 @@ async def main(argv=None):
                     for index, sock in enumerate(sockets):
                         poller.add_socket(
                             sock,
-                            zlink.PollEventFlag.POLLIN | zlink.PollEventFlag.POLLOUT,
+                            zlink.PollEventFlag.POLLIN,
                             index,
                         )
 
-                    while time.perf_counter() < active_deadline:
-                        submitted = False
-                        for index, current_sock in enumerate(sockets):
-                            if send_pending[index]:
-                                continue
-                            next_seq = seq + 1
-                            payload = stamp_payload(
-                                payloads[index], phase=1, run_id=run_id, seq=next_seq
+                    async def send_loop(index, current_sock):
+                        nonlocal seq
+                        while time.perf_counter() < active_deadline:
+                            seq += 1
+                            await send_routed(
+                                current_sock,
+                                stamp_payload(
+                                    payloads[index], phase=1, run_id=run_id, seq=seq
+                                ),
+                                routing_id=b"SERVER",
                             )
-                            if not send_nonblocking(
-                                current_sock, payload, routing_id=b"SERVER"
-                            ):
-                                send_pending[index] = True
-                                continue
-                            seq = next_seq
-                            submitted = True
-                        remaining_ms = int((active_deadline - time.perf_counter()) * 1000)
+
+                    send_tasks = [
+                        asyncio.create_task(send_loop(index, current_sock))
+                        for index, current_sock in enumerate(sockets)
+                    ]
+                    send_completion = asyncio.gather(*send_tasks)
+                    send_drain_deadline = active_deadline + max(
+                        0.001,
+                        float(
+                            os.environ.get(
+                                "PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", "1000"
+                            )
+                        )
+                        / 1000.0,
+                    )
+                    while time.perf_counter() < active_deadline or (
+                        not send_completion.done()
+                        and time.perf_counter() < send_drain_deadline
+                    ):
+                        if (
+                            send_completion.done()
+                            and send_completion.exception() is not None
+                        ):
+                            raise send_completion.exception()
+                        wait_deadline = (
+                            active_deadline
+                            if time.perf_counter() < active_deadline
+                            else send_drain_deadline
+                        )
+                        remaining_ms = int(
+                            (wait_deadline - time.perf_counter()) * 1000
+                        )
                         if remaining_ms <= 0:
                             break
-                        wait_ms = 0 if submitted else min(50, max(1, remaining_ms))
-                        ready_count = safe_poll(poller, poll_events, wait_ms)
-                        if not ready_count:
-                            continue
+                        # Public send awaitables drive admission progress.
+                        # Receive probing must not block their event loop on a
+                        # periodic timer.
+                        ready_count = safe_poll(poller, poll_events, 0)
                         for offset in range(ready_count):
                             index = poll_events.slot(offset)
                             if index < 0 or index >= len(sockets):
                                 continue
                             current_sock = sockets[index]
                             ev = poll_events.revents(offset)
-                            if ev & int(zlink.PollEventFlag.POLLOUT):
-                                send_pending[index] = False
                             if not (ev & int(zlink.PollEventFlag.POLLIN)):
                                 continue
                             while True:
@@ -121,13 +149,26 @@ async def main(argv=None):
                                         )
                                     # C: every matched header counts; latency
                                     # excludes clock-skew, halved for round trip.
-                                    if active:
+                                    if active and time.perf_counter() < active_deadline:
                                         received += 1
                                         if latency is not None:
                                             latency_sampler.add(latency / 2.0)
+                                await asyncio.sleep(0)
+                        await asyncio.sleep(0)
+                    if not send_completion.done():
+                        send_completion.cancel()
+                        await asyncio.gather(send_completion, return_exceptions=True)
+                        raise RuntimeError(
+                            "multi router-router send admission drain timed out"
+                        )
+                    await send_completion
                 if received == 0:
                     raise RuntimeError(
                         "multi router-router benchmark did not receive any active reply"
+                    )
+                if latency_sampler.count == 0:
+                    raise RuntimeError(
+                        "multi router-router benchmark received active replies without latency samples"
                     )
                 metrics = result_metrics(
                     count=received,

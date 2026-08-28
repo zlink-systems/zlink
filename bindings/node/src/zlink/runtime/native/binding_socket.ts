@@ -41,7 +41,8 @@ export interface SocketNativeBinding {
     parts: unknown,
     token: bigint,
     timeoutMs: number,
-    flags?: number
+    flags?: number,
+    directCallback?: boolean
   ) => { result: number; nativeErrno: number };
   dealerRequestSync: (socket: NativeHandle, parts: unknown, timeoutMs: number, flags: number) =>
     { result: number; nativeErrno: number; requestResult?: number; parts?: Buffer[] };
@@ -63,7 +64,8 @@ export interface SocketNativeBinding {
     timeoutMs: number,
     transportPairId?: bigint,
     transportPairGeneration?: bigint,
-    flags?: number
+    flags?: number,
+    directCallback?: boolean
   ) => { result: number; nativeErrno: number };
   routerRequestSync: (socket: NativeHandle, peerRid: Buffer, parts: unknown, timeoutMs: number,
     transportPairId: bigint, transportPairGeneration: bigint, flags: number) =>

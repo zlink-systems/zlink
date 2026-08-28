@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import os
 import sys
 import time
@@ -171,6 +172,33 @@ def resolve_multi_recv_timeout_ms():
     return _env_int("PERF_MULTI_RCVTIMEO_MS", 200)
 
 
+def resolve_multi_monitor_hwm_bytes(environment=None):
+    environment = os.environ if environment is None else environment
+    for name in ("PERF_MULTI_MONITOR_HWM", "PERF_MONITOR_HWM"):
+        value = environment.get(name)
+        if value in (None, ""):
+            continue
+        try:
+            parsed = int(value)
+        except ValueError:
+            continue
+        if parsed >= 0:
+            return parsed
+    return 4_096_000
+
+
+def resolve_multi_reqrep_timeout_ms():
+    return _env_int("PERF_MULTI_REQREP_TIMEOUT_MS", 200)
+
+
+def resolve_multi_reqrep_drain_timeout_ms():
+    request_timeout_ms = resolve_multi_reqrep_timeout_ms()
+    return _env_int(
+        "PERF_MULTI_REQREP_DRAIN_TIMEOUT_MS",
+        max(1000, request_timeout_ms * 4),
+    )
+
+
 
 
 
@@ -249,16 +277,8 @@ def recv_nonblocking(sock, *, method="recv", storage=None):
         raise
 
 
-_DONT_WAIT_FLAG = None
 _SUBMIT_ERROR = None
 _SUBMIT_BACKPRESSURED = None
-
-
-def _dont_wait_flag():
-    global _DONT_WAIT_FLAG
-    if _DONT_WAIT_FLAG is None:
-        _DONT_WAIT_FLAG = int(_require_zlink().SendFlags.DONT_WAIT)
-    return _DONT_WAIT_FLAG
 
 
 def _submit_error_type():
@@ -283,63 +303,45 @@ def measurement_parts(payload):
     return (payload,) if measurement_part_count() == 1 else (payload, b"")
 
 
-def send_nonblocking(sock, payload, *, method="send", routing_id=None, measurement=True):
-    if method != "send":
-        raise ValueError(f"unsupported send method: {method}")
-    send_method = sock.send
-    flag = _dont_wait_flag()
-    try:
-        if routing_id is None:
-            op = send_method()
-        else:
-            op = send_method(routing_id)
-        if measurement and not isinstance(payload, (list, tuple)):
-            op.messages(*measurement_parts(payload))
-        elif isinstance(payload, (list, tuple)):
-            op.messages(*payload)
-        else:
-            op.message(payload)
-        op.submit_sync(flags=flag)
-        return True
-    except _submit_error_type() as exc:
-        if exc.result == _submit_backpressured_result():
-            return False
-        raise
-
-
-async def send_routed(sock, payload, *, routing_id=None, measurement=True):
-    try:
-        op = sock.send() if routing_id is None else sock.send(routing_id)
-        if measurement and not isinstance(payload, (list, tuple)):
-            op.messages(*measurement_parts(payload))
-        elif isinstance(payload, (list, tuple)):
-            op.messages(*payload)
-        else:
-            op.message(payload)
-        await op.submit()
-        return True
-    except _submit_error_type() as exc:
-        if exc.result == _submit_backpressured_result():
-            return False
-        raise
+async def send_routed(
+    sock, payload, *, routing_id=None, measurement=True, method="send"
+):
+    while True:
+        try:
+            send_method = getattr(sock, method)
+            op = send_method() if routing_id is None else send_method(routing_id)
+            if measurement and not isinstance(payload, (list, tuple)):
+                op.messages(*measurement_parts(payload))
+            elif isinstance(payload, (list, tuple)):
+                op.messages(*payload)
+            else:
+                op.message(payload)
+            await op.submit()
+            # Core may admit inline (op_id == 0), in which case awaiting the
+            # public terminal does not suspend this coroutine. Always yield
+            # one turn so concurrent send loops and receive progress cannot
+            # be starved for the entire active phase.
+            await asyncio.sleep(0)
+            return True
+        except _submit_error_type() as exc:
+            if exc.result != _submit_backpressured_result():
+                raise
+            # No operation was accepted, so rebuild the public builder after
+            # one cooperative event-loop turn. Core/HWM still owns depth;
+            # this adds no retry timer, application window, or pending queue.
+            await asyncio.sleep(0)
 
 
 
-def publish_nonblocking(sock, topic, payload, *, measurement=True):
-    flag = _dont_wait_flag()
-    try:
-        op = sock.publish(topic).flags(flag)
-        if measurement and not isinstance(payload, (list, tuple)):
-            op.messages(*measurement_parts(payload))
-        elif isinstance(payload, (list, tuple)):
-            op.messages(*payload)
-        else:
-            op.message(payload)
-        return bool(op.submit())
-    except _submit_error_type() as exc:
-        if exc.result == _submit_backpressured_result():
-            return False
-        raise
+def publish_sync(sock, topic, payload, *, measurement=True):
+    op = sock.publish(topic)
+    if measurement and not isinstance(payload, (list, tuple)):
+        op.messages(*measurement_parts(payload))
+    elif isinstance(payload, (list, tuple)):
+        op.messages(*payload)
+    else:
+        op.message(payload)
+    op.submit()
 
 
 

@@ -125,12 +125,6 @@ final class PerfTransport {
         ctx.recalculateAutoHwm();
     }
 
-    static void applyMonitorOptions(SocketMonitor monitor, PerfUtil.Config config) {
-        // The aligned SocketMonitor surface does not accept generic HWM tuning.
-        // Perf runners keep the hook for parity, but unsupported monitor options
-        // must degrade to a no-op instead of failing startup.
-    }
-
     static void await(CountDownLatch latch, String label, Duration timeout) {
         try {
             if (!latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS)) {

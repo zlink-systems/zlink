@@ -22,9 +22,8 @@ const {
   parseSingleBinaryArgs,
   runLocalSocketOneWayBenchmark,
   spawnSenderWorker,
-  waitForWorkerError,
   waitForMonitorConnectionReady,
-  waitForWorkerMessage,
+  waitForWorkerStatus,
 } = require('./perf_single_common');
 
 async function runDealerDealerBenchmark(msgSize, options) {
@@ -60,12 +59,8 @@ async function runDealerDealerBenchmark(msgSize, options) {
       runId: options.runId ?? 1,
       options,
     });
-    const workerError = waitForWorkerError(worker);
-    await Promise.race([
-      waitForWorkerMessage(worker, 'ready'),
-      workerError.then((message) => Promise.reject(new Error(message.message)))
-    ]);
-    await waitForMonitorConnectionReady(serverMonitor);
+    waitForWorkerStatus(worker, 3);
+    waitForMonitorConnectionReady(serverMonitor);
 
     const activeStartNs = currentEpochNs();
     const activeStopNs = activeStartNs
@@ -83,7 +78,7 @@ async function runDealerDealerBenchmark(msgSize, options) {
     // sync (mirrors C spawning sender/receiver threads after
     // setup_connected_*); the receiver drains until the wire stop token,
     // exactly like C perf_single_one_way.hpp run_active_phase.
-    const recvTask = drainRecvSocket(
+    drainRecvSocket(
       server,
       (received) => {
         const payload = measurementPayload(received.parts);
@@ -100,10 +95,7 @@ async function runDealerDealerBenchmark(msgSize, options) {
       },
       { recordUntilNs: activeStopNs }
     );
-    await Promise.race([
-      recvTask,
-      workerError.then((message) => Promise.reject(new Error(message.message)))
-    ]);
+    waitForWorkerStatus(worker, 4);
     const result = collector.finish();
     emitSingleSocketHwmDetail(server, 'DEALER_DEALER', options.transport, 'receiver', msgSize);
     return result;

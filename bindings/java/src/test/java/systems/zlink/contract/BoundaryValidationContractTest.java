@@ -4,6 +4,8 @@ import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.RoutedSendOperation;
+import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.contracts.sockets.PubSocket;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.RouterSocketOptions;
@@ -27,9 +29,14 @@ public class BoundaryValidationContractTest {
     }
 
     @Test
-    public void streamSocketKeepsItsExistingSynchronousSendSurface() {
-        assertFalse(java.util.Arrays.stream(StreamSocket.class.getMethods())
-            .anyMatch(method -> method.getName().equals("sendAsync")));
+    public void streamSocketKeepsSyncSendAndAddsExplicitAsyncSend()
+        throws Exception {
+        assertEquals(SendOperation.class,
+            StreamSocket.class.getMethod("send", RoutingId.class)
+                .getReturnType());
+        assertEquals(RoutedSendOperation.class,
+            StreamSocket.class.getMethod("sendAsync", RoutingId.class)
+                .getReturnType());
     }
 
     @Test

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -89,36 +90,43 @@ func runMultiDealerRouterEchoWindow(
 	perfcommon.Must(err)
 	defer poller.Close()
 	events := make([]zlink.PollEvent, len(dealers))
-	payloads := make([][]byte, len(dealers))
-	sendPending := make([]bool, len(dealers))
 	for i, dealer := range dealers {
 		perfcommon.Must(poller.AddSocket(dealer.socket, perfcommon.ZLinkPollIn, uintptr(i)))
-		payloads[i] = perfcommon.PreparePayload(msgSize)
+	}
+
+	// A sender goroutine owns each socket's blocking submit path. Receiver
+	// progress remains independent on POLLIN, so waiting for admission never
+	// turns SENDSEND into reply-gated ping-pong.
+	var senders sync.WaitGroup
+	sendErrors := make(chan error, len(dealers))
+	for _, dealer := range dealers {
+		socket := dealer.socket
+		senders.Add(1)
+		go func() {
+			defer senders.Done()
+			payload := perfcommon.PreparePayload(msgSize)
+			for time.Now().Before(window.StopAt) {
+				if sendErr := sendMultiDealerRouterRequest(socket, payload, msgSize, window); sendErr != nil {
+					if perfcommon.IsTransient(sendErr) {
+						continue
+					}
+					select {
+					case sendErrors <- fmt.Errorf("multi dealer/router client send: %w", sendErr):
+					default:
+					}
+					return
+				}
+			}
+		}()
 	}
 
 	for time.Now().Before(window.StopAt) {
-		blocked := 0
-		for i := range dealers {
-			if sendPending[i] {
-				blocked++
-				continue
-			}
-			if !sendMultiDealerRouterRequest(dealers[i].socket, payloads[i], msgSize, window) {
-				sendPending[i] = true
-				blocked++
-				perfcommon.Must(poller.ModifySocket(dealers[i].socket, perfcommon.ZLinkPollIn|perfcommon.ZLinkPollOut))
-			}
-		}
-
-		if !time.Now().Before(window.StopAt) {
+		wait := time.Until(window.StopAt)
+		if wait <= 0 {
 			break
 		}
-		wait := time.Duration(0)
-		if blocked == len(dealers) {
-			wait = time.Until(window.StopAt)
-			if wait > 50*time.Millisecond {
-				wait = 50 * time.Millisecond
-			}
+		if wait > 50*time.Millisecond {
+			wait = 50 * time.Millisecond
 		}
 		n, waitErr := poller.Wait(events, wait)
 		if waitErr != nil {
@@ -136,11 +144,13 @@ func runMultiDealerRouterEchoWindow(
 			if events[i].Revents&perfcommon.ZLinkPollIn != 0 {
 				drainMultiDealerRouterReplies(socket, stats, msgSize, window)
 			}
-			if events[i].Revents&perfcommon.ZLinkPollOut != 0 && sendPending[idx] {
-				sendPending[idx] = false
-				perfcommon.Must(poller.ModifySocket(socket, perfcommon.ZLinkPollIn))
-			}
 		}
+	}
+	senders.Wait()
+	select {
+	case sendErr := <-sendErrors:
+		perfcommon.Must(sendErr)
+	default:
 	}
 }
 
@@ -149,18 +159,10 @@ func sendMultiDealerRouterRequest(
 	payload []byte,
 	msgSize int,
 	window perfcommon.BenchmarkWindow,
-) bool {
+) error {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
 	message := perfcommon.NewMessage(payload)
-	err := perfcommon.SubmitMeasurementRoutedFlags(socket.Send(), message, zlink.SendFlagsDontWait)
-	sent := err == nil
-	if err != nil {
-		if perfcommon.IsTransient(err) {
-			return false
-		}
-		perfcommon.Must(fmt.Errorf("multi dealer/router client send: %w", err))
-	}
-	return sent
+	return perfcommon.SubmitMeasurementRouted(socket.Send(), message)
 }
 
 func drainMultiDealerRouterReplies(

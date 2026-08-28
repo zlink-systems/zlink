@@ -97,7 +97,6 @@ final class PerfAutoHwm {
             case 2 -> "routed";
             case 3 -> "fanout";
             case 4 -> "recv_ingress";
-            case 5 -> "spot_data";
             case 6 -> "peer_queue";
             case 7 -> "stream";
             default -> "none";
@@ -107,7 +106,6 @@ final class PerfAutoHwm {
     private static String policyClassName(int policyClass) {
         return switch (policyClass) {
             case 1 -> "fanout";
-            case 2 -> "spot_data";
             case 3 -> "recv_ingress";
             case 4 -> "routed";
             case 5 -> "peer_queue";
@@ -183,6 +181,6 @@ final class PerfAutoHwm {
         }
         return sendSide
             || !((socketType == SocketType.PUB || socketType == SocketType.XPUB)
-            && ("spot_data".equals(roleName) || "control".equals(roleName)));
+            && "control".equals(roleName));
     }
 }

@@ -197,7 +197,7 @@ final class PerfMetricsCollector {
         String envName = "multi".equals(suite)
             ? "PERF_MULTI_LATENCY_SAMPLE_CAP"
             : "PERF_SINGLE_LATENCY_SAMPLE_CAP";
-        int fallback = "multi".equals(suite) ? 65_536 : 200_000;
+        int fallback = "multi".equals(suite) ? 65_536 : 1_000_000;
         return Math.max(0, intEnv(envName, fallback));
     }
 

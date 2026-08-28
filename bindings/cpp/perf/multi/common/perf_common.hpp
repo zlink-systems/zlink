@@ -264,8 +264,6 @@ inline const char *auto_hwm_role_name (uint32_t role)
             return "fanout";
         case 4:
             return "recv_ingress";
-        case 5:
-            return "spot_data";
         case 6:
             return "peer_queue";
         case 7:
@@ -296,8 +294,6 @@ inline const char *auto_hwm_policy_class_name (uint32_t policy_class)
     switch (policy_class) {
         case 1:
             return "fanout";
-        case 2:
-            return "spot_data";
         case 3:
             return "recv_ingress";
         case 4:
@@ -366,18 +362,16 @@ inline void emit_auto_hwm_detail (SocketLike &socket,
       transport.empty () ? auto_hwm_env_or_default ("PERF_MULTI_TRANSPORT", "unknown") : transport;
     const std::string socket_type_value = socket_type && *socket_type ? socket_type : "unknown";
 
-    // Match the C multi reference (perf_multi_runtime.hpp
-    // perf_auto_hwm_sndbuf_display / perf_auto_hwm_rcvbuf_display, also
-    // applied in the spotnode path below): a SUB/XSUB carrying
+    // Match the C multi reference: a SUB/XSUB carrying
     // recv_ingress(4)|control(1) never sends and a PUB/XPUB carrying
-    // spot_data(5)|control(1) never receives, so the C benchmark reports
+    // control(1) never receives, so the benchmark reports
     // effective_sndbuf=0 / effective_rcvbuf=0 for the inactive direction
     // (sndhwm/rcvhwm stay raw).
     int32_t effective_sndbuf = snapshot.auto_hwm_effective_sndbuf;
     int32_t effective_rcvbuf = snapshot.auto_hwm_effective_rcvbuf;
     {
         const uint32_t role = snapshot.auto_hwm_role;
-        if ((socket_type_value == "pub" || socket_type_value == "xpub") && (role == 1 || role == 5))
+        if ((socket_type_value == "pub" || socket_type_value == "xpub") && role == 1)
             effective_rcvbuf = 0;
         if ((socket_type_value == "sub" || socket_type_value == "xsub") && (role == 1 || role == 4))
             effective_sndbuf = 0;
@@ -459,9 +453,13 @@ inline void apply_benchmark_socket_options (SocketLike &socket,
 
 template <typename SocketLike>
 inline bool
-open_socket_monitor (SocketLike &socket, zlink::monitor_event events, connect_monitor_t &out)
+open_socket_monitor (SocketLike &socket,
+                     zlink::monitor_event events,
+                     uint64_t monitor_hwm,
+                     connect_monitor_t &out)
 {
-    zlink::socket_monitor_t monitor (socket.monitor_open (events));
+    zlink::socket_monitor_t monitor (
+      socket.monitor_open (events, zlink::byte_count_t::bytes (monitor_hwm)));
     if (!monitor.valid ())
         return false;
 
@@ -470,9 +468,11 @@ open_socket_monitor (SocketLike &socket, zlink::monitor_event events, connect_mo
 }
 
 template <typename SocketLike>
-inline bool open_connect_monitor (SocketLike &socket, connect_monitor_t &out)
+inline bool
+open_connect_monitor (SocketLike &socket, uint64_t monitor_hwm, connect_monitor_t &out)
 {
-    return open_socket_monitor (socket, zlink::monitor_event::connection_ready, out);
+    return open_socket_monitor (socket, zlink::monitor_event::connection_ready,
+                                monitor_hwm, out);
 }
 
 // Migrated to unified perf::wait_socket_monitor_event in

@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { currentEpochNs, createPayload, stampPayload, } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, tryRoutedSocketSend, waitForConnectionReady } = require('./perf_multi_runtime');
+const { applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, sendRouted, waitForConnectionReady } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 // MULTI_DEALER_DEALER client == SENDER (one DEALER socket per client).
 //
@@ -28,8 +28,6 @@ async function main() {
     const ctx = zlink.createContext();
     applyContextPolicy(ctx, 'client', 'MULTI_DEALER_DEALER');
     const dealers = [];
-    const poller = zlink.createPoller();
-    const pollBuffer = zlink.createPollEvents(Math.max(1, options.clients));
     let rl = null;
     try {
         for (let i = 0; i < options.clients; i += 1) {
@@ -41,7 +39,6 @@ async function main() {
         for (let i = 0; i < dealers.length; i += 1) {
             const dealer = dealers[i];
             await waitForConnectionReady(dealer, () => dealer.connect(options.endpoint));
-            poller.add(dealer, pollEvents(POLLOUT), i);
         }
         ctx.recalculateAutoHwm();
         for (const dealer of dealers) {
@@ -58,69 +55,23 @@ async function main() {
             }
         }
         const payloads = dealers.map(() => createPayload(options.msgSize));
-        const pending = new Array(dealers.length).fill(false);
         const activeStopNs = currentEpochNs() + BigInt(Math.floor(options.duration * 1_000_000_000));
         let seq = 1n;
-        while (currentEpochNs() < activeStopNs) {
-            let pendingCount = 0;
-            for (let i = 0; i < dealers.length; i += 1) {
-                if (pending[i]) {
-                    pendingCount += 1;
-                    continue;
-                }
-                // Match the C sender window: keep one writable socket active until
-                // backpressure occurs, then wait for POLLOUT before returning to it.
-                while (currentEpochNs() < activeStopNs) {
-                    stampPayload(payloads[i], { phase: 1, runId: 1, msgSize: options.msgSize, seq });
-                    if (!tryRoutedSocketSend(dealers[i], payloads[i])) {
-                        pending[i] = true;
-                        pendingCount += 1;
-                        break;
-                    }
-                    seq += 1n;
-                }
+        await Promise.all(dealers.map(async (dealer, index) => {
+            while (currentEpochNs() < activeStopNs) {
+                const currentSeq = seq;
+                seq += 1n;
+                stampPayload(payloads[index], {
+                    phase: 1, runId: 1, msgSize: options.msgSize, seq: currentSeq
+                });
+                await sendRouted(dealer, payloads[index]);
             }
-            if (currentEpochNs() >= activeStopNs || pendingCount === 0) {
-                continue;
-            }
-            const readyCount = poller.wait(pollBuffer, -1);
-            for (let offset = 0; offset < readyCount; offset += 1) {
-                const index = pollBuffer.slot(offset);
-                if (!Number.isInteger(index) || index < 0 || index >= dealers.length) {
-                    continue;
-                }
-                const event = { revents: pollBuffer.revents(offset) };
-                if (pollEventHas(event, POLLOUT)) {
-                    pending[index] = false;
-                }
-            }
-        }
-        for (let i = 0; i < dealers.length; i += 1) {
-            const deadline = Date.now() + 5000;
-            while (!tryRoutedSocketSend(dealers[i], [STOP_TOKEN_BYTES])) {
-                if (Date.now() >= deadline) {
-                    throw new Error('stop token send timeout');
-                }
-                pending[i] = true;
-                const readyCount = poller.wait(pollBuffer, 50);
-                for (let offset = 0; offset < readyCount; offset += 1) {
-                    const index = pollBuffer.slot(offset);
-                    if (!Number.isInteger(index) || index < 0 || index >= dealers.length) {
-                        continue;
-                    }
-                    const event = { revents: pollBuffer.revents(offset) };
-                    if (pollEventHas(event, POLLOUT)) {
-                        pending[index] = false;
-                    }
-                }
-            }
-        }
+            await sendRouted(dealer, [STOP_TOKEN_BYTES]);
+        }));
         console.log(`CLIENT_DONE,${options.msgSize}`);
     }
     finally {
         rl?.close();
-        pollBuffer.close();
-        poller.close();
         for (const dealer of dealers) {
             dealer.close();
         }

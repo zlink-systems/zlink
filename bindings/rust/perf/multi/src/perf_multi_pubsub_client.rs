@@ -18,7 +18,6 @@ fn drain_subscriber(
     latency_stats: &mut common::LatencyStats,
     active_count: &mut u64,
     active_deadline: Instant,
-    latency_stride: u64,
 ) -> bool {
     let mut stop_seen = false;
     let mut topic_msg = TopicMessage::empty();
@@ -39,11 +38,8 @@ fn drain_subscriber(
                     continue;
                 }
                 *active_count += 1;
-                if should_sample_latency(*active_count, latency_stride) {
-                    let sent_ts_ns = common::decode_sent_ts_ns(data);
-                    latency_stats.record_ns(
-                        common::now_ns().saturating_sub(sent_ts_ns.max(0) as u64) as f64,
-                    );
+                if let Some(elapsed_ns) = common::elapsed_since_sent_ns(data) {
+                    latency_stats.record_latency_sample_ns(elapsed_ns);
                 }
             }
             Ok(false) => break,
@@ -52,18 +48,6 @@ fn drain_subscriber(
         }
     }
     stop_seen
-}
-
-fn resolve_latency_sample_stride() -> u64 {
-    std::env::var("PERF_MULTI_PUBSUB_LATENCY_SAMPLE_STRIDE")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(32)
-}
-
-fn should_sample_latency(index: u64, stride: u64) -> bool {
-    stride <= 1 || index == 1 || index % stride == 0
 }
 
 fn main() {
@@ -85,7 +69,7 @@ fn main() {
         // C multi helper subscribes all topics before connect. Keep that order
         // so subscription state is present when the PUB endpoint sees us.
         sub.set_subscription("").expect("subscribe");
-        let mon = SocketMonitor::open(&sub).expect("monitor");
+        let mon = common::open_connection_ready_monitor(&sub);
         sub.connect(&args.endpoint).expect("connect");
         sockets.push(sub);
         monitors.push(mon);
@@ -127,7 +111,6 @@ fn main() {
     let mut latency_stats = common::LatencyStats::new();
     let mut active_count: u64 = 0;
     let mut phase_done = false;
-    let latency_stride = resolve_latency_sample_stride();
 
     while !phase_done {
         let now = Instant::now();
@@ -154,7 +137,6 @@ fn main() {
                         &mut latency_stats,
                         &mut active_count,
                         active_deadline,
-                        latency_stride,
                     ) {
                         phase_done = true;
                     }

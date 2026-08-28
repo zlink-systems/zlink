@@ -16,6 +16,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -314,8 +315,7 @@ bool setup_connected_pair (BindSocketLike &bind_socket_,
 // Performs the one-shot routed self-check required by the C single runner.
 // It validates both the peer route observed by the receiver and the return
 // route used by the sender before the measured request/reply phase starts.
-inline async_task_t<bool>
-complete_router_router_handshake (perf_socket_t &receiver_,
+inline bool complete_router_router_handshake (perf_socket_t &receiver_,
                                   perf_socket_t &sender_,
                                   const zlink::routing_id_t &receiver_rid_,
                                   zlink::routing_id_t *target_rid_out_ = nullptr)
@@ -330,13 +330,13 @@ complete_router_router_handshake (perf_socket_t &receiver_,
         receiver_.poller_add (poller, zlink::poll_event_flag_t::pollin);
     }
     catch (const zlink::binding_error_t &) {
-        co_return false;
+        return false;
     }
 
     while (!connected && std::chrono::steady_clock::now () < deadline) {
         zlink::message_t outbound = zlink::message_t::from ("PING");
         if (!outbound.valid ())
-            co_return false;
+            return false;
 
         try {
             sender_.send_routed (receiver_rid_, outbound);
@@ -347,7 +347,7 @@ complete_router_router_handshake (perf_socket_t &receiver_,
                     != 0) {
                     if (errno == EAGAIN || errno == EINTR)
                         break;
-                    co_return false;
+                    return false;
                 }
                 if (inbound.routing_id ().has_value () && inbound.parts ().size () == 1
                     && inbound.parts ()[0].to_string () == "PING") {
@@ -360,7 +360,7 @@ complete_router_router_handshake (perf_socket_t &receiver_,
         catch (const zlink::binding_error_t &err_) {
             const int err = err_.internal_errno ();
             if (err != EAGAIN && err != EINTR && err != EHOSTUNREACH && err != ENOTCONN)
-                co_return false;
+                return false;
         }
 
         if (!connected) {
@@ -374,27 +374,27 @@ complete_router_router_handshake (perf_socket_t &receiver_,
     }
 
     if (!connected || !sender_actual_rid.has_value ())
-        co_return false;
+        return false;
 
     zlink::message_t reply = zlink::message_t::from ("PONG");
     if (!reply.valid ())
-        co_return false;
+        return false;
     try {
         receiver_.send_routed (*sender_actual_rid, reply);
     }
     catch (const zlink::binding_error_t &) {
-        co_return false;
+        return false;
     }
 
     zlink::received_t response;
     if (sender_.receive (response, 0) != 0)
-        co_return false;
+        return false;
     const bool ok = response.routing_id ().has_value ()
                     && *response.routing_id () == receiver_rid_ && response.parts ().size () == 1
                     && response.parts ()[0].to_string () == "PONG";
     if (ok && target_rid_out_)
         *target_rid_out_ = *response.routing_id ();
-    co_return ok;
+    return ok;
 }
 
 // Migrated to unified perf::wait_socket_monitor_event in
@@ -444,8 +444,6 @@ inline const char *single_auto_hwm_role_name (uint32_t role_)
             return "fanout";
         case 4:
             return "recv_ingress";
-        case 5:
-            return "spot_data";
         case 6:
             return "peer_queue";
         case 7:
@@ -682,33 +680,6 @@ inline int send_payload_active (perf_socket_t &socket_,
     }
 }
 
-inline async_task_t<int>
-send_payload_active_async (perf_socket_t &socket_,
-                           const zlink::routing_id_t &routing_id_,
-                           const void *data_,
-                           size_t size_,
-                           bool measurement_ = true)
-{
-    zlink::message_t msg = message_from_payload (data_, size_);
-    if (!msg.valid ())
-        co_return -1;
-    try {
-        if (measurement_ && measurement_part_count () == 2) {
-            zlink::message_t tail = message_from_payload (NULL, 0);
-            co_await socket_.send_routed_async (routing_id_, msg, tail);
-        } else {
-            co_await socket_.send_routed_async (routing_id_, msg);
-        }
-        co_return 1;
-    }
-    catch (const zlink::binding_error_t &err) {
-        errno = err.internal_errno ();
-        if (is_transient_send_errno (errno))
-            co_return 0;
-        co_return -1;
-    }
-}
-
 inline bool send_stop_token_active (perf_socket_t &socket_)
 {
     return send_payload_active (socket_, k_stop_token,
@@ -722,14 +693,6 @@ inline bool send_stop_token_active (perf_socket_t &socket_,
     return send_payload_active (socket_, routing_id_, k_stop_token,
                                 std::strlen (k_stop_token), false)
            > 0;
-}
-
-inline async_task_t<bool> send_stop_token_async (perf_socket_t &socket_,
-                                                  const zlink::routing_id_t &routing_id_)
-{
-    const int rc = co_await send_payload_active_async (
-      socket_, routing_id_, k_stop_token, std::strlen (k_stop_token), false);
-    co_return rc > 0;
 }
 
 inline bool send_stop_token_blocking (zlink::pair_socket_t &socket_)

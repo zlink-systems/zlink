@@ -10,6 +10,7 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.runtime.messaging.MessageOperations;
 import systems.zlink.runtime.framework.FrameworkStreamOperations;
@@ -68,6 +69,14 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
         Objects.requireNonNull(rid, "rid");
         return MessageOperations.send((parts, flags) -> runtime().send(rid,
             parts, SendFlag.fromValue(flags.value())));
+    }
+
+    public RoutedSendOperation sendAsync(RoutingId rid) {
+        Objects.requireNonNull(rid, "rid");
+        return MessageOperations.routedSend((parts, timeout) ->
+            runtime().sendAsync(rid, parts, timeout),
+            (parts, flags) -> runtime().send(rid, parts,
+                SendFlag.fromValue(flags.value())));
     }
 
     private CompletionStage<Void> sendAsync(

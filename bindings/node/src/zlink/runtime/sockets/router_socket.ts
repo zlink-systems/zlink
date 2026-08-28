@@ -212,7 +212,7 @@ export class RouterSocket extends RoutedMessageSocket {
     const resolved = timeoutMs === 0 ? (this.options.requestTimeout === 0 ? 5_000 : this.options.requestTimeout) : timeoutMs;
     let result;
     try { result = native.routerRequest(handle, peer, normalizeOperationPayload(parts), registration.token,
-      resolved, pairId, pairGeneration, flags | 0); }
+      resolved, pairId, pairGeneration, flags | 0, true); }
     catch (error) { registration.cancel(); throw submitNativeError(error, flags, 'request submit failed'); }
     if (result.result !== SubmitResult.Ok) {
       const error = submitErrorFromNativeResult(result.result, result.nativeErrno, 'request submit failed');

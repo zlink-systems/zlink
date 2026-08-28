@@ -8,7 +8,6 @@ using Systems.Zlink;
 internal static partial class PerfRunner
 {
     internal const PollEventFlags SocketPollIn = PollEventFlags.PollIn;
-    internal const PollEventFlags SocketPollOut = PollEventFlags.PollOut;
 
     internal static bool IsSupportedTransport(string transport)
     {

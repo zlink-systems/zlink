@@ -37,29 +37,61 @@ func StampWindowPayload(payload []byte, activeAt time.Time) {
 
 func RecordMessageLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgSize int, part *zlink.Message) {
 	now := time.Now()
-	if latencyNs, ok := LatencyNsFromMessageAt(part, msgSize, PhaseActive, now); ok && !now.Before(activeAt) && now.Before(stopAt) {
-		stats.AddLatencyNs(latencyNs)
+	if now.Before(activeAt) || !now.Before(stopAt) {
+		return
+	}
+	sentTsNs, ok := SentTimestampNsFromMessagePhase(part, msgSize, PhaseActive)
+	if !ok {
+		return
+	}
+	stats.AddCount()
+	if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+		stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
 	}
 }
 
 func RecordMessageRTTLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgSize int, part *zlink.Message) {
 	now := time.Now()
-	if latencyNs, ok := LatencyNsFromMessageAt(part, msgSize, PhaseActive, now); ok && !now.Before(activeAt) && now.Before(stopAt) {
-		stats.AddLatencyNs(latencyNs / 2.0)
+	if now.Before(activeAt) || !now.Before(stopAt) {
+		return
+	}
+	sentTsNs, ok := SentTimestampNsFromMessagePhase(part, msgSize, PhaseActive)
+	if !ok {
+		return
+	}
+	stats.AddCount()
+	if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+		stats.AddLatencySampleNs(float64(nowNs-sentTsNs) / 2.0)
 	}
 }
 
 func RecordBytesLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgSize int, payload []byte) {
 	now := time.Now()
-	if latencyNs, ok := LatencyNsFromBytesAt(payload, msgSize, PhaseActive, now); ok && !now.Before(activeAt) && now.Before(stopAt) {
-		stats.AddLatencyNs(latencyNs)
+	if now.Before(activeAt) || !now.Before(stopAt) {
+		return
+	}
+	sentTsNs, ok := SentTimestampNsFromBytesPhase(payload, msgSize, PhaseActive)
+	if !ok {
+		return
+	}
+	stats.AddCount()
+	if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+		stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
 	}
 }
 
 func RecordBytesRTTLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgSize int, payload []byte) {
 	now := time.Now()
-	if latencyNs, ok := LatencyNsFromBytesAt(payload, msgSize, PhaseActive, now); ok && !now.Before(activeAt) && now.Before(stopAt) {
-		stats.AddLatencyNs(latencyNs / 2.0)
+	if now.Before(activeAt) || !now.Before(stopAt) {
+		return
+	}
+	sentTsNs, ok := SentTimestampNsFromBytesPhase(payload, msgSize, PhaseActive)
+	if !ok {
+		return
+	}
+	stats.AddCount()
+	if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+		stats.AddLatencySampleNs(float64(nowNs-sentTsNs) / 2.0)
 	}
 }
 

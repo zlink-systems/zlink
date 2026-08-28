@@ -5,7 +5,7 @@ const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, currentEpochNs, sleepImmediate, stampPayload, summarizeMetrics } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
-const { applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, waitForConnectionReady } = require('./perf_multi_runtime');
+const { applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, waitForConnectionReady } = require('./perf_multi_runtime');
 function appendMeasurement(op, payload) {
     op = op.message(payload);
     if (process.env.PERF_PART_COUNT !== '1')
@@ -24,21 +24,10 @@ function closeParts(parts) {
     for (const part of parts ?? [])
         part?.close?.();
 }
-function transientRequest(error) {
-    return error instanceof zlink.SubmitError
-        && (error.result === zlink.SubmitResult.Backpressured
-            || error.result === zlink.SubmitResult.NotConnected
-            || error.result === zlink.SubmitResult.NotFound);
-}
 async function runSocketReqRepClient({ options, pattern, routerClient, serverRoutingId }) {
     const ctx = zlink.createContext();
     applyContextPolicy(ctx, 'client', pattern);
     const sockets = [];
-    const poller = zlink.createPoller();
-    const pollBuffer = zlink.createPollEvents(Math.max(1, options.clients));
-    const outstanding = new Array(options.clients).fill(0);
-    const blocked = new Array(options.clients).fill(false);
-    let fatal = null;
     let rl = null;
     try {
         for (let i = 0; i < options.clients; i += 1) {
@@ -50,8 +39,6 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
                 socket.options.setConnectRoutingId(serverRoutingId);
             sockets.push(socket);
             await waitForConnectionReady(socket, () => socket.connect(options.endpoint));
-            // Completion owns this registration. POLLIN/POLLOUT must not be mixed in.
-            poller.add(socket, pollEvents(zlink.PollEventFlag.PollCompletion), i);
         }
         ctx.recalculateAutoHwm();
         for (const socket of sockets) {
@@ -71,71 +58,69 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
             + BigInt(Math.floor(options.duration * 1_000_000_000));
         const collector = createMetricCollector({
             suite: 'multi', runId, msgSize: options.msgSize,
-            activeStartNs, activeStopNs, roundTrip: true, acceptDrainCompletions: true
+            activeStartNs, activeStopNs, roundTrip: true
         });
         const requestTimeoutMs = Math.max(1, Number(process.env.PERF_MULTI_REQREP_TIMEOUT_MS ?? 200));
         let seq = 1n;
-        const observe = (index, error, parts) => {
+        const payloadTemplates = sockets.map(() => createPayload(options.msgSize));
+        const retryPayloads = sockets.map(() => []);
+        const pending = new Set();
+        let requestFailure = null;
+        const submitRequest = async (socket, payload) => {
+            let parts = null;
             try {
-                if (error)
-                    throw error;
-                const payload = measurementPayload(parts);
-                collector.recordPayload(payload?.data?.() ?? null, currentEpochNs());
-                blocked[index] = false;
+                const operation = routerClient ? socket.request(serverRoutingId) : socket.request();
+                parts = await appendMeasurement(operation, payload)
+                    .timeout(requestTimeoutMs).submit();
+                const replyPayload = measurementPayload(parts);
+                collector.recordPayload(replyPayload?.data?.() ?? null, currentEpochNs());
             }
             catch (error) {
-                if (transientRequest(error)
-                    || (error instanceof zlink.RequestError
-                        && error.result === zlink.RequestResult.TimedOut)) {
-                    blocked[index] = true;
-                }
-                else {
-                    fatal = error;
-                }
+                if (error instanceof zlink.SubmitError
+                    && (error.result === zlink.SubmitResult.Backpressured
+                        || error.result === zlink.SubmitResult.NotAdmitted))
+                    return true;
+                if (error instanceof zlink.RequestError
+                    && error.result === zlink.RequestResult.TimedOut)
+                    return false;
+                throw error;
             }
             finally {
                 closeParts(parts);
-                outstanding[index] -= 1;
             }
+            return false;
         };
-        while (currentEpochNs() < activeStopNs && !fatal) {
-            let submitted = false;
-            for (let i = 0; i < sockets.length && currentEpochNs() < activeStopNs; i += 1) {
-                if (blocked[i])
-                    continue;
-                const payload = createPayload(options.msgSize);
-                stampPayload(payload, { phase: 1, runId, msgSize: options.msgSize, seq });
-                const operation = routerClient ? sockets[i].request(serverRoutingId) : sockets[i].request();
-                try {
-                    appendMeasurement(operation, payload).timeout(requestTimeoutMs)
-                        .submit_sync(zlink.SendFlags.DontWait, (error, parts) => observe(i, error, parts));
-                    outstanding[i] += 1;
-                    submitted = true;
+        while (currentEpochNs() < activeStopNs) {
+            for (let index = 0; index < sockets.length; index += 1) {
+                let payload = retryPayloads[index].shift();
+                if (!payload) {
+                    payload = Buffer.from(payloadTemplates[index]);
+                    const currentSeq = seq;
                     seq += 1n;
+                    stampPayload(payload, {
+                        phase: 1, runId, msgSize: options.msgSize, seq: currentSeq
+                    });
                 }
-                catch (error) {
-                    if (!transientRequest(error))
-                        throw error;
-                    blocked[i] = true;
-                }
+                const logicalPayload = payload;
+                const task = submitRequest(sockets[index], logicalPayload).then((retry) => {
+                    if (retry && currentEpochNs() < activeStopNs) {
+                        // Preserve every pre-admission failure as its exact logical
+                        // request. Queued retries take priority over allocating another
+                        // sequence on a later event-loop turn.
+                        retryPayloads[index].push(logicalPayload);
+                    }
+                });
+                pending.add(task);
+                task.catch((error) => { requestFailure = error; })
+                    .finally(() => pending.delete(task));
             }
-            // The external completion poller owns native completion progress. Node
-            // needs one event-loop turn after the drain to deliver Promise callbacks.
-            poller.wait(pollBuffer, submitted ? 0 : 50);
             await sleepImmediate();
-            if (!submitted)
-                blocked.fill(false);
+            if (requestFailure)
+                throw requestFailure;
         }
-        const drainStopNs = currentEpochNs()
-            + BigInt(Math.max(1000, requestTimeoutMs * 4)) * 1000000n;
-        while (outstanding.some((count) => count > 0) && currentEpochNs() < drainStopNs && !fatal) {
-            poller.wait(pollBuffer, 50);
-            await sleepImmediate();
-        }
-        if (fatal)
-            throw fatal;
-        if (outstanding.some((count) => count > 0))
-            throw new Error('request drain timed out');
+        await Promise.all(Array.from(pending));
+        if (requestFailure)
+            throw requestFailure;
         const result = await collector.finish();
         for (const line of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs)) {
             console.log(line);
@@ -144,8 +129,6 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
     }
     finally {
         rl?.close();
-        pollBuffer.close();
-        poller.close();
         for (const socket of sockets)
             socket.close();
         ctx.close();

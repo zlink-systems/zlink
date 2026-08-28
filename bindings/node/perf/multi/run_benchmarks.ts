@@ -26,6 +26,7 @@ const {
   createAutoHwmCollector
 } = require('../common/perf_c_emitter');
 const { spawnMultiPair } = require('./perf_multi_orchestrator');
+const { resolveMultiMonitorHwm } = require('./perf_multi_common');
 const {
   MULTI_PATTERN_RUNNERS,
   POLICY_TRANSPORTS,
@@ -143,6 +144,13 @@ async function main() {
     usage();
     return;
   }
+
+  if (options.monitorHwm !== undefined
+      && (!Number.isSafeInteger(options.monitorHwm) || options.monitorHwm < 0)) {
+    throw new Error('--monitor-hwm must be a nonnegative safe integer');
+  }
+  options.monitorHwm = options.monitorHwm ?? resolveMultiMonitorHwm();
+  process.env.PERF_MULTI_MONITOR_HWM = String(options.monitorHwm);
 
   const patternNames = resolveMultiPatternNames(options.pattern);
   const defaultMsgSizes = defaultMultiMsgSizes(patternNames, options.msgSizesExplicit);

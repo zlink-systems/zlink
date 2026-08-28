@@ -124,7 +124,7 @@ export class DealerSocket extends ReceiveSocket {
     const registration = registerNativeRequestCallback(handle, callback, 'request failed');
     let result;
     try { result = native.dealerRequest(handle, normalizeOperationPayload(parts), registration.token,
-      this.resolvedRequestTimeout(timeoutMs), flags | 0); }
+      this.resolvedRequestTimeout(timeoutMs), flags | 0, true); }
     catch (error) { registration.cancel(); throw submitNativeError(error, flags, 'request submit failed'); }
     if (result.result !== SubmitResult.Ok) {
       registration.cancel();

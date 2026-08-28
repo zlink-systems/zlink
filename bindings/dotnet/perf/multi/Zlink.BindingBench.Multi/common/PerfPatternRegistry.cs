@@ -39,7 +39,8 @@ internal static class MultiPerfPatternRegistry
                 static options => PerfMultiPubSubServer.Run(options),
                 static options => PerfMultiPubSubClient.Run(options)),
             new MultiPerfPattern("STREAM",
-                static options => PerfMultiStreamServer.Run(options),
+                static options => PerfMultiStreamServer.Run(options)
+                    .GetAwaiter().GetResult(),
                 static options => PerfRunner.PrintExternalStreamClientError()),
         });
 

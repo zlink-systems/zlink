@@ -14,6 +14,7 @@ const {
 const POLLIN = 1;
 const POLLOUT = 2;
 const { emitMultiSocketHwmDetail } = require('./perf_multi_auto_hwm');
+const { resolveMultiMonitorHwm } = require('./perf_multi_common');
 
 function measurementPartCount() {
   return process.env.PERF_PART_COUNT === '1' ? 1 : 2;
@@ -78,9 +79,9 @@ function applySocketPolicy(
   // apply_debug_timeouts (~986-997) sets ZLINK_OPT_SNDTIMEO/RCVTIMEO to
   // the 200ms default on every benchmark socket UNCONDITIONALLY, and
   // returns early (no timeouts) only for the inproc transport. Direct
-  // synchronous roles still use DONTWAIT + poller waits; routed roles await
-  // the canonical Core completion terminal. Match C's timeout policy: skip for
-  // inproc, otherwise apply the C default.
+  // Receive-only roles use public poller readiness; HWM-managed routed sends
+  // await the canonical Promise completion terminal. Match C's timeout policy:
+  // skip for inproc, otherwise apply the C default.
   const transport = String(
     options.transport || process.env.PERF_MULTI_TRANSPORT || ''
   ).trim().toLowerCase();
@@ -162,22 +163,6 @@ function recvNoWaitInto(socket, received) {
   }
 }
 
-function subscribeNoWait(socket) {
-  const received = new zlink.TopicMessage();
-  return subscribeNoWaitInto(socket, received) ? received : null;
-}
-
-function subscribeNoWaitInto(socket, received) {
-  try {
-    return socket.subscribe(received, RecvFlags.DontWait);
-  } catch (error) {
-    if (error instanceof zlink.RecvError && error.result === RecvResult.NoData) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 async function waitForConnectionReady(
   socket,
   connectFn = null,
@@ -192,7 +177,10 @@ async function waitForConnectionReadyCount(
   connectFn = null,
   timeoutMs = integerEnvPair('PERF_MULTI_CONNECT_READY_TIMEOUT_MS', 'PERF_CONNECT_READY_TIMEOUT_MS', 10000)
 ) {
-  const monitor = socket.monitorOpen([MonitorEventType.ConnectionReady]);
+  const monitor = socket.monitorOpen(
+    [MonitorEventType.ConnectionReady],
+    BigInt(resolveMultiMonitorHwm())
+  );
   try {
     if (typeof connectFn === 'function') {
       await connectFn();
@@ -233,51 +221,13 @@ async function waitForConnectionReadyCount(
   }
 }
 
-function trySocketSend(socket, ...args) {
-  try {
-    const routed = args.length >= 2 && args[0] instanceof zlink.RoutingId;
-    const payload = routed ? args[1] : args[0];
-    // STREAM packet callbacks keep their synchronous raw trySend relay;
-    // managed PAIR/DEALER/ROUTER sends use the completion Promise below.
-    let op = routed ? socket.trySend(args[0]) : socket.trySend();
-    const parts = Array.isArray(payload) ? payload : measurementParts(payload);
-    for (const part of parts) {
-      op = op.message(part);
-    }
-    return op.flags(zlink.SendFlags.DontWait).submit();
-  } catch (error) {
-    if (error instanceof zlink.SubmitError && error.result === zlink.SubmitResult.Backpressured) {
-      return false;
-    }
-    const text = String(error && error.message ? error.message : error);
-    if ((error && error.code === 'EAGAIN') || text.includes('Resource temporarily unavailable')) {
-      return false;
-    }
-    throw error;
-  }
-}
-
-function tryRoutedSocketSend(socket, ...args) {
-  try {
-    const routed = args.length >= 2 && args[0] instanceof zlink.RoutingId;
-    const payload = routed ? args[1] : args[0];
-    let op = routed ? socket.send(args[0]) : socket.send();
-    const parts = Array.isArray(payload) ? payload : measurementParts(payload);
-    for (const part of parts) {
-      op = op.message(part);
-    }
-    op.submit_sync(zlink.SendFlags.DontWait);
-    return true;
-  } catch (error) {
-    if (error instanceof zlink.SubmitError && error.result === zlink.SubmitResult.Backpressured) {
-      return false;
-    }
-    const text = String(error && error.message ? error.message : error);
-    if ((error && error.code === 'EAGAIN') || text.includes('Resource temporarily unavailable')) {
-      return false;
-    }
-    throw error;
-  }
+async function sendRouted(socket, ...args) {
+  const routed = args.length >= 2 && args[0] instanceof zlink.RoutingId;
+  const payload = routed ? args[1] : args[0];
+  let op = routed ? socket.send(args[0]) : socket.send();
+  const parts = Array.isArray(payload) ? payload : measurementParts(payload);
+  for (const part of parts) op = op.message(part);
+  await op.submit();
 }
 
 // PERF_MULTI_TEST_POLICY § 1.3.1: emit the wire-level stop token once at
@@ -315,77 +265,6 @@ function sleepMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
 
-// C parity: bindings/c/perf/multi/common/perf_multi_spot_control.hpp
-// publish_control_payload (~536-584). The control PUB->SUB link is a
-// slow-joiner channel: a single publish can be dropped/backpressured
-// while the peer's subscription is still propagating, and a PUB socket
-// emits NO POLLOUT drain wakeup when it has no live subscriber pipe.
-// C therefore does NOT wait on a signal-driven `-1` POLLOUT poller for
-// control sends — it uses a BOUNDED deadline
-// (PERF_MULTI_CONNECT_READY_TIMEOUT_MS, default 5000ms), a blocking
-// publish attempt, and a short (<=10ms) timed idle wait on backpressure,
-// then RETURNS (false) on timeout so the caller's higher-level handshake
-// loop (e.g. wait_msg_size_start_with_ready_republish) can re-publish.
-// An infinite signal-driven loop here is the MULTI_SPOT non-termination
-// root cause, so this mirrors C exactly: bounded, returns a boolean.
-async function publishControlUntilSent(socket, _waiter, topic, payload) {
-  const body = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload));
-  const deadlineMs = Math.max(
-    1,
-    integerEnvPair('PERF_MULTI_CONNECT_READY_TIMEOUT_MS', 'PERF_CONNECT_READY_TIMEOUT_MS', 10000)
-  );
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    if (trySocketPublish(socket, topic, [body])) {
-      return true;
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      break;
-    }
-    await sleepMs(Math.min(remaining, 10));
-  }
-  return false;
-}
-
-function createCallbackEventWaiter(register) {
-  let pending = 0;
-  const waiters = [];
-  register(() => {
-    const resolve = waiters.shift();
-    if (resolve) {
-      resolve();
-      return;
-    }
-    pending += 1;
-  });
-  return {
-    async wait() {
-      if (pending > 0) {
-        pending -= 1;
-        return;
-      }
-      await new Promise((resolve) => waiters.push(resolve));
-    }
-  };
-}
-
-async function waitForRunnerControlConnected() {
-  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) {
-      if (line.startsWith('CONTROL_CONNECTED,')) {
-        return;
-      }
-      if (line === 'STOP' || line === 'QUIT') {
-        return;
-      }
-    }
-  } finally {
-    rl.close();
-  }
-}
-
 async function waitForRunnerStart(msgSize) {
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   try {
@@ -397,26 +276,6 @@ async function waitForRunnerStart(msgSize) {
     return null;
   } finally {
     rl.close();
-  }
-}
-
-async function waitForControlStart(controlSub, waiter, msgSize) {
-  for (;;) {
-    while (true) {
-      const received = subscribeNoWait(controlSub);
-      if (!received) {
-        break;
-      }
-      try {
-        const payloadText = received.parts[0].data().toString('utf8');
-        if (payloadText === `START,${msgSize}`) {
-          return;
-        }
-      } finally {
-        received.close();
-      }
-    }
-    await waiter.wait(POLLIN);
   }
 }
 
@@ -460,25 +319,19 @@ module.exports = {
   POLLOUT,
   applyContextPolicy,
   applySocketPolicy,
-  createCallbackEventWaiter,
   createSocketEventWaiter,
   emitMultiSocketHwmDetail,
   pollEvents,
   pollEventHas,
   waitPollerOne,
-  publishControlUntilSent,
   recvNoWait,
   recvNoWaitInto,
+  resolveMultiMonitorHwm,
   sendStopTokenOnce,
-  subscribeNoWait,
-  subscribeNoWaitInto,
+  sendRouted,
   trySocketPublish,
-  tryRoutedSocketSend,
-  trySocketSend,
   measurementParts,
   measurementPayload,
-  waitForControlStart,
-  waitForRunnerControlConnected,
   waitForRunnerStart,
   waitForConnectionReadyCount,
   waitForConnectionReady

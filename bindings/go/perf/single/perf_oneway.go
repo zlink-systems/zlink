@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -49,6 +50,8 @@ func runSingleOneWayWithTransient(
 	// burst drain after the first payload uses DONTWAIT.
 	receiverDone := make(chan error, 1)
 	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		for {
 			stop, drainErr := recvSingleOneWayUntilStop(receiver, &received, stats, cfg.msgSize, window.ActiveAt, window.StopAt)
 			if drainErr != nil {

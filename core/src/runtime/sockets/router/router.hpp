@@ -81,6 +81,7 @@ class router_t : public routing_socket_base_t
                                         bool locally_initiated_) const;
     void copy_router_pipe_source_rid (pipe_t *pipe_,
                                       zlink_routing_id_t *out_) const;
+    void reset_current_in_after_multipart_abort ();
     void promote_anonymous_pipe_for_dispatch (pipe_t *pipe_);
     pipe_t *find_transport_pair_pipe (const zlink_routing_id_t *target_rid_,
                                       uint64_t transport_pair_id_,

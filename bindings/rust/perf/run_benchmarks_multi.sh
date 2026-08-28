@@ -101,14 +101,14 @@ SNDBUF=""
 RCVBUF=""
 SNDTIMEO_MS="${PERF_MULTI_SNDTIMEO_MS:-200}"
 RCVTIMEO_MS="${PERF_MULTI_RCVTIMEO_MS:-200}"
-AUTO_HWM_PROFILE="${PERF_CTX_AUTO_HWM_PROFILE:-}"
+AUTO_HWM_PROFILE="${PERF_MULTI_CTX_AUTO_HWM_PROFILE:-${PERF_CTX_AUTO_HWM_PROFILE:-}}"
 CONNECT_CONCURRENCY=""
 TRANSPORT_TRANSITION_MS="${PERF_MULTI_TRANSPORT_TRANSITION_MS:-${PERF_TRANSPORT_TRANSITION_MS:-3000}}"
 PATTERN_TRANSITION_MS="${PERF_MULTI_PATTERN_TRANSITION_MS:-${PERF_PATTERN_TRANSITION_MS:-3000}}"
 SERVER_READY_TIMEOUT_MS="${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}"
 SERVER_SHUTDOWN_TIMEOUT_MS="${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}"
 CONNECT_READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-1000}}"
-MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-1000}"
+MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-4096000}"
 SERVER_BIND_PORT="0"
 ENV_PERF_IO_THREADS="${PERF_IO_THREADS:-}"
 ENV_MULTI_SERVER_IO_THREADS="${PERF_MULTI_SERVER_IO_THREADS:-}"
@@ -476,7 +476,7 @@ normalize_patterns() {
     local raw="${1:-ALL}"
     raw="${raw^^}"
     if [[ "${raw}" == "ALL" ]]; then
-        printf '%s\n' "MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER,MULTI_ROUTER_ROUTER,MULTI_PUBSUB,MULTI_STREAM"
+        printf '%s\n' "MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER_SENDSEND,MULTI_DEALER_ROUTER_REQREP,MULTI_ROUTER_ROUTER_SENDSEND,MULTI_ROUTER_ROUTER_REQREP,MULTI_PUBSUB,MULTI_STREAM"
         return
     fi
 
@@ -491,7 +491,19 @@ normalize_patterns() {
             value="STREAM"
         fi
         case "${value}" in
-            DEALER_DEALER|DEALER_ROUTER|ROUTER_ROUTER|PUBSUB|STREAM)
+            DEALER_ROUTER|DEALER_ROUTER_SENDSEND)
+                items+=("MULTI_DEALER_ROUTER_SENDSEND")
+                ;;
+            DEALER_ROUTER_REQREP)
+                items+=("MULTI_DEALER_ROUTER_REQREP")
+                ;;
+            ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND)
+                items+=("MULTI_ROUTER_ROUTER_SENDSEND")
+                ;;
+            ROUTER_ROUTER_REQREP)
+                items+=("MULTI_ROUTER_ROUTER_REQREP")
+                ;;
+            DEALER_DEALER|PUBSUB|STREAM)
                 items+=("MULTI_${value}")
                 ;;
             *)
@@ -794,15 +806,21 @@ for run in $(seq 1 "${RUNS}"); do
             MULTI_DEALER_DEALER)
                 SERVER_BIN="${BIN_DIR}/perf_multi_dealer_dealer_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_dealer_dealer_client" ;;
-            MULTI_DEALER_ROUTER)
+            MULTI_DEALER_ROUTER_SENDSEND)
                 SERVER_BIN="${BIN_DIR}/perf_multi_dealer_router_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_dealer_router_client" ;;
+            MULTI_DEALER_ROUTER_REQREP)
+                SERVER_BIN="${BIN_DIR}/perf_multi_dealer_router_reqrep_server"
+                CLIENT_BIN="${BIN_DIR}/perf_multi_dealer_router_reqrep_client" ;;
             MULTI_PUBSUB)
                 SERVER_BIN="${BIN_DIR}/perf_multi_pubsub_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_pubsub_client" ;;
-            MULTI_ROUTER_ROUTER)
+            MULTI_ROUTER_ROUTER_SENDSEND)
                 SERVER_BIN="${BIN_DIR}/perf_multi_router_router_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_router_router_client" ;;
+            MULTI_ROUTER_ROUTER_REQREP)
+                SERVER_BIN="${BIN_DIR}/perf_multi_router_router_reqrep_server"
+                CLIENT_BIN="${BIN_DIR}/perf_multi_router_router_reqrep_client" ;;
             MULTI_STREAM)
                 SERVER_BIN="${BIN_DIR}/perf_multi_stream_server"
                 CLIENT_BIN="" ;;
@@ -964,7 +982,7 @@ for run in $(seq 1 "${RUNS}"); do
                         --sizes "${size}" \
                         --runs 1 \
                         --duration "${DURATION}" \
-                        --completion-wait-ms "${SERVER_SHUTDOWN_TIMEOUT_MS}" \
+                        --completion-wait-ms "${PERF_MULTI_STREAM_COMPLETION_WAIT_MS:-${PERF_STREAM_COMPLETION_WAIT_MS:-${SERVER_SHUTDOWN_TIMEOUT_MS}}}" \
                         --ccu "${CASE_CLIENTS}" \
                         --io-threads "${PERF_MULTI_CLIENT_IO_THREADS}" \
                         --print-perf-result 1 \

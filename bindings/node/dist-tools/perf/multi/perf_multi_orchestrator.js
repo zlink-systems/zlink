@@ -5,7 +5,7 @@ const { once } = require('node:events');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { benchmarkEndpoint, reservePort } = require('./perf_multi_common');
+const { benchmarkEndpoint, resolveMultiMonitorHwm } = require('./perf_multi_common');
 const processCaptureStates = new WeakMap();
 function processCaptureState(processRef) {
     const state = processCaptureStates.get(processRef);
@@ -64,47 +64,10 @@ async function waitForLine(processRef, expected, label, timeoutMs) {
         });
     });
 }
-async function waitForPrefix(processRef, prefix, label, timeoutMs) {
-    return new Promise((resolve, reject) => {
-        let done = false;
-        const state = processCaptureState(processRef);
-        const seen = state.seenLines.find((line) => line.startsWith(prefix));
-        if (seen) {
-            resolve(seen);
-            return;
-        }
-        const timeout = setTimeout(() => {
-            if (!done) {
-                done = true;
-                reject(new Error(`${label} timeout waiting for ${prefix}`));
-            }
-        }, timeoutMs);
-        processRef.once('exit', (code) => {
-            if (!done) {
-                done = true;
-                clearTimeout(timeout);
-                reject(new Error(`${label} exited before ${prefix}: ${code}`));
-            }
-        });
-        state.waiters.push((line) => {
-            if (!done && line.startsWith(prefix)) {
-                done = true;
-                clearTimeout(timeout);
-                resolve(line);
-                return true;
-            }
-            return false;
-        });
-    });
-}
 function isControlLine(line) {
     return line.startsWith('READY,')
-        || line.startsWith('CONTROL_READY,')
         || line.startsWith('CLIENT_READY,')
-        || line.startsWith('CLIENT_DONE,')
-        || line.startsWith('CLIENT_CONTROL_ENDPOINT,')
-        || line.startsWith('CONTROL_CONNECTED,')
-        || line.startsWith('DATA_ENDPOINT,');
+        || line.startsWith('CLIENT_DONE,');
 }
 function attachProcessCapture(child, resultLines, resultPrefix = 'RESULT,') {
     processCaptureStates.set(child, { seenLines: [], stderrLines: [], waiters: [] });
@@ -404,10 +367,7 @@ function needsClientReady(pattern) {
         || pattern === 'MULTI_ROUTER_ROUTER'
         || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
         || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_PUBSUB'
-        || pattern === 'MULTI_SPOT'
-        || pattern === 'MULTI_SPOT_REQREP'
-        || pattern === 'MULTI_SPOT_SENDSEND';
+        || pattern === 'MULTI_PUBSUB';
 }
 function needsRunnerStart(pattern) {
     return pattern === 'MULTI_DEALER_DEALER'
@@ -417,10 +377,7 @@ function needsRunnerStart(pattern) {
         || pattern === 'MULTI_ROUTER_ROUTER'
         || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
         || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_PUBSUB'
-        || pattern === 'MULTI_SPOT'
-        || pattern === 'MULTI_SPOT_REQREP'
-        || pattern === 'MULTI_SPOT_SENDSEND';
+        || pattern === 'MULTI_PUBSUB';
 }
 function childEnv(args, component) {
     const env = { ...process.env };
@@ -468,9 +425,9 @@ function childEnv(args, component) {
     if (Number.isFinite(args.connectReadyTimeoutMs)) {
         env.PERF_MULTI_CONNECT_READY_TIMEOUT_MS = String(args.connectReadyTimeoutMs);
     }
-    if (Number.isFinite(args.monitorHwm)) {
-        env.PERF_MULTI_MONITOR_HWM = String(args.monitorHwm);
-    }
+    env.PERF_MULTI_MONITOR_HWM = String(Number.isSafeInteger(args.monitorHwm) && args.monitorHwm >= 0
+        ? args.monitorHwm
+        : resolveMultiMonitorHwm(env));
     if (Number.isFinite(args.connectConcurrency)) {
         env.PERF_MULTI_CONNECT_CONCURRENCY = String(args.connectConcurrency);
     }
@@ -527,6 +484,13 @@ function buildClientSpawn(clientPath, clientArgs, args) {
     if (args.transport !== 'tcp' && Number.isFinite(streamClients) && Number.isFinite(nonTcpMax) && streamClients > nonTcpMax) {
         streamClients = Math.trunc(nonTcpMax);
     }
+    const streamCompletionWaitMs = process.env.PERF_MULTI_STREAM_COMPLETION_WAIT_MS
+        || process.env.PERF_STREAM_COMPLETION_WAIT_MS
+        || (Number.isFinite(args.serverShutdownTimeoutMs)
+            ? String(Math.max(0, Math.trunc(args.serverShutdownTimeoutMs)))
+            : process.env.PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS
+                || process.env.PERF_SERVER_SHUTDOWN_TIMEOUT_MS
+                || '5000');
     const streamClientArgs = [
         '--endpoint', clientArgs[1],
         '--transport', args.transport,
@@ -535,11 +499,8 @@ function buildClientSpawn(clientPath, clientArgs, args) {
         '--sizes', String(args.msgSize),
         '--runs', '1',
         '--duration', String(args.duration),
-        '--completion-wait-ms',
-        process.env.PERF_MULTI_STREAM_COMPLETION_WAIT_MS
-            || process.env.PERF_STREAM_COMPLETION_WAIT_MS
-            || '2000',
-        '--send-stop-token', '1'
+        '--completion-wait-ms', streamCompletionWaitMs,
+        '--send-stop-token', '0'
     ];
     const ioThreads = Number.isFinite(args.clientIoThreads)
         ? args.clientIoThreads
@@ -559,30 +520,15 @@ function resolveMultiTimeoutSeconds(args) {
     if (args.pattern === 'MULTI_STREAM') {
         return Math.max(45, Math.floor(duration * 3) + 20);
     }
-    if (args.pattern === 'MULTI_SPOT'
-        || args.pattern === 'MULTI_SPOT_REQREP'
-        || args.pattern === 'MULTI_SPOT_SENDSEND') {
-        return Math.max(90, Math.floor(duration * 6) + 30);
-    }
     if ((args.transport === 'tls' || args.transport === 'wss') && msgSize >= 131072) {
         return Math.max(90, Math.floor(duration * 6) + 30);
     }
     return Math.max(45, Math.floor(duration * 3) + 20);
 }
 function resolveClientReadyTimeoutMs(args) {
-    const configured = Number.isFinite(args.connectReadyTimeoutMs)
+    return Number.isFinite(args.connectReadyTimeoutMs)
         ? args.connectReadyTimeoutMs
         : 5000;
-    if (args.pattern === 'MULTI_SPOT'
-        || args.pattern === 'MULTI_SPOT_REQREP'
-        || args.pattern === 'MULTI_SPOT_SENDSEND') {
-        const spotReadyTimeout = Number(process.env.PERF_MULTI_SPOT_READY_TIMEOUT_MS);
-        const minimumSpotReadyTimeout = Number.isFinite(spotReadyTimeout)
-            ? spotReadyTimeout
-            : Math.max(5000, configured * 6);
-        return Math.max(configured, minimumSpotReadyTimeout);
-    }
-    return configured;
 }
 async function spawnMultiPair(serverScript, clientScript, args) {
     const serverPath = path.join(__dirname, serverScript);
@@ -591,42 +537,14 @@ async function spawnMultiPair(serverScript, clientScript, args) {
     const clientPath = clientScript ? path.join(__dirname, clientScript) : null;
     const resultLines = [];
     const endpoint = await benchmarkEndpoint(args.transport, `${String(args.pattern || 'multi').toLowerCase()}-${args.msgSize}`, args.serverBindPort);
-    let serverArgs = [
+    const serverArgs = [
         '--endpoint', endpoint,
         '--transport', args.transport,
         '--msg-size', String(args.msgSize),
         '--duration', String(args.duration),
         '--clients', String(args.clients)
     ];
-    let clientArgs = [...serverArgs];
-    if (args.pattern === 'MULTI_SPOT'
-        || args.pattern === 'MULTI_SPOT_REQREP'
-        || args.pattern === 'MULTI_SPOT_SENDSEND') {
-        const serverControlEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
-        const clientControlEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
-        const peerEndpoint = args.pattern === 'MULTI_SPOT'
-            ? await benchmarkEndpoint(args.transport, `${String(args.pattern).toLowerCase()}-data-${args.msgSize}`)
-            : endpoint;
-        serverArgs = [
-            '--endpoint', endpoint,
-            '--transport', args.transport,
-            '--peer-endpoint', peerEndpoint,
-            '--control-endpoint', serverControlEndpoint,
-            '--msg-size', String(args.msgSize),
-            '--duration', String(args.duration),
-            '--clients', String(args.clients)
-        ];
-        clientArgs = [
-            '--endpoint', endpoint,
-            '--transport', args.transport,
-            '--peer-endpoint', peerEndpoint,
-            '--control-endpoint', clientControlEndpoint,
-            '--server-control-endpoint', serverControlEndpoint,
-            '--msg-size', String(args.msgSize),
-            '--duration', String(args.duration),
-            '--clients', String(args.clients)
-        ];
-    }
+    const clientArgs = [...serverArgs];
     const serverSpawn = buildPinnedSpawn(process.execPath, [serverPath, ...serverArgs], args);
     const server = spawn(serverSpawn.command, serverSpawn.args, {
         cwd: process.cwd(),
@@ -652,27 +570,6 @@ async function spawnMultiPair(serverScript, clientScript, args) {
         }
         throw error;
     }
-    if (args.pattern === 'MULTI_SPOT'
-        || args.pattern === 'MULTI_SPOT_REQREP'
-        || args.pattern === 'MULTI_SPOT_SENDSEND') {
-        try {
-            await waitForPrefix(server, 'CONTROL_READY,', serverScript, 10_000);
-        }
-        catch (error) {
-            await Promise.allSettled([terminateProcessTree(server, 1000)]);
-            if (hasAddressInUse(server) && startupBindRetryCount(args) < 3) {
-                return spawnMultiPair(serverScript, clientScript, {
-                    ...args,
-                    __startupBindRetry: startupBindRetryCount(args) + 1
-                });
-            }
-            const stderr = stderrText(server);
-            if (stderr) {
-                error.message = `${error.message}\n${stderr}`;
-            }
-            throw error;
-        }
-    }
     const clientSpawn = buildClientSpawn(clientPath, clientArgs, args);
     const client = spawn(clientSpawn.command, clientSpawn.args, {
         cwd: process.cwd(),
@@ -681,15 +578,6 @@ async function spawnMultiPair(serverScript, clientScript, args) {
         detached: true
     });
     attachProcessCapture(client, resultLines);
-    if (args.pattern === 'MULTI_SPOT'
-        || args.pattern === 'MULTI_SPOT_REQREP'
-        || args.pattern === 'MULTI_SPOT_SENDSEND') {
-        const clientControlLine = await waitForPrefix(client, 'CLIENT_CONTROL_ENDPOINT,', clientScript, resolveClientReadyTimeoutMs(args));
-        const clientControlEndpoint = clientControlLine.split(',')[1];
-        writeChildLine(server, `CONNECT_CONTROL,${clientControlEndpoint}\n`);
-        const controlConnectedLine = await waitForPrefix(server, 'CONTROL_CONNECTED,', serverScript, resolveClientReadyTimeoutMs(args));
-        writeChildLine(client, `${controlConnectedLine}\n`);
-    }
     if (needsClientReady(args.pattern)) {
         await waitForLine(client, clientReadyLine(args.msgSize), clientScript, resolveClientReadyTimeoutMs(args));
     }
@@ -769,6 +657,5 @@ module.exports = {
     attachProcessCapture,
     spawnMultiPair,
     stopServer,
-    waitForLine,
-    waitForPrefix
+    waitForLine
 };

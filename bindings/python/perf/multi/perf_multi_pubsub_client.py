@@ -14,6 +14,7 @@ from perf_multi_common import (
     LatencySampler,
     parse_client_args,
     perf_client_context,
+    resolve_multi_monitor_hwm_bytes,
     print_result_lines,
     recv_nonblocking,
     resolve_multi_connect_ready_timeout_ms,
@@ -40,7 +41,10 @@ def main(argv=None):
                 for sock in sockets:
                     apply_multi_socket_options(sock)
                     monitor = stack.enter_context(
-                        sock.monitor_open(zlink.MonitorEventMask.CONNECTION_READY)
+                        sock.monitor_open(
+                            zlink.MonitorEventMask.CONNECTION_READY,
+                            resolve_multi_monitor_hwm_bytes(),
+                        )
                     )
                     configure_multi_tls_client(sock, args.transport)
                     sock.set_subscription(TOPIC)
@@ -107,7 +111,9 @@ def main(argv=None):
                                     expected_msg_size=args.msg_size,
                                     run_id=run_id,
                                 )
-                                if not active or time.perf_counter() >= active_deadline:
+                                if not active:
+                                    continue
+                                if time.perf_counter() >= active_deadline:
                                     continue
                                 count += 1
                                 if latency is not None:
@@ -118,6 +124,10 @@ def main(argv=None):
             if count <= 0:
                 raise RuntimeError(
                     "multi pubsub benchmark did not receive any active message"
+                )
+            if latency_sampler.count == 0:
+                raise RuntimeError(
+                    "multi pubsub benchmark received active messages without latency samples"
                 )
             metrics = result_metrics(
                 count=count,

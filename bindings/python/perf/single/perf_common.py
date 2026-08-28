@@ -22,6 +22,7 @@ _idle_wait_local = threading.local()
 from perf_metrics import (
     HEADER_MAGIC,
     HEADER_SIZE,
+    LatencySampler,
     benchmark_run_id,
     build_report_path,
     configure_tls_client,
@@ -165,6 +166,10 @@ def resolve_single_latency_sample_cap():
     return max(0, _env_int("PERF_SINGLE_LATENCY_SAMPLE_CAP", 1000000))
 
 
+def new_single_latency_sampler():
+    return LatencySampler(resolve_single_latency_sample_cap())
+
+
 def resolve_single_pubsub_recv_timeout_ms():
     return _env_int(
         "PERF_SINGLE_PUBSUB_RCVTIMEO_MS",
@@ -274,7 +279,7 @@ def recv_into_storage(sock, storage, *, method="recv", blocking=True):
 
 
 def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
-                         received, latencies):
+                         received, latency_sampler):
     """C perf_single_one_way.hpp run_active_phase receiver, fused for the
     Python hot path on one reused storage object. Python uses DONTWAIT for
     the receive loop so a lost stop token cannot leave the runner blocked
@@ -346,16 +351,16 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
                 count += 1
                 now_ns = time_ns()
                 if sent_ts_ns > 0 and now_ns >= sent_ts_ns:
-                    latencies.append(float(now_ns - sent_ts_ns))
+                    latency_sampler.add(now_ns - sent_ts_ns)
                 else:
-                    latencies.append(0.0)
+                    latency_sampler.add(0.0)
     finally:
         poller.close()
     return count
 
 
 def run_one_way_receiver_public_recv(
-    sock, *, msg_size, run_id, active_end, received, latencies
+    sock, *, msg_size, run_id, active_end, received, latency_sampler
 ):
     return run_one_way_receiver(
         sock,
@@ -364,12 +369,12 @@ def run_one_way_receiver_public_recv(
         run_id=run_id,
         active_end=active_end,
         received=received,
-        latencies=latencies,
+        latency_sampler=latency_sampler,
     )
 
 
 def run_one_way_subscriber_public_subscribe(
-    sock, *, topic, msg_size, run_id, active_end, received, latencies
+    sock, *, topic, msg_size, run_id, active_end, received, latency_sampler
 ):
     return run_one_way_receiver(
         sock,
@@ -378,7 +383,7 @@ def run_one_way_subscriber_public_subscribe(
         run_id=run_id,
         active_end=active_end,
         received=received,
-        latencies=latencies,
+        latency_sampler=latency_sampler,
     )
 
 
@@ -427,19 +432,23 @@ def send_nonblocking(sock, payload, *, routing_id=None, measurement=True):
         raise
 
 
-async def send_routed(sock, payload, *, routing_id=None, measurement=True):
-    try:
-        op = sock.send() if routing_id is None else sock.send(routing_id)
-        if measurement:
-            op.messages(*measurement_parts(payload))
-        else:
-            op.message(payload)
-        await op.submit()
-        return True
-    except _submit_error_type() as exc:
-        if exc.result == _submit_backpressured_result():
-            return False
-        raise
+def send_routed_sync(sock, payload, *, routing_id=None, measurement=True,
+                     flags=None):
+    """Submit a routed send through the synchronous blocking public terminal.
+
+    Single-process benchmarks deliberately keep coroutine scheduling out of
+    setup and the measured data path. Core owns HWM admission.
+    """
+
+    if flags is None:
+        flags = _require_zlink().SendFlags.NONE
+    op = sock.send() if routing_id is None else sock.send(routing_id)
+    if measurement:
+        op.messages(*measurement_parts(payload))
+    else:
+        op.message(payload)
+    op.submit_sync(flags=flags)
+    return True
 
 
 def publish_nonblocking(sock, topic, payload, *, measurement=True):
@@ -473,11 +482,11 @@ def wait_socket_readable_until(poller, events, deadline):
     safe_poll(poller, events, wait_ms)
 
 
-async def single_routing_probe(sender, receiver, payload, *, run_id, msg_size,
-                               routing_id=None):
+def single_routing_probe(sender, receiver, payload, *, run_id, msg_size,
+                         routing_id=None):
     """C perf_dealer_router.cpp wait_for_dealer_router_ready /
     perf_router_router.cpp wait_for_router_router_ready: one-shot routing
-    self-check. Bounded by PERF_CONNECT_READY_TIMEOUT_MS; awaited routed
+    self-check. Bounded by PERF_CONNECT_READY_TIMEOUT_MS; synchronous routed
     probe sends (phase=active, seq=0) until the receiver confirms one matching
     header. No retry/sleep loop beyond C's bounded probe."""
 
@@ -490,7 +499,12 @@ async def single_routing_probe(sender, receiver, payload, *, run_id, msg_size,
     probe = stamp_payload(payload, phase=1, run_id=run_id, seq=0)
     try:
         while time.perf_counter() < deadline:
-            await send_routed(sender, probe, routing_id=routing_id, measurement=False)
+            send_routed_sync(
+                sender,
+                probe,
+                routing_id=routing_id,
+                measurement=False,
+            )
             probe_deadline = min(deadline, time.perf_counter() + 0.05)
             while time.perf_counter() < probe_deadline:
                 received = recv_nonblocking(receiver)

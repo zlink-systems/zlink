@@ -178,7 +178,13 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
     errno_assert (init_rc == 0);
 
     pipe_t *dispatch_pipe = NULL;
-    while (_fq.recvpipe (&msg, &dispatch_pipe) == 0) {
+    while (true) {
+        const int recv_rc = _fq.recvpipe (&msg, &dispatch_pipe);
+        if (recv_rc != 0) {
+            if (errno == ECONNABORTED)
+                continue;
+            break;
+        }
         const int dispatch_rc = xsocket_msg_dispatch (&msg, dispatch_pipe);
         if (dispatch_rc <= 0)
             break;
@@ -186,6 +192,14 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
 
     const int close_rc = msg.close ();
     errno_assert (close_rc == 0);
+}
+
+void zlink::router_t::reset_current_in_after_multipart_abort ()
+{
+    _routing_id_sent = false;
+    _current_in = NULL;
+    _terminate_current_in = false;
+    _more_in = false;
 }
 
 int zlink::router_t::xrecv (msg_t *msg_)
@@ -218,8 +232,11 @@ int zlink::router_t::xrecv (msg_t *msg_)
     while (rc == 0 && msg_->is_routing_id ())
         rc = _fq.recvpipe (msg_, &pipe);
 
-    if (rc != 0)
+    if (rc != 0) {
+        if (errno == ECONNABORTED)
+            reset_current_in_after_multipart_abort ();
         return -1;
+    }
 
     zlink_assert (pipe != NULL);
 
@@ -289,8 +306,11 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
     int rc = _fq.recvpipe (msg_, &pipe);
     while (rc == 0 && msg_->is_routing_id ())
         rc = _fq.recvpipe (msg_, &pipe);
-    if (rc != 0)
+    if (rc != 0) {
+        if (errno == ECONNABORTED)
+            reset_current_in_after_multipart_abort ();
         return -1;
+    }
 
     zlink_assert (pipe != NULL);
     if (!_more_in) {

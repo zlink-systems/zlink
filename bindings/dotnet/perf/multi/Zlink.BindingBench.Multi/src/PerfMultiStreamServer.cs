@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 using Systems.Zlink;
 using static PerfRunner;
 
@@ -9,14 +12,7 @@ internal static class PerfMultiStreamServer
 {
     private const string Pattern = "STREAM";
 
-    private enum SendStatus
-    {
-        Done = 0,
-        Blocked = 1,
-        Fatal = 2,
-    }
-
-    internal static int Run(PerfOptions options)
+    internal static async Task<int> Run(PerfOptions options)
     {
         if (!IsCoreStreamServerTransport(options.Transport))
         {
@@ -44,70 +40,80 @@ internal static class PerfMultiStreamServer
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;
         RecalculateAutoHwm(ctx);
-        WriteStdoutLine($"READY,{endpoint}");
 
-        var pending = new Queue<PendingStreamMessage>();
-        object pendingLock = new();
-        using var pendingSignal = new ManualResetEventSlim(false);
-        var control = new ControlState();
+        var dispatchQueue = new StreamDispatchQueue();
+        var control = new ControlState(dispatchQueue.StopAccepting);
         StartControlWatcher(control);
+        var sends = new SendTracker();
+        using var drainCancellation = new CancellationTokenSource();
+        Task dispatcher = DispatchSendsAsync(server, dispatchQueue, sends,
+            control, drainCancellation.Token);
+        long handlersInFlight = 0;
 
         server.OnPacket((routingId, header, payload) =>
         {
-            Message packet;
-            using (header)
-            using (payload)
+            Interlocked.Increment(ref handlersInFlight);
+            Message? packet = null;
+            try
             {
-                ReadOnlySpan<byte> body = payload.AsReadOnlySpan();
-                if (IsStopTokenPayload(body))
+                using (header)
+                using (payload)
                 {
-                    Interlocked.Exchange(ref control.StopRequested, 1);
-                    return;
+                    if (Volatile.Read(ref control.StopRequested) != 0)
+                        return;
+                    ReadOnlySpan<byte> body = payload.AsReadOnlySpan();
+                    if (IsStopTokenPayload(body))
+                    {
+                        control.RequestStop();
+                        return;
+                    }
+
+                    packet = BuildStreamPacket(header, payload);
                 }
 
-                packet = BuildStreamPacket(header, payload);
+                if (dispatchQueue.TryEnqueue(routingId, packet))
+                    packet = null;
+                else
+                {
+                    packet.Dispose();
+                    packet = null;
+                }
             }
-
-            SendStatus sendStatus = TrySendMessageNow(server, routingId, packet);
-            if (sendStatus == SendStatus.Done)
+            catch (Exception ex)
             {
-                packet.Dispose();
-                return;
+                packet?.Dispose();
+                DebugFailure("stream packet callback", ex);
+                control.Fail();
             }
-
-            if (sendStatus == SendStatus.Fatal)
+            finally
             {
-                packet.Dispose();
-                Interlocked.Exchange(ref control.StopRequested, 1);
-                return;
-            }
-
-            var request = new PendingStreamMessage();
-            request.Assign(routingId, packet);
-            lock (pendingLock)
-            {
-                pending.Enqueue(request);
-                pendingSignal.Set();
+                Interlocked.Decrement(ref handlersInFlight);
             }
         });
 
-        int rc = 0;
-        while (Volatile.Read(ref control.StopRequested) == 0)
+        WriteStdoutLine($"READY,{endpoint}");
+        await control.StopTask.ConfigureAwait(false);
+
+        int drainTimeoutMs = Math.Max(1000, ioTimeoutMs * 4);
+        drainCancellation.CancelAfter(drainTimeoutMs);
+        try
         {
-            if (!FlushPendingMessages(server, pending, pendingLock,
-                    pendingSignal, ref rc))
-            {
-                break;
-            }
-
-            if (Volatile.Read(ref control.StopRequested) != 0)
-                break;
-
-            pendingSignal.Wait(50);
-            pendingSignal.Reset();
+            await dispatcher.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            control.Fail();
         }
 
-        return rc;
+        long handlerDeadline = Stopwatch.GetTimestamp()
+            + (long)drainTimeoutMs * Stopwatch.Frequency / 1000L;
+        while (Volatile.Read(ref handlersInFlight) != 0
+               && Stopwatch.GetTimestamp() < handlerDeadline)
+            await Task.Delay(1).ConfigureAwait(false);
+        if (sends.Count != 0 || Volatile.Read(ref handlersInFlight) != 0)
+            control.Fail();
+
+        return control.ResultCode;
     }
 
     private static void StartControlWatcher(ControlState control)
@@ -139,8 +145,7 @@ internal static class PerfMultiStreamServer
                                         || line.Trim().Equals("QUIT",
                                             StringComparison.OrdinalIgnoreCase))
                                     {
-                                        Interlocked.Exchange(
-                                            ref control.StopRequested, 1);
+                                        control.RequestStop();
                                         return;
                                     }
                                 }
@@ -166,57 +171,18 @@ internal static class PerfMultiStreamServer
                 {
                     if (line == "STOP" || line == "QUIT")
                     {
-                        Interlocked.Exchange(ref control.StopRequested, 1);
+                        control.RequestStop();
                         return;
                     }
                 }
             }
             finally
             {
-                Interlocked.Exchange(ref control.StopRequested, 1);
+                control.RequestStop();
             }
         });
         watcher.IsBackground = true;
         watcher.Start();
-    }
-
-    private static bool FlushPendingMessages(ISocket server,
-        Queue<PendingStreamMessage> pending, object pendingLock,
-        ManualResetEventSlim pendingSignal, ref int rc)
-    {
-        while (true)
-        {
-            PendingStreamMessage? next = null;
-            lock (pendingLock)
-            {
-                if (pending.Count > 0)
-                    next = pending.Dequeue();
-            }
-
-            if (next == null)
-                return true;
-
-            SendStatus sendStatus = TrySendPendingMessage(server, next);
-            if (sendStatus == SendStatus.Done)
-            {
-                next.Clear();
-                continue;
-            }
-
-            if (sendStatus == SendStatus.Fatal)
-            {
-                next.Clear();
-                rc = 1;
-                return false;
-            }
-
-            lock (pendingLock)
-            {
-                pending.Enqueue(next);
-            }
-            pendingSignal.Set();
-            return true;
-        }
     }
 
     private static Message BuildStreamPacket(Message header, Message payload)
@@ -248,73 +214,224 @@ internal static class PerfMultiStreamServer
         return payload.SequenceEqual(MultiStopToken);
     }
 
-    private static SendStatus TrySendMessageNow(ISocket server,
-        RoutingId routingId, Message payload)
+    private static async Task DispatchSendsAsync(IStreamSocket server,
+        StreamDispatchQueue dispatchQueue, SendTracker sends,
+        ControlState control, CancellationToken cancellationToken)
     {
         try
         {
-            return ((IStreamSocket)server).TrySend(routingId).Message(payload)
-                    .Flags(SendFlags.DontWait).Submit()
-                ? SendStatus.Done
-                : SendStatus.Blocked;
-        }
-        catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
-                                        || IsInterrupted(ex.NativeErrno))
-        {
-            return SendStatus.Blocked;
-        }
-    }
-
-    private static SendStatus TrySendPendingMessage(ISocket server,
-        PendingStreamMessage message)
-    {
-        if (!message.Pending)
-            return SendStatus.Done;
-
-        try
-        {
-            if (message.Payload == null)
-                return SendStatus.Fatal;
-
-            if (((IStreamSocket)server).TrySend(message.RoutingId)
-                    .Message(message.Payload).Flags(SendFlags.DontWait)
-                    .Submit())
+            await foreach (PendingStreamPacket packet in dispatchQueue.Reader
+                               .ReadAllAsync(cancellationToken)
+                               .ConfigureAwait(false))
             {
-                message.Clear();
-                return SendStatus.Done;
+                Task send = SendMessageAsync(server, packet.RoutingId,
+                    packet.Payload, cancellationToken);
+                sends.Track(send, control);
             }
-        }
-        catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
-                                        || IsInterrupted(ex.NativeErrno))
-        {
-            return SendStatus.Blocked;
-        }
 
-        return SendStatus.Blocked;
+            await sends.DrainTask.WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            dispatchQueue.DisposeRemaining();
+        }
     }
 
-    private sealed class PendingStreamMessage
+    private static async Task SendMessageAsync(IStreamSocket server,
+        RoutingId routingId, Message payload,
+        CancellationToken cancellationToken)
     {
-        internal RoutingId RoutingId { get; private set; }
-        internal Message? Payload { get; private set; }
-        internal bool Pending => Payload != null;
+        try
+        {
+            await server.Send(routingId).Message(payload)
+                .Async(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
+        {
+        }
+        finally
+        {
+            payload.Dispose();
+        }
+    }
 
-        internal void Assign(RoutingId routingId, Message payload)
+    private static void DebugFailure(string operation, Exception error)
+    {
+        if (Environment.GetEnvironmentVariable("PERF_DEBUG") == null)
+            return;
+        if (error is ZlinkException zlinkError)
+            Console.Error.WriteLine($"{Pattern} {operation} failed "
+                + $"errno={zlinkError.NativeErrno}: {error}");
+        else
+            Console.Error.WriteLine($"{Pattern} {operation} failed: {error}");
+    }
+
+    private static bool IsStaleRoute(ZlinkSubmitException error)
+    {
+        return error.Result == ZlinkSubmitException.ErrorCode.NotConnected
+            || error.Result == ZlinkSubmitException.ErrorCode.NotFound;
+    }
+
+    private sealed class PendingStreamPacket : IDisposable
+    {
+        internal PendingStreamPacket(RoutingId routingId, Message payload)
         {
             RoutingId = routingId;
             Payload = payload;
         }
 
-        internal void Clear()
+        internal RoutingId RoutingId { get; }
+        internal Message Payload { get; }
+
+        public void Dispose()
         {
-            Payload?.Dispose();
-            Payload = null;
-            RoutingId = default;
+            Payload.Dispose();
+        }
+    }
+
+    private sealed class StreamDispatchQueue
+    {
+        private readonly Channel<PendingStreamPacket> _channel =
+            Channel.CreateUnbounded<PendingStreamPacket>(
+                new UnboundedChannelOptions
+                {
+                    SingleReader = true,
+                    SingleWriter = false,
+                    AllowSynchronousContinuations = false,
+                });
+        private int _accepting = 1;
+
+        internal ChannelReader<PendingStreamPacket> Reader => _channel.Reader;
+
+        internal bool TryEnqueue(RoutingId routingId, Message payload)
+        {
+            if (Volatile.Read(ref _accepting) == 0)
+                return false;
+            return _channel.Writer.TryWrite(
+                new PendingStreamPacket(routingId, payload));
+        }
+
+        internal void StopAccepting()
+        {
+            if (Interlocked.Exchange(ref _accepting, 0) != 0)
+                _channel.Writer.TryComplete();
+        }
+
+        internal void DisposeRemaining()
+        {
+            while (_channel.Reader.TryRead(out PendingStreamPacket? packet))
+                packet.Dispose();
+        }
+    }
+
+    private sealed class SendTracker
+    {
+        private readonly object _sync = new();
+        private readonly Dictionary<long, Task> _sends = new();
+        private TaskCompletionSource _drained = CompletedSource();
+        private long _nextId;
+
+        internal int Count
+        {
+            get
+            {
+                lock (_sync)
+                    return _sends.Count;
+            }
+        }
+
+        internal Task DrainTask
+        {
+            get
+            {
+                lock (_sync)
+                    return _drained.Task;
+            }
+        }
+
+        internal void Track(Task send, ControlState control)
+        {
+            long id;
+            lock (_sync)
+            {
+                if (_sends.Count == 0)
+                    _drained = new TaskCompletionSource(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                id = ++_nextId;
+                _sends.Add(id, send);
+            }
+            _ = ObserveAsync(id, send, control);
+        }
+
+        private async Task ObserveAsync(long id, Task send,
+            ControlState control)
+        {
+            try
+            {
+                await send.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                if (Volatile.Read(ref control.StopRequested) == 0)
+                    control.Fail();
+            }
+            catch (Exception ex)
+            {
+                DebugFailure("async echo send", ex);
+                control.Fail();
+            }
+            finally
+            {
+                TaskCompletionSource? drained = null;
+                lock (_sync)
+                {
+                    _sends.Remove(id);
+                    if (_sends.Count == 0)
+                        drained = _drained;
+                }
+                drained?.TrySetResult();
+            }
+        }
+
+        private static TaskCompletionSource CompletedSource()
+        {
+            var source = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            source.SetResult();
+            return source;
         }
     }
 
     private sealed class ControlState
     {
+        private readonly TaskCompletionSource _stopped = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Action _stopAccepting;
+
+        internal ControlState(Action stopAccepting)
+        {
+            _stopAccepting = stopAccepting;
+        }
+
         internal int StopRequested;
+        internal int ResultCode;
+        internal Task StopTask => _stopped.Task;
+
+        internal void RequestStop()
+        {
+            if (Interlocked.Exchange(ref StopRequested, 1) == 0)
+            {
+                _stopAccepting();
+                _stopped.TrySetResult();
+            }
+        }
+
+        internal void Fail()
+        {
+            Interlocked.Exchange(ref ResultCode, 1);
+            RequestStop();
+        }
     }
 }

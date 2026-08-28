@@ -1,6 +1,6 @@
 """HWM-managed send and request completion under the 0.13.1 contract.
 
-Bindings own zero threads, queues, or retry. PAIR send and DEALER/ROUTER
+Bindings own zero threads, queues, or retry. PAIR send and DEALER/ROUTER/STREAM
 routed send are admitted by `zlink_send_async` and completed by Core's
 `zlink_send_complete_handler` — never by a binding-owned park queue,
 WRITABLE-callback retry, deadline timer, or dispatcher thread. request
@@ -11,6 +11,8 @@ operation bound surfaces immediately for application policy.
 
 import asyncio
 import inspect
+import socket
+import struct
 import threading
 import time
 import uuid
@@ -24,6 +26,14 @@ def _endpoint(label):
 
 def _thread_names():
     return {thread.name for thread in threading.enumerate()}
+
+
+def _tcp_endpoint():
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    return port, f"tcp://127.0.0.1:{port}"
 
 
 async def _send_when_connected(socket, payload, routing_id=None):
@@ -136,6 +146,137 @@ def test_pair_send_is_also_hwm_managed_and_coroutine_driven():
                     assert await asyncio.wait_for(pending, 2) is None
                     assert right.recv_into(received)
                     received.close()
+
+    asyncio.run(scenario())
+
+
+def test_stream_send_uses_public_routed_coroutine_terminal():
+    async def scenario():
+        port, endpoint = _tcp_endpoint()
+        with zlink.create_context() as context:
+            with zlink.create_stream_socket(context) as stream:
+                stream.options.linger_ms = 0
+                packet_ready = threading.Event()
+                observed_routing_id = []
+
+                def on_packet(routing_id, header, body):
+                    assert header.to_bytes() == b""
+                    assert body.to_bytes() == b"ping"
+                    observed_routing_id.append(bytes(routing_id))
+                    packet_ready.set()
+
+                stream.bind(endpoint)
+                stream.on_packet(on_packet)
+                with socket.create_connection(
+                    ("127.0.0.1", port), timeout=3.0
+                ) as client:
+                    client.sendall(struct.pack("!HI", 0, 4) + b"ping")
+                    assert packet_ready.wait(3.0)
+                    sync_operation = stream.send(observed_routing_id[0]).message(
+                        b"sync"
+                    )
+                    assert isinstance(sync_operation, zlink.SendOp)
+                    assert sync_operation.submit() is True
+                    assert client.recv(4) == b"sync"
+
+                    operation = stream.send_async(observed_routing_id[0]).message(
+                        b"pong"
+                    )
+                    assert isinstance(operation, zlink.RoutedSendOp)
+                    coroutine = operation.submit()
+                    assert inspect.iscoroutine(coroutine)
+                    assert await coroutine is None
+                    assert client.recv(4) == b"pong"
+
+    asyncio.run(scenario())
+
+
+def test_routed_multipart_send_uses_core_async_admission():
+    async def scenario():
+        with zlink.create_context() as context:
+            with zlink.create_dealer_socket(context) as dealer:
+                with zlink.create_router_socket(context) as router:
+                    dealer.options.linger_ms = 0
+                    router.options.linger_ms = 0
+                    endpoint = _endpoint("multipart-async")
+                    router.bind(endpoint)
+                    dealer.connect(endpoint)
+
+                    for _ in range(200):
+                        try:
+                            await dealer.send().messages(b"payload", b"").submit()
+                            break
+                        except zlink.SubmitError as error:
+                            if error.result not in (
+                                zlink.SubmitResult.NOT_CONNECTED,
+                                zlink.SubmitResult.NOT_FOUND,
+                                zlink.SubmitResult.BACKPRESSURED,
+                            ):
+                                raise
+                            await asyncio.sleep(0)
+                    else:
+                        raise AssertionError("multipart routed send did not connect")
+
+                    received = zlink.create_received()
+                    assert router.recv_into(received)
+                    assert received.to_bytes_list() == [b"payload", b""]
+                    routing_id = bytes(received.routing_id)
+                    echo_parts = received.to_bytes_list()
+                    received.close()
+
+                    await router.send(routing_id).messages(*echo_parts).submit()
+                    assert dealer.recv_into(received)
+                    assert received.to_bytes_list() == [b"payload", b""]
+                    received.close()
+
+    asyncio.run(scenario())
+
+
+def test_async_request_reply_preserves_two_application_parts():
+    async def scenario():
+        with zlink.create_context() as context:
+            with zlink.create_dealer_socket(context) as dealer:
+                with zlink.create_router_socket(context) as router:
+                    dealer.options.linger_ms = 0
+                    router.options.linger_ms = 0
+                    endpoint = _endpoint("multipart-request-reply")
+                    router.bind(endpoint)
+                    dealer.connect(endpoint)
+
+                    await _send_when_connected(dealer, b"ready")
+                    ready = zlink.create_received()
+                    assert router.recv_into(ready)
+                    ready.close()
+
+                    pending = asyncio.create_task(
+                        dealer.request()
+                        .messages(b"payload", b"")
+                        .timeout(1.0)
+                        .submit()
+                    )
+                    received = zlink.create_received()
+                    for _ in range(200):
+                        await asyncio.sleep(0)
+                        if router.recv_into(
+                            received, flags=zlink.RecvFlags.DONT_WAIT
+                        ):
+                            break
+                    else:
+                        raise AssertionError("multipart request did not arrive")
+
+                    assert received.to_bytes_list() == [b"payload", b""]
+                    received.reply().messages(b"payload", b"").submit()
+                    received.close()
+
+                    reply_parts = await asyncio.wait_for(pending, 2.0)
+                    try:
+                        assert [part.to_bytes() for part in reply_parts] == [
+                            b"payload",
+                            b"",
+                        ]
+                    finally:
+                        for part in reply_parts:
+                            part.close()
 
     asyncio.run(scenario())
 

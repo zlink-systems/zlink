@@ -244,16 +244,11 @@ detect_platform() {
 }
 
 default_transports() {
-  case "$1" in
-    SPOT) echo "tcp,tls,ws,wss" ;;
-    *)
-      if [[ "$(uname -s)" == "Linux" ]]; then
-        echo "tcp,tls,ws,wss,inproc,ipc"
-      else
-        echo "tcp,tls,ws,wss,inproc"
-      fi
-      ;;
-  esac
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    echo "tcp,tls,ws,wss,inproc,ipc"
+  else
+    echo "tcp,tls,ws,wss,inproc"
+  fi
 }
 
 filter_transports_for_pattern() {
@@ -262,12 +257,8 @@ filter_transports_for_pattern() {
   python3 - "${pattern}" "${transports_csv}" <<'PY'
 import sys
 
-pattern = sys.argv[1].strip().upper()
 items = [item.strip() for item in sys.argv[2].split(",") if item.strip()]
-if pattern == "SPOT":
-    allowed = {"tcp", "tls", "ws", "wss"}
-else:
-    allowed = {"tcp", "tls", "ws", "wss", "inproc", "ipc"}
+allowed = {"tcp", "tls", "ws", "wss", "inproc", "ipc"}
 print(",".join(item for item in items if item in allowed))
 PY
 }
@@ -410,12 +401,6 @@ case_timeout_seconds() {
   if [[ "${value}" -lt 30 ]]; then
     value=30
   fi
-  if [[ "${pattern}" == "SPOT" ]]; then
-    local spot_value=$((DURATION * 12 + 60))
-    if [[ "${spot_value}" -gt "${value}" ]]; then
-      value="${spot_value}"
-    fi
-  fi
   printf '%s' "${value}"
 }
 
@@ -545,14 +530,11 @@ for pattern in "${patterns[@]}"; do
   done
 done
 
-# C single timeout_seconds: max(30, dur*6+15); if SPOT present max(that, dur*12+60)
-TIMEOUT_SECONDS="$(python3 - "${DURATION}" "${PATTERN}" <<'PY'
+# C single timeout_seconds: max(30, dur*6+15)
+TIMEOUT_SECONDS="$(python3 - "${DURATION}" <<'PY'
 import sys
 dur = int(sys.argv[1])
-patterns = sys.argv[2]
 val = max(30, dur * 6 + 15)
-if "SPOT" in patterns.split(","):
-    val = max(val, dur * 12 + 60)
 print(val)
 PY
 )"

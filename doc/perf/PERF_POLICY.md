@@ -1,8 +1,8 @@
 # zlink Performance Test Policy (통합)
 
 > **적용 범위**: zlink 전체 (core + bindings)
-> **Policy Version**: 2.0
-> **Date**: 2026-07-18
+> **Policy Version**: 2.1
+> **Date**: 2026-08-28
 > **Scope**: zlink 성능 테스트 통합 정책 — 공통 구조, 통합 실행, 비교 스크립트
 >
 > 본 정책은 `bindings/c/perf`의 C benchmark runner와 in-repo perf 자산이 존재하는 바인딩
@@ -16,9 +16,8 @@
 > - direct message callback 경로의 동기화 비용(TSFN, GIL, mutex 등)은 언어별
 >   런타임 메커니즘이 달라 일관된 비교 기준이 불가능하므로 기본 perf 비교 surface에서
 >   제외한다. callback 정합성 검증은 `core/tests/integration`에서 수행한다.
-> - 예외:
->   `SPOT_PUBSUB`은 MeshNode ready/claim batch 수신 경로를 사용하고,
->   `STREAM`은 raw callback이 아니라 packet handler surface를 기준으로 테스트한다.
+> - `STREAM`은 raw callback이 아니라 packet handler surface를 기준으로 테스트한다.
+> - Spot 성능 시험은 Framework 성능 시험이 소유하며 binding perf suite에는 포함하지 않는다.
 
 ---
 
@@ -29,7 +28,6 @@
 | **PERF_POLICY.md** (본 문서) | 공통 원칙, 디렉터리 구조, RESULT 형식, 결과 저장, 출력 형식, 실패 처리, 환경 변수(공통), 리팩토링 원칙 |
 | [PERF_SINGLE_TEST_POLICY.md](PERF_SINGLE_TEST_POLICY.md) | single suite 전용: recv/request-reply 모델, phase, 패턴/transport, single 전용 환경 변수 |
 | [PERF_MULTI_TEST_POLICY.md](PERF_MULTI_TEST_POLICY.md) | multi suite 전용: 프로세스 모델, backpressure, throughput/latency 측정, 패턴/transport, multi 전용 환경 변수 |
-| [PERF_SPOT_TEST_POLICY.md](PERF_SPOT_TEST_POLICY.md) | Core 10.0.0 Spot 패턴 이름, MeshNode peer 토폴로지, ready/claim 수신과 단계별 실행 |
 
 - 양 suite에 공통으로 적용되는 모든 규칙은 본 문서에서 관리한다.
 - 개별 정책 문서는 해당 suite **전용** 규칙만 기술하며, 공통 규칙은 본 문서를 참조한다.
@@ -114,9 +112,22 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   - throughput count 증가 위치
   - latency sample 채취 위치
   - RESULT line 확정 위치
-- bindings perf는 측정 anchor와 결과 의미를 C perf 기준과 동일하게 유지해야 하지만,
-  구현 스타일은 언어별 특성에 맞게 작성할 수 있다.
-  - 허용: 언어별 async/runtime, 모듈 분리, 타입 시스템 차이
+- bindings perf는 측정 anchor와 결과 의미를 C perf 기준과 동일하게 유지한다.
+  실행 모델은 suite별로 고정하며 언어별 편의에 따라 바꾸지 않는다.
+  - single: sender와 receiver/progress 역할을 전용 OS thread에서 실행하고 측정
+    구간에는 synchronous public API만 사용한다. raw send는 blocking terminal을,
+    request/reply는 synchronous callback terminal과 completion poller를 사용한다.
+    request submit과 completion progress는 같은 전용 requester thread에서 교대로
+    구동하거나 별도 OS thread로 나눌 수 있지만 async runtime에는 맡기지 않는다.
+    synchronous callback terminal이 ownership 이전의 backpressure를 즉시 알리는
+    경우에는 requester thread가 completion progress를 구동한 뒤 같은 logical
+    request를 다시 제출할 수 있다. 이는 thread 안의 flow-control 진행이며 async
+    terminal이나 benchmark case 재시도가 아니다.
+  - multi: C reference는 nonblocking API와 poller로 진행한다. 다른 binding의
+    HWM-managed send/request는 coroutine/async runtime 또는 그 언어의 동등한
+    비동기 실행 모델로 진행한다. 다만 public 계약이 synchronous로 분류한
+    PUB/XPUB publish와 raw reply는 multi에서도 synchronous terminal을 사용한다.
+  - 허용: 위 실행 의미를 유지하는 모듈 분리와 타입 시스템 차이
   - 금지: 측정 anchor point 이동, phase 의미 변경, metric 집합 변경, fail/skip/
     unsupported 의미 변경
 - `bindings/c/perf`와 `bindings/<lang>/perf`의 공식 실행 스크립트는 동일한 CLI 옵션
@@ -129,14 +140,12 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   같은 stdout/stdin token, 같은 전송 방향, 같은 start/stop 의미, 같은 timeout
   실패 의미를 사용해야 한다. 언어별 runner가 편의를 위해 별도 token을 추가하거나
   C runner가 요구하지 않는 보정 phase를 측정 조건으로 만들면 안 된다.
-- **bindings ↔ C 성능 비교는 multi suite로 한정한다.** single suite는
-  sender와 receiver를 한 프로세스의 스레드로 구동하므로, coroutine/event-loop
-  기반 async 런타임 바인딩(Node·Python 등)에서는 측정 아티팩트(예: reqrep
-  latency가 큐 깊이/타이머에 지배됨)를 유발한다. 따라서 **C 기준 대비 bindings
-  성능 비교(회귀 검증)는 multi로만** 수행한다. 단, **single·multi runner는 둘
-  다 유지**한다 — single은 C 기준 자체의 single+multi 검증과 각 바인딩 스모크에
-  계속 쓰되, bindings-vs-C 비교 대상에서는 제외한다. **C reference는 single과
-  multi를 모두** 측정한다.
+- **bindings ↔ C 성능 비교는 multi suite로 한정한다.** single suite는 sender와
+  receiver를 같은 프로세스의 전용 thread에서 실행하므로, 언어 runtime의 thread
+  scheduling, JIT와 GC가 양쪽 역할에 함께 영향을 준다. single 결과는 각 binding의
+  synchronous path와 lifecycle을 검증하는 데 사용하고 cross-binding ratio에는
+  사용하지 않는다. **single·multi runner는 모두 유지**하며, C reference는
+  single과 multi를 모두 측정한다.
 - bindings perf는 아래 비교 가능성 체크리스트를 함께 만족해야 한다.
   - 같은 pattern/transport 의미를 측정한다.
   - 같은 metric header / wire protocol contract를 사용한다.
@@ -166,25 +175,30 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
     임베디드/배포용 옵션은 별도이다.
 - backpressure 검증은 기본 perf surface가 아니라 `core/tests/integration`
   으로 분리한다. one-way backpressure 통합 범위는 `DEALER_DEALER`,
-  `DEALER_ROUTER`, `ROUTER_ROUTER`, `PUBSUB`, `SPOT_PUBSUB` 이며,
-  `STREAM`, echo, `PAIR` 은 제외한다.
+  `DEALER_ROUTER`, `ROUTER_ROUTER`, `PUBSUB` 이며, `STREAM`, echo, `PAIR` 은 제외한다.
 - 실제 오류는 즉시 `fail` 처리한다.
 - `EAGAIN`은 오류가 아니라 flow-control 상태로 취급한다.
 - perf 측정용 I/O 경로는 기본적으로 **recv 모델**과 request-reply completion
   모델만 사용한다.
-  - recv: poller `POLLIN` readiness 감지 → 비동기 `zlink_recv()` /
+  - recv: poller `POLLIN` readiness 감지 → nonblocking `zlink_recv()` /
     `zlink_msg_recv()` drain 루프 (react 방식).
   - **suite별 send 모델은 다음과 같이 고정한다.**
-    - 각 send 종결자의 언어별 이름·반환 타입은 [async-coroutine-policy](../../bindings/doc/spec/async-coroutine-policy.ko.md) 정규 표가 소유한다. blocking/non-blocking 축은 [async-execution-model](../../bindings/doc/spec/async-execution-model.ko.md)을 따른다. 아래 blocking=sync 종결자 `NONE`, nonblocking=sync 종결자 `DONTWAIT`(C++ `.flags(DONTWAIT).submit()`, .NET `Submit(SendFlags.DontWait)`, Java `submit(SendFlags.DONT_WAIT)`, Node `submit(SendFlags.DONTWAIT)`, Python `submit_blocking(flags=DONT_WAIT)`, Rust `submit_blocking(DONT_WAIT)`, Go `Flags(DontWait).Submit(ctx)`) 또는 async 종결자를 뜻한다.
-  - send (single): **poller + blocking send**. HWM 도달 시 자연 backpressure로
-    멈춘다. 단일 프로세스에서 sender/receiver를 구동하므로 nonblocking 제어가
-    필요 없다. C reference와 대부분 binding은 이를 thread + blocking send로
-    동일하게 구현한다. 따라서 single 측정은 C와 같은 실행 모델이며 binding의
-    순수 오버헤드를 나타낸다. **예외**: async/event-loop가 기본인 언어(Node,
-    Python 등)는 blocking submit이 부자연스러우므로 single에서 async submit
-    경로를 사용할 수 있다. 이 경우에도 poller 기반 recv 집계와 phase/header
-    계약은 동일하게 유지한다.
-  - send (multi): **poller + nonblocking send**. 두 구현 경로가 있으며, 둘 다
+    - 각 send 종결자의 언어별 이름과 반환 타입은
+      [async-coroutine-policy](../../bindings/doc/spec/async-coroutine-policy.ko.md)의
+      정규 표가 소유한다. blocking/nonblocking 의미는
+      [async-execution-model](../../bindings/doc/spec/async-execution-model.ko.md)을
+      따른다. single raw send는 sync terminal `NONE`, C multi는 C ABI `DONTWAIT`,
+      binding multi는 async terminal을 사용한다.
+  - send (single): **전용 thread + synchronous terminal**. raw send는 blocking
+    terminal을 사용하며 HWM 도달 시 Core가 sender thread를 대기시킨다.
+    request/reply는 synchronous callback terminal로 admission하고 전용 requester/
+    progress thread가 completion poller를 구동한다. submit과 progress를 별도 OS
+    thread로 나눠도 된다. 측정 구간에는 coroutine, async task,
+    Promise/Future executor 또는 event-loop yield를 사용하지 않는다. Go는 역할별
+    goroutine을 active 구간 전체에서 하나의 OS thread에 고정하여 runtime이 다른
+    goroutine과 multiplex하지 못하게 한다. Node는 `worker_threads`, Python은
+    `threading.Thread`에서 synchronous terminal을 호출한다.
+  - send (multi): **비동기 concurrent send**. 두 구현 경로가 있으며, 둘 다
     "backpressure를 만나면 그 소켓의 송신 진행을 멈추되 메시지를 잃지 않고 다른
     소켓은 계속 진행한다"는 같은 목표를 이루지만 **admission 처리 의미가 다르다.**
     - **C reference (DONTWAIT 경로)**: `send(..., DONTWAIT)`로 제출한다.
@@ -192,25 +206,39 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
       (호출자 소유 유지). runner가 그 소켓을 pending으로 표시했다가 poller
       `POLLOUT` readiness에서 **같은 메시지를 재제출**한다. 즉 backpressure를
       runner가 수동으로 관리한다.
-    - **코루틴/async binding (async admission 경로)**: `async()` submit으로
-      제출한다. admission이 막히면 core가 그 요청을 **pending으로 수용하고 그
-      async 작업을 suspend**한다(메시지는 이미 core로 이관). core의
-      writable/completion 신호에서 그 작업이 resume되며, 다른 소켓의 submit은
-      계속 진행한다. C가 수동으로 하던 pending 표시와 `POLLOUT` 재제출을 언어
-      런타임의 suspend/resume이 대신하므로 runner 코드에 pending/재제출 로직이
-      없다.
-    binding multi 오버헤드는 이 async/코루틴 실행(suspend/resume) 오버헤드를
-    포함한 값으로 정의한다. **매 submit을 즉시 await하여 한 소켓의 왕복을
-    직렬화하면(사실상 inflight 1) 계약 위반이다** — 이는 blocking 실행이며
-    C의 nonblocking 모델과 다른 측정이 된다. inflight 깊이는 어느 경로에서도
-    코드로 고정하지 않고 소켓 HWM(backpressure)이 결정한다.
-  - poller는 recv readiness와 request-reply completion 감지에 공통 사용하고,
-    send backpressure는 suite별로 위 방식을 따른다.
-- **binding이 위 nonblocking 경로를 표현할 수 있어야 한다**: multi 측정은
-  binding 공개 API로 위 두 경로 중 하나(sync 종결자 `DONTWAIT` submit 또는
-  async 종결자 admission)를 사용한다. **0.14.0부터 send 계열은 모든 바인딩에
-  sync(+flags) 종결자를 노출하므로(async-coroutine-policy 정규 표), 이 nonblocking
-  경로는 항상 표현 가능하다.** 그럼에도 어떤 이유로 그 소켓 송신이 admission
+    - **C 이외의 binding (async admission 경로)**: HWM-managed send/request는 각
+      언어의 async terminal로 제출한다. ownership을 받은 terminal은 backpressure
+      동안 async 작업을 suspend하고 Core의 writable/completion 진행에 따라
+      resume한다. public async terminal이 ownership 이전의 backpressure를 즉시
+      알리는 경우에는 같은 coroutine/task가 cooperative yield 또는 public
+      readiness를 기다린 뒤 같은 logical operation을 다시 제출한다. 어느 경우든
+      다른 소켓의 submit은 계속 진행해야 하며, sync `DONTWAIT`와 binding-local
+      `POLLOUT` pending table로 C reference를 복제하지 않는다.
+    binding multi 오버헤드는 coroutine/async runtime 또는 언어별 동등한 비동기
+    실행 모델의 suspend/resume과 scheduling 오버헤드를
+    포함한 값으로 정의한다. send coroutine은 admission 완료를 await한 뒤 즉시 다음
+    send를 제출할 수 있다. 이 대기는 echo 수신 대기가 아니므로 HWM까지 admitted
+    message가 누적된다. 반면 echo 수신이나 request reply completion을 기다린 뒤 다음
+    작업을 제출하여 왕복을 inflight 1로 직렬화하면 정책 위반이다. request/reply는
+    여러 async request를 동시에 진행한다. app 고정 window를 두지 않으며, HWM은
+    send admission queue를 제한하고 reply를 기다리는 request 수는 실제 admission과
+    completion 속도로 정해진다.
+    - **synchronous operation 예외**: PUB/XPUB publish는 lossy 기본 계약에서
+      HWM admission을 기다리지 않고, raw reply는 request sequence에 대한 즉시
+      terminal이므로 공개 API가 synchronous terminal만 제공한다. 이 operation을
+      executor나 internal adapter로 감싸 가짜 async 비용을 추가하지 않는다.
+      raw STREAM reply는 이 예외에 포함하지 않는다. C 이외의 binding은 public
+      async terminal을 사용해야 하며, 해당 terminal이 없으면 perf에서 우회하지
+      말고 binding public contract를 보완한다.
+  - poller는 recv readiness 감지에 사용한다. request-reply completion은 C에서는
+    public completion poller로, 다른 binding에서는 public async request completion으로
+    진행한다. send backpressure는 suite별로 위 방식을 따른다.
+- **binding이 위 async admission 경로를 표현해야 한다**: C 이외의 multi 측정에서
+  HWM-managed send/request는 binding 공개 async terminal을 사용한다. Go처럼 별도 async terminal이 없는
+  binding은 blocking `Submit(ctx)` 하나를 goroutine 하나가 소유하고, Go runtime이
+  여러 goroutine을 concurrent하게 진행하는 방식을 동등한 비동기 실행 모델로
+  사용한다. sync `DONTWAIT`와 binding-local `POLLOUT` 재제출로 C 구현을 복제하면
+  정책 위반이다. 어떤 이유로든 한 소켓 송신이 admission
   완료까지 직렬화되면 C와 다른 실행이 되어 측정 의미가 어긋난다. 이때 **perf
   runner를 우회로 손대 측정을 억지로 맞추지 않는다.** 이는 perf 측정 조건이 아니라
   binding 라이브러리 API 계약의 문제이므로, 측정에서는 그 사실을 그대로 보고한다
@@ -222,44 +250,35 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   submit 뒤에도 같은 requester socket의 reply 수신/progress 경로를 계속 돌려야
   한다. completion은 requester socket을 수신하지 않아도 되는 별도 channel이
   아니다.
-  - single reqrep은 같은 process 안에서 requester submit thread, requester
-    progress thread, replier thread를 분리한다. requester progress thread는
+  - single reqrep은 같은 process 안에서 requester와 replier를 동시에 실행한다.
+    requester는 하나의 전용 OS thread에서 submit과 completion progress를 교대로
+    구동하거나 두 역할을 별도 OS thread로 나눌 수 있다. completion progress는
     blocking recv/wait 또는 그와 같은 의미의 public completion progress 경로로
-    reply completion을 drain한다. async/event-loop가 기본인 언어(Node, Python
-    등)는 이 progress를 async completion 경로로 구현할 수 있으나, 매 request를
-    제출 즉시 await하여 왕복을 직렬화하지 않는다. submit flow는 계약이 허용하는
-    만큼 연속 제출하고 progress가 완료를 drain한다.
-  - multi reqrep은 client process의 active poller loop가 N개 requester socket을
-    multiplex한다. socket request/reply surface와 spot request/reply surface는
-    이 public poller loop에 `POLLCOMPLETION`을 등록한다.
-    `ZLINK_POLLCOMPLETION`은 completion drain 요청이므로 `POLLIN`/`POLLOUT`과
-    섞지 않고 completion 대상에 단독으로 등록한다. `MULTI_SPOT_REQREP`
-    requester reply completion도 예외 없이 `POLLCOMPLETION` poller가 소유한다.
+    reply completion을 drain한다. 언어의 기본 실행 모델과 관계없이 single 측정
+    경로는 synchronous callback terminal과 전용 OS thread만 사용한다. submit
+    flow는 계약이 허용하는 만큼 연속 제출하고 progress가 완료를 drain한다.
+  - C multi reqrep은 client process의 active poller loop가 N개 requester socket을
+    multiplex한다. socket request/reply 경로는 requester socket을 이 public
+    poller에 `POLLCOMPLETION` 단독으로 등록한다. C 이외의 binding은 public async
+    request completion을 여러 개 동시에 진행한다.
   suite 정책에 없는 timer, pipe/eventfd wake, `setInterval`, 짧은 sleep,
   busy polling을 hot path에 두면 C perf와 같은 측정 의미가 아니므로 금지한다.
-  Node처럼 native completion callback을 JavaScript turn에서 전달하는 binding은
-  `POLLCOMPLETION` poller wait가 completion queue를 drain한 뒤 callback 전달을
-  위해 event-loop turn을 한 번 양보할 수 있다. 이 양보는 completion progress
-  소유권을 가져가는 timer나 별도 pump가 아니어야 하며, poller wait를 대체하면
-  안 된다.
-- binding public async/request API가 일반 사용자 편의를 위해 내부 progress
-  pump를 제공하더라도, perf에서 `POLLCOMPLETION`을 등록한 외부 poller가
-  completion을 소유하는 동안에는 그 내부 pump가 같은 completion queue를
-  경쟁해서 drain하면 안 된다. 이 경우 binding 내부 구현은 외부 poller 등록을
-  감지해 자동 pump를 비활성화하고, completion drain은 perf의 단일 active
-  poll loop에 맡겨야 한다.
-- 다만 아래 두 예외는 perf 정책 범위에 포함한다.
-  - Spot 계열은 `zlink_mesh_node_drain_ready()`와 claim batch로 application 및
-    infrastructure record를 읽는다. direct message callback은 사용하지 않는다.
-  - `STREAM`은 raw callback을 제외하지만 packet handler를 정식 수신 경로로 본다.
-- `MULTI_SPOT_REQREP` completion도 Spot의 infrastructure claim batch에서 읽는다.
-  자세한 record 종류와 응답 API는
-  [Core 10.0.0 Spot 성능 시험 정책](./PERF_SPOT_TEST_POLICY.md)을 따른다.
+  Node처럼 native completion을 JavaScript turn에서 Promise에 전달하는 binding은
+  async completion 진행을 위해 event-loop turn을 양보한다. 이 양보를 timer나
+  별도 progress pump로 대체하면 안 된다.
+- `STREAM`은 raw callback을 제외하지만 packet handler를 정식 수신 경로로 본다.
 
 ### 1.1.1 Metric Header Wire Format
 
 모든 언어에서 동일한 metric header를 사용해야 언어 간 결과 비교가 가능하다.
 metric header는 benchmark payload의 선두에 고정 크기로 인코딩된다.
+
+- 공식 baseline과 cross-binding 비교의 non-STREAM application wire shape는
+  **2-part `[payload, empty]`** 로 고정한다. ROUTER routing identity는 transport
+  envelope metadata이며 application part 수에 포함하지 않는다. 따라서 ROUTER
+  계열도 application 3-part 메시지를 사용하지 않는다.
+- `--part-count 1` / `PERF_PART_COUNT=1`은 direct-send 차이를 확인하는 명시적
+  진단 실행만 허용한다. 이 결과는 2-part 공식 baseline과 섞어 비교하지 않는다.
 
 ```text
 offset  size  type       field         설명
@@ -325,6 +344,11 @@ total: 29 bytes (고정)
   - 문자열 생성
   - 로그 출력
   - 불필요 복사
+- flow-control 예외: single synchronous request callback 또는 binding multi의
+  public async terminal이 ownership 이전의 backpressure를 즉시 알린 경우, 같은
+  logical operation을 유지한 채 completion progress를 구동하거나 cooperative
+  thread/task yield 또는 public readiness를 기다린 뒤 재제출할 수 있다. 고정
+  retry budget, sleep timer, 별도 `POLLOUT` 우회 경로를 추가해서는 안 된다.
 - 예외: `bindings/c/perf` 기준 코드가 같은 위치에서
   `perf_socket_poll(NULL, 0, N)`을 사용하는 경우에는, binding perf도 같은 의미의
   bounded idle wait를 둘 수 있다. 우선 public empty-poll API를 사용하고, 해당
@@ -340,24 +364,14 @@ total: 29 bytes (고정)
   - raw socket client 연결 준비: low-cost monitor event `CONNECTION_READY`
   - runner-barrier raw start gate: `CONNECTION_READY` 확인 뒤 suite별 패턴 표의
     `CLIENT_READY` / `START` orchestration
-  - single `SPOT_PUBSUB`: MeshNode와 두 Spot을 만든 뒤 local subscription 설정 완료
-  - multi Spot 계열: 모든 peer MeshNode가 hub에 admitted되고 hub Spot generation을
-    받은 뒤 `CLIENT_READY` / `START`
 - raw socket client 연결 준비는 expected client 수만큼
   `CONNECTION_READY` 수신으로 판정한다.
-- multi Spot 계열은 `zlink_mesh_node_peers()`에서 각 hub peer가
-  `ZLINK_MESH_PEER_ADMITTED`인지 확인하고, setup용 node request/reply가 완료된 뒤
-  `CLIENT_READY`를 출력한다. 별도 control MeshNode나 고정 settle 시간을 사용하지 않는다.
-- single과 multi Spot 수신은 `zlink_mesh_node_drain_ready()`와
-  `zlink_mesh_claim_recv_batch()`로 처리한다.
 - `setup_connected_pair()` 같은 helper는 raw socket client 의 `CONNECTION_READY`
   counting 만 캡슐화한 경우에만 허용된다.
 - `wait_ready()` 같은 helper는 허용한다. 단:
   - raw socket client 연결 준비에서는 `CONNECTION_READY` counting 만 수행해야 한다.
   - runner-barrier raw start gate 에서는 `CONNECTION_READY` 확인 뒤 suite별 패턴
     표의 `CLIENT_READY` / `START` orchestration 을 수행해야 한다.
-  - single SPOT_PUBSUB에서는 MeshNode와 subscription 설정 완료만 확인한다.
-  - multi Spot 계열에서는 peer admission과 hub Spot generation setup만 확인한다.
   - delivery-ready event, 별도 서비스 이벤트 스트림, snapshot polling 을 helper 뒤에
     숨기면 안 된다.
 
@@ -398,9 +412,6 @@ total: 29 bytes (고정)
   금지한다.
 - `STOP`은 runner orchestration 정리 명령이다. data-plane phase 종료 신호가
   필요한 패턴은 suite 정책에 정의된 wire-level stop token을 사용한다.
-- multi Spot 계열 client는 N개 peer의 admission과 setup request/reply가 끝난 뒤
-  `CLIENT_READY,<msg_size>`를 출력한다. runner가 server와 client에 같은
-  `START,<msg_size>`를 전달하면 active 구간을 시작한다.
 - C perf handshake에 없는 언어별 ready token, 별도 ack, 추가 quorum, 별도 warmup
   start 명령은 정책 위반이다. 특정 바인딩 public API 부족으로 C handshake를
   구현할 수 없으면 binding public API를 보강하거나 해당 perf 조합을
@@ -454,8 +465,6 @@ total: 29 bytes (고정)
 - raw socket client 의 ready gate event 는
   [`doc/guide/06-monitoring.ko.md`](../../core/doc/guide/06-monitoring.ko.md)의
   raw socket monitoring 절을 단일 기준으로 따른다.
-- SPOT_PUBSUB 계열은 별도 서비스 이벤트 스트림을 사용하지 않으며, perf-ready 는
-  suite별 benchmark barrier protocol 로만 정의한다.
 - monitor event rename:
   - raw socket ready event 는 `CONNECTION_READY` 이다.
 - routing 검증이 필요한 패턴(예: ROUTER)은 monitor-ready 이후
@@ -502,13 +511,9 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
 - benchmark는 메시지 크기별로 context
   `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES`를 현재 테스트 메시지 크기와 같은 값으로
   설정한다. raw socket `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 저수준 socket별
-  override로만 유지하며, MeshNode 또는 Spot handle에는 설정하지 않는다. Spot
-  서비스 핸들에 이 공통 옵션을 설정하려는 코드는 정책 위반이고, C API에서는
-  `EINVAL` 실패로 처리된다. C perf runner는 일반 패턴의 결과 행 뒤에 runtime
+  override로만 유지한다. C perf runner는 일반 패턴의 결과 행 뒤에 runtime
   snapshot에서 실제 수집한 `Auto-HWM detail` 표를 붙이고,
   `Size(B)`, `MsgUnit(B)`, `Scope`, `ScopeCount`를 적용 HWM과 함께 보여야 한다.
-  MeshNode와 Spot 계열은 RESULT 계약을 우선하며 내부 socket snapshot을 perf의
-  공개 계약으로 사용하지 않는다.
 - one-way pattern에서도 이 규칙을 유지한다. 실제 traffic 방향상 한쪽 값만 더
   중요하더라도 기본 bench surface는 auto 계산 결과를 그대로 본다.
 - perf는 throughput/bandwidth/latency 중심의 기본 surface만 유지한다. cpu/mem,
@@ -542,7 +547,10 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
 - echo
   - 왕복 완료 의미를 유지한다.
   - `*_SENDSEND` 패턴은 public send/recv API로 echo를 만든다.
-  - `*_REQREP` 패턴은 public request/reply API와 completion poller로 왕복을 만든다.
+  - `*_REQREP` 패턴은 public request/reply API와 suite별 completion 경로로 왕복을
+    만든다. C는 completion poller, C 이외의 binding multi는 async request
+    completion, binding single은 synchronous callback terminal과 completion
+    progress를 사용한다.
   - send 역할과 recv 역할 정책을 둘 다 적용한다.
 - one-way send
   - recv 정책은 없다.
@@ -550,15 +558,9 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
 - one-way recv
   - send 정책은 없다.
   - recv 정책만 적용한다.
-- `PUBSUB`, `SPOT_PUBSUB`
+- `PUBSUB`
   - publisher/server는 one-way send다.
   - subscriber/client는 one-way recv다.
-- `MULTI_SPOT_PUBSUB`, `MULTI_SPOT_REQREP`, `MULTI_SPOT_SENDSEND`
-  - `clients`는 peer MeshNode 수다.
-  - client child process 하나가 MeshNode 하나와 entry Spot 하나를 만든다.
-  - 모든 peer는 hub MeshNode에만 연결한다.
-  - 정확한 메시지 흐름과 generation 교환은
-    [Core 10.0.0 Spot 성능 시험 정책](./PERF_SPOT_TEST_POLICY.md)을 따른다.
 - `MULTI_DEALER_ROUTER`
   - 기존 send/send echo 패턴의 호환 이름이다.
   - 새 문서와 새 구현에서는 같은 의미를 `MULTI_DEALER_ROUTER_SENDSEND` 로
@@ -571,11 +573,19 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
   - multi suite 의 raw socket request/reply 패턴이다.
   - client(dealer requester) 는 public request API로 request를 제출하고,
     server(router replier) 는 request를 읽은 뒤 public reply API로 응답한다.
-  - client completion은 public poller `POLLCOMPLETION` 경로로만 진행한다.
+  - C client completion은 public poller `POLLCOMPLETION` 경로로 진행한다.
+    다른 binding은 public async request completion을 여러 개 동시에 진행한다.
 - `MULTI_ROUTER_ROUTER_REQREP`
   - multi suite 의 route-aware raw socket request/reply 패턴이다.
   - 양쪽 모두 routing identity가 있는 socket을 사용하되, 왕복 의미는
     `MULTI_DEALER_ROUTER_REQREP` 와 같다.
+- binding single의 공식 `--pattern ALL`은 `PAIR`, `PUBSUB`, `DEALER_DEALER`,
+  `DEALER_ROUTER`, `ROUTER_ROUTER`, `DEALER_ROUTER_REQREP`,
+  `ROUTER_ROUTER_REQREP`의 7개 패턴이다.
+- binding multi의 공식 `--pattern ALL`은 `MULTI_DEALER_DEALER`,
+  `MULTI_DEALER_ROUTER_SENDSEND`, `MULTI_ROUTER_ROUTER_SENDSEND`,
+  `MULTI_DEALER_ROUTER_REQREP`, `MULTI_ROUTER_ROUTER_REQREP`, `MULTI_PUBSUB`,
+  `MULTI_STREAM`의 7개 패턴이다.
 
 ---
 
@@ -643,9 +653,9 @@ perf/                                       # bindings/<lang>/perf/
   때는 기존 pattern의 mode나 API 의미를 바꾸지 않고 별도 pattern 이름으로 분리한다.
   handler 또는 completion callback은 측정 data delivery surface로 분리하지 않는다.
 - **예외**: 공통 유틸리티 헤더는 `perf_` 접두어 없이 명명할 수 있다 (예: `bench_common.hpp`, `perf_common.hpp`).
-- 상세 파일명 규칙은 개별 정책 문서를 참조한다:
-  - Single: [PERF_SINGLE_TEST_POLICY.md § 10.1](PERF_SINGLE_TEST_POLICY.md)
-  - Multi: [PERF_MULTI_TEST_POLICY.md § 11.1](PERF_MULTI_TEST_POLICY.md)
+- 공식 패턴 목록과 multi 소스 매핑은 개별 정책 문서를 참조한다:
+  - Single: [PERF_SINGLE_TEST_POLICY.md § 6.1](PERF_SINGLE_TEST_POLICY.md)
+  - Multi: [PERF_MULTI_TEST_POLICY.md § 8.1](PERF_MULTI_TEST_POLICY.md)
 
 #### 소스 위치 테이블
 
@@ -794,7 +804,9 @@ bindings/cpp/perf/run_benchmarks.sh --pattern PAIR
 bindings/cpp/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM
 ```
 
-각 스크립트의 상세 옵션은 개별 정책 문서의 섹션 5를 참조한다.
+각 스크립트의 상세 옵션은
+[single § 5.1](PERF_SINGLE_TEST_POLICY.md)과
+[multi § 9.2](PERF_MULTI_TEST_POLICY.md)를 참조한다.
 
 > **정책 준수 실행기**: 아래 스크립트가 각 suite의 유일한 정책 준수 실행기이다. C 기준은 single=`bindings/c/perf/run_benchmarks.sh`, multi=`bindings/c/perf/run_benchmarks_multi.sh`를 사용하고, 다른 bindings는 각 언어 디렉터리의 `bindings/<binding>/perf/run_benchmarks*.sh` 또는 그와 동등한 binding-local 실행기를 사용한다. 내부 실행 엔진과 공식 entrypoint 사이의 호출 체인은 구현 세부이며, 정책은 공식 entrypoint와 책임 분리만 규정한다.
 >
@@ -807,16 +819,15 @@ bindings/cpp/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM
 
 ### 3.2 Smoke 테스트
 
-perf smoke 테스트는 **대표 패턴 하나(ROUTER_ROUTER 계열)를 지원하는 모든
-transport에 대해** 실행하여, 각 runner가 전 transport에서 crash/fail 없이
-끝까지 도는지 빠르게 검증하는 실행이다. 성능 수치가 아니라 **transport별
-정상 동작(fail 없이 `status=complete`)**을 확인하는 것이 목적이다. 전 패턴을
-도는 것이 아니라 **transport 축**을 커버하는 것이 핵심이다.
+perf smoke 테스트는 **각 suite가 지원하는 모든 패턴을 TCP와 WSS에서** 실행하여,
+각 runner의 주요 data path와 보안 transport가 crash/fail 없이 끝까지 동작하는지
+빠르게 검증하는 실행이다. 성능 수치가 아니라 **패턴별 정상 동작(fail 없이
+`status=complete`)**을 확인하는 것이 목적이다.
 
 - **스모크 정의 (고정)**:
-  - **패턴**: `ROUTER_ROUTER`(single) / `MULTI_ROUTER_ROUTER`(multi). router-to-router 대표 패턴만.
+  - **패턴**: 각 single/multi runner가 지원하는 **모든 패턴**.
   - **메시지 크기**: **1024B** 하나.
-  - **transport**: 각 suite가 지원하는 **전 transport**(single: tcp·ws·wss·tls·inproc·ipc, multi: tcp·ws·wss·tls·ipc — inproc은 프로세스 내부 transport라 multi 대상 아님).
+  - **transport**: **TCP와 WSS**만.
   - **CCU**: multi는 **100 clients**.
 - perf 코드나 실행 스크립트, 정책 문서를 수정한 뒤에는 **single + multi
   smoke 테스트를 모두 실행해야 한다**(single·multi runner 둘 다 유지·검증한다).
@@ -825,26 +836,29 @@ transport에 대해** 실행하여, 각 runner가 전 transport에서 crash/fail
   - multi: `run_benchmarks_multi.sh` / `.ps1`
 
 ```bash
-# C 기준 smoke (single) — ROUTER_ROUTER, 1024B, 전 transport
-PERF_TRANSPORTS=tcp,ws,wss,tls,inproc,ipc \
-  bindings/c/perf/run_benchmarks.sh --pattern ROUTER_ROUTER --msg-sizes 1024
+# C 기준 smoke (single) — 모든 지원 패턴, TCP/WSS, 1024B
+PERF_TRANSPORTS=tcp,wss \
+  bindings/c/perf/run_benchmarks.sh --pattern ALL --msg-sizes 1024
 
-# C 기준 smoke (multi) — MULTI_ROUTER_ROUTER, 1024B, 100 CCU, 전 transport
-PERF_TRANSPORTS=tcp,ws,wss,tls,ipc \
-  bindings/c/perf/run_benchmarks_multi.sh --pattern MULTI_ROUTER_ROUTER --msg-sizes 1024 --clients 100
+# C 기준 smoke (multi) — 모든 지원 패턴, TCP/WSS, 1024B, 100 CCU
+PERF_TRANSPORTS=tcp,wss \
+  bindings/c/perf/run_benchmarks_multi.sh --pattern ALL --msg-sizes 1024 --clients 100
 
 # bindings smoke (예: cpp) — 동일 정의
-PERF_TRANSPORTS=tcp,ws,wss,tls,inproc,ipc \
-  bindings/cpp/perf/run_benchmarks.sh --pattern ROUTER_ROUTER --msg-sizes 1024
-PERF_TRANSPORTS=tcp,ws,wss,tls,ipc \
-  bindings/cpp/perf/run_benchmarks_multi.sh --pattern MULTI_ROUTER_ROUTER --msg-sizes 1024 --clients 100
+PERF_TRANSPORTS=tcp,wss \
+  bindings/cpp/perf/run_benchmarks.sh --pattern ALL --msg-sizes 1024
+PERF_TRANSPORTS=tcp,wss \
+  bindings/cpp/perf/run_benchmarks_multi.sh --pattern ALL --msg-sizes 1024 --clients 100
 ```
 
 - single과 multi 각각 실행한다.
-- 크기는 **1024B 하나**, 패턴은 **ROUTER_ROUTER 계열 하나**만.
-- transport는 **지원하는 전부**를 명시적으로 순회한다(이게 스모크의 핵심 축).
-- 어떤 (transport)를 특정 바인딩이 지원하지 않으면 `unsupported`로 스킵하고 사유를 남긴다(억지 통과 금지).
-- smoke 통과 기준: 지원하는 전 transport가 `fail` 없이 완료 (`status=complete`), 유효 RESULT.
+- 크기는 **1024B 하나**, 패턴은 각 runner가 지원하는 **모든 패턴**이다.
+- transport는 **TCP와 WSS**를 명시적으로 순회한다.
+- 공식 matrix에 정의된 pattern/transport 조합은 실패 시 반드시 `fail`이며
+  `unsupported`로 바꿔 통과시킬 수 없다. 정책에 정의되지 않은 조합만 사유와
+  함께 `unsupported`로 제외할 수 있다.
+- smoke 통과 기준: 공식 pattern/transport 조합이 `fail` 없이 완료
+  (`status=complete`)되고 유효 RESULT를 출력한다.
 - smoke는 측정(격리 필요)과 달리 **crash/fail 확인**이 목적이라 부하 격리가 필수는 아니나, 진짜 실패와 일시적 포트 충돌을 구분한다.
 - 리팩토링 단계마다 single/multi smoke를 실행하여 기본 경로를 검증한다.
 - 모든 리팩토링이 마무리된 뒤 최종 성능 검증 단계에서 full perf를 실행한다.
@@ -916,7 +930,7 @@ bindings/java/perf/run_benchmarks_multi.sh --pattern ALL
 - lang: c
 - suite: single
 - runs: 1
-- patterns: PAIR, SPOT_PUBSUB
+- patterns: PAIR, PUBSUB
 - transports: tcp, tls, ws, wss
 - msg_sizes: 64, 256, 1024, 65536, 131072, 262144
 - pin_cpu: off
@@ -950,8 +964,8 @@ RESULT,<lib>,<pattern>,<transport>,<size>,<metric>,<value>
 | `latency` | 레이턴시 (internal ns, external ms) | MUST |
 | `latency_p95` | 레이턴시 95th percentile (internal ns, external ms) | MUST |
 | `latency_p99` | 레이턴시 99th percentile (internal ns, external ms) | MUST |
-- throughput 단위는 패턴의 메시지 흐름 방향에 따라 결정된다. echo(왕복) 패턴은 `ops/s`, one-way(단방향) 패턴은 `msg/s`. 상세 분류는 개별 정책 문서 섹션 8.1을 참조한다.
-- bandwidth는 throughput 단위가 다른 패턴 간에도 실제 데이터 처리량으로 직접 비교할 수 있는 공통 지표이다. 상세 계산은 개별 정책 문서 섹션 8.3을 참조한다.
+- throughput 단위는 패턴의 메시지 흐름 방향에 따라 결정된다. echo(왕복) 패턴은 `ops/s`, one-way(단방향) 패턴은 `msg/s`다. 상세 분류는 [single § 6.1](PERF_SINGLE_TEST_POLICY.md)과 [multi § 4.1](PERF_MULTI_TEST_POLICY.md)을 참조한다.
+- bandwidth는 throughput 단위가 다른 패턴 간에도 실제 데이터 처리량으로 직접 비교할 수 있는 공통 지표다. 상세 계산은 [single § 6.1](PERF_SINGLE_TEST_POLICY.md)과 [multi § 4.3](PERF_MULTI_TEST_POLICY.md)을 참조한다.
 - 기본 perf surface와 RESULT 계약에는 cpu/mem 계열 메트릭을 포함하지 않는다.
 - 상세 META 키 및 패턴별 측정 방식은 개별 정책 문서를 참조한다.
 
@@ -983,7 +997,7 @@ RESULT,<lib>,<pattern>,<transport>,<size>,<metric>,<value>
 - lang: c
 - suite: single
 - runs: 1
-- patterns: PAIR, SPOT_PUBSUB
+- patterns: PAIR, PUBSUB
 - transports: tcp, tls, ws, wss
 - msg_sizes: 64, 256, 1024, 65536, 131072, 262144
 - pin_cpu: off
@@ -1041,8 +1055,8 @@ RESULT,<lib>,<pattern>,<transport>,<size>,<metric>,<value>
 - 바이너리 stderr는 stdout 결과에 통합하지 않지만, multi 엔진(`run_comparison.py`)은 stderr에서 `protocol not supported` 문자열을 감지하여 `unsupported` 자동 분류에 활용한다 (§ 7.4 참조).
 
 상세 형식은 suite별 정책 문서를 참조한다:
-- Single: [PERF_SINGLE_TEST_POLICY.md § 6.3](PERF_SINGLE_TEST_POLICY.md)
-- Multi: [PERF_MULTI_TEST_POLICY.md § 6.3](PERF_MULTI_TEST_POLICY.md)
+- Single: [PERF_SINGLE_TEST_POLICY.md § 4](PERF_SINGLE_TEST_POLICY.md)
+- Multi: [PERF_MULTI_TEST_POLICY.md § 10](PERF_MULTI_TEST_POLICY.md)
 
 **Single (runs=1):**
 ```text
@@ -1123,7 +1137,7 @@ Saved result file: ... (status=partial)
 | 항목 | 규칙 |
 |------|------|
 | 스크립트 레벨 재시도 | 금지 — 실패한 pattern/transport/size 조합을 자동으로 다시 실행하지 않는다 |
-| 바이너리 내부 재시도 | 금지 — send/recv 실패 시 자동 재시도하지 않는다. `EAGAIN`은 pending 상태로 기록하고 이후 `PollOut` readiness에서 재개할 수 있으나, 동일 호출 흐름에서의 즉시 retry loop는 금지한다 |
+| 바이너리 내부 재시도 | 금지 — send/recv의 실제 실패나 benchmark case를 자동 재시도하지 않는다. C multi의 `EAGAIN`은 pending 상태로 기록하고 `PollOut` readiness에서 재개한다. suite가 허용한 synchronous request callback 또는 binding async terminal의 ownership 이전 backpressure는 같은 logical operation의 flow-control continuation으로 처리한다. 고정 횟수 retry와 무조건 즉시 반복은 금지한다 |
 | 환경 변수 | `PERF_MULTI_ATTEMPTS`, `PERF_MULTI_STREAM_ATTEMPTS` 및 레거시 `PERF_MULTI_ATTEMPTS`, `PERF_MULTI_STREAM_ATTEMPTS`는 **삭제 대상**이다. 구현에 존재하면 제거해야 한다 |
 
 - **이유**: 재시도는 실패 원인을 숨긴다. 벤치마크 실패는 라이브러리 또는 환경의 실제 문제를 반영하며, 재시도로 통과시키면 회귀가 감지되지 않는다.
@@ -1140,7 +1154,10 @@ Saved result file: ... (status=partial)
 
 - **이유**: inflight 제한은 벤치마크 결과를 인위적으로 왜곡한다. 라이브러리의 실제 처리 능력을 측정해야 하며, 벤치마크 인프라가 추가 병목을 도입하면 안 된다.
 - one-way 패턴에서는 응답이 없으므로 outstanding 개념 자체가 성립하지 않는다.
-- echo·request/reply 패턴에서도 outstanding을 코드로 고정하지 않는다. echo를 받아야 다음을 보내는 1:1 직렬화 없이 backpressure까지 연속 제출하며, 소켓 HWM이 자연 backpressure를 제공하므로 별도의 outstanding 상한이 불필요하다.
+- echo·request/reply 패턴에서도 outstanding을 코드로 고정하지 않는다. echo나
+  reply를 받아야 다음 작업을 보내는 1:1 직렬화 없이 admission backpressure까지
+  연속 제출한다. HWM은 send admission queue를 제한하며, reply를 기다리는 request
+  수는 실제 admission과 completion 속도로 정해진다.
 
 ### 7.3 실패 시 대응 절차
 
@@ -1158,7 +1175,7 @@ Saved result file: ... (status=partial)
 
 ### 7.4 UNSUPPORTED 오용 금지
 
-정책 문서(§10.3 / §11.3)에 **정의된 transport**가 실행 시 실패하면 반드시 `fail`로 보고해야 한다. `UNSUPPORTED`로 보고하여 실패를 숨기는 것을 **금지**한다.
+[single § 6.3](PERF_SINGLE_TEST_POLICY.md)과 [multi § 8.3](PERF_MULTI_TEST_POLICY.md)에 **정의된 transport**가 실행 시 실패하면 반드시 `fail`로 보고해야 한다. `UNSUPPORTED`로 보고하여 실패를 숨기는 것을 **금지**한다.
 
 | 상황 | 올바른 상태 | 설명 |
 |------|------------|------|
@@ -1190,7 +1207,7 @@ perf 구현의 공통화 기준은 **코드 중복 제거 자체가 아니라 be
 | TLS 설정 | `setup_tls_client`, `setup_tls_server` |
 | Context RAII | `ctx_guard_t` 등 리소스 관리 wrapper |
 | 타이머/스톱워치 | `stopwatch_t`, 시간 측정 유틸리티 |
-| Monitor 유틸리티 | raw socket client `CONNECTION_READY` counting helper, multi SPOT_PUBSUB / multi SPOT_REQREP / multi SPOT_SENDSEND=`READY/START` barrier helper |
+| Monitor 유틸리티 | raw socket client `CONNECTION_READY` counting helper |
 | transport 가용성 검사 | `transport_available()` |
 | 공통 cleanup | socket / monitor / context close helper |
 
@@ -1377,7 +1394,7 @@ perf 벤치마크 코드와 실행 인프라를 리팩토링할 때는 아래 �
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
 | `PERF_DEBUG` | 디버그 로그 | unset |
-| `PERF_IO_THREADS` | context I/O threads. single 기본값은 모든 패턴에서 1이며, SPOT_PUBSUB 계열 예외를 두지 않는다. multi 기본값은 server/client 모두 4다. Python multi는 GIL 기반 callback 경합을 피하기 위해 기본값 1을 사용하되, 이 변수를 설정하면 명시값을 따른다. | suite별 기본값 |
+| `PERF_IO_THREADS` | context I/O threads. single 기본값은 모든 패턴에서 1이다. multi 기본값은 server/client 모두 4다. Python multi는 GIL 기반 callback 경합을 피하기 위해 기본값 1을 사용하되, 이 변수를 설정하면 명시값을 따른다. | suite별 기본값 |
 | `PERF_MSG_SIZES` | 테스트 size 목록이며 runner가 size별 case로 나누어 실행한다. single 기본값은 `64,256,1024,65536,131072,262144`, multi 기본값은 `64,256,1024,4096,65536,131072`, multi STREAM 기본값은 `64,256,1024,65536`이다. | suite/패턴별 기본값 |
 | `PERF_TRANSPORTS` | 테스트 transport 목록 | suite/패턴별 기본값 |
 | `PERF_TASKSET` | CPU pinning (`1`로 활성화, Linux: taskset, Windows: processor affinity) | 0 |
@@ -1386,10 +1403,10 @@ perf 벤치마크 코드와 실행 인프라를 리팩토링할 때는 아래 �
 | `PERF_DISABLE_RESOURCE_METRICS` | 리소스 메트릭(CPU/메모리) 수집 비활성화 (`1`로 활성화) | 0 |
 | `PERF_STREAM_NON_TCP_CLIENTS_MAX` | STREAM 계열 non-tcp transport의 최대 client cap | 10000 |
 | `PERF_RESULTS_MAX_FILES` | report/ 디렉터리 최대 파일 수 (multi 전용) | 100 |
-| `PERF_MULTI_LATENCY_SAMPLE_CAP` | multi sampler 하나가 보관하는 percentile sample 상한 | 65536 |
-| `PERF_SINGLE_LATENCY_SAMPLE_CAP` | single sampler 하나가 보관하는 percentile sample 상한 | 1000000 |
+| `PERF_MULTI_LATENCY_SAMPLE_CAP` | multi sampler 하나가 보관하는 percentile sample 상한 | 65,536 |
+| `PERF_SINGLE_LATENCY_SAMPLE_CAP` | single sampler 하나가 보관하는 percentile sample 상한 | 1,000,000 |
 
 - 위 환경 변수는 C 기준과 모든 바인딩에서 동일하게 적용된다 (단, `PERF_RESULTS_MAX_FILES`는 multi 엔진만 참조하며, single 엔진은 100 하드코딩).
 - suite별 고유 환경 변수는 개별 정책 문서를 참조한다:
-  - Single: [PERF_SINGLE_TEST_POLICY.md § 11](PERF_SINGLE_TEST_POLICY.md)
+  - Single: [PERF_SINGLE_TEST_POLICY.md § 7](PERF_SINGLE_TEST_POLICY.md)
   - Multi: [PERF_MULTI_TEST_POLICY.md § 12](PERF_MULTI_TEST_POLICY.md)

@@ -15,6 +15,32 @@ struct weighted_sample_t
     double weight;
 };
 
+inline bool append_weighted_samples (
+  uint64_t represented_count,
+  const double *values,
+  size_t sample_count,
+  std::vector<weighted_sample_t> *out)
+{
+    if (!out || sample_count > represented_count
+        || (sample_count > 0 && !values)) {
+        return false;
+    }
+    // A zero-cap reservoir deliberately carries no percentile samples while
+    // represented_count/total_sum still preserve the exact mean.
+    if (sample_count == 0)
+        return true;
+
+    const double weight = static_cast<double> (represented_count)
+                          / static_cast<double> (sample_count);
+    for (size_t i = 0; i < sample_count; ++i) {
+        weighted_sample_t sample;
+        sample.value = values[i];
+        sample.weight = weight;
+        out->push_back (sample);
+    }
+    return true;
+}
+
 inline double weighted_percentile (
   const std::vector<weighted_sample_t> &samples,
   double quantile)

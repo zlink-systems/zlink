@@ -29,3 +29,19 @@
 | # | 대상 | 반영 내용 | 승인 |
 |---:|---|---|---|
 | 1 | `core/doc/spec/core/socket/07-router.{ko,en}.md`, `bindings/doc/spec/README.{ko,en}.md` | route 없는 terminal reply의 disposition을 `ZLINK_SUBMIT_NOT_CONNECTED`/`ENOTCONN`으로 명문화. 대상 completion pipe 미발견과 커밋 도중 대상 소멸 두 경우 모두 포함하고, backpressure가 아니므로 `ZLINK_POLLOUT`으로 재시도가 가능해지지 않음을 명시. | 사용자 승인 (2026-08-27) |
+
+
+## 향후 검토 (지금 범위 아님)
+
+### Kotlin binding 제공 방식 (정정: 이미 존재)
+
+**정정**: framework 레이어에 Kotlin이 이미 정리되어 있다. binding 레이어에 Kotlin 전용
+binding은 없지만, `framework/doc/framework/kotlin/reference/`가 `ZLinkKotlinClient`로
+Java call을 coroutine 모양으로 감싸 `await()`(suspend fun) terminal을 제공한다고 규정한다.
+
+즉 계층이 다음처럼 분리되어 있다:
+- **binding 레이어(Java)**: virtual thread + blocking submit 중심
+- **framework 레이어(Kotlin)**: Java call을 감싸 `await()`로 노출
+
+따라서 "Kotlin 매핑 레이어를 별도 제공"은 신규 제안이 아니라 framework에 이미 있는 설계다.
+routed send terminal 작업 시 이 2계층(binding sync / framework Kotlin await)을 전제로 한다.

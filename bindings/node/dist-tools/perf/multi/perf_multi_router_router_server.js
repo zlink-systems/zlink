@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
-const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, tryRoutedSocketSend, measurementPayload, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, measurementPayload, waitPollerOne } = require('./perf_multi_runtime');
 const { resolveRoutedPattern, runRoutedSendSendServer } = require('./perf_multi_routed_sendsend');
 const PATTERN = 'MULTI_ROUTER_ROUTER_REQREP';
 function receiveAndReply(router, received) {

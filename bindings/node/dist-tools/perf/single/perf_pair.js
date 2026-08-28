@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForMonitorConnectionReady, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForMonitorConnectionReady, waitForWorkerStatus, } = require('./perf_single_common');
 async function runPairBenchmark(msgSize, options) {
     if (options.transport === 'inproc') {
         return runLocalSocketOneWayBenchmark({
@@ -35,12 +35,8 @@ async function runPairBenchmark(msgSize, options) {
             runId: options.runId ?? 1,
             options,
         });
-        const workerError = waitForWorkerError(worker);
-        await Promise.race([
-            waitForWorkerMessage(worker, 'ready'),
-            workerError.then((message) => Promise.reject(new Error(message.message)))
-        ]);
-        await waitForMonitorConnectionReady(serverMonitor);
+        waitForWorkerStatus(worker, 3);
+        waitForMonitorConnectionReady(serverMonitor);
         const activeStartNs = currentEpochNs();
         const activeStopNs = activeStartNs
             + BigInt(Math.floor(options.duration * 1_000_000_000));
@@ -56,7 +52,7 @@ async function runPairBenchmark(msgSize, options) {
         // sync (mirrors C spawning sender/receiver threads after
         // setup_connected_*); the receiver drains until the wire stop token,
         // exactly like C perf_single_one_way.hpp run_active_phase.
-        const recvTask = drainRecvSocket(server, (received) => {
+        drainRecvSocket(server, (received) => {
             const payload = measurementPayload(received.parts);
             if (!payload) {
                 collector.recordPayload(null, currentEpochNs());
@@ -69,10 +65,7 @@ async function runPairBenchmark(msgSize, options) {
             }
             collector.recordPayload(data, currentEpochNs());
         }, { recordUntilNs: activeStopNs });
-        await Promise.race([
-            recvTask,
-            workerError.then((message) => Promise.reject(new Error(message.message)))
-        ]);
+        waitForWorkerStatus(worker, 4);
         const result = collector.finish();
         emitSingleSocketHwmDetail(server, 'PAIR', options.transport, 'receiver', msgSize);
         return result;

@@ -20,6 +20,7 @@ from perf_common import (
     resolve_single_connect_ready_timeout_ms,
     resolve_single_pubsub_ready_settle_s,
     resolve_single_pubsub_recv_timeout_ms,
+    new_single_latency_sampler,
     result_metrics,
     run_one_way_subscriber_public_subscribe,
     stamp_payload,
@@ -51,26 +52,20 @@ def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="pubsub")
     payload = new_payload(args.msg_size)
     run_id = benchmark_run_id()
-    latencies = []
+    latency_sampler = new_single_latency_sampler()
     received = 0
 
     def send_loop(publisher, active_end):
-        # C send_active_samples: DONTWAIT publish, re-stamp fresh now_ns on
-        # every retry, busy-loop through transient backpressure.
-        flag = int(zlink.SendFlags.DONT_WAIT)
+        # Core owns blocking HWM admission on this dedicated publisher thread.
+        flag = int(zlink.SendFlags.NONE)
         publish = publisher.publish
         topic = TOPIC
         stamp = stamp_payload
         perf_counter = time.perf_counter
-        submit_backpressured = zlink.SubmitResult.BACKPRESSURED
         while perf_counter() < active_end:
-            try:
-                publish(topic).messages(
-                    *measurement_parts(stamp(payload, phase=1, run_id=run_id))
-                ).flags(flag).submit()
-            except zlink.SubmitError as exc:
-                if exc.result != submit_backpressured:
-                    raise
+            publish(topic).messages(
+                *measurement_parts(stamp(payload, phase=1, run_id=run_id))
+            ).flags(flag).submit()
         _publish_stop_token(publisher)
     with perf_context() as ctx:
         with zlink.create_pub_socket(ctx) as publisher:
@@ -121,7 +116,7 @@ def main(argv=None):
                         run_id=run_id,
                         active_end=active_end,
                         received=received,
-                        latencies=latencies,
+                        latency_sampler=latency_sampler,
                     )
 
                     sender.join()
@@ -133,7 +128,7 @@ def main(argv=None):
                         count=received,
                         msg_size=args.msg_size,
                         elapsed_s=args.duration,
-                        latencies_ns=latencies,
+                        latency_sampler=latency_sampler,
                     )
                 print_result_lines("PUBSUB", args.transport, args.msg_size, metrics)
 

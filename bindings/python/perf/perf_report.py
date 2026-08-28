@@ -22,8 +22,10 @@ RESULT_METRICS = ("bandwidth", "latency", "latency_p95", "latency_p99", "through
 ECHO_MULTI_PATTERNS = {
     "MULTI_DEALER_ROUTER",
     "MULTI_DEALER_ROUTER_SENDSEND",
+    "MULTI_DEALER_ROUTER_REQREP",
     "MULTI_ROUTER_ROUTER",
     "MULTI_ROUTER_ROUTER_SENDSEND",
+    "MULTI_ROUTER_ROUTER_REQREP",
     "MULTI_STREAM",
 }
 
@@ -264,8 +266,8 @@ def _write_report(lines, report_path, output_path):
     sys.stdout.write(text)
 
 
-def _single_direction(_pattern):
-    return "one-way"
+def _single_direction(pattern):
+    return "request/reply" if pattern.endswith("_REQREP") else "one-way"
 
 
 def _multi_direction(pattern):
@@ -273,7 +275,7 @@ def _multi_direction(pattern):
 
 
 def _rate_unit(pattern, direction_func):
-    return "Kops/s" if direction_func(pattern) == "echo" else "Kmsg/s"
+    return "Kops/s" if direction_func(pattern) != "one-way" else "Kmsg/s"
 
 
 def _metric_value_for_run(rows, key, metric, run_index):

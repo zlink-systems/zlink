@@ -178,7 +178,6 @@ public static class PerfShared
             2u => "routed",
             3u => "fanout",
             4u => "recv_ingress",
-            5u => "spot_data",
             6u => "peer_queue",
             7u => "stream",
             _ => "none",

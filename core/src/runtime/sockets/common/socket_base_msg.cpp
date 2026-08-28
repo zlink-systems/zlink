@@ -68,6 +68,22 @@ int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
         *observed_epoch_out_ = runtime_.progress_epoch;
     return receive_ ();
 }
+
+bool receive_multipart_abort_as_no_data (int rc_,
+                                         bool *multipart_aborted_out_)
+{
+    if (rc_ == 0 || errno != ECONNABORTED)
+        return false;
+
+    // fq_t uses ECONNABORTED as an internal record-boundary marker when the
+    // pipe that supplied an exposed multipart prefix disappears.  Return one
+    // transient miss to the public caller without retrying into another
+    // pipe's message.
+    if (multipart_aborted_out_)
+        *multipart_aborted_out_ = true;
+    errno = EAGAIN;
+    return true;
+}
 }
 
 int zlink::socket_base_t::send (msg_t *msg_, int flags_)
@@ -532,12 +548,15 @@ int zlink::socket_base_t::rollback_scoped (socket_public_send_scope_t &scope_)
     return rc;
 }
 
-int zlink::socket_base_t::recv (msg_t *msg_, int flags_)
+int zlink::socket_base_t::recv (msg_t *msg_, int flags_,
+                                bool *multipart_aborted_out_)
 {
     // Plain public receive is the dominant data-plane role. Keep its state
     // machine explicit instead of routing every frame through the routed
     // receive policy branch in recv_common(). The guarded receive
     // operation still owns the public/async reader handoff.
+    if (multipart_aborted_out_)
+        *multipart_aborted_out_ = false;
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
         return -1;
@@ -557,6 +576,9 @@ int zlink::socket_base_t::recv (msg_t *msg_, int flags_)
     uint64_t observed_epoch = 0;
     int rc = receive_once_guarded (receive_runtime (), recv_once,
                                    &observed_epoch);
+    if (unlikely (receive_multipart_abort_as_no_data (
+          rc, multipart_aborted_out_)))
+        return -1;
     if (unlikely (rc != 0 && errno != EAGAIN))
         return -1;
     if (rc == 0) {
@@ -570,6 +592,9 @@ int zlink::socket_base_t::recv (msg_t *msg_, int flags_)
         command_runtime ().reset_recv_ticks ();
         rc = receive_once_guarded (receive_runtime (), recv_once,
                                    &observed_epoch);
+        if (unlikely (receive_multipart_abort_as_no_data (
+              rc, multipart_aborted_out_)))
+            return -1;
         if (rc < 0)
             return rc;
         extract_flags (msg_);
@@ -589,6 +614,9 @@ int zlink::socket_base_t::recv (msg_t *msg_, int flags_)
             return -1;
         rc = receive_once_guarded (receive_runtime (), recv_once,
                                    &observed_epoch);
+        if (unlikely (receive_multipart_abort_as_no_data (
+              rc, multipart_aborted_out_)))
+            return -1;
         if (rc == 0) {
             command_runtime ().reset_recv_ticks ();
             break;
@@ -648,6 +676,8 @@ int zlink::socket_base_t::recv_common (
     uint64_t observed_epoch = 0;
     int rc = receive_once_guarded (receive_runtime (), recv_once,
                                    &observed_epoch);
+    if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
+        return -1;
     if (unlikely (rc != 0 && errno != EAGAIN))
         return -1;
     if (rc == 0) {
@@ -661,6 +691,8 @@ int zlink::socket_base_t::recv_common (
         command_runtime ().reset_recv_ticks ();
         rc = receive_once_guarded (receive_runtime (), recv_once,
                                    &observed_epoch);
+        if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
+            return -1;
         if (rc < 0)
             return rc;
         extract_flags (msg_);
@@ -680,6 +712,8 @@ int zlink::socket_base_t::recv_common (
             return -1;
         rc = receive_once_guarded (receive_runtime (), recv_once,
                                    &observed_epoch);
+        if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
+            return -1;
         if (rc == 0) {
             command_runtime ().reset_recv_ticks ();
             break;
@@ -740,6 +774,8 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
     uint64_t observed_epoch = 0;
     int rc = receive_once_guarded (receive_runtime (), recv_once,
                                    &observed_epoch);
+    if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
+        return -1;
     if (unlikely (rc != 0 && errno != EAGAIN))
         return -1;
     if (rc == 0) {
@@ -753,6 +789,8 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
         command_runtime ().reset_recv_ticks ();
         rc = receive_once_guarded (receive_runtime (), recv_once,
                                    &observed_epoch);
+        if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
+            return -1;
         if (rc < 0)
             return rc;
         extract_flags (msg_);
@@ -772,6 +810,8 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
             return -1;
         rc = receive_once_guarded (receive_runtime (), recv_once,
                                    &observed_epoch);
+        if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
+            return -1;
         if (rc == 0) {
             command_runtime ().reset_recv_ticks ();
             break;

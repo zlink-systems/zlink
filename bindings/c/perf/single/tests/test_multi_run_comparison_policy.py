@@ -80,6 +80,20 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                 RC.resolve_binary_names("ROUTER_ROUTER_SENDSEND")["client"],
                 "comp_src_router_router_sendsend_matched_client",
             )
+            self.assertEqual(
+                RC.resolve_split_required_binaries("ROUTER_ROUTER_REQREP"),
+                [
+                    "comp_src_router_router_reqrep_server",
+                    "comp_src_router_router_reqrep_matched_client",
+                ],
+            )
+            self.assertEqual(
+                RC.resolve_split_required_binaries("ROUTER_ROUTER_SENDSEND"),
+                [
+                    "comp_src_router_router_sendsend_server",
+                    "comp_src_router_router_sendsend_matched_client",
+                ],
+            )
         finally:
             if previous is None:
                 os.environ.pop("PERF_MULTI_MATCHED_BASELINE", None)

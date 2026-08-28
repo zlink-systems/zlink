@@ -34,7 +34,7 @@ async function main() {
 
   try {
     applySocketPolicy(pub, {
-      noDrop: Number(process.env.PERF_MULTI_PUBSUB_XPUB_NODROP ?? 1) !== 0
+      noDrop: Number(process.env.PERF_MULTI_PUBSUB_XPUB_NODROP ?? 0) !== 0
     });
     configureTlsServer(pub, options.transport);
     pub.bind(options.endpoint);

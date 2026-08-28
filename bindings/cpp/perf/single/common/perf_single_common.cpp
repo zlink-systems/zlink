@@ -145,13 +145,16 @@ int resolve_single_duration_seconds ()
 size_t resolve_single_latency_sample_cap ()
 {
     const char *value = std::getenv ("PERF_SINGLE_LATENCY_SAMPLE_CAP");
-    if (!value || !*value)
-        return 4000000;
+    if (!value || !*value || *value == '-')
+        return 1000000;
 
     char *end = nullptr;
+    errno = 0;
     const unsigned long long parsed = std::strtoull (value, &end, 10);
-    if (!end || *end != '\0')
-        return 4000000;
+    if (errno != 0 || end == value || !end || *end != '\0'
+        || parsed
+             > static_cast<unsigned long long> (std::numeric_limits<size_t>::max ()))
+        return 1000000;
     return static_cast<size_t> (parsed);
 }
 

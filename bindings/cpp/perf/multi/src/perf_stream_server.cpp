@@ -1,4 +1,4 @@
-// STREAM multi server benchmark: callback-based echo relay.
+// STREAM multi server benchmark: callback-to-dispatcher async echo relay.
 // Topology: client STREAM(connect, N) -> server STREAM(bind, 1)
 // Measurement role: echo incoming framed payloads back to the originating peer.
 
@@ -6,13 +6,16 @@
 #include "../common/perf_entry.hpp"
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -45,10 +48,30 @@ struct queued_packet_t
 struct stream_handler_context_t
 {
     zlink::stream_socket_t *server;
-    std::mutex pending_mutex;
+    std::mutex queue_mutex;
+    std::condition_variable queue_cv;
     std::deque<queued_packet_t> pending_packets;
+    bool accepting_packets{true};
+    std::atomic<unsigned long long> handlers_in_flight{0};
+    std::atomic<unsigned long long> sends_in_flight{0};
+    std::atomic<bool> failed{false};
+    std::atomic<bool> drain_timed_out{false};
 
-    stream_handler_context_t () : server (NULL), pending_packets () {}
+    stream_handler_context_t () : server (NULL) {}
+};
+
+struct handler_guard_t
+{
+    explicit handler_guard_t (stream_handler_context_t &ctx_) : ctx (ctx_)
+    {
+        ctx.handlers_in_flight.fetch_add (1, std::memory_order_acq_rel);
+    }
+    ~handler_guard_t ()
+    {
+        ctx.handlers_in_flight.fetch_sub (1, std::memory_order_acq_rel);
+    }
+
+    stream_handler_context_t &ctx;
 };
 
 inline void request_stop ()
@@ -107,93 +130,172 @@ inline zlink::message_t build_packet_frame (const zlink::message_t &header_,
     return packet;
 }
 
-bool try_send_packet (stream_handler_context_t &ctx_,
-                      const zlink::routing_id_t &source_rid_,
-                      zlink::message_t &packet_)
+inline bool stale_stream_route (const zlink::submit_error_t &error_)
 {
-    try {
-        const bool sent = std::move (ctx_.server->send (source_rid_))
-                            .message (packet_)
-                            .flags (zlink::send_flags_t::dontwait)
-                            .submit ();
-        if (sent)
-            return true;
-        errno = EAGAIN;
-        return false;
-    }
-    catch (const zlink::submit_error_t &err) {
-        errno = err.internal_errno ();
-        if (err.result () != zlink::submit_result_t::backpressured
-            && errno != EAGAIN && errno != EWOULDBLOCK && errno != ETIMEDOUT)
-            request_stop ();
-        return false;
-    }
+    return error_.result () == zlink::submit_result_t::not_connected
+           || error_.result () == zlink::submit_result_t::not_found;
 }
 
-void enqueue_packet (stream_handler_context_t &ctx_,
+inline bool perf_debug_enabled ()
+{
+    return std::getenv ("PERF_DEBUG") != NULL;
+}
+
+inline void debug_send_failure (int err_)
+{
+    if (perf_debug_enabled ())
+        std::cerr << k_pattern << " async echo failed errno=" << err_ << std::endl;
+}
+
+void close_packet_queue (const std::shared_ptr<stream_handler_context_t> &ctx_)
+{
+    {
+        std::lock_guard<std::mutex> lock (ctx_->queue_mutex);
+        ctx_->accepting_packets = false;
+    }
+    ctx_->queue_cv.notify_all ();
+}
+
+bool enqueue_packet (const std::shared_ptr<stream_handler_context_t> &ctx_,
                      const zlink::routing_id_t &source_rid_,
                      zlink::message_t &&packet_)
 {
     {
-        std::lock_guard<std::mutex> lock (ctx_.pending_mutex);
-        ctx_.pending_packets.emplace_back (source_rid_, std::move (packet_));
+        std::lock_guard<std::mutex> lock (ctx_->queue_mutex);
+        if (!ctx_->accepting_packets
+            || g_stop_requested.load (std::memory_order_acquire))
+            return false;
+        ctx_->pending_packets.emplace_back (source_rid_, std::move (packet_));
     }
-    g_stop_cv.notify_all ();
+    ctx_->queue_cv.notify_one ();
+    return true;
 }
 
-size_t pending_packet_count (stream_handler_context_t &ctx_)
+perf::detached_async_task_t send_packet_async (
+  const std::shared_ptr<stream_handler_context_t> &ctx_,
+  zlink::routing_id_t source_rid_, zlink::message_t packet_)
 {
-    std::lock_guard<std::mutex> lock (ctx_.pending_mutex);
-    return ctx_.pending_packets.size ();
-}
-
-void drain_pending_packets (stream_handler_context_t &ctx_)
-{
-    for (;;) {
-        std::optional<queued_packet_t> packet;
-        {
-            std::lock_guard<std::mutex> lock (ctx_.pending_mutex);
-            if (ctx_.pending_packets.empty ())
-                return;
-            packet.emplace (std::move (ctx_.pending_packets.front ()));
-            ctx_.pending_packets.pop_front ();
-        }
-
-        if (try_send_packet (ctx_, packet->routing_id, packet->packet)) {
-            continue;
-        }
-
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT) {
-            std::lock_guard<std::mutex> lock (ctx_.pending_mutex);
-            ctx_.pending_packets.push_front (std::move (*packet));
-            return;
-        }
-
-        return;
+    try {
+        co_await std::move (ctx_->server->send (source_rid_))
+          .message (std::move (packet_))
+          .async ();
     }
+    catch (const zlink::submit_error_t &error) {
+        if (!stale_stream_route (error)) {
+            debug_send_failure (error.internal_errno ());
+            ctx_->failed.store (true, std::memory_order_release);
+            close_packet_queue (ctx_);
+            request_stop ();
+        }
+    }
+    catch (const zlink::binding_error_t &error) {
+        debug_send_failure (error.internal_errno ());
+        ctx_->failed.store (true, std::memory_order_release);
+        close_packet_queue (ctx_);
+        request_stop ();
+    }
+    catch (...) {
+        debug_send_failure (EIO);
+        ctx_->failed.store (true, std::memory_order_release);
+        close_packet_queue (ctx_);
+        request_stop ();
+    }
+    ctx_->sends_in_flight.fetch_sub (1, std::memory_order_acq_rel);
+    ctx_->queue_cv.notify_all ();
 }
 
-void handle_packet (stream_handler_context_t &ctx_,
+void handle_packet (const std::shared_ptr<stream_handler_context_t> &ctx_,
                     const zlink::routing_id_t &source_rid_,
                     const zlink::message_t &header_,
                     const zlink::message_t &body_)
 {
+    handler_guard_t guard (*ctx_);
+    if (g_stop_requested.load (std::memory_order_acquire))
+        return;
     if (is_stop_payload (body_)) {
+        close_packet_queue (ctx_);
         request_stop ();
         return;
     }
 
     zlink::message_t packet = build_packet_frame (header_, body_);
     if (!packet.valid ()) {
+        ctx_->failed.store (true, std::memory_order_release);
+        close_packet_queue (ctx_);
         request_stop ();
         return;
     }
 
-    if (try_send_packet (ctx_, source_rid_, packet))
-        return;
-
-    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT)
+    try {
         enqueue_packet (ctx_, source_rid_, std::move (packet));
+    }
+    catch (...) {
+        debug_send_failure (EIO);
+        ctx_->failed.store (true, std::memory_order_release);
+        close_packet_queue (ctx_);
+        request_stop ();
+    }
+}
+
+void run_packet_dispatcher (const std::shared_ptr<stream_handler_context_t> &ctx_,
+                            std::chrono::milliseconds drain_timeout_)
+{
+    std::optional<std::chrono::steady_clock::time_point> drain_deadline;
+    for (;;) {
+        std::optional<queued_packet_t> packet;
+        {
+            std::unique_lock<std::mutex> lock (ctx_->queue_mutex);
+            ctx_->queue_cv.wait (lock, [&ctx_] () {
+                return !ctx_->pending_packets.empty () || !ctx_->accepting_packets;
+            });
+
+            if (!ctx_->accepting_packets && !drain_deadline.has_value ())
+                drain_deadline = std::chrono::steady_clock::now () + drain_timeout_;
+
+            const bool deadline_expired =
+              drain_deadline.has_value ()
+              && std::chrono::steady_clock::now () >= *drain_deadline;
+            if (!ctx_->pending_packets.empty () && !deadline_expired) {
+                packet.emplace (std::move (ctx_->pending_packets.front ()));
+                ctx_->pending_packets.pop_front ();
+            }
+            else if (!ctx_->accepting_packets) {
+                if (deadline_expired
+                    || ctx_->sends_in_flight.load (std::memory_order_acquire) == 0) {
+                    if (!ctx_->pending_packets.empty ()
+                        || ctx_->sends_in_flight.load (std::memory_order_acquire) != 0)
+                        ctx_->drain_timed_out.store (true, std::memory_order_release);
+                    ctx_->pending_packets.clear ();
+                    return;
+                }
+
+                ctx_->queue_cv.wait_until (lock, *drain_deadline, [&ctx_] () {
+                    return !ctx_->pending_packets.empty ()
+                           || ctx_->sends_in_flight.load (std::memory_order_acquire) == 0;
+                });
+                continue;
+            }
+        }
+
+        if (!packet.has_value ())
+            continue;
+
+        ctx_->sends_in_flight.fetch_add (1, std::memory_order_acq_rel);
+        try {
+            // Starting the public async terminal on this application thread is
+            // required: Core packet/completion callback scopes reject submit
+            // re-entry with EDEADLK.
+            send_packet_async (ctx_, std::move (packet->routing_id),
+                               std::move (packet->packet));
+        }
+        catch (...) {
+            ctx_->sends_in_flight.fetch_sub (1, std::memory_order_acq_rel);
+            debug_send_failure (EIO);
+            ctx_->failed.store (true, std::memory_order_release);
+            close_packet_queue (ctx_);
+            request_stop ();
+        }
+    }
 }
 
 void wait_for_stop_stdin ()
@@ -209,41 +311,12 @@ void wait_for_stop_stdin ()
     request_stop ();
 }
 
-void run_server_event_loop (stream_handler_context_t &handler_context_)
+void run_server_event_loop ()
 {
-    while (!g_stop_requested.load (std::memory_order_acquire)) {
-        if (pending_packet_count (handler_context_) > 0)
-            drain_pending_packets (handler_context_);
-
-        if (pending_packet_count (handler_context_) == 0) {
-            std::unique_lock<std::mutex> stop_lock (g_stop_mutex);
-            g_stop_cv.wait (stop_lock, [&handler_context_] () {
-                return g_stop_requested.load (std::memory_order_acquire)
-                       || pending_packet_count (handler_context_) > 0;
-            });
-            continue;
-        }
-
-        zlink::poller_t poller;
-        try {
-            poller.add (*handler_context_.server, zlink::poll_event_flag_t::pollout, 0);
-            zlink::poll_event_t event;
-            const size_t event_count = poller.wait (&event, 1, std::chrono::milliseconds (-1));
-            for (size_t i = 0; i < event_count; ++i) {
-                const short revents = static_cast<short> (event.revents);
-                if (revents & static_cast<short> (zlink::poll_event_flag_t::pollout)) {
-                    drain_pending_packets (handler_context_);
-                }
-            }
-        }
-        catch (const zlink::recv_error_t &err) {
-            const int err_no = err.internal_errno ();
-            if (err_no != EINTR && err_no != EAGAIN) {
-                request_stop ();
-                return;
-            }
-        }
-    }
+    std::unique_lock<std::mutex> stop_lock (g_stop_mutex);
+    g_stop_cv.wait (stop_lock, [] () {
+        return g_stop_requested.load (std::memory_order_acquire);
+    });
 }
 
 } // namespace
@@ -307,22 +380,38 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         g_stop_requested.store (false, std::memory_order_release);
         install_signal_handlers ();
 
-        stream_handler_context_t handler_context;
-        handler_context.server = &server;
-        server.set_packet_handler ([&handler_context] (const zlink::routing_id_t &source_rid_,
-                                                       zlink::message_t header_,
-                                                       zlink::message_t body_) {
+        const std::shared_ptr<stream_handler_context_t> handler_context =
+          std::make_shared<stream_handler_context_t> ();
+        handler_context->server = &server;
+        server.set_packet_handler ([handler_context] (const zlink::routing_id_t &source_rid_,
+                                                      zlink::message_t header_,
+                                                      zlink::message_t body_) {
             handle_packet (handler_context, source_rid_, header_, body_);
         });
+
+        const std::chrono::milliseconds drain_timeout (
+          std::max (1000, io_timeout_ms * 4));
+        std::thread dispatcher_thread (&run_packet_dispatcher, handler_context,
+                                       drain_timeout);
 
         std::thread stdin_watcher (&wait_for_stop_stdin);
         stdin_watcher.detach ();
 
-        std::thread event_loop_thread (
-          [&handler_context] () { run_server_event_loop (handler_context); });
+        std::thread event_loop_thread (&run_server_event_loop);
         perf::multi::print_ready (endpoint);
         event_loop_thread.join ();
-        return true;
+        close_packet_queue (handler_context);
+        dispatcher_thread.join ();
+
+        const auto handler_deadline = std::chrono::steady_clock::now () + drain_timeout;
+        while (handler_context->handlers_in_flight.load (std::memory_order_acquire) != 0
+               && std::chrono::steady_clock::now () < handler_deadline) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        return !handler_context->failed.load (std::memory_order_acquire)
+               && !handler_context->drain_timed_out.load (std::memory_order_acquire)
+               && handler_context->handlers_in_flight.load (std::memory_order_acquire) == 0
+               && handler_context->sends_in_flight.load (std::memory_order_acquire) == 0;
     }
     catch (const zlink::binding_error_t &) {
         return false;

@@ -195,8 +195,20 @@ func percentile(values []float64, pct float64) float64 {
 	if len(values) == 0 {
 		return 0
 	}
-	idx := int((pct / 100.0) * float64(len(values)-1))
-	return values[idx]
+	if pct <= 0 {
+		return values[0]
+	}
+	if pct >= 100 {
+		return values[len(values)-1]
+	}
+	position := (pct / 100.0) * float64(len(values)-1)
+	lower := int(position)
+	upper := lower + 1
+	if upper >= len(values) {
+		return values[lower]
+	}
+	fraction := position - float64(lower)
+	return values[lower] + (values[upper]-values[lower])*fraction
 }
 
 type invalidMetricPayloadError struct {

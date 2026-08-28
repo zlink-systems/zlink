@@ -9,6 +9,7 @@ internal static class PerfMultiDealerRouterServer
     internal static async Task<int> Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
+        int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
         int pollTimeoutMs = ResolveMultiClientPollTimeoutMs(options);
         string endpoint = MultiEndpointFor(options.Transport,
@@ -32,131 +33,8 @@ internal static class PerfMultiDealerRouterServer
         PrintAutoHwmSnapshot(server, "server", options.Transport, size);
         WriteStdoutLine($"READY,{endpoint}");
 
-        var sockets = new[] { (ISocket)server };
-        var eventMasks = new[] { SocketPollIn };
-        var pendingReplies = new Queue<PendingReply>();
-        using var receivedBuffer = Received.Create();
-
-        bool stop = false;
-        while (!stop)
-        {
-            eventMasks[0] = pendingReplies.Count > 0
-                ? SocketPollIn | SocketPollOut
-                : SocketPollIn;
-            int readyCount = PollSocketEvents(pollManager, sockets, eventMasks,
-                pollTimeoutMs);
-            if (readyCount <= 0)
-            {
-                continue;
-            }
-
-            PollEventFlags readyMask = PollEventFlags.None;
-            for (int i = 0; i < readyCount; i++)
-            {
-                if (ReadySocketIndexAt(pollManager, i) == 0)
-                    readyMask |= ReadySocketMaskAt(pollManager, i);
-            }
-
-            if ((readyMask & PollEventFlags.PollOut) != 0
-                && !await FlushPendingRepliesAsync(server, pendingReplies)
-                    .ConfigureAwait(false))
-            {
-                return 2;
-            }
-
-            if ((readyMask & PollEventFlags.PollIn) == 0)
-                continue;
-
-            if (!TryRecvNoWait(server, receivedBuffer))
-            {
-                continue;
-            }
-
-            if (receivedBuffer.Parts.Count == 1
-                && IsStopTokenPayload(receivedBuffer.FirstPart().AsReadOnlySpan()))
-            {
-                stop = true;
-                continue;
-            }
-            if (!PerfSocketIo.TryMeasurementPayload(receivedBuffer.Parts,
-                    out Message bodyMessage))
-            {
-                continue;
-            }
-
-            RoutingId? maybeRoutingId = receivedBuffer.RoutingId;
-            if (maybeRoutingId == null)
-                return 2;
-            bool sent;
-            try
-            {
-                sent = PerfSocketIo.SendMeasurement(server, maybeRoutingId.Value,
-                    bodyMessage.AsReadOnlySpan(), SendFlags.DontWait) > 0;
-            }
-            catch (ZlinkSubmitException ex)
-                when (ex.Result == ZlinkSubmitException.ErrorCode.NotConnected
-                      || ex.Result == ZlinkSubmitException.ErrorCode.NotFound)
-            {
-                continue;
-            }
-            if (!sent)
-            {
-                Message reply = bodyMessage.Copy();
-                pendingReplies.Enqueue(new PendingReply(maybeRoutingId.Value,
-                    reply));
-            }
-        }
-
-        return 0;
-    }
-
-    private static async Task<bool> FlushPendingRepliesAsync(IRouterSocket server,
-        Queue<PendingReply> pendingReplies)
-    {
-        if (pendingReplies.Count == 0)
-            return true;
-
-        PendingReply pending = pendingReplies.Peek();
-        bool sent;
-        try
-        {
-            sent = PerfSocketIo.SendMeasurement(server, pending.RoutingId,
-                pending.Message.AsReadOnlySpan(), SendFlags.DontWait) > 0;
-        }
-        catch (ZlinkSubmitException ex)
-            when (ex.Result == ZlinkSubmitException.ErrorCode.NotConnected
-                  || ex.Result == ZlinkSubmitException.ErrorCode.NotFound)
-        {
-            sent = true;
-        }
-        if (sent)
-        {
-            pendingReplies.Dequeue();
-            pending.Dispose();
-        }
-
-        return true;
-    }
-
-    private static bool TryRecvNoWait(IRouterSocket socket, Received result)
-    {
-        return socket.Recv(result, RecvFlags.DontWait);
-    }
-
-    private sealed class PendingReply : IDisposable
-    {
-        internal PendingReply(RoutingId routingId, Message message)
-        {
-            RoutingId = routingId;
-            Message = message;
-        }
-
-        internal RoutingId RoutingId { get; }
-        internal Message Message { get; }
-
-        public void Dispose()
-        {
-            Message.Dispose();
-        }
+        return await PerfMultiRoutedRelayServer.RunAsync(server, pollManager,
+            pollTimeoutMs, Math.Max(1000, sndTimeoutMs * 4))
+            .ConfigureAwait(false);
     }
 }

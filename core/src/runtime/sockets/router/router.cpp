@@ -305,6 +305,26 @@ void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
             close_socket_msg_parts (&parts_it->second);
             _dispatch_parts_by_pipe.erase (parts_it);
         }
+        if (pipe_ == _current_in) {
+            // A prefetched frame still belongs to the terminating pipe. It
+            // must not be presented with metadata from the next active pipe.
+            if (_prefetched && !_routing_id_sent) {
+                int rc = _prefetched_id.close ();
+                errno_assert (rc == 0);
+                rc = _prefetched_id.init ();
+                errno_assert (rc == 0);
+                rc = _prefetched_msg.close ();
+                errno_assert (rc == 0);
+                rc = _prefetched_msg.init ();
+                errno_assert (rc == 0);
+                _prefetched = false;
+            }
+            if (!_prefetched)
+                _routing_id_sent = false;
+            _current_in = NULL;
+            _terminate_current_in = false;
+            _more_in = false;
+        }
         _fq.pipe_terminated (pipe_);
         pipe_->rollback ();
         if (pipe_ == _current_out) {

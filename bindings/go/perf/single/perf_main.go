@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"os"
+	"runtime"
 	"time"
 
 	"zlink.systems/zlink/perf/internal/perfcommon"
@@ -23,6 +24,8 @@ var (
 )
 
 func main() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	flag.Parse()
 
 	loaded := perfcommon.LoadSingleConfig(

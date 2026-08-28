@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"runtime"
 	"time"
 
 	"zlink.systems/zlink/perf/internal/perfcommon"
@@ -64,17 +63,6 @@ func (e *unsupportedMultiPatternError) Error() string {
 }
 
 func runMultiRole(cfg multiConfig, role, endpoint string) {
-	// The multi role hot loops are tight cgo round-trips with the core IO
-	// threads. Pinning the role goroutine to a dedicated OS thread keeps the
-	// Go scheduler from migrating its M across the many blocking poller waits
-	// that backpressure produces at high pipe fan-in; without it, each wakeup
-	// pays Go-runtime M-handoff latency and large many-client throughput
-	// collapses (profiling showed both peers idle in futex/nanosleep, not CPU
-	// bound). This is a measurement-neutral harness detail: it changes which OS
-	// thread runs the loop, not the public API or wire semantics.
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	switch role {
 	case "server":
 		runMultiServerRole(cfg)
@@ -94,11 +82,11 @@ func runMultiServerRole(cfg multiConfig) {
 		runMultiPubSubServer(cfg)
 	case "MULTI_DEALER_DEALER":
 		runMultiDealerDealerServer(cfg)
-	case "MULTI_DEALER_ROUTER":
+	case "MULTI_DEALER_ROUTER_SENDSEND":
 		runMultiDealerRouterServer(cfg)
 	case "MULTI_DEALER_ROUTER_REQREP":
 		runMultiDealerRouterReqRepServer(cfg)
-	case "MULTI_ROUTER_ROUTER":
+	case "MULTI_ROUTER_ROUTER_SENDSEND":
 		runMultiRouterRouterServer(cfg)
 	case "MULTI_ROUTER_ROUTER_REQREP":
 		runMultiRouterRouterReqRepServer(cfg)
@@ -116,13 +104,13 @@ func runMultiClientRole(cfg multiConfig, endpoint string) {
 		printMultiResult(cfg, result)
 	case "MULTI_DEALER_DEALER":
 		runMultiDealerDealerClient(cfg, endpoint)
-	case "MULTI_DEALER_ROUTER":
+	case "MULTI_DEALER_ROUTER_SENDSEND":
 		result := runMultiDealerRouterClient(cfg, endpoint)
 		printMultiResult(cfg, result)
 	case "MULTI_DEALER_ROUTER_REQREP":
 		result := runMultiDealerRouterReqRepClient(cfg, endpoint)
 		printMultiResult(cfg, result)
-	case "MULTI_ROUTER_ROUTER":
+	case "MULTI_ROUTER_ROUTER_SENDSEND":
 		result := runMultiRouterRouterClientRole(cfg, endpoint)
 		printMultiResult(cfg, result)
 	case "MULTI_ROUTER_ROUTER_REQREP":

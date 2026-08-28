@@ -50,11 +50,11 @@ final class PerfRouterRouter {
         Context senderCtx = sharedContext ? receiverCtx : PerfUtil.newContext(config);
         try (RouterSocket receiver = receiverCtx.createRouterSocket();
              RouterSocket sender = senderCtx.createRouterSocket();
-             var receiverMonitor = receiver.monitorOpen(MonitorEventType.CONNECTION_READY);
-             var senderMonitor = sender.monitorOpen(MonitorEventType.CONNECTION_READY)) {
+             var receiverMonitor = receiver.monitorOpen(
+                 config.monitorHwm(), MonitorEventType.CONNECTION_READY);
+             var senderMonitor = sender.monitorOpen(
+                 config.monitorHwm(), MonitorEventType.CONNECTION_READY)) {
             Duration readyTimeout = Duration.ofMillis(config.connectReadyTimeoutMs());
-            PerfUtil.applyMonitorOptions(receiverMonitor, config);
-            PerfUtil.applyMonitorOptions(senderMonitor, config);
             PerfUtil.applySocketOptions(receiver, config);
             PerfUtil.applySocketOptions(sender, config);
             PerfUtil.recalculateAutoHwm(receiverCtx);

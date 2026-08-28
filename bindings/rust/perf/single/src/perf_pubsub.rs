@@ -57,29 +57,29 @@ fn main() {
 
     let active = Duration::from_secs(config.duration_seconds);
     let active_deadline = std::time::Instant::now() + active;
-    let send_thread =
-        std::thread::spawn(move || {
-            common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
-                match if common::measurement_part_count() == 2 {
-                    pub_sock.publish("P").message(msg)
-                        .message(Message::try_from(&[] as &[u8]).expect("empty measurement tail")).submit()
-                } else {
-                    pub_sock.publish("P").message(msg).submit()
-                } {
-                    Ok(()) => true,
-                    Err(err) if err.code() == SubmitResult::NotConnected => false,
-                    Err(err) => panic!("active publish: {err}"),
-                }
-            });
-            common::send_stop_token(|msg| {
+    let send_thread = std::thread::spawn(move || {
+        common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
+            match if common::measurement_part_count() == 2 {
                 pub_sock
                     .publish("P")
                     .message(msg)
-                    .flags(zlink::SendFlags::DONT_WAIT)
+                    .message(Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
                     .submit()
-                    .map(|()| true)
-            });
+            } else {
+                pub_sock.publish("P").message(msg).submit()
+            } {
+                Ok(()) => true,
+                Err(err)
+                    if err.code() == SubmitResult::NotConnected
+                        || common::is_single_send_retry_error(&err) =>
+                {
+                    false
+                }
+                Err(err) => panic!("active publish: {err}"),
+            }
         });
+        common::send_stop_token(|msg| pub_sock.publish("P").message(msg).submit().map(|()| true));
+    });
 
     let stop_wait_deadline = active_deadline + common::resolve_single_stop_wait();
     loop {

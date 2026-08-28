@@ -54,14 +54,17 @@ fn main() {
     let active = std::time::Duration::from_secs(config.duration_seconds);
     let active_deadline = std::time::Instant::now() + active;
     let send_thread = std::thread::spawn(move || {
-        common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
-            match perf_submit_measurement!(sender.send(), msg) {
+        common::send_loop(
+            active_deadline,
+            config.size,
+            common::PHASE_ACTIVE,
+            |msg| match perf_submit_measurement!(sender.send(), msg) {
                 Ok(()) => true,
                 Err(err) if err.code() == SubmitResult::NotConnected => false,
                 Err(err) if common::is_single_send_retry_error(&err) => false,
                 Err(err) => panic!("active send: {err}"),
-            }
-        });
+            },
+        );
         common::send_stop_token(|msg| {
             // Match C perf: the phase terminator must be queued after every
             // accepted payload even when the data path has reached its HWM.

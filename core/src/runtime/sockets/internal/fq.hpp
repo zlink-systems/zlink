@@ -56,6 +56,11 @@ class fq_t
     //  there are following parts still waiting in the current pipe.
     bool _more;
 
+    //  A pipe disappeared after exposing a multipart prefix. Surface one
+    //  transient receive miss before another pipe may become the source of a
+    //  new message, so callers can discard the incomplete record.
+    bool _multipart_abort_pending;
+
     ZLINK_NON_COPYABLE_NOR_MOVABLE (fq_t)
 };
 }

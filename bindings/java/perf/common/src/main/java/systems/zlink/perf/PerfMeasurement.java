@@ -108,14 +108,10 @@ final class PerfMeasurement {
             || "ROUTER_ROUTER_SENDSEND".equals(pattern)
             || "ROUTER_ROUTER_REQREP".equals(pattern)
             || "STREAM".equals(pattern)
-            || "SPOT_REQREP".equals(pattern)
-            || "SPOT_SENDSEND".equals(pattern)
             || "MULTI_DEALER_ROUTER_SENDSEND".equals(pattern)
             || "MULTI_DEALER_ROUTER_REQREP".equals(pattern)
             || "MULTI_ROUTER_ROUTER_SENDSEND".equals(pattern)
-            || "MULTI_ROUTER_ROUTER_REQREP".equals(pattern)
-            || "MULTI_SPOT_REQREP".equals(pattern)
-            || "MULTI_SPOT_SENDSEND".equals(pattern);
+            || "MULTI_ROUTER_ROUTER_REQREP".equals(pattern);
     }
 
     static long nowNs() {

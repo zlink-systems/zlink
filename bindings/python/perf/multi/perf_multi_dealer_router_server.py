@@ -12,7 +12,7 @@ from perf_multi_common import (
     perf_server_context,
     recv_nonblocking,
     safe_poll,
-    measurement_parts,
+    send_routed,
     measurement_part_count,
 )
 
@@ -36,6 +36,11 @@ async def main(argv=None):
         if task.cancelled():
             return
         exc = task.exception()
+        if isinstance(exc, zlink.SubmitError) and exc.result in {
+            zlink.SubmitResult.NOT_CONNECTED,
+            zlink.SubmitResult.NOT_FOUND,
+        }:
+            return
         if exc is not None:
             send_errors.append(exc)
 
@@ -59,31 +64,41 @@ async def main(argv=None):
                 poller.add_socket(router, zlink.PollEventFlag.POLLIN, 0)
                 poll_events = zlink.create_poll_events(1)
                 recv_storage = zlink.create_received()
-                # Small bounded wait: lets the stdin stop event terminate an
-                # otherwise idle server and keeps the event loop responsive
-                # to Core's send-completion notifications for pending reply
-                # tasks.
-                aux_wait_ms = 5
                 while not stop.is_set():
                     if send_errors:
                         raise send_errors[0]
-                    while True:
-                        received = recv_nonblocking(router, storage=recv_storage)
-                        if received is None:
-                            break
-                        with received:
-                            if len(received.parts) != measurement_part_count():
-                                raise RuntimeError("invalid measured multipart request")
-                            if len(received.parts) == 2 and len(received.parts[1].data) != 0:
-                                raise RuntimeError("invalid measured multipart trailing frame")
-                            payload = bytes(received.parts[0].data)
-                            routing_id = bytes(received.routing_id)
-                        task = asyncio.create_task(
-                            router.send(routing_id).messages(*measurement_parts(payload)).submit()
-                        )
-                        pending_tasks.add(task)
-                        task.add_done_callback(_on_send_done)
-                    safe_poll(poller, poll_events, aux_wait_ms)
+                    # Pending public send awaitables and stdin share this
+                    # event loop. Probe receive readiness without a timer;
+                    # asyncio's cooperative turn below is their wake path.
+                    ready_count = safe_poll(poller, poll_events, 0)
+                    for offset in range(ready_count):
+                        if poll_events.slot(offset) != 0 or not (
+                            poll_events.revents(offset)
+                            & int(zlink.PollEventFlag.POLLIN)
+                        ):
+                            continue
+                        while True:
+                            received = recv_nonblocking(router, storage=recv_storage)
+                            if received is None:
+                                break
+                            with received:
+                                if len(received.parts) != measurement_part_count():
+                                    raise RuntimeError("invalid measured multipart request")
+                                if len(received.parts) == 2 and len(received.parts[1].data) != 0:
+                                    raise RuntimeError("invalid measured multipart trailing frame")
+                                payload = bytes(received.parts[0].data)
+                                routing_id = bytes(received.routing_id)
+                            task = asyncio.create_task(
+                                send_routed(router, payload, routing_id=routing_id)
+                            )
+                            pending_tasks.add(task)
+                            task.add_done_callback(_on_send_done)
+                            # The receive queue can stay continuously readable under
+                            # multi-client load.  Give the scheduled submit coroutine
+                            # a chance to enter Core before draining the next request;
+                            # otherwise replies remain Python tasks until the clients
+                            # have already closed their routes.
+                            await asyncio.sleep(0)
                     await asyncio.sleep(0)
                 if send_errors:
                     raise send_errors[0]

@@ -7,7 +7,10 @@
 #include "core/ctx.hpp"
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
+#include "core/recv_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
+#include "api/socket/socket_request_reply_internal.hpp"
+#include "api/socket/socket_request_reply_runtime_io_helpers.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/internal/fq.hpp"
 #include "sockets/router/router.hpp"
@@ -40,6 +43,11 @@ class session_termination_test_access_t
             return true;
         sync.unlock ();
         return false;
+    }
+
+    static void reset_pipe_inbound_queue (pipe_t *pipe_)
+    {
+        pipe_->hiccup ();
     }
 };
 }
@@ -156,6 +164,21 @@ void write_internal_pipe_message (zlink::pipe_t *pipe_,
     if (routing_id_)
         msg.set_flags (zlink::msg_t::routing_id);
     TEST_ASSERT_TRUE (pipe_->write_and_flush (&msg));
+    TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+}
+
+void write_internal_pipe_part (zlink::pipe_t *pipe_,
+                               const char *payload_,
+                               bool more_)
+{
+    zlink::msg_t msg;
+    const size_t size = std::strlen (payload_);
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init_size (size));
+    memcpy (msg.data (), payload_, size);
+    if (more_)
+        msg.set_flags (zlink::msg_t::more);
+    TEST_ASSERT_TRUE (pipe_->write (&msg));
+    pipe_->flush ();
     TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
 }
 
@@ -755,6 +778,155 @@ void test_router_routed_recv_serializes_fq_with_pipe_termination ()
     run_router_recv_serializes_fq_with_pipe_termination (true);
 }
 
+void run_router_multipart_pipe_termination_does_not_join_next_peer_record (
+  bool first_part_exposed_, bool blocking_followup_ = false,
+  bool read_false_abort_ = false)
+{
+    void *router_handle =
+      zlink_socket (get_test_context (), ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (router_handle);
+
+    socket_handle_t router_pin = as_socket_handle (router_handle);
+    TEST_ASSERT_NOT_NULL (router_pin.socket);
+    zlink::router_t *router = static_cast<zlink::router_t *> (router_pin.socket);
+    zlink::object_t *parents[2] = {router, router};
+    zlink::pipe_t *pipe_a[2] = {NULL, NULL};
+    zlink::pipe_t *pipe_b[2] = {NULL, NULL};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipe_a, hwms, conflates, true));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipe_b, hwms, conflates, true));
+
+    passive_pipe_sink_t peer_a_sink;
+    passive_pipe_sink_t peer_b_sink;
+    pipe_a[1]->set_event_sink (&peer_a_sink);
+    pipe_b[1]->set_event_sink (&peer_b_sink);
+
+    write_internal_pipe_message (pipe_a[1], "peer-A", true);
+    write_internal_pipe_part (pipe_a[1], "payload-A", true);
+    write_internal_pipe_part (pipe_a[1], "", false);
+    write_internal_pipe_message (pipe_b[1], "peer-B", true);
+    write_internal_pipe_part (pipe_b[1], "payload-B", true);
+    write_internal_pipe_part (pipe_b[1], "", false);
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      router, pipe_a[0]);
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      router, pipe_b[0]);
+
+    if (first_part_exposed_) {
+        zlink::msg_t first;
+        TEST_ASSERT_SUCCESS_ERRNO (first.init ());
+        zlink_routing_id_t source_rid;
+        memset (&source_rid, 0, sizeof (source_rid));
+        TEST_ASSERT_SUCCESS_ERRNO (
+          router->recv_routed (&first, &source_rid, ZLINK_DONTWAIT));
+        TEST_ASSERT_EQUAL_UINT (9, first.size ());
+        TEST_ASSERT_EQUAL_MEMORY ("payload-A", first.data (), first.size ());
+        TEST_ASSERT_TRUE ((first.flags () & zlink::msg_t::more) != 0);
+        TEST_ASSERT_EQUAL_UINT8 (6, source_rid.size);
+        TEST_ASSERT_EQUAL_MEMORY ("peer-A", source_rid.data, source_rid.size);
+        TEST_ASSERT_SUCCESS_ERRNO (first.close ());
+    } else {
+        // Match a poller readiness check that prefetched A just before its
+        // terminal command was processed.
+        TEST_ASSERT_TRUE (router->xhas_in ());
+    }
+
+    // Model the transport terminal command arriving between application
+    // frames. The follow-up receive must abort this logical record; it must
+    // never consume peer-B as peer-A's continuation.
+    if (read_false_abort_)
+        zlink::session_termination_test_access_t::reset_pipe_inbound_queue (
+          pipe_a[0]);
+    else
+        router->xpipe_terminated (pipe_a[0]);
+    if (first_part_exposed_) {
+        zlink_msg_t followup;
+        zlink_msg_init (&followup);
+        int followup_rc = -1;
+        if (read_false_abort_) {
+            zlink_routing_id_t aborted_source_rid;
+            memset (&aborted_source_rid, 0, sizeof (aborted_source_rid));
+            followup_rc = router->xrecv_routed (
+              reinterpret_cast<zlink::msg_t *> (&followup),
+              &aborted_source_rid, NULL);
+            TEST_ASSERT_EQUAL_INT (ECONNABORTED, errno);
+        } else if (blocking_followup_) {
+            followup_rc = zlink::recv_followup_msg_socket_wait (
+              router, &followup, 0);
+        } else {
+            followup_rc =
+              zlink::socket_reqrep_internal::recv_router_followup_frame (
+                router, &followup);
+        }
+        TEST_ASSERT_EQUAL_INT (-1, followup_rc);
+        TEST_ASSERT_EQUAL_INT (read_false_abort_ ? ECONNABORTED : EAGAIN,
+                               errno);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&followup));
+    } else {
+        const zlink_routing_id_t *aborted_source_rid = NULL;
+        uint64_t aborted_request_seq = 0;
+        zlink_msg_t *aborted_parts = NULL;
+        size_t aborted_part_count = 0;
+        TEST_ASSERT_EQUAL_INT (
+          -1, zlink::socket_reqrep_internal::recv_router_message_direct (
+                router_pin, &aborted_source_rid, &aborted_request_seq,
+                &aborted_parts, &aborted_part_count, ZLINK_DONTWAIT));
+        TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    }
+
+    const zlink_routing_id_t *next_source_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::socket_reqrep_internal::recv_router_message_direct (
+        router_pin, &next_source_rid, &request_seq, &parts, &part_count,
+        ZLINK_DONTWAIT));
+    TEST_ASSERT_NOT_NULL (next_source_rid);
+    TEST_ASSERT_EQUAL_UINT8 (6, next_source_rid->size);
+    TEST_ASSERT_EQUAL_MEMORY ("peer-B", next_source_rid->data,
+                              next_source_rid->size);
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_EQUAL_UINT64 (2, part_count);
+    TEST_ASSERT_EQUAL_UINT64 (9, zlink_msg_size (&parts[0]));
+    TEST_ASSERT_EQUAL_MEMORY ("payload-B", zlink_msg_data (&parts[0]),
+                              zlink_msg_size (&parts[0]));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&parts[1]));
+    zlink_multipart_close (parts, part_count);
+
+    router_pin = socket_handle_t ();
+    close_zero_linger (router_handle);
+    zlink::ctx_t *ctx =
+      static_cast<zlink::ctx_t *> (get_test_context ());
+    TEST_ASSERT_SUCCESS_ERRNO (
+      ctx->wait_for_socket_count_at_most (0, 5000));
+}
+
+void test_router_exposed_multipart_pipe_termination_does_not_join_next_peer_record ()
+{
+    run_router_multipart_pipe_termination_does_not_join_next_peer_record (true);
+}
+
+void test_router_prefetched_multipart_pipe_termination_does_not_join_next_peer_record ()
+{
+    run_router_multipart_pipe_termination_does_not_join_next_peer_record (false);
+}
+
+void test_router_blocking_followup_does_not_retry_across_aborted_record ()
+{
+    run_router_multipart_pipe_termination_does_not_join_next_peer_record (
+      true, true);
+}
+
+void test_router_empty_pinned_pipe_aborts_multipart_before_next_peer_record ()
+{
+    run_router_multipart_pipe_termination_does_not_join_next_peer_record (
+      true, false, true);
+}
+
 int main ()
 {
     setup_test_environment ();
@@ -764,5 +936,13 @@ int main ()
     RUN_TEST (test_router_routed_send_during_peer_close_does_not_touch_destroyed_pipe);
     RUN_TEST (test_router_recv_serializes_fq_with_pipe_termination);
     RUN_TEST (test_router_routed_recv_serializes_fq_with_pipe_termination);
+    RUN_TEST (
+      test_router_exposed_multipart_pipe_termination_does_not_join_next_peer_record);
+    RUN_TEST (
+      test_router_prefetched_multipart_pipe_termination_does_not_join_next_peer_record);
+    RUN_TEST (
+      test_router_blocking_followup_does_not_retry_across_aborted_record);
+    RUN_TEST (
+      test_router_empty_pinned_pipe_aborts_multipart_before_next_peer_record);
     return UNITY_END ();
 }

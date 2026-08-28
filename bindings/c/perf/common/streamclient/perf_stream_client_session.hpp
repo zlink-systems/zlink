@@ -470,7 +470,10 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
 
         if (payload_write && size >= perf_multi_metric::header_size ()) {
             const uint64_t seq = owner.next_seq ();
-            const uint64_t sent_ts_ns = perf_multi_metric::now_ns ();
+            // STREAM echoes return this timestamp to the same client process.
+            // Use the same monotonic clock as the active cutoff so wall-clock
+            // adjustments cannot inflate an in-window RTT.
+            const uint64_t sent_ts_ns = perf_stream_common::perf_stream_now_ns ();
             (void) perf_multi_metric::stamp_payload (payload_write, size, owner.metric_run_id (),
                                                      owner.metric_phase (), size, seq, sent_ts_ns);
         }
@@ -772,9 +775,11 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
             return;
         }
 
+        bool valid_measurement = true;
         if (!perf_stream_common::perf_stream_is_msg_name (bytes > 0 ? &read_buf[0] : NULL,
                                                           read_header_declared)) {
             owner.on_size_mismatch ();
+            valid_measurement = false;
         }
         if (read_declared != static_cast<uint32_t> (chunk_size)) {
             owner.on_size_mismatch ();
@@ -795,19 +800,24 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
         uint64_t sent_ts_ns = 0;
         if (payload_ptr && payload_bytes >= perf_multi_metric::header_size ()) {
             perf_multi_metric::header_t header;
-            if (perf_multi_metric::decode_payload_header (payload_ptr, payload_bytes, &header)) {
-                if (header.msg_size == static_cast<uint32_t> (chunk_size))
-                    sent_ts_ns = header.sent_ts_ns;
-                else
-                    owner.on_size_mismatch ();
+            if (perf_multi_metric::decode_payload_header (payload_ptr, payload_bytes, &header)
+                && perf_multi_metric::is_expected (header, owner.metric_run_id (),
+                                                    perf_multi_metric::phase_active,
+                                                    chunk_size)
+                && header.sent_ts_ns > 0) {
+                sent_ts_ns = static_cast<uint64_t> (header.sent_ts_ns);
             } else {
                 owner.on_size_mismatch ();
+                valid_measurement = false;
             }
+        } else {
+            owner.on_size_mismatch ();
+            valid_measurement = false;
         }
 
         if (outstanding > 0) {
             --outstanding;
-            owner.on_recv_done (payload_bytes, sent_ts_ns);
+            owner.on_recv_done (payload_bytes, valid_measurement ? sent_ts_ns : 0);
         }
 
         maybe_send_more ();

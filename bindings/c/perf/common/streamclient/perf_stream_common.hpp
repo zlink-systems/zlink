@@ -32,6 +32,31 @@ inline uint64_t perf_stream_now_ns ()
       std::chrono::duration_cast<std::chrono::nanoseconds> (now.time_since_epoch ()).count ());
 }
 
+// A STREAM echo contributes to active metrics only when its receive callback
+// completes before the configured active deadline.  The lifecycle tail drain
+// deliberately leaves this predicate false.
+inline bool perf_stream_is_active_completion (bool collection_enabled,
+                                               bool active_phase,
+                                               uint64_t completion_ns,
+                                               uint64_t phase_end_ns)
+{
+    return collection_enabled && active_phase && phase_end_ns > 0
+           && completion_ns < phase_end_ns;
+}
+
+inline double perf_stream_echo_latency_ns (uint64_t rtt_ns)
+{
+    return static_cast<double> (rtt_ns) * 0.5;
+}
+
+inline double perf_stream_echo_mean_ns (uint64_t rtt_sum_ns, uint64_t completion_count)
+{
+    if (completion_count == 0)
+        return 0.0;
+    return perf_stream_echo_latency_ns (rtt_sum_ns)
+           / static_cast<double> (completion_count);
+}
+
 // Big-endian wire encoding helpers for the packet framing protocol.
 // Wire format: [2-byte BE header length][4-byte BE body length][header][body]
 inline uint16_t perf_stream_load_u16_be (const unsigned char *p)

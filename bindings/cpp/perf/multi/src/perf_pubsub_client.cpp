@@ -182,7 +182,8 @@ class pubsub_client_bench_t
             if (!perf::multi::setup_tls_client (sock, _transport))
                 return false;
             _monitors.push_back (perf::multi::connect_monitor_t ());
-            if (!perf::multi::open_connect_monitor (sock, _monitors.back ())) {
+            if (!perf::multi::open_connect_monitor (
+                  sock, _settings.monitor_hwm, _monitors.back ())) {
                 close_monitors ();
                 return false;
             }

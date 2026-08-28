@@ -6,6 +6,7 @@ const path = require('node:path');
 const { defaultMultiMsgSizes, defaultMultiTransports, hasPrimaryMetricsFromResultLines, medianMetrics, parseCommonArgs, primaryMetricsFromResultLines, resolveMultiPatternNames } = require('../common/perf_metrics');
 const { buildMetaItems, metaLines, buildMultiOptionItems, effectiveOptionLines, multiResultDataLines, multiTableHeaderLine, multiTableSeparatorLine, multiTableRowLine, isEchoPattern, createAutoHwmCollector } = require('../common/perf_c_emitter');
 const { spawnMultiPair } = require('./perf_multi_orchestrator');
+const { resolveMultiMonitorHwm } = require('./perf_multi_common');
 const { MULTI_PATTERN_RUNNERS, POLICY_TRANSPORTS, patternMsgSizes, defaultClientsForPattern } = require('./perf_multi_policy');
 const { explicitClientCount, resolvePatternClients, resolveTransportClients } = require('./perf_multi_guards');
 // C parity: bindings/c/perf/run_comparison.py pattern_direction_label
@@ -94,6 +95,12 @@ async function main() {
         usage();
         return;
     }
+    if (options.monitorHwm !== undefined
+        && (!Number.isSafeInteger(options.monitorHwm) || options.monitorHwm < 0)) {
+        throw new Error('--monitor-hwm must be a nonnegative safe integer');
+    }
+    options.monitorHwm = options.monitorHwm ?? resolveMultiMonitorHwm();
+    process.env.PERF_MULTI_MONITOR_HWM = String(options.monitorHwm);
     const patternNames = resolveMultiPatternNames(options.pattern);
     const defaultMsgSizes = defaultMultiMsgSizes(patternNames, options.msgSizesExplicit);
     if (defaultMsgSizes !== null) {

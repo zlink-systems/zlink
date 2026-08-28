@@ -22,8 +22,6 @@ const {
   applyAutoHwmProfile,
   integerEnv,
   manualSocketOverridesEnabled,
-  sleepImmediate,
-  sleepMillis,
   stampPayload
 } = require('../common/perf_metrics');
 const {
@@ -86,21 +84,19 @@ interface RecordUntilOptions {
   recordUntilNs?: bigint | number | string;
 }
 
-interface WorkerMessage {
-  type?: string;
-  [key: string]: unknown;
-}
-
-type WorkerWaiter = (message: WorkerMessage) => boolean;
-
 type SenderWorker = NodeWorker;
 
 interface SenderWorkerState {
-  seenMessages: WorkerMessage[];
-  waiters: WorkerWaiter[];
+  control: Int32Array;
+  status: Int32Array;
 }
 
 const senderWorkerStates = new WeakMap<SenderWorker, SenderWorkerState>();
+const sleepState = new Int32Array(new SharedArrayBuffer(4));
+
+function sleepMillisSync(ms) {
+  Atomics.wait(sleepState, 0, 0, Math.max(0, ms | 0));
+}
 
 function senderWorkerState(worker: SenderWorker): SenderWorkerState {
   const state = senderWorkerStates.get(worker);
@@ -167,7 +163,6 @@ function autoHwmRoleName(role) {
     case 2: return 'routed';
     case 3: return 'fanout';
     case 4: return 'recv_ingress';
-    case 5: return 'spot_data';
     case 6: return 'peer_queue';
     case 7: return 'stream';
     default: return 'none';
@@ -185,9 +180,7 @@ function emitSingleSocketHwmDetail(socket, pattern, transport, component, msgSiz
   if (!socket || !pattern || !component) {
     return;
   }
-  // Capability gap (e.g. SpotNode has no monitorOpen) is not a fault —
-  // simply skip the optional diagnostic for objects that do not expose a
-  // monitor surface.
+  // Objects without a monitor surface do not emit this optional diagnostic.
   if (typeof socket.monitorOpen !== 'function') {
     return;
   }
@@ -276,7 +269,7 @@ function isStopTokenPayload(buffer, size) {
   return true;
 }
 
-async function waitForConnectionReady(
+function waitForConnectionReady(
   socket,
   connectFn = null,
   timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)
@@ -284,7 +277,7 @@ async function waitForConnectionReady(
   const monitor = socket.monitorOpen([MonitorEventType.ConnectionReady]);
   try {
     if (typeof connectFn === 'function') {
-      await connectFn();
+      connectFn();
     }
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -298,7 +291,7 @@ async function waitForConnectionReady(
           throw error;
         }
       }
-      await sleepMillis(1);
+      sleepMillisSync(1);
     }
     throw new Error(`connection ready timeout after ${timeoutMs}ms`);
   } finally {
@@ -306,7 +299,7 @@ async function waitForConnectionReady(
   }
 }
 
-async function waitForMonitorConnectionReady(
+function waitForMonitorConnectionReady(
   monitor,
   timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)
 ) {
@@ -322,13 +315,13 @@ async function waitForMonitorConnectionReady(
         throw error;
       }
     }
-    await sleepMillis(1);
+    sleepMillisSync(1);
   }
   throw new Error(`connection ready timeout after ${timeoutMs}ms`);
 }
 
-async function waitForPostReadySettle(timeoutMs) {
-  await sleepMillis(Math.max(0, timeoutMs | 0));
+function waitForPostReadySettle(timeoutMs) {
+  sleepMillisSync(Math.max(0, timeoutMs | 0));
 }
 
 // C parity: bindings/c/perf/single/common/perf_single_one_way.hpp
@@ -350,12 +343,9 @@ async function waitForPostReadySettle(timeoutMs) {
 // main thread parked in `do_sys_poll` and the worker thread futex-blocked
 // inside a native zlink call). The `Promise.race` against the sender-Worker
 // error channel can then never settle, hard-hanging the case to the
-// harness timeout. The RCVTIMEO-bounded wakeup mirrors C's EAGAIN cycle so
-// the loop (and the error race) always makes progress, while the
-// An occasional `await sleepImmediate()` lets queued Worker postMessages and
-// the error channel run without turning every receive cycle into a scheduler
-// round trip.
-async function drainRecvSocket(socket, onMessage, options: RecordUntilOptions = {}) {
+// harness timeout. The RCVTIMEO-bounded wakeup mirrors C's EAGAIN cycle and
+// keeps every synchronous blocking receive bounded.
+function drainRecvSocket(socket, onMessage, options: RecordUntilOptions = {}) {
   const useSubscribe = typeof socket.subscribe === 'function';
   const recvTimeoutMs = Math.max(
     1,
@@ -379,9 +369,6 @@ async function drainRecvSocket(socket, onMessage, options: RecordUntilOptions = 
     iterCount += 1;
     if (process.env.PERF_NODE_TRACE === '1' && (iterCount === 1 || iterCount % 100 === 0)) {
       console.error(`[drainRecvSocket] iter=${iterCount} totalReceived=${totalReceived}`);
-    }
-    if ((iterCount & 0x3f) === 0) {
-      await sleepImmediate();
     }
     let first = true;
     while (true) {
@@ -414,7 +401,7 @@ async function drainRecvSocket(socket, onMessage, options: RecordUntilOptions = 
   }
 }
 
-async function drainRouterRecvInto(router, msgSize, onHeader, options: RecordUntilOptions = {}) {
+function drainRouterRecvInto(router, msgSize, onHeader, options: RecordUntilOptions = {}) {
   const payloadSize = Math.max(msgSize, HEADER_SIZE);
   const recordUntilNs = options.recordUntilNs === undefined
     ? null
@@ -495,7 +482,7 @@ function isTransientSubmit(error) {
     || text.includes('Transport endpoint is not connected');
 }
 
-async function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
+function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
   try {
     appendMeasurement(socket.send(), payload).submit_sync(flags);
     return true;
@@ -507,14 +494,14 @@ async function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWai
   }
 }
 
-async function sendSocketRequired(socket, payload, flags = zlink.SendFlags.None) {
+function sendSocketRequired(socket, payload, flags = zlink.SendFlags.None) {
   appendMeasurement(socket.send(), payload).submit_sync(flags);
 }
 
-async function sendSocketStopWithRetry(socket) {
+function sendSocketStopWithRetry(socket) {
   for (let retry = 0; retry < 100; retry += 1) {
     try {
-      await socket.send().message(STOP_TOKEN_BYTES).submit();
+      socket.send().message(STOP_TOKEN_BYTES).submit_sync(zlink.SendFlags.None);
       return;
     } catch (error) {
       if (!isTransientSubmit(error)) {
@@ -550,7 +537,7 @@ function drainRecvSocketNoWaitUntilIdle(socket, collector, payloadSize, viaSubsc
   }
 }
 
-async function runLocalSocketOneWayBenchmark({ pattern }) {
+function runLocalSocketOneWayBenchmark({ pattern }) {
   // inproc is context-local, while Node Workers cannot share a Context.
   // A single JavaScript loop that alternates send and recv imposes a hidden
   // window and does not represent C's concurrent sender/receiver workload.
@@ -581,91 +568,45 @@ function parseSingleBinaryArgs(argv) {
 }
 
 function spawnSenderWorker(workerData): SenderWorker {
+  const controlBuffer = new SharedArrayBuffer(4);
+  const control = new Int32Array(controlBuffer);
+  const statusBuffer = new SharedArrayBuffer(4);
+  const status = new Int32Array(statusBuffer);
   const worker = new Worker(
     path.join(__dirname, 'perf_single_sender_worker.js'),
-    { workerData }
+    { workerData: { ...workerData, controlBuffer, statusBuffer } }
   ) as SenderWorker;
-  senderWorkerStates.set(worker, { seenMessages: [], waiters: [] });
-  worker.on('message', (message: WorkerMessage) => {
-    const state = senderWorkerState(worker);
-    state.seenMessages.push(message);
-    for (const waiter of state.waiters.slice()) {
-      if (waiter(message)) {
-        return;
-      }
-    }
-  });
+  senderWorkerStates.set(worker, { control, status });
   return worker;
 }
 
-function waitForWorkerMessage<T extends WorkerMessage = WorkerMessage>(
+function waitForWorkerStatus(
   worker: SenderWorker,
-  expectedType: string,
+  expectedStatus: number,
   timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const state = senderWorkerState(worker);
-    const seen = state.seenMessages.find((message) => message && message.type === expectedType);
-    if (seen) {
-      resolve(seen as T);
+) {
+  const status = senderWorkerState(worker).status;
+  const deadline = Date.now() + Math.max(1, timeoutMs | 0);
+  for (;;) {
+    const current = Atomics.load(status, 0);
+    if (current < 0) {
+      throw new Error('sender worker failed during synchronous benchmark setup');
+    }
+    if (current >= expectedStatus) {
       return;
     }
-
-    let done = false;
-    const timeout = setTimeout(() => {
-      if (done) {
-        return;
-      }
-      done = true;
-      reject(new Error(`worker timeout waiting for ${expectedType}`));
-    }, timeoutMs);
-
-    const onExit = (code) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearTimeout(timeout);
-      reject(new Error(`worker exited before ${expectedType}: ${code}`));
-    };
-    worker.once('exit', onExit);
-
-    state.waiters.push((message: WorkerMessage) => {
-      if (done || !message || message.type !== expectedType) {
-        return false;
-      }
-      done = true;
-      clearTimeout(timeout);
-      worker.off('exit', onExit);
-      resolve(message as T);
-      return true;
-    });
-  });
-}
-
-function waitForWorkerError(worker: SenderWorker): Promise<WorkerMessage> {
-  return new Promise<WorkerMessage>((resolve) => {
-    const state = senderWorkerState(worker);
-    const seen = state.seenMessages.find((message) => message && message.type === 'error');
-    if (seen) {
-      resolve(seen);
-      return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error(`worker status timeout waiting for ${expectedStatus}`);
     }
-
-    state.waiters.push((message: WorkerMessage) => {
-      if (!message || message.type !== 'error') {
-        return false;
-      }
-      resolve(message);
-      return true;
-    });
-  });
+    Atomics.wait(status, 0, current, remaining);
+  }
 }
 
-function waitForWorkerDone(worker: SenderWorker, durationSeconds) {
-  const readyTimeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000);
-  const activeMs = Math.ceil(Math.max(0, Number(durationSeconds) || 0) * 1000);
-  return waitForWorkerMessage(worker, 'done', activeMs + readyTimeoutMs);
+function releaseSenderWorker(worker: SenderWorker) {
+  const control = senderWorkerState(worker).control;
+  Atomics.store(control, 0, 1);
+  Atomics.notify(control, 0);
 }
 
 async function closeSenderWorker(worker?: NodeWorker | null) {
@@ -676,7 +617,9 @@ async function closeSenderWorker(worker?: NodeWorker | null) {
     worker.once('exit', () => resolve());
   });
   try {
-    worker.postMessage({ type: 'stop' });
+    const control = senderWorkerState(worker).control;
+    Atomics.store(control, 0, 2);
+    Atomics.notify(control, 0);
   } catch (err) {
     console.error(`[perf] close failed: ${err}`);
   }
@@ -707,11 +650,10 @@ module.exports = {
   parseSingleBinaryArgs,
   measurementPayload,
   runLocalSocketOneWayBenchmark,
+  releaseSenderWorker,
   sendSocketRequired,
   spawnSenderWorker,
-  waitForWorkerDone,
-  waitForWorkerError,
-  waitForWorkerMessage,
+  waitForWorkerStatus,
   waitForPostReadySettle,
   waitForConnectionReady,
   waitForMonitorConnectionReady,
@@ -731,11 +673,10 @@ export {
   parseSingleBinaryArgs,
   measurementPayload,
   runLocalSocketOneWayBenchmark,
+  releaseSenderWorker,
   sendSocketRequired,
   spawnSenderWorker,
-  waitForWorkerDone,
-  waitForWorkerError,
-  waitForWorkerMessage,
+  waitForWorkerStatus,
   waitForPostReadySettle,
   waitForConnectionReady,
   waitForMonitorConnectionReady,

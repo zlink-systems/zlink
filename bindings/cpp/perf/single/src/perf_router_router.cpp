@@ -126,26 +126,26 @@ bool send_router_samples (::perf::socket_t *sender_,
 
 } // namespace
 
-perf::async_task_t<bool> run_pattern_router_router_async (const std::string &transport,
-                                                          size_t msg_size,
-                                                          const std::string &lib_name)
+bool run_pattern_router_router (const std::string &transport,
+                                size_t msg_size,
+                                const std::string &lib_name)
 {
     if (!perf::single::transport_available (transport)) {
         std::cout << "UNSUPPORTED," << lib_name << ",ROUTER_ROUTER," << transport << std::endl;
-        co_return true;
+        return true;
     }
 
     perf::single::ctx_guard_t ctx;
     if (!ctx.valid ()) {
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
-        co_return false;
+        return false;
     }
 
     perf::single::socket_guard_t receiver (ctx, zlink::socket_type::router);
     perf::single::socket_guard_t sender (ctx, zlink::socket_type::router);
     if (!receiver.valid () || !sender.valid ()) {
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
-        co_return false;
+        return false;
     }
 
     (void) receiver.sock ().set_routing_id (std::string (k_receiver_id));
@@ -156,7 +156,7 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
                                std::string (k_receiver_id));
     if (!perf::single::recalculate_single_auto_hwm (ctx)) {
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
-        co_return false;
+        return false;
     }
 
     router_router_recv_state_t state;
@@ -164,13 +164,13 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
     if (!perf::single::setup_connected_pair (receiver.sock (), sender.sock (), transport,
                                              lib_name + "_router_router")) {
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
-        co_return false;
+        return false;
     }
-    const bool handshake_ok = co_await perf::single::complete_router_router_handshake (
+    const bool handshake_ok = perf::single::complete_router_router_handshake (
       receiver.sock (), sender.sock (), *state.target_rid, &(*state.target_rid));
     if (!handshake_ok) {
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
-        co_return false;
+        return false;
     }
 
     const int recv_timeout = perf::single::resolve_single_recv_timeout_ms ();
@@ -232,7 +232,7 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
     sender_thread.join ();
     if (!sender_ok.load (std::memory_order_acquire)) {
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
-        co_return false;
+        return false;
     }
     // Stop token is the last in-flight message, so any earlier payloads
     // have already been recorded above. No bounded drain loop needed.
@@ -243,7 +243,7 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
                       << sent_count.load (std::memory_order_acquire) << " received=" << received
                       << std::endl;
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
-        co_return false;
+        return false;
     }
     latency = state.latency.snapshot ();
 
@@ -255,14 +255,7 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
     const double throughput = static_cast<double> (received) / static_cast<double> (duration_s);
     perf::single::print_result (lib_name, "ROUTER_ROUTER", transport, msg_size, throughput,
                                 latency.mean_ns, latency.p95_ns, latency.p99_ns);
-    co_return true;
-}
-
-bool run_pattern_router_router (const std::string &transport,
-                                size_t msg_size,
-                                const std::string &lib_name)
-{
-    return run_pattern_router_router_async (transport, msg_size, lib_name).get ();
+    return true;
 }
 
 int main (int argc, char **argv)

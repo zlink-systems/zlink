@@ -217,6 +217,163 @@ test('request submit_sync(DONTWAIT, callback) returns after admission and delive
         closeAll(context, dealer, router);
     }
 });
+test('PollCompletion delivers submit_sync callback before wait returns', async () => {
+    const controlBuffer = new SharedArrayBuffer(4);
+    const control = new Int32Array(controlBuffer);
+    const worker = new Worker(`
+    const { parentPort, workerData } = require('node:worker_threads');
+    const z = require(workerData.modulePath);
+    const control = new Int32Array(workerData.controlBuffer);
+    const ctx = z.createContext(); const router = z.createRouterSocket(ctx);
+    router.bind('tcp://127.0.0.1:*'); parentPort.postMessage(router.options.lastEndpoint);
+    const received = new z.Received(); router.recv(received, z.RecvFlags.None);
+    while (Atomics.load(control, 0) === 0) Atomics.wait(control, 0, 0);
+    received.reply().message('sync-progress-reply').submit(); received.close();
+    router.close(); ctx.close();
+  `, {
+        eval: true,
+        workerData: {
+            modulePath: require.resolve('@zlink-systems/zlink'),
+            controlBuffer,
+        }
+    });
+    const remoteEndpoint = await new Promise((resolve, reject) => {
+        worker.once('message', resolve);
+        worker.once('error', reject);
+    });
+    const context = zlink.createContext();
+    const dealer = zlink.createDealerSocket(context);
+    const poller = zlink.createPoller();
+    const events = zlink.createPollEvents(1);
+    dealer.connect(remoteEndpoint);
+    try {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+        let callbackError = null;
+        let callbackReply = null;
+        let waitReturned = false;
+        let callbackBeforeWaitReturned = false;
+        dealer.request().message('sync-progress-request').timeout(2_000)
+            .submit_sync(zlink.SendFlags.DontWait, (error, reply) => {
+            callbackError = error;
+            callbackReply = reply;
+            callbackBeforeWaitReturned = !waitReturned;
+        });
+        poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 0);
+        Atomics.store(control, 0, 1);
+        Atomics.notify(control, 0);
+        poller.wait(events, 2_000);
+        waitReturned = true;
+        assert.equal(callbackError, null);
+        assert.equal(callbackBeforeWaitReturned, true);
+        assert.ok(callbackReply);
+        assert.equal(callbackReply[0].getString(), 'sync-progress-reply');
+        callbackReply[0].close();
+    }
+    finally {
+        events.close();
+        poller.close();
+        closeAll(context, dealer);
+        await worker.terminate();
+    }
+});
+test('routed PollCompletion delivers submit_sync callback before wait returns', async () => {
+    const controlBuffer = new SharedArrayBuffer(4);
+    const control = new Int32Array(controlBuffer);
+    const worker = new Worker(`
+    const { parentPort, workerData } = require('node:worker_threads');
+    const z = require(workerData.modulePath);
+    const control = new Int32Array(workerData.controlBuffer);
+    const ctx = z.createContext(); const router = z.createRouterSocket(ctx);
+    router.setRoutingId(z.RoutingId.from(Buffer.from('SERVER')));
+    router.options.mandatory = true;
+    router.bind('tcp://127.0.0.1:*'); parentPort.postMessage(router.options.lastEndpoint);
+    const received = new z.Received(); router.recv(received, z.RecvFlags.None);
+    while (Atomics.load(control, 0) === 0) Atomics.wait(control, 0, 0);
+    received.reply().message('routed-sync-progress-reply').submit(); received.close();
+    router.close(); ctx.close();
+  `, {
+        eval: true,
+        workerData: {
+            modulePath: require.resolve('@zlink-systems/zlink'),
+            controlBuffer,
+        }
+    });
+    const remoteEndpoint = await new Promise((resolve, reject) => {
+        worker.once('message', resolve);
+        worker.once('error', reject);
+    });
+    const context = zlink.createContext();
+    const router = zlink.createRouterSocket(context);
+    const poller = zlink.createPoller();
+    const events = zlink.createPollEvents(1);
+    const serverRoutingId = zlink.RoutingId.from(Buffer.from('SERVER'));
+    router.setRoutingId(zlink.RoutingId.from(Buffer.from('CLIENT')));
+    router.options.setConnectRoutingId(serverRoutingId);
+    router.options.mandatory = true;
+    router.connect(remoteEndpoint);
+    try {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+        let callbackError = null;
+        let callbackReply = null;
+        let waitReturned = false;
+        let callbackBeforeWaitReturned = false;
+        router.request(serverRoutingId).message('routed-sync-progress-request').timeout(2_000)
+            .submit_sync(zlink.SendFlags.DontWait, (error, reply) => {
+            callbackError = error;
+            callbackReply = reply;
+            callbackBeforeWaitReturned = !waitReturned;
+        });
+        poller.add(router, [zlink.PollEventFlag.PollCompletion], 0);
+        Atomics.store(control, 0, 1);
+        Atomics.notify(control, 0);
+        poller.wait(events, 2_000);
+        waitReturned = true;
+        assert.equal(callbackError, null);
+        assert.equal(callbackBeforeWaitReturned, true);
+        assert.ok(callbackReply);
+        assert.equal(callbackReply[0].getString(), 'routed-sync-progress-reply');
+        callbackReply[0].close();
+    }
+    finally {
+        events.close();
+        poller.close();
+        closeAll(context, router);
+        await worker.terminate();
+    }
+});
+test('PollCompletion synchronously delivers submit_sync request timeout', () => {
+    const context = zlink.createContext();
+    const dealer = zlink.createDealerSocket(context);
+    const router = zlink.createRouterSocket(context);
+    const poller = zlink.createPoller();
+    const events = zlink.createPollEvents(1);
+    router.bind(endpoint('sync-progress-timeout'));
+    dealer.connect(router.options.lastEndpoint);
+    try {
+        let callbackError = null;
+        let callbackReply = null;
+        let waitReturned = false;
+        let callbackBeforeWaitReturned = false;
+        dealer.request().message('never-replied').timeout(25)
+            .submit_sync(zlink.SendFlags.DontWait, (error, reply) => {
+            callbackError = error;
+            callbackReply = reply;
+            callbackBeforeWaitReturned = !waitReturned;
+        });
+        poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 0);
+        poller.wait(events, 1_000);
+        waitReturned = true;
+        assert.ok(callbackError instanceof zlink.RequestError);
+        assert.equal(callbackError.result, zlink.RequestResult.TimedOut);
+        assert.equal(callbackReply, null);
+        assert.equal(callbackBeforeWaitReturned, true);
+    }
+    finally {
+        events.close();
+        poller.close();
+        closeAll(context, dealer, router);
+    }
+});
 test('request submit_sync(DONTWAIT, callback) throws SubmitError on admission backpressure', async () => {
     const context = zlink.createContext();
     context.options.autoHwmEnabled = false;

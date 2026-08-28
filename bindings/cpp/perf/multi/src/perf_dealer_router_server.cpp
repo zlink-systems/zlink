@@ -4,6 +4,7 @@
 
 #include "../common/perf_common.hpp"
 #include "../common/perf_entry.hpp"
+#include "../common/perf_multi_routed_relay.hpp"
 
 #include <atomic>
 #include <cerrno>
@@ -98,78 +99,8 @@ perf::async_task_t<bool> perf_dealer_router_server (const std::string &lib_name,
 
     perf::multi::print_ready (endpoint);
 
-    bool failed = false;
-    zlink::poller_t poller;
-    std::vector<zlink::poll_event_t> events (1);
-    poller.add (server, zlink::poll_event_flag_t::pollin, 0);
-
-    // Bounded poll wait so the stdin/signal stop flag is observed promptly
-    // without depending solely on a SIGTERM interrupting an infinite poll
-    // (the C reference uses -1 + SIGTERM; this is the equivalent outcome,
-    // just more responsive). 200ms keeps idle wakeups negligible.
-    const std::chrono::milliseconds poll_timeout (200);
-
-    while (!g_stop_requested.load (std::memory_order_acquire)) {
-        try {
-            const size_t ready_count = poller.wait (events.data (), events.size (), poll_timeout);
-            if (ready_count == 0)
-                continue;
-            const auto revents_value = static_cast<int> (events[0].revents);
-            const bool readable =
-              (revents_value & static_cast<int> (zlink::poll_event_flag_t::pollin)) != 0;
-            if (!readable)
-                continue;
-        }
-        catch (const zlink::binding_error_t &err) {
-            const int err_no = err.internal_errno ();
-            if (err_no == EINTR)
-                continue;
-            failed = true;
-            break;
-        }
-
-        // Receive one complete logical message so the benchmark can preserve
-        // and validate its required empty trailing measurement frame.
-        while (!g_stop_requested.load (std::memory_order_acquire)) {
-            zlink::received_t received;
-            const int recv_rc = server.recv (received, zlink::recv_flags_t::dontwait);
-            if (recv_rc != 0) {
-                const int err = errno;
-                if (recv_rc == static_cast<int> (zlink::recv_result_t::no_data) || err == EAGAIN
-                    || err == EWOULDBLOCK || err == EINTR)
-                    break;
-                failed = true;
-                break;
-            }
-
-            if (!received.routing_id ().has_value ()
-                || !perf::multi::measurement_parts_valid (received.parts ())) {
-                continue;
-            }
-            try {
-                zlink::message_t &part = received.parts ().front ();
-                const zlink::routing_id_t source_rid = *received.routing_id ();
-                if (perf::multi::measurement_part_count () == 2) {
-                    zlink::message_t tail = perf::multi::measurement_empty_part ();
-                    std::move (server.send (source_rid).message (part)).message (tail).submit ();
-                } else {
-                    std::move (server.send (source_rid)).message (part).submit ();
-                }
-            }
-            catch (const zlink::submit_error_t &err) {
-                const int err_no = err.internal_errno ();
-                if (err_no == EINTR || err_no == EHOSTUNREACH || err_no == ENOTCONN) {
-                    continue;
-                }
-                failed = true;
-                break;
-            }
-        }
-        if (failed)
-            break;
-    }
-
-    co_return !failed;
+    co_return perf::multi::run_routed_echo_relay (
+      server, g_stop_requested, "dealer_router server:");
 }
 
 int main (int argc, char **argv)

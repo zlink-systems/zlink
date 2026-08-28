@@ -15,7 +15,7 @@ from perf_multi_common import (
     new_payload,
     parse_server_args,
     perf_server_context,
-    publish_nonblocking,
+    publish_sync,
     stamp_payload,
 )
 
@@ -56,22 +56,14 @@ def main(argv=None):
                 return
             active_deadline = time.perf_counter() + active_duration_s
             while time.perf_counter() < active_deadline and not stop_event.is_set():
-                sent = publish_nonblocking(
+                publish_sync(
                     publisher,
                     TOPIC,
                     stamp_payload(payload, phase=1, run_id=run_id),
                 )
-                if not sent:
-                    continue
             # PERF_MULTI_TEST_POLICY § 1.3.1: signal phase end on the wire.
-            cooldown_deadline = time.perf_counter() + 5.0
-            while not stop_event.is_set() and time.perf_counter() < cooldown_deadline:
-                try:
-                    if publisher.publish(TOPIC).message(STOP_TOKEN).submit():
-                        break
-                except zlink.SubmitError as exc:
-                    if exc.result != zlink.SubmitResult.BACKPRESSURED:
-                        raise
+            for _ in range(64):
+                publisher.publish(TOPIC).message(STOP_TOKEN).submit()
             # Stay alive until runner sends STOP so the published stop token
             # has time to flush to all subscribers (linger_ms == 0).
             stop_event.wait()

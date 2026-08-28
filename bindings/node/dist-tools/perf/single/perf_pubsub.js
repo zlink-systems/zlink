@@ -3,15 +3,12 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, appendMeasurement, benchmarkEndpoint, closeSenderWorker, configureTlsClient, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForPostReadySettle, waitForMonitorConnectionReady, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, appendMeasurement, benchmarkEndpoint, closeSenderWorker, configureTlsClient, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, releaseSenderWorker, spawnSenderWorker, waitForPostReadySettle, waitForMonitorConnectionReady, waitForWorkerStatus, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 function trace(message) {
     if (process.env.PERF_NODE_TRACE === '1') {
         console.error(`[pubsub] ${message}`);
     }
-}
-function yieldImmediate() {
-    return new Promise((resolve) => setImmediate(resolve));
 }
 function trySubscribe(socket, received, buffer, flags) {
     try {
@@ -37,20 +34,14 @@ function trySubscribe(socket, received, buffer, flags) {
         throw error;
     }
 }
-async function drainPubSubPayloadInto(socket, buffer, onHeader, options = {}) {
+function drainPubSubPayloadInto(socket, buffer, onHeader, options = {}) {
     const recordUntilNs = options.recordUntilNs === undefined
         ? null
         : BigInt(options.recordUntilNs);
     let stopReceived = false;
     let recordingActive = true;
-    let iterCount = 0;
     const reusableReceived = new zlink.TopicMessage();
     while (!stopReceived) {
-        iterCount += 1;
-        if ((iterCount & 0x3f) === 0) {
-            await yieldImmediate();
-        }
-        let processed = false;
         let first = true;
         while (true) {
             const received = trySubscribe(socket, reusableReceived, buffer, first ? zlink.RecvFlags.None : zlink.RecvFlags.DontWait);
@@ -58,7 +49,6 @@ async function drainPubSubPayloadInto(socket, buffer, onHeader, options = {}) {
                 break;
             }
             first = false;
-            processed = true;
             if (received.stop) {
                 stopReceived = true;
                 break;
@@ -78,9 +68,6 @@ async function drainPubSubPayloadInto(socket, buffer, onHeader, options = {}) {
                 continue;
             }
             onHeader(buffer, currentEpochNs(), received.size);
-        }
-        if (!processed) {
-            await yieldImmediate();
         }
     }
 }
@@ -170,19 +157,16 @@ async function runPubSubBenchmark(msgSize, options) {
                     : true
             },
         });
-        const workerError = waitForWorkerError(worker);
-        await Promise.race([
-            waitForWorkerMessage(worker, 'bound'),
-            workerError.then((message) => Promise.reject(new Error(message.message)))
-        ]);
+        waitForWorkerStatus(worker, 1);
         // C setup_connected_pubsub_pair: wait for the subscriber
         // CONNECTION_READY and the post-ready settle BEFORE releasing the
         // publisher's active loop, so the active window starts on a settled
         // connected pair (not an extra start gate — this is the ready gate).
-        await waitForMonitorConnectionReady(subMonitor);
+        waitForMonitorConnectionReady(subMonitor);
+        waitForWorkerStatus(worker, 2);
         trace('connection ready');
-        await waitForPostReadySettle(Number(process.env.PERF_SINGLE_PUBSUB_READY_SETTLE_MS ?? 1000));
-        worker.postMessage({ type: 'ready' });
+        waitForPostReadySettle(Number(process.env.PERF_SINGLE_PUBSUB_READY_SETTLE_MS ?? 1000));
+        releaseSenderWorker(worker);
         const activeStartNs = currentEpochNs();
         const activeStopNs = activeStartNs
             + BigInt(Math.floor(options.duration * 1_000_000_000));
@@ -199,17 +183,14 @@ async function runPubSubBenchmark(msgSize, options) {
         // the worker, SUB connects here). No extra start/stop ack — the
         // subscriber drains until the wire stop token on the topic.
         const payloadBuffer = Buffer.allocUnsafe(Math.max(msgSize, HEADER_SIZE, STOP_TOKEN_BYTES.length));
-        const recvTask = drainPubSubPayloadInto(sub, payloadBuffer, (payload, receivedAtNs, receivedSize) => {
+        drainPubSubPayloadInto(sub, payloadBuffer, (payload, receivedAtNs, receivedSize) => {
             if (receivedSize !== Math.max(msgSize, HEADER_SIZE)) {
                 collector.recordPayload(null, receivedAtNs);
                 return;
             }
             collector.recordPayload(payload, receivedAtNs);
         }, { recordUntilNs: activeStopNs });
-        await Promise.race([
-            recvTask,
-            workerError.then((message) => Promise.reject(new Error(message.message)))
-        ]);
+        waitForWorkerStatus(worker, 4);
         const result = collector.finish();
         emitSingleSocketHwmDetail(sub, 'PUBSUB', options.transport, 'subscriber', msgSize);
         return result;

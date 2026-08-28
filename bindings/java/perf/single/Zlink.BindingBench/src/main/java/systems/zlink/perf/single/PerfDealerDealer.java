@@ -36,11 +36,11 @@ final class PerfDealerDealer {
         try (Context ctx = PerfUtil.newContext(config);
              DealerSocket receiver = ctx.createDealerSocket();
              DealerSocket sender = ctx.createDealerSocket();
-             var receiverMonitor = receiver.monitorOpen(MonitorEventType.CONNECTION_READY);
-             var senderMonitor = sender.monitorOpen(MonitorEventType.CONNECTION_READY)) {
+             var receiverMonitor = receiver.monitorOpen(
+                 config.monitorHwm(), MonitorEventType.CONNECTION_READY);
+             var senderMonitor = sender.monitorOpen(
+                 config.monitorHwm(), MonitorEventType.CONNECTION_READY)) {
             Duration readyTimeout = Duration.ofMillis(config.connectReadyTimeoutMs());
-            PerfUtil.applyMonitorOptions(receiverMonitor, config);
-            PerfUtil.applyMonitorOptions(senderMonitor, config);
             PerfUtil.applySocketOptions(receiver, config);
             PerfUtil.applySocketOptions(sender, config);
             PerfUtil.configureServerTls(receiver, config.transport());

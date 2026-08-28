@@ -44,13 +44,19 @@ type Result struct {
 }
 
 func NewStats() *Stats {
-	return newStats(1_000_000)
+	latencyCap := 1_000_000
+	if raw := os.Getenv("PERF_SINGLE_LATENCY_SAMPLE_CAP"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value >= 0 {
+			latencyCap = value
+		}
+	}
+	return newStats(latencyCap)
 }
 
 func NewMultiStats() *Stats {
 	latencyCap := 65536
 	if raw := os.Getenv("PERF_MULTI_LATENCY_SAMPLE_CAP"); raw != "" {
-		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+		if value, err := strconv.Atoi(raw); err == nil && value >= 0 {
 			latencyCap = value
 		}
 	}
@@ -130,12 +136,18 @@ func (s *Stats) Snapshot(duration time.Duration, msgSize int) Result {
 	if latencyCount > 0 {
 		latencyMean = s.sumNs / float64(latencyCount)
 	}
+	latencyP95 := latencyMean
+	latencyP99 := latencyMean
+	if len(s.latNs) > 0 {
+		latencyP95 = percentile(s.latNs, 95)
+		latencyP99 = percentile(s.latNs, 99)
+	}
 	return Result{
 		Throughput:   float64(count) / duration.Seconds(),
 		Bandwidth:    float64(count*uint64(msgSize)) / duration.Seconds() / 1_000_000.0,
 		LatencyNs:    latencyMean,
-		LatencyP95Ns: percentile(s.latNs, 95),
-		LatencyP99Ns: percentile(s.latNs, 99),
+		LatencyP95Ns: latencyP95,
+		LatencyP99Ns: latencyP99,
 		Valid:        count > 0 && latencyCount > 0,
 	}
 }
@@ -435,7 +447,8 @@ func FinalizeResult(pattern string, msgSize int, result Result) Result {
 func isEchoPattern(pattern string) bool {
 	switch pattern {
 	case "DEALER_ROUTER_REQREP", "ROUTER_ROUTER_REQREP",
-		"MULTI_DEALER_ROUTER", "MULTI_ROUTER_ROUTER", "MULTI_STREAM":
+		"MULTI_DEALER_ROUTER_SENDSEND", "MULTI_DEALER_ROUTER_REQREP",
+		"MULTI_ROUTER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_STREAM":
 		return true
 	default:
 		return false
@@ -690,4 +703,15 @@ func IsReadyProbeTransient(err error) bool {
 func IsSubmitNotConnected(err error) bool {
 	var submitErr *zlink.SubmitError
 	return errors.As(err, &submitErr) && submitErr.Result == zlink.SubmitNotConnected
+}
+
+// IsStaleRoute identifies a routed destination that disappeared after a
+// receive was admitted. Relay servers drop these replies; retrying them as
+// backpressure would pin the head of the work queue forever.
+func IsStaleRoute(err error) bool {
+	var submitErr *zlink.SubmitError
+	if !errors.As(err, &submitErr) {
+		return false
+	}
+	return submitErr.Result == zlink.SubmitNotConnected || submitErr.Result == zlink.SubmitNotFound
 }

@@ -91,9 +91,7 @@ function isEchoPattern(pattern) {
         || pattern === 'MULTI_ROUTER_ROUTER'
         || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
         || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_STREAM'
-        || pattern === 'MULTI_SPOT_REQREP'
-        || pattern === 'MULTI_SPOT_SENDSEND';
+        || pattern === 'MULTI_STREAM';
 }
 function multiFormatThroughput(pattern, throughputPerSec) {
     const unit = isEchoPattern(pattern) ? 'Kops/s' : 'Kmsg/s';
@@ -430,7 +428,6 @@ function multiResultDataLines(records) {
 // Faithful port of bindings/c/perf/run_comparison.py auto-hwm detail
 // emitters (emit_auto_hwm_detail_line .. emit_auto_hwm_detail_table,
 // ~lines 813-1395). Presentation only.
-const SPOT_CONTROL_PATTERNS = new Set(['SPOT', 'SPOT_REQREP', 'SPOT_SENDSEND']);
 function normalizeMultiPatternName(patternName) {
     let pattern = String(patternName || '').trim().toUpperCase();
     if (pattern.startsWith('MULTI_')) {
@@ -504,26 +501,12 @@ function createAutoHwmCollector() {
         }
         return String(Math.trunc(parsed / 1024));
     }
-    function patternIsSpot(patternName) {
-        return SPOT_CONTROL_PATTERNS.has(normalizeMultiPatternName(patternName));
-    }
-    function spotScopeAndSocket(label) {
-        const raw = String(label || '').trim();
-        if (raw.startsWith('spotnode_')) {
-            return ['shared', raw.slice('spotnode_'.length)];
-        }
-        if (raw.startsWith('spotend_')) {
-            return ['per-spot', raw.slice('spotend_'.length)];
-        }
-        return ['', raw || 'socket'];
-    }
     function activeHwmFields(row) {
         const socketType = String(row.socket_type || row.type || '').toLowerCase();
         const role = String(row.role || '').toLowerCase();
         let sendActive = true;
         let recvActive = true;
-        if ((socketType === 'pub' || socketType === 'xpub')
-            && (role === 'spot_data' || role === 'control')) {
+        if ((socketType === 'pub' || socketType === 'xpub') && role === 'control') {
             recvActive = false;
         }
         if ((socketType === 'sub' || socketType === 'xsub')
@@ -543,121 +526,7 @@ function createAutoHwmCollector() {
         }
         return display;
     }
-    function spotDisplayRows(spotRows, scope) {
-        const displayRows = [];
-        for (const fields of spotRows) {
-            const [rs, socket] = spotScopeAndSocket(fields.label || '');
-            const rowScope = fields.scope || rs;
-            if (rowScope !== scope) {
-                continue;
-            }
-            const display = { ...fields };
-            display.scope = rowScope;
-            display.socket = socket;
-            display.managed = fields.managed_connections || '';
-            display.active = fields.active_connections || '';
-            displayRows.push(applyActiveHwmDisplay(display));
-        }
-        return displayRows;
-    }
-    function emitSpotSocketTable(out, title, tableRows) {
-        if (tableRows.length === 0) {
-            return false;
-        }
-        const displayRows = [];
-        const localSeen = new Set();
-        for (const row of tableRows) {
-            const key = ['transport', 'socket', 'scope', 'source', 'role',
-                'sndhwm', 'rcvhwm', 'effective_sndbuf', 'effective_rcvbuf']
-                .map((n) => row[n] || '').join('');
-            if (localSeen.has(key)) {
-                continue;
-            }
-            localSeen.add(key);
-            displayRows.push(row);
-        }
-        out.push(`    ${title}:`);
-        emitMarkdownTable(out, '      ', [
-            ['Socket', 'socket'], ['Scope', 'scope'], ['Source', 'source'],
-            ['Role', 'role'], ['SNDHWM', 'sndhwm'], ['RCVHWM', 'rcvhwm'],
-            ['SNDBUF', 'effective_sndbuf'], ['RCVBUF', 'effective_rcvbuf']
-        ], displayRows);
-        return true;
-    }
-    function emitSpotSnapshotSocketTable(out, title, tableRows) {
-        if (tableRows.length === 0) {
-            return false;
-        }
-        const sorted = [...tableRows].sort((a, b) => (parseInt10(a.msg_size || '0', 0) - parseInt10(b.msg_size || '0', 0)
-            || parseInt10(a.owner_id || '0', 0) - parseInt10(b.owner_id || '0', 0)
-            || String(a.socket || '').localeCompare(String(b.socket || ''))
-            || String(a.role || '').localeCompare(String(b.role || ''))));
-        const displayRows = [];
-        const localSeen = new Set();
-        for (const row of sorted) {
-            let display = { ...row };
-            display.managed = row.managed_connections || '';
-            display.active = row.active_connections || '';
-            display.type = row.socket_type || '';
-            display = applyActiveHwmDisplay(display);
-            const key = ['msg_size', 'socket', 'type',
-                'role', 'sndhwm', 'rcvhwm', 'effective_sndbuf', 'effective_rcvbuf']
-                .map((n) => (display[n] !== undefined ? display[n] : '')).join('');
-            if (localSeen.has(key)) {
-                continue;
-            }
-            localSeen.add(key);
-            displayRows.push(display);
-        }
-        if (displayRows.length === 0) {
-            return false;
-        }
-        out.push(`    ${title}:`);
-        const grouped = new Map();
-        const groupOrder = [];
-        for (const row of displayRows) {
-            const gk = `${row.msg_size || ''}`;
-            if (!grouped.has(gk)) {
-                grouped.set(gk, []);
-                groupOrder.push(gk);
-            }
-            grouped.get(gk).push(row);
-        }
-        for (let index = 0; index < groupOrder.length; index += 1) {
-            const gk = groupOrder[index];
-            out.push(`      - Size(B)=${gk}`);
-            emitMarkdownTable(out, '      ', [
-                ['Socket', 'socket'], ['Type', 'type'], ['Role', 'role'],
-                ['SNDHWM', 'sndhwm'], ['RCVHWM', 'rcvhwm'],
-                ['SNDBUF', 'effective_sndbuf'], ['RCVBUF', 'effective_rcvbuf']
-            ], grouped.get(gk));
-            if (index + 1 < groupOrder.length) {
-                out.push('      ');
-            }
-        }
-        return true;
-    }
-    function emitSpotTables(out, tableRows) {
-        const snapshotRows = tableRows.filter((f) => f.source === 'spotnode_snapshot' && f.socket);
-        if (snapshotRows.length > 0) {
-            const nodeRows = snapshotRows.filter((f) => f.owner === 'node');
-            const spotR = snapshotRows.filter((f) => f.owner === 'spot');
-            let emitted = false;
-            emitted = emitSpotSnapshotSocketTable(out, 'Auto-HWM spotnode', nodeRows) || emitted;
-            emitted = emitSpotSnapshotSocketTable(out, 'Auto-HWM spot handles', spotR) || emitted;
-            return emitted;
-        }
-        const spotRows = tableRows.filter((f) => f.source !== 'option_fallback'
-            && spotScopeAndSocket(f.label || '')[0]);
-        if (spotRows.length === 0) {
-            return false;
-        }
-        let emitted = false;
-        emitted = emitSpotSocketTable(out, 'Auto-HWM spotnode', spotDisplayRows(spotRows, 'shared')) || emitted;
-        emitted = emitSpotSocketTable(out, 'Auto-HWM spot handles', spotDisplayRows(spotRows, 'per-spot')) || emitted;
-        return emitted;
-    }
-    function selectNonSpotDisplayRows(tableRows) {
+    function selectDisplayRows(tableRows) {
         const selected = new Map();
         tableRows.forEach((fields, index) => {
             const logicalKey = ['msg_size', 'component', 'socket_type',
@@ -686,15 +555,6 @@ function createAutoHwmCollector() {
         if (patternRows.length === 0) {
             return false;
         }
-        if (patternIsSpot(pattern)) {
-            if (!emitSpotTables(out, patternRows)) {
-                return false;
-            }
-            for (const fields of patternRows) {
-                tableSeen.add(`${pattern}${fields._dedup_key}`);
-            }
-            return true;
-        }
         patternRows = patternRows.filter((f) => f.msg_size && f.msg_size !== '0');
         if (patternRows.length === 0) {
             return false;
@@ -705,7 +565,7 @@ function createAutoHwmCollector() {
         out.push('    Auto-HWM detail:');
         const displayRows = [];
         const seenDisplay = new Set();
-        for (const fields of selectNonSpotDisplayRows(patternRows)) {
+        for (const fields of selectDisplayRows(patternRows)) {
             const display = { ...fields };
             display.type = fields.socket_type || '';
             const msgSize = fields.msg_size || '';
@@ -744,7 +604,6 @@ function createAutoHwmCollector() {
 }
 module.exports = {
     STREAM_VARIANT_PATTERNS,
-    SPOT_CONTROL_PATTERNS,
     resolveLatencyTriplet,
     singleTableHeaderLine,
     singleTableSeparatorLine,

@@ -70,7 +70,8 @@ struct client_slot_t
 
 struct client_state_t
 {
-    client_state_t () :
+    explicit client_state_t (
+      size_t maximum_latency_sample_cap = std::numeric_limits<size_t>::max ()) :
         poller (NULL),
         active_run_id (0),
         active_msg_size (0),
@@ -80,7 +81,7 @@ struct client_state_t
         callback_mutex (),
         slots (),
         events (),
-        latency ()
+        latency (maximum_latency_sample_cap)
     {
     }
 

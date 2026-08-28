@@ -1,4 +1,3 @@
-import asyncio
 import sys
 import threading
 import time
@@ -16,8 +15,9 @@ from perf_common import (
     perf_context,
     poll_idle_ms,
     print_result_lines,
+    new_single_latency_sampler,
     run_one_way_receiver_public_recv,
-    send_routed,
+    send_routed_sync,
     result_metrics,
     resolve_single_endpoint,
     resolve_single_connect_ready_timeout_ms,
@@ -26,18 +26,15 @@ from perf_common import (
 )
 
 
-async def _send_stop_token(sock):
+def _send_stop_token(sock):
     """PERF_SINGLE_TEST_POLICY § 1.4 wire-level shutdown signal.
 
-    PAIR send is HWM-managed and ASYNC-classified (Core `zlink_send_async`,
-    bindings/doc/spec/async-coroutine-policy.ko.md) — `submit()` returns an
-    awaitable coroutine object completed by Core's send-completion
-    notification, the same terminal DEALER/ROUTER routed send uses.
+    Single perf uses only the synchronous blocking public send terminal.
     """
 
     for _ in range(100):
         try:
-            await sock.send().message(STOP_TOKEN).submit()
+            sock.send().message(STOP_TOKEN).submit_sync(flags=zlink.SendFlags.NONE)
             return
         except zlink.SubmitError as exc:
             if exc.result != zlink.SubmitResult.BACKPRESSURED:
@@ -53,22 +50,18 @@ def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="pair")
     payload = new_payload(args.msg_size)
     run_id = benchmark_run_id()
-    latencies = []
+    latency_sampler = new_single_latency_sampler()
     received = 0
 
-    async def send_loop(client, active_end):
-        # C perf_single_one_way.hpp send_active_samples: DONTWAIT-equivalent
-        # send, re-stamp the payload (fresh now_ns) on every retry, busy-loop
-        # through transient backpressure. `submit()` suspends this coroutine
-        # only until Core's send-completion notification admits or rejects
-        # the record — no binding-owned retry/park queue.
+    def send_loop(client, active_end):
+        # Core owns blocking HWM admission on this dedicated sender thread.
         while time.perf_counter() < active_end:
-            await send_routed(
+            send_routed_sync(
                 client, stamp_payload(payload, phase=1, run_id=run_id)
             )
         # PERF_SINGLE_TEST_POLICY § 1.4: wire stop token instead of
         # threading.Event coordination.
-        await _send_stop_token(client)
+        _send_stop_token(client)
 
     with perf_context() as ctx:
         with zlink.create_pair_socket(ctx) as server:
@@ -99,7 +92,7 @@ def main(argv=None):
 
                     def run_sender():
                         try:
-                            asyncio.run(send_loop(client, active_end))
+                            send_loop(client, active_end)
                         except BaseException as exc:  # pragma: no cover - surfaced on main thread
                             sender_errors.append(exc)
 
@@ -114,7 +107,7 @@ def main(argv=None):
                         run_id=run_id,
                         active_end=active_end,
                         received=received,
-                        latencies=latencies,
+                        latency_sampler=latency_sampler,
                     )
 
                     sender.join()
@@ -128,7 +121,7 @@ def main(argv=None):
                         count=received,
                         msg_size=args.msg_size,
                         elapsed_s=args.duration,
-                        latencies_ns=latencies,
+                        latency_sampler=latency_sampler,
                     )
                 print_result_lines("PAIR", args.transport, args.msg_size, metrics)
 

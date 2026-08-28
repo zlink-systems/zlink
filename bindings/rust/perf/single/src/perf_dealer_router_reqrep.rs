@@ -11,8 +11,7 @@ fn main() {
         pattern,
         &config.transport,
         "dealer-router-reqrep",
-    )
-    else {
+    ) else {
         return;
     };
 
@@ -58,7 +57,7 @@ fn main() {
         .send()
         .message(Message::try_from(b"PING").expect("handshake ping"))
         .submit_sync(zlink::SendFlags::NONE)
-    .expect("handshake send");
+        .expect("handshake send");
     let mut handshake = Received::empty();
     replier
         .recv(&mut handshake, zlink::RecvFlags::NONE)
@@ -68,7 +67,7 @@ fn main() {
         .send()
         .message(Message::try_from(b"PONG").expect("handshake pong"))
         .submit_sync(zlink::SendFlags::NONE)
-    .expect("handshake reply");
+        .expect("handshake reply");
     let mut handshake_reply = Received::empty();
     requester
         .recv(&mut handshake_reply, zlink::RecvFlags::NONE)

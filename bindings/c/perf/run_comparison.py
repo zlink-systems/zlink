@@ -239,13 +239,10 @@ def collect_unsupported_patterns(pattern_names, recv_mode):
 
 def resolve_split_required_binaries(pattern_name):
     pattern = normalize_multi_pattern_name(pattern_name)
-    suffix = PATTERN_SUFFIX.get(pattern)
-    if not suffix:
+    names = resolve_binary_names(pattern)
+    if not names:
         return []
-    return [
-        f"comp_src_{suffix}_server",
-        f"comp_src_{suffix}_client",
-    ]
+    return [names["server"], names["client"]]
 
 
 def pattern_direction_label(pattern_name):

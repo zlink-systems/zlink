@@ -73,10 +73,10 @@ fn main() {
         // Stop token (is_valid_active_message is false for it) only ends the
         // window via the deadline; it is never counted.
         if Instant::now() < deadline && common::is_valid_active_message(data, args.msg_size) {
-            let sent_ts_ns = common::decode_sent_ts_ns(data);
-            latency_stats
-                .record_ns(common::now_ns().saturating_sub(sent_ts_ns.max(0) as u64) as f64);
             active_count += 1;
+            if let Some(elapsed_ns) = common::elapsed_since_sent_ns(data) {
+                latency_stats.record_latency_sample_ns(elapsed_ns);
+            }
         }
     };
 

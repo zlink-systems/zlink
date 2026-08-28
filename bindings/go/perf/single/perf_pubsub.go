@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -50,6 +51,8 @@ func runPubSub(cfg benchmarkConfig) perfcommon.Result {
 
 	receiverDone := make(chan error, 1)
 	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		for {
 			stop, drainErr := recvSinglePubSubUntilStop(subscriber, &received, stats, cfg.msgSize, window.ActiveAt, window.StopAt)
 			if drainErr != nil {

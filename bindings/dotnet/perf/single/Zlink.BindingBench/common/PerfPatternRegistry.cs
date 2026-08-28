@@ -10,20 +10,15 @@ internal static class SinglePerfPatternRegistry
             new SinglePerfPattern("PUBSUB", static options =>
                 PerfPubSub.RunPubSub(options.Transport, options.Size)),
             new SinglePerfPattern("DEALER_DEALER", static options =>
-                PerfDealerDealer.RunDealerDealer(options.Transport, options.Size)
-                    .GetAwaiter().GetResult()),
+                PerfDealerDealer.RunDealerDealer(options.Transport, options.Size)),
             new SinglePerfPattern("DEALER_ROUTER", static options =>
-                PerfDealerRouter.RunDealerRouter(options.Transport, options.Size)
-                    .GetAwaiter().GetResult()),
+                PerfDealerRouter.RunDealerRouter(options.Transport, options.Size)),
             new SinglePerfPattern("DEALER_ROUTER_REQREP", static options =>
-                PerfReqRep.RunDealerRouter(options.Transport, options.Size)
-                    .GetAwaiter().GetResult()),
+                PerfReqRep.RunDealerRouter(options.Transport, options.Size)),
             new SinglePerfPattern("ROUTER_ROUTER", static options =>
-                PerfRouterRouter.RunRouterRouter(options.Transport, options.Size)
-                    .GetAwaiter().GetResult()),
+                PerfRouterRouter.RunRouterRouter(options.Transport, options.Size)),
             new SinglePerfPattern("ROUTER_ROUTER_REQREP", static options =>
-                PerfReqRep.RunRouterRouter(options.Transport, options.Size)
-                    .GetAwaiter().GetResult()),
+                PerfReqRep.RunRouterRouter(options.Transport, options.Size)),
         });
 
     internal static bool TryGet(string pattern, out IPerfPattern perfPattern)

@@ -3,11 +3,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
-const { createMetricCollector, createPayload, createRunId, HEADER_SIZE, currentEpochNs, stampPayload, summarizeMetrics } = require('../common/perf_metrics');
+const { createMetricCollector, createPayload, createRunId, HEADER_SIZE, currentEpochNs, sleepImmediate, stampPayload, summarizeMetrics } = require('../common/perf_metrics');
 const { configureTlsClient, configureTlsServer } = require('../common/perf_tls');
-const { STOP_TOKEN_BYTES, isStopTokenParts } = require('../perf_stop_token');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementPayload, pollEvents, pollEventHas, recvNoWaitInto, tryRoutedSocketSend, waitForConnectionReady, waitForConnectionReadyCount, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementPayload, pollEvents, pollEventHas, recvNoWaitInto, sendRouted, waitForConnectionReady, waitForConnectionReadyCount, waitPollerOne } = require('./perf_multi_runtime');
 const SERVER_ROUTING_ID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
 function resolveRoutedPattern(pattern, family) {
     const base = `MULTI_${family}`;
@@ -22,15 +21,15 @@ function createClientSocket(ctx, routerClient) {
         ? zlink.createRouterSocket(ctx)
         : zlink.createDealerSocket(ctx);
 }
-function sendPayload(socket, routerClient, payload, control = false) {
-    const frames = control ? [payload] : payload;
+function sendPayload(socket, routerClient, payload) {
     return routerClient
-        ? tryRoutedSocketSend(socket, SERVER_ROUTING_ID, frames)
-        : tryRoutedSocketSend(socket, frames);
+        ? sendRouted(socket, SERVER_ROUTING_ID, payload)
+        : sendRouted(socket, payload);
 }
-function tryServerReply(router, routingId, parts) {
+async function sendServerReply(router, routingId, parts) {
     try {
-        return tryRoutedSocketSend(router, routingId, parts);
+        await sendRouted(router, routingId, parts);
+        return true;
     }
     catch (error) {
         if (error instanceof zlink.SubmitError
@@ -41,21 +40,11 @@ function tryServerReply(router, routingId, parts) {
         throw error;
     }
 }
-async function sendStopTokenWithRetry(socket, routerClient, poller, pollBuffer) {
-    const deadline = Date.now() + 5000;
-    while (!sendPayload(socket, routerClient, STOP_TOKEN_BYTES, true)) {
-        if (Date.now() >= deadline) {
-            throw new Error('stop token send timeout');
-        }
-        poller.wait(pollBuffer, 50);
-    }
-}
 async function runRoutedSendSendClient({ options, pattern, routerClient }) {
     const ctx = zlink.createContext();
     applyContextPolicy(ctx, 'client', pattern);
     const sockets = [];
     const payloads = [];
-    const sendPending = [];
     const replies = [];
     const poller = zlink.createPoller();
     const pollBuffer = zlink.createPollEvents(Math.max(1, options.clients));
@@ -74,7 +63,6 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
             }
             sockets.push(socket);
             payloads.push(createPayload(options.msgSize));
-            sendPending.push(false);
             replies.push(new zlink.Received());
         }
         for (let i = 0; i < sockets.length; i += 1) {
@@ -108,33 +96,42 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
             roundTrip: true
         });
         let seq = 1n;
-        while (currentEpochNs() < activeStopNs) {
-            for (let i = 0; i < sockets.length; i += 1) {
-                if (sendPending[i]) {
-                    continue;
-                }
-                if (currentEpochNs() >= activeStopNs) {
-                    break;
-                }
-                stampPayload(payloads[i], {
-                    phase: 1,
-                    runId,
-                    msgSize: options.msgSize,
-                    seq
-                });
-                const sent = sendPayload(sockets[i], routerClient, payloads[i]);
-                if (!sent) {
-                    sendPending[i] = true;
-                    poller.modify(sockets[i], pollEvents(POLLIN | POLLOUT));
-                    continue;
-                }
+        const sendTasks = sockets.map(async (socket, index) => {
+            while (currentEpochNs() < activeStopNs) {
+                const currentSeq = seq;
                 seq += 1n;
+                stampPayload(payloads[index], {
+                    phase: 1, runId, msgSize: options.msgSize, seq: currentSeq
+                });
+                await sendPayload(socket, routerClient, payloads[index]);
+                // Inline admission resolves in the microtask queue. Yield to the next
+                // event-loop turn so receive readiness and native completions progress
+                // concurrently with this socket's next logical send.
+                await sleepImmediate();
             }
-            const remainingMs = Math.ceil((Number(activeStopNs) - Number(currentEpochNs())) / 1_000_000);
+        });
+        let sendsDone = false;
+        let sendFailure = null;
+        const sendsCompletion = Promise.all(sendTasks).then(() => { sendsDone = true; }, (error) => {
+            sendFailure = error;
+            sendsDone = true;
+        });
+        const sendDrainMs = Math.max(1, Number(process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS ?? 1000));
+        const sendDrainStopNs = activeStopNs + BigInt(Math.floor(sendDrainMs * 1_000_000));
+        while (currentEpochNs() < activeStopNs
+            || (!sendsDone && currentEpochNs() < sendDrainStopNs)) {
+            if (sendFailure)
+                throw sendFailure;
+            const nowNs = currentEpochNs();
+            const waitStopNs = nowNs < activeStopNs ? activeStopNs : sendDrainStopNs;
+            const remainingMs = Math.ceil(Number(waitStopNs - nowNs) / 1_000_000);
             if (remainingMs <= 0) {
                 break;
             }
-            const readyCount = poller.wait(pollBuffer, sendPending.every(Boolean) ? Math.max(1, Math.min(remainingMs, 2_147_483_647)) : 0);
+            // The public send Promise is the completion wake for this event-loop
+            // turn.  Poll receive readiness without a timer so Promise admission is
+            // never advanced by a periodic 1-10 ms progress pump.
+            const readyCount = poller.wait(pollBuffer, 0);
             for (let offset = 0; offset < readyCount; offset += 1) {
                 const index = pollBuffer.slot(offset);
                 if (!Number.isInteger(index) || index < 0 || index >= sockets.length) {
@@ -142,8 +139,8 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
                 }
                 const event = { revents: pollBuffer.revents(offset) };
                 if (pollEventHas(event, POLLIN)) {
-                    const reply = replies[index];
-                    while (recvNoWaitInto(sockets[index], reply)) {
+                    while (recvNoWaitInto(sockets[index], replies[index])) {
+                        const reply = replies[index];
                         try {
                             const payload = measurementPayload(reply.parts);
                             if (!payload)
@@ -154,19 +151,18 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
                             reply.close();
                             replies[index] = new zlink.Received();
                         }
+                        await sleepImmediate();
                     }
                 }
-                if (pollEventHas(event, POLLOUT)) {
-                    sendPending[index] = false;
-                    poller.modify(sockets[index], pollEvents(POLLIN));
-                }
             }
+            await sleepImmediate();
         }
-        // Send one wire-level stop token per client socket after the active
-        // window. The receiver's tail drain consumes queued payloads and tokens.
-        for (const socket of sockets) {
-            await sendStopTokenWithRetry(socket, routerClient, poller, pollBuffer);
+        if (!sendsDone) {
+            throw new Error('multi routed send admission drain timed out');
         }
+        await sendsCompletion;
+        if (sendFailure)
+            throw sendFailure;
         const result = await collector.finish();
         for (const metricLine of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs)) {
             console.log(metricLine);
@@ -192,19 +188,10 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
     const router = zlink.createRouterSocket(ctx);
     const poller = zlink.createPoller();
     let received = new zlink.Received();
-    const pending = [];
+    const pendingTasks = new Set();
+    let sendFailure = null;
     let pollBuffer = null;
     let rl = null;
-    let pollMask = POLLIN;
-    const drainPending = async () => {
-        while (pending.length > 0) {
-            const reply = pending[0];
-            if (!tryServerReply(router, reply.routingId, reply.parts)) {
-                return;
-            }
-            pending.shift();
-        }
-    };
     try {
         applySocketPolicy(router, { transport: options.transport });
         configureTlsServer(router, options.transport);
@@ -219,63 +206,59 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
         const readyBarrier = waitForConnectionReadyCount(router, options.clients);
         console.log(`READY,${options.endpoint}`);
         rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-        for await (const line of rl) {
-            if (line !== `START,${options.msgSize}`) {
+        let stopRequested = false;
+        const started = await new Promise((resolve) => {
+            rl.on('line', (line) => {
                 if (line === 'STOP' || line === 'QUIT') {
-                    return;
+                    stopRequested = true;
+                    resolve(false);
                 }
-                continue;
-            }
-            await readyBarrier;
-            let stopTokenCount = 0;
-            while (stopTokenCount < options.clients) {
-                const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
-                if (!ready) {
-                    continue;
+                else if (line === `START,${options.msgSize}`) {
+                    resolve(true);
                 }
-                if (pollEventHas(ready, POLLOUT)) {
-                    await drainPending();
-                }
-                if (pollEventHas(ready, POLLIN)) {
-                    while (router.recv(received, zlink.RecvFlags.DontWait)) {
-                        try {
-                            if (!received.routingId) {
-                                throw new Error('routed echo received without routing id');
-                            }
-                            if (isStopTokenParts(received.parts)) {
-                                stopTokenCount += 1;
-                                continue;
-                            }
-                            const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
-                            if (received.parts.length !== expectedParts
-                                || (expectedParts === 2 && received.parts[1].data().length !== 0)) {
-                                const partSizes = received.parts.map((part) => part.data().length).join(',');
-                                throw new Error(`invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`);
-                            }
-                            if (pending.length === 0
-                                && tryServerReply(router, received.routingId, received.parts)) {
-                                continue;
-                            }
-                            pending.push({
-                                routingId: zlink.RoutingId.from(received.routingId.toBytes()),
-                                parts: received.parts.map((part) => Buffer.from(part.data()))
-                            });
-                        }
-                        finally {
-                            received.close();
-                            received = new zlink.Received();
-                        }
-                    }
-                    await drainPending();
-                }
-                const nextPollMask = pending.length > 0 ? POLLIN | POLLOUT : POLLIN;
-                if (nextPollMask !== pollMask) {
-                    poller.modify(router, pollEvents(nextPollMask));
-                    pollMask = nextPollMask;
-                }
-            }
-            break;
+            });
+        });
+        if (!started) {
+            return;
         }
+        await readyBarrier;
+        while (!stopRequested) {
+            // Pending public send Promises and stdin both run on this event loop.
+            // A zero-time readiness probe followed by setImmediate keeps those
+            // signal-driven continuations runnable without a timer pump.
+            const ready = waitPollerOne(poller, pollBuffer, 0);
+            if (ready && pollEventHas(ready, POLLIN)) {
+                while (router.recv(received, zlink.RecvFlags.DontWait)) {
+                    try {
+                        if (!received.routingId) {
+                            throw new Error('routed echo received without routing id');
+                        }
+                        const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+                        if (received.parts.length !== expectedParts
+                            || (expectedParts === 2 && received.parts[1].data().length !== 0)) {
+                            const partSizes = received.parts.map((part) => part.data().length).join(',');
+                            throw new Error(`invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`);
+                        }
+                        // Snapshot only the application parts before releasing this
+                        // receive envelope. routingId remains transport metadata and is
+                        // never echoed as an application frame.
+                        const task = sendServerReply(router, zlink.RoutingId.from(received.routingId.toBytes()), received.parts.map((part) => Buffer.from(part.data())));
+                        pendingTasks.add(task);
+                        task.catch((error) => { sendFailure = error; })
+                            .finally(() => pendingTasks.delete(task));
+                    }
+                    finally {
+                        received.close();
+                        received = new zlink.Received();
+                    }
+                    await sleepImmediate();
+                }
+            }
+            await sleepImmediate();
+            if (sendFailure)
+                throw sendFailure;
+        }
+        await Promise.all(pendingTasks);
     }
     finally {
         rl?.close();

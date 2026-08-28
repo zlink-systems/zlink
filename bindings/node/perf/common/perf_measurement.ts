@@ -69,7 +69,7 @@ function decodeMetricHeader(buffer) {
 // decode_header (~106-119) decode the metric header strictly at byte 0 of
 // the first part and reject any payload whose size does not match the
 // expected payload size. No magic scanning / offset search. The same
-// strict contract applies to multi PUBSUB/SPOT
+// strict contract applies to multi PUBSUB
 // (perf_multi_client_helpers.hpp recv_one_message_header ~621-624 decodes
 // at offset 0; the capture scan is STREAM-raw-only and unused here).
 function decodeMetricHeaderFromParts(parts, expectedSize) {
@@ -169,9 +169,7 @@ function isEchoPattern(pattern) {
     || pattern === 'MULTI_ROUTER_ROUTER'
     || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
     || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-    || pattern === 'MULTI_STREAM'
-    || pattern === 'MULTI_SPOT_REQREP'
-    || pattern === 'MULTI_SPOT_SENDSEND';
+    || pattern === 'MULTI_STREAM';
 }
 
 function summarizeMetrics(

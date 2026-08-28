@@ -113,8 +113,8 @@ run_external_stream_client() {
     "${STREAM_CLIENT}" --transport "${transport}" --pattern STREAM \
     --sizes "${size}" --runs 1 --duration "${duration}" \
     --ccu "${stream_clients}" --io-threads "${stream_client_io_threads}" \
-    --completion-wait-ms "${SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}}" \
-    --send-stop-token 1 --endpoint "${endpoint}" \
+    --completion-wait-ms "${PERF_MULTI_STREAM_COMPLETION_WAIT_MS:-${PERF_STREAM_COMPLETION_WAIT_MS:-${SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}}}}" \
+    --send-stop-token 0 --endpoint "${endpoint}" \
     > "${client_out}" 2> "${client_err}"
 }
 
@@ -366,8 +366,9 @@ Options:
 
 Notes:
   - Supported multi patterns:
-    MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER,MULTI_ROUTER_ROUTER,MULTI_PUBSUB,
-    MULTI_STREAM
+    MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER_SENDSEND,MULTI_DEALER_ROUTER_REQREP,
+    MULTI_ROUTER_ROUTER_SENDSEND,MULTI_ROUTER_ROUTER_REQREP,MULTI_PUBSUB,MULTI_STREAM
+  - MULTI_DEALER_ROUTER and MULTI_ROUTER_ROUTER remain accepted input aliases.
   - If GOMAXPROCS is unset, PERF_GO_GOMAXPROCS is an explicit positive-integer override.
     Otherwise --io-threads/PERF_IO_THREADS derives Go scheduler parallelism
     with a minimum of 4.
@@ -686,6 +687,14 @@ normalize_multi_pattern() {
   if [[ "${raw}" == MULTI_* ]]; then
     raw="${raw#MULTI_}"
   fi
+  case "${raw}" in
+    DEALER_ROUTER|DEALER_ROUTER_SENDSEND)
+      raw="DEALER_ROUTER_SENDSEND"
+      ;;
+    ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND)
+      raw="ROUTER_ROUTER_SENDSEND"
+      ;;
+  esac
   if [[ "${raw}" == "STREAMS" ]]; then
     raw="STREAM"
   fi
@@ -722,7 +731,7 @@ pattern_msg_sizes() {
 }
 
 if [[ "${PATTERN}" == "ALL" ]]; then
-	PATTERNS=("MULTI_DEALER_DEALER" "MULTI_DEALER_ROUTER" "MULTI_ROUTER_ROUTER" "MULTI_PUBSUB" "MULTI_STREAM")
+	PATTERNS=("MULTI_DEALER_DEALER" "MULTI_DEALER_ROUTER_SENDSEND" "MULTI_DEALER_ROUTER_REQREP" "MULTI_ROUTER_ROUTER_SENDSEND" "MULTI_ROUTER_ROUTER_REQREP" "MULTI_PUBSUB" "MULTI_STREAM")
 else
   IFS=',' read -r -a RAW_PATTERNS <<< "${PATTERN}"
   PATTERNS=()
@@ -739,14 +748,14 @@ fi
 
 pattern_transports() {
   case "$1" in
-    MULTI_ROUTER_ROUTER)
+    MULTI_ROUTER_ROUTER_SENDSEND)
       if [[ "${PLATFORM}" == "windows" ]]; then
         echo "tcp tls ws wss"
       else
         echo "tcp tls ws wss ipc"
       fi
       ;;
-	MULTI_STREAM|MULTI_PUBSUB|MULTI_DEALER_DEALER|MULTI_DEALER_ROUTER)
+	MULTI_STREAM|MULTI_PUBSUB|MULTI_DEALER_DEALER|MULTI_DEALER_ROUTER_SENDSEND)
       echo "tcp tls ws wss"
       ;;
     *)
@@ -916,7 +925,7 @@ emit_effective_options_multi() {
   echo "- go_gomaxprocs: ${GOMAXPROCS:-unset}"
   echo "- go_gomaxprocs_source: ${GO_GOMAXPROCS_SOURCE}"
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" ]]; then
-    echo "- go_gomaxprocs_case_overrides: MULTI_DEALER_DEALER/tcp/262144=8,MULTI_ROUTER_ROUTER/tcp/64=8,MULTI_ROUTER_ROUTER/tls/64=8,MULTI_ROUTER_ROUTER/tls/256=8,MULTI_ROUTER_ROUTER/tls/1024=8"
+    echo "- go_gomaxprocs_case_overrides: MULTI_DEALER_DEALER/tcp/262144=8,MULTI_ROUTER_ROUTER_SENDSEND/tcp/64=8,MULTI_ROUTER_ROUTER_SENDSEND/tls/64=8,MULTI_ROUTER_ROUTER_SENDSEND/tls/256=8,MULTI_ROUTER_ROUTER_SENDSEND/tls/1024=8"
   else
     echo "- go_gomaxprocs_case_overrides: none"
   fi
@@ -1140,28 +1149,28 @@ resolve_case_gomaxprocs() {
     return
   fi
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" \
-    && "${pattern}" == "MULTI_ROUTER_ROUTER" \
+    && "${pattern}" == "MULTI_ROUTER_ROUTER_SENDSEND" \
     && "${transport}" == "tcp" \
     && "${size}" == "64" ]]; then
     echo "8"
     return
   fi
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" \
-    && "${pattern}" == "MULTI_ROUTER_ROUTER" \
+    && "${pattern}" == "MULTI_ROUTER_ROUTER_SENDSEND" \
     && "${transport}" == "tls" \
     && "${size}" == "64" ]]; then
     echo "8"
     return
   fi
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" \
-    && "${pattern}" == "MULTI_ROUTER_ROUTER" \
+    && "${pattern}" == "MULTI_ROUTER_ROUTER_SENDSEND" \
     && "${transport}" == "tls" \
     && "${size}" == "256" ]]; then
     echo "8"
     return
   fi
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" \
-    && "${pattern}" == "MULTI_ROUTER_ROUTER" \
+    && "${pattern}" == "MULTI_ROUTER_ROUTER_SENDSEND" \
     && "${transport}" == "tls" \
     && "${size}" == "1024" ]]; then
     echo "8"

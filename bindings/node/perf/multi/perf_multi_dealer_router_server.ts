@@ -9,12 +9,10 @@ const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
 const {
   POLLIN,
-  POLLOUT,
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
   pollEvents,
-  tryRoutedSocketSend,
   measurementPayload,
   waitPollerOne
 } = require('./perf_multi_runtime');

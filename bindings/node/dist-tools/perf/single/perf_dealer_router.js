@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerStatus, } = require('./perf_single_common');
 async function runDealerRouterBenchmark(msgSize, options) {
     if (options.transport === 'inproc') {
         return runLocalSocketOneWayBenchmark({
@@ -34,11 +34,7 @@ async function runDealerRouterBenchmark(msgSize, options) {
             runId: options.runId ?? 1,
             options,
         });
-        const workerError = waitForWorkerError(worker);
-        await Promise.race([
-            waitForWorkerMessage(worker, 'ready'),
-            workerError.then((message) => Promise.reject(new Error(message.message)))
-        ]);
+        waitForWorkerStatus(worker, 3);
         // The worker reports ready only after its CONNECTION_READY monitor has
         // completed. A second ROUTER-side monitor wait requires recv activity to
         // progress and would deadlock before the active receive loop starts.
@@ -56,11 +52,8 @@ async function runDealerRouterBenchmark(msgSize, options) {
         // channel. The worker connection-ready gate above is the only cross-thread
         // sync; the receiver uses blocking recv + drain and exits on the wire
         // stop token (C perf_dealer_router.cpp recv-until-stop-token model).
-        const recvTask = drainRouterRecvInto(router, msgSize, Object.assign(collector, { runId, activeStartNs }), { recordUntilNs: activeStopNs });
-        await Promise.race([
-            recvTask,
-            workerError.then((message) => Promise.reject(new Error(message.message)))
-        ]);
+        drainRouterRecvInto(router, msgSize, Object.assign(collector, { runId, activeStartNs }), { recordUntilNs: activeStopNs });
+        waitForWorkerStatus(worker, 4);
         const result = collector.finish();
         emitSingleSocketHwmDetail(router, 'DEALER_ROUTER', options.transport, 'receiver', msgSize);
         return result;

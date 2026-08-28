@@ -66,9 +66,24 @@ function resolveMultiConnectConcurrency(clientCount) {
   return clientCount >= 10000 ? 1024 : 128;
 }
 
+function resolveMultiMonitorHwm(environment = process.env) {
+  for (const name of ['PERF_MULTI_MONITOR_HWM', 'PERF_MONITOR_HWM']) {
+    const raw = environment[name];
+    if (raw === undefined || raw === '') {
+      continue;
+    }
+    const value = Number(raw);
+    if (Number.isSafeInteger(value) && value >= 0) {
+      return value;
+    }
+  }
+  return 4_096_000;
+}
+
 module.exports = {
   benchmarkEndpoint,
   parseMultiArgs: parseArgs,
   reservePort,
-  resolveMultiConnectConcurrency
+  resolveMultiConnectConcurrency,
+  resolveMultiMonitorHwm
 };

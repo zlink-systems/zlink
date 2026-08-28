@@ -3,7 +3,7 @@
 """Core `send_complete`-driven async send and reply-driven request completion.
 
 Zero binding-owned threads, queues, or retry. HWM-managed **send** (PAIR
-send, DEALER/ROUTER routed send) is admitted by ``zlink_send_async`` and
+send, DEALER/ROUTER/STREAM routed send) is admitted by ``zlink_send_async`` and
 completed by the single ``zlink_send_complete_handler`` installed on the
 socket — inline when Core admits immediately, or later from whatever
 context Core chooses to dispatch the callback from (its own async mailbox
@@ -338,7 +338,7 @@ class RoutedSendOwner:
         # DEALER always passes `target=None` here — Core commits one
         # weighted selection at submit time (`zlink_send_async_options_t`
         # doc, core/include/zlink/socket/api.h).
-        target = self._select_target(router_rid) if self._role == SocketType.ROUTER else None
+        target = self._select_target(router_rid) if self._role != SocketType.DEALER else None
         # `zlink_send_async_options_t.timeout_ms` is a per-operation Core
         # deadline, unrelated to `ZLINK_OPT_SNDTIMEO`. 0 means no deadline:
         # Core's own

@@ -1,4 +1,3 @@
-import asyncio
 import threading
 import time
 
@@ -86,17 +85,19 @@ def _run_replier(replier, state, drain_timeout_s):
         state["error"] = exc
 
 
-def _request_operation(requester, routing_id, parts, timeout_s):
+def _request_operation_sync(requester, routing_id, parts, timeout_s):
     operation = requester.request() if routing_id is None else requester.request(routing_id)
-    return operation.messages(*parts).timeout(timeout_s).submit()
+    return operation.messages(*parts).timeout(timeout_s).submit_sync(
+        flags=zlink.SendFlags.NONE
+    )
 
 
-async def _routing_probe(requester, routing_id, timeout_s):
+def _routing_probe(requester, routing_id, timeout_s):
     deadline = time.perf_counter() + timeout_s
     expected = measurement_parts(_PROBE_TOKEN)
     while time.perf_counter() < deadline:
         try:
-            reply = await _request_operation(requester, routing_id, expected, timeout_s)
+            reply = _request_operation_sync(requester, routing_id, expected, timeout_s)
         except zlink.SubmitError as exc:
             if _transient_submit_result(exc.result):
                 continue
@@ -108,7 +109,7 @@ async def _routing_probe(requester, routing_id, timeout_s):
     return False
 
 
-async def _run_requester(requester, routing_id, payload, *, run_id, msg_size, duration_s):
+def _run_requester(requester, routing_id, payload, *, run_id, msg_size, duration_s):
     timeout_s = max(0.001, resolve_single_reqrep_timeout_ms() / 1000.0)
     drain_timeout_s = max(0.001, resolve_single_reqrep_drain_timeout_ms() / 1000.0)
     latency = LatencySampler(resolve_single_latency_sample_cap())
@@ -120,6 +121,7 @@ async def _run_requester(requester, routing_id, payload, *, run_id, msg_size, du
 
     def on_reply(parts, error):
         nonlocal outstanding, completed, fatal
+        completed_at = time.perf_counter()
         outstanding -= 1
         if error is not None:
             if not (
@@ -143,6 +145,7 @@ async def _run_requester(requester, routing_id, payload, *, run_id, msg_size, du
                 or header["msg_size"] != msg_size
                 or header["sent_ts_ns"] <= 0
                 or now_ns < header["sent_ts_ns"]
+                or completed_at >= active_end
             ):
                 return
             completed += 1
@@ -155,7 +158,8 @@ async def _run_requester(requester, routing_id, payload, *, run_id, msg_size, du
         poller.add_socket(requester, zlink.PollEventFlag.POLLCOMPLETION, 0)
         while time.perf_counter() < active_end and fatal is None:
             backpressured = False
-            while time.perf_counter() < active_end:
+            submitted_since_progress = 0
+            while time.perf_counter() < active_end and fatal is None:
                 stamped = stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
                 operation = (
                     requester.request()
@@ -177,6 +181,15 @@ async def _run_requester(requester, routing_id, payload, *, run_id, msg_size, du
                     backpressured = True
                     break
                 seq += 1
+                submitted_since_progress += 1
+                if submitted_since_progress >= 64:
+                    # Completion callbacks run when this requester-owned
+                    # poller is progressed. Interleave a non-blocking poll
+                    # with submission so an auto-HWM that remains writable
+                    # for the whole active phase cannot defer every reply
+                    # until after the active cutoff.
+                    poller.wait(poll_events, 0)
+                    submitted_since_progress = 0
             if outstanding and (backpressured or time.perf_counter() >= active_end):
                 poller.wait(poll_events, 25)
 
@@ -199,11 +212,11 @@ async def _run_requester(requester, routing_id, payload, *, run_id, msg_size, du
     )
 
 
-async def _send_stop(requester, routing_id):
+def _send_stop(requester, routing_id):
     for _ in range(100):
         try:
             operation = requester.send() if routing_id is None else requester.send(routing_id)
-            await operation.message(STOP_TOKEN).submit()
+            operation.message(STOP_TOKEN).submit_sync(flags=zlink.SendFlags.NONE)
             return
         except zlink.SubmitError as exc:
             if not _transient_submit_result(exc.result):
@@ -211,7 +224,7 @@ async def _send_stop(requester, routing_id):
     raise RuntimeError("failed to submit request-reply stop token")
 
 
-async def run_reqrep_pattern(argv, *, pattern, routed_request):
+def run_reqrep_pattern(argv, *, pattern, routed_request):
     args = parse_single_args(argv, pattern=pattern.lower())
     run_id = benchmark_run_id()
     payload = new_payload(args.msg_size)
@@ -258,9 +271,9 @@ async def run_reqrep_pattern(argv, *, pattern, routed_request):
                 metrics = None
                 run_error = None
                 try:
-                    if not await _routing_probe(requester, routing_id, request_timeout_s):
+                    if not _routing_probe(requester, routing_id, request_timeout_s):
                         raise RuntimeError("request-reply routing probe failed")
-                    metrics = await _run_requester(
+                    metrics = _run_requester(
                         requester,
                         routing_id,
                         payload,
@@ -273,7 +286,7 @@ async def run_reqrep_pattern(argv, *, pattern, routed_request):
 
                 stop_error = None
                 try:
-                    await _send_stop(requester, routing_id)
+                    _send_stop(requester, routing_id)
                 except BaseException as exc:
                     state["stop"] = True
                     stop_error = exc

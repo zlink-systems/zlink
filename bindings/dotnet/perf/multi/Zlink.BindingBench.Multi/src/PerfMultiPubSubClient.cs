@@ -15,6 +15,7 @@ internal static class PerfMultiPubSubClient
         int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
+        ulong monitorHwmBytes = ResolveMultiMonitorHwmBytes();
         int latencySampleCap = ResolveMultiLatencySampleCap(options);
         int clientCount = ResolveMultiClients(options);
         int durationSeconds = ResolveMultiDurationSeconds(options);
@@ -36,7 +37,8 @@ internal static class PerfMultiPubSubClient
                 client.Options.SendTimeout = TimeSpan.FromMilliseconds(sndTimeoutMs);
                 client.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeoutMs);
                 client.SetSubscription(string.Empty);
-                var monitor = client.MonitorOpen(SocketEvent.ConnectionReady);
+                var monitor = client.MonitorOpen(SocketEvent.ConnectionReady,
+                    monitorHwmBytes);
                 client.Connect(endpoint);
                 clients.Add(client);
                 monitors.Add(monitor);
@@ -70,7 +72,7 @@ internal static class PerfMultiPubSubClient
             var result = RunMultiPubSubClientLoop(pollManager, activeClients,
                 size, latencySampleCap, durationSeconds);
 
-            if (result.measureCount <= 0)
+            if (result.measureCount <= 0 || result.latencyCount <= 0)
                 return 2;
 
             PrintResult(options.Pattern, options.Transport, size, result.throughput,
@@ -86,7 +88,7 @@ internal static class PerfMultiPubSubClient
     }
 
     private static (double throughput, double latencyNs, double latencyP95Ns,
-        double latencyP99Ns, long measureCount)
+        double latencyP99Ns, long measureCount, long latencyCount)
         RunMultiPubSubClientLoop(PollManager pollManager,
             List<ISocket> activeClients, int msgSize, int latencySampleCap,
             int durationSeconds)
@@ -95,6 +97,7 @@ internal static class PerfMultiPubSubClient
         const uint expectedRunId = 1;
         var activeLatSamples = new List<double>(latencySampleCap);
         long activeSampleSeen = 0;
+        double activeSampleSum = 0.0;
         uint rng = 0xA341316Cu;
         long measureCount = 0;
 
@@ -175,8 +178,8 @@ internal static class PerfMultiPubSubClient
                             if (header.SentTsNs > 0)
                             {
                                 AddLatencySample(activeLatSamples,
-                                    ref activeSampleSeen, latencySampleCap,
-                                    ref rng, header);
+                                    ref activeSampleSeen, ref activeSampleSum,
+                                    latencySampleCap, ref rng, header);
                             }
                         }
                         else if (header.Phase == (uint)PerfPhase.Cooldown)
@@ -199,12 +202,14 @@ internal static class PerfMultiPubSubClient
         // PERF_POLICY: report measured latency only. C
         // normalize_latency_stats reports zeros when no samples and never
         // fabricates a duration-derived latency.
-        var latency = ComputeLatencyStats(activeLatSamples);
+        var latency = ComputeMultiLatencyStats(activeLatSamples,
+            activeSampleSeen, activeSampleSum);
         double latencyNs = latency.mean;
         double latencyP95Ns = Math.Max(latency.p95, latencyNs);
         double latencyP99Ns = Math.Max(latency.p99, latencyP95Ns);
 
-        return (throughput, latencyNs, latencyP95Ns, latencyP99Ns, measureCount);
+        return (throughput, latencyNs, latencyP95Ns, latencyP99Ns,
+            measureCount, activeSampleSeen);
     }
 
     // Matches C perf_multi_pubsub_client.cpp: poll for at most 100ms and
@@ -233,16 +238,16 @@ internal static class PerfMultiPubSubClient
     }
 
     private static void AddLatencySample(List<double> samples,
-        ref long sampleSeen, int latencySampleCap, ref uint rng,
-        PerfMetricHeader header)
+        ref long sampleSeen, ref double sampleSum, int latencySampleCap,
+        ref uint rng, PerfMetricHeader header)
     {
         if (header.SentTsNs == 0)
             return;
         ulong nowNs = EpochNs();
         if (nowNs < header.SentTsNs)
             return;
-        ReservoirSample(samples, nowNs - header.SentTsNs, ref sampleSeen,
-            latencySampleCap, ref rng);
+        ReservoirSampleMulti(samples, nowNs - header.SentTsNs,
+            ref sampleSeen, ref sampleSum, latencySampleCap, ref rng);
     }
 
     private static bool TrySubscribeNoWait(ISubSocket socket,

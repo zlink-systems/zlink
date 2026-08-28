@@ -5,9 +5,7 @@ mod common;
 
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, Instant};
-use zlink::{
-    DealerSocket, Message, POLLOUT, PollEvent, Poller, RoutingId, SocketMonitor, SubmitResult,
-};
+use zlink::{DealerSocket, Message, RoutingId, SocketMonitor};
 
 fn main() {
     let args = common::MultiArgs::parse();
@@ -30,7 +28,7 @@ fn main() {
             let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");
             common::setup_raw_tls_client(&sock, &tls).expect("client tls");
         }
-        let mon = SocketMonitor::open(&sock).expect("monitor");
+        let mon = common::open_connection_ready_monitor(&sock);
         sock.connect(&args.endpoint).expect("connect");
         sockets.push(sock);
         monitors.push(mon);
@@ -60,99 +58,55 @@ fn main() {
         return;
     }
 
-    let poller = Poller::new().expect("poller");
-    for (index, socket) in sockets.iter().enumerate() {
-        poller
-            .add_socket(socket, POLLOUT, index)
-            .expect("poller add");
-    }
-    let mut poll_events = vec![PollEvent::default(); sockets.len().max(1)];
-
     let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
+    let drain_deadline = deadline + common::resolve_multi_send_drain_timeout();
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
-    let mut send_pending = vec![false; sockets.len()];
-    let mut seq: u64 = 1;
-    while Instant::now() < deadline {
-        let mut progressed = false;
-        for (index, socket) in sockets.iter().enumerate() {
-            if send_pending[index] {
-                continue;
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-
-            let mut msg = Message::with_size(payload_size).expect("msg");
-            common::encode_header(
-                msg.data_mut(),
-                common::PHASE_ACTIVE,
-                args.msg_size as u32,
-                seq,
-            );
-            match perf_submit_measurement!(socket.send(), msg) {
-                Ok(()) => {
-                    seq += 1;
-                    progressed = true;
-                }
-                Err(err) if err.code() == SubmitResult::Backpressured => {
-                    send_pending[index] = true;
-                }
-                Err(err) if err.code() == SubmitResult::NotConnected => {
-                    send_pending[index] = true;
-                }
-                Err(err) => panic!("send failed: {err}"),
-            }
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        let remaining_ms = if progressed {
-            0
-        } else {
-            deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis()
-                .clamp(1, 50) as i64
-        };
-        match poller.wait(&mut poll_events, remaining_ms) {
-            Ok(event_count) => {
-                for event in &poll_events[..event_count] {
-                    if event.revents & POLLOUT != 0 && event.slot < send_pending.len() {
-                        send_pending[event.slot] = false;
-                    }
-                }
-            }
-            Err(err) => panic!("poller wait failed: {err}"),
-        }
-    }
-
-    // C perf_multi_dealer_dealer_client.cpp run_single_size_case(): after the
-    // send window, publish the wire stop token on every socket so the server's
-    // poll wakes (the stop token is NOT the server's count anchor — its
-    // measure-seconds deadline is). Bounded retry through transient backpressure.
-    for socket in &sockets {
-        let mut sent = false;
-        for _ in 0..100 {
-            match socket
-                .send()
-                .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
-                .submit_sync(zlink::SendFlags::NONE) {
-                Ok(()) => {
-                    sent = true;
-                    break;
-                }
-                Err(err)
-                    if matches!(
-                        err.code(),
-                        SubmitResult::Backpressured | SubmitResult::NotConnected
-                    ) =>
-                {
+    let mut sequence = 1u64;
+    let mut tasks = common::ConcurrentTasks::new(sockets.len());
+    while Instant::now() < deadline || (tasks.any_pending() && Instant::now() < drain_deadline) {
+        if Instant::now() < deadline {
+            for (slot, socket) in sockets.iter().enumerate() {
+                if tasks.is_pending(slot) {
                     continue;
                 }
-                Err(err) => panic!("stop token send failed: {err}"),
+                let mut msg = Message::with_size(payload_size).expect("msg");
+                common::encode_header(
+                    msg.data_mut(),
+                    common::PHASE_ACTIVE,
+                    args.msg_size as u32,
+                    sequence,
+                );
+                sequence += 1;
+                tasks.insert(slot, perf_submit_measurement_async!(socket.send(), msg));
             }
         }
-        let _ = sent;
+        let ready = tasks.poll_ready();
+        for (_, result) in &ready {
+            if let Err(err) = result {
+                panic!("send failed: {err}");
+            }
+        }
+        if ready.is_empty() && tasks.any_pending() {
+            let wait_deadline = if Instant::now() < deadline {
+                deadline
+            } else {
+                drain_deadline
+            };
+            tasks.wait_for_wake(wait_deadline.saturating_duration_since(Instant::now()));
+        }
+    }
+    assert!(!tasks.any_pending(), "send admission drain timed out");
+    let stop_futures = sockets
+        .iter()
+        .map(|socket| {
+            socket
+                .send()
+                .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
+                .submit()
+        })
+        .collect();
+    for result in common::block_on_all(stop_futures) {
+        result.unwrap_or_else(|err| panic!("stop token send failed: {err}"));
     }
 
     println!("CLIENT_DONE,{}", args.msg_size);

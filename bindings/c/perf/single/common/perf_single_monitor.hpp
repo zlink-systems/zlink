@@ -5,25 +5,38 @@
 
 #include <chrono>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 
 #include <zlink.h>
+
+inline uint64_t perf_single_monitor_hwm_bytes ()
+{
+    const uint64_t default_hwm_bytes = 4096000;
+    const char *value = std::getenv ("PERF_MONITOR_HWM_BYTES");
+    if (!value || !*value)
+        return default_hwm_bytes;
+    if (std::strspn (value, "0123456789") != std::strlen (value))
+        return default_hwm_bytes;
+
+    errno = 0;
+    char *end = NULL;
+    const unsigned long long parsed = std::strtoull (value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0'
+        || parsed > (std::numeric_limits<uint64_t>::max) ())
+        return default_hwm_bytes;
+    return static_cast<uint64_t> (parsed);
+}
 
 inline void configure_perf_monitor_socket (void *monitor_)
 {
     if (!monitor_)
         return;
 
-    const int monitor_hwm = parse_positive_env ("PERF_MONITOR_HWM_BYTES", 4096000);
     set_sockopt_int (monitor_, ZLINK_OPT_LINGER, 0, "ZLINK_OPT_LINGER");
-    if (monitor_hwm > 0) {
-        set_sockopt_u64 (monitor_, ZLINK_OPT_SNDHWM, static_cast<uint64_t> (monitor_hwm),
-                         "ZLINK_OPT_SNDHWM");
-        set_sockopt_u64 (monitor_, ZLINK_OPT_RCVHWM, static_cast<uint64_t> (monitor_hwm),
-                         "ZLINK_OPT_RCVHWM");
-    }
 }
 
 inline bool is_socket_monitor_error_event (uint64_t event_)
@@ -56,9 +69,11 @@ inline void *open_configured_socket_monitor (void *socket_, uint64_t events_)
     if (!socket_ || events_ == 0)
         return NULL;
 
+    const uint64_t monitor_hwm = perf_single_monitor_hwm_bytes ();
     zlink_socket_monitor_open_options_t monitor_opts;
     memset (&monitor_opts, 0, sizeof (monitor_opts));
     monitor_opts.events = events_;
+    monitor_opts.monitor_hwm_bytes = monitor_hwm;
     void *monitor = zlink_socket_monitor_open (socket_, &monitor_opts);
     if (!monitor)
         return NULL;

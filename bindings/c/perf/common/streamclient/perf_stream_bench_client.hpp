@@ -171,6 +171,8 @@ class bench_client_t : public bench_client_iface_t
         outstanding_total (0),
         seq_gen (0),
         bytes_recv_measure (0),
+        latency_rtt_sum_ns_measure (0),
+        latency_count_measure (0),
         send_error_measure (0),
         recv_error_measure (0),
         timeout_error_measure (0),
@@ -333,33 +335,37 @@ class bench_client_t : public bench_client_iface_t
     // Record received bytes and RTT derived from stamped payload header.
     void on_recv_done (size_t bytes, uint64_t sent_ts_ns) override
     {
+        const bool count_active_completion = active_metrics_enabled_now ();
+
+        if (count_active_completion && sent_ts_ns > 0) {
+            const uint64_t now_ns = perf_stream_common::perf_stream_now_ns ();
+            if (now_ns >= sent_ts_ns) {
+                const uint64_t rtt_ns = now_ns - sent_ts_ns;
+                bytes_recv_measure.fetch_add (static_cast<long long> (bytes),
+                                              std::memory_order_relaxed);
+                latency_rtt_sum_ns_measure.fetch_add (rtt_ns, std::memory_order_relaxed);
+                latency_count_measure.fetch_add (1, std::memory_order_relaxed);
+                add_rtt_sample (perf_stream_common::perf_stream_echo_latency_ns (rtt_ns));
+            }
+        }
+
         const long remaining = outstanding_total.fetch_sub (1, std::memory_order_relaxed) - 1;
         if (remaining <= 0) {
             std::lock_guard<std::mutex> lk (completion_wait_mu);
             completion_wait_cv.notify_all ();
         }
-        if (!collect_metrics.load (std::memory_order_acquire))
-            return;
-
-        bytes_recv_measure.fetch_add (static_cast<long long> (bytes), std::memory_order_relaxed);
-
-        if (sent_ts_ns > 0) {
-            const uint64_t now_ns = perf_multi_metric::now_ns ();
-            if (now_ns >= sent_ts_ns)
-                add_rtt_sample (static_cast<double> (now_ns - sent_ts_ns));
-        }
     }
 
     void on_send_error () override
     {
-        if (!collect_metrics.load (std::memory_order_acquire))
+        if (!active_metrics_enabled_now ())
             return;
         send_error_measure.fetch_add (1, std::memory_order_relaxed);
     }
 
     void on_recv_error () override
     {
-        if (!collect_metrics.load (std::memory_order_acquire))
+        if (!active_metrics_enabled_now ())
             return;
         recv_error_measure.fetch_add (1, std::memory_order_relaxed);
     }
@@ -378,12 +384,21 @@ class bench_client_t : public bench_client_iface_t
 
     void on_size_mismatch () override
     {
-        if (!collect_metrics.load (std::memory_order_acquire))
+        if (!active_metrics_enabled_now ())
             return;
         size_mismatch_measure.fetch_add (1, std::memory_order_relaxed);
     }
 
   private:
+    bool active_metrics_enabled_now () const
+    {
+        return perf_stream_common::perf_stream_is_active_completion (
+          collect_metrics.load (std::memory_order_acquire),
+          mode.load (std::memory_order_acquire) == phase_active,
+          perf_stream_common::perf_stream_now_ns (),
+          phase_end_ns.load (std::memory_order_acquire));
+    }
+
     int resolve_connect_batch_limit () const
     {
         const char *raw = std::getenv ("PERF_MULTI_STREAM_CONNECT_BATCH");
@@ -498,14 +513,7 @@ class bench_client_t : public bench_client_iface_t
             copy[i]->start_traffic ();
     }
 
-    void on_timeout (long count)
-    {
-        if (count <= 0)
-            return;
-        timeout_error_measure.fetch_add (count, std::memory_order_relaxed);
-    }
-
-    int effective_phase_completion_ms (size_t size) const
+    int effective_tail_drain_ms (size_t size) const
     {
         int completion_wait_ms = std::max (0, opt.completion_wait_ms);
         // Large frames leave a longer tail of in-flight echoes in callback
@@ -516,7 +524,7 @@ class bench_client_t : public bench_client_iface_t
         return completion_wait_ms;
     }
 
-    // Run the active window, then stop and wait for in-flight ops to finish.
+    // Run the active window, freeze its metrics, then drain the lifecycle tail.
     bool run_active_window (int duration_s)
     {
         if (duration_s <= 0)
@@ -534,30 +542,25 @@ class bench_client_t : public bench_client_iface_t
         std::this_thread::sleep_for (std::chrono::seconds (duration_s));
 
         mode.store (phase_ready, std::memory_order_release);
+        collect_metrics.store (false, std::memory_order_release);
 
         const int completion_wait_ms =
-          effective_phase_completion_ms (phase_size.load (std::memory_order_acquire));
+          effective_tail_drain_ms (phase_size.load (std::memory_order_acquire));
         if (completion_wait_ms > 0) {
             const auto completion_wait_deadline =
               std::chrono::steady_clock::now () + std::chrono::milliseconds (completion_wait_ms);
-            long remaining = 0;
-            {
-                std::unique_lock<std::mutex> lk (completion_wait_mu);
-                while (outstanding_total.load (std::memory_order_relaxed) > 0) {
-                    if (completion_wait_cv.wait_until (lk, completion_wait_deadline)
-                        == std::cv_status::timeout)
-                        break;
-                }
-
-                remaining = outstanding_total.load (std::memory_order_relaxed);
+            std::unique_lock<std::mutex> lk (completion_wait_mu);
+            while (outstanding_total.load (std::memory_order_relaxed) > 0) {
+                if (completion_wait_cv.wait_until (lk, completion_wait_deadline)
+                    == std::cv_status::timeout)
+                    break;
             }
-            if (remaining > 0) {
-                on_timeout (remaining);
-                on_abandon (remaining);
-            }
+            // A saturated active window normally has outstanding echoes at
+            // its cutoff.  Any remainder after this teardown grace is neither
+            // an active completion nor an active timeout.  The owning session
+            // drains it later or abandons it during its actual close.
         }
 
-        collect_metrics.store (false, std::memory_order_release);
         return true;
     }
 
@@ -581,6 +584,8 @@ class bench_client_t : public bench_client_iface_t
     void reset_measurement_counters ()
     {
         bytes_recv_measure.store (0, std::memory_order_relaxed);
+        latency_rtt_sum_ns_measure.store (0, std::memory_order_relaxed);
+        latency_count_measure.store (0, std::memory_order_relaxed);
         send_error_measure.store (0, std::memory_order_relaxed);
         recv_error_measure.store (0, std::memory_order_relaxed);
         timeout_error_measure.store (0, std::memory_order_relaxed);
@@ -653,16 +658,15 @@ class bench_client_t : public bench_client_iface_t
                 snapshot.push_back (
                   decode_double_bits (rtt_samples_bits[i].load (std::memory_order_acquire)));
             }
-            double sum_ns = 0.0;
-            for (size_t i = 0; i < snapshot.size (); ++i)
-                sum_ns += snapshot[i];
-            if (!snapshot.empty ())
-                out.mean_ns = sum_ns / static_cast<double> (snapshot.size ());
             std::sort (snapshot.begin (), snapshot.end ());
             out.p50_ns = perf_stream_common::percentile_from_sorted (snapshot, 0.50);
             out.p95_ns = perf_stream_common::percentile_from_sorted (snapshot, 0.95);
             out.p99_ns = perf_stream_common::percentile_from_sorted (snapshot, 0.99);
         }
+
+        out.mean_ns = perf_stream_common::perf_stream_echo_mean_ns (
+          latency_rtt_sum_ns_measure.load (std::memory_order_relaxed),
+          static_cast<uint64_t> (latency_count_measure.load (std::memory_order_relaxed)));
 
         out.send_error = send_error_measure.load (std::memory_order_relaxed);
         out.recv_error = recv_error_measure.load (std::memory_order_relaxed);
@@ -736,6 +740,8 @@ class bench_client_t : public bench_client_iface_t
 
     // --- Measurement counters (reset per-case) ---
     std::atomic<long long> bytes_recv_measure;
+    std::atomic<uint64_t> latency_rtt_sum_ns_measure;
+    std::atomic<long long> latency_count_measure;
     std::atomic<long> send_error_measure;
     std::atomic<long> recv_error_measure;
     std::atomic<long> timeout_error_measure;

@@ -2,23 +2,18 @@
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
-const { createMetricCollector, createPayload, createRunId, currentEpochNs, sleepImmediate, stampPayload, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, configureTlsClient, configureTlsServer, } = require('./perf_single_common');
-const { STOP_TOKEN_BYTES, isStopToken } = require('../perf_stop_token');
+const { createMetricCollector, createPayload, createRunId, currentEpochNs, stampPayload, } = require('../common/perf_metrics');
+const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsClient, releaseSenderWorker, spawnSenderWorker, waitForMonitorConnectionReady, waitForWorkerStatus, } = require('./perf_single_common');
+const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const SERVER_RID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
-const trace = (message) => {
-    if (process.env.PERF_DEBUG === '1')
-        console.error(`[socket-reqrep] ${message}`);
-};
 function closeParts(parts) {
     for (const part of parts ?? [])
         part?.close?.();
 }
 function appendMeasurement(op, payload) {
     op = op.message(payload);
-    if (process.env.PERF_PART_COUNT !== '1') {
+    if (process.env.PERF_PART_COUNT !== '1')
         op = op.message(Buffer.alloc(0));
-    }
     return op;
 }
 function measurementPayload(parts) {
@@ -35,125 +30,59 @@ function transientSubmit(error) {
             || error.result === zlink.SubmitResult.NotConnected
             || error.result === zlink.SubmitResult.NotFound);
 }
-function monitorReady(monitor) {
-    try {
-        return monitor.recv(zlink.RecvFlags.DontWait)?.event
-            === zlink.MonitorEventType.ConnectionReady;
-    }
-    catch (error) {
-        if (error instanceof zlink.RecvError
-            && error.result === zlink.RecvResult.NoData) {
-            return false;
-        }
-        throw error;
-    }
+function requestOperation(client, routedClient, payload, timeoutMs) {
+    const operation = routedClient ? client.request(SERVER_RID) : client.request();
+    return appendMeasurement(operation, payload).timeout(timeoutMs);
 }
-async function waitForRequestSocketsReady(server, serverMonitor, clientMonitor) {
-    const timeoutMs = Math.max(1, Number(process.env.PERF_CONNECT_READY_TIMEOUT_MS ?? 1000));
-    const deadline = Date.now() + timeoutMs;
-    const activity = new zlink.Received();
-    let serverReady = false;
-    let clientReady = false;
+function routingProbe(client, routedClient, timeoutMs) {
+    const expected = Buffer.from('__zlink_perf_reqrep_probe__');
+    const parts = requestOperation(client, routedClient, expected, timeoutMs)
+        .submit_sync(zlink.SendFlags.None);
     try {
-        while (Date.now() < deadline) {
-            server.recv(activity, zlink.RecvFlags.DontWait);
-            activity.close();
-            serverReady = serverReady || monitorReady(serverMonitor);
-            clientReady = clientReady || monitorReady(clientMonitor);
-            if (serverReady && clientReady) {
-                return;
-            }
-            await sleepImmediate();
-        }
+        const payload = measurementPayload(parts);
+        return payload !== null && payload.data().equals(expected);
     }
     finally {
-        activity.close();
-    }
-    throw new Error(`connection ready timeout after ${timeoutMs}ms server=${serverReady} client=${clientReady}`);
-}
-function drainServer(server) {
-    let stop = false;
-    const received = new zlink.Received();
-    try {
-        while (server.recv(received, zlink.RecvFlags.DontWait)) {
-            const parts = received.parts;
-            if (parts.length === 1 && isStopToken(parts[0].data())) {
-                stop = true;
-                received.close();
-                continue;
-            }
-            if (received.requestSeq === null) {
-                received.close();
-                continue;
-            }
-            const payload = measurementPayload(parts);
-            if (!payload) {
-                received.close();
-                continue;
-            }
-            appendMeasurement(received.reply(), Buffer.from(payload.data())).submit();
-            received.close();
-        }
-    }
-    finally {
-        received.close();
-    }
-    return stop;
-}
-async function handshakeRouters(client, server) {
-    await client.send(SERVER_RID).message(Buffer.from('PING')).submit();
-    const ping = new zlink.Received();
-    const pong = new zlink.Received();
-    try {
-        server.recv(ping);
-        if (!ping.routingId || ping.singlePartOrThrow().data().toString() !== 'PING') {
-            throw new Error('router request/reply handshake receive failed');
-        }
-        await server.send(ping.routingId).message(Buffer.from('PONG')).submit();
-        client.recv(pong);
-        if (pong.singlePartOrThrow().data().toString() !== 'PONG') {
-            throw new Error('router request/reply handshake reply failed');
-        }
-    }
-    finally {
-        pong.close();
-        ping.close();
+        closeParts(parts);
     }
 }
 async function runSocketReqRep(msgSize, options, routedClient) {
+    const endpoint = await benchmarkEndpoint(options.transport, routedClient ? `router-router-reqrep-${msgSize}` : `dealer-router-reqrep-${msgSize}`);
     const ctx = zlink.createContext();
     applyContextPolicy(ctx);
-    const server = zlink.createRouterSocket(ctx);
     const client = routedClient ? zlink.createRouterSocket(ctx)
         : zlink.createDealerSocket(ctx);
-    const serverMonitor = server.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     const clientMonitor = client.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     const completionPoller = zlink.createPoller();
     const completionEvents = zlink.createPollEvents(1);
-    const endpoint = await benchmarkEndpoint(options.transport, routedClient ? `router-router-reqrep-${msgSize}` : `dealer-router-reqrep-${msgSize}`);
-    let replierTask = null;
-    let stopReplier = false;
+    let worker = null;
     try {
-        applySocketPolicy(server, options);
         applySocketPolicy(client, options);
-        server.setRoutingId(SERVER_RID);
-        server.options.mandatory = true;
         if (routedClient) {
             client.setRoutingId(zlink.RoutingId.from(Buffer.from('CLIENT', 'ascii')));
             client.options.setConnectRoutingId(SERVER_RID);
             client.options.mandatory = true;
         }
-        configureTlsServer(server, options.transport);
-        configureTlsClient(client, options.transport);
-        server.bind(endpoint);
-        client.connect(endpoint);
-        trace('connected-called');
-        await waitForRequestSocketsReady(server, serverMonitor, clientMonitor);
         ctx.recalculateAutoHwm();
-        trace('ready');
-        if (routedClient) {
-            await handshakeRouters(client, server);
-            trace('handshake-done');
+        configureTlsClient(client, options.transport);
+        worker = spawnSenderWorker({
+            kind: 'socket_reqrep_replier',
+            transport: options.transport,
+            endpoint,
+            duration: options.duration,
+            msgSize,
+            runId: options.runId ?? 1,
+            options,
+        });
+        waitForWorkerStatus(worker, 1);
+        client.connect(endpoint);
+        waitForMonitorConnectionReady(clientMonitor);
+        releaseSenderWorker(worker);
+        const requestTimeoutMs = Number.isFinite(options.recvTimeoutMs)
+            ? Math.trunc(options.recvTimeoutMs)
+            : 200;
+        if (!routingProbe(client, routedClient, requestTimeoutMs)) {
+            throw new Error('request-reply routing probe failed');
         }
         completionPoller.add(client, [zlink.PollEventFlag.PollCompletion], 0);
         const runId = createRunId(options.runId ?? 1);
@@ -166,29 +95,17 @@ async function runSocketReqRep(msgSize, options, routedClient) {
             activeStartNs,
             activeStopNs,
             roundTrip: false,
-            acceptDrainCompletions: true,
         });
+        const payload = createPayload(msgSize);
         let seq = 1n;
         let outstanding = 0;
-        // parseSingleBinaryArgs yields NaN when PERF_SINGLE_RCVTIMEO_MS is unset,
-        // and NaN is not nullish, so `??` would forward it into timeout().
-        const requestTimeoutMs = Number.isFinite(options.recvTimeoutMs)
-            ? Math.trunc(options.recvTimeoutMs)
-            : 200;
         let failure = null;
-        let replierFailure = null;
-        let stopReceived = false;
         const observe = (error, parts) => {
             try {
                 if (error)
                     throw error;
-                const payload = measurementPayload(parts);
-                if (payload) {
-                    collector.recordPayload(payload.data(), currentEpochNs());
-                }
-                else {
-                    collector.recordPayload(null, currentEpochNs());
-                }
+                const replyPayload = measurementPayload(parts);
+                collector.recordPayload(replyPayload ? replyPayload.data() : null, currentEpochNs());
             }
             catch (error) {
                 if (!(error instanceof zlink.RequestError
@@ -201,85 +118,43 @@ async function runSocketReqRep(msgSize, options, routedClient) {
                 outstanding -= 1;
             }
         };
-        // Keep reply receive/reply work in an independent event-loop flow. The
-        // requester flow below can continue submitting and progressing completion
-        // callbacks while this flow drains the replier socket, matching C's three
-        // simultaneously active submit/progress/replier roles as closely as the
-        // single-threaded public Node runtime permits.
-        replierTask = (async () => {
-            while (!stopReplier) {
-                try {
-                    if (drainServer(server)) {
-                        stopReceived = true;
-                        return;
-                    }
-                }
-                catch (error) {
-                    replierFailure = error;
-                    return;
-                }
-                await sleepImmediate();
-            }
-        })();
-        while (currentEpochNs() < activeStopNs && !failure && !replierFailure) {
-            const payload = createPayload(msgSize);
+        while (currentEpochNs() < activeStopNs && !failure) {
             stampPayload(payload, { phase: 1, runId, msgSize, seq });
+            // A completion may be delivered inline from the same synchronous
+            // requester thread, so reserve the count before transferring ownership.
+            outstanding += 1;
+            let backpressured = false;
             try {
-                const operation = routedClient ? client.request(SERVER_RID) : client.request();
-                appendMeasurement(operation, payload).timeout(requestTimeoutMs)
+                requestOperation(client, routedClient, payload, requestTimeoutMs)
                     .submit_sync(zlink.SendFlags.DontWait, observe);
-                outstanding += 1;
                 seq += 1n;
             }
             catch (error) {
+                outstanding -= 1;
                 if (!transientSubmit(error))
                     throw error;
+                backpressured = true;
             }
-            // Let native request completions and admission failures dispatch. The
-            // request surface owns its pending limit; the runner does not impose an
-            // inflight/window cap.
-            completionPoller.wait(completionEvents, 0);
-            await sleepImmediate();
+            // PollCompletion is the public synchronous completion-progress surface;
+            // its callback is delivered before wait() returns, without an event-loop
+            // or Promise hop.
+            completionPoller.wait(completionEvents, backpressured ? 25 : 0);
         }
-        trace(`active-done outstanding=${outstanding}`);
         const drainStopNs = currentEpochNs() + 10000000000n;
-        while (outstanding > 0 && currentEpochNs() < drainStopNs && !replierFailure) {
-            completionPoller.wait(completionEvents, 0);
-            await sleepImmediate();
+        while (outstanding > 0 && currentEpochNs() < drainStopNs && !failure) {
+            completionPoller.wait(completionEvents, 25);
         }
-        if (failure || replierFailure || outstanding !== 0) {
-            stopReplier = true;
-            await replierTask;
-            throw failure ?? replierFailure ?? new Error('request drain timed out');
+        if (failure || outstanding !== 0) {
+            throw failure ?? new Error('request drain timed out');
         }
-        trace('drain-done');
         const stopOperation = routedClient ? client.send(SERVER_RID) : client.send();
-        await stopOperation.message(STOP_TOKEN_BYTES).submit();
-        const stopDeadlineNs = currentEpochNs() + 5000000000n;
-        while (!stopReceived && currentEpochNs() < stopDeadlineNs) {
-            await Promise.race([replierTask, sleepImmediate()]);
-        }
-        stopReplier = true;
-        await replierTask;
-        if (replierFailure)
-            throw replierFailure;
-        if (!stopReceived)
-            throw new Error('wire stop token was not received');
-        trace('stop-done');
+        stopOperation.message(STOP_TOKEN_BYTES).submit_sync(zlink.SendFlags.None);
+        waitForWorkerStatus(worker, 4, 10_000);
         return collector.finish();
     }
-    catch (error) {
-        stopReplier = true;
-        await replierTask;
-        trace(`failure=${error?.stack ?? error}`);
-        throw error;
-    }
     finally {
-        stopReplier = true;
-        await replierTask?.catch?.(() => { });
-        trace('closing');
-        for (const resource of [completionEvents, completionPoller, clientMonitor, serverMonitor,
-            client, server, ctx]) {
+        await closeSenderWorker(worker);
+        for (const resource of [completionEvents, completionPoller, clientMonitor, client, ctx]) {
             try {
                 resource?.close?.();
             }

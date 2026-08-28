@@ -10,6 +10,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -37,10 +38,11 @@ struct bench_latency_stats_t
 class bench_latency_sampler_t
 {
   public:
-    bench_latency_sampler_t () :
+    explicit bench_latency_sampler_t (
+      size_t maximum_sample_cap_ = std::numeric_limits<size_t>::max ()) :
         _count (0),
         _sum_ns (0.0),
-        _sample_cap (resolve_sample_cap ()),
+        _sample_cap (std::min (resolve_sample_cap (), maximum_sample_cap_)),
         _samples_seen (0),
         _rng (0xA341316Cu)
     {
@@ -75,7 +77,7 @@ class bench_latency_sampler_t
         out_->insert (out_->end (), _samples.begin (), _samples.end ());
     }
 
-    bench_latency_stats_t snapshot ()
+    bench_latency_stats_t snapshot () const
     {
         bench_latency_stats_t out;
         if (_count == 0)
@@ -88,9 +90,14 @@ class bench_latency_sampler_t
             return out;
         }
 
-        std::sort (_samples.begin (), _samples.end ());
-        out.p95_ns = percentile_from_sorted (_samples, 0.95);
-        out.p99_ns = percentile_from_sorted (_samples, 0.99);
+        // Percentile calculation must not reorder the reservoir.  Matched
+        // clients export that reservoir to their parent after snapshot(), and
+        // sorting it here would turn a bounded reservoir into a low-tail
+        // prefix when the IPC sample cap is smaller.
+        std::vector<double> sorted (_samples);
+        std::sort (sorted.begin (), sorted.end ());
+        out.p95_ns = percentile_from_sorted (sorted, 0.95);
+        out.p99_ns = percentile_from_sorted (sorted, 0.99);
         return out;
     }
 

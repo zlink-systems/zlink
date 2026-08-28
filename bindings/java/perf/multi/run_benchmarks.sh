@@ -88,10 +88,6 @@ RCVTIMEO_MS="${PERF_MULTI_RCVTIMEO_MS:-${PERF_RCVTIMEO_MS:-200}}"
 CTX_AUTO_HWM_ENABLE="${PERF_CTX_AUTO_HWM_ENABLE:-1}"
 CTX_AUTO_HWM_PROFILE="${PERF_MULTI_CTX_AUTO_HWM_PROFILE:-${PERF_CTX_AUTO_HWM_PROFILE:-balanced}}"
 CONNECT_READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}"
-SPOT_READY_TIMEOUT_MS="$(( CONNECT_READY_TIMEOUT_MS * 6 ))"
-if (( SPOT_READY_TIMEOUT_MS < 1000 )); then
-  SPOT_READY_TIMEOUT_MS=1000
-fi
 TRANSPORT_TRANSITION_MS="${PERF_MULTI_TRANSPORT_TRANSITION_MS:-${PERF_TRANSPORT_TRANSITION_MS:-3000}}"
 PATTERN_TRANSITION_MS="${PERF_MULTI_PATTERN_TRANSITION_MS:-${PERF_PATTERN_TRANSITION_MS:-3000}}"
 RUN_COOLDOWN_MS="${PERF_MULTI_RUN_COOLDOWN_MS:-${PERF_RUN_COOLDOWN_MS:-3000}}"
@@ -108,7 +104,6 @@ explicit_msg_sizes=0
 [[ -n "${PERF_MULTI_CLIENTS+x}" || -n "${PERF_CLIENTS+x}" ]] && explicit_clients=1
 SKIP_NOFILE_CHECK="${PERF_SKIP_NOFILE_CHECK:-0}"
 SKIP_MEMORY_CHECK="${PERF_SKIP_MEMORY_CHECK:-0}"
-SPOT_CLEAN_LATENCY="${PERF_MULTI_SPOT_CLEAN_LATENCY:-1}"
 DISABLE_RESOURCE_METRICS="${PERF_DISABLE_RESOURCE_METRICS:-0}"
 TIMEOUT_SECONDS="${PERF_MULTI_TIMEOUT_SECONDS:-${PERF_TIMEOUT_SECONDS:-auto}}"
 SERVICE_CLIENTS="${PERF_MULTI_SERVICE_CLIENTS:-${PERF_SERVICE_CLIENTS:-auto}}"
@@ -331,10 +326,6 @@ pick_endpoint() {
       echo "${transport}://127.0.0.1:${SERVER_BIND_PORT}"
       return
     fi
-    case "${token}" in
-      SPOT) port_offset=3 ;;
-      SPOT_REQREP|SPOT_SENDSEND) port_offset=1 ;;
-    esac
     echo "${transport}://127.0.0.1:$(pick_port_range "${port_offset}")"
   fi
 }
@@ -417,14 +408,7 @@ PY
 
 is_start_gated_pattern() {
   case "$1" in
-    DEALER_DEALER|PUBSUB|SPOT|SPOT_REQREP|SPOT_SENDSEND) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-is_spot_control_pattern() {
-  case "$1" in
-    SPOT|SPOT_REQREP|SPOT_SENDSEND) return 0 ;;
+    DEALER_DEALER|PUBSUB) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -668,7 +652,7 @@ ensure_memory_budget() {
 
 throughput_unit_for_pattern() {
   case "$1" in
-    DEALER_ROUTER|DEALER_ROUTER_REQREP|ROUTER_ROUTER|ROUTER_ROUTER_REQREP|SPOT_REQREP|SPOT_SENDSEND|STREAM) printf 'Kops/s' ;;
+    DEALER_ROUTER|DEALER_ROUTER_SENDSEND|DEALER_ROUTER_REQREP|ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND|ROUTER_ROUTER_REQREP|STREAM) printf 'Kops/s' ;;
     *) printf 'Kmsg/s' ;;
   esac
 }
@@ -684,7 +668,7 @@ import sys
 
 pattern, transport, size, source_file, prefix = sys.argv[1:]
 size = int(size)
-unit = "Kops/s" if pattern in {"DEALER_ROUTER", "DEALER_ROUTER_REQREP", "ROUTER_ROUTER", "ROUTER_ROUTER_REQREP", "SPOT_REQREP", "SPOT_SENDSEND", "STREAM"} else "Kmsg/s"
+unit = "Kops/s" if pattern in {"DEALER_ROUTER", "DEALER_ROUTER_SENDSEND", "DEALER_ROUTER_REQREP", "ROUTER_ROUTER", "ROUTER_ROUTER_SENDSEND", "ROUTER_ROUTER_REQREP", "STREAM"} else "Kmsg/s"
 metrics = {}
 with open(source_file, encoding="utf-8") as f:
     for line in f:
@@ -723,7 +707,7 @@ from collections import defaultdict
 pattern, transport, size, metrics_file, prefix = sys.argv[1:]
 size = int(size)
 bare = pattern.removeprefix("MULTI_")
-unit = "Kops/s" if pattern in {"MULTI_DEALER_ROUTER", "MULTI_DEALER_ROUTER_REQREP", "MULTI_ROUTER_ROUTER", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_SPOT_REQREP", "MULTI_SPOT_SENDSEND", "MULTI_STREAM"} else "Kmsg/s"
+unit = "Kops/s" if pattern in {"MULTI_DEALER_ROUTER", "MULTI_DEALER_ROUTER_SENDSEND", "MULTI_DEALER_ROUTER_REQREP", "MULTI_ROUTER_ROUTER", "MULTI_ROUTER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_STREAM"} else "Kmsg/s"
 values = defaultdict(list)
 with open(metrics_file, newline="", encoding="utf-8") as f:
     for row in csv.reader(f):
@@ -986,6 +970,7 @@ run_stream_case() {
 
   local stream_client_rc=0
   local stream_clients="${pattern_clients}"
+  local stream_completion_wait_ms="${PERF_MULTI_STREAM_COMPLETION_WAIT_MS:-${PERF_STREAM_COMPLETION_WAIT_MS:-${SERVER_SHUTDOWN_TIMEOUT_MS}}}"
   if [[ "${transport}" != "tcp" && "${stream_clients}" =~ ^[0-9]+$ \
         && "${STREAM_NON_TCP_CLIENTS_MAX}" =~ ^[0-9]+$ \
         && "${stream_clients}" -gt "${STREAM_NON_TCP_CLIENTS_MAX}" ]]; then
@@ -994,8 +979,8 @@ run_stream_case() {
   "${stream_client_prefix[@]}" "${STREAM_CLIENT}" --transport "${transport}" --pattern STREAM \
     --sizes "${size}" --runs 1 --duration "${DURATION}" \
     --ccu "${stream_clients}" --io-threads "${pattern_client_io_threads}" \
-    --completion-wait-ms "${LAT_TIMEOUT_MS}" \
-    --send-stop-token 1 --endpoint "${endpoint}" \
+    --completion-wait-ms "${stream_completion_wait_ms}" \
+    --send-stop-token 0 --endpoint "${endpoint}" \
     >"${client_log}" 2>&1 || stream_client_rc=$?
   printf 'STOP\n' >&3
   exec 3>&-
@@ -1066,59 +1051,12 @@ run_socket_case() {
     CASE_STATUS="fail"
     return 0
   fi
-  local server_control_endpoint=""
-  if is_spot_control_pattern "${bare_pattern}"; then
-    local control_line
-    control_line="$(wait_for_log_token "${server_log}" "CONTROL_READY," "${SERVER_READY_TIMEOUT_MS}" || true)"
-    if [[ "${control_line}" != CONTROL_READY,* ]]; then
-      record_failure "${pattern}" "${transport}" "${size}" "${run}" "control_ready_timeout"
-      wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "server" || true
-      exec {server_fd}>&-
-      rm -f "${server_fifo}" "${client_fifo}"
-      CASE_STATUS="fail"
-      return 0
-    fi
-    server_control_endpoint="${control_line#CONTROL_READY,}"
-  fi
-
   build_multi_role_cmd client_cmd "client" "${endpoint}" "${pattern_client_io_threads}" "${concurrency}"
   "${client_cmd[@]}" <"${client_fifo}" >"${client_log}" 2>&1 &
   client_pid=$!
   exec {client_fd}>"${client_fifo}"
-  if is_spot_control_pattern "${bare_pattern}"; then
-    local client_control_line
-    client_control_line="$(wait_for_log_token "${client_log}" "CLIENT_CONTROL_ENDPOINT," "${SPOT_READY_TIMEOUT_MS}" || true)"
-    if [[ "${client_control_line}" != CLIENT_CONTROL_ENDPOINT,* ]]; then
-      record_failure "${pattern}" "${transport}" "${size}" "${run}" "client_control_endpoint_timeout"
-      wait_for_pid_or_kill "${client_pid}" "$(( (DURATION + 20) * 1000 ))" "client" || true
-      wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "server" || true
-      exec {client_fd}>&-
-      exec {server_fd}>&-
-      rm -f "${server_fifo}" "${client_fifo}"
-      CASE_STATUS="fail"
-      return 0
-    fi
-    local client_control_endpoint="${client_control_line#CLIENT_CONTROL_ENDPOINT,}"
-    printf 'CONNECT_CONTROL,%s\n' "${client_control_endpoint}" >&${server_fd}
-    local connected_line
-    connected_line="$(wait_for_log_token "${server_log}" "CONTROL_CONNECTED,${client_control_endpoint}" "${SPOT_READY_TIMEOUT_MS}" || true)"
-    if [[ "${connected_line}" != "CONTROL_CONNECTED,${client_control_endpoint}" ]]; then
-      record_failure "${pattern}" "${transport}" "${size}" "${run}" "control_connected_timeout"
-      wait_for_pid_or_kill "${client_pid}" "$(( (DURATION + 20) * 1000 ))" "client" || true
-      wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "server" || true
-      exec {client_fd}>&-
-      exec {server_fd}>&-
-      rm -f "${server_fifo}" "${client_fifo}"
-      CASE_STATUS="fail"
-      return 0
-    fi
-    printf '%s\n' "${connected_line}" >&${client_fd}
-  fi
   if is_start_gated_pattern "${bare_pattern}"; then
     local client_ready_timeout_ms="${CONNECT_READY_TIMEOUT_MS}"
-    if is_spot_control_pattern "${bare_pattern}"; then
-      client_ready_timeout_ms="${SPOT_READY_TIMEOUT_MS}"
-    fi
     if ! wait_for_log_token "${client_log}" "CLIENT_READY,${size}" "${client_ready_timeout_ms}" >/dev/null; then
       record_failure "${pattern}" "${transport}" "${size}" "${run}" "client_ready_timeout"
       wait_for_pid_or_kill "${client_pid}" "$(( (DURATION + 20) * 1000 ))" "client" || true
@@ -1159,10 +1097,7 @@ run_socket_case() {
      || "${bare_pattern}" == "ROUTER_ROUTER" \
      || "${bare_pattern}" == "ROUTER_ROUTER_SENDSEND" \
      || "${bare_pattern}" == "PUBSUB" \
-     || "${bare_pattern}" == "ROUTER_ROUTER_REQREP" \
-     || "${bare_pattern}" == "SPOT_REQREP" \
-     || "${bare_pattern}" == "SPOT_SENDSEND" \
-     || "${bare_pattern}" == "SPOT" ]]; then
+     || "${bare_pattern}" == "ROUTER_ROUTER_REQREP" ]]; then
     metric_log="${client_log}"
   fi
   if [[ "${client_exit}" -ne 0 ]]; then
@@ -1192,67 +1127,6 @@ run_socket_case() {
 
   CASE_STATUS="ok"
   CASE_METRIC_LOG="${metric_log}"
-}
-
-merge_spot_clean_latency_log() {
-  local active_log="$1"
-  local latency_log="$2"
-  local merged_log="$3"
-  python3 - "$bare_pattern" "$transport" "$size" "$active_log" "$latency_log" "$merged_log" <<'PY'
-import sys
-
-pattern, transport, size, active_log, latency_log, merged_log = sys.argv[1:]
-latency_metrics = {"latency", "latency_p95", "latency_p99"}
-merged = {}
-
-def load(path, allowed):
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        for raw in handle:
-            line = raw.strip()
-            if not line.startswith("RESULT,"):
-                continue
-            parts = line.split(",")
-            if len(parts) != 7:
-                continue
-            _, _, row_pattern, row_transport, row_size, metric, value = parts
-            if row_pattern == pattern and row_transport == transport and row_size == size and metric in allowed:
-                merged[metric] = value
-
-load(active_log, {"throughput", "bandwidth", "latency", "latency_p95", "latency_p99"})
-load(latency_log, latency_metrics)
-
-with open(merged_log, "w", encoding="utf-8") as handle:
-    for metric in ["throughput", "bandwidth", "latency", "latency_p95", "latency_p99"]:
-        if metric in merged:
-            handle.write(f"RESULT,current,{pattern},{transport},{size},{metric},{merged[metric]}\n")
-PY
-}
-
-run_spot_case_with_optional_clean_latency() {
-  run_socket_case "$1"
-  if [[ "${CASE_STATUS}" != "ok" || "${bare_pattern}" != "SPOT" \
-     || "${SPOT_CLEAN_LATENCY}" == "0" ]]; then
-    return 0
-  fi
-
-  local active_log="${RESULTS_ROOT}/multi/tmp/${bare_pattern,,}_${transport}_${size}_active.log"
-  local latency_log="${RESULTS_ROOT}/multi/tmp/${bare_pattern,,}_${transport}_${size}_latency.log"
-  local merged_log="${RESULTS_ROOT}/multi/tmp/${bare_pattern,,}_${transport}_${size}_merged.log"
-  local failure_mark
-  cp -f "${CASE_METRIC_LOG}" "${active_log}"
-  sleep_ms "${RUN_COOLDOWN_MS}"
-  failure_mark="$(wc -c < "${tmp_failures}")"
-  PERF_MULTI_SPOT_LATENCY_ONLY=1 run_socket_case "$1"
-  if [[ "${CASE_STATUS}" != "ok" ]]; then
-    truncate -s "${failure_mark}" "${tmp_failures}"
-    echo "      warning: MULTI_SPOT clean latency pass failed; using active-pass latency" >&2
-    CASE_STATUS="ok"
-    CASE_METRIC_LOG="${active_log}"
-    return 0
-  fi
-  cp -f "${CASE_METRIC_LOG}" "${latency_log}"
-  merge_spot_clean_latency_log "${active_log}" "${latency_log}" "${merged_log}"
-  CASE_METRIC_LOG="${merged_log}"
 }
 
 IFS=',' read -r -a patterns <<< "$(trim_csv "${PATTERN}")"
@@ -1381,8 +1255,6 @@ for pattern_index in "${!patterns[@]}"; do
 
         if [[ "${bare_pattern}" == "STREAM" ]]; then
           run_stream_case "${case_connect_concurrency}"
-        elif [[ "${bare_pattern}" == "SPOT" ]]; then
-          run_spot_case_with_optional_clean_latency "${case_connect_concurrency}"
         else
           run_socket_case "${case_connect_concurrency}"
         fi
@@ -1492,8 +1364,7 @@ all_metrics = ["throughput", "bandwidth", "latency", "latency_p95", "latency_p99
 ECHO_PATTERNS = {
     "MULTI_DEALER_ROUTER", "MULTI_DEALER_ROUTER_REQREP",
     "MULTI_DEALER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER",
-    "MULTI_ROUTER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_SPOT_REQREP",
-    "MULTI_SPOT_SENDSEND", "MULTI_STREAM",
+    "MULTI_ROUTER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_STREAM",
 }
 
 
@@ -1651,7 +1522,7 @@ def auto_hwm_for(pattern):
             if r.get("pattern", "").upper() == pattern.upper()]
 
 
-def emit_non_spot_auto_hwm(pattern_rows):
+def emit_auto_hwm_rows(pattern_rows):
     display_rows = []
     seen = set()
     for row in pattern_rows:
@@ -1692,94 +1563,11 @@ def emit_non_spot_auto_hwm(pattern_rows):
     ), display_rows)
 
 
-def emit_spot_auto_hwm(pattern_rows):
-    # C parity: run_comparison.py _auto_hwm_emit_spot_snapshot_socket_table
-    # (~975-1043). Group the spotnode-snapshot rows by (msg_size,
-    # MsgUnit(B)) and, per group, emit a "- Size(B)=X, MsgUnit(B)=Y" line
-    # followed by a Socket/Type/Role/SNDHWM/RCVHWM/SNDBUF/RCVBUF markdown
-    # table (raw effective_sndbuf/rcvbuf bytes). Groups are separated by a
-    # blank "      " line. The previous wide Profile/Class/Cap/Slots schema
-    # diverged from the C reference report and broke byte-identity.
-    # C parity: bindings/c/perf/multi/common/perf_multi_runtime.hpp:488 skips
-    # every spot-node snapshot socket whose core `auto_hwm_visible == 0`
-    # BEFORE emitting its AUTO_HWM_DETAIL line, so the C reference report
-    # never contains the `internal_receiver` dispatch socket. The Java JNI
-    # binding's SpotNodeSocketEntry.autoHwmVisible() mis-reports that
-    # internal socket as visible (binding-library gap, out of scope for
-    # bindings/java/perf), so mirror C's effective visible-socket set here in
-    # the report emitter to keep the spotnode table byte-identical to C.
-    SPOT_SNAPSHOT_EXCLUDED_SOCKETS = {"internal_receiver"}
-
-    def build(owner):
-        out = []
-        seen = set()
-        for row in pattern_rows:
-            if row.get("source") != "spotnode_snapshot":
-                continue
-            if row.get("socket", "") in SPOT_SNAPSHOT_EXCLUDED_SOCKETS:
-                continue
-            if row.get("owner") != owner:
-                continue
-            display = dict(row)
-            display["type"] = row.get("socket_type", "")
-            key = tuple(display.get(name, "") for name in (
-                "msg_size", "effective_message_bytes", "socket", "type",
-                "role", "sndhwm", "rcvhwm", "effective_sndbuf",
-                "effective_rcvbuf",
-            ))
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(display)
-        out.sort(key=lambda row: (
-            parse_int(row.get("msg_size", "0")),
-            parse_int(row.get("owner_id", "0")),
-            row.get("socket", ""),
-            row.get("role", ""),
-        ))
-        return out
-    columns = (
-        ("Socket", "socket"),
-        ("Type", "type"),
-        ("Role", "role"),
-        ("SNDHWM", "sndhwm"),
-        ("RCVHWM", "rcvhwm"),
-        ("SNDBUF", "effective_sndbuf"),
-        ("RCVBUF", "effective_rcvbuf"),
-    )
-
-    def emit_grouped(title, rows):
-        if not rows:
-            return
-        emit(f"    {title}:")
-        grouped = {}
-        order = []
-        for row in rows:
-            gk = (row.get("msg_size", ""),
-                  row.get("effective_message_bytes", ""))
-            if gk not in grouped:
-                grouped[gk] = []
-                order.append(gk)
-            grouped[gk].append(row)
-        for index, gk in enumerate(order):
-            msg_size, msg_unit = gk
-            emit(f"      - Size(B)={msg_size}, MsgUnit(B)={msg_unit}")
-            emit_md_table("      ", columns, grouped[gk])
-            if index + 1 < len(order):
-                emit("      ")
-
-    emit_grouped("Auto-HWM spotnode", build("node"))
-    emit_grouped("Auto-HWM spot handles", build("spot"))
-
-
 def emit_auto_hwm(pattern):
     selected = auto_hwm_for(pattern)
     if not selected:
         return
-    if pattern in {"MULTI_SPOT", "MULTI_SPOT_REQREP", "MULTI_SPOT_SENDSEND"}:
-        emit_spot_auto_hwm(selected)
-    else:
-        emit_non_spot_auto_hwm(selected)
+    emit_auto_hwm_rows(selected)
 
 
 def get_cpu_model():

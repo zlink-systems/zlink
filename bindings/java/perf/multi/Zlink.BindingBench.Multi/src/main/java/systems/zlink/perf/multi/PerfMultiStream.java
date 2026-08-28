@@ -4,15 +4,10 @@ package systems.zlink.perf.multi;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.sockets.StreamSocket;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.perf.PerfControl;
-import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.io.BufferedReader;
@@ -20,9 +15,16 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class PerfMultiStream {
     private PerfMultiStream() {
@@ -30,9 +32,9 @@ final class PerfMultiStream {
 
     static PerfUtil.Result runServer(PerfUtil.Config config) {
         AtomicBoolean stopRequested = new AtomicBoolean(false);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
         Object stopSignal = new Object();
-        PendingPackets pending = new PendingPackets();
-        Thread controlWatcher = startControlWatcher(stopRequested, stopSignal);
+        Thread controlWatcher = null;
 
         try (Context ctx = PerfUtil.newContext(config);
             StreamSocket server = ctx.createStreamSocket()) {
@@ -41,22 +43,34 @@ final class PerfMultiStream {
             Duration streamTimeout = Duration.ofMillis(streamTimeoutMs());
             server.options().sendTimeout(streamTimeout);
             server.options().recvTimeout(streamTimeout);
-            server.bind(config.endpoint());
-            PerfUtil.recalculateAutoHwm(ctx);
-            PerfUtil.printMultiSocketAutoHwm(config, server, "server",
-                "server", SocketType.STREAM);
-            PerfControl.emitReady(config.endpoint());
-            server.onPacket(
-                (routingId, header, body) ->
-                    onPacket(server, routingId, header, body,
-                        pending, stopRequested, stopSignal));
+            Duration drainTimeout = streamDrainTimeout(streamTimeout);
 
-            runPendingLoop(server, pending, stopRequested, stopSignal);
+            try (StreamReplyDispatcher dispatcher =
+                     new StreamReplyDispatcher(server, streamTimeout,
+                         drainTimeout, stopRequested, stopSignal, failure)) {
+                controlWatcher = startControlWatcher(dispatcher);
+                server.bind(config.endpoint());
+                PerfUtil.recalculateAutoHwm(ctx);
+                PerfUtil.printMultiSocketAutoHwm(config, server, "server",
+                    "server", SocketType.STREAM);
+                server.onPacket(dispatcher::onPacket);
+                PerfControl.emitReady(config.endpoint());
+
+                awaitStop(stopRequested, stopSignal);
+                dispatcher.stopAndDrain();
+                Throwable error = failure.get();
+                if (error != null) {
+                    throw new IllegalStateException(
+                        "stream reply failed", error);
+                }
+            }
             return PerfUtil.Result.silent(config);
         } finally {
             stopRequested.set(true);
-            pending.close();
-            controlWatcher.interrupt();
+            signal(stopSignal);
+            if (controlWatcher != null) {
+                controlWatcher.interrupt();
+            }
         }
     }
 
@@ -64,16 +78,15 @@ final class PerfMultiStream {
         throw new IllegalStateException("MULTI_STREAM requires the shared raw stream client");
     }
 
-    private static Thread startControlWatcher(AtomicBoolean stopRequested,
-                                              Object stopSignal) {
+    private static Thread startControlWatcher(
+        StreamReplyDispatcher dispatcher) {
         Thread watcher = new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if ("STOP".equals(line) || "QUIT".equals(line)) {
-                        stopRequested.set(true);
-                        signal(stopSignal);
+                        dispatcher.requestStop();
                         return;
                     }
                 }
@@ -84,31 +97,6 @@ final class PerfMultiStream {
         watcher.setDaemon(true);
         watcher.start();
         return watcher;
-    }
-
-    private static void onPacket(StreamSocket server,
-                                 RoutingId routingId,
-                                 Message header,
-                                 Message body,
-                                 PendingPackets pending,
-                                 AtomicBoolean stopRequested,
-                                 Object stopSignal) {
-        if (routingId == null) {
-            return;
-        }
-        if (PerfStopToken.isStopTokenMessage(body)) {
-            stopRequested.set(true);
-            signal(stopSignal);
-            return;
-        }
-        try {
-            pending.sendOrQueue(server, routingId, buildPacketFrame(header, body),
-                stopRequested, stopSignal);
-        } catch (RuntimeException ex) {
-            stopRequested.set(true);
-            signal(stopSignal);
-            throw ex;
-        }
     }
 
     // C parity: write the framing prefix and the received native frames into
@@ -126,29 +114,16 @@ final class PerfMultiStream {
         return packet;
     }
 
-    private static void runPendingLoop(StreamSocket server,
-                                       PendingPackets pending,
-                                       AtomicBoolean stopRequested,
-                                       Object stopSignal) {
-        // C runs a dedicated pending-send loop: a queued reply waits for the
-        // STREAM socket's POLLOUT readiness and is then drained until it
-        // backpressures again. Keep this benchmark's explicit polling loop;
-        // the runtime does not own a readiness scheduler for the operation.
-        try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
-                 List.of(server), PollEventFlags.POLLOUT)) {
+    private static void awaitStop(AtomicBoolean stopRequested,
+                                  Object stopSignal) {
+        synchronized (stopSignal) {
             while (!stopRequested.get()) {
-                if (!pending.hasPending()) {
-                    // C waits on its pending-queue condition with the same
-                    // auxiliary 50 ms control bound before it has POLLOUT
-                    // work. This is not an active-phase timer fallback.
-                    pending.awaitWork(stopRequested, 50);
-                    continue;
-                }
-                writable.setEvents(0, PollEventFlags.POLLOUT);
-                int readyCount = writable.poll(50);
-                if (readyCount > 0
-                    && writable.readyHasEventAt(0, PollEventFlags.POLLOUT)) {
-                    pending.drain(server, stopRequested, stopSignal);
+                try {
+                    stopSignal.wait(50L);
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                        "stream stop wait interrupted", error);
                 }
             }
         }
@@ -173,102 +148,291 @@ final class PerfMultiStream {
         }
     }
 
-    private static final class PendingPackets {
+    private static Duration streamDrainTimeout(Duration streamTimeout) {
+        long timeoutMs = Math.max(1_000L,
+            Math.multiplyExact(streamTimeout.toMillis(), 4L));
+        return Duration.ofMillis(timeoutMs);
+    }
+
+    /**
+     * Owns callback-copied packets and starts their public async terminals on
+     * an application thread. The queue and pending set are tracking only:
+     * neither imposes an application-level admission window.
+     */
+    static final class StreamReplyDispatcher implements AutoCloseable {
+        private final StreamSocket server;
+        private final Duration sendTimeout;
+        private final long drainTimeoutNanos;
+        private final AtomicBoolean stopRequested;
+        private final Object stopSignal;
+        private final AtomicReference<Throwable> failure;
         private final Object lock = new Object();
         private final Deque<PendingPacket> queue = new ArrayDeque<>();
-        private boolean closed;
+        private final Set<CompletableFuture<Void>> pending =
+            new HashSet<>();
+        private final Thread worker;
 
-        void sendOrQueue(StreamSocket socket, RoutingId routingId, Message packet,
-                         AtomicBoolean stopRequested, Object stopSignal) {
-            synchronized (lock) {
-                if (closed || stopRequested.get()) {
+        private boolean accepting = true;
+        private long drainDeadlineNanos = Long.MAX_VALUE;
+
+        StreamReplyDispatcher(StreamSocket server,
+                              Duration sendTimeout,
+                              Duration drainTimeout,
+                              AtomicBoolean stopRequested,
+                              Object stopSignal,
+                              AtomicReference<Throwable> failure) {
+            this.server = Objects.requireNonNull(server, "server");
+            this.sendTimeout = Objects.requireNonNull(
+                sendTimeout, "sendTimeout");
+            this.drainTimeoutNanos = drainTimeout.toNanos();
+            this.stopRequested = Objects.requireNonNull(
+                stopRequested, "stopRequested");
+            this.stopSignal = Objects.requireNonNull(
+                stopSignal, "stopSignal");
+            this.failure = Objects.requireNonNull(failure, "failure");
+            worker = new Thread(this::run, "stream-reply-dispatcher");
+            worker.setDaemon(true);
+            worker.start();
+        }
+
+        void onPacket(RoutingId routingId, Message header, Message body) {
+            if (routingId == null || stopRequested.get()) {
+                return;
+            }
+            if (PerfStopToken.isStopTokenMessage(body)) {
+                requestStop();
+                return;
+            }
+
+            Message packet = null;
+            try {
+                RoutingId ownedRoutingId = RoutingId.from(
+                    routingId.toBytes());
+                packet = buildPacketFrame(header, body);
+                if (enqueue(new PendingPacket(ownedRoutingId, packet))) {
+                    packet = null;
+                }
+            } catch (RuntimeException | Error error) {
+                recordFailure(error);
+            } finally {
+                if (packet != null) {
                     packet.close();
+                }
+            }
+        }
+
+        void requestStop() {
+            synchronized (lock) {
+                if (accepting) {
+                    accepting = false;
+                    drainDeadlineNanos = saturatingAdd(
+                        System.nanoTime(), drainTimeoutNanos);
+                }
+                lock.notifyAll();
+            }
+            stopRequested.set(true);
+            signal(stopSignal);
+        }
+
+        void stopAndDrain() {
+            requestStop();
+            long deadline;
+            synchronized (lock) {
+                deadline = drainDeadlineNanos;
+            }
+            joinUntil(deadline);
+            if (worker.isAlive()) {
+                worker.interrupt();
+                recordFailure(new IllegalStateException(
+                    "stream reply dispatcher drain timed out"));
+            }
+            awaitPendingUntil(deadline);
+            cancelPending();
+            dropQueued();
+        }
+
+        @Override
+        public void close() {
+            stopAndDrain();
+        }
+
+        private boolean enqueue(PendingPacket packet) {
+            synchronized (lock) {
+                if (!accepting || stopRequested.get()) {
+                    return false;
+                }
+                queue.addLast(packet);
+                lock.notifyAll();
+                return true;
+            }
+        }
+
+        private void run() {
+            for (;;) {
+                PendingPacket packet = takeNext();
+                if (packet == null) {
                     return;
                 }
-                if (queue.isEmpty()) {
+                send(packet);
+                if (failure.get() != null) {
+                    dropQueued();
+                    return;
+                }
+            }
+        }
+
+        private PendingPacket takeNext() {
+            synchronized (lock) {
+                for (;;) {
+                    if (!accepting
+                        && System.nanoTime() >= drainDeadlineNanos) {
+                        dropQueuedLocked();
+                        lock.notifyAll();
+                        return null;
+                    }
+                    if (!queue.isEmpty()) {
+                        return queue.removeFirst();
+                    }
+                    if (!accepting) {
+                        lock.notifyAll();
+                        return null;
+                    }
                     try {
-                        if (trySend(socket, routingId, packet)) {
-                            return;
-                        }
-                    } catch (ZlinkSubmitException ex) {
-                        if (!isTransient(ex)) {
-                            packet.close();
-                            throw ex;
-                        }
+                        lock.wait();
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                        recordFailure(error);
+                        return null;
                     }
                 }
-                queue.addLast(new PendingPacket(routingId, packet));
+            }
+        }
+
+        private void send(PendingPacket queued) {
+            CompletionStage<Void> stage;
+            try (Message packet = queued.message()) {
+                stage = server.sendAsync(queued.routingId())
+                    .message(packet)
+                    .timeout(sendTimeout)
+                    .submit();
+            } catch (RuntimeException | Error error) {
+                if (!PerfMultiRoutedRelay.isStaleRoute(error)) {
+                    recordFailure(error);
+                }
+                return;
+            }
+
+            CompletableFuture<Void> future = Objects.requireNonNull(stage,
+                "stream async submit stage").toCompletableFuture();
+            synchronized (lock) {
+                pending.add(future);
+            }
+            future.whenComplete((ignored, error) ->
+                onSendComplete(future, error));
+        }
+
+        private void onSendComplete(CompletableFuture<Void> future,
+                                    Throwable error) {
+            if (error != null && !future.isCancelled()) {
+                Throwable cause =
+                    PerfMultiAsyncSendLoop.completionCause(error);
+                if (!PerfMultiRoutedRelay.isStaleRoute(cause)) {
+                    recordFailure(cause);
+                }
+            }
+            synchronized (lock) {
+                pending.remove(future);
                 lock.notifyAll();
             }
         }
 
-        boolean hasPending() {
-            synchronized (lock) {
-                return !queue.isEmpty();
+        private void recordFailure(Throwable error) {
+            Throwable cause = PerfMultiAsyncSendLoop.completionCause(error);
+            if (failure.compareAndSet(null, cause)) {
+                requestStop();
             }
         }
 
-        void awaitWork(AtomicBoolean stopRequested, long timeoutMs) {
+        private void dropQueued() {
             synchronized (lock) {
-                if (closed || stopRequested.get() || !queue.isEmpty()) {
+                dropQueuedLocked();
+                lock.notifyAll();
+            }
+        }
+
+        private void dropQueuedLocked() {
+            while (!queue.isEmpty()) {
+                queue.removeFirst().message().close();
+            }
+        }
+
+        private void awaitPendingUntil(long deadlineNanos) {
+            synchronized (lock) {
+                while (!pending.isEmpty()) {
+                    long remaining = deadlineNanos - System.nanoTime();
+                    if (remaining <= 0L) {
+                        return;
+                    }
+                    try {
+                        waitRemaining(lock, remaining);
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                        recordFailure(error);
+                        return;
+                    }
+                }
+            }
+        }
+
+        private void cancelPending() {
+            List<CompletableFuture<Void>> tail;
+            synchronized (lock) {
+                if (pending.isEmpty()) {
                     return;
                 }
+                tail = new ArrayList<>(pending);
+                pending.clear();
+            }
+            for (CompletableFuture<Void> future : tail) {
+                future.cancel(true);
+            }
+        }
+
+        private void joinUntil(long deadlineNanos) {
+            while (worker.isAlive()) {
+                long remaining = deadlineNanos - System.nanoTime();
+                if (remaining <= 0) {
+                    return;
+                }
+                long millis = Math.max(1L,
+                    Math.min(Integer.MAX_VALUE,
+                        (remaining + 999_999L) / 1_000_000L));
                 try {
-                    lock.wait(timeoutMs);
-                } catch (InterruptedException ex) {
+                    worker.join(millis);
+                } catch (InterruptedException error) {
                     Thread.currentThread().interrupt();
-                    throw new IllegalStateException("stream pending wait interrupted", ex);
+                    recordFailure(error);
+                    return;
                 }
             }
         }
 
-        void drain(StreamSocket socket, AtomicBoolean stopRequested,
-                   Object stopSignal) {
-            synchronized (lock) {
-                while (!closed && !stopRequested.get() && !queue.isEmpty()) {
-                    PendingPacket packet = queue.peekFirst();
-                    try {
-                        if (!trySend(socket, packet.routingId(), packet.message())) {
-                            return;
-                        }
-                    } catch (ZlinkSubmitException ex) {
-                        if (isTransient(ex)) {
-                            return;
-                        }
-                        queue.removeFirst();
-                        packet.message().close();
-                        stopRequested.set(true);
-                        signal(stopSignal);
-                        throw ex;
-                    }
-                    queue.removeFirst();
-                }
-            }
+        private static void waitRemaining(Object lock, long remainingNanos)
+            throws InterruptedException {
+            long millis = remainingNanos / 1_000_000L;
+            int nanos = (int) (remainingNanos % 1_000_000L);
+            lock.wait(millis, nanos);
         }
 
-        void close() {
-            synchronized (lock) {
-                closed = true;
-                while (!queue.isEmpty()) {
-                    queue.removeFirst().message().close();
-                }
+        private static long saturatingAdd(long left, long right) {
+            if (right > 0L && left > Long.MAX_VALUE - right) {
+                return Long.MAX_VALUE;
             }
-        }
-
-        private static boolean trySend(StreamSocket socket, RoutingId routingId,
-                                       Message packet) {
-            return socket.send(routingId)
-                .message(packet)
-                .flags(SendFlags.DONT_WAIT)
-                .submit();
+            return left + right;
         }
     }
 
     private record PendingPacket(RoutingId routingId, Message message) {
     }
 
-    private static boolean isTransient(ZlinkSubmitException ex) {
-        return ex.getResult() == SubmitResult.BACKPRESSURED
-            || ex.getResult() == SubmitResult.NOT_CONNECTED;
-    }
 }

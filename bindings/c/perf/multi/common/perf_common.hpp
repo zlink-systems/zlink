@@ -141,12 +141,14 @@ inline bool open_connect_monitor (void *socket_, connect_monitor_t &out_)
     if (!state)
         return false;
 
+    const uint64_t monitor_hwm = bench_monitor_hwm_bytes_from_env ();
     zlink_socket_monitor_open_options_t monitor_opts;
     memset (&monitor_opts, 0, sizeof (monitor_opts));
     monitor_opts.events =
       ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_BIND_FAILED | ZLINK_EVENT_ACCEPT_FAILED
       | ZLINK_EVENT_CLOSE_FAILED | ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL
       | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL | ZLINK_EVENT_HANDSHAKE_FAILED_AUTH;
+    monitor_opts.monitor_hwm_bytes = monitor_hwm;
     void *monitor = zlink_socket_monitor_open (socket_, &monitor_opts);
     if (!monitor) {
         delete state;
@@ -158,14 +160,7 @@ inline bool open_connect_monitor (void *socket_, connect_monitor_t &out_)
         return false;
     }
 
-    const uint64_t monitor_hwm = bench_hwm_from_env ("PERF_MONITOR_HWM_BYTES", 4096000);
     set_sockopt_int (monitor, ZLINK_OPT_LINGER, 0, "ZLINK_OPT_LINGER");
-    if (monitor_hwm > 0) {
-        set_sockopt_u64 (monitor, ZLINK_OPT_SNDHWM, monitor_hwm,
-                         "ZLINK_OPT_SNDHWM");
-        set_sockopt_u64 (monitor, ZLINK_OPT_RCVHWM, monitor_hwm,
-                         "ZLINK_OPT_RCVHWM");
-    }
 
     out_.monitor = monitor;
     out_.state = state;
@@ -188,14 +183,7 @@ inline void configure_perf_monitor_socket (void *monitor_)
     if (!monitor_)
         return;
 
-    const uint64_t monitor_hwm = bench_hwm_from_env ("PERF_MONITOR_HWM_BYTES", 4096000);
     set_sockopt_int (monitor_, ZLINK_OPT_LINGER, 0, "ZLINK_OPT_LINGER");
-    if (monitor_hwm > 0) {
-        set_sockopt_u64 (monitor_, ZLINK_OPT_SNDHWM, monitor_hwm,
-                         "ZLINK_OPT_SNDHWM");
-        set_sockopt_u64 (monitor_, ZLINK_OPT_RCVHWM, monitor_hwm,
-                         "ZLINK_OPT_RCVHWM");
-    }
 }
 
 inline void close_ready_monitor (ready_monitor_t &monitor_)
@@ -217,9 +205,11 @@ inline bool open_configured_socket_monitor (void *socket_, uint64_t events_, rea
     out_->owner = socket_;
     out_->monitor = NULL;
 
+    const uint64_t monitor_hwm = bench_monitor_hwm_bytes_from_env ();
     zlink_socket_monitor_open_options_t opts;
     std::memset (&opts, 0, sizeof (opts));
     opts.events = events_;
+    opts.monitor_hwm_bytes = monitor_hwm;
     void *monitor = zlink_socket_monitor_open (socket_, &opts);
     if (!monitor)
         return false;

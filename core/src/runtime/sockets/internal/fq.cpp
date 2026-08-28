@@ -25,7 +25,11 @@ void zlink::fq_t::set_recv_test_hook (recv_test_hook_fn hook_, void *userdata_)
 }
 #endif
 
-zlink::fq_t::fq_t () : _active (0), _current (0), _more (false)
+zlink::fq_t::fq_t () :
+    _active (0),
+    _current (0),
+    _more (false),
+    _multipart_abort_pending (false)
 {
 }
 
@@ -99,16 +103,33 @@ void zlink::fq_t::pipe_terminated (pipe_t *pipe_)
     if (!try_get_pipe_index (pipe_, &index))
         return;
 
+    pipe_t *const current_pipe =
+      _active > 0 && _current < _active ? _pipes[_current] : NULL;
+    if (_more && pipe_ == current_pipe) {
+        _more = false;
+        _multipart_abort_pending = true;
+    }
+
     //  Remove the pipe from the list; adjust number of active pipes
     //  accordingly.
     if (index < _active) {
         _active--;
         _pipes.swap (index, _active);
-        if (_current == _active)
-            _current = 0;
     }
     _pipes.erase (pipe_);
     normalize_state ();
+
+    //  Removal uses swaps. Preserve the pipe selected for an in-progress
+    //  fair-queue turn when some other pipe terminates; otherwise the next
+    //  frame could silently come from a different peer.
+    if (current_pipe && current_pipe != pipe_) {
+        pipes_t::size_type current_index = 0;
+        if (try_get_pipe_index (current_pipe, &current_index)
+            && current_index < _active)
+            _current = current_index;
+    } else if (_active > 0) {
+        _current = index < _active ? index : 0;
+    }
 }
 
 void zlink::fq_t::activated (pipe_t *pipe_)
@@ -166,11 +187,26 @@ int zlink::fq_t::recvpipe_internal (msg_t *msg_, pipe_t **pipe_)
 {
     normalize_state ();
 
+    if (pipe_)
+        *pipe_ = NULL;
+
     //  Deallocate old content of the message.
     int rc = msg_->close ();
     if (unlikely (rc != 0)) {
         rc = msg_->init ();
         errno_assert (rc == 0);
+    }
+
+    if (_multipart_abort_pending) {
+        _multipart_abort_pending = false;
+        rc = msg_->init ();
+        errno_assert (rc == 0);
+        // Keep this distinct from an ordinary empty queue. socket_base_t
+        // retries EAGAIN after processing commands, which would let the retry
+        // consume a frame from another pipe. The public receive boundary
+        // translates this marker back to EAGAIN without retrying.
+        errno = ECONNABORTED;
+        return -1;
     }
 
     //  Round-robin over the pipes to get the next message.
@@ -219,7 +255,11 @@ int zlink::fq_t::recvpipe_internal (msg_t *msg_, pipe_t **pipe_)
                 _current = 0;
             rc = msg_->init ();
             errno_assert (rc == 0);
-            errno = EAGAIN;
+            // A false read while pinned can be the pipe delimiter being
+            // consumed before pipe_terminated() reaches the socket. Keep it
+            // distinct from an empty queue so socket_base_t cannot retry on a
+            // different peer and splice two records together.
+            errno = ECONNABORTED;
             return -1;
         }
 
@@ -240,6 +280,9 @@ int zlink::fq_t::recvpipe_internal (msg_t *msg_, pipe_t **pipe_)
 bool zlink::fq_t::has_in ()
 {
     normalize_state ();
+
+    if (_multipart_abort_pending)
+        return true;
 
     //  There are subsequent parts of the partly-read message available.
     if (_more)

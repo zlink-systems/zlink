@@ -22,6 +22,7 @@ internal static class PerfMultiDealerDealerServer
     {
         int size = Math.Max(1, options.Size);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
+        ulong monitorHwmBytes = ResolveMultiMonitorHwmBytes();
         int clientCount = ResolveMultiClients(options);
         int durationSeconds = ResolveMultiDurationSeconds(options);
         int latencySampleCap = ResolveMultiLatencySampleCap(options);
@@ -35,7 +36,8 @@ internal static class PerfMultiDealerDealerServer
         using var server = ctx.CreateDealerSocket();
         ApplyMultiSocketOptions(server, options);
         ConfigureTlsServerIfNeeded(server, options.Transport);
-        using var monitor = server.MonitorOpen(SocketEvent.ConnectionReady);
+        using var monitor = server.MonitorOpen(SocketEvent.ConnectionReady,
+            monitorHwmBytes);
 
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;

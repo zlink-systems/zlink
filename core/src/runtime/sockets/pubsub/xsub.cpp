@@ -333,12 +333,19 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
     while (true) {
         //  Get a message using fair queueing algorithm.
         pipe_t *pipe = NULL;
+        const bool continuing_exposed_message = _more_recv;
         int rc = _fq.recvpipe (msg_, &pipe);
 
         //  If there's no message available, return immediately.
         //  The same when error occurs.
-        if (rc != 0)
+        if (rc != 0) {
+            if (errno == ECONNABORTED) {
+                _more_recv = false;
+                if (!continuing_exposed_message)
+                    continue;
+            }
             return -1;
+        }
 
         //  Check whether the message matches at least one subscription.
         //  Non-initial parts of the message are passed
@@ -354,7 +361,13 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
         //  from the pipe.
         while (msg_->flags () & msg_t::more) {
             rc = _fq.recvpipe (msg_, &pipe);
-            errno_assert (rc == 0);
+            if (rc != 0) {
+                if (errno == ECONNABORTED) {
+                    _more_recv = false;
+                    break;
+                }
+                return -1;
+            }
         }
         ++skipped_non_matching;
         if (unlikely (skipped_non_matching >= xsub_non_matching_skip_budget)) {
@@ -386,6 +399,10 @@ bool zlink::xsub_t::xhas_in ()
         //  If there's no message available, return immediately.
         //  The same when error occurs.
         if (rc != 0) {
+            if (errno == ECONNABORTED) {
+                _more_recv = false;
+                continue;
+            }
             errno_assert (errno == EAGAIN);
             return false;
         }
@@ -400,7 +417,14 @@ bool zlink::xsub_t::xhas_in ()
         //  from the pipe.
         while (_message.flags () & msg_t::more) {
             rc = _fq.recvpipe (&_message, &pipe);
-            errno_assert (rc == 0);
+            if (rc != 0) {
+                if (errno == ECONNABORTED) {
+                    _more_recv = false;
+                    break;
+                }
+                errno_assert (errno == EAGAIN);
+                return false;
+            }
         }
 
         ++skipped_non_matching;
@@ -465,18 +489,38 @@ int zlink::xsub_t::dispatch_ready_messages ()
         pipe_t *pipe = NULL;
 
         int rc = 0;
+        bool record_aborted = false;
         while (true) {
             rc = _fq.recvpipe (&msg, &pipe);
-            if (rc != 0)
+            if (rc != 0) {
+                if (errno == ECONNABORTED) {
+                    record_aborted = true;
+                    rc = 0;
+                }
                 break;
+            }
 
             if (!options.filter || match (&msg))
                 break;
 
             while (msg.flags () & msg_t::more) {
                 rc = _fq.recvpipe (&msg, &pipe);
-                errno_assert (rc == 0);
+                if (rc != 0) {
+                    if (errno == ECONNABORTED) {
+                        record_aborted = true;
+                        rc = 0;
+                        break;
+                    }
+                    break;
+                }
             }
+            if (rc != 0 || record_aborted)
+                break;
+        }
+        if (record_aborted) {
+            const int close_rc = msg.close ();
+            errno_assert (close_rc == 0);
+            continue;
         }
         if (rc != 0) {
             const int close_rc = msg.close ();
@@ -513,7 +557,11 @@ int zlink::xsub_t::dispatch_message (msg_t *msg_, pipe_t *pipe_)
         const int next_init_rc = msg_->init ();
         errno_assert (next_init_rc == 0);
         if (_fq.recvpipe (msg_, &pipe_) != 0) {
+            const int saved_errno = errno;
             close_dispatch_frames (&_dispatch_parts);
+            if (saved_errno == ECONNABORTED)
+                return 0;
+            errno = saved_errno;
             return -1;
         }
     }

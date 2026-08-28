@@ -141,32 +141,52 @@ inline bool capture_pending_reply (const zlink_routing_id_t *source_rid,
     return true;
 }
 
-inline bool try_send_reply_now (void *server,
-                                const zlink_routing_id_t *source_rid,
-                                zlink_msg_t *parts,
-                                size_t part_count,
-                                bool *would_block)
+enum reply_send_status_t
 {
-    if (would_block)
-        *would_block = false;
+    reply_send_ok = 0,
+    reply_send_backpressured = 1,
+    reply_send_stale_route = 2,
+    reply_send_failed = 3
+};
 
-    const zlink_submit_result_t send_rc =
-      ::perf_zlink_send_rid_parts (server, source_rid, parts, part_count,
-                                   static_cast<zlink_send_flags_t> (ZLINK_SEND_FLAGS_DONTWAIT));
-    if (send_rc == ZLINK_SUBMIT_OK)
-        return true;
+inline reply_send_status_t classify_reply_send_result (zlink_submit_result_t result,
+                                                       int err)
+{
+    if (result == ZLINK_SUBMIT_NOT_CONNECTED || result == ZLINK_SUBMIT_NOT_FOUND)
+        return reply_send_stale_route;
+    if (result == ZLINK_SUBMIT_BACKPRESSURED)
+        return reply_send_backpressured;
+    if (err == EHOSTUNREACH || err == ENOTCONN)
+        return reply_send_stale_route;
+    if (err == EAGAIN || err == EWOULDBLOCK)
+        return reply_send_backpressured;
+    return reply_send_failed;
+}
 
-    const int err = zlink_errno ();
-    if (err == EAGAIN || err == EINTR || err == EHOSTUNREACH || err == ENOTCONN) {
-        if (would_block)
-            *would_block = true;
-        return false;
-    }
+inline reply_send_status_t try_send_reply_now (void *server,
+                                               const zlink_routing_id_t *source_rid,
+                                               zlink_msg_t *parts,
+                                               size_t part_count)
+{
+    zlink_submit_result_t send_rc;
+    int err;
+    do {
+        send_rc = ::perf_zlink_send_rid_parts (
+          server, source_rid, parts, part_count,
+          static_cast<zlink_send_flags_t> (ZLINK_SEND_FLAGS_DONTWAIT));
+        if (send_rc == ZLINK_SUBMIT_OK)
+            return reply_send_ok;
+        err = zlink_errno ();
+    } while (err == EINTR);
+
+    const reply_send_status_t status = classify_reply_send_result (send_rc, err);
+    if (status != reply_send_failed)
+        return status;
 
     if (bench_debug_enabled ()) {
         std::cerr << "[perf-multi-relay] reply send failed err=" << err << std::endl;
     }
-    return false;
+    return reply_send_failed;
 }
 
 inline bool flush_pending_replies (void *server, std::deque<pending_reply_t> *pending)
@@ -175,18 +195,23 @@ inline bool flush_pending_replies (void *server, std::deque<pending_reply_t> *pe
         return true;
     while (!pending->empty ()) {
         pending_reply_t &front = pending->front ();
-        bool would_block = false;
-        const bool ok = try_send_reply_now (server, &front.rid, front.parts.data (),
-                                            front.parts.size (), &would_block);
-        if (ok) {
+        const reply_send_status_t status = try_send_reply_now (
+          server, &front.rid, front.parts.data (), front.parts.size ());
+        if (status == reply_send_ok) {
             // zlink_send_rid consumed the parts on success; clear the vector
             // without closing them again so the destructor is a no-op.
             front.parts.clear ();
             pending->pop_front ();
             continue;
         }
-        if (would_block)
+        if (status == reply_send_backpressured)
             return true;
+        if (status == reply_send_stale_route) {
+            // The source route no longer exists. Drop this reply and continue
+            // so one disconnected peer cannot pin the global FIFO head.
+            pending->pop_front ();
+            continue;
+        }
         return false;
     }
     return true;
@@ -239,16 +264,21 @@ inline bool drain_recv_and_relay (void *server,
 
         // While we still have backlog, push everything onto the queue to keep
         // ordering. Otherwise try to send immediately.
-        bool would_block = false;
+        reply_send_status_t send_status = reply_send_failed;
         if (pending && pending->empty ()
-            && try_send_reply_now (server, source_rid, parts, part_count, &would_block)) {
+            && (send_status = try_send_reply_now (
+                  server, source_rid, parts, part_count))
+                 == reply_send_ok) {
             continue;
         }
-        if (!would_block && pending && !pending->empty ()) {
+        if (pending && !pending->empty ()) {
             // Already pending; do not even attempt and keep ordering.
-        } else if (!would_block) {
-            // try_send_reply_now returned false but did not block: that means
-            // a real error path (logged inside) — propagate.
+        } else if (send_status == reply_send_stale_route) {
+            zlink_multipart_close (parts, part_count);
+            continue;
+        } else if (send_status != reply_send_backpressured) {
+            // Any remaining status is a real error path (logged inside) —
+            // propagate it instead of hiding the relay failure.
             zlink_multipart_close (parts, part_count);
             return false;
         }

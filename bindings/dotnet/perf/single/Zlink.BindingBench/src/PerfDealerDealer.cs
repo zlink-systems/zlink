@@ -32,7 +32,7 @@ internal static class PerfDealerDealer
         }
     }
 
-    internal static async Task<int> RunDealerDealer(string transport, int size)
+    internal static int RunDealerDealer(string transport, int size)
     {
         int durationSeconds = ResolveSingleDurationSeconds();
         int recvTimeoutMs = ResolveSingleRcvTimeoutMs();
@@ -85,9 +85,8 @@ internal static class PerfDealerDealer
             var payload = new byte[payloadSize];
             Array.Fill(payload, (byte)'a');
 
-            var active = await RunActivePhaseAsync(sender, receiver, payload,
-                size, durationSeconds, recvTimeoutMs, latencySampleCap)
-                .ConfigureAwait(false);
+            var active = RunActivePhase(sender, receiver, payload,
+                size, durationSeconds, recvTimeoutMs, latencySampleCap);
             if (!active.Ok)
             {
                 TryCleanup(sender, receiver, endpoint);
@@ -115,8 +114,8 @@ internal static class PerfDealerDealer
         }
     }
 
-    private static async Task<(bool Ok, long Received,
-        List<double> LatencySamples)> RunActivePhaseAsync(IDealerSocket sender,
+    private static (bool Ok, long Received,
+        List<double> LatencySamples) RunActivePhase(IDealerSocket sender,
         IDealerSocket receiver, byte[] payload, int msgSize,
         int durationSeconds, int recvTimeoutMs, int latencyCap)
     {
@@ -132,7 +131,7 @@ internal static class PerfDealerDealer
         // PERF_SINGLE_TEST_POLICY § 1.4 / C parity: wait on the receiver
         // poller, receive with DontWait, drain the available burst, and end
         // only on the wire-level stop token. The sender owns the active
-        // deadline and awaits routed admission without occupying this thread.
+        // deadline on a dedicated OS thread and uses the blocking terminal.
         using var poller = Zlink.CreatePoller();
         var events = new PollEvent[1];
         poller.Add(receiver, PollEventFlags.PollIn, 0);
@@ -166,7 +165,7 @@ internal static class PerfDealerDealer
             return false;
         }
 
-        async Task SendLoopAsync()
+        void SendLoop()
         {
             try
             {
@@ -177,7 +176,7 @@ internal static class PerfDealerDealer
                     StampMetricHeader(payload.AsSpan(), RunId, ActivePhase,
                         msgSize, seq, EpochNs());
                     seq++;
-                    if (await SendAsync(sender, payload).ConfigureAwait(false) <= 0)
+                    if (SendBlocking(sender, payload) <= 0)
                         continue;
                 }
             }
@@ -187,14 +186,19 @@ internal static class PerfDealerDealer
             }
             finally
             {
-                if (!await SendStopTokenAsync(sender,
-                        "[single-dealer-dealer]").ConfigureAwait(false))
+                if (!SendStopTokenBlocking(sender,
+                        "[single-dealer-dealer]"))
                     sendError ??= new InvalidOperationException(
                         "dealer-dealer stop token was not sent");
             }
         }
 
-        Task senderTask = SendLoopAsync();
+        var senderThread = new Thread(SendLoop)
+        {
+            IsBackground = true,
+            Name = "single dealer-dealer sender"
+        };
+        senderThread.Start();
 
         try
         {
@@ -218,7 +222,7 @@ internal static class PerfDealerDealer
             recvError = ex;
         }
 
-        await senderTask.ConfigureAwait(false);
+        senderThread.Join();
 
         if (sendError != null || recvError != null)
             return (false, received, samples);

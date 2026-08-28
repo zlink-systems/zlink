@@ -4,14 +4,15 @@ use std::fs;
 use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::pin::pin;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zlink::{
-    Context, DealerSocket, Message, PairSocket, PollEvent, Poller, PubSocket, RecvFlags,
-    RouterSocket, SocketMonitor, StreamSocket, SubSocket, ZlinkError,
+    AutoHwmProfile, Context, DealerSocket, Message, Monitorable, PairSocket, PollEvent, Poller,
+    PubSocket, RecvFlags, RouterSocket, SocketMonitor, SocketMonitorEventMask,
+    SocketMonitorOpenOptions, StreamSocket, SubSocket, ZlinkError,
 };
 
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
@@ -21,6 +22,7 @@ pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_COOLDOWN: u8 = 2;
 pub const MAGIC: u32 = 0x5A4C_4E4B; // "ZLNK"
 pub const BENCHMARK_RUN_ID: u32 = 1;
+const DEFAULT_MULTI_MONITOR_HWM_BYTES: u64 = 4_096_000;
 
 struct ThreadWake(Thread);
 
@@ -34,15 +36,88 @@ impl Wake for ThreadWake {
     }
 }
 
-pub fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = pin!(future);
+/// Poll a dynamically sized batch of same-type futures concurrently.
+///
+/// Multi perf uses this tiny executor instead of serial `block_on` calls so
+/// Core completion, rather than a binding-owned window, controls admission.
+pub fn block_on_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
+    let mut futures: Vec<_> = futures.into_iter().map(Box::pin).collect();
+    let mut outputs = Vec::with_capacity(futures.len());
     let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
     let mut context = TaskContext::from_waker(&waker);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => thread::park(),
+    while !futures.is_empty() {
+        let mut index = 0;
+        let mut progressed = false;
+        while index < futures.len() {
+            match futures[index].as_mut().poll(&mut context) {
+                Poll::Ready(output) => {
+                    outputs.push(output);
+                    drop(futures.swap_remove(index));
+                    progressed = true;
+                }
+                Poll::Pending => index += 1,
+            }
         }
+        if !progressed && !futures.is_empty() {
+            thread::park();
+        }
+    }
+    outputs
+}
+
+pub struct ConcurrentTasks<F: Future> {
+    tasks: Vec<Option<Pin<Box<F>>>>,
+    waker: Waker,
+}
+
+impl<F: Future> ConcurrentTasks<F> {
+    pub fn new(slots: usize) -> Self {
+        Self {
+            tasks: (0..slots).map(|_| None).collect(),
+            waker: Waker::from(Arc::new(ThreadWake(thread::current()))),
+        }
+    }
+
+    pub fn insert(&mut self, slot: usize, future: F) {
+        assert!(self.tasks[slot].is_none(), "task slot is already occupied");
+        self.tasks[slot] = Some(Box::pin(future));
+    }
+
+    pub fn push(&mut self, future: F) -> usize {
+        if let Some(slot) = self.tasks.iter().position(Option::is_none) {
+            self.insert(slot, future);
+            slot
+        } else {
+            self.tasks.push(Some(Box::pin(future)));
+            self.tasks.len() - 1
+        }
+    }
+
+    pub fn poll_ready(&mut self) -> Vec<(usize, F::Output)> {
+        let mut context = TaskContext::from_waker(&self.waker);
+        let mut ready = Vec::new();
+        for (slot, task) in self.tasks.iter_mut().enumerate() {
+            let Some(future) = task.as_mut() else {
+                continue;
+            };
+            if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
+                *task = None;
+                ready.push((slot, output));
+            }
+        }
+        ready
+    }
+
+    pub fn is_pending(&self, slot: usize) -> bool {
+        self.tasks[slot].is_some()
+    }
+
+    pub fn any_pending(&self) -> bool {
+        self.tasks.iter().any(Option::is_some)
+    }
+
+    pub fn wait_for_wake(&self, timeout: Duration) {
+        thread::park_timeout(timeout);
     }
 }
 
@@ -111,15 +186,20 @@ pub fn measurement_part_count() -> usize {
 }
 
 #[macro_export]
-macro_rules! perf_submit_measurement {
+macro_rules! perf_submit_measurement_async {
     ($operation:expr, $payload:expr) => {{
-        let operation = $operation.message($payload);
-        if $crate::common::measurement_part_count() == 2 {
-            operation
-                .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
-                .submit_sync(zlink::SendFlags::DONT_WAIT)
-        } else {
-            operation.submit_sync(zlink::SendFlags::DONT_WAIT)
+        async move {
+            let operation = $operation.message($payload);
+            if $crate::common::measurement_part_count() == 2 {
+                operation
+                    .message(
+                        zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"),
+                    )
+                    .submit()
+                    .await
+            } else {
+                operation.submit().await
+            }
         }
     }};
 }
@@ -320,68 +400,122 @@ pub fn is_valid_active_message(data: &[u8], expected_size: usize) -> bool {
     is_valid_message(data, expected_size) && decode_phase(data) == PHASE_ACTIVE
 }
 
+pub fn elapsed_since_sent_ns(data: &[u8]) -> Option<f64> {
+    let sent_ts_ns = decode_sent_ts_ns(data);
+    if sent_ts_ns <= 0 {
+        return None;
+    }
+    now_ns()
+        .checked_sub(sent_ts_ns as u64)
+        .map(|elapsed| elapsed as f64)
+}
+
+pub fn record_active_rtt_latency(
+    data: &[u8],
+    expected_size: usize,
+    stats: &mut LatencyStats,
+) -> bool {
+    if !is_valid_active_message(data, expected_size) {
+        return false;
+    }
+
+    stats.record_received();
+    if let Some(elapsed_ns) = elapsed_since_sent_ns(data) {
+        stats.record_latency_sample_ns(elapsed_ns / 2.0);
+    }
+    true
+}
+
 // -- Latency stats -----------------------------------------------------------
 
 pub struct LatencyStats {
     samples: Vec<f64>,
-    count: u64,
-    sum: f64,
+    received_count: u64,
+    latency_count: u64,
+    latency_sum_ns: f64,
+    sample_cap: usize,
+    samples_seen: u64,
+    rng: u32,
 }
 
 impl LatencyStats {
     pub fn new() -> Self {
+        Self::with_sample_cap(resolve_latency_sample_cap())
+    }
+
+    fn with_sample_cap(sample_cap: usize) -> Self {
         Self {
-            samples: Vec::new(),
-            count: 0,
-            sum: 0.0,
+            samples: Vec::with_capacity(sample_cap),
+            received_count: 0,
+            latency_count: 0,
+            latency_sum_ns: 0.0,
+            sample_cap,
+            samples_seen: 0,
+            rng: 0xA341_316C,
         }
     }
 
-    // C perf_multi_metrics.hpp bench_latency_sampler_t: every sample retained in
-    // an unbounded growing vector; percentiles are exact.
     pub fn record_ns(&mut self, ns: f64) {
-        self.count += 1;
-        self.sum += ns;
-        self.samples.push(ns);
+        self.record_received();
+        self.record_latency_sample_ns(ns);
     }
 
     pub fn record_received(&mut self) {
-        self.count += 1;
+        self.received_count += 1;
     }
 
     pub fn record_latency_sample_ns(&mut self, ns: f64) {
-        self.sum += ns;
-        self.samples.push(ns);
-    }
+        let sample = if ns >= 0.0 { ns } else { 0.0 };
+        self.latency_count += 1;
+        self.latency_sum_ns += sample;
+        self.samples_seen += 1;
+        if self.sample_cap == 0 {
+            return;
+        }
+        if self.samples.len() < self.sample_cap {
+            self.samples.push(sample);
+            return;
+        }
 
-    /// Fold another sampler's totals in (used to combine per-worker drain
-    /// threads into a single result before finish()).
-    pub fn merge(&mut self, mut other: LatencyStats) {
-        self.count += other.count;
-        self.sum += other.sum;
-        self.samples.append(&mut other.samples);
+        self.rng = self.rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let slot = (self.rng as u64) % self.samples_seen;
+        if slot < self.sample_cap as u64 {
+            self.samples[slot as usize] = sample;
+        }
     }
 
     pub fn finish(&mut self) -> StatsResult {
-        if self.count == 0 {
-            return StatsResult::default();
-        }
         self.samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let sample_count = self.samples.len() as f64;
-        let mean = if sample_count > 0.0 {
-            self.sum / sample_count
+        let mean = if self.latency_count > 0 {
+            self.latency_sum_ns / self.latency_count as f64
         } else {
             0.0
         };
-        let p95 = percentile(&self.samples, 0.95);
-        let p99 = percentile(&self.samples, 0.99);
+        let p95 = if self.samples.is_empty() {
+            mean
+        } else {
+            percentile(&self.samples, 0.95)
+        };
+        let p99 = if self.samples.is_empty() {
+            mean
+        } else {
+            percentile(&self.samples, 0.99)
+        };
         StatsResult {
-            count: self.count,
+            count: self.received_count,
+            latency_count: self.latency_count,
             mean_ns: mean,
             p95_ns: p95,
             p99_ns: p99,
         }
     }
+}
+
+fn resolve_latency_sample_cap() -> usize {
+    std::env::var("PERF_MULTI_LATENCY_SAMPLE_CAP")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(65_536)
 }
 
 // C perf_multi_metrics.hpp percentile_from_sorted(): linear interpolation
@@ -406,9 +540,16 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 #[derive(Default)]
 pub struct StatsResult {
     pub count: u64,
+    pub latency_count: u64,
     pub mean_ns: f64,
     pub p95_ns: f64,
     pub p99_ns: f64,
+}
+
+impl StatsResult {
+    pub fn is_valid(&self) -> bool {
+        self.count > 0 && self.latency_count > 0
+    }
 }
 
 #[derive(Default)]
@@ -422,7 +563,13 @@ pub struct PhaseResult {
 
 fn bandwidth_multiplier(pattern: &str) -> f64 {
     match pattern {
-        "MULTI_DEALER_ROUTER" | "MULTI_ROUTER_ROUTER" | "MULTI_STREAM" => 2.0,
+        "MULTI_DEALER_ROUTER"
+        | "MULTI_DEALER_ROUTER_SENDSEND"
+        | "MULTI_DEALER_ROUTER_REQREP"
+        | "MULTI_ROUTER_ROUTER"
+        | "MULTI_ROUTER_ROUTER_SENDSEND"
+        | "MULTI_ROUTER_ROUTER_REQREP"
+        | "MULTI_STREAM" => 2.0,
         _ => 1.0,
     }
 }
@@ -474,6 +621,10 @@ pub fn print_result(
     duration_s: u64,
     stats: &StatsResult,
 ) {
+    if !stats.is_valid() {
+        eprintln!("FAIL,current,{pattern},{transport},{size}");
+        std::process::exit(1);
+    }
     let key = format!("RESULT,current,{pattern},{transport},{size}");
     let phase = build_phase_result(pattern, size, duration_s, stats);
     print_phase_result(&key, &phase);
@@ -483,6 +634,17 @@ pub fn print_ready(endpoint: &str) {
     println!("READY,{endpoint}");
     use std::io::Write;
     std::io::stdout().flush().ok();
+}
+
+pub fn open_connection_ready_monitor(socket: &dyn Monitorable) -> SocketMonitor {
+    SocketMonitor::open_with_options(
+        socket,
+        SocketMonitorOpenOptions {
+            events: SocketMonitorEventMask::CONNECTION_READY,
+            monitor_hwm_bytes: resolve_multi_monitor_hwm_bytes(),
+        },
+    )
+    .expect("connection-ready monitor")
 }
 
 pub fn wait_monitor_ready(mon: &mut SocketMonitor, timeout: Duration, name: &str) {
@@ -540,6 +702,12 @@ fn wait_poller_until(
 fn perf_context_with_env(primary_env: &str) -> Context {
     let ctx = Context::new().expect("context");
     ctx.options().set_blocky(false).expect("set blocky");
+    ctx.options()
+        .set_auto_hwm_enabled(resolve_auto_hwm_enabled())
+        .expect("set auto hwm enabled");
+    ctx.options()
+        .set_core_hwm_profile(resolve_auto_hwm_profile())
+        .expect("set auto hwm profile");
     let io_threads = std::env::var(primary_env)
         .ok()
         .or_else(|| std::env::var("PERF_IO_THREADS").ok())
@@ -552,6 +720,32 @@ fn perf_context_with_env(primary_env: &str) -> Context {
         .set_io_threads(io_threads)
         .expect("set io threads");
     ctx
+}
+
+fn resolve_auto_hwm_enabled() -> bool {
+    std::env::var("PERF_CTX_AUTO_HWM_ENABLE")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .map(|value| value != 0)
+        .unwrap_or(true)
+}
+
+fn auto_hwm_profile_from_name(value: &str) -> AutoHwmProfile {
+    match value {
+        "compact" => AutoHwmProfile::Compact,
+        "low_latency" | "low-latency" => AutoHwmProfile::LowLatency,
+        "throughput" => AutoHwmProfile::Throughput,
+        _ => AutoHwmProfile::Balanced,
+    }
+}
+
+fn resolve_auto_hwm_profile() -> AutoHwmProfile {
+    let value = std::env::var("PERF_MULTI_CTX_AUTO_HWM_PROFILE")
+        .ok()
+        .or_else(|| std::env::var("PERF_CTX_AUTO_HWM_PROFILE").ok())
+        .or_else(|| std::env::var("PERF_AUTO_HWM_PROFILE").ok())
+        .unwrap_or_default();
+    auto_hwm_profile_from_name(value.trim())
 }
 
 pub fn perf_server_context() -> Context {
@@ -705,6 +899,43 @@ pub fn resolve_multi_connect_ready_timeout() -> Duration {
     ) as u64)
 }
 
+pub fn resolve_multi_monitor_hwm_bytes() -> u64 {
+    let primary = std::env::var("PERF_MULTI_MONITOR_HWM").ok();
+    let fallback = std::env::var("PERF_MONITOR_HWM").ok();
+    resolve_nonnegative_u64(
+        primary.as_deref(),
+        fallback.as_deref(),
+        DEFAULT_MULTI_MONITOR_HWM_BYTES,
+    )
+}
+
+pub fn resolve_multi_reqrep_timeout() -> Duration {
+    Duration::from_millis(env_or("PERF_MULTI_REQREP_TIMEOUT_MS", 200).max(1) as u64)
+}
+
+pub fn resolve_multi_reqrep_drain_timeout(request_timeout: Duration) -> Duration {
+    let fallback_ms = request_timeout.as_millis().saturating_mul(4).max(1_000);
+    Duration::from_millis(
+        env_or_u64(
+            "PERF_MULTI_REQREP_DRAIN_TIMEOUT_MS",
+            fallback_ms.min(u64::MAX as u128) as u64,
+        )
+        .max(1),
+    )
+}
+
+pub fn resolve_multi_send_drain_timeout() -> Duration {
+    Duration::from_millis(env_or_u64("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", 1_000).max(1))
+}
+
+pub fn poll_timeout_until(deadline: Instant) -> i64 {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return 0;
+    }
+    remaining.as_millis().max(1).min(i64::MAX as u128) as i64
+}
+
 fn env_or_multi(primary: &str, fallback_name: &str, default: usize) -> usize {
     std::env::var(primary)
         .ok()
@@ -724,6 +955,13 @@ fn env_or_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
         .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn resolve_nonnegative_u64(primary: Option<&str>, fallback: Option<&str>, default: u64) -> u64 {
+    primary
+        .and_then(|value| value.parse::<u64>().ok())
+        .or_else(|| fallback.and_then(|value| value.parse::<u64>().ok()))
         .unwrap_or(default)
 }
 
@@ -804,5 +1042,145 @@ pub fn wait_for_stop_stdin() {
             Err(_) => break,
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn active_payload(sent_ts_ns: i64) -> Vec<u8> {
+        let mut payload = vec![0u8; 64];
+        encode_header(&mut payload, PHASE_ACTIVE, 64, 1);
+        payload[21..29].copy_from_slice(&sent_ts_ns.to_le_bytes());
+        payload
+    }
+
+    #[test]
+    fn rtt_metrics_count_active_headers_without_invalid_timestamp_samples() {
+        for sent_ts_ns in [0, -1, i64::MAX] {
+            let mut stats = LatencyStats::with_sample_cap(8);
+            assert!(record_active_rtt_latency(
+                &active_payload(sent_ts_ns),
+                64,
+                &mut stats,
+            ));
+
+            let result = stats.finish();
+            assert_eq!(result.count, 1);
+            assert_eq!(result.latency_count, 0);
+            assert!(!result.is_valid());
+        }
+    }
+
+    #[test]
+    fn rtt_metrics_record_one_way_half_of_a_valid_round_trip() {
+        let sent_ts_ns = now_ns().saturating_sub(1_000_000) as i64;
+        let mut stats = LatencyStats::with_sample_cap(8);
+        assert!(record_active_rtt_latency(
+            &active_payload(sent_ts_ns),
+            64,
+            &mut stats,
+        ));
+
+        let result = stats.finish();
+        assert_eq!(result.count, 1);
+        assert_eq!(result.latency_count, 1);
+        assert!(result.mean_ns >= 500_000.0);
+        assert!(result.is_valid());
+    }
+
+    #[test]
+    fn latency_reservoir_bounds_percentile_memory_but_keeps_exact_mean() {
+        let mut stats = LatencyStats::with_sample_cap(4);
+        for sample in 0..100 {
+            stats.record_ns(sample as f64);
+        }
+        assert_eq!(stats.samples.len(), 4);
+
+        let result = stats.finish();
+        assert_eq!(result.count, 100);
+        assert_eq!(result.latency_count, 100);
+        assert_eq!(result.mean_ns, 49.5);
+        assert!(result.is_valid());
+    }
+
+    #[test]
+    fn zero_sample_cap_falls_back_to_exact_mean_for_percentiles() {
+        let mut stats = LatencyStats::with_sample_cap(0);
+        stats.record_ns(10.0);
+        stats.record_ns(30.0);
+
+        let result = stats.finish();
+        assert_eq!(result.mean_ns, 20.0);
+        assert_eq!(result.p95_ns, 20.0);
+        assert_eq!(result.p99_ns, 20.0);
+        assert!(result.is_valid());
+    }
+
+    #[test]
+    fn canonical_sendsend_patterns_use_round_trip_bandwidth() {
+        let stats = StatsResult {
+            count: 10,
+            latency_count: 10,
+            mean_ns: 1.0,
+            p95_ns: 1.0,
+            p99_ns: 1.0,
+        };
+        for pattern in [
+            "MULTI_DEALER_ROUTER_SENDSEND",
+            "MULTI_ROUTER_ROUTER_SENDSEND",
+        ] {
+            let result = build_phase_result(pattern, 100, 2, &stats);
+            assert_eq!(result.throughput, 5.0);
+            assert_eq!(result.bandwidth, 0.001);
+        }
+    }
+
+    #[test]
+    fn percentile_uses_linear_interpolation() {
+        assert_eq!(percentile(&[0.0, 100.0], 0.95), 95.0);
+    }
+
+    #[test]
+    fn auto_hwm_profile_names_match_perf_policy() {
+        assert_eq!(
+            auto_hwm_profile_from_name("compact"),
+            AutoHwmProfile::Compact
+        );
+        assert_eq!(
+            auto_hwm_profile_from_name("low_latency"),
+            AutoHwmProfile::LowLatency
+        );
+        assert_eq!(
+            auto_hwm_profile_from_name("low-latency"),
+            AutoHwmProfile::LowLatency
+        );
+        assert_eq!(
+            auto_hwm_profile_from_name("throughput"),
+            AutoHwmProfile::Throughput
+        );
+        assert_eq!(
+            auto_hwm_profile_from_name("unknown"),
+            AutoHwmProfile::Balanced
+        );
+    }
+
+    #[test]
+    fn monitor_hwm_is_nonnegative_and_has_exact_multi_default() {
+        assert_eq!(
+            resolve_nonnegative_u64(None, None, DEFAULT_MULTI_MONITOR_HWM_BYTES),
+            4_096_000
+        );
+        assert_eq!(
+            resolve_nonnegative_u64(Some("12345"), Some("67890"), 1),
+            12_345
+        );
+        assert_eq!(resolve_nonnegative_u64(Some("0"), None, 1), 0);
+        assert_eq!(
+            resolve_nonnegative_u64(Some("-1"), Some("67890"), 1),
+            67_890
+        );
+        assert_eq!(resolve_nonnegative_u64(Some("invalid"), None, 99), 99);
     }
 }

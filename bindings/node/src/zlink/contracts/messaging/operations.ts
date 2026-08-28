@@ -74,6 +74,10 @@ export interface RequestSubmitOperation
   /** Submit the request and return the reply parts, which the caller owns. */
   submit(): Promise<Message[]>;
   submit_sync(flags: SendFlags): Message[];
+  /**
+   * Submit without a Promise. Polling `PollCompletion` synchronously delivers
+   * this callback on the same thread before `Poller.wait()` returns.
+   */
   submit_sync(flags: SendFlags, callback: RequestCallback): void;
 }
 

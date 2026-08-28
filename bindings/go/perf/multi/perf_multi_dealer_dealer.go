@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -78,10 +79,8 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 			}
 			part, partErr := perfcommon.MeasurementPayload(parts)
 			if partErr == nil {
-				now := time.Now()
-				if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, cfg.msgSize, perfcommon.PhaseActive, now); ok && now.After(window.ActiveAt) && now.Before(window.StopAt) {
-					stats.AddLatencyNsSingleThread(latencyNs)
-				}
+				perfcommon.RecordMessageLatency(
+					stats, window.ActiveAt, window.StopAt, cfg.msgSize, part)
 			}
 			_ = received.Close()
 		}
@@ -200,98 +199,45 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 	if len(clients) == 0 {
 		return
 	}
-	// The role goroutine is already pinned to its OS thread by runMultiRole,
-	// which keeps the Go scheduler from migrating its M across the blocking
-	// poller waits that backpressure produces at high pipe fan-in.
-	poller, err := zlink.NewPoller()
-	perfcommon.Must(err)
-	defer poller.Close()
-	events := make([]zlink.PollEvent, len(clients))
-	pending := make([]bool, len(clients))
-	for i, client := range clients {
-		perfcommon.Must(poller.AddSocket(client.socket, 0, uintptr(i)))
-	}
-
-	// blast keeps sending on one socket until it backpressures (EAGAIN) or the
-	// window ends. On backpressure it registers POLLOUT; on drain it clears it.
-	// Mirrors the C++ dealer_dealer client's per-socket try_send_once loop.
-	blast := func(i int) {
-		client := clients[i]
-		for {
-			now := time.Now()
-			if !now.Before(window.StopAt) {
-				break
-			}
-			var sent bool
-			var sendErr error
-			if perfcommon.MeasurementPartCount() == 2 {
-				message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
-				sendErr = perfcommon.SubmitMeasurementRoutedFlags(client.socket.Send(), message, zlink.SendFlagsDontWait)
-				sent = sendErr == nil
-			} else {
-				sent, sendErr = perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
-					if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
-						return client.socket.Send().Message(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
-					}
-					return client.socket.Send().MoveMessage(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
-				})
-			}
-			if sendErr == nil && sent {
-				if pending[i] {
-					pending[i] = false
-					perfcommon.Must(poller.ModifySocket(client.socket, 0))
+	// Go has no separate async send terminal. Each long-lived goroutine owns
+	// one socket's blocking Submit call; the Go scheduler keeps the remaining
+	// sockets progressing while Core suspends a backpressured submit.
+	var workers sync.WaitGroup
+	errors := make(chan error, len(clients))
+	for _, client := range clients {
+		client := client
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for time.Now().Before(window.StopAt) {
+				var sendErr error
+				if perfcommon.MeasurementPartCount() == 2 {
+					message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
+					sendErr = perfcommon.SubmitMeasurementRouted(client.socket.Send(), message)
+				} else {
+					_, sendErr = perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
+						if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
+							return client.socket.Send().Message(message).Submit(context.Background())
+						}
+						return client.socket.Send().MoveMessage(message).Submit(context.Background())
+					})
 				}
-				continue
+				if sendErr == nil || perfcommon.IsTransient(sendErr) {
+					continue
+				}
+				select {
+				case errors <- fmt.Errorf("multi dealer/dealer client send: %w", sendErr):
+				default:
+				}
+				return
 			}
-			if sendErr != nil && !perfcommon.IsTransient(sendErr) {
-				perfcommon.Must(fmt.Errorf("multi dealer/dealer client send: %w", sendErr))
-			}
-			if !pending[i] {
-				pending[i] = true
-				perfcommon.Must(poller.ModifySocket(client.socket, perfcommon.ZLinkPollOut))
-			}
-			return
-		}
+		}()
 	}
-
-	for time.Now().Before(window.StopAt) {
-		pendingCount := 0
-		for i := range clients {
-			if pending[i] {
-				pendingCount++
-				continue
-			}
-			blast(i)
-			if pending[i] {
-				pendingCount++
-			}
-		}
-		if !time.Now().Before(window.StopAt) || pendingCount == 0 {
-			continue
-		}
-		wait := time.Until(window.StopAt)
-		if wait <= 0 {
-			break
-		}
-		n, waitErr := poller.Wait(events, wait)
-		if waitErr != nil {
-			if perfcommon.IsTransient(waitErr) {
-				continue
-			}
-			perfcommon.Must(fmt.Errorf("multi dealer/dealer client poll: %w", waitErr))
-		}
-		// Drain each woken socket inline (C++ parity) instead of clearing the
-		// pending flag and waiting for the next full round-robin scan. This
-		// keeps the freed pipe busy and avoids an O(N) rescan per wakeup.
-		for i := 0; i < n; i++ {
-			if events[i].Revents&perfcommon.ZLinkPollOut == 0 {
-				continue
-			}
-			idx := int(events[i].Slot)
-			if idx >= 0 && idx < len(pending) && pending[idx] {
-				blast(idx)
-			}
-		}
+	workers.Wait()
+	select {
+	case err := <-errors:
+		perfcommon.Must(err)
+	default:
 	}
 }
 

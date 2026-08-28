@@ -136,13 +136,17 @@ int zlink::recv_followup_msg_socket (socket_base_t *socket_, zlink_msg_t *msg_)
         return -1;
     }
 
-    const int rc = socket_->recv (reinterpret_cast<msg_t *> (msg_), ZLINK_DONTWAIT);
+    bool multipart_aborted = false;
+    const int rc = socket_->recv (reinterpret_cast<msg_t *> (msg_),
+                                  ZLINK_DONTWAIT, &multipart_aborted);
     if (rc >= 0) {
         const size_t size = zlink_msg_size (msg_);
         return static_cast<int> (size < static_cast<size_t> (INT_MAX) ? size : INT_MAX);
     }
 
-    if (errno == EAGAIN || errno == EINTR)
+    if (multipart_aborted)
+        errno = EAGAIN;
+    else if (errno == EAGAIN || errno == EINTR)
         errno = EPROTO;
     return -1;
 }
@@ -164,8 +168,15 @@ int zlink::recv_followup_msg_socket_wait (socket_base_t *socket_, zlink_msg_t *m
         return -1;
     }
 
-    while (socket_->recv (reinterpret_cast<msg_t *> (msg_), flags_) != 0) {
+    bool multipart_aborted = false;
+    while (socket_->recv (reinterpret_cast<msg_t *> (msg_), flags_,
+                          &multipart_aborted)
+           != 0) {
         const int saved_errno = errno;
+        if (multipart_aborted) {
+            errno = EAGAIN;
+            return -1;
+        }
         if ((flags_ & ZLINK_DONTWAIT) != 0 || (saved_errno != EAGAIN && saved_errno != EINTR)) {
             errno = saved_errno;
             return -1;

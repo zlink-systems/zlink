@@ -2,7 +2,7 @@
 
 package systems.zlink.contracts.messaging;
 
-/** Builds a DEALER or ROUTER send completed by Core send completion. */
+/** Builds a DEALER, ROUTER, or routed STREAM send completed by Core. */
 public interface RoutedSendOperation
   extends MessageBuilderStage<RoutedSendSubmitOperation> {
     /** Adds the first message part; consumed when Core accepts the record. */

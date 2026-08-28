@@ -14,12 +14,15 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PerfMultiDealerDealerRegressionTest {
     private static final Duration PROCESS_TIMEOUT = Duration.ofSeconds(30);
+    private static final Pattern THROUGHPUT = Pattern.compile(
+        "RESULT,current,DEALER_DEALER,tcp,64,throughput,([0-9.]+)");
 
     @Test
     void splitProcessServerAndClientCompleteWithoutTimeout() throws Exception {
@@ -60,6 +63,10 @@ class PerfMultiDealerDealerRegressionTest {
 
         assertTrue(serverOut.contains("RESULT,current,DEALER_DEALER,tcp,64,throughput,"),
             "unexpected server output:\n" + serverOut);
+        var throughput = THROUGHPUT.matcher(serverOut);
+        assertTrue(throughput.find(), "missing throughput:\n" + serverOut);
+        assertTrue(Double.parseDouble(throughput.group(1)) > 0.0,
+            "async client traffic was not delivered:\n" + serverOut);
         assertTrue(!clientOut.contains("RESULT,current,DEALER_DEALER,tcp,64,throughput,"),
             "unexpected client output:\n" + clientOut);
     }

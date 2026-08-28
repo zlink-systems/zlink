@@ -17,6 +17,7 @@ from perf_multi_common import (
     pin_current_process_cpu0,
     PYTHON_MULTI_DEFAULT_IO_THREADS,
     render_effective_options,
+    resolve_multi_monitor_hwm_bytes,
     resolve_multi_timeout_seconds,
     rows_by_case,
     status_row_text,
@@ -66,6 +67,8 @@ DEFAULT_PATTERNS = (
     "DEALER_DEALER",
     "DEALER_ROUTER",
     "ROUTER_ROUTER",
+    "DEALER_ROUTER_REQREP",
+    "ROUTER_ROUTER_REQREP",
     "PUBSUB",
     "STREAM",
 )
@@ -78,6 +81,8 @@ POLICY_TRANSPORTS = {
     "DEALER_DEALER": RAW_TRANSPORTS,
     "DEALER_ROUTER": RAW_TRANSPORTS,
     "ROUTER_ROUTER": ROUTER_ROUTER_TRANSPORTS,
+    "DEALER_ROUTER_REQREP": RAW_TRANSPORTS,
+    "ROUTER_ROUTER_REQREP": ROUTER_ROUTER_TRANSPORTS,
     "PUBSUB": RAW_TRANSPORTS,
     "STREAM": ("tcp", "tls", "ws", "wss"),
 }
@@ -476,9 +481,9 @@ def _env_pair_value(primary_env, fallback_env, default, env_map=None):
     return source.get(primary_env) or source.get(fallback_env, default)
 
 
-def _stream_completion_wait_ms():
-    return os.environ.get("PERF_MULTI_STREAM_COMPLETION_WAIT_MS") or os.environ.get(
-        "PERF_STREAM_COMPLETION_WAIT_MS", "10000"
+def _stream_completion_wait_ms(env, shutdown_timeout_ms):
+    return env.get("PERF_MULTI_STREAM_COMPLETION_WAIT_MS") or env.get(
+        "PERF_STREAM_COMPLETION_WAIT_MS", str(shutdown_timeout_ms)
     )
 
 
@@ -513,6 +518,11 @@ def _metric_row(pattern, msg_size, metrics, *, indent="      "):
 
 
 def pattern_direction(pattern):
+    if pattern in {
+        "MULTI_DEALER_ROUTER_REQREP",
+        "MULTI_ROUTER_ROUTER_REQREP",
+    }:
+        return "request-reply"
     return "echo" if pattern in {
         "MULTI_DEALER_ROUTER",
         "MULTI_DEALER_ROUTER_SENDSEND",
@@ -703,18 +713,20 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
     stdout_chunks = []
     stderr_chunks = []
     client = None
+    failure_message = None
     ready_timeout_s = _arg_or_env_int(
         args.server_ready_timeout_ms,
         "PERF_MULTI_SERVER_READY_TIMEOUT_MS",
         _env_int("PERF_SERVER_READY_TIMEOUT_MS", 10000),
         env,
     ) / 1000.0
-    shutdown_grace_s = _arg_or_env_int(
+    shutdown_timeout_ms = _arg_or_env_int(
         args.server_shutdown_timeout_ms,
         "PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS",
-        _env_int("PERF_SERVER_SHUTDOWN_TIMEOUT_MS", 5000),
+        _env_int("PERF_SERVER_SHUTDOWN_TIMEOUT_MS", 5000, env),
         env,
-    ) / 1000.0
+    )
+    shutdown_grace_s = shutdown_timeout_ms / 1000.0
     timeout_override = _arg_or_env_pair_int(
         "",
         "PERF_MULTI_TIMEOUT_SECONDS",
@@ -751,8 +763,8 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
         if pattern == "STREAM":
             # Spawn the shared C perf_stream_client (mirrors the Go/dotnet
             # runner: --pattern MULTI_STREAM so RESULT lines match the
-            # Python runner parser; --send-stop-token 1 terminates the
-            # Python STREAM server's receive surface).
+            # Python runner parser. Server teardown remains owned by the
+            # runner's control channel after the client exits.
             stream_client_bin = _ensure_stream_client()
             stream_clients = clients
             non_tcp_max = os.environ.get("PERF_STREAM_NON_TCP_CLIENTS_MAX") or os.environ.get(
@@ -777,9 +789,9 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                 "--io-threads",
                 _effective_role_io_threads(args, "client").split()[0],
                 "--completion-wait-ms",
-                _stream_completion_wait_ms(),
+                _stream_completion_wait_ms(env, shutdown_timeout_ms),
                 "--send-stop-token",
-                "1",
+                "0",
                 "--endpoint",
                 endpoint,
             ]
@@ -902,10 +914,10 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
             stdout_chunks.append(_coerce_text(exc.stdout).strip())
         if exc.stderr:
             stderr_chunks.append(_coerce_text(exc.stderr).strip())
-        output = "\n".join(chunk for chunk in stderr_chunks + stdout_chunks if chunk)
+        output = "\n".join(chunk for chunk in stdout_chunks + stderr_chunks if chunk)
         if _is_unsupported_output(output):
             return f"UNSUPPORTED,current,{_result_pattern(pattern)},{transport}"
-        raise SystemExit(output)
+        failure_message = output
     except subprocess.TimeoutExpired as exc:
         if exc.stdout:
             stdout_chunks.append(_coerce_text(exc.stdout).strip())
@@ -913,12 +925,12 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
             stderr_chunks.append(_coerce_text(exc.stderr).strip())
         output = "\n".join(
             chunk
-            for chunk in stderr_chunks + stdout_chunks + [f"client timed out for pattern {pattern}"]
+            for chunk in stdout_chunks + stderr_chunks + [f"client timed out for pattern {pattern}"]
             if chunk
         )
         if _is_unsupported_output(output):
             return f"UNSUPPORTED,current,{_result_pattern(pattern)},{transport}"
-        raise SystemExit(output)
+        failure_message = output
     finally:
         if client is not None and hasattr(client, "poll") and client.poll() is None:
             _terminate_process(client, grace_seconds=shutdown_grace_s)
@@ -927,6 +939,9 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
             err = server.stderr.read().strip()
             if err:
                 stderr_chunks.append(err)
+    if failure_message is not None:
+        output = "\n".join(chunk for chunk in stdout_chunks + stderr_chunks if chunk)
+        raise SystemExit(output or failure_message)
     if stderr_chunks:
         stderr_text = "\n".join(chunk for chunk in stderr_chunks if chunk)
         if _is_unsupported_output(stderr_text):
@@ -984,8 +999,7 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
         or env.get("PERF_MULTI_CONNECT_READY_TIMEOUT_MS")
         or env.get("PERF_CONNECT_READY_TIMEOUT_MS")
         or "10000",
-        "monitor_hwm": args.monitor_hwm
-        or os.environ.get("PERF_MULTI_MONITOR_HWM", "4096000"),
+        "monitor_hwm": env["PERF_MULTI_MONITOR_HWM"],
         "server_ready_timeout_ms": args.server_ready_timeout_ms
         or env.get("PERF_MULTI_SERVER_READY_TIMEOUT_MS")
         or env.get("PERF_SERVER_READY_TIMEOUT_MS")
@@ -1094,7 +1108,15 @@ def main(argv=None):
     if args.connect_ready_timeout_ms:
         env["PERF_MULTI_CONNECT_READY_TIMEOUT_MS"] = args.connect_ready_timeout_ms
     if args.monitor_hwm:
-        env["PERF_MULTI_MONITOR_HWM"] = args.monitor_hwm
+        try:
+            monitor_hwm = int(args.monitor_hwm)
+        except ValueError as exc:
+            raise SystemExit("--monitor-hwm must be a nonnegative integer") from exc
+        if monitor_hwm < 0:
+            raise SystemExit("--monitor-hwm must be a nonnegative integer")
+    else:
+        monitor_hwm = resolve_multi_monitor_hwm_bytes()
+    env["PERF_MULTI_MONITOR_HWM"] = str(monitor_hwm)
     if args.server_shutdown_timeout_ms:
         env["PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS"] = args.server_shutdown_timeout_ms
     if args.server_bind_port:
@@ -1104,10 +1126,14 @@ def main(argv=None):
 
     run_cooldown_ms = _env_int("PERF_MULTI_RUN_COOLDOWN_MS", _env_int("PERF_RUN_COOLDOWN_MS", 3000))
     transport_transition_ms = _env_int(
-        "PERF_MULTI_TRANSPORT_TRANSITION_MS", _env_int("PERF_TRANSPORT_TRANSITION_MS", 3000)
+        "PERF_MULTI_TRANSPORT_TRANSITION_MS",
+        _env_int("PERF_TRANSPORT_TRANSITION_MS", 3000, env),
+        env,
     )
     pattern_transition_ms = _env_int(
-        "PERF_MULTI_PATTERN_TRANSITION_MS", _env_int("PERF_PATTERN_TRANSITION_MS", 3000)
+        "PERF_MULTI_PATTERN_TRANSITION_MS",
+        _env_int("PERF_PATTERN_TRANSITION_MS", 3000, env),
+        env,
     )
 
     options = _build_options(args, patterns, transports, requested_msg_sizes, clients, env)

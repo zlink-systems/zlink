@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -38,6 +39,8 @@ func runSingleRoutedOneWayWithTransient(
 
 	senderDone := make(chan error, 1)
 	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		for time.Now().Before(window.StopAt) {
 			message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
 			sent, err := sendActive(message)
@@ -116,8 +119,13 @@ func recvSingleRoutedOneWayOnce(
 		return false, partErr
 	}
 	now := time.Now()
-	if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(part, msgSize, perfcommon.PhaseActive, now); ok {
-		stats.AddLatencyNs(latencyNs)
+	sentTsNs, valid := perfcommon.SentTimestampNsFromMessagePhase(
+		part, msgSize, perfcommon.PhaseActive)
+	if valid {
+		stats.AddCount()
+		if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+			stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
+		}
 	}
 	return false, nil
 }

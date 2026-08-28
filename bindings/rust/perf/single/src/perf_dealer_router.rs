@@ -59,7 +59,7 @@ fn main() {
         .send()
         .message(Message::try_from(b"PING").expect("dealer ping"))
         .submit_sync(zlink::SendFlags::NONE)
-    .expect("dealer handshake send");
+        .expect("dealer handshake send");
     let mut handshake = zlink::Received::empty();
     if let Err(err) = router.recv(&mut handshake, zlink::RecvFlags::NONE) {
         panic!("router handshake recv: {err}");
@@ -73,7 +73,7 @@ fn main() {
         .send(&reply_rid)
         .message(Message::try_from(b"PONG").expect("router pong"))
         .submit_sync(zlink::SendFlags::NONE)
-    .expect("router handshake reply");
+        .expect("router handshake reply");
     let mut handshake_reply = zlink::Received::empty();
     if let Err(err) = dealer.recv(&mut handshake_reply, zlink::RecvFlags::NONE) {
         panic!("dealer handshake recv: {err}");
@@ -85,17 +85,18 @@ fn main() {
     let active = Duration::from_secs(config.duration_seconds);
     let active_deadline = std::time::Instant::now() + active;
     let send_thread = std::thread::spawn(move || {
-        common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
-            match perf_submit_measurement!(dealer.send(), msg) {
+        common::send_loop(
+            active_deadline,
+            config.size,
+            common::PHASE_ACTIVE,
+            |msg| match perf_submit_measurement!(dealer.send(), msg) {
                 Ok(()) => true,
                 Err(err) if err.code() == SubmitResult::NotConnected => false,
                 Err(err) if common::is_single_send_retry_error(&err) => false,
                 Err(err) => panic!("active send: {err}"),
-            }
-        });
-        common::send_stop_token(|msg| {
-            perf_submit_measurement!(dealer.send(), msg).map(|()| true)
-        });
+            },
+        );
+        common::send_stop_token(|msg| perf_submit_measurement!(dealer.send(), msg).map(|()| true));
     });
 
     let mut received = Received::empty();

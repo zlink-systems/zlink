@@ -315,7 +315,7 @@ class _ManagedSendOp:
 
 
 class _ManagedRoutedSendOp:
-    """Canonical coroutine builder for DEALER/ROUTER HWM admission."""
+    """Canonical coroutine builder for DEALER/ROUTER/STREAM HWM admission."""
 
     __slots__ = ("_socket", "_routing_id", "_payload", "_parts", "_submitted")
 
@@ -373,19 +373,6 @@ class _ManagedRoutedSendOp:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         payload = self._payload_or_raise()
         self._submitted = True
-        if self._parts is not None:
-            fallback = (
-                _SocketSendOp(self._socket)
-                if self._routing_id is None
-                else _RoutedSocketSendOp(self._socket, self._routing_id)
-            )
-            fallback.messages(*self._parts)
-
-            async def submit_multipart():
-                fallback.submit()
-                return None
-
-            return submit_multipart()
         return self._socket._routed_admission.submit_send(
             self._routing_id, payload
         )
@@ -649,8 +636,10 @@ class _RoutedAsyncSocket:
     def _init_routed_async_socket(self, role):
         if role == SocketType.DEALER:
             read_request_timeout = lambda: self.dealer_options.request_timeout_ms
-        else:
+        elif role == SocketType.ROUTER:
             read_request_timeout = lambda: self.router_options.request_timeout_ms
+        else:
+            read_request_timeout = lambda: 0
         try:
             admission = RoutedSendOwner(
                 self,
@@ -921,6 +910,7 @@ class RouterSocket(
         return True
 
 class StreamSocket(
+    _RoutedAsyncSocket,
     _BindSocket,
     _StreamOptionSocket,
     _RoutingIdSocket,
@@ -930,11 +920,15 @@ class StreamSocket(
 
     def __init__(self, context):
         super().__init__(context)
+        self._init_routed_async_socket(SocketType.STREAM)
 
     def send(self, routing_id):
         return _native_routed_send_op(self, routing_id) or _RoutedSocketSendOp(
             self, routing_id
         )
+
+    def send_async(self, routing_id):
+        return _ManagedRoutedSendOp(self, routing_id)
 
     def disconnect_rid(self, peer_rid):
         native = _copy_routing_id(peer_rid)

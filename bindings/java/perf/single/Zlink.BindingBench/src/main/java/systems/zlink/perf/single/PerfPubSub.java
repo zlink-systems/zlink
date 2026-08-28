@@ -43,11 +43,11 @@ final class PerfPubSub {
         Context ctx = PerfUtil.newContext(config);
         try (PubSocket pub = ctx.createPubSocket();
              SubSocket sub = ctx.createSubSocket()) {
-            var pubMonitor = pub.monitorOpen(MonitorEventType.CONNECTION_READY);
-            var subMonitor = sub.monitorOpen(MonitorEventType.CONNECTION_READY);
+            var pubMonitor = pub.monitorOpen(
+                config.monitorHwm(), MonitorEventType.CONNECTION_READY);
+            var subMonitor = sub.monitorOpen(
+                config.monitorHwm(), MonitorEventType.CONNECTION_READY);
             try {
-            PerfUtil.applyMonitorOptions(pubMonitor, config);
-            PerfUtil.applyMonitorOptions(subMonitor, config);
             PerfUtil.applySocketOptions(pub, config);
             PerfUtil.applySocketOptions(sub, config);
             // C parity: perf_pubsub.cpp resolve_pubsub_xpub_nodrop_opt

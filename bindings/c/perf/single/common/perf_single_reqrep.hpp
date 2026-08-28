@@ -10,10 +10,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -27,6 +30,7 @@ struct request_state_t
         run_id (0),
         msg_size (0),
         latency_sample_cap (0),
+        active_deadline (std::chrono::steady_clock::time_point::min ()),
         completed (0),
         in_flight (0),
         next_seq (1),
@@ -38,6 +42,7 @@ struct request_state_t
     uint32_t run_id;
     size_t msg_size;
     size_t latency_sample_cap;
+    std::chrono::steady_clock::time_point active_deadline;
     std::atomic<unsigned long long> completed;
     std::atomic<int> in_flight;
     std::atomic<unsigned long long> next_seq;
@@ -75,7 +80,18 @@ inline int resolve_completion_drain_timeout_ms ()
 
 inline size_t resolve_latency_sample_cap ()
 {
-    return static_cast<size_t> (parse_positive_env ("PERF_SINGLE_LATENCY_SAMPLE_CAP", 4000000));
+    const size_t fallback = 1000000;
+    const char *value = std::getenv ("PERF_SINGLE_LATENCY_SAMPLE_CAP");
+    if (!value || !*value || *value == '-')
+        return fallback;
+
+    char *end = NULL;
+    errno = 0;
+    const unsigned long long parsed = std::strtoull (value, &end, 10);
+    if (errno != 0 || end == value || !end || *end != '\0'
+        || parsed > static_cast<unsigned long long> (std::numeric_limits<size_t>::max ()))
+        return fallback;
+    return static_cast<size_t> (parsed);
 }
 
 inline void print_reqrep_result (const std::string &lib_type,
@@ -125,6 +141,9 @@ inline void on_request_reply (zlink_request_result_t result_,
     if (!state)
         return;
 
+    const std::chrono::steady_clock::time_point completed_at =
+      std::chrono::steady_clock::now ();
+
     if (result_ == ZLINK_REQUEST_OK && parts_
         && part_count_ == perf_measurement_part_count ()) {
         if (part_count_ == 2 && zlink_msg_size (&parts_[1]) != 0) {
@@ -139,7 +158,8 @@ inline void on_request_reply (zlink_request_result_t result_,
                                                        &header)
             && perf_single_metric::is_expected (header, state->run_id,
                                                 perf_single_metric::phase_active,
-                                                state->msg_size)) {
+                                                state->msg_size)
+            && completed_at < state->active_deadline) {
             const uint64_t now_ns = perf_single_metric::now_ns ();
             if (now_ns >= static_cast<uint64_t> (header.sent_ts_ns)) {
                 {
@@ -241,6 +261,7 @@ inline bool run_requester (void *requester_,
     const int drain_timeout_ms = resolve_completion_drain_timeout_ms ();
     const auto deadline = std::chrono::steady_clock::now ()
                           + std::chrono::seconds (std::max (1, duration_s_));
+    state_->active_deadline = deadline;
     while (std::chrono::steady_clock::now () < deadline
            && !state_->fatal.load (std::memory_order_acquire)) {
         bool submitted_any = false;

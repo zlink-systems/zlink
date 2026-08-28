@@ -13,16 +13,16 @@ from perf_multi_common import (
     new_payload,
     parse_client_args,
     perf_client_context,
+    resolve_multi_monitor_hwm_bytes,
     resolve_multi_connect_ready_timeout_ms,
-    safe_poll,
-    send_nonblocking,
+    send_routed,
     stamp_payload,
     wait_monitor_event,
 )
 
 
-def _send_stop_token(sock):
-    sock.send().message(STOP_TOKEN).submit_sync(flags=0)
+async def _send_stop_token(sock):
+    await send_routed(sock, STOP_TOKEN, measurement=False)
 
 
 async def main(argv=None):
@@ -38,7 +38,10 @@ async def main(argv=None):
                 monitors = []
                 for sock in sockets:
                     monitor = stack.enter_context(
-                        sock.monitor_open(zlink.MonitorEventMask.CONNECTION_READY)
+                        sock.monitor_open(
+                            zlink.MonitorEventMask.CONNECTION_READY,
+                            resolve_multi_monitor_hwm_bytes(),
+                        )
                     )
                     configure_multi_tls_client(sock, args.transport)
                     apply_multi_socket_options(sock)
@@ -56,61 +59,22 @@ async def main(argv=None):
                     raise SystemExit(f"unexpected command: {command}")
 
                 active_deadline = time.perf_counter() + args.duration
-                send_pending = [False] * len(sockets)
-                with zlink.create_poller() as poller:
-                    poll_events = zlink.create_poll_events(max(1, len(sockets)))
-                    for index, sock in enumerate(sockets):
-                        poller.add_socket(sock, zlink.PollEventFlag.POLLOUT, index)
-                    # Await routed admission per socket. Retain the POLLOUT
-                    # fallback only for a transient pre-admission rejection.
+                async def send_loop(index, current_sock):
+                    nonlocal seq
                     while time.perf_counter() < active_deadline:
-                        for index, current_sock in enumerate(sockets):
-                            if send_pending[index]:
-                                continue
-                            while time.perf_counter() < active_deadline:
-                                next_seq = seq + 1
-                                if send_nonblocking(
-                                    current_sock,
-                                    stamp_payload(
-                                        payloads[index],
-                                        phase=1,
-                                        run_id=run_id,
-                                        seq=next_seq,
-                                    ),
-                                ):
-                                    seq = next_seq
-                                    continue
-                                # EAGAIN/backpressure: defer until POLLOUT.
-                                send_pending[index] = True
-                                break
-                        if time.perf_counter() >= active_deadline:
-                            break
-                        if not any(send_pending):
-                            continue
-                        remaining_ms = int(
-                            (active_deadline - time.perf_counter()) * 1000
+                        seq += 1
+                        await send_routed(
+                            current_sock,
+                            stamp_payload(
+                                payloads[index], phase=1, run_id=run_id, seq=seq
+                            ),
                         )
-                        if remaining_ms <= 0:
-                            break
-                        ready_count = safe_poll(
-                            poller, poll_events, max(1, remaining_ms)
-                        )
-                        if not ready_count:
-                            continue
-                        for offset in range(ready_count):
-                            if not (
-                                poll_events.revents(offset)
-                                & int(zlink.PollEventFlag.POLLOUT)
-                            ):
-                                continue
-                            idx = poll_events.slot(offset)
-                            if idx < 0 or idx >= len(sockets):
-                                continue
-                            send_pending[idx] = False
+                    await _send_stop_token(current_sock)
+                await asyncio.gather(*(
+                    send_loop(index, sock) for index, sock in enumerate(sockets)
+                ))
                 # C run_single_size_case: send a wire stop token per socket
                 # so the server receive window terminates.
-                for sock in sockets:
-                    _send_stop_token(sock)
                 print(f"CLIENT_DONE,{args.msg_size}", flush=True)
         finally:
             for sock in sockets:

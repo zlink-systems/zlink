@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 
 
@@ -69,6 +70,26 @@ inline uint64_t parse_positive_uint64_env (const char *name, uint64_t default_va
     char *end = NULL;
     const unsigned long long parsed = std::strtoull (value, &end, 10);
     if (errno != 0 || end == value || *end != '\0' || parsed == 0)
+        return default_value;
+    return static_cast<uint64_t> (parsed);
+}
+
+inline uint64_t parse_nonnegative_uint64_env (const char *name,
+                                              uint64_t default_value)
+{
+    if (!name)
+        return default_value;
+
+    const char *value = std::getenv (name);
+    if (!value || !*value
+        || std::strspn (value, "0123456789") != std::strlen (value))
+        return default_value;
+
+    errno = 0;
+    char *end = NULL;
+    const unsigned long long parsed = std::strtoull (value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0'
+        || parsed > (std::numeric_limits<uint64_t>::max) ())
         return default_value;
     return static_cast<uint64_t> (parsed);
 }
@@ -191,7 +212,8 @@ inline multi_bench_settings_t resolve_multi_bench_settings ()
       std::max (0, parse_positive_env ("PERF_MULTI_CONNECT_READY_TIMEOUT_MS", 10000));
     out.sndtimeo_ms = std::max (0, parse_positive_env ("PERF_MULTI_SNDTIMEO_MS", 200));
     out.rcvtimeo_ms = std::max (0, parse_positive_env ("PERF_MULTI_RCVTIMEO_MS", 200));
-    out.monitor_hwm = parse_positive_uint64_env ("PERF_MULTI_MONITOR_HWM", 4096000);
+    out.monitor_hwm =
+      parse_nonnegative_uint64_env ("PERF_MULTI_MONITOR_HWM", 4096000);
     out.server_bind_port = std::max (0, parse_positive_env ("PERF_MULTI_SERVER_BIND_PORT", 0));
 
     return out;

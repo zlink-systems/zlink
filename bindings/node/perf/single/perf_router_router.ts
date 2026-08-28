@@ -21,15 +21,16 @@ const {
   emitSingleSocketHwmDetail,
   parseSingleBinaryArgs,
   runLocalSocketOneWayBenchmark,
+  releaseSenderWorker,
   spawnSenderWorker,
-  waitForWorkerError,
-  waitForWorkerMessage,
+  waitForWorkerStatus,
 } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 
 const RECEIVER_ID = Buffer.from('ROUTER1', 'ascii');
 const SENDER_ID = Buffer.from('ROUTER2', 'ascii');
 const RECEIVER_ROUTING_ID = zlink.RoutingId.from(RECEIVER_ID);
+const handshakeSleepState = new Int32Array(new SharedArrayBuffer(4));
 
 function trace(message) {
   if (process.env.PERF_NODE_TRACE === '1') {
@@ -41,7 +42,7 @@ function partStrings(received) {
   return received.parts.map((part) => part.data().toString());
 }
 
-async function handshakeRouterReceiver(receiver) {
+function handshakeRouterReceiver(receiver) {
   const ping = new zlink.Received();
   receiver.recv(ping);
   try {
@@ -49,14 +50,15 @@ async function handshakeRouterReceiver(receiver) {
       throw new Error('router-router handshake receive failed');
     }
 
-    await receiver.send(ping.routingId).message(Buffer.from('PONG')).submit();
+    receiver.send(ping.routingId).message(Buffer.from('PONG'))
+      .submit_sync(zlink.SendFlags.None);
     return ping.routingId;
   } finally {
     ping.close();
   }
 }
 
-async function handshakeRouterReceiverWithRetry(receiver) {
+function handshakeRouterReceiverWithRetry(receiver) {
   const ping = new zlink.Received();
   try {
     const configuredMs = integerEnv('PERF_ROUTER_HANDSHAKE_TIMEOUT_MS', 3000);
@@ -72,7 +74,7 @@ async function handshakeRouterReceiverWithRetry(receiver) {
         }
       }
       if (!received) {
-        await new Promise((resolve) => setTimeout(resolve, 1));
+        Atomics.wait(handshakeSleepState, 0, 0, 1);
       }
     }
     if (!received) {
@@ -82,7 +84,8 @@ async function handshakeRouterReceiverWithRetry(receiver) {
       throw new Error('router-router handshake receive failed');
     }
 
-    await receiver.send(ping.routingId).message(Buffer.from('PONG')).submit();
+    receiver.send(ping.routingId).message(Buffer.from('PONG'))
+      .submit_sync(zlink.SendFlags.None);
     return ping.routingId;
   } finally {
     ping.close();
@@ -104,10 +107,10 @@ async function runRouterRouterBenchmark(msgSize, options) {
       createSender: (ctx) => zlink.createRouterSocket(ctx),
       configureReceiver: (socket) => socket.setRoutingId(RECEIVER_ROUTING_ID),
       configureSender: (socket) => socket.setRoutingId(zlink.RoutingId.from(SENDER_ID)),
-      handshake: async (sender, receiver) => {
-        await sender.send(RECEIVER_ROUTING_ID)
-          .message(Buffer.from('PING')).submit();
-        const senderRid = await handshakeRouterReceiver(receiver);
+      handshake: (sender, receiver) => {
+        sender.send(RECEIVER_ROUTING_ID)
+          .message(Buffer.from('PING')).submit_sync(zlink.SendFlags.None);
+        const senderRid = handshakeRouterReceiver(receiver);
         const reply = new zlink.Received();
         sender.recv(reply);
         try {
@@ -121,9 +124,10 @@ async function runRouterRouterBenchmark(msgSize, options) {
         // id; the sender addresses the receiver by RECEIVER_ROUTING_ID.
         return RECEIVER_ROUTING_ID;
       },
-      sendActive: async (socket, payload, routingId) => {
+      sendActive: (socket, payload, routingId) => {
         try {
-          await appendMeasurement(socket.send(routingId), payload).submit();
+          appendMeasurement(socket.send(routingId), payload)
+            .submit_sync(zlink.SendFlags.DontWait);
           return true;
         } catch (error) {
           if (error instanceof zlink.SubmitError
@@ -140,8 +144,9 @@ async function runRouterRouterBenchmark(msgSize, options) {
           throw error;
         }
       },
-      sendStop: async (socket, routingId) => {
-        await socket.send(routingId).message(STOP_TOKEN_BYTES).submit();
+      sendStop: (socket, routingId) => {
+        socket.send(routingId).message(STOP_TOKEN_BYTES)
+          .submit_sync(zlink.SendFlags.None);
       },
     });
   }
@@ -169,17 +174,10 @@ async function runRouterRouterBenchmark(msgSize, options) {
       senderRoutingIdBytes: SENDER_ID,
       options,
     });
-    const workerError = waitForWorkerError(worker);
-    await Promise.race([
-      waitForWorkerMessage(worker, 'connected'),
-      workerError.then((message) => Promise.reject(new Error(message.message)))
-    ]);
-    worker.postMessage({ type: 'handshake' });
-    await handshakeRouterReceiverWithRetry(receiver);
-    await Promise.race([
-      waitForWorkerMessage(worker, 'ready'),
-      workerError.then((message) => Promise.reject(new Error(message.message)))
-    ]);
+    waitForWorkerStatus(worker, 2);
+    releaseSenderWorker(worker);
+    handshakeRouterReceiverWithRetry(receiver);
+    waitForWorkerStatus(worker, 3);
     trace('handshake done');
 
     const activeStartNs = currentEpochNs();
@@ -197,16 +195,13 @@ async function runRouterRouterBenchmark(msgSize, options) {
     // above is the routing-id discovery gate (C perf_router_router.cpp
     // does the same). No extra start/stop control channel — the receiver
     // uses blocking recv + drain and exits on the wire stop token.
-    const recvTask = drainRouterRecvInto(
+    drainRouterRecvInto(
       receiver,
       msgSize,
       Object.assign(collector, { runId, activeStartNs }),
       { recordUntilNs: activeStopNs }
     );
-    await Promise.race([
-      recvTask,
-      workerError.then((message) => Promise.reject(new Error(message.message)))
-    ]);
+    waitForWorkerStatus(worker, 4);
     const result = collector.finish();
     emitSingleSocketHwmDetail(receiver, 'ROUTER_ROUTER', options.transport, 'receiver', msgSize);
     return result;

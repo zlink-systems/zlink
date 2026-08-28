@@ -152,7 +152,7 @@ internal static partial class PerfRunner
     internal static int ResolveSingleLatencyCount(string pattern)
     {
         _ = pattern;
-        return PerfEnv.ReadPositive("PERF_SINGLE_LATENCY_SAMPLE_CAP", 4_000_000);
+        return PerfEnv.ReadNonNegative("PERF_SINGLE_LATENCY_SAMPLE_CAP", 1_000_000);
     }
 
     internal static int ResolveSinglePubSubReadySettleMs()
@@ -176,53 +176,12 @@ internal static partial class PerfRunner
         return PerfSocketIo.SendMeasurement(socket, buffer, flags);
     }
 
-    internal static async Task<int> SendAsync(IDealerSocket socket, byte[] buffer,
+    internal static int SendBlocking(IDealerSocket socket, byte[] buffer,
         SendFlags flags = SendFlags.None)
     {
         if (buffer == null)
             throw new ArgumentNullException(nameof(buffer));
-        return await PerfSocketIo.SendMeasurementAsync(socket, buffer, flags)
-            .ConfigureAwait(false);
-    }
-
-    internal static bool TrySendActiveMessage(IMessageSocket socket,
-        ReadOnlySpan<byte> buffer, string tag)
-    {
-        try
-        {
-            return PerfSocketIo.SendMeasurement(socket, buffer, SendFlags.DontWait) > 0;
-        }
-        catch (ZlinkException ex)
-            when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
-        {
-            return false;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"{tag} send failed: {ex.Message}");
-            throw;
-        }
-    }
-
-    internal static bool TrySendRoutedActiveMessage(IRouterSocket socket,
-        RoutingId routingId, ReadOnlySpan<byte> buffer, string tag)
-    {
-        try
-        {
-            return PerfSocketIo.SendMeasurement(socket, routingId, buffer,
-                SendFlags.DontWait) > 0;
-        }
-        catch (ZlinkException ex)
-            when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
-                  || PerfShared.IsTransientNetworkError(ex.NativeErrno))
-        {
-            return false;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"{tag} send failed: {ex.Message}");
-            throw;
-        }
+        return PerfSocketIo.SendMeasurement(socket, buffer, flags);
     }
 
     internal static bool PublishActiveMessageBlocking(IPublisherSocket socket,
@@ -333,34 +292,36 @@ internal static partial class PerfRunner
         return false;
     }
 
-    internal static async Task<bool> SendStopTokenAsync(IDealerSocket sender,
-        string tag)
+    internal static bool SendStopTokenBlocking(IDealerSocket sender, string tag)
     {
-        try
-        {
-            return await PerfSocketIo.SendAsync(sender, StopToken.Bytes)
-                .ConfigureAwait(false) > 0;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"{tag} stop-token send failed: {ex.Message}");
-            return false;
-        }
-    }
+        long deadlineTicks = DeadlineTicksFromMilliseconds(
+            ResolveStopTokenTimeoutMs());
 
-    internal static async Task<bool> SendRoutedStopTokenAsync(IRouterSocket sender,
-        RoutingId routingId, string tag)
-    {
-        try
+        while (Stopwatch.GetTimestamp() < deadlineTicks)
         {
-            return await PerfSocketIo.SendAsync(sender, routingId,
-                StopToken.Bytes).ConfigureAwait(false) > 0;
+            try
+            {
+                using Message token = Message.From(StopToken.Bytes);
+                sender.Send().Message(token).Submit(SendFlags.None);
+                return true;
+            }
+            catch (ZlinkException ex)
+                when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
+                      || PerfShared.IsTransientNetworkError(ex.NativeErrno))
+            {
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    $"{tag} stop-token send failed: {ex.Message}");
+                return false;
+            }
+
+            Thread.Sleep(1);
         }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"{tag} stop-token send failed: {ex.Message}");
-            return false;
-        }
+
+        Console.Error.WriteLine($"{tag} stop-token send failed");
+        return false;
     }
 
     internal static bool SendRoutedStopTokenBlocking(IRouterSocket sender,

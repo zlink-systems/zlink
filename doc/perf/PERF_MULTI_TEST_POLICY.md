@@ -1,8 +1,8 @@
 # zlink Multi Performance Test Policy
 
 > **적용 범위**: zlink 전체 (core + bindings) — multi-client 벤치마크
-> **Policy Version**: 2.0
-> **Date**: 2026-07-18
+> **Policy Version**: 2.1
+> **Date**: 2026-08-28
 > **Scope**: zlink multi-client 성능 테스트 정책
 >
 > 본 정책은 `bindings/c/perf`의 multi C benchmark runner와 in-repo multi perf 자산이 존재하는
@@ -15,10 +15,11 @@
 > **상위 문서**: [PERF_POLICY.md](PERF_POLICY.md) — 공통 원칙, 디렉터리 구조,
 > RESULT 형식, 결과 저장, 출력 형식, 실패 처리, 환경 변수(공통), 리팩토링 원칙
 >
-> **관련 문서**: [PERF_SINGLE_TEST_POLICY.md](PERF_SINGLE_TEST_POLICY.md), [PERF_SPOT_TEST_POLICY.md](PERF_SPOT_TEST_POLICY.md)
+> **관련 문서**: [PERF_SINGLE_TEST_POLICY.md](PERF_SINGLE_TEST_POLICY.md)
 >
 > 본 문서는 multi suite **전용** 정책만 기술한다.
 > 양 suite에 공통으로 적용되는 규칙은 상위 문서에서 관리한다.
+> Spot 성능 시험은 Framework 성능 시험이 소유하며 binding multi suite에는 포함하지 않는다.
 ---
 
 ## 1. Multi 핵심 정책
@@ -32,44 +33,57 @@
 | 기본 runs | 1 |
 
 - 목적: 벤치 코드가 병목이 되지 않게 유지하면서, 선택된 I/O 모델의 성능을 측정한다.
-- 한 줄 요약: `multi = poller POLLIN drain + POLLOUT backpressure`
-  - backpressure 전략: `echo 서버: deque, echo 클라이언트/one-way sender: bool 플래그`
+- 한 줄 요약: `multi = C nonblocking poller reference + binding async runtime`
+  - C reference는 pending deque/플래그와 `POLLOUT`으로 backpressure를 관리한다.
+  - 다른 binding의 HWM-managed send/request는 async 작업으로 backpressure를
+    관리한다. ownership을 받은 작업은 suspend/resume하고, ownership 이전의
+    backpressure는 같은 coroutine/task의 flow-control continuation으로 재제출한다.
+  - 공개 API 계약이 synchronous terminal만 제공하는 publish/raw reply는 예외다.
 
 ### 1.1 I/O 모델
 
 - **recv 모델**:
   - recv: poller `POLLIN` readiness 감지 → `zlink_recv()` / `zlink_msg_recv()`
-    비동기 drain 루프 (react 방식). poller가 readable을 알려주면 수신 가능한
+    nonblocking drain 루프 (react 방식). poller가 readable을 알려주면 수신 가능한
     만큼 drain한다.
-  - send: **poller + nonblocking send**. C reference는 `send(..., DONTWAIT)`로
-    구현한다.
+  - send: C reference는 **poller + nonblocking send**로 구현한다. C 이외의
+    binding은 HWM-managed send/request를 public async terminal과 언어별 async
+    runtime으로 구현한다.
   - send backpressure: C reference는 poller `POLLOUT` readiness를 감지해
     writable 상태에서만 send하고, `EAGAIN` 발생 시 그 소켓을 pending으로
     표시했다가 `POLLOUT`에서 재개한다(메시지를 잃지 않는다).
-  - **코루틴/async binding**: 같은 nonblocking 의미를 async submit +
-    suspend/resume으로 구현한다. backpressure를 만난 submit은 그 async 작업을
-    suspend하고 core의 writable/completion 신호에서 resume하며, 다른 소켓의
-    submit은 계속 진행한다. C가 수동으로 관리하는 pending 표시와 `POLLOUT`
-    재등록/재개를 binding은 언어 런타임의 suspend/resume이 대신한다. binding
-    multi 오버헤드는 이 async 실행 오버헤드를 포함한다. **매 submit을 즉시
-    await하여 왕복을 직렬화하면 nonblocking 계약 위반이다** — 이는 blocking
-    실행이며 C의 poller+nonblocking 모델과 다른 측정이 된다.
-  - app thread(또는 event loop)가 poller/completion 구동을 담당하며, C는
-    `POLLIN`/`POLLOUT` 이벤트로, binding은 async recv drain과 submit
-    suspend/resume으로 recv drain과 send 재개를 처리한다.
+  - **C 이외의 binding**: 같은 nonblocking 의미를 async submit으로 구현한다.
+    ownership을 받은 terminal은 backpressure 동안 async 작업을 suspend하고
+    Core의 writable/completion 진행에 따라 resume한다. public async terminal이
+    ownership 이전의 backpressure를 즉시 알리면 같은 coroutine/task가 cooperative
+    yield 또는 public readiness 뒤 같은 logical operation을 재제출한다. 다른
+    소켓의 submit은 계속 진행해야 하며, C의 pending 표시와 `POLLOUT` 재등록을
+    binding-local sync 경로로 복제하지 않는다. binding multi 오버헤드는 이 async
+    실행 오버헤드를 포함한다. send coroutine은 admission 완료를 await한 뒤 다음
+    send를 제출할 수 있지만 echo 수신을 기다리면 안 된다.
+    request coroutine은 reply completion을 기다리는 동안 다음 request 작업을 별도로
+    시작해야 한다. 왕복을 inflight 1로 직렬화하면 C의 nonblocking 모델과 달라진다.
+  - C app thread는 poller/completion을 구동한다. 다른 binding은 coroutine/async
+    runtime 또는 그 언어의 동등한 비동기 실행 모델로 recv drain과 send
+    continuation을 진행한다.
+  - 언어별 비동기 실행 모델은 C++ coroutine, .NET `Task`, Java
+    `CompletionStage`, Node `Promise`, Go goroutine, Python `asyncio`, Rust Future다.
+    Go에는 별도 send async terminal이 없으므로 goroutine 하나가 blocking
+    `Submit(ctx)` 하나를 소유하고, 여러 goroutine을 Go runtime이 concurrent하게
+    진행한다.
+  - C 이외의 binding이 sync `DONTWAIT`와 `POLLOUT` 재제출로 C reference를 복제하거나,
+    active hot path를 전용 OS thread의 blocking loop로 실행하면 정책 위반이다.
+  - **operation 계약 예외**: PUB/XPUB publish와 수신한 raw request에 대한 reply는
+    공개 API가 synchronous terminal만 제공한다. publish는 기본 lossy 계약에서 HWM
+    admission을 기다리지 않으므로 async로 감싸지 않는다. raw STREAM reply는 이
+    예외에 포함하지 않는다. C 이외의 binding은 public async terminal을 사용하며,
+    terminal이 없으면 perf의 internal adapter나 executor로 우회하지 않고 binding
+    public contract를 보완한다. 이 예외는 HWM-managed send/request를 sync
+    `DONTWAIT`로 구현해도 된다는 뜻이 아니다.
   - `send_ready_handler`는 사용하지 않는다.
 - multi one-way와 send/send echo pattern은 recv 모델로 측정한다. raw socket
-  request/reply pattern은 public completion poller로 reply completion을 측정한다.
-- Spot 계열은 direct message callback이나 socket poller를 사용하지 않는다.
-  MeshNode의 `zlink_mesh_node_drain_ready()`로 ready record를 받고 claim을 얻은 뒤
-  `zlink_mesh_claim_recv_batch()`로 record를 읽는다.
-- `MULTI_SPOT_REQREP` server는 `ZLINK_MESH_RECORD_SPOT_REQUEST`를 읽고
-  `zlink_mesh_reply()`로 응답한다. requester는 completion을 기다리지 않고
-  backpressure까지 request를 연속 제출하며, infrastructure claim batch의
-  `ZLINK_MESH_RECORD_COMPLETION`을 계속 drain해 완료 왕복을 집계한다.
-  outstanding 깊이는 backpressure가 결정한다.
-- `MULTI_SPOT_SENDSEND` 양쪽은 `ZLINK_MESH_RECORD_SPOT_SEND`를 읽는다. hub는 source
-  Spot 주소로 `zlink_spot_send_to_spot()`을 호출해 echo를 반환한다.
+  request/reply pattern은 C에서는 public completion poller로, 다른 binding에서는
+  public async request completion으로 reply 완료를 측정한다.
 - `MULTI_STREAM`은 raw callback을 테스트하지 않고
   `zlink_stream_packet_handler()`를 기준으로 packet receive surface를 테스트한다.
 - `while (send 실패)` 식의 즉시 재시도는 금지한다.
@@ -96,50 +110,62 @@ poller wait 이후 hot path는 poller가 ready로 보고한 source만 처리해�
 역할별 backpressure 전략:
 
 - **send/send echo 서버** (소켓 1개 × 클라이언트 N개):
-  - `EAGAIN` 시 per-socket pending deque에 메시지를 저장한다.
-  - pending이 있는 동안 새 send는 pending deque에 추가만 한다.
-  - poller `POLLOUT` readiness에서 pending deque를 `EAGAIN`까지 drain한다.
-  - 소켓 1개로 N개 클라이언트를 처리하므로, EAGAIN 중에도 다른 클라이언트의 메시지가 도착할 수 있어 deque가 필요하다.
+  - C reference는 `EAGAIN` 시 per-socket pending deque에 메시지를 저장하고,
+    poller `POLLOUT` readiness에서 deque를 다시 전송한다.
+  - 다른 binding은 각 reply를 async terminal로 제출한다. async runtime은 여러
+    reply 작업을 동시에 진행하며, Core가 backpressure 대기와 전송 순서를 소유한다.
+    binding-local pending deque와 `POLLOUT` 재전송은 사용하지 않는다.
 - **send/send echo 클라이언트** (per-socket):
-  - inflight 깊이를 인위적으로 고정하지 않는다. outstanding send 수는
-    backpressure(HWM)가 결정한다. 즉 backpressure를 만날 때까지 연속 제출하고,
-    막히면 재개 신호에서 이어간다.
+  - inflight 깊이를 인위적으로 고정하지 않는다. backpressure를 만날 때까지
+    연속 제출하고, 막히면 재개 신호에서 이어간다. HWM은 send admission queue를
+    제한하며 echo를 기다리는 전체 message 수를 app 상수로 제한하지 않는다.
     - C reference: `EAGAIN` 시 `bool send_pending` 플래그를 설정하고 poller
       `POLLOUT` readiness에서 재전송한다.
-    - 코루틴/async binding: backpressure를 만난 submit을 suspend하고 core의
-      writable 신호에서 resume한다. 같은 소켓의 이후 submit은 언어 런타임이
-      순서를 관리한다.
+    - C 이외의 binding: backpressure를 만난 submit을 async 작업 안에서 대기하고
+      Core의 writable 신호에서 resume한다. 같은 소켓의 이후 submit은 언어
+      runtime이 순서를 관리한다.
   - echo record 수신은 send를 gate하지 않는다. echo를 받아야만 다음을 보내는
     1:1 ping-pong으로 직렬화하지 않으며, backpressure를 만날 때까지 연속 제출한다.
-    실제 outstanding 깊이는 소켓 HWM이 결정한다.
+    실제 admission 속도는 소켓 HWM과 peer의 drain 속도로 정해진다.
   - 기존 `MULTI_DEALER_ROUTER`, `MULTI_ROUTER_ROUTER` 이름은 위 send/send echo
     pattern의 호환 이름이다.
 - **request/reply 클라이언트** (per-socket):
-  - client process는 N개 requester socket을 하나의 active poller loop에서
-    multiplex한다. socket마다 별도 recv/progress thread를 만들지 않는다.
+  - client process는 N개 requester socket을 하나의 active execution context에서
+    multiplex한다. socket마다 별도 recv/progress OS thread를 만들지 않는다.
   - inflight request 수를 인위적으로 고정하지 않는다. **응답을 기다리지 않고
-    backpressure를 만날 때까지 request를 연속 제출**하며, 동시에 reply를 계속
-    drain한다. outstanding request 깊이는 backpressure(HWM)가 결정한다.
+    admission backpressure를 만날 때까지 request를 연속 제출**하며, 동시에 reply
+    completion을 계속 진행한다. HWM은 send admission queue를 제한하고, reply를
+    기다리는 request 수는 실제 admission과 completion 속도로 정해진다.
     응답을 받아야 다음 request를 보내는 1:1 ping-pong으로 직렬화하지 않는다.
-  - public request API로 request를 제출하고, 같은 active poller에 completion
-    대상을 `POLLCOMPLETION` 단독으로 등록한다.
-  - requester socket은 request 제출 뒤에도 reply 수신/progress 경로를 계속
-    실행해야 한다. `POLLCOMPLETION`은 이 requester socket reply progress와
-    completion callback drain을 public poller loop에 묶는 등록이다.
-  - 코루틴/async binding은 여러 request의 async 완료를 동시에 진행한다.
-    backpressure를 만난 submit은 suspend하고 writable/completion 신호에서
-    resume한다. 별도 progress thread, timer, pipe wake, sleep fallback은 금지한다.
+  - C reference는 public callback request terminal로 제출하고, 같은 active
+    poller에 requester socket을 `POLLCOMPLETION` 단독으로 등록한다. 이 등록은
+    reply progress와 completion callback drain을 public poller loop에 묶는다.
+  - C 이외의 binding은 public async request terminal로 여러 request 완료를 동시에
+    진행한다. ownership을 받은 submit은 해당 언어의 async 작업에서 대기하고
+    writable/completion 진행에 따라 재개한다. ownership 이전의 backpressure는
+    같은 async 작업이 cooperative yield 또는 public readiness 뒤 재제출한다.
+    별도 progress OS thread, timer, pipe wake, sleep fallback은 금지한다.
   - **유효 집계**: throughput과 latency는 **active 측정 구간 안에서 reply까지
     완료된 왕복만** 계산한다. 측정 종료 시점에 아직 응답이 오지 않은 outstanding
     request는 완료 왕복이 아니므로 집계에서 제외한다(C reference와 동일).
 - **one-way sender** (단일 흐름):
-  - `EAGAIN` 시 `bool send_pending` 플래그만 설정한다.
-  - poller `POLLOUT` readiness에서 플래그 확인 후 재전송한다.
+  - C reference는 `EAGAIN` 시 `bool send_pending` 플래그를 설정하고 poller
+    `POLLOUT` readiness에서 같은 메시지를 재전송한다.
+  - 다른 binding은 async submit을 동시에 진행하며, backpressure 대기는 async
+    작업과 Core가 소유한다. binding-local pending 플래그나 `POLLOUT` 재전송 queue를
+    만들지 않는다.
+  - PUB/XPUB pattern의 sender는 위 async send 규칙이 아니라 public synchronous
+    publish 계약을 따른다. 공식 기본은 lossy `NODROP=0`이다. 명시적 진단
+    override로 `NODROP=1`을 선택한 구현은 publish 실패를 잃지 않도록 retry할 수
+    있지만 async send terminal을 새로 만들지 않는다.
 - **one-way receiver**: send 없음, backpressure 불필요.
 
 ### 1.3 동시성
 
-- app thread가 poller event loop를 단일 스레드로 구동하므로 직렬화된다.
+- C reference는 app thread 하나가 poller event loop를 구동한다.
+- C 이외의 binding은 async runtime 하나가 여러 socket의 send, recv와 completion을
+  concurrent하게 진행한다. socket마다 전용 OS thread를 만들거나 submit 직후
+  완료를 기다려 inflight를 1로 제한하지 않는다.
 
 ### 1.3.1 Poller wait timeout 정책
 
@@ -154,7 +180,7 @@ wait는 신호 누락을 덮는 timer fallback이 아니라, 이미 받은 phase
 같은 loop에서 active deadline을 닫기 위한 상한이다.
 
 routed relay server의 `STOP`은 wire payload가 아닌 runner teardown 제어다. 이
-제어는 C canonical runner처럼 stdin watcher가 상태를 바꾸고 relay loop가
+제어는 C 기준 runner처럼 stdin watcher가 상태를 바꾸고 relay loop가
 `perf_aux_poll_wait_ms()`로 확인할 수 있다. 이 auxiliary wait는 relay의 active
 payload 집계, send rate, HWM, socket event mask를 바꾸지 않으며, 다른 패턴의
 active loop에 일반화하지 않는다.
@@ -162,35 +188,24 @@ active loop에 일반화하지 않는다.
 | 항목 | 규칙 |
 |------|------|
 | wire stop token으로 종료되는 recv/readiness loop | 기본은 **`-1`** (signal-driven wait). active drain에서 stop token을 소비했으면 active deadline의 남은 시간만 단일 bounded wait |
-| active duration/request timeout을 직접 닫는 sender/requester loop | C 기준 bounded wait. MeshNode Spot 계열은 nonblocking ready/claim drain 뒤 deadline을 다시 확인 |
+| active duration/request timeout을 직접 닫는 sender/requester loop | C 기준 bounded wait |
 | `MULTI_PUBSUB` receiver | `min(100ms, remaining)` bounded wait. PUB submit 성공은 subscriber 전달을 보장하지 않으므로 active deadline이 필수 종료 조건이다 |
 | routed relay runner teardown | stdin `STOP` watcher + C `perf_aux_poll_wait_ms()` auxiliary wait. runner 제어 전용이며 active metrics와 분리 |
 | 짧은 timer tick 기반 fallback (1–25 ms) | 금지. 과거 wakeup 누락 우회용으로 사용됐으나 core fix 이후 사용 금지. 단, C 기준 코드가 같은 위치에서 `perf_socket_poll(NULL, 0, N)`을 쓰는 idle wait는 `PERF_POLICY.md`의 empty-poll 예외를 따른다 |
 | 종료 / cooldown 용 별도 deadline 검사 | 별도 application clock 으로 처리하고 poller timeout 으로 대체하지 않음 |
 
-송수신 양방향 가능한 Spot 워크로드(`MULTI_SPOT_SENDSEND`)의 각 peer는 echo record
-수신을 send의 gate로 삼지 않고 backpressure를 만날 때까지 연속 제출한다. `EAGAIN`이면
-ready/claim 진행을 계속한 뒤 재개한다. outstanding send 깊이는 backpressure가
-결정하며, 별도 송신 간격·재시도 횟수·outstanding 상한을 두지 않는다.
-
-request completion이 있는 socket request/reply 워크로드는 같은 active poller에 completion 대상을
+C의 socket request/reply 워크로드는 같은 active poller에 requester socket을
 **`ZLINK_POLLCOMPLETION` 단독**으로 등록한다. `ZLINK_POLLCOMPLETION`은
-`POLLIN`/`POLLOUT` readiness와 섞어 등록하지 않는다. completion event는 public
-event로 보고되지 않을 수 있지만, poller wait가 hidden completion queue를
-drain하면 app thread는 즉시 완료된 slot state를 다시 확인하고 그 slot의 다음
-request를 submit해야 한다. binding perf는 이 completion poller 의미를 따라야
-하며, completion progress를 위해 socket별 recv/progress thread, timer, pipe,
-setInterval, sleep fallback을 추가하면 측정이 무효다.
-socket request/reply 워크로드에서 이 completion drain은 requester socket의 reply
-수신/progress를 포함한다. requester 가 request만 submit하고 socket receive/progress
-를 돌리지 않는 구조는 reply completion을 관측할 수 없으므로 정책 위반이다.
-Node처럼 callback 전달이 event loop turn에서 완료되는 binding은 poller wait 이후
-callback dispatch turn을 한 번 허용한다. 이 turn은 `POLLCOMPLETION` poller가
-completion을 drain한 뒤 언어 런타임 callback을 실행시키는 단계일 뿐이며, 별도
-timer나 progress pump로 completion을 진행하면 안 된다.
+`POLLIN`/`POLLOUT` readiness와 섞어 등록하지 않는다. app thread의 submit loop는
+reply completion을 gate로 삼지 않고 각 socket이 admission backpressure를 만날
+때까지 request를 연속 제출한다. poller wait는 completion queue와 callback을
+동시에 drain한다.
 
-Spot request/reply는 위 socket poller 규칙의 대상이 아니다. requester MeshNode의
-infrastructure claim batch에서 completion record를 읽는 Core 10.0.0 공개 경로를 사용한다.
+C 이외의 binding은 public async request terminal로 여러 request를 동시에
+진행한다. async runtime이 requester reply completion을 진행하며 socket별
+recv/progress OS thread, timer, pipe, `setInterval`, sleep fallback을 추가하면
+측정이 무효다. Node는 Promise completion을 전달하기 위해 event-loop turn을
+양보할 수 있지만 별도 timer나 progress pump로 completion을 진행하면 안 된다.
 
 #### Shutdown / phase 종료 신호 — wire-level stop token
 
@@ -222,10 +237,6 @@ active 집계는 configured duration 안의 `phase_active` payload만 포함한�
 - 기존 multi server 의 stop token 처리와 일치 (`is_stop_token` 헬퍼 그대로 활용)
 - poller timeout fallback 없이도 phase 종료 시 receiver 를 깨울 수 있음
 
-> 회귀 가드: `core/tests/integration/test_spot_poller.cpp` 의
-> `test_spot_poller_wait_all_returns_promptly_after_*` 와
-> `test_spot_poller_accepts_pollin_or_pollout_combined` 참조.
-
 ### 1.4 성능 참고
 
 - 정상 perf에서는 auto-HWM과 backpressure가 burst를 조절한다. EAGAIN은
@@ -240,32 +251,18 @@ ready gate는 패턴이 실제 active payload를 시작할 수 있는 최소 조
 | 패턴군 | ready 조건 |
 |---|---|
 | raw socket | client socket의 `CONNECTION_READY` 확인 뒤 `CLIENT_READY,<size>` 출력 |
-| `MULTI_SPOT_PUBSUB` | N개 peer MeshNode가 hub에 admitted되고 subscription descriptor와 hub Spot generation setup 완료 |
-| `MULTI_SPOT_REQREP` / `MULTI_SPOT_SENDSEND` | N개 peer MeshNode가 hub에 admitted되고 hub Spot generation setup 완료 |
 | `MULTI_STREAM` | STREAM 연결과 패턴별 HELLO/READY 계약 완료 |
-
-Spot 계열에서 `clients`는 peer MeshNode 수다. client parent는 N개 child process를 만들고,
-각 child는 MeshNode 하나와 entry Spot 하나를 만든다. 모든 peer는 hub에만 연결한다.
-`connect_peer()` 제출 성공만으로 ready를 선언하지 않으며, `zlink_mesh_node_peers()`의
-`ZLINK_MESH_PEER_ADMITTED` 상태와 setup request/reply 완료를 확인한다.
-
-Spot 계열은 Core 9의 별도 control SpotNode, `CONTROL_READY`, `DATA_ENDPOINT`,
-`READY_COUNT` protocol을 사용하지 않는다. 모든 child가 준비되면 client parent가
-`CLIENT_READY,<size>`를 출력하고 runner가 server와 client에 `START,<size>`를 전달한다.
-세부 토폴로지와 record 종류는 [Core 10.0.0 Spot 성능 시험 정책](./PERF_SPOT_TEST_POLICY.md)을 따른다.
 
 ### 1.6 Auto-HWM 정책
 
 - multi 기본 HWM 정책은 context auto-HWM 이다. perf는
-  `ZLINK_CTX_OPT_AUTO_HWM_ENABLE` 을 켜고 benchmark socket과 spot handle의
+  `ZLINK_CTX_OPT_AUTO_HWM_ENABLE` 을 켜고 benchmark socket의
   기본 `SNDHWM`, `RCVHWM`을 core 계산값에 맡긴다.
 - multi 기본 OS socket buffer 정책은 `SNDBUF=-1`, `RCVBUF=-1`이다. 기본
   경로는 OS 기본 buffer와 TCP 자동 조정에 맡긴다.
-- multi 기본 context I/O thread 수는 server와 raw socket client 모두 `4`다. C 기준과
+- multi 기본 context I/O thread 수는 server와 client 모두 `4`다. C 기준과
   binding perf는 이 값을 같게 적용해야 한다. 언어 runtime 기본값을 그대로
   쓰거나 single suite 기본값 `1`을 multi에 가져오면 비교 의미가 달라진다.
-  Spot peer process는 MeshNode 하나와 peer 연결 하나만 소유하므로 context I/O thread
-  기본값을 `1`로 두며, `PERF_MULTI_SPOT_NODE_IO_THREADS`로 별도 비교할 수 있다.
 - 기본 실행에서는 pattern/role 특례 없이 같은 context budget을 공유한다.
   숫자 HWM이나 transport buffer를 직접 주입해서 결과를 고정하지 않는다.
 - multi runner는 실행 중인 메시지 크기를 context
@@ -273,23 +270,18 @@ Spot 계열은 Core 9의 별도 control SpotNode, `CONTROL_READY`, `DATA_ENDPOIN
   크기 제한이 아니라 auto-HWM 예산을 메시지 슬롯으로 바꾸는 계획 단위다.
 - C, .NET, Java 등 multi perf는 size 케이스마다 아래 순서를 지켜야 한다.
   1. benchmark context를 만든다.
-  2. socket 또는 MeshNode와 Spot을 만들고 bind/connect 준비를 끝낸다.
+  2. socket을 만들고 bind/connect 준비를 끝낸다.
   3. 해당 케이스의 payload size를 context
      `AUTO_HWM_MSG_UNIT_BYTES`로 설정하고 auto-HWM을 다시 계산한다.
   4. ready gate 이후 active phase를 시작한다.
 - 이 순서가 빠지면 작은 메시지와 큰 메시지가 같은 HWM 계획 단위를 쓰게 되어
   C 기준과 비교 의미가 달라진다.
-- MeshNode와 Spot handle에는 raw socket 공통 옵션을 설정하지 않는다.
-  `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 raw socket 옵션이므로 SPOT_PUBSUB 서비스
-  핸들에 적용하려는 코드는 정책 위반이다. C API에서는 해당 호출이 `EINVAL`로
-  실패한다. MeshNode 내부 data path는 context message unit을 따른다.
 - `PERF_MULTI_HWM`, `PERF_MULTI_SNDHWM`, `PERF_MULTI_RCVHWM`, `PERF_SNDBUF`,
   `PERF_RCVBUF` 는 debug 전용 override 이다. 기본 경로에서는 비활성이고,
   `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1` 또는
   `PERF_ALLOW_MANUAL_SOCKET_OVERRIDES=1` 이 켜졌을 때만 허용한다.
-- Spot 계열은 별도 control socket을 만들지 않는다.
 
-OOM을 피하려고 숫자 HWM, 송신 간격, peer 수, payload 크기, active duration을 낮추면
+OOM을 피하려고 숫자 HWM, 송신 간격, client 수, payload 크기, active duration을 낮추면
 공식 결과로 인정하지 않는다. `EAGAIN`은 auto-HWM이 만든 backpressure로 처리하고,
 Core가 backpressure를 반환하지 않은 채 메모리를 계속 늘리면 Core 버그로 수정한다.
 
@@ -351,8 +343,6 @@ Multi 벤치마크는 **server/client 별도 프로세스**로 동작한다.
 - raw socket client 의 연결 준비 조건은 각 바이너리 내부의
   `CONNECTION_READY` gate가 담당한다. runner-barrier raw pattern 의 실제 active
   시작 조건은 패턴별 `CLIENT_READY` / `START` 계약이 담당한다.
-- Spot 계열은 모든 peer MeshNode의 admission과 hub Spot generation setup이 끝난 뒤
-  client parent가 출력하는 `CLIENT_READY`와 runner의 `START`를 시작 조건으로 사용한다.
 
 ### 2.1.1 Runner ↔ 바이너리 Orchestration 메시지 규격
 
@@ -398,48 +388,25 @@ runner(스크립트/Python 엔진)와 server/client 바이너리는 **stdin/stdo
 | `START` | `START,<msg_size>` | 해당 size 케이스 active 시작 |
 | `PHASE_ACTIVE` | `PHASE_ACTIVE,<msg_size>` | C runner 호환용 one-way 보조 token. active gate가 아니며 client가 필수 조건으로 기다리면 안 됨 |
 
-#### Spot 계열 process 내부 조정
-
-Spot 계열은 runner 외의 별도 network control channel을 만들지 않는다. server는 hub
-MeshNode endpoint를 `READY,<endpoint>`로 출력한다. client parent는 child process를 만들고
-endpoint를 전달한다. 각 child의 admission과 setup request/reply가 끝나면 parent가
-`CLIENT_READY,<size>`를 출력한다.
-
-| 방향 | token | 의미 |
-|---|---|---|
-| Server → Runner | `READY,<endpoint>` | hub MeshNode bind 완료 |
-| Client → Runner | `CLIENT_READY,<size>` | 모든 peer MeshNode admission과 setup 완료 |
-| Runner → 양쪽 | `START,<size>` | active 구간 시작 |
-| Client → Runner | `CLIENT_DONE,<size>` | child 결과 집계와 RESULT 출력 완료 |
-| Runner → 양쪽 | `STOP` | 종료와 정리 요청 |
-
 #### 패턴별 Orchestration 시퀀스
 
-raw socket과 Spot 계열은 공통 runner token을 사용한다. 패턴별 ready 조건만 다르다.
+raw socket 패턴은 아래 runner token과 패턴별 ready 조건을 사용한다.
 
 ```mermaid
 sequenceDiagram
     participant S as Server
     participant R as Runner
-    participant C as Client parent
-    participant P as Peer processes
+    participant C as Client
 
     S->>R: READY,endpoint
     R->>C: endpoint argument
-    C->>P: create MeshNode and connect hub
-    P-->>C: admitted and setup complete
+    C->>S: connect and complete ready gate
     C->>R: CLIENT_READY,size
     R->>S: START,size
     R->>C: START,size
-    C->>P: RUN,size
-    P-->>C: bounded metrics
     C->>R: RESULT lines and CLIENT_DONE,size
     R->>S: STOP
 ```
-
-Spot pub/sub server는 active deadline까지 Logical Multicast를 publish하고 cooldown header를
-보낸다. request/reply와 send/send server는 client active 구간 동안 ready/claim batch를
-계속 drain해 reply 또는 echo send를 제출한다.
 
 #### 메시지 규격 정리
 
@@ -448,7 +415,6 @@ Spot pub/sub server는 active deadline까지 Logical Multicast를 publish하고 
 - `PHASE_ACTIVE,<msg_size>`는 C runner 호환용 보조 token이다. 실제 active 시작
   조건은 아니므로, 언어별 client가 이 token을 기다리는 구조를 만들면 안 된다.
 - raw socket의 실제 연결 확인은 바이너리 내부 `CONNECTION_READY`가 담당한다.
-  Spot의 실제 연결 확인은 peer admission과 setup request/reply가 담당한다.
   그 확인이 끝난 뒤 `CLIENT_READY,<msg_size>`와 `START,<msg_size>`가 active 시작
   barrier를 구성한다.
 
@@ -518,7 +484,7 @@ for pattern in [MULTI_DEALER_DEALER, MULTI_PUBSUB, ...]:
 
 | Phase | 방식 | 기본값 | 환경 변수 |
 |-------|------|--------|-----------|
-| ready | event-based | raw socket client=`CONNECTION_READY`, one-way raw start=`CLIENT_READY`/`START`, Spot=peer admission + setup request/reply + `CLIENT_READY`/`START` | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` |
+| ready | event-based | raw socket client=`CONNECTION_READY`, one-way raw start=`CLIENT_READY`/`START` | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` |
 | active | time-based | 5s | `PERF_MULTI_DURATION_SECONDS` |
 
 > `PERF_MULTI_SETTLE_MS`는 C multi perf에서 삭제됐다. benchmark phase를 추가하는
@@ -574,16 +540,17 @@ for pattern in [MULTI_DEALER_DEALER, MULTI_PUBSUB, ...]:
 
 | 방향 | 단위 | 의미 | 측정 지점 | 패턴 |
 |------|------|------|-----------|------|
-| send/send echo | `ops/s` | send/recv 기반 왕복 완료 수/초 | client 측 recv | MULTI_DEALER_ROUTER_SENDSEND, MULTI_ROUTER_ROUTER_SENDSEND, MULTI_STREAM, MULTI_SPOT_SENDSEND |
-| request/reply | `ops/s` | public request/reply 완료 수/초 | client 측 completion | MULTI_DEALER_ROUTER_REQREP, MULTI_ROUTER_ROUTER_REQREP, MULTI_SPOT_REQREP |
-| one-way | `msg/s` | 단방향 수신 수/초 | receiver 측 recv | MULTI_DEALER_DEALER, MULTI_PUBSUB, MULTI_SPOT_PUBSUB |
+| send/send echo | `ops/s` | send/recv 기반 왕복 완료 수/초 | client 측 recv | MULTI_DEALER_ROUTER_SENDSEND, MULTI_ROUTER_ROUTER_SENDSEND, MULTI_STREAM |
+| request/reply | `ops/s` | public request/reply 완료 수/초 | client 측 completion | MULTI_DEALER_ROUTER_REQREP, MULTI_ROUTER_ROUTER_REQREP |
+| one-way | `msg/s` | 단방향 수신 수/초 | receiver 측 recv | MULTI_DEALER_DEALER, MULTI_PUBSUB |
 
 - echo 패턴: client가 send → server echo → client recv. 1 rtt = 2 message hops. client가 echo를 수신한 횟수를 카운트한다.
 - `MULTI_DEALER_ROUTER_SENDSEND` 와 `MULTI_ROUTER_ROUTER_SENDSEND` 는
   public send/recv API로 왕복 echo를 만든다. 기존 `MULTI_DEALER_ROUTER`,
   `MULTI_ROUTER_ROUTER` 이름은 이 두 패턴의 호환 이름이다.
 - `MULTI_DEALER_ROUTER_REQREP` 와 `MULTI_ROUTER_ROUTER_REQREP` 는 public
-  request/reply API와 `POLLCOMPLETION`으로 왕복 완료를 만든다.
+  request/reply API로 왕복 완료를 만든다. C는 `POLLCOMPLETION`, 다른 binding은
+  public async request completion을 사용한다.
 - one-way 패턴: sender가 송신한 메시지를 receiver가 수신한다(서버 relay 또는 server push 포함). 1 msg = 1 message hop으로 보고, receiver 수신 수를 카운트한다.
 - 동일 단위의 패턴 간에만 throughput을 직접 비교할 수 있다.
 
@@ -619,15 +586,13 @@ latency는 패턴 유형에 따라 측정 방식을 분리한다.
 1. echo 패턴: ready → active phase
 2. one-way 패턴: ready → active phase
 - 기본 echo/one-way 패턴은 active phase 단일 실행에서 throughput/latency를 동시에 산출한다.
-- `MULTI_SPOT_PUBSUB`도 별도 송신 간격이나 latency-only pass를 두지 않는다.
-  active 구간의 timestamp 차이는 queue 체류 시간을 포함한 포화 조건의 지연 시간이다.
 
 ### 5.2 패턴별 divisor 규칙
 
 | 유형 | divisor | 적용 패턴 |
 |------|---------|-----------|
-| 양방향 RTT | `2` | MULTI_DEALER_ROUTER_SENDSEND, MULTI_ROUTER_ROUTER_SENDSEND, MULTI_DEALER_ROUTER_REQREP, MULTI_ROUTER_ROUTER_REQREP, MULTI_STREAM, MULTI_SPOT_REQREP, MULTI_SPOT_SENDSEND |
-| 단방향 | `received_count` | MULTI_DEALER_DEALER, MULTI_PUBSUB, MULTI_SPOT_PUBSUB |
+| 양방향 RTT | `2` | MULTI_DEALER_ROUTER_SENDSEND, MULTI_ROUTER_ROUTER_SENDSEND, MULTI_DEALER_ROUTER_REQREP, MULTI_ROUTER_ROUTER_REQREP, MULTI_STREAM |
+| 단방향 | `received_count` | MULTI_DEALER_DEALER, MULTI_PUBSUB |
 
 ### 5.3 계산식
 
@@ -648,12 +613,17 @@ latency는 패턴 유형에 따라 측정 방식을 분리한다.
 one-way 패턴 latency는 패턴의 실제 receiver 측에서 측정한다.
 
 - `MULTI_DEALER_DEALER`: server(receiver) 기준으로 latency 측정
-- `MULTI_PUBSUB`, `MULTI_SPOT_PUBSUB`: client(receiver) 기준으로 latency 측정
+- `MULTI_PUBSUB`: client(receiver) 기준으로 latency 측정
 - active phase 구간에서 수신한 메시지는 throughput count와 mean 집계에 모두 포함한다.
 - mean은 `lat_sum / lat_count`로 계산하고, p95/p99만 bounded reservoir를 사용한다.
 
 ### 5.5 Header 기반 필터 규칙
 
+- 공식 multi 측정의 non-STREAM application wire shape는
+  **2-part `[payload, empty]`** 다. ROUTER routing identity는 envelope metadata로
+  application part 수에 포함하지 않으므로 세 번째 application part는 없다.
+- `--part-count 1`은 direct-send 비교를 위한 명시적 진단 실행이며, 공식 2-part
+  baseline과 섞어 비교하지 않는다.
 - 측정 메시지 payload 선두에는 공통 metric header를 포함한다: `magic`, `run_id`, `phase`, `msg_size`, `seq`, `sent_ts_ns`.
 - receiver는 header를 decode하여 `phase == active`, `msg_size == expected_size`,
   `run_id == current_case_run_id` 조건을 만족하는 샘플만 집계한다.
@@ -749,9 +719,15 @@ one-way 패턴 latency는 패턴의 실제 receiver 측에서 측정한다.
 
 ### 8.1 지원 패턴
 
-MULTI_DEALER_DEALER, MULTI_DEALER_ROUTER_SENDSEND, MULTI_ROUTER_ROUTER_SENDSEND,
-MULTI_DEALER_ROUTER_REQREP, MULTI_ROUTER_ROUTER_REQREP, MULTI_PUBSUB, MULTI_SPOT_PUBSUB,
-MULTI_SPOT_REQREP, MULTI_SPOT_SENDSEND, MULTI_STREAM
+공식 `--pattern ALL`은 아래 7개 패턴을 정확히 선택한다.
+
+- `MULTI_DEALER_DEALER`
+- `MULTI_DEALER_ROUTER_SENDSEND`
+- `MULTI_ROUTER_ROUTER_SENDSEND`
+- `MULTI_DEALER_ROUTER_REQREP`
+- `MULTI_ROUTER_ROUTER_REQREP`
+- `MULTI_PUBSUB`
+- `MULTI_STREAM`
 
 `MULTI_DEALER_ROUTER` 와 `MULTI_ROUTER_ROUTER` 는 기존 결과와 runner 호환을 위한
 send/send echo alias 이다. 새 문서, 새 runner 옵션, 새 결과 표에서는 각각
@@ -796,9 +772,6 @@ server/client 분리 패턴은 **별도 소스 파일 / 별도 바이너리**로
 | MULTI_DEALER_ROUTER_REQREP | `*_dealer_router_reqrep_server.cpp` | `comp_src_dealer_router_reqrep_server` | `*_dealer_router_reqrep_client.cpp` | `comp_src_dealer_router_reqrep_client` |
 | MULTI_ROUTER_ROUTER_REQREP | `*_router_router_reqrep_server.cpp` | `comp_src_router_router_reqrep_server` | `*_router_router_reqrep_client.cpp` | `comp_src_router_router_reqrep_client` |
 | MULTI_PUBSUB | `*_pubsub_server.cpp` | `comp_src_pubsub_server` | `*_pubsub_client.cpp` | `comp_src_pubsub_client` |
-| MULTI_SPOT_PUBSUB | `*_spot_server.cpp` | `comp_src_spot_pubsub_server` | `*_spot_client.cpp` | `comp_src_spot_pubsub_client` |
-| MULTI_SPOT_REQREP | `*_spot_server.cpp` (replier) | `comp_src_spot_reqrep_server` | `*_spot_client.cpp` (requester) | `comp_src_spot_reqrep_client` |
-| MULTI_SPOT_SENDSEND | `*_spot_server.cpp` | `comp_src_spot_sendsend_server` | `*_spot_client.cpp` | `comp_src_spot_sendsend_client` |
 | MULTI_STREAM | `*_stream_server.cpp` | `comp_src_stream_server` | `perf/common/streamclient/perf_stream_client.cpp` (shared) | `perf_stream_client` (shared) |
 
 > 위 표의 `*`는 `perf_multi`를 축약한 것이다 (예: `*_stream_server.cpp` = `perf_multi_stream_server.cpp`).
@@ -806,10 +779,6 @@ server/client 분리 패턴은 **별도 소스 파일 / 별도 바이너리**로
 > `*_sendsend_*` 로 옮기는 대상이다. 전환 전에는 호환 alias 로만 취급하며,
 > 새로 추가하는 request/reply 패턴은 `*_reqrep_*` 목표 이름을 사용한다.
 > STREAM client 예외(C 기준): `MULTI_STREAM` client는 [PERF_POLICY.md § 7.5](PERF_POLICY.md)의 STREAM client 예외에 따라 `perf/common/streamclient/` 공용 구현을 사용한다. C++ 등 다른 binding perf runner가 이 공용 `perf_stream_client`를 symlink나 wrapper로 연결해 실행하는 것은 정책 위반이 아니다. 이 client는 외부 raw peer 검증 인프라이며, 측정 대상 binding surface는 각 언어의 `MULTI_STREAM` server/packet handler 구현이다. public pattern은 `MULTI_STREAM` 하나만 유지한다.
-> Spot 계열 topology 고정: `MULTI_SPOT_PUBSUB`, `MULTI_SPOT_REQREP`,
-> `MULTI_SPOT_SENDSEND`에서 `--clients N`은 peer MeshNode 수다. client parent가
-> child process N개를 만들고, 각 child는 MeshNode 하나와 entry Spot 하나를 만든다.
-> 각 peer는 hub MeshNode에만 연결한다.
 
 #### MULTI_STREAM 계열 패턴
 
@@ -841,7 +810,6 @@ server/client 분리 패턴은 **별도 소스 파일 / 별도 바이너리**로
 |--------|------|
 | MULTI_DEALER / MULTI_ROUTER / MULTI_PUBSUB | `[64, 256, 1024, 4096, 65536, 131072]` |
 | MULTI_STREAM | `[64, 256, 1024, 65536]` |
-| MULTI_SPOT_PUBSUB / MULTI_SPOT_REQREP / MULTI_SPOT_SENDSEND | `[64, 256, 1024, 4096, 65536, 131072]` |
 
 - STREAM 계열은 대량 동시 연결 환경에서 테스트하므로 65536B까지만 측정한다.
 
@@ -850,7 +818,6 @@ server/client 분리 패턴은 **별도 소스 파일 / 별도 바이너리**로
 | 패턴군 | transport |
 |--------|-----------|
 | MULTI_DEALER_DEALER, MULTI_DEALER_ROUTER_SENDSEND, MULTI_ROUTER_ROUTER_SENDSEND, MULTI_DEALER_ROUTER_REQREP, MULTI_ROUTER_ROUTER_REQREP, MULTI_PUBSUB | tcp, tls, ws, wss (Python 엔진 기본값에 ipc 포함, 단 shell entrypoint 기본값은 tcp,tls,ws,wss; Windows: ipc 제외) |
-| MULTI_SPOT_PUBSUB / MULTI_SPOT_REQREP / MULTI_SPOT_SENDSEND | tcp, tls, ws, wss |
 | MULTI_STREAM | tcp, tls, ws, wss |
 
 ---
@@ -910,7 +877,7 @@ run_benchmarks_multi.sh / .ps1                         # 공식 multi entrypoint
 | `--pattern-transition-ms N` | pattern 전환 cooldown(ms) | 3000 |
 | `--server-ready-timeout-ms N` | server READY 대기 타임아웃(ms) | 10000 |
 | `--connect-ready-timeout-ms N` | 연결 준비 대기 타임아웃(ms) | 10000 |
-| `--monitor-hwm N` | 모니터 소켓 HWM | 1000 |
+| `--monitor-hwm N` | 모니터 큐 HWM(byte). C/Go runner의 동등 옵션은 `--monitor-hwm-bytes`다 | 4,096,000 |
 | `--server-shutdown-timeout-ms N` | server 종료 대기 타임아웃(ms) | 5000 |
 | `--server-bind-port N` | server 바인드 포트 (0=자동 할당) | 0 |
 | `--auto-hwm-profile NAME` | context auto-HWM profile (`compact`, `low_latency`, `balanced`, `throughput`) | `balanced` |
@@ -974,10 +941,6 @@ bindings/c/perf/run_benchmarks_multi.sh --duration 10
 
 # 터미널 2 (client)
 ./core/build/linux-x64/bin/comp_src_dealer_dealer_client current tcp 1024 --endpoint tcp://127.0.0.1:15557
-
-# 예시: MULTI_STREAM (recv mode)
-./core/build/linux-x64/bin/comp_src_stream_server current tcp
-./core/build/linux-x64/bin/perf_stream_client current tcp 1024 --endpoint tcp://127.0.0.1:15557
 
 # 예시: MULTI_STREAM
 ./core/build/linux-x64/bin/comp_src_stream_server current tcp
@@ -1162,8 +1125,8 @@ bindings/c/perf/run_benchmarks_multi.sh --duration 10
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
 | `PERF_MULTI_MSG_SIZES` | multi benchmark 바이너리에서 읽는 size 목록 fallback. runner는 보통 공통 `PERF_MSG_SIZES`로 전달한다 | 공통 기본값 |
-| `PERF_MULTI_CLIENTS` | raw 패턴의 client socket 수. Spot 패턴에서는 peer MeshNode 수 | 100 |
-| `PERF_MULTI_DEFAULT_CLIENTS` | `PERF_MULTI_CLIENTS` 미설정 시 raw/spot 계열 기본 client 수 | 100 |
+| `PERF_MULTI_CLIENTS` | socket 패턴의 client socket 수 | 100 |
+| `PERF_MULTI_DEFAULT_CLIENTS` | `PERF_MULTI_CLIENTS` 미설정 시 socket 계열 기본 client 수 | 100 |
 | `PERF_MULTI_DEFAULT_STREAM_CLIENTS` | `PERF_MULTI_CLIENTS` 미설정 시 STREAM 계열 기본 client 수 | 100 |
 | `PERF_MULTI_STREAM_MSG_SIZES` | STREAM 계열 전용 size 목록. 미설정 시 `PERF_MSG_SIZES`가 설정되어 있으면 그 값을 사용하고, 둘 다 미설정이면 기본값 사용 | `64,256,1024,65536` |
 | `PERF_MULTI_HWM` | debug 전용 공통 HWM override. allow flag가 켜진 경우에만 사용 | 비활성 |
@@ -1172,7 +1135,6 @@ bindings/c/perf/run_benchmarks_multi.sh --duration 10
 | `PERF_MULTI_CONNECT_CONCURRENCY` | 동시 연결 수 | auto (clients≥10000: 1024, 기타: 128) |
 | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` | 연결 준비 타임아웃(ms) | 10000 |
 | `PERF_MULTI_SERVICE_CLIENTS` | 서비스 클라이언트 수 상한 (0=제한 없음) | 0 |
-| `PERF_MULTI_SPOT_NODE_IO_THREADS` | Spot peer process 하나의 context I/O thread 수 | 1 |
 | `PERF_MULTI_LATENCY_SAMPLE_CAP` | 공통 multi p95/p99 reservoir 상한. `0`이면 sample 미보관 | 65,536 |
 
 ### 12.3 송수신 제어
@@ -1184,8 +1146,8 @@ bindings/c/perf/run_benchmarks_multi.sh --duration 10
 | `PERF_MULTI_SNDBUF` | debug 전용 송신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_RCVBUF` | debug 전용 수신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES` | 수동 HWM/SNDBUF/RCVBUF override 허용 플래그 | 0 |
-| `PERF_MULTI_MONITOR_HWM` | 모니터 소켓 HWM | 1000 |
-| `PERF_MULTI_PUBSUB_XPUB_NODROP` | PUBSUB 서버의 `ZLINK_XPUB_NODROP` 기본값 | 1 |
+| `PERF_MULTI_MONITOR_HWM` | 모니터 큐 HWM(byte). C/Go는 단위가 명시된 `PERF_MULTI_MONITOR_HWM_BYTES`를 사용한다 | 4,096,000 |
+| `PERF_MULTI_PUBSUB_XPUB_NODROP` | PUBSUB 서버의 `ZLINK_XPUB_NODROP` 진단 override | 0 |
 | `PERF_MULTI_PRINT_AUTO_HWM_DETAIL` | auto-HWM detail 출력 여부. `0`이면 출력하지 않는다 | 1 |
 
 - `PERF_MULTI_CLIENT_POLL_TIMEOUT_MS`, `PERF_MULTI_CLIENT_IDLE_SLEEP_US`, `PERF_MULTI_SEND_BACKOFF_US`, `PERF_MULTI_BLOCKING_SEND`는 삭제됐다.
@@ -1226,7 +1188,7 @@ bindings/c/perf/run_benchmarks_multi.sh --duration 10
 Python multi perf는 위 I/O thread 기본값의 예외다. Python runner의 기본
 server/client I/O thread 수는 `1`이며, Effective Options에 실제 값을
 기록해야 한다. Python callback은 GIL 때문에 동시에 실행되지 않으므로 기본값
-`4`는 `MULTI_SPOT_REQREP` 같은 callback-heavy 패턴에서 처리량 개선보다 CPU
+`4`는 callback-heavy request/reply 패턴에서 처리량 개선보다 CPU
 포화와 thread 경합을 먼저 만든다. C baseline과 같은 리소스 조건을 확인할
 때는 `--io-threads 4` 또는 `PERF_IO_THREADS=4`를 명시해서 실행한다.
 
@@ -1237,7 +1199,7 @@ server/client I/O thread 수는 `1`이며, Effective Options에 실제 값을
 ## 13. 구현 제약 (multi 전용)
 
 > Public API 전용, retry/workaround 금지, 코어 로직 인라인 원칙, 공통화 경계 등
-> 공통 구현 제약은 [PERF_POLICY.md § 1.1, § 8](PERF_POLICY.md) 참조.
+> 공통 구현 제약은 [PERF_POLICY.md § 1.1, § 7](PERF_POLICY.md) 참조.
 
 ### 13.1 불필요한 메모리 할당/복사 금지
 
@@ -1265,20 +1227,17 @@ pattern별 공식 start contract 를 사용한다.
 |------|------|
 | raw socket client 연결 확인 API | `zlink_socket_monitor_open(...)` 뒤에 `CONNECTION_READY` 직접 대기 helper 사용 |
 | runner-barrier raw start API | `CONNECTION_READY` 확인 뒤 `CLIENT_READY` / `START` runner orchestration 사용 |
-| SPOT_PUBSUB / SPOT_REQREP / SPOT_SENDSEND 연결 확인 API | `zlink_mesh_node_peers()`에서 hub 상태가 `ZLINK_MESH_PEER_ADMITTED`인지 확인하고 node request/reply로 hub Spot generation을 받음 |
 | 대기 방식 | app thread에서 타임아웃 기반 bounded wait — busy-wait/sleep 금지 |
 | 타임아웃 | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` (기본 10000ms) 초과 시 run 실패 처리 |
-| Monitor HWM | raw monitor 사용 시 `PERF_MULTI_MONITOR_HWM` (기본 1,000) |
+| Monitor HWM | raw monitor 사용 시 4,096,000 byte. C/Go는 `PERF_MULTI_MONITOR_HWM_BYTES`, 나머지 binding은 `PERF_MULTI_MONITOR_HWM`을 사용한다 |
 
-- raw socket client monitor handle은 pattern 파일 안에서 직접 열고 닫되, ready gate는
-  expected client 수 `CONNECTION_READY` counting 으로 끝낸다.
+- raw socket client pattern이 monitor lifecycle을 소유한다. configured open은 공용
+  helper로 감쌀 수 있으며, ready gate는 expected client 수 `CONNECTION_READY`
+  counting으로 끝낸다.
 - runner-barrier raw 는 먼저 `CONNECTION_READY` 로 연결 준비를 닫고, suite별
   패턴 표의 `CLIENT_READY` / `START` 계약으로 active start gate 를 닫는다.
-- SPOT_PUBSUB / SPOT_REQREP / SPOT_SENDSEND의 client parent는 모든 child의 admission과
-  setup이 끝난 뒤 `CLIENT_READY`를 출력한다. runner의 `START`가 active 시작을 확정한다.
 - server 측에서도 runner-barrier raw 는 `START` stdin token 을 기준으로 active
-  송신을 시작한다. Spot server도 같은 `START` stdin token을 사용하며 별도 control
-  channel이나 broadcast를 만들지 않는다.
+  송신을 시작한다.
 
 ### 13.3 코어 로직 인라인 (multi 보충)
 
@@ -1331,6 +1290,6 @@ def latency_rtt_ns(elapsed_ns, roundtrip_count):
     return elapsed_ns / max(1, roundtrip_count * 2)
 
 def latency_oneway_ns(elapsed_ns, count):
-    """MULTI_DEALER_DEALER, MULTI_PUBSUB, MULTI_SPOT_PUBSUB: count=received_count"""
+    """MULTI_DEALER_DEALER, MULTI_PUBSUB: count=received_count"""
     return elapsed_ns / max(1, count)
 ```

@@ -4,6 +4,7 @@
 
 #include "../common/perf_common.hpp"
 #include "../common/perf_entry.hpp"
+#include "../common/perf_multi_routed_relay.hpp"
 
 #include <atomic>
 #include <cerrno>
@@ -56,18 +57,6 @@ inline void wait_for_stop_stdin ()
     request_stop ();
 }
 
-bool perf_debug_enabled ()
-{
-    return std::getenv ("PERF_DEBUG") != NULL;
-}
-
-void debug_log (const std::string &message_)
-{
-    if (!perf_debug_enabled ())
-        return;
-    std::cerr << "router_router server: " << message_ << std::endl;
-}
-
 } // namespace
 
 perf::async_task_t<bool> perf_router_router_server (const std::string &lib_name,
@@ -114,71 +103,8 @@ perf::async_task_t<bool> perf_router_router_server (const std::string &lib_name,
 
     perf::multi::print_ready (endpoint);
 
-    bool failed = false;
-    zlink::poller_t poller;
-    poller.add (server, zlink::poll_event_flag_t::pollin, 0);
-    std::vector<zlink::poll_event_t> events (1);
-
-    while (!g_stop_requested.load (std::memory_order_acquire)) {
-        const size_t poll_rc =
-          poller.wait (events.data (), events.size (), std::chrono::milliseconds (-1));
-        if (poll_rc == 0)
-            continue;
-
-        const short revents = static_cast<short> (events[0].revents);
-        const bool readable =
-          (revents & static_cast<short> (zlink::poll_event_flag_t::pollin)) != 0;
-        if (!readable)
-            continue;
-
-        // Drain available single-part routed messages without blocking.
-        while (!g_stop_requested.load (std::memory_order_acquire)) {
-            zlink::received_t received;
-            const int recv_rc = server.recv (received, zlink::recv_flags_t::dontwait);
-            if (recv_rc != 0) {
-                const int err = errno;
-                if (recv_rc == static_cast<int> (zlink::recv_result_t::no_data) || err == EAGAIN
-                    || err == EWOULDBLOCK || err == EINTR)
-                    break;
-                debug_log ("recv failed errno=" + std::to_string (err));
-                failed = true;
-                break;
-            }
-            if (!received.routing_id ().has_value () || received.routing_id ()->size () == 0
-                || received.request_seq ().has_value ()
-                || !perf::multi::measurement_parts_valid (received.parts ())) {
-                debug_log ("recv envelope mismatch");
-                failed = true;
-                break;
-            }
-            zlink::message_t &part = received.parts ().front ();
-
-            const zlink::routing_id_t source_node_rid = *received.routing_id ();
-            try {
-                if (perf::multi::measurement_part_count () == 2) {
-                    zlink::message_t tail = perf::multi::measurement_empty_part ();
-                    std::move (server.send (source_node_rid).message (part)).message (tail).submit ();
-                } else {
-                    std::move (server.send (source_node_rid)).message (part).submit ();
-                }
-            }
-            catch (const zlink::submit_error_t &err) {
-                const int err_no = err.internal_errno ();
-                if (err_no == EAGAIN || err_no == EWOULDBLOCK || err_no == EINTR
-                    || err_no == EHOSTUNREACH || err_no == ENOTCONN) {
-                    continue;
-                }
-                errno = err_no;
-                debug_log ("send failed errno=" + std::to_string (err_no));
-                failed = true;
-                break;
-            }
-        }
-        if (failed)
-            break;
-    }
-
-    co_return !failed;
+    co_return perf::multi::run_routed_echo_relay (
+      server, g_stop_requested, "router_router server:");
 }
 
 int main (int argc, char **argv)

@@ -322,7 +322,8 @@ class socket_base_t : public own_t,
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
     int rollback ();
     int rollback_scoped (socket_public_send_scope_t &scope_);
-    int recv (zlink::msg_t *msg_, int flags_);
+    int recv (zlink::msg_t *msg_, int flags_,
+              bool *multipart_aborted_out_ = NULL);
     int recv_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_, int flags_);
     int recv_routed (zlink::msg_t *msg_,
                      zlink_routing_id_t *source_rid_out_,

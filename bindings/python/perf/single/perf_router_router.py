@@ -1,4 +1,3 @@
-import asyncio
 import sys
 import threading
 import time
@@ -16,27 +15,30 @@ from perf_common import (
     perf_context,
     poll_idle_ms,
     print_result_lines,
+    new_single_latency_sampler,
     run_one_way_receiver,
     result_metrics,
     resolve_single_endpoint,
     resolve_single_connect_ready_timeout_ms,
     single_routing_probe,
-    send_routed,
+    send_routed_sync,
     stamp_payload,
     wait_monitor_event,
 )
 
 
-async def _send_router_stop_token(router, dest_routing_id):
+def _send_router_stop_token(router, dest_routing_id):
     """PERF_SINGLE_TEST_POLICY § 1.4 wire-level shutdown signal.
 
-    Router-router uses ``send(routing_id).message(payload).submit()``; the stop token is a
+    Router-router uses the synchronous public send terminal; the stop token is a
     single payload frame addressed to the peer.
     """
 
     for _ in range(100):
         try:
-            await router.send(dest_routing_id).message(STOP_TOKEN).submit()
+            router.send(dest_routing_id).message(STOP_TOKEN).submit_sync(
+                flags=zlink.SendFlags.NONE
+            )
             return
         except zlink.SubmitError as exc:
             if exc.result not in (
@@ -51,30 +53,23 @@ def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):
     return None
 
 
-async def main(argv=None):
+def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="router_router")
     run_id = benchmark_run_id()
-    latencies = []
+    latency_sampler = new_single_latency_sampler()
     received = 0
     payload = new_payload(args.msg_size)
 
-    async def send_loop(router, active_end):
-        # Preserve C's fresh timestamp per attempt while the routed terminal
-        # suspends this coroutine until Core admission.
+    def send_loop(router, active_end):
+        # Core owns blocking HWM admission on this dedicated sender thread.
         stamp = stamp_payload
-        submit_backpressured = zlink.SubmitResult.BACKPRESSURED
-        submit_not_connected = zlink.SubmitResult.NOT_CONNECTED
         while time.perf_counter() < active_end:
-            try:
-                await send_routed(
-                    router,
-                    stamp(payload, phase=1, run_id=run_id),
-                    routing_id=b"SERVER",
-                )
-            except zlink.SubmitError as exc:
-                if exc.result not in (submit_backpressured, submit_not_connected):
-                    raise
-        await _send_router_stop_token(router, b"SERVER")
+            send_routed_sync(
+                router,
+                stamp(payload, phase=1, run_id=run_id),
+                routing_id=b"SERVER",
+            )
+        _send_router_stop_token(router, b"SERVER")
 
     with perf_context() as ctx:
         with zlink.create_router_socket(ctx) as server:
@@ -98,7 +93,7 @@ async def main(argv=None):
                 # C perf_router_router.cpp wait_for_router_router_ready:
                 # one-shot routed probe (addressed to the peer routing id)
                 # before phase=active.
-                if not await single_routing_probe(
+                if not single_routing_probe(
                     client,
                     server,
                     payload,
@@ -119,8 +114,9 @@ async def main(argv=None):
                     run_id=run_id,
                 )
                 if metrics is None:
-                    sender = threading.Thread(target=lambda: asyncio.run(
-                        send_loop(client, active_end)), daemon=True)
+                    sender = threading.Thread(
+                        target=send_loop, args=(client, active_end), daemon=True
+                    )
                     sender.start()
                     # C perf_router_router.cpp run_active_phase receiver.
                     received = run_one_way_receiver(
@@ -130,7 +126,7 @@ async def main(argv=None):
                         run_id=run_id,
                         active_end=active_end,
                         received=received,
-                        latencies=latencies,
+                        latency_sampler=latency_sampler,
                     )
 
                     sender.join()
@@ -142,10 +138,10 @@ async def main(argv=None):
                         count=received,
                         msg_size=args.msg_size,
                         elapsed_s=args.duration,
-                        latencies_ns=latencies,
+                        latency_sampler=latency_sampler,
                     )
                 print_result_lines("ROUTER_ROUTER", args.transport, args.msg_size, metrics)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

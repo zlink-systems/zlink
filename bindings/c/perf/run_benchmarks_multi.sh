@@ -668,12 +668,18 @@ resolve_multi_build_targets() {
         ;;
       ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND)
         targets+=("comp_src_router_router_sendsend_server" "comp_src_router_router_sendsend_client")
+        if [[ "${PERF_MULTI_MATCHED_BASELINE:-0}" == "1" ]]; then
+          targets+=("comp_src_router_router_sendsend_matched_client")
+        fi
         ;;
       DEALER_ROUTER_REQREP)
         targets+=("comp_src_dealer_router_reqrep_server" "comp_src_dealer_router_reqrep_client")
         ;;
       ROUTER_ROUTER_REQREP)
         targets+=("comp_src_router_router_reqrep_server" "comp_src_router_router_reqrep_client")
+        if [[ "${PERF_MULTI_MATCHED_BASELINE:-0}" == "1" ]]; then
+          targets+=("comp_src_router_router_reqrep_matched_client")
+        fi
         ;;
       PUBSUB)
         targets+=("comp_src_pubsub_server" "comp_src_pubsub_client")

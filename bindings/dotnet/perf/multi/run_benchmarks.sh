@@ -70,10 +70,6 @@ DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
 PART_COUNT="${PERF_PART_COUNT:-2}"
 RUNS="${PERF_RUNS:-1}"
 READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}"
-SPOT_READY_TIMEOUT_MS="$(( READY_TIMEOUT_MS > READY_TIMEOUT_MS * 6 ? READY_TIMEOUT_MS : READY_TIMEOUT_MS * 6 ))"
-if (( SPOT_READY_TIMEOUT_MS < 1000 )); then
-  SPOT_READY_TIMEOUT_MS=1000
-fi
 SERVER_READY_TIMEOUT_MS="${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-10000}"
 SERVER_SHUTDOWN_TIMEOUT_MS="${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}"
 RESULT_TIMEOUT_SECONDS="${PERF_MULTI_TIMEOUT_SECONDS:-60}"
@@ -577,76 +573,6 @@ raise SystemExit(1)
 PY
 }
 
-wait_for_control_ready_endpoint() {
-  local log_path="$1"
-  local timeout_ms="${2:-${SERVER_READY_TIMEOUT_MS}}"
-  python3 - "${log_path}" "${timeout_ms}" <<'PY'
-import pathlib
-import sys
-import time
-
-path = pathlib.Path(sys.argv[1])
-deadline = time.time() + max(0, int(sys.argv[2])) / 1000.0
-while time.time() < deadline:
-    if path.exists():
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for line in text.splitlines():
-            if line.startswith("CONTROL_READY,"):
-                print(line.split(",", 1)[1].strip())
-                raise SystemExit(0)
-            if "multi_server_error:" in line:
-                raise SystemExit(1)
-    time.sleep(0.05)
-raise SystemExit(1)
-PY
-}
-
-wait_for_client_control_endpoint() {
-  local log_path="$1"
-  local timeout_ms="${2:-${READY_TIMEOUT_MS}}"
-  python3 - "${log_path}" "${timeout_ms}" <<'PY'
-import pathlib
-import sys
-import time
-
-path = pathlib.Path(sys.argv[1])
-deadline = time.time() + max(0, int(sys.argv[2])) / 1000.0
-while time.time() < deadline:
-    if path.exists():
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for line in text.splitlines():
-            if line.startswith("CLIENT_CONTROL_ENDPOINT,"):
-                print(line.split(",", 1)[1].strip())
-                raise SystemExit(0)
-        if "multi_client_error:" in text:
-            raise SystemExit(1)
-    time.sleep(0.05)
-raise SystemExit(1)
-PY
-}
-
-wait_for_control_connected() {
-  local log_path="$1"
-  local timeout_ms="${2:-${READY_TIMEOUT_MS}}"
-  python3 - "${log_path}" "${timeout_ms}" <<'PY'
-import pathlib
-import sys
-import time
-
-path = pathlib.Path(sys.argv[1])
-deadline = time.time() + max(0, int(sys.argv[2])) / 1000.0
-while time.time() < deadline:
-    if path.exists():
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for line in text.splitlines():
-            if line.startswith("CONTROL_CONNECTED,"):
-                print(line.split(",", 1)[1].strip())
-                raise SystemExit(0)
-    time.sleep(0.05)
-raise SystemExit(1)
-PY
-}
-
 wait_for_results_from_logs() {
   local primary_log="${1:-}"
   local secondary_log="${2:-}"
@@ -809,8 +735,10 @@ import sys
 pattern = sys.argv[2].upper()
 echo_patterns = {
     "MULTI_DEALER_ROUTER",
+    "MULTI_DEALER_ROUTER_SENDSEND",
     "MULTI_DEALER_ROUTER_REQREP",
     "MULTI_ROUTER_ROUTER",
+    "MULTI_ROUTER_ROUTER_SENDSEND",
     "MULTI_ROUTER_ROUTER_REQREP",
     "MULTI_STREAM",
 }
@@ -835,48 +763,6 @@ print(
     f"      | {size + 'B':<8} | {throughput_text:>16} | {bandwidth:>10.3f} MB/s |"
     f" {latency_ms:>9.3f} ms | {latency_p95_ms:>9.3f} ms | {latency_p99_ms:>9.3f} ms |"
 )
-PY
-}
-
-# C parity: bindings/c/perf/run_comparison.py:3082-3088. Override the live
-# SPOT pass's latency/p95/p99 RESULT rows with the values measured by the
-# clean (paced, latency-only) second pass; throughput/bandwidth keep the
-# live (saturated) numbers. arg1: live block; arg2: clean block.
-merge_spot_clean_latency() {
-  local live_block="${1:-}"
-  local clean_block="${2:-}"
-  python3 - "${live_block}" "${clean_block}" <<'PY'
-import csv
-import io
-import sys
-
-live_text = sys.argv[1]
-clean_text = sys.argv[2]
-
-LATENCY_METRICS = {"latency", "latency_p95", "latency_p99"}
-
-
-def parse(text):
-    rows = []
-    for row in csv.reader(io.StringIO(text)):
-        if len(row) == 7 and row[0] == "RESULT":
-            rows.append(row)
-    return rows
-
-
-clean_by_metric = {}
-for row in parse(clean_text):
-    if row[5] in LATENCY_METRICS:
-        clean_by_metric[row[5]] = row[6]
-
-out = io.StringIO()
-writer = csv.writer(out, lineterminator="\n")
-for row in parse(live_text):
-    if row[5] in clean_by_metric:
-        row = list(row)
-        row[6] = clean_by_metric[row[5]]
-    writer.writerow(row)
-sys.stdout.write(out.getvalue())
 PY
 }
 
@@ -935,9 +821,6 @@ emit_auto_hwm_detail_table() {
   python3 - "${pattern_name}" "$@" <<'PY'
 import pathlib
 import sys
-
-SPOT_CONTROL_PATTERNS = {"SPOT", "SPOT_REQREP", "SPOT_SENDSEND"}
-
 
 def normalize_pattern(name):
     value = (name or "").strip().upper()
@@ -998,115 +881,6 @@ def emit_markdown_table(indent, columns, rows):
         print(f"{indent}|" + "|".join(cells) + "|")
 
 
-def active_hwm_fields(row):
-    socket_type = (row.get("socket_type") or row.get("type") or "").lower()
-    role = (row.get("role") or "").lower()
-    send_active = True
-    recv_active = True
-    if socket_type in ("pub", "xpub") and role in ("spot_data", "control"):
-        recv_active = False
-    if socket_type in ("sub", "xsub") and role in ("recv_ingress", "control"):
-        send_active = False
-    return send_active, recv_active
-
-
-def apply_active_hwm_display(row):
-    display = dict(row)
-    send_active, recv_active = active_hwm_fields(display)
-    if not send_active:
-        display["sndhwm"] = "-"
-    if not recv_active:
-        display["rcvhwm"] = "-"
-    return display
-
-
-def spot_snapshot_table(title, rows):
-    if not rows:
-        return False
-    display_rows = []
-    seen = set()
-    for row in sorted(
-        rows,
-        key=lambda item: (
-            parse_int(item.get("msg_size", "0")),
-            parse_int(item.get("owner_id", "0")),
-            item.get("socket", ""),
-            item.get("role", ""),
-        ),
-    ):
-        display = dict(row)
-        display["type"] = row.get("socket_type", "")
-        display = apply_active_hwm_display(display)
-        key = tuple(
-            display.get(name, "")
-            for name in (
-                "msg_size",
-                "effective_message_bytes",
-                "socket",
-                "type",
-                "role",
-                "sndhwm",
-                "rcvhwm",
-                "effective_sndbuf",
-                "effective_rcvbuf",
-            )
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        display_rows.append(display)
-    if not display_rows:
-        return False
-    print(f"    {title}:")
-    grouped = {}
-    order = []
-    for row in display_rows:
-        key = (row.get("msg_size", ""), row.get("effective_message_bytes", ""))
-        if key not in grouped:
-            grouped[key] = []
-            order.append(key)
-        grouped[key].append(row)
-    for index, key in enumerate(order):
-        msg_size, msg_unit = key
-        print(f"      - Size(B)={msg_size}, MsgUnit(B)={msg_unit}")
-        emit_markdown_table(
-            "      ",
-            (
-                ("Socket", "socket"),
-                ("Type", "type"),
-                ("Role", "role"),
-                ("SNDHWM", "sndhwm"),
-                ("RCVHWM", "rcvhwm"),
-                ("SNDBUF", "effective_sndbuf"),
-                ("RCVBUF", "effective_rcvbuf"),
-            ),
-            grouped[key],
-        )
-        if index + 1 < len(order):
-            print("      ")
-    return True
-
-
-def emit_spot_tables(rows):
-    snapshot_rows = [
-        row
-        for row in rows
-        if row.get("source") == "spotnode_snapshot" and row.get("socket")
-    ]
-    if not snapshot_rows:
-        return False
-    emitted = False
-    emitted = spot_snapshot_table(
-        "Auto-HWM spotnode",
-        [row for row in snapshot_rows if row.get("owner") == "node"],
-    ) or emitted
-    emitted = spot_snapshot_table(
-        "Auto-HWM spot handles",
-        [row for row in snapshot_rows if row.get("owner") == "spot"],
-    ) or emitted
-    return emitted
-
-
 def expected_hwm(row):
     unit_budget = parse_int(row.get("unit_budget_bytes", ""), 0)
     msg_unit = parse_int(row.get("effective_message_bytes", ""), 0)
@@ -1141,7 +915,7 @@ def expected_match_score(row):
     return 0 if matches == visible else 1 if matches > 0 else 2
 
 
-def select_non_spot_rows(rows):
+def select_rows(rows):
     selected = {}
     for index, row in enumerate(rows):
         key = (
@@ -1196,10 +970,6 @@ for raw_path in sys.argv[2:]:
 if not rows:
     raise SystemExit(0)
 
-if pattern in SPOT_CONTROL_PATTERNS:
-    emit_spot_tables(rows)
-    raise SystemExit(0)
-
 rows = [
     row for row in rows
     if row.get("msg_size", "") and row.get("msg_size", "") != "0"
@@ -1215,7 +985,7 @@ rows.sort(
 )
 display_rows = []
 seen_display = set()
-for fields in select_non_spot_rows(rows):
+for fields in select_rows(rows):
     display = dict(fields)
     display["type"] = fields.get("socket_type", "")
     msg_size = fields.get("msg_size", "")
@@ -1633,13 +1403,6 @@ run_multi_process() {
     role_io_threads="${CLIENT_IO_THREADS}"
   fi
   local effective_ready_timeout="${READY_TIMEOUT_MS}"
-  if [[ "${pattern}" == "MULTI_SPOT" || "${pattern}" == "MULTI_SPOT_REQREP" ]]; then
-    if [[ "${transport}" == "tls" || "${transport}" == "wss" ]]; then
-      if (( effective_ready_timeout < 12000 )); then
-        effective_ready_timeout=12000
-      fi
-    fi
-  fi
   local normalized_pattern="${pattern#MULTI_}"
   local env_prefix=(
     "PERF_PATTERN=${normalized_pattern}"
@@ -1727,6 +1490,7 @@ run_external_stream_client() {
   ensure_stream_client
   local stream_clients="${pattern_clients}"
   local non_tcp_max="${PERF_STREAM_NON_TCP_CLIENTS_MAX:-${PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX:-10000}}"
+  local stream_completion_wait_ms="${PERF_MULTI_STREAM_COMPLETION_WAIT_MS:-${PERF_STREAM_COMPLETION_WAIT_MS:-${SERVER_SHUTDOWN_TIMEOUT_MS}}}"
   if [[ "${transport}" != "tcp" && "${stream_clients}" =~ ^[0-9]+$ \
         && "${non_tcp_max}" =~ ^[0-9]+$ \
         && "${stream_clients}" -gt "${non_tcp_max}" ]]; then
@@ -1735,8 +1499,8 @@ run_external_stream_client() {
   local cmd=(
     "${STREAM_CLIENT}" --transport "${transport}" --pattern STREAM
     --sizes "${size}" --runs 1 --duration "${DURATION}"
-    --ccu "${stream_clients}" --send-stop-token 1 --endpoint "${endpoint}"
-    --completion-wait-ms "${SERVER_SHUTDOWN_TIMEOUT_MS}"
+    --ccu "${stream_clients}" --send-stop-token 0 --endpoint "${endpoint}"
+    --completion-wait-ms "${stream_completion_wait_ms}"
     --io-threads "${CLIENT_IO_THREADS:-${COMMON_IO_THREADS:-${EFFECTIVE_DEFAULT_IO_THREADS:-4}}}"
   )
   if [[ "${PIN_CPU}" -eq 1 && "$(uname -s)" == Linux* ]] \
@@ -1749,91 +1513,6 @@ run_external_stream_client() {
     "PERF_MULTI_TRANSPORT=${transport}" \
     "PERF_MULTI_COMPONENT=client" \
     "${cmd[@]}" > "${client_log}" 2>&1
-}
-
-# C parity: bindings/c/perf/run_comparison.py:3062-3088 +
-# bindings/c/perf/multi/src/perf_multi_spot_server.cpp:197,334-373.
-# After the live (saturated) SPOT size case, run a fully isolated second
-# size case with PERF_MULTI_SPOT_LATENCY_ONLY=1 so the server publishes one
-# paced probe per interval over an idle link. The clean pass's
-# latency/p95/p99 are then merged over the live result; throughput keeps
-# the live numbers. Echoes the extracted clean RESULT block on success.
-run_spot_clean_latency_pass() {
-  local _pattern="$1"
-  local _transport="$2"
-  local _size="$3"
-  local _run_index="$4"
-  local cl_server_log="${RESULTS_ROOT}/multi/tmp/${_pattern,,}_${_transport}_${_size}_clean_server_run${_run_index}.log"
-  local cl_client_log="${RESULTS_ROOT}/multi/tmp/${_pattern,,}_${_transport}_${_size}_clean_client_run${_run_index}.log"
-  local cl_server_fifo="${RESULTS_ROOT}/multi/tmp/${_pattern,,}_${_transport}_${_size}_clean_server_run${_run_index}.ctl"
-  local cl_client_fifo="${RESULTS_ROOT}/multi/tmp/${_pattern,,}_${_transport}_${_size}_clean_client_run${_run_index}.ctl"
-  rm -f "${cl_server_log}" "${cl_client_log}" "${cl_server_fifo}" "${cl_client_fifo}"
-
-  # C parity (run_comparison.py:3069-3071): the second pass forces
-  # PERF_MULTI_SPOT_LATENCY_ONLY=1 and PERF_MULTI_SPOT_CLEAN_LATENCY=0
-  # (the latter prevents recursion). Exported so the server child inherits
-  # them (run_multi_process's env_prefix does not clear inherited env).
-  export PERF_MULTI_SPOT_LATENCY_ONLY=1
-  export PERF_MULTI_SPOT_CLEAN_LATENCY=0
-
-  local rc=1
-  local cl_server_pid=0 cl_client_pid=0
-  local cl_server_fd='' cl_client_fd=''
-  local cl_server_ep='' cl_control_ep='' cl_client_ctrl_ep='' cl_connected_ep=''
-
-  mkfifo "${cl_server_fifo}"
-  run_multi_process "server" "${cl_server_log}" "" "${cl_server_fifo}" 1
-  cl_server_pid=$!
-    exec {cl_server_fd}>"${cl_server_fifo}"
-  if [[ "$(normalize_platform)" != "windows" ]]; then
-    rm -f "${cl_server_fifo}"
-  fi
-
-  if cl_server_ep="$(wait_for_ready_endpoint "${cl_server_log}" "${SERVER_READY_TIMEOUT_MS}")" \
-     && cl_control_ep="$(wait_for_control_ready_endpoint "${cl_server_log}" "${SERVER_READY_TIMEOUT_MS}")"; then
-    mkfifo "${cl_client_fifo}"
-    run_multi_process "client" "${cl_client_log}" "${cl_server_ep}" "${cl_client_fifo}" 1 "--control-endpoint" "${cl_control_ep}"
-    cl_client_pid=$!
-    exec {cl_client_fd}>"${cl_client_fifo}"
-    if [[ "$(normalize_platform)" != "windows" ]]; then
-      rm -f "${cl_client_fifo}"
-    fi
-
-    if cl_client_ctrl_ep="$(wait_for_client_control_endpoint "${cl_client_log}" "${SPOT_READY_TIMEOUT_MS}")"; then
-      write_control_line "${cl_server_fd}" 'CONNECT_CONTROL,%s\n' "${cl_client_ctrl_ep}"
-      if cl_connected_ep="$(wait_for_control_connected "${cl_server_log}" "${SPOT_READY_TIMEOUT_MS}")"; then
-        write_control_line "${cl_client_fd}" 'CONTROL_CONNECTED,%s\n' "${cl_connected_ep}"
-        if wait_for_client_ready_line "${cl_client_log}" "${SPOT_READY_TIMEOUT_MS}"; then
-          write_control_line "${cl_server_fd}" 'START,%s\n' "${_size}"
-          write_control_line "${cl_client_fd}" 'START,%s\n' "${_size}"
-          local cl_extracted=''
-          if cl_extracted="$(wait_for_results_from_logs \
-              "${cl_client_log}" "${cl_server_log}" "${_pattern}" \
-              "${_transport}" "${_size}" "${RESULT_TIMEOUT_SECONDS}")"; then
-            printf '%s\n' "${cl_extracted}"
-            rc=0
-          fi
-        fi
-      fi
-    fi
-  fi
-
-  [[ -n "${cl_client_fd}" ]] && write_control_line "${cl_client_fd}" 'STOP\n'
-  [[ -n "${cl_server_fd}" ]] && write_control_line "${cl_server_fd}" 'STOP\n'
-  if [[ "${cl_client_pid}" -ne 0 ]]; then
-    wait_for_pid_exit_zero "${cl_client_pid}" "$(shutdown_timeout_seconds)" \
-      "SPOT clean latency client" || rc=1
-  fi
-  if [[ "${cl_server_pid}" -ne 0 ]]; then
-    wait_for_pid_exit_zero "${cl_server_pid}" "$(shutdown_timeout_seconds)" \
-      "SPOT clean latency server" || rc=1
-  fi
-  [[ -n "${cl_client_fd}" ]] && exec {cl_client_fd}>&-
-  [[ -n "${cl_server_fd}" ]] && exec {cl_server_fd}>&-
-
-  unset PERF_MULTI_SPOT_LATENCY_ONLY
-  unset PERF_MULTI_SPOT_CLEAN_LATENCY
-  return "${rc}"
 }
 
 ensure_build_output
@@ -1957,7 +1636,7 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
     IFS=',' read -r -a msg_sizes <<< "${pattern_msg_sizes}"
     pattern_kind="one-way"
     case "${pattern}" in
-      MULTI_DEALER_ROUTER|MULTI_DEALER_ROUTER_REQREP|MULTI_ROUTER_ROUTER|MULTI_ROUTER_ROUTER_REQREP|MULTI_STREAM)
+      MULTI_DEALER_ROUTER|MULTI_DEALER_ROUTER_SENDSEND|MULTI_DEALER_ROUTER_REQREP|MULTI_ROUTER_ROUTER|MULTI_ROUTER_ROUTER_SENDSEND|MULTI_ROUTER_ROUTER_REQREP|MULTI_STREAM)
         pattern_kind="echo"
         ;;
     esac
@@ -2119,153 +1798,6 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
             continue
           fi
           exec {server_control_fd}>&-
-        elif [[ "${pattern}" == "MULTI_SPOT" || "${pattern}" == "MULTI_SPOT_REQREP" || "${pattern}" == "MULTI_SPOT_SENDSEND" ]]; then
-          control_endpoint=''
-          if ! control_endpoint="$(wait_for_control_ready_endpoint "${server_log}" "${SERVER_READY_TIMEOUT_MS}")"; then
-            cat "${server_log}" >&2 || true
-            write_control_line "${server_control_fd}" 'STOP\n'
-            terminate_pid "${server_pid}"
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "server_ready_timeout"
-            exec {server_control_fd}>&-
-            status=1
-            continue
-          fi
-
-          mkfifo "${client_control_fifo}"
-          run_multi_process "client" "${client_log}" "${server_endpoint}" "${client_control_fifo}" 1 "--control-endpoint" "${control_endpoint}"
-          client_pid=$!
-          exec {client_control_fd}>"${client_control_fifo}"
-
-          client_ctrl_ep=''
-          if ! client_ctrl_ep="$(wait_for_client_control_endpoint "${client_log}" "${SPOT_READY_TIMEOUT_MS}")"; then
-            if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
-              print_line "${unsupported_line}"
-              unsupported_count=$((unsupported_count + 1))
-              expected_result_lines=$((expected_result_lines - 5))
-              terminate_pid "${client_pid}"
-              write_control_line "${server_control_fd}" 'STOP\n'
-              terminate_pid "${server_pid}"
-              exec {server_control_fd}>&-
-              exec {client_control_fd}>&-
-              continue
-            fi
-            cat "${server_log}" >&2 || true
-            cat "${client_log}" >&2 || true
-            terminate_pid "${client_pid}"
-            write_control_line "${server_control_fd}" 'STOP\n'
-            terminate_pid "${server_pid}"
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "client_control_timeout"
-            exec {server_control_fd}>&-
-            exec {client_control_fd}>&-
-            status=1
-            continue
-          fi
-
-          write_control_line "${server_control_fd}" 'CONNECT_CONTROL,%s\n' "${client_ctrl_ep}"
-
-          connected_ep=''
-          if ! connected_ep="$(wait_for_control_connected "${server_log}" "${SPOT_READY_TIMEOUT_MS}")"; then
-            cat "${server_log}" >&2 || true
-            cat "${client_log}" >&2 || true
-            terminate_pid "${client_pid}"
-            write_control_line "${server_control_fd}" 'STOP\n'
-            terminate_pid "${server_pid}"
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "control_connect_timeout"
-            exec {server_control_fd}>&-
-            exec {client_control_fd}>&-
-            status=1
-            continue
-          fi
-
-          write_control_line "${client_control_fd}" 'CONTROL_CONNECTED,%s\n' "${connected_ep}"
-
-          if ! wait_for_client_ready_line "${client_log}" "${SPOT_READY_TIMEOUT_MS}"; then
-            if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
-             print_line "${unsupported_line}"
-              unsupported_count=$((unsupported_count + 1))
-              expected_result_lines=$((expected_result_lines - 5))
-              terminate_pid "${client_pid}"
-              write_control_line "${server_control_fd}" 'STOP\n'
-              terminate_pid "${server_pid}"
-              exec {server_control_fd}>&-
-              exec {client_control_fd}>&-
-              continue
-            fi
-            cat "${server_log}" >&2 || true
-            cat "${client_log}" >&2 || true
-            terminate_pid "${client_pid}"
-            write_control_line "${server_control_fd}" 'STOP\n'
-            terminate_pid "${server_pid}"
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "client_ready_timeout"
-            exec {server_control_fd}>&-
-            exec {client_control_fd}>&-
-            status=1
-            continue
-          fi
-
-          write_control_line "${server_control_fd}" 'START,%s\n' "${size}"
-          write_control_line "${client_control_fd}" 'START,%s\n' "${size}"
-          if ! extracted="$(wait_for_results_from_logs \
-            "${client_log}" "${server_log}" "${pattern}" "${transport}" "${size}" \
-            "${RESULT_TIMEOUT_SECONDS}")"; then
-            if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
-              print_line "${unsupported_line}"
-              unsupported_count=$((unsupported_count + 1))
-              expected_result_lines=$((expected_result_lines - 5))
-              write_control_line "${server_control_fd}" 'STOP\n'
-              terminate_pid "${client_pid}"
-              terminate_pid "${server_pid}"
-              exec {server_control_fd}>&-
-              exec {client_control_fd}>&-
-              continue
-            fi
-            cat "${server_log}" >&2 || true
-            cat "${client_log}" >&2 || true
-            write_control_line "${server_control_fd}" 'STOP\n'
-            terminate_pid "${client_pid}"
-            terminate_pid "${server_pid}"
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "result_timeout"
-            exec {server_control_fd}>&-
-            exec {client_control_fd}>&-
-            status=1
-            continue
-          fi
-
-          write_control_line "${server_control_fd}" 'STOP\n'
-          write_control_line "${client_control_fd}" 'STOP\n'
-          process_shutdown_ok=1
-          if ! wait_for_pid_exit_zero "${client_pid}" "$(shutdown_timeout_seconds)" "${pattern} client"; then
-            process_shutdown_ok=0
-          fi
-          if ! wait_for_pid_exit_zero "${server_pid}" "$(shutdown_timeout_seconds)" "${pattern} server"; then
-            process_shutdown_ok=0
-          fi
-          if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
-             print_line "${unsupported_line}"
-              unsupported_count=$((unsupported_count + 1))
-              expected_result_lines=$((expected_result_lines - 5))
-            exec {server_control_fd}>&-
-            exec {client_control_fd}>&-
-            continue
-          fi
-          if [[ "${process_shutdown_ok}" -ne 1 ]]; then
-            cat "${server_log}" >&2 || true
-            cat "${client_log}" >&2 || true
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "process_exit_nonzero"
-            status=1
-            exec {server_control_fd}>&-
-            exec {client_control_fd}>&-
-            continue
-          fi
-          if ! extracted="$(extract_results_from_logs "${client_log}" "${server_log}" "${pattern}" "${transport}" "${size}")"; then
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "missing_required_result_lines"
-            status=1
-            exec {server_control_fd}>&-
-            exec {client_control_fd}>&-
-            continue
-          fi
-          exec {server_control_fd}>&-
-          exec {client_control_fd}>&-
         elif [[ "${pattern}" == "MULTI_DEALER_DEALER" || "${pattern}" == "MULTI_PUBSUB" ]]; then
           if [[ "${native_control_mode}" -eq 1 ]]; then
             run_multi_process "client" "${client_log}" "${server_endpoint}" "" 1
@@ -2408,31 +1940,6 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
             cat "${client_log}" >&2 || true
             terminate_pid "${server_pid}"
             record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "process_exit_nonzero"
-            status=1
-            continue
-          fi
-        fi
-
-        # C parity: bindings/c/perf/run_comparison.py:3062-3088. Only the
-        # live MULTI_SPOT pass is saturated; its latency reflects queue
-        # backlog (~2300ms here, like C's pre-fix bug). Defer the live
-        # latency row by running a clean, paced latency-only second pass
-        # and overriding latency/p95/p99 with its uncontended values.
-        # REQREP/SENDSEND are echo (round-trip) patterns and are excluded,
-        # matching C's normalized_pattern == "SPOT" guard.
-        if [[ "${pattern}" == "MULTI_SPOT" \
-              && "${PERF_MULTI_SPOT_CLEAN_LATENCY:-1}" != "0" ]]; then
-          clean_extracted=''
-          if clean_extracted="$(run_spot_clean_latency_pass \
-              "${pattern}" "${transport}" "${size}" "${run_index}")"; then
-            if merged_extracted="$(merge_spot_clean_latency \
-                "${extracted}" "${clean_extracted}")"; then
-              extracted="${merged_extracted}"
-            fi
-          else
-            cat "${RESULTS_ROOT}/multi/tmp/${pattern,,}_${transport}_${size}_clean_server_run${run_index}.log" >&2 2>/dev/null || true
-            cat "${RESULTS_ROOT}/multi/tmp/${pattern,,}_${transport}_${size}_clean_client_run${run_index}.log" >&2 2>/dev/null || true
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "clean_latency_failed"
             status=1
             continue
           fi

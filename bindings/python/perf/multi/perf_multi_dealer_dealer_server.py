@@ -15,6 +15,7 @@ from perf_multi_common import (
     print_result_lines,
     parse_server_args,
     perf_server_context,
+    resolve_multi_monitor_hwm_bytes,
     result_metrics,
     received_metric_payload,
     safe_poll,
@@ -45,7 +46,10 @@ def main(argv=None):
         with zlink.create_dealer_socket(ctx) as dealer:
             configure_multi_tls_server(dealer, args.transport)
             apply_multi_socket_options(dealer)
-            with dealer.monitor_open(zlink.MonitorEventMask.CONNECTION_READY) as monitor:
+            with dealer.monitor_open(
+                zlink.MonitorEventMask.CONNECTION_READY,
+                resolve_multi_monitor_hwm_bytes(),
+            ) as monitor:
                 dealer.bind(endpoint)
                 print(f"READY,{endpoint}", flush=True)
                 with zlink.create_poller() as poller:
@@ -85,6 +89,8 @@ def main(argv=None):
                                     run_id=run_id,
                                 )
                                 if not active:
+                                    continue
+                                if time.perf_counter() >= active_deadline:
                                     continue
                                 count += 1
                                 if latency is not None:
@@ -126,6 +132,10 @@ def main(argv=None):
                     if count <= 0:
                         raise RuntimeError(
                             "multi dealer-dealer server did not receive any active message"
+                        )
+                    if latency_sampler.count == 0:
+                        raise RuntimeError(
+                            "multi dealer-dealer server received active messages without latency samples"
                         )
                     metrics = result_metrics(
                         count=count,
