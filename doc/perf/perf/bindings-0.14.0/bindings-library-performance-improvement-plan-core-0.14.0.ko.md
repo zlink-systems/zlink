@@ -809,145 +809,49 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `미측정`
 - Multi 상태: `미측정`
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
-#### 9.1.1 Single suite
-
-| Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
-|-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 81.2% | 79.5% | 88.7% | 90.7% | 92.2% | 97.0% | 미달(88.2%); latency 1.18x; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_062050_cpp0140-single-tcp-pair.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_062347_cpp0140-single-tcp-pair.txt` |
-| `tcp` | `PUBSUB` | 87.8% | 82.8% | 91.5% | 98.3% | 99.4% | 128.2% | 통과(98.0%); latency 0.99x; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_062854_cpp0140-single-tcp-pubsub.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_063220_cpp0140-single-tcp-pubsub.txt` |
-| `tcp` | `DEALER_DEALER` | 77.1% | 76.7% | 76.7% | 85.2% | 91.0% | 94.9% | 미달(83.6%); latency 0.957x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_064209_cpp0140-single-tcp-dealer-dealer-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_064241_cpp0140-single-tcp-dealer-dealer-r1.txt` |
-| `tcp` | `DEALER_ROUTER` | 84.6% | 79.8% | 82.5% | 88.5% | 92.8% | 99.3% | 미달(87.9%); latency 3.590x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_064312_cpp0140-single-tcp-dealer-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_064344_cpp0140-single-tcp-dealer-router-r1.txt` |
-| `tcp` | `DEALER_ROUTER_REQREP` | 59.5% | 53.4% | 38.6% | 77.7% | 79.5% | 78.0% | 미달(64.5%); latency 2.078x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_064415_cpp0140-single-tcp-dealer-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_064447_cpp0140-single-tcp-dealer-router-reqrep-r1.txt` |
-| `tcp` | `ROUTER_ROUTER` | 90.8% | 81.5% | 83.2% | 92.7% | 89.5% | 86.6% | 미달(87.4%); latency 13.757x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_064518_cpp0140-single-tcp-router-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_064549_cpp0140-single-tcp-router-router-r1.txt` |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 59.4% | 55.9% | 42.3% | 76.2% | 83.9% | 78.2% | 미달(66.0%); latency 2.001x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_064620_cpp0140-single-tcp-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_064651_cpp0140-single-tcp-router-router-reqrep-r1.txt` |
-| `ws` | `PAIR` | 92.0% | 81.9% | 95.5% | 93.2% | 100.5% | 99.2% | 미달(93.7%); latency 1.028x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_065157_cpp0140-single-ws-pair-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_065228_cpp0140-single-ws-pair-r1.txt` |
-| `ws` | `PUBSUB` | 84.4% | 84.1% | 102.6% | 100.3% | 117.3% | 103.7% | 통과(98.7%); latency 1.253x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_065259_cpp0140-single-ws-pubsub-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_065338_cpp0140-single-ws-pubsub-r1.txt` |
-| `ws` | `DEALER_DEALER` | 74.8% | 95.6% | 92.4% | 89.3% | 96.1% | 97.7% | 미달(91.0%); latency 1.114x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_065415_cpp0140-single-ws-dealer-dealer-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_065447_cpp0140-single-ws-dealer-dealer-r1.txt` |
-| `ws` | `DEALER_ROUTER` | 76.2% | 82.7% | 96.1% | 91.5% | 99.1% | 104.1% | 통과(91.6%); latency 1.048x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_065519_cpp0140-single-ws-dealer-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_065550_cpp0140-single-ws-dealer-router-r1.txt` |
-| `ws` | `DEALER_ROUTER_REQREP` | 22.1% | 34.4% | 41.5% | 86.3% | 86.6% | 90.6% | 미달(60.2%); latency 2.575x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_065621_cpp0140-single-ws-dealer-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_065652_cpp0140-single-ws-dealer-router-reqrep-r1.txt` |
-| `ws` | `ROUTER_ROUTER` | 75.3% | 78.1% | 91.7% | 95.5% | 98.3% | 103.0% | 통과(90.3%); latency 1.204x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_065723_cpp0140-single-ws-router-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_065755_cpp0140-single-ws-router-router-r1.txt` |
-| `ws` | `ROUTER_ROUTER_REQREP` | 24.1% | 33.8% | 35.9% | 85.2% | 87.1% | 86.3% | 미달(58.7%); latency 2.573x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_065827_cpp0140-single-ws-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_065858_cpp0140-single-ws-router-router-reqrep-r1.txt` |
-| `wss` | `PAIR` | 77.5% | 83.7% | 99.2% | 95.0% | 97.8% | 100.8% | 미달(92.3%); latency 1.094x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_070145_cpp0140-single-wss-pair-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_070217_cpp0140-single-wss-pair-r1.txt` |
-| `wss` | `PUBSUB` | 88.5% | 90.5% | 97.7% | 98.1% | 95.1% | 86.8% | 미달(92.8%); latency 1.138x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_070249_cpp0140-single-wss-pubsub-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_070326_cpp0140-single-wss-pubsub-r1.txt` |
-| `wss` | `DEALER_DEALER` | 105.5% | 88.2% | 98.7% | 100.9% | 100.6% | 101.9% | 통과(99.3%); latency 1.113x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_070403_cpp0140-single-wss-dealer-dealer-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_070435_cpp0140-single-wss-dealer-dealer-r1.txt` |
-| `wss` | `DEALER_ROUTER` | 78.7% | 89.7% | 102.0% | 97.5% | 95.3% | 97.0% | 통과(93.4%); latency 1.071x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_070507_cpp0140-single-wss-dealer-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_070538_cpp0140-single-wss-dealer-router-r1.txt` |
-| `wss` | `DEALER_ROUTER_REQREP` | 36.4% | 42.2% | 44.3% | 90.2% | 92.4% | 91.8% | 미달(66.2%); latency 1.849x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_070610_cpp0140-single-wss-dealer-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_070641_cpp0140-single-wss-dealer-router-reqrep-r1.txt` |
-| `wss` | `ROUTER_ROUTER` | 78.9% | 82.7% | 91.0% | 96.1% | 92.6% | 94.8% | 통과(89.4%); latency 1.136x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_070712_cpp0140-single-wss-router-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_070743_cpp0140-single-wss-router-router-r1.txt` |
-| `wss` | `ROUTER_ROUTER_REQREP` | 37.6% | 40.6% | 37.7% | 115.5% | 105.5% | 96.7% | 미달(72.3%); latency 1.924x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_070815_cpp0140-single-wss-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_070846_cpp0140-single-wss-router-router-reqrep-r1.txt` |
-| `tls` | `PAIR` | 73.4% | 79.9% | 102.1% | 91.8% | 91.7% | 86.1% | 미달(87.5%); latency 1.073x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_071027_cpp0140-single-tls-pair-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_071059_cpp0140-single-tls-pair-r1.txt` |
-| `tls` | `PUBSUB` | 92.6% | 86.0% | 109.9% | 101.3% | 96.2% | 83.9% | 미달(95.0%); latency 1.010x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_071131_cpp0140-single-tls-pubsub-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_071208_cpp0140-single-tls-pubsub-r1.txt` |
-| `tls` | `DEALER_DEALER` | 83.1% | 84.9% | 104.2% | 95.2% | 96.2% | 88.0% | 미달(91.9%); latency 0.866x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_071245_cpp0140-single-tls-dealer-dealer-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_071317_cpp0140-single-tls-dealer-dealer-r1.txt` |
-| `tls` | `DEALER_ROUTER` | 88.7% | 75.3% | 122.4% | 96.4% | 101.1% | 89.4% | 미달(95.5%); latency 5.421x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_071349_cpp0140-single-tls-dealer-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_071420_cpp0140-single-tls-dealer-router-r1.txt` |
-| `tls` | `DEALER_ROUTER_REQREP` | 48.3% | 48.2% | 47.9% | 92.4% | 90.1% | 95.8% | 미달(70.4%); latency 1.783x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_071452_cpp0140-single-tls-dealer-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_071523_cpp0140-single-tls-dealer-router-reqrep-r1.txt` |
-| `tls` | `ROUTER_ROUTER` | 78.9% | 83.6% | 97.1% | 98.8% | 100.2% | 95.6% | 통과(92.4%); latency 1.415x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_071555_cpp0140-single-tls-router-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_071626_cpp0140-single-tls-router-router-r1.txt` |
-| `tls` | `ROUTER_ROUTER_REQREP` | 48.8% | 50.8% | 45.3% | 89.8% | 92.1% | 93.7% | 미달(70.1%); latency 1.820x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_071658_cpp0140-single-tls-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_071729_cpp0140-single-tls-router-router-reqrep-r1.txt` |
-| `inproc` | `PAIR` | 78.1% | 84.9% | 82.3% | 23.6% | 41.3% | 85.2% | 미달(65.9%); latency 1.819x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_071835_cpp0140-single-inproc-pair-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_071906_cpp0140-single-inproc-pair-r1.txt` |
-| `inproc` | `PUBSUB` | 96.9% | 96.8% | 94.1% | 111.1% | 99.0% | 122.1% | 통과(103.3%); latency 1.097x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_071938_cpp0140-single-inproc-pubsub-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_072016_cpp0140-single-inproc-pubsub-r1.txt` |
-| `inproc` | `DEALER_DEALER` | 83.5% | 84.2% | 87.4% | 25.2% | 57.0% | 41.2% | 미달(63.1%); latency 1.530x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_072054_cpp0140-single-inproc-dealer-dealer-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_072125_cpp0140-single-inproc-dealer-dealer-r1.txt` |
-| `inproc` | `DEALER_ROUTER` | 79.9% | 88.6% | 80.8% | 33.7% | 32.2% | 93.0% | 미달(68.0%); latency 1.621x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_072157_cpp0140-single-inproc-dealer-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_072227_cpp0140-single-inproc-dealer-router-r1.txt` |
-| `inproc` | `DEALER_ROUTER_REQREP` | 42.8% | 42.9% | 43.2% | 34.4% | 37.2% | 29.5% | 미달(38.3%); latency 1.088x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_072259_cpp0140-single-inproc-dealer-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_072331_cpp0140-single-inproc-dealer-router-reqrep-r1.txt` |
-| `inproc` | `ROUTER_ROUTER` | 87.0% | 88.8% | 90.7% | 28.4% | 39.6% | 44.9% | 미달(63.2%); latency 1.976x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_072402_cpp0140-single-inproc-router-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_072433_cpp0140-single-inproc-router-router-r1.txt` |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 44.0% | 42.7% | 45.6% | 35.6% | 39.1% | 29.8% | 미달(39.5%); latency 1.038x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_072505_cpp0140-single-inproc-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_072536_cpp0140-single-inproc-router-router-reqrep-r1.txt` |
-| `ipc` | `PAIR` | 78.4% | 83.8% | 78.4% | 96.2% | 90.2% | 96.0% | 미달(87.2%); latency 1.280x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_072649_cpp0140-single-ipc-pair-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_072720_cpp0140-single-ipc-pair-r1.txt` |
-| `ipc` | `PUBSUB` | 88.9% | 86.4% | 88.2% | 99.8% | 123.1% | 134.5% | 통과(103.5%); latency 1.133x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_072752_cpp0140-single-ipc-pubsub-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_072829_cpp0140-single-ipc-pubsub-r1.txt` |
-| `ipc` | `DEALER_DEALER` | 80.2% | 80.1% | 70.6% | 85.0% | 89.0% | 98.0% | 미달(83.8%); latency 0.961x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_072907_cpp0140-single-ipc-dealer-dealer-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_072938_cpp0140-single-ipc-dealer-dealer-r1.txt` |
-| `ipc` | `DEALER_ROUTER` | 80.3% | 85.4% | 76.1% | 85.3% | 96.2% | 92.8% | 미달(86.0%); latency 9.751x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_073010_cpp0140-single-ipc-dealer-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_073041_cpp0140-single-ipc-dealer-router-r1.txt` |
-| `ipc` | `DEALER_ROUTER_REQREP` | 56.4% | 53.0% | 38.1% | 78.0% | 84.6% | 84.2% | 미달(65.7%); latency 1.957x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_073113_cpp0140-single-ipc-dealer-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_073145_cpp0140-single-ipc-dealer-router-reqrep-r1.txt` |
-| `ipc` | `ROUTER_ROUTER` | 93.3% | 79.8% | 82.4% | 89.2% | 91.4% | 91.3% | 미달(87.9%); latency 9.405x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_073216_cpp0140-single-ipc-router-router-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_073247_cpp0140-single-ipc-router-router-r1.txt` |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 60.3% | 58.0% | 41.1% | 76.9% | 82.0% | 76.8% | 미달(65.8%); latency 1.944x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_073319_cpp0140-single-ipc-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260828_073350_cpp0140-single-ipc-router-router-reqrep-r1.txt` |
-
-#### 9.1.2 Multi suite
+#### 9.1.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 38.8% | 34.5% | 38.6% | 82.9% | 56.3% | 76.1% | 미달(54.5%); latency 중앙값 0.442x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_074931_cpp0140-multi-tcp-dealer-dealer-r1-recheck.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_075015_cpp0140-multi-tcp-dealer-dealer-r1-recheck.txt` |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 85.7% | 86.7% | 87.5% | 91.9% | 90.5% | 90.8% | 통과(88.9%); latency 중앙값 1.370x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_075107_cpp0140-multi-tcp-dealer-router-sendsend-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_075150_cpp0140-multi-tcp-dealer-router-sendsend-r1.txt` |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 91.2% | 90.8% | 91.9% | 95.9% | 104.7% | 111.3% | 통과(97.6%); latency 중앙값 1.415x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_075331_cpp0140-multi-tcp-MULTI_DEALER_ROUTER_REQREP-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_075405_cpp0140-multi-tcp-MULTI_DEALER_ROUTER_REQREP-r1.txt` |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 82.6% | 88.4% | 97.1% | 98.3% | 100.5% | 105.4% | 통과(95.4%); latency 중앙값 0.983x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_075535_cpp0140-multi-tcp-router-router-sendsend-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_075609_cpp0140-multi-tcp-router-router-sendsend-r1.txt` |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 88.5% | 88.7% | 82.6% | 81.8% | 83.4% | 99.2% | 통과(87.3%); latency 중앙값 1.546x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_075713_cpp0140-multi-tcp-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_075746_cpp0140-multi-tcp-router-router-reqrep-r1.txt` |
-| `tcp` | `MULTI_PUBSUB` | 222.8% | 215.9% | 191.0% | 136.7% | 115.9% | 102.2% | 통과(164.1%); latency 중앙값 0.899x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_075819_cpp0140-multi-tcp-pubsub-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_075853_cpp0140-multi-tcp-pubsub-r1.txt` |
-| `tcp` | `MULTI_STREAM` | 92.2% | 95.6% | 97.6% | 해당 없음 | 88.4% | 해당 없음 | 미달(93.5%); latency 중앙값 1.032x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_080215_cpp0140-multi-tcp-stream-default-inventory-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_080243_cpp0140-multi-tcp-stream-default-inventory-r1.txt` |
-| `ws` | `MULTI_DEALER_DEALER` | 46.6% | 29.6% | 44.7% | 62.9% | 60.7% | 67.9% | 미달(52.1%); latency 중앙값 1.204x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_080442_cpp0140-multi-ws-dealer-dealer-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_080518_cpp0140-multi-ws-dealer-dealer-r1.txt` |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 98.9% | 90.2% | 84.9% | 98.7% | 110.1% | 98.3% | 통과(96.9%); latency 중앙값 1.108x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_080609_cpp0140-multi-ws-dealer-router-sendsend-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_080642_cpp0140-multi-ws-dealer-router-sendsend-r1.txt` |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 91.7% | 97.7% | 89.1% | 84.1% | 90.3% | 91.2% | 통과(90.7%); latency 중앙값 1.362x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_080716_cpp0140-multi-ws-dealer-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_080750_cpp0140-multi-ws-dealer-router-reqrep-r1.txt` |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 100.2% | 126.1% | 120.0% | 115.9% | 126.2% | 122.0% | 통과(118.4%); latency 중앙값 0.810x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_080823_cpp0140-multi-ws-router-router-sendsend-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_080857_cpp0140-multi-ws-router-router-sendsend-r1.txt` |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 78.9% | 79.1% | 70.8% | 70.8% | 106.1% | 95.4% | 미달(83.5%); latency 중앙값 1.567x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_081000_cpp0140-multi-ws-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_081034_cpp0140-multi-ws-router-router-reqrep-r1.txt` |
-| `ws` | `MULTI_PUBSUB` | 228.7% | 207.1% | 165.4% | 95.2% | 89.6% | 116.0% | 통과(150.3%); latency 중앙값 0.908x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_081107_cpp0140-multi-ws-pubsub-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_081141_cpp0140-multi-ws-pubsub-r1.txt` |
-| `ws` | `MULTI_STREAM` | 104.3% | 98.4% | 101.1% | 해당 없음 | 102.3% | 해당 없음 | 통과(101.5%); latency 중앙값 0.976x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_081216_cpp0140-multi-ws-stream-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_081239_cpp0140-multi-ws-stream-r1.txt` |
-| `wss` | `MULTI_DEALER_DEALER` | 42.3% | 34.0% | 55.4% | 73.1% | 64.9% | 73.6% | 미달(57.2%); latency 중앙값 1.931x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_081459_cpp0140-multi-wss-dealer-dealer-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_081537_cpp0140-multi-wss-dealer-dealer-r1.txt` |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_081648_cpp0140-multi-wss-dealer-router-sendsend-r1.txt` status=partial (256B부터 exit -6, `malloc_consolidate(): unaligned fastbin chunk detected`); C++ 비교 미실행 |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 58.3% | 85.0% | 64.2% | 63.6% | 70.5% | 91.2% | 미달(72.1%); latency 중앙값 1.572x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_081655_cpp0140-multi-wss-dealer-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_081732_cpp0140-multi-wss-dealer-router-reqrep-r1.txt` |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 101.7% | 130.5% | 132.6% | 132.3% | 127.5% | 116.9% | 통과(123.6%); latency 중앙값 0.820x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_081806_cpp0140-multi-wss-router-router-sendsend-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_081842_cpp0140-multi-wss-router-router-sendsend-r1.txt` |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 88.1% | 69.2% | 63.3% | 80.4% | 87.9% | 86.1% | 미달(79.2%); latency 중앙값 1.411x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_081946_cpp0140-multi-wss-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_082025_cpp0140-multi-wss-router-router-reqrep-r1.txt` |
-| `wss` | `MULTI_PUBSUB` | 174.3% | 229.9% | 135.2% | 101.1% | 117.9% | 102.7% | 통과(143.5%); latency 중앙값 0.961x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_082101_cpp0140-multi-wss-pubsub-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_082135_cpp0140-multi-wss-pubsub-r1.txt` |
-| `wss` | `MULTI_STREAM` | 108.9% | 103.4% | 103.1% | 해당 없음 | 100.1% | 해당 없음 | 통과(103.9%); latency 중앙값 0.984x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_082210_cpp0140-multi-wss-stream-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_082232_cpp0140-multi-wss-stream-r1.txt` |
-| `tls` | `MULTI_DEALER_DEALER` | 48.2% | 33.9% | 49.1% | 85.9% | 62.8% | 68.6% | 미달(58.1%); latency 중앙값 1.123x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_082658_cpp0140-multi-tls-dealer-dealer-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_082733_cpp0140-multi-tls-dealer-dealer-r1.txt` |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 108.9% | 90.0% | 98.6% | 100.5% | 100.2% | 108.3% | 통과(101.1%); latency 중앙값 1.089x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_082817_cpp0140-multi-tls-dealer-router-sendsend-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_082852_cpp0140-multi-tls-dealer-router-sendsend-r1.txt` |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 96.1% | 92.9% | 92.1% | 81.7% | 93.8% | 81.0% | 통과(89.6%); latency 중앙값 1.281x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_082927_cpp0140-multi-tls-dealer-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_083001_cpp0140-multi-tls-dealer-router-reqrep-r1.txt` |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 89.3% | 100.2% | 97.4% | 129.6% | 131.9% | 136.4% | 통과(114.1%); latency 중앙값 0.929x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_083035_cpp0140-multi-tls-router-router-sendsend-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_083110_cpp0140-multi-tls-router-router-sendsend-r1.txt` |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 75.8% | 71.7% | 77.9% | 79.3% | 89.4% | 84.7% | 미달(79.8%); latency 중앙값 1.573x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_083214_cpp0140-multi-tls-router-router-reqrep-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_083249_cpp0140-multi-tls-router-router-reqrep-r1.txt` |
-| `tls` | `MULTI_PUBSUB` | 200.9% | 221.1% | 169.6% | 108.7% | 118.5% | 118.4% | 통과(156.2%); latency 중앙값 0.831x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_083323_cpp0140-multi-tls-pubsub-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_083357_cpp0140-multi-tls-pubsub-r1.txt` |
-| `tls` | `MULTI_STREAM` | 105.7% | 101.7% | 104.7% | 해당 없음 | 103.6% | 해당 없음 | 통과(103.9%); latency 중앙값 0.951x; runs=1; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260828_083437_cpp0140-multi-tls-stream-r1.txt`; C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260828_083500_cpp0140-multi-tls-stream-r1.txt` |
+| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
-- Single 상태: `미측정`
 - Multi 상태: `미측정`
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
-#### 9.2.1 Single suite
-
-| Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
-|-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 43.5% | 42.7% | 44.9% | 482.1% | 538.3% | 553.1% | 미달(284.1%); latency 164.404x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_084953_dotnet0140-single-tcp-pubsub-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_085030_dotnet0140-single-tcp-pubsub-r1.txt` |
-| `tcp` | `DEALER_DEALER` | 35.3% | 38.7% | 36.0% | 82.8% | 89.5% | 89.3% | 미달(61.9%); latency 3.336x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_085111_dotnet0140-single-tcp-dealer_dealer-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_085143_dotnet0140-single-tcp-dealer_dealer-r1.txt` |
-| `tcp` | `DEALER_ROUTER` | 32.9% | 33.9% | 36.5% | 83.7% | 112.0% | 85.6% | 미달(64.1%); latency 29.179x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_085216_dotnet0140-single-tcp-dealer_router-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_085248_dotnet0140-single-tcp-dealer_router-r1.txt` |
-| `tcp` | `DEALER_ROUTER_REQREP` | 31.3% | 31.2% | 32.0% | 89.6% | 77.8% | 63.9% | 미달(54.3%); latency 1.656x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_085322_dotnet0140-single-tcp-dealer_router_reqrep-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_085353_dotnet0140-single-tcp-dealer_router_reqrep-r1.txt` |
-| `tcp` | `ROUTER_ROUTER` | 39.3% | 40.6% | 39.7% | 76.5% | 85.3% | 75.6% | 미달(59.5%); latency 38.548x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_085426_dotnet0140-single-tcp-router_router-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_085458_dotnet0140-single-tcp-router_router-r1.txt` |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 29.4% | 32.3% | 32.4% | 82.3% | 66.9% | 67.8% | 미달(51.9%); latency 1.712x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_085532_dotnet0140-single-tcp-router_router_reqrep-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_085603_dotnet0140-single-tcp-router_router_reqrep-r1.txt` |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 46.2% | 45.7% | 64.6% | 257.9% | 396.2% | 525.0% | 미달(222.6%); latency 4.214x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_090937_dotnet0140-single-ws-pubsub-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_091015_dotnet0140-single-ws-pubsub-r1.txt` |
-| `ws` | `DEALER_DEALER` | 45.0% | 34.6% | 56.4% | 129.7% | 132.7% | 98.4% | 미달(82.8%); latency 2.842x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_091055_dotnet0140-single-ws-dealer_dealer-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_091127_dotnet0140-single-ws-dealer_dealer-r1.txt` |
-| `ws` | `DEALER_ROUTER` | 36.9% | 34.6% | 56.6% | 88.8% | 151.1% | 140.0% | 미달(84.6%); latency 3.004x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_091200_dotnet0140-single-ws-dealer_router-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_091232_dotnet0140-single-ws-dealer_router-r1.txt` |
-| `ws` | `DEALER_ROUTER_REQREP` | 34.9% | 52.4% | 79.9% | 137.3% | 98.4% | 104.2% | 미달(84.5%); latency 1.011x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_091306_dotnet0140-single-ws-dealer_router_reqrep-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_091338_dotnet0140-single-ws-dealer_router_reqrep-r1.txt` |
-| `ws` | `ROUTER_ROUTER` | 37.3% | 42.2% | 44.8% | 81.3% | 90.2% | 104.4% | 미달(66.7%); latency 0.974x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_091411_dotnet0140-single-ws-router_router-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_091443_dotnet0140-single-ws-router_router-r1.txt` |
-| `ws` | `ROUTER_ROUTER_REQREP` | 36.0% | 53.5% | 82.2% | 103.2% | 96.9% | 74.7% | 미달(74.4%); latency 0.994x; runs=1; C `bindings/c/perf/results/single/report/perf_c_single_linux_20260828_091517_dotnet0140-single-ws-router_router_reqrep-r1.txt`; .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260828_091548_dotnet0140-single-ws-router_router_reqrep-r1.txt` |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-
-#### 9.2.2 Multi suite
+#### 9.2.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
@@ -983,58 +887,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.3 Java
 
 - perf 경로: `bindings/java/perf`
-- Single 상태: `미측정`
 - Multi 상태: `미측정`
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
-#### 9.3.1 Single suite
-
-| Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
-|-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-
-#### 9.3.2 Multi suite
+#### 9.3.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
@@ -1070,58 +926,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.4 Node
 
 - perf 경로: `bindings/node/perf`
-- Single 상태: `미측정`
 - Multi 상태: `미측정`
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
-#### 9.4.1 Single suite
-
-| Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
-|-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-
-#### 9.4.2 Multi suite
+#### 9.4.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
@@ -1149,46 +957,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.5 Go
 
 - perf 경로: `bindings/go/perf`
-- Single 상태: `미측정`
 - Multi 상태: `미측정`
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
-#### 9.5.1 Single suite
-
-| Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
-|-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-
-#### 9.5.2 Multi suite
+#### 9.5.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
@@ -1216,46 +988,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.6 Rust
 
 - perf 경로: `bindings/rust/perf`
-- Single 상태: `미측정`
 - Multi 상태: `미측정`
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
-#### 9.6.1 Single suite
-
-| Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
-|-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-
-#### 9.6.2 Multi suite
+#### 9.6.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
@@ -1283,46 +1019,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.7 Python
 
 - perf 경로: `bindings/python/perf`
-- Single 상태: `미측정`
 - Multi 상태: `미측정`
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
-#### 9.7.1 Single suite
-
-| Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
-|-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-
-#### 9.7.2 Multi suite
+#### 9.7.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
@@ -1374,15 +1074,15 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 ### 10.3 언어 진행 상태
 
-| 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
-|------|------|-------------|------------|-----------|
-| 1 | C++ | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 7 | Python | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 순서 | 언어 | Multi 상태 | 다음 작업 |
+|------|------|------------|-----------|
+| 1 | C++ | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 2 | .NET | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 3 | Java | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 4 | Node | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 5 | Go | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 6 | Rust | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 7 | Python | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 
 ## 11. 측정 기록과 결과
 
