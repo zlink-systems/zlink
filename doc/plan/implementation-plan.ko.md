@@ -144,8 +144,8 @@ bindings 0.14.0 전환 완료(릴리스·로컬 패키지·참조 모두). 아�
 | **doc-contracts 검증 체인 그린** | **완료** `b3d8368105` — 노후 지문 4계열(exact 수식 제거分·ps1 인벤토리·ZoneWorld $0 호출·재구성 이전 스펙 경로) 정합, 전 체인 rc=0 |
 | 이월 등재(갱신) | java SerialExecutionQueueTest flake 발현율 상승 · dotnet 동적 flags 2곳 공개 async 표면 개정(사용자 안건) · GameQuest 권위문서 DisableRelocation vs java·kotlin recreateOnRelocation 계약 갭(사용자 안건) |
 | 스펙 경량 계약 재작성(감독관) → 사용자 리뷰 → origin의 B안 절 대체 커밋 | 대기 |
-| 로컬 레이스 수정 재적용(codex sol ultra) → TTT·Bingo 반복 실증으로 원 결함 해소 판정 | 대기 |
-| ZoneWorld (cpp·jvm·node·dotnet, codex sol ultra) | 대기 |
+| 로컬 레이스 수정 재적용 → 원 결함 해소 | **완료** `cd92311156` — 스펙 확정(`eb36244d16`: B안 절 제거+binding 완료·인지 두 선형화점 명문화, 사용자 지시) 위에 레이스 3건 수렴. **TTT 14/15**(잔여=등재 teardown flake)·게이트 45/45·5종 OK. **4언어×6샘플 전부 그린 달성, push 완료** |
+| ZoneWorld (cpp·jvm·node·dotnet, codex sol ultra) | **착수** — 4언어 재실증 병렬 실행 중(Z1 cpp split-brain·Z2 dotnet mesh admission 기존 등재분 포함 지문 수집) |
 
 ---
 
