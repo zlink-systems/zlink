@@ -109,7 +109,9 @@ void ssl_transport_t::async_read_some (unsigned char *buffer,
 
     stream->async_read_some (
       boost::asio::buffer (buffer, buffer_size),
-      [stream, handler] (const boost::system::error_code &ec, std::size_t bytes_transferred) {
+      [stream,
+       handler = std::move (handler)] (const boost::system::error_code &ec,
+                                       std::size_t bytes_transferred) {
           if (handler) {
               handler (ec, bytes_transferred);
           }
@@ -179,7 +181,9 @@ void ssl_transport_t::async_write_some (const unsigned char *buffer,
 
     boost::asio::async_write (
       *stream, boost::asio::buffer (buffer, buffer_size),
-      [stream, handler] (const boost::system::error_code &ec, std::size_t bytes_transferred) {
+      [stream,
+       handler = std::move (handler)] (const boost::system::error_code &ec,
+                                       std::size_t bytes_transferred) {
           if (handler) {
               handler (ec, bytes_transferred);
           }
@@ -266,15 +270,16 @@ void ssl_transport_t::async_handshake (int handshake_type, completion_handler_t 
         }
     }
 
-    stream->async_handshake (hs_type,
-                             [this, stream, handler] (const boost::system::error_code &ec) {
-                                 if (!ec) {
-                                     _handshake_complete = true;
-                                 }
-                                 if (handler) {
-                                     handler (ec, 0);
-                                 }
-                             });
+    stream->async_handshake (
+      hs_type,
+      [this, stream, handler = std::move (handler)] (const boost::system::error_code &ec) {
+          if (!ec) {
+              _handshake_complete = true;
+          }
+          if (handler) {
+              handler (ec, 0);
+          }
+      });
 }
 
 } // namespace zlink

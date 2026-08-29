@@ -99,6 +99,221 @@ const bool tcp_use_native_send_on =
 #else
 const bool tcp_use_native_send_on = false;
 #endif
+
+struct tcp_native_writev_cursor_t
+{
+    const unsigned char *header;
+    size_t header_size;
+    size_t header_sent;
+    const unsigned char *body;
+    size_t body_size;
+    size_t body_sent;
+
+    size_t bytes_sent () const { return header_sent + body_sent; }
+    size_t total_size () const { return header_size + body_size; }
+};
+
+struct tcp_native_writev_result_t
+{
+    enum status_t
+    {
+        completed,
+        pending,
+        failed,
+        closed
+    };
+
+    explicit tcp_native_writev_result_t (
+      status_t status_, const boost::system::error_code &error_ = boost::system::error_code ()) :
+        status (status_), error (error_)
+    {
+    }
+
+    status_t status;
+    boost::system::error_code error;
+};
+
+tcp_native_writev_result_t tcp_run_native_writev (
+  const std::shared_ptr<boost::asio::ip::tcp::socket> &socket_,
+  tcp_native_writev_cursor_t &cursor_)
+{
+    if (!socket_ || !socket_->is_open ())
+        return tcp_native_writev_result_t (tcp_native_writev_result_t::closed);
+
+    for (;;) {
+        const size_t header_left = cursor_.header_size - cursor_.header_sent;
+        const size_t body_left = cursor_.body_size - cursor_.body_sent;
+        if (header_left == 0 && body_left == 0)
+            return tcp_native_writev_result_t (tcp_native_writev_result_t::completed);
+
+#if defined ZLINK_HAVE_WINDOWS
+        WSABUF buffers[2];
+        DWORD buffer_count = 0;
+        if (header_left > 0) {
+            buffers[buffer_count].buf = reinterpret_cast<char *> (
+              const_cast<unsigned char *> (cursor_.header + cursor_.header_sent));
+            buffers[buffer_count].len = static_cast<ULONG> (
+              std::min (header_left, static_cast<size_t> (std::numeric_limits<ULONG>::max ())));
+            ++buffer_count;
+        }
+        if (body_left > 0) {
+            buffers[buffer_count].buf = reinterpret_cast<char *> (
+              const_cast<unsigned char *> (cursor_.body + cursor_.body_sent));
+            buffers[buffer_count].len = static_cast<ULONG> (
+              std::min (body_left, static_cast<size_t> (std::numeric_limits<ULONG>::max ())));
+            ++buffer_count;
+        }
+
+        DWORD bytes_sent = 0;
+        const int rc = WSASend (socket_->native_handle (), buffers, buffer_count, &bytes_sent, 0,
+                                NULL, NULL);
+        if (rc == 0) {
+            size_t remaining = static_cast<size_t> (bytes_sent);
+            if (header_left > 0) {
+                const size_t advanced = std::min (header_left, remaining);
+                cursor_.header_sent += advanced;
+                remaining -= advanced;
+            }
+            if (remaining > 0 && body_left > 0)
+                cursor_.body_sent += std::min (body_left, remaining);
+            if (bytes_sent == 0)
+                return tcp_native_writev_result_t (tcp_native_writev_result_t::pending);
+            continue;
+        }
+
+        const int wsa_error = WSAGetLastError ();
+        if (wsa_error == WSAEINTR)
+            continue;
+        if (wsa_error == WSAEWOULDBLOCK || wsa_error == WSAENOBUFS)
+            return tcp_native_writev_result_t (tcp_native_writev_result_t::pending);
+
+        return tcp_native_writev_result_t (
+          tcp_native_writev_result_t::failed,
+          boost::system::error_code (wsa_error, boost::system::system_category ()));
+#else
+        struct iovec iov[2];
+        int iovcnt = 0;
+        if (header_left > 0) {
+            iov[iovcnt].iov_base =
+              const_cast<unsigned char *> (cursor_.header + cursor_.header_sent);
+            iov[iovcnt].iov_len = header_left;
+            ++iovcnt;
+        }
+        if (body_left > 0) {
+            iov[iovcnt].iov_base =
+              const_cast<unsigned char *> (cursor_.body + cursor_.body_sent);
+            iov[iovcnt].iov_len = body_left;
+            ++iovcnt;
+        }
+
+        const ssize_t rc = ::writev (socket_->native_handle (), iov, iovcnt);
+        if (rc > 0) {
+            size_t remaining = static_cast<size_t> (rc);
+            if (header_left > 0) {
+                const size_t advanced = std::min (header_left, remaining);
+                cursor_.header_sent += advanced;
+                remaining -= advanced;
+            }
+            if (remaining > 0 && body_left > 0)
+                cursor_.body_sent += std::min (body_left, remaining);
+
+            if (tcp_writev_single_shot_on && cursor_.bytes_sent () < cursor_.total_size ())
+                return tcp_native_writev_result_t (tcp_native_writev_result_t::pending);
+            continue;
+        }
+        if (rc == -1 && errno == EINTR)
+            continue;
+        if (rc == 0
+            || (rc == -1 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS)))
+            return tcp_native_writev_result_t (tcp_native_writev_result_t::pending);
+
+        return tcp_native_writev_result_t (
+          tcp_native_writev_result_t::failed,
+          boost::system::error_code (errno, boost::system::system_category ()));
+#endif
+    }
+}
+
+void tcp_invoke_writev_completion (
+  i_asio_transport::completion_handler_t &handler_,
+  const boost::system::error_code &error_,
+  size_t bytes_sent_)
+{
+    i_asio_transport::completion_handler_t completion;
+    completion.swap (handler_);
+    if (completion)
+        completion (error_, bytes_sent_);
+}
+
+void tcp_finish_native_writev (
+  i_asio_transport::completion_handler_t &handler_,
+  const tcp_native_writev_cursor_t &cursor_,
+  const tcp_native_writev_result_t &result_)
+{
+    boost::system::error_code error;
+    if (result_.status == tcp_native_writev_result_t::completed) {
+        if (tcp_stats_on)
+            tcp_async_write_bytes += cursor_.total_size ();
+    } else if (result_.status == tcp_native_writev_result_t::failed) {
+        if (tcp_stats_on)
+            ++tcp_async_write_errors;
+        error = result_.error;
+    } else {
+        zlink_assert (result_.status == tcp_native_writev_result_t::closed);
+        error = boost::asio::error::bad_descriptor;
+    }
+
+    tcp_invoke_writev_completion (handler_, error, cursor_.bytes_sent ());
+}
+
+struct tcp_pending_writev_t
+{
+    tcp_pending_writev_t (
+      const std::shared_ptr<boost::asio::ip::tcp::socket> &socket_,
+      const tcp_native_writev_cursor_t &cursor_,
+      i_asio_transport::completion_handler_t &&handler_) :
+        socket (socket_), cursor (cursor_), handler (std::move (handler_))
+    {
+    }
+
+    std::shared_ptr<boost::asio::ip::tcp::socket> socket;
+    tcp_native_writev_cursor_t cursor;
+    i_asio_transport::completion_handler_t handler;
+};
+
+void tcp_resume_native_writev (
+  const std::shared_ptr<tcp_pending_writev_t> &state_,
+  const boost::system::error_code &error_);
+
+void tcp_wait_native_writev (const std::shared_ptr<tcp_pending_writev_t> &state_)
+{
+    state_->socket->async_wait (
+      boost::asio::socket_base::wait_write,
+      [state_] (const boost::system::error_code &error) {
+          tcp_resume_native_writev (state_, error);
+      });
+}
+
+void tcp_resume_native_writev (
+  const std::shared_ptr<tcp_pending_writev_t> &state_,
+  const boost::system::error_code &error_)
+{
+    if (error_) {
+        if (tcp_stats_on)
+            ++tcp_async_write_errors;
+        tcp_invoke_writev_completion (state_->handler, error_, state_->cursor.bytes_sent ());
+        return;
+    }
+
+    const tcp_native_writev_result_t result =
+      tcp_run_native_writev (state_->socket, state_->cursor);
+    if (result.status == tcp_native_writev_result_t::pending) {
+        tcp_wait_native_writev (state_);
+        return;
+    }
+
+    tcp_finish_native_writev (state_->handler, state_->cursor, result);
+}
 }
 
 tcp_transport_t::tcp_transport_t ()
@@ -381,119 +596,7 @@ void tcp_transport_t::async_writev (const unsigned char *header,
         return;
     }
 
-#if defined(ZLINK_HAVE_WINDOWS)
-    struct writev_state_t
-    {
-        const unsigned char *header;
-        size_t header_size;
-        size_t header_sent;
-        const unsigned char *body;
-        size_t body_size;
-        size_t body_sent;
-        completion_handler_t handler;
-    };
-
-    const std::shared_ptr<writev_state_t> state (
-      new writev_state_t{header, header_size, 0, body, body_size, 0, std::move (handler)});
-
-    const std::shared_ptr<std::function<void (const boost::system::error_code &)>> do_write (
-      new std::function<void (const boost::system::error_code &)>);
-
-    *do_write = [socket, state, do_write] (const boost::system::error_code &ec) {
-        if (ec) {
-            if (tcp_stats_on)
-                ++tcp_async_write_errors;
-            if (state->handler)
-                state->handler (ec, state->header_sent + state->body_sent);
-            return;
-        }
-
-        if (!socket || !socket->is_open ()) {
-            if (state->handler)
-                state->handler (boost::asio::error::bad_descriptor,
-                                state->header_sent + state->body_sent);
-            return;
-        }
-
-        for (;;) {
-            const size_t header_left = state->header_size - state->header_sent;
-            const size_t body_left = state->body_size - state->body_sent;
-            if (header_left == 0 && body_left == 0) {
-                if (tcp_stats_on)
-                    tcp_async_write_bytes += state->header_size + state->body_size;
-                if (state->handler)
-                    state->handler (boost::system::error_code (),
-                                    state->header_size + state->body_size);
-                return;
-            }
-
-            WSABUF buffers[2];
-            DWORD buffer_count = 0;
-            if (header_left > 0) {
-                buffers[buffer_count].buf = reinterpret_cast<char *> (
-                  const_cast<unsigned char *> (state->header + state->header_sent));
-                buffers[buffer_count].len = static_cast<ULONG> (
-                  std::min (header_left, static_cast<size_t> (std::numeric_limits<ULONG>::max ())));
-                ++buffer_count;
-            }
-            if (body_left > 0) {
-                buffers[buffer_count].buf = reinterpret_cast<char *> (
-                  const_cast<unsigned char *> (state->body + state->body_sent));
-                buffers[buffer_count].len = static_cast<ULONG> (
-                  std::min (body_left, static_cast<size_t> (std::numeric_limits<ULONG>::max ())));
-                ++buffer_count;
-            }
-
-            DWORD bytes_sent = 0;
-            const int rc = WSASend (socket->native_handle (), buffers, buffer_count, &bytes_sent, 0,
-                                    NULL, NULL);
-            if (rc == 0) {
-                size_t remaining = static_cast<size_t> (bytes_sent);
-                if (header_left > 0) {
-                    const size_t advanced = std::min (header_left, remaining);
-                    state->header_sent += advanced;
-                    remaining -= advanced;
-                }
-                if (remaining > 0 && body_left > 0)
-                    state->body_sent += std::min (body_left, remaining);
-
-                if (bytes_sent == 0) {
-                    socket->async_wait (
-                      boost::asio::socket_base::wait_write,
-                      [do_write, socket] (const boost::system::error_code &wec) {
-                          LIBZLINK_UNUSED (socket);
-                          (*do_write) (wec);
-                      });
-                    return;
-                }
-                continue;
-            }
-
-            const int wsa_error = WSAGetLastError ();
-            if (wsa_error == WSAEINTR)
-                continue;
-            if (wsa_error == WSAEWOULDBLOCK || wsa_error == WSAENOBUFS) {
-                socket->async_wait (
-                  boost::asio::socket_base::wait_write,
-                  [do_write, socket] (const boost::system::error_code &wec) {
-                      LIBZLINK_UNUSED (socket);
-                      (*do_write) (wec);
-                  });
-                return;
-            }
-
-            if (tcp_stats_on)
-                ++tcp_async_write_errors;
-            if (state->handler)
-                state->handler (boost::system::error_code (
-                                  wsa_error, boost::system::system_category ()),
-                                state->header_sent + state->body_sent);
-            return;
-        }
-    };
-
-    (*do_write) (boost::system::error_code ());
-#else
+#if !defined ZLINK_HAVE_WINDOWS
     if (tcp_use_asio_writev_on) {
         if (tcp_stats_on) {
             auto stats_handler = [handler = std::move (handler),
@@ -525,118 +628,28 @@ void tcp_transport_t::async_writev (const unsigned char *header,
         return;
     }
 
-    struct writev_state_t
-    {
-        const unsigned char *header;
-        size_t header_size;
-        size_t header_sent;
-        const unsigned char *body;
-        size_t body_size;
-        size_t body_sent;
-        completion_handler_t handler;
-    };
-
-    const std::shared_ptr<writev_state_t> state (
-      new writev_state_t{header, header_size, 0, body, body_size, 0, std::move (handler)});
-
-    const std::shared_ptr<std::function<void (const boost::system::error_code &)>> do_write (
-      new std::function<void (const boost::system::error_code &)>);
-
-    *do_write = [socket, state, do_write] (const boost::system::error_code &ec) {
-        if (ec) {
-            if (tcp_stats_on)
-                ++tcp_async_write_errors;
-            if (state->handler)
-                state->handler (ec, state->header_sent + state->body_sent);
-            return;
-        }
-
-        if (!socket || !socket->is_open ()) {
-            if (state->handler)
-                state->handler (boost::asio::error::bad_descriptor,
-                                state->header_sent + state->body_sent);
-            return;
-        }
-
-        for (;;) {
-            const size_t header_left = state->header_size - state->header_sent;
-            const size_t body_left = state->body_size - state->body_sent;
-            if (header_left == 0 && body_left == 0) {
-                if (tcp_stats_on)
-                    tcp_async_write_bytes += (state->header_size + state->body_size);
-                if (state->handler)
-                    state->handler (boost::system::error_code (),
-                                    state->header_size + state->body_size);
-                return;
-            }
-
-            struct iovec iov[2];
-            int iovcnt = 0;
-            if (header_left > 0) {
-                iov[iovcnt].iov_base =
-                  const_cast<unsigned char *> (state->header + state->header_sent);
-                iov[iovcnt].iov_len = header_left;
-                ++iovcnt;
-            }
-            if (body_left > 0) {
-                iov[iovcnt].iov_base = const_cast<unsigned char *> (state->body + state->body_sent);
-                iov[iovcnt].iov_len = body_left;
-                ++iovcnt;
-            }
-
-            const ssize_t rc = ::writev (socket->native_handle (), iov, iovcnt);
-            if (rc > 0) {
-                size_t remaining = static_cast<size_t> (rc);
-                if (header_left > 0) {
-                    const size_t adv = std::min (header_left, remaining);
-                    state->header_sent += adv;
-                    remaining -= adv;
-                }
-                if (remaining > 0 && body_left > 0) {
-                    state->body_sent += remaining;
-                }
-                if (tcp_writev_single_shot_on) {
-                    const size_t left = (state->header_size - state->header_sent)
-                                        + (state->body_size - state->body_sent);
-                    if (left == 0) {
-                        if (tcp_stats_on)
-                            tcp_async_write_bytes += (state->header_size + state->body_size);
-                        if (state->handler)
-                            state->handler (boost::system::error_code (),
-                                            state->header_size + state->body_size);
-                        return;
-                    }
-                    socket->async_wait (boost::asio::socket_base::wait_write,
-                                        [do_write, socket] (const boost::system::error_code &wec) {
-                                            LIBZLINK_UNUSED (socket);
-                                            (*do_write) (wec);
-                                        });
-                    return;
-                }
-                continue;
-            }
-            if (rc == -1 && errno == EINTR)
-                continue;
-            if (rc == -1 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS)) {
-                socket->async_wait (boost::asio::socket_base::wait_write,
-                                    [do_write, socket] (const boost::system::error_code &wec) {
-                                        LIBZLINK_UNUSED (socket);
-                                        (*do_write) (wec);
-                                    });
-                return;
-            }
-
-            boost::system::error_code werr (errno, boost::system::system_category ());
-            if (tcp_stats_on)
-                ++tcp_async_write_errors;
-            if (state->handler)
-                state->handler (werr, state->header_sent + state->body_sent);
-            return;
-        }
-    };
-
-    (*do_write) (boost::system::error_code ());
 #endif
+
+    tcp_native_writev_cursor_t cursor = {header, header_size, 0, body, body_size, 0};
+    const tcp_native_writev_result_t result = tcp_run_native_writev (socket, cursor);
+    if (result.status != tcp_native_writev_result_t::pending) {
+        tcp_finish_native_writev (handler, cursor, result);
+        return;
+    }
+
+    std::shared_ptr<tcp_pending_writev_t> state;
+    try {
+        state = std::make_shared<tcp_pending_writev_t> (socket, cursor, std::move (handler));
+    }
+    catch (const std::bad_alloc &) {
+        if (tcp_stats_on)
+            ++tcp_async_write_errors;
+        tcp_invoke_writev_completion (
+          handler, boost::system::error_code (ENOMEM, boost::system::system_category ()),
+          cursor.bytes_sent ());
+        return;
+    }
+    tcp_wait_native_writev (state);
 }
 
 std::size_t tcp_transport_t::write_some (const std::uint8_t *data, std::size_t len)

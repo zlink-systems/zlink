@@ -3,6 +3,8 @@
 #ifndef __ZLINK_ASIO_STREAM_FASTPATH_POLICY_HPP_INCLUDED__
 #define __ZLINK_ASIO_STREAM_FASTPATH_POLICY_HPP_INCLUDED__
 
+#include <cstring>
+
 #include "utils/env.hpp"
 
 namespace zlink
@@ -94,6 +96,19 @@ inline bool stream_async_write_opt_in ()
     return env::flag_enabled ("ZLINK_ASIO_STREAM_ASYNC_WRITE");
 }
 
+struct speculative_write_diagnostics_t
+{
+    bool legacy_sync_write;
+    bool stream_async_write;
+};
+
+inline speculative_write_diagnostics_t load_speculative_write_diagnostics ()
+{
+    const speculative_write_diagnostics_t diagnostics = {
+      legacy_sync_write_opt_in (), stream_async_write_opt_in ()};
+    return diagnostics;
+}
+
 //  Owns the whole "may this engine drain the pipe synchronously?" decision.
 //
 //  A speculative synchronous write turn keeps pulling messages out of the
@@ -114,13 +129,49 @@ inline bool stream_async_write_opt_in ()
 //  Kept as a pure predicate so the invariant is directly testable.
 inline bool use_speculative_write_for (int socket_type_,
                                        bool tcp_transport_,
-                                       bool transport_supports_speculative_)
+                                       bool transport_supports_speculative_,
+                                       const speculative_write_diagnostics_t &diagnostics_)
 {
     if (socket_type_ == ZLINK_CORE_SOCKET_STREAM && tcp_transport_)
-        return enable_speculative_write () && !stream_async_write_opt_in ();
+        return enable_speculative_write () && !diagnostics_.stream_async_write;
 
-    return transport_supports_speculative_ && legacy_sync_write_opt_in ();
+    return transport_supports_speculative_ && diagnostics_.legacy_sync_write;
 }
+
+//  A connection owns this immutable snapshot. Diagnostic environment changes
+//  affect engines created afterwards, never a write already running on an
+//  existing engine.
+class connection_fastpath_policy_t
+{
+  public:
+    connection_fastpath_policy_t (
+      int socket_type_,
+      const char *transport_name_,
+      bool transport_supports_speculative_,
+      const speculative_write_diagnostics_t &diagnostics_) :
+        _tcp_transport (transport_name_ && std::strcmp (transport_name_, "tcp") == 0),
+        _speculative_write_enabled (
+          use_speculative_write_for (socket_type_, _tcp_transport,
+                                     transport_supports_speculative_, diagnostics_))
+    {
+    }
+
+    static connection_fastpath_policy_t from_environment (
+      int socket_type_, const char *transport_name_, bool transport_supports_speculative_)
+    {
+        return connection_fastpath_policy_t (
+          socket_type_, transport_name_, transport_supports_speculative_,
+          load_speculative_write_diagnostics ());
+    }
+
+    bool tcp_transport () const { return _tcp_transport; }
+
+    bool speculative_write_enabled () const { return _speculative_write_enabled; }
+
+  private:
+    const bool _tcp_transport;
+    const bool _speculative_write_enabled;
+};
 
 inline size_t read_drain_max_loops ()
 {

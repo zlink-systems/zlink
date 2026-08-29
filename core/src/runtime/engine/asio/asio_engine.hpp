@@ -9,6 +9,7 @@
 #include <boost/asio.hpp>
 
 #include <memory>
+#include <utility>
 #include <vector>
 #include <deque>
 
@@ -22,6 +23,7 @@
 #include "protocol/metadata.hpp"
 #include "engine/asio/handler_allocator.hpp"
 #include "engine/asio/asio_engine_pipeline.hpp"
+#include "engine/asio/asio_stream_fastpath_policy.hpp"
 #include "engine/asio/i_asio_transport.hpp"
 
 namespace zlink
@@ -224,8 +226,6 @@ class asio_engine_t : public i_engine
 
     void destroy_after_callbacks ();
 
-    bool is_tcp_transport () const;
-    bool use_stream_speculative_write () const;
     bool use_non_tcp_speculative_read () const;
     bool use_stream_rx_slab () const;
     bool use_stream_dynamic_read_growth () const;
@@ -260,7 +260,13 @@ class asio_engine_t : public i_engine
 
     struct transport_adapter_t
     {
-        transport_adapter_t () : io_context (NULL), current_timer_id (-1), fd (retired_fd) {}
+        transport_adapter_t (fd_t fd_, std::unique_ptr<i_asio_transport> transport_) :
+            io_context (NULL),
+            transport (std::move (transport_)),
+            current_timer_id (-1),
+            fd (fd_)
+        {
+        }
 
         boost::asio::io_context *io_context;
         std::unique_ptr<i_asio_transport> transport;
@@ -289,6 +295,8 @@ class asio_engine_t : public i_engine
     };
 
     transport_adapter_t _transport_adapter;
+    const asio_stream_fastpath_policy::connection_fastpath_policy_t
+      _connection_fastpath_policy;
     asio_engine_pipeline_t _pipeline;
     connection_facade_t _connection_facade;
 

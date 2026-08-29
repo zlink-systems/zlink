@@ -126,7 +126,16 @@ const size_t asio_stream_read_drain_max_loops =
 const size_t asio_stream_read_drain_max_bytes =
   zlink::asio_stream_fastpath_policy::read_drain_max_bytes ();
 
+std::unique_ptr<zlink::i_asio_transport>
+make_asio_transport (std::unique_ptr<zlink::i_asio_transport> transport_)
+{
+    if (!transport_) {
+        transport_.reset (new (std::nothrow) zlink::tcp_transport_t ());
+        alloc_assert (transport_.get ());
+    }
 
+    return transport_;
+}
 }
 
 zlink::asio_engine_t::asio_engine_t (fd_t fd_,
@@ -150,17 +159,19 @@ zlink::asio_engine_t::asio_engine_t (fd_t fd_,
     _has_handshake_timer (false),
     _peer_address (get_peer_address (fd_)),
     _has_handshake_stage (true),
-    _transport_adapter (),
+    _transport_adapter (fd_, make_asio_transport (std::move (transport_))),
+    _connection_fastpath_policy (
+      zlink::asio_stream_fastpath_policy::connection_fastpath_policy_t::from_environment (
+        _options.type, _transport_adapter.transport->name (),
+        _transport_adapter.transport->supports_speculative_write ())),
     _pipeline (),
     _connection_facade ()
 {
     ENGINE_DBG ("Constructor called, fd=%d", fd_);
 
-    _transport_adapter.transport = std::move (transport_);
     //  _pipeline.read_buffer is allocated lazily on the first handshake
     //  read (see start_async_read/speculative_read). Raw engines create
     //  their decoder at plug time and never use it.
-    _transport_adapter.fd = fd_;
     _connection_facade.callback_guard.reset (new connection_facade_t::callback_guard_t ());
     _pipeline.stream_decoder_read_target_size =
       zlink::asio_stream_fastpath_policy::decoder_initial_read_target (options_);
@@ -173,12 +184,6 @@ zlink::asio_engine_t::asio_engine_t (fd_t fd_,
 
     const int rc = _pipeline.tx_msg.init ();
     errno_assert (rc == 0);
-
-    if (!_transport_adapter.transport) {
-        _transport_adapter.transport =
-          std::unique_ptr<i_asio_transport> (new (std::nothrow) tcp_transport_t ());
-        alloc_assert (_transport_adapter.transport);
-    }
 
     //  Put the socket into non-blocking mode.
     unblock_socket (_transport_adapter.fd);
@@ -658,8 +663,7 @@ void zlink::asio_engine_t::start_async_write ()
     }
 
     //  Try a synchronous write first when supported (libzlink-like path).
-    const bool use_speculative_write = use_stream_speculative_write ();
-    if (use_speculative_write) {
+    if (_connection_fastpath_policy.speculative_write_enabled ()) {
         const std::size_t bytes = _transport_adapter.transport->write_some (
           reinterpret_cast<const std::uint8_t *> (_outpos), _outsize);
         if (bytes == 0) {
@@ -808,30 +812,12 @@ void zlink::asio_engine_t::finish_gather_output ()
     errno_assert (rc_init == 0);
 }
 
-bool zlink::asio_engine_t::is_tcp_transport () const
-{
-    return _transport_adapter.transport && _transport_adapter.transport->name ()
-           && strcmp (_transport_adapter.transport->name (), "tcp") == 0;
-}
-
-bool zlink::asio_engine_t::use_stream_speculative_write () const
-{
-    if (!_transport_adapter.transport)
-        return false;
-
-    //  asio_stream_fastpath_policy::use_speculative_write_for owns this
-    //  decision, including why non-STREAM sockets stay on the Proactor path.
-    return zlink::asio_stream_fastpath_policy::use_speculative_write_for (
-      _options.type, is_tcp_transport (),
-      _transport_adapter.transport->supports_speculative_write ());
-}
-
 bool zlink::asio_engine_t::use_non_tcp_speculative_read () const
 {
     if (!_transport_adapter.transport || _options.type != ZLINK_CORE_SOCKET_STREAM)
         return false;
 
-    if (is_tcp_transport ())
+    if (_connection_fastpath_policy.tcp_transport ())
         return true;
 
     return asio_stream_enable_non_tcp_spec_read;
@@ -1139,7 +1125,8 @@ void zlink::asio_engine_t::on_write_complete (const boost::system::error_code &e
     //  For STREAM/TCP, prefer speculative loop from completion callback
     //  to reduce async callback churn on small frames.
     if (!_output_stopped) {
-        if (_options.type == ZLINK_CORE_SOCKET_STREAM && use_stream_speculative_write ())
+        if (_options.type == ZLINK_CORE_SOCKET_STREAM
+            && _connection_fastpath_policy.speculative_write_enabled ())
             speculative_write ();
         else
             start_async_write ();
@@ -1305,8 +1292,7 @@ void zlink::asio_engine_t::speculative_write ()
         return;
     }
 
-    const bool use_speculative_write = use_stream_speculative_write ();
-    if (!use_speculative_write) {
+    if (!_connection_fastpath_policy.speculative_write_enabled ()) {
         ENGINE_DBG ("speculative_write: transport prefers async");
         start_async_write ();
         return;
