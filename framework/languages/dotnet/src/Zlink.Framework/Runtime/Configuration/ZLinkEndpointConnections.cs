@@ -18,13 +18,18 @@ internal sealed class ZLinkEndpointConnections : IZLinkEndpointConnections, IRea
         // below and the attachment callback agree with every other write
         // point.
         var normalized = ZLinkEndpointNotation.Normalize(endpoint);
-        var prepared = AwaitStateLane(_lane.RunAsync(() =>
+        AwaitStateLane(ConnectAsync(normalized));
+    }
+
+    private async ValueTask ConnectAsync(string normalized)
+    {
+        var prepared = await _lane.RunAsync(() =>
         {
             EnsureManualMutationAllowed();
             if (_endpoints.Contains(normalized, StringComparer.Ordinal)) return null;
             _endpoints.Add(normalized);
             return new EndpointCallback(_attachment?.Connect, _endpoints.Count - 1);
-        }));
+        }).ConfigureAwait(false);
         try
         {
             prepared?.Callback?.Invoke(normalized);
@@ -33,7 +38,7 @@ internal sealed class ZLinkEndpointConnections : IZLinkEndpointConnections, IRea
         {
             if (prepared is not null)
             {
-                AwaitStateLane(_lane.RunAsync(() =>
+                await _lane.RunAsync(() =>
                 {
                     if (_endpoints.Count > prepared.Index
                         && string.Equals(
@@ -41,7 +46,7 @@ internal sealed class ZLinkEndpointConnections : IZLinkEndpointConnections, IRea
                             normalized,
                             StringComparison.Ordinal))
                         _endpoints.RemoveAt(prepared.Index);
-                }));
+                }).ConfigureAwait(false);
             }
             throw;
         }
@@ -51,14 +56,19 @@ internal sealed class ZLinkEndpointConnections : IZLinkEndpointConnections, IRea
     {
         Validate(endpoint);
         var normalized = ZLinkEndpointNotation.Normalize(endpoint);
-        var prepared = AwaitStateLane(_lane.RunAsync(() =>
+        AwaitStateLane(DisconnectAsync(normalized));
+    }
+
+    private async ValueTask DisconnectAsync(string normalized)
+    {
+        var prepared = await _lane.RunAsync(() =>
         {
             EnsureManualMutationAllowed();
             var index = _endpoints.FindIndex(value => string.Equals(value, normalized, StringComparison.Ordinal));
             if (index < 0) return null;
             _endpoints.RemoveAt(index);
             return new EndpointCallback(_attachment?.Disconnect, index);
-        }));
+        }).ConfigureAwait(false);
         try
         {
             prepared?.Callback?.Invoke(normalized);
@@ -67,13 +77,13 @@ internal sealed class ZLinkEndpointConnections : IZLinkEndpointConnections, IRea
         {
             if (prepared is not null)
             {
-                AwaitStateLane(_lane.RunAsync(() =>
+                await _lane.RunAsync(() =>
                 {
                     if (!_endpoints.Contains(normalized, StringComparer.Ordinal))
                         _endpoints.Insert(
                             Math.Min(prepared.Index, _endpoints.Count),
                             normalized);
-                }));
+                }).ConfigureAwait(false);
             }
             throw;
         }
