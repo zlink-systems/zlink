@@ -1865,7 +1865,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             node->configure_spot_route_fence_resolver (
               [&spot_resolver, mesh_name] (
                 const zlink::routing_id_t &target_node_rid, std::string_view target_spot_id,
-                std::uint64_t target_spot_generation) -> std::optional<host::route_fence_t> {
+                std::uint64_t) -> std::optional<host::route_fence_t> {
                   try {
                       const auto resolved =
                         spot_resolver.resolve_spot_address (mesh_name, std::string (target_spot_id))
@@ -1874,7 +1874,6 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                           return std::nullopt;
                       const auto &address = *resolved.value ();
                       if (address.node_rid != target_node_rid
-                          || address.object_generation != target_spot_generation
                           || address.authority_owner_generation == 0
                           || address.owner.lease_generation <= 0)
                           return std::nullopt;
@@ -1899,8 +1898,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       if (!resolved || !resolved.value ())
                           return std::nullopt;
                       const auto &address = *resolved.value ();
-                      if (address.object_generation != actor.object_generation ()
-                          || address.authority_owner_generation == 0
+                      if (address.authority_owner_generation == 0
                           || address.owner.lease_generation <= 0)
                           return std::nullopt;
                       return address;

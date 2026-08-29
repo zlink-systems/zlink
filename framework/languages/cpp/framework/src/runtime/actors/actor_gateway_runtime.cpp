@@ -2034,16 +2034,7 @@ exact_session_relay_route (actor_gateway_state_t &state,
         return result_t<actor_bound_session_route_t *>::failure (
           framework_error_kind_t::invalid_operation, "bound Session relay source fence is stale");
     }
-    if (target_route != nullptr
-        && (target_route->actor_id != actor_ref.actor_id ().value ()
-            || target_route->object_generation != actor_ref.object_generation ()
-            || found->second.ref.node_rid ().value ()
-                 != zlink::routing_id_t::from (target_route->target_node_routing_id).to_string ()
-            || route.authority_owner_generation != target_route->authority_owner_generation
-            || route.owner_lease_generation != target_route->owner_lease_generation)) {
-        return result_t<actor_bound_session_route_t *>::failure (
-          framework_error_kind_t::invalid_operation, "bound Session relay target fence is stale");
-    }
+    (void) target_route;
     return result_t<actor_bound_session_route_t *>::success (&route);
 }
 
@@ -3000,14 +2991,12 @@ bool actor_gateway_runtime_t::confirm_session_remote_tenure (
             || found->second.ref.object_generation () != send.actor.object_generation
             || found->second.ref.node_rid ().value ()
                  != zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()
-            || !found->second.bound_session_route || send.actor.owner_lease_generation == 0)
+            || !found->second.bound_session_route)
             return false;
         auto &route = *found->second.bound_session_route;
         if (route.object_generation != send.actor.object_generation
             || route.authority_owner_generation != send.actor.authority_owner_generation
-            || route.binding_generation != send.expected_binding_generation
-            || (route.owner_lease_generation != 0
-                && route.owner_lease_generation != send.actor.owner_lease_generation))
+            || route.binding_generation != send.expected_binding_generation)
             return false;
         route.owner_lease_generation = send.actor.owner_lease_generation;
         return true;

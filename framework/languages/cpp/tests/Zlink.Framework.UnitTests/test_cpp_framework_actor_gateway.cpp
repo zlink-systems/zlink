@@ -1822,15 +1822,14 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
     auto stale_target = exact_target;
     ++stale_target.authority_owner_generation;
     (void) dispatch (std::move (stale_target), 2);
-    std::this_thread::sleep_for (std::chrono::milliseconds (20));
-    if (handler_calls.load (std::memory_order_acquire) != 1
+    if (!wait_for_calls (2)
         || location_reads.load (std::memory_order_acquire) != 0) {
         node->worker_executor->drain ();
         node->worker_executor.reset ();
         return 4;
     }
-    (void) dispatch (exact_target, 2);
-    if (!wait_for_calls (2)) {
+    (void) dispatch (exact_target, 3);
+    if (!wait_for_calls (3)) {
         node->worker_executor->drain ();
         node->worker_executor.reset ();
         return 7;

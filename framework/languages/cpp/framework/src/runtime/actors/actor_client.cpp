@@ -831,7 +831,7 @@ class actor_client_impl_t final : public actor_client_t
             || snapshot->allocation.object_kind != placement_object_kind_t::actor
             || !projection
             || projection->actor.actor_id () != actor.actor_id ()
-            || projection->actor.object_generation () != actor.object_generation ()) {
+            || projection->actor.node_rid ().value () != actor.node_rid ().value ()) {
             return result_t<resolved_actor_t>::failure (
               framework_error_kind_t::unavailable,
               "explicit Actor route no longer identifies the current incarnation");
@@ -840,8 +840,8 @@ class actor_client_impl_t final : public actor_client_t
           ? snapshot->allocation.target.mesh_name
           : std::string (actor.mesh_name ());
         return result_t<resolved_actor_t>::success (
-          resolved_actor_t{actor,
-                           actor,
+          resolved_actor_t{projection->actor,
+                           projection->actor,
                            actor.node_rid (),
                            projection->spot_id,
                            mesh_name,

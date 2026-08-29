@@ -50,13 +50,8 @@ bound_session_bind_actor_matches (
 }
 
 bound_session_bind_admission_t
-classify_bound_session_bind_admission (const protocol::actor_route_fence_t &requested,
-                                       const std::optional<route_fence_t> &authoritative,
-                                       bool local_actor_matches) noexcept
+classify_bound_session_bind_admission (bool local_actor_matches) noexcept
 {
-    if (!authoritative || authoritative->first != requested.authority_owner_generation) {
-        return bound_session_bind_admission_t::stale_route;
-    }
     return local_actor_matches ? bound_session_bind_admission_t::ready
                                : bound_session_bind_admission_t::actor_not_ready;
 }
@@ -333,13 +328,13 @@ read_route_owner_fence (const std::shared_ptr<zlink::framework::location_reposit
             return std::nullopt;
         }
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
-        if (!snapshot || snapshot->object_generation != object_generation
-            || snapshot->authority_owner_generation == 0 || snapshot->owner.lease_generation <= 0) {
+        if (!snapshot || snapshot->authority_owner_generation == 0
+            || snapshot->owner.lease_generation <= 0) {
             trace_mesh_host (
               "route-owner-fence-read",
               std::string ("reason=snapshot-mismatch snapshot=")
                 + (snapshot
-                     ? "generation=" + std::to_string (snapshot->object_generation)
+                    ? "generation=" + std::to_string (snapshot->object_generation)
                          + " authority=" + std::to_string (snapshot->authority_owner_generation)
                          + " lease=" + std::to_string (snapshot->owner.lease_generation)
                      : "missing")
@@ -2566,8 +2561,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
 {
     const auto target_routing_id =
       zlink::routing_id_t::from (std::string (target.node_rid ().value ()));
-    if (target_routing_id.to_bytes () == status ().routing_id ().to_bytes ()
-        && resolve_actor (target)) {
+    if (target_routing_id.to_bytes () == status ().routing_id ().to_bytes ()) {
         co_return enqueue_local_actor_message (target, record_kind_t::actor_send, parts,
                                                std::nullopt, std::move (bound_session_source));
     }
@@ -2587,7 +2581,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
     if (!current_peer || current_peer->descriptor.lifecycle_generation != node_generation) {
         co_return zlink::submit_result_t::not_connected;
     }
-    const auto object = resolve_actor (target);
+    const auto object = _objects.find (stateful::object_kind_t::actor,
+                                       std::string (target.actor_id ().value ()));
     const auto authority_generation = authority_owner_generation != 0 ? authority_owner_generation
                                       : object ? object->authority_owner_generation
                                                : target.object_generation ();
@@ -2624,20 +2619,10 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_bound_session (
                            + std::string (actor.actor_id ().value ()));
         co_return zlink::submit_result_t::not_found;
     }
-    if (authority_owner_generation == 0 || owner_lease_generation == 0) {
+    if (authority_owner_generation == 0) {
         trace_mesh_host ("bound-session-send-rejected",
                          "reason=bound-route-fence-mismatch actor="
                            + std::string (actor.actor_id ().value ()));
-        co_return zlink::submit_result_t::not_found;
-    }
-    const auto owner = read_route_owner_fence (
-      _user_spot_store, '1', actor.actor_id ().value (), actor.object_generation (),
-      authority_owner_generation, owner_lease_generation, _options.owner_lease_fencing_margin);
-    if (!owner || owner->fence.first != authority_owner_generation) {
-        trace_mesh_host ("bound-session-send-rejected",
-                         "reason=owner-fence-mismatch actor="
-                           + std::string (actor.actor_id ().value ())
-                           + " authority=" + std::to_string (authority_owner_generation));
         co_return zlink::submit_result_t::not_found;
     }
     co_return co_await _transport->send_bound_session_result (
@@ -2666,8 +2651,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         co_return zlink::submit_result_t::backpressured;
     const auto target_routing_id =
       zlink::routing_id_t::from (std::string (target.node_rid ().value ()));
-    if (target_routing_id.to_bytes () == status ().routing_id ().to_bytes ()
-        && resolve_actor (target)) {
+    if (target_routing_id.to_bytes () == status ().routing_id ().to_bytes ()) {
         const auto accepted = enqueue_local_actor_message (
           target, record_kind_t::actor_request, parts, operation, std::move (bound_session_source));
         if (accepted != zlink::submit_result_t::ok)
@@ -2693,7 +2677,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         release_completion (operation);
         co_return zlink::submit_result_t::not_connected;
     }
-    const auto object = resolve_actor (target);
+    const auto object = _objects.find (stateful::object_kind_t::actor,
+                                       std::string (target.actor_id ().value ()));
     const auto authority_generation = authority_owner_generation != 0 ? authority_owner_generation
                                       : object ? object->authority_owner_generation
                                                : target.object_generation ();
@@ -4133,14 +4118,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto authority_matches =
                       bound_session_bind_actor_matches (
                         bind.actor, actor, local.routing_id (), local.lifecycle_generation ());
-                    const auto owner_fence = read_route_owner_fence (
-                      store, '1', bind.actor.actor_id, bind.actor.object_generation, 0, 0,
-                      _options.owner_lease_fencing_margin);
-                    const auto admission = classify_bound_session_bind_admission (
-                      bind.actor,
-                      owner_fence ? std::optional<route_fence_t>{owner_fence->fence}
-                                  : std::optional<route_fence_t>{},
-                      authority_matches);
+                    const auto admission =
+                      classify_bound_session_bind_admission (authority_matches);
                     trace_mesh_host (
                       "bound-session-bind-admission",
                       "actor=" + bind.actor.actor_id + " admission="
@@ -4151,10 +4130,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         + " requested_authority="
                         + std::to_string (bind.actor.authority_owner_generation)
                         + " requested_lease=" + std::to_string (bind.actor.owner_lease_generation)
-                        + " store_authority="
-                        + (owner_fence ? std::to_string (owner_fence->fence.first) : "nullopt")
-                        + " store_lease="
-                        + (owner_fence ? std::to_string (owner_fence->fence.second) : "nullopt")
                         + " authority_matches=" + (authority_matches ? "true" : "false")
                         + " local_actor=" + (actor ? "found" : "missing"));
                     bound_session_bind_operation_result_t operation_result{
@@ -5638,24 +5613,17 @@ bool public_host_runtime_t::dispatch_bound_session_send (
       tenure.authority_owner_generation, tenure.target_node_id, tenure.target_node_generation);
     std::optional<stateful::stream_remote_tenure_proof_t> first_proof;
     const auto current = _sessions.current_binding (tenure.actor_id);
-    auto current_tenure =
+    const auto current_tenure =
       current && current->binding_generation == tenure.binding_generation
       && current->actor.object_generation == tenure.object_generation
       && current->actor.authority_owner_generation == tenure.authority_owner_generation
       && current->actor.node_id == tenure.target_node_id
-      && current->target_node_generation == tenure.target_node_generation
-      && current->owner_lease_generation == tenure.owner_lease_generation;
-    const auto provisional_current_tenure =
-      current && current->binding_generation == tenure.binding_generation
-      && current->actor.object_generation == tenure.object_generation
-      && current->actor.authority_owner_generation == tenure.authority_owner_generation
-      && current->actor.node_id == tenure.target_node_id
-      && current->target_node_generation == tenure.target_node_generation
-      && current->owner_lease_generation == 0;
-    if (!current_tenure && provisional_current_tenure) {
-        /* The Session registry owns the binding. The Actor gateway is only a
-         * delivery projection and may legitimately trail command 44, so its
-         * confirmation cannot veto owner settlement. */
+      && current->target_node_generation == tenure.target_node_generation;
+    if (current_tenure && tenure.owner_lease_generation != 0
+        && current->owner_lease_generation != tenure.owner_lease_generation) {
+        /* OwnerLeaseGeneration is route state, not a push-admission input.
+         * Refresh the Session-owned route before delivery so a later command
+         * 44 seals the fence actually used by this binding. */
         if (!_sessions.confirm_remote_tenure (tenure))
             return false;
         try {
@@ -5664,7 +5632,6 @@ bool public_host_runtime_t::dispatch_bound_session_send (
         }
         catch (...) {
         }
-        current_tenure = true;
     }
     if (!current_tenure && !proof) {
         if (!current || !retain_mailbox_reservation || !release_mailbox_reservation)
@@ -6413,7 +6380,8 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (
     if (kind != record_kind_t::actor_send && kind != record_kind_t::actor_request) {
         return zlink::submit_result_t::invalid_argument;
     }
-    const auto current = resolve_actor (target);
+    const auto current = _objects.find (stateful::object_kind_t::actor,
+                                        std::string (target.actor_id ().value ()));
     if (!current) {
         return zlink::submit_result_t::not_found;
     }
@@ -6473,8 +6441,7 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
         return zlink::submit_result_t::not_found;
     }
     const auto object = resolve_spot (target.spot_id);
-    if (!object || object->object_generation != target.object_generation
-        || object->node_id != local.routing_id ().to_string ()) {
+    if (!object || object->node_id != local.routing_id ().to_string ()) {
         return zlink::submit_result_t::not_found;
     }
 
@@ -6520,8 +6487,7 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
         return zlink::submit_result_t::not_found;
     }
     const auto object = resolve_spot (target.spot_id);
-    if (!object || object->object_generation != target.object_generation
-        || object->node_id != local.routing_id ().to_string ()) {
+    if (!object || object->node_id != local.routing_id ().to_string ()) {
         return zlink::submit_result_t::not_found;
     }
 

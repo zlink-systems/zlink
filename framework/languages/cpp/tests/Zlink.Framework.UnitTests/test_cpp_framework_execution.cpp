@@ -1817,6 +1817,7 @@ bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
     host::receive_record_t record{.kind = host::record_kind_t::actor_send,
                                   .domain = host::ready_domain_t::application};
     record.actor_route = exact_route;
+    --record.actor_route->object_generation;
     messaging::envelope_codec_t codec;
     auto encoded = codec.encode_raw_body_parts (
       messaging::envelope_header_t{.kind = messaging::message_kind_t::command,
@@ -7079,6 +7080,7 @@ int main ()
               error.kind ()
               == zlink::framework::framework_error_kind_t::not_configured;
         }
+
         if (!detached_rejected) {
             return 31;
         }
@@ -7270,6 +7272,23 @@ int main ()
             if (error.kind ()
                 != zlink::framework::framework_error_kind_t::internal_failure)
                 return 73;
+        }
+
+        const auto successor_operation =
+          completion_runtime.actor_join_operation_id ("transfer-successor");
+        completion_state->actor_generations[completion_key] =
+          completion_actor.object_generation () + 1;
+        const zlink::framework::actor_join_completion_t successor_completion =
+          zlink::framework::actor_join_rejected_t{
+            successor_operation.first, successor_operation.second,
+            zlink::framework::message_t::from (std::string ("successor"))};
+        if (!completion_runtime.deliver_actor_join_completion (
+              completion_actor, successor_completion,
+              zlink::framework::spot_id_t ("source-spot"))
+            || completion_callback_count != 4
+            || completion_outcomes.back ()
+                 != zlink::framework::detail::actor_join_completion_outcome_t::rejected) {
+            return 74;
         }
 
         zlink::framework::runtime::offload_executor_t target_executor (1);

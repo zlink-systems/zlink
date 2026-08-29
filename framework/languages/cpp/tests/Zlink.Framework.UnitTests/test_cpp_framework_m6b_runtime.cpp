@@ -1430,12 +1430,10 @@ stateful::object_ref_t same_node_bound_session_actor ()
 host::bound_session_bind_admission_t
 classify_same_node_bound_session_bind (
   const protocol::actor_route_fence_t &requested,
-  const std::optional<stateful::object_ref_t> &local_actor,
-  std::optional<host::route_fence_t> authoritative = host::route_fence_t{13, 23})
+  const std::optional<stateful::object_ref_t> &local_actor)
 {
     const auto local_routing_id = zlink::routing_id_t::from ("same-node-owner");
     return host::classify_bound_session_bind_admission (
-      requested, authoritative,
       host::bound_session_bind_actor_matches (
         requested, local_actor, local_routing_id, 11));
 }
@@ -1465,12 +1463,6 @@ void verify_bound_session_bind_uses_only_three_value_actor_fence ()
     assert (classify_same_node_bound_session_bind (requested, wrong_authority)
             == host::bound_session_bind_admission_t::actor_not_ready);
 
-    assert (classify_same_node_bound_session_bind (
-              requested, actor, host::route_fence_t{14, 23})
-            == host::bound_session_bind_admission_t::stale_route);
-    assert (classify_same_node_bound_session_bind (
-              requested, actor, std::nullopt)
-            == host::bound_session_bind_admission_t::stale_route);
 }
 
 void verify_bound_session_push_uses_session_registry_when_gateway_projection_rejects ()
@@ -1586,6 +1578,15 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
             && lagging_projection->authority_owner_generation
                  == previous.authority_owner_generation
             && lagging_projection->owner_lease_generation == 17);
+
+    const protocol::bound_session_send_t refreshed_projection{
+      protocol::actor_route_fence_t{
+        previous.key, previous.object_generation,
+        zlink::routing_id_t::from (previous.node_id).to_bytes (), 13,
+        previous.authority_owner_generation, 29},
+      binding.binding_generation};
+    assert (gateway.confirm_session_remote_tenure (refreshed_projection));
+    assert (gateway.bound_session_route (previous_actor)->owner_lease_generation == 29);
 }
 
 class memory_relocation_repository_t final :
@@ -3075,9 +3076,11 @@ void verify_session_route_defers_target_lease_to_first_bound_push ()
     assert (sessions.current_binding (source.key)
               ->owner_lease_generation == 23);
     assert (sessions.confirm_remote_tenure (first_push));
-    auto stale_push = first_push;
-    ++stale_push.owner_lease_generation;
-    assert (!sessions.confirm_remote_tenure (stale_push));
+    auto refreshed_lease_push = first_push;
+    ++refreshed_lease_push.owner_lease_generation;
+    assert (sessions.confirm_remote_tenure (refreshed_lease_push));
+    assert (sessions.current_binding (source.key)
+              ->owner_lease_generation == refreshed_lease_push.owner_lease_generation);
 }
 
 void verify_displaced_stream_binding_can_be_restored ()

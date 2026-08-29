@@ -219,9 +219,7 @@ bool bound_session_bind_actor_matches (
   std::uint64_t local_node_generation) noexcept;
 
 bound_session_bind_admission_t
-classify_bound_session_bind_admission (const protocol::actor_route_fence_t &requested,
-                                       const std::optional<route_fence_t> &authoritative,
-                                       bool local_actor_matches) noexcept;
+classify_bound_session_bind_admission (bool local_actor_matches) noexcept;
 
 // Full-vocabulary 1:1 classification of an explicit relocationFailed(53)
 // wire failure_code (see public_host_runtime.cpp for the mapping table).

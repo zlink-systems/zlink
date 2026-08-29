@@ -693,13 +693,11 @@ bool stream_session_registry_t::confirm_remote_tenure (const stream_remote_tenur
                    != tenure.authority_owner_generation
               || aggregate->binding.actor.node_id != tenure.target_node_id
               || aggregate->binding.target_node_generation != tenure.target_node_generation
-              || aggregate->binding.binding_generation != tenure.binding_generation
-              || tenure.owner_lease_generation == 0
-              || (aggregate->binding.owner_lease_generation != 0
-                  && aggregate->binding.owner_lease_generation != tenure.owner_lease_generation)) {
+              || aggregate->binding.binding_generation != tenure.binding_generation) {
               return false;
           }
-          aggregate->binding.owner_lease_generation = tenure.owner_lease_generation;
+          if (tenure.owner_lease_generation != 0)
+              aggregate->binding.owner_lease_generation = tenure.owner_lease_generation;
           return true;
       })
       .get ();
@@ -1105,7 +1103,6 @@ bool stream_session_registry_t::exact_tenure_target (const stream_remote_tenure_
            && tenure.authority_owner_generation == binding.actor.authority_owner_generation
            && tenure.target_node_id == binding.actor.node_id
            && tenure.target_node_generation == binding.target_node_generation
-           && tenure.owner_lease_generation == binding.owner_lease_generation
            && tenure.binding_generation == binding.binding_generation;
 }
 

@@ -8126,26 +8126,18 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
               immediate.emplace (result_t<void>::success ());
           } else {
               const auto key = actor_key (actor_ref);
-              const auto generation = _state->actor_generations.find (key);
-              if (generation != _state->actor_generations.end ()
-                  && generation->second != actor_ref.object_generation ()) {
+              const auto factory = _state->actor_factories.find (std::string (
+                ::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
+              const auto instance = _state->actor_instances.find (key);
+              if (factory == _state->actor_factories.end ()
+                  || instance == _state->actor_instances.end () || !instance->second) {
                   immediate.emplace (
-                    result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                             "Actor Join completion generation is stale"));
+                    result_t<void>::failure (framework_error_kind_t::not_found,
+                                             "Actor Join completion Actor is not registered"));
               } else {
-                  const auto factory = _state->actor_factories.find (std::string (
-                    ::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
-                  const auto instance = _state->actor_instances.find (key);
-                  if (factory == _state->actor_factories.end ()
-                      || instance == _state->actor_instances.end () || !instance->second) {
-                      immediate.emplace (
-                        result_t<void>::failure (framework_error_kind_t::not_found,
-                                                 "Actor Join completion Actor is not registered"));
-                  } else {
-                      callback = factory->second.on_join_completed;
-                      actor = instance->second;
-                      _state->delivering_join_completions.insert (operation);
-                  }
+                  callback = factory->second.on_join_completed;
+                  actor = instance->second;
+                  _state->delivering_join_completions.insert (operation);
               }
           }
       })
@@ -10800,7 +10792,6 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     {
         spot_id_t current_spot_id;
         std::uint64_t current_generation = 0;
-        bool stale_generation = false;
         std::optional<actor_ref_t> current_actor_ref;
         std::shared_ptr<detail::spot_context_state_t> context_state;
         std::shared_ptr<void> spot_instance;
@@ -10823,11 +10814,6 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         plan.current_generation = found_generation != _state->actor_generations.end ()
                                     ? found_generation->second
                                     : actor_ref.object_generation ();
-        if (plan.current_generation != actor_ref.object_generation ()) {
-            plan.stale_generation = true;
-            return result_t<actor_dispatch_plan_t>::success (std::move (plan));
-        }
-
         const auto current_actor_node_rid = actor_ref.node_rid ().empty ()
                                               ? detail::effective_spot_node_rid (_state->snapshot)
                                               : std::string (actor_ref.node_rid ().value ());
@@ -11068,25 +11054,6 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
           "actor spot changed after lifecycle admission");
     }
     const auto current_spot_id = dispatch_plan.current_spot_id;
-    if (dispatch_plan.stale_generation) {
-        // The dispatched ref's generation does not match the actor's current
-        // incarnation (§10.4-3). Retriable: for a still-committing local move the
-        // published record lags and re-resolving lands the committed generation
-        // (ST-A3); for a genuinely stale record the client re-resolves the same
-        // answer and eventually surfaces this stale on its own budget timeout.
-        if (actor_transfer_marker_enabled ()) {
-            emit_actor_transfer_marker (
-              "message_follow_expired", actor_ref,
-              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref))
-                + ":" + std::string (actor_ref.actor_id ().value ()),
-              current_spot_id);
-        }
-        co_return result_t<std::optional<zlink::message_t>>::failure (
-          framework_error_kind_t::unavailable,
-          "actor generation is stale. actor=" + std::string (actor_ref.actor_id ().value ())
-            + ", current=" + std::to_string (dispatch_plan.current_generation)
-            + ", received=" + std::to_string (actor_ref.object_generation ()));
-    }
     const auto &current_actor_ref = *dispatch_plan.current_actor_ref;
     if (!factory.create_context_instance) {
         auto current_actor_context =
@@ -13468,7 +13435,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         }
         std::optional<result_t<actor_context_t>> session_relay_admission;
         bool targets_current_authority = false;
-        bool targets_admitted_route = false;
+        bool admitted_message_follow_route = false;
         auto native_node = std::move (dispatch_snapshot.native_node);
         auto relocation_authority = std::move (dispatch_snapshot.relocation_authority);
         auto actor_route_admission = std::move (dispatch_snapshot.actor_route_admission);
@@ -13495,6 +13462,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
               && coordinator_snapshot.matches_message_follow_source;
             const bool follows_in_flight_source =
               targets_exact_incarnation && coordinator_snapshot.transfer_in_progress;
+            admitted_message_follow_route =
+              follows_committed_source || follows_in_flight_source;
             const bool requires_exact_incarnation =
               header.value ().message_name == actor_bound_session_bind_route_request_t::packet_name
               || header.value ().message_name == actor_bound_session_route_request_t::packet_name;
@@ -13506,7 +13475,13 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             const bool targets_current_bound_route =
               session_relay_admission && *session_relay_admission;
             if (!has_bound_session_source) {
-                targets_current_authority = authority_fence && *authority_fence == route;
+                targets_current_authority =
+                  authority_fence && authority_fence->actor_id == route.actor_id
+                  && authority_fence->target_node_routing_id == route.target_node_routing_id
+                  && authority_fence->target_node_generation == route.target_node_generation
+                  && authority_fence->authority_owner_generation
+                       == route.authority_owner_generation
+                  && authority_fence->owner_lease_generation == route.owner_lease_generation;
                 if (!targets_current_authority && relocation_authority) {
                     try {
                         const auto committed = relocation_authority->read (
@@ -13515,7 +13490,6 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                           committed
                           && committed->target.kind == runtime::stateful::object_kind_t::actor
                           && committed->target.key == route.actor_id
-                          && committed->target.object_generation == route.object_generation
                           && committed->target.node_id
                                == zlink::routing_id_t::from (route.target_node_routing_id)
                                     .to_string ()
@@ -13532,7 +13506,6 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 if (!targets_current_authority && actor_route_admission)
                     targets_current_authority = actor_route_admission (route);
             }
-            targets_admitted_route = targets_current_authority || targets_current_bound_route;
             const bool admitted = targets_local_actor
                                   && (!requires_exact_incarnation || targets_exact_incarnation)
                                   && (follows_committed_source || targets_current_authority
@@ -13776,7 +13749,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 : stream_message_kind_t::request,
               header.value ().message_name, body.value (), services, serializers,
               std::move (relay_metadata),
-              targets_admitted_route && record.actor_route ? &*record.actor_route : nullptr,
+              admitted_message_follow_route && record.actor_route ? &*record.actor_route : nullptr,
               std::move (before_application_handler), std::move (after_application_admission),
               record.source_node_rid, handoff_operation, record.reply_route_id,
               header.value ().deadline,

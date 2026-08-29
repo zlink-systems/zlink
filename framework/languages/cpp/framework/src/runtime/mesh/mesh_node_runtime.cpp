@@ -3621,8 +3621,7 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
             owner_lease_generation = stale_route.owner_lease_generation;
         } else if (_actor_route_resolver) {
             const auto resolved = _actor_route_resolver (target_actor);
-            if (!resolved || resolved->object_generation != target_actor.object_generation ()
-                || resolved->authority_owner_generation == 0
+            if (!resolved || resolved->authority_owner_generation == 0
                 || resolved->owner.lease_generation <= 0) {
                 co_return result_t<std::optional<zlink::message_t>>::failure (
                   framework_error_kind_t::not_found, "Actor route fence is unavailable");
