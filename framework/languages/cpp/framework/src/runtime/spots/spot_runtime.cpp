@@ -3925,7 +3925,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
   std::function<void ()> after_application_admission,
   std::function<void ()> transfer_owner_reservation,
   std::size_t transferred_owner_byte_cost,
-  std::function<void ()> application_admission_terminal) const
+  std::function<void ()> application_admission_terminal,
+  bool *actor_handoff_fence_refused) const
 {
     for (std::size_t index = 0; index < _state->handlers.size (); ++index) {
         const auto &descriptor = _state->handlers[index];
@@ -4057,12 +4058,21 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             }
             const bool has_transferred_owner_reservation =
               static_cast<bool> (transfer_owner_reservation);
-            const runtime::serial_work_options_t work_options{
+            /* The relocation admission fence is a positive opt-in threaded from
+             * the one ordinary Actor ingress call site. Relocation-owned work
+             * (replay, commit, join) reaches invoke_erased through call sites
+             * that never pass the flag, so it can still enter the Actor queue
+             * while its own handoff barrier is reserved. */
+            const bool fences_on_actor_handoff = actor_handoff_fence_refused != nullptr;
+            runtime::serial_work_options_t work_options{
               runtime::serial_work_lane_t::application,
               has_transferred_owner_reservation
                 ? transferred_owner_byte_cost
                 : handler_work_byte_cost (message, metadata),
               transfer_owner_reservation};
+            work_options.refuse_when_actor_handoff_fenced = fences_on_actor_handoff;
+            work_options.actor_handoff_fence_refused =
+              fences_on_actor_handoff ? actor_handoff_fence_refused : nullptr;
             auto carrier = std::make_shared<std::pair<zlink::message_t, spot_inbound_message_t>> (
               std::move (message), std::move (metadata));
             auto dispatch_flow = runtime::flow_context_t::current ();
@@ -10665,6 +10675,11 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
               && current_fence->authority_owner_generation > m.authority_owner_generation;
         }
     }
+    // Retained across the admission block so an ordinary dispatch that later
+    // loses the Actor FIFO admission race against a relocation handoff barrier
+    // can re-admit the very same packet into the transfer backlog. Empty once
+    // the coordinator has taken ownership of the packet.
+    std::optional<detail::handoff_packet_t> fence_divert_packet;
     {
         // In-flight handoff (§10.2-1): actor packets that arrive while the actor
         // is moving are preserved in arrival order and travel to the target with
@@ -10673,7 +10688,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         // immediate dispatch. A preserved request keeps its source reply token;
         // the target sends one internal terminal envelope after replay.
         const bool is_request = message_kind == stream_message_kind_t::request;
-        const auto packet_admission =
+        auto packet_admission =
           _state->actor_transfer_coordinator.admit_dispatch_packet (
             key, admitted_message_follow_target, targets_current_authority,
             detail::handoff_packet_t{std::string (packet_name), message.to_bytes (),
@@ -10682,6 +10697,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
           !targets_current_authority && admitted_message_follow_target != nullptr
           && packet_admission.matches_message_follow_source;
         const auto append_result = packet_admission.append_result;
+        fence_divert_packet = std::move (packet_admission.released_packet);
         const auto append_result_name = [&] {
             switch (append_result) {
                 case detail::handoff_append_result_t::not_moving:
@@ -11153,6 +11169,14 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     const auto admitted_source_fence = admitted_message_follow_target == nullptr
                                          ? std::optional<runtime::protocol::actor_route_fence_t>{}
                                          : std::make_optional (*admitted_message_follow_target);
+    // Relocation admission fence (membership §903, relocation-flow §108/§155).
+    // The coordinator answered not_moving for this packet, but a Defer() may
+    // have reserved the source and pushed a handoff barrier into this Actor
+    // queue since then. The Actor FIFO post below is refused atomically in that
+    // case -- under the same queue mutex that ordered the barrier -- so the
+    // packet can be re-admitted into the transfer backlog and travel with the
+    // commit instead of executing on the old owner after capture.
+    bool actor_handoff_fence_refused = false;
     zlink::message_t reply;
     try {
         reply = co_await spot_handler_registry_t (dispatch_plan.context_state)
@@ -11162,13 +11186,55 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                                   dispatch_on_spot_serial, key, current_spot_id, {},
                                   spot_handler_registry_t::actor_queue_dispatch_t::acquire,
                                   std::move (before_application_handler),
-                                  std::move (after_application_admission),
+                                  after_application_admission,
                                   std::move (transfer_owner_reservation),
                                   transferred_owner_byte_cost,
                                   admission_token ? admission_token->handler_terminal ()
-                                                  : std::function<void ()>{});
+                                                  : std::function<void ()>{},
+                                  fence_divert_packet ? &actor_handoff_fence_refused : nullptr);
     }
     catch (const framework_exception_t &error) {
+        if (actor_handoff_fence_refused && fence_divert_packet) {
+            if (!dedup_request_id.empty ()) {
+                (void) state_owner->dispatched_request_replies.erase (
+                  actor_request_dedup_key (key, dedup_request_id));
+            }
+            const auto diverted = _state->actor_transfer_coordinator.try_append_backlog (
+              key, std::move (*fence_divert_packet));
+            report_actor_dispatch_stage_trace_lazy (
+              _state,
+              diverted == detail::handoff_append_result_t::appended
+                ? message_flow_outcome_t::admitted
+                : message_flow_outcome_t::received,
+              dispatch_kind, packet_name, {}, actor_ref.actor_id ().value (),
+              "relay_actor_packet.handoff_fence_divert", [&] {
+                  return std::string ("result=")
+                         + (diverted == detail::handoff_append_result_t::appended
+                              ? "appended"
+                              : "not_moving");
+              });
+            if (diverted == detail::handoff_append_result_t::appended) {
+                if (actor_transfer_marker_enabled ()) {
+                    emit_actor_transfer_marker (
+                      "handoff_backlog", actor_ref,
+                      _state->actor_transfer_coordinator.transfer_id (key).value_or (key));
+                }
+                if (!request_delivery) {
+                    if (after_application_admission)
+                        after_application_admission ();
+                    co_return result_t<std::optional<zlink::message_t>>::success (
+                      zlink::message_t{});
+                }
+                co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
+            }
+            // The whole move closed between the refusal and this re-admission.
+            // Surface it as the retriable transfer origin rather than running
+            // the packet on a queue whose ordering guarantee we just lost.
+            co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+              detail::make_origin_exception (framework_error_kind_t::unavailable,
+                                             detail::failure_origin_t::actor_transfer_in_progress,
+                                             "actor transfer is in progress"));
+        }
         if (!dedup_request_id.empty ()) {
             (void) state_owner->dispatched_request_replies.erase (
               actor_request_dedup_key (key, dedup_request_id));

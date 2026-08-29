@@ -1695,7 +1695,15 @@ class spot_handler_registry_t
                    std::function<void ()> after_application_admission = {},
                    std::function<void ()> transfer_owner_reservation = {},
                    std::size_t transferred_owner_byte_cost = 0,
-                   std::function<void ()> application_admission_terminal = {}) const;
+                   std::function<void ()> application_admission_terminal = {},
+                   // Opt-in relocation admission fence for ordinary Actor
+                   // ingress. When non-null, the Actor FIFO post is refused
+                   // atomically if a relocation handoff barrier is already
+                   // reserved on that queue, and the flag is set so the caller
+                   // can re-admit the packet into the transfer backlog instead
+                   // of letting it execute on the old owner after capture.
+                   // Only written during this synchronous call.
+                   bool *actor_handoff_fence_refused = nullptr) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);

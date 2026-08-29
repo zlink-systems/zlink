@@ -180,6 +180,11 @@ struct actor_transfer_packet_admission_t
     bool matches_message_follow_source = false;
     bool transfer_in_progress = false;
     handoff_append_result_t append_result = handoff_append_result_t::not_moving;
+    // The packet is moved back out when it was not retained, so an ordinary
+    // dispatch that later loses the Actor FIFO admission race against a
+    // relocation barrier can re-admit the very same packet without paying a
+    // second payload/metadata copy on the hot path.
+    std::optional<handoff_packet_t> released_packet;
 };
 
 class actor_transfer_coordinator_t
@@ -401,8 +406,10 @@ class actor_transfer_coordinator_t
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t *source_fence,
       std::chrono::steady_clock::time_point now) const;
+    // Consumes packet only when the result is `appended`; otherwise the packet
+    // is left intact for the caller to hand back.
     handoff_append_result_t try_append_backlog_unlocked (const std::string &actor_key,
-                                                         handoff_packet_t packet);
+                                                         handoff_packet_t &packet);
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};

@@ -183,13 +183,13 @@ handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog (
   handoff_packet_t packet)
 {
     return _lane.run ([&, this] {
-    return try_append_backlog_unlocked (actor_key, std::move (packet));
+    return try_append_backlog_unlocked (actor_key, packet);
     }).get ();
 }
 
 handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog_unlocked (
   const std::string &actor_key,
-  handoff_packet_t packet)
+  handoff_packet_t &packet)
 {
     const auto moving = _moves.find (actor_key);
     if (moving == _moves.end ()) {
@@ -402,9 +402,12 @@ actor_transfer_packet_admission_t actor_transfer_coordinator_t::admit_dispatch_p
     const auto append_result =
       targets_committed_source
         ? handoff_append_result_t::not_moving
-        : try_append_backlog_unlocked (actor_key, std::move (packet));
-    return actor_transfer_packet_admission_t{projected.matches_message_follow_source,
-                                             projected.transfer_in_progress, append_result};
+        : try_append_backlog_unlocked (actor_key, packet);
+    return actor_transfer_packet_admission_t{
+      projected.matches_message_follow_source, projected.transfer_in_progress, append_result,
+      append_result == handoff_append_result_t::appended
+        ? std::optional<handoff_packet_t>{}
+        : std::make_optional (std::move (packet))};
     }).get ();
 }
 

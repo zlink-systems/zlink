@@ -6,12 +6,14 @@
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
+#include <atomic>
 #include <condition_variable>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -142,6 +144,24 @@ struct serial_work_options_t
     // committed. It is consumed by one queue boundary and is not propagated to
     // an upper Spot execution-gate turn.
     std::function<void ()> transfer_owner_reservation;
+    // Ordinary Actor ingress opt-in for the relocation admission fence
+    // (spot-actor membership §"Defer() 뒤 source seal 전 message"). While an
+    // Actor handoff barrier is reserved on this queue, a message that already
+    // passed the transfer coordinator's not_moving admission must NOT be
+    // allowed to land behind the barrier: it would run on the old owner after
+    // capture and be lost from the authority state. Refusing the post here --
+    // under the same mutex that orders the barrier's own enqueue -- is the
+    // linearization point that makes coordinator admission and Actor FIFO
+    // admission one atomic decision. The caller then re-admits the packet into
+    // the coordinator backlog so it travels with the commit.
+    // Never set on relocation-owned work (transfer_owner_reservation) or on
+    // the Spot execution-gate hop; it is a positive opt-in from the one
+    // ordinary Actor dispatch call site.
+    bool refuse_when_actor_handoff_fenced = false;
+    // Written (true) at the refusal site so the caller can distinguish a fence
+    // refusal from a capacity/closed refusal. Only dereferenced inside the
+    // synchronous post call.
+    bool *actor_handoff_fence_refused = nullptr;
 };
 
 using serial_submission_id_t = std::uint64_t;
@@ -316,6 +336,13 @@ class serial_execution_queue_t
     bool _draining = false;
     std::size_t _active = 0;
     serial_submission_id_t _next_submission_id = 1;
+    // Raised strictly before an Actor handoff barrier is enqueued and lowered
+    // when that barrier is reached or cancelled. Read while _mutex is held, so
+    // a post that observes zero is provably ordered ahead of the barrier.
+    // Held behind a shared_ptr because a reserved barrier can outlive the queue
+    // (an erased Actor queue) and still has to lower the fence it raised.
+    const std::shared_ptr<std::atomic<std::size_t>> _actor_handoff_fence_depth =
+      std::make_shared<std::atomic<std::size_t>> (0);
 };
 
 } // namespace zlink::framework::runtime

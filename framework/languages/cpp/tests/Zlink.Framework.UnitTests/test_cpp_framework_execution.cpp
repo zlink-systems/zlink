@@ -2283,6 +2283,67 @@ bool verify_cancellable_serial_submission_lifecycle ()
         }
     }
 
+    // Relocation admission fence: while an Actor handoff barrier is reserved,
+    // an opted-in ordinary ingress post is refused under the same mutex that
+    // orders the barrier's own enqueue, so it can never land behind the barrier
+    // and run on the old owner after capture (spot-actor membership :903).
+    // Work that does not opt in -- relocation's own replay, join and commit --
+    // still enters the queue.
+    {
+        offload_executor_t executor (1);
+        serial_execution_queue_t queue (executor, 8);
+        std::atomic_int fenced_runs{0};
+        std::atomic_int unfenced_runs{0};
+
+        bool refused_before_reservation = false;
+        serial_work_options_t probe_options;
+        probe_options.refuse_when_actor_handoff_fenced = true;
+        probe_options.actor_handoff_fence_refused = &refused_before_reservation;
+        if (!queue.try_post ("ingress-before-barrier", [&] { ++unfenced_runs; }, probe_options)
+            || refused_before_reservation) {
+            queue.cancel_pending ();
+            return false;
+        }
+
+        auto handoff_barrier = queue.reserve_handoff_barrier ("relocation-admission-fence");
+        if (!handoff_barrier) {
+            queue.cancel_pending ();
+            return false;
+        }
+        bool refused_after_reservation = false;
+        serial_work_options_t fenced_options;
+        fenced_options.refuse_when_actor_handoff_fenced = true;
+        fenced_options.actor_handoff_fence_refused = &refused_after_reservation;
+        const bool late_ingress_posted =
+          queue.try_post ("ingress-after-barrier", [&] { ++fenced_runs; }, fenced_options);
+        // Relocation-owned work never opts in and must still be accepted.
+        const bool relocation_work_posted =
+          queue.try_post ("relocation-owned", [&] { ++unfenced_runs; }, {});
+        if (late_ingress_posted || !refused_after_reservation || !relocation_work_posted) {
+            handoff_barrier.value ()->cancel ();
+            queue.cancel_pending ();
+            return false;
+        }
+
+        // Cancelling the reservation lowers the fence immediately -- the
+        // coordinator source reservation is rolled back right after it, so the
+        // queue must not stay fenced while ordinary ingress is servable again.
+        handoff_barrier.value ()->cancel ();
+        bool refused_after_cancel = false;
+        serial_work_options_t resumed_options;
+        resumed_options.refuse_when_actor_handoff_fenced = true;
+        resumed_options.actor_handoff_fence_refused = &refused_after_cancel;
+        if (!queue.try_post ("ingress-after-cancel", [&] { ++unfenced_runs; }, resumed_options)
+            || refused_after_cancel) {
+            queue.cancel_pending ();
+            return false;
+        }
+        queue.drain ();
+        if (fenced_runs.load () != 0 || unfenced_runs.load () != 3) {
+            return false;
+        }
+    }
+
     // Completing and then throwing reports the late exception without a
     // second queue release. Each work callback receives only its own turn.
     {

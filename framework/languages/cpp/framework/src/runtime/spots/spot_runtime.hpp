@@ -620,6 +620,10 @@ class spot_serial_executor_t
             auto spot_options = options;
             spot_options.byte_cost = queue_t::fixed_work_byte_cost;
             spot_options.transfer_owner_reservation = {};
+            // The Actor handoff fence belongs to the per-Actor queue boundary
+            // only; the Spot execution-gate hop never carries it.
+            spot_options.refuse_when_actor_handoff_fenced = false;
+            spot_options.actor_handoff_fence_refused = nullptr;
             return _spot_queue->try_post_async (
               std::move (name), std::move (work), std::move (spot_options));
         }
@@ -636,6 +640,8 @@ class spot_serial_executor_t
         auto spot_options = options;
         spot_options.byte_cost = queue_t::fixed_work_byte_cost;
         spot_options.transfer_owner_reservation = {};
+        spot_options.refuse_when_actor_handoff_fenced = false;
+        spot_options.actor_handoff_fence_refused = nullptr;
         return executor->execute_actor (
           std::move (name),
           [this, work = std::move (work), spot_options,

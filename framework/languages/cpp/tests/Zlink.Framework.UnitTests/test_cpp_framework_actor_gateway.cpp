@@ -2738,6 +2738,272 @@ int reconcile_deadline_restores_actor_to_local_service ()
     return 0;
 }
 
+// Regression pin for the relocation admission TOCTOU (B-2):
+// spot-actor membership :903 ("Defer() 뒤 source seal 전 message는 barrier 뒤
+// Actor queue에 두고 capture 대상") and relocation-flow :108/:155.
+//
+// The interleave: a packet clears the transfer coordinator with `not_moving`,
+// and only afterwards does a Defer() reserve the source and push an
+// application-lane handoff barrier into that Actor's FIFO. Before the fix the
+// packet landed BEHIND the barrier with an old-source closure -- invisible to
+// the coordinator backlog, to the Core held_application set and to Message
+// Follow -- and executed silently on the old owner after capture, so the
+// mutation never reached the authority state.
+//
+// `configure_instance` is invoked after the coordinator admission and before
+// the Actor FIFO post, so reserving the barrier there reproduces the window
+// deterministically instead of relying on timing.
+int relocation_barrier_fences_late_actor_fifo_admission ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    node->worker_executor =
+      std::make_shared<runtime::offload_executor_t> (1, 16, "handoff-fence-worker");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("actor-a");
+    spot->spot_id = spot_id_t ("actor-a-entry");
+    spot->spot_name = "entry";
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime->serializers = &serializers;
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+
+    const auto actor = test_actor_ref ("actor-a", "player", "fence-actor", 1);
+    const auto key = std::string ("player:fence-actor");
+    spot_node_runtime_t spots (node);
+
+    std::atomic_int configure_calls{0};
+    std::shared_ptr<deferred_barrier_t> barrier;
+    std::atomic_bool barrier_reserved{false};
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [&] (void *, const actor_ref_t &current, void *) {
+        if (configure_calls.fetch_add (1, std::memory_order_acq_rel) != 0)
+            return;
+        // The relocation starts strictly AFTER this packet was admitted as
+        // not_moving and strictly BEFORE it reaches the Actor FIFO.
+        auto reserved = spots.reserve_actor_join_barrier (current);
+        if (!reserved)
+            return;
+        barrier = std::move (reserved.value ());
+        barrier_reserved.store (true, std::memory_order_release);
+    };
+    node->actor_factories.emplace ("player", std::move (factory));
+
+    node->actor_instances.emplace (key, std::make_shared<int> (7));
+    node->actor_spot_ids.emplace (key, spot->spot_id);
+    node->actor_generations.emplace (key, 1);
+
+    std::atomic_int source_handler_runs{0};
+    spot->handlers.push_back (
+      spot_handler_descriptor_t{spot_handler_kind_t::actor_send, "FencedProbe", "",
+                                std::type_index (typeid (int)), std::type_index (typeid (void)),
+                                std::type_index (typeid (int)), std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [&source_handler_runs] (void *, void *, service_provider_t &, serializer_registry_t &,
+                              const zlink::message_t &,
+                              const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+          source_handler_runs.fetch_add (1, std::memory_order_acq_rel);
+          co_return zlink::message_t{};
+      });
+
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    actor_gateway_runtime_t gateway;
+
+    spot_inbound_message_t metadata;
+    metadata.values.emplace ("sequence", "LATE");
+    auto sent =
+      spots.relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::send,
+                                "FencedProbe", zlink::message_t::from (std::string ("late")),
+                                provider, serializers, std::move (metadata), nullptr);
+    const auto sent_result = finite_task_result (std::move (sent));
+
+    const auto cleanup = [&] {
+        if (barrier)
+            barrier->cancel ();
+        node->actor_transfer_coordinator.cancel_move (key);
+        node->worker_executor->drain ();
+        node->worker_executor.reset ();
+    };
+
+    if (!barrier_reserved.load (std::memory_order_acquire)) {
+        cleanup ();
+        return 1;
+    }
+    // A one-way send preserved for the move is indistinguishable from
+    // immediate dispatch on the wire (spot-actor §10.2-1).
+    if (!sent_result || !*sent_result) {
+        cleanup ();
+        return 2;
+    }
+    // The contract, not just the symptom: the old owner must never run it.
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    if (source_handler_runs.load (std::memory_order_acquire) != 0) {
+        cleanup ();
+        return 3;
+    }
+    if (!node->actor_transfer_coordinator.blocks_dispatch (key)) {
+        cleanup ();
+        return 4;
+    }
+    // It must be in the capture set that travels with the commit, exactly once.
+    auto backlog = node->actor_transfer_coordinator.take_backlog (key);
+    if (backlog.size () != 1 || backlog.front ().packet_name != "FencedProbe"
+        || backlog.front ().is_request) {
+        cleanup ();
+        return 5;
+    }
+    const auto sequence = backlog.front ().metadata.find ("sequence");
+    if (sequence == backlog.front ().metadata.end () || sequence->second != "LATE") {
+        cleanup ();
+        return 6;
+    }
+
+    // The barrier is released and the move closed: ordinary ingress resumes on
+    // the same queue rather than staying fenced forever.
+    barrier->cancel ();
+    barrier.reset ();
+    node->actor_transfer_coordinator.cancel_move (key);
+    spot_inbound_message_t resumed_metadata;
+    auto resumed = spots.relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::send, "FencedProbe",
+      zlink::message_t::from (std::string ("resumed")), provider, serializers,
+      std::move (resumed_metadata), nullptr);
+    const auto resumed_result = finite_task_result (std::move (resumed));
+    const auto resumed_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (source_handler_runs.load (std::memory_order_acquire) == 0
+           && std::chrono::steady_clock::now () < resumed_deadline) {
+        std::this_thread::yield ();
+    }
+    const auto resumed_runs = source_handler_runs.load (std::memory_order_acquire);
+    cleanup ();
+    if (!resumed_result || !*resumed_result)
+        return 7;
+    if (resumed_runs != 1)
+        return 8;
+    return 0;
+}
+
+// A request caught in the same window must park too, and must not deadlock
+// against the barrier that is waiting for the relocation to finish.
+int relocation_barrier_fences_late_actor_request_without_deadlock ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    node->worker_executor =
+      std::make_shared<runtime::offload_executor_t> (1, 16, "handoff-fence-request-worker");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("actor-a");
+    spot->spot_id = spot_id_t ("actor-a-entry");
+    spot->spot_name = "entry";
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime->serializers = &serializers;
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+
+    const auto actor = test_actor_ref ("actor-a", "player", "fence-request-actor", 1);
+    const auto key = std::string ("player:fence-request-actor");
+    spot_node_runtime_t spots (node);
+
+    std::atomic_int configure_calls{0};
+    std::shared_ptr<deferred_barrier_t> barrier;
+    std::atomic_bool barrier_reserved{false};
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [&] (void *, const actor_ref_t &current, void *) {
+        if (configure_calls.fetch_add (1, std::memory_order_acq_rel) != 0)
+            return;
+        auto reserved = spots.reserve_actor_join_barrier (current);
+        if (!reserved)
+            return;
+        barrier = std::move (reserved.value ());
+        barrier_reserved.store (true, std::memory_order_release);
+    };
+    node->actor_factories.emplace ("player", std::move (factory));
+
+    node->actor_instances.emplace (key, std::make_shared<int> (7));
+    node->actor_spot_ids.emplace (key, spot->spot_id);
+    node->actor_generations.emplace (key, 1);
+
+    std::atomic_int source_handler_runs{0};
+    spot->handlers.push_back (
+      spot_handler_descriptor_t{spot_handler_kind_t::actor_request, "FencedAsk", "",
+                                std::type_index (typeid (int)), std::type_index (typeid (void)),
+                                std::type_index (typeid (int)), std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [&source_handler_runs] (void *, void *, service_provider_t &, serializer_registry_t &,
+                              const zlink::message_t &,
+                              const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+          source_handler_runs.fetch_add (1, std::memory_order_acq_rel);
+          co_return zlink::message_t{};
+      });
+
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    actor_gateway_runtime_t gateway;
+
+    spot_inbound_message_t metadata;
+    metadata.values.emplace ("__zlink.actorRequestId", "fence-request-1");
+    auto asked = spots.relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::request, "FencedAsk",
+      zlink::message_t::from (std::string ("ask")), provider, serializers, std::move (metadata),
+      nullptr);
+    // A preserved request must terminate here, not block behind the barrier.
+    const auto asked_result = finite_task_result (std::move (asked));
+
+    const auto cleanup = [&] {
+        if (barrier)
+            barrier->cancel ();
+        node->actor_transfer_coordinator.cancel_move (key);
+        node->worker_executor->drain ();
+        node->worker_executor.reset ();
+    };
+
+    if (!barrier_reserved.load (std::memory_order_acquire)) {
+        cleanup ();
+        return 1;
+    }
+    // Preserved request: success with no reply yet (the target replies after
+    // replay), never a silent local dispatch.
+    if (!asked_result || !*asked_result || (*asked_result).value ().has_value ()) {
+        cleanup ();
+        return 2;
+    }
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    if (source_handler_runs.load (std::memory_order_acquire) != 0) {
+        cleanup ();
+        return 3;
+    }
+    auto backlog = node->actor_transfer_coordinator.take_backlog (key);
+    if (backlog.size () != 1 || !backlog.front ().is_request) {
+        cleanup ();
+        return 4;
+    }
+    cleanup ();
+    return 0;
+}
+
 int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
 {
     using namespace zlink::framework;
@@ -4842,6 +5108,15 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
 
 int main ()
 {
+    if (const auto handoff_fence = relocation_barrier_fences_late_actor_fifo_admission ();
+        handoff_fence != 0) {
+        return 400 + handoff_fence;
+    }
+    if (const auto handoff_fence_request =
+          relocation_barrier_fences_late_actor_request_without_deadlock ();
+        handoff_fence_request != 0) {
+        return 410 + handoff_fence_request;
+    }
     if (const auto completion_delivery =
           join_completion_waits_for_bound_session_delivery_terminal ();
         completion_delivery != 0) {
