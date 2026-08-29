@@ -2003,6 +2003,17 @@ final class ZLinkJavaRawSpotNode
             target.enqueueActor(messages);
             return true;
         }
+        //  A relocation cut can finish between the forward lookup above and the
+        //  Actor queue admission below. The queue then rejects the arrival with
+        //  RelocatedOwnerException; routing :222/:240 requires that arrival to
+        //  reach the new owner through the forward that the source installs
+        //  before the cut, not to be dropped. The Spot runtime still owns the
+        //  surviving header/payload copies at that point, so it calls back here.
+        ZLinkBackendActorReceived.RelocationRedirect relocationRedirect =
+            parts.size() == 2
+                ? (headerFrame, payloadFrame) -> redirectRelocatedActor(
+                    header, headerFrame, payloadFrame, reply, failure)
+                : null;
         AtomicInteger remainingTerminals = new AtomicInteger(parts.size());
         Runnable partTerminal = () -> {
             if (remainingTerminals.decrementAndGet() == 0) {
@@ -2024,7 +2035,8 @@ final class ZLinkJavaRawSpotNode
                     index + 1 < parts.size(),
                       acceptedJournalRecord,
                       contentType,
-                      partTerminal)
+                      partTerminal,
+                      relocationRedirect)
                 : new ZLinkBackendActorReceived(
                 actor,
                 sourceNodeRid,
@@ -2040,8 +2052,81 @@ final class ZLinkJavaRawSpotNode
                   contentType,
                   partTerminal));
         }
-        target.enqueueActor(messages);
+        reportRelocatedActorIngress(
+            target.enqueueActor(messages), header, requestId, reply, failure);
         return true;
+    }
+
+    /**
+     * Re-routes one post-cut Actor arrival through the relocation forward the
+     * source installs before its queue cut finishes. Returns whether the
+     * forward accepted it; a refusal leaves the caller with the stale terminal
+     * (routing :244 forbids re-submitting the operation here).
+     */
+    private boolean redirectRelocatedActor(
+        ZLinkServiceM6BWireCodec.ActorMessage header,
+        Message headerFrame,
+        Message payloadFrame,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        ZLinkServiceM6BWireCodec.ActorRouteFence forwarded =
+            relocationActorForwards.get(header.target());
+        if (forwarded == null) {
+            return false;
+        }
+        List<Message> parts = new ArrayList<>(2);
+        parts.add(Message.from(headerFrame));
+        parts.add(Message.from(payloadFrame));
+        boolean accepted;
+        try {
+            accepted = owner.forwardRelocationActor(
+                header, forwarded, parts, reply, failure);
+        } catch (RuntimeException error) {
+            parts.forEach(Message::close);
+            throw error;
+        }
+        if (!accepted) {
+            parts.forEach(Message::close);
+        }
+        return accepted;
+    }
+
+    /**
+     * Surfaces a post-cut Actor queue rejection that the relocation forward did
+     * not absorb. Reporting it keeps the ingress from claiming a delivery it
+     * never made; other admission failures keep their existing handling.
+     */
+    private void reportRelocatedActorIngress(
+        CompletionStage<Void> dispatched,
+        ZLinkServiceM6BWireCodec.ActorMessage header,
+        long requestId,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        if (dispatched == null) {
+            return;
+        }
+        dispatched.whenComplete((ignored, error) -> {
+            if (error == null) {
+                return;
+            }
+            Throwable cause = error;
+            while (cause instanceof CompletionException
+                && cause.getCause() != null) {
+                cause = cause.getCause();
+            }
+            if (!(cause instanceof systems.zlink.framework.execution
+                .ZLinkSerialExecutionQueue.RelocatedOwnerException)) {
+                return;
+            }
+            streamTrace(STREAM_TRACE ? "remote enqueue post-cut drop actor="
+                + actorSummary(header.target().actor()) : null);
+            if (header.request()) {
+                actorRemoteReplies.remove(requestId, reply);
+            }
+            if (failure != null) {
+                failure.accept(cause);
+            }
+        });
     }
 
     private boolean acceptRemoteStreamSequence(

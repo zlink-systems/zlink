@@ -8,6 +8,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 public final class ZLinkBackendActorReceived implements AutoCloseable {
+    /**
+     * Re-routes one arrival that reached the owner Spot after its relocation
+     * cut finished. The mesh node owns the relocation forward table, so the
+     * Spot runtime hands the surviving header/payload copies back through this
+     * hook instead of dropping the turn
+     * (spec server/03-spot-actor/08-routing.ko.md:222,240).
+     */
+    @FunctionalInterface
+    public interface RelocationRedirect {
+        /** Returns whether the arrival was accepted by the forward route. */
+        boolean redirect(Message headerFrame, Message payloadFrame);
+    }
+
     private final ZLinkBackendActorRef actor;
     private final RoutingId sourceNodeRid;
     private final RoutingId sourceSessionRid;
@@ -21,6 +34,7 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
     private volatile byte[] acceptedJournalRecord;
     private final String contentType;
     private final Runnable terminalRelease;
+    private final RelocationRedirect relocationRedirect;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public ZLinkBackendActorReceived(
@@ -59,6 +73,27 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         boolean acceptedJournalRecordAvailable,
         String contentType,
         Runnable terminalRelease) {
+        this(
+            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
+            flags, message, hasMore, acceptedJournalRecordSupplier,
+            acceptedJournalRecordAvailable, contentType, terminalRelease,
+            null);
+    }
+
+    private ZLinkBackendActorReceived(
+        ZLinkBackendActorRef actor,
+        RoutingId sourceNodeRid,
+        RoutingId sourceSessionRid,
+        Optional<Long> requestSeq,
+        long requestId,
+        int flags,
+        Message message,
+        boolean hasMore,
+        Supplier<byte[]> acceptedJournalRecordSupplier,
+        boolean acceptedJournalRecordAvailable,
+        String contentType,
+        Runnable terminalRelease,
+        RelocationRedirect relocationRedirect) {
         this.actor = Objects.requireNonNull(actor, "actor");
         this.sourceNodeRid = Objects.requireNonNull(
             sourceNodeRid, "sourceNodeRid");
@@ -74,6 +109,7 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         this.contentType = contentType;
         this.terminalRelease = Objects.requireNonNull(
             terminalRelease, "terminal release");
+        this.relocationRedirect = relocationRedirect;
     }
 
     public static ZLinkBackendActorReceived lazyJournal(
@@ -111,6 +147,25 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
             terminalRelease);
     }
 
+    public static ZLinkBackendActorReceived lazyJournal(
+        ZLinkBackendActorRef actor,
+        RoutingId sourceNodeRid,
+        RoutingId sourceSessionRid,
+        Optional<Long> requestSeq,
+        long requestId,
+        int flags,
+        Message message,
+        boolean hasMore,
+        Supplier<byte[]> acceptedJournalRecord,
+        String contentType,
+        Runnable terminalRelease,
+        RelocationRedirect relocationRedirect) {
+        return new ZLinkBackendActorReceived(
+            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
+            flags, message, hasMore, acceptedJournalRecord, true, contentType,
+            terminalRelease, relocationRedirect);
+    }
+
     public ZLinkBackendActorReceived(
         ZLinkBackendActorRef actor,
         RoutingId sourceNodeRid,
@@ -146,6 +201,8 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         return acceptedJournalRecordAvailable;
     }
     public String contentType() { return contentType; }
+    /** Post-cut re-route hook installed by the mesh ingress, or {@code null}. */
+    public RelocationRedirect relocationRedirect() { return relocationRedirect; }
     /** Backward-compatible constructor without an inbound content type. */
     public ZLinkBackendActorReceived(
         ZLinkBackendActorRef actor,

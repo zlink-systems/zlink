@@ -679,6 +679,144 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void postCutActorRedirectReachesTheRelocationForwardExactlyOnce()
+        throws Exception {
+        String endpoint = "inproc://jvm-postcut-target-" + System.nanoTime();
+        RoutingId sourceRid = RoutingId.from("jvm-postcut-source");
+        RoutingId targetRid = RoutingId.from("jvm-postcut-target");
+        RoutingId callerRid = RoutingId.from("jvm-postcut-caller");
+        try (var context = Zlink.createContext();
+             var source = new ZLinkJavaRawMeshNode(context, "mesh");
+             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            source.setRoutingId(sourceRid);
+            source.setBind("inproc://jvm-postcut-source-" + System.nanoTime());
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            source.start();
+            target.start();
+            acceptExactSource(
+                target, sourceRid, source.lifecycleGeneration());
+            source.connectPeer(endpoint, targetRid);
+            awaitAdmitted(source);
+
+            ZLinkJavaRawSpotNode sourceSpots =
+                (ZLinkJavaRawSpotNode) source.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = sourceSpots.createActor("moving-actor", 7, create);
+            }
+            sourceSpots.rememberActorAuthority(actor, 11, 3);
+            var sourceRoute = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actor, source.lifecycleGeneration(), 11, 3);
+            var targetRoute = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(targetRid, "moving-actor", 7),
+                target.lifecycleGeneration(),
+                12,
+                5);
+
+            List<String> targetFifo = new CopyOnWriteArrayList<>();
+            CompletableFuture<Void> received = new CompletableFuture<>();
+            AtomicReference<Throwable> targetFailure = new AtomicReference<>();
+            target.spotNode().setRelocationStagingIngressHandler(
+                new ZLinkInternalSpotNode.RelocationStagingIngressHandler() {
+                    @Override
+                    public boolean handleSpot(
+                        ZLinkInternalMeshNode.PeerAuthorityFence peer,
+                        ZLinkServiceM6BWireCodec.SpotMessage header,
+                        byte[] metadata,
+                        java.util.function.Supplier<byte[]> acceptedRecord,
+                        int acceptedRecordSizeHint,
+                        List<Message> parts,
+                        String contentType,
+                        java.util.function.Consumer<List<Message>> reply,
+                        java.util.function.Consumer<Throwable> failure) {
+                        parts.forEach(Message::close);
+                        return true;
+                    }
+
+                    @Override
+                    public boolean handleActor(
+                        ZLinkInternalMeshNode.PeerAuthorityFence peer,
+                        ZLinkServiceM6BWireCodec.ActorMessage header,
+                        java.util.function.Supplier<byte[]> acceptedRecord,
+                        List<Message> parts,
+                        String contentType,
+                        java.util.function.Consumer<List<Message>> reply,
+                        java.util.function.Consumer<Throwable> failure) {
+                        try {
+                            assertEquals(targetRoute, header.target());
+                            targetFifo.add(parts.getLast().toUtf8String());
+                            received.complete(null);
+                        } catch (Throwable error) {
+                            targetFailure.compareAndSet(null, error);
+                            received.completeExceptionally(error);
+                        } finally {
+                            parts.forEach(Message::close);
+                        }
+                        return true;
+                    }
+                });
+
+            //  The dispatch handler stands in for the Spot runtime: it grabs
+            //  the post-cut re-route hook the ingress installed, and the
+            //  forward only appears after ingress already passed its lookup -
+            //  exactly the cut-versus-enqueue interleaving under test.
+            AtomicReference<Boolean> redirected = new AtomicReference<>();
+            AtomicInteger redirectCalls = new AtomicInteger();
+            ZLinkBackendSpot sourceSpot = sourceSpots.entrySpot();
+            sourceSpot.onDispatchEvent(info -> {
+                if (info.event()
+                    != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE
+                    || info.actorMessages().isEmpty()) {
+                    return;
+                }
+                var header = info.actorMessages().get(0);
+                var payload = info.actorMessages().get(1);
+                var redirect = header.relocationRedirect();
+                assertNotNull(redirect,
+                    "the mesh ingress must install a post-cut re-route hook");
+                source.spotNode().installRelocationActorForward(
+                    sourceRoute, targetRoute, Duration.ofMinutes(1));
+                redirectCalls.incrementAndGet();
+                redirected.set(redirect.redirect(
+                    header.message(), payload.message()));
+                info.actorMessages().forEach(
+                    systems.zlink.framework.runtime.internal.backend
+                        .ZLinkBackendActorReceived::close);
+            });
+
+            var wireHeader = new ZLinkServiceM6BWireCodec.ActorMessage(
+                false, 0, null, null, sourceRoute);
+            List<Message> parts = List.of(
+                Message.from(ZLinkStreamHeaderCodec.encode(
+                    new ZLinkStreamHeader(
+                        "RelocatedPacket", Map.of(), Optional.empty()))),
+                Message.from("post-cut-suffix"));
+            AtomicInteger callerFailures = new AtomicInteger();
+            boolean accepted = sourceSpots.enqueueRemoteActor(
+                new ZLinkInternalMeshNode.PeerAuthorityFence(
+                    callerRid, 9, "caller-owner", 7),
+                wireHeader,
+                () -> new byte[] {1},
+                parts,
+                null,
+                null,
+                ignored -> callerFailures.incrementAndGet());
+            assertTrue(accepted);
+
+            received.get(3, TimeUnit.SECONDS);
+            assertNull(targetFailure.get());
+            assertEquals(1, redirectCalls.get());
+            assertTrue(redirected.get(),
+                "an installed forward must accept the post-cut arrival");
+            assertEquals(List.of("post-cut-suffix"), targetFifo);
+            Thread.sleep(200);
+            assertEquals(0, callerFailures.get(),
+                "a redirected arrival must not also raise a stale terminal");
+        }
+    }
+
+    @Test
     void staleActorRelayOwnsPartsAndAdmissionLeaseAtTheInfrastructureBoundary() {
         try (var context = Zlink.createContext();
              var node = new ZLinkJavaRawMeshNode(context, "mesh")) {

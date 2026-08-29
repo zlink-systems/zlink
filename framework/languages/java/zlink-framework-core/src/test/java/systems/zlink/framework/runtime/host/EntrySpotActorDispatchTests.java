@@ -4,6 +4,7 @@ import java.lang.reflect.Proxy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
@@ -438,6 +439,177 @@ final class EntrySpotActorDispatchTests {
             assertTrue(backend.node.boundSessionReplies.isEmpty());
             assertEquals(0, backend.node.remoteSessionBinds.size());
         }
+    }
+
+    @Test
+    void postCutActorArrivalIsReRoutedThroughTheRelocationForwardExactlyOnce()
+        throws Exception {
+        TestBackend backend = startBackend();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            runtime.actorManager().create("actor-a", "probe").submit()
+                .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
+            ProbeActor actor = (ProbeActor)
+                actors.localActor("actor-a").orElseThrow();
+
+            //  Take the Actor queue past its relocation cut: from here every
+            //  admission is rejected with RelocatedOwnerException, which is the
+            //  exact post-cut window the ingress used to swallow.
+            var seal = actors.trySealActorRelocation("actor-a").orElseThrow();
+            var commit = actors.retainActorRelocationCommit("actor-a", seal)
+                .orElseThrow();
+            var cut = commit.cut();
+            while (!commit.tryEstablishAndFinishCapture(cut)) {
+                cut = commit.cut();
+            }
+
+            AtomicInteger redirects = new AtomicInteger();
+            List<String> forwarded = new CopyOnWriteArrayList<>();
+            backend.entrySpot.raiseActorReadable(postCutSendParts(
+                "actor-a",
+                "follow-send",
+                "post-cut",
+                (headerFrame, payloadFrame) -> {
+                    redirects.incrementAndGet();
+                    forwarded.add(payloadFrame.toUtf8String());
+                    return true;
+                }));
+
+            awaitCount(redirects, 1);
+            assertEquals(1, forwarded.size());
+            Thread.sleep(100);
+            assertEquals(1, redirects.get(),
+                "the post-cut arrival must reach the relocation forward once");
+            assertEquals(0, actor.handled(),
+                "the relocated source must not run the post-cut turn");
+        }
+    }
+
+    @Test
+    void postCutActorArrivalWithoutForwardKeepsTheStaleTerminal()
+        throws Exception {
+        TestBackend backend = startBackend();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            runtime.actorManager().create("actor-a", "probe").submit()
+                .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
+            ProbeActor actor = (ProbeActor)
+                actors.localActor("actor-a").orElseThrow();
+
+            var seal = actors.trySealActorRelocation("actor-a").orElseThrow();
+            var commit = actors.retainActorRelocationCommit("actor-a", seal)
+                .orElseThrow();
+            var cut = commit.cut();
+            while (!commit.tryEstablishAndFinishCapture(cut)) {
+                cut = commit.cut();
+            }
+
+            AtomicInteger redirects = new AtomicInteger();
+            backend.entrySpot.raiseActorReadable(postCutSendParts(
+                "actor-a",
+                "follow-send",
+                "post-cut",
+                (headerFrame, payloadFrame) -> {
+                    redirects.incrementAndGet();
+                    return false;
+                }));
+
+            awaitCount(redirects, 1);
+            Thread.sleep(100);
+            assertEquals(1, redirects.get());
+            assertEquals(0, actor.handled(),
+                "a refused forward must not replay the turn on the source");
+        }
+    }
+
+    @Test
+    void postCutMultipartActorArrivalIsNotRedirectedAndIsNotReplayed()
+        throws Exception {
+        TestBackend backend = startBackend();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            runtime.actorManager().create("actor-a", "probe").submit()
+                .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
+            ProbeActor actor = (ProbeActor)
+                actors.localActor("actor-a").orElseThrow();
+
+            var seal = actors.trySealActorRelocation("actor-a").orElseThrow();
+            var commit = actors.retainActorRelocationCommit("actor-a", seal)
+                .orElseThrow();
+            var cut = commit.cut();
+            while (!commit.tryEstablishAndFinishCapture(cut)) {
+                cut = commit.cut();
+            }
+
+            //  The mesh ingress installs no re-route hook for a shape the
+            //  relocation forward cannot re-encode frame for frame, so the
+            //  rejection has to stay the terminal instead of being truncated.
+            List<ZLinkBackendActorReceived> parts =
+                new ArrayList<>(postCutSendParts(
+                    "actor-a",
+                    "follow-send",
+                    "post-cut-multipart",
+                    null));
+            parts.add(new ZLinkBackendActorReceived(
+                new ZLinkBackendActorRef(
+                    RoutingId.from("entry-node"), "actor-a", 1),
+                RoutingId.from("source-node"),
+                RoutingId.from("source-session"),
+                Optional.empty(),
+                0,
+                0,
+                Message.from("trailer".getBytes(StandardCharsets.UTF_8)),
+                false));
+            backend.entrySpot.raiseActorReadable(List.copyOf(parts));
+
+            Thread.sleep(200);
+            assertNull(parts.get(0).relocationRedirect(),
+                "a non-canonical part shape must carry no re-route hook");
+            assertEquals(0, actor.handled(),
+                "a relocated source must not replay a post-cut multipart turn");
+        }
+    }
+
+    private static List<ZLinkBackendActorReceived> postCutSendParts(
+        String actorId,
+        String packetName,
+        String value,
+        ZLinkBackendActorReceived.RelocationRedirect redirect) {
+        ZLinkBackendActorRef actorRef =
+            new ZLinkBackendActorRef(RoutingId.from("entry-node"), actorId, 1);
+        ZLinkStreamHeader header = new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.SEND,
+            ZLinkStreamCodec.JSON,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.empty(),
+            packetName,
+            Map.of());
+        byte[] payload = SERIALIZER.serialize(new ProbeRequest(value)).bytes();
+        byte[] accepted = acceptedActorRecord(
+            actorId, false, 0, 301, 401, packetName, payload);
+        return List.of(
+            ZLinkBackendActorReceived.lazyJournal(
+                actorRef,
+                RoutingId.from("source-node"),
+                RoutingId.from("source-session"),
+                Optional.empty(),
+                0,
+                0,
+                Message.from(ZLinkStreamHeaderCodec.encode(header)),
+                true,
+                () -> accepted,
+                "application/zlink-framework-json-v1",
+                () -> { },
+                redirect),
+            new ZLinkBackendActorReceived(
+                actorRef,
+                RoutingId.from("source-node"),
+                RoutingId.from("source-session"),
+                Optional.empty(),
+                0,
+                0,
+                Message.from(payload),
+                false));
     }
 
     private static TestBackend startBackend() {

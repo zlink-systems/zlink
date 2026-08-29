@@ -187,12 +187,28 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
+    /**
+     * Rejection raised when a turn reaches this queue after its relocation cut
+     * finished. The typed form lets the ingress owner tell a post-cut arrival
+     * apart from an ordinary admission failure and re-route it through the
+     * relocation forward instead of dropping it
+     * (spec server/03-spot-actor/08-routing.ko.md:222).
+     */
+    public static final class RelocatedOwnerException
+        extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        public RelocatedOwnerException() {
+            super("queue owner has relocated");
+        }
+    }
+
     public CompletionStage<Void> enqueue(Supplier<CompletionStage<Void>> operation) {
         EnqueueResult result;
         synchronized (this) {
             if (relocated) {
                 return CompletableFuture.failedFuture(
-                    new IllegalStateException("queue owner has relocated"));
+                    new RelocatedOwnerException());
             }
             result = enqueueAccepted(null, 0, operation);
         }
@@ -213,7 +229,7 @@ public final class ZLinkSerialExecutionQueue {
             validatePayloadBytes(payloadBytes);
             if (relocated) {
                 return CompletableFuture.failedFuture(
-                    new IllegalStateException("queue owner has relocated"));
+                    new RelocatedOwnerException());
             }
             result = enqueueAccepted(null, payloadBytes, operation);
         }
@@ -255,7 +271,7 @@ public final class ZLinkSerialExecutionQueue {
             Objects.requireNonNull(operation, "operation");
             if (relocated) {
                 return CompletableFuture.failedFuture(
-                    new IllegalStateException("queue owner has relocated"));
+                    new RelocatedOwnerException());
             }
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
@@ -329,7 +345,7 @@ public final class ZLinkSerialExecutionQueue {
             Objects.requireNonNull(relocationRelease, "relocationRelease");
             if (relocated) {
                 return CompletableFuture.failedFuture(
-                    new IllegalStateException("queue owner has relocated"));
+                    new RelocatedOwnerException());
             }
             result = enqueueAccepted(
                 record.clone(), record.length, operation, relocationRelease);
@@ -355,7 +371,7 @@ public final class ZLinkSerialExecutionQueue {
             validatePayloadBytes(recordSizeHint);
             if (relocated) {
                 return CompletableFuture.failedFuture(
-                    new IllegalStateException("queue owner has relocated"));
+                    new RelocatedOwnerException());
             }
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
@@ -460,7 +476,7 @@ public final class ZLinkSerialExecutionQueue {
         validatePayloadBytes(payloadBytes);
         if (relocated) {
             return new EnqueueResult(CompletableFuture.failedFuture(
-                new IllegalStateException("queue owner has relocated")), false);
+                new RelocatedOwnerException()), false);
         }
         if (nextSequence == Long.MAX_VALUE) {
             throw new IllegalStateException("queue sequence exhausted");

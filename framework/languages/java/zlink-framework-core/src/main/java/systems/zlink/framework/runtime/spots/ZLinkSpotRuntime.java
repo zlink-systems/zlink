@@ -4846,10 +4846,11 @@ public final class ZLinkSpotRuntime
         ZLinkBackendActorReceived headerCopy,
         Message payloadCopy) {
         CompletionStage<Void> queued;
+        ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply = null;
         try {
             boolean noBindRequest = isNoBindActorRequest(
                 packetHeader, headerCopy);
-            ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply =
+            relocationReply =
                 !headerCopy.hasAcceptedJournalRecord()
                     ? null
                     : relocationReplyRoutes.registerActorLazy(
@@ -4867,6 +4868,8 @@ public final class ZLinkSpotRuntime
                             noBindRequest,
                             parts),
                         () -> { });
+            ZLinkSpotRelocationReplyRoutes.LazyRegistration registered =
+                relocationReply;
             Supplier<CompletionStage<Void>> operation = () -> {
                     //  Spec 27 §4: install the inbound flow pair (or start a
                     //  new flow) only while capture is enabled; at Off suppress
@@ -4879,7 +4882,7 @@ public final class ZLinkSpotRuntime
                         return dispatchActorPacketToHandler(
                               dispatchLine.dispatchOutbound(), handler, spotSurface, actor,
                               packetHeader, headerCopy, payloadCopy,
-                              relocationReply,
+                              registered,
                               "actor bound session reply failed");
                     }
                 };
@@ -4897,7 +4900,51 @@ public final class ZLinkSpotRuntime
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
-        return queued;
+        return recoverRelocatedActorDispatch(queued, headerCopy, payloadCopy);
+    }
+
+    /**
+     * Hands a turn that the Actor queue rejected after its relocation cut back
+     * to the mesh ingress so the relocation forward delivers it to the new
+     * owner (spec server/03-spot-actor/08-routing.ko.md:222,240). The turn never
+     * ran, so this is a re-route of an unaccepted arrival, not a re-submission
+     * of a failed operation (:244). When no forward is available the rejection
+     * stays on the stage as the stale terminal.
+     */
+    private static CompletionStage<Void> recoverRelocatedActorDispatch(
+        CompletionStage<Void> queued,
+        ZLinkBackendActorReceived headerCopy,
+        Message payloadCopy) {
+        ZLinkBackendActorReceived.RelocationRedirect redirect =
+            headerCopy.relocationRedirect();
+        if (redirect == null) {
+            return queued;
+        }
+        return queued.handle((ignored, error) -> {
+            if (error == null) {
+                return CompletableFuture.<Void>completedFuture(null);
+            }
+            Throwable cause = unwrapCompletion(error);
+            if (!(cause instanceof ZLinkSerialExecutionQueue
+                .RelocatedOwnerException)) {
+                return CompletableFuture.<Void>failedFuture(cause);
+            }
+            //  The lazy relocation-reply registration is never materialized
+            //  for a rejected admission - its record supplier only runs when a
+            //  seal captures the queued turn - so there is nothing to release
+            //  here; the forward target registers its own reply route.
+            boolean accepted;
+            try {
+                accepted = redirect.redirect(
+                    headerCopy.message(), payloadCopy);
+            } catch (RuntimeException redirectFailure) {
+                cause.addSuppressed(redirectFailure);
+                return CompletableFuture.<Void>failedFuture(cause);
+            }
+            return accepted
+                ? CompletableFuture.<Void>completedFuture(null)
+                : CompletableFuture.<Void>failedFuture(cause);
+        }).thenCompose(stage -> stage);
     }
 
     private CompletionStage<Void> replyCapturedActorPacket(
@@ -4962,7 +5009,9 @@ public final class ZLinkSpotRuntime
                 Message.from(received.message()),
                   received.hasMore(),
                   received::acceptedJournalRecord,
-                  received.contentType());
+                  received.contentType(),
+                  () -> { },
+                  received.relocationRedirect());
         }
         return new ZLinkBackendActorReceived(
             received.actor(),
