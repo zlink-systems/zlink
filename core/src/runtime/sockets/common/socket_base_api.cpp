@@ -274,6 +274,12 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         scoped_lock_t lock (_transport_pairs_sync);
         const transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
         if (pair_id != 0 && it != _transport_pairs.end ()) {
+            //  A completion frame can overtake this socket thread's pair
+            //  admission. Validation has now selected the registered
+            //  completion connection, so promote only that source before the
+            //  application lane is released for writes.
+            if (it->second.ready)
+                promote_pending_flow_state_locked (it->second);
             if (it->second.remote_flow_seen && it->second.application) {
                 flow_edge_pipe = it->second.application;
                 flow_epoch = it->second.remote_flow_epoch;
@@ -939,6 +945,12 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
                 pair_it->second.completion = NULL;
             else
                 pair_it->second.application = NULL;
+            //  A candidate's unvalidated state cannot outlive the connection
+            //  that supplied it. Once the completion lane is absent nothing
+            //  in this pair can validate any remaining candidate.
+            discard_pending_flow_state_locked (
+              pair_it->second, pipe_->get_transport_connection_id (),
+              pair_it->second.completion == NULL);
             //  A pair that is torn down while paused never sees a RESUMED, so
             //  its +1 on the gauge would never be matched. Release it here,
             //  once, on the lane that owns the accepted state - and only if

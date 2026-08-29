@@ -134,6 +134,28 @@ struct transport_pair_pipes_t
     //  own count behind for good.
     bool remote_flow_pause_accounted;
     uint64_t remote_flow_epoch;
+    //  A flow frame may arrive on a completion lane before the socket thread
+    //  has registered and validated that lane. Keep the latest frame per
+    //  candidate connection until admission identifies the winning pipe.
+    //  Staging is not acceptance: it changes no epoch, blocker, metric, or
+    //  event while the transport pair is unregistered. Admission may later
+    //  accept only the exact physical source that passed pair validation.
+    //  The source is a transport connection id rather than a pipe address so
+    //  allocator reuse cannot turn stale state into the winner's state.
+    struct pending_flow_slot_t
+    {
+        pending_flow_slot_t () :
+            valid (false), paused (false), epoch (0), source_connection_id (0)
+        {
+        }
+
+        bool valid;
+        bool paused;
+        uint64_t epoch;
+        uint64_t source_connection_id;
+    };
+    static const size_t pending_flow_slot_count = 2;
+    pending_flow_slot_t pending_flow[pending_flow_slot_count];
 };
 
 class socket_recv_source_rid_scope_t
@@ -271,6 +293,20 @@ class socket_base_t : public own_t,
     bool consume_receive_flow_state_frame (pipe_t *completion_pipe_,
                                            const zlink::msg_t &msg_);
 
+  private:
+    //  These helpers run under _transport_pairs_sync. A held frame does not
+    //  consume the pair epoch until validation promotes the winning source.
+    void promote_pending_flow_state_locked (transport_pair_pipes_t &pair_);
+    void buffer_pending_flow_state_locked (transport_pair_pipes_t &pair_,
+                                           uint64_t source_connection_id_,
+                                           bool paused_,
+                                           uint64_t epoch_);
+    static void discard_pending_flow_state_locked (
+      transport_pair_pipes_t &pair_, uint64_t source_connection_id_,
+      bool discard_all_);
+
+  public:
+
 #ifdef ZLINK_BUILD_TESTS
     //  Test-only observation and injection for the completion-lane flow state.
     //  These compile out of the shipped runtime, so nothing here is reachable
@@ -308,8 +344,17 @@ class socket_base_t : public own_t,
                                           uint64_t transport_pair_generation_,
                                           unsigned char state_,
                                           uint64_t epoch_);
-    //  Counts the writable edges published by releasing a transport-pair hold.
-    //  A pair whose peer is already PAUSED must never produce one.
+    bool test_pending_flow_buffered (bool *paused_out_,
+                                     uint64_t *epoch_out_,
+                                     uint64_t *pair_id_out_ = NULL,
+                                     uint64_t *generation_out_ = NULL,
+                                     uint64_t *source_connection_id_out_ = NULL) const;
+    bool test_buffer_flow_frame (uint64_t transport_pair_id_,
+                                 uint64_t transport_pair_generation_,
+                                 uint64_t source_connection_id_,
+                                 bool paused_,
+                                 uint64_t epoch_);
+    //  Reports whether both validated lanes have admitted this pair.
     bool test_pair_is_ready (uint64_t transport_pair_id_,
                              uint64_t transport_pair_generation_) const;
     //  Seeds and reads the socket-wide epoch, so the wraparound boundary is

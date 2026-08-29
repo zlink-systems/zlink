@@ -853,13 +853,11 @@ void test_epoch_wraparound_forces_a_new_connection_generation ()
     fixture.teardown ();
 }
 
-//  Pass 3. A flow frame that arrives before this socket has registered the
-//  pair's completion pipe is dropped, not held. The hard contract is that the
-//  drop cannot stall anything: a dropped frame can only ever be a PAUSE for a
-//  pipe that is still RUNNING, so the route stays usable, and the next state
-//  the peer sets converges normally. Late or lost flow state is a hint layer
-//  bounded by the byte HWM, per the design intent.
-void test_flow_frame_before_registration_is_dropped_without_stalling ()
+//  A pair-ready resync is an absolute state and is not repeated until it
+//  changes. If it overtakes peer registration, hold it by candidate connection
+//  without accepting or reporting it, then promote only the completion
+//  connection that wins validation.
+void test_flow_frame_before_registration_is_promoted_after_validation ()
 {
     const int zero = 0;
     char endpoint[MAX_SOCKET_STRING];
@@ -878,48 +876,77 @@ void test_flow_frame_before_registration_is_dropped_without_stalling ()
       zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
 
-    //  Only the ROUTER runs, so its resync is delivered while the DEALER has
-    //  not admitted the pair yet and the frame is dropped.
-    for (int i = 0; i < 400; ++i) {
+    //  Only the ROUTER runs, so its resync reaches the DEALER I/O thread before
+    //  the DEALER socket thread admits the pair. Poll the test-only buffer
+    //  directly: observing it does not process the DEALER mailbox.
+    bool buffered = false;
+    bool buffered_paused = false;
+    uint64_t buffered_epoch = 0;
+    uint64_t buffered_pair_id = 0;
+    uint64_t buffered_generation = 0;
+    uint64_t buffered_source_connection_id = 0;
+    const std::chrono::steady_clock::time_point buffer_deadline =
+      deadline_in_ms (4000);
+    while (!deadline_expired (buffer_deadline)) {
         (void) as_socket (router)->process_submit_commands ();
+        if (as_socket (dealer)->test_pending_flow_buffered (
+              &buffered_paused, &buffered_epoch, &buffered_pair_id,
+              &buffered_generation, &buffered_source_connection_id)) {
+            buffered = true;
+            break;
+        }
         msleep (1);
     }
+    TEST_ASSERT_TRUE (buffered);
+    TEST_ASSERT_TRUE (buffered_paused);
+    TEST_ASSERT_EQUAL_UINT64 (1, buffered_epoch);
+    TEST_ASSERT_TRUE (buffered_source_connection_id != 0);
+    TEST_ASSERT_FALSE (as_socket (dealer)->remote_receive_flow_paused (
+      buffered_pair_id, buffered_generation));
+
+    //  A foreign candidate with a newer epoch cannot overwrite the real
+    //  connection's one-shot PAUSE.
+    const uint64_t foreign_connection_id =
+      buffered_source_connection_id == UINT64_MAX
+        ? 1
+        : buffered_source_connection_id + 1;
+    TEST_ASSERT_TRUE (as_socket (dealer)->test_buffer_flow_frame (
+      buffered_pair_id, buffered_generation, foreign_connection_id, false,
+      buffered_epoch + 8));
 
     zlink_routed_submit_target_t target;
     memset (&target, 0, sizeof (target));
-    bool resolved = false;
+    bool promoted = false;
     const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
     while (!deadline_expired (deadline)) {
         if (as_socket (dealer)->select_routed_submit_target (NULL, &target) == 0
             && target.transport_pair_id != 0
-            && as_socket (dealer)->test_pair_is_ready (
+            && as_socket (dealer)->application_pipe_remote_flow_paused (
                  target.transport_pair_id, target.transport_pair_generation)) {
-            resolved = true;
+            promoted = true;
             break;
         }
         (void) as_socket (router)->process_submit_commands ();
         msleep (1);
     }
-    TEST_ASSERT_TRUE (resolved);
+    TEST_ASSERT_TRUE (promoted);
+    TEST_ASSERT_EQUAL_UINT64 (buffered_pair_id, target.transport_pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (buffered_generation,
+                              target.transport_pair_generation);
+    TEST_ASSERT_FALSE (
+      as_socket (dealer)->test_pending_flow_buffered (NULL, NULL));
+    TEST_ASSERT_TRUE (stays_blocked (dealer, 100));
 
-    //  No stall: the route is usable and ordinary traffic flows.
-    TEST_ASSERT_TRUE (wait_for_send_success (dealer, 5000));
-    char rid[256];
-    TEST_ASSERT_GREATER_THAN_INT (0, zlink_recv (router, rid, sizeof (rid), 0));
-    recv_string_expect_success (router, "payload", 0);
-
-    //  Convergence: the next state the peer sets is applied normally.
+    //  The next state advances normally after promotion and releases sends.
     TEST_ASSERT_EQUAL_INT (
       0, as_socket (router)->set_local_receive_flow_state (k_running));
-    TEST_ASSERT_EQUAL_INT (
-      0, as_socket (router)->set_local_receive_flow_state (k_paused));
     bool converged = false;
     const std::chrono::steady_clock::time_point converge_deadline =
       deadline_in_ms (4000);
     while (!deadline_expired (converge_deadline)) {
         (void) as_socket (router)->process_submit_commands ();
         (void) as_socket (dealer)->process_submit_commands ();
-        if (as_socket (dealer)->application_pipe_remote_flow_paused (
+        if (!as_socket (dealer)->application_pipe_remote_flow_paused (
               target.transport_pair_id, target.transport_pair_generation)) {
             converged = true;
             break;
@@ -927,6 +954,7 @@ void test_flow_frame_before_registration_is_dropped_without_stalling ()
         msleep (1);
     }
     TEST_ASSERT_TRUE (converged);
+    TEST_ASSERT_TRUE (wait_for_send_success (dealer, 5000));
 
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
@@ -1448,7 +1476,7 @@ int main ()
     RUN_TEST (test_flow_frame_cannot_complete_a_truncated_reply);
     RUN_TEST (test_epoch_zero_is_refused_by_the_pipe_command);
     RUN_TEST (test_epoch_wraparound_forces_a_new_connection_generation);
-    RUN_TEST (test_flow_frame_before_registration_is_dropped_without_stalling);
+    RUN_TEST (test_flow_frame_before_registration_is_promoted_after_validation);
     RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);
     RUN_TEST (test_router_peer_state_reports_remote_pause);
     RUN_TEST (test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair);

@@ -221,25 +221,22 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
     pipe_t *application = NULL;
     {
         scoped_lock_t lock (_transport_pairs_sync);
-        const transport_pairs_t::iterator found =
-          _transport_pairs.find (transport_pair_key_t (pair_id, generation));
-        if (found == _transport_pairs.end ())
+        //  The transport I/O thread can decode the frame before this socket's
+        //  mailbox has admitted the same physical connection. Create the pair
+        //  record when needed, but do not accept the state until validation
+        //  identifies this exact completion connection as the winner. The
+        //  unregistered frame itself therefore produces no state transition,
+        //  metric, or event.
+        transport_pair_pipes_t &pair =
+          _transport_pairs[transport_pair_key_t (pair_id, generation)];
+        if (pair.completion && pair.completion != completion_pipe_)
             return true;
-        transport_pair_pipes_t &pair = found->second;
-        //  Only the registered completion pipe of this pair may carry the
-        //  state. That covers a frame on the application lane, a frame from a
-        //  connection that lost registration, and a frame that overtook this
-        //  socket's own pair admission - on a passive transport the peer
-        //  supplies the pair identity, so an unregistered sender has not been
-        //  validated as the pair's owner.
-        //
-        //  Such a frame is dropped rather than held. A dropped frame can only
-        //  ever be a PAUSE for a pipe that is still RUNNING, because a paused
-        //  pipe implies the pair was already registered, so dropping can delay
-        //  throttling but can never stall a route - and the byte HWM bounds
-        //  what the delay costs.
-        if (pair.completion != completion_pipe_)
+        if (!pair.ready || pair.completion != completion_pipe_) {
+            buffer_pending_flow_state_locked (
+              pair, completion_pipe_->get_transport_connection_id (), paused,
+              frame.epoch);
             return true;
+        }
 
         //  Duplicate or reversed epoch within one generation.
         if (pair.remote_flow_seen && frame.epoch <= pair.remote_flow_epoch) {
@@ -267,6 +264,84 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
         application->release_lifetime_ref ();
     }
     return true;
+}
+
+void zlink::socket_base_t::buffer_pending_flow_state_locked (
+  transport_pair_pipes_t &pair_, uint64_t source_connection_id_, bool paused_,
+  uint64_t epoch_)
+{
+    if (source_connection_id_ == 0)
+        return;
+
+    //  Update only this candidate's slot. A losing connection must never burn
+    //  the winner's epoch or overwrite its one-shot absolute state.
+    for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+         ++i) {
+        transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
+        if (!slot.valid || slot.source_connection_id != source_connection_id_)
+            continue;
+        if (epoch_ <= slot.epoch)
+            return;
+        slot.paused = paused_;
+        slot.epoch = epoch_;
+        return;
+    }
+    for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+         ++i) {
+        transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
+        if (slot.valid)
+            continue;
+        slot.valid = true;
+        slot.paused = paused_;
+        slot.epoch = epoch_;
+        slot.source_connection_id = source_connection_id_;
+        return;
+    }
+    //  The bounded candidate set is full. Refuse the newcomer instead of
+    //  evicting a possible winner; only a validated source can be promoted.
+}
+
+void zlink::socket_base_t::promote_pending_flow_state_locked (
+  transport_pair_pipes_t &pair_)
+{
+    bool found = false;
+    bool paused = false;
+    uint64_t epoch = 0;
+    const uint64_t winner_connection_id =
+      pair_.completion ? pair_.completion->get_transport_connection_id () : 0;
+    for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+         ++i) {
+        transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
+        if (slot.valid && winner_connection_id != 0
+            && slot.source_connection_id == winner_connection_id) {
+            found = true;
+            paused = slot.paused;
+            epoch = slot.epoch;
+        }
+        slot = transport_pair_pipes_t::pending_flow_slot_t ();
+    }
+
+    if (!found)
+        return;
+    if (pair_.remote_flow_seen && epoch <= pair_.remote_flow_epoch)
+        return;
+    pair_.remote_flow_epoch = epoch;
+    pair_.remote_flow_seen = true;
+    pair_.remote_flow_paused = paused;
+}
+
+void zlink::socket_base_t::discard_pending_flow_state_locked (
+  transport_pair_pipes_t &pair_, uint64_t source_connection_id_,
+  bool discard_all_)
+{
+    for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+         ++i) {
+        transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
+        if (!slot.valid)
+            continue;
+        if (discard_all_ || slot.source_connection_id == source_connection_id_)
+            slot = transport_pair_pipes_t::pending_flow_slot_t ();
+    }
 }
 
 void zlink::socket_base_t::flow_state_applied (
@@ -469,6 +544,49 @@ bool zlink::socket_base_t::test_deliver_flow_state_command (
         return false;
     send_flow_state (application, state_, epoch_);
     application->release_lifetime_ref ();
+    return true;
+}
+
+bool zlink::socket_base_t::test_pending_flow_buffered (
+  bool *paused_out_, uint64_t *epoch_out_, uint64_t *pair_id_out_,
+  uint64_t *generation_out_, uint64_t *source_connection_id_out_) const
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    for (transport_pairs_t::const_iterator it = _transport_pairs.begin (),
+                                           end = _transport_pairs.end ();
+         it != end; ++it) {
+        for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+             ++i) {
+            if (!it->second.pending_flow[i].valid)
+                continue;
+            if (paused_out_)
+                *paused_out_ = it->second.pending_flow[i].paused;
+            if (epoch_out_)
+                *epoch_out_ = it->second.pending_flow[i].epoch;
+            if (pair_id_out_)
+                *pair_id_out_ = it->first.first;
+            if (generation_out_)
+                *generation_out_ = it->first.second;
+            if (source_connection_id_out_)
+                *source_connection_id_out_ =
+                  it->second.pending_flow[i].source_connection_id;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool zlink::socket_base_t::test_buffer_flow_frame (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  uint64_t source_connection_id_, bool paused_, uint64_t epoch_)
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pairs_t::iterator it = _transport_pairs.find (
+      transport_pair_key_t (transport_pair_id_, transport_pair_generation_));
+    if (it == _transport_pairs.end ())
+        return false;
+    buffer_pending_flow_state_locked (it->second, source_connection_id_,
+                                      paused_, epoch_);
     return true;
 }
 #endif
