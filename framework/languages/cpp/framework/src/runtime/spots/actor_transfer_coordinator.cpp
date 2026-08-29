@@ -339,13 +339,36 @@ bool actor_transfer_coordinator_t::matches_message_follow_source (
   const runtime::protocol::actor_route_fence_t &source_fence) const
 {
     return _lane.run ([&, this] {
+        return matches_message_follow_source_unlocked (actor_key, source_fence,
+                                                       std::chrono::steady_clock::now ());
+    }).get ();
+}
+
+bool actor_transfer_coordinator_t::matches_message_follow_source_unlocked (
+  const std::string &actor_key,
+  const runtime::protocol::actor_route_fence_t &source_fence,
+  std::chrono::steady_clock::time_point now) const
+{
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
         return false;
-    const auto now = std::chrono::steady_clock::now ();
     return std::ranges::any_of (found->second, [&] (const auto &route) {
         return route.remove_at > now && route.source_fence == source_fence;
     });
+}
+
+actor_transfer_dispatch_state_snapshot_t actor_transfer_coordinator_t::project_dispatch_state (
+  const std::string &actor_key,
+  const runtime::protocol::actor_route_fence_t *source_fence) const
+{
+    return _lane.run ([&, this] {
+        actor_transfer_dispatch_state_snapshot_t snapshot;
+        snapshot.matches_message_follow_source =
+          source_fence != nullptr
+          && matches_message_follow_source_unlocked (actor_key, *source_fence,
+                                                     std::chrono::steady_clock::now ());
+        snapshot.transfer_in_progress = _moves.contains (actor_key);
+        return snapshot;
     }).get ();
 }
 

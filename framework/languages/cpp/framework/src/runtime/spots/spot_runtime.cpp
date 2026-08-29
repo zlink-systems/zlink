@@ -10237,7 +10237,26 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
       _state, message_flow_outcome_t::received, dispatch_kind, packet_name, {},
       actor_ref.actor_id ().value (), "relay_actor_packet.enter",
       admitted_message_follow_target == nullptr ? "follow_fence=none" : "follow_fence=present");
-    if (_state->lane.run ([&] { return _state->retiring_actor_keys.contains (key); }).get ()) {
+    struct actor_relay_prefence_state_snapshot_t
+    {
+        bool retiring = false;
+        bool authority_projected = false;
+        std::optional<runtime::protocol::actor_route_fence_t> authority_fence;
+    };
+    const auto prefence_snapshot = _state->lane.run ([&] {
+        actor_relay_prefence_state_snapshot_t snapshot;
+        snapshot.retiring = _state->retiring_actor_keys.contains (key);
+        if (snapshot.retiring)
+            return snapshot;
+        snapshot.authority_projected = admitted_message_follow_target != nullptr;
+        if (!snapshot.authority_projected)
+            return snapshot;
+        const auto current = _state->actor_authority_fences.find (key);
+        if (current != _state->actor_authority_fences.end ())
+            snapshot.authority_fence = current->second;
+        return snapshot;
+    }).get ();
+    if (prefence_snapshot.retiring) {
         co_return result_t<std::optional<zlink::message_t>>::failure (
           framework_error_kind_t::not_found, "actor destruction is pending");
     }
@@ -10259,12 +10278,15 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         }
     }
     if (admitted_message_follow_target != nullptr) {
-        const auto current_fence = _state->lane.run ([&] {
-            const auto current = _state->actor_authority_fences.find (key);
-            return current == _state->actor_authority_fences.end ()
-                     ? std::optional<runtime::protocol::actor_route_fence_t>{}
-                     : std::make_optional (current->second);
-        }).get ();
+        auto current_fence = prefence_snapshot.authority_fence;
+        if (!prefence_snapshot.authority_projected) {
+            current_fence = _state->lane.run ([&] {
+                const auto current = _state->actor_authority_fences.find (key);
+                return current == _state->actor_authority_fences.end ()
+                         ? std::optional<runtime::protocol::actor_route_fence_t>{}
+                         : std::make_optional (current->second);
+            }).get ();
+        }
         // The exact adoption fence gates only when this node retains state
         // that could be confused with an older incarnation: a recorded
         // adoption fence or a retained Message Follow source route. A
@@ -10367,9 +10389,6 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
               && current_fence->authority_owner_generation > m.authority_owner_generation;
         }
     }
-    const bool targets_committed_source =
-      admitted_message_follow_target != nullptr
-      && matches_actor_message_follow_source (actor_ref, *admitted_message_follow_target);
     {
         // In-flight handoff (§10.2-1): actor packets that arrive while the actor
         // is moving are preserved in arrival order and travel to the target with
@@ -10378,8 +10397,11 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         // immediate dispatch. A preserved request keeps its source reply token;
         // the target sends one internal terminal envelope after replay.
         const bool is_request = message_kind == stream_message_kind_t::request;
+        const auto targets_committed_source =
+          !targets_current_authority && admitted_message_follow_target != nullptr
+          && matches_actor_message_follow_source (actor_ref, *admitted_message_follow_target);
         const auto append_result =
-          !targets_current_authority && targets_committed_source
+          targets_committed_source
             ? detail::handoff_append_result_t::not_moving
             : _state->actor_transfer_coordinator.try_append_backlog (
                 key, detail::handoff_packet_t{std::string (packet_name), message.to_bytes (),
@@ -13027,21 +13049,62 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
     if (owner.owner_kind == service::owner_kind_t::actor
         && (record.kind == service::record_kind_t::actor_send
             || record.kind == service::record_kind_t::actor_request)) {
-        auto actor_type = _state->lane.run ([&] {
-            std::string result;
-            const auto found =
-              _state->actor_types_by_id.find (std::string (owner.actor->actor_id ().value ())); 
-            if (found != _state->actor_types_by_id.end ())
-                result = found->second;
-            return result;
-        }).get ();
+        const auto actor_id = std::string (owner.actor->actor_id ().value ());
+        const bool has_bound_session_source = record.source_session_rid.has_value ()
+                                              || record.source_binding_generation != 0
+                                              || record.source_session_sequence != 0;
+        using actor_route_admission_t = decltype (_state->actor_route_admission);
+        using actor_message_follow_relay_t = decltype (_state->actor_message_follow_relay);
+        // These node-owned values all feed this mesh-record dispatch phase.
+        // Calls through the projected ports remain outside the state lane.
+        struct actor_mesh_dispatch_state_snapshot_t
+        {
+            std::string actor_type;
+            std::string actor_key;
+            std::shared_ptr<service::mesh_node_t> native_node;
+            std::shared_ptr<runtime::stateful::authority_relocation_port_t> relocation_authority;
+            actor_route_admission_t actor_route_admission;
+            actor_message_follow_relay_t actor_message_follow_relay;
+            std::optional<runtime::protocol::actor_route_fence_t> authority_fence;
+            std::string relay_parking_node_rid;
+        };
+        const auto project_actor_mesh_dispatch_state = [&] (
+                                                         std::optional<std::string_view> resolved_type) {
+            return _state->lane.run ([&] {
+                actor_mesh_dispatch_state_snapshot_t snapshot;
+                const auto found = _state->actor_types_by_id.find (actor_id);
+                if (resolved_type && !resolved_type->empty ()) {
+                    snapshot.actor_type = *resolved_type;
+                    _state->actor_types_by_id[actor_id] = snapshot.actor_type;
+                } else if (found != _state->actor_types_by_id.end () && !found->second.empty ()) {
+                    snapshot.actor_type = found->second;
+                }
+                if (snapshot.actor_type.empty ())
+                    return snapshot;
+
+                snapshot.actor_key = snapshot.actor_type + ":" + actor_id;
+                snapshot.native_node = _state->native_node.lock ();
+                snapshot.relocation_authority = _state->relocation_authority;
+                snapshot.actor_route_admission = _state->actor_route_admission;
+                snapshot.actor_message_follow_relay = _state->actor_message_follow_relay;
+                if (record.actor_route && !has_bound_session_source) {
+                    const auto current = _state->actor_authority_fences.find (snapshot.actor_key);
+                    if (current != _state->actor_authority_fences.end ())
+                        snapshot.authority_fence = current->second;
+                }
+                snapshot.relay_parking_node_rid = detail::effective_spot_node_rid (_state->snapshot);
+                return snapshot;
+            }).get ();
+        };
+        auto dispatch_snapshot = project_actor_mesh_dispatch_state (std::nullopt);
+        auto actor_type = dispatch_snapshot.actor_type;
         if (actor_type.empty ()) {
-            const auto actor_id = std::string (owner.actor->actor_id ().value ());
             const auto located = actor_type_from_authority (
               services.get_required<runtime::live_location_reader_t> (), actor_id);
             if (located && !located->empty ()) {
-                actor_type = *located;
-                _state->lane.run ([&] { _state->actor_types_by_id[actor_id] = actor_type; }).get ();
+                dispatch_snapshot = project_actor_mesh_dispatch_state (
+                  std::make_optional<std::string_view> (*located));
+                actor_type = dispatch_snapshot.actor_type;
             }
         }
         runtime::messaging::message_parts_t encoded (std::move (parts));
@@ -13072,9 +13135,6 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                            ? dispatch_message_kind_t::actor_send
                                            : dispatch_message_kind_t::actor_request;
         auto &actor_gateway = services.get_required<actor_gateway_runtime_t> ();
-        const bool has_bound_session_source = record.source_session_rid.has_value ()
-                                              || record.source_binding_generation != 0
-                                              || record.source_session_sequence != 0;
         if (has_bound_session_source
             && (!record.source_session_rid || record.source_binding_generation == 0
                 || record.source_session_sequence == 0)) {
@@ -13085,12 +13145,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         std::optional<result_t<void>> session_relay_admission;
         bool targets_current_authority = false;
         bool targets_admitted_route = false;
-        auto [native_node, relocation_authority, actor_route_admission,
-              actor_message_follow_relay] = _state->lane.run ([&] {
-            return std::make_tuple (_state->native_node.lock (), _state->relocation_authority,
-                                    _state->actor_route_admission,
-                                    _state->actor_message_follow_relay);
-        }).get ();
+        auto native_node = std::move (dispatch_snapshot.native_node);
+        auto relocation_authority = std::move (dispatch_snapshot.relocation_authority);
+        auto actor_route_admission = std::move (dispatch_snapshot.actor_route_admission);
+        auto actor_message_follow_relay = std::move (dispatch_snapshot.actor_message_follow_relay);
+        const auto authority_fence = std::move (dispatch_snapshot.authority_fence);
+        const auto relay_parking_node_rid = std::move (dispatch_snapshot.relay_parking_node_rid);
         if (record.actor_route) {
             const auto &route = *record.actor_route;
             const auto local =
@@ -13101,10 +13161,16 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
               && route.target_node_generation == local.lifecycle_generation ();
             const bool targets_exact_incarnation =
               targets_local_actor && route.object_generation == actor.object_generation ();
+            const auto coordinator_snapshot =
+              targets_exact_incarnation
+                ? _state->actor_transfer_coordinator.project_dispatch_state (
+                    dispatch_snapshot.actor_key, &route)
+                : detail::actor_transfer_dispatch_state_snapshot_t{};
             const bool follows_committed_source =
-              targets_exact_incarnation && matches_actor_message_follow_source (actor, route);
+              targets_exact_incarnation
+              && coordinator_snapshot.matches_message_follow_source;
             const bool follows_in_flight_source =
-              targets_exact_incarnation && actor_transfer_in_progress (actor);
+              targets_exact_incarnation && coordinator_snapshot.transfer_in_progress;
             const bool requires_exact_incarnation =
               header.value ().message_name == actor_bound_session_bind_route_request_t::packet_name
               || header.value ().message_name == actor_bound_session_route_request_t::packet_name;
@@ -13116,11 +13182,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             const bool targets_current_bound_route =
               session_relay_admission && *session_relay_admission;
             if (!has_bound_session_source) {
-                targets_current_authority = _state->lane.run ([&] {
-                    const auto current = _state->actor_authority_fences.find (actor_key (actor));
-                    return current != _state->actor_authority_fences.end ()
-                           && current->second == route;
-                }).get ();
+                targets_current_authority = authority_fence && *authority_fence == route;
                 if (!targets_current_authority && relocation_authority) {
                     try {
                         const auto committed = relocation_authority->read (
@@ -13328,9 +13390,6 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 (*terminal_owner) ();
             };
         }
-        const auto relay_parking_node_rid = _state->lane.run ([&] {
-            return detail::effective_spot_node_rid (_state->snapshot);
-        }).get ();
         auto relayed = [&] {
             const bool actor_packet = record.kind == service::record_kind_t::actor_request
                                       || record.kind == service::record_kind_t::actor_send;
@@ -13339,11 +13398,15 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
              * than a positive Location-cache result for the former owner.
              * Relay it before ordinary current-authority dispatch so the
              * original operation and reply route remain attached. */
+            const auto coordinator_snapshot =
+              _state->actor_transfer_coordinator.project_dispatch_state (
+                dispatch_snapshot.actor_key,
+                record.actor_route ? &*record.actor_route : nullptr);
             const auto follows_committed_source =
               actor_packet && record.actor_route
-              && matches_actor_message_follow_source (actor, *record.actor_route);
+              && coordinator_snapshot.matches_message_follow_source;
             const auto follows_in_flight_source =
-              actor_packet && actor_transfer_in_progress (actor);
+              actor_packet && coordinator_snapshot.transfer_in_progress;
             if (follows_committed_source && !follows_in_flight_source
                 && actor_message_follow_relay) {
                 //  The wire record kind is the authoritative send/request

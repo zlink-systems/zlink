@@ -169,6 +169,12 @@ enum class handoff_append_result_t
     duplicate_request
 };
 
+struct actor_transfer_dispatch_state_snapshot_t
+{
+    bool matches_message_follow_source = false;
+    bool transfer_in_progress = false;
+};
+
 class actor_transfer_coordinator_t
 {
   public:
@@ -241,6 +247,11 @@ class actor_transfer_coordinator_t
     bool matches_message_follow_source (
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence) const;
+    // Both values decide one dispatch admission phase. Project them in one
+    // coordinator turn; callers take a fresh snapshot for a later phase.
+    actor_transfer_dispatch_state_snapshot_t project_dispatch_state (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t *source_fence) const;
     std::optional<actor_message_follow_target_t> message_follow_target (
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence) const;
@@ -366,6 +377,11 @@ class actor_transfer_coordinator_t
         std::size_t in_flight_bytes = 0;
         message_follow_suppression_key_t suppression_key;
     };
+
+    bool matches_message_follow_source_unlocked (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence,
+      std::chrono::steady_clock::time_point now) const;
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
