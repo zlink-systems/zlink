@@ -11,14 +11,14 @@
 | A1 | cpp B-2 TOCTOU fence | opus | `relocation-toctou-verdict.ko.md` 판정 구현 — coordinator admission↔Actor FIFO admission 원자화(membership :903 위반 해소). 잠재 결함 수정 | B-2 인터리빙 회귀 + 게이트 45/45 + ZW ×3 |
 | A2 | java B-2 silent drop | opus | post-cut queue 거부를 호출자가 묵살하는 유실 경로 수정 — ingress hold/capture 회송(routing :222) | 회귀 + gradle 게이트 + ZW java ×3·kotlin ×1 |
 | A3 | dotnet registry 재조회 제거 | sol medium | 08-routing §2.6(:316) 위반 과잉 검증 삭제(-2회, 14/15→12/13) + reset clear→fence 창의 same-generation 재게시 가능성 실증(가능하면 :471 위반으로 수정) | Deferred Join 캡처 계약(:6576) 보존 + 전체 게이트 + ZW ×3 |
-| A4 | 과잉 검증 전수 감사 ×4 | sol medium ×4 | 언어별 판정 지점 전수 분류(정당 10 / 금지 A·B·C / [의심]) — 1차 시도는 codex 한도 소진으로 유실, 재실행 중 | 언어별 분류표 + 과잉 우선순위 |
+| ~~A4~~ | ~~과잉 검증 전수 감사 ×4~~ | — | **완료(2026-08-30)** — `overvalidation-audit.ko.md`: 과잉 합계 ~51지점(cpp 14·dotnet 22·java 10계열·node 5) → B1 승격 |
 | A5 | 동적 제어 표면 dual 정렬 | sol medium | 스펙 06 §5 신설 조항(dual: async 정본 + sync 최소 bridge, sync는 framework 문맥 밖 전용) 구현 — 4언어 인벤토리 후 비파괴 추가 | 언어별 게이트 + 신규 표면 단위 테스트 |
 
 ## B. 대기 (선행 조건 있음)
 
 | # | 트랙 | 선행 | 내용 |
 |---|---|---|---|
-| B1 | 과잉 검증 일괄 제거 라운드 | A4 | 감사 "과잉" 판정분을 언어별 제거 — 각 게이트+ZW 재실증 |
+| B1 | 과잉 검증 일괄 제거 라운드 | 언어별 A1~A3 종료 | `overvalidation-audit.ko.md`의 과잉 판정분 제거 — node(5, 선행 없음·즉시 가능) → dotnet(22, A3 후) → java(10, A2 후) → cpp(14, A1 후). 각 언어 게이트+ZW 재실증 |
 | B2 | cpp 7번째 wait 재설계 | A1 | B-2 fence가 자리 잡으면 warm materialization 재검증의 존치/이관 재판정(send 7→6 가능성) — 단독 판단 금지, fence 설계와 함께 |
 | B3 | 감사 [의심] 미분류 정리 | A4·B1 | dotnet 386곳·cpp 662곳 콜드/핫 정밀 분류(선택적 — B1이 상당 부분 흡수 예상) |
 
