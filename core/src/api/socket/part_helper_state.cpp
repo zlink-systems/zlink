@@ -17,20 +17,6 @@ std::mutex g_part_helper_mutex;
 std::unordered_map<void *, std::shared_ptr<zlink::part_helper_internal::handle_state_t>>
   g_part_helper_state;
 
-std::shared_ptr<zlink::part_helper_internal::handle_state_t>
-try_socket_owned_handle_state (void *handle_)
-{
-    socket_handle_t handle = as_socket_handle (handle_);
-    return zlink::part_helper_internal::find_socket_state (handle.socket);
-}
-
-std::shared_ptr<zlink::part_helper_internal::handle_state_t>
-create_socket_owned_handle_state (void *handle_)
-{
-    socket_handle_t handle = as_socket_handle (handle_);
-    return zlink::part_helper_internal::find_or_create_socket_state (handle.socket);
-}
-
 bool prepare_send_scope_for_cleanup (
   zlink::part_helper_internal::send_sequence_state_t *send_)
 {
@@ -83,12 +69,9 @@ zlink::part_helper_internal::find_or_create_handle_state (void *handle_)
         return std::shared_ptr<handle_state_t> ();
     }
 
-    std::shared_ptr<handle_state_t> socket_state = create_socket_owned_handle_state (handle_);
-    if (socket_state)
-        return socket_state;
-    socket_handle_t valid_handle = as_socket_handle (handle_);
-    if (valid_handle.socket)
-        return std::shared_ptr<handle_state_t> ();
+    socket_handle_t handle = as_socket_handle (handle_);
+    if (handle.socket)
+        return find_or_create_socket_state (handle.socket);
 
     std::lock_guard<std::mutex> lock (g_part_helper_mutex);
     std::unordered_map<void *, std::shared_ptr<handle_state_t>>::iterator it =
@@ -120,12 +103,9 @@ zlink::part_helper_internal::find_or_create_handle_state (void *handle_)
 std::shared_ptr<zlink::part_helper_internal::handle_state_t>
 zlink::part_helper_internal::find_handle_state (void *handle_)
 {
-    std::shared_ptr<handle_state_t> socket_state = try_socket_owned_handle_state (handle_);
-    if (socket_state)
-        return socket_state;
-    socket_handle_t valid_handle = as_socket_handle (handle_);
-    if (valid_handle.socket)
-        return std::shared_ptr<handle_state_t> ();
+    socket_handle_t handle = as_socket_handle (handle_);
+    if (handle.socket)
+        return find_socket_state (handle.socket);
 
     std::lock_guard<std::mutex> lock (g_part_helper_mutex);
     std::unordered_map<void *, std::shared_ptr<handle_state_t>>::iterator it =

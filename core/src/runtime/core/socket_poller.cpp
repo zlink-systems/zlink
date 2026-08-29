@@ -38,7 +38,8 @@ zlink::socket_poller_t::socket_poller_t () :
 #endif
 #if defined ZLINK_POLL_BASED_ON_POLL
     ,
-    _pollfds (NULL)
+    _pollfds (_inline_pollfds),
+    _pollfds_capacity (ZLINK_POLLITEMS_DFLT)
 #elif defined ZLINK_POLL_BASED_ON_SELECT
     ,
     _max_fd (0)
@@ -70,9 +71,9 @@ zlink::socket_poller_t::~socket_poller_t ()
     _tag = 0xdeadbeef;
 
 #if defined ZLINK_POLL_BASED_ON_POLL
-    if (_pollfds) {
+    if (_pollfds != _inline_pollfds) {
         free (_pollfds);
-        _pollfds = NULL;
+        _pollfds = _inline_pollfds;
     }
 #endif
 }
@@ -319,12 +320,6 @@ int zlink::socket_poller_t::rebuild ()
 #endif
 
 #if defined ZLINK_POLL_BASED_ON_POLL
-
-    if (_pollfds) {
-        free (_pollfds);
-        _pollfds = NULL;
-    }
-
 #if defined ZLINK_HAVE_WINDOWS
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
         if (it->events)
@@ -335,10 +330,7 @@ int zlink::socket_poller_t::rebuild ()
     if (_pollset_size == 0)
         return 0;
 
-    _pollfds = static_cast<pollfd *> (malloc (_pollset_size * sizeof (pollfd)));
-
-    if (!_pollfds) {
-        errno = ENOMEM;
+    if (ensure_pollfds_capacity (static_cast<size_t> (_pollset_size)) != 0) {
         _need_rebuild = true;
         return -1;
     }
@@ -351,6 +343,7 @@ int zlink::socket_poller_t::rebuild ()
         _socket_signaler_pollfd_index = item_nbr;
         _pollfds[item_nbr].fd = _socket_signaler->get_fd ();
         _pollfds[item_nbr].events = POLLIN;
+        _pollfds[item_nbr].revents = 0;
         ++item_nbr;
     }
 #endif
@@ -376,6 +369,7 @@ int zlink::socket_poller_t::rebuild ()
                 }
 
                 _pollfds[item_nbr].events = POLLIN;
+                _pollfds[item_nbr].revents = 0;
                 item_nbr++;
 #endif
             } else {
@@ -383,6 +377,7 @@ int zlink::socket_poller_t::rebuild ()
                 _pollfds[item_nbr].events = (it->events & ZLINK_POLLIN ? POLLIN : 0)
                                             | (it->events & ZLINK_POLLOUT ? POLLOUT : 0)
                                             | (it->events & ZLINK_POLLPRI ? POLLPRI : 0);
+                _pollfds[item_nbr].revents = 0;
                 it->pollfd_index = item_nbr;
                 item_nbr++;
             }
@@ -466,6 +461,27 @@ int zlink::socket_poller_t::rebuild ()
 
     return 0;
 }
+
+#if defined ZLINK_POLL_BASED_ON_POLL
+int zlink::socket_poller_t::ensure_pollfds_capacity (size_t capacity_)
+{
+    if (capacity_ <= _pollfds_capacity)
+        return 0;
+
+    pollfd *const pollfds =
+      static_cast<pollfd *> (malloc (capacity_ * sizeof (pollfd)));
+    if (!pollfds) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    if (_pollfds != _inline_pollfds)
+        free (_pollfds);
+    _pollfds = pollfds;
+    _pollfds_capacity = capacity_;
+    return 0;
+}
+#endif
 
 #if !defined ZLINK_HAVE_WINDOWS
 zlink::signaler_t *zlink::socket_poller_t::ensure_socket_signaler ()

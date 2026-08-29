@@ -172,7 +172,7 @@ int move_staged_parts_for_submit (const std::shared_ptr<handle_state_t> &state_,
 int prepare_recv_step (void *handle_,
                        recv_family_t family_,
                        zlink::socket_base_t *source_socket_,
-                       std::shared_ptr<handle_state_t> *state_out_,
+                       std::shared_ptr<handle_state_t> *state_inout_,
                        bool *first_part_out_,
                        zlink::socket_base_t **active_source_socket_out_);
 void complete_send_step (const std::shared_ptr<handle_state_t> &state_,

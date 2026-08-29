@@ -15,9 +15,9 @@ namespace reqrep = zlink::socket_reqrep_internal;
 int reqrep::lookup_socket_pending_request_by_seq (
   const std::shared_ptr<reqrep::socket_request_reply_state_t> &state_,
   uint64_t request_seq_,
-  reqrep::pending_key_t *key_out_)
+  reqrep::pending_request_token_t *token_out_)
 {
-    if (!state_ || !key_out_ || request_seq_ == 0) {
+    if (!state_ || !token_out_ || request_seq_ == 0) {
         errno = EFAULT;
         return -1;
     }
@@ -37,8 +37,17 @@ int reqrep::lookup_socket_pending_request_by_seq (
         errno = ENOMEM;
         return -1;
     }
-    key_out_->request_seq = key.request_seq;
-    key_out_->peer_rid.swap (key.peer_rid);
+    std::unordered_map<reqrep::pending_key_t, reqrep::pending_request_t,
+                       reqrep::pending_key_hash_t>::const_iterator pending =
+      state_->pending_requests.find (key);
+    if (pending == state_->pending_requests.end ()) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    token_out_->key.request_seq = key.request_seq;
+    token_out_->key.peer_rid.swap (key.peer_rid);
+    token_out_->resolved_timeout_ms = pending->second.resolved_timeout_ms;
     return 0;
 }
 
@@ -98,16 +107,16 @@ bool reqrep::record_socket_pending_transport_pair_identity (
 }
 
 int reqrep::ensure_socket_pending_request (
-  socket_handle_t handle_,
+  const socket_handle_t &handle_,
   const zlink_routing_id_t *peer_rid_,
   uint32_t timeout_ms_,
   zlink_reply_handler_fn handler_,
   void *userdata_,
   uint64_t *request_seq_out_,
   std::shared_ptr<reqrep::socket_request_reply_state_t> *state_out_,
-  reqrep::pending_key_t *key_out_)
+  reqrep::pending_request_token_t *token_out_)
 {
-    if (!request_seq_out_ || !state_out_ || !key_out_) {
+    if (!request_seq_out_ || !state_out_ || !token_out_) {
         errno = EFAULT;
         return -1;
     }
@@ -142,7 +151,7 @@ int reqrep::ensure_socket_pending_request (
                 pending.key = key;
                 pending.transport_pair_id = 0;
                 pending.transport_pair_generation = 0;
-                pending.timeout_ms = zlink::request_reply::resolve_timeout_ms (
+                pending.resolved_timeout_ms = zlink::request_reply::resolve_timeout_ms (
                   timeout_ms_, state->default_timeout_ms);
                 pending.handler = handler_;
                 pending.userdata = userdata_;
@@ -167,35 +176,25 @@ int reqrep::ensure_socket_pending_request (
     }
 
     *state_out_ = state;
-    key_out_->request_seq = key.request_seq;
-    key_out_->peer_rid.swap (key.peer_rid);
+    token_out_->key.request_seq = key.request_seq;
+    token_out_->key.peer_rid.swap (key.peer_rid);
+    token_out_->resolved_timeout_ms = pending.resolved_timeout_ms;
     return 0;
 }
 
 int reqrep::arm_socket_pending_request_timeout (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const reqrep::pending_key_t &key_)
+  const reqrep::pending_request_token_t &token_)
 {
     if (!state_) {
         errno = EFAULT;
         return -1;
     }
 
-    uint32_t timeout_ms = 0;
-    {
-        std::lock_guard<std::mutex> lock (state_->mutex);
-        std::unordered_map<reqrep::pending_key_t, reqrep::pending_request_t,
-                           reqrep::pending_key_hash_t>::iterator pending =
-          state_->pending_requests.find (key_);
-        if (pending == state_->pending_requests.end ())
-            return 0;
-        if (pending->second.timeout_task)
-            return 0;
-        timeout_ms = pending->second.timeout_ms;
-    }
-
     std::shared_ptr<zlink::request_timeout::task_t> task;
-    if (reqrep::schedule_socket_pending_timeout (state_, key_, timeout_ms, &task) != 0) {
+    if (reqrep::schedule_socket_pending_timeout (
+          state_, token_.key, token_.resolved_timeout_ms, &task)
+        != 0) {
         // The request record is already physically committed when this is
         // called, so timeout-allocation failure cannot be reported as a
         // submit failure: the caller's payload has transferred and the peer
@@ -203,7 +202,21 @@ int reqrep::arm_socket_pending_request_timeout (
         // completion channel instead.
         const int terminal_errno = errno;
         reqrep::pending_request_t pending;
-        if (reqrep::remove_socket_pending_request (state_, key_, &pending)) {
+        bool removed = false;
+        {
+            // Another arm may already own the live timeout. Its later schedule
+            // failure must not resolve this admitted request as an error.
+            std::lock_guard<std::mutex> lock (state_->mutex);
+            std::unordered_map<reqrep::pending_key_t, reqrep::pending_request_t,
+                               reqrep::pending_key_hash_t>::const_iterator current =
+              state_->pending_requests.find (token_.key);
+            if (current != state_->pending_requests.end ()
+                && !current->second.timeout_task) {
+                removed = reqrep::remove_socket_pending_request_locked (
+                  state_.get (), token_.key, &pending);
+            }
+        }
+        if (removed) {
             if (reqrep::queue_reply_completion (
                   state_, pending.handler, pending.userdata, terminal_errno,
                   NULL, 0)
@@ -224,7 +237,7 @@ int reqrep::arm_socket_pending_request_timeout (
         std::lock_guard<std::mutex> lock (state_->mutex);
         std::unordered_map<reqrep::pending_key_t, reqrep::pending_request_t,
                            reqrep::pending_key_hash_t>::iterator pending =
-          state_->pending_requests.find (key_);
+          state_->pending_requests.find (token_.key);
         if (pending != state_->pending_requests.end () && !pending->second.timeout_task) {
             pending->second.timeout_task = task;
             installed = true;

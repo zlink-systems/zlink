@@ -681,16 +681,22 @@ int zlink::part_helper_internal::prepare_recv_step (
   void *handle_,
   recv_family_t family_,
   zlink::socket_base_t *source_socket_,
-  std::shared_ptr<handle_state_t> *state_out_,
+  std::shared_ptr<handle_state_t> *state_inout_,
   bool *first_part_out_,
   zlink::socket_base_t **active_source_socket_out_)
 {
-    if (!state_out_ || !first_part_out_ || !active_source_socket_out_) {
+    if (!state_inout_ || !first_part_out_ || !active_source_socket_out_) {
         errno = EFAULT;
         return -1;
     }
 
-    std::shared_ptr<handle_state_t> state = find_or_create_handle_state (handle_);
+    // The public entry may already own the socket lifetime and resolve its
+    // socket-owned state. Reuse that operation context instead of acquiring
+    // the public handle a second time. Foreign-handle callers retain the
+    // registry fallback through handle_.
+    std::shared_ptr<handle_state_t> state = *state_inout_;
+    if (!state)
+        state = find_or_create_handle_state (handle_);
     if (!state)
         return -1;
 
@@ -718,7 +724,7 @@ int zlink::part_helper_internal::prepare_recv_step (
     }
 
     *active_source_socket_out_ = state->recv.source_socket;
-    *state_out_ = state;
+    *state_inout_ = state;
     return 0;
 }
 

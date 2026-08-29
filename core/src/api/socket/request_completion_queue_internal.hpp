@@ -16,6 +16,9 @@ namespace request_completion
 // until its callback is ready to run. This bounds pending requests and queued
 // terminal controls with one admission decision.
 static const size_t max_pending_completions = 65536;
+// Keep common request bursts allocation-free without retaining the admission
+// limit's worth of idle controls on every socket.
+static const size_t max_cached_controls = 64;
 
 struct control_t
 {
@@ -33,9 +36,12 @@ struct queue_state_t
     ~queue_state_t ();
 
     std::mutex mutex;
-    //  try_reserve() allocates one node before request admission. enqueue()
-    //  moves a reserved node to this ready queue without allocating, so a
-    //  terminal result cannot disappear after Core owns the request.
+    //  try_reserve() owns one node before request admission. enqueue() moves a
+    //  reserved node to the ready queue without allocating, so a terminal
+    //  result cannot disappear after Core owns the request. Released nodes stay
+    //  in this bounded cache so the steady-state request path does not allocate.
+    control_t *cached_head;
+    size_t cached;
     control_t *reserved_head;
     control_t *ready_head;
     control_t *ready_tail;

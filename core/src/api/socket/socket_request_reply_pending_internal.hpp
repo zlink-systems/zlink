@@ -12,7 +12,7 @@ namespace socket_reqrep_internal
 int lookup_socket_pending_request_by_seq (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   uint64_t request_seq_,
-  pending_key_t *key_out_);
+  pending_request_token_t *token_out_);
 bool erase_socket_pending_request (const std::shared_ptr<socket_request_reply_state_t> &state_,
                                    const pending_key_t &key_);
 void record_socket_pending_transport_pair (
@@ -24,14 +24,14 @@ bool record_socket_pending_transport_pair_identity (
   const pending_key_t &key_,
   uint64_t transport_pair_id_,
   uint64_t transport_pair_generation_);
-int ensure_socket_pending_request (socket_handle_t handle_,
+int ensure_socket_pending_request (const socket_handle_t &handle_,
                                    const zlink_routing_id_t *peer_rid_,
                                    uint32_t timeout_ms_,
                                    zlink_reply_handler_fn handler_,
                                    void *userdata_,
                                    uint64_t *request_seq_out_,
                                    std::shared_ptr<socket_request_reply_state_t> *state_out_,
-                                   pending_key_t *key_out_);
+                                   pending_request_token_t *token_out_);
 }
 }
 

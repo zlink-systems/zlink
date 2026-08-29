@@ -21,6 +21,8 @@ router_recv_metadata_tls_t &router_recv_metadata_tls ()
 
 namespace
 {
+const size_t completion_part_capacity = 8;
+
 void complete_reply_from_transport (
   socket_request_reply_state_t *state_,
   const zlink_routing_id_t *source_rid_,
@@ -87,8 +89,13 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
         return;
 
     std::shared_ptr<socket_request_reply_state_t> state = socket_->request_reply_state ();
+    std::vector<zlink_msg_t> parts;
+    parts.reserve (completion_part_capacity);
     while (true) {
-        std::vector<zlink_msg_t> parts;
+        // Every exit below closes or consumes the current elements. Keep the
+        // vector's storage for the lifetime of this drain so steady-state
+        // completions do not allocate once the common part capacity is warm.
+        parts.clear ();
         bool complete = false;
         bool malformed = false;
         while (!complete) {
@@ -229,7 +236,7 @@ void fail_disconnected_peer_requests (
     }
 }
 
-int drain_close_request_reply_socket (socket_handle_t handle_)
+int drain_close_request_reply_socket (const socket_handle_t &handle_)
 {
     if (!handle_.socket) {
         errno = EFAULT;
@@ -284,7 +291,7 @@ int drain_close_request_reply_socket (socket_handle_t handle_)
     return drain_reply_completions_while_closing (state, handle_.socket);
 }
 
-void cleanup_request_reply_socket (socket_handle_t handle_)
+void cleanup_request_reply_socket (const socket_handle_t &handle_)
 {
     if (!handle_.socket)
         return;

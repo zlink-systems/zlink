@@ -47,7 +47,7 @@ struct router_mandatory_scope_t
 
     ~router_mandatory_scope_t () { restore (); }
 
-    int arm (socket_handle_t handle_)
+    int arm (const socket_handle_t &handle_)
     {
         if (!handle_.socket || socket_type (handle_) != ZLINK_CORE_SOCKET_ROUTER)
             return 0;

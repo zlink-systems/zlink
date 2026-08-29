@@ -43,19 +43,41 @@ void delete_control_chain (zlink::request_completion::control_t *head_)
     }
 }
 
+zlink::request_completion::control_t *cache_released_control_locked (
+  zlink::request_completion::queue_state_t *state_,
+  zlink::request_completion::control_t *node_)
+{
+    node_->handler = NULL;
+    node_->userdata = NULL;
+    node_->errnum = 0;
+    if (state_->cached < zlink::request_completion::max_cached_controls) {
+        node_->next = state_->cached_head;
+        state_->cached_head = node_;
+        ++state_->cached;
+        return NULL;
+    }
+
+    node_->next = NULL;
+    return node_;
+}
+
 void release_ready_node (zlink::request_completion::queue_state_t *state_,
                          zlink::request_completion::control_t *node_)
 {
+    zlink::request_completion::control_t *released = NULL;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
         zlink_assert (state_->reserved > 0);
         --state_->reserved;
+        released = cache_released_control_locked (state_, node_);
     }
-    delete node_;
+    delete released;
 }
 }
 
 zlink::request_completion::queue_state_t::queue_state_t () :
+    cached_head (NULL),
+    cached (0),
     reserved_head (NULL),
     ready_head (NULL),
     ready_tail (NULL),
@@ -67,6 +89,7 @@ zlink::request_completion::queue_state_t::queue_state_t () :
 
 zlink::request_completion::queue_state_t::~queue_state_t ()
 {
+    delete_control_chain (cached_head);
     delete_control_chain (reserved_head);
     delete_control_chain (ready_head);
 }
@@ -77,6 +100,24 @@ bool zlink::request_completion::try_reserve (queue_state_t *state_)
         errno = EFAULT;
         return false;
     }
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        if (state_->closed || state_->reserved >= max_pending_completions) {
+            const int failure_errno = state_->closed ? ETERM : EAGAIN;
+            errno = failure_errno;
+            return false;
+        }
+        if (state_->cached_head) {
+            control_t *node = state_->cached_head;
+            state_->cached_head = node->next;
+            --state_->cached;
+            node->next = state_->reserved_head;
+            state_->reserved_head = node;
+            ++state_->reserved;
+            return true;
+        }
+    }
+
     control_t *node = new (std::nothrow) control_t ();
     if (!node) {
         errno = ENOMEM;
@@ -111,8 +152,8 @@ void zlink::request_completion::release_reservation (queue_state_t *state_)
             zlink_assert (state_->reserved_head != NULL);
             released = state_->reserved_head;
             state_->reserved_head = released->next;
-            released->next = NULL;
             --state_->reserved;
+            released = cache_released_control_locked (state_, released);
         } else {
             zlink_assert (state_->closed);
         }
@@ -273,19 +314,24 @@ void zlink::request_completion::close (queue_state_t *state_)
         return;
     control_t *reserved = NULL;
     control_t *ready = NULL;
+    control_t *cached = NULL;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
         state_->closed = true;
         reserved = state_->reserved_head;
         ready = state_->ready_head;
+        cached = state_->cached_head;
         state_->reserved_head = NULL;
         state_->ready_head = NULL;
         state_->ready_tail = NULL;
+        state_->cached_head = NULL;
+        state_->cached = 0;
         state_->reserved = 0;
         state_->owner_thread_valid = false;
     }
     delete_control_chain (reserved);
     delete_control_chain (ready);
+    delete_control_chain (cached);
 }
 
 void zlink::request_completion::claim_owner_thread (queue_state_t *state_)

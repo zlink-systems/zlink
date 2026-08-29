@@ -19,7 +19,9 @@
 #include <unistd.h>
 #endif
 
-#include <vector>
+#include <algorithm>
+#include <cstddef>
+#include <new>
 
 #include "sockets/common/socket_base.hpp"
 #include "core/signaler.hpp"
@@ -77,6 +79,69 @@ class socket_poller_t
 #endif
     } item_t;
 
+    // Poll registrations are normally few and live no longer than this
+    // poller. Keep their storage with that lifecycle owner; larger pollsets
+    // transparently fall back to the heap without changing the poll contract.
+    class items_t
+    {
+      public:
+        typedef item_t *iterator;
+
+        items_t () : _data (_inline_items), _size (0), _capacity (inline_capacity) {}
+
+        ~items_t ()
+        {
+            if (_data != _inline_items)
+                delete[] _data;
+        }
+
+        void reserve (size_t capacity_)
+        {
+            if (capacity_ <= _capacity)
+                return;
+
+            item_t *const items = new item_t[capacity_];
+            std::copy (_data, _data + _size, items);
+            if (_data != _inline_items)
+                delete[] _data;
+            _data = items;
+            _capacity = capacity_;
+        }
+
+        void push_back (const item_t &item_)
+        {
+            if (_size == _capacity)
+                reserve (_capacity * 2);
+            _data[_size++] = item_;
+        }
+
+        iterator erase (iterator item_)
+        {
+            std::copy (item_ + 1, end (), item_);
+            --_size;
+            return item_;
+        }
+
+        iterator begin () { return _data; }
+        iterator end () { return _data + _size; }
+        size_t size () const { return _size; }
+        size_t capacity () const { return _capacity; }
+        bool empty () const { return _size == 0; }
+
+      private:
+        enum
+        {
+            inline_capacity = ZLINK_POLLITEMS_DFLT
+        };
+
+        item_t _inline_items[inline_capacity];
+        item_t *_data;
+        size_t _size;
+        size_t _capacity;
+
+        ZLINK_NON_COPYABLE_NOR_MOVABLE (items_t)
+    };
+
     static void
     zero_trail_events (zlink::socket_poller_t::event_t *events_, int n_events_, int found_);
     int check_socket_events (zlink::socket_poller_t::event_t *events_, int n_events_);
@@ -121,7 +186,6 @@ class socket_poller_t
 #endif
 
     //  List of sockets
-    typedef std::vector<item_t> items_t;
     items_t _items;
 
 
@@ -145,7 +209,10 @@ class socket_poller_t
     int _pollset_size;
 
 #if defined ZLINK_POLL_BASED_ON_POLL
+    int ensure_pollfds_capacity (size_t capacity_);
+    pollfd _inline_pollfds[ZLINK_POLLITEMS_DFLT];
     pollfd *_pollfds;
+    size_t _pollfds_capacity;
 #elif defined ZLINK_POLL_BASED_ON_SELECT
     resizable_optimized_fd_set_t _pollset_in;
     resizable_optimized_fd_set_t _pollset_out;

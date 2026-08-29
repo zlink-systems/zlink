@@ -77,7 +77,7 @@ zlink_handler_result_t zlink_send_complete_handler (
       handle.socket->socket_set_send_complete_handler (handler_, userdata_));
 }
 
-int validate_socket_callback_poller_events (socket_handle_t handle_, short events_)
+int validate_socket_callback_poller_events (const socket_handle_t &handle_, short events_)
 {
     if (!handle_.socket)
         return 0;

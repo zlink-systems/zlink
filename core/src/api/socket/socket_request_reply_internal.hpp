@@ -45,12 +45,27 @@ struct pending_key_hash_t
     size_t operator() (const pending_key_t &key_) const;
 };
 
+struct pending_request_token_t
+{
+    pending_request_token_t () : resolved_timeout_ms (0)
+    {
+        key.request_seq = 0;
+    }
+
+    pending_key_t key;
+    //  Registration resolves the policy once. The token carries that decision
+    //  across physical admission so arm does not reopen the pending aggregate.
+    uint32_t resolved_timeout_ms;
+};
+
 struct pending_request_t
 {
     pending_key_t key;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
-    uint32_t timeout_ms;
+    //  Retained by the lifecycle owner so a resumed multipart send can rebuild
+    //  its ephemeral arm token without reinterpreting the current socket policy.
+    uint32_t resolved_timeout_ms;
     zlink_reply_handler_fn handler;
     void *userdata;
     std::shared_ptr<zlink::request_timeout::task_t> timeout_task;
@@ -143,7 +158,7 @@ void commit_router_reply_target (
 void forget_router_reply_targets_for_pipe (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   zlink::pipe_t *application_pipe_);
-int send_request_reply_message (zlink::socket_base_t *socket_,
+int send_request_reply_message (const socket_handle_t &handle_,
                                 const zlink_routing_id_t *peer_rid_,
                                 zlink_msg_t *parts_,
                                 size_t part_count_,
@@ -292,7 +307,7 @@ int schedule_socket_pending_timeout (
   std::shared_ptr<zlink::request_timeout::task_t> *task_out_);
 int arm_socket_pending_request_timeout (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const pending_key_t &key_);
+  const pending_request_token_t &token_);
 void queue_socket_pending_timeout_completion (
   const std::shared_ptr<socket_request_reply_state_t> &state_, const pending_request_t &pending_);
 bool has_pending_request_work (const std::shared_ptr<socket_request_reply_state_t> &state_);
@@ -303,8 +318,8 @@ void fail_disconnected_peer_requests (
   const unsigned char *routing_id_,
   size_t routing_id_size_,
   int errnum_);
-int drain_close_request_reply_socket (socket_handle_t handle_);
-void cleanup_request_reply_socket (socket_handle_t handle_);
+int drain_close_request_reply_socket (const socket_handle_t &handle_);
+void cleanup_request_reply_socket (const socket_handle_t &handle_);
 
 #ifdef ZLINK_BUILD_TESTS
 enum request_reply_allocation_failpoint_t

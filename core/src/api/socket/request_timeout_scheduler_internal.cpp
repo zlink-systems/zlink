@@ -164,7 +164,7 @@ schedule (uint32_t timeout_ms_, handler_fn handler_, void *userdata_, cleanup_fn
     std::shared_ptr<task_t> task;
     bool userdata_adopted = false;
     try {
-        task.reset (new task_t ());
+        task = std::make_shared<task_t> ();
         task->handler = handler_;
         task->cleanup = cleanup_;
         task->userdata = userdata_;

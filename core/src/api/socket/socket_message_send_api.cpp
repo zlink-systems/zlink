@@ -603,7 +603,7 @@ zlink_submit_result_t zlink_send_part (void *s_,
     if (part_flag_ == ZLINK_PART_FINAL && is_singlepart_fast_socket_type (type)
         && !zlink::part_helper_internal::send_sequence_active (socket)) {
         const int rc =
-          send_socket_singlepart_fast (make_socket_handle (socket), part_, flags_);
+          send_socket_singlepart_fast (socket_guard, part_, flags_);
         const int saved_errno = errno;
         zlink::part_helper_internal::consume_send_part (part_);
         errno = saved_errno;
@@ -651,8 +651,7 @@ zlink_submit_result_t zlink_send_part_rid (void *s_,
             return zlink::submit_result_internal::from_errno (errno);
         }
 
-        socket_handle_t handle = make_socket_handle (socket);
-        const int rc = send_stream_message (handle, target_rid_, part_, flags_);
+        const int rc = send_stream_message (socket_guard, target_rid_, part_, flags_);
         return zlink::submit_result_internal::from_rc (rc);
     }
 
@@ -821,6 +820,19 @@ zlink_submit_result_t zlink_publish_part (void *subject_,
         zlink::part_helper_internal::consume_send_part (part_);
         errno = ENOTSUP;
         return zlink::submit_result_internal::from_errno (errno);
+    }
+
+    // FINAL owns no state across public calls. Use complete-record admission
+    // with the entry's existing socket pin, leaving helper state for actual
+    // multipart sequences.
+    if (part_flag_ == ZLINK_PART_FINAL
+        && !zlink::part_helper_internal::send_sequence_active (socket)) {
+        const int rc = publish_socket_parts (socket_guard, topic_id_, part_, 1,
+                                             flags_, false);
+        const int saved_errno = errno;
+        zlink::part_helper_internal::consume_send_part (part_);
+        errno = saved_errno;
+        return zlink::submit_result_internal::from_rc (rc);
     }
 
     try {

@@ -126,6 +126,7 @@ int send_dealer_reply_to_target (zlink::socket_base_t *socket_,
 }
 
 zlink_submit_result_t request_part_common (
+  const socket_handle_t &socket_handle_,
   void *handle_,
   const zlink_routing_id_t *peer_rid_,
   zlink_msg_t *part_,
@@ -156,8 +157,7 @@ zlink_submit_result_t request_part_common (
         return zlink::submit_result_internal::from_errno (errno);
     }
 
-    socket_handle_t handle = as_socket_handle (handle_);
-    if (!handle.socket) {
+    if (!socket_handle_.socket) {
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
         zlink::part_helper_internal::consume_send_part (part_);
         errno = EFAULT;
@@ -179,7 +179,7 @@ zlink_submit_result_t request_part_common (
     }
 
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
-      zlink::part_helper_internal::find_handle_state (handle_);
+      zlink::part_helper_internal::find_socket_state (socket_handle_.socket);
     bool helper_state_matches_family = false;
     bool helper_send_active = false;
     if (helper_state) {
@@ -194,8 +194,8 @@ zlink_submit_result_t request_part_common (
     if (part_flag_ == ZLINK_PART_MORE && !handler_ && spec.request_seq == 0) {
         std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
         bool first_part = false;
-        if (zlink::part_helper_internal::prepare_send_step (handle_, spec, handle.socket, &state,
-                                                            &first_part)
+        if (zlink::part_helper_internal::prepare_send_step (
+              handle_, spec, socket_handle_.socket, &state, &first_part)
             != 0) {
             zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
             zlink::part_helper_internal::consume_send_part (part_);
@@ -216,21 +216,21 @@ zlink_submit_result_t request_part_common (
     }
 
     std::shared_ptr<reqrep::socket_request_reply_state_t> request_state;
-    reqrep::pending_key_t pending_key;
+    reqrep::pending_request_token_t pending_token;
     if (spec.request_seq == 0) {
-        if (reqrep::ensure_socket_pending_request (handle, peer_rid_, timeout_ms_, handler_,
-                                                   userdata_, &spec.request_seq, &request_state,
-                                                   &pending_key)
+        if (reqrep::ensure_socket_pending_request (
+              socket_handle_, peer_rid_, timeout_ms_, handler_, userdata_,
+              &spec.request_seq, &request_state, &pending_token)
             != 0) {
             zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
             zlink::part_helper_internal::consume_send_part (part_);
             return zlink::submit_result_internal::from_errno (errno);
         }
     } else {
-        request_state = reqrep::find_or_create_request_reply_state (handle);
+        request_state = reqrep::find_or_create_request_reply_state (socket_handle_);
         if (!request_state
             || reqrep::lookup_socket_pending_request_by_seq (request_state, spec.request_seq,
-                                                             &pending_key)
+                                                             &pending_token)
                  != 0) {
             zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
             zlink::part_helper_internal::consume_send_part (part_);
@@ -245,7 +245,8 @@ zlink_submit_result_t request_part_common (
         zlink::part_helper_internal::consume_send_part (part_);
         errno = EFAULT;
         return finish_request_submit_failure (
-          request_state, pending_key, zlink::submit_result_internal::from_errno (errno));
+          request_state, pending_token.key,
+          zlink::submit_result_internal::from_errno (errno));
     }
 
     // The ordinary one-part fast path selects a route by RID. A transport
@@ -266,46 +267,49 @@ zlink_submit_result_t request_part_common (
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_key, zlink::submit_result_internal::from_errno (saved_errno));
+              request_state, pending_token.key,
+              zlink::submit_result_internal::from_errno (saved_errno));
         }
 
         pending_pair_observer_t pair_observer;
         pair_observer.state = request_state;
-        pair_observer.key = &pending_key;
+        pair_observer.key = &pending_token.key;
         const int send_rc =
           peer_rid_
             ? zlink::logical_multipart_send_routed_tracked (
-                handle.socket, peer_rid_, combined, total_part_count, flags_,
+                socket_handle_.socket, peer_rid_, combined, total_part_count, flags_,
                 &record_pending_pair, &pair_observer)
             : zlink::logical_multipart_send_tracked (
-                handle.socket, combined, total_part_count, flags_,
+                socket_handle_.socket, combined, total_part_count, flags_,
                 &record_pending_pair, &pair_observer);
         const int saved_errno = errno;
         zlink::request_reply::close_built_parts (combined, total_part_count);
         if (send_rc != 0) {
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_key, zlink::submit_result_internal::from_errno (saved_errno));
+              request_state, pending_token.key,
+              zlink::submit_result_internal::from_errno (saved_errno));
         }
-        if (reqrep::arm_socket_pending_request_timeout (request_state, pending_key) != 0) {
+        if (reqrep::arm_socket_pending_request_timeout (request_state, pending_token) != 0) {
             const int saved_errno = errno;
             return finish_request_submit_failure (
-              request_state, pending_key, zlink::submit_result_internal::from_errno (saved_errno));
+              request_state, pending_token.key,
+              zlink::submit_result_internal::from_errno (saved_errno));
         }
         return ZLINK_SUBMIT_OK;
     }
 
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
     bool first_part = false;
-    if (zlink::part_helper_internal::prepare_send_step (handle_, spec, handle.socket, &state,
-                                                        &first_part)
+    if (zlink::part_helper_internal::prepare_send_step (
+          handle_, spec, socket_handle_.socket, &state, &first_part)
         != 0) {
         const zlink_submit_result_t failure =
           zlink::submit_result_internal::from_errno (errno);
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
         zlink::part_helper_internal::consume_send_part (part_);
         return spec.request_seq != 0
-                 ? finish_request_submit_failure (request_state, pending_key, failure)
+                 ? finish_request_submit_failure (request_state, pending_token.key, failure)
                  : failure;
     }
 
@@ -316,7 +320,8 @@ zlink_submit_result_t request_part_common (
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_key, zlink::submit_result_internal::from_errno (saved_errno));
+              request_state, pending_token.key,
+              zlink::submit_result_internal::from_errno (saved_errno));
         }
 
         zlink::part_helper_internal::complete_send_step (state,
@@ -330,13 +335,13 @@ zlink_submit_result_t request_part_common (
                                      : zlink::request_reply::request_type;
         pending_pair_observer_t pair_observer;
         pair_observer.state = request_state;
-        pair_observer.key = &pending_key;
+        pair_observer.key = &pending_token.key;
         if (zlink::request_reply::send_envelope_control_frames (
               type, spec.request_seq,
               [&] (size_t index_, const void *data_, size_t size_) {
                   zlink::pipe_t *selected_pipe = NULL;
                   const int rc = reqrep::send_request_frame (
-                    handle.socket, state.get (),
+                    socket_handle_.socket, state.get (),
                     index_ == zlink::request_reply::envelope_protocol_index ? peer_rid_ : NULL,
                     data_, size_, ZLINK_SNDMORE | (flags_ & ZLINK_DONTWAIT),
                     spec.transport_pair_id, spec.transport_pair_generation,
@@ -353,12 +358,13 @@ zlink_submit_result_t request_part_common (
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_key, zlink::submit_result_internal::from_errno (saved_errno));
+              request_state, pending_token.key,
+              zlink::submit_result_internal::from_errno (saved_errno));
         }
     }
 
     for (size_t i = 0; i < state->send.buffered_parts.size (); ++i) {
-        if (reqrep::send_request_payload_part (handle.socket, state.get (), peer_rid_,
+        if (reqrep::send_request_payload_part (socket_handle_.socket, state.get (), peer_rid_,
                                                &state->send.buffered_parts[i], flags_,
                                                ZLINK_PART_MORE)
             != 0) {
@@ -367,27 +373,30 @@ zlink_submit_result_t request_part_common (
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_key, zlink::submit_result_internal::from_errno (saved_errno));
+              request_state, pending_token.key,
+              zlink::submit_result_internal::from_errno (saved_errno));
         }
     }
 
-    if (reqrep::send_request_payload_part (handle.socket, state.get (), peer_rid_, part_, flags_,
-                                           part_flag_)
+    if (reqrep::send_request_payload_part (
+          socket_handle_.socket, state.get (), peer_rid_, part_, flags_, part_flag_)
         != 0) {
         const int saved_errno = errno;
         zlink::part_helper_internal::abort_send_step (state);
         zlink::part_helper_internal::consume_send_part (part_);
         errno = saved_errno;
         return finish_request_submit_failure (
-          request_state, pending_key, zlink::submit_result_internal::from_errno (saved_errno));
+          request_state, pending_token.key,
+          zlink::submit_result_internal::from_errno (saved_errno));
     }
 
-    if (reqrep::arm_socket_pending_request_timeout (request_state, pending_key) != 0) {
+    if (reqrep::arm_socket_pending_request_timeout (request_state, pending_token) != 0) {
         const int saved_errno = errno;
         zlink::part_helper_internal::abort_send_step (state);
         errno = saved_errno;
         return finish_request_submit_failure (
-          request_state, pending_key, zlink::submit_result_internal::from_errno (saved_errno));
+          request_state, pending_token.key,
+          zlink::submit_result_internal::from_errno (saved_errno));
     }
 
     zlink::part_helper_internal::complete_send_step (state, part_flag_);
@@ -409,14 +418,15 @@ zlink_submit_result_t zlink_dealer_request_part (void *dealer_,
         errno = EINVAL;
         return zlink::submit_result_internal::from_errno (errno);
     }
-    if (reqrep::validate_socket_type (dealer_, ZLINK_CORE_SOCKET_DEALER) != 0) {
+    socket_handle_t handle = as_socket_handle (dealer_);
+    if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_DEALER) != 0) {
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (dealer_);
         zlink::part_helper_internal::consume_send_part (part_);
         return zlink::submit_result_internal::from_errno (errno);
     }
-    return request_part_common (dealer_, NULL, part_, flags_, part_flag_, timeout_ms_, handler_,
-                                userdata_, zlink::part_helper_internal::send_family_dealer_request,
-                                0, 0);
+    return request_part_common (
+      handle, dealer_, NULL, part_, flags_, part_flag_, timeout_ms_, handler_,
+      userdata_, zlink::part_helper_internal::send_family_dealer_request, 0, 0);
 }
 
 zlink_submit_result_t zlink_dealer_request_transport_pair_part (
@@ -434,7 +444,8 @@ zlink_submit_result_t zlink_dealer_request_transport_pair_part (
         errno = EINVAL;
         return zlink::submit_result_internal::from_errno (errno);
     }
-    if (reqrep::validate_socket_type (dealer_, ZLINK_CORE_SOCKET_DEALER)
+    socket_handle_t handle = as_socket_handle (dealer_);
+    if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_DEALER)
         != 0) {
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (dealer_);
         zlink::part_helper_internal::consume_send_part (part_);
@@ -442,7 +453,7 @@ zlink_submit_result_t zlink_dealer_request_transport_pair_part (
     }
 
     return request_part_common (
-      dealer_, &target_->peer_rid, part_, flags_, part_flag_, timeout_ms_,
+      handle, dealer_, &target_->peer_rid, part_, flags_, part_flag_, timeout_ms_,
       handler_, userdata_,
       zlink::part_helper_internal::send_family_dealer_request,
       target_->transport_pair_id, target_->transport_pair_generation);
@@ -463,13 +474,14 @@ zlink_submit_result_t zlink_router_request_part (void *router_,
         errno = EINVAL;
         return zlink::submit_result_internal::from_errno (errno);
     }
-    if (reqrep::validate_socket_type (router_, ZLINK_CORE_SOCKET_ROUTER) != 0) {
+    socket_handle_t handle = as_socket_handle (router_);
+    if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_ROUTER) != 0) {
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (router_);
         zlink::part_helper_internal::consume_send_part (part_);
         return zlink::submit_result_internal::from_errno (errno);
     }
-    return request_part_common (router_, peer_rid_, part_, flags_, part_flag_, timeout_ms_,
-                                handler_, userdata_,
+    return request_part_common (handle, router_, peer_rid_, part_, flags_, part_flag_,
+                                timeout_ms_, handler_, userdata_,
                                 zlink::part_helper_internal::send_family_router_request,
                                 0, 0);
 }
@@ -494,13 +506,14 @@ zlink_submit_result_t zlink_router_request_transport_pair_part (
         errno = EINVAL;
         return zlink::submit_result_internal::from_errno (errno);
     }
-    if (reqrep::validate_socket_type (router_, ZLINK_CORE_SOCKET_ROUTER) != 0) {
+    socket_handle_t handle = as_socket_handle (router_);
+    if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_ROUTER) != 0) {
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (router_);
         zlink::part_helper_internal::consume_send_part (part_);
         return zlink::submit_result_internal::from_errno (errno);
     }
     return request_part_common (
-      router_, peer_rid_, part_, flags_, part_flag_, timeout_ms_, handler_, userdata_,
+      handle, router_, peer_rid_, part_, flags_, part_flag_, timeout_ms_, handler_, userdata_,
       zlink::part_helper_internal::send_family_router_request,
       transport_pair_id_, transport_pair_generation_);
 }
@@ -522,7 +535,8 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
         errno = EINVAL;
         return zlink::submit_result_internal::from_errno (errno);
     }
-    if (reqrep::validate_socket_type (router_, ZLINK_CORE_SOCKET_ROUTER) != 0) {
+    socket_handle_t handle = as_socket_handle (router_);
+    if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_ROUTER) != 0) {
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (router_);
         zlink::part_helper_internal::consume_send_part (part_);
         return zlink::submit_result_internal::from_errno (errno);
@@ -536,7 +550,6 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
         return zlink::submit_result_internal::from_errno (errno);
     }
 
-    socket_handle_t handle = as_socket_handle (router_);
     zlink::part_helper_internal::send_sequence_spec_t spec;
     spec.family = zlink::part_helper_internal::send_family_router_reply;
     spec.request_like = true;
@@ -603,7 +616,7 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
     }
 
     if (reqrep::send_request_reply_message (
-          handle.socket, peer_rid_, &payload[0], payload_count, ZLINK_SEND_FLAGS_NONE,
+          handle, peer_rid_, &payload[0], payload_count, ZLINK_SEND_FLAGS_NONE,
           zlink::request_reply::reply_type, request_seq_)
         != 0) {
         const int saved_errno = errno;
@@ -635,13 +648,13 @@ zlink_submit_result_t zlink_dealer_reply_part (void *dealer_,
         errno = EINVAL;
         return zlink::submit_result_internal::from_errno (errno);
     }
-    if (reqrep::validate_socket_type (dealer_, ZLINK_CORE_SOCKET_DEALER) != 0) {
+    socket_handle_t handle = as_socket_handle (dealer_);
+    if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_DEALER) != 0) {
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (dealer_);
         zlink::part_helper_internal::consume_send_part (part_);
         return zlink::submit_result_internal::from_errno (errno);
     }
 
-    socket_handle_t handle = as_socket_handle (dealer_);
     std::shared_ptr<reqrep::socket_request_reply_state_t> request_state =
       reqrep::find_request_reply_state (handle);
     if (!request_state) {

@@ -108,7 +108,7 @@ int poller_fill_public_event_from_registration (
   const poller_registration_t *registration_,
   const zlink::socket_poller_t::event_t &native_,
   zlink_poller_event_t *event_out_);
-int validate_socket_callback_poller_events (socket_handle_t handle_, short events_);
+int validate_socket_callback_poller_events (const socket_handle_t &handle_, short events_);
 int validate_socket_poller_event_mask (short events_, bool allow_completion_);
 int validate_fd_poller_event_mask (short events_);
 void release_poller_registration (const poller_registration_t &registration_);

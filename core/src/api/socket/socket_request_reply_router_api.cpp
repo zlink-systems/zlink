@@ -142,7 +142,8 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
         }
 
         if (!helper_state) {
-            helper_state = zlink::part_helper_internal::find_or_create_handle_state (router_);
+            helper_state =
+              zlink::part_helper_internal::find_or_create_socket_state (handle.socket);
             if (!helper_state) {
                 zlink_multipart_close (parts, part_count);
                 return zlink::recv_result_internal::from_errno (errno);
@@ -310,7 +311,7 @@ zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,
     if (!state)
         return zlink::recv_result_internal::from_errno (errno);
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
-      zlink::part_helper_internal::find_handle_state (dealer_);
+      zlink::part_helper_internal::find_socket_state (handle.socket);
     const bool recv_sequence_active =
       zlink::part_helper_internal::recv_sequence_active (helper_state);
 
@@ -354,7 +355,8 @@ zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,
         }
 
         if (!helper_state) {
-            helper_state = zlink::part_helper_internal::find_or_create_handle_state (dealer_);
+            helper_state =
+              zlink::part_helper_internal::find_or_create_socket_state (handle.socket);
             if (!helper_state) {
                 zlink_multipart_close (parts, part_count);
                 return zlink::recv_result_internal::from_errno (errno);

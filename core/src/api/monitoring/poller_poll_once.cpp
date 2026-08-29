@@ -2,7 +2,9 @@
 
 #include "utils/precompiled.hpp"
 
+#include <array>
 #include <new>
+#include <utility>
 #include <vector>
 
 #include "api/core/config_result_internal.hpp"
@@ -29,11 +31,23 @@ int zlink_poll (zlink_pollitem_t *items_,
     // Keep every public-handle pin until after the local poller releases its
     // raw socket registrations. Declaration order is intentional: poller is
     // destroyed first on every return path.
-    std::vector<socket_handle_t> socket_handles;
+    std::array<socket_handle_t, ZLINK_POLLITEMS_DFLT> inline_socket_handles;
+    std::vector<socket_handle_t> overflow_socket_handles;
+    socket_handle_t *socket_handles = inline_socket_handles.data ();
     zlink::socket_poller_t poller;
+    std::array<zlink::socket_poller_t::event_t, ZLINK_POLLITEMS_DFLT>
+      inline_events;
+    std::vector<zlink::socket_poller_t::event_t> overflow_events;
+    zlink::socket_poller_t::event_t *events = inline_events.data ();
     try {
-        socket_handles.resize (static_cast<size_t> (nitems_));
-        poller.reserve (static_cast<size_t> (nitems_));
+        const size_t item_count = static_cast<size_t> (nitems_);
+        if (item_count > inline_socket_handles.size ()) {
+            overflow_socket_handles.resize (item_count);
+            overflow_events.resize (item_count);
+            socket_handles = overflow_socket_handles.data ();
+            events = overflow_events.data ();
+        }
+        poller.reserve (item_count);
     }
     catch (const std::bad_alloc &) {
         errno = ENOMEM;
@@ -66,7 +80,7 @@ int zlink_poll (zlink_pollitem_t *items_,
                     *error_out_ = zlink::config_result_internal::from_errno (errno);
                 return -1;
             }
-            socket_handles[static_cast<size_t> (i)] = handle;
+            socket_handles[static_cast<size_t> (i)] = std::move (handle);
         } else {
             if (validate_fd_poller_event_mask (items_[i].events) != 0
                 || poller.add_fd (items_[i].fd, index_user_data,
@@ -79,9 +93,7 @@ int zlink_poll (zlink_pollitem_t *items_,
         }
     }
 
-    std::vector<zlink::socket_poller_t::event_t> events (
-      static_cast<size_t> (nitems_));
-    const int rc = poller.wait (events.data (), nitems_, timeout_);
+    const int rc = poller.wait (events, nitems_, timeout_);
     if (rc < 0) {
         if (errno == EAGAIN) {
             errno = 0;

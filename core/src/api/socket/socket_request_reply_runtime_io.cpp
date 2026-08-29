@@ -722,7 +722,7 @@ int recv_dealer_message_direct (
     return 0;
 }
 
-int send_request_reply_message (zlink::socket_base_t *socket_,
+int send_request_reply_message (const socket_handle_t &handle_,
                                 const zlink_routing_id_t *peer_rid_,
                                 zlink_msg_t *parts_,
                                 size_t part_count_,
@@ -730,20 +730,18 @@ int send_request_reply_message (zlink::socket_base_t *socket_,
                                 uint8_t message_type_,
                                 uint64_t request_seq_)
 {
-    if (!socket_ || !parts_ || part_count_ == 0 || request_seq_ == 0) {
+    if (!handle_.socket || !parts_ || part_count_ == 0 || request_seq_ == 0) {
         errno = EINVAL;
         return -1;
     }
-
-    const socket_handle_t handle = make_socket_handle (socket_);
 
     const bool routed = zlink::valid_routing_id (peer_rid_);
     std::shared_ptr<socket_request_reply_state_t> reply_state;
     pending_key_t reply_key;
     if (message_type_ != zlink::request_reply::request_type
-        && handle.socket->socket_type () == ZLINK_CORE_SOCKET_ROUTER
+        && handle_.socket->socket_type () == ZLINK_CORE_SOCKET_ROUTER
         && routed) {
-        reply_state = find_request_reply_state (handle);
+        reply_state = find_request_reply_state (handle_);
         if (reply_state) {
             try {
 #ifdef ZLINK_BUILD_TESTS
@@ -809,7 +807,7 @@ int send_request_reply_message (zlink::socket_base_t *socket_,
         //  socket commands itself. Without it the completion pipe stays
         //  backpressured forever: the peer's activate-write command sits in
         //  the mailbox and every retry keeps failing with EAGAIN.
-        if (handle.socket->process_submit_commands () != 0) {
+        if (handle_.socket->process_submit_commands () != 0) {
             const int saved_errno = errno;
             zlink::request_reply::close_built_parts (combined, total_part_count);
             errno = saved_errno;
@@ -821,7 +819,7 @@ int send_request_reply_message (zlink::socket_base_t *socket_,
             target_taken = take_router_reply_target (
               reply_state, reply_key, &application_pipe);
         const int rc =
-          send_completion_frames (handle.socket, application_pipe, peer_rid_,
+          send_completion_frames (handle_.socket, application_pipe, peer_rid_,
                                   combined, total_part_count);
         if (rc != 0) {
             if (target_taken)
@@ -835,7 +833,7 @@ int send_request_reply_message (zlink::socket_base_t *socket_,
     }
 
     router_mandatory_scope_t mandatory_scope;
-    if (routed && mandatory_scope.arm (handle) != 0) {
+    if (routed && mandatory_scope.arm (handle_) != 0) {
         const int saved_errno = errno;
         zlink::request_reply::close_built_parts (combined, total_part_count);
         errno = saved_errno;
@@ -843,9 +841,10 @@ int send_request_reply_message (zlink::socket_base_t *socket_,
     }
 
     const int rc =
-      routed ? zlink::logical_multipart_send_routed (handle.socket, peer_rid_, combined,
+      routed ? zlink::logical_multipart_send_routed (handle_.socket, peer_rid_, combined,
                                                      total_part_count, flags_)
-             : zlink::logical_multipart_send (handle.socket, combined, total_part_count, flags_);
+             : zlink::logical_multipart_send (handle_.socket, combined, total_part_count,
+                                              flags_);
     if (rc != 0)
         return -1;
 

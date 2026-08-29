@@ -137,7 +137,9 @@ zlink_recv_result_t zlink_recv_part (void *s_,
         }
 
         std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
-          zlink::part_helper_internal::find_or_create_handle_state (s_);
+          existing_state ? existing_state
+                         : zlink::part_helper_internal::find_or_create_socket_state (
+                             handle.socket);
         if (!helper_state) {
             zlink_multipart_close (parts, part_count);
             return zlink::recv_result_internal::from_errno (errno);
@@ -170,7 +172,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
     }
 
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
-      zlink::part_helper_internal::find_or_create_handle_state (s_);
+      existing_state;
     if (!helper_state)
         return zlink::recv_result_internal::from_errno (errno);
 
@@ -283,19 +285,16 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
     if (!handle.socket)
         return zlink::recv_result_internal::from_errno (errno);
 
-    std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
-      zlink::part_helper_internal::find_or_create_handle_state (subject_);
-    if (!helper_state)
-        return zlink::recv_result_internal::from_errno (errno);
-
     const int type = socket_type (handle);
     if (type != ZLINK_CORE_SOCKET_SUB && type != ZLINK_CORE_SOCKET_XSUB) {
         errno = ENOTSUP;
         return zlink::recv_result_internal::from_errno (errno);
     }
 
+    std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
+      zlink::part_helper_internal::find_socket_state (handle.socket);
     bool sequence_active = false;
-    {
+    if (helper_state) {
         std::lock_guard<std::mutex> lock (helper_state->mutex);
         sequence_active = helper_state->recv.active;
         if (sequence_active
@@ -382,6 +381,17 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
 
             payload_has_more =
               (reinterpret_cast<const zlink::msg_t *> (&slot)->flags () & zlink::msg_t::more) != 0;
+        }
+
+        if (!helper_state)
+            helper_state = zlink::part_helper_internal::find_or_create_socket_state (
+              handle.socket);
+        if (!helper_state) {
+            const int saved_errno = errno;
+            for (size_t i = 0; i < buffered_parts.size (); ++i)
+                zlink_msg_close (&buffered_parts[i]);
+            errno = saved_errno;
+            return zlink::recv_result_internal::from_errno (errno);
         }
 
         bool first_part = false;

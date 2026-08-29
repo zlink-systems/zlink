@@ -12,6 +12,8 @@
 
 namespace zlink
 {
+struct shared_message_memory_allocator_state_t;
+
 // Static buffer policy.
 class c_single_allocator
 {
@@ -44,11 +46,11 @@ class c_single_allocator
 // to use zero-copy msg::init_data to create messages with memory from this buffer as
 // data storage.
 //
-// The buffer is allocated with a reference count of 1 to make sure that is is alive while
+// The buffer is allocated with a reference count of 1 to make sure that it is alive while
 // decoding messages. Otherwise, it is possible that e.g. the first message increases the count
 // from zero to one, gets passed to the user application, processed in the user thread and deleted
-// which would then deallocate the buffer. The drawback is that the buffer may be allocated longer
-// than necessary because it is only deleted when allocate is called the next time.
+// which would then deallocate the buffer. One normal read-size block may remain as an
+// allocator-owned spare so a cross-thread final close can return storage to the decoder.
 class shared_message_memory_allocator
 {
   public:
@@ -70,7 +72,8 @@ class shared_message_memory_allocator
     // created on this buffer.
     unsigned char *allocate ();
 
-    // force deallocation of buffer.
+    // Release the current buffer. Storage may remain in the allocator-owned
+    // spare until it is reused or the allocator is destroyed.
     void deallocate ();
 
     // Give up ownership of the buffer. The buffer's lifetime is now coupled to
@@ -105,6 +108,8 @@ class shared_message_memory_allocator
     static bool allocation_size_for_test (std::size_t target_size_,
                                           std::size_t max_counters_,
                                           std::size_t *out_);
+    static std::size_t buffer_header_size_for_test ();
+    std::size_t cached_buffer_count_for_test ();
 #endif
 
   private:
@@ -117,6 +122,7 @@ class shared_message_memory_allocator
     std::size_t _allocated_size;
     zlink::msg_t::content_t *_msg_content;
     std::size_t _max_counters;
+    shared_message_memory_allocator_state_t *_recycle_state;
 };
 }
 

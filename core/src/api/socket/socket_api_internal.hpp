@@ -36,6 +36,26 @@ class socket_handle_t
         return *this;
     }
 
+    socket_handle_t (socket_handle_t &&other_) noexcept :
+        socket (other_.socket), _public_handle (other_._public_handle)
+    {
+        other_.socket = NULL;
+        other_._public_handle = NULL;
+    }
+
+    socket_handle_t &operator= (socket_handle_t &&other_) noexcept
+    {
+        if (this == &other_)
+            return *this;
+        if (_public_handle)
+            _public_handle->release ();
+        socket = other_.socket;
+        _public_handle = other_._public_handle;
+        other_.socket = NULL;
+        other_._public_handle = NULL;
+        return *this;
+    }
+
     ~socket_handle_t ()
     {
         if (_public_handle)
