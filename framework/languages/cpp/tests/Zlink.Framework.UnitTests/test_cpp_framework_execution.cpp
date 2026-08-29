@@ -1052,6 +1052,79 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
            && queue.pending_count () == 0 && queue.pending_bytes () == 0;
 }
 
+bool verify_transferred_owner_reservation_bypasses_full_lifecycle_lane ()
+{
+    using namespace zlink::framework::runtime;
+
+    offload_executor_t executor (1);
+    serial_execution_queue_options_t options;
+    options.lifecycle_message_capacity = 1;
+    options.lifecycle_byte_capacity = serial_execution_queue_t::fixed_work_byte_cost;
+    serial_execution_queue_t queue (executor, options);
+
+    std::mutex gate;
+    std::condition_variable changed;
+    std::optional<serial_execution_queue_t::async_completion_t> complete_active;
+    bool active_entered = false;
+    const auto lifecycle = serial_work_options_t{
+      serial_work_lane_t::lifecycle, serial_execution_queue_t::fixed_work_byte_cost};
+    if (!queue.try_post_async (
+          "lifecycle-owner-cap-active",
+          [&] (auto complete) {
+              std::lock_guard lock (gate);
+              complete_active.emplace (std::move (complete));
+              active_entered = true;
+              changed.notify_all ();
+          },
+          lifecycle)) {
+        return false;
+    }
+    {
+        std::unique_lock lock (gate);
+        if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return active_entered; }))
+            return false;
+    }
+
+    const auto release_active = [&] {
+        if (complete_active) {
+            (*complete_active) ([] {});
+            complete_active.reset ();
+        }
+        queue.drain ();
+    };
+    if (queue.try_post ("ordinary-lifecycle-over-capacity", [] {}, lifecycle)) {
+        release_active ();
+        return false;
+    }
+
+    std::atomic_int transfer_count{0};
+    std::atomic_int transferred_runs{0};
+    constexpr auto transferred_byte_cost =
+      serial_execution_queue_t::fixed_work_byte_cost * 2;
+    const serial_work_options_t transferred{
+      serial_work_lane_t::lifecycle,
+      transferred_byte_cost,
+      [&] { transfer_count.fetch_add (1, std::memory_order_release); }};
+    if (!queue.try_post (
+          "transferred-lifecycle-owner-reservation",
+          [&] { transferred_runs.fetch_add (1, std::memory_order_release); }, transferred)) {
+        release_active ();
+        return false;
+    }
+    if (transfer_count.load (std::memory_order_acquire) != 1
+        || queue.pending_count (serial_work_lane_t::lifecycle) != 2
+        || queue.pending_bytes ()
+             != serial_execution_queue_t::fixed_work_byte_cost + transferred_byte_cost) {
+        release_active ();
+        return false;
+    }
+
+    release_active ();
+    return transfer_count.load (std::memory_order_acquire) == 1
+           && transferred_runs.load (std::memory_order_acquire) == 1
+           && queue.pending_count () == 0 && queue.pending_bytes () == 0;
+}
+
 bool verify_serial_queue_owner_time_budget ()
 {
     using namespace zlink::framework::runtime;
@@ -5451,6 +5524,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     const auto target_spot_id = new_user_spot_id ();
     auto source_native_spot = source.get_or_create_spot (
       std::string (source_spot.spot_id));
+    auto source_native_entry_spot = source.native_node ().entry_spot ();
 
     const object_reserve_request_t source_spot_reserve{
       .key = {placement_object_kind_t::user_spot,
@@ -5653,12 +5727,15 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     }
     source_spots.record_actor_spot (actor, spot_id_t (source_native_spot.spot_id ()));
 
+    // Actor creation can leave CurrentSpot at the Entry Spot after live
+    // membership has moved to a User Spot. Canonical cutover must keep the
+    // locally captured source membership for target-to-source OnLeave.
     const auto actor_committed_value =
       locations
         ->commit ({actor_reserve.key, actor_reserved->fence,
                    runtime::encode_actor_authority_payload (
-                     actor, source_native_spot.spot_id (),
-                     source_native_spot.status ().lifecycle_generation ())})
+                     actor, source_native_entry_spot.spot_id (),
+                     source_native_entry_spot.status ().lifecycle_generation ())})
         .result ()
         .value ();
     if (!std::holds_alternative<object_committed_t> (actor_committed_value)) {
@@ -6317,6 +6394,9 @@ int main ()
     }
     if (!verify_transferred_owner_reservation_is_continuous_until_terminal ()) {
         return 112;
+    }
+    if (!verify_transferred_owner_reservation_bypasses_full_lifecycle_lane ()) {
+        return 113;
     }
     if (!verify_serial_queue_owner_time_budget ()) {
         return 56;

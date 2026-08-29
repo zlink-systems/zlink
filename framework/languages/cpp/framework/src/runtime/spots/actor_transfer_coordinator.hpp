@@ -210,6 +210,8 @@ class actor_transfer_coordinator_t
     bool blocks_dispatch (const std::string &actor_key) const;
     std::optional<actor_move_phase_t> phase (const std::string &actor_key) const;
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
+    bool matches_source_remote_transfer (const std::string &actor_key,
+                                         const std::string &transfer_id) const;
     bool try_submit_source_leave (const std::string &actor_key,
                                   const std::string &transfer_id);
     bool source_leave_submitted (const std::string &actor_key,

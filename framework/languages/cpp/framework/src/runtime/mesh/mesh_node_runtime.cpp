@@ -2935,8 +2935,11 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_jo
               "source Actor Authority CurrentSpot is unavailable");
         }
         s->source_authority = *authority;
-        s->source_spot = projection->spot_id;
-        s->source_spot_generation = projection->spot_generation;
+        // The authority payload can still describe the Actor's creation Spot
+        // while local membership has already moved to another User Spot. The
+        // source runtime captured the exact current membership before
+        // relocation admission; retain that identity for the target's
+        // one-way OnLeave notification.
         s->source_mesh_name = authority->allocation.target.mesh_name;
         s->source_owner_lease_generation =
           static_cast<std::uint64_t> (authority->owner.lease_generation);

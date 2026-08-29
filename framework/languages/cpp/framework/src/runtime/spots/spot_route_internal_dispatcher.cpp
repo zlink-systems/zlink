@@ -105,6 +105,16 @@ result_t<void>
 spot_route_internal_dispatcher_t::dispatch_send (const route_received_packet_t &received,
                                                  service_provider_t &services) const
 {
+    return dispatch_send (received, services, {}, 0);
+}
+
+result_t<void>
+spot_route_internal_dispatcher_t::dispatch_send (
+  const route_received_packet_t &received,
+  service_provider_t &services,
+  std::function<void ()> transfer_owner_reservation,
+  std::size_t transferred_owner_byte_cost) const
+{
     (void) received;
     (void) services;
     auto body = runtime::messaging::envelope_codec_t{}.decode_body (received.parts);
@@ -191,7 +201,9 @@ spot_route_internal_dispatcher_t::dispatch_send (const route_received_packet_t &
                 zlink::routing_id_t::from (command.target_node_rid).to_bytes (),
                 command.target_node_generation,
                 command.target_authority_owner_generation,
-                command.target_owner_lease_generation});
+                command.target_owner_lease_generation},
+              std::move (transfer_owner_reservation),
+              transferred_owner_byte_cost);
         }
         auto request = _serializers->get<actor_bound_session_route_request_t> ().deserialize (
           detail::encoded_payload_from_raw (body.value ()));

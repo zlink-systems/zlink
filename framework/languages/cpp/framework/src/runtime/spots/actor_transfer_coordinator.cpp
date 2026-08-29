@@ -633,6 +633,18 @@ actor_transfer_coordinator_t::transfer_id (const std::string &actor_key) const
     }).get ();
 }
 
+bool actor_transfer_coordinator_t::matches_source_remote_transfer (
+  const std::string &actor_key,
+  const std::string &transfer_id) const
+{
+    return _lane.run ([&, this] {
+    const auto found = _moves.find (actor_key);
+    return found != _moves.end ()
+           && found->second.phase == actor_move_phase_t::source_remote
+           && found->second.transfer_id == transfer_id;
+    }).get ();
+}
+
 bool actor_transfer_coordinator_t::try_submit_source_leave (
   const std::string &actor_key,
   const std::string &transfer_id)
