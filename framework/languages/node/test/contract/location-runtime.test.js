@@ -1253,7 +1253,7 @@ test('store location resolvers seed reusable SpotHandle snapshots from live rows
   assert.equal(await resolvers.resolveActorSpotHandle('play', 'actor-1'), undefined);
 });
 
-test('actor resolver rejects a stale membership when the same SPOT RID is recreated', async () => {
+test('actor resolver keeps the current Actor route while its enclosing Spot projection changes', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const firstOwner = await lifecycleNode(store, 'owner-a', 'node-a', 'play');
   const successor = await lifecycleNode(store, 'owner-b', 'node-b', 'play');
@@ -1296,9 +1296,21 @@ test('actor resolver rejects a stale membership when the same SPOT RID is recrea
     ownerNodeGeneration: 4n
   }, internal.ZLinkLocationWriteIntent.Takeover);
   resolvers.invalidateSpotRoute(spotId, 'play');
+  resolvers.invalidateActorRoute(actorId, 'play');
 
-  assert.equal(await resolvers.resolveActorRef(actorId), undefined);
-  assert.equal(await resolvers.resolveActorSpotHandle('play', actorId), undefined);
+  const perActorMoveResolvers = resolversFor(store);
+  const actorDuringPerActorMove = await perActorMoveResolvers.resolveActorRef(actorId);
+  assert.equal(String(actorDuringPerActorMove.nodeRid), 'node-a');
+  assert.equal(actorDuringPerActorMove.objectGeneration, 5n);
+  const actorSpotDuringPerActorMove = await perActorMoveResolvers.resolveActorSpotHandle(
+    'play',
+    actorId
+  );
+  const actorSpotTargetDuringPerActorMove = await internal.resolveSpotHandle(
+    actorSpotDuringPerActorMove
+  );
+  assert.equal(actorSpotTargetDuringPerActorMove.nodeRid, 'node-a');
+  assert.equal(actorSpotTargetDuringPerActorMove.spotGeneration, 7n);
 
   await successor.lifecycle.takeoverActorJoinedSpot(
     'player',
@@ -1315,7 +1327,7 @@ test('actor resolver rejects a stale membership when the same SPOT RID is recrea
     12n,
     4n
   );
-  const current = await resolvers.resolveActorRef(actorId);
+  const current = await resolversFor(store).resolveActorRef(actorId);
   assert.equal(String(current.nodeRid), 'node-b');
   assert.equal(current.objectGeneration, 6n);
 });

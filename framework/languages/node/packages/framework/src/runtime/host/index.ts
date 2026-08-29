@@ -2793,11 +2793,6 @@ export class ZLinkFrameworkRuntimeHost implements
         localStatus.routingId,
         binding.sessionNodeRid
       ) && localStatus.lifecycleGeneration === binding.sessionOwnerNodeGeneration;
-      const sessionOwnerIsCurrentPeer = sessionOwnerIsLocal || node?.peers().some((peer) =>
-        peer.routingId !== null
-        && routingIdsEqual(peer.routingId, binding.sessionNodeRid)
-        && peer.lifecycleGeneration === binding.sessionOwnerNodeGeneration
-      ) === true;
       if (binding.transition === 'tombstone') {
         const actorRef: ActorRef = {
           actorId: binding.actor.actorId,
@@ -2815,13 +2810,6 @@ export class ZLinkFrameworkRuntimeHost implements
         }
         state.retireBoundSessionBinding(binding);
         replyBindingSuccess();
-        return;
-      }
-      if (!sessionOwnerIsCurrentPeer) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          `Actor '${binding.actor.actorId}' Session owner lifecycle is stale.`
-        );
         return;
       }
       const target = this.boundSessionRelay.boundSessions.resolveRemoteBoundSessionTarget(

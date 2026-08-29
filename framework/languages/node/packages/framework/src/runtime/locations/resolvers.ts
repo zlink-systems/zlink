@@ -433,12 +433,6 @@ export class ZLinkStoreLocationResolvers implements
         }
         throw error;
       }
-      if (
-        enclosingSpotRoute.targetSpotGeneration !== decoded.spotGeneration
-        || !routingIdsEqual(enclosingSpotRoute.targetNodeRid, decoded.actor.nodeRid)
-      ) {
-        return undefined;
-      }
     }
     const route: ZLinkResolvedActorRoute = {
       meshName: current.allocation.descriptor.meshName,
@@ -595,23 +589,6 @@ export class ZLinkStoreLocationResolvers implements
     if (row === undefined) {
       this.options.events?.actorResolveMiss(key);
       return undefined;
-    }
-    if (row.spotKind === ZLinkSpotKind.User) {
-      const currentSpot = await this.resolveSpotRow({
-        meshName: row.meshName,
-        spotId: row.spotId
-      }, signal);
-      if (
-        currentSpot === undefined
-        || row.spotGeneration <= 0n
-        || row.membershipEpoch <= 0n
-        || row.spotGeneration !== currentSpot.spotGeneration
-        || row.ownerNodeGeneration !== currentSpot.ownerNodeGeneration
-        || !routingIdsEqual(row.ownerNodeRid, currentSpot.ownerNodeRid)
-      ) {
-        this.options.events?.actorResolveMiss(key);
-        return undefined;
-      }
     }
     if (!await this.cacheReady(
       this.actorRoutes,

@@ -5734,17 +5734,13 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   state.setLocationGeneration(9n);
   state.setOwnerLeaseGeneration(10n);
   assert.equal(state.ownsLocation, false);
-  let sessionOwnerNodeGeneration = 3n;
   let localRetireCalls = 0;
   const host = Object.create(framework.ZLinkFrameworkRuntimeHost.prototype);
   host.actorManager = { getState: () => state };
   host.spotNodeRuntime = {
     meshNode: () => ({
       status: () => ({ routingId: actor.nodeRid, lifecycleGeneration: 5n }),
-      peers: () => [{
-        routingId: 'session-node',
-        lifecycleGeneration: sessionOwnerNodeGeneration
-      }]
+      peers: () => { throw new Error('bind approval must not re-read the peer projection'); }
     })
   };
   host.boundSessionRelay = {
@@ -5770,15 +5766,17 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
     ownerGeneration,
     bindingGeneration,
     objectGeneration = actor.generation,
-    ownerLeaseGeneration = 10n
+    ownerLeaseGeneration = 10n,
+    actorNodeGeneration = 5n,
+    authorityOwnerGeneration = 9n
   ) => ({
     kind: framework.ReceiveKind.ActorBinding,
     kindData: {
       kind: 'actorBinding',
       transition,
       actor: { ...actor, generation: objectGeneration },
-      actorNodeGeneration: 5n,
-      authorityOwnerGeneration: 9n,
+      actorNodeGeneration,
+      authorityOwnerGeneration,
       ownerLeaseGeneration,
       bindingGeneration,
       sessionNodeRid: 'session-node',
@@ -5810,7 +5808,6 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   assert.equal(state.ownerLeaseGeneration, 10n);
   assert.deepEqual(failures, []);
 
-  sessionOwnerNodeGeneration = 4n;
   await host.dispatchMeshRecord(
     meshName,
     { ownerKind: framework.ReadyOwnerKind.Actor },
@@ -5847,8 +5844,93 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
     { ownerKind: framework.ReadyOwnerKind.Actor },
     bindingRecord('active', 4n, 2n, 8n)
   );
-  assert.deepEqual(failures, [[RequestResult.InvalidState, 0]]);
+  await host.dispatchMeshRecord(
+    meshName,
+    { ownerKind: framework.ReadyOwnerKind.Actor },
+    bindingRecord('active', 4n, 2n, actor.generation, 10n, 6n)
+  );
+  await host.dispatchMeshRecord(
+    meshName,
+    { ownerKind: framework.ReadyOwnerKind.Actor },
+    bindingRecord('active', 4n, 2n, actor.generation, 10n, 5n, 10n)
+  );
+  assert.deepEqual(failures[0], [RequestResult.InvalidState, 0]);
+  assert.equal(failures.length, 3);
   assert.equal(successes.length, 5);
+});
+
+test('bound-session replacement accepts an authenticated notice despite a stale Actor route projection', async () => {
+  let serviceIngress;
+  const serviceRuntime = new ServiceStatefulRuntime({
+    setServiceIngress(handler) {
+      serviceIngress = handler;
+    }
+  }, 'session-owner', 7n);
+  const actor = serviceRuntime.restoreActorAuthority(
+    'actor-replaced-projection',
+    'actor',
+    5n,
+    11n,
+    'session-owner',
+    7n,
+    1n
+  );
+  let replacements = 0;
+  const result = await serviceRuntime.bindSession(
+    'session-rid',
+    actor.ref,
+    1000,
+    () => true,
+    () => { replacements += 1; }
+  ).promise;
+  assert.equal(result.terminalResult, RequestResult.Ok);
+  const binding = serviceRuntime.sessionBindings('session-rid')[0];
+  serviceRuntime.rememberActorRoute({
+    actor: actor.ref,
+    targetNodeGeneration: 7n,
+    authorityOwnerGeneration: 11n,
+    ownerLeaseGeneration: 7n
+  });
+  const notice = (retiredBindingGeneration = binding.bindingGeneration) =>
+    serviceStatefulWire.encodeBoundSessionReplacedHeader({
+      actor: actor.ref,
+      targetNodeGeneration: 7n,
+      authorityOwnerGeneration: 12n,
+      ownerLeaseGeneration: 8n
+    }, {
+      sessionOwnerNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 7n,
+      sessionOwnerId: 'session-owner',
+      sessionOwnerLeaseGeneration: 7n,
+      sessionRid: 'session-rid',
+      retiredBindingGeneration
+    });
+
+  assert.equal(await serviceIngress({
+    command: serviceStatefulWire.M6bServiceWireCommand.boundSessionReplaced,
+    flags: 0,
+    sourceRoutingId: 'session-owner',
+    sourceNodeGeneration: 8n,
+    parts: [notice()]
+  }), 'infrastructure');
+  assert.equal(await serviceIngress({
+    command: serviceStatefulWire.M6bServiceWireCommand.boundSessionReplaced,
+    flags: 0,
+    sourceRoutingId: 'session-owner',
+    sourceNodeGeneration: 7n,
+    parts: [notice(binding.bindingGeneration + 1n)]
+  }), 'infrastructure');
+  assert.equal(replacements, 0);
+
+  assert.equal(await serviceIngress({
+    command: serviceStatefulWire.M6bServiceWireCommand.boundSessionReplaced,
+    flags: 0,
+    sourceRoutingId: 'session-owner',
+    sourceNodeGeneration: 7n,
+    parts: [notice()]
+  }), 'infrastructure');
+  assert.equal(replacements, 1);
+  serviceRuntime.close();
 });
 
 test('bound-session refresh resolved through the mesh-router producer path carries Session identity and blocks a successor fence', () => {

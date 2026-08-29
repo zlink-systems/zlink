@@ -3378,17 +3378,6 @@ export class ServiceStatefulRuntime {
       // session that belongs to the new lifecycle.
       return 'infrastructure';
     }
-    const knownAuthority = this.actorRoutes.get(actorKey(authority.actor));
-    if (
-      knownAuthority !== undefined
-      && (
-        knownAuthority.targetNodeGeneration !== authority.targetNodeGeneration
-        || knownAuthority.authorityOwnerGeneration !== authority.authorityOwnerGeneration
-        || knownAuthority.ownerLeaseGeneration !== authority.ownerLeaseGeneration
-      )
-    ) {
-      return 'infrastructure';
-    }
     if (
       record.retiredSession.sessionOwnerNodeRid !== this.nodeRid
       || record.retiredSession.sessionOwnerNodeGeneration !== this.nodeGeneration
